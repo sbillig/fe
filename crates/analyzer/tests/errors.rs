@@ -1,16 +1,20 @@
 //! Tests for contracts that should cause compile errors
 
-use fe_analyzer::Db;
+use fe_analyzer::namespace::items;
+use fe_analyzer::namespace::items::{Global, ModuleFileContent};
+use fe_analyzer::AnalyzerDb;
+use fe_analyzer::TestDb;
 use fe_common::diagnostics::{diagnostics_string, print_diagnostics};
 use fe_common::files::FileStore;
 use insta::assert_snapshot;
+use std::rc::Rc;
 use wasm_bindgen_test::wasm_bindgen_test;
 
 fn error_string(path: &str, src: &str) -> String {
     let mut files = FileStore::new();
     let id = files.add_file(path, src);
 
-    let fe_module = match fe_parser::parse_file(id, src) {
+    let ast = match fe_parser::parse_file(id, src) {
         Ok((module, _)) => module,
         Err(diags) => {
             print_diagnostics(&diags, &files);
@@ -18,8 +22,21 @@ fn error_string(path: &str, src: &str) -> String {
         }
     };
 
-    let db = Db::default();
-    match fe_analyzer::analyze(&db, fe_module) {
+    let db = TestDb::default();
+
+    let global = Global::default();
+    let global_id = db.intern_global(Rc::new(global));
+
+    let module = items::Module {
+        name: "test_module".to_string(),
+        context: items::ModuleContext::Global(global_id),
+        file_content: ModuleFileContent::File { file: id },
+        ast,
+    };
+
+    let module_id = db.intern_module(Rc::new(module));
+
+    match fe_analyzer::analyze_module(&db, module_id) {
         Ok(_) => panic!("expected analysis to fail with an error"),
         Err(diags) => diagnostics_string(&diags, &files),
     }

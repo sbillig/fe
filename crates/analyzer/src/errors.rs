@@ -96,6 +96,7 @@ pub fn fancy_error(
     notes: Vec<String>,
 ) -> Diagnostic {
     Diagnostic {
+        // TODO: fix this
         severity: Severity::Error,
         message: message.into(),
         labels,

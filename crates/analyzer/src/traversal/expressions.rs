@@ -906,6 +906,8 @@ fn expr_call_name(
             )],
             vec![format!("Hint: to emit an event, use `emit {}(..)`", name)],
         ))),
+        NamedThing::Item(Item::Ingot(_)) => todo!(),
+        NamedThing::Item(Item::Module(_)) => todo!(),
     }
 }
 

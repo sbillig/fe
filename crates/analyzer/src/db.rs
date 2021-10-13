@@ -1,11 +1,11 @@
 use crate::context::{Analysis, FunctionBody};
 use crate::errors::TypeError;
 use crate::namespace::items::{
-    self, ContractFieldId, ContractId, EventId, FunctionId, Item, ModuleConstantId, ModuleId,
-    StructFieldId, StructId, TypeAliasId,
+    self, ContractFieldId, ContractId, EventId, FunctionId, GlobalId, IngotId, Item,
+    ModuleConstantId, ModuleId, StructFieldId, StructId, TypeAliasId,
 };
 use crate::namespace::types;
-use indexmap::IndexMap;
+use indexmap::map::IndexMap;
 use std::rc::Rc;
 
 mod queries;
@@ -29,6 +29,10 @@ macro_rules! impl_intern_key {
 #[salsa::query_group(AnalyzerDbStorage)]
 pub trait AnalyzerDb {
     #[salsa::interned]
+    fn intern_global(&self, data: Rc<items::Global>) -> GlobalId;
+    #[salsa::interned]
+    fn intern_ingot(&self, data: Rc<items::Ingot>) -> IngotId;
+    #[salsa::interned]
     fn intern_module(&self, data: Rc<items::Module>) -> ModuleId;
     #[salsa::interned]
     fn intern_module_const(&self, data: Rc<items::ModuleConstant>) -> ModuleConstantId;
@@ -47,13 +51,17 @@ pub trait AnalyzerDb {
     #[salsa::interned]
     fn intern_event(&self, data: Rc<items::Event>) -> EventId;
 
+    // Ingot
+    #[salsa::invoke(queries::ingots::ingot_all_modules)]
+    fn ingot_all_modules(&self, ingot: IngotId) -> Rc<Vec<ModuleId>>;
+
     // Module
     #[salsa::invoke(queries::module::module_all_items)]
     fn module_all_items(&self, module: ModuleId) -> Rc<Vec<Item>>;
     #[salsa::invoke(queries::module::module_item_map)]
     fn module_item_map(&self, module: ModuleId) -> Analysis<Rc<IndexMap<String, Item>>>;
-    #[salsa::invoke(queries::module::module_imported_item_map)]
-    fn module_imported_item_map(&self, module: ModuleId) -> Rc<IndexMap<String, Item>>;
+    #[salsa::invoke(queries::module::module_used_item_map)]
+    fn module_used_item_map(&self, module: ModuleId) -> Rc<IndexMap<String, Item>>;
     #[salsa::invoke(queries::module::module_contracts)]
     fn module_contracts(&self, module: ModuleId) -> Rc<Vec<ContractId>>;
     #[salsa::invoke(queries::module::module_structs)]
@@ -127,7 +135,7 @@ pub trait AnalyzerDb {
 
 #[salsa::database(AnalyzerDbStorage)]
 #[derive(Default)]
-pub struct Db {
-    storage: salsa::Storage<Db>,
+pub struct TestDb {
+    storage: salsa::Storage<TestDb>,
 }
-impl salsa::Database for Db {}
+impl salsa::Database for TestDb {}

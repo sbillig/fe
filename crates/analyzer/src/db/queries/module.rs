@@ -41,9 +41,87 @@ fn std_prelude_items() -> IndexMap<String, Item> {
     items
 }
 
-// This is probably too simple for real module imports
-pub fn module_imported_item_map(_: &dyn AnalyzerDb, _: ModuleId) -> Rc<IndexMap<String, Item>> {
-    Rc::new(std_prelude_items())
+pub fn module_used_item_map(db: &dyn AnalyzerDb, module: ModuleId) -> Rc<IndexMap<String, Item>> {
+    let ast::Module { body } = &module.data(db).ast;
+
+    let items = body
+        .iter()
+        .fold(indexmap! {}, |accum, stmt| {
+            if let ast::ModuleStmt::Use(use_stmt) = stmt {
+                let items = resolve_use_tree(
+                    db,
+                    module
+                        .parent_module(db)
+                        .expect(&format!("no parent for {}", module.name(db))),
+                    &use_stmt.kind.tree.kind,
+                );
+                accum.into_iter().chain(items).collect::<IndexMap<_, _>>()
+            } else {
+                accum
+            }
+        })
+        .into_iter()
+        .chain(std_prelude_items())
+        .collect::<IndexMap<_, _>>();
+
+    Rc::new(items)
+}
+
+fn resolve_use_tree(
+    db: &dyn AnalyzerDb,
+    module: ModuleId,
+    tree: &ast::UseTree,
+) -> IndexMap<String, Item> {
+    match tree {
+        ast::UseTree::Glob { prefix } => {
+            let prefix = path_names(&prefix.kind);
+            let prefix_item = module.resolve_sub_path(db, &prefix).unwrap();
+
+            let prefix_module = if let Item::Module(module) = prefix_item {
+                module
+            } else {
+                panic!("not a module")
+            };
+
+            (*prefix_module.items(db)).clone()
+        }
+        ast::UseTree::Nested { prefix, children } => {
+            let prefix = path_names(&prefix.kind);
+            let prefix_item = module.resolve_sub_path(db, &prefix).unwrap();
+
+            let prefix_module = if let Item::Module(module) = prefix_item {
+                module
+            } else {
+                panic!("not a module")
+            };
+
+            let items = children.iter().fold(indexmap! {}, |accum, node| {
+                let child_items = resolve_use_tree(db, prefix_module, &node.kind);
+                accum
+                    .into_iter()
+                    .chain(child_items)
+                    .collect::<IndexMap<_, _>>()
+            });
+
+            items
+        }
+        ast::UseTree::Simple { path, rename } => {
+            let path = path_names(&path.kind);
+            let item = module.resolve_sub_path(db, &path).unwrap();
+
+            let item_name = if let Some(name) = rename {
+                name.kind.clone()
+            } else {
+                item.name(db)
+            };
+
+            indexmap! { item_name => item }
+        }
+    }
+}
+
+fn path_names(path: &ast::Path) -> Vec<String> {
+    path.names.iter().map(|node| node.kind.clone()).collect()
 }
 
 pub fn module_all_items(db: &dyn AnalyzerDb, module: ModuleId) -> Rc<Vec<Item>> {
@@ -85,7 +163,7 @@ pub fn module_all_items(db: &dyn AnalyzerDb, module: ModuleId) -> Rc<Vec<Item>> 
                 }))))
             }
             ast::ModuleStmt::Pragma(_) => None,
-            ast::ModuleStmt::Use(_) => todo!(),
+            ast::ModuleStmt::Use(_) => None,
         })
         .collect();
     Rc::new(items)
@@ -97,12 +175,17 @@ pub fn module_item_map(
 ) -> Analysis<Rc<IndexMap<String, Item>>> {
     let mut diagnostics = vec![];
 
-    let imports = db.module_imported_item_map(module);
+    let builtin_items = std_prelude_items();
+    let sub_modules = module
+        .sub_modules(db)
+        .iter()
+        .map(|(name, id)| (name.clone(), Item::Module(*id)))
+        .collect::<IndexMap<_, _>>();
     let mut map = IndexMap::<String, Item>::new();
 
     for item in module.all_items(db).iter() {
         let item_name = item.name(db);
-        if let Some(builtin) = imports.get(&item_name) {
+        if let Some(builtin) = builtin_items.get(&item_name) {
             let builtin_kind = builtin.item_kind_display_name();
             diagnostics.push(errors::error(
                 &format!("type name conflicts with built-in {}", builtin_kind),
@@ -136,7 +219,11 @@ pub fn module_item_map(
         }
     }
     Analysis {
-        value: Rc::new(map),
+        value: Rc::new(
+            map.into_iter()
+                .chain(sub_modules)
+                .collect::<IndexMap<_, _>>(),
+        ),
         diagnostics: Rc::new(diagnostics),
     }
 }
@@ -159,6 +246,8 @@ pub fn module_structs(db: &dyn AnalyzerDb, module: ModuleId) -> Rc<Vec<StructId>
         module
             .all_items(db)
             .iter()
+            // TODO: figure out better pattern
+            .chain(module.used_items(db).values())
             .filter_map(|item| match item {
                 Item::Type(TypeDef::Struct(id)) => Some(*id),
                 _ => None,

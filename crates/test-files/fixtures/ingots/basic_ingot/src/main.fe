@@ -1,0 +1,19 @@
+use bar::baz::Baz
+use bing::Bing as Bong
+use bing::get_42_backend
+use ding::{dang::Dang as Dung, dong::Dong}
+
+#use bing::BingContract
+
+contract Foo:
+    pub fn get_my_baz() -> Baz:
+        return Baz(my_bool=true, my_u256=26)
+
+    pub fn get_my_bing() -> Bong:
+        return Bong(my_address=address(42))
+
+    pub fn get_42() -> u256:
+        return get_42_backend()
+
+#    pub fn create_bing_contract():
+#        BingContract.create(0)

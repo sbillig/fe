@@ -6,17 +6,23 @@ use crate::namespace::types::{self, GenericType};
 use crate::traversal::pragma::check_pragma_version;
 use crate::AnalyzerDb;
 use fe_common::diagnostics::Diagnostic;
+use fe_common::files::{SourceFile, SourceFileId};
 use fe_parser::ast;
 use fe_parser::ast::Expr;
 use fe_parser::node::{Node, Span};
+use indexmap::indexmap;
 use indexmap::IndexMap;
+use std::collections::BTreeMap;
+use std::path::Path;
 use std::rc::Rc;
 
 /// A named item. This does not include things inside of
 /// a function body.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Item {
-    // Module   // TODO: modules don't have names yet
+    Ingot(IngotId),
+    Module(ModuleId),
+    // Constant // TODO: when `const` is implemented
     Type(TypeDef),
     // GenericType probably shouldn't be a separate category.
     // Any of the items inside TypeDef (struct, alias, etc)
@@ -47,6 +53,8 @@ impl Item {
             Item::BuiltinFunction(id) => id.as_ref().to_string(),
             Item::Object(id) => id.as_ref().to_string(),
             Item::Constant(id) => id.name(db),
+            Item::Ingot(id) => id.name(db),
+            Item::Module(id) => id.name(db),
         }
     }
 
@@ -59,6 +67,8 @@ impl Item {
             Item::BuiltinFunction(_) => None,
             Item::Object(_) => None,
             Item::Constant(id) => Some(id.name_span(db)),
+            Item::Ingot(_) => None,
+            Item::Module(_) => None,
         }
     }
 
@@ -72,6 +82,8 @@ impl Item {
             Item::BuiltinFunction(_) => true,
             Item::Object(_) => true,
             Item::Constant(_) => false,
+            Item::Ingot(_) => false,
+            Item::Module(_) => false,
         }
     }
 
@@ -84,6 +96,8 @@ impl Item {
             Item::BuiltinFunction(_) => "function",
             Item::Object(_) => "object",
             Item::Constant(_) => "constant",
+            Item::Ingot(_) => "ingot",
+            Item::Module(_) => "module",
         }
     }
 
@@ -96,16 +110,95 @@ impl Item {
             Item::BuiltinFunction(_) => {}
             Item::Object(_) => {}
             Item::Constant(id) => id.sink_diagnostics(db, sink),
+            Item::Ingot(id) => id.sink_diagnostics(db, sink),
+            Item::Module(id) => id.sink_diagnostics(db, sink),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Default)]
+pub struct Global {
+    ingots: BTreeMap<String, IngotId>,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone)]
+pub struct GlobalId(pub(crate) u32);
+impl_intern_key!(GlobalId);
+impl GlobalId {}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub struct Ingot {
+    pub name: String,
+    // pub version: String,
+    pub global: GlobalId,
+    // `BTreeMap` implements `Hash`, which is required for an ID.
+    pub fe_files: BTreeMap<SourceFileId, (SourceFile, ast::Module)>,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone)]
+pub struct IngotId(pub(crate) u32);
+impl_intern_key!(IngotId);
+impl IngotId {
+    pub fn data(&self, db: &dyn AnalyzerDb) -> Rc<Ingot> {
+        db.lookup_intern_ingot(*self)
+    }
+
+    pub fn name(&self, db: &dyn AnalyzerDb) -> String {
+        self.data(db).name.clone()
+    }
+
+    pub fn main_module(&self, db: &dyn AnalyzerDb) -> ModuleId {
+        *self
+            .all_modules(db)
+            .iter()
+            // TODO: finding by name is not valid
+            .find(|module_id| module_id.name(db) == "main")
+            .unwrap()
+    }
+
+    pub fn diagnostics(&self, db: &dyn AnalyzerDb) -> Vec<Diagnostic> {
+        let mut diagnostics = vec![];
+        self.sink_diagnostics(db, &mut diagnostics);
+        diagnostics
+    }
+
+    pub fn all_modules(&self, db: &dyn AnalyzerDb) -> Rc<Vec<ModuleId>> {
+        db.ingot_all_modules(*self)
+    }
+
+    pub fn sink_diagnostics(&self, db: &dyn AnalyzerDb, sink: &mut impl DiagnosticSink) {
+        let modules = self.all_modules(db);
+
+        for module in modules.iter() {
+            module.sink_diagnostics(db, sink)
         }
     }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub enum ModuleFileContent {
+    Dir {
+        // file: SourceFileId,
+        // dir_files: Vec<SourceFileId>
+        dir_path: String,
+    },
+    File {
+        file: SourceFileId,
+    },
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub enum ModuleContext {
+    Ingot(IngotId),
+    Global(GlobalId),
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct Module {
+    pub name: String,
+    pub context: ModuleContext,
+    pub file_content: ModuleFileContent,
     pub ast: ast::Module,
-    // When we support multiple files, a module should know its file id,
-    // but for now this isn't used.
-    // pub file: SourceFileId,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Copy, Clone)]
@@ -114,6 +207,39 @@ impl_intern_key!(ModuleId);
 impl ModuleId {
     pub fn data(&self, db: &dyn AnalyzerDb) -> Rc<Module> {
         db.lookup_intern_module(*self)
+    }
+
+    pub fn name(&self, db: &dyn AnalyzerDb) -> String {
+        self.data(db).name.clone()
+    }
+
+    pub fn file_content(&self, db: &dyn AnalyzerDb) -> ModuleFileContent {
+        self.data(db).file_content.clone()
+    }
+
+    pub fn ingot_path(&self, db: &dyn AnalyzerDb) -> String {
+        match self.context(db) {
+            ModuleContext::Ingot(ingot) => match self.file_content(db) {
+                ModuleFileContent::Dir { dir_path } => dir_path.clone(),
+                ModuleFileContent::File { file } => ingot.data(db).fe_files[&file].0.name.clone(),
+            },
+            ModuleContext::Global(_) => panic!("cant do this"),
+        }
+    }
+
+    pub fn has_dir(&self, db: &dyn AnalyzerDb) -> bool {
+        match self.file_content(db) {
+            ModuleFileContent::Dir { .. } => true,
+            ModuleFileContent::File { .. } => false,
+        }
+    }
+
+    pub fn ast(&self, db: &dyn AnalyzerDb) -> ast::Module {
+        self.data(db).ast.clone()
+    }
+
+    pub fn context(&self, db: &dyn AnalyzerDb) -> ModuleContext {
+        self.data(db).context.clone()
     }
 
     /// Returns a map of the named items in the module
@@ -126,21 +252,38 @@ impl ModuleId {
         db.module_all_items(*self)
     }
 
-    pub fn imported_items(&self, db: &dyn AnalyzerDb) -> Rc<IndexMap<String, Item>> {
-        db.module_imported_item_map(*self)
+    pub fn used_items(&self, db: &dyn AnalyzerDb) -> Rc<IndexMap<String, Item>> {
+        db.module_used_item_map(*self)
     }
 
     pub fn resolve_name(&self, db: &dyn AnalyzerDb, name: &str) -> Option<Item> {
         self.items(db)
             .get(name)
             .copied()
-            .or_else(|| self.imported_items(db).get(name).copied())
+            .or_else(|| self.used_items(db).get(name).copied())
+    }
+
+    pub fn resolve_sub_path(&self, db: &dyn AnalyzerDb, path: &[String]) -> Option<Item> {
+        let mut curr_module = *self;
+
+        for name in path.iter().take(path.len() - 1) {
+            // TODO: add module not found diagnostic message
+            curr_module = *curr_module.sub_modules(db).get(name).unwrap()
+        }
+
+        // TODO: add item not found diagnostic message
+        curr_module
+            .items(db)
+            .get(path.last().expect("path is empty"))
+            .or_else(|| panic!("{:?}", path.last()))
+            .copied()
     }
 
     /// All contracts, including duplicates
     pub fn all_contracts(&self, db: &dyn AnalyzerDb) -> Rc<Vec<ContractId>> {
         db.module_contracts(*self)
     }
+
     /// All structs, including duplicates
     pub fn all_structs(&self, db: &dyn AnalyzerDb) -> Rc<Vec<StructId>> {
         db.module_structs(*self)
@@ -161,9 +304,6 @@ impl ModuleId {
                         sink.push(&diag)
                     }
                 }
-                ast::ModuleStmt::Use(inner) => {
-                    sink.push(&errors::not_yet_implemented("use", inner.span));
-                }
                 _ => {} // everything else is a type def, handled below.
             }
         }
@@ -175,6 +315,61 @@ impl ModuleId {
         self.all_items(db)
             .iter()
             .for_each(|id| id.sink_diagnostics(db, sink));
+    }
+
+    pub fn parent_module(&self, db: &dyn AnalyzerDb) -> Option<ModuleId> {
+        match self.context(db) {
+            ModuleContext::Ingot(ingot) => {
+                let all_modules = ingot.all_modules(db);
+
+                for module_id in all_modules.iter() {
+                    if module_id
+                        .sub_modules(db)
+                        .values()
+                        .collect::<Vec<_>>()
+                        .contains(&self)
+                    {
+                        return Some(*module_id);
+                    }
+                }
+
+                None
+            }
+            ModuleContext::Global(_) => None,
+        }
+    }
+
+    pub fn adjacent_modules(&self, db: &dyn AnalyzerDb) -> Rc<IndexMap<String, ModuleId>> {
+        if let Some(parent) = self.parent_module(db) {
+            parent.sub_modules(db)
+        } else {
+            Rc::new(indexmap! {})
+        }
+    }
+
+    pub fn sub_modules(&self, db: &dyn AnalyzerDb) -> Rc<IndexMap<String, ModuleId>> {
+        match self.context(db) {
+            ModuleContext::Ingot(ingot) => {
+                let all_modules = ingot.all_modules(db);
+
+                match self.file_content(db) {
+                    ModuleFileContent::Dir { dir_path } => {
+                        // TODO: clean this up
+                        let sub_modules = all_modules
+                            .iter()
+                            .filter(|module_id| {
+                                Path::new(&module_id.ingot_path(db)).parent().unwrap()
+                                    == Path::new(&dir_path)
+                            })
+                            .map(|module_id| (module_id.name(db), *module_id))
+                            .collect::<IndexMap<_, _>>();
+                        Rc::new(sub_modules)
+                    }
+                    ModuleFileContent::File { .. } => Rc::new(indexmap! {}),
+                }
+            }
+            ModuleContext::Global(_) => Rc::new(indexmap! {}),
+        }
     }
 }
 

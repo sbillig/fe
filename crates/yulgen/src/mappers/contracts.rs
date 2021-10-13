@@ -3,7 +3,7 @@ use crate::context::ContractContext;
 use crate::mappers::functions;
 use crate::names;
 use crate::runtime;
-use fe_analyzer::namespace::items::ContractId;
+use fe_analyzer::namespace::items::{ContractId, Item};
 use fe_analyzer::AnalyzerDb;
 use fe_common::utils::keccak;
 use std::collections::HashMap;
@@ -29,9 +29,20 @@ pub fn contract_def(
         )
     });
 
+    let module = contract.module(db);
+
     let user_functions = contract
         .functions(db)
         .values()
+        .chain(
+            module
+                .used_items(db)
+                .values()
+                .filter_map(|item| match item {
+                    Item::Function(fid) => Some(fid),
+                    _ => None,
+                }),
+        )
         .map(|func| functions::func_def(db, &mut context, names::func_name(&func.name(db)), *func))
         .collect::<Vec<_>>();
 

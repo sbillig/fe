@@ -1,6 +1,8 @@
-use fe_analyzer::namespace::items::{self, Item, TypeDef};
+use fe_analyzer::namespace::items::{
+    self, Global, Item, Module, ModuleContext, ModuleFileContent, TypeDef,
+};
 use fe_analyzer::namespace::types::{Event, FixedSize};
-use fe_analyzer::{AnalyzerDb, Db};
+use fe_analyzer::{AnalyzerDb, TestDb};
 use fe_common::diagnostics::{diagnostics_string, print_diagnostics, Diagnostic, Label, Severity};
 use fe_common::files::FileStore;
 use fe_parser::node::NodeId;
@@ -24,7 +26,7 @@ macro_rules! test_analysis {
             let mut files = FileStore::new();
             let src = test_files::fixture($path);
             let id = files.add_file($path, src);
-            let fe_module = match fe_parser::parse_file(id, &src) {
+            let ast = match fe_parser::parse_file(id, &src) {
                 Ok((module, _)) => module,
                 Err(diags) => {
                     print_diagnostics(&diags, &files);
@@ -32,9 +34,21 @@ macro_rules! test_analysis {
                 }
             };
 
-            let db = Db::default();
-            let module = db.intern_module(Rc::new(items::Module { ast: fe_module }));
-            let diagnostics = module.diagnostics(&db);
+            let db = TestDb::default();
+
+            let global = Global::default();
+            let global_id = db.intern_global(Rc::new(global));
+
+            let module = Module {
+                name: "test_module".to_string(),
+                context: ModuleContext::Global(global_id),
+                file_content: ModuleFileContent::File { file: id },
+                ast,
+            };
+
+            let module_id = db.intern_module(Rc::new(module));
+
+            let diagnostics = module_id.diagnostics(&db);
             if !diagnostics.is_empty() {
                 print_diagnostics(&diagnostics, &files);
                 panic!("analysis failed")
@@ -46,10 +60,10 @@ macro_rules! test_analysis {
                 //  for larger diffs. I recommend commenting out all tests but one.
                 fe_common::assert_snapshot_wasm!(
                     concat!("snapshots/analysis__", stringify!($name), ".snap"),
-                    build_snapshot(&files, module, &db)
+                    build_snapshot(&files, module_id, &db)
                 );
             } else {
-                assert_snapshot!(build_snapshot(&files, module, &db));
+                assert_snapshot!(build_snapshot(&files, module_id, &db));
             }
         }
     };
@@ -224,6 +238,8 @@ fn build_snapshot(file_store: &FileStore, module: items::ModuleId, db: &dyn Anal
             | Item::GenericType(_)
             | Item::BuiltinFunction(_)
             | Item::Object(_) => vec![],
+            Item::Ingot(_) => todo!(),
+            Item::Module(_) => todo!()
         })
         .flatten()
         .collect::<Vec<_>>();
