@@ -1,0 +1,6 @@
+use foo::Foo
+use bar::Baz
+
+contract Bar:
+    pub fn a() -> Foo:
+        return Foo(my_u256=bool)

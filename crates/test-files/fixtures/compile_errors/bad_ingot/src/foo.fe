@@ -1,0 +1,2 @@
+struct Foo:
+    my_num: u256

@@ -9,6 +9,8 @@ use fe_common::files::FileStore;
 use insta::assert_snapshot;
 use std::rc::Rc;
 use wasm_bindgen_test::wasm_bindgen_test;
+use test_files::build_filestore;
+use fe_parser::parse_file;
 
 fn error_string(path: &str, src: &str) -> String {
     let mut files = FileStore::new();
@@ -40,6 +42,57 @@ fn error_string(path: &str, src: &str) -> String {
         Ok(_) => panic!("expected analysis to fail with an error"),
         Err(diags) => diagnostics_string(&diags, &files),
     }
+}
+
+fn error_string_ingot(path: &str) -> String {
+    let files = build_filestore(path);
+
+    let db = TestDb::default();
+
+    let global = Global::default();
+    let global_id = db.intern_global(Rc::new(global));
+
+    let ingot = items::Ingot {
+        name: "".to_string(),
+        global: global_id,
+        fe_files: files
+            .files
+            .values()
+            .into_iter()
+            .map(|file| {
+                (
+                    file.id,
+                    (file.clone(), parse_file(file.id, &file.content).unwrap().0),
+                )
+            })
+            .collect()
+    };
+
+    let ingot_id = db.intern_ingot(Rc::new(ingot));
+
+    match fe_analyzer::analyze_ingot(&db, ingot_id) {
+        Ok(_) => panic!("expected analysis to fail with an error"),
+        Err(diags) => diagnostics_string(&diags, &files),
+    }
+}
+
+macro_rules! test_ingot {
+    ($name:ident) => {
+        #[test]
+        #[wasm_bindgen_test]
+        fn $name() {
+            let path = concat!("compile_errors/", stringify!($name));
+
+            if cfg!(target_arch = "wasm32") {
+                fe_common::assert_snapshot_wasm!(
+                    concat!("snapshots/errors__", stringify!($name), ".snap"),
+                    error_string_ingot(&path)
+                );
+            } else {
+                assert_snapshot!(error_string_ingot(&path));
+            }
+        }
+    };
 }
 
 macro_rules! test_file {
@@ -290,3 +343,5 @@ test_file! { self_not_first }
 test_file! { self_in_standalone_fn }
 test_file! { unsafe_misuse }
 test_file! { unsafe_nesting }
+
+test_ingot! { bad_ingot }
