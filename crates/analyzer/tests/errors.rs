@@ -6,11 +6,11 @@ use fe_analyzer::AnalyzerDb;
 use fe_analyzer::TestDb;
 use fe_common::diagnostics::{diagnostics_string, print_diagnostics};
 use fe_common::files::FileStore;
+use fe_parser::parse_file;
 use insta::assert_snapshot;
 use std::rc::Rc;
-use wasm_bindgen_test::wasm_bindgen_test;
 use test_files::build_filestore;
-use fe_parser::parse_file;
+use wasm_bindgen_test::wasm_bindgen_test;
 
 fn error_string(path: &str, src: &str) -> String {
     let mut files = FileStore::new();
@@ -65,7 +65,7 @@ fn error_string_ingot(path: &str) -> String {
                     (file.clone(), parse_file(file.id, &file.content).unwrap().0),
                 )
             })
-            .collect()
+            .collect(),
     };
 
     let ingot_id = db.intern_ingot(Rc::new(ingot));

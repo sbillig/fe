@@ -253,7 +253,7 @@ impl ModuleId {
     }
 
     pub fn used_items(&self, db: &dyn AnalyzerDb) -> Rc<IndexMap<String, Item>> {
-        db.module_used_item_map(*self)
+        db.module_used_item_map(*self).value
     }
 
     pub fn resolve_name(&self, db: &dyn AnalyzerDb, name: &str) -> Option<Item> {
@@ -263,20 +263,25 @@ impl ModuleId {
             .or_else(|| self.used_items(db).get(name).copied())
     }
 
-    pub fn resolve_sub_path(&self, db: &dyn AnalyzerDb, path: &[String]) -> Option<Item> {
-        let mut curr_module = *self;
+    pub fn resolve_path(&self, db: &dyn AnalyzerDb, path: &ast::Path) -> Option<Item> {
+        // TODO: intern AST
+        db.module_resolve_path(*self, path.to_owned()).value
+    }
 
-        for name in path.iter().take(path.len() - 1) {
-            // TODO: add module not found diagnostic message
-            curr_module = *curr_module.sub_modules(db).get(name).unwrap()
-        }
+    pub fn resolve_use_tree(&self, db: &dyn AnalyzerDb, tree: &ast::UseTree) -> Rc<IndexMap<String, Item>> {
+        db.module_resolve_use_tree(*self, tree.to_owned()).value
+    }
 
-        // TODO: add item not found diagnostic message
-        curr_module
-            .items(db)
-            .get(path.last().expect("path is empty"))
-            .or_else(|| panic!("{:?}", path.last()))
-            .copied()
+    pub fn sub_modules(&self, db: &dyn AnalyzerDb) -> Rc<IndexMap<String, ModuleId>> {
+        db.module_sub_modules(*self)
+    }
+
+    pub fn adjacent_modules(&self, db: &dyn AnalyzerDb) -> Rc<IndexMap<String, ModuleId>> {
+        db.module_adjacent_modules(*self)
+    }
+
+    pub fn parent_module(&self, db: &dyn AnalyzerDb) -> Option<ModuleId> {
+        db.module_parent_module(*self)
     }
 
     /// All contracts, including duplicates
@@ -316,61 +321,6 @@ impl ModuleId {
             .iter()
             .for_each(|id| id.sink_diagnostics(db, sink));
     }
-
-    pub fn parent_module(&self, db: &dyn AnalyzerDb) -> Option<ModuleId> {
-        match self.context(db) {
-            ModuleContext::Ingot(ingot) => {
-                let all_modules = ingot.all_modules(db);
-
-                for module_id in all_modules.iter() {
-                    if module_id
-                        .sub_modules(db)
-                        .values()
-                        .collect::<Vec<_>>()
-                        .contains(&self)
-                    {
-                        return Some(*module_id);
-                    }
-                }
-
-                None
-            }
-            ModuleContext::Global(_) => None,
-        }
-    }
-
-    pub fn adjacent_modules(&self, db: &dyn AnalyzerDb) -> Rc<IndexMap<String, ModuleId>> {
-        if let Some(parent) = self.parent_module(db) {
-            parent.sub_modules(db)
-        } else {
-            Rc::new(indexmap! {})
-        }
-    }
-
-    pub fn sub_modules(&self, db: &dyn AnalyzerDb) -> Rc<IndexMap<String, ModuleId>> {
-        match self.context(db) {
-            ModuleContext::Ingot(ingot) => {
-                let all_modules = ingot.all_modules(db);
-
-                match self.file_content(db) {
-                    ModuleFileContent::Dir { dir_path } => {
-                        // TODO: clean this up
-                        let sub_modules = all_modules
-                            .iter()
-                            .filter(|module_id| {
-                                Path::new(&module_id.ingot_path(db)).parent().unwrap()
-                                    == Path::new(&dir_path)
-                            })
-                            .map(|module_id| (module_id.name(db), *module_id))
-                            .collect::<IndexMap<_, _>>();
-                        Rc::new(sub_modules)
-                    }
-                    ModuleFileContent::File { .. } => Rc::new(indexmap! {}),
-                }
-            }
-            ModuleContext::Global(_) => Rc::new(indexmap! {}),
-        }
-    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
@@ -406,7 +356,7 @@ impl ModuleConstantId {
         self.data(db).ast.kind.name.span
     }
 
-    pub fn value(&self, db: &dyn AnalyzerDb) -> fe_parser::ast::Expr {
+    pub fn value(&self, db: &dyn AnalyzerDb) -> ast::Expr {
         self.data(db).ast.kind.value.kind.clone()
     }
 

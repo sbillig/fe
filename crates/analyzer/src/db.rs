@@ -7,6 +7,7 @@ use crate::namespace::items::{
 use crate::namespace::types;
 use indexmap::map::IndexMap;
 use std::rc::Rc;
+use fe_parser::ast;
 
 mod queries;
 
@@ -60,12 +61,23 @@ pub trait AnalyzerDb {
     fn module_all_items(&self, module: ModuleId) -> Rc<Vec<Item>>;
     #[salsa::invoke(queries::module::module_item_map)]
     fn module_item_map(&self, module: ModuleId) -> Analysis<Rc<IndexMap<String, Item>>>;
-    #[salsa::invoke(queries::module::module_used_item_map)]
-    fn module_used_item_map(&self, module: ModuleId) -> Rc<IndexMap<String, Item>>;
     #[salsa::invoke(queries::module::module_contracts)]
     fn module_contracts(&self, module: ModuleId) -> Rc<Vec<ContractId>>;
     #[salsa::invoke(queries::module::module_structs)]
     fn module_structs(&self, module: ModuleId) -> Rc<Vec<StructId>>;
+    #[salsa::invoke(queries::module::module_used_item_map)]
+    fn module_used_item_map(&self, module: ModuleId) -> Analysis<Rc<IndexMap<String, Item>>>;
+    // TODO: these ast nodes should be interned
+    #[salsa::invoke(queries::module::module_resolve_use_tree)]
+    fn module_resolve_use_tree(&self, module: ModuleId, tree: ast::UseTree) -> Analysis<Rc<IndexMap<String, Item>>>;
+    #[salsa::invoke(queries::module::module_resolve_path)]
+    fn module_resolve_path(&self, module: ModuleId, path: ast::Path) -> Analysis<Option<Item>>;
+    #[salsa::invoke(queries::module::module_parent_module)]
+    fn module_parent_module(&self, module: ModuleId) -> Option<ModuleId>;
+    #[salsa::invoke(queries::module::module_adjacent_modules)]
+    fn module_adjacent_modules(&self, module: ModuleId) -> Rc<IndexMap<String, ModuleId>>;
+    #[salsa::invoke(queries::module::module_sub_modules)]
+    fn module_sub_modules(&self, module: ModuleId) -> Rc<IndexMap<String, ModuleId>>;
 
     // Module Constant
     #[salsa::invoke(queries::module::module_constant_type)]
