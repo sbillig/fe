@@ -172,6 +172,7 @@ pub fn type_desc(
 ) -> Result<Type, TypeError> {
     match &desc.kind {
         ast::TypeDesc::Base { base } => resolve_concrete_type(context, base, desc.span, None),
+        ast::TypeDesc::Path(_) => todo!(),
         ast::TypeDesc::Generic { base, args } => {
             resolve_concrete_type(context, &base.kind, base.span, Some(args))
         }

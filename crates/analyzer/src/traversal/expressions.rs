@@ -33,6 +33,7 @@ pub fn expr(
 ) -> Result<ExpressionAttributes, FatalError> {
     let attributes = match &exp.kind {
         fe::Expr::Name(_) => expr_name(scope, exp, expected_type),
+        fe::Expr::Path(_) => todo!(),
         fe::Expr::Num(_) => Ok(expr_num(scope, exp, expected_type.as_int())),
         fe::Expr::Bool(_) => expr_bool(exp),
         fe::Expr::Subscript { .. } => expr_subscript(scope, exp),

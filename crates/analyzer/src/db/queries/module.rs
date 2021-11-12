@@ -13,10 +13,10 @@ use fe_common::diagnostics::{Diagnostic, Label};
 use fe_parser::ast;
 use indexmap::indexmap;
 use indexmap::map::{Entry, IndexMap};
+use std::collections::HashSet;
 use std::path::Path;
 use std::rc::Rc;
 use strum::IntoEnumIterator;
-use std::collections::HashSet;
 
 // Placeholder; someday std::prelude will be a proper module.
 fn std_prelude_items() -> IndexMap<String, Item> {
@@ -212,11 +212,11 @@ pub fn module_used_item_map(
         .fold(indexmap! {}, |accum, stmt| {
             if let ast::ModuleStmt::Use(use_stmt) = stmt {
                 let parent = module.parent_module(db).unwrap();
-                let items = parent.resolve_use_tree(
-                    db,
-                    &use_stmt.kind.tree.kind,
-                );
-                accum.into_iter().chain((*items).clone()).collect::<IndexMap<_, _>>()
+                let items = parent.resolve_use_tree(db, &use_stmt.kind.tree.kind);
+                accum
+                    .into_iter()
+                    .chain((*items).clone())
+                    .collect::<IndexMap<_, _>>()
             } else {
                 accum
             }
@@ -238,7 +238,7 @@ pub fn module_resolve_use_tree(
 ) -> Analysis<Rc<IndexMap<String, Item>>> {
     match tree {
         ast::UseTree::Glob { prefix } => {
-            let prefix_item = module.resolve_path(db, &prefix.kind).unwrap();
+            let prefix_item = module.resolve_path(db, &prefix).unwrap();
 
             let prefix_module = if let Item::Module(module) = prefix_item {
                 module
@@ -246,10 +246,13 @@ pub fn module_resolve_use_tree(
                 panic!("not a module")
             };
 
-            Analysis { value: prefix_module.items(db), diagnostics: Rc::new(vec![]) }
+            Analysis {
+                value: prefix_module.items(db),
+                diagnostics: Rc::new(vec![]),
+            }
         }
         ast::UseTree::Nested { prefix, children } => {
-            let prefix_item = module.resolve_path(db, &prefix.kind).unwrap();
+            let prefix_item = module.resolve_path(db, &prefix).unwrap();
 
             let prefix_module = if let Item::Module(module) = prefix_item {
                 module
@@ -265,10 +268,13 @@ pub fn module_resolve_use_tree(
                     .collect::<IndexMap<_, _>>()
             });
 
-            Analysis { value: Rc::new(items), diagnostics: Rc::new(vec![]) }
+            Analysis {
+                value: Rc::new(items),
+                diagnostics: Rc::new(vec![]),
+            }
         }
         ast::UseTree::Simple { path, rename } => {
-            let item = module.resolve_path(db, &path.kind).unwrap();
+            let item = module.resolve_path(db, &path).unwrap();
 
             let item_name = if let Some(name) = rename {
                 name.kind.clone()
@@ -276,7 +282,10 @@ pub fn module_resolve_use_tree(
                 item.name(db)
             };
 
-            Analysis { value: Rc::new(indexmap! { item_name => item }), diagnostics: Rc::new(vec![]) }
+            Analysis {
+                value: Rc::new(indexmap! { item_name => item }),
+                diagnostics: Rc::new(vec![]),
+            }
         }
     }
 }
@@ -289,7 +298,7 @@ pub fn module_resolve_path(
     let mut curr_module = module;
 
     // TODO: should be able to iter over all pub items
-    for node in path.names.iter().take(path.names.len() - 1) {
+    for node in path.segments.iter().take(path.segments.len() - 1) {
         curr_module = match curr_module.sub_modules(db).get(&node.kind) {
             Some(module) => *module,
             None => {
@@ -304,7 +313,8 @@ pub fn module_resolve_path(
     Analysis {
         value: curr_module
             .items(db)
-            .get(&path.names.last().expect("path is empty").kind).map(|item| *item),
+            .get(&path.segments.last().expect("path is empty").kind)
+            .map(|item| *item),
         diagnostics: Rc::new(vec![]),
     }
 }
