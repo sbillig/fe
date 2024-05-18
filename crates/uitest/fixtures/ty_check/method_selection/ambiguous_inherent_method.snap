@@ -1,7 +1,7 @@
 ---
 source: crates/uitest/tests/ty_check.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty_check/method_selection/ambiguous_inherent_method.fe
+input_file: fixtures/ty_check/method_selection/ambiguous_inherent_method.fe
 ---
 error[8-0025]: ambiguous method call
    ┌─ ambiguous_inherent_method.fe:35:7

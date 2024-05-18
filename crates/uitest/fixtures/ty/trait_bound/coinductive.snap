@@ -1,7 +1,7 @@
 ---
 source: crates/uitest/tests/ty.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty/trait_bound/coinductive.fe
+input_file: fixtures/ty/trait_bound/coinductive.fe
 ---
 error[8-0031]: type annotation is needed
    ┌─ coinductive.fe:35:9
@@ -11,5 +11,3 @@ error[8-0031]: type annotation is needed
    │         │
    │         type annotation is needed
    │         consider giving `: Vec<_>` here
-
-

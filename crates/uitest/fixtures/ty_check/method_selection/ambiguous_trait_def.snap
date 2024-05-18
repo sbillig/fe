@@ -1,7 +1,7 @@
 ---
 source: crates/uitest/tests/ty_check.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty_check/method_selection/ambiguous_trait_def.fe
+input_file: fixtures/ty_check/method_selection/ambiguous_trait_def.fe
 ---
 error[8-0026]: multiple trait candidates found
    ┌─ ambiguous_trait_def.fe:38:15

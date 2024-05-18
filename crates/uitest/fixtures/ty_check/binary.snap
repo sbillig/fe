@@ -1,7 +1,7 @@
 ---
 source: crates/uitest/tests/ty_check.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty_check/binary.fe
+input_file: fixtures/ty_check/binary.fe
 ---
 error[8-0016]: `std::ops::Add` trait is not implemented
   ┌─ binary.fe:4:5
@@ -38,5 +38,3 @@ error[8-0016]: `std::ops::Ord` trait is not implemented
   │     │
   │     `<` cant be applied to `Foo`
   │     Try implementing `std::ops::Ord` for `Foo`
-
-

@@ -1,7 +1,7 @@
 ---
 source: crates/uitest/tests/ty_check.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty_check/generic_arg_mismatch.fe
+input_file: fixtures/ty_check/generic_arg_mismatch.fe
 ---
 error[3-0016]: too many generic args; expected 1, given 2
   ┌─ generic_arg_mismatch.fe:7:11

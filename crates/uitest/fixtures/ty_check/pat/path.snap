@@ -1,7 +1,7 @@
 ---
 source: crates/uitest/tests/ty_check.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty_check/pat/path.fe
+input_file: fixtures/ty_check/pat/path.fe
 ---
 error[8-0004]: expected unit variant
   ┌─ path.fe:7:13
@@ -11,5 +11,3 @@ error[8-0004]: expected unit variant
   │             │
   │             expected unit variant here, but found struct
   │             Consider using `Foo { a, b }` instead
-
-

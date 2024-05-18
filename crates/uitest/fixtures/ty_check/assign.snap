@@ -1,7 +1,7 @@
 ---
 source: crates/uitest/tests/ty_check.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty_check/assign.fe
+input_file: fixtures/ty_check/assign.fe
 ---
 error[8-0000]: type mismatch
    ┌─ assign.fe:29:11
@@ -53,5 +53,3 @@ error[8-0031]: type annotation is needed
    │     │
    │     type annotation is needed
    │     no default type is provided for an integer type. consider giving integer type
-
-

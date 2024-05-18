@@ -1,7 +1,7 @@
 ---
 source: crates/uitest/tests/ty_check.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty_check/functor.fe
+input_file: fixtures/ty_check/functor.fe
 ---
 error[8-0031]: type annotation is needed
    ┌─ functor.fe:38:9

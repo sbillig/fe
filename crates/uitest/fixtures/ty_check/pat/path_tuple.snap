@@ -1,7 +1,7 @@
 ---
 source: crates/uitest/tests/ty_check.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty_check/pat/path_tuple.fe
+input_file: fixtures/ty_check/pat/path_tuple.fe
 ---
 error[8-0004]: expected unit variant
    ┌─ path_tuple.fe:12:9
@@ -44,5 +44,3 @@ error[8-0007]: field count mismatch
    │
 10 │     let Foo::Variant(x, y, z, ..)
    │         ^^^^^^^^^^^^^^^^^^^^^^^^^ expected 2 fields here, but 3 given
-
-
