@@ -7,10 +7,72 @@ target = "evm-ethereum-osaka"
 
 func private %aug_assign(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = add v0 v1;
-        v5.i256 = mul v3 2.i256;
-        v6.i256 = evm_udiv v5 2.i256;
+        v3.i256 = call %u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add v0 v1;
+        v5.i256 = call %u64_haee7f05a097ffa16_mul_h290dcc921ed80777_mul v3 2.i256;
+        v6.i256 = call %u64_haee7f05a097ffa16_div_h14000ca7bc1a1bc4_div v5 2.i256;
         return v6;
+}
+
+func private %u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i64 = trunc v0 i64;
+        v4.i64 = trunc v1 i64;
+        v5.i64 = add v3 v4;
+        v6.i256 = zext v3 i256;
+        v7.i256 = zext v4 i256;
+        v8.i256 = zext v5 i256;
+        v9.i1 = lt v8 v6;
+        br v9 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v8;
+}
+
+func private %u64_haee7f05a097ffa16_mul_h290dcc921ed80777_mul(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i64 = trunc v0 i64;
+        v4.i64 = trunc v1 i64;
+        v5.i64 = mul v3 v4;
+        v6.i256 = zext v3 i256;
+        v7.i256 = zext v4 i256;
+        v8.i256 = zext v5 i256;
+        v9.i1 = ne v6 0.i256;
+        v10.i256 = evm_udiv v8 v6;
+        v11.i1 = ne v10 v7;
+        v12.i1 = and v9 v11;
+        br v12 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v8;
+}
+
+func private %u64_haee7f05a097ffa16_div_h14000ca7bc1a1bc4_div(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = call %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq v1 0.i256;
+        v4.i1 = ne v3 0.i256;
+        br v4 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        v7.i256 = evm_udiv v0 v1;
+        return v7;
+}
+
+func private %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq(v0.i256, v1.i256) -> i256 {
+    block0:
+        v4.i256 = and v0 18446744073709551615.i256;
+        v5.i256 = and v1 18446744073709551615.i256;
+        v6.i1 = eq v4 v5;
+        v7.i256 = zext v6 i256;
+        return v7;
 }
 
 func private %__fe_sonatina_entry() {

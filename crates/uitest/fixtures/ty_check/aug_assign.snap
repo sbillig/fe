@@ -3,14 +3,14 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/aug_assign.fe
 ---
-error[8-0016]: `core::ops::SubAssign` trait is not implemented
+error[8-0016]: `core::ops::Sub` trait is not implemented
   ┌─ aug_assign.fe:6:5
   │
 6 │     f -= f
   │     ^^^^^^
   │     │
-  │     `-=` can't be applied to `Foo`
-  │     Try implementing `core::ops::SubAssign` for `Foo`
+  │     `-` can't be applied to `Foo`
+  │     Try implementing `core::ops::Sub` for `Foo`
 
 error[8-0018]: left-hand side of assignment is immutable
   ┌─ aug_assign.fe:6:5

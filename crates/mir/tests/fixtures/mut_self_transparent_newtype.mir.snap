@@ -12,5 +12,11 @@ fn wrap_haf9e70905fcbd513_bump(v0: mut Wrap) -> ():
   bb0:
     bind v0
     v1: u8 = load mem[v0]
-    store mem[v0] = (v1 + 1)
+    v2: u8 = u8_hbc9d6eeaea22ffb5_add_h4cebc227a0cfd3c0_add(v1, 1)
+    store mem[v0] = v2
     ret
+
+fn u8_hbc9d6eeaea22ffb5_add_h4cebc227a0cfd3c0_add(v0: u8, v1: u8) -> u8:
+  bb0:
+    v2: u8 = __checked_add__u8__bc9d6eeaea22ffb5(v0, v1)
+    ret v2
