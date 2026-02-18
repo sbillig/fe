@@ -14,14 +14,14 @@ use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 use sonatina_ir::{
-    BlockId, GlobalVariableData, I256, Immediate, Linkage, Type, ValueId,
+    BlockId, GlobalVariableData, I256, Immediate, Linkage, Type, Value, ValueId,
     global_variable::GvInitializer,
     inst::{
         arith::{Add, Mul, Neg, Shl, Shr, Sub},
-        cast::{IntToPtr, PtrToInt, Sext, Trunc, Zext},
+        cast::{Bitcast, IntToPtr, PtrToInt, Sext, Trunc, Zext},
         cmp::{Eq, Gt, IsZero, Lt, Ne},
         control_flow::{Br, Call, Jump, Return},
-        data::{Gep, Mload, Mstore, SymAddr, SymSize, SymbolRef},
+        data::{Alloca, Gep, Mload, Mstore, SymAddr, SymSize, SymbolRef},
         evm::{
             EvmAddMod, EvmAddress, EvmBaseFee, EvmBlockHash, EvmCall, EvmCallValue,
             EvmCalldataCopy, EvmCalldataLoad, EvmCalldataSize, EvmCaller, EvmChainId, EvmCodeCopy,
@@ -39,6 +39,80 @@ use sonatina_ir::{
 };
 
 use super::{LowerCtx, LowerError, is_erased_runtime_ty, types};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MirPtrEscapeSummary {
+    pub(super) arg_may_escape: Vec<bool>,
+    pub(super) arg_may_be_returned: Vec<bool>,
+}
+
+impl MirPtrEscapeSummary {
+    fn new(arg_count: usize) -> Self {
+        Self {
+            arg_may_escape: vec![false; arg_count],
+            arg_may_be_returned: vec![false; arg_count],
+        }
+    }
+}
+
+pub(super) fn compute_mir_ptr_escape_summaries<'db>(
+    mir: &mir::MirModule<'db>,
+) -> FxHashMap<String, MirPtrEscapeSummary> {
+    let mut summaries: FxHashMap<String, MirPtrEscapeSummary> = FxHashMap::default();
+
+    for func in &mir.functions {
+        if func.symbol_name.is_empty() {
+            continue;
+        }
+        let arg_count = function_arg_locals(&func.body).len();
+        summaries.insert(
+            func.symbol_name.clone(),
+            MirPtrEscapeSummary::new(arg_count),
+        );
+    }
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for func in &mir.functions {
+            if func.symbol_name.is_empty() {
+                continue;
+            }
+
+            let name = &func.symbol_name;
+            let next = compute_mir_ptr_escape_summary_for_function(&func.body, &summaries);
+            if summaries.get(name) != Some(&next) {
+                summaries.insert(name.clone(), next);
+                changed = true;
+            }
+        }
+    }
+
+    summaries
+}
+
+fn compute_mir_ptr_escape_summary_for_function<'db>(
+    body: &mir::MirBody<'db>,
+    summaries: &FxHashMap<String, MirPtrEscapeSummary>,
+) -> MirPtrEscapeSummary {
+    let args = function_arg_locals(body);
+    let mut out = MirPtrEscapeSummary::new(args.len());
+
+    for (idx, local) in args.iter().copied().enumerate() {
+        out.arg_may_escape[idx] = alloc_local_may_escape(body, local, summaries);
+        out.arg_may_be_returned[idx] = local_may_be_returned(body, local, summaries);
+    }
+
+    out
+}
+
+fn function_arg_locals<'db>(body: &mir::MirBody<'db>) -> Vec<mir::LocalId> {
+    body.param_locals
+        .iter()
+        .chain(body.effect_param_locals.iter())
+        .copied()
+        .collect()
+}
 
 /// Lower a MIR instruction.
 pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
@@ -77,7 +151,7 @@ pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 return Ok(());
             }
 
-            let result = lower_rvalue(ctx, rvalue)?;
+            let result = lower_rvalue(ctx, rvalue, *dest)?;
             if let (Some(dest_local), Some(result_val)) = (dest, result) {
                 let dest_var = ctx.local_vars.get(dest_local).copied().ok_or_else(|| {
                     LowerError::Internal(format!("missing SSA variable for local {dest_local:?}"))
@@ -128,6 +202,7 @@ pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
     rvalue: &mir::Rvalue<'db>,
+    dest_local: Option<mir::LocalId>,
 ) -> Result<Option<ValueId>, LowerError> {
     use mir::Rvalue;
 
@@ -407,6 +482,16 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                             ));
                         }
                         let size = lower_value(ctx, *size)?;
+                        if dest_local.is_some_and(|local| {
+                            !alloc_local_may_escape(ctx.body, local, ctx.ptr_escape_summaries)
+                        }) && let Some(size_bytes) = const_usize_value(ctx.fb, size)
+                        {
+                            if size_bytes == 0 {
+                                return Ok(Some(ctx.fb.make_imm_value(I256::zero())));
+                            }
+                            let alloca_ty = ctx.fb.declare_array_type(Type::I8, size_bytes);
+                            return Ok(Some(emit_alloca_word_addr(ctx.fb, alloca_ty, ctx.is)));
+                        }
                         return Ok(Some(emit_evm_malloc_word_addr(ctx.fb, size, ctx.is)));
                     }
                     "evm_create_create_raw" => {
@@ -1460,10 +1545,9 @@ fn lower_place_address_gep<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 ) -> Result<ValueId, LowerError> {
     let ptr_ty = ctx.fb.ptr_type(base_sonatina_ty);
 
-    // IntToPtr: cast I256 base address to typed pointer
-    let typed_ptr = ctx
-        .fb
-        .insert_inst(IntToPtr::new(ctx.is, base_val, ptr_ty), ptr_ty);
+    // Reuse pointer sources from `ptr_to_int` when possible to avoid pointless
+    // `ptr_to_int -> int_to_ptr` round-trips before GEP.
+    let typed_ptr = coerce_word_addr_to_ptr(ctx, base_val, ptr_ty);
 
     // Build GEP index list, tracking types through the chain
     let mut gep_values: SmallVec<[ValueId; 8]> = SmallVec::new();
@@ -1919,12 +2003,22 @@ fn lower_alloc<C: sonatina_ir::func_cursor::FuncCursor>(
         return Ok(ctx.fb.make_imm_value(I256::zero()));
     }
 
-    // Use Sonatina's EvmMalloc to allocate memory. This delegates memory management
-    // to Sonatina's codegen, avoiding conflicts with its stack frame handling.
-    let size_val = ctx.fb.make_imm_value(I256::from(size_bytes as u64));
-    let ptr = emit_evm_malloc_word_addr(ctx.fb, size_val, ctx.is);
+    if alloc_local_may_escape(ctx.body, dest, ctx.ptr_escape_summaries) {
+        let size_val = ctx.fb.make_imm_value(I256::from(size_bytes as u64));
+        return Ok(emit_evm_malloc_word_addr(ctx.fb, size_val, ctx.is));
+    }
 
-    Ok(ptr)
+    let alloca_ty = fe_ty_to_sonatina(
+        ctx.fb,
+        ctx.db,
+        ctx.target_layout,
+        alloc_ty,
+        ctx.gep_type_cache,
+        ctx.gep_name_counter,
+    )
+    .unwrap_or_else(|| ctx.fb.declare_array_type(Type::I8, size_bytes));
+
+    Ok(emit_alloca_word_addr(ctx.fb, alloca_ty, ctx.is))
 }
 
 fn lower_store_inst<'db, C: sonatina_ir::func_cursor::FuncCursor>(
@@ -1961,8 +2055,10 @@ fn store_word_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     let addr = lower_place_address(ctx, place)?;
     match ctx.body.place_address_space(place) {
         AddressSpaceKind::Memory => {
+            let byte_ptr_ty = ctx.fb.ptr_type(Type::I8);
+            let ptr_addr = coerce_word_addr_to_ptr(ctx, addr, byte_ptr_ty);
             ctx.fb
-                .insert_inst_no_result(Mstore::new(ctx.is, addr, val, Type::I256));
+                .insert_inst_no_result(Mstore::new(ctx.is, ptr_addr, val, Type::I256));
         }
         AddressSpaceKind::Storage => {
             ctx.fb
@@ -1990,9 +2086,12 @@ fn load_place_typed<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 
     let addr = lower_place_address(ctx, place)?;
     let raw = match ctx.body.place_address_space(place) {
-        AddressSpaceKind::Memory => ctx
-            .fb
-            .insert_inst(Mload::new(ctx.is, addr, Type::I256), Type::I256),
+        AddressSpaceKind::Memory => {
+            let byte_ptr_ty = ctx.fb.ptr_type(Type::I8);
+            let ptr_addr = coerce_word_addr_to_ptr(ctx, addr, byte_ptr_ty);
+            ctx.fb
+                .insert_inst(Mload::new(ctx.is, ptr_addr, Type::I256), Type::I256)
+        }
         AddressSpaceKind::Storage => ctx.fb.insert_inst(EvmSload::new(ctx.is, addr), Type::I256),
         AddressSpaceKind::TransientStorage => {
             ctx.fb.insert_inst(EvmTload::new(ctx.is, addr), Type::I256)
@@ -2212,4 +2311,673 @@ fn lower_const_aggregate<C: sonatina_ir::func_cursor::FuncCursor>(
         .insert_inst_no_result(EvmCodeCopy::new(ctx.is, ptr, code_offset, code_size));
 
     Ok(ptr)
+}
+
+fn emit_alloca_word_addr<C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    alloca_ty: Type,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> ValueId {
+    let ptr_ty = fb.ptr_type(alloca_ty);
+    let ptr = fb.insert_inst(Alloca::new(is, alloca_ty), ptr_ty);
+    fb.insert_inst(PtrToInt::new(is, ptr, Type::I256), Type::I256)
+}
+
+fn const_usize_value<C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &sonatina_ir::builder::FunctionBuilder<C>,
+    value: ValueId,
+) -> Option<usize> {
+    let imm = fb.func.dfg.value_imm(value)?;
+    if imm.is_negative() {
+        return None;
+    }
+    Some(imm.as_usize())
+}
+
+fn local_may_be_returned<'db>(
+    body: &mir::MirBody<'db>,
+    local: mir::LocalId,
+    ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
+) -> bool {
+    let mut value_memo: Vec<Option<bool>> = vec![None; body.values.len()];
+    let mut value_visiting = vec![false; body.values.len()];
+    let mut local_memo: Vec<Option<bool>> = vec![None; body.locals.len()];
+    let mut local_visiting = vec![false; body.locals.len()];
+
+    for block in &body.blocks {
+        if let mir::Terminator::Return {
+            value: Some(returned),
+            ..
+        } = &block.terminator
+            && value_depends_on_local(
+                body,
+                *returned,
+                local,
+                ptr_escape_summaries,
+                &mut value_memo,
+                &mut value_visiting,
+                &mut local_memo,
+                &mut local_visiting,
+            )
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn alloc_local_may_escape<'db>(
+    body: &mir::MirBody<'db>,
+    local: mir::LocalId,
+    ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
+) -> bool {
+    let mut value_memo: Vec<Option<bool>> = vec![None; body.values.len()];
+    let mut value_visiting = vec![false; body.values.len()];
+    let mut local_memo: Vec<Option<bool>> = vec![None; body.locals.len()];
+    let mut local_visiting = vec![false; body.locals.len()];
+
+    for block in &body.blocks {
+        for inst in &block.insts {
+            match inst {
+                mir::MirInst::Assign { rvalue, .. } => {
+                    if rvalue_may_escape_local(
+                        body,
+                        rvalue,
+                        local,
+                        ptr_escape_summaries,
+                        &mut value_memo,
+                        &mut value_visiting,
+                        &mut local_memo,
+                        &mut local_visiting,
+                    ) {
+                        return true;
+                    }
+                }
+                mir::MirInst::Store { place, value, .. } => {
+                    if value_depends_on_local(
+                        body,
+                        *value,
+                        local,
+                        ptr_escape_summaries,
+                        &mut value_memo,
+                        &mut value_visiting,
+                        &mut local_memo,
+                        &mut local_visiting,
+                    ) && store_target_is_non_local(
+                        body,
+                        place,
+                        local,
+                        ptr_escape_summaries,
+                        &mut value_memo,
+                        &mut value_visiting,
+                        &mut local_memo,
+                        &mut local_visiting,
+                    ) {
+                        return true;
+                    }
+                }
+                mir::MirInst::InitAggregate { place, inits, .. } => {
+                    for (_, value) in inits {
+                        if value_depends_on_local(
+                            body,
+                            *value,
+                            local,
+                            ptr_escape_summaries,
+                            &mut value_memo,
+                            &mut value_visiting,
+                            &mut local_memo,
+                            &mut local_visiting,
+                        ) && store_target_is_non_local(
+                            body,
+                            place,
+                            local,
+                            ptr_escape_summaries,
+                            &mut value_memo,
+                            &mut value_visiting,
+                            &mut local_memo,
+                            &mut local_visiting,
+                        ) {
+                            return true;
+                        }
+                    }
+                }
+                mir::MirInst::SetDiscriminant { .. } | mir::MirInst::BindValue { .. } => {}
+            }
+        }
+
+        if terminator_may_escape_local(
+            body,
+            &block.terminator,
+            local,
+            ptr_escape_summaries,
+            &mut value_memo,
+            &mut value_visiting,
+            &mut local_memo,
+            &mut local_visiting,
+        ) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn value_depends_on_local<'db>(
+    body: &mir::MirBody<'db>,
+    value: mir::ValueId,
+    local: mir::LocalId,
+    ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
+    value_memo: &mut [Option<bool>],
+    value_visiting: &mut [bool],
+    local_memo: &mut [Option<bool>],
+    local_visiting: &mut [bool],
+) -> bool {
+    if let Some(cached) = value_memo[value.index()] {
+        return cached;
+    }
+    if value_visiting[value.index()] {
+        // Conservatively treat recursive value dependency as escaping.
+        return true;
+    }
+
+    value_visiting[value.index()] = true;
+    let depends = match &body.value(value).origin {
+        mir::ValueOrigin::Local(dep_local) | mir::ValueOrigin::PlaceRoot(dep_local) => {
+            local_depends_on_local(
+                body,
+                *dep_local,
+                local,
+                ptr_escape_summaries,
+                value_memo,
+                value_visiting,
+                local_memo,
+                local_visiting,
+            )
+        }
+        mir::ValueOrigin::Unary { inner, .. } => value_depends_on_local(
+            body,
+            *inner,
+            local,
+            ptr_escape_summaries,
+            value_memo,
+            value_visiting,
+            local_memo,
+            local_visiting,
+        ),
+        mir::ValueOrigin::Binary { lhs, rhs, .. } => {
+            value_depends_on_local(
+                body,
+                *lhs,
+                local,
+                ptr_escape_summaries,
+                value_memo,
+                value_visiting,
+                local_memo,
+                local_visiting,
+            ) || value_depends_on_local(
+                body,
+                *rhs,
+                local,
+                ptr_escape_summaries,
+                value_memo,
+                value_visiting,
+                local_memo,
+                local_visiting,
+            )
+        }
+        mir::ValueOrigin::FieldPtr(field_ptr) => value_depends_on_local(
+            body,
+            field_ptr.base,
+            local,
+            ptr_escape_summaries,
+            value_memo,
+            value_visiting,
+            local_memo,
+            local_visiting,
+        ),
+        mir::ValueOrigin::PlaceRef(place) | mir::ValueOrigin::MoveOut { place } => {
+            let mut depends = value_depends_on_local(
+                body,
+                place.base,
+                local,
+                ptr_escape_summaries,
+                value_memo,
+                value_visiting,
+                local_memo,
+                local_visiting,
+            );
+            if !depends {
+                for projection in place.projection.iter() {
+                    if let Projection::Index(IndexSource::Dynamic(index_val)) = projection
+                        && value_depends_on_local(
+                            body,
+                            *index_val,
+                            local,
+                            ptr_escape_summaries,
+                            value_memo,
+                            value_visiting,
+                            local_memo,
+                            local_visiting,
+                        )
+                    {
+                        depends = true;
+                        break;
+                    }
+                }
+            }
+            depends
+        }
+        mir::ValueOrigin::TransparentCast { value } => value_depends_on_local(
+            body,
+            *value,
+            local,
+            ptr_escape_summaries,
+            value_memo,
+            value_visiting,
+            local_memo,
+            local_visiting,
+        ),
+        mir::ValueOrigin::Expr(_)
+        | mir::ValueOrigin::ControlFlowResult { .. }
+        | mir::ValueOrigin::Unit
+        | mir::ValueOrigin::Synthetic(_)
+        | mir::ValueOrigin::FuncItem(_) => false,
+    };
+    value_visiting[value.index()] = false;
+    value_memo[value.index()] = Some(depends);
+    depends
+}
+
+fn rvalue_may_escape_local<'db>(
+    body: &mir::MirBody<'db>,
+    rvalue: &mir::Rvalue<'db>,
+    local: mir::LocalId,
+    ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
+    value_memo: &mut [Option<bool>],
+    value_visiting: &mut [bool],
+    local_memo: &mut [Option<bool>],
+    local_visiting: &mut [bool],
+) -> bool {
+    match rvalue {
+        mir::Rvalue::Call(call) => {
+            let arg_escape_mask =
+                call_escape_arg_mask(call.resolved_name.as_deref(), ptr_escape_summaries);
+            call_args_depend_on_local_with_mask(
+                body,
+                &call.args,
+                local,
+                ptr_escape_summaries,
+                arg_escape_mask,
+                0,
+                value_memo,
+                value_visiting,
+                local_memo,
+                local_visiting,
+            ) || call_args_depend_on_local_with_mask(
+                body,
+                &call.effect_args,
+                local,
+                ptr_escape_summaries,
+                arg_escape_mask,
+                call.args.len(),
+                value_memo,
+                value_visiting,
+                local_memo,
+                local_visiting,
+            )
+        }
+        mir::Rvalue::Intrinsic { args, .. } => values_depend_on_local(
+            body,
+            args,
+            local,
+            ptr_escape_summaries,
+            value_memo,
+            value_visiting,
+            local_memo,
+            local_visiting,
+        ),
+        mir::Rvalue::ZeroInit
+        | mir::Rvalue::Value(_)
+        | mir::Rvalue::Load { .. }
+        | mir::Rvalue::Alloc { .. } => false,
+    }
+}
+
+fn terminator_may_escape_local<'db>(
+    body: &mir::MirBody<'db>,
+    terminator: &mir::Terminator<'db>,
+    local: mir::LocalId,
+    ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
+    value_memo: &mut [Option<bool>],
+    value_visiting: &mut [bool],
+    local_memo: &mut [Option<bool>],
+    local_visiting: &mut [bool],
+) -> bool {
+    match terminator {
+        mir::Terminator::Return {
+            value: Some(returned),
+            ..
+        } => value_depends_on_local(
+            body,
+            *returned,
+            local,
+            ptr_escape_summaries,
+            value_memo,
+            value_visiting,
+            local_memo,
+            local_visiting,
+        ),
+        mir::Terminator::TerminatingCall { call, .. } => match call {
+            mir::TerminatingCall::Call(call) => {
+                let arg_escape_mask =
+                    call_escape_arg_mask(call.resolved_name.as_deref(), ptr_escape_summaries);
+                call_args_depend_on_local_with_mask(
+                    body,
+                    &call.args,
+                    local,
+                    ptr_escape_summaries,
+                    arg_escape_mask,
+                    0,
+                    value_memo,
+                    value_visiting,
+                    local_memo,
+                    local_visiting,
+                ) || call_args_depend_on_local_with_mask(
+                    body,
+                    &call.effect_args,
+                    local,
+                    ptr_escape_summaries,
+                    arg_escape_mask,
+                    call.args.len(),
+                    value_memo,
+                    value_visiting,
+                    local_memo,
+                    local_visiting,
+                )
+            }
+            mir::TerminatingCall::Intrinsic { args, .. } => values_depend_on_local(
+                body,
+                args,
+                local,
+                ptr_escape_summaries,
+                value_memo,
+                value_visiting,
+                local_memo,
+                local_visiting,
+            ),
+        },
+        mir::Terminator::Return { .. }
+        | mir::Terminator::Goto { .. }
+        | mir::Terminator::Branch { .. }
+        | mir::Terminator::Switch { .. }
+        | mir::Terminator::Unreachable { .. } => false,
+    }
+}
+
+fn store_target_is_non_local<'db>(
+    body: &mir::MirBody<'db>,
+    place: &Place<'db>,
+    local: mir::LocalId,
+    ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
+    value_memo: &mut [Option<bool>],
+    value_visiting: &mut [bool],
+    local_memo: &mut [Option<bool>],
+    local_visiting: &mut [bool],
+) -> bool {
+    if !matches!(body.place_address_space(place), AddressSpaceKind::Memory) {
+        return true;
+    }
+    !value_depends_on_local(
+        body,
+        place.base,
+        local,
+        ptr_escape_summaries,
+        value_memo,
+        value_visiting,
+        local_memo,
+        local_visiting,
+    )
+}
+
+fn values_depend_on_local<'db>(
+    body: &mir::MirBody<'db>,
+    values: &[mir::ValueId],
+    local: mir::LocalId,
+    ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
+    value_memo: &mut [Option<bool>],
+    value_visiting: &mut [bool],
+    local_memo: &mut [Option<bool>],
+    local_visiting: &mut [bool],
+) -> bool {
+    values.iter().copied().any(|value| {
+        value_depends_on_local(
+            body,
+            value,
+            local,
+            ptr_escape_summaries,
+            value_memo,
+            value_visiting,
+            local_memo,
+            local_visiting,
+        )
+    })
+}
+
+fn local_depends_on_local<'db>(
+    body: &mir::MirBody<'db>,
+    candidate_local: mir::LocalId,
+    source_local: mir::LocalId,
+    ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
+    value_memo: &mut [Option<bool>],
+    value_visiting: &mut [bool],
+    local_memo: &mut [Option<bool>],
+    local_visiting: &mut [bool],
+) -> bool {
+    if candidate_local == source_local {
+        return true;
+    }
+    if let Some(cached) = local_memo[candidate_local.index()] {
+        return cached;
+    }
+    if local_visiting[candidate_local.index()] {
+        // Conservatively treat recursive local dependency as escaping.
+        return true;
+    }
+
+    local_visiting[candidate_local.index()] = true;
+    let mut depends = false;
+    for block in &body.blocks {
+        for inst in &block.insts {
+            let mir::MirInst::Assign {
+                dest: Some(dest_local),
+                rvalue,
+                ..
+            } = inst
+            else {
+                continue;
+            };
+            if *dest_local != candidate_local {
+                continue;
+            }
+            if rvalue_depends_on_local_value(
+                body,
+                rvalue,
+                source_local,
+                ptr_escape_summaries,
+                value_memo,
+                value_visiting,
+                local_memo,
+                local_visiting,
+            ) {
+                depends = true;
+                break;
+            }
+        }
+        if depends {
+            break;
+        }
+    }
+
+    local_visiting[candidate_local.index()] = false;
+    local_memo[candidate_local.index()] = Some(depends);
+    depends
+}
+
+fn rvalue_depends_on_local_value<'db>(
+    body: &mir::MirBody<'db>,
+    rvalue: &mir::Rvalue<'db>,
+    local: mir::LocalId,
+    ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
+    value_memo: &mut [Option<bool>],
+    value_visiting: &mut [bool],
+    local_memo: &mut [Option<bool>],
+    local_visiting: &mut [bool],
+) -> bool {
+    match rvalue {
+        mir::Rvalue::ZeroInit | mir::Rvalue::Alloc { .. } => false,
+        mir::Rvalue::Value(value) => value_depends_on_local(
+            body,
+            *value,
+            local,
+            ptr_escape_summaries,
+            value_memo,
+            value_visiting,
+            local_memo,
+            local_visiting,
+        ),
+        mir::Rvalue::Call(call) => {
+            let arg_return_mask =
+                call_return_arg_mask(call.resolved_name.as_deref(), ptr_escape_summaries);
+            call_args_depend_on_local_with_mask(
+                body,
+                &call.args,
+                local,
+                ptr_escape_summaries,
+                arg_return_mask,
+                0,
+                value_memo,
+                value_visiting,
+                local_memo,
+                local_visiting,
+            ) || call_args_depend_on_local_with_mask(
+                body,
+                &call.effect_args,
+                local,
+                ptr_escape_summaries,
+                arg_return_mask,
+                call.args.len(),
+                value_memo,
+                value_visiting,
+                local_memo,
+                local_visiting,
+            )
+        }
+        mir::Rvalue::Intrinsic { args, .. } => values_depend_on_local(
+            body,
+            args,
+            local,
+            ptr_escape_summaries,
+            value_memo,
+            value_visiting,
+            local_memo,
+            local_visiting,
+        ),
+        mir::Rvalue::Load { place } => value_depends_on_local(
+            body,
+            place.base,
+            local,
+            ptr_escape_summaries,
+            value_memo,
+            value_visiting,
+            local_memo,
+            local_visiting,
+        ),
+    }
+}
+
+fn call_escape_arg_mask<'a>(
+    callee_name: Option<&str>,
+    ptr_escape_summaries: &'a FxHashMap<String, MirPtrEscapeSummary>,
+) -> Option<&'a [bool]> {
+    callee_name
+        .and_then(|name| ptr_escape_summaries.get(name))
+        .map(|summary| summary.arg_may_escape.as_slice())
+}
+
+fn call_return_arg_mask<'a>(
+    callee_name: Option<&str>,
+    ptr_escape_summaries: &'a FxHashMap<String, MirPtrEscapeSummary>,
+) -> Option<&'a [bool]> {
+    callee_name
+        .and_then(|name| ptr_escape_summaries.get(name))
+        .map(|summary| summary.arg_may_be_returned.as_slice())
+}
+
+fn call_args_depend_on_local_with_mask<'db>(
+    body: &mir::MirBody<'db>,
+    values: &[mir::ValueId],
+    local: mir::LocalId,
+    ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
+    arg_mask: Option<&[bool]>,
+    arg_offset: usize,
+    value_memo: &mut [Option<bool>],
+    value_visiting: &mut [bool],
+    local_memo: &mut [Option<bool>],
+    local_visiting: &mut [bool],
+) -> bool {
+    values.iter().copied().enumerate().any(|(index, value)| {
+        if let Some(mask) = arg_mask
+            && !mask.get(arg_offset + index).copied().unwrap_or(true)
+        {
+            return false;
+        }
+
+        value_depends_on_local(
+            body,
+            value,
+            local,
+            ptr_escape_summaries,
+            value_memo,
+            value_visiting,
+            local_memo,
+            local_visiting,
+        )
+    })
+}
+
+fn coerce_word_addr_to_ptr<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    addr: ValueId,
+    ptr_ty: Type,
+) -> ValueId {
+    if let Some(from_ptr) = ptr_source_from_word_addr(ctx, addr) {
+        return bitcast_ptr(ctx, from_ptr, ptr_ty);
+    }
+
+    ctx.fb
+        .insert_inst(IntToPtr::new(ctx.is, addr, ptr_ty), ptr_ty)
+}
+
+fn ptr_source_from_word_addr<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    value: ValueId,
+) -> Option<ValueId> {
+    let Value::Inst { inst, .. } = ctx.fb.func.dfg.value(value) else {
+        return None;
+    };
+    let ptr_to_int = sonatina_ir::inst::downcast::<&PtrToInt>(ctx.is, ctx.fb.func.dfg.inst(*inst))?;
+    Some(*ptr_to_int.from())
+}
+
+fn bitcast_ptr<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    ptr: ValueId,
+    ptr_ty: Type,
+) -> ValueId {
+    if ctx.fb.type_of(ptr) == ptr_ty {
+        return ptr;
+    }
+    ctx.fb
+        .insert_inst(Bitcast::new(ctx.is, ptr, ptr_ty), ptr_ty)
 }

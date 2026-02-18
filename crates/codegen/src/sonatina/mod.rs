@@ -438,6 +438,8 @@ struct ModuleLowerer<'db, 'a> {
     data_globals_by_symbol: FxHashMap<String, Vec<GlobalVariableRef>>,
     /// Counter for generating unique data global names.
     data_global_counter: usize,
+    /// Interprocedural pointer escape summaries keyed by lowered symbol name.
+    ptr_escape_summaries: FxHashMap<String, lower::MirPtrEscapeSummary>,
 }
 
 impl<'db, 'a> ModuleLowerer<'db, 'a> {
@@ -466,6 +468,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             data_globals: Vec::new(),
             data_globals_by_symbol: FxHashMap::default(),
             data_global_counter: 0,
+            ptr_escape_summaries: lower::compute_mir_ptr_escape_summaries(mir),
         }
     }
 
@@ -1210,6 +1213,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 data_globals: &mut self.data_globals,
                 data_global_counter: &mut self.data_global_counter,
                 const_data_globals: &mut const_data_globals,
+                ptr_escape_summaries: &self.ptr_escape_summaries,
             };
 
             for (idx, block) in ctx.body.blocks.iter().enumerate() {
@@ -1261,4 +1265,6 @@ pub(super) struct LowerCtx<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> {
     pub(super) data_global_counter: &'a mut usize,
     /// Per-function dedupe for constant aggregate payloads.
     pub(super) const_data_globals: &'a mut FxHashMap<Vec<u8>, GlobalVariableRef>,
+    /// Interprocedural pointer escape summaries keyed by lowered symbol name.
+    pub(super) ptr_escape_summaries: &'a FxHashMap<String, lower::MirPtrEscapeSummary>,
 }
