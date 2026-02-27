@@ -392,7 +392,7 @@ impl super::Parse for BinExprScope {
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         let nt = parser.set_newline_as_trivia(true);
         let is_or = parser.current_kind() == Some(SyntaxKind::Pipe2);
-        let msg = "`||` cannot be mixed with `let` conditions in this position; parenthesize it";
+        let msg = "`||` cannot be mixed with `let` conditions in this position";
         let saw_let_before = self
             .condition_state
             .as_ref()
