@@ -1214,9 +1214,10 @@ pub fn run_tests(
     }
 
     let filter = filter.map(str::to_owned);
+    let normalized_backend = backend.to_ascii_lowercase();
     let shared = Arc::new(WorkerSharedConfig {
         show_logs,
-        backend: backend.to_string(),
+        backend: normalized_backend.clone(),
         yul_optimize,
         solc: solc.map(str::to_owned),
         opt_level,
@@ -1335,10 +1336,15 @@ pub fn run_tests(
     }
 
     if let Some((out, staging)) = report_root {
-        gas::write_run_gas_comparison_summary(&staging.root_dir, backend, yul_optimize, opt_level);
+        gas::write_run_gas_comparison_summary(
+            &staging.root_dir,
+            normalized_backend.as_str(),
+            yul_optimize,
+            opt_level,
+        );
         write_report_manifest(
             &staging.root_dir,
-            backend,
+            normalized_backend.as_str(),
             yul_optimize,
             opt_level,
             filter.as_deref(),

@@ -1653,6 +1653,20 @@ fn test_cli_test_solc_flag_overrides_env() {
 }
 
 #[test]
+fn test_cli_test_backend_is_case_insensitive_for_worker_execution() {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test_runner/pass.fe");
+    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
+
+    let (output, exit_code) = run_fe_main(&["test", "--backend", "Sonatina", fixture_path_str]);
+    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
+    assert!(
+        output.contains("PASS  [<time>] test_pass"),
+        "expected passing sonatina test output, got:\n{output}"
+    );
+}
+
+#[test]
 fn test_cli_build_optimize_and_opt_level_0_is_error() {
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/cli_output/build/simple_contract.fe");
