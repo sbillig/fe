@@ -144,20 +144,14 @@ static bool scan_automatic_semicolon(TSLexer *lexer) {
     }
 
     if (c == '<') {
-      // `<=`, `<<`, and `<<=` are continuations.
-      // Bare `<` starts a new expression boundary.
+      // Only `<=` and `<<=` are continuations.
+      // Bare `<` and bare `<<` start a new expression boundary.
       advance(lexer);
       if (lexer->lookahead == '=') return false;
 
       if (lexer->lookahead == '<') {
         advance(lexer);
-        int32_t after_shift = lexer->lookahead;
-        if (after_shift == '=' ||
-            after_shift == ' ' || after_shift == '\t' ||
-            after_shift == '\r' || after_shift == '\n' ||
-            after_shift == '/') {
-          return false;
-        }
+        return lexer->lookahead != '=';
       }
 
       return true;

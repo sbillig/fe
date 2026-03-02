@@ -85,12 +85,15 @@ fn parse_expr_with_min_bp<S: TokenStream>(
                 break;
             }
             let is_bare_lt = !is_lt_eq(parser) && !is_lshift(parser);
-            if is_bare_lt && !is_allowed_line_start_lt_context(parser) {
+            let is_bare_lshift = is_lshift(parser) && !is_aug_assign(parser);
+            if (is_bare_lt || is_bare_lshift) && !is_allowed_line_start_lt_context(parser) {
                 let range = line_start_op_range(parser);
-                parser.add_error(ParseError::Msg(
-                    "line-start `<` is ambiguous; use parentheses to disambiguate".to_string(),
-                    range,
-                ));
+                let msg = if is_bare_lshift {
+                    "line-start `<<` is ambiguous; use parentheses to disambiguate"
+                } else {
+                    "line-start `<` is ambiguous; use parentheses to disambiguate"
+                };
+                parser.add_error(ParseError::Msg(msg.to_string(), range));
                 break;
             }
         }
@@ -131,7 +134,7 @@ fn parse_expr_with_min_bp<S: TokenStream>(
             None => {}
         }
 
-        if let Some((lbp, _)) = infix_binding_power(parser) {
+        if let Some((lbp, rbp)) = infix_binding_power(parser) {
             if lbp < min_bp {
                 break;
             }
@@ -143,7 +146,7 @@ fn parse_expr_with_min_bp<S: TokenStream>(
             } else if is_aug_assign(parser) {
                 parser.parse_cp(AugAssignExprScope::default(), Some(checkpoint))
             } else {
-                parser.parse_cp(BinExprScope::default(), Some(checkpoint))
+                parser.parse_cp(BinExprScope::new(rbp), Some(checkpoint))
             }?;
             continue;
         }
@@ -231,6 +234,14 @@ fn infix_binding_power<S: TokenStream>(parser: &mut Parser<S>) -> Option<(u8, u8
                 parser.set_newline_as_trivia(is_trivia);
                 return None;
             }
+            if has_line_break_before(parser) {
+                let is_bare_lt = !is_lt_eq(parser) && !is_lshift(parser);
+                let is_bare_lshift = is_lshift(parser) && !is_aug_assign(parser);
+                if (is_bare_lt || is_bare_lshift) && !is_allowed_line_start_lt_context(parser) {
+                    parser.set_newline_as_trivia(is_trivia);
+                    return None;
+                }
+            }
             if is_lshift(parser) {
                 (110, 111)
             } else {
@@ -301,16 +312,15 @@ impl super::Parse for CastExprScope {
     }
 }
 
-define_scope! { BinExprScope, BinExpr }
+define_scope! { BinExprScope { rbp: u8 }, BinExpr }
 impl super::Parse for BinExprScope {
     type Error = Recovery<ErrProof>;
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         let nt = parser.set_newline_as_trivia(true);
-        let (_, rbp) = infix_binding_power(parser).unwrap();
         bump_bin_op(parser);
         parser.set_newline_as_trivia(false);
-        let r = parse_expr_with_min_bp(parser, rbp, false);
+        let r = parse_expr_with_min_bp(parser, self.rbp, false);
         parser.set_newline_as_trivia(nt);
         r
     }

@@ -128,8 +128,8 @@ impl<S: TokenStream> Parser<S> {
 
     pub(super) fn in_scope_set(&self, scopes: &[SyntaxKind]) -> bool {
         self.parents
-            .iter()
-            .any(|scope| scopes.contains(&scope.scope.syntax_kind()))
+            .last()
+            .is_some_and(|scope| scopes.contains(&scope.scope.syntax_kind()))
     }
 
     pub fn expect_and_pop_recovery_stack(&mut self) -> Result<(), Recovery<ErrProof>> {

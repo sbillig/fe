@@ -14,9 +14,19 @@ fn f(x: i32, y: i32) {
         < y
     )
 
+    let _a_shift = (
+        x
+        << y
+    )
+
     let _b = id(
         x
         < y
+    )
+
+    let _b_shift = id(
+        x
+        << y
     )
 
     let _c = [
@@ -24,11 +34,24 @@ fn f(x: i32, y: i32) {
         < y
     ]
 
+    let _c_shift = [
+        x
+        << y
+    ]
+
     let _d = arr[x
         < y]
+
+    let _d_shift = arr[x
+        << y]
 
     let _e = Holder {
         value: x
             < y
+    }
+
+    let _e_shift = Holder {
+        value: x
+            << y
     }
 }

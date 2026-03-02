@@ -15,3 +15,9 @@ error[1-0001]: unexpected syntax while parsing block
   │
 3 │         < y
   │           ^ unexpected
+
+error[1-0001]: line-start `<<` is ambiguous; use parentheses to disambiguate
+  ┌─ newline_lt_continuation.fe:9:9
+  │
+9 │         << y
+  │         ^ line-start `<<` is ambiguous; use parentheses to disambiguate
