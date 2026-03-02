@@ -9,12 +9,11 @@ global private const [i8; 320] $__fe_const_data_0 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 
 
 func private %for_array_large_sum() -> i64 {
     block0:
-        v0.objref<[i64; 10]> = obj.alloc [i64; 10];
-        v1.*[i64; 10] = obj.materialize.stack v0;
-        v2.i256 = sym_addr $__fe_const_data_0;
-        v3.i256 = sym_size $__fe_const_data_0;
-        v4.i256 = ptr_to_int v1 i256;
-        evm_code_copy v4 v2 v3;
+        v1.*i8 = evm_malloc 320.i256;
+        v2.*[i64; 10] = bitcast v1 *[i64; 10];
+        v3.i256 = ptr_to_int v2 i256;
+        v4.i256 = sym_addr $__fe_const_data_0;
+        evm_code_copy v3 v4 320.i256;
         v7.i256 = call %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len__u64_10__2b47acd750beacf4;
         jump block1;
 
@@ -25,7 +24,7 @@ func private %for_array_large_sum() -> i64 {
         br v10 block2 block4;
 
     block2:
-        v13.i64 = call %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u64_10__2b47acd750beacf4 v0 v8;
+        v13.i64 = call %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u64_10__2b47acd750beacf4 v2 v8;
         (v15.i64, v16.i1) = uaddo v24 v13;
         br v16 block5 block6;
 
@@ -48,19 +47,12 @@ func private %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len__u
         return 10.i256;
 }
 
-func private %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u64_10__2b47acd750beacf4(v0.objref<[i64; 10]>, v1.i256) -> i64 {
+func private %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u64_10__2b47acd750beacf4(v0.*[i64; 10], v1.i256) -> i64 {
     block0:
-        v3.i1 = lt v1 10.i256;
-        v4.i1 = is_zero v3;
-        br v4 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        v6.objref<i64> = obj.index v0 v1;
-        v7.i64 = obj.load v6;
-        return v7;
+        v3.*i64 = gep v0 0.i256 v1;
+        v4.i256 = mload v3 i256;
+        v5.i64 = trunc v4 i64;
+        return v5;
 }
 
 func private %__fe_sonatina_entry() {

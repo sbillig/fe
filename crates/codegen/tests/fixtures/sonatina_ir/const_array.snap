@@ -9,40 +9,30 @@ global private const [i8; 96] $__fe_const_data_0 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 
 func private %sum_two(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.objref<[i256; 3]> = obj.alloc [i256; 3];
-        v3.*[i256; 3] = obj.materialize.stack v2;
-        v4.i256 = sym_addr $__fe_const_data_0;
-        v5.i256 = sym_size $__fe_const_data_0;
-        v6.i256 = ptr_to_int v3 i256;
-        evm_code_copy v6 v4 v5;
-        v8.i1 = lt v0 3.i256;
-        v9.i1 = is_zero v8;
-        br v9 block1 block2;
+        v2.i256 = sym_addr $__fe_const_data_0;
+        v3.*[i256; 3] = int_to_ptr v2 *[i256; 3];
+        v5.*i256 = gep v3 0.i256 v0;
+        v6.i256 = ptr_to_int v5 i256;
+        v8.*i8 = evm_malloc 32.i256;
+        v9.i256 = ptr_to_int v8 i256;
+        evm_code_copy v9 v6 32.i256;
+        v10.i256 = mload v9 i256;
+        v11.i256 = sym_addr $__fe_const_data_0;
+        v12.*[i256; 3] = int_to_ptr v11 *[i256; 3];
+        v13.*i256 = gep v12 0.i256 v1;
+        v14.i256 = ptr_to_int v13 i256;
+        v15.*i8 = evm_malloc 32.i256;
+        v16.i256 = ptr_to_int v15 i256;
+        evm_code_copy v16 v14 32.i256;
+        v17.i256 = mload v16 i256;
+        (v18.i256, v19.i1) = uaddo v10 v17;
+        br v19 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        v11.objref<i256> = obj.index v2 v0;
-        v12.i256 = obj.load v11;
-        v13.objref<[i256; 3]> = obj.alloc [i256; 3];
-        v14.*[i256; 3] = obj.materialize.stack v13;
-        v15.i256 = sym_addr $__fe_const_data_0;
-        v16.i256 = sym_size $__fe_const_data_0;
-        v17.i256 = ptr_to_int v14 i256;
-        evm_code_copy v17 v15 v16;
-        v19.i1 = lt v1 3.i256;
-        v20.i1 = is_zero v19;
-        br v20 block1 block3;
-
-    block3:
-        v21.objref<i256> = obj.index v13 v1;
-        v22.i256 = obj.load v21;
-        (v24.i256, v25.i1) = uaddo v12 v22;
-        br v25 block1 block4;
-
-    block4:
-        return v24;
+        return v18;
 }
 
 func private %__fe_sonatina_entry() {

@@ -14,10 +14,13 @@ mod ty;
 
 pub use core_lib::CoreLib;
 pub use ir::{
-    BasicBlockId, CallOrigin, CallTargetRef, CodeRegionRef, LocalData, LocalId, LoopInfo,
-    MirBackend, MirBody, MirFunction, MirInst, MirModule, MirProjection, MirProjectionPath,
-    MirStage, Rvalue, SwitchTarget, SwitchValue, TerminatingCall, Terminator, ValueData, ValueId,
-    ValueOrigin, ValueRepr,
+    BasicBlockId, CallOrigin, CallTargetRef, CodeRegionRef, ConstRegion, ConstRegionId, LocalData, LocalId, LoopInfo,
+    MirBackend,
+    MirBody, MirFunction, MirInst, MirModule, MirProjection, MirProjectionPath,
+    MirStage, Rvalue,
+    SwitchTarget, SwitchValue, TerminatingCall, Terminator, ValueData, ValueId,
+    ValueOrigin,
+    ValueRepr,
 };
 pub use lower::{
     MirDiagnosticsMode, MirDiagnosticsOutput, MirLowerError, MirLowerResult,

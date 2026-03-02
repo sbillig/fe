@@ -402,6 +402,7 @@ fn add_value_runtime_uses<'db>(
         ValueOrigin::Expr(..)
         | ValueOrigin::ControlFlowResult { .. }
         | ValueOrigin::Unit
+        | ValueOrigin::ConstRegion(_)
         | ValueOrigin::Synthetic(..)
         | ValueOrigin::CodeRegionRef(..) => {}
     }
@@ -833,6 +834,7 @@ fn mark_value_runtime_live<'db>(
         ValueOrigin::Expr(..)
         | ValueOrigin::ControlFlowResult { .. }
         | ValueOrigin::Unit
+        | ValueOrigin::ConstRegion(_)
         | ValueOrigin::Synthetic(..)
         | ValueOrigin::CodeRegionRef(..) => {}
     }
@@ -2122,6 +2124,7 @@ fn value_deps_in_eval_order(origin: &ValueOrigin<'_>) -> Vec<ValueId> {
             deps
         }
         ValueOrigin::TransparentCast { value } => vec![*value],
+        ValueOrigin::ConstRegion(_) => vec![],
         ValueOrigin::Expr(..)
         | ValueOrigin::ControlFlowResult { .. }
         | ValueOrigin::Unit
@@ -2152,7 +2155,6 @@ fn compute_value_use_counts<'db>(body: &MirBody<'db>) -> Vec<usize> {
             match inst {
                 MirInst::BindValue { value, .. } => bump(*value),
                 MirInst::Assign { rvalue, .. } => match rvalue {
-                    Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::ConstAggregate { .. } => {}
                     Rvalue::Value(value) => bump(*value),
                     Rvalue::Call(call) => {
                         for arg in call.args.iter().chain(call.effect_args.iter()) {
@@ -2168,6 +2170,9 @@ fn compute_value_use_counts<'db>(body: &MirBody<'db>) -> Vec<usize> {
                         bump(place.base);
                         bump_place_path(&mut bump, &place.projection);
                     }
+                    Rvalue::Alloc { .. }
+                    | Rvalue::ZeroInit
+                    | Rvalue::ConstAggregate { .. } => {}
                 },
                 MirInst::Store { place, value, .. } => {
                     bump(place.base);
