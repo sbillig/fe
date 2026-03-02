@@ -47,11 +47,10 @@ func private %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u
     block0:
         v3.*[i256; 10] = int_to_ptr v0 *[i256; 10];
         v4.*i256 = gep v3 0.i256 v1;
-        v5.i256 = ptr_to_int v4 i256;
-        v6.i256 = mload v5 i256;
-        v7.i64 = trunc v6 i64;
-        v8.i256 = zext v7 i256;
-        return v8;
+        v5.i256 = mload v4 i256;
+        v6.i64 = trunc v5 i64;
+        v7.i256 = zext v6 i256;
+        return v7;
 }
 
 func public %__fe_sonatina_entry() {

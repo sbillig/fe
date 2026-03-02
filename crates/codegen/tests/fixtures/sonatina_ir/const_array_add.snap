@@ -14,12 +14,11 @@ func public %get_sum() -> i256 {
         v4.i256 = sym_addr $__fe_const_data_0;
         v5.i256 = sym_size $__fe_const_data_0;
         evm_code_copy v3 v4 v5;
-        v6.*[i256; 3] = int_to_ptr v3 *[i256; 3];
+        v6.*[i256; 3] = bitcast v2 *[i256; 3];
         v7.*i256 = gep v6 0.i256 0.i256;
-        v8.i256 = ptr_to_int v7 i256;
-        v9.i256 = mload v8 i256;
-        v11.i256 = add 1.i256 v9;
-        return v11;
+        v8.i256 = mload v7 i256;
+        v10.i256 = add 1.i256 v8;
+        return v10;
 }
 
 func public %__fe_sonatina_entry() {

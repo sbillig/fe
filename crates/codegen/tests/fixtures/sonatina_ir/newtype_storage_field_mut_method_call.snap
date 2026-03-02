@@ -14,10 +14,14 @@ type @__fe_CallData_5 = {i256};
 type @__fe_Cursor_6 = {@__fe_CallData_5, i256};
 type @__fe_SolDecoder_7 = {@__fe_Cursor_6, i256};
 
-func private %wrap_haf9e70905fcbd513_bump(v0.i256) -> i256 {
+func private %wrap_haf9e70905fcbd513_bump(v0.i256) {
     block0:
-        v3.i256 = add v0 1.i256;
-        return v3;
+        v2.*i256 = int_to_ptr v0 *i256;
+        v3.i256 = mload v2 i256;
+        v5.i256 = add v3 1.i256;
+        v6.*i256 = int_to_ptr v0 *i256;
+        mstore v6 v5 i256;
+        return;
 }
 
 func private %__NewtypeStorageFieldMutMethodCall_init_contract() {
@@ -28,10 +32,9 @@ func private %__NewtypeStorageFieldMutMethodCall_init_contract() {
 func private %__NewtypeStorageFieldMutMethodCall_recv_0_0(v0.i256) -> i256 {
     block0:
         v2.i256 = evm_sload v0;
-        v3.i256 = call %wrap_haf9e70905fcbd513_bump_stor v2;
-        evm_sstore v0 v3;
-        v4.i256 = evm_sload v0;
-        return v4;
+        call %wrap_haf9e70905fcbd513_bump_stor_arg0_root_stor v0;
+        v3.i256 = evm_sload v0;
+        return v3;
 }
 
 func private %__NewtypeStorageFieldMutMethodCall_init() {
@@ -40,39 +43,32 @@ func private %__NewtypeStorageFieldMutMethodCall_init() {
         v3.i256 = call %init_field__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24 0.i256 1.i256;
         v4.i256 = sym_addr &__NewtypeStorageFieldMutMethodCall_runtime;
         v5.i256 = sym_size &__NewtypeStorageFieldMutMethodCall_runtime;
-        v6.i256 = evm_code_size;
-        v7.i256 = add v4 v5;
-        v8.i256 = add v4 v5;
-        v9.i1 = lt v6 v8;
-        v10.i256 = zext v9 i256;
-        v11.i1 = ne v10 0.i256;
-        br v11 block1 block2;
+        v6.i256 = sym_size .;
+        v7.i256 = evm_code_size;
+        v8.i1 = lt v7 v6;
+        v9.i256 = zext v8 i256;
+        v10.i1 = ne v9 0.i256;
+        br v10 block1 block2;
 
     block1:
         call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort 0.i256;
         evm_invalid;
 
     block2:
-        v14.i256 = add v4 v5;
-        v16.i256 = add v4 v5;
-        v17.i256 = sub v6 v16;
-        v18.i256 = add v4 v5;
-        v19.i256 = sub v6 v18;
-        v20.*i8 = evm_malloc v19;
-        v21.i256 = ptr_to_int v20 i256;
-        v22.i256 = add v4 v5;
-        v23.i256 = add v4 v5;
-        v24.i256 = sub v6 v23;
-        evm_code_copy v21 v22 v24;
-        v25.*@__fe_MemoryBytes_0 = alloca @__fe_MemoryBytes_0;
-        v26.i256 = ptr_to_int v25 i256;
-        v27.*i256 = gep v25 0.i256 0.i256;
-        mstore v27 v21 i256;
-        v28.i256 = add v4 v5;
-        v29.i256 = sub v6 v28;
-        v30.*i256 = gep v25 0.i256 1.i256;
-        mstore v30 v29 i256;
-        v31.i256 = call %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v26;
+        v13.i256 = sub v7 v6;
+        v14.i256 = sub v7 v6;
+        v15.*i8 = evm_malloc v14;
+        v16.i256 = ptr_to_int v15 i256;
+        v17.i256 = sub v7 v6;
+        evm_code_copy v16 v6 v17;
+        v18.*@__fe_MemoryBytes_0 = alloca @__fe_MemoryBytes_0;
+        v19.i256 = ptr_to_int v18 i256;
+        v20.*i256 = gep v18 0.i256 0.i256;
+        mstore v20 v16 i256;
+        v21.i256 = sub v7 v6;
+        v22.*i256 = gep v18 0.i256 1.i256;
+        mstore v22 v21 i256;
+        v23.i256 = call %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v19;
         call %__NewtypeStorageFieldMutMethodCall_init_contract;
         evm_code_copy 0.i256 v4 v5;
         evm_return 0.i256 v5;
@@ -98,22 +94,12 @@ func private %__NewtypeStorageFieldMutMethodCall_runtime() {
         evm_invalid;
 }
 
-func private %__NewtypeStorageFieldMutMethodCall_init_code_offset() -> i256 {
+func private %wrap_haf9e70905fcbd513_bump_stor_arg0_root_stor(v0.i256) {
     block0:
-        v1.i256 = sym_addr &__NewtypeStorageFieldMutMethodCall_init;
-        return v1;
-}
-
-func private %__NewtypeStorageFieldMutMethodCall_init_code_len() -> i256 {
-    block0:
-        v1.i256 = sym_size &__NewtypeStorageFieldMutMethodCall_init;
-        return v1;
-}
-
-func private %wrap_haf9e70905fcbd513_bump_stor(v0.i256) -> i256 {
-    block0:
-        v3.i256 = add v0 1.i256;
-        return v3;
+        v2.i256 = evm_sload v0;
+        v4.i256 = add v2 1.i256;
+        evm_sstore v0 v4;
+        return;
 }
 
 func private %init_field__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9(v0.i256, v1.i256) -> i256 {

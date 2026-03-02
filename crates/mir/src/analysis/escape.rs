@@ -418,7 +418,11 @@ fn rvalue_may_escape_local<'db>(
             intrinsic_arg_may_escape(*op, idx)
                 && value_depends_on_local(body, value, local, ptr_escape_summaries, state)
         }),
-        Rvalue::ZeroInit | Rvalue::Value(_) | Rvalue::Load { .. } | Rvalue::Alloc { .. } => false,
+        Rvalue::ZeroInit
+        | Rvalue::Value(_)
+        | Rvalue::Load { .. }
+        | Rvalue::Alloc { .. }
+        | Rvalue::ConstAggregate { .. } => false,
     }
 }
 
@@ -496,7 +500,10 @@ fn intrinsic_arg_may_escape(op: IntrinsicOp, arg_idx: usize) -> bool {
         | IntrinsicOp::Codesize
         | IntrinsicOp::CodeRegionOffset
         | IntrinsicOp::CodeRegionLen
+        | IntrinsicOp::CurrentCodeRegionLen
         | IntrinsicOp::Keccak
+        | IntrinsicOp::Addmod
+        | IntrinsicOp::Mulmod
         | IntrinsicOp::Caller
         | IntrinsicOp::Alloc => false,
     }
@@ -644,7 +651,7 @@ fn rvalue_depends_on_local_value<'db>(
     state: &mut LocalDependencyState,
 ) -> bool {
     match rvalue {
-        Rvalue::ZeroInit | Rvalue::Alloc { .. } => false,
+        Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::ConstAggregate { .. } => false,
         Rvalue::Value(value) => {
             value_depends_on_local(body, *value, local, ptr_escape_summaries, state)
         }
@@ -757,6 +764,7 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
+            capability_spaces: Vec::new(),
         });
         let local_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
@@ -794,6 +802,7 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
+            capability_spaces: Vec::new(),
         });
         func.body.param_locals.push(param);
         let param_value = func.body.alloc_value(ValueData {
@@ -826,6 +835,7 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
+            capability_spaces: Vec::new(),
         });
         func.body.effect_param_locals.push(effect_param);
         let effect_param_value = func.body.alloc_value(ValueData {
@@ -858,6 +868,7 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
+            capability_spaces: Vec::new(),
         });
         let alloc_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
@@ -912,6 +923,7 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
+            capability_spaces: Vec::new(),
         });
         let alloc_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
@@ -925,6 +937,7 @@ mod tests {
             is_mut: false,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
+            capability_spaces: Vec::new(),
         });
         let call_result_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
@@ -979,6 +992,7 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
+            capability_spaces: Vec::new(),
         });
         let alloc_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
@@ -992,6 +1006,7 @@ mod tests {
             is_mut: false,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
+            capability_spaces: Vec::new(),
         });
         let call_result_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
@@ -1047,6 +1062,7 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
+            capability_spaces: Vec::new(),
         });
         let local_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
@@ -1095,6 +1111,7 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
+            capability_spaces: Vec::new(),
         });
         let alloc_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
@@ -1109,6 +1126,7 @@ mod tests {
             is_mut: false,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
+            capability_spaces: Vec::new(),
         });
         let loaded_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
