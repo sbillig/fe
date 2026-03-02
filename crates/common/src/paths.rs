@@ -1,7 +1,7 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use std::io;
 use std::path::{Path, PathBuf};
-use typed_path::{Utf8WindowsComponent, Utf8WindowsPath, Utf8WindowsPrefix};
+use typed_path::{Utf8WindowsPath, Utf8WindowsPrefix};
 use url::Url;
 
 fn non_utf8_path_error(path: PathBuf) -> io::Error {
@@ -16,51 +16,34 @@ pub fn normalize_slashes(raw: &str) -> String {
         return raw.to_string();
     }
 
-    let mut normalized = String::with_capacity(raw.len());
-    let mut needs_separator = false;
+    let windows_path = Utf8WindowsPath::new(raw);
+    let unix_path = windows_path.with_unix_encoding();
+    let unix = unix_path.as_str();
+    let components = windows_path.components();
 
-    for component in Utf8WindowsPath::new(raw).components() {
-        match component {
-            Utf8WindowsComponent::Prefix(prefix) => {
-                if needs_separator {
-                    normalized.push('/');
-                }
+    match components.prefix_kind() {
+        Some(Utf8WindowsPrefix::Disk(drive)) => {
+            if windows_path.has_root() {
+                return format!("{drive}:{unix}");
+            }
 
-                let is_disk_prefix = matches!(prefix.kind(), Utf8WindowsPrefix::Disk(_));
-                normalized.push_str(&normalize_windows_prefix(prefix.kind()));
-                needs_separator = !is_disk_prefix && !normalized.ends_with('/');
+            let drive_prefix = format!("{drive}:/");
+            if let Some(path) = unix.strip_prefix(&drive_prefix) {
+                return format!("{drive}:{path}");
             }
-            Utf8WindowsComponent::RootDir => {
-                if !normalized.ends_with('/') {
-                    normalized.push('/');
-                }
-                needs_separator = false;
-            }
-            Utf8WindowsComponent::CurDir => {
-                if needs_separator {
-                    normalized.push('/');
-                }
-                normalized.push('.');
-                needs_separator = true;
-            }
-            Utf8WindowsComponent::ParentDir => {
-                if needs_separator {
-                    normalized.push('/');
-                }
-                normalized.push_str("..");
-                needs_separator = true;
-            }
-            Utf8WindowsComponent::Normal(component) => {
-                if needs_separator {
-                    normalized.push('/');
-                }
-                normalized.push_str(component);
-                needs_separator = true;
+
+            unix.to_string()
+        }
+        Some(prefix) => {
+            let normalized_prefix = normalize_windows_prefix(prefix);
+            if unix == "/" && !components.has_physical_root() {
+                normalized_prefix
+            } else {
+                format!("{normalized_prefix}{unix}")
             }
         }
+        None => unix.to_string(),
     }
-
-    normalized
 }
 
 pub fn glob_pattern(path: &Path) -> String {
