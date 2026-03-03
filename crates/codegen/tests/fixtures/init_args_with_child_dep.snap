@@ -142,14 +142,18 @@ object "Parent" {
       let v1 := mload(add($self, 64))
       let v2 := add(v1, 32)
       let v3 := mload(add($self, 64))
-      let v4 := or(lt(v2, v3), gt(v2, v0))
+      let v4 := lt(v2, v3)
       if v4 {
         revert(0, 0)
       }
-      let v5 := mload(add($self, 64))
-      let v6 := $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at($self, v5)
+      let v5 := gt(v2, v0)
+      if v5 {
+        revert(0, 0)
+      }
+      let v6 := mload(add($self, 64))
+      let v7 := $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at($self, v6)
       mstore(add($self, 64), v2)
-      ret := v6
+      ret := v7
       leave
     }
     function $soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
@@ -370,14 +374,18 @@ object "Parent" {
         let v1 := mload(add($self, 64))
         let v2 := add(v1, 32)
         let v3 := mload(add($self, 64))
-        let v4 := or(lt(v2, v3), gt(v2, v0))
+        let v4 := lt(v2, v3)
         if v4 {
           revert(0, 0)
         }
-        let v5 := mload(add($self, 64))
-        let v6 := $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at($self, v5)
+        let v5 := gt(v2, v0)
+        if v5 {
+          revert(0, 0)
+        }
+        let v6 := mload(add($self, 64))
+        let v7 := $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at($self, v6)
         mstore(add($self, 64), v2)
-        ret := v6
+        ret := v7
         leave
       }
       function $soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
