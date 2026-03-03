@@ -1,11 +1,5 @@
 use dir_test::{Fixture, dir_test};
-use std::{
-    fs,
-    io::IsTerminal,
-    path::{Path, PathBuf},
-    process::Command,
-    sync::OnceLock,
-};
+use std::{fs, io::IsTerminal, path::Path, process::Command, sync::OnceLock};
 use tempfile::tempdir;
 use test_utils::{
     normalize::{normalize_newlines, normalize_path_separators, replace_path_token},
@@ -219,34 +213,8 @@ impl FeOutput {
     }
 }
 
-fn fe_binary() -> &'static PathBuf {
-    static BIN: OnceLock<PathBuf> = OnceLock::new();
-    BIN.get_or_init(|| {
-        if let Some(bin) = std::env::var_os("CARGO_BIN_EXE_fe") {
-            return PathBuf::from(bin);
-        }
-
-        let cargo_exe = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-        let output = Command::new(&cargo_exe)
-            .args(["build", "--bin", "fe"])
-            .output()
-            .expect("Failed to build fe binary");
-
-        if !output.status.success() {
-            panic!(
-                "Failed to build fe binary: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-
-        std::env::current_exe()
-            .expect("Failed to get current exe")
-            .parent()
-            .expect("Failed to get parent")
-            .parent()
-            .expect("Failed to get parent")
-            .join(format!("fe{}", std::env::consts::EXE_SUFFIX))
-    })
+fn fe_binary() -> &'static str {
+    env!("CARGO_BIN_EXE_fe")
 }
 
 fn run_fe_main_impl(args: &[&str], cwd: Option<&Path>, extra_env: &[(&str, &str)]) -> FeOutput {

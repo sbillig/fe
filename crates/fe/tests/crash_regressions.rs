@@ -3,51 +3,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    sync::OnceLock,
 };
-
-fn fe_binary() -> PathBuf {
-    static BIN: OnceLock<PathBuf> = OnceLock::new();
-    BIN.get_or_init(|| {
-        if let Some(bin) = std::env::var_os("CARGO_BIN_EXE_fe") {
-            return PathBuf::from(bin);
-        }
-
-        let cargo_exe = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-
-        let mut build = Command::new(&cargo_exe);
-        build.args(["build", "--bin", "fe", "--no-default-features"]);
-
-        let mut features = Vec::new();
-        if cfg!(feature = "lsp") {
-            features.push("lsp");
-        }
-        if cfg!(feature = "vendored-openssl") {
-            features.push("vendored-openssl");
-        }
-        if !features.is_empty() {
-            build.args(["--features", &features.join(",")]);
-        }
-
-        build.current_dir(env!("CARGO_MANIFEST_DIR"));
-        let output = build.output().expect("failed to build `fe` binary");
-        if !output.status.success() {
-            panic!(
-                "failed to build `fe` binary:\n{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-
-        std::env::current_exe()
-            .expect("failed to get current exe")
-            .parent()
-            .expect("failed to get parent")
-            .parent()
-            .expect("failed to get parent")
-            .join(format!("fe{}", std::env::consts::EXE_SUFFIX))
-    })
-    .clone()
-}
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/crash_regressions")
@@ -58,7 +14,7 @@ fn is_fe_file(path: &Path) -> bool {
 }
 
 fn run_fe_check(path: &Path) -> (i32, String) {
-    let output = Command::new(fe_binary())
+    let output = Command::new(env!("CARGO_BIN_EXE_fe"))
         .args(["check", "--standalone", "--color", "never"])
         .arg(path)
         .env("NO_COLOR", "1")
