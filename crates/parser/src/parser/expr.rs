@@ -9,8 +9,8 @@ use super::{
     Checkpoint, ErrProof, Parser, Recovery, TextSize, define_scope,
     expr_atom::{self, is_expr_atom_head},
     param::{CallArgListScope, GenericArgListScope},
-    path::is_qualified_type,
     pat::parse_pat,
+    path::is_qualified_type,
     token_stream::TokenStream,
 };
 use crate::{ExpectedKind, ParseError, SyntaxKind, TextRange};
