@@ -11,6 +11,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
   RUST_BACKTRACE: full
   SOLC_VERSION: v0.8.30
 
@@ -33,7 +34,7 @@ jobs:
       - name: Lint with rustfmt
         run: cargo fmt --all -- --check
       - name: Lint with clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D clippy::all
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D clippy::all
 
   test:
     # Build & Test runs on all platforms
@@ -82,6 +83,8 @@ jobs:
         uses: taiki-e/install-action@nextest
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          cache-workspace-crates: true
       - name: Build
         run: cargo test --release --workspace --all-features --no-run --locked --exclude fe-language-server --exclude fe-bench
       - name: Run tests
@@ -104,9 +107,9 @@ jobs:
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
       - name: Check core crates for wasm32-unknown-unknown
-        run: cargo check -p fe-common -p fe-parser -p fe-hir --target wasm32-unknown-unknown
+        run: cargo check --locked -p fe-common -p fe-parser -p fe-hir --target wasm32-unknown-unknown
       - name: Check filesystem crates for wasm32-wasip1
-        run: cargo check -p fe-driver -p fe-resolver --target wasm32-wasip1
+        run: cargo check --locked -p fe-driver -p fe-resolver --target wasm32-wasip1
 
   release:
     # Only run this when we push a tag
@@ -164,7 +167,7 @@ jobs:
       - name: Build
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-        run: cargo build --release --target ${{ matrix.target }} ${{ matrix.EXTRA_FEATURES }}
+        run: cargo build --locked --release --target ${{ matrix.target }} ${{ matrix.EXTRA_FEATURES }}
       - name: Strip binary (Unix)
         if: runner.os != 'Windows'
         run: ${{ matrix.STRIP }} target/${{ matrix.target }}/release/fe
