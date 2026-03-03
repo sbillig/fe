@@ -78,6 +78,8 @@ jobs:
         uses: foundry-rs/foundry-toolchain@v1
         with:
           version: stable
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
       - name: Build
@@ -85,7 +87,7 @@ jobs:
       - name: Run tests
         env:
           FE_SOLC_PATH: ${{ runner.os == 'Windows' && format('{0}\\solc-{1}.exe', runner.temp, env.SOLC_VERSION) || format('{0}/solc-{1}', runner.temp, env.SOLC_VERSION) }}
-        run: cargo test --workspace --all-features --verbose --exclude fe-language-server --exclude fe-bench
+        run: cargo nextest run --workspace --all-features --no-fail-fast --locked --exclude fe-language-server --exclude fe-bench
 
   wasm-wasi-check:
     runs-on: ubuntu-latest
