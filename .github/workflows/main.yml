@@ -83,11 +83,11 @@ jobs:
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo test --workspace --all-features --no-run --locked --exclude fe-language-server --exclude fe-bench
+        run: cargo test --release --workspace --all-features --no-run --locked --exclude fe-language-server --exclude fe-bench
       - name: Run tests
         env:
           FE_SOLC_PATH: ${{ runner.os == 'Windows' && format('{0}\\solc-{1}.exe', runner.temp, env.SOLC_VERSION) || format('{0}/solc-{1}', runner.temp, env.SOLC_VERSION) }}
-        run: cargo nextest run --workspace --all-features --no-fail-fast --locked --exclude fe-language-server --exclude fe-bench
+        run: cargo nextest run --release --workspace --all-features --no-fail-fast --locked --exclude fe-language-server --exclude fe-bench
 
   wasm-wasi-check:
     runs-on: ubuntu-latest
