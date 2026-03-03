@@ -1,35 +1,9 @@
-use std::{path::PathBuf, process::Command, sync::OnceLock};
+use std::process::Command;
 
 use tempfile::TempDir;
 
-fn fe_binary() -> &'static PathBuf {
-    static BIN: OnceLock<PathBuf> = OnceLock::new();
-    BIN.get_or_init(|| {
-        let cargo_exe = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-        let output = Command::new(&cargo_exe)
-            .args(["build", "--bin", "fe"])
-            .output()
-            .expect("Failed to build fe binary");
-
-        if !output.status.success() {
-            panic!(
-                "Failed to build fe binary: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-
-        std::env::current_exe()
-            .expect("Failed to get current exe")
-            .parent()
-            .expect("Failed to get parent")
-            .parent()
-            .expect("Failed to get parent")
-            .join("fe")
-    })
-}
-
 fn run_fe(args: &[&str], cwd: &std::path::Path) -> (String, i32) {
-    let output = Command::new(fe_binary())
+    let output = Command::new(env!("CARGO_BIN_EXE_fe"))
         .args(args)
         .env("NO_COLOR", "1")
         .current_dir(cwd)
