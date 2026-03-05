@@ -262,33 +262,36 @@ func private %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_
         v20.i256 = mload v19 i256;
         v21.i1 = lt v15 v20;
         v22.i256 = zext v21 i256;
-        v23.i1 = gt v15 v7;
-        v24.i256 = zext v23 i256;
-        v25.i256 = or v22 v24;
-        v26.i1 = ne v25 0.i256;
-        br v26 block1 block2;
+        v23.i1 = ne v22 0.i256;
+        br v23 block1 block3;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        v28.*@__fe_SolDecoder_4 = int_to_ptr v0 *@__fe_SolDecoder_4;
-        v29.*@__fe_Cursor_3 = gep v28 0.i256 0.i256;
-        v30.i256 = ptr_to_int v29 i256;
-        v31.*i256 = gep v29 0.i256 1.i256;
-        v32.i256 = mload v31 i256;
-        v33.*@__fe_SolDecoder_4 = int_to_ptr v0 *@__fe_SolDecoder_4;
-        v34.*@__fe_Cursor_3 = gep v33 0.i256 0.i256;
-        v35.i256 = ptr_to_int v34 i256;
-        v36.*@__fe_MemoryBytes_0 = gep v34 0.i256 0.i256;
-        v37.i256 = ptr_to_int v36 i256;
-        v38.i256 = call %memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at v37 v32;
-        v40.*@__fe_SolDecoder_4 = int_to_ptr v0 *@__fe_SolDecoder_4;
-        v41.*@__fe_Cursor_3 = gep v40 0.i256 0.i256;
-        v42.i256 = ptr_to_int v41 i256;
-        v43.*i256 = gep v41 0.i256 1.i256;
-        mstore v43 v15 i256;
-        return v38;
+        v25.*@__fe_SolDecoder_4 = int_to_ptr v0 *@__fe_SolDecoder_4;
+        v26.*@__fe_Cursor_3 = gep v25 0.i256 0.i256;
+        v27.i256 = ptr_to_int v26 i256;
+        v28.*i256 = gep v26 0.i256 1.i256;
+        v29.i256 = mload v28 i256;
+        v30.*@__fe_SolDecoder_4 = int_to_ptr v0 *@__fe_SolDecoder_4;
+        v31.*@__fe_Cursor_3 = gep v30 0.i256 0.i256;
+        v32.i256 = ptr_to_int v31 i256;
+        v33.*@__fe_MemoryBytes_0 = gep v31 0.i256 0.i256;
+        v34.i256 = ptr_to_int v33 i256;
+        v35.i256 = call %memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at v34 v29;
+        v37.*@__fe_SolDecoder_4 = int_to_ptr v0 *@__fe_SolDecoder_4;
+        v38.*@__fe_Cursor_3 = gep v37 0.i256 0.i256;
+        v39.i256 = ptr_to_int v38 i256;
+        v40.*i256 = gep v38 0.i256 1.i256;
+        mstore v40 v15 i256;
+        return v35;
+
+    block3:
+        v43.i1 = gt v15 v7;
+        v44.i256 = zext v43 i256;
+        v45.i1 = ne v44 0.i256;
+        br v45 block1 block2;
 }
 
 func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(v0.i256) -> i256 {

@@ -24,12 +24,7 @@ func private %example__Evm_hef0af3106e109414__3af54274b2985741(v0.i256) -> i256 
         jump block2;
 
     block5:
-        v10.i1 = eq v2 305419896.i256;
-        br v10 block1 block6;
-
-    block6:
-        v11.i1 = eq v2 591751049.i256;
-        br v11 block3 block4;
+        br_table v2 block4 (305419896.i256 block1) (591751049.i256 block3);
 }
 
 func public %read_selector__Evm_hef0af3106e109414__3af54274b2985741(v0.i256) -> i256 {

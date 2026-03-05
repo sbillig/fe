@@ -20,7 +20,7 @@ use sonatina_ir::{
         arith::{Add, Mul, Neg, Shl, Shr, Sub},
         cast::{Bitcast, IntToPtr, PtrToInt, Sext, Trunc, Zext},
         cmp::{Eq, Gt, IsZero, Lt, Ne},
-        control_flow::{Br, Call, Jump, Return},
+        control_flow::{Br, BrTable, Call, Jump, Return},
         data::{Alloca, Gep, Mload, Mstore, SymAddr, SymSize, SymbolRef},
         evm::{
             EvmAddMod, EvmAddress, EvmBaseFee, EvmBlockHash, EvmCall, EvmCallValue,
@@ -1810,8 +1810,6 @@ pub(super) fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             let discr_val = lower_value(ctx, *discr)?;
             let default_block = ctx.block_map[default];
 
-            // NOTE: Sonatina's current EVM backend `BrTable` lowering is broken (it does not
-            // compare against the scrutinee). Lower to a chain of `Eq` + `Br` instead.
             if targets.is_empty() {
                 ctx.fb
                     .insert_inst_no_result(Jump::new(ctx.is, default_block));
@@ -1827,28 +1825,12 @@ pub(super) fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 cases.push((value, dest));
             }
 
-            // Create additional compare blocks as needed.
-            let mut compare_blocks = Vec::with_capacity(cases.len().saturating_sub(1));
-            for _ in 0..cases.len().saturating_sub(1) {
-                compare_blocks.push(ctx.fb.append_block());
-            }
-
-            for (case_idx, (case_value, case_dest)) in cases.into_iter().enumerate() {
-                if case_idx > 0 {
-                    ctx.fb.switch_to_block(compare_blocks[case_idx - 1]);
-                }
-
-                let else_dest = if case_idx + 1 < compare_blocks.len() + 1 {
-                    compare_blocks[case_idx]
-                } else {
-                    default_block
-                };
-                let cond = ctx
-                    .fb
-                    .insert_inst(Eq::new(ctx.is, discr_val, case_value), Type::I1);
-                ctx.fb
-                    .insert_inst_no_result(Br::new(ctx.is, cond, case_dest, else_dest));
-            }
+            ctx.fb.insert_inst_no_result(BrTable::new(
+                ctx.is,
+                discr_val,
+                Some(default_block),
+                cases,
+            ));
         }
         Terminator::TerminatingCall { call, .. } => match call {
             mir::TerminatingCall::Call(call) => {

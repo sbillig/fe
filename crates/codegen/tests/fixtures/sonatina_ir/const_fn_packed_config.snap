@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/const_fn_packed_config.fe
 ---
@@ -56,12 +55,7 @@ func private %token_params(v0.i256) -> i256 {
         jump block2;
 
     block5:
-        v33.i1 = eq v0 0.i256;
-        br v33 block1 block6;
-
-    block6:
-        v34.i1 = eq v0 1.i256;
-        br v34 block3 block4;
+        br_table v0 block4 (0.i256 block1) (1.i256 block3);
 }
 
 func private %pack_config(v0.i256, v1.i256, v2.i256) -> i256 {

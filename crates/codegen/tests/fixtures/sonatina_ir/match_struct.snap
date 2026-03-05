@@ -54,26 +54,23 @@ func public %match_struct_fields(v0.i256) -> i256 {
         v31.i256 = mload v30 i256;
         v32.i8 = trunc v31 i8;
         v33.i256 = zext v32 i256;
-        v34.i1 = eq v33 0.i256;
-        br v34 block7 block8;
+        br_table v33 block8 (0.i256 block7);
 
     block7:
-        v36.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
-        v37.*i256 = gep v36 0.i256 0.i256;
-        v38.i256 = mload v37 i256;
-        v39.i8 = trunc v38 i8;
-        v40.i256 = zext v39 i256;
-        v41.i1 = eq v40 0.i256;
-        br v41 block1 block4;
+        v35.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
+        v36.*i256 = gep v35 0.i256 0.i256;
+        v37.i256 = mload v36 i256;
+        v38.i8 = trunc v37 i8;
+        v39.i256 = zext v38 i256;
+        br_table v39 block4 (0.i256 block1);
 
     block8:
-        v43.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
-        v44.*i256 = gep v43 0.i256 0.i256;
-        v45.i256 = mload v44 i256;
-        v46.i8 = trunc v45 i8;
-        v47.i256 = zext v46 i256;
-        v48.i1 = eq v47 0.i256;
-        br v48 block3 block5;
+        v41.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
+        v42.*i256 = gep v41 0.i256 0.i256;
+        v43.i256 = mload v42 i256;
+        v44.i8 = trunc v43 i8;
+        v45.i256 = zext v44 i256;
+        br_table v45 block5 (0.i256 block3);
 }
 
 func public %match_struct_wildcard(v0.i256) -> i256 {
@@ -99,17 +96,15 @@ func public %match_struct_wildcard(v0.i256) -> i256 {
         v9.i256 = mload v8 i256;
         v10.i8 = trunc v9 i8;
         v11.i256 = zext v10 i256;
-        v12.i1 = eq v11 0.i256;
-        br v12 block1 block6;
+        br_table v11 block6 (0.i256 block1);
 
     block6:
-        v14.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
-        v15.*i256 = gep v14 0.i256 1.i256;
-        v16.i256 = mload v15 i256;
-        v17.i8 = trunc v16 i8;
-        v18.i256 = zext v17 i256;
-        v19.i1 = eq v18 0.i256;
-        br v19 block3 block4;
+        v13.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
+        v14.*i256 = gep v13 0.i256 1.i256;
+        v15.i256 = mload v14 i256;
+        v16.i8 = trunc v15 i8;
+        v17.i256 = zext v16 i256;
+        br_table v17 block4 (0.i256 block3);
 }
 
 func public %__fe_sonatina_entry() {

@@ -47,28 +47,24 @@ func private %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_le
         v7.i256 = mload v6 i256;
         v8.i1 = lt v5 v7;
         v9.i256 = zext v8 i256;
-        v11.i1 = eq v9 1.i256;
-        br v11 block1 block4;
+        v10.i1 = ne v9 0.i256;
+        br v10 block1 block2;
 
     block1:
         jump block3;
 
     block2:
-        v14.i256 = add v0 32.i256;
-        v15.*i256 = int_to_ptr v14 *i256;
+        v12.i256 = add v0 32.i256;
+        v13.*i256 = int_to_ptr v12 *i256;
+        v14.i256 = mload v13 i256;
+        v15.*i256 = int_to_ptr v0 *i256;
         v16.i256 = mload v15 i256;
-        v17.*i256 = int_to_ptr v0 *i256;
-        v18.i256 = mload v17 i256;
-        v19.i256 = sub v16 v18;
+        v17.i256 = sub v14 v16;
         jump block3;
 
     block3:
-        v20.i256 = phi (0.i256 block1) (v19 block2);
-        return v20;
-
-    block4:
-        v12.i1 = eq v9 0.i256;
-        br v12 block2 block2;
+        v18.i256 = phi (0.i256 block1) (v17 block2);
+        return v18;
 }
 
 func private %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_get(v0.i256, v1.i256) -> i256 {

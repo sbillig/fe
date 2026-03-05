@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/storage_map_contract.fe
 ---
@@ -66,24 +65,7 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
         evm_return 0.i256 0.i256;
 
     block7:
-        v25.i1 = eq v3 2630350600.i256;
-        br v25 block1 block8;
-
-    block8:
-        v26.i1 = eq v3 1246470123.i256;
-        br v26 block2 block9;
-
-    block9:
-        v27.i1 = eq v3 2430412327.i256;
-        br v27 block3 block10;
-
-    block10:
-        v28.i1 = eq v3 3378517838.i256;
-        br v28 block4 block11;
-
-    block11:
-        v29.i1 = eq v3 197806145.i256;
-        br v29 block5 block6;
+        br_table v3 block6 (2630350600.i256 block1) (1246470123.i256 block2) (2430412327.i256 block3) (3378517838.i256 block4) (197806145.i256 block5);
 }
 
 func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_new__u256_u256_0__6a346ad3c930d971() {

@@ -97,40 +97,7 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
         evm_revert 0.i256 0.i256;
 
     block11:
-        v47.i1 = eq v4 1889567281.i256;
-        br v47 block1 block12;
-
-    block12:
-        v48.i1 = eq v4 3714247998.i256;
-        br v48 block2 block13;
-
-    block13:
-        v49.i1 = eq v4 117300739.i256;
-        br v49 block3 block14;
-
-    block14:
-        v50.i1 = eq v4 2514000705.i256;
-        br v50 block4 block15;
-
-    block15:
-        v51.i1 = eq v4 826074471.i256;
-        br v51 block5 block16;
-
-    block16:
-        v52.i1 = eq v4 2835717307.i256;
-        br v52 block6 block17;
-
-    block17:
-        v53.i1 = eq v4 157198259.i256;
-        br v53 block7 block18;
-
-    block18:
-        v54.i1 = eq v4 599290589.i256;
-        br v54 block8 block19;
-
-    block19:
-        v55.i1 = eq v4 1086394137.i256;
-        br v55 block9 block10;
+        br_table v4 block10 (1889567281.i256 block1) (3714247998.i256 block2) (117300739.i256 block3) (2514000705.i256 block4) (826074471.i256 block5) (2835717307.i256 block6) (157198259.i256 block7) (599290589.i256 block8) (1086394137.i256 block9);
 }
 
 func private %stor_ptr_stor__Evm_hef0af3106e109414_Erc20_0__1___536307fd4fe270cd(v0.i256, v1.i256) -> i256 {

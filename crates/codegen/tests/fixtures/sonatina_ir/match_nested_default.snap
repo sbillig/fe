@@ -25,26 +25,19 @@ func public %nested_with_defaults(v0.i256) -> i256 {
     block5:
         v6.*i256 = int_to_ptr v0 *i256;
         v7.i256 = mload v6 i256;
-        v8.i1 = eq v7 0.i256;
-        br v8 block6 block8;
+        br_table v7 block4 (0.i256 block6) (1.i256 block7);
 
     block6:
-        v12.i256 = add v0 32.i256;
-        v13.*i256 = int_to_ptr v12 *i256;
-        v14.i256 = mload v13 i256;
-        v15.i1 = eq v14 0.i256;
-        br v15 block1 block4;
+        v10.i256 = add v0 32.i256;
+        v11.*i256 = int_to_ptr v10 *i256;
+        v12.i256 = mload v11 i256;
+        br_table v12 block4 (0.i256 block1);
 
     block7:
-        v17.i256 = add v0 32.i256;
-        v18.*i256 = int_to_ptr v17 *i256;
-        v19.i256 = mload v18 i256;
-        v20.i1 = eq v19 1.i256;
-        br v20 block3 block4;
-
-    block8:
-        v9.i1 = eq v7 1.i256;
-        br v9 block7 block4;
+        v14.i256 = add v0 32.i256;
+        v15.*i256 = int_to_ptr v14 *i256;
+        v16.i256 = mload v15 i256;
+        br_table v16 block4 (1.i256 block3);
 }
 
 func public %outer_specific_inner_wildcard(v0.i256) -> i256 {
@@ -67,15 +60,13 @@ func public %outer_specific_inner_wildcard(v0.i256) -> i256 {
     block5:
         v7.*i256 = int_to_ptr v0 *i256;
         v8.i256 = mload v7 i256;
-        v9.i1 = eq v8 0.i256;
-        br v9 block6 block4;
+        br_table v8 block4 (0.i256 block6);
 
     block6:
-        v12.i256 = add v0 32.i256;
-        v13.*i256 = int_to_ptr v12 *i256;
-        v14.i256 = mload v13 i256;
-        v15.i1 = eq v14 0.i256;
-        br v15 block1 block3;
+        v11.i256 = add v0 32.i256;
+        v12.*i256 = int_to_ptr v11 *i256;
+        v13.i256 = mload v12 i256;
+        br_table v13 block3 (0.i256 block1);
 }
 
 func public %deeply_nested_wildcard(v0.i256) -> i256 {
@@ -95,22 +86,19 @@ func public %deeply_nested_wildcard(v0.i256) -> i256 {
     block4:
         v5.*i256 = int_to_ptr v0 *i256;
         v6.i256 = mload v5 i256;
-        v7.i1 = eq v6 0.i256;
-        br v7 block5 block3;
+        br_table v6 block3 (0.i256 block5);
 
     block5:
-        v10.i256 = add v0 32.i256;
-        v11.*i256 = int_to_ptr v10 *i256;
-        v12.i256 = mload v11 i256;
-        v13.i1 = eq v12 0.i256;
-        br v13 block6 block3;
+        v9.i256 = add v0 32.i256;
+        v10.*i256 = int_to_ptr v9 *i256;
+        v11.i256 = mload v10 i256;
+        br_table v11 block3 (0.i256 block6);
 
     block6:
-        v16.i256 = add v0 64.i256;
-        v17.*i256 = int_to_ptr v16 *i256;
-        v18.i256 = mload v17 i256;
-        v19.i1 = eq v18 0.i256;
-        br v19 block1 block3;
+        v14.i256 = add v0 64.i256;
+        v15.*i256 = int_to_ptr v14 *i256;
+        v16.i256 = mload v15 i256;
+        br_table v16 block3 (0.i256 block1);
 }
 
 func public %exhaustive_inner_outer_wildcard(v0.i256) -> i256 {
@@ -136,23 +124,13 @@ func public %exhaustive_inner_outer_wildcard(v0.i256) -> i256 {
     block6:
         v7.*i256 = int_to_ptr v0 *i256;
         v8.i256 = mload v7 i256;
-        v9.i1 = eq v8 0.i256;
-        br v9 block7 block5;
+        br_table v8 block5 (0.i256 block7);
 
     block7:
-        v12.i256 = add v0 32.i256;
-        v13.*i256 = int_to_ptr v12 *i256;
-        v14.i256 = mload v13 i256;
-        v15.i1 = eq v14 0.i256;
-        br v15 block1 block8;
-
-    block8:
-        v16.i1 = eq v14 1.i256;
-        br v16 block3 block9;
-
-    block9:
-        v17.i1 = eq v14 2.i256;
-        br v17 block4 block5;
+        v11.i256 = add v0 32.i256;
+        v12.*i256 = int_to_ptr v11 *i256;
+        v13.i256 = mload v12 i256;
+        br_table v13 block5 (0.i256 block1) (1.i256 block3) (2.i256 block4);
 }
 
 func public %__fe_sonatina_entry() {

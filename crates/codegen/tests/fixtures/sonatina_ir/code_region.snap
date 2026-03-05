@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/code_region.fe
 ---
@@ -40,12 +39,7 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
         jump block2;
 
     block5:
-        v5.i1 = eq v1 305419896.i256;
-        br v5 block1 block6;
-
-    block6:
-        v6.i1 = eq v1 591751049.i256;
-        br v6 block3 block4;
+        br_table v1 block4 (305419896.i256 block1) (591751049.i256 block3);
 }
 
 func private %child_init__StorPtr_Evm___207f35a85ac4062e() {

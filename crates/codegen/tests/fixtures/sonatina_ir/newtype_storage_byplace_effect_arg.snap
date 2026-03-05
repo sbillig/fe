@@ -80,8 +80,7 @@ func private %__NewtypeByPlaceEffectArg_runtime() {
         v3.i256 = call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Wrap_haf9e70905fcbd513__945a70bbbf171dbd 0.i256 1.i256;
         v4.i256 = call %runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2 0.i256;
         v5.i256 = call %runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2 0.i256;
-        v6.i1 = eq v4 1.i256;
-        br v6 block2 block1;
+        br_table v4 block1 (1.i256 block2);
 
     block1:
         call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort 0.i256;
@@ -89,8 +88,8 @@ func private %__NewtypeByPlaceEffectArg_runtime() {
 
     block2:
         call %bump_hfb5a53c6af92b8a6_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
-        v10.i256 = call %__NewtypeByPlaceEffectArg_recv_0_0 v3 v1;
-        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v10;
+        v9.i256 = call %__NewtypeByPlaceEffectArg_recv_0_0 v3 v1;
+        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v9;
         evm_invalid;
 }
 

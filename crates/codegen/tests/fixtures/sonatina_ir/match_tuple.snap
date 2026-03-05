@@ -34,47 +34,32 @@ func public %match_bool_tuple(v0.i256) -> i256 {
         v9.i256 = mload v8 i256;
         v10.i1 = ne v9 0.i256;
         v11.i256 = zext v10 i256;
-        v12.i1 = eq v11 1.i256;
-        br v12 block7 block12;
+        br_table v11 block11 (1.i256 block7) (0.i256 block9);
 
     block7:
-        v15.*@__fe_tuple_0 = int_to_ptr v0 *@__fe_tuple_0;
-        v16.*i256 = gep v15 0.i256 0.i256;
-        v17.i256 = mload v16 i256;
-        v18.i1 = ne v17 0.i256;
-        v19.i256 = zext v18 i256;
-        v20.i1 = eq v19 1.i256;
-        br v20 block1 block13;
+        v13.*@__fe_tuple_0 = int_to_ptr v0 *@__fe_tuple_0;
+        v14.*i256 = gep v13 0.i256 0.i256;
+        v15.i256 = mload v14 i256;
+        v16.i1 = ne v15 0.i256;
+        v17.i256 = zext v16 i256;
+        br_table v17 block8 (1.i256 block1) (0.i256 block4);
 
     block8:
         evm_invalid;
 
     block9:
-        v23.*@__fe_tuple_0 = int_to_ptr v0 *@__fe_tuple_0;
-        v24.*i256 = gep v23 0.i256 0.i256;
-        v25.i256 = mload v24 i256;
-        v26.i1 = ne v25 0.i256;
-        v27.i256 = zext v26 i256;
-        v28.i1 = eq v27 1.i256;
-        br v28 block3 block14;
+        v19.*@__fe_tuple_0 = int_to_ptr v0 *@__fe_tuple_0;
+        v20.*i256 = gep v19 0.i256 0.i256;
+        v21.i256 = mload v20 i256;
+        v22.i1 = ne v21 0.i256;
+        v23.i256 = zext v22 i256;
+        br_table v23 block10 (1.i256 block3) (0.i256 block5);
 
     block10:
         evm_invalid;
 
     block11:
         evm_invalid;
-
-    block12:
-        v13.i1 = eq v11 0.i256;
-        br v13 block9 block11;
-
-    block13:
-        v21.i1 = eq v19 0.i256;
-        br v21 block4 block8;
-
-    block14:
-        v29.i1 = eq v27 0.i256;
-        br v29 block5 block10;
 }
 
 func public %match_tuple_with_wildcard(v0.i256) -> i256 {
@@ -97,15 +82,10 @@ func public %match_tuple_with_wildcard(v0.i256) -> i256 {
         v7.i256 = mload v6 i256;
         v8.i1 = ne v7 0.i256;
         v9.i256 = zext v8 i256;
-        v10.i1 = eq v9 1.i256;
-        br v10 block1 block6;
+        br_table v9 block5 (1.i256 block1) (0.i256 block3);
 
     block5:
         evm_invalid;
-
-    block6:
-        v11.i1 = eq v9 0.i256;
-        br v11 block3 block5;
 }
 
 func public %match_mixed_tuple(v0.i256) -> i256 {
@@ -134,28 +114,18 @@ func public %match_mixed_tuple(v0.i256) -> i256 {
         v9.i256 = mload v8 i256;
         v10.i1 = ne v9 0.i256;
         v11.i256 = zext v10 i256;
-        v13.i1 = eq v11 1.i256;
-        br v13 block7 block9;
+        br_table v11 block8 (1.i256 block7) (0.i256 block5);
 
     block7:
-        v16.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
-        v17.*i256 = gep v16 0.i256 1.i256;
-        v18.i256 = mload v17 i256;
-        v19.i8 = trunc v18 i8;
-        v20.i256 = zext v19 i256;
-        v21.i1 = eq v20 0.i256;
-        br v21 block1 block10;
+        v14.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
+        v15.*i256 = gep v14 0.i256 1.i256;
+        v16.i256 = mload v15 i256;
+        v17.i8 = trunc v16 i8;
+        v18.i256 = zext v17 i256;
+        br_table v18 block4 (0.i256 block1) (1.i256 block3);
 
     block8:
         evm_invalid;
-
-    block9:
-        v14.i1 = eq v11 0.i256;
-        br v14 block5 block8;
-
-    block10:
-        v22.i1 = eq v20 1.i256;
-        br v22 block3 block4;
 }
 
 func public %__fe_sonatina_entry() {
