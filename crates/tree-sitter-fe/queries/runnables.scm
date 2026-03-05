@@ -9,18 +9,13 @@
 
 ; Fe test function (with #[test] attribute)
 (
-    (
-        (attribute
-            (identifier) @_attribute
-            (#match? @_attribute "test")
-        ) @_start
-        .
-        (attribute) *
-        .
-        (function_definition
-            name: (_) @run
-            body: _
-        ) @_end
+    (function_definition
+        (attribute_list
+            (attribute
+                name: (identifier) @_attribute
+                (#match? @_attribute "test")))
+        name: (_) @run
+        body: _
     )
     (#set! tag fe-test)
 )
