@@ -195,7 +195,7 @@ func private %getx_hdbb0a53a8b757989_decode_h624c3cd8c996d995_decode__SolDecoder
         return;
 }
 
-func public %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0.i256) -> i256 {
+func private %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0.i256) -> i256 {
     block0:
         v2.i256 = call %cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v0;
         v4.*i8 = evm_malloc 128.i256;
@@ -391,7 +391,7 @@ func private %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482
         return v2;
 }
 
-func public %cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0.i256) -> i256 {
+func private %cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0.i256) -> i256 {
     block0:
         v3.*i8 = evm_malloc 96.i256;
         v4.i256 = ptr_to_int v3 i256;
@@ -444,7 +444,7 @@ func private %s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_uncheck
         return v3;
 }
 
-func public %soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0.i256, v1.i256) -> i256 {
+func private %soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0.i256, v1.i256) -> i256 {
     block0:
         v3.i256 = call %cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v0;
         v4.i256 = call %cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v3 v1;
@@ -468,7 +468,7 @@ func public %soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc
         return v7;
 }
 
-func public %solencoder_h1b9228b90dad6928_new() -> i256 {
+func private %solencoder_h1b9228b90dad6928_new() -> i256 {
     block0:
         v2.*i8 = evm_malloc 96.i256;
         v3.i256 = ptr_to_int v2 i256;
@@ -560,7 +560,7 @@ func private %u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_from_word(v0.i256)
         return v0;
 }
 
-func public %cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0.i256) -> i256 {
+func private %cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0.i256) -> i256 {
     block0:
         v3.*i8 = evm_malloc 64.i256;
         v4.i256 = ptr_to_int v3 i256;
@@ -573,7 +573,7 @@ func public %cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f0
         return v4;
 }
 
-func public %cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0.i256, v1.i256) -> i256 {
+func private %cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0.i256, v1.i256) -> i256 {
     block0:
         v3.*@__fe_Cursor_6 = int_to_ptr v0 *@__fe_Cursor_6;
         v4.*@__fe_CallData_5 = gep v3 0.i256 0.i256;

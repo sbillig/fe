@@ -5,22 +5,22 @@ input_file: crates/codegen/tests/fixtures/tuple_single_element_peeling.fe
 ---
 target = "evm-ethereum-osaka"
 
-func public %tuple_single_passthrough(v0.i256) -> i256 {
+func private %tuple_single_passthrough(v0.i256) -> i256 {
     block0:
         return v0;
 }
 
-func public %tuple_single_nested_passthrough(v0.i256) -> i256 {
+func private %tuple_single_nested_passthrough(v0.i256) -> i256 {
     block0:
         return v0;
 }
 
-func public %tuple_single_struct_newtype_nested(v0.i256) -> i256 {
+func private %tuple_single_struct_newtype_nested(v0.i256) -> i256 {
     block0:
         return v0;
 }
 
-func public %match_single_element_tuple(v0.i256) -> i256 {
+func private %match_single_element_tuple(v0.i256) -> i256 {
     block0:
         jump block4;
 
@@ -41,7 +41,7 @@ func public %match_single_element_tuple(v0.i256) -> i256 {
         evm_invalid;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v1.i256 = call %tuple_single_passthrough 0.i256;
         evm_stop;

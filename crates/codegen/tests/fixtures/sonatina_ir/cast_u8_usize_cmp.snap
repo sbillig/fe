@@ -5,7 +5,7 @@ input_file: crates/codegen/tests/fixtures/cast_u8_usize_cmp.fe
 ---
 target = "evm-ethereum-osaka"
 
-func public %cast_u8_usize_cmp(v0.i256, v1.i256, v2.i256) -> i256 {
+func private %cast_u8_usize_cmp(v0.i256, v1.i256, v2.i256) -> i256 {
     block0:
         v4.*[i256; 8] = int_to_ptr v0 *[i256; 8];
         v5.*i256 = gep v4 0.i256 v1;
@@ -42,7 +42,7 @@ func public %cast_u8_usize_cmp(v0.i256, v1.i256, v2.i256) -> i256 {
         return 0.i256;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v1.i256 = call %cast_u8_usize_cmp 0.i256 0.i256 0.i256;
         evm_stop;

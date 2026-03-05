@@ -5,7 +5,7 @@ input_file: crates/codegen/tests/fixtures/array_mut.fe
 ---
 target = "evm-ethereum-osaka"
 
-func public %array_mut(v0.i256) -> i256 {
+func private %array_mut(v0.i256) -> i256 {
     block0:
         v3.*i8 = evm_malloc 128.i256;
         v4.i256 = ptr_to_int v3 i256;
@@ -32,7 +32,7 @@ func public %array_mut(v0.i256) -> i256 {
         return v4;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v1.i256 = call %array_mut 0.i256;
         evm_stop;

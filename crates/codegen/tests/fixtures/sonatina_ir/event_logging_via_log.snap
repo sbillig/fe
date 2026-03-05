@@ -57,7 +57,7 @@ func private %transfer_h628c212e2bb5f76f_event_hd33e4481d4a34b05_emit__Evm_hef0a
         return;
 }
 
-func public %solencoder_h1b9228b90dad6928_new() -> i256 {
+func private %solencoder_h1b9228b90dad6928_new() -> i256 {
     block0:
         v2.*i8 = evm_malloc 96.i256;
         v3.i256 = ptr_to_int v2 i256;
@@ -155,7 +155,7 @@ func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_wo
         return;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         call %emit_transfer 0.i256 0.i256 0.i256 0.i256;
         evm_stop;

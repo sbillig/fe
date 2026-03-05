@@ -7,7 +7,7 @@ target = "evm-ethereum-osaka"
 
 global private const [i8; 32] $__fe_const_data_0 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
 
-func public %const_array_branch(v0.i256) -> i256 {
+func private %const_array_branch(v0.i256) -> i256 {
     block0:
         v2.i1 = ne v0 0.i256;
         br v2 block1 block2;
@@ -49,7 +49,7 @@ func public %const_array_branch(v0.i256) -> i256 {
         return v26;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v1.i256 = call %const_array_branch 0.i256;
         evm_stop;

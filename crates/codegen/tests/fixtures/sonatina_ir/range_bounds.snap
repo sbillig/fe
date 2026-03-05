@@ -5,7 +5,7 @@ input_file: crates/codegen/tests/fixtures/range_bounds.fe
 ---
 target = "evm-ethereum-osaka"
 
-func public %sum_const() -> i256 {
+func private %sum_const() -> i256 {
     block0:
         v1.i256 = call %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_len__0_4__f9605efabd18106c 0.i256;
         jump block1;
@@ -31,7 +31,7 @@ func public %sum_const() -> i256 {
         return v16;
 }
 
-func public %sum_dynamic_end(v0.i256) -> i256 {
+func private %sum_dynamic_end(v0.i256) -> i256 {
     block0:
         v2.*[i8; 32] = alloca [i8; 32];
         v3.i256 = ptr_to_int v2 i256;
@@ -61,7 +61,7 @@ func public %sum_dynamic_end(v0.i256) -> i256 {
         return v23;
 }
 
-func public %sum_dynamic_start(v0.i256) -> i256 {
+func private %sum_dynamic_start(v0.i256) -> i256 {
     block0:
         v2.*[i8; 32] = alloca [i8; 32];
         v3.i256 = ptr_to_int v2 i256;
@@ -91,7 +91,7 @@ func public %sum_dynamic_start(v0.i256) -> i256 {
         return v23;
 }
 
-func public %sum_dynamic(v0.i256, v1.i256) -> i256 {
+func private %sum_dynamic(v0.i256, v1.i256) -> i256 {
     block0:
         v3.*[i8; 64] = alloca [i8; 64];
         v4.i256 = ptr_to_int v3 i256;
@@ -232,7 +232,7 @@ func private %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_le
         return v18;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v0.i256 = call %sum_const;
         evm_stop;

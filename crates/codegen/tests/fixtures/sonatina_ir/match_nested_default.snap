@@ -5,7 +5,7 @@ input_file: crates/codegen/tests/fixtures/match_nested_default.fe
 ---
 target = "evm-ethereum-osaka"
 
-func public %nested_with_defaults(v0.i256) -> i256 {
+func private %nested_with_defaults(v0.i256) -> i256 {
     block0:
         jump block5;
 
@@ -40,7 +40,7 @@ func public %nested_with_defaults(v0.i256) -> i256 {
         br_table v16 block4 (1.i256 block3);
 }
 
-func public %outer_specific_inner_wildcard(v0.i256) -> i256 {
+func private %outer_specific_inner_wildcard(v0.i256) -> i256 {
     block0:
         jump block5;
 
@@ -69,7 +69,7 @@ func public %outer_specific_inner_wildcard(v0.i256) -> i256 {
         br_table v13 block3 (0.i256 block1);
 }
 
-func public %deeply_nested_wildcard(v0.i256) -> i256 {
+func private %deeply_nested_wildcard(v0.i256) -> i256 {
     block0:
         jump block4;
 
@@ -101,7 +101,7 @@ func public %deeply_nested_wildcard(v0.i256) -> i256 {
         br_table v16 block3 (0.i256 block1);
 }
 
-func public %exhaustive_inner_outer_wildcard(v0.i256) -> i256 {
+func private %exhaustive_inner_outer_wildcard(v0.i256) -> i256 {
     block0:
         jump block6;
 
@@ -133,7 +133,7 @@ func public %exhaustive_inner_outer_wildcard(v0.i256) -> i256 {
         br_table v13 block5 (0.i256 block1) (1.i256 block3) (2.i256 block4);
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v1.i256 = call %nested_with_defaults 0.i256;
         evm_stop;

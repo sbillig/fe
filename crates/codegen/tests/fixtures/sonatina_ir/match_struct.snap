@@ -7,7 +7,7 @@ target = "evm-ethereum-osaka"
 
 type @__fe_Point_0 = {i256, i256};
 
-func public %match_struct_fields(v0.i256) -> i256 {
+func private %match_struct_fields(v0.i256) -> i256 {
     block0:
         jump block6;
 
@@ -73,7 +73,7 @@ func public %match_struct_fields(v0.i256) -> i256 {
         br_table v45 block5 (0.i256 block3);
 }
 
-func public %match_struct_wildcard(v0.i256) -> i256 {
+func private %match_struct_wildcard(v0.i256) -> i256 {
     block0:
         jump block5;
 
@@ -107,7 +107,7 @@ func public %match_struct_wildcard(v0.i256) -> i256 {
         br_table v17 block4 (0.i256 block3);
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v1.i256 = call %match_struct_fields 0.i256;
         evm_stop;

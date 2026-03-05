@@ -5,7 +5,7 @@ input_file: crates/codegen/tests/fixtures/match_literal.fe
 ---
 target = "evm-ethereum-osaka"
 
-func public %match_bool(v0.i256) -> i256 {
+func private %match_bool(v0.i256) -> i256 {
     block0:
         jump block4;
 
@@ -23,7 +23,7 @@ func public %match_bool(v0.i256) -> i256 {
         br_table v0 block3 (1.i256 block1);
 }
 
-func public %match_u8(v0.i256) -> i256 {
+func private %match_u8(v0.i256) -> i256 {
     block0:
         jump block5;
 
@@ -44,7 +44,7 @@ func public %match_u8(v0.i256) -> i256 {
         br_table v0 block4 (0.i256 block1) (255.i256 block3);
 }
 
-func public %match_u16(v0.i256) -> i256 {
+func private %match_u16(v0.i256) -> i256 {
     block0:
         jump block5;
 
@@ -65,7 +65,7 @@ func public %match_u16(v0.i256) -> i256 {
         br_table v0 block4 (4660.i256 block1) (43981.i256 block3);
 }
 
-func public %match_u32(v0.i256) -> i256 {
+func private %match_u32(v0.i256) -> i256 {
     block0:
         jump block5;
 
@@ -86,7 +86,7 @@ func public %match_u32(v0.i256) -> i256 {
         br_table v0 block4 (3735928559.i256 block1) (3405691582.i256 block3);
 }
 
-func public %match_u64(v0.i256) -> i256 {
+func private %match_u64(v0.i256) -> i256 {
     block0:
         jump block5;
 
@@ -107,7 +107,7 @@ func public %match_u64(v0.i256) -> i256 {
         br_table v0 block4 (0.i256 block1) (18446744073709551615.i256 block3);
 }
 
-func public %match_u128(v0.i256) -> i256 {
+func private %match_u128(v0.i256) -> i256 {
     block0:
         jump block5;
 
@@ -128,7 +128,7 @@ func public %match_u128(v0.i256) -> i256 {
         br_table v0 block4 (0.i256 block1) (340282366920938463463374607431768211455.i256 block3);
 }
 
-func public %match_u256(v0.i256) -> i256 {
+func private %match_u256(v0.i256) -> i256 {
     block0:
         jump block5;
 
@@ -149,7 +149,7 @@ func public %match_u256(v0.i256) -> i256 {
         br_table v0 block4 (0.i256 block1) (-1.i256 block3);
 }
 
-func public %match_i8(v0.i256) -> i256 {
+func private %match_i8(v0.i256) -> i256 {
     block0:
         jump block5;
 
@@ -170,7 +170,7 @@ func public %match_i8(v0.i256) -> i256 {
         br_table v0 block4 (0.i256 block1) (99.i256 block3);
 }
 
-func public %match_i16(v0.i256) -> i256 {
+func private %match_i16(v0.i256) -> i256 {
     block0:
         jump block5;
 
@@ -191,7 +191,7 @@ func public %match_i16(v0.i256) -> i256 {
         br_table v0 block4 (0.i256 block1) (32000.i256 block3);
 }
 
-func public %match_i32(v0.i256) -> i256 {
+func private %match_i32(v0.i256) -> i256 {
     block0:
         jump block5;
 
@@ -212,7 +212,7 @@ func public %match_i32(v0.i256) -> i256 {
         br_table v0 block4 (0.i256 block1) (2000000000.i256 block3);
 }
 
-func public %match_i64(v0.i256) -> i256 {
+func private %match_i64(v0.i256) -> i256 {
     block0:
         jump block5;
 
@@ -233,7 +233,7 @@ func public %match_i64(v0.i256) -> i256 {
         br_table v0 block4 (0.i256 block1) (9223372036854775807.i256 block3);
 }
 
-func public %match_i128(v0.i256) -> i256 {
+func private %match_i128(v0.i256) -> i256 {
     block0:
         jump block5;
 
@@ -254,7 +254,7 @@ func public %match_i128(v0.i256) -> i256 {
         br_table v0 block4 (0.i256 block1) (170141183460469231731687303715884105727.i256 block3);
 }
 
-func public %match_i256(v0.i256) -> i256 {
+func private %match_i256(v0.i256) -> i256 {
     block0:
         jump block5;
 
@@ -275,7 +275,7 @@ func public %match_i256(v0.i256) -> i256 {
         br_table v0 block4 (0.i256 block1) (-1.i256 block3);
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v1.i256 = call %match_bool 0.i256;
         evm_stop;

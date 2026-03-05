@@ -84,7 +84,7 @@ func private %transfer__Evm_hef0af3106e109414__3af54274b2985741(v0.i256) {
         evm_return 0.i256 0.i256;
 }
 
-func public %read_selector__Evm_hef0af3106e109414__3af54274b2985741(v0.i256) -> i256 {
+func private %read_selector__Evm_hef0af3106e109414__3af54274b2985741(v0.i256) -> i256 {
     block0:
         v2.i256 = evm_calldata_load 0.i256;
         v4.i256 = shr 224.i256 v2;

@@ -180,14 +180,14 @@ func private %erc20_______h94f6fe6e679122ca_set_owner_once_stor_arg0_root_stor__
         return;
 }
 
-func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(v0.i256, v1.i256) -> i256 {
+func private %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(v0.i256, v1.i256) -> i256 {
     block0:
         v3.i256 = call %storagemap_get_word_with_salt__Address_h257056268eac7027__5ab99f7153cdba29 v1 0.i256;
         v4.i256 = call %u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_from_word v3;
         return v4;
 }
 
-func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f(v0.i256, v1.i256) -> i256 {
+func private %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f(v0.i256, v1.i256) -> i256 {
     block0:
         v4.i256 = call %storagemap_get_word_with_salt___Address__Address___c32d499da259c78e v1 1.i256;
         v5.i256 = call %u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_from_word v4;
@@ -275,7 +275,7 @@ func private %erc20_______h94f6fe6e679122ca_mint_stor_arg0_root_stor__0_1_Evm_he
         return;
 }
 
-func public %address_h257056268eac7027_zero() -> i256 {
+func private %address_h257056268eac7027_zero() -> i256 {
     block0:
         return 0.i256;
 }
@@ -313,14 +313,14 @@ func private %erc20_______h94f6fe6e679122ca_balance_of_stor_arg0_root_stor__0_1_
         return v3;
 }
 
-func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(v0.i256, v1.i256, v2.i256) {
+func private %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(v0.i256, v1.i256, v2.i256) {
     block0:
         v4.i256 = call %u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word v2;
         call %storagemap_set_word_with_salt__Address_h257056268eac7027__5ab99f7153cdba29 v1 0.i256 v4;
         return;
 }
 
-func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f(v0.i256, v1.i256, v2.i256) {
+func private %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f(v0.i256, v1.i256, v2.i256) {
     block0:
         v4.i256 = call %u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word v2;
         call %storagemap_set_word_with_salt___Address__Address___c32d499da259c78e v1 1.i256 v4;

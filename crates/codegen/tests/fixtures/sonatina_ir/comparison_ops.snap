@@ -7,7 +7,7 @@ target = "evm-ethereum-osaka"
 
 type @__fe_tuple_0 = {i256, i256, i256, i256, i256, i256};
 
-func public %comparison_ops() -> i256 {
+func private %comparison_ops() -> i256 {
     block0:
         v5.*i8 = evm_malloc 192.i256;
         v6.i256 = ptr_to_int v5 i256;
@@ -59,7 +59,7 @@ func public %comparison_ops() -> i256 {
         return v6;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v0.i256 = call %comparison_ops;
         evm_stop;

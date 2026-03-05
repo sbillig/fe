@@ -524,16 +524,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         use mir::ir::{ContractFunctionKind, MirFunctionOrigin, SyntheticId};
 
         let name = &func.symbol_name;
-        let linkage = match func.origin {
-            MirFunctionOrigin::Hir(hir_func) => {
-                if hir_func.vis(self.db).is_pub() {
-                    sonatina_ir::Linkage::Public
-                } else {
-                    sonatina_ir::Linkage::Private
-                }
-            }
-            MirFunctionOrigin::Synthetic(_) => sonatina_ir::Linkage::Private,
-        };
+        // Keep lowered functions private so Sonatina DFE can eliminate dead functions.
+        // Reachability roots are selected via object section entries, not linkage visibility.
+        let linkage = sonatina_ir::Linkage::Private;
 
         // Contract init/runtime entrypoints are executed directly by the EVM with an empty stack.
         // Even though MIR models them as taking effect args (e.g. `StorPtr<Evm>`), we cannot
@@ -1047,7 +1040,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
         let sig = Signature::new(
             WRAPPER_NAME,
-            sonatina_ir::Linkage::Public,
+            sonatina_ir::Linkage::Private,
             &[],
             types::unit_type(),
         );

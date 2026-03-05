@@ -7,7 +7,7 @@ target = "evm-ethereum-osaka"
 
 type @__fe_tuple_0 = {i256, i256};
 
-func public %tuple_expr() -> i256 {
+func private %tuple_expr() -> i256 {
     block0:
         v2.*i8 = evm_malloc 64.i256;
         v3.i256 = ptr_to_int v2 i256;
@@ -27,7 +27,7 @@ func public %tuple_expr() -> i256 {
         return v3;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v0.i256 = call %tuple_expr;
         evm_stop;

@@ -8,7 +8,7 @@ target = "evm-ethereum-osaka"
 type @__fe_tuple_0 = {i256, i256};
 type @__fe_tuple_1 = {i256, @__fe_tuple_0};
 
-func public %tuple_literal_field_access() -> i256 {
+func private %tuple_literal_field_access() -> i256 {
     block0:
         v3.*@__fe_tuple_0 = alloca @__fe_tuple_0;
         v4.i256 = ptr_to_int v3 i256;
@@ -21,7 +21,7 @@ func public %tuple_literal_field_access() -> i256 {
         return v8;
 }
 
-func public %tuple_literal_nested_access() -> i256 {
+func private %tuple_literal_nested_access() -> i256 {
     block0:
         v4.*@__fe_tuple_0 = alloca @__fe_tuple_0;
         v5.i256 = ptr_to_int v4 i256;
@@ -48,7 +48,7 @@ func public %tuple_literal_nested_access() -> i256 {
         return v20;
 }
 
-func public %tuple_literal_struct_chain() -> i256 {
+func private %tuple_literal_struct_chain() -> i256 {
     block0:
         v3.*@__fe_tuple_0 = alloca @__fe_tuple_0;
         v4.i256 = ptr_to_int v3 i256;
@@ -61,7 +61,7 @@ func public %tuple_literal_struct_chain() -> i256 {
         return v8;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v0.i256 = call %tuple_literal_field_access;
         evm_stop;

@@ -8,7 +8,7 @@ target = "evm-ethereum-osaka"
 type @__fe_tuple_0 = {unit, i256};
 type @__fe_Wrap_1 = {unit, i256};
 
-func public %tuple_with_empty() -> i256 {
+func private %tuple_with_empty() -> i256 {
     block0:
         v2.*@__fe_tuple_0 = alloca @__fe_tuple_0;
         v3.i256 = ptr_to_int v2 i256;
@@ -19,12 +19,12 @@ func public %tuple_with_empty() -> i256 {
         return v7;
 }
 
-func public %tuple_only_empty() {
+func private %tuple_only_empty() {
     block0:
         return;
 }
 
-func public %struct_with_empty() -> i256 {
+func private %struct_with_empty() -> i256 {
     block0:
         v2.*@__fe_Wrap_1 = alloca @__fe_Wrap_1;
         v3.i256 = ptr_to_int v2 i256;
@@ -35,7 +35,7 @@ func public %struct_with_empty() -> i256 {
         return v7;
 }
 
-func public %empty_field_assign() {
+func private %empty_field_assign() {
     block0:
         v1.*@__fe_Wrap_1 = alloca @__fe_Wrap_1;
         v2.i256 = ptr_to_int v1 i256;
@@ -44,7 +44,7 @@ func public %empty_field_assign() {
         return;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v0.i256 = call %tuple_with_empty;
         evm_stop;

@@ -100,7 +100,7 @@ func private %main() -> i256 {
         return 1179678.i256;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v1.i256 = call %token_params 0.i256;
         evm_stop;

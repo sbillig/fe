@@ -8,7 +8,7 @@ target = "evm-ethereum-osaka"
 type @__fe_tuple_0 = {i256, i256};
 type @__fe_tuple_1 = {@__fe_tuple_0, i256};
 
-func public %match_tuple_extract(v0.i256) -> i256 {
+func private %match_tuple_extract(v0.i256) -> i256 {
     block0:
         jump block5;
 
@@ -63,7 +63,7 @@ func public %match_tuple_extract(v0.i256) -> i256 {
         br_table v40 block4 (0.i256 block3);
 }
 
-func public %match_nested_extract(v0.i256) -> i256 {
+func private %match_nested_extract(v0.i256) -> i256 {
     block0:
         jump block5;
 
@@ -140,7 +140,7 @@ func public %match_nested_extract(v0.i256) -> i256 {
         br_table v58 block4 (0.i256 block3);
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v1.i256 = call %match_tuple_extract 0.i256;
         evm_stop;

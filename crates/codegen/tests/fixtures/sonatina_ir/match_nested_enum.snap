@@ -5,7 +5,7 @@ input_file: crates/codegen/tests/fixtures/match_nested_enum.fe
 ---
 target = "evm-ethereum-osaka"
 
-func public %match_nested_enum(v0.i256) -> i256 {
+func private %match_nested_enum(v0.i256) -> i256 {
     block0:
         jump block5;
 
@@ -50,7 +50,7 @@ func public %match_nested_enum(v0.i256) -> i256 {
         evm_invalid;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v1.i256 = call %match_nested_enum 0.i256;
         evm_stop;

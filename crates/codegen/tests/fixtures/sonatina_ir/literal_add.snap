@@ -17,7 +17,7 @@ func private %add(v0.i256, v1.i256) -> i256 {
         return v3;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v0.i256 = call %main;
         evm_stop;

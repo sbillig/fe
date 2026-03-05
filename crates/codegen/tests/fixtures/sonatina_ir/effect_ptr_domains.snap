@@ -77,7 +77,7 @@ func private %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_r
         return v0;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         call %bump__StorPtr_Foo___3698cc3c4b2626e3 0.i256;
         evm_stop;

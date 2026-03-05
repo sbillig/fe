@@ -7,7 +7,7 @@ target = "evm-ethereum-osaka"
 
 global private const [i8; 96] $__fe_const_data_0 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 30];
 
-func public %sum_two(v0.i256, v1.i256) -> i256 {
+func private %sum_two(v0.i256, v1.i256) -> i256 {
     block0:
         v4.*i8 = evm_malloc 96.i256;
         v5.i256 = ptr_to_int v4 i256;
@@ -39,7 +39,7 @@ func public %sum_two(v0.i256, v1.i256) -> i256 {
         return v26;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v1.i256 = call %sum_two 0.i256 0.i256;
         evm_stop;

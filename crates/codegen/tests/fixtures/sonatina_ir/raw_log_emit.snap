@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/raw_log_emit.fe
 ---
@@ -18,7 +17,7 @@ func private %evm_hef0af3106e109414_log_h22d1a10952034bae_log0(v0.i256, v1.i256,
         return;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         call %raw_emit 0.i256;
         evm_stop;

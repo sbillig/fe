@@ -5,12 +5,12 @@ input_file: crates/codegen/tests/fixtures/name_collisions.fe
 ---
 target = "evm-ethereum-osaka"
 
-func public %a_b_h12fd23afeb13a092_flattened_fn() -> i256 {
+func private %a_b_h12fd23afeb13a092_flattened_fn() -> i256 {
     block0:
         return 1.i256;
 }
 
-func public %a_b_h948d5ab23860c017_flattened_fn() -> i256 {
+func private %a_b_h948d5ab23860c017_flattened_fn() -> i256 {
     block0:
         return 2.i256;
 }
@@ -92,7 +92,7 @@ func private %test_yul_reserved_fn_collision() -> i256 {
         return v1;
 }
 
-func public %main() -> i256 {
+func private %main() -> i256 {
     block0:
         v1.i256 = call %test_module_qualifier_flatten_collision;
         v2.i256 = call %test_generic_type_collision;
@@ -105,13 +105,13 @@ func public %main() -> i256 {
         return 0.i256;
 }
 
-func public %widget_h8588afca9d68e578_process(v0.i256) -> i256 {
+func private %widget_h8588afca9d68e578_process(v0.i256) -> i256 {
     block0:
         v3.i256 = mul v0 2.i256;
         return v3;
 }
 
-func public %widget_h6847c0e3e0e4aa1e_process(v0.i256) -> i256 {
+func private %widget_h6847c0e3e0e4aa1e_process(v0.i256) -> i256 {
     block0:
         v3.i256 = mul v0 3.i256;
         return v3;
@@ -139,7 +139,7 @@ func private %generic_fn__S_h2db58d011b97b333__42a13489a1ec39e8(v0.i256) -> i256
         return v0;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v0.i256 = call %a_b_h12fd23afeb13a092_flattened_fn;
         evm_stop;

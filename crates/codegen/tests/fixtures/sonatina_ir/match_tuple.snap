@@ -8,7 +8,7 @@ target = "evm-ethereum-osaka"
 type @__fe_tuple_0 = {i256, i256};
 type @__fe_tuple_1 = {i256, i256};
 
-func public %match_bool_tuple(v0.i256) -> i256 {
+func private %match_bool_tuple(v0.i256) -> i256 {
     block0:
         jump block6;
 
@@ -62,7 +62,7 @@ func public %match_bool_tuple(v0.i256) -> i256 {
         evm_invalid;
 }
 
-func public %match_tuple_with_wildcard(v0.i256) -> i256 {
+func private %match_tuple_with_wildcard(v0.i256) -> i256 {
     block0:
         jump block4;
 
@@ -88,7 +88,7 @@ func public %match_tuple_with_wildcard(v0.i256) -> i256 {
         evm_invalid;
 }
 
-func public %match_mixed_tuple(v0.i256) -> i256 {
+func private %match_mixed_tuple(v0.i256) -> i256 {
     block0:
         jump block6;
 
@@ -128,7 +128,7 @@ func public %match_mixed_tuple(v0.i256) -> i256 {
         evm_invalid;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v1.i256 = call %match_bool_tuple 0.i256;
         evm_stop;

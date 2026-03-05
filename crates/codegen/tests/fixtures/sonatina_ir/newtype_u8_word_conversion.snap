@@ -8,7 +8,7 @@ target = "evm-ethereum-osaka"
 type @__fe_WrapU8_0 = {i256};
 type @__fe_Container_1 = {@__fe_WrapU8_0, i256};
 
-func public %newtype_u8_roundtrip(v0.i256) -> i256 {
+func private %newtype_u8_roundtrip(v0.i256) -> i256 {
     block0:
         v2.*@__fe_Container_1 = alloca @__fe_Container_1;
         v3.i256 = ptr_to_int v2 i256;
@@ -25,7 +25,7 @@ func public %newtype_u8_roundtrip(v0.i256) -> i256 {
         return v12;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v1.i256 = call %newtype_u8_roundtrip 0.i256;
         evm_stop;

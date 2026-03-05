@@ -5,7 +5,7 @@ input_file: crates/codegen/tests/fixtures/match_wildcard.fe
 ---
 target = "evm-ethereum-osaka"
 
-func public %match_with_wildcard(v0.i256) -> i256 {
+func private %match_with_wildcard(v0.i256) -> i256 {
     block0:
         jump block4;
 
@@ -25,7 +25,7 @@ func public %match_with_wildcard(v0.i256) -> i256 {
         br_table v6 block3 (0.i256 block1);
 }
 
-func public %wildcard_not_last(v0.i256) -> i256 {
+func private %wildcard_not_last(v0.i256) -> i256 {
     block0:
         jump block4;
 
@@ -43,7 +43,7 @@ func public %wildcard_not_last(v0.i256) -> i256 {
         br_table v0 block3 (0.i256 block1);
 }
 
-func public %multiple_before_wildcard(v0.i256) -> i256 {
+func private %multiple_before_wildcard(v0.i256) -> i256 {
     block0:
         jump block5;
 
@@ -66,7 +66,7 @@ func public %multiple_before_wildcard(v0.i256) -> i256 {
         br_table v8 block4 (0.i256 block1) (1.i256 block3);
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v1.i256 = call %match_with_wildcard 0.i256;
         evm_stop;

@@ -8,7 +8,7 @@ target = "evm-ethereum-osaka"
 type @__fe_tuple_0 = {i256, i256};
 type @__fe_tuple_1 = {i256, i256, i256};
 
-func public %make_tuple() -> i256 {
+func private %make_tuple() -> i256 {
     block0:
         v1.*@__fe_tuple_0 = alloca @__fe_tuple_0;
         v2.i256 = ptr_to_int v1 i256;
@@ -21,7 +21,7 @@ func public %make_tuple() -> i256 {
         return v2;
 }
 
-func public %access_tuple() -> i256 {
+func private %access_tuple() -> i256 {
     block0:
         v1.*@__fe_tuple_1 = alloca @__fe_tuple_1;
         v2.i256 = ptr_to_int v1 i256;
@@ -36,7 +36,7 @@ func public %access_tuple() -> i256 {
         return v10;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v0.i256 = call %make_tuple;
         evm_stop;

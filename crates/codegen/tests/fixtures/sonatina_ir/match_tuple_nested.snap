@@ -9,7 +9,7 @@ type @__fe_tuple_0 = {i256, i256};
 type @__fe_tuple_1 = {@__fe_tuple_0, i256};
 type @__fe_tuple_2 = {@__fe_tuple_1, i256};
 
-func public %match_nested_tuple(v0.i256) -> i256 {
+func private %match_nested_tuple(v0.i256) -> i256 {
     block0:
         jump block7;
 
@@ -77,7 +77,7 @@ func public %match_nested_tuple(v0.i256) -> i256 {
         evm_invalid;
 }
 
-func public %match_deeply_nested(v0.i256) -> i256 {
+func private %match_deeply_nested(v0.i256) -> i256 {
     block0:
         jump block5;
 
@@ -130,7 +130,7 @@ func public %match_deeply_nested(v0.i256) -> i256 {
         evm_invalid;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v1.i256 = call %match_nested_tuple 0.i256;
         evm_stop;

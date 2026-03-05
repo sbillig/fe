@@ -5,7 +5,7 @@ input_file: crates/codegen/tests/fixtures/match_enum.fe
 ---
 target = "evm-ethereum-osaka"
 
-func public %match_enum(v0.i256) -> i256 {
+func private %match_enum(v0.i256) -> i256 {
     block0:
         jump block6;
 
@@ -31,7 +31,7 @@ func public %match_enum(v0.i256) -> i256 {
         br_table v9 block5 (0.i256 block1) (1.i256 block3) (2.i256 block4);
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v1.i256 = call %match_enum 0.i256;
         evm_stop;
