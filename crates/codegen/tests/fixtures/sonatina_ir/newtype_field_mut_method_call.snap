@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/newtype_field_mut_method_call.fe
 ---
@@ -17,29 +18,34 @@ func private %newtype_field_mut_method_call(v0.i256) -> i256 {
         mstore v4 v0 i256;
         v6.*i256 = gep v2 0.i256 1.i256;
         mstore v6 0.i256 i256;
-        v7.*@__fe_Container_2 = alloca @__fe_Container_2;
-        v8.i256 = ptr_to_int v7 i256;
-        v9.*i256 = gep v7 0.i256 0.i256;
-        mstore v9 0.i256 i256;
-        v10.*@__fe_WrapCounter_1 = bitcast v2 *@__fe_WrapCounter_1;
-        v11.*i256 = gep v10 0.i256 0.i256 0.i256;
-        v12.i256 = mload v11 i256;
-        v13.*i256 = gep v7 0.i256 1.i256 0.i256 0.i256;
-        mstore v13 v12 i256;
-        v14.*@__fe_WrapCounter_1 = bitcast v2 *@__fe_WrapCounter_1;
-        v15.*i256 = gep v14 0.i256 0.i256 1.i256;
-        v16.i256 = mload v15 i256;
-        v17.*i256 = gep v7 0.i256 1.i256 0.i256 1.i256;
-        mstore v17 v16 i256;
-        v18.*@__fe_WrapCounter_1 = gep v7 0.i256 1.i256;
-        v19.i256 = ptr_to_int v18 i256;
-        call %wrapcounter_hbcbd3a74a267488b_bump v19;
-        v20.*@__fe_WrapCounter_1 = gep v7 0.i256 1.i256;
-        v21.i256 = ptr_to_int v20 i256;
-        v22.*@__fe_Counter_0 = bitcast v20 *@__fe_Counter_0;
-        v23.*i256 = gep v22 0.i256 0.i256;
-        v24.i256 = mload v23 i256;
-        return v24;
+        v8.*i8 = evm_malloc 96.i256;
+        v9.i256 = ptr_to_int v8 i256;
+        v10.*@__fe_Container_2 = bitcast v8 *@__fe_Container_2;
+        v11.*i256 = gep v10 0.i256 0.i256;
+        mstore v11 0.i256 i256;
+        v12.*@__fe_WrapCounter_1 = bitcast v2 *@__fe_WrapCounter_1;
+        v13.*i256 = gep v12 0.i256 0.i256 0.i256;
+        v14.i256 = mload v13 i256;
+        v15.*@__fe_Container_2 = bitcast v8 *@__fe_Container_2;
+        v16.*i256 = gep v15 0.i256 1.i256 0.i256 0.i256;
+        mstore v16 v14 i256;
+        v17.*@__fe_WrapCounter_1 = bitcast v2 *@__fe_WrapCounter_1;
+        v18.*i256 = gep v17 0.i256 0.i256 1.i256;
+        v19.i256 = mload v18 i256;
+        v20.*@__fe_Container_2 = bitcast v8 *@__fe_Container_2;
+        v21.*i256 = gep v20 0.i256 1.i256 0.i256 1.i256;
+        mstore v21 v19 i256;
+        v22.*@__fe_Container_2 = bitcast v8 *@__fe_Container_2;
+        v23.*@__fe_WrapCounter_1 = gep v22 0.i256 1.i256;
+        v24.i256 = ptr_to_int v23 i256;
+        call %wrapcounter_hbcbd3a74a267488b_bump v24;
+        v25.*@__fe_Container_2 = bitcast v8 *@__fe_Container_2;
+        v26.*@__fe_WrapCounter_1 = gep v25 0.i256 1.i256;
+        v27.i256 = ptr_to_int v26 i256;
+        v28.*@__fe_Counter_0 = bitcast v26 *@__fe_Counter_0;
+        v29.*i256 = gep v28 0.i256 0.i256;
+        v30.i256 = mload v29 i256;
+        return v30;
 }
 
 func private %counter_h872958864d1ad471_bump(v0.i256) {

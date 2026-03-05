@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/tstor_ptr_contract.fe
 ---
@@ -62,14 +63,16 @@ func private %__GuardContract_init() {
         v15.i256 = ptr_to_int v14 i256;
         v16.i256 = sub v6 v5;
         evm_code_copy v15 v5 v16;
-        v17.*@__fe_MemoryBytes_0 = alloca @__fe_MemoryBytes_0;
-        v18.i256 = ptr_to_int v17 i256;
-        v19.*i256 = gep v17 0.i256 0.i256;
-        mstore v19 v15 i256;
-        v20.i256 = sub v6 v5;
-        v22.*i256 = gep v17 0.i256 1.i256;
-        mstore v22 v20 i256;
-        v23.i256 = call %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v18;
+        v18.*i8 = evm_malloc 64.i256;
+        v19.i256 = ptr_to_int v18 i256;
+        v20.*@__fe_MemoryBytes_0 = bitcast v18 *@__fe_MemoryBytes_0;
+        v21.*i256 = gep v20 0.i256 0.i256;
+        mstore v21 v15 i256;
+        v22.i256 = sub v6 v5;
+        v23.*@__fe_MemoryBytes_0 = bitcast v18 *@__fe_MemoryBytes_0;
+        v25.*i256 = gep v23 0.i256 1.i256;
+        mstore v25 v22 i256;
+        v26.i256 = call %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v19;
         call %__GuardContract_init_contract v2;
         evm_code_copy 0.i256 v3 v4;
         evm_return 0.i256 v4;

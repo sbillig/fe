@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/effect_ptr_domains.fe
 ---
@@ -26,13 +27,15 @@ func private %test_effect_ptr_domains__Evm_hef0af3106e109414_Evm_hef0af3106e1094
         call %bump__MemPtr_Foo___cdd30998d577b6ea v4;
         v5.i256 = call %stor_ptr_stor_arg0_root_stor__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d v0 0.i256;
         call %bump__StorPtr_Foo___3698cc3c4b2626e3 v5;
-        v6.*@__fe_Foo_0 = alloca @__fe_Foo_0;
-        v7.i256 = ptr_to_int v6 i256;
-        v9.*i256 = gep v6 0.i256 0.i256;
-        mstore v9 10.i256 i256;
-        v12.*i256 = gep v6 0.i256 1.i256;
-        mstore v12 20.i256 i256;
-        call %bump__MemPtr_Foo___cdd30998d577b6ea v7;
+        v7.*i8 = evm_malloc 64.i256;
+        v8.i256 = ptr_to_int v7 i256;
+        v10.*@__fe_Foo_0 = bitcast v7 *@__fe_Foo_0;
+        v11.*i256 = gep v10 0.i256 0.i256;
+        mstore v11 10.i256 i256;
+        v13.*@__fe_Foo_0 = bitcast v7 *@__fe_Foo_0;
+        v15.*i256 = gep v13 0.i256 1.i256;
+        mstore v15 20.i256 i256;
+        call %bump__MemPtr_Foo___cdd30998d577b6ea v8;
         return;
 }
 

@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/newtype_storage_byplace_effect_arg.fe
 ---
@@ -61,14 +62,16 @@ func private %__NewtypeByPlaceEffectArg_init() {
         v16.i256 = ptr_to_int v15 i256;
         v17.i256 = sub v7 v6;
         evm_code_copy v16 v6 v17;
-        v18.*@__fe_MemoryBytes_0 = alloca @__fe_MemoryBytes_0;
-        v19.i256 = ptr_to_int v18 i256;
-        v20.*i256 = gep v18 0.i256 0.i256;
-        mstore v20 v16 i256;
-        v21.i256 = sub v7 v6;
-        v22.*i256 = gep v18 0.i256 1.i256;
-        mstore v22 v21 i256;
-        v23.i256 = call %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v19;
+        v19.*i8 = evm_malloc 64.i256;
+        v20.i256 = ptr_to_int v19 i256;
+        v21.*@__fe_MemoryBytes_0 = bitcast v19 *@__fe_MemoryBytes_0;
+        v22.*i256 = gep v21 0.i256 0.i256;
+        mstore v22 v16 i256;
+        v23.i256 = sub v7 v6;
+        v24.*@__fe_MemoryBytes_0 = bitcast v19 *@__fe_MemoryBytes_0;
+        v25.*i256 = gep v24 0.i256 1.i256;
+        mstore v25 v23 i256;
+        v26.i256 = call %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v20;
         call %__NewtypeByPlaceEffectArg_init_contract;
         evm_code_copy 0.i256 v4 v5;
         evm_return 0.i256 v5;

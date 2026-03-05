@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/for_range.fe
 ---
@@ -7,35 +8,35 @@ target = "evm-ethereum-osaka"
 
 func private %for_range_sum() -> i256 {
     block0:
-        v2.*[i8; 64] = alloca [i8; 64];
-        v3.i256 = ptr_to_int v2 i256;
-        v4.*i256 = bitcast v2 *i256;
-        mstore v4 0.i256 i256;
-        v6.i256 = add v3 32.i256;
-        v7.*i256 = int_to_ptr v6 *i256;
-        mstore v7 10.i256 i256;
-        v8.i256 = call %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len v3;
+        v3.*i8 = evm_malloc 64.i256;
+        v4.i256 = ptr_to_int v3 i256;
+        v5.*i256 = bitcast v3 *i256;
+        mstore v5 0.i256 i256;
+        v7.i256 = add v4 32.i256;
+        v8.*i256 = int_to_ptr v7 *i256;
+        mstore v8 10.i256 i256;
+        v9.i256 = call %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len v4;
         jump block1;
 
     block1:
-        v26.i256 = phi (0.i256 block0) (v18 block3);
-        v9.i256 = phi (0.i256 block0) (v21 block3);
-        v11.i1 = lt v9 v8;
-        v12.i256 = zext v11 i256;
-        v13.i1 = ne v12 0.i256;
-        br v13 block2 block4;
+        v27.i256 = phi (0.i256 block0) (v19 block3);
+        v10.i256 = phi (0.i256 block0) (v22 block3);
+        v12.i1 = lt v10 v9;
+        v13.i256 = zext v12 i256;
+        v14.i1 = ne v13 0.i256;
+        br v14 block2 block4;
 
     block2:
-        v16.i256 = call %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_get v3 v9;
-        v18.i256 = add v26 v16;
+        v17.i256 = call %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_get v4 v10;
+        v19.i256 = add v27 v17;
         jump block3;
 
     block3:
-        v21.i256 = add v9 1.i256;
+        v22.i256 = add v10 1.i256;
         jump block1;
 
     block4:
-        return v26;
+        return v27;
 }
 
 func private %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len(v0.i256) -> i256 {

@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/erc20_low_level.fe
 ---
@@ -121,14 +122,16 @@ func private %balance_of__0_1_StorPtr_Erc20_0__1____896784bc09903ba1(v0.i256, v1
 
 func private %allowance__0_1_StorPtr_Erc20_0__1____896784bc09903ba1(v0.i256, v1.i256, v2.i256) -> i256 {
     block0:
-        v4.*@__fe_tuple_1 = alloca @__fe_tuple_1;
-        v5.i256 = ptr_to_int v4 i256;
-        v6.*@__fe_Address_0 = gep v4 0.i256 0.i256;
-        mstore v6 v0 i256;
-        v8.*@__fe_Address_0 = gep v4 0.i256 1.i256;
-        mstore v8 v1 i256;
-        v9.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v5;
-        return v9;
+        v5.*i8 = evm_malloc 64.i256;
+        v6.i256 = ptr_to_int v5 i256;
+        v7.*@__fe_tuple_1 = bitcast v5 *@__fe_tuple_1;
+        v8.*@__fe_Address_0 = gep v7 0.i256 0.i256;
+        mstore v8 v0 i256;
+        v9.*@__fe_tuple_1 = bitcast v5 *@__fe_tuple_1;
+        v11.*@__fe_Address_0 = gep v9 0.i256 1.i256;
+        mstore v11 v1 i256;
+        v12.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v6;
+        return v12;
 }
 
 func private %transfer__0_1_StorPtr_Erc20_0__1___Evm_hef0af3106e109414_Evm_hef0af3106e109414__d36080519ce8fddb(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
@@ -216,13 +219,15 @@ func private %erc20_______h94f6fe6e679122ca_transfer_stor_arg0_root_stor__0_1_Ev
 
 func private %erc20_______h94f6fe6e679122ca_approve_stor_arg0_root_stor__0_1__e4c8be10cab939c2(v0.i256, v1.i256, v2.i256, v3.i256) {
     block0:
-        v5.*@__fe_tuple_1 = alloca @__fe_tuple_1;
-        v6.i256 = ptr_to_int v5 i256;
-        v7.*@__fe_Address_0 = gep v5 0.i256 0.i256;
-        mstore v7 v1 i256;
-        v9.*@__fe_Address_0 = gep v5 0.i256 1.i256;
-        mstore v9 v2 i256;
-        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v6 v3;
+        v6.*i8 = evm_malloc 64.i256;
+        v7.i256 = ptr_to_int v6 i256;
+        v8.*@__fe_tuple_1 = bitcast v6 *@__fe_tuple_1;
+        v9.*@__fe_Address_0 = gep v8 0.i256 0.i256;
+        mstore v9 v1 i256;
+        v10.*@__fe_tuple_1 = bitcast v6 *@__fe_tuple_1;
+        v12.*@__fe_Address_0 = gep v10 0.i256 1.i256;
+        mstore v12 v2 i256;
+        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v7 v3;
         return;
 }
 
@@ -329,14 +334,16 @@ func private %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0
 
 func private %erc20_______h94f6fe6e679122ca_allowance_stor_arg0_root_stor__0_1__e4c8be10cab939c2(v0.i256, v1.i256, v2.i256) -> i256 {
     block0:
-        v4.*@__fe_tuple_1 = alloca @__fe_tuple_1;
-        v5.i256 = ptr_to_int v4 i256;
-        v6.*@__fe_Address_0 = gep v4 0.i256 0.i256;
-        mstore v6 v1 i256;
-        v8.*@__fe_Address_0 = gep v4 0.i256 1.i256;
-        mstore v8 v2 i256;
-        v9.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v5;
-        return v9;
+        v5.*i8 = evm_malloc 64.i256;
+        v6.i256 = ptr_to_int v5 i256;
+        v7.*@__fe_tuple_1 = bitcast v5 *@__fe_tuple_1;
+        v8.*@__fe_Address_0 = gep v7 0.i256 0.i256;
+        mstore v8 v1 i256;
+        v9.*@__fe_tuple_1 = bitcast v5 *@__fe_tuple_1;
+        v11.*@__fe_Address_0 = gep v9 0.i256 1.i256;
+        mstore v11 v2 i256;
+        v12.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v6;
+        return v12;
 }
 
 func private %ne_arg1_root_stor__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2(v0.i256, v1.i256) -> i256 {
