@@ -11,7 +11,7 @@ func private %fail__Evm_hef0af3106e109414__3af54274b2985741(v0.i256) {
         evm_revert 0.i256 32.i256;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         call %fail__Evm_hef0af3106e109414__3af54274b2985741 0.i256;
         evm_stop;

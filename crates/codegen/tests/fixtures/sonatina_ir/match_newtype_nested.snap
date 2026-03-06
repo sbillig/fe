@@ -1,12 +1,11 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/match_newtype_nested.fe
 ---
 target = "evm-ethereum-osaka"
 
-func public %match_newtype_nested(v0.i256) -> i256 {
+func private %match_newtype_nested(v0.i256) -> i256 {
     block0:
         jump block4;
 
@@ -21,8 +20,7 @@ func public %match_newtype_nested(v0.i256) -> i256 {
         jump block2;
 
     block4:
-        v6.i1 = eq v0 0.i256;
-        br v6 block1 block3;
+        br_table v0 block3 (0.i256 block1);
 }
 
 func private %f() -> i256 {
@@ -31,7 +29,7 @@ func private %f() -> i256 {
         return v2;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v1.i256 = call %match_newtype_nested 0.i256;
         evm_stop;

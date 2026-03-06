@@ -10,7 +10,7 @@ func private %main() -> i256 {
         return 12910348618308260923200348219926901280687058984330794534952861439530514639560.i256;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v0.i256 = call %main;
         evm_stop;

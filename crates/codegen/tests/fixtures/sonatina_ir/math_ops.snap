@@ -5,7 +5,7 @@ input_file: crates/codegen/tests/fixtures/math_ops.fe
 ---
 target = "evm-ethereum-osaka"
 
-func public %math_ops() -> i256 {
+func private %math_ops() -> i256 {
     block0:
         v3.i256 = sub 10.i256 3.i256;
         v5.i256 = mul v3 2.i256;
@@ -14,7 +14,7 @@ func public %math_ops() -> i256 {
         return v8;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v0.i256 = call %math_ops;
         evm_stop;
