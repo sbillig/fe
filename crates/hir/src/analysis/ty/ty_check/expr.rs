@@ -2503,29 +2503,10 @@ impl<'db> TyChecker<'db> {
             return unit;
         }
 
-        // For arithmetic ops, resolve the binary operator trait (e.g. Add::add)
-        // instead of the augmented assignment trait (e.g. AddAssign::add_assign).
-        // The binary op traits use `own self` which avoids memory-backed spill
-        // slots that `mut self` in the assign traits would create, and they
-        // route through checked arithmetic intrinsics.
-        if matches!(
-            op,
-            ArithBinOp::Add
-                | ArithBinOp::Sub
-                | ArithBinOp::Mul
-                | ArithBinOp::Div
-                | ArithBinOp::Rem
-                | ArithBinOp::Pow
-                | ArithBinOp::LShift
-                | ArithBinOp::RShift
-                | ArithBinOp::BitAnd
-                | ArithBinOp::BitOr
-                | ArithBinOp::BitXor
-        ) {
-            self.check_ops_trait(expr, lhs_place_ty, &BinOp::Arith(*op), Some(*rhs));
-        } else {
-            self.check_ops_trait(expr, lhs_place_ty, &AugAssignOp(*op), Some(*rhs));
-        }
+        // `x += y` is semantically defined by the `*Assign` traits. Primitive
+        // integer fast paths are introduced later during MIR lowering without
+        // changing which trait method the source program resolves to here.
+        self.check_ops_trait(expr, lhs_place_ty, &AugAssignOp(*op), Some(*rhs));
 
         // Return unit ty even if trait resolution fails
         unit

@@ -380,24 +380,31 @@ func private %mint__0_1_StorPtr_TokenStore_0__1___Evm_hef0af3106e109414__4094b60
         v6.i256 = call %ne__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2 v0 v5;
         call %assert v6;
         v7.i256 = evm_sload v2;
-        v8.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add v7 v1;
+        v8.i256 = add v7 v1;
+        v9.i1 = lt v8 v7;
+        br v9 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
         evm_sstore v2 v8;
-        v9.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3 0.i256 v0;
-        v10.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add v9 v1;
-        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3 0.i256 v0 v10;
-        v11.i256 = call %address_h257056268eac7027_zero;
-        v13.*i8 = evm_malloc 96.i256;
-        v14.i256 = ptr_to_int v13 i256;
-        v15.*@__fe_TransferEvent_12 = bitcast v13 *@__fe_TransferEvent_12;
-        v16.*@__fe_Address_0 = gep v15 0.i256 0.i256;
-        mstore v16 v11 i256;
-        v17.*@__fe_TransferEvent_12 = bitcast v13 *@__fe_TransferEvent_12;
-        v19.*@__fe_Address_0 = gep v17 0.i256 1.i256;
-        mstore v19 v0 i256;
-        v20.*@__fe_TransferEvent_12 = bitcast v13 *@__fe_TransferEvent_12;
-        v22.*i256 = gep v20 0.i256 2.i256;
-        mstore v22 v1 i256;
-        call %emit_stor_arg0_root_stor__Evm_hef0af3106e109414_TransferEvent_h1c9ba82714a4a1f0__6ee531292f5eff63 v3 v14;
+        v12.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3 0.i256 v0;
+        v14.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add v12 v1;
+        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3 0.i256 v0 v14;
+        v15.i256 = call %address_h257056268eac7027_zero;
+        v17.*i8 = evm_malloc 96.i256;
+        v18.i256 = ptr_to_int v17 i256;
+        v19.*@__fe_TransferEvent_12 = bitcast v17 *@__fe_TransferEvent_12;
+        v20.*@__fe_Address_0 = gep v19 0.i256 0.i256;
+        mstore v20 v15 i256;
+        v21.*@__fe_TransferEvent_12 = bitcast v17 *@__fe_TransferEvent_12;
+        v23.*@__fe_Address_0 = gep v21 0.i256 1.i256;
+        mstore v23 v0 i256;
+        v24.*@__fe_TransferEvent_12 = bitcast v17 *@__fe_TransferEvent_12;
+        v26.*i256 = gep v24 0.i256 2.i256;
+        mstore v26 v1 i256;
+        call %emit_stor_arg0_root_stor__Evm_hef0af3106e109414_TransferEvent_h1c9ba82714a4a1f0__6ee531292f5eff63 v3 v18;
         return;
 }
 
@@ -532,21 +539,28 @@ func private %burn__0_1_StorPtr_TokenStore_0__1___Evm_hef0af3106e109414__4094b60
         v9.i256 = call %u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub v7 v1;
         call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3 0.i256 v0 v9;
         v10.i256 = evm_sload v2;
-        v11.i256 = call %u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub v10 v1;
+        v11.i256 = sub v10 v1;
+        v12.i1 = gt v1 v10;
+        br v12 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
         evm_sstore v2 v11;
-        v12.i256 = call %address_h257056268eac7027_zero;
-        v14.*i8 = evm_malloc 96.i256;
-        v15.i256 = ptr_to_int v14 i256;
-        v16.*@__fe_TransferEvent_12 = bitcast v14 *@__fe_TransferEvent_12;
-        v17.*@__fe_Address_0 = gep v16 0.i256 0.i256;
-        mstore v17 v0 i256;
-        v18.*@__fe_TransferEvent_12 = bitcast v14 *@__fe_TransferEvent_12;
-        v20.*@__fe_Address_0 = gep v18 0.i256 1.i256;
-        mstore v20 v12 i256;
-        v21.*@__fe_TransferEvent_12 = bitcast v14 *@__fe_TransferEvent_12;
-        v23.*i256 = gep v21 0.i256 2.i256;
-        mstore v23 v1 i256;
-        call %emit_stor_arg0_root_stor__Evm_hef0af3106e109414_TransferEvent_h1c9ba82714a4a1f0__6ee531292f5eff63 v3 v15;
+        v14.i256 = call %address_h257056268eac7027_zero;
+        v16.*i8 = evm_malloc 96.i256;
+        v17.i256 = ptr_to_int v16 i256;
+        v19.*@__fe_TransferEvent_12 = bitcast v16 *@__fe_TransferEvent_12;
+        v20.*@__fe_Address_0 = gep v19 0.i256 0.i256;
+        mstore v20 v0 i256;
+        v21.*@__fe_TransferEvent_12 = bitcast v16 *@__fe_TransferEvent_12;
+        v23.*@__fe_Address_0 = gep v21 0.i256 1.i256;
+        mstore v23 v14 i256;
+        v25.*@__fe_TransferEvent_12 = bitcast v16 *@__fe_TransferEvent_12;
+        v27.*i256 = gep v25 0.i256 2.i256;
+        mstore v27 v1 i256;
+        call %emit_stor_arg0_root_stor__Evm_hef0af3106e109414_TransferEvent_h1c9ba82714a4a1f0__6ee531292f5eff63 v3 v17;
         return;
 }
 

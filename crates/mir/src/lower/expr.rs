@@ -2389,105 +2389,74 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         stmt_id: StmtId,
         expr: ExprId,
         target: ExprId,
+        rhs_expr: ExprId,
         rhs_value: ValueId,
         op: hir::hir_def::expr::ArithBinOp,
     ) -> bool {
-        use hir::hir_def::expr::ArithBinOp;
-
-        if !matches!(
-            op,
-            ArithBinOp::Add
-                | ArithBinOp::Sub
-                | ArithBinOp::Mul
-                | ArithBinOp::Div
-                | ArithBinOp::Rem
-                | ArithBinOp::Pow
-                | ArithBinOp::LShift
-                | ArithBinOp::RShift
-                | ArithBinOp::BitAnd
-                | ArithBinOp::BitOr
-                | ArithBinOp::BitXor
-        ) {
-            return false;
-        }
-
         // When the core library is not available (standalone `.fe` files),
         // no callable is registered — fall back to unchecked raw binary.
-        let Some(mut callable) = self.typed_body.callable_expr(expr).cloned() else {
+        let Some(callable) = self.typed_body.callable_expr(expr).cloned() else {
             return false;
         };
 
-        let peeled_target = self.peel_transparent_newtype_field0_lvalue(target);
-        let is_peeled = peeled_target != target;
-
-        let root_expr = if is_peeled { peeled_target } else { target };
-        let root_ty = self.typed_body.expr_ty(self.db, root_expr);
-        let lhs_ty = self.typed_body.expr_ty(self.db, target);
-        let lhs_place_ty = lhs_ty
-            .as_capability(self.db)
-            .map(|(_, inner)| inner)
-            .unwrap_or(lhs_ty);
-
-        let Some(root_lvalue) = self.root_lvalue_for_expr(root_expr) else {
-            return true;
-        };
-
-        let lhs_value = match &root_lvalue {
-            RootLvalue::Place(place) => {
-                let loaded_local = self.alloc_temp_local(lhs_place_ty, false, "load");
-                self.builder.body.locals[loaded_local.index()].address_space =
-                    self.expr_address_space(target);
-                self.assign(
-                    None,
-                    Some(loaded_local),
-                    Rvalue::Load {
-                        place: place.clone(),
-                    },
-                );
-                self.alloc_value(
-                    lhs_place_ty,
-                    ValueOrigin::Local(loaded_local),
-                    ValueRepr::Word,
-                )
-            }
-            RootLvalue::Local(local) => {
-                if is_peeled {
-                    let base_value = self.alloc_value(
-                        root_ty,
-                        ValueOrigin::Local(*local),
-                        self.value_repr_for_ty(
-                            root_ty,
-                            self.builder.body.local(*local).address_space,
-                        ),
-                    );
-                    self.alloc_value(
-                        lhs_ty,
-                        ValueOrigin::TransparentCast { value: base_value },
-                        ValueRepr::Word,
-                    )
-                } else {
-                    self.alloc_value(lhs_place_ty, ValueOrigin::Local(*local), ValueRepr::Word)
-                }
-            }
-        };
-
-        let args = vec![lhs_value, rhs_value];
-
-        let mut receiver_space = None;
-        if !args.is_empty() {
-            let needs_space = callable
-                .callable_def
-                .receiver_ty(self.db)
-                .is_some_and(|binder| {
-                    let ty = binder.instantiate_identity();
-                    self.value_repr_for_ty(ty, AddressSpaceKind::Memory)
-                        .address_space()
-                        .is_some()
-                });
-            if needs_space {
-                receiver_space = Some(self.value_address_space(args[0]));
-            }
+        if !self.can_fast_path_aug_assign(&callable, op, self.typed_body.expr_ty(self.db, target)) {
+            return self
+                .lower_aug_assign_trait_call(stmt_id, expr, target, rhs_expr, rhs_value, callable);
         }
+        self.lower_aug_assign_to_lvalue(stmt_id, target, rhs_value, op);
+        true
+    }
+
+    fn lower_aug_assign_trait_call(
+        &mut self,
+        stmt_id: StmtId,
+        expr: ExprId,
+        target: ExprId,
+        rhs_expr: ExprId,
+        rhs_value: ValueId,
+        mut callable: Callable<'db>,
+    ) -> bool {
+        let target_ty = self.typed_body.expr_ty(self.db, target);
+        let Some(mut receiver_place) = self.place_for_borrow_expr(target) else {
+            return false;
+        };
+        let mut writeback_place = None;
+        if matches!(
+            self.builder.body.value(receiver_place.base).origin,
+            ValueOrigin::PlaceRoot(_)
+        ) {
+            let receiver_value = self.lower_expr(target);
+            let (_addr_value, temp_place) = self.materialize_value_in_temp_place(
+                target_ty,
+                receiver_value,
+                AddressSpaceKind::Memory,
+                "aug_assign_self",
+            );
+            receiver_place = temp_place.clone();
+            writeback_place = Some(temp_place);
+        }
+        let Some(receiver_ty) = callable
+            .callable_def
+            .receiver_ty(self.db)
+            .map(|ty| ty.instantiate(self.db, callable.generic_args()))
+        else {
+            return false;
+        };
+
+        let receiver_space = self.value_address_space(receiver_place.base);
+        let receiver_repr = self.value_repr_for_ty(receiver_ty, receiver_space);
+        let receiver = self.alloc_value(
+            receiver_ty,
+            ValueOrigin::PlaceRef(receiver_place.clone()),
+            receiver_repr,
+        );
+
+        let expected_arg_tys = self.call_expected_arg_tys(&callable);
+        let Some(&expected_rhs_ty) = expected_arg_tys.get(1) else {
+            return false;
+        };
+        let mut rhs = self.coerce_call_arg_value(rhs_expr, rhs_value, expected_rhs_ty);
+        rhs = self.materialize_capability_call_arg(rhs_expr, rhs, expected_rhs_ty);
 
         let mut effect_args = Vec::new();
         let mut effect_writebacks: Vec<(LocalId, Place<'db>)> = Vec::new();
@@ -2503,57 +2472,91 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
         }
 
-        let result_space = self
-            .effect_provider_space_for_provider_ty(lhs_ty)
-            .unwrap_or_else(|| self.expr_address_space(target));
-        let dest = self.alloc_temp_local(lhs_place_ty, false, "aug");
-        self.builder.body.locals[dest.index()].address_space = result_space;
-
         let hir_target = crate::ir::HirCallTarget {
             callable_def: callable.callable_def,
             generic_args: callable.generic_args().to_vec(),
             trait_inst: callable.trait_inst(),
         };
-        let checked_intrinsic = self.checked_intrinsic_kind(callable.callable_def, lhs_place_ty);
-        let builtin_terminator = self.builtin_terminator_kind(callable.callable_def);
         let call_origin = CallOrigin {
             expr: Some(expr),
             hir_target: Some(hir_target),
-            args,
+            args: vec![receiver, rhs],
             effect_args,
             resolved_name: None,
-            checked_intrinsic,
-            builtin_terminator,
-            receiver_space,
+            checked_intrinsic: None,
+            builtin_terminator: self.builtin_terminator_kind(callable.callable_def),
+            receiver_space: (receiver_space != AddressSpaceKind::Memory).then_some(receiver_space),
         };
-
-        self.assign(Some(stmt_id), Some(dest), Rvalue::Call(call_origin));
+        self.assign(Some(stmt_id), None, Rvalue::Call(call_origin));
         for (writeback_local, place) in effect_writebacks {
             self.assign(None, Some(writeback_local), Rvalue::Load { place });
         }
 
-        let updated = self.alloc_value(
-            lhs_place_ty,
-            ValueOrigin::Local(dest),
-            self.value_repr_for_ty(lhs_place_ty, result_space),
-        );
-
-        // Register the expression value so the borrow checker can track loans
-        // for borrow-handle targets.
-        self.builder.body.expr_values.insert(expr, updated);
-
-        let stored = if is_peeled {
-            self.alloc_value(
-                root_ty,
-                ValueOrigin::TransparentCast { value: updated },
-                self.value_repr_for_expr(root_expr, root_ty),
-            )
-        } else {
-            updated
-        };
-
-        self.store_to_root_lvalue(Some(stmt_id), root_lvalue, stored);
+        if let Some(place) = writeback_place {
+            let updated_local = self.alloc_temp_local(target_ty, false, "aug_assign");
+            self.builder.body.locals[updated_local.index()].address_space =
+                self.expr_address_space(target);
+            self.assign(None, Some(updated_local), Rvalue::Load { place });
+            let updated = self.alloc_value(
+                target_ty,
+                ValueOrigin::Local(updated_local),
+                self.value_repr_for_expr(target, target_ty),
+            );
+            self.lower_assign_to_lvalue(stmt_id, target, updated);
+        }
         true
+    }
+
+    fn can_fast_path_aug_assign(
+        &self,
+        callable: &Callable<'db>,
+        op: hir::hir_def::expr::ArithBinOp,
+        lhs_ty: TyId<'db>,
+    ) -> bool {
+        match callable.callable_def.ingot(self.db).kind(self.db) {
+            IngotKind::Core | IngotKind::Std => {}
+            _ => return false,
+        }
+
+        let Some(name) = callable.callable_def.name(self.db) else {
+            return false;
+        };
+        if !matches!(
+            op,
+            ArithBinOp::Add
+                | ArithBinOp::Sub
+                | ArithBinOp::Mul
+                | ArithBinOp::LShift
+                | ArithBinOp::RShift
+                | ArithBinOp::BitAnd
+                | ArithBinOp::BitOr
+                | ArithBinOp::BitXor
+        ) {
+            return false;
+        }
+        let expected_name = match op {
+            ArithBinOp::Add => "add_assign",
+            ArithBinOp::Sub => "sub_assign",
+            ArithBinOp::Mul => "mul_assign",
+            ArithBinOp::Div => "div_assign",
+            ArithBinOp::Rem => "rem_assign",
+            ArithBinOp::Pow => "pow_assign",
+            ArithBinOp::LShift => "shl_assign",
+            ArithBinOp::RShift => "shr_assign",
+            ArithBinOp::BitAnd => "bitand_assign",
+            ArithBinOp::BitOr => "bitor_assign",
+            ArithBinOp::BitXor => "bitxor_assign",
+            ArithBinOp::Range => return false,
+        };
+        if name.data(self.db).as_str() != expected_name {
+            return false;
+        }
+
+        let lhs_place_ty = lhs_ty
+            .as_capability(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(lhs_ty);
+        lhs_place_ty.is_integral(self.db) || lhs_place_ty.is_bool(self.db)
     }
 
     /// Lowers a statement in the current block.
@@ -3471,9 +3474,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     }
                 }
 
-                if !self
-                    .lower_arith_aug_assign_via_trait_call(stmt_id, expr, *target, value_id, *op)
-                {
+                if !self.lower_arith_aug_assign_via_trait_call(
+                    stmt_id, expr, *target, *value, value_id, *op,
+                ) {
                     self.lower_aug_assign_to_lvalue(stmt_id, *target, value_id, *op);
                 }
             }

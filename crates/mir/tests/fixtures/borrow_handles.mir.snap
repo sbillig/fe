@@ -12,12 +12,7 @@ fn borrow_handles() -> ():
     v0 = 1
     bind v1
     v2: u256 = load mem[v1]
-    v3: u256 = u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v2, 1)
+    v3: u256 = <unresolved>(v2, 1)
     store mem[v1] = v3
     v0 = v3
     ret
-
-fn u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v0: u256, v1: u256) -> u256:
-  bb0:
-    v2: u256 = __checked_add__u256__3271ca15373d4483(v0, v1)
-    ret v2

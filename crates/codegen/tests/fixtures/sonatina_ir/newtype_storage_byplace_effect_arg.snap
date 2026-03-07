@@ -17,7 +17,14 @@ type @__fe_SolDecoder_7 = {@__fe_Cursor_6, i256};
 func private %bump__StorPtr_Wrap___5036bb3e02939b91(v0.i256) {
     block0:
         v2.i256 = evm_sload v0;
-        v4.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add v2 1.i256;
+        v4.i256 = add v2 1.i256;
+        v5.i1 = lt v4 v2;
+        br v5 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
         evm_sstore v0 v4;
         return;
 }
@@ -31,10 +38,17 @@ func private %__NewtypeByPlaceEffectArg_recv_0_0(v0.i256, v1.i256) -> i256 {
     block0:
         call %bump__StorPtr_Wrap___5036bb3e02939b91 v0;
         v3.i256 = evm_sload v1;
-        v5.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add v3 1.i256;
+        v5.i256 = add v3 1.i256;
+        v6.i1 = lt v5 v3;
+        br v6 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
         evm_sstore v1 v5;
-        v6.i256 = evm_sload v1;
-        return v6;
+        v8.i256 = evm_sload v1;
+        return v8;
 }
 
 func private %__NewtypeByPlaceEffectArg_init() {
@@ -93,19 +107,6 @@ func private %__NewtypeByPlaceEffectArg_runtime() {
         v9.i256 = call %__NewtypeByPlaceEffectArg_recv_0_0 v3 v1;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f 0.i256 v9;
         evm_invalid;
-}
-
-func private %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v0.i256, v1.i256) -> i256 {
-    block0:
-        v3.i256 = add v0 v1;
-        v4.i1 = lt v3 v0;
-        br v4 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        return v3;
 }
 
 func private %init_field__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9(v0.i256, v1.i256) -> i256 {
@@ -368,6 +369,19 @@ func private %u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub(v0.i256, v1.i256)
     block0:
         v3.i256 = sub v0 v1;
         v4.i1 = gt v1 v0;
+        br v4 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v3;
+}
+
+func private %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = add v0 v1;
+        v4.i1 = lt v3 v0;
         br v4 block1 block2;
 
     block1:

@@ -408,7 +408,7 @@ object "NewtypeStorageFieldMutMethodCall" {
       function $wrap_haf9e70905fcbd513_bump_stor_arg0_root_stor($self) {
         let v0 := $self
         let v1 := sload($self)
-        let v2 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v1, 1)
+        let v2 := $checked_add_u256(v1, 1)
         sstore($self, v2)
         leave
       }

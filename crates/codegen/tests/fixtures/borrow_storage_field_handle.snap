@@ -7,15 +7,10 @@ function $borrow_storage_field_handle__StorPtr_CoinStore___ba1c0d0726e89ba2($sto
   let v0 := $store
   let v1 := v0
   let v2 := sload(v1)
-  let v3 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v2, 1)
+  let v3 := $checked_add_u256(v2, 1)
   sstore(v1, v3)
   let v4 := sload($store)
   ret := v4
-  leave
-}
-function $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add($self, $other) -> ret {
-  let v0 := $checked_add_u256($self, $other)
-  ret := v0
   leave
 }
 function $checked_add_u256($a, $b) -> ret {

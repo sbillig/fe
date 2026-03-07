@@ -5,22 +5,12 @@ input_file: tests/fixtures/aug_assign.fe
 ---
 function $aug_assign($x, $y) -> ret {
   let v0 := $x
-  let v1 := $u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add(v0, $y)
+  let v1 := $checked_add_u64(v0, $y)
   v0 := v1
-  let v2 := $u64_haee7f05a097ffa16_mul_h290dcc921ed80777_mul(v0, 2)
+  let v2 := $checked_mul_u64(v0, 2)
   v0 := v2
   let v3 := $u64_haee7f05a097ffa16_div_h14000ca7bc1a1bc4_div(v0, 2)
   ret := v3
-  leave
-}
-function $u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add($self, $other) -> ret {
-  let v0 := $checked_add_u64($self, $other)
-  ret := v0
-  leave
-}
-function $u64_haee7f05a097ffa16_mul_h290dcc921ed80777_mul($self, $other) -> ret {
-  let v0 := $checked_mul_u64($self, $other)
-  ret := v0
   leave
 }
 function $u64_haee7f05a097ffa16_div_h14000ca7bc1a1bc4_div($self, $other) -> ret {
