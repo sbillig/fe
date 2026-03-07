@@ -2939,7 +2939,7 @@ fn try_lower_numeric_intrinsic<C: sonatina_ir::func_cursor::FuncCursor>(
         }
 
         // --- Unary ops (may need sub-word masking) ---
-        "bitnot" | "not" => {
+        "bitnot" => {
             let val = lower_unary_arg(ctx, callee_name, args)?;
             let raw = ctx.fb.insert_inst(Not::new(ctx.is, val), Type::I256);
             let result = if let Some(ref mi) = mask_info {
@@ -2947,6 +2947,19 @@ fn try_lower_numeric_intrinsic<C: sonatina_ir::func_cursor::FuncCursor>(
             } else {
                 raw
             };
+            Ok(Some(result))
+        }
+        "not" => {
+            if !callee_name.ends_with("_bool") {
+                return Err(LowerError::Internal(format!(
+                    "logical not intrinsic must be bool-typed, got `{callee_name}`"
+                )));
+            }
+            let val = lower_unary_arg(ctx, callee_name, args)?;
+            let is_zero = ctx.fb.insert_inst(IsZero::new(ctx.is, val), Type::I1);
+            let result = ctx
+                .fb
+                .insert_inst(Zext::new(ctx.is, is_zero, Type::I256), Type::I256);
             Ok(Some(result))
         }
         "neg" => {
