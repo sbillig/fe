@@ -487,7 +487,15 @@ fn create_code_regions_object(
             .ok_or_else(|| LowerError::Internal(format!("unknown function: {root}")))?;
 
         let wrapper_name = format!("__fe_sonatina_code_region_entry_{}", sanitize_symbol(root));
-        let wrapper_ref = lowerer.create_call_and_stop_wrapper(&wrapper_name, root_ref)?;
+        let runtime_metadata = lowerer
+            .runtime_function_metadata
+            .get(root)
+            .cloned()
+            .ok_or_else(|| {
+                LowerError::Internal(format!("missing runtime type metadata for `{root}`"))
+            })?;
+        let wrapper_ref =
+            lowerer.create_call_and_stop_wrapper(&wrapper_name, root_ref, &runtime_metadata)?;
 
         let section_name = code_region_sections
             .get(root)
@@ -546,7 +554,18 @@ fn create_test_object(
         .ok_or_else(|| LowerError::Internal(format!("unknown function: {}", test.symbol_name)))?;
 
     let wrapper_name = format!("__fe_sonatina_test_entry_{}", test.object_name);
-    let wrapper_ref = lowerer.create_call_and_stop_wrapper(&wrapper_name, test_ref)?;
+    let runtime_metadata = lowerer
+        .runtime_function_metadata
+        .get(&test.symbol_name)
+        .cloned()
+        .ok_or_else(|| {
+            LowerError::Internal(format!(
+                "missing runtime type metadata for `{}`",
+                test.symbol_name
+            ))
+        })?;
+    let wrapper_ref =
+        lowerer.create_call_and_stop_wrapper(&wrapper_name, test_ref, &runtime_metadata)?;
 
     let reachable = reachable_functions(call_graph, &test.symbol_name);
     let deps = collect_code_region_deps(&reachable, funcs_by_symbol);
@@ -589,61 +608,16 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             }
 
             let name = &func.symbol_name;
-            let linkage = sonatina_ir::Linkage::Public;
-
-            let mut params = Vec::new();
-            let mut mask = Vec::new();
-            for local_id in func.body.param_locals.iter().copied() {
-                let local_ty = func
-                    .body
-                    .locals
-                    .get(local_id.index())
-                    .ok_or_else(|| {
-                        LowerError::Internal(format!("unknown param local: {local_id:?}"))
-                    })?
-                    .ty;
-                if layout::ty_size_bytes_in(self.db, &layout::EVM_LAYOUT, local_ty)
-                    .is_some_and(|s| s == 0)
-                {
-                    mask.push(false);
-                    continue;
-                }
-                mask.push(true);
-                params.push(super::types::value_type(self.db, local_ty));
-            }
-            for local_id in func.body.effect_param_locals.iter().copied() {
-                let local_ty = func
-                    .body
-                    .locals
-                    .get(local_id.index())
-                    .ok_or_else(|| {
-                        LowerError::Internal(format!("unknown effect param local: {local_id:?}"))
-                    })?
-                    .ty;
-                if layout::ty_size_bytes_in(self.db, &layout::EVM_LAYOUT, local_ty)
-                    .is_some_and(|s| s == 0)
-                {
-                    mask.push(false);
-                    continue;
-                }
-                mask.push(true);
-                params.push(super::types::value_type(self.db, local_ty));
-            }
-
-            let ret_tys = if func.returns_value {
-                vec![super::types::value_type(self.db, func.ret_ty)]
-            } else {
-                Vec::new()
-            };
-
-            let sig = Signature::new(name, linkage, &params, &ret_tys);
+            let (_sig, metadata) = self.lower_signature_and_metadata(func)?;
+            let sig = metadata.signature(name, sonatina_ir::Linkage::Public);
             let func_ref = self.builder.declare_function(sig).map_err(|e| {
                 LowerError::Internal(format!("failed to declare function {name}: {e}"))
             })?;
 
             self.func_map.insert(idx, func_ref);
             self.name_map.insert(name.clone(), func_ref);
-            self.runtime_param_masks.insert(name.clone(), mask);
+            self.runtime_function_metadata
+                .insert(name.clone(), metadata);
         }
         Ok(())
     }
@@ -652,6 +626,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         &mut self,
         wrapper_name: &str,
         callee_ref: sonatina_ir::module::FuncRef,
+        runtime_metadata: &super::RuntimeFunctionMetadata,
     ) -> Result<sonatina_ir::module::FuncRef, LowerError> {
         if self.name_map.contains_key(wrapper_name) {
             return Err(LowerError::Internal(format!(
@@ -670,16 +645,13 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         let entry_block = fb.append_block();
         fb.switch_to_block(entry_block);
 
-        let (arg_tys, ret_ty) = fb.module_builder.ctx.func_sig(callee_ref, |sig| {
-            (sig.args().to_vec(), sig.ret_tys().first().copied())
-        });
-        let mut args = Vec::with_capacity(arg_tys.len());
-        for ty in arg_tys {
-            args.push(super::types::zero_value(&mut fb, ty));
+        let mut args = Vec::with_capacity(runtime_metadata.params.iter().flatten().count());
+        for arg_ty in runtime_metadata.params.iter().copied().flatten() {
+            args.push(super::zero_value_for_type(&mut fb, arg_ty, is));
         }
 
         let call_inst = Call::new(is, callee_ref, args.into());
-        if let Some(ret_ty) = ret_ty {
+        if let Some(ret_ty) = runtime_metadata.ret {
             let _ = fb.insert_inst(call_inst, ret_ty);
         } else {
             fb.insert_inst_no_result(call_inst);

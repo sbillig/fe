@@ -379,12 +379,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 match op {
                     hir::hir_def::expr::UnOp::Mut | hir::hir_def::expr::UnOp::Ref => {
                         if let Some(place) = self.place_for_borrow_expr(*inner) {
-                            let space = self.value_address_space(place.base);
+                            let space = self.place_address_space(&place);
                             let value_ty = self.builder.body.value(value_id).ty;
                             self.builder.body.values[value_id.index()].origin =
                                 ValueOrigin::PlaceRef(place);
                             self.builder.body.values[value_id.index()].repr =
                                 self.value_repr_for_ty(value_ty, space);
+                            self.refresh_value_pointer_info(value_id);
                         } else {
                             let _ = self.lower_expr(*inner);
                         }
@@ -663,20 +664,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if self.capability_value_is_address_backed(value) {
             let base_repr = match self.builder.body.stage {
                 crate::ir::MirStage::Capability => ValueRepr::Word,
-                crate::ir::MirStage::Repr(_) => {
-                    if self
-                        .builder
-                        .body
-                        .value(value)
-                        .repr
-                        .address_space()
-                        .is_some()
-                    {
-                        ValueRepr::Ptr(self.value_address_space(value))
-                    } else {
-                        ValueRepr::Word
-                    }
-                }
+                crate::ir::MirStage::Repr(_) => crate::ir::try_value_address_space_in(
+                    &self.builder.body.values,
+                    &self.builder.body.locals,
+                    value,
+                )
+                .map(ValueRepr::Ptr)
+                .unwrap_or(ValueRepr::Word),
             };
             let base =
                 self.alloc_value(inner_ty, ValueOrigin::TransparentCast { value }, base_repr);
@@ -739,13 +733,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         expected_ty: TyId<'db>,
     ) -> ValueId {
         let actual_ty = self.builder.body.value(arg_value).ty;
-        let arg_space = self
-            .builder
-            .body
-            .value(arg_value)
-            .repr
-            .address_space()
-            .unwrap_or(AddressSpaceKind::Memory);
+        let arg_space = self.value_address_space_or_memory(arg_value);
         if actual_ty == expected_ty {
             if let Some((_, inner_ty)) = expected_ty.as_capability(self.db) {
                 let expected_repr = self.value_repr_for_ty(expected_ty, arg_space);
@@ -755,7 +743,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         .place_for_borrow_expr(arg_expr)
                         .or_else(|| self.place_from_capability_value(arg_value, expected_ty))
                 {
-                    let place_space = self.value_address_space(place.base);
+                    let place_space = self.place_address_space(&place);
                     let expected_repr = self.value_repr_for_ty(expected_ty, place_space);
                     let base = self.alloc_value(
                         inner_ty,
@@ -790,7 +778,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         .place_for_borrow_expr(arg_expr)
                         .or_else(|| self.place_from_capability_value(arg_value, actual_ty))
                     {
-                        let place_space = self.value_address_space(place.base);
+                        let place_space = self.place_address_space(&place);
                         let expected_repr = self.value_repr_for_ty(expected_ty, place_space);
                         let loaded = self.alloc_temp_local(required_inner, false, "viewword");
                         self.builder.body.locals[loaded.index()].address_space = place_space;
@@ -839,7 +827,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     .is_some()
                 {
                     if let Some(place) = self.place_for_borrow_expr(arg_expr) {
-                        let place_space = self.value_address_space(place.base);
+                        let place_space = self.place_address_space(&place);
                         if place_space != arg_space {
                             let expected_repr = self.value_repr_for_ty(expected_ty, place_space);
                             return self.alloc_value(
@@ -860,7 +848,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     .place_for_borrow_expr(arg_expr)
                     .or_else(|| self.place_from_capability_value(arg_value, actual_ty))
                 {
-                    let place_space = self.value_address_space(place.base);
+                    let place_space = self.place_address_space(&place);
                     let expected_repr = self.value_repr_for_ty(expected_ty, place_space);
                     return self.alloc_value(
                         expected_ty,
@@ -879,7 +867,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
 
             if let Some(place) = self.place_for_borrow_expr(arg_expr) {
-                let place_space = self.value_address_space(place.base);
+                let place_space = self.place_address_space(&place);
                 let expected_repr = self.value_repr_for_ty(expected_ty, place_space);
                 return self.alloc_value(expected_ty, ValueOrigin::PlaceRef(place), expected_repr);
             }
@@ -921,8 +909,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             };
 
             let dest = self.alloc_temp_local(expected_ty, false, "copyarg");
-            self.builder.body.locals[dest.index()].address_space =
-                self.value_address_space(place.base);
+            self.builder.body.locals[dest.index()].address_space = self.place_address_space(&place);
             self.assign(None, Some(dest), Rvalue::Load { place });
             return self.alloc_value(expected_ty, ValueOrigin::Local(dest), expected_repr);
         }
@@ -945,7 +932,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             );
         };
 
-        let receiver_space = self.value_address_space(receiver_place.base);
+        let receiver_space = self.place_address_space(&receiver_place);
         if receiver_space == AddressSpaceKind::Memory {
             return (receiver_value, None);
         }
@@ -1065,6 +1052,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if receiver_space.is_none()
             && expected_receiver_ty.is_some()
             && let Some(&receiver) = args.first()
+            && arg_exprs
+                .first()
+                .and_then(|expr| self.place_for_borrow_expr(*expr))
+                .is_none()
         {
             let space = self.value_address_space_or_memory(receiver);
             if space != AddressSpaceKind::Memory {
@@ -1108,7 +1099,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return arg_value;
         };
 
-        let place_space = self.value_address_space(place.base);
+        let place_space = self.place_address_space(&place);
         let expected_repr = self.value_repr_for_ty(expected_ty, place_space);
         self.alloc_value(expected_ty, ValueOrigin::PlaceRef(place), expected_repr)
     }
@@ -1385,17 +1376,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             None
         };
         if let Some(dest) = dest {
-            let mut dest_space = result_space;
-            if dest_space == AddressSpaceKind::Memory
-                && let Some(space) = receiver_space
-                && space != AddressSpaceKind::Memory
-                && self.ty_contains_capability(ty)
-            {
-                // Preserve capability payload space for aggregate returns like
-                // `Option<mut T>`, while keeping the aggregate value repr itself unchanged.
-                dest_space = space;
-            }
-            self.builder.body.locals[dest.index()].address_space = dest_space;
+            self.builder.body.locals[dest.index()].address_space = result_space;
         }
         let hir_target = crate::ir::HirCallTarget {
             callable_def: callable.callable_def,
@@ -1658,7 +1639,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     };
                     place.projection.push(Projection::Field(info.field_idx));
 
-                    let addr_space = self.value_address_space(place.base);
+                    let addr_space = self.place_address_space(&place);
                     if self.is_by_ref_ty(info.field_ty) {
                         let place_value = self.alloc_value(
                             info.field_ty,
@@ -1685,9 +1666,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 if self.is_transparent_field0(lhs_place_ty, info.field_idx) {
                     let base_repr = self.builder.body.value(base_value).repr;
                     if !base_repr.is_ref() {
-                        let space = base_repr
-                            .address_space()
-                            .unwrap_or(AddressSpaceKind::Memory);
+                        let space = self.value_address_space_or_memory(base_value);
                         let field_repr = self.value_repr_for_ty(info.field_ty, space);
                         if field_repr.address_space().is_some() {
                             self.builder.body.locals[dest.index()].address_space =
@@ -1978,7 +1957,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             };
             place.projection.push(Projection::Field(info.field_idx));
 
-            let addr_space = self.value_address_space(place.base);
+            let addr_space = self.place_address_space(&place);
             if self.is_by_ref_ty(info.field_ty) {
                 self.builder.body.values[value_id.index()].origin = ValueOrigin::PlaceRef(place);
                 self.builder.body.values[value_id.index()].repr = ValueRepr::Ref(addr_space);
@@ -1986,7 +1965,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
 
             let dest = self.alloc_temp_local(info.field_ty, false, "load");
-            self.builder.body.locals[dest.index()].address_space = self.expr_address_space(expr);
+            self.builder.body.locals[dest.index()].address_space =
+                self.load_result_address_space(expr, info.field_ty, addr_space);
             self.assign(None, Some(dest), Rvalue::Load { place });
             self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
             return value_id;
@@ -1996,9 +1976,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if self.is_transparent_field0(lhs_place_ty, info.field_idx) {
             let base_repr = self.builder.body.value(base_value).repr;
             if !base_repr.is_ref() {
-                let space = base_repr
-                    .address_space()
-                    .unwrap_or(AddressSpaceKind::Memory);
+                let space = self.value_address_space_or_memory(base_value);
                 self.builder.body.values[value_id.index()].origin =
                     ValueOrigin::TransparentCast { value: base_value };
                 self.builder.body.values[value_id.index()].repr =
@@ -2020,7 +1998,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let dest = self.alloc_temp_local(info.field_ty, false, "load");
-        self.builder.body.locals[dest.index()].address_space = self.expr_address_space(expr);
+        self.builder.body.locals[dest.index()].address_space =
+            self.load_result_address_space(expr, info.field_ty, addr_space);
         self.assign(None, Some(dest), Rvalue::Load { place });
         self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
         value_id
@@ -2139,10 +2118,22 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let dest = self.alloc_temp_local(elem_ty, false, "load");
-        self.builder.body.locals[dest.index()].address_space = self.expr_address_space(expr);
+        self.builder.body.locals[dest.index()].address_space =
+            self.load_result_address_space(expr, elem_ty, addr_space);
         self.assign(None, Some(dest), Rvalue::Load { place });
         self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
         value_id
+    }
+
+    fn load_result_address_space(
+        &self,
+        expr: ExprId,
+        ty: TyId<'db>,
+        source_space: AddressSpaceKind,
+    ) -> AddressSpaceKind {
+        crate::repr::pointer_info_for_ty(self.db, &self.core, ty, source_space)
+            .map(|info| info.address_space)
+            .unwrap_or_else(|| self.expr_address_space(expr))
     }
 
     fn field_access_info_for_expr(
@@ -2250,6 +2241,21 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     .unwrap_or(lhs_ty);
                 let info = self.field_access_info_for_expr(expr, lhs_place_ty, field_index)?;
 
+                if self.is_transparent_field0(lhs_place_ty, info.field_idx)
+                    && info.field_ty.as_capability(self.db).is_some()
+                {
+                    let base_value = self.lower_expr(*lhs);
+                    let handle = self.alloc_value(
+                        info.field_ty,
+                        ValueOrigin::TransparentCast { value: base_value },
+                        self.value_repr_for_ty(
+                            info.field_ty,
+                            self.value_address_space_or_memory(base_value),
+                        ),
+                    );
+                    return self.place_from_capability_value(handle, info.field_ty);
+                }
+
                 let Place {
                     base,
                     mut projection,
@@ -2332,6 +2338,18 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 // Transparent newtypes: treat field 0 as the same place when the base is
                 // already addressable, otherwise fall back to scalar newtype semantics.
                 if self.is_transparent_field0(lhs_place_ty, info.field_idx) {
+                    if info.field_ty.as_capability(self.db).is_some() {
+                        let base_value = self.lower_expr(*lhs);
+                        let handle = self.alloc_value(
+                            info.field_ty,
+                            ValueOrigin::TransparentCast { value: base_value },
+                            self.value_repr_for_ty(
+                                info.field_ty,
+                                self.value_address_space_or_memory(base_value),
+                            ),
+                        );
+                        return self.place_from_capability_value(handle, info.field_ty);
+                    }
                     if let Some(place) = self.place_for_expr(*lhs) {
                         return Some(place);
                     }
@@ -2388,7 +2406,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             let Some(info) = self.field_access_info(base_ty, field_index) else {
                 return expr;
             };
-            if self.is_transparent_field0(base_ty, info.field_idx) {
+            if self.is_transparent_field0(base_ty, info.field_idx)
+                && info.field_ty.as_capability(self.db).is_none()
+            {
                 expr = *base;
                 continue;
             }
@@ -2506,6 +2526,28 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         ValueOrigin::TransparentCast { value: base_value },
                         ValueRepr::Word,
                     )
+                } else if lhs_ty.as_capability(self.db).is_some() {
+                    let base_value = self.alloc_value(
+                        lhs_ty,
+                        ValueOrigin::Local(*local),
+                        self.value_repr_for_ty(
+                            lhs_ty,
+                            self.builder.body.local(*local).address_space,
+                        ),
+                    );
+                    if let Some(place) = self.place_from_capability_value(base_value, lhs_ty) {
+                        let loaded_local = self.alloc_temp_local(lhs_place_ty, false, "load");
+                        self.builder.body.locals[loaded_local.index()].address_space =
+                            self.expr_address_space(target);
+                        self.assign(None, Some(loaded_local), Rvalue::Load { place });
+                        self.alloc_value(
+                            lhs_place_ty,
+                            ValueOrigin::Local(loaded_local),
+                            ValueRepr::Word,
+                        )
+                    } else {
+                        self.alloc_value(lhs_ty, ValueOrigin::Local(*local), ValueRepr::Word)
+                    }
                 } else {
                     self.alloc_value(lhs_ty, ValueOrigin::Local(*local), ValueRepr::Word)
                 }
@@ -2783,13 +2825,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                                 .address_space()
                                 .is_some()
                                 || pat_ty.as_capability(self.db).is_some();
-                            if carries_space
-                                && let Some(space) = try_value_address_space_in(
-                                    &self.builder.body.values,
+                            let _ = value_id;
+                            if carries_space {
+                                let space = crate::ir::lookup_local_pointer_leaf_info(
                                     &self.builder.body.locals,
-                                    value_id,
+                                    local,
+                                    &MirProjectionPath::new(),
                                 )
-                            {
+                                .map(|info| info.address_space)
+                                .unwrap_or(self.builder.body.local(local).address_space);
                                 self.set_pat_address_space(*pat, space);
                             }
                         } else {
@@ -3676,9 +3720,214 @@ mod tests {
     use common::InputDb;
     use driver::DriverDataBase;
     use hir::analysis::ty::ty_check::check_func_body;
+    use hir::analysis::{
+        name_resolution::{PathRes, resolve_path},
+        ty::trait_resolution::PredicateListId,
+    };
     use url::Url;
 
     use super::*;
+
+    #[test]
+    fn storage_field_borrow_keeps_storage_pointer_info() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///storage_field_borrow_keeps_storage_pointer_info.fe").unwrap();
+        let src = r#"
+struct CoinStore {
+    alice: u256,
+}
+
+fn borrow_storage_field_handle() -> u256
+    uses (store: mut CoinStore)
+{
+    let p: mut u256 = mut store.alice
+    p += 1
+    store.alice
+}
+"#;
+
+        let file = db.workspace().touch(&mut db, url, Some(src.to_owned()));
+        let top_mod = db.top_mod(file);
+        let hir_func = top_mod
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "borrow_storage_field_handle")
+            })
+            .expect("expected HIR `borrow_storage_field_handle`");
+        let assumptions = PredicateListId::empty_list(&db);
+        let key_path = hir_func
+            .effect_params(&db)
+            .next()
+            .and_then(|effect| effect.key_path(&db))
+            .expect("expected effect key path");
+        match resolve_path(&db, key_path, hir_func.scope(), assumptions, false)
+            .expect("effect key path should resolve")
+        {
+            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
+                assert_eq!(ty.pretty_print(&db), "CoinStore");
+            }
+            other => panic!("expected `CoinStore` effect key to resolve as a type, got {other:?}"),
+        }
+        let module = crate::lower_module(&db, top_mod).expect("module should lower");
+        let func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name.contains("borrow_storage_field_handle"))
+            .expect("expected `borrow_storage_field_handle`");
+        let p_local = func
+            .body
+            .locals
+            .iter()
+            .enumerate()
+            .find_map(|(idx, local)| (local.name == "p").then_some(LocalId(idx as u32)))
+            .expect("expected local `p`");
+        assert_eq!(
+            func.body.local(p_local).address_space,
+            AddressSpaceKind::Storage,
+            "borrowed storage field local should keep storage address space",
+        );
+        assert_eq!(
+            crate::ir::lookup_local_pointer_leaf_info(
+                &func.body.locals,
+                p_local,
+                &MirProjectionPath::new(),
+            )
+            .expect("borrowed storage field local should carry root pointer info")
+            .address_space,
+            AddressSpaceKind::Storage,
+        );
+        let p_value = func
+            .body
+            .values
+            .iter()
+            .enumerate()
+            .find_map(|(idx, value)| match value.origin {
+                ValueOrigin::Local(local) if local == p_local => Some(ValueId(idx as u32)),
+                _ => None,
+            })
+            .expect("expected root value for local `p`");
+        assert_eq!(
+            func.body
+                .value_pointer_info(p_value)
+                .expect("borrowed storage field value should carry pointer info")
+                .address_space,
+            AddressSpaceKind::Storage,
+        );
+    }
+
+    #[test]
+    fn mem_ptr_binding_keeps_mem_ptr_type_and_pointer_info() {
+        let mut db = DriverDataBase::default();
+        let url =
+            Url::parse("file:///mem_ptr_binding_keeps_mem_ptr_type_and_pointer_info.fe").unwrap();
+        let src = r#"
+use std::evm::{MemPtr, RawMem}
+
+struct Foo {
+    a: u256,
+}
+
+fn test() uses (mem: mut RawMem) {
+    let mp: MemPtr<Foo> = mem.mem_ptr(0x100)
+    with (mp) {}
+}
+"#;
+
+        let file = db.workspace().touch(&mut db, url, Some(src.to_owned()));
+        let top_mod = db.top_mod(file);
+        let module = crate::lower_module(&db, top_mod).expect("module should lower");
+        let func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name.contains("test"))
+            .expect("expected `test`");
+        let mp_local = func
+            .body
+            .locals
+            .iter()
+            .enumerate()
+            .find_map(|(idx, local)| (local.name == "mp").then_some(LocalId(idx as u32)))
+            .expect("expected local `mp`");
+        let mp_ty = func.body.local(mp_local).ty;
+        assert!(
+            crate::repr::effect_provider_space_for_ty(
+                &db,
+                &CoreLib::new(&db, top_mod.scope()),
+                mp_ty,
+            ) == Some(AddressSpaceKind::Memory),
+            "expected local `mp` to keep `MemPtr<_>` type, got `{}`",
+            mp_ty.pretty_print(&db),
+        );
+        assert_eq!(
+            crate::ir::lookup_local_pointer_leaf_info(
+                &func.body.locals,
+                mp_local,
+                &MirProjectionPath::new(),
+            )
+            .expect("mem ptr local should carry root pointer info")
+            .address_space,
+            AddressSpaceKind::Memory,
+        );
+    }
+
+    #[test]
+    fn mixed_effect_provider_bindings_keep_distinct_spaces() {
+        let mut db = DriverDataBase::default();
+        let url =
+            Url::parse("file:///mixed_effect_provider_bindings_keep_distinct_spaces.fe").unwrap();
+        let src = r#"
+use std::evm::{MemPtr, RawMem, RawStorage, StorPtr}
+
+struct Foo {
+    a: u256,
+}
+
+fn test() uses (st: mut RawStorage, mem: mut RawMem) {
+    let mp: MemPtr<Foo> = mem.mem_ptr(0x100)
+    let sp: StorPtr<Foo> = st.stor_ptr(0)
+    with (mp) {}
+    with (sp) {}
+}
+"#;
+
+        let file = db.workspace().touch(&mut db, url, Some(src.to_owned()));
+        let top_mod = db.top_mod(file);
+        let module = crate::lower_module(&db, top_mod).expect("module should lower");
+        let func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name.contains("test"))
+            .expect("expected `test`");
+        let local_by_name = |name: &str| {
+            func.body
+                .locals
+                .iter()
+                .enumerate()
+                .find_map(|(idx, local)| (local.name == name).then_some(LocalId(idx as u32)))
+                .unwrap_or_else(|| panic!("expected local `{name}`"))
+        };
+
+        let mp_local = local_by_name("mp");
+        let sp_local = local_by_name("sp");
+        let root = MirProjectionPath::new();
+
+        assert_eq!(
+            crate::ir::lookup_local_pointer_leaf_info(&func.body.locals, mp_local, &root)
+                .expect("mem ptr local should carry root pointer info")
+                .address_space,
+            AddressSpaceKind::Memory,
+        );
+        assert_eq!(
+            crate::ir::lookup_local_pointer_leaf_info(&func.body.locals, sp_local, &root)
+                .expect("stor ptr local should carry root pointer info")
+                .address_space,
+            AddressSpaceKind::Storage,
+        );
+    }
 
     #[test]
     #[should_panic(expected = "invalid effect argument for ByValue")]

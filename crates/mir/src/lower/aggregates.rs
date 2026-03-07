@@ -11,7 +11,6 @@ use num_bigint::BigUint;
 impl<'db, 'a> MirBuilder<'db, 'a> {
     fn try_lower_transparent_newtype_aggregate_cast(
         &mut self,
-        expr: ExprId,
         aggregate_ty: TyId<'db>,
         fallback: ValueId,
         field_count: usize,
@@ -25,8 +24,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let inner_value = inner_value?;
         self.builder.body.values[fallback.index()].origin =
             ValueOrigin::TransparentCast { value: inner_value };
-        self.builder.body.values[fallback.index()].repr =
-            self.value_repr_for_expr(expr, aggregate_ty);
+        self.builder.body.values[fallback.index()].repr = self.builder.body.value(inner_value).repr;
+        self.refresh_value_pointer_info(fallback);
         Some(fallback)
     }
 
@@ -55,7 +54,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         self.builder.body.locals[dest.index()].address_space = AddressSpaceKind::Memory;
         self.builder.body.locals[dest.index()]
-            .capability_spaces
+            .pointer_leaf_infos
             .clear();
         let source = self.source_for_expr(expr);
         self.push_inst_here(MirInst::Assign {
@@ -94,17 +93,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return;
         };
         let mut merged = self.builder.body.locals[local.index()]
-            .capability_spaces
+            .pointer_leaf_infos
             .clone();
         for (init_path, init_value) in metadata_inits {
             let update_prefix = base_projection.concat(&init_path);
             merged.retain(|(path, _)| !update_prefix.is_prefix_of(path));
-            for (suffix, space) in self.capability_spaces_for_value(init_value) {
-                merged.push((update_prefix.concat(&suffix), space));
+            for (suffix, info) in self.pointer_leaf_infos_for_value(init_value) {
+                merged.push((update_prefix.concat(&suffix), info));
             }
         }
-        self.builder.body.locals[local.index()].capability_spaces =
-            self.normalize_capability_spaces(merged);
+        self.builder.body.locals[local.index()].pointer_leaf_infos =
+            self.normalize_pointer_leaf_infos(merged);
     }
 
     /// Lowers a record literal into an allocation plus `store_field` calls.
@@ -135,7 +134,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let record_ty = self.typed_body.expr_ty(self.db, expr);
 
         if let Some(value) = self.try_lower_transparent_newtype_aggregate_cast(
-            expr,
             record_ty,
             fallback,
             lowered_fields.len(),
@@ -195,7 +193,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         if let Some(value) = self.try_lower_transparent_newtype_aggregate_cast(
-            expr,
             tuple_ty,
             fallback,
             lowered_elems.len(),
@@ -414,6 +411,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             origin: ValueOrigin::Synthetic(SyntheticValue::Int(value)),
             source: crate::ir::SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Word,
+            pointer_info: None,
         })
     }
 

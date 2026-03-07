@@ -32,27 +32,24 @@ func private %dispatch__StorPtr_Evm___207f35a85ac4062e() {
         v7.i256 = evm_calldata_load 4.i256;
         v9.i256 = evm_calldata_load 36.i256;
         v11.*i8 = evm_malloc 64.i256;
-        v12.i256 = ptr_to_int v11 i256;
-        v13.*@__fe_Point_0 = bitcast v11 *@__fe_Point_0;
-        v14.*i256 = gep v13 0.i256 0.i256;
-        mstore v14 v7 i256;
-        v15.*@__fe_Point_0 = bitcast v11 *@__fe_Point_0;
-        v17.*i256 = gep v15 0.i256 1.i256;
-        mstore v17 v9 i256;
-        v18.*@__fe_Point_0 = bitcast v11 *@__fe_Point_0;
-        v19.*i256 = gep v18 0.i256 0.i256;
-        v20.i256 = mload v19 i256;
-        (v21.i256, v22.i1) = uaddo v20 1.i256;
-        br v22 block5 block6;
+        v12.*@__fe_Point_0 = bitcast v11 *@__fe_Point_0;
+        v13.*i256 = gep v12 0.i256 0.i256;
+        mstore v13 v7 i256;
+        v15.*i256 = gep v12 0.i256 1.i256;
+        mstore v15 v9 i256;
+        v16.*i256 = gep v12 0.i256 0.i256;
+        v17.i256 = mload v16 i256;
+        (v18.i256, v19.i1) = uaddo v17 1.i256;
+        br v19 block5 block6;
 
     block2:
-        v39.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v3 2066295049.i256;
-        br v39 block3 block4;
+        v33.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v3 2066295049.i256;
+        br v33 block3 block4;
 
     block3:
-        v40.i256 = evm_calldata_load 4.i256;
-        (v42.i256, v43.i1) = uaddo v40 3.i256;
-        br v43 block5 block8;
+        v34.i256 = evm_calldata_load 4.i256;
+        (v36.i256, v37.i1) = uaddo v34 3.i256;
+        br v37 block5 block8;
 
     block4:
         evm_return 0.i256 0.i256;
@@ -61,45 +58,40 @@ func private %dispatch__StorPtr_Evm___207f35a85ac4062e() {
         evm_revert 0.i256 0.i256;
 
     block6:
-        v24.*@__fe_Point_0 = int_to_ptr v12 *@__fe_Point_0;
-        v25.*i256 = gep v24 0.i256 0.i256;
-        mstore v25 v21 i256;
-        v26.*@__fe_Point_0 = int_to_ptr v12 *@__fe_Point_0;
-        v27.*i256 = gep v26 0.i256 1.i256;
-        v28.i256 = mload v27 i256;
-        (v30.i256, v31.i1) = uaddo v28 2.i256;
-        br v31 block5 block7;
+        v21.*i256 = gep v12 0.i256 0.i256;
+        mstore v21 v18 i256;
+        v22.*i256 = gep v12 0.i256 1.i256;
+        v23.i256 = mload v22 i256;
+        (v25.i256, v26.i1) = uaddo v23 2.i256;
+        br v26 block5 block7;
 
     block7:
-        v33.*@__fe_Point_0 = int_to_ptr v12 *@__fe_Point_0;
-        v34.*i256 = gep v33 0.i256 1.i256;
-        mstore v34 v30 i256;
-        v35.i256 = call %point_hac92469562809d28_area v12;
-        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v35 0.i256;
+        v28.*i256 = gep v12 0.i256 1.i256;
+        mstore v28 v25 i256;
+        v29.i256 = call %point_hac92469562809d28_area v12;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v29 0.i256;
         evm_invalid;
 
     block8:
-        v44.i256 = call %square_h97afaa872b6ea17e_area v42;
-        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v44 0.i256;
+        v38.i256 = call %square_h97afaa872b6ea17e_area v36;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v38 0.i256;
         evm_invalid;
 }
 
-func private %point_hac92469562809d28_area(v0.i256) -> i256 {
+func private %point_hac92469562809d28_area(v0.*@__fe_Point_0) -> i256 {
     block0:
-        v1.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
-        v3.*i256 = gep v1 0.i256 0.i256;
-        v4.i256 = mload v3 i256;
-        v5.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
-        v7.*i256 = gep v5 0.i256 1.i256;
-        v8.i256 = mload v7 i256;
-        (v9.i256, v10.i1) = umulo v4 v8;
-        br v10 block1 block2;
+        v2.*i256 = gep v0 0.i256 0.i256;
+        v3.i256 = mload v2 i256;
+        v5.*i256 = gep v0 0.i256 1.i256;
+        v6.i256 = mload v5 i256;
+        (v7.i256, v8.i1) = umulo v3 v6;
+        br v8 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        return v9;
+        return v7;
 }
 
 func private %square_h97afaa872b6ea17e_area(v0.i256) -> i256 {

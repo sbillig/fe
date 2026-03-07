@@ -9,7 +9,7 @@ type @__fe_tuple_0 = {i1, i1};
 type @__fe_tuple_1 = {@__fe_tuple_0, i1};
 type @__fe_tuple_2 = {@__fe_tuple_1, i1};
 
-func private %match_nested_tuple(v0.i256) -> i8 {
+func private %match_nested_tuple(v0.*@__fe_tuple_1) -> i8 {
     block0:
         jump block7;
 
@@ -17,8 +17,8 @@ func private %match_nested_tuple(v0.i256) -> i8 {
         jump block2;
 
     block2:
-        v3.i8 = phi (7.i8 block1) (6.i8 block3) (5.i8 block4) (2.i8 block5) (1.i8 block6);
-        return v3;
+        v4.i8 = phi (7.i8 block1) (6.i8 block3) (5.i8 block4) (2.i8 block5) (1.i8 block6);
+        return v4;
 
     block3:
         jump block2;
@@ -33,25 +33,22 @@ func private %match_nested_tuple(v0.i256) -> i8 {
         jump block2;
 
     block7:
-        v9.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
-        v11.*i1 = gep v9 0.i256 0.i256 0.i256;
-        v12.i256 = mload v11 i256;
-        v13.i1 = ne v12 0.i256;
-        br_table v13 block14 (1.i1 block8) (0.i1 block12);
+        v10.*i1 = gep v0 0.i256 0.i256 0.i256;
+        v11.i256 = mload v10 i256;
+        v12.i1 = ne v11 0.i256;
+        br_table v12 block14 (1.i1 block8) (0.i1 block12);
 
     block8:
-        v17.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
-        v19.*i1 = gep v17 0.i256 0.i256 1.i256;
-        v20.i256 = mload v19 i256;
-        v21.i1 = ne v20 0.i256;
-        br_table v21 block11 (1.i1 block9) (0.i1 block4);
+        v17.*i1 = gep v0 0.i256 0.i256 1.i256;
+        v18.i256 = mload v17 i256;
+        v19.i1 = ne v18 0.i256;
+        br_table v19 block11 (1.i1 block9) (0.i1 block4);
 
     block9:
-        v23.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
-        v24.*i1 = gep v23 0.i256 1.i256;
-        v25.i256 = mload v24 i256;
-        v26.i1 = ne v25 0.i256;
-        br_table v26 block10 (1.i1 block1) (0.i1 block3);
+        v21.*i1 = gep v0 0.i256 1.i256;
+        v22.i256 = mload v21 i256;
+        v23.i1 = ne v22 0.i256;
+        br_table v23 block10 (1.i1 block1) (0.i1 block3);
 
     block10:
         evm_invalid;
@@ -60,11 +57,10 @@ func private %match_nested_tuple(v0.i256) -> i8 {
         evm_invalid;
 
     block12:
-        v28.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
-        v29.*i1 = gep v28 0.i256 1.i256;
-        v30.i256 = mload v29 i256;
-        v31.i1 = ne v30 0.i256;
-        br_table v31 block13 (1.i1 block5) (0.i1 block6);
+        v25.*i1 = gep v0 0.i256 1.i256;
+        v26.i256 = mload v25 i256;
+        v27.i1 = ne v26 0.i256;
+        br_table v27 block13 (1.i1 block5) (0.i1 block6);
 
     block13:
         evm_invalid;
@@ -73,7 +69,7 @@ func private %match_nested_tuple(v0.i256) -> i8 {
         evm_invalid;
 }
 
-func private %match_deeply_nested(v0.i256) -> i8 {
+func private %match_deeply_nested(v0.*@__fe_tuple_2) -> i8 {
     block0:
         jump block5;
 
@@ -81,8 +77,8 @@ func private %match_deeply_nested(v0.i256) -> i8 {
         jump block2;
 
     block2:
-        v3.i8 = phi (15.i8 block1) (8.i8 block3) (0.i8 block4);
-        return v3;
+        v4.i8 = phi (15.i8 block1) (8.i8 block3) (0.i8 block4);
+        return v4;
 
     block3:
         jump block2;
@@ -91,32 +87,28 @@ func private %match_deeply_nested(v0.i256) -> i8 {
         jump block2;
 
     block5:
-        v6.*@__fe_tuple_2 = int_to_ptr v0 *@__fe_tuple_2;
-        v8.*i1 = gep v6 0.i256 0.i256 0.i256 0.i256;
-        v9.i256 = mload v8 i256;
-        v10.i1 = ne v9 0.i256;
-        br_table v10 block9 (1.i1 block6) (0.i1 block4);
+        v7.*i1 = gep v0 0.i256 0.i256 0.i256 0.i256;
+        v8.i256 = mload v7 i256;
+        v9.i1 = ne v8 0.i256;
+        br_table v9 block9 (1.i1 block6) (0.i1 block4);
 
     block6:
-        v14.*@__fe_tuple_2 = int_to_ptr v0 *@__fe_tuple_2;
-        v16.*i1 = gep v14 0.i256 1.i256;
-        v17.i256 = mload v16 i256;
-        v18.i1 = ne v17 0.i256;
-        br_table v18 block3 (1.i1 block7);
+        v14.*i1 = gep v0 0.i256 1.i256;
+        v15.i256 = mload v14 i256;
+        v16.i1 = ne v15 0.i256;
+        br_table v16 block3 (1.i1 block7);
 
     block7:
-        v20.*@__fe_tuple_2 = int_to_ptr v0 *@__fe_tuple_2;
-        v21.*i1 = gep v20 0.i256 0.i256 1.i256;
-        v22.i256 = mload v21 i256;
-        v23.i1 = ne v22 0.i256;
-        br_table v23 block3 (1.i1 block8);
+        v18.*i1 = gep v0 0.i256 0.i256 1.i256;
+        v19.i256 = mload v18 i256;
+        v20.i1 = ne v19 0.i256;
+        br_table v20 block3 (1.i1 block8);
 
     block8:
-        v25.*@__fe_tuple_2 = int_to_ptr v0 *@__fe_tuple_2;
-        v26.*i1 = gep v25 0.i256 0.i256 0.i256 1.i256;
-        v27.i256 = mload v26 i256;
-        v28.i1 = ne v27 0.i256;
-        br_table v28 block3 (1.i1 block1);
+        v22.*i1 = gep v0 0.i256 0.i256 0.i256 1.i256;
+        v23.i256 = mload v22 i256;
+        v24.i1 = ne v23 0.i256;
+        br_table v24 block3 (1.i1 block1);
 
     block9:
         evm_invalid;
@@ -124,7 +116,8 @@ func private %match_deeply_nested(v0.i256) -> i8 {
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.i8 = call %match_nested_tuple 0.i256;
+        v1.*@__fe_tuple_1 = int_to_ptr 0.i256 *@__fe_tuple_1;
+        v2.i8 = call %match_nested_tuple v1;
         evm_stop;
 }
 

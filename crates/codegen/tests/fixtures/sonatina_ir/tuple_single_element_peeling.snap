@@ -28,8 +28,8 @@ func private %match_single_element_tuple(v0.i1) -> i8 {
         jump block2;
 
     block2:
-        v3.i8 = phi (1.i8 block1) (0.i8 block3);
-        return v3;
+        v4.i8 = phi (1.i8 block1) (0.i8 block3);
+        return v4;
 
     block3:
         jump block2;

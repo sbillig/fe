@@ -525,9 +525,20 @@ impl<'db> FunctionEmitter<'db> {
                     local_data.ty.pretty_print(self.db),
                 )))
             }
-            ValueOrigin::PlaceRoot(_) => Err(YulError::Unsupported(
-                "capability-stage place root reached codegen".into(),
-            )),
+            ValueOrigin::PlaceRoot(local) => {
+                if let Some(spill) = self.mir_func.body.spill_slots.get(local)
+                    && let Some(name) = state.resolve_local(*spill)
+                {
+                    return Ok(name);
+                }
+                Err(YulError::Unsupported(format!(
+                    "capability-stage place root reached codegen (func={}, local=l{} `{}`, ty={})",
+                    self.mir_func.symbol_name,
+                    local.index(),
+                    self.mir_func.body.local(*local).name,
+                    self.mir_func.body.local(*local).ty.pretty_print(self.db),
+                )))
+            }
             ValueOrigin::FuncItem(_) => {
                 debug_assert!(
                     layout::is_zero_sized_ty_in(self.db, &self.layout, value.ty),
@@ -868,8 +879,8 @@ impl<'db> FunctionEmitter<'db> {
         state: &BlockState,
     ) -> Result<String, YulError> {
         let base_value = self.mir_func.body.value(place.base);
-        let mut base_expr = if let ValueOrigin::Local(local) = &base_value.origin
-            && base_value.repr.is_ref()
+        let mut base_expr = if let ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) =
+            &base_value.origin
             && let Some(spill) = self.mir_func.body.spill_slots.get(local)
         {
             state.resolve_local(*spill).ok_or_else(|| {

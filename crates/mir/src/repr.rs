@@ -14,6 +14,7 @@
 
 use hir::analysis::HirAnalysisDb;
 use hir::analysis::ty::adt_def::AdtRef;
+use hir::analysis::ty::normalize::normalize_ty;
 use hir::analysis::ty::ty_def::{TyBase, TyData, TyId};
 use hir::analysis::ty::{
     canonical::Canonicalized,
@@ -26,7 +27,7 @@ use hir::hir_def::{EnumVariant, IdentId};
 use hir::projection::{Projection, ProjectionPath};
 
 use crate::core_lib::CoreLib;
-use crate::ir::AddressSpaceKind;
+use crate::ir::{AddressSpaceKind, PointerInfo};
 use crate::layout;
 use common::indexmap::IndexMap;
 
@@ -130,6 +131,95 @@ pub fn effect_provider_space_for_ty<'db>(
 
     transparent_newtype_field_ty(db, ty)
         .and_then(|inner| effect_provider_space_for_ty(db, core, inner))
+}
+
+/// Returns the normalized `EffectHandle::Target` type for an effect provider, looking through
+/// transparent newtype wrappers.
+pub fn effect_provider_target_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    ty: TyId<'db>,
+) -> Option<TyId<'db>> {
+    if let Some((_, inner)) = ty.as_capability(db) {
+        return Some(inner);
+    }
+
+    let effect_handle = resolve_core_trait(db, core.scope, &["effect_ref", "EffectHandle"])
+        .expect("missing required core trait `core::effect_ref::EffectHandle`");
+    let assumptions = PredicateListId::empty_list(db);
+    let target_ident = IdentId::new(db, "Target".to_string());
+    let inst = TraitInstId::new(db, effect_handle, vec![ty], IndexMap::new());
+    let goal = Canonicalized::new(db, inst).value;
+    match is_goal_satisfiable(
+        db,
+        TraitSolveCx::new(db, core.scope).with_assumptions(assumptions),
+        goal,
+    ) {
+        GoalSatisfiability::Satisfied(_) => {
+            if let Some(target) = inst
+                .assoc_ty(db, target_ident)
+                .map(|assoc| normalize_ty(db, assoc, core.scope, assumptions))
+                .filter(|target| !target.has_invalid(db))
+            {
+                return Some(target);
+            }
+        }
+        GoalSatisfiability::NeedsConfirmation(_) => return None,
+        GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => {}
+    }
+
+    transparent_newtype_field_ty(db, ty)
+        .and_then(|inner| effect_provider_target_ty(db, core, inner))
+}
+
+pub fn pointer_info_for_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    ty: TyId<'db>,
+    default_ref_space: AddressSpaceKind,
+) -> Option<PointerInfo<'db>> {
+    if let Some((capability, inner)) = ty.as_capability(db) {
+        return match capability {
+            CapabilityKind::Mut => Some(PointerInfo {
+                address_space: default_ref_space,
+                target_ty: Some(inner),
+            }),
+            CapabilityKind::Ref => match repr_kind_for_ref_inner(db, core, inner) {
+                ReprKind::Ptr(AddressSpaceKind::Memory) => Some(PointerInfo {
+                    address_space: default_ref_space,
+                    target_ty: Some(inner),
+                }),
+                ReprKind::Zst | ReprKind::Word | ReprKind::Ptr(_) | ReprKind::Ref => None,
+            },
+            CapabilityKind::View => pointer_info_for_ty(db, core, inner, default_ref_space),
+        };
+    }
+
+    if let Some(space) = effect_provider_space_for_ty(db, core, ty) {
+        return Some(PointerInfo {
+            address_space: space,
+            target_ty: effect_provider_target_ty(db, core, ty),
+        });
+    }
+
+    transparent_newtype_field_ty(db, ty)
+        .and_then(|inner| pointer_info_for_ty(db, core, inner, default_ref_space))
+}
+
+pub fn runtime_pointer_info_for_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    ty: TyId<'db>,
+    default_ref_space: AddressSpaceKind,
+) -> Option<PointerInfo<'db>> {
+    if let Some(info) = pointer_info_for_ty(db, core, ty, default_ref_space) {
+        return Some(info);
+    }
+
+    matches!(repr_kind_for_ty(db, core, ty), ReprKind::Ref).then_some(PointerInfo {
+        address_space: default_ref_space,
+        target_ty: Some(ty),
+    })
 }
 
 fn effect_provider_space_via_domain_trait<'db>(

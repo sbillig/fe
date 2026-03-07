@@ -140,7 +140,7 @@ pub fn place_effect_provider_param_index_map<'db>(
 ///
 /// Normalization currently means existentializing omitted trailing const args only
 /// when the omitted const parameter defaults to a layout hole (`_`).
-pub(crate) fn resolve_normalized_type_effect_key<'db>(
+pub fn resolve_normalized_type_effect_key<'db>(
     db: &'db dyn HirAnalysisDb,
     key_path: PathId<'db>,
     scope: ScopeId<'db>,

@@ -1269,13 +1269,14 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         let local_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Local(local),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+            pointer_info: None,
         });
 
         func.body.push_block(BasicBlock {
@@ -1307,7 +1308,7 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         func.body.param_locals.push(param);
         let param_value = func.body.alloc_value(ValueData {
@@ -1315,6 +1316,7 @@ mod tests {
             origin: ValueOrigin::Local(param),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+            pointer_info: None,
         });
 
         func.body.push_block(BasicBlock {
@@ -1340,7 +1342,7 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         func.body.effect_param_locals.push(effect_param);
         let effect_param_value = func.body.alloc_value(ValueData {
@@ -1348,6 +1350,7 @@ mod tests {
             origin: ValueOrigin::Local(effect_param),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+            pointer_info: None,
         });
 
         func.body.push_block(BasicBlock {
@@ -1373,13 +1376,14 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         let alloc_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Local(alloc_local),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+            pointer_info: None,
         });
 
         func.body.push_block(BasicBlock {
@@ -1430,13 +1434,14 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         let alloc_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Local(alloc_local),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+            pointer_info: None,
         });
         let call_result_local = func.body.alloc_local(LocalData {
             name: "result".to_string(),
@@ -1444,13 +1449,14 @@ mod tests {
             is_mut: false,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         let call_result_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Local(call_result_local),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+            pointer_info: None,
         });
 
         func.body.push_block(BasicBlock {
@@ -1501,13 +1507,14 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         let alloc_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Local(alloc_local),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+            pointer_info: None,
         });
         let call_result_local = func.body.alloc_local(LocalData {
             name: "result".to_string(),
@@ -1515,13 +1522,14 @@ mod tests {
             is_mut: false,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         let call_result_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Local(call_result_local),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+            pointer_info: None,
         });
 
         func.body.push_block(BasicBlock {
@@ -1573,19 +1581,21 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         let local_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Local(local),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+            pointer_info: None,
         });
         let size_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Synthetic(crate::ir::SyntheticValue::Int(BigUint::from(32u64))),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Word,
+            pointer_info: None,
         });
 
         func.body.push_block(BasicBlock {
@@ -1624,13 +1634,14 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         let alloc_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Local(alloc_local),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+            pointer_info: None,
         });
 
         let loaded_local = func.body.alloc_local(LocalData {
@@ -1639,13 +1650,14 @@ mod tests {
             is_mut: false,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         let loaded_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Local(loaded_local),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Word,
+            pointer_info: None,
         });
 
         func.body.push_block(BasicBlock {
@@ -1690,13 +1702,14 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         let alloc_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Local(alloc_local),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+            pointer_info: None,
         });
 
         let target_local = func.body.alloc_local(LocalData {
@@ -1705,13 +1718,14 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         let target_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Local(target_local),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+            pointer_info: None,
         });
 
         let foreign_local = func.body.alloc_local(LocalData {
@@ -1720,13 +1734,14 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         let foreign_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Local(foreign_local),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+            pointer_info: None,
         });
 
         let cond_value = func.body.alloc_value(ValueData {
@@ -1734,6 +1749,7 @@ mod tests {
             origin: ValueOrigin::Synthetic(SyntheticValue::Bool(true)),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Word,
+            pointer_info: None,
         });
 
         let then_id = BasicBlockId(1);
@@ -1815,13 +1831,14 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         let alloc_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Local(alloc_local),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+            pointer_info: None,
         });
 
         func.body.push_block(BasicBlock {
@@ -1860,19 +1877,21 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         let alloc_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Local(alloc_local),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+            pointer_info: None,
         });
         let cast_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::TransparentCast { value: alloc_value },
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+            pointer_info: None,
         });
 
         func.body.push_block(BasicBlock {
@@ -1914,13 +1933,14 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         let alloc_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Local(alloc_local),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+            pointer_info: None,
         });
 
         let target_local = func.body.alloc_local(LocalData {
@@ -1929,13 +1949,14 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         let target_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Local(target_local),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+            pointer_info: None,
         });
 
         let foreign_local = func.body.alloc_local(LocalData {
@@ -1944,13 +1965,14 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         let foreign_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Local(foreign_local),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+            pointer_info: None,
         });
 
         func.body.push_block(BasicBlock {
@@ -2009,13 +2031,14 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         let alloc_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Local(alloc_local),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+            pointer_info: None,
         });
 
         let foreign_local = func.body.alloc_local(LocalData {
@@ -2024,13 +2047,14 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         let foreign_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Local(foreign_local),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+            pointer_info: None,
         });
 
         let result_local = func.body.alloc_local(LocalData {
@@ -2039,13 +2063,14 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         let result_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Local(result_local),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+            pointer_info: None,
         });
 
         func.body.push_block(BasicBlock {
@@ -2101,13 +2126,14 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         let src_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Local(src_local),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ref(AddressSpaceKind::Memory),
+            pointer_info: None,
         });
 
         let dst_local = func.body.alloc_local(LocalData {
@@ -2116,13 +2142,14 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         let dst_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Local(dst_local),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ref(AddressSpaceKind::Memory),
+            pointer_info: None,
         });
 
         func.body.push_block(BasicBlock {

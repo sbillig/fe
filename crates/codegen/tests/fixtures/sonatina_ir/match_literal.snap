@@ -13,8 +13,8 @@ func private %match_bool(v0.i1) -> i64 {
         jump block2;
 
     block2:
-        v3.i64 = phi (1.i64 block1) (2.i64 block3);
-        return v3;
+        v4.i64 = phi (1.i64 block1) (2.i64 block3);
+        return v4;
 
     block3:
         jump block2;
@@ -31,8 +31,8 @@ func private %match_u8(v0.i8) -> i8 {
         jump block2;
 
     block2:
-        v3.i8 = phi (1.i8 block1) (2.i8 block3) (3.i8 block4);
-        return v3;
+        v4.i8 = phi (1.i8 block1) (2.i8 block3) (3.i8 block4);
+        return v4;
 
     block3:
         jump block2;
@@ -52,8 +52,8 @@ func private %match_u16(v0.i16) -> i16 {
         jump block2;
 
     block2:
-        v3.i16 = phi (1.i16 block1) (2.i16 block3) (3.i16 block4);
-        return v3;
+        v4.i16 = phi (1.i16 block1) (2.i16 block3) (3.i16 block4);
+        return v4;
 
     block3:
         jump block2;
@@ -73,8 +73,8 @@ func private %match_u32(v0.i32) -> i32 {
         jump block2;
 
     block2:
-        v3.i32 = phi (1.i32 block1) (2.i32 block3) (3.i32 block4);
-        return v3;
+        v4.i32 = phi (1.i32 block1) (2.i32 block3) (3.i32 block4);
+        return v4;
 
     block3:
         jump block2;
@@ -94,8 +94,8 @@ func private %match_u64(v0.i64) -> i64 {
         jump block2;
 
     block2:
-        v3.i64 = phi (1.i64 block1) (2.i64 block3) (3.i64 block4);
-        return v3;
+        v4.i64 = phi (1.i64 block1) (2.i64 block3) (3.i64 block4);
+        return v4;
 
     block3:
         jump block2;
@@ -115,8 +115,8 @@ func private %match_u128(v0.i128) -> i128 {
         jump block2;
 
     block2:
-        v3.i128 = phi (1.i128 block1) (2.i128 block3) (3.i128 block4);
-        return v3;
+        v4.i128 = phi (1.i128 block1) (2.i128 block3) (3.i128 block4);
+        return v4;
 
     block3:
         jump block2;
@@ -157,8 +157,8 @@ func private %match_i8(v0.i8) -> i8 {
         jump block2;
 
     block2:
-        v3.i8 = phi (1.i8 block1) (2.i8 block3) (3.i8 block4);
-        return v3;
+        v4.i8 = phi (1.i8 block1) (2.i8 block3) (3.i8 block4);
+        return v4;
 
     block3:
         jump block2;
@@ -178,8 +178,8 @@ func private %match_i16(v0.i16) -> i16 {
         jump block2;
 
     block2:
-        v3.i16 = phi (1.i16 block1) (2.i16 block3) (3.i16 block4);
-        return v3;
+        v4.i16 = phi (1.i16 block1) (2.i16 block3) (3.i16 block4);
+        return v4;
 
     block3:
         jump block2;
@@ -199,8 +199,8 @@ func private %match_i32(v0.i32) -> i32 {
         jump block2;
 
     block2:
-        v3.i32 = phi (1.i32 block1) (2.i32 block3) (3.i32 block4);
-        return v3;
+        v4.i32 = phi (1.i32 block1) (2.i32 block3) (3.i32 block4);
+        return v4;
 
     block3:
         jump block2;
@@ -220,8 +220,8 @@ func private %match_i64(v0.i64) -> i64 {
         jump block2;
 
     block2:
-        v3.i64 = phi (1.i64 block1) (2.i64 block3) (3.i64 block4);
-        return v3;
+        v4.i64 = phi (1.i64 block1) (2.i64 block3) (3.i64 block4);
+        return v4;
 
     block3:
         jump block2;
@@ -241,8 +241,8 @@ func private %match_i128(v0.i128) -> i128 {
         jump block2;
 
     block2:
-        v3.i128 = phi (1.i128 block1) (2.i128 block3) (3.i128 block4);
-        return v3;
+        v4.i128 = phi (1.i128 block1) (2.i128 block3) (3.i128 block4);
+        return v4;
 
     block3:
         jump block2;
@@ -277,7 +277,7 @@ func private %match_i256(v0.i256) -> i256 {
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.i64 = call %match_bool 0.i1;
+        v2.i64 = call %match_bool 0.i1;
         evm_stop;
 }
 

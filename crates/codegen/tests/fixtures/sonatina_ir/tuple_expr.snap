@@ -7,7 +7,7 @@ target = "evm-ethereum-osaka"
 
 type @__fe_tuple_0 = {i64, i1};
 
-func private %tuple_expr() -> i256 {
+func private %tuple_expr() -> *@__fe_tuple_0 {
     block0:
         (v2.i64, v3.i1) = uaddo 1.i64 2.i64;
         br v3 block1 block2;
@@ -17,22 +17,20 @@ func private %tuple_expr() -> i256 {
 
     block2:
         v6.*i8 = evm_malloc 64.i256;
-        v7.i256 = ptr_to_int v6 i256;
-        v8.i256 = zext v2 i256;
-        v9.*@__fe_tuple_0 = bitcast v6 *@__fe_tuple_0;
-        v10.*i64 = gep v9 0.i256 0.i256;
-        mstore v10 v8 i256;
-        v12.i1 = is_zero 0.i1;
-        v13.i256 = zext v12 i256;
-        v14.*@__fe_tuple_0 = bitcast v6 *@__fe_tuple_0;
-        v16.*i1 = gep v14 0.i256 1.i256;
-        mstore v16 v13 i256;
+        v7.*@__fe_tuple_0 = bitcast v6 *@__fe_tuple_0;
+        v8.*i64 = gep v7 0.i256 0.i256;
+        v9.i256 = zext v2 i256;
+        mstore v8 v9 i256;
+        v11.i1 = is_zero 0.i1;
+        v13.*i1 = gep v7 0.i256 1.i256;
+        v14.i256 = zext v11 i256;
+        mstore v13 v14 i256;
         return v7;
 }
 
 func private %__fe_sonatina_entry() {
     block0:
-        v0.i256 = call %tuple_expr;
+        v0.*@__fe_tuple_0 = call %tuple_expr;
         evm_stop;
 }
 

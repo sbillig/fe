@@ -203,6 +203,109 @@ pub(crate) fn insert_temp_binds<'db>(db: &'db dyn HirAnalysisDb, body: &mut MirB
     }
 }
 
+pub(crate) fn compute_live_values<'db>(body: &MirBody<'db>) -> Vec<bool> {
+    fn mark_value_live<'db>(
+        values: &[ValueData<'db>],
+        live: &mut [bool],
+        visiting: &mut FxHashSet<ValueId>,
+        value: ValueId,
+    ) {
+        if !visiting.insert(value) {
+            return;
+        }
+        let Some(slot) = live.get_mut(value.index()) else {
+            return;
+        };
+        if *slot {
+            return;
+        }
+        *slot = true;
+        let Some(origin) = values.get(value.index()).map(|value| &value.origin) else {
+            return;
+        };
+        for dep in value_deps_in_eval_order(origin) {
+            mark_value_live(values, live, visiting, dep);
+        }
+        visiting.remove(&value);
+    }
+
+    let mut live = vec![false; body.values.len()];
+    let values = &body.values;
+
+    let mut mark_root = |value: ValueId| {
+        let mut visiting = FxHashSet::default();
+        mark_value_live(values, &mut live, &mut visiting, value);
+    };
+
+    for block in &body.blocks {
+        for inst in &block.insts {
+            match inst {
+                MirInst::BindValue { value, .. } => mark_root(*value),
+                MirInst::Assign { rvalue, .. } => match rvalue {
+                    Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::ConstAggregate { .. } => {}
+                    Rvalue::Value(value) => mark_root(*value),
+                    Rvalue::Call(call) => {
+                        for arg in call.args.iter().chain(call.effect_args.iter()) {
+                            mark_root(*arg);
+                        }
+                    }
+                    Rvalue::Intrinsic { args, .. } => {
+                        for arg in args {
+                            mark_root(*arg);
+                        }
+                    }
+                    Rvalue::Load { place } => {
+                        mark_root(place.base);
+                        bump_place_path(&mut mark_root, &place.projection);
+                    }
+                },
+                MirInst::Store { place, value, .. } => {
+                    mark_root(place.base);
+                    bump_place_path(&mut mark_root, &place.projection);
+                    mark_root(*value);
+                }
+                MirInst::InitAggregate { place, inits, .. } => {
+                    mark_root(place.base);
+                    bump_place_path(&mut mark_root, &place.projection);
+                    for (path, value) in inits {
+                        bump_place_path(&mut mark_root, path);
+                        mark_root(*value);
+                    }
+                }
+                MirInst::SetDiscriminant { place, .. } => {
+                    mark_root(place.base);
+                    bump_place_path(&mut mark_root, &place.projection);
+                }
+            }
+        }
+
+        match &block.terminator {
+            Terminator::Return {
+                value: Some(value), ..
+            } => mark_root(*value),
+            Terminator::TerminatingCall { call, .. } => match call {
+                TerminatingCall::Call(call) => {
+                    for arg in call.args.iter().chain(call.effect_args.iter()) {
+                        mark_root(*arg);
+                    }
+                }
+                TerminatingCall::Intrinsic { args, .. } => {
+                    for arg in args {
+                        mark_root(*arg);
+                    }
+                }
+            },
+            Terminator::Branch { cond, .. } => mark_root(*cond),
+            Terminator::Switch { discr, .. } => mark_root(*discr),
+            Terminator::Return { value: None, .. }
+            | Terminator::Goto { .. }
+            | Terminator::Unreachable { .. } => {}
+        }
+    }
+
+    live
+}
+
 /// Canonicalize transparent-newtype operations in MIR.
 ///
 /// This pass enforces a single representation strategy for transparent single-field wrappers
@@ -305,6 +408,10 @@ pub(crate) fn canonicalize_transparent_newtypes<'db>(
                             origin: ValueOrigin::PlaceRef(prefix_place),
                             source: SourceInfoId::SYNTHETIC,
                             repr: ValueRepr::Ref(addr_space),
+                            pointer_info: Some(crate::ir::PointerInfo {
+                                address_space: addr_space,
+                                target_ty: Some(current_ty),
+                            }),
                         },
                     )
                 };
@@ -319,6 +426,11 @@ pub(crate) fn canonicalize_transparent_newtypes<'db>(
                         },
                         source: SourceInfoId::SYNTHETIC,
                         repr,
+                        pointer_info: crate::ir::try_value_pointer_info_in(
+                            values,
+                            locals,
+                            base_at_point,
+                        ),
                     },
                 );
                 current_ty = inner_ty;
@@ -616,6 +728,33 @@ pub(crate) fn canonicalize_zero_sized<'db>(db: &'db dyn HirAnalysisDb, body: &mu
             value.repr = ValueRepr::Word;
         }
     }
+
+    let mut unit_values: Vec<bool> = values
+        .iter()
+        .map(|value| matches!(value.origin, ValueOrigin::Unit))
+        .collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (idx, value) in values.iter_mut().enumerate() {
+            let collapses_to_unit = match &value.origin {
+                ValueOrigin::TransparentCast { value } => {
+                    unit_values.get(value.index()).copied().unwrap_or(false)
+                }
+                ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => unit_values
+                    .get(place.base.index())
+                    .copied()
+                    .unwrap_or(false),
+                _ => false,
+            };
+            if collapses_to_unit && !unit_values[idx] {
+                value.origin = ValueOrigin::Unit;
+                value.repr = ValueRepr::Word;
+                unit_values[idx] = true;
+                changed = true;
+            }
+        }
+    }
 }
 
 fn value_should_bind(
@@ -764,6 +903,7 @@ fn bump_place_path<'db>(bump: &mut impl FnMut(ValueId), path: &crate::ir::MirPro
 mod tests {
     use common::InputDb;
     use driver::DriverDataBase;
+    use hir::analysis::ty::ty_def::TyId;
     use url::Url;
 
     use crate::{
@@ -817,19 +957,21 @@ pub fn transparent_newtype_projection_keeps_non_memory_space(w: mut Wrap) {}
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Storage,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
         });
         let base = body.alloc_value(ValueData {
             ty: wrap_inner_ty,
             origin: ValueOrigin::Local(wrap_local),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ref(AddressSpaceKind::Storage),
+            pointer_info: None,
         });
         let value = body.alloc_value(ValueData {
             ty: inner_ty,
             origin: ValueOrigin::Synthetic(crate::ir::SyntheticValue::Int(1u8.into())),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Word,
+            pointer_info: None,
         });
         body.blocks[0].insts.push(crate::MirInst::Store {
             source: SourceInfoId::SYNTHETIC,
@@ -854,5 +996,56 @@ pub fn transparent_newtype_projection_keeps_non_memory_space(w: mut Wrap) {}
             Some(AddressSpaceKind::Storage),
             "peeled base must preserve non-memory address space",
         );
+    }
+
+    #[test]
+    fn canonicalize_zero_sized_rewrites_place_values_over_unit_bases() {
+        let db = DriverDataBase::default();
+        let unit_ty = TyId::unit(&db);
+        let mut body = MirBody::new();
+        body.blocks.push(BasicBlock {
+            insts: Vec::new(),
+            terminator: Terminator::Return {
+                source: SourceInfoId::SYNTHETIC,
+                value: None,
+            },
+        });
+
+        let local = body.alloc_local(LocalData {
+            name: "zst".to_string(),
+            ty: unit_ty,
+            is_mut: false,
+            source: SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Memory,
+            pointer_leaf_infos: Vec::new(),
+        });
+        let root = body.alloc_value(ValueData {
+            ty: unit_ty,
+            origin: ValueOrigin::Local(local),
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Word,
+            pointer_info: None,
+        });
+        let place = Place::new(root, MirProjectionPath::new());
+        let place_ref = body.alloc_value(ValueData {
+            ty: unit_ty,
+            origin: ValueOrigin::PlaceRef(place.clone()),
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Word,
+            pointer_info: None,
+        });
+        let move_out = body.alloc_value(ValueData {
+            ty: unit_ty,
+            origin: ValueOrigin::MoveOut { place },
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Word,
+            pointer_info: None,
+        });
+
+        super::canonicalize_zero_sized(&db, &mut body);
+
+        assert!(matches!(body.value(root).origin, ValueOrigin::Unit));
+        assert!(matches!(body.value(place_ref).origin, ValueOrigin::Unit));
+        assert!(matches!(body.value(move_out).origin, ValueOrigin::Unit));
     }
 }

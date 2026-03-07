@@ -42,7 +42,7 @@ func private %u64_haee7f05a097ffa16_ord_h264f6d6d75097a_lt(v0.i64, v1.i64) -> i1
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.i1 = call %lt_ten 0.i64;
+        v2.i1 = call %lt_ten 0.i64;
         evm_stop;
 }
 
