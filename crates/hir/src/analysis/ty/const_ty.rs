@@ -294,7 +294,7 @@ pub(crate) fn evaluate_const_ty<'db>(
                         Ok(neg)
                     }
                     crate::core::hir_def::expr::UnOp::Plus => Ok(value),
-                    _ => Err(ConstIntError::Overflow),
+                    _ => Err(ConstIntError::NotIntExpr),
                 }
             }
 
@@ -395,9 +395,9 @@ pub(crate) fn evaluate_const_ty<'db>(
                             }
                             Ok(acc)
                         }
-                        _ => Err(ConstIntError::Overflow),
+                        _ => Err(ConstIntError::NotIntExpr),
                     },
-                    _ => Err(ConstIntError::Overflow),
+                    _ => Err(ConstIntError::NotIntExpr),
                 }
             }
 
