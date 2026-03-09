@@ -13,6 +13,7 @@ use mir::ir::{
 };
 use mir::layout;
 use mir::layout::TargetDataLayout;
+use mir::repr::{PlaceState, ResolvedPlace, ResolvedPlaceProjection, ResolvedPlaceSegment};
 use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
@@ -761,9 +762,17 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 Ok(ctx.fb.make_imm_value(i256_val))
             }
         },
-        ValueOrigin::Local(local_id) | ValueOrigin::PlaceRoot(local_id) => {
+        ValueOrigin::Local(local_id) => {
             let var = ctx.local_vars.get(local_id).copied().ok_or_else(|| {
                 LowerError::Internal(format!("SSA variable not found for local {local_id:?}"))
+            })?;
+            Ok(ctx.fb.use_var(var))
+        }
+        ValueOrigin::PlaceRoot(local_id) => {
+            let var = ctx.local_vars.get(local_id).copied().ok_or_else(|| {
+                LowerError::Internal(format!(
+                    "SSA variable not found for place-root local {local_id:?}"
+                ))
             })?;
             let val = ctx.fb.use_var(var);
             Ok(val)
@@ -808,10 +817,33 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             )))
         }
         ValueOrigin::PlaceRef(place) => {
-            if value_data.repr.address_space().is_none()
-                && let Some((_, inner_ty)) = value_data.ty.as_capability(ctx.db)
-            {
-                return load_place_runtime(ctx, place, inner_ty, types::value_type(ctx.db, inner_ty));
+            if !value_data.repr.is_ref() {
+                let loaded_ty = value_data
+                    .ty
+                    .as_capability(ctx.db)
+                    .map(|(_, inner_ty)| inner_ty)
+                    .unwrap_or(value_data.ty);
+                let runtime_ty = RuntimeTypeCx {
+                    builder: &ctx.fb.module_builder,
+                    db: ctx.db,
+                    core: ctx.core,
+                    target_layout: ctx.target_layout,
+                    cache: &mut *ctx.gep_type_cache,
+                    name_counter: &mut *ctx.gep_name_counter,
+                }
+                .runtime_type_for_value_with_info(
+                    value_data,
+                    ctx.body.value_pointer_info(value_id),
+                );
+                if place_yields_location_value(
+                    ctx,
+                    place,
+                    value_data.ty,
+                    ctx.body.value_pointer_info(value_id),
+                )? {
+                    return lower_place_runtime_location_value(ctx, place, runtime_ty);
+                }
+                return load_place_runtime(ctx, place, loaded_ty, runtime_ty);
             }
             if value_data.repr.address_space() == Some(AddressSpaceKind::Memory) {
                 return lower_place_memory_ptr(ctx, place);
@@ -821,6 +853,12 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         ValueOrigin::MoveOut { place } => {
             if place.projection.is_empty()
                 && move_out_uses_root_local_alias(&ctx.body.values, place.base)
+                && place_yields_location_value(
+                    ctx,
+                    place,
+                    value_data.ty,
+                    ctx.body.value_pointer_info(value_id),
+                )?
             {
                 return lower_value(ctx, place.base);
             }
@@ -842,6 +880,14 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     value_data,
                     ctx.body.value_pointer_info(value_id),
                 );
+                if place_yields_location_value(
+                    ctx,
+                    place,
+                    value_data.ty,
+                    ctx.body.value_pointer_info(value_id),
+                )? {
+                    return lower_place_runtime_location_value(ctx, place, runtime_ty);
+                }
                 load_place_runtime(ctx, place, value_data.ty, runtime_ty)
             } else if value_data.repr.address_space().is_some() {
                 lower_place_address(ctx, place)
@@ -1609,14 +1655,14 @@ fn pointer_like_sonatina_ty<'db>(
     })
 }
 
-fn memory_runtime_pointer_target_ty<'db>(
+fn memory_effect_pointer_target_ty<'db>(
     db: &'db DriverDataBase,
     core: &mir::CoreLib<'db>,
     ty: hir::analysis::ty::ty_def::TyId<'db>,
 ) -> Option<TyId<'db>> {
-    mir::repr::pointer_info_for_ty(db, core, ty, AddressSpaceKind::Memory)
-        .filter(|info| info.address_space == AddressSpaceKind::Memory)
-        .and_then(|info| info.target_ty)
+    (mir::repr::effect_provider_space_for_ty(db, core, ty) == Some(AddressSpaceKind::Memory))
+        .then(|| mir::repr::effect_provider_target_ty(db, core, ty))
+        .flatten()
 }
 
 fn lowers_by_ref_layout<'db>(
@@ -1633,7 +1679,7 @@ fn lowers_by_ref_layout<'db>(
             return false;
         }
 
-        if memory_runtime_pointer_target_ty(db, core, ty).is_some() {
+        if memory_effect_pointer_target_ty(db, core, ty).is_some() {
             return false;
         }
 
@@ -1692,7 +1738,7 @@ fn fe_ty_to_sonatina_inner<'db>(
         };
     }
 
-    if let Some(target_ty) = memory_runtime_pointer_target_ty(db, core, ty) {
+    if let Some(target_ty) = memory_effect_pointer_target_ty(db, core, ty) {
         return Some(pointer_like_sonatina_ty(
             builder,
             db,
@@ -1794,60 +1840,35 @@ fn fe_ty_to_sonatina_inner<'db>(
 /// Checks whether a projection chain is eligible for GEP-based addressing.
 ///
 /// Returns true when all projections are Field or Index (no VariantField, Discriminant, or Deref).
-fn projections_eligible_for_gep(place: &Place<'_>) -> bool {
-    place
-        .projection
+fn projections_eligible_for_gep(projections: &[ResolvedPlaceProjection<'_>]) -> bool {
+    projections
         .iter()
-        .all(|p| matches!(p, Projection::Field(_) | Projection::Index(_)))
-}
-
-fn place_projection_root_ty<'db>(
-    db: &'db DriverDataBase,
-    body: &mir::MirBody<'db>,
-    value: mir::ValueId,
-    value_data: &mir::ValueData<'db>,
-) -> hir::analysis::ty::ty_def::TyId<'db> {
-    if value_data.ty.is_array(db)
-        || value_data.ty.field_count(db) > 0
-        || value_data
-            .ty
-            .adt_ref(db)
-            .is_some_and(|adt| matches!(adt, AdtRef::Struct(_) | AdtRef::Enum(_)))
-    {
-        return value_data.ty;
-    }
-
-    body.value_pointer_info(value)
-        .and_then(|info| info.target_ty)
-        .unwrap_or(value_data.ty)
+        .all(|step| matches!(step.projection, Projection::Field(_) | Projection::Index(_)))
 }
 
 fn place_supports_gep<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
-    mut current_fe_ty: hir::analysis::ty::ty_def::TyId<'db>,
     mut current_sonatina_ty: Type,
-    place: &Place<'db>,
+    projections: &[ResolvedPlaceProjection<'db>],
 ) -> bool {
-    for proj in place.projection.iter() {
-        match proj {
+    for step in projections {
+        match &step.projection {
             Projection::Field(field_idx) => {
-                let field_types = current_fe_ty.field_types(ctx.db);
-                let Some(field_fe_ty) = field_types.get(*field_idx).copied() else {
-                    return false;
-                };
+                if mir::repr::transparent_field0_inner_ty(ctx.db, step.owner.ty, *field_idx)
+                    == Some(step.result.ty)
+                {
+                    continue;
+                }
+
                 let Some(field_sonatina_ty) = ctx.fb.module_builder.ctx.with_ty_store(|s| {
                     s.struct_def(current_sonatina_ty)
                         .and_then(|sd| sd.fields.get(*field_idx).copied())
                 }) else {
                     return false;
                 };
-                current_fe_ty = field_fe_ty;
                 current_sonatina_ty = field_sonatina_ty;
             }
             Projection::Index(_) => {
-                let Some(elem_fe_ty) = layout::array_elem_ty(ctx.db, current_fe_ty) else {
-                    return false;
-                };
                 let Some(elem_sonatina_ty) = ctx
                     .fb
                     .module_builder
@@ -1856,7 +1877,6 @@ fn place_supports_gep<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 else {
                     return false;
                 };
-                current_fe_ty = elem_fe_ty;
                 current_sonatina_ty = elem_sonatina_ty;
             }
             _ => return false,
@@ -1864,6 +1884,302 @@ fn place_supports_gep<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     }
 
     true
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LoweredPlaceTerminal<'db> {
+    state: PlaceState<'db>,
+    word_addr: ValueId,
+    memory_ptr: Option<ValueId>,
+}
+
+fn lower_place_state_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    debug_place: &Place<'db>,
+    state: PlaceState<'db>,
+    runtime: ValueId,
+) -> Result<LoweredPlaceTerminal<'db>, LowerError> {
+    let address_space = state.location_address_space().ok_or_else(|| {
+        LowerError::Internal(format!("non-location segment base for {debug_place:?}"))
+    })?;
+    let word_addr = coerce_value_to_word(ctx, runtime);
+    let opaque_ptr_ty = ctx.fb.ptr_type(Type::I8);
+    let memory_ptr = matches!(address_space, AddressSpaceKind::Memory)
+        .then(|| coerce_value_to_type(ctx, runtime, opaque_ptr_ty));
+    Ok(LoweredPlaceTerminal {
+        state,
+        word_addr,
+        memory_ptr,
+    })
+}
+
+fn resolve_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    place: &Place<'db>,
+) -> Result<ResolvedPlace<'db>, LowerError> {
+    mir::repr::resolve_place(ctx.db, ctx.core, &ctx.body.values, &ctx.body.locals, place).ok_or_else(
+        || {
+            let base = ctx.body.value(place.base);
+            LowerError::Internal(format!(
+                "failed to resolve MIR place {place:?} (base ty={}, repr={:?}, origin={:?}, pointer_info={:?})",
+                base.ty.pretty_print(ctx.db),
+                base.repr,
+                base.origin,
+                base.pointer_info,
+            ))
+        },
+    )
+}
+
+fn place_yields_location_value<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    place: &Place<'db>,
+    value_ty: TyId<'db>,
+    pointer_info: Option<mir::ir::PointerInfo<'db>>,
+) -> Result<bool, LowerError> {
+    mir::repr::place_yields_location_value(
+        ctx.db,
+        ctx.core,
+        &ctx.body.values,
+        &ctx.body.locals,
+        place,
+        value_ty,
+        pointer_info,
+    )
+    .ok_or_else(|| LowerError::Internal(format!("failed to resolve place for {place:?}")))
+}
+
+fn lower_place_runtime_location_value<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    place: &Place<'db>,
+    expected_runtime_ty: Type,
+) -> Result<ValueId, LowerError> {
+    let terminal = lower_place_terminal(ctx, place)?;
+    if expected_runtime_ty.is_pointer(&ctx.fb.module_builder.ctx)
+        && let Some(memory_ptr) = terminal.memory_ptr
+    {
+        return Ok(coerce_value_to_type(ctx, memory_ptr, expected_runtime_ty));
+    }
+    Ok(coerce_value_to_type(
+        ctx,
+        terminal.word_addr,
+        expected_runtime_ty,
+    ))
+}
+
+fn load_from_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    terminal: LoweredPlaceTerminal<'db>,
+    loaded_ty: TyId<'db>,
+    expected_runtime_ty: Type,
+) -> Result<ValueId, LowerError> {
+    match terminal
+        .state
+        .location_address_space()
+        .ok_or_else(|| LowerError::Internal("place terminal is not a location".to_string()))?
+    {
+        AddressSpaceKind::Memory => {
+            let opaque_ptr_ty = ctx.fb.ptr_type(Type::I8);
+            let ptr_addr = terminal
+                .memory_ptr
+                .unwrap_or_else(|| coerce_word_addr_to_ptr(ctx, terminal.word_addr, opaque_ptr_ty));
+            if expected_runtime_ty.is_pointer(&ctx.fb.module_builder.ctx) {
+                return Ok(ctx.fb.insert_inst(
+                    Mload::new(ctx.is, ptr_addr, expected_runtime_ty),
+                    expected_runtime_ty,
+                ));
+            }
+            let raw = ctx
+                .fb
+                .insert_inst(Mload::new(ctx.is, ptr_addr, Type::I256), Type::I256);
+            Ok(apply_from_word(ctx.fb, ctx.db, raw, loaded_ty, ctx.is))
+        }
+        AddressSpaceKind::Storage => {
+            let raw = ctx
+                .fb
+                .insert_inst(EvmSload::new(ctx.is, terminal.word_addr), Type::I256);
+            let loaded = apply_from_word(ctx.fb, ctx.db, raw, loaded_ty, ctx.is);
+            Ok(coerce_value_to_type(ctx, loaded, expected_runtime_ty))
+        }
+        AddressSpaceKind::TransientStorage => {
+            let raw = ctx
+                .fb
+                .insert_inst(EvmTload::new(ctx.is, terminal.word_addr), Type::I256);
+            let loaded = apply_from_word(ctx.fb, ctx.db, raw, loaded_ty, ctx.is);
+            Ok(coerce_value_to_type(ctx, loaded, expected_runtime_ty))
+        }
+        AddressSpaceKind::Calldata => {
+            let raw = ctx
+                .fb
+                .insert_inst(EvmCalldataLoad::new(ctx.is, terminal.word_addr), Type::I256);
+            let loaded = apply_from_word(ctx.fb, ctx.db, raw, loaded_ty, ctx.is);
+            Ok(coerce_value_to_type(ctx, loaded, expected_runtime_ty))
+        }
+    }
+}
+
+fn lower_place_segment_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    debug_place: &Place<'db>,
+    segment_base: ValueId,
+    segment: &ResolvedPlaceSegment<'db>,
+) -> Result<LoweredPlaceTerminal<'db>, LowerError> {
+    let address_space = segment.base.location_address_space().ok_or_else(|| {
+        LowerError::Internal(format!("non-location segment base for {debug_place:?}"))
+    })?;
+    if segment.projections.is_empty() {
+        return lower_place_state_terminal(
+            ctx,
+            debug_place,
+            segment.terminal_state(),
+            segment_base,
+        );
+    }
+
+    let is_slot_addressed = matches!(
+        address_space,
+        AddressSpaceKind::Storage | AddressSpaceKind::TransientStorage
+    );
+    if !is_slot_addressed
+        && projections_eligible_for_gep(&segment.projections)
+        && let Some(sonatina_ty) = fe_ty_to_sonatina(
+            &ctx.fb.module_builder,
+            ctx.db,
+            ctx.core,
+            ctx.target_layout,
+            segment.base.ty,
+            ctx.gep_type_cache,
+            ctx.gep_name_counter,
+        )
+        && place_supports_gep(ctx, sonatina_ty, &segment.projections)
+    {
+        let gep_ptr =
+            lower_place_address_gep(ctx, &segment.projections, segment_base, sonatina_ty)?;
+        let word_addr = ctx
+            .fb
+            .insert_inst(PtrToInt::new(ctx.is, gep_ptr, Type::I256), Type::I256);
+        let opaque_ptr_ty = ctx.fb.ptr_type(Type::I8);
+        let memory_ptr = Some(coerce_value_to_type(ctx, gep_ptr, opaque_ptr_ty));
+        return Ok(LoweredPlaceTerminal {
+            state: segment.terminal_state(),
+            word_addr,
+            memory_ptr,
+        });
+    }
+
+    let base_word = coerce_value_to_word(ctx, segment_base);
+    let word_addr =
+        lower_place_address_arithmetic(ctx, &segment.projections, base_word, is_slot_addressed)?;
+    let opaque_ptr_ty = ctx.fb.ptr_type(Type::I8);
+    let memory_ptr = matches!(address_space, AddressSpaceKind::Memory)
+        .then(|| coerce_word_addr_to_ptr(ctx, word_addr, opaque_ptr_ty));
+    Ok(LoweredPlaceTerminal {
+        state: segment.terminal_state(),
+        word_addr,
+        memory_ptr,
+    })
+}
+
+fn terminal_runtime_value<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    terminal: LoweredPlaceTerminal<'db>,
+) -> ValueId {
+    if terminal.state.location_address_space() == Some(AddressSpaceKind::Memory) {
+        let opaque_ptr_ty = ctx.fb.ptr_type(Type::I8);
+        return terminal
+            .memory_ptr
+            .unwrap_or_else(|| coerce_word_addr_to_ptr(ctx, terminal.word_addr, opaque_ptr_ty));
+    }
+
+    terminal.word_addr
+}
+
+fn lower_place_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    place: &Place<'db>,
+) -> Result<LoweredPlaceTerminal<'db>, LowerError> {
+    let resolved = resolve_place(ctx, place)?;
+    let root_runtime = match ctx.body.value(place.base).origin {
+        mir::ValueOrigin::Local(local) => {
+            let root_local = ctx.body.spill_slots.get(&local).copied().unwrap_or(local);
+            let var = ctx.local_vars.get(&root_local).copied().ok_or_else(|| {
+                LowerError::Internal(format!(
+                    "SSA variable not found for place root {root_local:?}"
+                ))
+            })?;
+            ctx.fb.use_var(var)
+        }
+        _ => lower_value(ctx, place.base)?,
+    };
+    let mut current_terminal: Option<LoweredPlaceTerminal<'db>> = None;
+
+    for (idx, segment) in resolved.segments.iter().enumerate() {
+        let segment_base_runtime = match (idx == 0, segment.start_kind, current_terminal.take()) {
+            (true, None, None)
+            | (true, Some(mir::repr::DerefStepKind::ReuseLocation), None)
+            | (true, Some(mir::repr::DerefStepKind::UseBaseValue), None) => root_runtime,
+            (true, Some(mir::repr::DerefStepKind::LoadLocationValue), None) => {
+                let base_terminal =
+                    lower_place_state_terminal(ctx, place, segment.before, root_runtime)?;
+                let runtime_ty = RuntimeTypeCx {
+                    builder: &ctx.fb.module_builder,
+                    db: ctx.db,
+                    core: ctx.core,
+                    target_layout: ctx.target_layout,
+                    cache: &mut *ctx.gep_type_cache,
+                    name_counter: &mut *ctx.gep_name_counter,
+                }
+                .runtime_type_for_pointer_info(
+                    segment.before.pointer_info.ok_or_else(|| {
+                        LowerError::Internal(format!(
+                            "missing pointer metadata at deref boundary for {place:?}"
+                        ))
+                    })?,
+                );
+                load_from_terminal(ctx, base_terminal, segment.before.ty, runtime_ty)?
+            }
+            (false, Some(mir::repr::DerefStepKind::ReuseLocation), Some(terminal)) => {
+                terminal_runtime_value(ctx, terminal)
+            }
+            (false, Some(mir::repr::DerefStepKind::LoadLocationValue), Some(terminal)) => {
+                let runtime_ty = RuntimeTypeCx {
+                    builder: &ctx.fb.module_builder,
+                    db: ctx.db,
+                    core: ctx.core,
+                    target_layout: ctx.target_layout,
+                    cache: &mut *ctx.gep_type_cache,
+                    name_counter: &mut *ctx.gep_name_counter,
+                }
+                .runtime_type_for_pointer_info(
+                    segment.before.pointer_info.ok_or_else(|| {
+                        LowerError::Internal(format!(
+                            "missing pointer metadata at deref boundary for {place:?}"
+                        ))
+                    })?,
+                );
+                load_from_terminal(ctx, terminal, segment.before.ty, runtime_ty)?
+            }
+            (false, None, Some(_))
+            | (false, Some(mir::repr::DerefStepKind::UseBaseValue), Some(_))
+            | (true, None, Some(_))
+            | (true, Some(_), Some(_))
+            | (false, _, None) => {
+                return Err(LowerError::Internal(format!(
+                    "invalid resolved place segment sequence for {place:?}"
+                )));
+            }
+        };
+        current_terminal = Some(lower_place_segment_terminal(
+            ctx,
+            place,
+            segment_base_runtime,
+            segment,
+        )?);
+    }
+
+    current_terminal.ok_or_else(|| {
+        LowerError::Internal(format!("resolved place produced no segments for {place:?}"))
+    })
 }
 
 /// Computes the address for a place by walking the projection path.
@@ -1874,73 +2190,14 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
     place: &Place<'db>,
 ) -> Result<ValueId, LowerError> {
-    let base_val = lower_value(ctx, place.base)?;
-    let is_memory_address = ctx.body.place_address_space(place) == AddressSpaceKind::Memory;
-
-    if place.projection.is_empty() {
-        return Ok(if is_memory_address {
-            coerce_value_to_word(ctx, base_val)
-        } else {
-            base_val
-        });
-    }
-
-    // Get the base value's type to navigate projections
-    let base_value = ctx.body.values.get(place.base.index()).ok_or_else(|| {
-        LowerError::Internal(format!(
-            "unknown MIR place base value {}",
-            place.base.index()
-        ))
-    })?;
-    let current_ty = place_projection_root_ty(ctx.db, ctx.body, place.base, base_value);
-    if is_erased_runtime_ty(ctx.db, ctx.target_layout, current_ty) {
-        return Ok(if is_memory_address {
-            coerce_value_to_word(ctx, base_val)
-        } else {
-            base_val
-        });
-    }
-
-    let is_slot_addressed = matches!(
-        ctx.body.place_address_space(place),
-        AddressSpaceKind::Storage | AddressSpaceKind::TransientStorage
-    );
-
-    // Use GEP for memory-addressed places where all projections are Field or Index
-    if !is_slot_addressed
-        && projections_eligible_for_gep(place)
-        && let Some(sonatina_ty) = fe_ty_to_sonatina(
-            &ctx.fb.module_builder,
-            ctx.db,
-            ctx.core,
-            ctx.target_layout,
-            current_ty,
-            ctx.gep_type_cache,
-            ctx.gep_name_counter,
-        )
-        && place_supports_gep(ctx, current_ty, sonatina_ty, place)
-    {
-        let gep_ptr = lower_place_address_gep(ctx, place, base_val, current_ty, sonatina_ty)?;
-        return Ok(ctx
-            .fb
-            .insert_inst(PtrToInt::new(ctx.is, gep_ptr, Type::I256), Type::I256));
-    }
-
-    // Fall back to manual offset arithmetic
-    let base_word = if is_slot_addressed || is_memory_address {
-        coerce_value_to_word(ctx, base_val)
-    } else {
-        base_val
-    };
-    lower_place_address_arithmetic(ctx, place, base_word, current_ty, is_slot_addressed)
+    Ok(lower_place_terminal(ctx, place)?.word_addr)
 }
 
 /// GEP-based place address computation for memory-addressed struct/array paths.
 fn lower_place_address_gep<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
-    place: &Place<'db>,
+    projections: &[ResolvedPlaceProjection<'db>],
     base_val: ValueId,
-    base_fe_ty: hir::analysis::ty::ty_def::TyId<'db>,
     base_sonatina_ty: Type,
 ) -> Result<ValueId, LowerError> {
     let ptr_ty = ctx.fb.ptr_type(base_sonatina_ty);
@@ -1957,17 +2214,16 @@ fn lower_place_address_gep<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     let zero = ctx.fb.make_imm_value(I256::zero());
     gep_values.push(zero);
 
-    let mut current_fe_ty = base_fe_ty;
     let mut current_sonatina_ty = base_sonatina_ty;
 
-    for proj in place.projection.iter() {
-        match proj {
+    for step in projections {
+        match &step.projection {
             Projection::Field(field_idx) => {
-                let owner_fe_ty = current_fe_ty;
+                let owner_fe_ty = step.owner.ty;
                 if let Some(inner_ty) =
                     mir::repr::transparent_field0_inner_ty(ctx.db, owner_fe_ty, *field_idx)
+                    && inner_ty == step.result.ty
                 {
-                    current_fe_ty = inner_ty;
                     continue;
                 }
 
@@ -1975,18 +2231,13 @@ fn lower_place_address_gep<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 gep_values.push(idx_val);
 
                 // Navigate Fe type
-                let field_types = current_fe_ty.field_types(ctx.db);
-                current_fe_ty = *field_types.get(*field_idx).ok_or_else(|| {
-                    LowerError::Unsupported(format!("gep: field {field_idx} out of bounds"))
-                })?;
-
                 // Navigate sonatina type to the field's type
                 current_sonatina_ty = sonatina_struct_field_ty(
                     ctx,
                     current_sonatina_ty,
                     *field_idx,
                     owner_fe_ty,
-                    current_fe_ty,
+                    step.result.ty,
                 )?;
             }
             Projection::Index(idx_source) => {
@@ -1995,11 +2246,6 @@ fn lower_place_address_gep<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     IndexSource::Dynamic(value_id) => lower_value(ctx, *value_id)?,
                 };
                 gep_values.push(idx_val);
-
-                // Navigate Fe type
-                current_fe_ty = layout::array_elem_ty(ctx.db, current_fe_ty).ok_or_else(|| {
-                    LowerError::Unsupported("gep: array index on non-array type".to_string())
-                })?;
 
                 // Navigate sonatina type to array element
                 current_sonatina_ty = sonatina_array_elem_ty(ctx, current_sonatina_ty)?;
@@ -2021,53 +2267,13 @@ fn lower_place_memory_ptr<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
     place: &Place<'db>,
 ) -> Result<ValueId, LowerError> {
-    let base_val = lower_value(ctx, place.base)?;
-    if place.projection.is_empty() {
-        return Ok(
-            if ctx
-                .fb
-                .type_of(base_val)
-                .is_pointer(&ctx.fb.module_builder.ctx)
-            {
-                base_val
-            } else {
-                let opaque_ptr_ty = ctx.fb.ptr_type(Type::I8);
-                coerce_word_addr_to_ptr(ctx, base_val, opaque_ptr_ty)
-            },
-        );
-    }
-
-    let base_value = ctx.body.values.get(place.base.index()).ok_or_else(|| {
-        LowerError::Internal(format!(
-            "unknown MIR place base value {}",
-            place.base.index()
-        ))
-    })?;
-    let current_ty = place_projection_root_ty(ctx.db, ctx.body, place.base, base_value);
-    if is_erased_runtime_ty(ctx.db, ctx.target_layout, current_ty) {
-        let opaque_ptr_ty = ctx.fb.ptr_type(Type::I8);
-        return Ok(coerce_word_addr_to_ptr(ctx, base_val, opaque_ptr_ty));
-    }
-
-    if projections_eligible_for_gep(place)
-        && let Some(sonatina_ty) = fe_ty_to_sonatina(
-            &ctx.fb.module_builder,
-            ctx.db,
-            ctx.core,
-            ctx.target_layout,
-            current_ty,
-            ctx.gep_type_cache,
-            ctx.gep_name_counter,
-        )
-        && place_supports_gep(ctx, current_ty, sonatina_ty, place)
-    {
-        return lower_place_address_gep(ctx, place, base_val, current_ty, sonatina_ty);
-    }
-
-    let base_word = coerce_value_to_word(ctx, base_val);
-    let addr = lower_place_address_arithmetic(ctx, place, base_word, current_ty, false)?;
-    let opaque_ptr_ty = ctx.fb.ptr_type(Type::I8);
-    Ok(coerce_word_addr_to_ptr(ctx, addr, opaque_ptr_ty))
+    let lowered = lower_place_terminal(ctx, place)?;
+    let Some(ptr) = lowered.memory_ptr else {
+        return Err(LowerError::Internal(format!(
+            "requested memory pointer for non-memory place: {place:?}"
+        )));
+    };
+    Ok(ptr)
 }
 
 /// Resolves the sonatina type of a struct field by index.
@@ -2119,35 +2325,31 @@ fn sonatina_array_elem_ty<C: sonatina_ir::func_cursor::FuncCursor>(
 /// Used for storage-addressed places and any memory path with enum projections.
 fn lower_place_address_arithmetic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
-    place: &Place<'db>,
+    projections: &[ResolvedPlaceProjection<'db>],
     mut base_val: ValueId,
-    mut current_ty: hir::analysis::ty::ty_def::TyId<'db>,
     is_slot_addressed: bool,
 ) -> Result<ValueId, LowerError> {
     let mut total_offset: usize = 0;
 
-    for proj in place.projection.iter() {
-        match proj {
+    for step in projections {
+        match &step.projection {
             Projection::Field(field_idx) => {
+                if mir::repr::transparent_field0_inner_ty(ctx.db, step.owner.ty, *field_idx)
+                    == Some(step.result.ty)
+                {
+                    continue;
+                }
                 // Use slot-based offsets for storage, byte-based for memory
                 total_offset += if is_slot_addressed {
-                    layout::field_offset_slots(ctx.db, current_ty, *field_idx)
+                    layout::field_offset_slots(ctx.db, step.owner.ty, *field_idx)
                 } else {
                     layout::field_offset_memory_in(
                         ctx.db,
                         ctx.target_layout,
-                        current_ty,
+                        step.owner.ty,
                         *field_idx,
                     )
                 };
-                // Update current type to the field's type
-                let field_types = current_ty.field_types(ctx.db);
-                current_ty = *field_types.get(*field_idx).ok_or_else(|| {
-                    LowerError::Unsupported(format!(
-                        "projection: field {field_idx} out of bounds for {} at {place:?}",
-                        current_ty.pretty_print(ctx.db)
-                    ))
-                })?;
             }
             Projection::VariantField {
                 variant,
@@ -2169,38 +2371,20 @@ fn lower_place_address_arithmetic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                         *field_idx,
                     );
                 }
-                // Update current type to the field's type
-                let ctor = hir::analysis::ty::simplified_pattern::ConstructorKind::Variant(
-                    *variant, *enum_ty,
-                );
-                let field_types = ctor.field_types(ctx.db);
-                current_ty = *field_types.get(*field_idx).ok_or_else(|| {
-                    LowerError::Unsupported(format!(
-                        "projection: variant field {field_idx} out of bounds"
-                    ))
-                })?;
             }
             Projection::Discriminant => {
-                // Discriminant is at offset 0, just update the type
-                current_ty = hir::analysis::ty::ty_def::TyId::new(
-                    ctx.db,
-                    hir::analysis::ty::ty_def::TyData::TyBase(
-                        hir::analysis::ty::ty_def::TyBase::Prim(
-                            hir::analysis::ty::ty_def::PrimTy::U256,
-                        ),
-                    ),
-                );
+                // Discriminant is always at offset 0.
             }
             Projection::Index(idx_source) => {
                 let stride = if is_slot_addressed {
-                    layout::array_elem_stride_slots(ctx.db, current_ty)
+                    layout::array_elem_stride_slots(ctx.db, step.owner.ty)
                 } else {
-                    layout::array_elem_stride_memory_in(ctx.db, ctx.target_layout, current_ty)
+                    layout::array_elem_stride_memory_in(ctx.db, ctx.target_layout, step.owner.ty)
                 }
                 .ok_or_else(|| {
                     LowerError::Unsupported(format!(
-                        "projection: array index on non-array type `{}` for place {place:?}",
-                        current_ty.pretty_print(ctx.db),
+                        "projection: array index on non-array type `{}`",
+                        step.owner.ty.pretty_print(ctx.db),
                     ))
                 })?;
 
@@ -2231,15 +2415,6 @@ fn lower_place_address_arithmetic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                             .insert_inst(Add::new(ctx.is, base_val, offset_val), Type::I256);
                     }
                 }
-
-                // Update current type to element type
-                let elem_ty = layout::array_elem_ty(ctx.db, current_ty).ok_or_else(|| {
-                    LowerError::Unsupported(format!(
-                        "projection: array index on non-array type `{}` for place {place:?}",
-                        current_ty.pretty_print(ctx.db),
-                    ))
-                })?;
-                current_ty = elem_ty;
             }
             Projection::Deref => {
                 return Err(LowerError::Unsupported(
@@ -2554,21 +2729,27 @@ fn store_word_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     place: &Place<'db>,
     val: ValueId,
 ) -> Result<(), LowerError> {
-    match ctx.body.place_address_space(place) {
+    let lowered = lower_place_terminal(ctx, place)?;
+    match lowered
+        .state
+        .location_address_space()
+        .ok_or_else(|| LowerError::Internal(format!("store target is not a location: {place:?}")))?
+    {
         AddressSpaceKind::Memory => {
-            let ptr_addr = lower_place_memory_ptr(ctx, place)?;
+            let opaque_ptr_ty = ctx.fb.ptr_type(Type::I8);
+            let ptr_addr = lowered
+                .memory_ptr
+                .unwrap_or_else(|| coerce_word_addr_to_ptr(ctx, lowered.word_addr, opaque_ptr_ty));
             ctx.fb
                 .insert_inst_no_result(Mstore::new(ctx.is, ptr_addr, val, Type::I256));
         }
         AddressSpaceKind::Storage => {
-            let addr = lower_place_address(ctx, place)?;
             ctx.fb
-                .insert_inst_no_result(EvmSstore::new(ctx.is, addr, val));
+                .insert_inst_no_result(EvmSstore::new(ctx.is, lowered.word_addr, val));
         }
         AddressSpaceKind::TransientStorage => {
-            let addr = lower_place_address(ctx, place)?;
             ctx.fb
-                .insert_inst_no_result(EvmTstore::new(ctx.is, addr, val));
+                .insert_inst_no_result(EvmTstore::new(ctx.is, lowered.word_addr, val));
         }
         AddressSpaceKind::Calldata => {
             return Err(LowerError::Unsupported("store to calldata".to_string()));
@@ -2588,9 +2769,17 @@ fn store_runtime_value_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         return store_runtime_value_to_place(ctx, &base_place, stored_ty, value);
     }
 
-    match ctx.body.place_address_space(place) {
+    let lowered = lower_place_terminal(ctx, place)?;
+    match lowered
+        .state
+        .location_address_space()
+        .ok_or_else(|| LowerError::Internal(format!("store target is not a location: {place:?}")))?
+    {
         AddressSpaceKind::Memory => {
-            let ptr_addr = lower_place_memory_ptr(ctx, place)?;
+            let opaque_ptr_ty = ctx.fb.ptr_type(Type::I8);
+            let ptr_addr = lowered
+                .memory_ptr
+                .unwrap_or_else(|| coerce_word_addr_to_ptr(ctx, lowered.word_addr, opaque_ptr_ty));
             let value_ty = ctx.fb.type_of(value);
             if value_ty.is_pointer(&ctx.fb.module_builder.ctx) {
                 ctx.fb
@@ -2604,19 +2793,17 @@ fn store_runtime_value_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             Ok(())
         }
         AddressSpaceKind::Storage => {
-            let addr = lower_place_address(ctx, place)?;
             let raw = coerce_value_to_word(ctx, value);
             let val = apply_to_word(ctx.fb, ctx.db, raw, stored_ty, ctx.is);
             ctx.fb
-                .insert_inst_no_result(EvmSstore::new(ctx.is, addr, val));
+                .insert_inst_no_result(EvmSstore::new(ctx.is, lowered.word_addr, val));
             Ok(())
         }
         AddressSpaceKind::TransientStorage => {
-            let addr = lower_place_address(ctx, place)?;
             let raw = coerce_value_to_word(ctx, value);
             let val = apply_to_word(ctx.fb, ctx.db, raw, stored_ty, ctx.is);
             ctx.fb
-                .insert_inst_no_result(EvmTstore::new(ctx.is, addr, val));
+                .insert_inst_no_result(EvmTstore::new(ctx.is, lowered.word_addr, val));
             Ok(())
         }
         AddressSpaceKind::Calldata => Err(LowerError::Unsupported("store to calldata".to_string())),
@@ -2643,41 +2830,8 @@ fn load_place_runtime<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         return Ok(coerce_value_to_type(ctx, loaded, expected_runtime_ty));
     }
 
-    match ctx.body.place_address_space(place) {
-        AddressSpaceKind::Memory => {
-            let ptr_addr = lower_place_memory_ptr(ctx, place)?;
-            if expected_runtime_ty.is_pointer(&ctx.fb.module_builder.ctx) {
-                return Ok(ctx.fb.insert_inst(
-                    Mload::new(ctx.is, ptr_addr, expected_runtime_ty),
-                    expected_runtime_ty,
-                ));
-            }
-            let raw = ctx
-                .fb
-                .insert_inst(Mload::new(ctx.is, ptr_addr, Type::I256), Type::I256);
-            Ok(apply_from_word(ctx.fb, ctx.db, raw, loaded_ty, ctx.is))
-        }
-        AddressSpaceKind::Storage => {
-            let addr = lower_place_address(ctx, place)?;
-            let raw = ctx.fb.insert_inst(EvmSload::new(ctx.is, addr), Type::I256);
-            let loaded = apply_from_word(ctx.fb, ctx.db, raw, loaded_ty, ctx.is);
-            Ok(coerce_value_to_type(ctx, loaded, expected_runtime_ty))
-        }
-        AddressSpaceKind::TransientStorage => {
-            let addr = lower_place_address(ctx, place)?;
-            let raw = ctx.fb.insert_inst(EvmTload::new(ctx.is, addr), Type::I256);
-            let loaded = apply_from_word(ctx.fb, ctx.db, raw, loaded_ty, ctx.is);
-            Ok(coerce_value_to_type(ctx, loaded, expected_runtime_ty))
-        }
-        AddressSpaceKind::Calldata => {
-            let addr = lower_place_address(ctx, place)?;
-            let raw = ctx
-                .fb
-                .insert_inst(EvmCalldataLoad::new(ctx.is, addr), Type::I256);
-            let loaded = apply_from_word(ctx.fb, ctx.db, raw, loaded_ty, ctx.is);
-            Ok(coerce_value_to_type(ctx, loaded, expected_runtime_ty))
-        }
-    }
+    let lowered = lower_place_terminal(ctx, place)?;
+    load_from_terminal(ctx, lowered, loaded_ty, expected_runtime_ty)
 }
 
 fn is_transparent_field0_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
@@ -2709,9 +2863,19 @@ fn deep_copy_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         return Ok(());
     }
 
-    if memory_runtime_pointer_target_ty(ctx.db, ctx.core, value_ty).is_some() {
-        let ptr_ty = ctx.fb.ptr_type(Type::I8);
-        let loaded = load_place_runtime(ctx, src_place, value_ty, ptr_ty)?;
+    if let Some(info) =
+        mir::repr::pointer_info_for_ty(ctx.db, ctx.core, value_ty, AddressSpaceKind::Memory)
+    {
+        let runtime_ty = RuntimeTypeCx {
+            builder: &ctx.fb.module_builder,
+            db: ctx.db,
+            core: ctx.core,
+            target_layout: ctx.target_layout,
+            cache: &mut *ctx.gep_type_cache,
+            name_counter: &mut *ctx.gep_name_counter,
+        }
+        .runtime_type_for_pointer_info(info);
+        let loaded = load_place_runtime(ctx, src_place, value_ty, runtime_ty)?;
         return store_runtime_value_to_place(ctx, dst_place, value_ty, loaded);
     }
 

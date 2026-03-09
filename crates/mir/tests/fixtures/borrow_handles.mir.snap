@@ -6,13 +6,9 @@ fn borrow_handles() -> ():
   bb0:
     v4: u256 = alloc mem
     v0: u256 = 0
-    store mem[v4] = v0
-    v1: mut u256 = &mem[v4]
-    store mem[v1] = 1
-    v0 = 1
-    bind v1
-    v2: u256 = load mem[v1]
-    v3: u256 = checked_add<u256>(v2, 1)
-    store mem[v1] = v3
-    v0 = v3
+    store mem[place_root(v3)] = v0
+    v1: mut u256 = &mem[place_root(v3)]
+    store mem[v1].* = 1
+    v2: u256 = load mem[v1].*
+    store mem[v1].* = (v2 + 1)
     ret

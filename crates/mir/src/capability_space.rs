@@ -89,25 +89,19 @@ impl<'a, 'db> PointerLeafInfoCollector<'a, 'db> {
         }
     }
 
-    fn collect(&mut self, ty: TyId<'db>, prefix: &MirProjectionPath<'db>, inside_aggregate: bool) {
+    fn collect(&mut self, ty: TyId<'db>, prefix: &MirProjectionPath<'db>) {
         if !self.active.insert(ty) {
             return;
         }
 
-        if let Some((_, inner)) = ty.as_capability(self.db)
-            && matches!(
-                crate::repr::repr_kind_for_ty(self.db, self.core, inner),
-                crate::repr::ReprKind::Ref
-            )
-            && !inside_aggregate
-        {
-            self.collect(inner, prefix, true);
-        } else if let Some(info) =
-            crate::repr::pointer_info_for_ty(self.db, self.core, ty, self.default_space)
+        if let Some(info) =
+            crate::repr::handle_pointer_info_for_ty(self.db, self.core, ty, self.default_space)
         {
             self.out.push((prefix.clone(), info));
+        } else if let Some((_, inner)) = ty.as_capability(self.db) {
+            self.collect(inner, prefix);
         } else if let Some(inner) = crate::repr::transparent_newtype_field_ty(self.db, ty) {
-            self.collect(inner, prefix, true);
+            self.collect(inner, prefix);
         } else if let Some(enum_def) = ty.as_enum(self.db) {
             for (idx, variant_def) in enum_def.variants(self.db).enumerate() {
                 let variant = EnumVariant::new(enum_def, idx);
@@ -123,14 +117,14 @@ impl<'a, 'db> PointerLeafInfoCollector<'a, 'db> {
                         enum_ty: ty,
                         field_idx,
                     });
-                    self.collect(field_ty, &field_prefix, true);
+                    self.collect(field_ty, &field_prefix);
                 }
             }
         } else {
             for (idx, field_ty) in ty.field_types(self.db).iter().copied().enumerate() {
                 let mut field_prefix = prefix.clone();
                 field_prefix.push(MirProjection::Field(idx));
-                self.collect(field_ty, &field_prefix, true);
+                self.collect(field_ty, &field_prefix);
             }
         }
 
@@ -156,7 +150,7 @@ pub(crate) fn pointer_leaf_infos_for_ty_with_default<'db>(
     default_space: AddressSpaceKind,
 ) -> Vec<(MirProjectionPath<'db>, PointerInfo<'db>)> {
     let mut collector = PointerLeafInfoCollector::new(db, core, default_space);
-    collector.collect(ty, &MirProjectionPath::new(), false);
+    collector.collect(ty, &MirProjectionPath::new());
     collector.out
 }
 

@@ -9,6 +9,6 @@ fn borrowck_const_index_disjoint() -> ():
     v0: [u256; 2] = v1
     v2: mut u256 = &mem[v0][0]
     v3: mut u256 = &mem[v0][1]
-    store mem[v2] = 1
-    store mem[v3] = 2
+    store mem[v2].* = 1
+    store mem[v3].* = 2
     ret

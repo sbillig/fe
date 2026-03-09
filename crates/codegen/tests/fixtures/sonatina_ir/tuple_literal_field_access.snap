@@ -12,48 +12,82 @@ func private %tuple_literal_field_access() -> i256 {
     block0:
         v2.*@__fe_tuple_0 = alloca @__fe_tuple_0;
         v4.*i256 = gep v2 0.i256 0.i256;
-        mstore v4 1.i256 i256;
-        v5.*i256 = gep v2 0.i256 1.i256;
-        mstore v5 2.i256 i256;
-        v6.*i256 = gep v2 0.i256 1.i256;
-        v7.i256 = mload v6 i256;
-        return v7;
+        v5.i256 = ptr_to_int v4 i256;
+        v6.*i8 = bitcast v4 *i8;
+        mstore v6 1.i256 i256;
+        v7.*i256 = gep v2 0.i256 1.i256;
+        v8.i256 = ptr_to_int v7 i256;
+        v9.*i8 = bitcast v7 *i8;
+        mstore v9 2.i256 i256;
+        v10.*i256 = gep v2 0.i256 1.i256;
+        v11.i256 = ptr_to_int v10 i256;
+        v12.*i8 = bitcast v10 *i8;
+        v13.i256 = mload v12 i256;
+        return v13;
 }
 
 func private %tuple_literal_nested_access() -> i256 {
     block0:
         v3.*@__fe_tuple_0 = alloca @__fe_tuple_0;
         v5.*i256 = gep v3 0.i256 0.i256;
-        mstore v5 2.i256 i256;
-        v6.*i256 = gep v3 0.i256 1.i256;
-        mstore v6 3.i256 i256;
-        v7.*@__fe_tuple_1 = alloca @__fe_tuple_1;
-        v8.*i256 = gep v7 0.i256 0.i256;
-        mstore v8 1.i256 i256;
-        v9.*i256 = gep v3 0.i256 0.i256;
-        v10.i256 = mload v9 i256;
-        v11.*i256 = gep v7 0.i256 1.i256 0.i256;
-        mstore v11 v10 i256;
-        v12.*i256 = gep v3 0.i256 1.i256;
-        v13.i256 = mload v12 i256;
-        v14.*i256 = gep v7 0.i256 1.i256 1.i256;
-        mstore v14 v13 i256;
-        v15.*@__fe_tuple_0 = gep v7 0.i256 1.i256;
-        v16.*i256 = gep v15 0.i256 0.i256;
-        v17.i256 = mload v16 i256;
-        return v17;
+        v6.i256 = ptr_to_int v5 i256;
+        v7.*i8 = bitcast v5 *i8;
+        mstore v7 2.i256 i256;
+        v8.*i256 = gep v3 0.i256 1.i256;
+        v9.i256 = ptr_to_int v8 i256;
+        v10.*i8 = bitcast v8 *i8;
+        mstore v10 3.i256 i256;
+        v11.*@__fe_tuple_1 = alloca @__fe_tuple_1;
+        v12.*i256 = gep v11 0.i256 0.i256;
+        v13.i256 = ptr_to_int v12 i256;
+        v14.*i8 = bitcast v12 *i8;
+        mstore v14 1.i256 i256;
+        v15.*i256 = gep v3 0.i256 0.i256;
+        v16.i256 = ptr_to_int v15 i256;
+        v17.*i8 = bitcast v15 *i8;
+        v18.i256 = mload v17 i256;
+        v19.*i256 = gep v11 0.i256 1.i256 0.i256;
+        v20.i256 = ptr_to_int v19 i256;
+        v21.*i8 = bitcast v19 *i8;
+        mstore v21 v18 i256;
+        v22.*i256 = gep v3 0.i256 1.i256;
+        v23.i256 = ptr_to_int v22 i256;
+        v24.*i8 = bitcast v22 *i8;
+        v25.i256 = mload v24 i256;
+        v26.*i256 = gep v11 0.i256 1.i256 1.i256;
+        v27.i256 = ptr_to_int v26 i256;
+        v28.*i8 = bitcast v26 *i8;
+        mstore v28 v25 i256;
+        v29.*@__fe_tuple_0 = gep v11 0.i256 1.i256;
+        v30.i256 = ptr_to_int v29 i256;
+        v31.*i8 = bitcast v29 *i8;
+        v32.*@__fe_tuple_0 = bitcast v31 *@__fe_tuple_0;
+        v33.*i256 = gep v32 0.i256 0.i256;
+        v34.i256 = ptr_to_int v33 i256;
+        v35.*i8 = bitcast v33 *i8;
+        v36.i256 = mload v35 i256;
+        return v36;
 }
 
 func private %tuple_literal_struct_chain() -> i256 {
     block0:
         v2.*@__fe_tuple_0 = alloca @__fe_tuple_0;
         v4.*i256 = gep v2 0.i256 0.i256;
-        mstore v4 1.i256 i256;
-        v5.*i256 = gep v2 0.i256 1.i256;
-        mstore v5 2.i256 i256;
-        v6.*i256 = gep v2 0.i256 1.i256;
-        v7.i256 = mload v6 i256;
-        return v7;
+        v5.i256 = ptr_to_int v4 i256;
+        v6.*i8 = bitcast v4 *i8;
+        mstore v6 1.i256 i256;
+        v7.*i256 = gep v2 0.i256 1.i256;
+        v8.i256 = ptr_to_int v7 i256;
+        v9.*i8 = bitcast v7 *i8;
+        mstore v9 2.i256 i256;
+        v10.i256 = ptr_to_int v2 i256;
+        v11.*i8 = bitcast v2 *i8;
+        v12.*@__fe_tuple_0 = bitcast v11 *@__fe_tuple_0;
+        v13.*i256 = gep v12 0.i256 1.i256;
+        v14.i256 = ptr_to_int v13 i256;
+        v15.*i8 = bitcast v13 *i8;
+        v16.i256 = mload v15 i256;
+        return v16;
 }
 
 func private %__fe_sonatina_entry() {

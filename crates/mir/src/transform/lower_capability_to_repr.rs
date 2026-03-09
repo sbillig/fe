@@ -34,6 +34,29 @@ fn resolve_place_root_local<'db>(values: &[ValueData<'db>], mut value: ValueId) 
     }
 }
 
+fn resolve_value_rewrite_root_local<'db>(
+    values: &[ValueData<'db>],
+    locals: &[LocalData<'db>],
+    mut value: ValueId,
+) -> Option<LocalId> {
+    loop {
+        match &values.get(value.index())?.origin {
+            ValueOrigin::PlaceRoot(local) => return Some(*local),
+            ValueOrigin::Local(local) => {
+                let root = MirProjectionPath::new();
+                if crate::ir::lookup_local_pointer_leaf_info(locals, *local, &root)
+                    .is_some_and(|info| info.target_ty.is_none())
+                {
+                    return Some(*local);
+                }
+                return None;
+            }
+            ValueOrigin::TransparentCast { value: inner } => value = *inner,
+            _ => return None,
+        }
+    }
+}
+
 fn resolve_owner_local<'db>(values: &[ValueData<'db>], mut value: ValueId) -> Option<LocalId> {
     loop {
         match &values.get(value.index())?.origin {
@@ -87,6 +110,10 @@ fn apply_transparent_field0_chain<'db>(
     mut base_ty: TyId<'db>,
     projection: &MirProjectionPath<'db>,
 ) -> Option<TyId<'db>> {
+    if projection.is_empty() {
+        return None;
+    }
+
     for proj in projection.iter() {
         let Projection::Field(0) = proj else {
             return None;
@@ -208,6 +235,17 @@ struct LowerReprCtx<'db, 'a> {
 }
 
 impl<'db, 'a> LowerReprCtx<'db, 'a> {
+    fn place_crosses_deref_boundary(&self, place: &Place<'db>) -> bool {
+        repr::resolve_place(self.db, self.core, self.values, self.locals, place).is_some_and(
+            |resolved| {
+                resolved
+                    .segments
+                    .iter()
+                    .any(|segment| segment.start_kind.is_some())
+            },
+        )
+    }
+
     fn local_repr(&self, local: LocalId) -> ValueRepr {
         repr_for_plain_ty(
             self.db,
@@ -517,6 +555,15 @@ impl<'db, 'a> LowerReprCtx<'db, 'a> {
         value: ValueId,
         out: &mut Vec<MirInst<'db>>,
     ) {
+        if self.place_crosses_deref_boundary(&place) {
+            out.push(MirInst::Store {
+                source,
+                place,
+                value,
+            });
+            return;
+        }
+
         if let Some(local) = resolve_place_root_local(self.values, place.base) {
             let local_ty = self.locals[local.index()].ty;
             let local_place_ty = local_ty
@@ -616,6 +663,11 @@ impl<'db, 'a> LowerReprCtx<'db, 'a> {
         out: &mut Vec<MirInst<'db>>,
         make_inst: impl FnOnce(Place<'db>) -> MirInst<'db>,
     ) {
+        if self.place_crosses_deref_boundary(&place) {
+            out.push(make_inst(place));
+            return;
+        }
+
         if let Some(local) = resolve_place_root_local(self.values, place.base) {
             let rewritten = if let Some(spill_base) = self.spill_base_for_owner(local) {
                 let Place { projection, .. } = place;
@@ -732,7 +784,7 @@ fn rewrite_place_root_value<'db>(
     locals: &[LocalData<'db>],
     value: ValueId,
 ) -> Option<ValueId> {
-    let local = resolve_place_root_local(values, value)?;
+    let local = resolve_value_rewrite_root_local(values, locals, value)?;
     let target_ty = values[value.index()].ty;
     let local_ty = locals[local.index()].ty;
     let local_repr = repr_for_plain_ty(db, core, local_ty, locals[local.index()].address_space);
@@ -772,7 +824,7 @@ impl<'db> PlaceOriginRewriteCtx<'db, '_> {
     fn rewrite_place_like_origin(
         &mut self,
         mut place: Place<'db>,
-        desired: ValueRepr,
+        _desired: ValueRepr,
         as_move_out: bool,
     ) -> ValueOrigin<'db> {
         let make_place_origin = |place: Place<'db>| {
@@ -788,9 +840,9 @@ impl<'db> PlaceOriginRewriteCtx<'db, '_> {
         };
 
         let local_ty = self.locals[local.index()].ty;
-        if let Some(projected_ty) =
-            apply_transparent_field0_chain(self.db, local_ty, &place.projection)
-            && (desired.address_space().is_none() || !place.projection.is_empty())
+        if !place.projection.is_empty()
+            && let Some(projected_ty) =
+                apply_transparent_field0_chain(self.db, local_ty, &place.projection)
         {
             let local_repr = repr_for_plain_ty(
                 self.db,
@@ -827,15 +879,14 @@ impl<'db> PlaceOriginRewriteCtx<'db, '_> {
             };
         }
 
-        let local_space = self.locals[local.index()].address_space;
         let spill_base = self.spill_addr_value_for_owner[local.index()].unwrap_or_else(|| {
             alloc_value(
                 self.values,
                 ValueData {
                     ty: local_ty,
-                    origin: ValueOrigin::Local(local),
+                    origin: ValueOrigin::PlaceRoot(local),
                     source: SourceInfoId::SYNTHETIC,
-                    repr: repr_for_plain_ty(self.db, self.core, local_ty, local_space),
+                    repr: ValueRepr::Word,
                     pointer_info: None,
                 },
             )
@@ -1114,7 +1165,7 @@ pub(crate) fn lower_capability_to_repr<'db>(
                     is_mut: false,
                     source: SourceInfoId::SYNTHETIC,
                     address_space: AddressSpaceKind::Memory,
-                    pointer_leaf_infos: Vec::new(),
+                    pointer_leaf_infos: owner_data.pointer_leaf_infos.clone(),
                 },
             );
             body.spill_slots.insert(owner, spill);
@@ -1145,9 +1196,9 @@ pub(crate) fn lower_capability_to_repr<'db>(
             &mut body.values,
             ValueData {
                 ty: owner_ty,
-                origin: ValueOrigin::Local(spill_local),
+                origin: ValueOrigin::PlaceRoot(spill_local),
                 source: SourceInfoId::SYNTHETIC,
-                repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+                repr: ValueRepr::Word,
                 pointer_info: None,
             },
         );
@@ -1254,14 +1305,13 @@ pub(crate) fn lower_capability_to_repr<'db>(
 
     let recomputed_pointer_infos: Vec<_> = (0..body.values.len())
         .map(|idx| {
-            let value = &body.values[idx];
-            let default_space = crate::ir::try_value_address_space_in(
+            repr::infer_value_pointer_info(
+                db,
+                core,
                 &body.values,
                 &body.locals,
                 ValueId(idx as u32),
             )
-            .unwrap_or(AddressSpaceKind::Memory);
-            repr::runtime_pointer_info_for_ty(db, core, value.ty, default_space)
         })
         .collect();
     for (value, pointer_info) in body.values.iter_mut().zip(recomputed_pointer_infos) {
@@ -1350,6 +1400,15 @@ mod tests {
     fn projection_is_field1<'db>(path: &crate::MirProjectionPath<'db>) -> bool {
         let mut it = path.iter();
         matches!(it.next(), Some(Projection::Field(1))) && it.next().is_none()
+    }
+
+    fn place_base_roots_local<'db>(
+        body: &MirBody<'db>,
+        base: crate::ValueId,
+        local: LocalId,
+    ) -> bool {
+        crate::ir::resolve_local_projection_root(&body.values, base)
+            .is_some_and(|(root, projection)| root == local && projection.is_empty())
     }
 
     #[test]
@@ -1551,7 +1610,7 @@ pub fn store_place_root_projection_rewrites_through_spill_and_reloads_owner(x: m
             match inst {
                 MirInst::Store { place, .. } => {
                     if projection_is_field1(&place.projection)
-                        && matches!(body.value(place.base).origin, ValueOrigin::Local(local) if local == spill)
+                        && place_base_roots_local(&body, place.base, spill)
                     {
                         saw_spill_store = true;
                     }
@@ -1563,7 +1622,7 @@ pub fn store_place_root_projection_rewrites_through_spill_and_reloads_owner(x: m
                 } => {
                     if *local == owner
                         && place.projection.is_empty()
-                        && matches!(body.value(place.base).origin, ValueOrigin::Local(base_local) if base_local == spill)
+                        && place_base_roots_local(&body, place.base, spill)
                     {
                         saw_owner_reload = true;
                     }
@@ -1634,7 +1693,7 @@ pub fn init_aggregate_place_root_projection_rewrites_through_spill_and_reloads_o
             match inst {
                 MirInst::InitAggregate { place, .. } => {
                     if projection_is_field1(&place.projection)
-                        && matches!(body.value(place.base).origin, ValueOrigin::Local(local) if local == spill)
+                        && place_base_roots_local(&body, place.base, spill)
                     {
                         saw_spill_init = true;
                     }
@@ -1646,7 +1705,7 @@ pub fn init_aggregate_place_root_projection_rewrites_through_spill_and_reloads_o
                 } => {
                     if *local == owner
                         && place.projection.is_empty()
-                        && matches!(body.value(place.base).origin, ValueOrigin::Local(base_local) if base_local == spill)
+                        && place_base_roots_local(&body, place.base, spill)
                     {
                         saw_owner_reload = true;
                     }
@@ -1723,7 +1782,7 @@ pub fn set_discriminant_place_root_projection_rewrites_through_spill_and_reloads
             match inst {
                 MirInst::SetDiscriminant { place, .. } => {
                     if projection_is_field0(&place.projection)
-                        && matches!(body.value(place.base).origin, ValueOrigin::Local(local) if local == spill)
+                        && place_base_roots_local(&body, place.base, spill)
                     {
                         saw_spill_discriminant = true;
                     }
@@ -1735,7 +1794,7 @@ pub fn set_discriminant_place_root_projection_rewrites_through_spill_and_reloads
                 } => {
                     if *local == owner
                         && place.projection.is_empty()
-                        && matches!(body.value(place.base).origin, ValueOrigin::Local(base_local) if base_local == spill)
+                        && place_base_roots_local(&body, place.base, spill)
                     {
                         saw_owner_reload = true;
                     }
@@ -1866,5 +1925,64 @@ pub fn transparent_cast_over_raw_pointer_handle_does_not_spill(x: mut Pair) {}
             .expect("raw-handle transparent cast should keep root pointer info");
         assert_eq!(info.address_space, AddressSpaceKind::Storage);
         assert_eq!(info.target_ty, Some(pair_ty));
+    }
+
+    #[test]
+    fn resolve_place_treats_opaque_raw_pointer_root_as_location() {
+        let mut db = DriverDataBase::default();
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///resolve_place_treats_opaque_raw_pointer_root_as_location.fe")
+                .unwrap(),
+            Some("pub fn resolve_place_treats_opaque_raw_pointer_root_as_location() {}".into()),
+        );
+        let top_mod = db.top_mod(file);
+        let core = CoreLib::new(&db, top_mod.scope());
+
+        let mut body = MirBody::new();
+        body.stage = MirStage::Repr(MirBackend::EvmYul);
+        body.blocks.push(BasicBlock {
+            insts: Vec::new(),
+            terminator: Terminator::Return {
+                source: SourceInfoId::SYNTHETIC,
+                value: None,
+            },
+        });
+
+        let local = body.alloc_local(LocalData {
+            name: "addr".to_string(),
+            ty: TyId::u256(&db),
+            is_mut: true,
+            source: SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Memory,
+            pointer_leaf_infos: vec![(
+                crate::MirProjectionPath::new(),
+                PointerInfo {
+                    address_space: AddressSpaceKind::Memory,
+                    target_ty: None,
+                },
+            )],
+        });
+        let base = body.alloc_value(ValueData {
+            ty: TyId::u256(&db),
+            origin: ValueOrigin::Local(local),
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+            pointer_info: None,
+        });
+        let place = Place::new(base, crate::MirProjectionPath::new());
+
+        let resolved = crate::repr::resolve_place(&db, &core, &body.values, &body.locals, &place)
+            .expect("opaque raw pointer place should resolve");
+
+        assert_eq!(
+            resolved.base.access_kind,
+            crate::repr::PlaceAccessKind::Location
+        );
+        assert_eq!(
+            resolved.base.location_address_space(),
+            Some(AddressSpaceKind::Memory),
+        );
+        assert_eq!(resolved.final_state(), resolved.base);
     }
 }

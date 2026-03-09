@@ -4,20 +4,17 @@ expression: mir_output
 ---
 fn bump(v0: mut u8) -> ():
   bb0:
-    bind v0
-    v1: u8 = load mem[v0]
-    v2: u8 = checked_add<u8>(v1, 1)
-    store mem[v0] = v2
-    bind v0
-    v3: u8 = load mem[v0]
-    v4: u8 = checked_sub<u8>(v3, 1)
-    store mem[v0] = v4
+    v1: u8 = load mem[v0].*
+    store mem[v0].* = (v1 + 1)
+    v2: u8 = load mem[v0].*
+    store mem[v0].* = (v2 - 1)
     ret
 
 fn mut_param_augassign() -> u8:
   bb0:
-    v1: u8 = alloc mem
+    v2: u8 = alloc mem
     v0: u8 = 7
-    store mem[v1] = v0
-    eval bump(&mem[v1])
-    ret v0
+    store mem[place_root(v2)] = v0
+    eval bump(&mem[place_root(v2)])
+    v1: u8 = load mem[place_root(v2)]
+    ret v1

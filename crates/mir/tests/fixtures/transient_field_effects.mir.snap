@@ -89,6 +89,7 @@ fn runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805
 
 fn runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(v0: mut Evm) -> SolDecoder<CallData>:
   bb0:
+    eval v0
     v2: CallData = evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(())
     v3: SolDecoder<CallData> = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v2, 4)
     ret v3
@@ -179,7 +180,7 @@ fn cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563
 
 fn cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0: Cursor<CallData>, v1: u256) -> Cursor<CallData>:
   bb0:
-    v2: CallData = load mem[v0].0
+    v2: CallData = load mem[v0].*.0
     v3: Cursor<CallData> = alloc mem
     init mem[v3] { .0 = v2, .1 = v1 }
     ret v3

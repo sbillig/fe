@@ -18,13 +18,17 @@ func private %s_t__h10779c135f64b393_foo_h6dbce71a6ea992b8_foo__u64__aee7f05a097
         v2.*i8 = evm_malloc 64.i256;
         v3.*@__fe_tuple_0 = bitcast v2 *@__fe_tuple_0;
         v5.*i256 = gep v3 0.i256 0.i256;
-        v6.i64 = trunc v0 i64;
-        v7.i256 = zext v6 i256;
-        mstore v5 v7 i256;
-        v9.*i256 = gep v3 0.i256 1.i256;
-        v10.i64 = trunc 1.i256 i64;
-        v11.i256 = zext v10 i256;
-        mstore v9 v11 i256;
+        v6.i256 = ptr_to_int v5 i256;
+        v7.*i8 = bitcast v5 *i8;
+        v8.i64 = trunc v0 i64;
+        v9.i256 = zext v8 i256;
+        mstore v7 v9 i256;
+        v11.*i256 = gep v3 0.i256 1.i256;
+        v12.i256 = ptr_to_int v11 i256;
+        v13.*i8 = bitcast v11 *i8;
+        v14.i64 = trunc 1.i256 i64;
+        v15.i256 = zext v14 i256;
+        mstore v13 v15 i256;
         return v3;
 }
 

@@ -103,12 +103,30 @@ impl RuntimeFunctionMetadata {
     }
 }
 
-fn merge_runtime_type(slot: &mut Option<Type>, ty: Type, what: &str) -> Result<(), LowerError> {
+fn merge_runtime_type(
+    builder: &ModuleBuilder,
+    slot: &mut Option<Type>,
+    ty: Type,
+    what: &str,
+) -> Result<(), LowerError> {
     if let Some(existing) = slot {
         if *existing != ty {
-            return Err(LowerError::Internal(format!(
-                "conflicting runtime sonatina types for {what}: {existing:?} vs {ty:?}"
-            )));
+            let opaque_ptr = builder.ptr_type(Type::I8);
+            let merged = if *existing == opaque_ptr && ty.is_pointer(&builder.ctx) {
+                ty
+            } else if ty == opaque_ptr && existing.is_pointer(&builder.ctx) {
+                *existing
+            } else if !existing.is_pointer(&builder.ctx) && ty.is_pointer(&builder.ctx) {
+                ty
+            } else if existing.is_pointer(&builder.ctx) && !ty.is_pointer(&builder.ctx) {
+                *existing
+            } else {
+                return Err(LowerError::Internal(format!(
+                    "conflicting runtime sonatina types for {what}: {existing:?} vs {ty:?}"
+                )));
+            };
+            *slot = Some(merged);
+            return Ok(());
         }
         return Ok(());
     }
@@ -170,7 +188,9 @@ fn infer_local_root_runtime_types(
     };
 
     for (idx, value) in func.body.values.iter().enumerate() {
-        let Some(local) = inferred_local_root_for_value(&func.body.values, value) else {
+        let Some(local) =
+            inferred_local_root_for_value(db, core, &func.body.values, &func.body.locals, value)
+        else {
             continue;
         };
         let runtime_ty = runtime_type_cx.runtime_type_for_value_with_info(
@@ -178,6 +198,7 @@ fn infer_local_root_runtime_types(
             func.body.value_pointer_info(mir::ValueId(idx as u32)),
         );
         merge_runtime_type(
+            builder,
             &mut local_runtime_types[local.index()],
             runtime_ty,
             &format!("local root {local:?}"),
@@ -188,18 +209,35 @@ fn infer_local_root_runtime_types(
 }
 
 fn inferred_local_root_for_value<'db>(
+    db: &'db DriverDataBase,
+    core: &CoreLib<'db>,
     values: &[mir::ValueData<'db>],
+    locals: &[mir::LocalData<'db>],
     value: &mir::ValueData<'db>,
 ) -> Option<mir::LocalId> {
     match &value.origin {
-        mir::ValueOrigin::Local(local) => Some(*local),
+        mir::ValueOrigin::Local(local) => locals
+            .get(local.index())
+            .filter(|local_data| local_data.ty == value.ty)
+            .map(|_| *local),
         mir::ValueOrigin::PlaceRef(place) | mir::ValueOrigin::MoveOut { place } => {
             if !place.projection.is_empty() {
                 return None;
             }
+            if mir::repr::resolve_place(db, core, values, locals, place)?
+                .segments
+                .iter()
+                .any(|segment| segment.start_kind.is_some())
+            {
+                return None;
+            }
 
             let (local, prefix) = mir::ir::resolve_local_projection_root(values, place.base)?;
-            prefix.is_empty().then_some(local)
+            (prefix.is_empty()
+                && locals
+                    .get(local.index())
+                    .is_some_and(|local_data| local_data.ty == value.ty))
+            .then_some(local)
         }
         _ => None,
     }
@@ -333,6 +371,7 @@ impl<'a, 'db> RuntimeTypeCx<'a, 'db> {
             let runtime_ty = self
                 .runtime_type_for_value_with_info(value, func.body.value_pointer_info(*value_id));
             merge_runtime_type(
+                self.builder,
                 &mut ret,
                 runtime_ty,
                 &format!("return of `{}`", func.symbol_name),

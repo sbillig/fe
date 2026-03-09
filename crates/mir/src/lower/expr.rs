@@ -22,7 +22,10 @@ use hir::analysis::{
     place::PlaceBase,
     ty::ty_check::{EffectArg, EffectPassMode},
 };
-use hir::hir_def::expr::{ArithBinOp, BinOp};
+use hir::hir_def::{
+    EnumVariant,
+    expr::{ArithBinOp, BinOp},
+};
 
 enum RootLvalue<'db> {
     Place(Place<'db>),
@@ -141,6 +144,136 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             .and_then(|lit| lit.to_usize())
             .map(IndexSource::Constant)
             .unwrap_or_else(|| IndexSource::Dynamic(self.lower_expr(expr)))
+    }
+
+    fn set_expr_value_from_lowered_value(&mut self, value_id: ValueId, lowered: ValueId) {
+        if value_id == lowered {
+            return;
+        }
+
+        let lowered_data = self.builder.body.value(lowered).clone();
+        self.builder.body.values[value_id.index()].origin = lowered_data.origin;
+        self.builder.body.values[value_id.index()].repr = lowered_data.repr;
+        self.refresh_value_pointer_info(value_id);
+    }
+
+    fn mark_place_root_address_taken(&mut self, place: &Place<'db>) {
+        let Some((local, projection)) =
+            crate::ir::resolve_local_projection_root(&self.builder.body.values, place.base)
+        else {
+            return;
+        };
+        if !projection.is_empty()
+            || !matches!(
+                crate::repr::repr_kind_for_ty(
+                    self.db,
+                    &self.core,
+                    self.builder.body.local(local).ty,
+                ),
+                crate::repr::ReprKind::Word
+            )
+        {
+            return;
+        }
+        self.address_taken_locals.insert(local);
+    }
+
+    fn alloc_place_ref_value(
+        &mut self,
+        ty: TyId<'db>,
+        place: Place<'db>,
+        repr: ValueRepr,
+    ) -> ValueId {
+        self.mark_place_root_address_taken(&place);
+        self.alloc_value(ty, ValueOrigin::PlaceRef(place), repr)
+    }
+
+    fn projection_source_value(
+        &mut self,
+        expr: ExprId,
+        place: Place<'db>,
+        ty: TyId<'db>,
+        addr_space: AddressSpaceKind,
+        temp_name: &'static str,
+    ) -> ValueId {
+        if self.is_by_ref_ty(ty) {
+            return self.alloc_place_ref_value(ty, place, ValueRepr::Ref(addr_space));
+        }
+
+        let dest = self.alloc_temp_local(ty, false, temp_name);
+        let load_space = self.load_result_address_space(expr, ty, addr_space);
+        self.builder.body.locals[dest.index()].address_space = load_space;
+        self.assign(None, Some(dest), Rvalue::Load { place });
+        self.alloc_value(
+            ty,
+            ValueOrigin::Local(dest),
+            self.value_repr_for_ty(ty, load_space),
+        )
+    }
+
+    fn coerce_contextual_capability_expr_value(
+        &mut self,
+        expr: ExprId,
+        source_value: ValueId,
+        source_ty: TyId<'db>,
+    ) -> ValueId {
+        let expr_ty = self.typed_body.expr_ty(self.db, expr);
+        if expr_ty == source_ty {
+            return source_value;
+        }
+
+        let Some((kind, inner_ty)) = source_ty.as_capability(self.db) else {
+            return source_value;
+        };
+        debug_assert_eq!(
+            expr_ty,
+            inner_ty,
+            "unexpected capability coercion from `{}` to `{}`",
+            source_ty.pretty_print(self.db),
+            expr_ty.pretty_print(self.db),
+        );
+
+        let target_repr = self.value_repr_for_expr(expr, expr_ty);
+        if matches!(kind, CapabilityKind::View) {
+            return self.alloc_value(
+                expr_ty,
+                ValueOrigin::TransparentCast {
+                    value: source_value,
+                },
+                target_repr,
+            );
+        }
+
+        if let Some(place) = self.place_from_derefable_value(source_value, source_ty) {
+            let place_space = self.place_address_space(&place);
+            let dest = self.alloc_temp_local(expr_ty, false, "coerce");
+            let load_space = self.load_result_address_space(expr, expr_ty, place_space);
+            self.builder.body.locals[dest.index()].address_space = load_space;
+            self.assign(None, Some(dest), Rvalue::Load { place });
+            return self.alloc_value(
+                expr_ty,
+                ValueOrigin::Local(dest),
+                self.value_repr_for_ty(expr_ty, load_space),
+            );
+        }
+
+        if target_repr.address_space().is_some() {
+            return self.alloc_value(
+                expr_ty,
+                ValueOrigin::TransparentCast {
+                    value: source_value,
+                },
+                target_repr,
+            );
+        }
+
+        self.alloc_value(
+            expr_ty,
+            ValueOrigin::TransparentCast {
+                value: source_value,
+            },
+            target_repr,
+        )
     }
 
     fn contract_field_slot_offset(&self, contract_name: &str, field_idx: usize) -> Option<usize> {
@@ -381,6 +514,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         if let Some(place) = self.place_for_borrow_expr(*inner) {
                             let space = self.place_address_space(&place);
                             let value_ty = self.builder.body.value(value_id).ty;
+                            self.mark_place_root_address_taken(&place);
                             self.builder.body.values[value_id.index()].origin =
                                 ValueOrigin::PlaceRef(place);
                             self.builder.body.values[value_id.index()].repr =
@@ -406,8 +540,26 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 value_id
             }
             Partial::Present(Expr::Cast(inner, _)) => {
-                let _ = self.lower_expr(*inner);
-                self.ensure_value(expr)
+                let value_id = self.ensure_value(expr);
+                let inner_value = self.lower_expr(*inner);
+                if self.current_block().is_none() {
+                    return value_id;
+                }
+
+                let inner_ty = self.typed_body.expr_ty(self.db, *inner);
+                let lowered = if inner_ty.as_capability(self.db).is_some() {
+                    self.coerce_contextual_capability_expr_value(expr, inner_value, inner_ty)
+                } else if inner_ty == self.typed_body.expr_ty(self.db, expr) {
+                    inner_value
+                } else {
+                    self.alloc_value(
+                        self.typed_body.expr_ty(self.db, expr),
+                        ValueOrigin::TransparentCast { value: inner_value },
+                        self.value_repr_for_expr(expr, self.typed_body.expr_ty(self.db, expr)),
+                    )
+                };
+                self.set_expr_value_from_lowered_value(value_id, lowered);
+                value_id
             }
             Partial::Present(Expr::Bin(lhs, rhs, BinOp::Index)) => {
                 self.lower_index_expr(expr, *lhs, *rhs)
@@ -621,7 +773,37 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             .collect()
     }
 
-    pub(super) fn capability_value_is_address_backed(&self, value: ValueId) -> bool {
+    pub(super) fn deref_target_ty(&self, ty: TyId<'db>) -> Option<TyId<'db>> {
+        crate::repr::deref_target_ty(self.db, &self.core, ty)
+    }
+
+    pub(super) fn direct_deref_target_ty(&self, ty: TyId<'db>) -> Option<TyId<'db>> {
+        crate::repr::direct_deref_target_ty(self.db, &self.core, ty)
+    }
+
+    pub(super) fn place_base_ty(&self, ty: TyId<'db>) -> TyId<'db> {
+        self.direct_deref_target_ty(ty).unwrap_or(ty)
+    }
+
+    fn transparent_field0_preserves_value(
+        &self,
+        lhs_ty: TyId<'db>,
+        base_value: ValueId,
+        field_ty: TyId<'db>,
+    ) -> bool {
+        let base_repr = self.builder.body.value(base_value).repr;
+        if base_repr.is_ref() {
+            return false;
+        }
+
+        if self.direct_deref_target_ty(lhs_ty).is_none() {
+            return true;
+        }
+
+        self.deref_target_ty(field_ty).is_some() || !self.value_supports_direct_deref(base_value)
+    }
+
+    pub(super) fn value_supports_direct_deref(&self, value: ValueId) -> bool {
         let mut root = value;
         while let ValueOrigin::TransparentCast { value: inner } =
             &self.builder.body.value(root).origin
@@ -630,17 +812,36 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let root_value = self.builder.body.value(root);
-        match crate::repr::repr_kind_for_ty(self.db, &self.core, root_value.ty) {
-            crate::repr::ReprKind::Zst | crate::repr::ReprKind::Word => return false,
-            crate::repr::ReprKind::Ptr(_) | crate::repr::ReprKind::Ref => {}
-        }
-        matches!(
+        let is_address_backed = matches!(
             root_value.origin,
             ValueOrigin::Local(_)
                 | ValueOrigin::PlaceRef(_)
                 | ValueOrigin::MoveOut { .. }
                 | ValueOrigin::FieldPtr(_)
-        )
+        );
+        if !is_address_backed {
+            return false;
+        }
+
+        if let Some((kind, inner_ty)) = root_value.ty.as_capability(self.db) {
+            return match kind {
+                CapabilityKind::Mut | CapabilityKind::Ref => true,
+                // `view T` reuses `T`'s runtime representation. Only by-ref inners carry an
+                // actual location that can be dereferenced directly.
+                CapabilityKind::View => self.is_by_ref_ty(inner_ty),
+            };
+        }
+
+        if root_value.repr.address_space().is_some()
+            || self.deref_target_ty(root_value.ty).is_some()
+        {
+            return true;
+        }
+
+        match crate::repr::repr_kind_for_ty(self.db, &self.core, root_value.ty) {
+            crate::repr::ReprKind::Zst | crate::repr::ReprKind::Word => false,
+            crate::repr::ReprKind::Ptr(_) | crate::repr::ReprKind::Ref => true,
+        }
     }
 
     fn ty_is_scalar_ref_capability(&self, ty: TyId<'db>) -> bool {
@@ -655,46 +856,39 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         })
     }
 
-    pub(super) fn place_from_capability_value(
+    pub(super) fn place_from_derefable_value(
         &mut self,
         value: ValueId,
         ty: TyId<'db>,
     ) -> Option<Place<'db>> {
-        let (kind, inner_ty) = ty.as_capability(self.db)?;
-        if self.capability_value_is_address_backed(value) {
-            let base_repr = match self.builder.body.stage {
-                crate::ir::MirStage::Capability => ValueRepr::Word,
-                crate::ir::MirStage::Repr(_) => crate::ir::try_value_address_space_in(
-                    &self.builder.body.values,
-                    &self.builder.body.locals,
-                    value,
-                )
-                .map(ValueRepr::Ptr)
-                .unwrap_or(ValueRepr::Word),
-            };
-            let base =
-                self.alloc_value(inner_ty, ValueOrigin::TransparentCast { value }, base_repr);
-            return Some(Place::new(base, MirProjectionPath::new()));
+        let inner_ty = self.deref_target_ty(ty)?;
+        if self.value_supports_direct_deref(value) {
+            return Some(Place::new(
+                value,
+                MirProjectionPath::from_projection(Projection::Deref),
+            ));
         }
 
-        let mut root = value;
-        while let ValueOrigin::TransparentCast { value } = &self.builder.body.value(root).origin {
-            root = *value;
-        }
-        if let ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) =
-            &self.builder.body.value(root).origin
+        if ty
+            .as_capability(self.db)
+            .is_some_and(|(kind, _)| matches!(kind, CapabilityKind::Ref))
+            && self.ty_is_scalar_ref_capability(ty)
         {
-            let base = self.alloc_value(inner_ty, ValueOrigin::PlaceRoot(*local), ValueRepr::Word);
-            return Some(Place::new(base, MirProjectionPath::new()));
+            return None;
         }
 
-        if matches!(kind, CapabilityKind::Ref) && self.ty_is_scalar_ref_capability(ty) {
+        if ty.as_capability(self.db).is_some_and(|(kind, inner)| {
+            matches!(kind, CapabilityKind::View) && !self.is_by_ref_ty(inner)
+        }) {
             return None;
         }
 
         // Capability-typed rvalues can appear as immediates (e.g. integer literals coerced to
         // `view T`). Materialize storage in memory so subsequent loads don't treat the immediate
-        // word as a pointer address (like `mload(10)`).
+        // word as a pointer address (like `mload(10)`). Non-capability effect handles always
+        // lower to concrete pointer words and should have returned through the direct-deref path.
+        ty.as_capability(self.db)?;
+
         let inner_value = self.alloc_value(
             inner_ty,
             ValueOrigin::TransparentCast { value },
@@ -738,18 +932,19 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             if let Some((_, inner_ty)) = expected_ty.as_capability(self.db) {
                 let expected_repr = self.value_repr_for_ty(expected_ty, arg_space);
                 if expected_repr.address_space().is_some()
-                    && !self.capability_value_is_address_backed(arg_value)
+                    && !self.value_supports_direct_deref(arg_value)
                     && let Some(place) = self
                         .place_for_borrow_expr(arg_expr)
-                        .or_else(|| self.place_from_capability_value(arg_value, expected_ty))
+                        .or_else(|| self.place_from_derefable_value(arg_value, expected_ty))
                 {
                     let place_space = self.place_address_space(&place);
                     let expected_repr = self.value_repr_for_ty(expected_ty, place_space);
                     let base = self.alloc_value(
                         inner_ty,
-                        ValueOrigin::PlaceRef(place),
+                        ValueOrigin::PlaceRef(place.clone()),
                         self.value_repr_for_ty(inner_ty, place_space),
                     );
+                    self.mark_place_root_address_taken(&place);
                     return self.alloc_value(
                         expected_ty,
                         ValueOrigin::TransparentCast { value: base },
@@ -774,9 +969,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         );
                     }
 
-                    if let Some(place) = self
-                        .place_for_borrow_expr(arg_expr)
-                        .or_else(|| self.place_from_capability_value(arg_value, actual_ty))
+                    if let Some(place) =
+                        self.place_for_capability_inner_load(arg_expr, arg_value, actual_ty)
                     {
                         let place_space = self.place_address_space(&place);
                         let expected_repr = self.value_repr_for_ty(expected_ty, place_space);
@@ -830,11 +1024,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         let place_space = self.place_address_space(&place);
                         if place_space != arg_space {
                             let expected_repr = self.value_repr_for_ty(expected_ty, place_space);
-                            return self.alloc_value(
-                                expected_ty,
-                                ValueOrigin::PlaceRef(place),
-                                expected_repr,
-                            );
+                            return self.alloc_place_ref_value(expected_ty, place, expected_repr);
                         }
                     }
                     return self.alloc_value(
@@ -844,21 +1034,18 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     );
                 }
 
-                if let Some(place) = self
-                    .place_for_borrow_expr(arg_expr)
-                    .or_else(|| self.place_from_capability_value(arg_value, actual_ty))
+                if let Some(place) =
+                    self.place_for_capability_inner_load(arg_expr, arg_value, actual_ty)
                 {
                     let place_space = self.place_address_space(&place);
                     let expected_repr = self.value_repr_for_ty(expected_ty, place_space);
-                    return self.alloc_value(
-                        expected_ty,
-                        ValueOrigin::PlaceRef(place),
-                        expected_repr,
-                    );
+                    return self.alloc_place_ref_value(expected_ty, place, expected_repr);
                 }
             }
 
-            if actual_ty == required_inner && self.is_by_ref_ty(actual_ty) {
+            if actual_ty == required_inner
+                && (self.is_by_ref_ty(actual_ty) || self.value_supports_direct_deref(arg_value))
+            {
                 return self.alloc_value(
                     expected_ty,
                     ValueOrigin::TransparentCast { value: arg_value },
@@ -869,7 +1056,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             if let Some(place) = self.place_for_borrow_expr(arg_expr) {
                 let place_space = self.place_address_space(&place);
                 let expected_repr = self.value_repr_for_ty(expected_ty, place_space);
-                return self.alloc_value(expected_ty, ValueOrigin::PlaceRef(place), expected_repr);
+                return self.alloc_place_ref_value(expected_ty, place, expected_repr);
             }
 
             let temp = self.alloc_temp_local(actual_ty, false, "viewtmp");
@@ -881,11 +1068,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return self.alloc_value(expected_ty, ValueOrigin::PlaceRef(place), expected_repr);
         }
 
-        if let Some((_, inner_ty)) = actual_ty.as_capability(self.db)
+        if let Some((kind, inner_ty)) = actual_ty.as_capability(self.db)
             && expected_ty == inner_ty
         {
             let expected_repr = self.value_repr_for_ty(expected_ty, arg_space);
-            if expected_repr.address_space().is_some() {
+            if matches!(kind, CapabilityKind::View) {
                 return self.alloc_value(
                     expected_ty,
                     ValueOrigin::TransparentCast { value: arg_value },
@@ -893,17 +1080,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 );
             }
 
-            if !self.capability_value_is_address_backed(arg_value) {
-                return self.alloc_value(
-                    expected_ty,
-                    ValueOrigin::TransparentCast { value: arg_value },
-                    expected_repr,
-                );
-            }
-
-            let Some(place) = self
-                .place_for_borrow_expr(arg_expr)
-                .or_else(|| self.place_from_capability_value(arg_value, actual_ty))
+            let Some(place) = self.place_for_capability_inner_load(arg_expr, arg_value, actual_ty)
             else {
                 return arg_value;
             };
@@ -915,6 +1092,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         arg_value
+    }
+
+    fn place_for_capability_inner_load(
+        &mut self,
+        arg_expr: ExprId,
+        arg_value: ValueId,
+        capability_ty: TyId<'db>,
+    ) -> Option<Place<'db>> {
+        self.place_from_derefable_value(arg_value, capability_ty)
+            .or_else(|| self.place_for_borrow_expr(arg_expr))
     }
 
     fn normalize_method_receiver_call_arg(
@@ -937,14 +1124,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return (receiver_value, None);
         }
 
-        if self
-            .builder
-            .body
-            .value(receiver_value)
-            .repr
-            .address_space()
-            .is_some()
-        {
+        if self.value_supports_direct_deref(receiver_value) {
             return (receiver_value, Some(receiver_space));
         }
 
@@ -957,11 +1137,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
         let receiver_repr = self.value_repr_for_ty(expected_receiver_ty, receiver_space);
         (
-            self.alloc_value(
-                expected_receiver_ty,
-                ValueOrigin::PlaceRef(receiver_place),
-                receiver_repr,
-            ),
+            self.alloc_place_ref_value(expected_receiver_ty, receiver_place, receiver_repr),
             Some(receiver_space),
         )
     }
@@ -1027,7 +1203,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             let Some(&arg_expr) = arg_exprs.get(idx) else {
                 continue;
             };
-            let Some(&expected_ty) = expected_arg_tys.get(idx) else {
+            let expected_ty = if idx == 0 {
+                expected_receiver_ty.or_else(|| expected_arg_tys.get(idx).copied())
+            } else {
+                expected_arg_tys.get(idx).copied()
+            };
+            let Some(expected_ty) = expected_ty else {
                 continue;
             };
             let coerced = self.coerce_call_arg_value(arg_expr, *arg, expected_ty);
@@ -1078,16 +1259,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         let expected_repr =
             self.value_repr_for_ty(expected_ty, self.value_address_space_or_memory(arg_value));
-        if expected_repr.address_space().is_none()
-            || self.capability_value_is_address_backed(arg_value)
-        {
+        if expected_repr.address_space().is_none() || self.value_supports_direct_deref(arg_value) {
             return arg_value;
         }
 
         let Some(place) = self.place_for_borrow_expr(arg_expr).or_else(|| {
             let source_ty = self.builder.body.value(arg_value).ty;
-            if source_ty.as_capability(self.db).is_some() {
-                return self.place_from_capability_value(arg_value, source_ty);
+            if self.deref_target_ty(source_ty).is_some() {
+                return self.place_from_derefable_value(arg_value, source_ty);
             }
 
             let temp = self.alloc_temp_local(source_ty, false, "viewtmp");
@@ -1101,7 +1280,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         let place_space = self.place_address_space(&place);
         let expected_repr = self.value_repr_for_ty(expected_ty, place_space);
-        self.alloc_value(expected_ty, ValueOrigin::PlaceRef(place), expected_repr)
+        self.alloc_place_ref_value(expected_ty, place, expected_repr)
     }
 
     fn coerce_primitive_operand_if_copy_capability(
@@ -1119,7 +1298,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return operand_value;
         }
 
-        if !self.capability_value_is_address_backed(operand_value) {
+        if !self.value_supports_direct_deref(operand_value) {
             return self.alloc_value(
                 inner_ty,
                 ValueOrigin::TransparentCast {
@@ -1129,9 +1308,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             );
         }
 
-        let Some(place) = self
-            .place_for_borrow_expr(operand_expr)
-            .or_else(|| self.place_from_capability_value(operand_value, operand_ty))
+        let Some(place) =
+            self.place_for_capability_inner_load(operand_expr, operand_value, operand_ty)
         else {
             return operand_value;
         };
@@ -1614,151 +1792,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 self.lower_call_expr_inner(expr, Some(dest), Some(stmt))
             }
             Partial::Present(Expr::Field(lhs, field_index)) => {
-                let value_id = self.ensure_value(expr);
-                let Some(field_index) = field_index.to_opt() else {
-                    return value_id;
-                };
-                let base_value = self.lower_expr(*lhs);
-                if self.current_block().is_none() {
-                    return value_id;
+                let value_id = self.lower_field_expr(expr, *lhs, *field_index);
+                if self.current_block().is_some() {
+                    self.assign(Some(stmt), Some(dest), Rvalue::Value(value_id));
                 }
-                let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
-                let lhs_place_ty = lhs_ty
-                    .as_capability(self.db)
-                    .map(|(_, inner)| inner)
-                    .unwrap_or(lhs_ty);
-                let Some(info) = self.field_access_info_for_expr(expr, lhs_place_ty, field_index)
-                else {
-                    return value_id;
-                };
-
-                if lhs_ty.as_capability(self.db).is_some() {
-                    let Some(mut place) = self.place_from_capability_value(base_value, lhs_ty)
-                    else {
-                        return value_id;
-                    };
-                    place.projection.push(Projection::Field(info.field_idx));
-
-                    let addr_space = self.place_address_space(&place);
-                    if self.is_by_ref_ty(info.field_ty) {
-                        let place_value = self.alloc_value(
-                            info.field_ty,
-                            ValueOrigin::PlaceRef(place),
-                            ValueRepr::Ref(addr_space),
-                        );
-                        self.builder.body.locals[dest.index()].address_space = addr_space;
-                        self.assign(Some(stmt), Some(dest), Rvalue::Value(place_value));
-                        self.builder.body.values[value_id.index()].origin =
-                            ValueOrigin::Local(dest);
-                        self.builder.body.values[value_id.index()].repr =
-                            ValueRepr::Ref(addr_space);
-                        return value_id;
-                    }
-
-                    self.builder.body.locals[dest.index()].address_space =
-                        self.expr_address_space(expr);
-                    self.assign(Some(stmt), Some(dest), Rvalue::Load { place });
-                    self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
-                    return value_id;
-                }
-
-                // Transparent newtype access: field 0 is a representation-preserving cast.
-                if self.is_transparent_field0(lhs_place_ty, info.field_idx) {
-                    let base_repr = self.builder.body.value(base_value).repr;
-                    if !base_repr.is_ref() {
-                        let space = self.value_address_space_or_memory(base_value);
-                        let field_repr = self.value_repr_for_ty(info.field_ty, space);
-                        if field_repr.address_space().is_some() {
-                            self.builder.body.locals[dest.index()].address_space =
-                                self.value_address_space(base_value);
-                        } else {
-                            self.builder.body.locals[dest.index()].address_space =
-                                self.expr_address_space(expr);
-                        }
-                        self.assign(Some(stmt), Some(dest), Rvalue::Value(base_value));
-                        self.builder.body.values[value_id.index()].origin =
-                            ValueOrigin::Local(dest);
-                        self.builder.body.values[value_id.index()].repr = field_repr;
-                        return value_id;
-                    }
-                }
-
-                let addr_space = self.value_address_space(base_value);
-                let place = Place::new(
-                    base_value,
-                    MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
-                );
-
-                if self.is_by_ref_ty(info.field_ty) {
-                    let place_value = self.alloc_value(
-                        info.field_ty,
-                        ValueOrigin::PlaceRef(place),
-                        ValueRepr::Ref(addr_space),
-                    );
-                    self.builder.body.locals[dest.index()].address_space = addr_space;
-                    self.assign(Some(stmt), Some(dest), Rvalue::Value(place_value));
-                    self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
-                    self.builder.body.values[value_id.index()].repr = ValueRepr::Ref(addr_space);
-                    return value_id;
-                }
-
-                self.builder.body.locals[dest.index()].address_space =
-                    self.expr_address_space(expr);
-                self.assign(Some(stmt), Some(dest), Rvalue::Load { place });
-                self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
                 value_id
             }
             Partial::Present(Expr::Bin(lhs, rhs, BinOp::Index)) => {
-                let value_id = self.ensure_value(expr);
-                let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
-                let lhs_place_ty = lhs_ty
-                    .as_capability(self.db)
-                    .map(|(_, inner)| inner)
-                    .unwrap_or(lhs_ty);
-                if !lhs_place_ty.is_array(self.db) {
-                    return value_id;
+                let value_id = self.lower_index_expr(expr, *lhs, *rhs);
+                if self.current_block().is_some() {
+                    self.assign(Some(stmt), Some(dest), Rvalue::Value(value_id));
                 }
-                let Some(elem_ty) = lhs_place_ty.generic_args(self.db).first().copied() else {
-                    return value_id;
-                };
-                let base_value = self.lower_expr(*lhs);
-                let index_source = self.lower_index_source(*rhs);
-                if self.current_block().is_none() {
-                    return value_id;
-                }
-                let (base, projection) = if lhs_ty.as_capability(self.db).is_some() {
-                    let Some(mut place) = self.place_from_capability_value(base_value, lhs_ty)
-                    else {
-                        return value_id;
-                    };
-                    place.projection.push(Projection::Index(index_source));
-                    (place.base, place.projection)
-                } else {
-                    (
-                        base_value,
-                        MirProjectionPath::from_projection(Projection::Index(index_source)),
-                    )
-                };
-                let addr_space = self.value_address_space(base);
-                let place = Place::new(base, projection);
-
-                if self.is_by_ref_ty(elem_ty) {
-                    let place_value = self.alloc_value(
-                        elem_ty,
-                        ValueOrigin::PlaceRef(place),
-                        ValueRepr::Ref(addr_space),
-                    );
-                    self.builder.body.locals[dest.index()].address_space = addr_space;
-                    self.assign(Some(stmt), Some(dest), Rvalue::Value(place_value));
-                    self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
-                    self.builder.body.values[value_id.index()].repr = ValueRepr::Ref(addr_space);
-                    return value_id;
-                }
-
-                self.builder.body.locals[dest.index()].address_space =
-                    self.expr_address_space(expr);
-                self.assign(Some(stmt), Some(dest), Rvalue::Load { place });
-                self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
                 value_id
             }
             _ => {
@@ -1840,6 +1884,21 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             self.builder.body.values[value_id.index()].repr = self.value_repr_for_expr(expr, ty);
             return value_id;
         }
+        if let Some(local) = self.local_for_binding(binding)
+            && self.address_taken_locals.contains(&local)
+            && matches!(
+                crate::repr::repr_kind_for_ty(self.db, &self.core, ty),
+                crate::repr::ReprKind::Word
+            )
+            && let Some(place) = self.place_for_borrow_expr(expr)
+        {
+            let dest = self.alloc_temp_local(ty, false, "addrload");
+            self.builder.body.locals[dest.index()].address_space = self.place_address_space(&place);
+            self.assign(None, Some(dest), Rvalue::Load { place });
+            self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
+            self.builder.body.values[value_id.index()].repr = ValueRepr::Word;
+            return value_id;
+        }
         if let Some(local) = self.local_for_binding(binding) {
             let local_ty = self.builder.body.local(local).ty;
             let local_address_space = self.builder.body.local(local).address_space;
@@ -1851,27 +1910,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     ValueOrigin::Local(local),
                     self.value_repr_for_ty(local_ty, local_address_space),
                 );
-                let target_repr = self.value_repr_for_expr(expr, ty);
-                if target_repr.address_space().is_some() {
-                    self.builder.body.values[value_id.index()].origin =
-                        ValueOrigin::TransparentCast { value: handle };
-                    self.builder.body.values[value_id.index()].repr = target_repr;
-                    return value_id;
-                }
-
-                if self.capability_value_is_address_backed(handle) {
-                    let Some(place) = self.place_from_capability_value(handle, local_ty) else {
-                        return value_id;
-                    };
-                    let dest = self.alloc_temp_local(ty, false, "load");
-                    self.assign(None, Some(dest), Rvalue::Load { place });
-                    self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
-                    self.builder.body.values[value_id.index()].repr = target_repr;
-                } else {
-                    self.builder.body.values[value_id.index()].origin =
-                        ValueOrigin::TransparentCast { value: handle };
-                    self.builder.body.values[value_id.index()].repr = target_repr;
-                }
+                let lowered = self.coerce_contextual_capability_expr_value(expr, handle, local_ty);
+                self.set_expr_value_from_lowered_value(value_id, lowered);
                 return value_id;
             }
         }
@@ -1943,65 +1983,47 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let lhs_ty = self.typed_body.expr_ty(self.db, lhs);
-        let lhs_place_ty = lhs_ty
-            .as_capability(self.db)
-            .map(|(_, inner)| inner)
-            .unwrap_or(lhs_ty);
+        let lhs_place_ty = self.place_base_ty(lhs_ty);
         let Some(info) = self.field_access_info_for_expr(expr, lhs_place_ty, field_index) else {
             return value_id;
         };
 
-        if lhs_ty.as_capability(self.db).is_some() {
-            let Some(mut place) = self.place_from_capability_value(base_value, lhs_ty) else {
+        // Transparent newtype access: field 0 is a representation-preserving cast only when we
+        // can preserve the value/handle directly. Dereferenceable scalar fields must still load
+        // from the pointed-to storage/memory location.
+        if self.is_transparent_field0(lhs_place_ty, info.field_idx)
+            && self.transparent_field0_preserves_value(lhs_ty, base_value, info.field_ty)
+        {
+            let space = self.value_address_space_or_memory(base_value);
+            let field_value = self.alloc_value(
+                info.field_ty,
+                ValueOrigin::TransparentCast { value: base_value },
+                self.value_repr_for_ty(info.field_ty, space),
+            );
+            let lowered =
+                self.coerce_contextual_capability_expr_value(expr, field_value, info.field_ty);
+            self.set_expr_value_from_lowered_value(value_id, lowered);
+            return value_id;
+        }
+
+        let place = if self.direct_deref_target_ty(lhs_ty).is_some() {
+            let Some(mut place) = self.place_from_derefable_value(base_value, lhs_ty) else {
                 return value_id;
             };
             place.projection.push(Projection::Field(info.field_idx));
-
-            let addr_space = self.place_address_space(&place);
-            if self.is_by_ref_ty(info.field_ty) {
-                self.builder.body.values[value_id.index()].origin = ValueOrigin::PlaceRef(place);
-                self.builder.body.values[value_id.index()].repr = ValueRepr::Ref(addr_space);
-                return value_id;
-            }
-
-            let dest = self.alloc_temp_local(info.field_ty, false, "load");
-            self.builder.body.locals[dest.index()].address_space =
-                self.load_result_address_space(expr, info.field_ty, addr_space);
-            self.assign(None, Some(dest), Rvalue::Load { place });
-            self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
-            return value_id;
-        }
-
-        // Transparent newtype access: field 0 is a representation-preserving cast.
-        if self.is_transparent_field0(lhs_place_ty, info.field_idx) {
-            let base_repr = self.builder.body.value(base_value).repr;
-            if !base_repr.is_ref() {
-                let space = self.value_address_space_or_memory(base_value);
-                self.builder.body.values[value_id.index()].origin =
-                    ValueOrigin::TransparentCast { value: base_value };
-                self.builder.body.values[value_id.index()].repr =
-                    self.value_repr_for_ty(info.field_ty, space);
-                return value_id;
-            }
-        }
-
-        let addr_space = self.value_address_space(base_value);
-        let place = Place::new(
-            base_value,
-            MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
-        );
-
-        if self.is_by_ref_ty(info.field_ty) {
-            self.builder.body.values[value_id.index()].origin = ValueOrigin::PlaceRef(place);
-            self.builder.body.values[value_id.index()].repr = ValueRepr::Ref(addr_space);
-            return value_id;
-        }
-
-        let dest = self.alloc_temp_local(info.field_ty, false, "load");
-        self.builder.body.locals[dest.index()].address_space =
-            self.load_result_address_space(expr, info.field_ty, addr_space);
-        self.assign(None, Some(dest), Rvalue::Load { place });
-        self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
+            place
+        } else {
+            Place::new(
+                base_value,
+                MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
+            )
+        };
+        let addr_space = self.place_address_space(&place);
+        let source_value =
+            self.projection_source_value(expr, place, info.field_ty, addr_space, "load");
+        let lowered =
+            self.coerce_contextual_capability_expr_value(expr, source_value, info.field_ty);
+        self.set_expr_value_from_lowered_value(value_id, lowered);
         value_id
     }
 
@@ -2079,10 +2101,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let lhs_ty = self.typed_body.expr_ty(self.db, lhs);
-        let lhs_place_ty = lhs_ty
-            .as_capability(self.db)
-            .map(|(_, inner)| inner)
-            .unwrap_or(lhs_ty);
+        let lhs_place_ty = self.place_base_ty(lhs_ty);
         if !lhs_place_ty.is_array(self.db) {
             return value_id;
         }
@@ -2096,32 +2115,22 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return value_id;
         }
 
-        let (base, projection) = if lhs_ty.as_capability(self.db).is_some() {
-            let Some(mut place) = self.place_from_capability_value(base_value, lhs_ty) else {
+        let place = if self.direct_deref_target_ty(lhs_ty).is_some() {
+            let Some(mut place) = self.place_from_derefable_value(base_value, lhs_ty) else {
                 return value_id;
             };
             place.projection.push(Projection::Index(index_source));
-            (place.base, place.projection)
+            place
         } else {
-            (
+            Place::new(
                 base_value,
                 MirProjectionPath::from_projection(Projection::Index(index_source)),
             )
         };
-        let addr_space = self.value_address_space(base);
-        let place = Place::new(base, projection);
-
-        if self.is_by_ref_ty(elem_ty) {
-            self.builder.body.values[value_id.index()].origin = ValueOrigin::PlaceRef(place);
-            self.builder.body.values[value_id.index()].repr = ValueRepr::Ref(addr_space);
-            return value_id;
-        }
-
-        let dest = self.alloc_temp_local(elem_ty, false, "load");
-        self.builder.body.locals[dest.index()].address_space =
-            self.load_result_address_space(expr, elem_ty, addr_space);
-        self.assign(None, Some(dest), Rvalue::Load { place });
-        self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
+        let addr_space = self.place_address_space(&place);
+        let source_value = self.projection_source_value(expr, place, elem_ty, addr_space, "load");
+        let lowered = self.coerce_contextual_capability_expr_value(expr, source_value, elem_ty);
+        self.set_expr_value_from_lowered_value(value_id, lowered);
         value_id
     }
 
@@ -2186,26 +2195,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         match expr.data(self.db, self.body) {
             Partial::Present(Expr::Path(_)) => {
                 let ty = self.typed_body.expr_ty(self.db, expr);
-                if ty.as_capability(self.db).is_some() {
-                    let handle = self.ensure_value(expr);
-                    if self.capability_value_is_address_backed(handle) {
-                        let (_, inner_ty) = ty.as_capability(self.db)?;
-                        let base_repr = match self.builder.body.stage {
-                            crate::ir::MirStage::Capability => ValueRepr::Word,
-                            crate::ir::MirStage::Repr(_) => {
-                                self.value_repr_for_ty(inner_ty, AddressSpaceKind::Memory)
-                            }
-                        };
-                        let base = self.alloc_value(
-                            inner_ty,
-                            ValueOrigin::TransparentCast { value: handle },
-                            base_repr,
-                        );
-                        return Some(Place::new(base, MirProjectionPath::new()));
-                    }
-                    return self.place_from_capability_value(handle, ty);
-                }
-
                 let binding = self.typed_body.expr_prop(self.db, expr).binding?;
                 if matches!(binding, LocalBinding::EffectParam { .. })
                     && self.effect_param_key_is_trait(binding)
@@ -2214,6 +2203,20 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 }
 
                 let local = self.local_for_binding(binding)?;
+                let local_ty = self.builder.body.local(local).ty;
+                if self
+                    .direct_deref_target_ty(local_ty)
+                    .is_some_and(|target_ty| !self.is_by_ref_ty(target_ty))
+                {
+                    let addr_space = self.address_space_for_binding(&binding);
+                    let base_value = self.alloc_value(
+                        local_ty,
+                        ValueOrigin::Local(local),
+                        self.value_repr_for_ty(local_ty, addr_space),
+                    );
+                    return self.place_from_derefable_value(base_value, local_ty);
+                }
+
                 let is_runtime_place = self.is_by_ref_ty(ty)
                     || matches!(
                         binding,
@@ -2235,65 +2238,80 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             Partial::Present(Expr::Field(lhs, field_index)) => {
                 let field_index = field_index.to_opt()?;
                 let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
-                let lhs_place_ty = lhs_ty
-                    .as_capability(self.db)
-                    .map(|(_, inner)| inner)
-                    .unwrap_or(lhs_ty);
+                let lhs_place_ty = self.place_base_ty(lhs_ty);
                 let info = self.field_access_info_for_expr(expr, lhs_place_ty, field_index)?;
 
-                if self.is_transparent_field0(lhs_place_ty, info.field_idx)
-                    && info.field_ty.as_capability(self.db).is_some()
-                {
+                if self.is_transparent_field0(lhs_place_ty, info.field_idx) {
+                    if self.direct_deref_target_ty(lhs_ty).is_some() {
+                        return self.project_expr_place(
+                            *lhs,
+                            lhs_ty,
+                            Projection::Field(info.field_idx),
+                            true,
+                        );
+                    }
+
+                    if let Some(place) = self.place_for_borrow_expr(*lhs) {
+                        return Some(place);
+                    }
+
                     let base_value = self.lower_expr(*lhs);
-                    let handle = self.alloc_value(
-                        info.field_ty,
-                        ValueOrigin::TransparentCast { value: base_value },
-                        self.value_repr_for_ty(
-                            info.field_ty,
-                            self.value_address_space_or_memory(base_value),
-                        ),
-                    );
-                    return self.place_from_capability_value(handle, info.field_ty);
+                    if self.builder.body.value(base_value).repr.is_ref() {
+                        return Some(Place::new(base_value, MirProjectionPath::new()));
+                    }
+                    return None;
                 }
 
-                let Place {
-                    base,
-                    mut projection,
-                } = self.place_for_borrow_expr(*lhs)?;
-                projection.push(Projection::Field(info.field_idx));
-                Some(Place::new(base, projection))
+                self.project_expr_place(*lhs, lhs_ty, Projection::Field(info.field_idx), true)
             }
             Partial::Present(Expr::Bin(lhs, rhs, BinOp::Index)) => {
                 let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
-                let lhs_place_ty = lhs_ty
-                    .as_capability(self.db)
-                    .map(|(_, inner)| inner)
-                    .unwrap_or(lhs_ty);
+                let lhs_place_ty = self.place_base_ty(lhs_ty);
                 if !lhs_place_ty.is_array(self.db) {
                     return None;
                 }
 
-                let Place {
-                    base,
-                    mut projection,
-                } = self.place_for_borrow_expr(*lhs)?;
                 let index_source = self.lower_index_source(*rhs);
-                projection.push(Projection::Index(index_source));
-                Some(Place::new(base, projection))
+                self.project_expr_place(*lhs, lhs_ty, Projection::Index(index_source), true)
             }
             _ => None,
         }
+    }
+
+    fn project_expr_place(
+        &mut self,
+        lhs: ExprId,
+        lhs_ty: TyId<'db>,
+        proj: Projection<TyId<'db>, EnumVariant<'db>, ValueId>,
+        recurse_from_lhs_place: bool,
+    ) -> Option<Place<'db>> {
+        if self.direct_deref_target_ty(lhs_ty).is_some() {
+            let base_value = self.lower_expr(lhs);
+            let mut place = self.place_from_derefable_value(base_value, lhs_ty)?;
+            place.projection.push(proj);
+            return Some(place);
+        }
+
+        if recurse_from_lhs_place {
+            let Place {
+                base,
+                mut projection,
+            } = self.place_for_borrow_expr(lhs)?;
+            projection.push(proj);
+            return Some(Place::new(base, projection));
+        }
+
+        let base_value = self.lower_expr(lhs);
+        Some(Place::new(
+            base_value,
+            MirProjectionPath::from_projection(proj),
+        ))
     }
 
     fn place_for_expr(&mut self, expr: ExprId) -> Option<Place<'db>> {
         match expr.data(self.db, self.body) {
             Partial::Present(Expr::Path(_)) => {
                 let ty = self.typed_body.expr_ty(self.db, expr);
-                if ty.as_capability(self.db).is_some() {
-                    let handle = self.ensure_value(expr);
-                    return self.place_from_capability_value(handle, ty);
-                }
-
                 let binding = self.typed_body.expr_prop(self.db, expr).binding?;
                 match binding {
                     LocalBinding::EffectParam { .. } => {
@@ -2322,34 +2340,21 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             Partial::Present(Expr::Field(lhs, field_index)) => {
                 let field_index = field_index.to_opt()?;
                 let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
-                let lhs_place_ty = lhs_ty
-                    .as_capability(self.db)
-                    .map(|(_, inner)| inner)
-                    .unwrap_or(lhs_ty);
+                let lhs_place_ty = self.place_base_ty(lhs_ty);
                 let info = self.field_access_info_for_expr(expr, lhs_place_ty, field_index)?;
-
-                if lhs_ty.as_capability(self.db).is_some() {
-                    let addr_value = self.lower_expr(*lhs);
-                    let mut place = self.place_from_capability_value(addr_value, lhs_ty)?;
-                    place.projection.push(Projection::Field(info.field_idx));
-                    return Some(place);
-                }
 
                 // Transparent newtypes: treat field 0 as the same place when the base is
                 // already addressable, otherwise fall back to scalar newtype semantics.
                 if self.is_transparent_field0(lhs_place_ty, info.field_idx) {
-                    if info.field_ty.as_capability(self.db).is_some() {
-                        let base_value = self.lower_expr(*lhs);
-                        let handle = self.alloc_value(
-                            info.field_ty,
-                            ValueOrigin::TransparentCast { value: base_value },
-                            self.value_repr_for_ty(
-                                info.field_ty,
-                                self.value_address_space_or_memory(base_value),
-                            ),
+                    if self.direct_deref_target_ty(lhs_ty).is_some() {
+                        return self.project_expr_place(
+                            *lhs,
+                            lhs_ty,
+                            Projection::Field(info.field_idx),
+                            false,
                         );
-                        return self.place_from_capability_value(handle, info.field_ty);
                     }
+
                     if let Some(place) = self.place_for_expr(*lhs) {
                         return Some(place);
                     }
@@ -2360,34 +2365,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     return None;
                 }
 
-                let addr_value = self.lower_expr(*lhs);
-                Some(Place::new(
-                    addr_value,
-                    MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
-                ))
+                self.project_expr_place(*lhs, lhs_ty, Projection::Field(info.field_idx), false)
             }
             Partial::Present(Expr::Bin(lhs, rhs, BinOp::Index)) => {
                 let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
-                let lhs_place_ty = lhs_ty
-                    .as_capability(self.db)
-                    .map(|(_, inner)| inner)
-                    .unwrap_or(lhs_ty);
+                let lhs_place_ty = self.place_base_ty(lhs_ty);
                 if !lhs_place_ty.is_array(self.db) {
                     return None;
                 }
-                if lhs_ty.as_capability(self.db).is_some() {
-                    let addr_value = self.lower_expr(*lhs);
-                    let mut place = self.place_from_capability_value(addr_value, lhs_ty)?;
-                    let index_source = self.lower_index_source(*rhs);
-                    place.projection.push(Projection::Index(index_source));
-                    return Some(place);
-                }
-                let addr_value = self.lower_expr(*lhs);
                 let index_source = self.lower_index_source(*rhs);
-                Some(Place::new(
-                    addr_value,
-                    MirProjectionPath::from_projection(Projection::Index(index_source)),
-                ))
+                self.project_expr_place(*lhs, lhs_ty, Projection::Index(index_source), false)
             }
             _ => None,
         }
@@ -2417,6 +2404,25 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     }
 
     fn root_lvalue_for_expr(&mut self, expr: ExprId) -> Option<RootLvalue<'db>> {
+        if self
+            .typed_body
+            .expr_ty(self.db, expr)
+            .as_capability(self.db)
+            .is_some()
+        {
+            return self.place_for_borrow_expr(expr).map(RootLvalue::Place);
+        }
+        if let Some(binding) = self.typed_body.expr_prop(self.db, expr).binding
+            && let Some(local) = self.local_for_binding(binding)
+        {
+            let local_ty = self.builder.body.local(local).ty;
+            if self
+                .direct_deref_target_ty(local_ty)
+                .is_some_and(|target_ty| !self.is_by_ref_ty(target_ty))
+            {
+                return self.place_for_borrow_expr(expr).map(RootLvalue::Place);
+            }
+        }
         if let Some(place) = self.place_for_expr(expr) {
             return Some(RootLvalue::Place(place));
         }
@@ -2436,6 +2442,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     ) {
         match lvalue {
             RootLvalue::Place(place) => {
+                self.mark_place_root_address_taken(&place);
                 let source = stmt
                     .map(|stmt| self.source_for_stmt(stmt))
                     .unwrap_or(SourceInfoId::SYNTHETIC);
@@ -2484,10 +2491,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let root_expr = if is_peeled { peeled_target } else { target };
         let root_ty = self.typed_body.expr_ty(self.db, root_expr);
         let lhs_ty = self.typed_body.expr_ty(self.db, target);
-        let lhs_place_ty = lhs_ty
-            .as_capability(self.db)
-            .map(|(_, inner)| inner)
-            .unwrap_or(lhs_ty);
+        let lhs_place_ty = self.place_base_ty(lhs_ty);
 
         let Some(root_lvalue) = self.root_lvalue_for_expr(root_expr) else {
             return;
@@ -2526,7 +2530,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         ValueOrigin::TransparentCast { value: base_value },
                         ValueRepr::Word,
                     )
-                } else if lhs_ty.as_capability(self.db).is_some() {
+                } else if self.direct_deref_target_ty(lhs_ty).is_some() {
                     let base_value = self.alloc_value(
                         lhs_ty,
                         ValueOrigin::Local(*local),
@@ -2535,7 +2539,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                             self.builder.body.local(*local).address_space,
                         ),
                     );
-                    if let Some(place) = self.place_from_capability_value(base_value, lhs_ty) {
+                    if let Some(place) = self.place_from_derefable_value(base_value, lhs_ty) {
                         let loaded_local = self.alloc_temp_local(lhs_place_ty, false, "load");
                         self.builder.body.locals[loaded_local.index()].address_space =
                             self.expr_address_space(target);
@@ -3727,6 +3731,7 @@ mod tests {
     use url::Url;
 
     use super::*;
+    use crate::lower::lower_function;
 
     #[test]
     fn storage_field_borrow_keeps_storage_pointer_info() {
@@ -3778,6 +3783,31 @@ fn borrow_storage_field_handle() -> u256
             .iter()
             .find(|func| func.symbol_name.contains("borrow_storage_field_handle"))
             .expect("expected `borrow_storage_field_handle`");
+        let place_ref_value = func
+            .body
+            .values
+            .iter()
+            .enumerate()
+            .find_map(|(idx, value)| match &value.origin {
+                ValueOrigin::PlaceRef(place) if place.projection.is_empty() => {
+                    Some((ValueId(idx as u32), value, place))
+                }
+                _ => None,
+            })
+            .expect("expected place-ref value");
+        assert_eq!(
+            crate::repr::place_yields_location_value(
+                &db,
+                &CoreLib::new(&db, top_mod.scope()),
+                &func.body.values,
+                &func.body.locals,
+                place_ref_value.2,
+                place_ref_value.1.ty,
+                place_ref_value.1.pointer_info,
+            ),
+            Some(true),
+            "single-field storage providers should still be recognized as location-valued handles",
+        );
         let p_local = func
             .body
             .locals
@@ -3817,6 +3847,22 @@ fn borrow_storage_field_handle() -> u256
                 .address_space,
             AddressSpaceKind::Storage,
         );
+        for value in &func.body.values {
+            if matches!(
+                value.origin,
+                ValueOrigin::PlaceRef(_) | ValueOrigin::MoveOut { .. }
+            ) && value.repr.address_space() == Some(AddressSpaceKind::Storage)
+            {
+                assert_eq!(
+                    value
+                        .pointer_info
+                        .expect("storage place values should carry pointer info")
+                        .address_space,
+                    AddressSpaceKind::Storage,
+                    "storage place values must not retain memory pointer metadata",
+                );
+            }
+        }
     }
 
     #[test]
@@ -3926,6 +3972,1087 @@ fn test() uses (st: mut RawStorage, mem: mut RawMem) {
                 .expect("stor ptr local should carry root pointer info")
                 .address_space,
             AddressSpaceKind::Storage,
+        );
+    }
+
+    #[test]
+    fn resolved_place_keeps_pointer_field_in_container_space() {
+        let mut db = DriverDataBase::default();
+        let url =
+            Url::parse("file:///resolved_place_keeps_pointer_field_in_container_space.fe").unwrap();
+        let src = r#"
+use std::evm::{RawStorage, StorPtr}
+
+struct Cell {
+    value: u256,
+}
+
+struct Holder {
+    ptr: StorPtr<Cell>,
+    tag: u256,
+}
+
+fn extract_ptr() -> StorPtr<Cell> uses (st: mut RawStorage) {
+    let holder = Holder { ptr: st.stor_ptr(0), tag: 1 }
+    holder.ptr
+}
+"#;
+
+        let file = db.workspace().touch(&mut db, url, Some(src.to_owned()));
+        let top_mod = db.top_mod(file);
+        let module = crate::lower_module(&db, top_mod).expect("module should lower");
+        let func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name.contains("extract_ptr"))
+            .expect("expected `extract_ptr`");
+        let return_value = match &func.body.blocks[0].terminator {
+            crate::ir::Terminator::Return {
+                value: Some(value), ..
+            } => *value,
+            other => panic!("expected return terminator, got {other:?}"),
+        };
+        let ValueOrigin::MoveOut { place } = &func.body.value(return_value).origin else {
+            panic!("expected return value to move out of a place");
+        };
+
+        let resolved = crate::repr::resolve_place(
+            &db,
+            &CoreLib::new(&db, top_mod.scope()),
+            &func.body.values,
+            &func.body.locals,
+            place,
+        )
+        .expect("place should resolve");
+        let assumptions = PredicateListId::empty_list(&db);
+        let final_ty = hir::analysis::ty::normalize::normalize_ty(
+            &db,
+            resolved.final_state().ty,
+            top_mod.scope(),
+            assumptions,
+        );
+        let return_ty = hir::analysis::ty::normalize::normalize_ty(
+            &db,
+            func.body.value(return_value).ty,
+            top_mod.scope(),
+            assumptions,
+        );
+
+        assert_eq!(resolved.segments.len(), 1);
+        let segment = &resolved.segments[0];
+        assert_eq!(segment.start_kind, None);
+        assert_eq!(
+            segment.base.location_address_space(),
+            Some(AddressSpaceKind::Memory),
+            "handle field location should stay in wrapper memory",
+        );
+        assert_eq!(segment.projections.len(), 1);
+        assert!(matches!(
+            segment.projections[0].projection,
+            Projection::Field(0)
+        ));
+        assert_eq!(
+            segment.terminal_state().location_address_space(),
+            Some(AddressSpaceKind::Memory),
+            "field access itself should remain in the container address space",
+        );
+        assert_eq!(
+            segment
+                .terminal_state()
+                .pointer_info
+                .expect("pointer field should keep pointee metadata")
+                .address_space,
+            AddressSpaceKind::Storage,
+            "field value should carry the pointee address space without changing the field location",
+        );
+        assert_eq!(
+            crate::repr::place_yields_location_value(
+                &db,
+                &CoreLib::new(&db, top_mod.scope()),
+                &func.body.values,
+                &func.body.locals,
+                place,
+                func.body.value(return_value).ty,
+                func.body.value_pointer_info(return_value),
+            ),
+            Some(false),
+            "moving a handle field out of a container must load the stored handle value, not reuse the field location (return_ty={}, final_ty={}, pointer_info={:?}, deref_target={:?})",
+            return_ty.pretty_print(&db),
+            final_ty.pretty_print(&db),
+            func.body.value_pointer_info(return_value),
+            crate::repr::direct_deref_target_ty(
+                &db,
+                &CoreLib::new(&db, top_mod.scope()),
+                return_ty
+            ),
+        );
+
+        for func in module
+            .functions
+            .iter()
+            .filter(|func| func.symbol_name.contains("extract_ptr"))
+        {
+            let return_value = match &func.body.blocks[0].terminator {
+                crate::ir::Terminator::Return {
+                    value: Some(value), ..
+                } => *value,
+                _ => continue,
+            };
+            let ValueOrigin::MoveOut { place } = &func.body.value(return_value).origin else {
+                continue;
+            };
+            assert_eq!(
+                crate::repr::place_yields_location_value(
+                    &db,
+                    &CoreLib::new(&db, top_mod.scope()),
+                    &func.body.values,
+                    &func.body.locals,
+                    place,
+                    func.body.value(return_value).ty,
+                    func.body.value_pointer_info(return_value),
+                ),
+                Some(false),
+                "specialized `{}` must also load the handle field value instead of reusing the field location",
+                func.symbol_name,
+            );
+        }
+    }
+
+    #[test]
+    fn resolved_place_uses_explicit_deref_for_loaded_capability_values() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse(
+            "file:///resolved_place_uses_explicit_deref_for_loaded_capability_values.fe",
+        )
+        .unwrap();
+        let src = r#"
+struct Cell {
+    value: u256,
+}
+
+struct CellMover {
+    cell: mut Cell,
+    tag: u256,
+}
+
+impl CellMover {
+    fn bump(mut self, by: u256) -> u256 {
+        self.cell.value += by
+        self.cell.value
+    }
+}
+"#;
+
+        let file = db.workspace().touch(&mut db, url, Some(src.to_owned()));
+        let top_mod = db.top_mod(file);
+        let module = crate::lower_module(&db, top_mod).expect("module should lower");
+        let func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name.contains("bump"))
+            .expect("expected `bump`");
+
+        let load_places = func
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .filter_map(|inst| match inst {
+                crate::ir::MirInst::Assign {
+                    rvalue: Rvalue::Load { place },
+                    ..
+                } => Some(place),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        let pointee_field_place = load_places
+            .iter()
+            .find(|place| matches!(func.body.value(place.base).origin, ValueOrigin::Local(_)))
+            .copied()
+            .expect("expected a load rooted on a loaded capability value");
+
+        let resolved = crate::repr::resolve_place(
+            &db,
+            &CoreLib::new(&db, top_mod.scope()),
+            &func.body.values,
+            &func.body.locals,
+            pointee_field_place,
+        )
+        .expect("place should resolve");
+
+        assert_eq!(resolved.segments.len(), 1);
+        let segment = &resolved.segments[0];
+        assert_eq!(
+            segment.start_kind,
+            Some(crate::repr::DerefStepKind::UseBaseValue),
+            "loaded handle values should cross into the pointee via an explicit deref step",
+        );
+        assert_eq!(
+            segment.before.pointer_info.map(|info| info.address_space),
+            Some(AddressSpaceKind::Memory),
+            "loaded `mut Cell` handle should retain memory pointee metadata",
+        );
+        assert_eq!(
+            segment.base.location_address_space(),
+            Some(AddressSpaceKind::Memory),
+            "after deref, the place should be in the pointee address space",
+        );
+        assert_eq!(segment.projections.len(), 1);
+        assert!(matches!(
+            segment.projections[0].projection,
+            Projection::Field(0)
+        ));
+    }
+
+    #[test]
+    fn resolved_place_keeps_empty_handle_roots_as_values() {
+        let mut db = DriverDataBase::default();
+        let url =
+            Url::parse("file:///resolved_place_keeps_empty_handle_roots_as_values.fe").unwrap();
+        let src = r#"
+fn forward(value: mut u256) -> mut u256 {
+    value
+}
+
+fn entry() -> u256 {
+    let mut local = 7
+    let value = forward(mut local)
+    value += 5
+    value
+}
+"#;
+
+        let file = db.workspace().touch(&mut db, url, Some(src.to_owned()));
+        let top_mod = db.top_mod(file);
+        let module = crate::lower_module(&db, top_mod).expect("module should lower");
+        let func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name.contains("entry"))
+            .expect("expected `entry`");
+
+        let scalar_handle_value = func
+            .body
+            .values
+            .iter()
+            .enumerate()
+            .find_map(|(idx, value)| {
+                value
+                    .ty
+                    .as_capability(&db)
+                    .is_some()
+                    .then_some((idx, value))
+                    .filter(|(_, value)| matches!(value.origin, ValueOrigin::Local(_)))
+            })
+            .map(|(idx, _)| ValueId(idx as u32))
+            .expect("expected a loaded scalar handle local");
+        let scalar_handle_place = Place::new(scalar_handle_value, MirProjectionPath::new());
+
+        let resolved = crate::repr::resolve_place(
+            &db,
+            &CoreLib::new(&db, top_mod.scope()),
+            &func.body.values,
+            &func.body.locals,
+            &scalar_handle_place,
+        )
+        .expect("place should resolve");
+
+        assert_eq!(resolved.segments.len(), 1);
+        let segment = &resolved.segments[0];
+        assert_eq!(
+            segment.start_kind, None,
+            "empty handle-root places should remain value roots until MIR inserts an explicit deref",
+        );
+        assert_eq!(
+            segment.base.location_address_space(),
+            None,
+            "empty handle-root places are not locations without an explicit deref",
+        );
+        assert_eq!(
+            segment.base.ty.pretty_print(&db),
+            "mut u256",
+            "empty handle-root places should preserve the handle type",
+        );
+        assert!(segment.projections.is_empty());
+    }
+
+    #[test]
+    fn scalar_loads_from_handle_roots_use_explicit_deref() {
+        let mut db = DriverDataBase::default();
+        let url =
+            Url::parse("file:///scalar_loads_from_handle_roots_use_explicit_deref.fe").unwrap();
+        let src = r#"
+fn forward(value: mut u256) -> mut u256 {
+    value
+}
+
+fn entry() -> u256 {
+    let mut local = 7
+    let value = forward(mut local)
+    value += 5
+    value
+}
+"#;
+
+        let file = db.workspace().touch(&mut db, url, Some(src.to_owned()));
+        let top_mod = db.top_mod(file);
+        let module = crate::lower_module(&db, top_mod).expect("module should lower");
+        let func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name.contains("entry"))
+            .expect("expected `entry`");
+
+        let (loaded_local, loaded_value) = func.body.blocks[0]
+            .insts
+            .iter()
+            .find_map(|inst| match inst {
+                crate::ir::MirInst::Assign {
+                    dest: Some(local),
+                    rvalue: Rvalue::Load { place },
+                    ..
+                } if func.body.local(*local).ty.pretty_print(&db) == "u256"
+                    && func.body.value(place.base).ty.pretty_print(&db) == "mut u256"
+                    && place.projection.iter().eq([Projection::Deref].iter()) =>
+                {
+                    let value = func
+                        .body
+                        .values
+                        .iter()
+                        .enumerate()
+                        .find_map(|(idx, value)| {
+                            matches!(value.origin, ValueOrigin::Local(origin) if origin == *local)
+                                .then_some(ValueId(idx as u32))
+                        })
+                        .expect("expected value for loaded scalar local");
+                    Some((*local, value))
+                }
+                _ => None,
+            })
+            .expect("expected scalar load rooted on a handle local");
+
+        assert!(
+            !func.body.blocks[0].insts.iter().any(|inst| {
+                matches!(
+                    inst,
+                    crate::ir::MirInst::Assign {
+                        rvalue: Rvalue::Load { place },
+                        ..
+                    } if func.body.value(place.base).ty.pretty_print(&db) == "mut u256"
+                        && place.projection.is_empty()
+                )
+            }),
+            "handle-root scalar loads must not rely on implicit base deref",
+        );
+
+        assert!(
+            func.body.local(loaded_local).pointer_leaf_infos.is_empty(),
+            "loading a scalar through an explicit deref must not retain handle leaf metadata",
+        );
+        assert!(
+            func.body.value_pointer_info(loaded_value).is_none(),
+            "loaded scalar value must not carry the handle pointer metadata",
+        );
+    }
+
+    #[test]
+    fn path_reads_from_address_taken_word_locals_use_loads() {
+        let mut db = DriverDataBase::default();
+        let url =
+            Url::parse("file:///path_reads_from_address_taken_word_locals_use_loads.fe").unwrap();
+        let src = r#"
+pub fn borrow_handles_readback() -> u256 {
+    let mut x: u256 = 0
+    let p: mut u256 = mut x
+    p = 5
+    x
+}
+"#;
+
+        let file = db.workspace().touch(&mut db, url, Some(src.to_owned()));
+        let top_mod = db.top_mod(file);
+        let module = crate::lower_module(&db, top_mod).expect("module should lower");
+        let func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name.contains("borrow_handles_readback"))
+            .expect("expected `borrow_handles_readback`");
+
+        let x_local = func
+            .body
+            .locals
+            .iter()
+            .enumerate()
+            .find_map(|(idx, local)| (local.name == "x").then_some(LocalId(idx as u32)))
+            .expect("expected local `x`");
+        let canonical_local = func
+            .body
+            .spill_slots
+            .get(&x_local)
+            .copied()
+            .unwrap_or(x_local);
+
+        assert!(
+            func.body.blocks[0].insts.iter().any(|inst| {
+                matches!(
+                    inst,
+                    crate::ir::MirInst::Assign {
+                        rvalue: Rvalue::Load { place },
+                        ..
+                    } if crate::ir::resolve_local_projection_root(&func.body.values, place.base)
+                        .is_some_and(|(local, projection)| {
+                            local == canonical_local && projection.is_empty()
+                        })
+                        && place.projection.is_empty()
+                )
+            }),
+            "reading an address-taken word local should reload from its canonical place",
+        );
+    }
+
+    #[test]
+    fn aug_assign_through_handle_local_stays_a_store() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///aug_assign_through_handle_local_stays_a_store.fe").unwrap();
+        let src = r#"
+fn forward(value: mut u256) -> mut u256 {
+    value
+}
+
+fn entry() -> u256 {
+    let mut local = 7
+    let value = forward(mut local)
+    value += 5
+    value
+}
+"#;
+
+        let file = db.workspace().touch(&mut db, url, Some(src.to_owned()));
+        let top_mod = db.top_mod(file);
+        let module = crate::lower_module(&db, top_mod).expect("module should lower");
+        let func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name.contains("entry"))
+            .expect("expected `entry`");
+
+        let handle_local = func.body.blocks[0]
+            .insts
+            .iter()
+            .find_map(|inst| match inst {
+                crate::ir::MirInst::Assign {
+                    dest: Some(local),
+                    rvalue: Rvalue::Call(_),
+                    ..
+                } if func.body.local(*local).ty.pretty_print(&db) == "mut u256" => Some(*local),
+                _ => None,
+            })
+            .expect("expected call result handle local");
+
+        assert!(
+            func.body.blocks[0].insts.iter().any(|inst| {
+                matches!(
+                    inst,
+                    crate::ir::MirInst::Store { place, value, .. }
+                        if place.projection.iter().eq([Projection::Deref].iter())
+                            && matches!(func.body.value(place.base).origin, ValueOrigin::Local(local) if local == handle_local)
+                            && func.body.value(*value).ty.pretty_print(&db) == "u256"
+                )
+            }),
+            "augmenting through a handle local must stay a store to the pointee location",
+        );
+        assert!(
+            !func.body.blocks[0].insts.iter().any(|inst| {
+                matches!(
+                    inst,
+                    crate::ir::MirInst::Assign {
+                        dest: Some(local),
+                        rvalue: Rvalue::Value(value),
+                        ..
+                    } if *local == handle_local && func.body.value(*value).ty.pretty_print(&db) == "u256"
+                )
+            }),
+            "augmenting through a handle local must not be rewritten into a direct local assignment",
+        );
+    }
+
+    #[test]
+    fn place_ref_values_keep_handle_pointer_metadata() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///place_ref_values_keep_handle_pointer_metadata.fe").unwrap();
+        let src = r#"
+fn forward(value: mut u256) -> mut u256 {
+    value
+}
+
+fn entry() -> u256 {
+    let mut local = 7
+    let value = forward(mut local)
+    value
+}
+"#;
+
+        let file = db.workspace().touch(&mut db, url, Some(src.to_owned()));
+        let top_mod = db.top_mod(file);
+        let module = crate::lower_module(&db, top_mod).expect("module should lower");
+        let func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name.contains("entry"))
+            .expect("expected `entry`");
+
+        let call_arg = func
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                crate::ir::MirInst::Assign {
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } => call.args.first().copied(),
+                _ => None,
+            })
+            .expect("expected call argument");
+
+        let info = func
+            .body
+            .value_pointer_info(call_arg)
+            .expect("place-ref handle argument should carry pointer metadata");
+        assert_eq!(info.address_space, AddressSpaceKind::Memory);
+        assert_eq!(
+            info.target_ty
+                .expect("handle metadata should preserve the pointee type")
+                .pretty_print(&db),
+            "u256",
+        );
+        assert_eq!(
+            func.body.value_address_space(call_arg),
+            AddressSpaceKind::Memory
+        );
+    }
+
+    #[test]
+    fn transparent_scalar_field_reads_do_not_retain_handle_pointer_metadata() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse(
+            "file:///transparent_scalar_field_reads_do_not_retain_handle_pointer_metadata.fe",
+        )
+        .unwrap();
+        let src = r#"
+struct WrapU8 {
+    inner: u8,
+}
+
+struct Container {
+    w: WrapU8,
+    pad: u256,
+}
+
+fn newtype_u8_roundtrip(x: u8) -> u8 {
+    let c = Container { w: WrapU8 { inner: x }, pad: 0 }
+    let w = ref c.w
+    w.inner
+}
+"#;
+
+        let file = db.workspace().touch(&mut db, url, Some(src.to_owned()));
+        let top_mod = db.top_mod(file);
+        let hir_func = top_mod
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "newtype_u8_roundtrip")
+            })
+            .expect("expected `newtype_u8_roundtrip`");
+        let (diags, typed_body) = check_func_body(&db, hir_func);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
+
+        let lowered = lower_function(
+            &db,
+            hir_func,
+            typed_body.clone(),
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("function should lower");
+
+        let has_invalid_scalar_deref = |body: &crate::MirBody<'_>| {
+            body.blocks.iter().any(|block| {
+                block.insts.iter().any(|inst| {
+                    matches!(
+                        inst,
+                        crate::ir::MirInst::Assign {
+                            rvalue:
+                                Rvalue::Load {
+                                    place: Place {
+                                        base,
+                                        projection,
+                                    },
+                                },
+                            ..
+                        } if projection.iter().eq([Projection::Deref].iter())
+                            && body.value(*base).ty.pretty_print(&db) == "u8"
+                    )
+                })
+            })
+        };
+
+        let mut body = lowered.body.clone();
+        assert!(
+            !has_invalid_scalar_deref(&body),
+            "invalid scalar deref should not exist before MIR transforms"
+        );
+
+        crate::transform::canonicalize_transparent_newtypes(&db, &mut body);
+        crate::transform::insert_temp_binds(&db, &mut body);
+        crate::transform::lower_capability_to_repr(
+            &db,
+            &crate::CoreLib::new(&db, top_mod.scope()),
+            crate::ir::MirBackend::EvmYul,
+            &mut body,
+        );
+        crate::transform::canonicalize_transparent_newtypes(&db, &mut body);
+        crate::transform::insert_temp_binds(&db, &mut body);
+        crate::transform::canonicalize_zero_sized(&db, &mut body);
+
+        let func = crate::ir::MirFunction { body, ..lowered };
+
+        assert!(
+            !has_invalid_scalar_deref(&func.body),
+            "invalid scalar deref should not exist after repr lowering"
+        );
+
+        let func = crate::lower_module(&db, top_mod)
+            .expect("module should lower")
+            .functions
+            .into_iter()
+            .find(|func| func.symbol_name.contains("newtype_u8_roundtrip"))
+            .expect("expected `newtype_u8_roundtrip`");
+
+        let return_value = match &func.body.blocks[0].terminator {
+            crate::ir::Terminator::Return {
+                value: Some(value), ..
+            } => *value,
+            other => panic!("expected return terminator, got {other:?}"),
+        };
+
+        assert_eq!(func.body.value(return_value).ty.pretty_print(&db), "u8");
+        assert!(
+            func.body.value_pointer_info(return_value).is_none(),
+            "scalar transparent field reads must not retain handle pointer metadata",
+        );
+    }
+
+    #[test]
+    fn effect_handle_field_deref_places_resolve() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///effect_handle_field_deref_places_resolve.fe").unwrap();
+        let file = db.workspace().touch(
+            &mut db,
+            url,
+            Some(
+                include_str!("../../../codegen/tests/fixtures/effect_handle_field_deref.fe")
+                    .to_owned(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let module = crate::lower_module(&db, top_mod).expect("module should lower");
+        let core = crate::CoreLib::new(&db, top_mod.scope());
+
+        for func in &module.functions {
+            for (bb_idx, block) in func.body.blocks.iter().enumerate() {
+                for inst in &block.insts {
+                    let unresolved = match inst {
+                        crate::ir::MirInst::Assign {
+                            rvalue: Rvalue::Load { place },
+                            ..
+                        }
+                        | crate::ir::MirInst::Store { place, .. }
+                        | crate::ir::MirInst::InitAggregate { place, .. }
+                        | crate::ir::MirInst::SetDiscriminant { place, .. } => {
+                            crate::repr::resolve_place(
+                                &db,
+                                &core,
+                                &func.body.values,
+                                &func.body.locals,
+                                place,
+                            )
+                            .is_none()
+                            .then_some(place)
+                        }
+                        crate::ir::MirInst::Assign { .. }
+                        | crate::ir::MirInst::BindValue { .. } => None,
+                    };
+
+                    if let Some(place) = unresolved {
+                        let base = func.body.value(place.base);
+                        panic!(
+                            "unresolved place in {} bb{}: {:?} (base ty={}, repr={:?}, origin={:?}, pointer_info={:?})",
+                            func.symbol_name,
+                            bb_idx,
+                            place,
+                            base.ty.pretty_print(&db),
+                            base.repr,
+                            base.origin,
+                            func.body.value_pointer_info(place.base),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn method_receiver_coercion_loads_through_ref_pointer_like_newtype() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse(
+            "file:///method_receiver_coercion_loads_through_ref_pointer_like_newtype.fe",
+        )
+        .unwrap();
+        let file = db.workspace().touch(
+            &mut db,
+            url,
+            Some(
+                include_str!(
+                    "../../../fe/tests/fixtures/fe_test/view_param_local_ref_take_reverse.fe"
+                )
+                .to_owned(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let module = crate::lower_module(&db, top_mod).expect("module should lower");
+
+        let func = module
+            .functions
+            .iter()
+            .find(|func| {
+                func.symbol_name.contains("take_i__t__")
+                    && func.symbol_name.contains("get__u256_Reverse")
+            })
+            .expect("expected Take<Reverse>::get specialization");
+
+        let block = &func.body.blocks[0];
+        let ref_reverse_local = block
+            .insts
+            .iter()
+            .find_map(|inst| match inst {
+                crate::ir::MirInst::Assign {
+                    dest: Some(local),
+                    rvalue: Rvalue::Load { .. },
+                    ..
+                } if func.body.local(*local).ty.pretty_print(&db)
+                    == "ref Reverse<u256, [u256; 8]>" =>
+                {
+                    Some(*local)
+                }
+                _ => None,
+            })
+            .expect("expected loaded `ref Reverse` local");
+
+        let reverse_call_receiver = block
+            .insts
+            .iter()
+            .find_map(|inst| match inst {
+                crate::ir::MirInst::Assign {
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } if call.resolved_name.as_deref().is_some_and(|name| {
+                    name.contains("reverse_i__t__") && name.contains("get__u256__u256__8__")
+                }) =>
+                {
+                    call.args.first().copied()
+                }
+                _ => None,
+            })
+            .expect("expected Reverse::get call result");
+        let reverse_call_receiver_local = match func.body.value(reverse_call_receiver).origin {
+            ValueOrigin::Local(local) => local,
+            ValueOrigin::TransparentCast { value } => {
+                let Some((CapabilityKind::View, inner_ty)) =
+                    func.body.value(reverse_call_receiver).ty.as_capability(&db)
+                else {
+                    panic!(
+                        "expected Reverse receiver arg to be a local or view-cast local, got {:?}",
+                        func.body.value(reverse_call_receiver).origin
+                    );
+                };
+                assert_eq!(
+                    inner_ty.pretty_print(&db),
+                    "Reverse<u256, [u256; 8]>",
+                    "expected receiver view cast to target Reverse",
+                );
+                let ValueOrigin::Local(local) = func.body.value(value).origin else {
+                    panic!(
+                        "expected receiver view cast to wrap a local, got {:?}",
+                        func.body.value(value).origin
+                    );
+                };
+                local
+            }
+            _ => {
+                panic!(
+                    "expected Reverse receiver arg to be a local or view-cast local, got {:?}",
+                    func.body.value(reverse_call_receiver).origin
+                );
+            }
+        };
+
+        let receiver_load_place = block
+            .insts
+            .iter()
+            .find_map(|inst| match inst {
+                crate::ir::MirInst::Assign {
+                    dest: Some(local),
+                    rvalue: Rvalue::Load { place },
+                    ..
+                } if *local == reverse_call_receiver_local => Some(place),
+                _ => None,
+            })
+            .expect("expected Reverse receiver load");
+
+        let ValueOrigin::Local(local) = func.body.value(receiver_load_place.base).origin else {
+            panic!(
+                "expected Reverse receiver load to be rooted on the loaded `ref Reverse`, got {:?}",
+                func.body.value(receiver_load_place.base).origin
+            );
+        };
+        assert_eq!(
+            local, ref_reverse_local,
+            "receiver coercion must load through the `ref Reverse` local instead of reloading the original field",
+        );
+        assert!(
+            receiver_load_place
+                .projection
+                .iter()
+                .eq([Projection::Deref].iter()),
+            "receiver coercion should dereference the loaded `ref Reverse`",
+        );
+    }
+
+    #[test]
+    fn delegated_field_into_local_lowering_does_not_self_assign() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///delegated_field_into_local_lowering_does_not_self_assign.fe")
+            .unwrap();
+        let file = db.workspace().touch(
+            &mut db,
+            url,
+            Some(
+                include_str!(
+                    "../../../fe/tests/fixtures/fe_test/view_param_local_ref_take_reverse.fe"
+                )
+                .to_owned(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let module = crate::lower_module(&db, top_mod).expect("module should lower");
+
+        let func = module
+            .functions
+            .iter()
+            .find(|func| {
+                func.symbol_name.contains("take_i__t__")
+                    && func.symbol_name.contains("len__u256_Reverse")
+            })
+            .expect("expected Take<Reverse>::len specialization");
+
+        for block in &func.body.blocks {
+            for inst in &block.insts {
+                let crate::ir::MirInst::Assign {
+                    dest: Some(local),
+                    rvalue: Rvalue::Value(value),
+                    ..
+                } = inst
+                else {
+                    continue;
+                };
+
+                assert!(
+                    !matches!(
+                        func.body.value(*value).origin,
+                        ValueOrigin::Local(src_local) if src_local == *local
+                    ),
+                    "field/index delegation must not rewrite the RHS value into the destination local",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ref_to_by_ref_path_stays_a_place_ref_to_the_value_location() {
+        let mut db = DriverDataBase::default();
+        let url =
+            Url::parse("file:///ref_to_by_ref_path_stays_a_place_ref_to_the_value_location.fe")
+                .unwrap();
+        let file = db.workspace().touch(
+            &mut db,
+            url,
+            Some(
+                include_str!(
+                    "../../../fe/tests/fixtures/fe_test/view_param_local_ref_take_reverse.fe"
+                )
+                .to_owned(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let module = crate::lower_module(&db, top_mod).expect("module should lower");
+
+        let func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "sum_last4")
+            .expect("expected `sum_last4`");
+
+        let reverse_call_arg = func.body.blocks[0]
+            .insts
+            .iter()
+            .find_map(|inst| match inst {
+                crate::ir::MirInst::Assign {
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } if call
+                    .resolved_name
+                    .as_deref()
+                    .is_some_and(|name| name.contains("reverse_u256")) =>
+                {
+                    call.args.first().copied()
+                }
+                _ => None,
+            })
+            .expect("expected reverse_u256 call");
+
+        let value = func.body.value(reverse_call_arg);
+        let ValueOrigin::PlaceRef(place) = &value.origin else {
+            panic!(
+                "expected `ref arr` arg to lower as PlaceRef, got {:?}",
+                value.origin
+            );
+        };
+        assert_eq!(value.ty.pretty_print(&db), "ref [u256; 8]");
+        let ValueOrigin::Local(local) = func.body.value(place.base).origin else {
+            panic!(
+                "expected `ref arr` place root to be the parameter local, got {:?}",
+                func.body.value(place.base).origin
+            );
+        };
+        assert_eq!(func.body.local(local).ty.pretty_print(&db), "[u256; 8]");
+        assert!(
+            place.projection.is_empty(),
+            "`ref arr` should reuse the array location"
+        );
+        let core = crate::CoreLib::new(&db, top_mod.scope());
+        let resolved =
+            crate::repr::resolve_place(&db, &core, &func.body.values, &func.body.locals, place)
+                .expect("`ref arr` place should resolve");
+        assert_eq!(
+            resolved.final_state().ty.pretty_print(&db),
+            "[u256; 8]",
+            "`ref arr` should resolve to the array value location",
+        );
+        assert_eq!(
+            resolved.final_state().location_address_space(),
+            Some(AddressSpaceKind::Memory),
+            "`ref arr` should resolve as a memory location",
+        );
+        assert_eq!(
+            func.body.value(place.base).repr,
+            ValueRepr::Ref(AddressSpaceKind::Memory),
+            "the borrowed array root should stay by-reference",
+        );
+        assert_eq!(
+            func.body
+                .value_pointer_info(reverse_call_arg)
+                .expect("`ref arr` arg should preserve pointer metadata")
+                .target_ty
+                .expect("`ref arr` metadata should preserve pointee type")
+                .pretty_print(&db),
+            "[u256; 8]",
+        );
+        assert_eq!(
+            crate::repr::place_yields_location_value(
+                &db,
+                &core,
+                &func.body.values,
+                &func.body.locals,
+                place,
+                value.ty,
+                func.body.value_pointer_info(reverse_call_arg),
+            ),
+            Some(true),
+            "`ref arr` should be recognized as a location value by MIR",
+        );
+    }
+
+    #[test]
+    fn ref_to_pointer_like_local_keeps_an_explicit_place_ref() {
+        let mut db = DriverDataBase::default();
+        let url =
+            Url::parse("file:///ref_to_pointer_like_local_keeps_an_explicit_place_ref.fe").unwrap();
+        let file = db.workspace().touch(
+            &mut db,
+            url,
+            Some(
+                include_str!(
+                    "../../../fe/tests/fixtures/fe_test/view_param_local_ref_take_reverse.fe"
+                )
+                .to_owned(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let module = crate::lower_module(&db, top_mod).expect("module should lower");
+
+        let func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "sum_last4")
+            .expect("expected `sum_last4`");
+
+        let take_call_arg = func.body.blocks[0]
+            .insts
+            .iter()
+            .find_map(|inst| match inst {
+                crate::ir::MirInst::Assign {
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } if call
+                    .resolved_name
+                    .as_deref()
+                    .is_some_and(|name| name.contains("take_u256__Reverse")) =>
+                {
+                    call.args.get(1).copied()
+                }
+                _ => None,
+            })
+            .expect("expected take_u256 call");
+
+        let value = func.body.value(take_call_arg);
+        let ValueOrigin::PlaceRef(place) = &value.origin else {
+            panic!(
+                "expected `ref rev` arg to lower as PlaceRef, got {:?}",
+                value.origin
+            );
+        };
+        assert_eq!(value.ty.pretty_print(&db), "ref Reverse<u256, [u256; 8]>");
+        let ValueOrigin::PlaceRoot(local) = func.body.value(place.base).origin else {
+            panic!(
+                "expected `ref rev` to borrow the local slot for `rev`, got {:?}",
+                func.body.value(place.base).origin
+            );
+        };
+        assert_eq!(
+            func.body.local(local).ty.pretty_print(&db),
+            "Reverse<u256, [u256; 8]>"
+        );
+        assert!(
+            place.projection.is_empty(),
+            "`ref rev` should not dereference `rev`"
         );
     }
 

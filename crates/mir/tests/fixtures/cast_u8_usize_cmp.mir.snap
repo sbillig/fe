@@ -4,9 +4,9 @@ expression: mir_output
 ---
 fn cast_u8_usize_cmp(v0: [u8; 8], v1: usize, v2: usize) -> u8:
   bb0:
-    v3: u8 = load mem[v0][v1]
-    v4: bool = usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt(v2, v3)
-    br v4 bb1 bb2
+    v4: u8 = load mem[v0].*[v1]
+    v3: u8 = v4
+    br (v2 < v3) bb1 bb2
   bb1:
     ret 1
   bb2:

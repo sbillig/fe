@@ -9,20 +9,20 @@ type @__fe_MyStruct_0 = {i8, i8};
 
 func private %read_x(v0.*@__fe_MyStruct_0) -> i8 {
     block0:
-        v2.*i8 = gep v0 0.i256 0.i256;
-        v3.i256 = mload v2 i256;
-        v4.i8 = trunc v3 i8;
-        v6.*i8 = gep v0 0.i256 1.i256;
-        v7.i256 = mload v6 i256;
-        v8.i8 = trunc v7 i8;
-        (v9.i8, v10.i1) = uaddo v4 v8;
-        br v10 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        return v9;
+        v2.*i256 = gep v0 0.i256 0.i256;
+        v3.i256 = ptr_to_int v2 i256;
+        v4.*i8 = bitcast v2 *i8;
+        v5.i256 = mload v4 i256;
+        v6.i8 = trunc v5 i8;
+        v7.i256 = zext v6 i256;
+        v9.*i256 = gep v0 0.i256 1.i256;
+        v10.i256 = ptr_to_int v9 i256;
+        v11.*i8 = bitcast v9 *i8;
+        v12.i256 = mload v11 i256;
+        v13.i8 = trunc v12 i8;
+        v14.i256 = zext v13 i256;
+        v15.i256 = add v7 v14;
+        return v15;
 }
 
 func private %__fe_sonatina_entry() {

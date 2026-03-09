@@ -15,38 +15,56 @@ func private %token_params(v0.i8) -> *@__fe_tuple_0 {
     block1:
         v4.*i8 = evm_malloc 64.i256;
         v5.*@__fe_tuple_0 = bitcast v4 *@__fe_tuple_0;
-        v7.*i8 = gep v5 0.i256 0.i256;
-        v8.i256 = zext 18.i8 i256;
-        mstore v7 v8 i256;
-        v11.*i16 = gep v5 0.i256 1.i256;
-        v12.i256 = zext 30.i16 i256;
-        mstore v11 v12 i256;
+        v7.*i256 = gep v5 0.i256 0.i256;
+        v8.i256 = ptr_to_int v7 i256;
+        v9.*i8 = bitcast v7 *i8;
+        v10.i8 = trunc 18.i256 i8;
+        v11.i256 = zext v10 i256;
+        mstore v9 v11 i256;
+        v14.*i256 = gep v5 0.i256 1.i256;
+        v15.i256 = ptr_to_int v14 i256;
+        v16.*i8 = bitcast v14 *i8;
+        v17.i16 = trunc 30.i256 i16;
+        v18.i256 = zext v17 i256;
+        mstore v16 v18 i256;
         jump block2;
 
     block2:
-        v13.*@__fe_tuple_0 = phi (v5 block1) (v15 block3) (v23 block4);
-        return v13;
+        v19.*@__fe_tuple_0 = phi (v5 block1) (v21 block3) (v35 block4);
+        return v19;
 
     block3:
-        v14.*i8 = evm_malloc 64.i256;
-        v15.*@__fe_tuple_0 = bitcast v14 *@__fe_tuple_0;
-        v17.*i8 = gep v15 0.i256 0.i256;
-        v18.i256 = zext 6.i8 i256;
-        mstore v17 v18 i256;
-        v20.*i16 = gep v15 0.i256 1.i256;
-        v21.i256 = zext 5.i16 i256;
-        mstore v20 v21 i256;
+        v20.*i8 = evm_malloc 64.i256;
+        v21.*@__fe_tuple_0 = bitcast v20 *@__fe_tuple_0;
+        v23.*i256 = gep v21 0.i256 0.i256;
+        v24.i256 = ptr_to_int v23 i256;
+        v25.*i8 = bitcast v23 *i8;
+        v26.i8 = trunc 6.i256 i8;
+        v27.i256 = zext v26 i256;
+        mstore v25 v27 i256;
+        v29.*i256 = gep v21 0.i256 1.i256;
+        v30.i256 = ptr_to_int v29 i256;
+        v31.*i8 = bitcast v29 *i8;
+        v32.i16 = trunc 5.i256 i16;
+        v33.i256 = zext v32 i256;
+        mstore v31 v33 i256;
         jump block2;
 
     block4:
-        v22.*i8 = evm_malloc 64.i256;
-        v23.*@__fe_tuple_0 = bitcast v22 *@__fe_tuple_0;
-        v24.*i8 = gep v23 0.i256 0.i256;
-        v25.i256 = zext 18.i8 i256;
-        mstore v24 v25 i256;
-        v27.*i16 = gep v23 0.i256 1.i256;
-        v28.i256 = zext 0.i16 i256;
-        mstore v27 v28 i256;
+        v34.*i8 = evm_malloc 64.i256;
+        v35.*@__fe_tuple_0 = bitcast v34 *@__fe_tuple_0;
+        v36.*i256 = gep v35 0.i256 0.i256;
+        v37.i256 = ptr_to_int v36 i256;
+        v38.*i8 = bitcast v36 *i8;
+        v39.i8 = trunc 18.i256 i8;
+        v40.i256 = zext v39 i256;
+        mstore v38 v40 i256;
+        v41.*i256 = gep v35 0.i256 1.i256;
+        v42.i256 = ptr_to_int v41 i256;
+        v43.*i8 = bitcast v41 *i8;
+        v44.i16 = trunc 0.i256 i16;
+        v45.i256 = zext v44 i256;
+        mstore v43 v45 i256;
         jump block2;
 
     block5:
@@ -77,14 +95,20 @@ func private %pack_config(v0.i8, v1.i1, v2.i16) -> i256 {
 func private %packed_token_config(v0.i8, v1.i1) -> i256 {
     block0:
         v2.*@__fe_tuple_0 = call %token_params v0;
-        v4.*i8 = gep v2 0.i256 0.i256;
-        v5.i256 = mload v4 i256;
-        v6.i8 = trunc v5 i8;
-        v8.*i16 = gep v2 0.i256 1.i256;
-        v9.i256 = mload v8 i256;
-        v10.i16 = trunc v9 i16;
-        v11.i256 = call %pack_config v6 v1 v10;
-        return v11;
+        v4.*i256 = gep v2 0.i256 0.i256;
+        v5.i256 = ptr_to_int v4 i256;
+        v6.*i8 = bitcast v4 *i8;
+        v7.i256 = mload v6 i256;
+        v8.i8 = trunc v7 i8;
+        v9.i256 = zext v8 i256;
+        v11.*i256 = gep v2 0.i256 1.i256;
+        v12.i256 = ptr_to_int v11 i256;
+        v13.*i8 = bitcast v11 *i8;
+        v14.i256 = mload v13 i256;
+        v15.i16 = trunc v14 i16;
+        v16.i256 = zext v15 i256;
+        v17.i256 = call %pack_config v9 v1 v16;
+        return v17;
 }
 
 func private %main() -> i256 {

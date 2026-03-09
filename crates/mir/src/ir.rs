@@ -261,9 +261,10 @@ pub(crate) fn try_value_address_space_in<'db>(
             try_value_address_space_in(values, locals, *value)
         }
         ValueOrigin::FieldPtr(field_ptr) => Some(field_ptr.addr_space),
-        ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
-            try_place_address_space_in(values, locals, place)
-        }
+        ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => value_data
+            .pointer_info
+            .map(|info| info.address_space)
+            .or_else(|| try_place_address_space_in(values, locals, place)),
         _ => None,
     }
 }
@@ -273,32 +274,67 @@ pub(crate) fn try_place_address_space_in<'db>(
     locals: &[LocalData<'db>],
     place: &Place<'db>,
 ) -> Option<AddressSpaceKind> {
-    if let Some((local, prefix)) = resolve_local_projection_root(values, place.base) {
-        let projection = prefix.concat(&place.projection);
-        if let Some(info) = lookup_local_pointer_leaf_info(locals, local, &projection) {
-            return Some(info.address_space);
+    let mut current_pointer_info = try_value_pointer_info_in(values, locals, place.base);
+    let mut local_root = resolve_local_projection_root(values, place.base);
+    let mut current_space = current_pointer_info
+        .map(|info| info.address_space)
+        .or_else(|| {
+            local_root
+                .as_ref()
+                .filter(|(_, path)| path.is_empty())
+                .and_then(|(local, _)| locals.get(local.index()).map(|local| local.address_space))
+        })
+        .or_else(|| match values.get(place.base.index())? {
+            value
+                if value.repr.is_ref()
+                    || matches!(
+                        value.origin,
+                        ValueOrigin::PlaceRoot(_)
+                            | ValueOrigin::PlaceRef(_)
+                            | ValueOrigin::FieldPtr(_)
+                    ) =>
+            {
+                try_value_address_space_in(values, locals, place.base)
+            }
+            _ => None,
+        });
+
+    for proj in place.projection.iter() {
+        match proj {
+            Projection::Deref => {
+                let deref_space = if let Some((local, path)) = &local_root {
+                    lookup_local_pointer_leaf_info(locals, *local, path)
+                        .map(|info| info.address_space)
+                        .or(current_pointer_info.map(|info| info.address_space))
+                        .or_else(|| {
+                            path.is_empty()
+                                .then(|| locals.get(local.index()).map(|local| local.address_space))
+                                .flatten()
+                        })
+                } else {
+                    current_pointer_info.map(|info| info.address_space)
+                }?;
+                current_space = Some(deref_space);
+                current_pointer_info = current_pointer_info.and_then(|info| {
+                    info.target_ty.map(|target_ty| PointerInfo {
+                        address_space: deref_space,
+                        target_ty: Some(target_ty),
+                    })
+                });
+                local_root = None;
+            }
+            _ => {
+                if let Some((local, path)) = &mut local_root {
+                    path.push(proj.clone());
+                    current_pointer_info = lookup_local_pointer_leaf_info(locals, *local, path);
+                } else {
+                    current_pointer_info = None;
+                }
+            }
         }
-        if let Some(info) = lookup_local_pointer_leaf_info(locals, local, &MirProjectionPath::new())
-        {
-            return Some(info.address_space);
-        }
-        return locals.get(local.index()).map(|local| local.address_space);
     }
 
-    let value_data = values.get(place.base.index())?;
-    match &value_data.origin {
-        ValueOrigin::TransparentCast { value } => {
-            try_value_address_space_in(values, locals, *value)
-        }
-        ValueOrigin::PlaceRef(inner) | ValueOrigin::MoveOut { place: inner } => {
-            try_place_address_space_in(values, locals, inner)
-        }
-        ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) => {
-            locals.get(local.index()).map(|local| local.address_space)
-        }
-        ValueOrigin::FieldPtr(field_ptr) => Some(field_ptr.addr_space),
-        _ => try_value_address_space_in(values, locals, place.base),
-    }
+    current_space
 }
 
 pub(crate) fn try_value_pointer_info_in<'db>(
@@ -318,8 +354,9 @@ pub(crate) fn try_value_pointer_info_in<'db>(
                         .then_some(value_data.ty),
                 }))
         }
-        ValueOrigin::TransparentCast { value } => try_value_pointer_info_in(values, locals, *value)
-            .or(value_data.pointer_info)
+        ValueOrigin::TransparentCast { value } => value_data
+            .pointer_info
+            .or_else(|| try_value_pointer_info_in(values, locals, *value))
             .or(value_data
                 .repr
                 .address_space()
@@ -328,22 +365,21 @@ pub(crate) fn try_value_pointer_info_in<'db>(
                     target_ty: matches!(value_data.repr, ValueRepr::Ref(_))
                         .then_some(value_data.ty),
                 })),
-        ValueOrigin::FieldPtr(field_ptr) => Some(PointerInfo {
+        ValueOrigin::FieldPtr(field_ptr) => value_data.pointer_info.or(Some(PointerInfo {
             address_space: field_ptr.addr_space,
             target_ty: None,
-        }),
-        ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
-            try_place_pointer_info_in(values, locals, place)
-                .or(value_data.pointer_info)
-                .or(value_data
-                    .repr
-                    .address_space()
-                    .map(|address_space| PointerInfo {
-                        address_space,
-                        target_ty: matches!(value_data.repr, ValueRepr::Ref(_))
-                            .then_some(value_data.ty),
-                    }))
-        }
+        })),
+        ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => value_data
+            .pointer_info
+            .or_else(|| try_place_pointer_info_in(values, locals, place))
+            .or(value_data
+                .repr
+                .address_space()
+                .map(|address_space| PointerInfo {
+                    address_space,
+                    target_ty: matches!(value_data.repr, ValueRepr::Ref(_))
+                        .then_some(value_data.ty),
+                })),
         _ => value_data
             .pointer_info
             .or(value_data
@@ -362,21 +398,35 @@ pub(crate) fn try_place_pointer_info_in<'db>(
     locals: &[LocalData<'db>],
     place: &Place<'db>,
 ) -> Option<PointerInfo<'db>> {
-    if let Some((local, prefix)) = resolve_local_projection_root(values, place.base) {
-        let projection = prefix.concat(&place.projection);
-        if let Some(info) = lookup_local_pointer_leaf_info(locals, local, &projection) {
-            return Some(info);
-        }
+    let mut current = try_value_pointer_info_in(values, locals, place.base);
+    let mut local_root = resolve_local_projection_root(values, place.base);
 
-        return projection
-            .is_empty()
-            .then(|| try_value_pointer_info_in(values, locals, place.base))?;
+    for proj in place.projection.iter() {
+        match proj {
+            Projection::Deref => {
+                let info = if let Some((local, path)) = &local_root {
+                    lookup_local_pointer_leaf_info(locals, *local, path).or(current)
+                } else {
+                    current
+                }?;
+                current = info.target_ty.map(|target_ty| PointerInfo {
+                    address_space: info.address_space,
+                    target_ty: Some(target_ty),
+                });
+                local_root = None;
+            }
+            _ => {
+                if let Some((local, path)) = &mut local_root {
+                    path.push(proj.clone());
+                    current = lookup_local_pointer_leaf_info(locals, *local, path);
+                } else if !place.projection.is_empty() {
+                    current = None;
+                }
+            }
+        }
     }
 
-    place
-        .projection
-        .is_empty()
-        .then(|| try_value_pointer_info_in(values, locals, place.base))?
+    current
 }
 
 pub(crate) fn lookup_local_pointer_leaf_info<'db>(

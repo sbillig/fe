@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/borrow_handles_readback.fe
 ---
@@ -9,11 +8,17 @@ target = "evm-ethereum-osaka"
 func private %borrow_handles_readback() -> i256 {
     block0:
         v0.*i256 = alloca i256;
-        v1.*i8 = bitcast v0 *i8;
-        mstore v1 0.i256 i256;
-        v3.*i256 = bitcast v1 *i256;
-        mstore v3 5.i256 i256;
-        return 5.i256;
+        v1.i256 = ptr_to_int v0 i256;
+        v3.*i8 = bitcast v0 *i8;
+        mstore v3 0.i256 i256;
+        v4.*i8 = bitcast v0 *i8;
+        v5.*i256 = bitcast v4 *i256;
+        v7.i256 = ptr_to_int v5 i256;
+        v8.*i8 = bitcast v5 *i8;
+        mstore v8 5.i256 i256;
+        v9.*i8 = bitcast v0 *i8;
+        v10.i256 = mload v9 i256;
+        return v10;
 }
 
 func private %__fe_sonatina_entry() {

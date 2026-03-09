@@ -17,15 +17,25 @@ func private %bit_ops(v0.i256, v1.i256) -> *@__fe_tuple_0 {
         v10.*i8 = evm_malloc 160.i256;
         v11.*@__fe_tuple_0 = bitcast v10 *@__fe_tuple_0;
         v13.*i256 = gep v11 0.i256 0.i256;
-        mstore v13 v2 i256;
-        v15.*i256 = gep v11 0.i256 1.i256;
-        mstore v15 v3 i256;
-        v16.*i256 = gep v11 0.i256 2.i256;
-        mstore v16 v4 i256;
-        v18.*i256 = gep v11 0.i256 3.i256;
-        mstore v18 v6 i256;
-        v20.*i256 = gep v11 0.i256 4.i256;
-        mstore v20 v8 i256;
+        v14.i256 = ptr_to_int v13 i256;
+        v15.*i8 = bitcast v13 *i8;
+        mstore v15 v2 i256;
+        v17.*i256 = gep v11 0.i256 1.i256;
+        v18.i256 = ptr_to_int v17 i256;
+        v19.*i8 = bitcast v17 *i8;
+        mstore v19 v3 i256;
+        v20.*i256 = gep v11 0.i256 2.i256;
+        v21.i256 = ptr_to_int v20 i256;
+        v22.*i8 = bitcast v20 *i8;
+        mstore v22 v4 i256;
+        v24.*i256 = gep v11 0.i256 3.i256;
+        v25.i256 = ptr_to_int v24 i256;
+        v26.*i8 = bitcast v24 *i8;
+        mstore v26 v6 i256;
+        v28.*i256 = gep v11 0.i256 4.i256;
+        v29.i256 = ptr_to_int v28 i256;
+        v30.*i8 = bitcast v28 *i8;
+        mstore v30 v8 i256;
         return v11;
 }
 

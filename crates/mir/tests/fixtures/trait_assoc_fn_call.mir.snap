@@ -1,28 +1,35 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
-assertion_line: 26
 expression: mir_output
 ---
 fn example() -> Bar:
   bb0:
+    v4: Bar = alloc mem
+    v6: Bar = alloc mem
+    v5: Bar = alloc mem
     v0: Bar = bar_h9f829bcd60910980_t_ha4fe9660e49389ad_make()
+    store mem[place_root(v4)] = v0
     v1: Bar = bar_h9f829bcd60910980_t_ha4fe9660e49389ad_make()
+    store mem[place_root(v5)] = v1
     v3: Bar = 0
     br true bb1 bb2
   bb1:
-    v3 = v0
+    v3 = move_out(mem[place_root(v4)])
     jmp bb3
   bb2:
-    v3 = v1
+    v3 = move_out(mem[place_root(v5)])
     jmp bb3
   bb3:
     v2: Bar = v3
-    ret v2
+    store mem[place_root(v6)] = v2
+    ret move_out(mem[place_root(v6)])
 
 fn f() -> Bar:
   bb0:
+    v1: Bar = alloc mem
     v0: Bar = bar_h9f829bcd60910980_t_ha4fe9660e49389ad_make()
-    ret v0
+    store mem[place_root(v1)] = v0
+    ret move_out(mem[place_root(v1)])
 
 fn bar_h9f829bcd60910980_t_ha4fe9660e49389ad_make() -> Bar:
   bb0:
