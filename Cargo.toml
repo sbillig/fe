@@ -20,6 +20,7 @@ mir = { path = "crates/mir", package = "fe-mir" }
 cranelift-entity = "0.115"
 url = "2.5.4"
 camino = "1.1.9"
+typed-path = "0.12.3"
 clap = { version = "4.5.26", features = ["derive"] }
 clap_complete = "4.5.65"
 codespan-reporting = "0.11"
@@ -29,6 +30,7 @@ derive_more = { version = "1.0", default-features = false, features = [
 ] }
 dir-test = "0.4"
 glob = "0.3.2"
+crossbeam-channel = "0.5.15"
 rustc-hash = "2.1.0"
 num-bigint = "0.4"
 num-traits = "0.2"
@@ -40,15 +42,15 @@ thin-vec = "0.2.14"
 smol_str = { version = "0.1", features = ["serde"] }
 serde-semver = "0.2.1"
 tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.19", default-features = false, features = ["std", "fmt", "env-filter"] }
 tracing-tree = "0.4.0"
 wasm-bindgen-test = "0.3"
 semver = "1.0.26"
 petgraph = "0.8"
-sonatina-ir = { git = "https://github.com/fe-lang/sonatina", rev = "6b5f2d53" }
-sonatina-triple = { git = "https://github.com/fe-lang/sonatina", rev = "6b5f2d53" }
-sonatina-codegen = { git = "https://github.com/fe-lang/sonatina", rev = "6b5f2d53" }
-sonatina-verifier = { git = "https://github.com/fe-lang/sonatina", rev = "6b5f2d53" }
+sonatina-ir = { git = "https://github.com/fe-lang/sonatina", rev = "74c797f" }
+sonatina-triple = { git = "https://github.com/fe-lang/sonatina", rev = "74c797f" }
+sonatina-codegen = { git = "https://github.com/fe-lang/sonatina", rev = "74c797f" }
+sonatina-verifier = { git = "https://github.com/fe-lang/sonatina", rev = "74c797f" }
 
 [profile.dev]
 # Set to 0 to make the build faster and debugging more difficult.

@@ -14,14 +14,14 @@ use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 use sonatina_ir::{
-    BlockId, GlobalVariableData, I256, Immediate, Linkage, Type, ValueId,
+    BlockId, GlobalVariableData, I256, Immediate, Linkage, Type, Value, ValueId,
     global_variable::GvInitializer,
     inst::{
         arith::{Add, Mul, Neg, Shl, Shr, Sub},
-        cast::{IntToPtr, PtrToInt, Sext, Trunc, Zext},
+        cast::{Bitcast, IntToPtr, PtrToInt, Sext, Trunc, Zext},
         cmp::{Eq, Gt, IsZero, Lt, Ne},
-        control_flow::{Br, Call, Jump, Return},
-        data::{Gep, Mload, Mstore, SymAddr, SymSize, SymbolRef},
+        control_flow::{Br, BrTable, Call, Jump, Return},
+        data::{Alloca, Gep, Mload, Mstore, SymAddr, SymSize, SymbolRef},
         evm::{
             EvmAddMod, EvmAddress, EvmBaseFee, EvmBlockHash, EvmCall, EvmCallValue,
             EvmCalldataCopy, EvmCalldataLoad, EvmCalldataSize, EvmCaller, EvmChainId, EvmCodeCopy,
@@ -77,7 +77,7 @@ pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 return Ok(());
             }
 
-            let result = lower_rvalue(ctx, rvalue)?;
+            let result = lower_rvalue(ctx, rvalue, *dest)?;
             if let (Some(dest_local), Some(result_val)) = (dest, result) {
                 let dest_var = ctx.local_vars.get(dest_local).copied().ok_or_else(|| {
                     LowerError::Internal(format!("missing SSA variable for local {dest_local:?}"))
@@ -128,6 +128,7 @@ pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
     rvalue: &mir::Rvalue<'db>,
+    dest_local: Option<mir::LocalId>,
 ) -> Result<Option<ValueId>, LowerError> {
     use mir::Rvalue;
 
@@ -407,6 +408,17 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                             ));
                         }
                         let size = lower_value(ctx, *size)?;
+                        if dest_local.is_some_and(|local| {
+                            let local_ty = ctx.body.local(local).ty;
+                            !local_ty.is_array(ctx.db) && !local_may_escape(ctx, local)
+                        }) && let Some(size_bytes) = const_usize_value(ctx.fb, size)
+                        {
+                            if size_bytes == 0 {
+                                return Ok(Some(ctx.fb.make_imm_value(I256::zero())));
+                            }
+                            let alloca_ty = ctx.fb.declare_array_type(Type::I8, size_bytes);
+                            return Ok(Some(emit_alloca_word_addr(ctx.fb, alloca_ty, ctx.is)));
+                        }
                         return Ok(Some(emit_evm_malloc_word_addr(ctx.fb, size, ctx.is)));
                     }
                     "evm_create_create_raw" => {
@@ -505,23 +517,26 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         }
         Rvalue::Intrinsic { op, args } => lower_intrinsic(ctx, *op, args),
         Rvalue::Load { place } => {
-            let addr = lower_place_address(ctx, place)?;
             let addr_space = ctx.body.place_address_space(place);
 
             let result = match addr_space {
                 AddressSpaceKind::Memory => {
-                    let load = Mload::new(ctx.is, addr, Type::I256);
+                    let ptr_addr = lower_place_memory_ptr(ctx, place)?;
+                    let load = Mload::new(ctx.is, ptr_addr, Type::I256);
                     ctx.fb.insert_inst(load, Type::I256)
                 }
                 AddressSpaceKind::Storage => {
+                    let addr = lower_place_address(ctx, place)?;
                     let load = EvmSload::new(ctx.is, addr);
                     ctx.fb.insert_inst(load, Type::I256)
                 }
                 AddressSpaceKind::TransientStorage => {
+                    let addr = lower_place_address(ctx, place)?;
                     let load = EvmTload::new(ctx.is, addr);
                     ctx.fb.insert_inst(load, Type::I256)
                 }
                 AddressSpaceKind::Calldata => {
+                    let addr = lower_place_address(ctx, place)?;
                     let load = EvmCalldataLoad::new(ctx.is, addr);
                     ctx.fb.insert_inst(load, Type::I256)
                 }
@@ -880,6 +895,18 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     op: IntrinsicOp,
     args: &[mir::ValueId],
 ) -> Result<Option<ValueId>, LowerError> {
+    if matches!(op, IntrinsicOp::CurrentCodeRegionLen) {
+        if !args.is_empty() {
+            return Err(LowerError::Internal(
+                "current_code_region_len requires 0 arguments".to_string(),
+            ));
+        }
+        return Ok(Some(ctx.fb.insert_inst(
+            SymSize::new(ctx.is, SymbolRef::CurrentSection),
+            Type::I256,
+        )));
+    }
+
     if matches!(
         op,
         IntrinsicOp::CodeRegionOffset | IntrinsicOp::CodeRegionLen
@@ -1046,7 +1073,9 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 .insert_inst_no_result(EvmCodeCopy::new(ctx.is, *dst, *offset, *len));
             Ok(None)
         }
-        IntrinsicOp::CodeRegionOffset | IntrinsicOp::CodeRegionLen => {
+        IntrinsicOp::CodeRegionOffset
+        | IntrinsicOp::CodeRegionLen
+        | IntrinsicOp::CurrentCodeRegionLen => {
             unreachable!("code region intrinsics are handled in the early return above")
         }
         IntrinsicOp::Keccak => {
@@ -1429,7 +1458,10 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             ctx.gep_name_counter,
         )
     {
-        return lower_place_address_gep(ctx, place, base_val, current_ty, sonatina_ty);
+        let gep_ptr = lower_place_address_gep(ctx, place, base_val, current_ty, sonatina_ty)?;
+        return Ok(ctx
+            .fb
+            .insert_inst(PtrToInt::new(ctx.is, gep_ptr, Type::I256), Type::I256));
     }
 
     // Fall back to manual offset arithmetic
@@ -1446,10 +1478,9 @@ fn lower_place_address_gep<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 ) -> Result<ValueId, LowerError> {
     let ptr_ty = ctx.fb.ptr_type(base_sonatina_ty);
 
-    // IntToPtr: cast I256 base address to typed pointer
-    let typed_ptr = ctx
-        .fb
-        .insert_inst(IntToPtr::new(ctx.is, base_val, ptr_ty), ptr_ty);
+    // Reuse pointer sources from `ptr_to_int` when possible to avoid pointless
+    // `ptr_to_int -> int_to_ptr` round-trips before GEP.
+    let typed_ptr = coerce_word_addr_to_ptr(ctx, base_val, ptr_ty);
 
     // Build GEP index list, tracking types through the chain
     let mut gep_values: SmallVec<[ValueId; 8]> = SmallVec::new();
@@ -1503,12 +1534,47 @@ fn lower_place_address_gep<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         .fb
         .insert_inst(Gep::new(ctx.is, gep_values), result_ptr_ty);
 
-    // PtrToInt: cast back to I256 for mload/mstore
-    let result = ctx
-        .fb
-        .insert_inst(PtrToInt::new(ctx.is, gep_result, Type::I256), Type::I256);
+    Ok(gep_result)
+}
 
-    Ok(result)
+fn lower_place_memory_ptr<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    place: &Place<'db>,
+) -> Result<ValueId, LowerError> {
+    let base_val = lower_value(ctx, place.base)?;
+    if place.projection.is_empty() {
+        let word_ptr_ty = ctx.fb.ptr_type(Type::I256);
+        return Ok(coerce_word_addr_to_ptr(ctx, base_val, word_ptr_ty));
+    }
+
+    let base_value = ctx.body.values.get(place.base.index()).ok_or_else(|| {
+        LowerError::Internal(format!(
+            "unknown MIR place base value {}",
+            place.base.index()
+        ))
+    })?;
+    let current_ty = base_value.ty;
+    if is_erased_runtime_ty(ctx.db, ctx.target_layout, current_ty) {
+        let word_ptr_ty = ctx.fb.ptr_type(Type::I256);
+        return Ok(coerce_word_addr_to_ptr(ctx, base_val, word_ptr_ty));
+    }
+
+    if projections_eligible_for_gep(place)
+        && let Some(sonatina_ty) = fe_ty_to_sonatina(
+            ctx.fb,
+            ctx.db,
+            ctx.target_layout,
+            current_ty,
+            ctx.gep_type_cache,
+            ctx.gep_name_counter,
+        )
+    {
+        return lower_place_address_gep(ctx, place, base_val, current_ty, sonatina_ty);
+    }
+
+    let addr = lower_place_address_arithmetic(ctx, place, base_val, current_ty, false)?;
+    let word_ptr_ty = ctx.fb.ptr_type(Type::I256);
+    Ok(coerce_word_addr_to_ptr(ctx, addr, word_ptr_ty))
 }
 
 /// Resolves the sonatina type of a struct field by index.
@@ -1744,8 +1810,6 @@ pub(super) fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             let discr_val = lower_value(ctx, *discr)?;
             let default_block = ctx.block_map[default];
 
-            // NOTE: Sonatina's current EVM backend `BrTable` lowering is broken (it does not
-            // compare against the scrutinee). Lower to a chain of `Eq` + `Br` instead.
             if targets.is_empty() {
                 ctx.fb
                     .insert_inst_no_result(Jump::new(ctx.is, default_block));
@@ -1761,28 +1825,12 @@ pub(super) fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 cases.push((value, dest));
             }
 
-            // Create additional compare blocks as needed.
-            let mut compare_blocks = Vec::with_capacity(cases.len().saturating_sub(1));
-            for _ in 0..cases.len().saturating_sub(1) {
-                compare_blocks.push(ctx.fb.append_block());
-            }
-
-            for (case_idx, (case_value, case_dest)) in cases.into_iter().enumerate() {
-                if case_idx > 0 {
-                    ctx.fb.switch_to_block(compare_blocks[case_idx - 1]);
-                }
-
-                let else_dest = if case_idx + 1 < compare_blocks.len() + 1 {
-                    compare_blocks[case_idx]
-                } else {
-                    default_block
-                };
-                let cond = ctx
-                    .fb
-                    .insert_inst(Eq::new(ctx.is, discr_val, case_value), Type::I1);
-                ctx.fb
-                    .insert_inst_no_result(Br::new(ctx.is, cond, case_dest, else_dest));
-            }
+            ctx.fb.insert_inst_no_result(BrTable::new(
+                ctx.is,
+                discr_val,
+                Some(default_block),
+                cases,
+            ));
         }
         Terminator::TerminatingCall { call, .. } => match call {
             mir::TerminatingCall::Call(call) => {
@@ -1905,12 +1953,30 @@ fn lower_alloc<C: sonatina_ir::func_cursor::FuncCursor>(
         return Ok(ctx.fb.make_imm_value(I256::zero()));
     }
 
-    // Use Sonatina's EvmMalloc to allocate memory. This delegates memory management
-    // to Sonatina's codegen, avoiding conflicts with its stack frame handling.
-    let size_val = ctx.fb.make_imm_value(I256::from(size_bytes as u64));
-    let ptr = emit_evm_malloc_word_addr(ctx.fb, size_val, ctx.is);
+    // TODO: Remove this fallback once array stack allocations are proven safe across
+    // ref/reborrow call paths. Without this guard, `view_param_local_ref_take_reverse`
+    // can regress at runtime when `[i256; 8]` lowers to `alloca`.
+    if alloc_ty.is_array(ctx.db) {
+        let size_val = ctx.fb.make_imm_value(I256::from(size_bytes as u64));
+        return Ok(emit_evm_malloc_word_addr(ctx.fb, size_val, ctx.is));
+    }
 
-    Ok(ptr)
+    if local_may_escape(ctx, dest) {
+        let size_val = ctx.fb.make_imm_value(I256::from(size_bytes as u64));
+        return Ok(emit_evm_malloc_word_addr(ctx.fb, size_val, ctx.is));
+    }
+
+    let alloca_ty = fe_ty_to_sonatina(
+        ctx.fb,
+        ctx.db,
+        ctx.target_layout,
+        alloc_ty,
+        ctx.gep_type_cache,
+        ctx.gep_name_counter,
+    )
+    .unwrap_or_else(|| ctx.fb.declare_array_type(Type::I8, size_bytes));
+
+    Ok(emit_alloca_word_addr(ctx.fb, alloca_ty, ctx.is))
 }
 
 fn lower_store_inst<'db, C: sonatina_ir::func_cursor::FuncCursor>(
@@ -1944,17 +2010,19 @@ fn store_word_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     place: &Place<'db>,
     val: ValueId,
 ) -> Result<(), LowerError> {
-    let addr = lower_place_address(ctx, place)?;
     match ctx.body.place_address_space(place) {
         AddressSpaceKind::Memory => {
+            let ptr_addr = lower_place_memory_ptr(ctx, place)?;
             ctx.fb
-                .insert_inst_no_result(Mstore::new(ctx.is, addr, val, Type::I256));
+                .insert_inst_no_result(Mstore::new(ctx.is, ptr_addr, val, Type::I256));
         }
         AddressSpaceKind::Storage => {
+            let addr = lower_place_address(ctx, place)?;
             ctx.fb
                 .insert_inst_no_result(EvmSstore::new(ctx.is, addr, val));
         }
         AddressSpaceKind::TransientStorage => {
+            let addr = lower_place_address(ctx, place)?;
             ctx.fb
                 .insert_inst_no_result(EvmTstore::new(ctx.is, addr, val));
         }
@@ -1974,18 +2042,25 @@ fn load_place_typed<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         return Ok(ctx.fb.make_imm_value(I256::zero()));
     }
 
-    let addr = lower_place_address(ctx, place)?;
     let raw = match ctx.body.place_address_space(place) {
-        AddressSpaceKind::Memory => ctx
-            .fb
-            .insert_inst(Mload::new(ctx.is, addr, Type::I256), Type::I256),
-        AddressSpaceKind::Storage => ctx.fb.insert_inst(EvmSload::new(ctx.is, addr), Type::I256),
+        AddressSpaceKind::Memory => {
+            let ptr_addr = lower_place_memory_ptr(ctx, place)?;
+            ctx.fb
+                .insert_inst(Mload::new(ctx.is, ptr_addr, Type::I256), Type::I256)
+        }
+        AddressSpaceKind::Storage => {
+            let addr = lower_place_address(ctx, place)?;
+            ctx.fb.insert_inst(EvmSload::new(ctx.is, addr), Type::I256)
+        }
         AddressSpaceKind::TransientStorage => {
+            let addr = lower_place_address(ctx, place)?;
             ctx.fb.insert_inst(EvmTload::new(ctx.is, addr), Type::I256)
         }
-        AddressSpaceKind::Calldata => ctx
-            .fb
-            .insert_inst(EvmCalldataLoad::new(ctx.is, addr), Type::I256),
+        AddressSpaceKind::Calldata => {
+            let addr = lower_place_address(ctx, place)?;
+            ctx.fb
+                .insert_inst(EvmCalldataLoad::new(ctx.is, addr), Type::I256)
+        }
     };
     Ok(apply_from_word(ctx.fb, ctx.db, raw, loaded_ty, ctx.is))
 }
@@ -2198,4 +2273,71 @@ fn lower_const_aggregate<C: sonatina_ir::func_cursor::FuncCursor>(
         .insert_inst_no_result(EvmCodeCopy::new(ctx.is, ptr, code_offset, code_size));
 
     Ok(ptr)
+}
+
+fn emit_alloca_word_addr<C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    alloca_ty: Type,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> ValueId {
+    let ptr_ty = fb.ptr_type(alloca_ty);
+    let ptr = fb.insert_inst(Alloca::new(is, alloca_ty), ptr_ty);
+    fb.insert_inst(PtrToInt::new(is, ptr, Type::I256), Type::I256)
+}
+
+fn const_usize_value<C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &sonatina_ir::builder::FunctionBuilder<C>,
+    value: ValueId,
+) -> Option<usize> {
+    let imm = fb.func.dfg.value_imm(value)?;
+    if imm.is_negative() {
+        return None;
+    }
+    Some(imm.as_usize())
+}
+
+fn local_may_escape<C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &LowerCtx<'_, '_, C>,
+    local: mir::LocalId,
+) -> bool {
+    ctx.ptr_escape_summary
+        .and_then(|summary| summary.local_alloc_may_escape.get(local.index()))
+        .copied()
+        .unwrap_or(true)
+}
+
+fn coerce_word_addr_to_ptr<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    addr: ValueId,
+    ptr_ty: Type,
+) -> ValueId {
+    if let Some(from_ptr) = ptr_source_from_word_addr(ctx, addr) {
+        return bitcast_ptr(ctx, from_ptr, ptr_ty);
+    }
+
+    ctx.fb
+        .insert_inst(IntToPtr::new(ctx.is, addr, ptr_ty), ptr_ty)
+}
+
+fn ptr_source_from_word_addr<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    value: ValueId,
+) -> Option<ValueId> {
+    let Value::Inst { inst, .. } = ctx.fb.func.dfg.value(value) else {
+        return None;
+    };
+    let ptr_to_int = sonatina_ir::inst::downcast::<&PtrToInt>(ctx.is, ctx.fb.func.dfg.inst(*inst))?;
+    Some(*ptr_to_int.from())
+}
+
+fn bitcast_ptr<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    ptr: ValueId,
+    ptr_ty: Type,
+) -> ValueId {
+    if ctx.fb.type_of(ptr) == ptr_ty {
+        return ptr;
+    }
+    ctx.fb
+        .insert_inst(Bitcast::new(ctx.is, ptr, ptr_ty), ptr_ty)
 }

@@ -1,5 +1,6 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
+assertion_line: 26
 expression: mir_output
 ---
 fn __LayoutHoles_recv_0_0(v0: Set, v1: u256, v2: u256) -> ():
@@ -49,16 +50,6 @@ fn __LayoutHoles_runtime() -> ():
     v7: Get = get_h7c52564759be682_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v5)
     v8: u256 = __LayoutHoles_recv_0_1(v7, v1, v3)
     terminate return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f((), v8)
-
-fn __LayoutHoles_init_code_offset() -> u256:
-  bb0:
-    v0: u256 = code_region_offset(func_item(__LayoutHoles_init))
-    ret v0
-
-fn __LayoutHoles_init_code_len() -> u256:
-  bb0:
-    v0: u256 = code_region_len(func_item(__LayoutHoles_init))
-    ret v0
 
 fn storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__u256_u256_2__7d7bd47f3e4876cc(v0: StorageMap<u256, u256, 2>, v1: u256, v2: u256) -> ():
   bb0:
@@ -314,7 +305,7 @@ fn soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallD
     v4: u256 = load mem[&mem[v0].0].1
     v3: u256 = (v4 + 32)
     v5: u256 = load mem[&mem[v0].0].1
-    br ((v3 < v5) || (v3 > v1)) bb1 bb2
+    br (v3 < v5) bb1 bb3
   bb1:
     terminate revert(0, 0)
   bb2:
@@ -323,6 +314,8 @@ fn soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallD
     v6: u256 = calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v7, v8)
     store mem[&mem[v0].0].1 = v3
     ret v6
+  bb3:
+    br (v3 > v1) bb1 bb2
 
 fn solencoder_h1b9228b90dad6928_new() -> SolEncoder:
   bb0:

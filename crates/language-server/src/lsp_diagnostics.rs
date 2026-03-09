@@ -2,7 +2,7 @@ use async_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range, Url}
 use camino::Utf8Path;
 use codespan_reporting::files as cs_files;
 use common::{
-    diagnostics::CompleteDiagnostic,
+    diagnostics::{CompleteDiagnostic, cmp_complete_diagnostics},
     file::{File, IngotFileKind},
     ingot::IngotKind,
 };
@@ -22,6 +22,18 @@ use hir::lower::map_file_to_mod;
 use rustc_hash::FxHashMap;
 
 use crate::util::diag_to_lsp;
+
+/// Test-only latch: set to `true` to force the next
+/// `handle_files_need_diagnostics` call to panic (simulating an analysis-pass
+/// crash). The flag is consumed atomically (swap to false), so only one call
+/// panics per arm.
+///
+/// The check lives in `handle_files_need_diagnostics` (handlers.rs), not in
+/// `diagnostics_for_ingot`, so unit tests that call `diagnostics_for_ingot`
+/// directly never interact with the latch — only the mock LSP test path does.
+#[cfg(test)]
+pub(crate) static FORCE_DIAGNOSTIC_PANIC: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Wrapper type to implement codespan Files trait
 #[allow(dead_code)]
@@ -46,6 +58,7 @@ impl LspDiagnostics for DriverDataBase {
             .filter(|(_, f)| matches!(f.kind(self), Some(IngotFileKind::Source)))
             .count();
 
+        let mut hir_has_errors = false;
         for (url, file) in ingot_files.iter() {
             if !matches!(file.kind(self), Some(IngotFileKind::Source)) {
                 continue;
@@ -68,10 +81,13 @@ impl LspDiagnostics for DriverDataBase {
                 .iter()
                 .map(|d| d.to_complete(self).clone())
                 .collect();
-            finalized_diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
-                std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
-                ord => ord,
-            });
+            if finalized_diags
+                .iter()
+                .any(|d| d.severity == common::diagnostics::Severity::Error)
+            {
+                hir_has_errors = true;
+            }
+            finalized_diags.sort_by(cmp_complete_diagnostics);
             for diag in finalized_diags {
                 let lsp_diags = diag_to_lsp(self, diag).clone();
                 for (uri, more_diags) in lsp_diags {
@@ -82,18 +98,36 @@ impl LspDiagnostics for DriverDataBase {
         }
 
         let t_mir = std::time::Instant::now();
-        // Skip MIR diagnostics for ingots with no modules (e.g. deleted ingots
-        // that are still referenced in the dependency graph).
-        let mut mir_diags = if ingot.module_tree(self).root_data().is_some() {
-            self.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::TemplatesOnly)
+        // Skip MIR diagnostics when HIR already has errors: MIR assumes HIR is
+        // sound and panics on broken input. Also skip for ingots with no modules.
+        let mut mir_diags = if !hir_has_errors && ingot.module_tree(self).root_data().is_some() {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::TemplatesOnly)
+            })) {
+                Ok(diags) => diags,
+                Err(panic_info) => {
+                    if panic_info.is::<salsa::Cancelled>() {
+                        std::panic::resume_unwind(panic_info);
+                    }
+                    let msg = panic_info
+                        .downcast_ref::<&str>()
+                        .copied()
+                        .or_else(|| panic_info.downcast_ref::<String>().map(|s| s.as_str()))
+                        .unwrap_or("<non-string panic>");
+                    tracing::error!("MIR diagnostics panicked (skipping): {msg}");
+                    // Intentional degradation: return empty MIR diagnostics rather
+                    // than letting the panic propagate to the outer handler and
+                    // losing the HIR diagnostics we already collected. The outer
+                    // catch_unwind in handle_files_need_diagnostics is the safety
+                    // net for panics that originate before we have any HIR results.
+                    Vec::new()
+                }
+            }
         } else {
             Vec::new()
         };
         tracing::debug!("[fe:timing]  MIR diagnostics: {:?}", t_mir.elapsed());
-        mir_diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
-            std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
-            ord => ord,
-        });
+        mir_diags.sort_by(cmp_complete_diagnostics);
         for diag in mir_diags {
             let lsp_diags = diag_to_lsp(self, diag).clone();
             for (uri, more_diags) in lsp_diags {

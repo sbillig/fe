@@ -292,15 +292,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
                 match op {
                     hir::hir_def::expr::UnOp::Mut | hir::hir_def::expr::UnOp::Ref => {
-                        let Some(place) = self.place_for_borrow_expr(*inner) else {
-                            panic!("borrow operand must lower to a place");
-                        };
-                        let space = self.value_address_space(place.base);
-                        let value_ty = self.builder.body.value(value_id).ty;
-                        self.builder.body.values[value_id.index()].origin =
-                            ValueOrigin::PlaceRef(place);
-                        self.builder.body.values[value_id.index()].repr =
-                            self.value_repr_for_ty(value_ty, space);
+                        if let Some(place) = self.place_for_borrow_expr(*inner) {
+                            let space = self.value_address_space(place.base);
+                            let value_ty = self.builder.body.value(value_id).ty;
+                            self.builder.body.values[value_id.index()].origin =
+                                ValueOrigin::PlaceRef(place);
+                            self.builder.body.values[value_id.index()].repr =
+                                self.value_repr_for_ty(value_ty, space);
+                        } else {
+                            let _ = self.lower_expr(*inner);
+                        }
                     }
                     _ => {
                         let _ = self.lower_expr(*inner);
@@ -379,11 +380,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let root_value = self.builder.body.value(root);
-        if root_value.ty.as_capability(self.db).is_some() {
-            match crate::repr::repr_kind_for_ty(self.db, &self.core, root_value.ty) {
-                crate::repr::ReprKind::Zst | crate::repr::ReprKind::Word => return false,
-                crate::repr::ReprKind::Ptr(_) | crate::repr::ReprKind::Ref => {}
-            }
+        match crate::repr::repr_kind_for_ty(self.db, &self.core, root_value.ty) {
+            crate::repr::ReprKind::Zst | crate::repr::ReprKind::Word => return false,
+            crate::repr::ReprKind::Ptr(_) | crate::repr::ReprKind::Ref => {}
         }
         matches!(
             root_value.origin,
@@ -1267,7 +1266,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         // Handle ByPlace: resolve binding and materialize as needed
         if resolved_arg.pass_mode == EffectPassMode::ByPlace {
             let EffectArg::Place(place) = &resolved_arg.arg else {
-                return self.default_effect_arg();
+                panic!("invalid effect argument for ByPlace: {resolved_arg:?}");
             };
             let PlaceBase::Binding(binding) = place.base;
 
@@ -1278,7 +1277,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             if matches!(binding, LocalBinding::EffectParam { .. }) {
                 let value = self
                     .binding_value(binding)
-                    .unwrap_or_else(|| self.synthetic_u256(BigUint::from(0u8)));
+                    .unwrap_or_else(|| panic!("missing value for effect binding `{binding:?}`"));
                 return value;
             }
 
@@ -1289,7 +1288,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             };
 
             let Some(local) = self.local_for_binding(binding) else {
-                return self.default_effect_arg();
+                panic!("missing local for effect binding `{binding:?}`");
             };
 
             let value_repr = self.value_repr_for_ty(binding_ty, addr_space);
@@ -1301,29 +1300,24 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 return value;
             }
 
-            // Memory provider: materialize in temp place
-            if matches!(addr_space, AddressSpaceKind::Memory) {
-                let initial =
-                    self.alloc_value(binding_ty, ValueOrigin::Local(local), ValueRepr::Word);
-                let (addr_value, addr_place) = self.materialize_value_in_temp_place(
-                    binding_ty,
-                    initial,
-                    AddressSpaceKind::Memory,
-                    "eff",
-                );
-                if binding.is_mut() {
-                    effect_writebacks.push((local, addr_place));
-                }
-                return addr_value;
+            // Memory provider: materialize in temp place.
+            let initial = self.alloc_value(binding_ty, ValueOrigin::Local(local), ValueRepr::Word);
+            let (addr_value, addr_place) = self.materialize_value_in_temp_place(
+                binding_ty,
+                initial,
+                AddressSpaceKind::Memory,
+                "eff",
+            );
+            if binding.is_mut() {
+                effect_writebacks.push((local, addr_place));
             }
-
-            return self.default_effect_arg();
+            return addr_value;
         }
 
         // Handle ByTempPlace: lower value and materialize if needed
         if resolved_arg.pass_mode == EffectPassMode::ByTempPlace {
             let EffectArg::Value(expr_id) = &resolved_arg.arg else {
-                return self.default_effect_arg();
+                panic!("invalid effect argument for ByTempPlace: {resolved_arg:?}");
             };
 
             let value = self.lower_expr(*expr_id);
@@ -1348,19 +1342,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 EffectArg::Value(expr_id) => self.lower_expr(*expr_id),
                 EffectArg::Binding(binding) => self
                     .binding_value(*binding)
-                    .unwrap_or_else(|| self.synthetic_u256(BigUint::from(0u8))),
-                EffectArg::Unknown | EffectArg::Place(_) => self.synthetic_u256(BigUint::from(0u8)),
+                    .unwrap_or_else(|| panic!("missing value for effect binding `{binding:?}`")),
+                EffectArg::Unknown | EffectArg::Place(_) => {
+                    panic!("invalid effect argument for ByValue: {resolved_arg:?}");
+                }
             };
 
             return value;
         }
 
-        // Unknown or any other case
-        self.default_effect_arg()
-    }
-
-    fn default_effect_arg(&mut self) -> ValueId {
-        self.synthetic_u256(BigUint::from(0u8))
+        panic!("invalid effect argument pass mode: {resolved_arg:?}");
     }
 
     fn lower_expr_into_local(&mut self, stmt: StmtId, expr: ExprId, dest: LocalId) -> ValueId {
@@ -2432,7 +2423,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// - `cond_expr`: Condition expression id.
     /// - `body_expr`: Loop body expression id.
     ///
-    pub(super) fn lower_while(&mut self, cond_expr: ExprId, body_expr: ExprId) {
+    pub(super) fn lower_while(&mut self, cond_expr: CondId, body_expr: ExprId) {
         let Some(block) = self.current_block() else {
             return;
         };
@@ -2444,10 +2435,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.goto(cond_entry);
 
         self.move_to_block(cond_entry);
-        let cond_val = self.lower_expr(cond_expr);
-        let Some(cond_header) = self.current_block() else {
-            return;
-        };
+        self.lower_condition_branch(cond_expr, body_block, exit_block);
 
         self.loop_stack.push(LoopScope {
             continue_target: cond_entry,
@@ -2466,9 +2454,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             self.goto(cond_entry);
             backedge = Some(body_end_block);
         }
-
-        self.move_to_block(cond_header);
-        self.branch(cond_val, body_block, exit_block);
 
         self.builder.body.loop_headers.insert(
             cond_entry,
@@ -2957,10 +2942,48 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.move_to_block(exit_block);
     }
 
+    fn lower_condition_branch(
+        &mut self,
+        cond_expr: CondId,
+        true_block: BasicBlockId,
+        false_block: BasicBlockId,
+    ) {
+        let Partial::Present(cond_data) = cond_expr.data(self.db, self.body) else {
+            if self.current_block().is_some() {
+                self.goto(false_block);
+            }
+            return;
+        };
+
+        match cond_data {
+            Cond::Bin(lhs, rhs, hir::hir_def::expr::LogicalBinOp::And) => {
+                let rhs_entry = self.alloc_block();
+                self.lower_condition_branch(*lhs, rhs_entry, false_block);
+                self.move_to_block(rhs_entry);
+                self.lower_condition_branch(*rhs, true_block, false_block);
+            }
+            Cond::Bin(lhs, rhs, hir::hir_def::expr::LogicalBinOp::Or) => {
+                let rhs_entry = self.alloc_block();
+                self.lower_condition_branch(*lhs, true_block, rhs_entry);
+                self.move_to_block(rhs_entry);
+                self.lower_condition_branch(*rhs, true_block, false_block);
+            }
+            Cond::Let(pat, scrutinee) => {
+                self.lower_let_condition_branch(*pat, *scrutinee, true_block, false_block);
+            }
+            Cond::Expr(expr) => {
+                let cond_val = self.lower_expr(*expr);
+                if self.current_block().is_some() {
+                    self.branch(cond_val, true_block, false_block);
+                }
+            }
+        }
+    }
+
     fn lower_if(
         &mut self,
         if_expr: ExprId,
-        cond: ExprId,
+        cond: CondId,
         then_expr: ExprId,
         else_expr: Option<ExprId>,
     ) -> ValueId {
@@ -2971,12 +2994,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         let if_ty = self.typed_body.expr_ty(self.db, if_expr);
         let produces_value = !self.is_unit_ty(if_ty) && !if_ty.is_never(self.db);
-
-        self.move_to_block(block);
-        let cond_val = self.lower_expr(cond);
-        let Some(cond_block) = self.current_block() else {
-            return value;
-        };
 
         let then_block = self.alloc_block();
         if produces_value {
@@ -2991,12 +3008,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
             let result_local = self.alloc_temp_local(if_ty, true, "if");
             self.builder.body.values[value.index()].origin = ValueOrigin::Local(result_local);
-
-            self.move_to_block(cond_block);
-            self.assign(None, Some(result_local), Rvalue::ZeroInit);
-
             let else_block = self.alloc_block();
 
+            self.move_to_block(block);
+            self.assign(None, Some(result_local), Rvalue::ZeroInit);
+            self.lower_condition_branch(cond, then_block, else_block);
             self.move_to_block(then_block);
             let then_value = self.lower_expr(then_expr);
             let then_end = self.current_block();
@@ -3024,22 +3040,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 }
             }
 
-            self.move_to_block(cond_block);
-            self.switch(
-                cond_val,
-                vec![
-                    SwitchTarget {
-                        value: SwitchValue::Bool(true),
-                        block: then_block,
-                    },
-                    SwitchTarget {
-                        value: SwitchValue::Bool(false),
-                        block: else_block,
-                    },
-                ],
-                else_block,
-            );
-
             if let Some(merge) = merge_block {
                 self.move_to_block(merge);
             }
@@ -3048,8 +3048,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             let merge_block = self.alloc_block();
             let else_block = else_expr.map(|_| self.alloc_block());
 
-            self.move_to_block(cond_block);
-            self.branch(cond_val, then_block, else_block.unwrap_or(merge_block));
+            self.move_to_block(block);
+            self.lower_condition_branch(cond, then_block, else_block.unwrap_or(merge_block));
 
             self.move_to_block(then_block);
             let _ = self.lower_expr(then_expr);
@@ -3202,5 +3202,92 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use common::InputDb;
+    use driver::DriverDataBase;
+    use hir::analysis::ty::ty_check::check_func_body;
+    use url::Url;
+
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "invalid effect argument for ByValue")]
+    fn lower_effect_arg_panics_instead_of_silently_defaulting() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///invalid_effect_arg_panics.fe").unwrap();
+        let src = r#"
+fn callee() uses (x: mut u256) {
+    x += 1
+}
+
+pub fn entry() -> u256 {
+    0
+}
+"#;
+
+        let file = db.workspace().touch(&mut db, url, Some(src.to_owned()));
+        let top_mod = db.top_mod(file);
+
+        let entry = top_mod
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "entry")
+            })
+            .expect("expected `entry` function");
+
+        let callee = top_mod
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "callee")
+            })
+            .expect("expected `callee` function");
+
+        let (diags, typed_body) = check_func_body(&db, entry);
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+        let body = entry.body(&db).expect("expected `entry` body");
+
+        let mut builder = MirBuilder::new_for_func(
+            &db,
+            entry,
+            body,
+            typed_body,
+            &[],
+            LoweringOverrides {
+                receiver_space: None,
+                effect_param_space_overrides: &[],
+                param_capability_space_overrides: &[],
+            },
+        )
+        .expect("failed to create MirBuilder");
+
+        let key = callee
+            .effect_params(&db)
+            .next()
+            .and_then(|effect| effect.key_path(&db))
+            .expect("expected a callee effect key path");
+
+        let resolved_arg = ResolvedEffectArg {
+            param_idx: 0,
+            key,
+            arg: EffectArg::Unknown,
+            pass_mode: EffectPassMode::ByValue,
+            key_kind: EffectKeyKind::Type,
+            instantiated_target_ty: None,
+        };
+
+        let mut writebacks = Vec::new();
+        let _ = builder.lower_effect_arg(&resolved_arg, &mut writebacks);
     }
 }

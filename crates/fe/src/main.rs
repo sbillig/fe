@@ -218,6 +218,9 @@ pub enum Command {
         /// Number of suites to run in parallel (0 = auto).
         #[arg(long, default_value_t = 8, value_name = "N")]
         jobs: usize,
+        /// Run suites as grouped jobs instead of splitting into per-test jobs.
+        #[arg(long)]
+        grouped: bool,
         /// Show event logs from test execution.
         #[arg(long)]
         show_logs: bool,
@@ -505,6 +508,7 @@ pub fn run(opts: &Options) {
             ingot,
             filter,
             jobs,
+            grouped,
             show_logs,
             debug: test_debug,
             backend,
@@ -567,6 +571,7 @@ pub fn run(opts: &Options) {
                 ingot.as_deref(),
                 filter.as_deref(),
                 *jobs,
+                *grouped,
                 *show_logs,
                 backend,
                 yul_optimize,

@@ -238,7 +238,9 @@ impl<'db> Monomorphizer<'db> {
             let receiver_space = canonicalize_receiver_space(self.templates[idx].receiver_space);
 
             if let crate::ir::MirFunctionOrigin::Synthetic(_) = origin {
-                let _ = self.ensure_synthetic_instance(origin, receiver_space, &[], &[]);
+                if !self.templates[idx].defer_root {
+                    let _ = self.ensure_synthetic_instance(origin, receiver_space, &[], &[]);
+                }
                 continue;
             }
 
@@ -349,6 +351,9 @@ impl<'db> Monomorphizer<'db> {
             if let Some(err) = self.take_deferred_error() {
                 return Err(err);
             }
+        }
+        if let Some(err) = self.take_deferred_error() {
+            return Err(err);
         }
         Ok(())
     }
@@ -487,7 +492,11 @@ impl<'db> Monomorphizer<'db> {
                         }
 
                         let name = func.pretty_print_signature(self.db);
-                        panic!("failed to instantiate MIR for `{name}`");
+                        self.defer_error(MirLowerError::Unsupported {
+                            func_name: name,
+                            message: "failed to instantiate MIR".to_string(),
+                        });
+                        return;
                     };
                     Some(symbol)
                 }
@@ -649,6 +658,37 @@ impl<'db> Monomorphizer<'db> {
         self.instances.push(instance);
         self.instance_map.insert(key, idx);
         self.worklist.push_back(idx);
+
+        // When a deferred synthetic template is first instantiated, co-instantiate
+        // all other synthetic templates for the same contract.  Contract entrypoints
+        // call init_handler and recv_arm_handlers via pre-resolved symbol names
+        // (`call_symbol` with `hir_target: None`), which the monomorphizer cannot
+        // trace through `resolve_call_target`.  Co-instantiation ensures that every
+        // helper referenced by symbol is present.
+        if self.templates[template_idx].defer_root {
+            let crate::ir::MirFunctionOrigin::Synthetic(syn_id) = origin else {
+                unreachable!();
+            };
+            let contract = syn_id.contract();
+            // Collect sibling template keys first to avoid borrow conflict.
+            let siblings: Vec<_> = self
+                .func_index
+                .iter()
+                .filter_map(|(k, _)| {
+                    if let crate::ir::MirFunctionOrigin::Synthetic(other_syn) = k.origin
+                        && other_syn.contract() == contract
+                        && k.origin != origin
+                    {
+                        return Some((k.origin, k.receiver_space));
+                    }
+                    None
+                })
+                .collect();
+            for (sib_origin, sib_receiver_space) in siblings {
+                let _ = self.ensure_synthetic_instance(sib_origin, sib_receiver_space, &[], &[]);
+            }
+        }
+
         Some((idx, symbol))
     }
 
@@ -730,7 +770,7 @@ impl<'db> Monomorphizer<'db> {
                 assumptions,
             };
             let typed_body = typed_body.fold_with(self.db, &mut normalizer);
-            let mut instance = lower_function(
+            let mut instance = match lower_function(
                 self.db,
                 func,
                 typed_body,
@@ -738,11 +778,13 @@ impl<'db> Monomorphizer<'db> {
                 normalized_args.clone(),
                 normalized_effect_param_space_overrides.clone(),
                 normalized_param_capability_space_overrides.clone(),
-            )
-            .unwrap_or_else(|err| {
-                let name = func.pretty_print_signature(self.db);
-                panic!("failed to instantiate MIR for `{name}`: {err}");
-            });
+            ) {
+                Ok(instance) => instance,
+                Err(err) => {
+                    self.defer_error(err);
+                    return None;
+                }
+            };
             instance.receiver_space = receiver_space;
             instance.symbol_name = symbol_name.clone();
             instance
@@ -857,11 +899,18 @@ impl<'db> Monomorphizer<'db> {
             if base_args.len() < trait_arg_len {
                 let inst_desc = inst.pretty_print(self.db, false);
                 let name = method_name.data(self.db);
-                panic!(
-                    "trait method `{name}` args too short for `{inst_desc}`: got {}, expected at least {}",
-                    base_args.len(),
-                    trait_arg_len
-                );
+                self.defer_error(MirLowerError::Unsupported {
+                    func_name: self
+                        .current_symbol
+                        .clone()
+                        .unwrap_or_else(|| "<unknown function>".to_string()),
+                    message: format!(
+                        "trait method `{name}` args too short for `{inst_desc}`: got {}, expected at least {}",
+                        base_args.len(),
+                        trait_arg_len
+                    ),
+                });
+                return None;
             }
             if let Some((func, impl_args)) =
                 resolve_trait_method_instance(self.db, solve_cx, inst, method_name)
@@ -883,9 +932,13 @@ impl<'db> Monomorphizer<'db> {
                 .current_symbol
                 .as_deref()
                 .unwrap_or("<unknown function>");
-            panic!(
-                "failed to resolve trait method `{name}` for `{inst_desc}` while lowering `{current}` (no impl and no default)"
-            );
+            self.defer_error(MirLowerError::Unsupported {
+                func_name: current.to_string(),
+                message: format!(
+                    "failed to resolve trait method `{name}` for `{inst_desc}` (no impl and no default)"
+                ),
+            });
+            return None;
         }
 
         if let CallableDef::Func(func) = hir_target.callable_def {
@@ -897,7 +950,15 @@ impl<'db> Monomorphizer<'db> {
                 && matches!(item, ItemKind::Trait(_) | ItemKind::ImplTrait(_))
             {
                 let name = func.pretty_print_signature(self.db);
-                panic!("unresolved trait method `{name}` during monomorphization");
+                let current = self
+                    .current_symbol
+                    .as_deref()
+                    .unwrap_or("<unknown function>");
+                self.defer_error(MirLowerError::Unsupported {
+                    func_name: current.to_string(),
+                    message: format!("unresolved trait method `{name}` during monomorphization"),
+                });
+                return None;
             }
             return Some((CallTarget::Decl(func), base_args));
         }
@@ -1281,8 +1342,14 @@ impl<'db> Monomorphizer<'db> {
             Vec::new(),
             Vec::new(),
             Vec::new(),
-        )
-        .ok()?;
+        );
+        let lowered = match lowered {
+            Ok(lowered) => lowered,
+            Err(err) => {
+                self.defer_error(err);
+                return None;
+            }
+        };
         let idx = self.templates.len();
         self.templates.push(lowered);
         self.func_index.insert(key, idx);
@@ -1740,6 +1807,29 @@ mod tests {
         };
         assert_eq!(func_name, "test_symbol");
         assert!(message.contains("conflicting non-memory capability-space override"));
+    }
+
+    #[test]
+    fn deferred_error_is_reported_with_empty_worklist() {
+        let db = DriverDataBase::default();
+        let mut monomorphizer = Monomorphizer::new(&db, Vec::new());
+        monomorphizer.defer_error(MirLowerError::Unsupported {
+            func_name: "seed_roots".to_owned(),
+            message: "boom".to_owned(),
+        });
+        assert!(
+            monomorphizer.worklist.is_empty(),
+            "test assumes no worklist entries"
+        );
+
+        let err = monomorphizer
+            .process_worklist()
+            .expect_err("deferred errors should be reported even with empty worklists");
+        let MirLowerError::Unsupported { func_name, message } = err else {
+            panic!("expected Unsupported, got {err:?}");
+        };
+        assert_eq!(func_name, "seed_roots");
+        assert_eq!(message, "boom");
     }
 
     #[test]

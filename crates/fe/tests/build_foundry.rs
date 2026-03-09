@@ -2,37 +2,12 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::Once,
 };
 
 use tempfile::tempdir;
 
-fn build_fe_binary() {
-    static BUILD: Once = Once::new();
-    BUILD.call_once(|| {
-        let cargo_exe = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-        let output = Command::new(&cargo_exe)
-            .args(["build", "--bin", "fe"])
-            .output()
-            .expect("Failed to build fe binary");
-
-        if !output.status.success() {
-            panic!(
-                "Failed to build fe binary: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-    });
-}
-
-fn fe_binary_path() -> PathBuf {
-    std::env::current_exe()
-        .expect("Failed to get current exe")
-        .parent()
-        .expect("Failed to get parent")
-        .parent()
-        .expect("Failed to get parent")
-        .join("fe")
+fn fe_binary_path() -> &'static str {
+    env!("CARGO_BIN_EXE_fe")
 }
 
 fn render_output(output: &std::process::Output) -> String {
@@ -65,10 +40,7 @@ fn find_executable_in_path(name: &str) -> Option<PathBuf> {
 }
 
 fn run_fe_main_with_env(args: &[&str], extra_env: &[(&str, &str)]) -> (String, i32) {
-    build_fe_binary();
-    let fe_binary = fe_binary_path();
-
-    let mut command = Command::new(&fe_binary);
+    let mut command = Command::new(fe_binary_path());
     command.args(args).env("NO_COLOR", "1");
     for (key, value) in extra_env {
         command.env(key, value);

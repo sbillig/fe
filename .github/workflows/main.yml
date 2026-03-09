@@ -11,6 +11,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
   RUST_BACKTRACE: full
   SOLC_VERSION: v0.8.30
 
@@ -33,7 +34,7 @@ jobs:
       - name: Lint with rustfmt
         run: cargo fmt --all -- --check
       - name: Lint with clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D clippy::all
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D clippy::all
 
   test:
     # Build & Test runs on all platforms
@@ -43,6 +44,7 @@ jobs:
         include:
           - os: ubuntu-latest
           - os: macOS-latest
+          - os: windows-latest
     steps:
       - uses: actions/checkout@v5
       - name: Install rust
@@ -53,34 +55,42 @@ jobs:
         id: solc-cache
         uses: actions/cache@v4
         with:
-          path: ${{ runner.temp }}/solc-${{ env.SOLC_VERSION }}
+          path: ${{ runner.os == 'Windows' && format('{0}\\solc-{1}.exe', runner.temp, env.SOLC_VERSION) || format('{0}/solc-{1}', runner.temp, env.SOLC_VERSION) }}
           key: solc-${{ runner.os }}-${{ env.SOLC_VERSION }}
-      - name: Download solc
-        if: steps.solc-cache.outputs.cache-hit != 'true'
+      - name: Download solc (Linux/macOS)
+        if: steps.solc-cache.outputs.cache-hit != 'true' && runner.os != 'Windows'
         run: |
           set -euo pipefail
           if [ "${{ runner.os }}" = "Linux" ]; then
             url="https://github.com/ethereum/solidity/releases/download/${SOLC_VERSION}/solc-static-linux"
-          elif [ "${{ runner.os }}" = "macOS" ]; then
-            url="https://github.com/ethereum/solidity/releases/download/${SOLC_VERSION}/solc-macos"
           else
-            echo "Unsupported OS: ${{ runner.os }}"
-            exit 1
+            url="https://github.com/ethereum/solidity/releases/download/${SOLC_VERSION}/solc-macos"
           fi
           curl -Ls "$url" -o "$RUNNER_TEMP/solc-${SOLC_VERSION}"
           chmod +x "$RUNNER_TEMP/solc-${SOLC_VERSION}"
+      - name: Download solc (Windows)
+        if: steps.solc-cache.outputs.cache-hit != 'true' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $url = "https://github.com/ethereum/solidity/releases/download/$env:SOLC_VERSION/solc-windows.exe"
+          $output = "$env:RUNNER_TEMP\solc-$env:SOLC_VERSION.exe"
+          Invoke-WebRequest -Uri $url -OutFile $output
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
           version: stable
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          cache-workspace-crates: true
       - name: Build
-        run: cargo test --workspace --all-features --no-run --locked --exclude fe-language-server --exclude fe-bench
+        run: cargo test --release --workspace --all-features --no-run --locked --exclude fe-language-server --exclude fe-bench
       - name: Run tests
         env:
-          FE_SOLC_PATH: ${{ runner.temp }}/solc-${{ env.SOLC_VERSION }}
-        run: cargo test --workspace --all-features --verbose --exclude fe-language-server --exclude fe-bench
+          FE_SOLC_PATH: ${{ runner.os == 'Windows' && format('{0}\\solc-{1}.exe', runner.temp, env.SOLC_VERSION) || format('{0}/solc-{1}', runner.temp, env.SOLC_VERSION) }}
+        run: cargo nextest run --release --workspace --all-features --no-fail-fast --locked --exclude fe-language-server --exclude fe-bench
 
   wasm-wasi-check:
     runs-on: ubuntu-latest
@@ -97,9 +107,9 @@ jobs:
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
       - name: Check core crates for wasm32-unknown-unknown
-        run: cargo check -p fe-common -p fe-parser -p fe-hir --target wasm32-unknown-unknown
+        run: cargo check --locked -p fe-common -p fe-parser -p fe-hir --target wasm32-unknown-unknown
       - name: Check filesystem crates for wasm32-wasip1
-        run: cargo check -p fe-driver -p fe-resolver --target wasm32-wasip1
+        run: cargo check --locked -p fe-driver -p fe-resolver --target wasm32-wasip1
 
   release:
     # Only run this when we push a tag
@@ -157,7 +167,7 @@ jobs:
       - name: Build
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-        run: cargo build --release --target ${{ matrix.target }} ${{ matrix.EXTRA_FEATURES }}
+        run: cargo build --locked --release --target ${{ matrix.target }} ${{ matrix.EXTRA_FEATURES }}
       - name: Strip binary (Unix)
         if: runner.os != 'Windows'
         run: ${{ matrix.STRIP }} target/${{ matrix.target }}/release/fe

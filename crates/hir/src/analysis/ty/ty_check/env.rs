@@ -297,17 +297,10 @@ impl<'db> TyCheckEnv<'db> {
             }
 
             let Some(provider_param_idx) = provider_map.get(idx).copied().flatten() else {
-                debug_assert!(false, "missing provider param for effect at index {idx}");
-                tracing::warn!("missing provider param for effect at index {idx}");
-                continue;
+                panic!("missing provider param for effect at index {idx}");
             };
             let Some(&provider_ty) = provider_params.get(provider_param_idx) else {
-                debug_assert!(
-                    false,
-                    "provider param index {provider_param_idx} out of range"
-                );
-                tracing::warn!("provider param index {provider_param_idx} out of range");
-                continue;
+                panic!("provider param index {provider_param_idx} out of range");
             };
 
             let provided_ty = match kind {
@@ -854,6 +847,11 @@ impl<'db> TyCheckEnv<'db> {
         self.var_env.push(var_env);
     }
 
+    pub(super) fn enter_lexical_scope(&mut self) {
+        let var_env = BlockEnv::new(self.scope(), self.var_env.len());
+        self.var_env.push(var_env);
+    }
+
     pub(super) fn leave_scope(&mut self) {
         self.var_env.pop().unwrap();
     }
@@ -934,6 +932,10 @@ impl<'db> TyCheckEnv<'db> {
         for (name, binding) in self.pending_vars.drain() {
             var_env.register_var(name, binding);
         }
+    }
+
+    pub(super) fn clear_pending_bindings(&mut self) {
+        self.pending_vars.clear();
     }
 
     pub(super) fn register_confirmation(&mut self, inst: TraitInstId<'db>, span: DynLazySpan<'db>) {
@@ -1353,7 +1355,8 @@ impl<'db> LocalBinding<'db> {
                 path.ident(hir_db).unwrap()
             }
 
-            Self::Param { site, idx, .. } => param_name(env.db, *site, *idx).unwrap(),
+            Self::Param { site, idx, .. } => param_name(env.db, *site, *idx)
+                .unwrap_or_else(|| IdentId::new(env.db, "_".to_string())),
             Self::EffectParam { key_path, .. } => key_path
                 .ident(env.db)
                 .to_opt()

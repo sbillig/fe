@@ -617,6 +617,9 @@ impl<'db> FunctionEmitter<'db> {
         ) {
             return self.lower_code_region_query(intr);
         }
+        if matches!(intr.op, IntrinsicOp::CurrentCodeRegionLen) {
+            return self.lower_current_code_region_len(intr);
+        }
         let args = self.lower_intrinsic_args(intr, state)?;
         Ok(format!(
             "{}({})",
@@ -659,6 +662,23 @@ impl<'db> FunctionEmitter<'db> {
             _ => unreachable!(),
         };
         Ok(format!("{op}(\"{label}\")"))
+    }
+
+    /// Lowers `current_code_region_len` into `datasize("<current-region>")`.
+    fn lower_current_code_region_len(&self, intr: &IntrinsicValue) -> Result<String, YulError> {
+        if !intr.args.is_empty() {
+            return Err(YulError::Unsupported(
+                "current code region len intrinsic expects 0 arguments".into(),
+            ));
+        }
+
+        let Some(label) = self.code_regions.get(&self.mir_func.symbol_name) else {
+            return Err(YulError::Unsupported(format!(
+                "current_code_region_len is only supported in code region root functions; `{}` is not a root",
+                self.mir_func.symbol_name
+            )));
+        };
+        Ok(format!("datasize(\"{label}\")"))
     }
 
     /// Converts intrinsic statement operations (`mstore`, …) into Yul.
@@ -748,6 +768,7 @@ impl<'db> FunctionEmitter<'db> {
             IntrinsicOp::Codesize => "codesize",
             IntrinsicOp::CodeRegionOffset => "code_region_offset",
             IntrinsicOp::CodeRegionLen => "code_region_len",
+            IntrinsicOp::CurrentCodeRegionLen => "current_code_region_len",
             IntrinsicOp::Keccak => "keccak256",
             IntrinsicOp::Addmod => "addmod",
             IntrinsicOp::Mulmod => "mulmod",

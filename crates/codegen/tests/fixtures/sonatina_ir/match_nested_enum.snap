@@ -1,12 +1,11 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/match_nested_enum.fe
 ---
 target = "evm-ethereum-osaka"
 
-func public %match_nested_enum(v0.i256) -> i256 {
+func private %match_nested_enum(v0.i256) -> i256 {
     block0:
         jump block5;
 
@@ -14,50 +13,44 @@ func public %match_nested_enum(v0.i256) -> i256 {
         jump block2;
 
     block2:
-        v3.i256 = phi (0.i256 block1) (v9 block3) (v15 block4);
+        v3.i256 = phi (0.i256 block1) (v10 block3) (v17 block4);
         return v3;
 
     block3:
         v6.i256 = add v0 64.i256;
-        v7.i256 = mload v6 i256;
-        v8.i8 = trunc v7 i8;
-        v9.i256 = zext v8 i256;
+        v7.*i256 = int_to_ptr v6 *i256;
+        v8.i256 = mload v7 i256;
+        v9.i8 = trunc v8 i8;
+        v10.i256 = zext v9 i256;
         jump block2;
 
     block4:
-        v12.i256 = add v0 32.i256;
-        v13.i256 = mload v12 i256;
-        v14.i8 = trunc v13 i8;
-        v15.i256 = zext v14 i256;
+        v13.i256 = add v0 32.i256;
+        v14.*i256 = int_to_ptr v13 *i256;
+        v15.i256 = mload v14 i256;
+        v16.i8 = trunc v15 i8;
+        v17.i256 = zext v16 i256;
         jump block2;
 
     block5:
-        v17.i256 = mload v0 i256;
-        v19.i1 = eq v17 0.i256;
-        br v19 block6 block9;
+        v19.*i256 = int_to_ptr v0 *i256;
+        v20.i256 = mload v19 i256;
+        br_table v20 block8 (0.i256 block6) (1.i256 block4);
 
     block6:
-        v22.i256 = add v0 32.i256;
-        v23.i256 = mload v22 i256;
-        v24.i1 = eq v23 0.i256;
-        br v24 block1 block10;
+        v23.i256 = add v0 32.i256;
+        v24.*i256 = int_to_ptr v23 *i256;
+        v25.i256 = mload v24 i256;
+        br_table v25 block7 (0.i256 block1) (1.i256 block3);
 
     block7:
         evm_invalid;
 
     block8:
         evm_invalid;
-
-    block9:
-        v20.i1 = eq v17 1.i256;
-        br v20 block4 block8;
-
-    block10:
-        v25.i1 = eq v23 1.i256;
-        br v25 block3 block7;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v1.i256 = call %match_nested_enum 0.i256;
         evm_stop;

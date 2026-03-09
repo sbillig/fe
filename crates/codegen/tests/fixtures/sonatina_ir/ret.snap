@@ -5,7 +5,7 @@ input_file: crates/codegen/tests/fixtures/ret.fe
 ---
 target = "evm-ethereum-osaka"
 
-func public %retfoo(v0.i256, v1.i256) -> i256 {
+func private %retfoo(v0.i256, v1.i256) -> i256 {
     block0:
         v3.i1 = ne v0 0.i256;
         br v3 block1 block2;
@@ -37,7 +37,7 @@ func public %retfoo(v0.i256, v1.i256) -> i256 {
         return v18;
 }
 
-func public %__fe_sonatina_entry() {
+func private %__fe_sonatina_entry() {
     block0:
         v1.i256 = call %retfoo 0.i256 0.i256;
         evm_stop;

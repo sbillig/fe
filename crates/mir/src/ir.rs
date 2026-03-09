@@ -47,6 +47,10 @@ pub struct MirFunction<'db> {
     pub symbol_name: String,
     /// For methods, the address space variant of the receiver for this instance.
     pub receiver_space: Option<AddressSpaceKind>,
+    /// When true, the monomorphizer will NOT automatically seed this template
+    /// as a root.  Used for dependency contract templates that should only be
+    /// instantiated when referenced by `create2`.
+    pub defer_root: bool,
 }
 
 /// Source identity of a MIR function.
@@ -69,6 +73,20 @@ pub enum SyntheticId<'db> {
     },
     ContractInitCodeOffset(Contract<'db>),
     ContractInitCodeLen(Contract<'db>),
+}
+
+impl<'db> SyntheticId<'db> {
+    /// Return the contract this synthetic function belongs to.
+    pub fn contract(&self) -> Contract<'db> {
+        match *self {
+            Self::ContractInitEntrypoint(c)
+            | Self::ContractRuntimeEntrypoint(c)
+            | Self::ContractInitHandler(c)
+            | Self::ContractInitCodeOffset(c)
+            | Self::ContractInitCodeLen(c) => c,
+            Self::ContractRecvArmHandler { contract, .. } => contract,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -803,6 +821,8 @@ pub enum IntrinsicOp {
     CodeRegionOffset,
     /// `datasize` of the code region rooted at a function.
     CodeRegionLen,
+    /// `datasize` of the current code section/object.
+    CurrentCodeRegionLen,
     /// `keccak256(ptr, len)`
     Keccak,
     /// `addmod(a, b, m)` — (a + b) % m without overflow
@@ -831,6 +851,7 @@ impl IntrinsicOp {
                 | IntrinsicOp::Codesize
                 | IntrinsicOp::CodeRegionOffset
                 | IntrinsicOp::CodeRegionLen
+                | IntrinsicOp::CurrentCodeRegionLen
                 | IntrinsicOp::Keccak
                 | IntrinsicOp::Addmod
                 | IntrinsicOp::Mulmod

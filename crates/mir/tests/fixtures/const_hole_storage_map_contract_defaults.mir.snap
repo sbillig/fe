@@ -1,5 +1,6 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
+assertion_line: 26
 expression: mir_output
 ---
 fn __BalanceMap_init_contract(v0: u256) -> ():
@@ -28,20 +29,19 @@ fn __BalanceMap_init() -> ():
     v0: u256 = init_field__Evm_hef0af3106e109414_Store_0__1___20b3d78bbd2b6198((), 0)
     v1: u256 = code_region_offset(func_item(__BalanceMap_runtime))
     v2: u256 = code_region_len(func_item(__BalanceMap_runtime))
-    v3: u256 = codesize()
-    bind (v1 + v2)
-    br (v3 < (v1 + v2)) bb1 bb2
+    v3: u256 = current_code_region_len()
+    v4: u256 = codesize()
+    br (v4 < v3) bb1 bb2
   bb1:
     terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(())
   bb2:
-    bind (v1 + v2)
-    bind (v3 - (v1 + v2))
-    v4: u256 = alloc((v3 - (v1 + v2)))
-    eval codecopy(v4, (v1 + v2), (v3 - (v1 + v2)))
-    v5: MemoryBytes = alloc mem
-    store mem[v5].0 = v4
-    store mem[v5].1 = (v3 - (v1 + v2))
-    v6: SolDecoder<MemoryBytes> = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v5)
+    bind (v4 - v3)
+    v5: u256 = alloc((v4 - v3))
+    eval codecopy(v5, v3, (v4 - v3))
+    v6: MemoryBytes = alloc mem
+    store mem[v6].0 = v5
+    store mem[v6].1 = (v4 - v3)
+    v7: SolDecoder<MemoryBytes> = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v6)
     eval __BalanceMap_init_contract(v0)
     eval codecopy(0, v1, v2)
     terminate return_data(0, v2)
@@ -62,16 +62,6 @@ fn __BalanceMap_runtime() -> ():
     v4: Get = get_hffdc4ce7dcd289bd_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v2)
     v5: u256 = __BalanceMap_recv_0_1(v4, v0)
     terminate return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f((), v5)
-
-fn __BalanceMap_init_code_offset() -> u256:
-  bb0:
-    v0: u256 = code_region_offset(func_item(__BalanceMap_init))
-    ret v0
-
-fn __BalanceMap_init_code_len() -> u256:
-  bb0:
-    v0: u256 = code_region_len(func_item(__BalanceMap_init))
-    ret v0
 
 fn storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__u256_u256_0__6a346ad3c930d971(v0: StorageMap<u256, u256, 0>, v1: u256, v2: u256) -> ():
   bb0:
@@ -300,7 +290,7 @@ fn soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallD
     v4: u256 = load mem[&mem[v0].0].1
     v3: u256 = (v4 + 32)
     v5: u256 = load mem[&mem[v0].0].1
-    br ((v3 < v5) || (v3 > v1)) bb1 bb2
+    br (v3 < v5) bb1 bb3
   bb1:
     terminate revert(0, 0)
   bb2:
@@ -309,6 +299,8 @@ fn soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallD
     v6: u256 = calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v7, v8)
     store mem[&mem[v0].0].1 = v3
     ret v6
+  bb3:
+    br (v3 > v1) bb1 bb2
 
 fn solencoder_h1b9228b90dad6928_new() -> SolEncoder:
   bb0:

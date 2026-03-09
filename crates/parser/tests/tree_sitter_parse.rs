@@ -69,6 +69,13 @@ fn collect_errors(node: tree_sitter::Node, source: &str, errors: &mut Vec<String
     }
 }
 
+fn parse_errors(parser: &mut Parser, source: &str) -> Vec<String> {
+    let tree = parser.parse(source, None).expect("parser returned None");
+    let mut errors = Vec::new();
+    collect_errors(tree.root_node(), source, &mut errors);
+    errors
+}
+
 struct SuiteResult {
     label: String,
     total: usize,
@@ -134,6 +141,64 @@ fn format_report(results: &[SuiteResult]) -> String {
         }
     }
     report
+}
+
+#[test]
+fn tree_sitter_parse_newline_lt_continuations() {
+    let mut parser = new_parser();
+    let cases = [
+        (
+            "bare_newline_lt",
+            "fn f(x: i32, y: i32) {\n    let a = x\n        < y\n}\n",
+            true,
+        ),
+        (
+            "bare_newline_lshift",
+            "fn f(x: i32, y: i32) {\n    let a = x\n        << y\n}\n",
+            true,
+        ),
+        (
+            "delimited_newline_lt",
+            "fn f(x: i32, y: i32) {\n    let a = (\n        x\n        < y\n    )\n}\n",
+            false,
+        ),
+        (
+            "delimited_newline_lshift",
+            "fn f(x: i32, y: i32) {\n    let a = (\n        x\n        << y\n    )\n}\n",
+            false,
+        ),
+        (
+            "newline_lte",
+            "fn f(x: i32, y: i32) {\n    let a = x\n        <= y\n}\n",
+            false,
+        ),
+        (
+            "newline_lshift_assign",
+            "fn f(x: i32, y: i32) {\n    let mut a = x\n    a\n        <<= y\n}\n",
+            false,
+        ),
+        (
+            "newline_nested_qualified_path",
+            "trait Foo { fn assoc() {} }\ntrait Bar { fn baz() {} }\nstruct T {}\n\nfn f(x: i32) {\n    x\n    <<T as Foo>::Assoc as Bar>::baz()\n}\n",
+            false,
+        ),
+    ];
+
+    for (name, source, should_error) in cases {
+        let errors = parse_errors(&mut parser, source);
+        if should_error {
+            assert!(
+                !errors.is_empty(),
+                "expected parse error for {name}, but parse succeeded",
+            );
+        } else {
+            assert!(
+                errors.is_empty(),
+                "unexpected parse errors for {name}:\n{}",
+                errors.join("\n"),
+            );
+        }
+    }
 }
 
 /// Strict test: these suites must parse with zero errors.

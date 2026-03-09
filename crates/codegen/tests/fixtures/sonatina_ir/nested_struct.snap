@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/nested_struct.fe
 ---
@@ -65,16 +64,7 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
         evm_return 0.i256 0.i256;
 
     block5:
-        v16.i1 = eq v4 3091856072.i256;
-        br v16 block1 block6;
-
-    block6:
-        v17.i1 = eq v4 3513050253.i256;
-        br v17 block2 block7;
-
-    block7:
-        v18.i1 = eq v4 2154770637.i256;
-        br v18 block3 block4;
+        br_table v4 block4 (3091856072.i256 block1) (3513050253.i256 block2) (2154770637.i256 block3);
 }
 
 func private %stor_ptr_stor__Evm_hef0af3106e109414_Outer_hccd04e332bd35653__177c3c9a6f7ae368(v0.i256, v1.i256) -> i256 {

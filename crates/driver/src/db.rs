@@ -4,7 +4,10 @@ use codespan_reporting::term::{
     termcolor::{BufferWriter, ColorChoice},
 };
 use common::file::File;
-use common::{define_input_db, diagnostics::CompleteDiagnostic};
+use common::{
+    define_input_db,
+    diagnostics::{CompleteDiagnostic, Severity, cmp_complete_diagnostics},
+};
 use hir::analysis::{
     analysis_pass::{AnalysisPassManager, EventLowerPass, MsgLowerPass, ParsingPass},
     diagnostics::DiagnosticVoucher,
@@ -99,6 +102,12 @@ impl DiagnosticsCollection<'_> {
         self.0.is_empty()
     }
 
+    pub fn has_errors(&self, db: &DriverDataBase) -> bool {
+        self.finalize(db)
+            .iter()
+            .any(|d| d.severity == Severity::Error)
+    }
+
     pub fn emit(&self, db: &DriverDataBase) {
         let writer = BufferWriter::stderr(ColorChoice::Auto);
         let mut buffer = writer.buffer();
@@ -134,10 +143,7 @@ impl DiagnosticsCollection<'_> {
 }
 
 fn sort_complete_diagnostics(diags: &mut [CompleteDiagnostic]) {
-    diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
-        std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
-        ord => ord,
-    });
+    diags.sort_by(cmp_complete_diagnostics);
 }
 
 fn sort_and_dedup_complete_diagnostics(diags: &mut Vec<CompleteDiagnostic>) {

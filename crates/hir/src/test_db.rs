@@ -37,9 +37,10 @@ use codespan_reporting::{
 };
 use common::{
     InputDb, define_input_db,
-    diagnostics::{LabelStyle, Severity, Span},
+    diagnostics::{LabelStyle, Severity, Span, cmp_complete_diagnostics},
     file::File,
     indexmap::IndexMap,
+    paths::absolute_utf8,
     stdlib::{HasBuiltinCore, HasBuiltinStd},
 };
 use derive_more::TryIntoError;
@@ -171,18 +172,15 @@ define_input_db!(HirAnalysisTestDb);
 #[allow(dead_code)]
 impl HirAnalysisTestDb {
     pub fn new_stand_alone(&mut self, file_path: Utf8PathBuf, text: &str) -> File {
-        let file_name = if file_path.is_relative() {
-            format!("/{file_path}")
-        } else {
-            file_path.to_string()
-        };
+        let file_path =
+            absolute_utf8(file_path.as_path()).expect("resolve absolute standalone path");
         // Use the index from the database and reinitialize it with core files
         let index = self.workspace();
         self.initialize_builtin_core();
         self.initialize_builtin_std();
         index.touch(
             self,
-            <Url as UrlExt>::from_file_path_lossy(&file_name),
+            <Url as UrlExt>::from_file_path_lossy(file_path.as_std_path()),
             Some(text.to_string()),
         )
     }
@@ -197,67 +195,13 @@ impl HirAnalysisTestDb {
         let mut manager = initialize_analysis_pass();
         let diags = manager.run_on_module(self, top_mod);
 
-        // Filter diagnostics based on file paths found in the diagnostic spans
-        let filtered_diags: Vec<_> = diags
-            .into_iter()
-            .filter(|diag_box| {
-                let complete_diag = diag_box.to_complete(self);
-
-                // If it's not an unreachable pattern warning, keep it
-                if complete_diag.error_code.pass != common::diagnostics::DiagnosticPass::TyCheck
-                    || complete_diag.error_code.local_code != 35
-                {
-                    return true;
-                }
-
-                // Extract the file path from the primary span's file
-                let span = complete_diag.primary_span();
-                let file_path = span
-                    .file
-                    .path(self)
-                    .as_ref()
-                    .map(|p| p.as_str().to_string());
-
-                // Define problematic files where we filter unreachable patterns
-                let problematic_ty_check_files = [
-                    "minimal_variant_paths.fe",
-                    "custom_imported_variants.fe",
-                    "patterns_comparison.fe",
-                    "ret.fe",
-                ];
-
-                // Check if this is a file where we should filter the warning
-                if let Some(path) = file_path {
-                    // Don't filter warnings from match_stmt.fe as those are intentional test cases
-                    // unless they're in a directory specifically testing unreachability
-                    if path.contains("match_stmt.fe") && !path.contains("unreachable/") {
-                        return true;
-                    }
-
-                    let should_filter = problematic_ty_check_files
-                        .iter()
-                        .any(|name| path.contains(name))
-                        && !path.contains("unreachable/");
-
-                    // If it's a problematic file, filter out the unreachable pattern warning
-                    return !should_filter;
-                }
-
-                true
-            })
-            .collect();
-
-        if !filtered_diags.is_empty() {
+        if !diags.is_empty() {
             let writer = BufferWriter::stderr(ColorChoice::Auto);
             let mut buffer = writer.buffer();
             let config = term::Config::default();
 
-            // copied from driver
-            let mut diags: Vec<_> = filtered_diags.iter().map(|d| d.to_complete(self)).collect();
-            diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
-                std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
-                ord => ord,
-            });
+            let mut diags: Vec<_> = diags.iter().map(|d| d.to_complete(self)).collect();
+            diags.sort_by(cmp_complete_diagnostics);
 
             for diag in diags {
                 let cs_diag = &diag.to_cs(self);
