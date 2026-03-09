@@ -5,61 +5,57 @@ input_file: crates/codegen/tests/fixtures/aug_assign.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %aug_assign(v0.i256, v1.i256) -> i256 {
+func private %aug_assign(v0.i256, v1.i256) -> i64 {
     block0:
-        v3.i64 = trunc v0 i64;
-        v4.i64 = trunc v1 i64;
-        (v5.i64, v6.i1) = uaddo v3 v4;
-        v7.i256 = zext v5 i256;
-        br v6 block1 block2;
+        v2.i64 = trunc v0 i64;
+        v3.i64 = trunc v1 i64;
+        (v4.i64, v5.i1) = uaddo v2 v3;
+        br v5 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        v9.i64 = trunc v7 i64;
-        v10.i64 = trunc 2.i256 i64;
-        (v11.i64, v12.i1) = umulo v9 v10;
-        v13.i256 = zext v11 i256;
-        br v12 block3 block4;
+        (v8.i64, v9.i1) = umulo v4 2.i64;
+        br v9 block3 block4;
 
     block3:
         evm_revert 0.i256 0.i256;
 
     block4:
-        v14.i256 = call %u64_haee7f05a097ffa16_div_h14000ca7bc1a1bc4_div v13 2.i256;
-        return v14;
+        v10.i64 = call %u64_haee7f05a097ffa16_div_h14000ca7bc1a1bc4_div v8 2.i64;
+        return v10;
 }
 
-func private %u64_haee7f05a097ffa16_div_h14000ca7bc1a1bc4_div(v0.i256, v1.i256) -> i256 {
+func private %u64_haee7f05a097ffa16_div_h14000ca7bc1a1bc4_div(v0.i64, v1.i64) -> i64 {
     block0:
-        v3.i256 = call %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq v1 0.i256;
-        v4.i1 = ne v3 0.i256;
+        v2.i256 = zext v1 i256;
+        v4.i1 = call %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq v2 0.i256;
         br v4 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        v7.i64 = trunc v0 i64;
-        v8.i64 = trunc v1 i64;
-        (v9.i64, v10.i1) = evm_udivo v7 v8;
-        v11.i256 = zext v9 i256;
+        v6.i256 = zext v0 i256;
+        v8.i256 = zext v1 i256;
+        v9.i64 = trunc v6 i64;
+        v10.i64 = trunc v8 i64;
+        (v11.i64, v12.i1) = evm_udivo v9 v10;
         return v11;
 }
 
-func private %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq(v0.i256, v1.i256) -> i256 {
+func private %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq(v0.i256, v1.i256) -> i1 {
     block0:
-        v3.i64 = trunc v0 i64;
-        v4.i64 = trunc v1 i64;
-        v5.i1 = eq v3 v4;
-        v6.i256 = zext v5 i256;
-        return v6;
+        v2.i64 = trunc v0 i64;
+        v3.i64 = trunc v1 i64;
+        v4.i1 = eq v2 v3;
+        return v4;
 }
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.i256 = call %aug_assign 0.i256 0.i256;
+        v1.i64 = call %aug_assign 0.i256 0.i256;
         evm_stop;
 }
 

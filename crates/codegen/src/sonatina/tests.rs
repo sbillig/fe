@@ -16,7 +16,7 @@ use sonatina_codegen::{
     stackalloc::StackifyBuilder,
 };
 use sonatina_ir::{
-    I256, Module, Signature, Type,
+    Module, Signature,
     builder::ModuleBuilder,
     cfg::ControlFlowGraph,
     func_cursor::InstInserter,
@@ -270,22 +270,6 @@ fn build_funcs_by_symbol<'a>(
         .collect()
 }
 
-fn runtime_argc(db: &DriverDataBase, func: &MirFunction<'_>) -> usize {
-    func.body
-        .param_locals
-        .iter()
-        .chain(func.body.effect_param_locals.iter())
-        .copied()
-        .filter(|local_id| {
-            let local_ty = func.body.locals.get(local_id.index()).map(|l| l.ty);
-            let Some(local_ty) = local_ty else {
-                return true;
-            };
-            layout::ty_size_bytes_in(db, &layout::EVM_LAYOUT, local_ty).is_none_or(|s| s != 0)
-        })
-        .count()
-}
-
 fn collect_code_region_roots(functions: &[MirFunction<'_>]) -> Vec<String> {
     let mut roots = FxHashSet::default();
     for func in functions {
@@ -492,7 +476,7 @@ fn create_code_regions_object(
     let mut sections = Vec::with_capacity(code_region_roots.len());
 
     for root in code_region_roots {
-        let Some(&root_func) = funcs_by_symbol.get(root.as_str()) else {
+        let Some(_) = funcs_by_symbol.get(root.as_str()) else {
             return Err(LowerError::Internal(format!(
                 "missing MIR function for code region root `{root}`"
             )));
@@ -503,13 +487,7 @@ fn create_code_regions_object(
             .ok_or_else(|| LowerError::Internal(format!("unknown function: {root}")))?;
 
         let wrapper_name = format!("__fe_sonatina_code_region_entry_{}", sanitize_symbol(root));
-        let argc = runtime_argc(lowerer.db, root_func);
-        let wrapper_ref = lowerer.create_call_and_stop_wrapper(
-            &wrapper_name,
-            root_ref,
-            argc,
-            root_func.returns_value,
-        )?;
+        let wrapper_ref = lowerer.create_call_and_stop_wrapper(&wrapper_name, root_ref)?;
 
         let section_name = code_region_sections
             .get(root)
@@ -555,7 +533,7 @@ fn create_test_object(
     test: &TestInfo,
     code_region_sections: &FxHashMap<String, SectionName>,
 ) -> Result<Object, LowerError> {
-    let Some(&test_func) = funcs_by_symbol.get(test.symbol_name.as_str()) else {
+    let Some(_) = funcs_by_symbol.get(test.symbol_name.as_str()) else {
         return Err(LowerError::Internal(format!(
             "missing MIR function for test `{}`",
             test.symbol_name
@@ -568,13 +546,7 @@ fn create_test_object(
         .ok_or_else(|| LowerError::Internal(format!("unknown function: {}", test.symbol_name)))?;
 
     let wrapper_name = format!("__fe_sonatina_test_entry_{}", test.object_name);
-    let argc = runtime_argc(lowerer.db, test_func);
-    let wrapper_ref = lowerer.create_call_and_stop_wrapper(
-        &wrapper_name,
-        test_ref,
-        argc,
-        test_func.returns_value,
-    )?;
+    let wrapper_ref = lowerer.create_call_and_stop_wrapper(&wrapper_name, test_ref)?;
 
     let reachable = reachable_functions(call_graph, &test.symbol_name);
     let deps = collect_code_region_deps(&reachable, funcs_by_symbol);
@@ -637,7 +609,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                     continue;
                 }
                 mask.push(true);
-                params.push(super::types::word_type());
+                params.push(super::types::value_type(self.db, local_ty));
             }
             for local_id in func.body.effect_param_locals.iter().copied() {
                 let local_ty = func
@@ -655,11 +627,11 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                     continue;
                 }
                 mask.push(true);
-                params.push(super::types::word_type());
+                params.push(super::types::value_type(self.db, local_ty));
             }
 
             let ret_tys = if func.returns_value {
-                vec![super::types::word_type()]
+                vec![super::types::value_type(self.db, func.ret_ty)]
             } else {
                 Vec::new()
             };
@@ -671,8 +643,6 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
             self.func_map.insert(idx, func_ref);
             self.name_map.insert(name.clone(), func_ref);
-            self.returns_value_map
-                .insert(name.clone(), func.returns_value);
             self.runtime_param_masks.insert(name.clone(), mask);
         }
         Ok(())
@@ -682,8 +652,6 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         &mut self,
         wrapper_name: &str,
         callee_ref: sonatina_ir::module::FuncRef,
-        callee_argc: usize,
-        callee_returns_value: bool,
     ) -> Result<sonatina_ir::module::FuncRef, LowerError> {
         if self.name_map.contains_key(wrapper_name) {
             return Err(LowerError::Internal(format!(
@@ -702,14 +670,17 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         let entry_block = fb.append_block();
         fb.switch_to_block(entry_block);
 
-        let mut args = Vec::with_capacity(callee_argc);
-        for _ in 0..callee_argc {
-            args.push(fb.make_imm_value(I256::zero()));
+        let (arg_tys, ret_ty) = fb.module_builder.ctx.func_sig(callee_ref, |sig| {
+            (sig.args().to_vec(), sig.ret_tys().first().copied())
+        });
+        let mut args = Vec::with_capacity(arg_tys.len());
+        for ty in arg_tys {
+            args.push(super::types::zero_value(&mut fb, ty));
         }
 
         let call_inst = Call::new(is, callee_ref, args.into());
-        if callee_returns_value {
-            let _ = fb.insert_inst(call_inst, Type::I256);
+        if let Some(ret_ty) = ret_ty {
+            let _ = fb.insert_inst(call_inst, ret_ty);
         } else {
             fb.insert_inst_no_result(call_inst);
         }

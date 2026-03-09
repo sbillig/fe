@@ -11,24 +11,24 @@ type @__fe_Container_2 = {i256, @__fe_WrapCounter_1};
 
 func private %newtype_field_mut_method_call(v0.i256) -> i256 {
     block0:
-        v2.*@__fe_Counter_0 = alloca @__fe_Counter_0;
-        v3.i256 = ptr_to_int v2 i256;
-        v4.*i256 = gep v2 0.i256 0.i256;
+        v1.*@__fe_Counter_0 = alloca @__fe_Counter_0;
+        v2.i256 = ptr_to_int v1 i256;
+        v4.*i256 = gep v1 0.i256 0.i256;
         mstore v4 v0 i256;
-        v6.*i256 = gep v2 0.i256 1.i256;
+        v6.*i256 = gep v1 0.i256 1.i256;
         mstore v6 0.i256 i256;
         v8.*i8 = evm_malloc 96.i256;
         v9.i256 = ptr_to_int v8 i256;
         v10.*@__fe_Container_2 = bitcast v8 *@__fe_Container_2;
         v11.*i256 = gep v10 0.i256 0.i256;
         mstore v11 0.i256 i256;
-        v12.*@__fe_WrapCounter_1 = bitcast v2 *@__fe_WrapCounter_1;
+        v12.*@__fe_WrapCounter_1 = bitcast v1 *@__fe_WrapCounter_1;
         v13.*i256 = gep v12 0.i256 0.i256 0.i256;
         v14.i256 = mload v13 i256;
         v15.*@__fe_Container_2 = bitcast v8 *@__fe_Container_2;
         v16.*i256 = gep v15 0.i256 1.i256 0.i256 0.i256;
         mstore v16 v14 i256;
-        v17.*@__fe_WrapCounter_1 = bitcast v2 *@__fe_WrapCounter_1;
+        v17.*@__fe_WrapCounter_1 = bitcast v1 *@__fe_WrapCounter_1;
         v18.*i256 = gep v17 0.i256 0.i256 1.i256;
         v19.i256 = mload v18 i256;
         v20.*@__fe_Container_2 = bitcast v8 *@__fe_Container_2;
@@ -49,8 +49,8 @@ func private %newtype_field_mut_method_call(v0.i256) -> i256 {
 
 func private %counter_h872958864d1ad471_bump(v0.i256) {
     block0:
-        v2.*@__fe_Counter_0 = int_to_ptr v0 *@__fe_Counter_0;
-        v3.*i256 = gep v2 0.i256 0.i256;
+        v1.*@__fe_Counter_0 = int_to_ptr v0 *@__fe_Counter_0;
+        v3.*i256 = gep v1 0.i256 0.i256;
         v4.i256 = mload v3 i256;
         (v6.i256, v7.i1) = uaddo v4 1.i256;
         br v7 block1 block2;
@@ -67,8 +67,8 @@ func private %counter_h872958864d1ad471_bump(v0.i256) {
 
 func private %wrapcounter_hbcbd3a74a267488b_bump(v0.i256) {
     block0:
-        v2.*@__fe_Counter_0 = int_to_ptr v0 *@__fe_Counter_0;
-        v3.*i256 = gep v2 0.i256 0.i256;
+        v1.*@__fe_Counter_0 = int_to_ptr v0 *@__fe_Counter_0;
+        v3.*i256 = gep v1 0.i256 0.i256;
         v4.i256 = mload v3 i256;
         (v6.i256, v7.i1) = uaddo v4 1.i256;
         br v7 block1 block2;

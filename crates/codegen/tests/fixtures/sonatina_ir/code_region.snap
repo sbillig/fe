@@ -9,19 +9,19 @@ func private %init__StorPtr_Evm___207f35a85ac4062e() {
     block0:
         v1.i256 = sym_size &child_init__StorPtr_Evm___207f35a85ac4062e;
         v2.i256 = sym_addr &child_init__StorPtr_Evm___207f35a85ac4062e;
-        v3.i256 = call %allocate__Evm_hef0af3106e109414__3af54274b2985741 v1 0.i256;
-        evm_code_copy v3 v2 v1;
-        v5.i256 = call %evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw_stor_arg0_root_stor 0.i256 0.i256 v2 v1 4660.i256;
-        v6.i256 = sym_size &runtime__StorPtr_Evm___207f35a85ac4062e;
-        v7.i256 = sym_addr &runtime__StorPtr_Evm___207f35a85ac4062e;
-        v8.i256 = call %allocate__Evm_hef0af3106e109414__3af54274b2985741 v6 0.i256;
-        evm_code_copy v8 v7 v6;
-        evm_return v8 v6;
+        v4.i256 = call %allocate__Evm_hef0af3106e109414__3af54274b2985741 v1 0.i256;
+        evm_code_copy v4 v2 v1;
+        v6.i256 = call %evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw_stor_arg0_root_stor 0.i256 0.i256 v2 v1 4660.i256;
+        v7.i256 = sym_size &runtime__StorPtr_Evm___207f35a85ac4062e;
+        v8.i256 = sym_addr &runtime__StorPtr_Evm___207f35a85ac4062e;
+        v10.i256 = call %allocate__Evm_hef0af3106e109414__3af54274b2985741 v7 0.i256;
+        evm_code_copy v10 v8 v7;
+        evm_return v10 v7;
 }
 
 func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block0:
-        v1.i256 = call %read_selector__Evm_hef0af3106e109414__3af54274b2985741 0.i256;
+        v2.i256 = call %read_selector__Evm_hef0af3106e109414__3af54274b2985741 0.i256;
         jump block5;
 
     block1:
@@ -39,7 +39,7 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
         jump block2;
 
     block5:
-        br_table v1 block4 (305419896.i256 block1) (591751049.i256 block3);
+        br_table v2 block4 (305419896.i256 block1) (591751049.i256 block3);
 }
 
 func private %child_init__StorPtr_Evm___207f35a85ac4062e() {
@@ -58,19 +58,18 @@ func private %child_runtime__StorPtr_Evm___207f35a85ac4062e() {
 
 func private %allocate__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256) -> i256 {
     block0:
-        v4.i256 = mload 64.i256 i256;
-        v5.i256 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v4 0.i256;
-        v6.i1 = ne v5 0.i256;
-        br v6 block1 block2;
+        v3.i256 = mload 64.i256 i256;
+        v5.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v3 0.i256;
+        br v5 block1 block2;
 
     block1:
         jump block2;
 
     block2:
-        v8.i256 = phi (v4 block0) (96.i256 block1);
-        v10.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add v8 v0;
-        mstore 64.i256 v10 i256;
-        return v8;
+        v7.i256 = phi (v3 block0) (96.i256 block1);
+        v9.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add v7 v0;
+        mstore 64.i256 v9 i256;
+        return v7;
 }
 
 func private %balance__Evm_hef0af3106e109414__3af54274b2985741(v0.i256) {
@@ -92,27 +91,26 @@ func private %read_selector__Evm_hef0af3106e109414__3af54274b2985741(v0.i256) ->
 
 func private %evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw_stor_arg0_root_stor(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
     block0:
-        v6.i256 = evm_create2 v1 v2 v3 v4;
-        return v6;
+        v5.i256 = evm_create2 v1 v2 v3 v4;
+        return v5;
 }
 
-func private %u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0.i256, v1.i256) -> i256 {
+func private %u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0.i256, v1.i256) -> i1 {
     block0:
-        v3.i1 = eq v0 v1;
-        v4.i256 = zext v3 i256;
-        return v4;
+        v2.i1 = eq v0 v1;
+        return v2;
 }
 
 func private %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v0.i256, v1.i256) -> i256 {
     block0:
-        (v3.i256, v4.i1) = uaddo v0 v1;
-        br v4 block1 block2;
+        (v2.i256, v3.i1) = uaddo v0 v1;
+        br v3 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        return v3;
+        return v2;
 }
 
 

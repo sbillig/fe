@@ -5,36 +5,41 @@ input_file: crates/codegen/tests/fixtures/literal_add.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %main() -> i256 {
+func private %main() -> i64 {
     block0:
-        v3.i256 = call %add 10.i256 20.i256;
-        return v3;
+        v1.i256 = zext 10.i64 i256;
+        v3.i256 = zext 20.i64 i256;
+        v4.i64 = call %add v1 v3;
+        return v4;
 }
 
-func private %add(v0.i256, v1.i256) -> i256 {
+func private %add(v0.i256, v1.i256) -> i64 {
     block0:
-        v3.i256 = call %u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add v0 v1;
-        return v3;
+        v2.i64 = trunc v0 i64;
+        v3.i64 = trunc v1 i64;
+        v4.i64 = call %u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add v2 v3;
+        return v4;
 }
 
-func private %u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add(v0.i256, v1.i256) -> i256 {
+func private %u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add(v0.i64, v1.i64) -> i64 {
     block0:
-        v3.i64 = trunc v0 i64;
-        v4.i64 = trunc v1 i64;
-        (v5.i64, v6.i1) = uaddo v3 v4;
-        v7.i256 = zext v5 i256;
-        br v6 block1 block2;
+        v2.i256 = zext v0 i256;
+        v3.i256 = zext v1 i256;
+        v4.i64 = trunc v2 i64;
+        v5.i64 = trunc v3 i64;
+        (v6.i64, v7.i1) = uaddo v4 v5;
+        br v7 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        return v7;
+        return v6;
 }
 
 func private %__fe_sonatina_entry() {
     block0:
-        v0.i256 = call %main;
+        v0.i64 = call %main;
         evm_stop;
 }
 

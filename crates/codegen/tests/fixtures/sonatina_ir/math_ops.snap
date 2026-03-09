@@ -5,44 +5,44 @@ input_file: crates/codegen/tests/fixtures/math_ops.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %math_ops() -> i256 {
+func private %math_ops() -> i64 {
     block0:
-        v3.i256 = sub 10.i256 3.i256;
-        v5.i256 = mul v3 2.i256;
-        v7.i256 = evm_udiv v5 7.i256;
-        v8.i256 = call %u64_haee7f05a097ffa16_rem_h890eb23a7e6cfef7_rem v7 3.i256;
-        return v8;
+        v2.i64 = sub 10.i64 3.i64;
+        v4.i64 = mul v2 2.i64;
+        v6.i64 = evm_udiv v4 7.i64;
+        v7.i64 = call %u64_haee7f05a097ffa16_rem_h890eb23a7e6cfef7_rem v6 3.i64;
+        return v7;
 }
 
-func private %u64_haee7f05a097ffa16_rem_h890eb23a7e6cfef7_rem(v0.i256, v1.i256) -> i256 {
+func private %u64_haee7f05a097ffa16_rem_h890eb23a7e6cfef7_rem(v0.i64, v1.i64) -> i64 {
     block0:
-        v3.i256 = call %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq v1 0.i256;
-        v4.i1 = ne v3 0.i256;
+        v2.i256 = zext v1 i256;
+        v4.i1 = call %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq v2 0.i256;
         br v4 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        v7.i64 = trunc v0 i64;
-        v8.i64 = trunc v1 i64;
-        (v9.i64, v10.i1) = evm_umodo v7 v8;
-        v11.i256 = zext v9 i256;
+        v6.i256 = zext v0 i256;
+        v8.i256 = zext v1 i256;
+        v9.i64 = trunc v6 i64;
+        v10.i64 = trunc v8 i64;
+        (v11.i64, v12.i1) = evm_umodo v9 v10;
         return v11;
 }
 
-func private %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq(v0.i256, v1.i256) -> i256 {
+func private %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq(v0.i256, v1.i256) -> i1 {
     block0:
-        v3.i64 = trunc v0 i64;
-        v4.i64 = trunc v1 i64;
-        v5.i1 = eq v3 v4;
-        v6.i256 = zext v5 i256;
-        return v6;
+        v2.i64 = trunc v0 i64;
+        v3.i64 = trunc v1 i64;
+        v4.i1 = eq v2 v3;
+        return v4;
 }
 
 func private %__fe_sonatina_entry() {
     block0:
-        v0.i256 = call %math_ops;
+        v0.i64 = call %math_ops;
         evm_stop;
 }
 

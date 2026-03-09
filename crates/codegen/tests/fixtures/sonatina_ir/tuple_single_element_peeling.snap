@@ -20,7 +20,7 @@ func private %tuple_single_struct_newtype_nested(v0.i256) -> i256 {
         return v0;
 }
 
-func private %match_single_element_tuple(v0.i256) -> i256 {
+func private %match_single_element_tuple(v0.i256) -> i8 {
     block0:
         jump block4;
 
@@ -28,14 +28,15 @@ func private %match_single_element_tuple(v0.i256) -> i256 {
         jump block2;
 
     block2:
-        v3.i256 = phi (1.i256 block1) (0.i256 block3);
+        v3.i8 = phi (1.i8 block1) (0.i8 block3);
         return v3;
 
     block3:
         jump block2;
 
     block4:
-        br_table v0 block5 (1.i256 block1) (0.i256 block3);
+        v6.i1 = ne v0 0.i256;
+        br_table v6 block5 (1.i1 block1) (0.i1 block3);
 
     block5:
         evm_invalid;

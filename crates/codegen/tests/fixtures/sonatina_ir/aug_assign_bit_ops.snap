@@ -7,43 +7,42 @@ target = "evm-ethereum-osaka"
 
 func private %aug_assign_bit_ops(v0.i256, v1.i256) -> i256 {
     block0:
-        v4.*i8 = evm_malloc 32.i256;
-        v5.i256 = ptr_to_int v4 i256;
-        v6.*i256 = bitcast v4 *i256;
-        mstore v6 v0 i256;
-        call %u256_h3271ca15373d4483_powassign_h1c527c5fd2f9bd8a_pow_assign v5 v1;
-        v7.*i256 = bitcast v4 *i256;
-        v8.i256 = mload v7 i256;
-        v10.i256 = shl 3.i256 v8;
-        v12.i256 = shr 1.i256 v10;
-        v14.i256 = and v12 255.i256;
-        v15.i256 = or v14 1.i256;
-        v17.i256 = xor v15 2.i256;
-        return v17;
+        v3.*i8 = evm_malloc 32.i256;
+        v4.i256 = ptr_to_int v3 i256;
+        v5.*i256 = bitcast v3 *i256;
+        mstore v5 v0 i256;
+        call %u256_h3271ca15373d4483_powassign_h1c527c5fd2f9bd8a_pow_assign v4 v1;
+        v6.*i256 = bitcast v3 *i256;
+        v7.i256 = mload v6 i256;
+        v9.i256 = shl 3.i256 v7;
+        v11.i256 = shr 1.i256 v9;
+        v13.i256 = and v11 255.i256;
+        v14.i256 = or v13 1.i256;
+        v16.i256 = xor v14 2.i256;
+        return v16;
 }
 
 func private %u256_h3271ca15373d4483_powassign_h1c527c5fd2f9bd8a_pow_assign(v0.i256, v1.i256) {
     block0:
-        v3.*i256 = int_to_ptr v0 *i256;
-        v4.i256 = mload v3 i256;
-        v5.i256 = call %u256_h3271ca15373d4483_pow_haae116e5e5042c2c_pow v4 v1;
-        v6.*i256 = int_to_ptr v0 *i256;
-        mstore v6 v5 i256;
+        v2.*i256 = int_to_ptr v0 *i256;
+        v3.i256 = mload v2 i256;
+        v4.i256 = call %u256_h3271ca15373d4483_pow_haae116e5e5042c2c_pow v3 v1;
+        v5.*i256 = int_to_ptr v0 *i256;
+        mstore v5 v4 i256;
         return;
 }
 
 func private %u256_h3271ca15373d4483_pow_haae116e5e5042c2c_pow(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = call %pow_checked__u256__3271ca15373d4483 v0 v1;
-        return v3;
+        v2.i256 = call %pow_checked__u256__3271ca15373d4483 v0 v1;
+        return v2;
 }
 
 func private %pow_checked__u256__3271ca15373d4483(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = call %u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word v1;
-        v5.i256 = and v3 -1.i256;
-        v6.i1 = ne 0.i256 0.i256;
-        br v6 block3 block2;
+        v2.i256 = call %u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word v1;
+        v4.i256 = and v2 -1.i256;
+        br 0.i1 block3 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
@@ -53,68 +52,62 @@ func private %pow_checked__u256__3271ca15373d4483(v0.i256, v1.i256) -> i256 {
         jump block4;
 
     block3:
-        v12.i256 = and v5 0.i256;
-        v13.i256 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_ne v12 0.i256;
-        v14.i1 = ne v13 0.i256;
-        br v14 block1 block2;
+        v12.i256 = and v4 0.i256;
+        v13.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_ne v12 0.i256;
+        br v13 block1 block2;
 
     block4:
-        v43.i256 = phi (v9 block2) (v44 block10);
-        v41.i256 = phi (1.i256 block2) (v46 block10);
-        v15.i256 = phi (v5 block2) (v31 block10);
-        v16.i256 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt v15 0.i256;
-        v17.i1 = ne v16 0.i256;
-        br v17 block5 block6;
+        v39.i256 = phi (v9 block2) (v40 block10);
+        v37.i256 = phi (1.i256 block2) (v42 block10);
+        v14.i256 = phi (v4 block2) (v28 block10);
+        v15.i1 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt v14 0.i256;
+        br v15 block5 block6;
 
     block5:
-        v19.i256 = and v15 1.i256;
-        v20.i256 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_ne v19 0.i256;
-        v21.i1 = ne v20 0.i256;
-        br v21 block7 block8;
+        v17.i256 = and v14 1.i256;
+        v18.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_ne v17 0.i256;
+        br v18 block7 block8;
 
     block6:
-        v23.i256 = call %u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word v41;
-        return v23;
+        v20.i256 = call %u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word v37;
+        return v20;
 
     block7:
-        v25.i256 = call %u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word v41;
-        v27.i256 = call %u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word v43;
-        v28.i256 = call %u256_h3271ca15373d4483_mul_h290dcc921ed80777_mul v25 v27;
-        v29.i256 = call %u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word v28;
+        v22.i256 = call %u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word v37;
+        v24.i256 = call %u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word v39;
+        v25.i256 = call %u256_h3271ca15373d4483_mul_h290dcc921ed80777_mul v22 v24;
+        v26.i256 = call %u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word v25;
         jump block8;
 
     block8:
-        v46.i256 = phi (v41 block5) (v29 block7);
-        v31.i256 = shr 1.i256 v15;
-        v32.i256 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt v31 0.i256;
-        v33.i1 = ne v32 0.i256;
-        br v33 block9 block10;
+        v42.i256 = phi (v37 block5) (v26 block7);
+        v28.i256 = shr 1.i256 v14;
+        v29.i1 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt v28 0.i256;
+        br v29 block9 block10;
 
     block9:
-        v35.i256 = call %u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word v43;
-        v36.i256 = call %u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word v43;
-        v37.i256 = call %u256_h3271ca15373d4483_mul_h290dcc921ed80777_mul v35 v36;
-        v38.i256 = call %u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word v37;
+        v31.i256 = call %u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word v39;
+        v32.i256 = call %u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word v39;
+        v33.i256 = call %u256_h3271ca15373d4483_mul_h290dcc921ed80777_mul v31 v32;
+        v34.i256 = call %u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word v33;
         jump block10;
 
     block10:
-        v44.i256 = phi (v43 block8) (v38 block9);
+        v40.i256 = phi (v39 block8) (v34 block9);
         jump block4;
 }
 
-func private %u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v0.i256, v1.i256) -> i256 {
+func private %u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v0.i256, v1.i256) -> i1 {
     block0:
-        v3.i1 = eq v0 v1;
-        v4.i1 = is_zero v3;
-        v5.i256 = zext v4 i256;
-        return v5;
+        v2.i1 = eq v0 v1;
+        v3.i1 = is_zero v2;
+        return v3;
 }
 
-func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v0.i256, v1.i256) -> i256 {
+func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v0.i256, v1.i256) -> i1 {
     block0:
-        v3.i1 = gt v0 v1;
-        v4.i256 = zext v3 i256;
-        return v4;
+        v2.i1 = gt v0 v1;
+        return v2;
 }
 
 func private %u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word(v0.i256) -> i256 {
@@ -124,14 +117,14 @@ func private %u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word(v0.i256
 
 func private %u256_h3271ca15373d4483_mul_h290dcc921ed80777_mul(v0.i256, v1.i256) -> i256 {
     block0:
-        (v3.i256, v4.i1) = umulo v0 v1;
-        br v4 block1 block2;
+        (v2.i256, v3.i1) = umulo v0 v1;
+        br v3 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        return v3;
+        return v2;
 }
 
 func private %__fe_sonatina_entry() {

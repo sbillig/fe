@@ -14,7 +14,7 @@ use hir::hir_def::TopLevelMod;
 use mir::{MirModule, layout, layout::TargetDataLayout, lower_ingot, lower_module};
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    BlockId, GlobalVariableRef, I256, Module, Signature, Type, ValueId,
+    BlockId, GlobalVariableRef, Module, Signature, Type, ValueId,
     builder::{ModuleBuilder, Variable},
     func_cursor::InstInserter,
     inst::{control_flow::Call, evm::EvmStop},
@@ -415,8 +415,6 @@ struct ModuleLowerer<'db, 'a> {
     func_map: FxHashMap<usize, FuncRef>,
     /// Maps function symbol names to Sonatina function references.
     name_map: FxHashMap<String, FuncRef>,
-    /// Maps function symbol names to whether they return a value.
-    returns_value_map: FxHashMap<String, bool>,
     /// Maps function symbol names to a parameter mask indicating which MIR arguments are
     /// runtime-visible (not erased) and therefore must be passed on the EVM stack.
     ///
@@ -460,7 +458,6 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             contract_selection,
             func_map: FxHashMap::default(),
             name_map: FxHashMap::default(),
-            returns_value_map: FxHashMap::default(),
             runtime_param_masks: FxHashMap::default(),
             entry_func_idxs: FxHashSet::default(),
             gep_type_cache: FxHashMap::default(),
@@ -509,8 +506,6 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
             self.func_map.insert(idx, func_ref);
             self.name_map.insert(name.clone(), func_ref);
-            self.returns_value_map
-                .insert(name.clone(), func.returns_value);
             self.runtime_param_masks.insert(name.clone(), mask);
         }
         Ok(())
@@ -550,48 +545,42 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             // Keep it empty; callers should never pass arguments to EVM entrypoints.
         } else {
             for local_id in func.body.param_locals.iter().copied() {
-                let local_ty = func
-                    .body
-                    .locals
-                    .get(local_id.index())
-                    .ok_or_else(|| {
-                        LowerError::Internal(format!("unknown param local: {local_id:?}"))
-                    })?
-                    .ty;
-                mask.push(!is_erased_runtime_ty(
-                    self.db,
-                    &self.target_layout,
-                    local_ty,
-                ));
+                mask.push(
+                    types::local_runtime_type(self.db, &self.target_layout, &func.body, local_id)
+                        != Type::Unit,
+                );
             }
             for local_id in func.body.effect_param_locals.iter().copied() {
-                let local_ty = func
-                    .body
-                    .locals
-                    .get(local_id.index())
-                    .ok_or_else(|| {
-                        LowerError::Internal(format!("unknown effect param local: {local_id:?}"))
-                    })?
-                    .ty;
-                mask.push(!is_erased_runtime_ty(
+                mask.push(
+                    types::local_runtime_type(self.db, &self.target_layout, &func.body, local_id)
+                        != Type::Unit,
+                );
+            }
+        }
+
+        // Convert parameter types to their runtime Sonatina types.
+        let mut params = Vec::new();
+        for (local_id, keep) in func
+            .body
+            .param_locals
+            .iter()
+            .chain(func.body.effect_param_locals.iter())
+            .copied()
+            .zip(mask.iter().copied())
+        {
+            if keep {
+                params.push(types::local_runtime_type(
                     self.db,
                     &self.target_layout,
-                    local_ty,
+                    &func.body,
+                    local_id,
                 ));
             }
         }
 
-        // Convert parameter types - all EVM parameters are 256-bit words.
-        let mut params = Vec::new();
-        for keep in &mask {
-            if *keep {
-                params.push(types::word_type());
-            }
-        }
-
-        // Convert return type - use Unit if function doesn't return a value
+        // Convert return type - use Unit if function doesn't return a value.
         let ret_tys = if func.returns_value {
-            vec![types::word_type()] // TODO: proper return type lowering
+            vec![types::value_type(self.db, func.ret_ty)]
         } else {
             Vec::new()
         };
@@ -749,7 +738,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
         // No contract annotations: fall back to compiling a single "main" entry. This is used by
         // snapshot tests for simple files and debugging.
-        let Some((entry_idx, entry_mir_func)) = self
+        let Some((entry_idx, _entry_mir_func)) = self
             .mir
             .functions
             .iter()
@@ -761,7 +750,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         };
 
         let entry_ref = self.func_map[&entry_idx];
-        let wrapper_ref = self.create_entry_wrapper(entry_ref, entry_mir_func)?;
+        let wrapper_ref = self.create_entry_wrapper(entry_ref)?;
         let mut directives = vec![Directive::Entry(wrapper_ref)];
         for &gv in &self.data_globals {
             directives.push(Directive::Data(gv));
@@ -1026,11 +1015,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     /// The wrapper calls the actual entry function and then halts with `evm_stop`.
     /// This is needed because the entry function uses internal `Return` which requires
     /// a return address on the stack (pushed by `Call`).
-    fn create_entry_wrapper(
-        &mut self,
-        entry_ref: FuncRef,
-        entry_mir_func: &mir::MirFunction<'db>,
-    ) -> Result<FuncRef, LowerError> {
+    fn create_entry_wrapper(&mut self, entry_ref: FuncRef) -> Result<FuncRef, LowerError> {
         const WRAPPER_NAME: &str = "__fe_sonatina_entry";
         if self.name_map.contains_key(WRAPPER_NAME) {
             return Err(LowerError::Internal(format!(
@@ -1053,32 +1038,16 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
         // Pass zero for all arguments (regular + effect params). Test entry functions
         // generally don't use effect params meaningfully.
-        let argc = entry_mir_func
-            .body
-            .param_locals
-            .iter()
-            .chain(entry_mir_func.body.effect_param_locals.iter())
-            .copied()
-            .filter(|local_id| {
-                let local_ty = entry_mir_func
-                    .body
-                    .locals
-                    .get(local_id.index())
-                    .map(|l| l.ty);
-                let Some(local_ty) = local_ty else {
-                    return true;
-                };
-                !is_erased_runtime_ty(self.db, &self.target_layout, local_ty)
-            })
-            .count();
-        let mut args = Vec::with_capacity(argc);
-        for _ in 0..argc {
-            args.push(fb.make_imm_value(I256::zero()));
+        let (arg_tys, ret_ty) = fb.module_builder.ctx.func_sig(entry_ref, |sig| {
+            (sig.args().to_vec(), sig.ret_tys().first().copied())
+        });
+        let mut args = Vec::with_capacity(arg_tys.len());
+        for ty in arg_tys {
+            args.push(types::zero_value(&mut fb, ty));
         }
-
         let call_inst = Call::new(is, entry_ref, args.into());
-        if entry_mir_func.returns_value {
-            let _ = fb.insert_inst(call_inst, types::word_type());
+        if let Some(ret_ty) = ret_ty {
+            let _ = fb.insert_inst(call_inst, ret_ty);
         } else {
             fb.insert_inst_no_result(call_inst);
         }
@@ -1104,6 +1073,20 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
         let mut fb = self.builder.func_builder::<InstInserter>(func_ref);
         let is = self.isa.inst_set();
+        let local_runtime_tys: Vec<_> = func
+            .body
+            .locals
+            .iter()
+            .enumerate()
+            .map(|(idx, _)| {
+                types::local_runtime_type(
+                    self.db,
+                    &self.target_layout,
+                    &func.body,
+                    mir::LocalId(idx as u32),
+                )
+            })
+            .collect();
 
         // Maps MIR block IDs to Sonatina block IDs
         let mut block_map: FxHashMap<mir::BasicBlockId, BlockId> = FxHashMap::default();
@@ -1112,7 +1095,8 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         let mut local_vars: FxHashMap<mir::LocalId, Variable> = FxHashMap::default();
         for (idx, _local) in func.body.locals.iter().enumerate() {
             let local_id = mir::LocalId(idx as u32);
-            let var = fb.declare_var(types::word_type());
+            let var_ty = local_runtime_tys[idx];
+            let var = fb.declare_var(var_ty);
             local_vars.insert(local_id, var);
         }
 
@@ -1149,14 +1133,13 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                         "missing SSA variable for param local {local_id:?}"
                     ))
                 })?;
-                let zero = fb.make_imm_value(I256::zero());
+                let zero = types::zero_value(&mut fb, local_runtime_tys[local_id.index()]);
                 fb.def_var(var, zero);
             }
         } else {
             // Non-entry functions: map actual arguments to param locals.
             let args = fb.args().to_vec();
             let mut arg_iter = args.into_iter();
-            let zero = fb.make_imm_value(I256::zero());
             for local_id in all_param_locals {
                 let var = local_vars.get(&local_id).copied().ok_or_else(|| {
                     LowerError::Internal(format!(
@@ -1164,20 +1147,16 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                     ))
                 })?;
 
-                let local_ty = func
-                    .body
-                    .locals
-                    .get(local_id.index())
-                    .ok_or_else(|| {
-                        LowerError::Internal(format!("unknown param local: {local_id:?}"))
-                    })?
-                    .ty;
-                if is_erased_runtime_ty(self.db, &self.target_layout, local_ty) {
+                let local_runtime_ty = local_runtime_tys[local_id.index()];
+                if local_runtime_ty == Type::Unit {
+                    let zero = types::zero_value(&mut fb, Type::Unit);
                     fb.def_var(var, zero);
                     continue;
                 }
 
-                let arg_val = arg_iter.next().unwrap_or(zero);
+                let arg_val = arg_iter
+                    .next()
+                    .unwrap_or_else(|| types::zero_value(&mut fb, local_runtime_ty));
                 fb.def_var(var, arg_val);
             }
         }
@@ -1190,9 +1169,10 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 db: self.db,
                 target_layout: &self.target_layout,
                 body: &func.body,
+                ret_ty: func.returns_value.then_some(func.ret_ty),
+                local_runtime_tys: &local_runtime_tys,
                 local_vars: &local_vars,
                 name_map: &self.name_map,
-                returns_value_map: &self.returns_value_map,
                 runtime_param_masks: &self.runtime_param_masks,
                 block_map: &block_map,
                 is,
@@ -1237,9 +1217,10 @@ pub(super) struct LowerCtx<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> {
     pub(super) db: &'db DriverDataBase,
     pub(super) target_layout: &'a TargetDataLayout,
     pub(super) body: &'a mir::MirBody<'db>,
+    pub(super) ret_ty: Option<hir::analysis::ty::ty_def::TyId<'db>>,
+    pub(super) local_runtime_tys: &'a [Type],
     pub(super) local_vars: &'a FxHashMap<mir::LocalId, Variable>,
     pub(super) name_map: &'a FxHashMap<String, FuncRef>,
-    pub(super) returns_value_map: &'a FxHashMap<String, bool>,
     pub(super) runtime_param_masks: &'a FxHashMap<String, Vec<bool>>,
     pub(super) block_map: &'a FxHashMap<mir::BasicBlockId, BlockId>,
     pub(super) is: &'a sonatina_ir::inst::evm::inst_set::EvmInstSet,

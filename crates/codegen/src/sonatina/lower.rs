@@ -59,10 +59,7 @@ pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     ));
                 };
                 let value = lower_alloc(ctx, *dest_local, *address_space)?;
-                let dest_var = ctx.local_vars.get(dest_local).copied().ok_or_else(|| {
-                    LowerError::Internal(format!("missing SSA variable for local {dest_local:?}"))
-                })?;
-                ctx.fb.def_var(dest_var, value);
+                def_local_value(ctx, *dest_local, value, format!("{rvalue:?}"))?;
                 return Ok(());
             }
 
@@ -73,18 +70,12 @@ pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     ));
                 };
                 let value = lower_const_aggregate(ctx, data)?;
-                let dest_var = ctx.local_vars.get(dest_local).copied().ok_or_else(|| {
-                    LowerError::Internal(format!("missing SSA variable for local {dest_local:?}"))
-                })?;
-                ctx.fb.def_var(dest_var, value);
+                def_local_value(ctx, *dest_local, value, format!("{rvalue:?}"))?;
                 return Ok(());
             }
 
             let result = lower_rvalue(ctx, rvalue, *dest)?;
             if let (Some(dest_local), Some(result_val)) = (dest, result) {
-                let dest_var = ctx.local_vars.get(dest_local).copied().ok_or_else(|| {
-                    LowerError::Internal(format!("missing SSA variable for local {dest_local:?}"))
-                })?;
                 // Apply from_word conversion for Load operations
                 let converted = if matches!(rvalue, mir::Rvalue::Load { .. }) {
                     let dest_ty = ctx
@@ -99,7 +90,7 @@ pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 } else {
                     result_val
                 };
-                ctx.fb.def_var(dest_var, converted);
+                def_local_value(ctx, *dest_local, converted, format!("{rvalue:?}"))?;
             }
         }
         MirInst::Store { place, value, .. } => {
@@ -127,6 +118,30 @@ pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     Ok(())
 }
 
+fn def_local_value<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    dest_local: mir::LocalId,
+    value: ValueId,
+    source: String,
+) -> Result<(), LowerError> {
+    let dest_var = ctx.local_vars.get(&dest_local).copied().ok_or_else(|| {
+        LowerError::Internal(format!("missing SSA variable for local {dest_local:?}"))
+    })?;
+    let expected_ty = ctx
+        .local_runtime_tys
+        .get(dest_local.index())
+        .copied()
+        .ok_or_else(|| LowerError::Internal(format!("missing local type for {dest_local:?}")))?;
+    let actual_ty = ctx.fb.type_of(value);
+    if actual_ty != expected_ty {
+        return Err(LowerError::Internal(format!(
+            "assignment type mismatch for {dest_local:?}: expected {expected_ty:?}, got {actual_ty:?} from {source}"
+        )));
+    }
+    ctx.fb.def_var(dest_var, value);
+    Ok(())
+}
+
 /// Lower a MIR rvalue to a Sonatina value.
 fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
@@ -137,8 +152,17 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 
     match rvalue {
         Rvalue::ZeroInit => {
-            // Create a zero constant
-            let zero = ctx.fb.make_imm_value(I256::zero());
+            let zero_ty = if let Some(dest_local) = dest_local {
+                ctx.local_runtime_tys
+                    .get(dest_local.index())
+                    .copied()
+                    .ok_or_else(|| {
+                        LowerError::Internal(format!("unknown destination local: {dest_local:?}"))
+                    })?
+            } else {
+                Type::I256
+            };
+            let zero = types::zero_value(ctx.fb, zero_ty);
             Ok(Some(zero))
         }
         Rvalue::Value(value_id) => {
@@ -495,8 +519,6 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             }
 
             // Core numeric intrinsics (extern functions from `core::num`).
-            // All integer types are represented as I256 on the EVM, so the same
-            // Sonatina instructions apply regardless of the Fe type suffix.
             if call.effect_args.is_empty()
                 && let Some(result) = try_lower_numeric_intrinsic(ctx, callee_name, &call.args)?
             {
@@ -517,24 +539,24 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 "call",
             )?;
 
-            // Emit call instruction with proper return type
-            let call_inst = Call::new(ctx.is, *func_ref, args.into());
-            let callee_returns =
-                ctx.returns_value_map
-                    .get(callee_name)
-                    .copied()
-                    .ok_or_else(|| {
-                        LowerError::Internal(format!(
-                            "missing return type metadata for function: {callee_name}"
-                        ))
-                    })?;
-            if callee_returns {
-                let result = ctx.fb.insert_inst(call_inst, types::word_type());
-                Ok(Some(result))
-            } else {
-                // Unit-returning calls don't produce a value
-                ctx.fb.insert_inst_no_result(call_inst);
-                Ok(None)
+            let ret_tys = ctx
+                .fb
+                .module_builder
+                .ctx
+                .func_sig(*func_ref, |sig| sig.ret_tys().to_vec());
+            match ret_tys.as_slice() {
+                [] => {
+                    let call_inst = Call::new(ctx.is, *func_ref, args.into());
+                    ctx.fb.insert_inst_no_result(call_inst);
+                    Ok(None)
+                }
+                [ret_ty] => {
+                    let call_inst = Call::new(ctx.is, *func_ref, args.into());
+                    Ok(Some(ctx.fb.insert_inst(call_inst, *ret_ty)))
+                }
+                _ => Err(LowerError::Internal(format!(
+                    "call to `{callee_name}` unexpectedly returned multiple values"
+                ))),
             }
         }
         Rvalue::Intrinsic { op, args } => lower_intrinsic(ctx, *op, args),
@@ -585,6 +607,7 @@ fn lower_call_args<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     context: &str,
 ) -> Result<Vec<ValueId>, LowerError> {
     let mut args = Vec::with_capacity(regular_args.len() + effect_args.len());
+    let mut arg_tys = Vec::with_capacity(regular_args.len() + effect_args.len());
     if let Some(mask) = ctx.runtime_param_masks.get(callee_name) {
         let all_args: Vec<_> = regular_args
             .iter()
@@ -602,7 +625,14 @@ fn lower_call_args<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             if !*keep {
                 continue;
             }
+            let arg_ty = ctx
+                .body
+                .values
+                .get(arg.index())
+                .ok_or_else(|| LowerError::Internal("unknown call argument".to_string()))?
+                .ty;
             args.push(lower_value(ctx, arg)?);
+            arg_tys.push(arg_ty);
         }
     } else {
         // Fallback for callees without a declared signature/mask (e.g. externs).
@@ -617,6 +647,7 @@ fn lower_call_args<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 continue;
             }
             args.push(lower_value(ctx, arg)?);
+            arg_tys.push(arg_ty);
         }
         for &effect_arg in effect_args {
             let arg_ty = ctx
@@ -629,22 +660,31 @@ fn lower_call_args<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 continue;
             }
             args.push(lower_value(ctx, effect_arg)?);
+            arg_tys.push(arg_ty);
         }
     }
 
-    let expected_argc = ctx
+    let expected_arg_tys = ctx
         .fb
         .module_builder
         .ctx
-        .func_sig(func_ref, |sig| sig.args().len());
+        .func_sig(func_ref, |sig| sig.args().to_vec());
+    let expected_argc = expected_arg_tys.len();
     if args.len() > expected_argc {
         return Err(LowerError::Internal(format!(
             "{context} to `{callee_name}` has too many args (got {}, expected {expected_argc})",
             args.len()
         )));
     }
-    while args.len() < expected_argc {
-        args.push(ctx.fb.make_imm_value(I256::zero()));
+    for ((arg, arg_ty), expected_ty) in args
+        .iter_mut()
+        .zip(arg_tys.iter().copied())
+        .zip(expected_arg_tys.iter().copied())
+    {
+        *arg = coerce_runtime_value(ctx.fb, ctx.db, *arg, arg_ty, expected_ty, ctx.is);
+    }
+    for ty in expected_arg_tys.into_iter().skip(args.len()) {
+        args.push(types::zero_value(ctx.fb, ty));
     }
 
     Ok(args)
@@ -677,16 +717,23 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 ) -> Result<ValueId, LowerError> {
     use mir::ValueOrigin;
     let origin = &value_data.origin;
+    let result_ty = types::value_runtime_type(ctx.db, ctx.target_layout, value_data);
 
     match origin {
         ValueOrigin::Synthetic(syn) => match syn {
             SyntheticValue::Int(n) => {
                 let i256_val = biguint_to_i256(n);
-                Ok(ctx.fb.make_imm_value(i256_val))
+                Ok(ctx
+                    .fb
+                    .make_imm_value(Immediate::from_i256(i256_val, result_ty)))
             }
             SyntheticValue::Bool(b) => {
-                let val = if *b { I256::one() } else { I256::zero() };
-                Ok(ctx.fb.make_imm_value(val))
+                if result_ty == Type::I1 {
+                    Ok(ctx.fb.make_imm_value(*b))
+                } else {
+                    let val = if *b { I256::one() } else { I256::zero() };
+                    Ok(ctx.fb.make_imm_value(Immediate::from_i256(val, result_ty)))
+                }
             }
             SyntheticValue::Bytes(bytes) => {
                 // Convert bytes to I256 (left-padded to 32 bytes)
@@ -701,22 +748,37 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             let val = ctx.fb.use_var(var);
             Ok(val)
         }
-        ValueOrigin::Unit => {
-            // Unit is represented as 0
-            Ok(ctx.fb.make_imm_value(I256::zero()))
-        }
+        ValueOrigin::Unit => Ok(types::zero_value(ctx.fb, result_ty)),
         ValueOrigin::Unary { op, inner } => {
             let inner_val = lower_value(ctx, *inner)?;
-            lower_unary_op(ctx.fb, *op, inner_val, ctx.is)
+            lower_unary_op(ctx.fb, ctx.db, *op, inner_val, value_data.ty, ctx.is)
         }
         ValueOrigin::Binary { op, lhs, rhs } => {
             let lhs_val = lower_value(ctx, *lhs)?;
             let rhs_val = lower_value(ctx, *rhs)?;
-            lower_binary_op(ctx.fb, *op, lhs_val, rhs_val, ctx.is)
+            let lhs_ty = ctx
+                .body
+                .values
+                .get(lhs.index())
+                .ok_or_else(|| {
+                    LowerError::Internal(format!("unknown MIR value id {}", lhs.index()))
+                })?
+                .ty;
+            lower_binary_op(ctx.fb, ctx.db, *op, lhs_val, rhs_val, lhs_ty, ctx.is)
         }
         ValueOrigin::TransparentCast { value } => {
-            // Transparent cast just passes through the inner value
-            lower_value(ctx, *value)
+            let inner_val = lower_value(ctx, *value)?;
+            let inner_ty = ctx
+                .body
+                .values
+                .get(value.index())
+                .ok_or_else(|| {
+                    LowerError::Internal(format!("unknown MIR value id {}", value.index()))
+                })?
+                .ty;
+            Ok(coerce_runtime_value(
+                ctx.fb, ctx.db, inner_val, inner_ty, result_ty, ctx.is,
+            ))
         }
         ValueOrigin::ControlFlowResult { expr } => {
             // ControlFlowResult values should be converted to Local values during MIR lowering.
@@ -774,27 +836,32 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 }
 
 /// Lower a unary operation.
-fn lower_unary_op<C: sonatina_ir::func_cursor::FuncCursor>(
+fn lower_unary_op<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    db: &'db DriverDataBase,
     op: UnOp,
     inner: ValueId,
+    result_ty: hir::analysis::ty::ty_def::TyId<'db>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<ValueId, LowerError> {
+    let op_ty = types::value_type(db, result_ty);
+    let prim = prim_for_runtime_value(db, result_ty);
+    let inner = prim
+        .map(|prim| coerce_scalar_value(fb, is, inner, op_ty, prim_is_signed(prim)))
+        .unwrap_or(inner);
     match op {
         UnOp::Not => {
-            // Logical not: normalize to i1, then keep Fe's word-level bool representation.
-            let is_zero = fb.insert_inst(IsZero::new(is, inner), Type::I1);
-            let result = fb.insert_inst(Zext::new(is, is_zero, Type::I256), Type::I256);
-            Ok(result)
+            let cond = condition_to_i1(fb, inner, is);
+            Ok(fb.insert_inst(IsZero::new(is, cond), Type::I1))
         }
         UnOp::Minus => {
             // Arithmetic negation
-            let result = fb.insert_inst(Neg::new(is, inner), Type::I256);
+            let result = fb.insert_inst(Neg::new(is, inner), op_ty);
             Ok(result)
         }
         UnOp::BitNot => {
             // Bitwise not
-            let result = fb.insert_inst(Not::new(is, inner), Type::I256);
+            let result = fb.insert_inst(Not::new(is, inner), op_ty);
             Ok(result)
         }
         UnOp::Plus => {
@@ -806,16 +873,18 @@ fn lower_unary_op<C: sonatina_ir::func_cursor::FuncCursor>(
 }
 
 /// Lower a binary operation.
-fn lower_binary_op<C: sonatina_ir::func_cursor::FuncCursor>(
+fn lower_binary_op<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    db: &'db DriverDataBase,
     op: BinOp,
     lhs: ValueId,
     rhs: ValueId,
+    lhs_ty: hir::analysis::ty::ty_def::TyId<'db>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<ValueId, LowerError> {
     match op {
-        BinOp::Arith(arith_op) => lower_arith_op(fb, arith_op, lhs, rhs, is),
-        BinOp::Comp(comp_op) => lower_comp_op(fb, comp_op, lhs, rhs, is),
+        BinOp::Arith(arith_op) => lower_arith_op(fb, db, arith_op, lhs, rhs, lhs_ty, is),
+        BinOp::Comp(comp_op) => lower_comp_op(fb, db, comp_op, lhs, rhs, lhs_ty, is),
         BinOp::Logical(log_op) => lower_logical_op(fb, log_op, lhs, rhs, is),
         BinOp::Index => {
             // Index operations are handled via projections, not as binary ops
@@ -825,26 +894,55 @@ fn lower_binary_op<C: sonatina_ir::func_cursor::FuncCursor>(
 }
 
 /// Lower an arithmetic binary operation.
-fn lower_arith_op<C: sonatina_ir::func_cursor::FuncCursor>(
+fn lower_arith_op<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    db: &'db DriverDataBase,
     op: ArithBinOp,
     lhs: ValueId,
     rhs: ValueId,
+    operand_ty: hir::analysis::ty::ty_def::TyId<'db>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<ValueId, LowerError> {
+    let operand_ty = mir::repr::word_conversion_leaf_ty(db, operand_ty);
+    let op_ty = types::value_type(db, operand_ty);
+    let signed = if let TyData::TyBase(TyBase::Prim(prim)) = operand_ty.base_ty(db).data(db) {
+        prim_is_signed(*prim)
+    } else {
+        false
+    };
+    let lhs = coerce_scalar_value(fb, is, lhs, op_ty, signed);
+    let rhs = coerce_scalar_value(fb, is, rhs, op_ty, signed);
     let result = match op {
-        ArithBinOp::Add => fb.insert_inst(Add::new(is, lhs, rhs), Type::I256),
-        ArithBinOp::Sub => fb.insert_inst(Sub::new(is, lhs, rhs), Type::I256),
-        ArithBinOp::Mul => fb.insert_inst(Mul::new(is, lhs, rhs), Type::I256),
-        ArithBinOp::Div => fb.insert_inst(EvmUdiv::new(is, lhs, rhs), Type::I256),
-        ArithBinOp::Rem => fb.insert_inst(EvmUmod::new(is, lhs, rhs), Type::I256),
-        ArithBinOp::Pow => fb.insert_inst(EvmExp::new(is, lhs, rhs), Type::I256),
+        ArithBinOp::Add => fb.insert_inst(Add::new(is, lhs, rhs), op_ty),
+        ArithBinOp::Sub => fb.insert_inst(Sub::new(is, lhs, rhs), op_ty),
+        ArithBinOp::Mul => fb.insert_inst(Mul::new(is, lhs, rhs), op_ty),
+        ArithBinOp::Div => {
+            if signed {
+                fb.insert_evm_sdivo(lhs, rhs)[0]
+            } else {
+                fb.insert_inst(EvmUdiv::new(is, lhs, rhs), op_ty)
+            }
+        }
+        ArithBinOp::Rem => {
+            if signed {
+                fb.insert_evm_smodo(lhs, rhs)[0]
+            } else {
+                fb.insert_inst(EvmUmod::new(is, lhs, rhs), op_ty)
+            }
+        }
+        ArithBinOp::Pow => fb.insert_inst(EvmExp::new(is, lhs, rhs), op_ty),
         // Shl/Shr take (bits, value).
-        ArithBinOp::LShift => fb.insert_inst(Shl::new(is, rhs, lhs), Type::I256),
-        ArithBinOp::RShift => fb.insert_inst(Shr::new(is, rhs, lhs), Type::I256),
-        ArithBinOp::BitOr => fb.insert_inst(Or::new(is, lhs, rhs), Type::I256),
-        ArithBinOp::BitXor => fb.insert_inst(Xor::new(is, lhs, rhs), Type::I256),
-        ArithBinOp::BitAnd => fb.insert_inst(And::new(is, lhs, rhs), Type::I256),
+        ArithBinOp::LShift => fb.insert_inst(Shl::new(is, rhs, lhs), op_ty),
+        ArithBinOp::RShift => {
+            if signed {
+                fb.insert_inst(Sar::new(is, rhs, lhs), op_ty)
+            } else {
+                fb.insert_inst(Shr::new(is, rhs, lhs), op_ty)
+            }
+        }
+        ArithBinOp::BitOr => fb.insert_inst(Or::new(is, lhs, rhs), op_ty),
+        ArithBinOp::BitXor => fb.insert_inst(Xor::new(is, lhs, rhs), op_ty),
+        ArithBinOp::BitAnd => fb.insert_inst(And::new(is, lhs, rhs), op_ty),
         ArithBinOp::Range => {
             // Range is handled at HIR level, shouldn't reach MIR binary ops
             return Err(LowerError::Unsupported("range operator".to_string()));
@@ -854,43 +952,62 @@ fn lower_arith_op<C: sonatina_ir::func_cursor::FuncCursor>(
 }
 
 /// Lower a comparison binary operation.
-fn lower_comp_op<C: sonatina_ir::func_cursor::FuncCursor>(
+fn lower_comp_op<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    db: &'db DriverDataBase,
     op: CompBinOp,
     lhs: ValueId,
     rhs: ValueId,
+    operand_ty: hir::analysis::ty::ty_def::TyId<'db>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<ValueId, LowerError> {
+    let operand_ty = mir::repr::word_conversion_leaf_ty(db, operand_ty);
+    let signed = if let TyData::TyBase(TyBase::Prim(prim)) = operand_ty.base_ty(db).data(db) {
+        prim_is_signed(*prim)
+    } else {
+        false
+    };
+    let op_ty = types::value_type(db, operand_ty);
+    let lhs = coerce_scalar_value(fb, is, lhs, op_ty, signed);
+    let rhs = coerce_scalar_value(fb, is, rhs, op_ty, signed);
     let result = match op {
-        CompBinOp::Eq => {
-            let eq = fb.insert_inst(Eq::new(is, lhs, rhs), Type::I1);
-            fb.insert_inst(Zext::new(is, eq, Type::I256), Type::I256)
-        }
+        CompBinOp::Eq => fb.insert_inst(Eq::new(is, lhs, rhs), Type::I1),
         CompBinOp::NotEq => {
             // neq = iszero(eq(lhs, rhs))
             let eq_result = fb.insert_inst(Eq::new(is, lhs, rhs), Type::I1);
-            let neq_i1 = fb.insert_inst(IsZero::new(is, eq_result), Type::I1);
-            fb.insert_inst(Zext::new(is, neq_i1, Type::I256), Type::I256)
+            fb.insert_inst(IsZero::new(is, eq_result), Type::I1)
         }
         CompBinOp::Lt => {
-            let lt = fb.insert_inst(Lt::new(is, lhs, rhs), Type::I1);
-            fb.insert_inst(Zext::new(is, lt, Type::I256), Type::I256)
+            if signed {
+                fb.insert_inst(Slt::new(is, lhs, rhs), Type::I1)
+            } else {
+                fb.insert_inst(Lt::new(is, lhs, rhs), Type::I1)
+            }
         }
         CompBinOp::LtEq => {
             // lhs <= rhs  <==>  !(lhs > rhs)
-            let gt_result = fb.insert_inst(Gt::new(is, lhs, rhs), Type::I1);
-            let lte_i1 = fb.insert_inst(IsZero::new(is, gt_result), Type::I1);
-            fb.insert_inst(Zext::new(is, lte_i1, Type::I256), Type::I256)
+            let gt_result = if signed {
+                fb.insert_inst(Slt::new(is, rhs, lhs), Type::I1)
+            } else {
+                fb.insert_inst(Gt::new(is, lhs, rhs), Type::I1)
+            };
+            fb.insert_inst(IsZero::new(is, gt_result), Type::I1)
         }
         CompBinOp::Gt => {
-            let gt = fb.insert_inst(Gt::new(is, lhs, rhs), Type::I1);
-            fb.insert_inst(Zext::new(is, gt, Type::I256), Type::I256)
+            if signed {
+                fb.insert_inst(Slt::new(is, rhs, lhs), Type::I1)
+            } else {
+                fb.insert_inst(Gt::new(is, lhs, rhs), Type::I1)
+            }
         }
         CompBinOp::GtEq => {
             // lhs >= rhs  <==>  !(lhs < rhs)
-            let lt_result = fb.insert_inst(Lt::new(is, lhs, rhs), Type::I1);
-            let gte_i1 = fb.insert_inst(IsZero::new(is, lt_result), Type::I1);
-            fb.insert_inst(Zext::new(is, gte_i1, Type::I256), Type::I256)
+            let lt_result = if signed {
+                fb.insert_inst(Slt::new(is, lhs, rhs), Type::I1)
+            } else {
+                fb.insert_inst(Lt::new(is, lhs, rhs), Type::I1)
+            };
+            fb.insert_inst(IsZero::new(is, lt_result), Type::I1)
         }
     };
     Ok(result)
@@ -904,10 +1021,9 @@ fn lower_logical_op<C: sonatina_ir::func_cursor::FuncCursor>(
     rhs: ValueId,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<ValueId, LowerError> {
-    // Logical ops work on booleans (I1), but we use I256 for EVM
     let result = match op {
-        LogicalBinOp::And => fb.insert_inst(And::new(is, lhs, rhs), Type::I256),
-        LogicalBinOp::Or => fb.insert_inst(Or::new(is, lhs, rhs), Type::I256),
+        LogicalBinOp::And => fb.insert_inst(And::new(is, lhs, rhs), Type::I1),
+        LogicalBinOp::Or => fb.insert_inst(Or::new(is, lhs, rhs), Type::I1),
     };
     Ok(result)
 }
@@ -1169,24 +1285,7 @@ fn bytes_to_i256(bytes: &[u8]) -> I256 {
 
 /// Returns the Sonatina Type for a Fe primitive type, or None if not a sub-word type.
 fn prim_to_sonatina_type(prim: PrimTy) -> Option<Type> {
-    match prim {
-        PrimTy::Bool => Some(Type::I1),
-        PrimTy::U8 | PrimTy::I8 => Some(Type::I8),
-        PrimTy::U16 | PrimTy::I16 => Some(Type::I16),
-        PrimTy::U32 | PrimTy::I32 => Some(Type::I32),
-        PrimTy::U64 | PrimTy::I64 => Some(Type::I64),
-        PrimTy::U128 | PrimTy::I128 => Some(Type::I128),
-        // Full-width types don't need conversion
-        PrimTy::U256
-        | PrimTy::I256
-        | PrimTy::Usize
-        | PrimTy::Isize
-        | PrimTy::View
-        | PrimTy::BorrowMut
-        | PrimTy::BorrowRef => None,
-        // Non-scalar types
-        PrimTy::String | PrimTy::Array | PrimTy::Tuple(_) | PrimTy::Ptr => None,
-    }
+    types::prim_scalar_type(prim).filter(|ty| *ty != Type::I256)
 }
 
 /// Returns true if the primitive type is signed.
@@ -1203,12 +1302,114 @@ fn prim_is_signed(prim: PrimTy) -> bool {
     )
 }
 
+fn int_type_bits(ty: Type) -> Option<u16> {
+    match ty {
+        Type::I1 => Some(1),
+        Type::I8 => Some(8),
+        Type::I16 => Some(16),
+        Type::I32 => Some(32),
+        Type::I64 => Some(64),
+        Type::I128 => Some(128),
+        Type::I256 => Some(256),
+        _ => None,
+    }
+}
+
+fn cast_int_value<C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+    value: ValueId,
+    target_ty: Type,
+    signed: bool,
+) -> ValueId {
+    let current_ty = fb.type_of(value);
+    if current_ty == target_ty {
+        return value;
+    }
+
+    let Some(current_bits) = int_type_bits(current_ty) else {
+        return value;
+    };
+    let Some(target_bits) = int_type_bits(target_ty) else {
+        return value;
+    };
+
+    if current_bits > target_bits {
+        fb.insert_inst(Trunc::new(is, value, target_ty), target_ty)
+    } else if current_bits < target_bits {
+        if signed && current_ty != Type::I1 {
+            fb.insert_inst(Sext::new(is, value, target_ty), target_ty)
+        } else {
+            fb.insert_inst(Zext::new(is, value, target_ty), target_ty)
+        }
+    } else {
+        value
+    }
+}
+
+fn prim_for_runtime_value<'db>(
+    db: &'db DriverDataBase,
+    ty: hir::analysis::ty::ty_def::TyId<'db>,
+) -> Option<PrimTy> {
+    let ty = mir::repr::word_conversion_leaf_ty(db, ty);
+    let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(db).data(db) else {
+        return None;
+    };
+    Some(*prim)
+}
+
+fn coerce_scalar_value<C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+    value: ValueId,
+    target_ty: Type,
+    signed: bool,
+) -> ValueId {
+    if target_ty == Type::I1 {
+        condition_to_i1(fb, value, is)
+    } else {
+        cast_int_value(fb, is, value, target_ty, signed)
+    }
+}
+
+fn coerce_runtime_value<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    db: &'db DriverDataBase,
+    value: ValueId,
+    value_ty: hir::analysis::ty::ty_def::TyId<'db>,
+    target_ty: Type,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> ValueId {
+    let current_ty = fb.type_of(value);
+    if current_ty == target_ty {
+        return value;
+    }
+    if target_ty == Type::Unit {
+        return types::zero_value(fb, Type::Unit);
+    }
+    if current_ty == Type::Unit {
+        return types::zero_value(fb, target_ty);
+    }
+
+    match prim_for_runtime_value(db, value_ty) {
+        Some(PrimTy::Bool) => coerce_scalar_value(fb, is, value, target_ty, false),
+        Some(prim) => coerce_scalar_value(fb, is, value, target_ty, prim_is_signed(prim)),
+        None => cast_int_value(fb, is, value, target_ty, false),
+    }
+}
+
+fn make_int_immediate<C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    value: I256,
+    ty: Type,
+) -> ValueId {
+    fb.make_imm_value(Immediate::from_i256(value, ty))
+}
+
 /// Applies `from_word` conversion after loading a value.
 ///
-/// This mirrors the stdlib `WordRepr::from_word` semantics:
-/// - bool: convert to 0 or 1
-/// - unsigned sub-word: mask to appropriate width
-/// - signed sub-word: mask then sign-extend
+/// This mirrors the stdlib `WordRepr::from_word` semantics, but returns the
+/// loaded value at its natural Sonatina type.
 fn apply_from_word<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
     db: &'db DriverDataBase,
@@ -1221,33 +1422,10 @@ fn apply_from_word<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 
     if let TyData::TyBase(TyBase::Prim(prim)) = base_ty.data(db) {
         match prim {
-            PrimTy::Bool => {
-                // bool: value != 0 → 0 or 1
-                let zero = fb.make_imm_value(I256::zero());
-                let cmp = Ne::new(is, raw_value, zero);
-                let bool_val = fb.insert_inst(cmp, Type::I1);
-                // Extend back to I256
-                let ext = Zext::new(is, bool_val, Type::I256);
-                fb.insert_inst(ext, Type::I256)
-            }
-            _ => {
-                if let Some(small_ty) = prim_to_sonatina_type(*prim) {
-                    // Truncate to small type then extend back
-                    let trunc = Trunc::new(is, raw_value, small_ty);
-                    let truncated = fb.insert_inst(trunc, small_ty);
-
-                    if prim_is_signed(*prim) {
-                        let ext = Sext::new(is, truncated, Type::I256);
-                        fb.insert_inst(ext, Type::I256)
-                    } else {
-                        let ext = Zext::new(is, truncated, Type::I256);
-                        fb.insert_inst(ext, Type::I256)
-                    }
-                } else {
-                    // Full-width type, no conversion needed
-                    raw_value
-                }
-            }
+            PrimTy::Bool => condition_to_i1(fb, raw_value, is),
+            _ => prim_to_sonatina_type(*prim)
+                .map(|small_ty| cast_int_value(fb, is, raw_value, small_ty, prim_is_signed(*prim)))
+                .unwrap_or(raw_value),
         }
     } else {
         // Non-primitive type, no conversion
@@ -1257,10 +1435,8 @@ fn apply_from_word<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 
 /// Applies `to_word` conversion before storing a value.
 ///
-/// This mirrors the stdlib `WordRepr::to_word` semantics:
-/// - bool: convert to 0 or 1
-/// - unsigned sub-word: mask to appropriate width
-/// - signed: no conversion needed (already sign-extended)
+/// This mirrors the stdlib `WordRepr::to_word` semantics, converting a natural-width
+/// Sonatina integer back into an EVM word.
 fn apply_to_word<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
     db: &'db DriverDataBase,
@@ -1274,26 +1450,19 @@ fn apply_to_word<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     if let TyData::TyBase(TyBase::Prim(prim)) = base_ty.data(db) {
         match prim {
             PrimTy::Bool => {
-                // bool: value != 0 → 0 or 1
-                let zero = fb.make_imm_value(I256::zero());
-                let cmp = Ne::new(is, value, zero);
-                let bool_val = fb.insert_inst(cmp, Type::I1);
-                let ext = Zext::new(is, bool_val, Type::I256);
-                fb.insert_inst(ext, Type::I256)
+                let bool_val = condition_to_i1(fb, value, is);
+                fb.insert_inst(Zext::new(is, bool_val, Type::I256), Type::I256)
             }
-            PrimTy::U8 | PrimTy::U16 | PrimTy::U32 | PrimTy::U64 | PrimTy::U128 => {
-                // Unsigned: truncate then zero-extend to mask high bits
-                if let Some(small_ty) = prim_to_sonatina_type(*prim) {
-                    let trunc = Trunc::new(is, value, small_ty);
-                    let truncated = fb.insert_inst(trunc, small_ty);
-                    let ext = Zext::new(is, truncated, Type::I256);
-                    fb.insert_inst(ext, Type::I256)
-                } else {
-                    value
-                }
-            }
-            // Signed types and full-width types don't need conversion
-            _ => value,
+            _ => prim_to_sonatina_type(*prim)
+                .map(|small_ty| {
+                    let cast = cast_int_value(fb, is, value, small_ty, prim_is_signed(*prim));
+                    if prim_is_signed(*prim) {
+                        fb.insert_inst(Sext::new(is, cast, Type::I256), Type::I256)
+                    } else {
+                        fb.insert_inst(Zext::new(is, cast, Type::I256), Type::I256)
+                    }
+                })
+                .unwrap_or(value),
         }
     } else {
         // Non-primitive type, no conversion
@@ -1342,26 +1511,6 @@ fn fe_ty_to_sonatina_inner<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     let base_ty = ty.base_ty(db);
     match base_ty.data(db) {
         TyData::TyBase(TyBase::Prim(prim)) => match prim {
-            // Scalars: all map to I256 on EVM
-            PrimTy::Bool
-            | PrimTy::U8
-            | PrimTy::I8
-            | PrimTy::U16
-            | PrimTy::I16
-            | PrimTy::U32
-            | PrimTy::I32
-            | PrimTy::U64
-            | PrimTy::I64
-            | PrimTy::U128
-            | PrimTy::I128
-            | PrimTy::U256
-            | PrimTy::I256
-            | PrimTy::Usize
-            | PrimTy::Isize
-            | PrimTy::Ptr
-            | PrimTy::View
-            | PrimTy::BorrowMut
-            | PrimTy::BorrowRef => Some(Type::I256),
             PrimTy::String => None,
             PrimTy::Tuple(_) => {
                 let field_tys = ty.field_types(db);
@@ -1390,6 +1539,7 @@ fn fe_ty_to_sonatina_inner<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     fe_ty_to_sonatina(fb, db, target_layout, elem_ty, cache, name_counter)?;
                 Some(fb.declare_array_type(sonatina_elem, len))
             }
+            _ => Some(types::value_type(db, ty)),
         },
         TyData::TyBase(TyBase::Adt(adt_def)) => {
             match adt_def.adt_ref(db) {
@@ -1797,7 +1947,26 @@ pub(super) fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             } else {
                 // Non-entry function: emit internal Return for function call semantics.
                 let ret_sonatina = if let Some(v) = ret_val {
-                    Some(lower_value(ctx, *v)?)
+                    let value = lower_value(ctx, *v)?;
+                    let value_ty = ctx
+                        .body
+                        .values
+                        .get(v.index())
+                        .ok_or_else(|| LowerError::Internal("unknown return value".to_string()))?
+                        .ty;
+                    let ret_ty = ctx.ret_ty.ok_or_else(|| {
+                        LowerError::Internal(
+                            "function returns a value but LowerCtx.ret_ty is missing".to_string(),
+                        )
+                    })?;
+                    Some(coerce_runtime_value(
+                        ctx.fb,
+                        ctx.db,
+                        value,
+                        value_ty,
+                        types::value_type(ctx.db, ret_ty),
+                        ctx.is,
+                    ))
                 } else {
                     None
                 };
@@ -1841,11 +2010,14 @@ pub(super) fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 return Ok(());
             }
 
+            let discr_ty = ctx.fb.type_of(discr_val);
             let mut cases = Vec::with_capacity(targets.len());
             for target in targets {
-                let value = ctx
-                    .fb
-                    .make_imm_value(biguint_to_i256(&target.value.as_biguint()));
+                let value = make_int_immediate(
+                    ctx.fb,
+                    biguint_to_i256(&target.value.as_biguint()),
+                    discr_ty,
+                );
                 let dest = ctx.block_map[&target.block];
                 cases.push((value, dest));
             }
@@ -2248,10 +2420,11 @@ fn condition_to_i1<C: sonatina_ir::func_cursor::FuncCursor>(
     cond: ValueId,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> ValueId {
-    if fb.type_of(cond) == Type::I1 {
+    let cond_ty = fb.type_of(cond);
+    if cond_ty == Type::I1 {
         cond
     } else {
-        let zero = fb.make_imm_value(I256::zero());
+        let zero = types::zero_value(fb, cond_ty);
         fb.insert_inst(Ne::new(is, cond, zero), Type::I1)
     }
 }
@@ -2418,17 +2591,11 @@ fn checked_intrinsic_prim<'db>(
 }
 
 fn checked_intrinsic_value_type(prim: PrimTy) -> Result<Type, LowerError> {
-    match prim {
-        PrimTy::U8 | PrimTy::I8 => Ok(Type::I8),
-        PrimTy::U16 | PrimTy::I16 => Ok(Type::I16),
-        PrimTy::U32 | PrimTy::I32 => Ok(Type::I32),
-        PrimTy::U64 | PrimTy::I64 => Ok(Type::I64),
-        PrimTy::U128 | PrimTy::I128 => Ok(Type::I128),
-        PrimTy::U256 | PrimTy::I256 | PrimTy::Usize | PrimTy::Isize => Ok(Type::I256),
-        _ => Err(LowerError::Internal(format!(
+    types::prim_scalar_type(prim).ok_or_else(|| {
+        LowerError::Internal(format!(
             "checked intrinsic type must be integral, got `{prim:?}`"
-        ))),
-    }
+        ))
+    })
 }
 
 fn lower_checked_operand<C: sonatina_ir::func_cursor::FuncCursor>(
@@ -2436,28 +2603,9 @@ fn lower_checked_operand<C: sonatina_ir::func_cursor::FuncCursor>(
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
     value: ValueId,
     op_ty: Type,
+    signed: bool,
 ) -> ValueId {
-    if op_ty == Type::I256 {
-        value
-    } else {
-        fb.insert_inst(Trunc::new(is, value, op_ty), op_ty)
-    }
-}
-
-fn extend_checked_result<C: sonatina_ir::func_cursor::FuncCursor>(
-    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
-    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
-    value: ValueId,
-    prim: PrimTy,
-    op_ty: Type,
-) -> ValueId {
-    if op_ty == Type::I256 {
-        value
-    } else if prim_is_signed(prim) {
-        fb.insert_inst(Sext::new(is, value, Type::I256), Type::I256)
-    } else {
-        fb.insert_inst(Zext::new(is, value, Type::I256), Type::I256)
-    }
+    cast_int_value(fb, is, value, op_ty, signed)
 }
 
 fn lower_checked_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
@@ -2479,16 +2627,15 @@ fn lower_checked_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             };
             let lhs_word = lower_value(ctx, *a)?;
             let rhs_word = lower_value(ctx, *b)?;
-            let lhs = lower_checked_operand(ctx.fb, ctx.is, lhs_word, op_ty);
-            let rhs = lower_checked_operand(ctx.fb, ctx.is, rhs_word, op_ty);
+            let lhs = lower_checked_operand(ctx.fb, ctx.is, lhs_word, op_ty, signed);
+            let rhs = lower_checked_operand(ctx.fb, ctx.is, rhs_word, op_ty, signed);
             let [raw, overflow] = if signed {
                 ctx.fb.insert_saddo(lhs, rhs)
             } else {
                 ctx.fb.insert_uaddo(lhs, rhs)
             };
-            let result = extend_checked_result(ctx.fb, ctx.is, raw, prim, op_ty);
             emit_overflow_revert(ctx.fb, ctx.is, overflow);
-            Ok(result)
+            Ok(raw)
         }
         CheckedArithmeticOp::Sub => {
             let [a, b] = args else {
@@ -2499,16 +2646,15 @@ fn lower_checked_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             };
             let lhs_word = lower_value(ctx, *a)?;
             let rhs_word = lower_value(ctx, *b)?;
-            let lhs = lower_checked_operand(ctx.fb, ctx.is, lhs_word, op_ty);
-            let rhs = lower_checked_operand(ctx.fb, ctx.is, rhs_word, op_ty);
+            let lhs = lower_checked_operand(ctx.fb, ctx.is, lhs_word, op_ty, signed);
+            let rhs = lower_checked_operand(ctx.fb, ctx.is, rhs_word, op_ty, signed);
             let [raw, overflow] = if signed {
                 ctx.fb.insert_ssubo(lhs, rhs)
             } else {
                 ctx.fb.insert_usubo(lhs, rhs)
             };
-            let result = extend_checked_result(ctx.fb, ctx.is, raw, prim, op_ty);
             emit_overflow_revert(ctx.fb, ctx.is, overflow);
-            Ok(result)
+            Ok(raw)
         }
         CheckedArithmeticOp::Mul => {
             let [a, b] = args else {
@@ -2519,16 +2665,15 @@ fn lower_checked_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             };
             let lhs_word = lower_value(ctx, *a)?;
             let rhs_word = lower_value(ctx, *b)?;
-            let lhs = lower_checked_operand(ctx.fb, ctx.is, lhs_word, op_ty);
-            let rhs = lower_checked_operand(ctx.fb, ctx.is, rhs_word, op_ty);
+            let lhs = lower_checked_operand(ctx.fb, ctx.is, lhs_word, op_ty, signed);
+            let rhs = lower_checked_operand(ctx.fb, ctx.is, rhs_word, op_ty, signed);
             let [raw, overflow] = if signed {
                 ctx.fb.insert_smulo(lhs, rhs)
             } else {
                 ctx.fb.insert_umulo(lhs, rhs)
             };
-            let result = extend_checked_result(ctx.fb, ctx.is, raw, prim, op_ty);
             emit_overflow_revert(ctx.fb, ctx.is, overflow);
-            Ok(result)
+            Ok(raw)
         }
         CheckedArithmeticOp::Neg => {
             let [arg] = args else {
@@ -2544,11 +2689,10 @@ fn lower_checked_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 )));
             }
             let val_word = lower_value(ctx, *arg)?;
-            let val = lower_checked_operand(ctx.fb, ctx.is, val_word, op_ty);
+            let val = lower_checked_operand(ctx.fb, ctx.is, val_word, op_ty, true);
             let [raw, overflow] = ctx.fb.insert_snego(val);
-            let result = extend_checked_result(ctx.fb, ctx.is, raw, prim, op_ty);
             emit_overflow_revert(ctx.fb, ctx.is, overflow);
-            Ok(result)
+            Ok(raw)
         }
     }
 }
@@ -2582,7 +2726,7 @@ fn intrinsic_name_parts(callee_name: &str) -> Option<(&str, PrimTy)> {
 }
 
 fn intrinsic_value_type(prim: PrimTy) -> Type {
-    prim_to_sonatina_type(prim).unwrap_or(Type::I256)
+    types::prim_scalar_type(prim).unwrap_or(Type::I256)
 }
 
 fn lower_intrinsic_operand<C: sonatina_ir::func_cursor::FuncCursor>(
@@ -2593,30 +2737,9 @@ fn lower_intrinsic_operand<C: sonatina_ir::func_cursor::FuncCursor>(
     op_ty: Type,
 ) -> ValueId {
     if prim == PrimTy::Bool {
-        let zero = fb.make_imm_value(I256::zero());
-        fb.insert_inst(Ne::new(is, value, zero), Type::I1)
-    } else if op_ty == Type::I256 {
-        value
+        condition_to_i1(fb, value, is)
     } else {
-        fb.insert_inst(Trunc::new(is, value, op_ty), op_ty)
-    }
-}
-
-fn extend_intrinsic_result<C: sonatina_ir::func_cursor::FuncCursor>(
-    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
-    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
-    value: ValueId,
-    prim: PrimTy,
-    op_ty: Type,
-) -> ValueId {
-    if op_ty == Type::I1 {
-        fb.insert_inst(Zext::new(is, value, Type::I256), Type::I256)
-    } else if op_ty == Type::I256 {
-        value
-    } else if prim_is_signed(prim) {
-        fb.insert_inst(Sext::new(is, value, Type::I256), Type::I256)
-    } else {
-        fb.insert_inst(Zext::new(is, value, Type::I256), Type::I256)
+        cast_int_value(fb, is, value, op_ty, prim_is_signed(prim))
     }
 }
 
@@ -2690,10 +2813,7 @@ fn try_lower_numeric_intrinsic<C: sonatina_ir::func_cursor::FuncCursor>(
                 }
                 _ => unreachable!(),
             };
-            Ok(Some(ctx.fb.insert_inst(
-                Zext::new(ctx.is, cmp, Type::I256),
-                Type::I256,
-            )))
+            Ok(Some(cmp))
         }
 
         "add" | "sub" | "mul" | "pow" | "shl" => {
@@ -2708,9 +2828,7 @@ fn try_lower_numeric_intrinsic<C: sonatina_ir::func_cursor::FuncCursor>(
                 "shl" => ctx.fb.insert_inst(Shl::new(ctx.is, rhs, lhs), op_ty),
                 _ => unreachable!(),
             };
-            Ok(Some(extend_intrinsic_result(
-                ctx.fb, ctx.is, raw, prim, op_ty,
-            )))
+            Ok(Some(raw))
         }
         "div" => {
             let (lhs_word, rhs_word) = lower_binary_args(ctx, callee_name, args)?;
@@ -2721,9 +2839,7 @@ fn try_lower_numeric_intrinsic<C: sonatina_ir::func_cursor::FuncCursor>(
             } else {
                 ctx.fb.insert_evm_udivo(lhs, rhs)
             };
-            Ok(Some(extend_intrinsic_result(
-                ctx.fb, ctx.is, raw, prim, op_ty,
-            )))
+            Ok(Some(raw))
         }
         "rem" => {
             let (lhs_word, rhs_word) = lower_binary_args(ctx, callee_name, args)?;
@@ -2734,9 +2850,7 @@ fn try_lower_numeric_intrinsic<C: sonatina_ir::func_cursor::FuncCursor>(
             } else {
                 ctx.fb.insert_evm_umodo(lhs, rhs)
             };
-            Ok(Some(extend_intrinsic_result(
-                ctx.fb, ctx.is, raw, prim, op_ty,
-            )))
+            Ok(Some(raw))
         }
         "shr" => {
             let (lhs_word, rhs_word) = lower_binary_args(ctx, callee_name, args)?;
@@ -2747,9 +2861,7 @@ fn try_lower_numeric_intrinsic<C: sonatina_ir::func_cursor::FuncCursor>(
             } else {
                 ctx.fb.insert_inst(Shr::new(ctx.is, rhs, lhs), op_ty)
             };
-            Ok(Some(extend_intrinsic_result(
-                ctx.fb, ctx.is, raw, prim, op_ty,
-            )))
+            Ok(Some(raw))
         }
 
         "bitand" => {
@@ -2757,36 +2869,28 @@ fn try_lower_numeric_intrinsic<C: sonatina_ir::func_cursor::FuncCursor>(
             let lhs = lower_intrinsic_operand(ctx.fb, ctx.is, lhs_word, prim, op_ty);
             let rhs = lower_intrinsic_operand(ctx.fb, ctx.is, rhs_word, prim, op_ty);
             let raw = ctx.fb.insert_inst(And::new(ctx.is, lhs, rhs), op_ty);
-            Ok(Some(extend_intrinsic_result(
-                ctx.fb, ctx.is, raw, prim, op_ty,
-            )))
+            Ok(Some(raw))
         }
         "bitor" => {
             let (lhs_word, rhs_word) = lower_binary_args(ctx, callee_name, args)?;
             let lhs = lower_intrinsic_operand(ctx.fb, ctx.is, lhs_word, prim, op_ty);
             let rhs = lower_intrinsic_operand(ctx.fb, ctx.is, rhs_word, prim, op_ty);
             let raw = ctx.fb.insert_inst(Or::new(ctx.is, lhs, rhs), op_ty);
-            Ok(Some(extend_intrinsic_result(
-                ctx.fb, ctx.is, raw, prim, op_ty,
-            )))
+            Ok(Some(raw))
         }
         "bitxor" => {
             let (lhs_word, rhs_word) = lower_binary_args(ctx, callee_name, args)?;
             let lhs = lower_intrinsic_operand(ctx.fb, ctx.is, lhs_word, prim, op_ty);
             let rhs = lower_intrinsic_operand(ctx.fb, ctx.is, rhs_word, prim, op_ty);
             let raw = ctx.fb.insert_inst(Xor::new(ctx.is, lhs, rhs), op_ty);
-            Ok(Some(extend_intrinsic_result(
-                ctx.fb, ctx.is, raw, prim, op_ty,
-            )))
+            Ok(Some(raw))
         }
 
         "bitnot" => {
             let val_word = lower_unary_arg(ctx, callee_name, args)?;
             let val = lower_intrinsic_operand(ctx.fb, ctx.is, val_word, prim, op_ty);
             let raw = ctx.fb.insert_inst(Not::new(ctx.is, val), op_ty);
-            Ok(Some(extend_intrinsic_result(
-                ctx.fb, ctx.is, raw, prim, op_ty,
-            )))
+            Ok(Some(raw))
         }
         "not" => {
             if prim != PrimTy::Bool {
@@ -2797,17 +2901,13 @@ fn try_lower_numeric_intrinsic<C: sonatina_ir::func_cursor::FuncCursor>(
             let val_word = lower_unary_arg(ctx, callee_name, args)?;
             let val = lower_intrinsic_operand(ctx.fb, ctx.is, val_word, prim, op_ty);
             let is_zero = ctx.fb.insert_inst(IsZero::new(ctx.is, val), Type::I1);
-            Ok(Some(extend_intrinsic_result(
-                ctx.fb, ctx.is, is_zero, prim, op_ty,
-            )))
+            Ok(Some(is_zero))
         }
         "neg" => {
             let val_word = lower_unary_arg(ctx, callee_name, args)?;
             let val = lower_intrinsic_operand(ctx.fb, ctx.is, val_word, prim, op_ty);
             let raw = ctx.fb.insert_inst(Neg::new(ctx.is, val), op_ty);
-            Ok(Some(extend_intrinsic_result(
-                ctx.fb, ctx.is, raw, prim, op_ty,
-            )))
+            Ok(Some(raw))
         }
 
         // Not a recognized intrinsic operation.

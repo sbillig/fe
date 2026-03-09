@@ -5,19 +5,17 @@ input_file: crates/codegen/tests/fixtures/while.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %do_while() -> i256 {
+func private %do_while() -> i64 {
     block0:
         jump block1;
 
     block1:
-        v1.i256 = phi (0.i256 block0) (v8 block2);
-        v3.i1 = lt v1 10.i256;
-        v4.i256 = zext v3 i256;
-        v5.i1 = ne v4 0.i256;
-        br v5 block2 block3;
+        v1.i64 = phi (0.i64 block0) (v6 block2);
+        v3.i1 = lt v1 10.i64;
+        br v3 block2 block3;
 
     block2:
-        v8.i256 = add v1 1.i256;
+        v6.i64 = add v1 1.i64;
         jump block1;
 
     block3:
@@ -26,7 +24,7 @@ func private %do_while() -> i256 {
 
 func private %__fe_sonatina_entry() {
     block0:
-        v0.i256 = call %do_while;
+        v0.i64 = call %do_while;
         evm_stop;
 }
 

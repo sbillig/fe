@@ -324,7 +324,7 @@ object "CoolCoin" {
       leave
     }
     function $stor_ptr__Evm_hef0af3106e109414_AccessControl_3___1911f7c438797961($self, $slot) -> ret {
-      let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__TokenStore_0__1___175215aa56127bde($slot)
+      let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__AccessControl_3___3633e113b859df5f($slot)
       ret := v0
       leave
     }
@@ -391,6 +391,10 @@ object "CoolCoin" {
       let v3 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v1, 32)
       let v4 := keccak256(v0, v3)
       ret := v4
+      leave
+    }
+    function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__AccessControl_3___3633e113b859df5f($raw) -> ret {
+      ret := $raw
       leave
     }
     function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__TokenStore_0__1___175215aa56127bde($raw) -> ret {
@@ -1100,7 +1104,7 @@ object "CoolCoin" {
         let v0 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new()
         let v1 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v0, 32)
         pop(v1)
-        $string_const_n__usize__h78b9b185054e88a2_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_32_SolEncoder_h1b9228b90dad6928__562228df2278c1ed($value, v0)
+        $string_const_n__usize__h78b9b185054e88a2_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_8_SolEncoder_h1b9228b90dad6928__1811d65564ab2650($value, v0)
         let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v0)
         let v3 := mload(v2)
         let v4 := mload(add(v2, 32))
@@ -1292,7 +1296,7 @@ object "CoolCoin" {
         leave
       }
       function $stor_ptr__Evm_hef0af3106e109414_AccessControl_3___1911f7c438797961($self, $slot) -> ret {
-        let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__TokenStore_0__1___175215aa56127bde($slot)
+        let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__AccessControl_3___3633e113b859df5f($slot)
         ret := v0
         leave
       }
@@ -1399,11 +1403,20 @@ object "CoolCoin" {
         ret := v4
         leave
       }
+      function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__AccessControl_3___3633e113b859df5f($raw) -> ret {
+        ret := $raw
+        leave
+      }
       function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__TokenStore_0__1___175215aa56127bde($raw) -> ret {
         ret := $raw
         leave
       }
       function $string_const_n__usize__h78b9b185054e88a2_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_32_SolEncoder_h1b9228b90dad6928__562228df2278c1ed($self, $e) {
+        let v0 := $self
+        $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($e, v0)
+        leave
+      }
+      function $string_const_n__usize__h78b9b185054e88a2_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_8_SolEncoder_h1b9228b90dad6928__1811d65564ab2650($self, $e) {
         let v0 := $self
         $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($e, v0)
         leave

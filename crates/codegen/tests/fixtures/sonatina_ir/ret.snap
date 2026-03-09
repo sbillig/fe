@@ -5,87 +5,87 @@ input_file: crates/codegen/tests/fixtures/ret.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %retfoo(v0.i256, v1.i256) -> i256 {
+func private %retfoo(v0.i256, v1.i256) -> i64 {
     block0:
         v3.i1 = ne v0 0.i256;
         br v3 block1 block2;
 
     block1:
-        return 0.i256;
+        return 0.i64;
 
     block2:
-        v6.i256 = call %u64_haee7f05a097ffa16_ord_h264f6d6d75097a_lt v1 5.i256;
-        v7.i1 = ne v6 0.i256;
+        v7.i1 = call %u64_haee7f05a097ffa16_ord_h264f6d6d75097a_lt v1 5.i256;
         br v7 block3 block4;
 
     block3:
-        return 1.i256;
+        return 1.i64;
 
     block4:
-        v10.i256 = call %u64_haee7f05a097ffa16_sub_h7b686d389c07535e_sub v1 1.i256;
-        v12.i256 = call %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq v10 42.i256;
-        v13.i1 = ne v12 0.i256;
-        br v13 block5 block6;
+        v10.i64 = trunc v1 i64;
+        v11.i64 = call %u64_haee7f05a097ffa16_sub_h7b686d389c07535e_sub v10 1.i64;
+        v12.i256 = zext v11 i256;
+        v14.i1 = call %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq v12 42.i256;
+        br v14 block5 block6;
 
     block5:
-        return 2.i256;
+        return 2.i64;
 
     block6:
-        v16.i256 = call %u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add v10 1.i256;
-        return v16;
+        v17.i64 = call %u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add v11 1.i64;
+        return v17;
 }
 
-func private %u64_haee7f05a097ffa16_ord_h264f6d6d75097a_lt(v0.i256, v1.i256) -> i256 {
+func private %u64_haee7f05a097ffa16_ord_h264f6d6d75097a_lt(v0.i256, v1.i256) -> i1 {
     block0:
-        v3.i64 = trunc v0 i64;
-        v4.i64 = trunc v1 i64;
-        v5.i1 = lt v3 v4;
-        v6.i256 = zext v5 i256;
-        return v6;
+        v2.i64 = trunc v0 i64;
+        v3.i64 = trunc v1 i64;
+        v4.i1 = lt v2 v3;
+        return v4;
 }
 
-func private %u64_haee7f05a097ffa16_sub_h7b686d389c07535e_sub(v0.i256, v1.i256) -> i256 {
+func private %u64_haee7f05a097ffa16_sub_h7b686d389c07535e_sub(v0.i64, v1.i64) -> i64 {
     block0:
-        v3.i64 = trunc v0 i64;
-        v4.i64 = trunc v1 i64;
-        (v5.i64, v6.i1) = usubo v3 v4;
-        v7.i256 = zext v5 i256;
-        br v6 block1 block2;
+        v2.i256 = zext v0 i256;
+        v3.i256 = zext v1 i256;
+        v4.i64 = trunc v2 i64;
+        v5.i64 = trunc v3 i64;
+        (v6.i64, v7.i1) = usubo v4 v5;
+        br v7 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        return v7;
-}
-
-func private %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq(v0.i256, v1.i256) -> i256 {
-    block0:
-        v3.i64 = trunc v0 i64;
-        v4.i64 = trunc v1 i64;
-        v5.i1 = eq v3 v4;
-        v6.i256 = zext v5 i256;
         return v6;
 }
 
-func private %u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add(v0.i256, v1.i256) -> i256 {
+func private %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq(v0.i256, v1.i256) -> i1 {
     block0:
-        v3.i64 = trunc v0 i64;
-        v4.i64 = trunc v1 i64;
-        (v5.i64, v6.i1) = uaddo v3 v4;
-        v7.i256 = zext v5 i256;
-        br v6 block1 block2;
+        v2.i64 = trunc v0 i64;
+        v3.i64 = trunc v1 i64;
+        v4.i1 = eq v2 v3;
+        return v4;
+}
+
+func private %u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add(v0.i64, v1.i64) -> i64 {
+    block0:
+        v2.i256 = zext v0 i256;
+        v3.i256 = zext v1 i256;
+        v4.i64 = trunc v2 i64;
+        v5.i64 = trunc v3 i64;
+        (v6.i64, v7.i1) = uaddo v4 v5;
+        br v7 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        return v7;
+        return v6;
 }
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.i256 = call %retfoo 0.i256 0.i256;
+        v1.i64 = call %retfoo 0.i256 0.i256;
         evm_stop;
 }
 

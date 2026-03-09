@@ -133,96 +133,94 @@ func private %balance_of_raw__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.i256, v1.i
 
 func private %total_supply__StorPtr_TotalSupply___2e654c25952f42f9(v0.i256) -> i256 {
     block0:
-        v2.i256 = evm_sload v0;
-        return v2;
+        v1.i256 = evm_sload v0;
+        return v1;
 }
 
 func private %credit_alice__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78(v0.i256, v1.i256, v2.i256) -> i256 {
     block0:
-        v4.i256 = evm_sload v1;
-        v5.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor v4 v0;
-        evm_sstore v1 v5;
-        v6.i256 = evm_sload v2;
-        v7.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor v6 v0;
-        evm_sstore v2 v7;
-        v8.i256 = evm_sload v1;
-        return v8;
+        v3.i256 = evm_sload v1;
+        v4.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor v3 v0;
+        evm_sstore v1 v4;
+        v5.i256 = evm_sload v2;
+        v6.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor v5 v0;
+        evm_sstore v2 v6;
+        v7.i256 = evm_sload v1;
+        return v7;
 }
 
 func private %credit_bob__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78(v0.i256, v1.i256, v2.i256) -> i256 {
     block0:
-        v5.i256 = add v1 1.i256;
-        v6.i256 = evm_sload v5;
-        v7.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor v6 v0;
-        v8.i256 = add v1 1.i256;
-        evm_sstore v8 v7;
-        v9.i256 = evm_sload v2;
-        v10.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor v9 v0;
-        evm_sstore v2 v10;
-        v11.i256 = add v1 1.i256;
-        v12.i256 = evm_sload v11;
-        return v12;
+        v4.i256 = add v1 1.i256;
+        v5.i256 = evm_sload v4;
+        v6.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor v5 v0;
+        v7.i256 = add v1 1.i256;
+        evm_sstore v7 v6;
+        v8.i256 = evm_sload v2;
+        v9.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor v8 v0;
+        evm_sstore v2 v9;
+        v10.i256 = add v1 1.i256;
+        v11.i256 = evm_sload v10;
+        return v11;
 }
 
 func private %transfer_from_alice__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = evm_sload v1;
-        v4.i256 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt_stor_arg0_root_stor v3 v0;
-        v5.i1 = ne v4 0.i256;
+        v2.i256 = evm_sload v1;
+        v3.i1 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt_stor_arg0_root_stor v2 v0;
+        br v3 block1 block2;
+
+    block1:
+        v5.*i8 = evm_malloc 32.i256;
+        v6.i256 = ptr_to_int v5 i256;
+        v8.*i256 = bitcast v5 *i256;
+        mstore v8 1.i256 i256;
+        return v6;
+
+    block2:
+        v10.i256 = evm_sload v1;
+        v12.i256 = call %u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub_stor v10 v0;
+        evm_sstore v1 v12;
+        v13.i256 = add v1 1.i256;
+        v14.i256 = evm_sload v13;
+        v15.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor v14 v0;
+        v16.i256 = add v1 1.i256;
+        evm_sstore v16 v15;
+        v17.*i8 = evm_malloc 32.i256;
+        v18.i256 = ptr_to_int v17 i256;
+        v20.*i256 = bitcast v17 *i256;
+        mstore v20 0.i256 i256;
+        return v18;
+}
+
+func private %transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = add v1 1.i256;
+        v4.i256 = evm_sload v3;
+        v5.i1 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt_stor_arg0_root_stor v4 v0;
         br v5 block1 block2;
 
     block1:
         v7.*i8 = evm_malloc 32.i256;
         v8.i256 = ptr_to_int v7 i256;
-        v10.*i256 = bitcast v7 *i256;
-        mstore v10 1.i256 i256;
+        v9.*i256 = bitcast v7 *i256;
+        mstore v9 1.i256 i256;
         return v8;
 
     block2:
-        v12.i256 = evm_sload v1;
+        v11.i256 = add v1 1.i256;
+        v12.i256 = evm_sload v11;
         v14.i256 = call %u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub_stor v12 v0;
-        evm_sstore v1 v14;
         v15.i256 = add v1 1.i256;
-        v16.i256 = evm_sload v15;
+        evm_sstore v15 v14;
+        v16.i256 = evm_sload v1;
         v17.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor v16 v0;
-        v18.i256 = add v1 1.i256;
-        evm_sstore v18 v17;
-        v19.*i8 = evm_malloc 32.i256;
-        v20.i256 = ptr_to_int v19 i256;
-        v21.*i256 = bitcast v19 *i256;
+        evm_sstore v1 v17;
+        v18.*i8 = evm_malloc 32.i256;
+        v19.i256 = ptr_to_int v18 i256;
+        v21.*i256 = bitcast v18 *i256;
         mstore v21 0.i256 i256;
-        return v20;
-}
-
-func private %transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.i256, v1.i256) -> i256 {
-    block0:
-        v4.i256 = add v1 1.i256;
-        v5.i256 = evm_sload v4;
-        v6.i256 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt_stor_arg0_root_stor v5 v0;
-        v7.i1 = ne v6 0.i256;
-        br v7 block1 block2;
-
-    block1:
-        v9.*i8 = evm_malloc 32.i256;
-        v10.i256 = ptr_to_int v9 i256;
-        v11.*i256 = bitcast v9 *i256;
-        mstore v11 1.i256 i256;
-        return v10;
-
-    block2:
-        v13.i256 = add v1 1.i256;
-        v14.i256 = evm_sload v13;
-        v16.i256 = call %u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub_stor v14 v0;
-        v17.i256 = add v1 1.i256;
-        evm_sstore v17 v16;
-        v18.i256 = evm_sload v1;
-        v19.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor v18 v0;
-        evm_sstore v1 v19;
-        v20.*i8 = evm_malloc 32.i256;
-        v21.i256 = ptr_to_int v20 i256;
-        v22.*i256 = bitcast v20 *i256;
-        mstore v22 0.i256 i256;
-        return v21;
+        return v19;
 }
 
 func private %init__StorPtr_Evm___207f35a85ac4062e() {
@@ -235,117 +233,121 @@ func private %init__StorPtr_Evm___207f35a85ac4062e() {
 
 func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block0:
-        v1.i256 = call %stor_ptr_stor__Evm_hef0af3106e109414_CoinStore_hd26a92ca525e0e79__b6feb5585dda62f1 0.i256 0.i256;
-        v3.i256 = call %stor_ptr_stor__Evm_hef0af3106e109414_TotalSupply_hddb16bb19b5b088e__f5679b0709de743a 0.i256 2.i256;
-        v4.i256 = evm_calldata_load 0.i256;
-        v6.i256 = shr 224.i256 v4;
+        v2.i256 = call %stor_ptr_stor__Evm_hef0af3106e109414_CoinStore_hd26a92ca525e0e79__b6feb5585dda62f1 0.i256 0.i256;
+        v5.i256 = call %stor_ptr_stor__Evm_hef0af3106e109414_TotalSupply_hddb16bb19b5b088e__f5679b0709de743a 0.i256 2.i256;
+        v6.i256 = evm_calldata_load 0.i256;
+        v8.i256 = shr 224.i256 v6;
         jump block14;
 
     block1:
-        v8.i256 = evm_calldata_load 4.i256;
-        v10.i256 = evm_calldata_load 36.i256;
+        v10.i256 = evm_calldata_load 4.i256;
+        v12.i256 = evm_calldata_load 36.i256;
         jump block5;
 
     block2:
-        v14.i256 = call %credit_alice__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78 v10 v1 v3;
+        v16.i256 = call %credit_alice__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78 v12 v2 v5;
         jump block3;
 
     block3:
-        v15.i256 = phi (v14 block2) (v19 block4);
-        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v15 0.i256;
+        v17.i256 = phi (v16 block2) (v22 block4);
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v17 0.i256;
         evm_invalid;
 
     block4:
-        v19.i256 = call %credit_bob__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78 v10 v1 v3;
+        v22.i256 = call %credit_bob__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78 v12 v2 v5;
         jump block3;
 
     block5:
-        br_table v8 block4 (0.i256 block2);
+        br_table v10 block4 (0.i256 block2);
 
     block6:
-        v21.i256 = evm_calldata_load 4.i256;
-        v23.i256 = call %balance_of_raw__StorPtr_CoinStore___ba1c0d0726e89ba2 v21 v1;
-        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v23 0.i256;
+        v24.i256 = evm_calldata_load 4.i256;
+        v26.i256 = call %balance_of_raw__StorPtr_CoinStore___ba1c0d0726e89ba2 v24 v2;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v26 0.i256;
         evm_invalid;
 
     block7:
-        v24.i256 = evm_calldata_load 4.i256;
-        v25.i256 = evm_calldata_load 36.i256;
+        v28.i256 = evm_calldata_load 4.i256;
+        v29.i256 = evm_calldata_load 36.i256;
         jump block11;
 
     block8:
-        v28.i256 = call %transfer_from_alice__StorPtr_CoinStore___ba1c0d0726e89ba2 v25 v1;
+        v32.i256 = call %transfer_from_alice__StorPtr_CoinStore___ba1c0d0726e89ba2 v29 v2;
         jump block9;
 
     block9:
-        v29.i256 = phi (v28 block8) (v33 block10);
-        v30.i256 = call %transfer_result_code v29;
-        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v30 0.i256;
+        v33.i256 = phi (v32 block8) (v38 block10);
+        v34.i256 = call %transfer_result_code v33;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v34 0.i256;
         evm_invalid;
 
     block10:
-        v33.i256 = call %transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2 v25 v1;
+        v38.i256 = call %transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2 v29 v2;
         jump block9;
 
     block11:
-        br_table v24 block10 (0.i256 block8);
+        br_table v28 block10 (0.i256 block8);
 
     block12:
-        v36.i256 = call %total_supply__StorPtr_TotalSupply___2e654c25952f42f9 v3;
-        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v36 0.i256;
+        v41.i256 = call %total_supply__StorPtr_TotalSupply___2e654c25952f42f9 v5;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v41 0.i256;
         evm_invalid;
 
     block13:
         evm_return 0.i256 0.i256;
 
     block14:
-        br_table v6 block13 (2877082652.i256 block1) (1818602213.i256 block6) (217554442.i256 block7) (960555502.i256 block12);
+        br_table v8 block13 (2877082652.i256 block1) (1818602213.i256 block6) (217554442.i256 block7) (960555502.i256 block12);
 }
 
 func private %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor(v0.i256, v1.i256) -> i256 {
     block0:
-        (v3.i256, v4.i1) = uaddo v0 v1;
-        br v4 block1 block2;
+        (v2.i256, v3.i1) = uaddo v0 v1;
+        br v3 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        return v3;
+        return v2;
 }
 
-func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt_stor_arg0_root_stor(v0.i256, v1.i256) -> i256 {
+func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt_stor_arg0_root_stor(v0.i256, v1.i256) -> i1 {
     block0:
-        v3.i1 = lt v0 v1;
-        v4.i256 = zext v3 i256;
-        return v4;
+        v2.i1 = lt v0 v1;
+        return v2;
 }
 
 func private %u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub_stor(v0.i256, v1.i256) -> i256 {
     block0:
-        (v3.i256, v4.i1) = usubo v0 v1;
-        br v4 block1 block2;
+        (v2.i256, v3.i1) = usubo v0 v1;
+        br v3 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        return v3;
+        return v2;
 }
 
 func private %stor_ptr_stor__Evm_hef0af3106e109414_CoinStore_hd26a92ca525e0e79__b6feb5585dda62f1(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = call %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__CoinStore_hd26a92ca525e0e79__a9c0a742c4f0cede v1;
-        return v3;
+        v2.i256 = call %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__CoinStore_hd26a92ca525e0e79__a9c0a742c4f0cede v1;
+        return v2;
 }
 
 func private %stor_ptr_stor__Evm_hef0af3106e109414_TotalSupply_hddb16bb19b5b088e__f5679b0709de743a(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = call %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__CoinStore_hd26a92ca525e0e79__a9c0a742c4f0cede v1;
-        return v3;
+        v2.i256 = call %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__TotalSupply_hddb16bb19b5b088e__4092604729aa99eb v1;
+        return v2;
 }
 
 func private %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__CoinStore_hd26a92ca525e0e79__a9c0a742c4f0cede(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+func private %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__TotalSupply_hddb16bb19b5b088e__4092604729aa99eb(v0.i256) -> i256 {
     block0:
         return v0;
 }

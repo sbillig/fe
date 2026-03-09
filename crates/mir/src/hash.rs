@@ -102,9 +102,10 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
         }
     }
 
-    /// Hash the origin of a MIR value, ignoring type information (handled elsewhere).
+    /// Hash a MIR value, including its logical type so width-distinct helpers are not merged.
     fn hash_value(&mut self, value: &crate::ValueData<'db>) {
         self.write_u8(0x10);
+        self.write_str(value.ty.pretty_print(self.db));
         // Hash the runtime representation category (word vs reference + address space).
         match value.repr {
             ValueRepr::Word => self.write_u8(0),

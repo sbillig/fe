@@ -5,14 +5,14 @@ input_file: crates/codegen/tests/fixtures/bool_literal.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %bool_literal() -> i256 {
+func private %bool_literal() -> i1 {
     block0:
-        return 1.i256;
+        return 1.i1;
 }
 
 func private %__fe_sonatina_entry() {
     block0:
-        v0.i256 = call %bool_literal;
+        v0.i1 = call %bool_literal;
         evm_stop;
 }
 

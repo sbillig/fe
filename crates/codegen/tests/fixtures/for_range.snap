@@ -66,8 +66,8 @@ function $usize_ha12462c6d36e68b0_sub_h7b686d389c07535e_sub($self, $other) -> re
 }
 function $checked_add_unsigned_impl__usize__a12462c6d36e68b0($a, $b) -> ret {
   let v0 := $usize_ha12462c6d36e68b0_wrappingadd_h14afa79b3047617f_wrapping_add($a, $b)
-  let v1 := $u8_hbc9d6eeaea22ffb5_intword_h9a147c8c32b1323c_to_word(v0)
-  let v2 := $u8_hbc9d6eeaea22ffb5_intword_h9a147c8c32b1323c_to_word($a)
+  let v1 := $usize_ha12462c6d36e68b0_intword_h9a147c8c32b1323c_to_word(v0)
+  let v2 := $usize_ha12462c6d36e68b0_intword_h9a147c8c32b1323c_to_word($a)
   let v3 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v1, v2)
   let v4 := v3
   if v4 {
@@ -82,8 +82,8 @@ function $checked_add_usize($a, $b) -> ret {
   leave
 }
 function $checked_sub_unsigned_impl__usize__a12462c6d36e68b0($a, $b) -> ret {
-  let v0 := $u8_hbc9d6eeaea22ffb5_intword_h9a147c8c32b1323c_to_word($b)
-  let v1 := $u8_hbc9d6eeaea22ffb5_intword_h9a147c8c32b1323c_to_word($a)
+  let v0 := $usize_ha12462c6d36e68b0_intword_h9a147c8c32b1323c_to_word($b)
+  let v1 := $usize_ha12462c6d36e68b0_intword_h9a147c8c32b1323c_to_word($a)
   let v2 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v0, v1)
   let v3 := v2
   if v3 {
@@ -108,7 +108,7 @@ function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt($self, $other) -> ret {
   ret := v0
   leave
 }
-function $u8_hbc9d6eeaea22ffb5_intword_h9a147c8c32b1323c_to_word($self) -> ret {
+function $usize_ha12462c6d36e68b0_intword_h9a147c8c32b1323c_to_word($self) -> ret {
   ret := $self
   leave
 }

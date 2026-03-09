@@ -5,7 +5,7 @@ input_file: crates/codegen/tests/fixtures/match_wildcard.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %match_with_wildcard(v0.i256) -> i256 {
+func private %match_with_wildcard(v0.i256) -> i8 {
     block0:
         jump block4;
 
@@ -13,7 +13,7 @@ func private %match_with_wildcard(v0.i256) -> i256 {
         jump block2;
 
     block2:
-        v3.i256 = phi (1.i256 block1) (0.i256 block3);
+        v3.i8 = phi (1.i8 block1) (0.i8 block3);
         return v3;
 
     block3:
@@ -25,7 +25,7 @@ func private %match_with_wildcard(v0.i256) -> i256 {
         br_table v6 block3 (0.i256 block1);
 }
 
-func private %wildcard_not_last(v0.i256) -> i256 {
+func private %wildcard_not_last(v0.i256) -> i8 {
     block0:
         jump block4;
 
@@ -33,17 +33,18 @@ func private %wildcard_not_last(v0.i256) -> i256 {
         jump block2;
 
     block2:
-        v3.i256 = phi (10.i256 block1) (99.i256 block3);
+        v3.i8 = phi (10.i8 block1) (99.i8 block3);
         return v3;
 
     block3:
         jump block2;
 
     block4:
-        br_table v0 block3 (0.i256 block1);
+        v6.i8 = trunc v0 i8;
+        br_table v6 block3 (0.i8 block1);
 }
 
-func private %multiple_before_wildcard(v0.i256) -> i256 {
+func private %multiple_before_wildcard(v0.i256) -> i8 {
     block0:
         jump block5;
 
@@ -51,7 +52,7 @@ func private %multiple_before_wildcard(v0.i256) -> i256 {
         jump block2;
 
     block2:
-        v3.i256 = phi (1.i256 block1) (2.i256 block3) (3.i256 block4);
+        v3.i8 = phi (1.i8 block1) (2.i8 block3) (3.i8 block4);
         return v3;
 
     block3:
@@ -68,7 +69,7 @@ func private %multiple_before_wildcard(v0.i256) -> i256 {
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.i256 = call %match_with_wildcard 0.i256;
+        v1.i8 = call %match_with_wildcard 0.i256;
         evm_stop;
 }
 
