@@ -1,7 +1,7 @@
 //! Type mapping from Fe MIR to Sonatina IR types.
 
 use driver::DriverDataBase;
-use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData, TyId};
+use hir::analysis::ty::ty_def::{CapabilityKind, PrimTy, TyBase, TyData, TyId};
 use mir::{
     LocalId, MirBody, MirInst, Rvalue, ValueData, ValueOrigin, layout::TargetDataLayout, repr,
 };
@@ -31,6 +31,10 @@ pub fn prim_scalar_type(prim: PrimTy) -> Option<Type> {
 
 /// Returns the Sonatina runtime value type for a Fe scalar-or-pointer runtime value.
 pub fn value_type(db: &DriverDataBase, ty: TyId<'_>) -> Type {
+    let ty = match ty.as_capability(db) {
+        Some((CapabilityKind::View, inner)) => inner,
+        _ => ty,
+    };
     let leaf_ty = repr::word_conversion_leaf_ty(db, ty);
     if let TyData::TyBase(TyBase::Prim(prim)) = leaf_ty.base_ty(db).data(db)
         && let Some(ty) = prim_scalar_type(*prim)

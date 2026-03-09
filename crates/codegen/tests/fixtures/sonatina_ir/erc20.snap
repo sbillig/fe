@@ -518,8 +518,7 @@ func private %accesscontrol____h4c85da5bbb505ade_require_stor_arg0_root_stor__3_
         v12.*@__fe_Address_0 = gep v10 0.i256 1.i256;
         mstore v12 v3 i256;
         v14.i1 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor___u256__Address__bool_3__5e1c6d4e3f4fb7e8 0.i256 v6;
-        v15.i256 = zext v14 i256;
-        v16.i1 = call %bool_h947c0c03c59c6f07_eq_he50383edd273619f_eq v15 1.i256;
+        v16.i1 = call %bool_h947c0c03c59c6f07_eq_he50383edd273619f_eq v14 1.i1;
         call %assert v16;
         return;
 }
@@ -980,12 +979,10 @@ func private %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0
         return v4;
 }
 
-func private %bool_h947c0c03c59c6f07_eq_he50383edd273619f_eq(v0.i256, v1.i256) -> i1 {
+func private %bool_h947c0c03c59c6f07_eq_he50383edd273619f_eq(v0.i1, v1.i1) -> i1 {
     block0:
-        v3.i1 = ne v0 0.i256;
-        v4.i1 = ne v1 0.i256;
-        v5.i1 = eq v3 v4;
-        return v5;
+        v2.i1 = eq v0 v1;
+        return v2;
 }
 
 func private %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0.i256) -> i256 {

@@ -5,17 +5,16 @@ input_file: crates/codegen/tests/fixtures/match_enum_with_data.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %make_some(v0.i256) -> i256 {
+func private %make_some(v0.i64) -> i256 {
     block0:
         v2.*i8 = evm_malloc 64.i256;
         v3.i256 = ptr_to_int v2 i256;
         v5.*i256 = bitcast v2 *i256;
         mstore v5 1.i256 i256;
-        v6.i64 = trunc v0 i64;
-        v7.i256 = zext v6 i256;
-        v9.i256 = add v3 32.i256;
-        v10.*i256 = int_to_ptr v9 *i256;
-        mstore v10 v7 i256;
+        v6.i256 = zext v0 i256;
+        v8.i256 = add v3 32.i256;
+        v9.*i256 = int_to_ptr v8 *i256;
+        mstore v9 v6 i256;
         return v3;
 }
 
@@ -48,7 +47,7 @@ func private %match_option(v0.i256) -> i64 {
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.i256 = call %make_some 0.i256;
+        v1.i256 = call %make_some 0.i64;
         evm_stop;
 }
 

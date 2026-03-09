@@ -5,57 +5,48 @@ input_file: crates/codegen/tests/fixtures/aug_assign.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %aug_assign(v0.i256, v1.i256) -> i64 {
+func private %aug_assign(v0.i64, v1.i64) -> i64 {
     block0:
-        v2.i64 = trunc v0 i64;
-        v3.i64 = trunc v1 i64;
-        (v4.i64, v5.i1) = uaddo v2 v3;
-        br v5 block1 block2;
+        (v2.i64, v3.i1) = uaddo v0 v1;
+        br v3 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        (v8.i64, v9.i1) = umulo v4 2.i64;
-        br v9 block3 block4;
+        (v6.i64, v7.i1) = umulo v2 2.i64;
+        br v7 block3 block4;
 
     block3:
         evm_revert 0.i256 0.i256;
 
     block4:
-        v10.i64 = call %u64_haee7f05a097ffa16_div_h14000ca7bc1a1bc4_div v8 2.i64;
-        return v10;
+        v8.i64 = call %u64_haee7f05a097ffa16_div_h14000ca7bc1a1bc4_div v6 2.i64;
+        return v8;
 }
 
 func private %u64_haee7f05a097ffa16_div_h14000ca7bc1a1bc4_div(v0.i64, v1.i64) -> i64 {
     block0:
-        v2.i256 = zext v1 i256;
-        v4.i1 = call %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq v2 0.i256;
-        br v4 block1 block2;
+        v3.i1 = call %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq v1 0.i64;
+        br v3 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        v6.i256 = zext v0 i256;
-        v8.i256 = zext v1 i256;
-        v9.i64 = trunc v6 i64;
-        v10.i64 = trunc v8 i64;
-        (v11.i64, v12.i1) = evm_udivo v9 v10;
-        return v11;
+        (v7.i64, v8.i1) = evm_udivo v0 v1;
+        return v7;
 }
 
-func private %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq(v0.i256, v1.i256) -> i1 {
+func private %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq(v0.i64, v1.i64) -> i1 {
     block0:
-        v2.i64 = trunc v0 i64;
-        v3.i64 = trunc v1 i64;
-        v4.i1 = eq v2 v3;
-        return v4;
+        v2.i1 = eq v0 v1;
+        return v2;
 }
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.i64 = call %aug_assign 0.i256 0.i256;
+        v1.i64 = call %aug_assign 0.i64 0.i64;
         evm_stop;
 }
 

@@ -16,28 +16,21 @@ func private %math_ops() -> i64 {
 
 func private %u64_haee7f05a097ffa16_rem_h890eb23a7e6cfef7_rem(v0.i64, v1.i64) -> i64 {
     block0:
-        v2.i256 = zext v1 i256;
-        v4.i1 = call %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq v2 0.i256;
-        br v4 block1 block2;
+        v3.i1 = call %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq v1 0.i64;
+        br v3 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        v6.i256 = zext v0 i256;
-        v8.i256 = zext v1 i256;
-        v9.i64 = trunc v6 i64;
-        v10.i64 = trunc v8 i64;
-        (v11.i64, v12.i1) = evm_umodo v9 v10;
-        return v11;
+        (v7.i64, v8.i1) = evm_umodo v0 v1;
+        return v7;
 }
 
-func private %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq(v0.i256, v1.i256) -> i1 {
+func private %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq(v0.i64, v1.i64) -> i1 {
     block0:
-        v2.i64 = trunc v0 i64;
-        v3.i64 = trunc v1 i64;
-        v4.i1 = eq v2 v3;
-        return v4;
+        v2.i1 = eq v0 v1;
+        return v2;
 }
 
 func private %__fe_sonatina_entry() {

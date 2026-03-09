@@ -522,6 +522,15 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         // Keep lowered functions private so Sonatina DFE can eliminate dead functions.
         // Reachability roots are selected via object section entries, not linkage visibility.
         let linkage = sonatina_ir::Linkage::Private;
+        let declared_param_runtime_ty = |local_id: mir::LocalId| -> Result<Type, LowerError> {
+            let local_ty = func
+                .body
+                .locals
+                .get(local_id.index())
+                .ok_or_else(|| LowerError::Internal(format!("unknown param local: {local_id:?}")))?
+                .ty;
+            Ok(types::runtime_type(self.db, &self.target_layout, local_ty))
+        };
 
         // Contract init/runtime entrypoints are executed directly by the EVM with an empty stack.
         // Even though MIR models them as taking effect args (e.g. `StorPtr<Evm>`), we cannot
@@ -545,16 +554,10 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             // Keep it empty; callers should never pass arguments to EVM entrypoints.
         } else {
             for local_id in func.body.param_locals.iter().copied() {
-                mask.push(
-                    types::local_runtime_type(self.db, &self.target_layout, &func.body, local_id)
-                        != Type::Unit,
-                );
+                mask.push(declared_param_runtime_ty(local_id)? != Type::Unit);
             }
             for local_id in func.body.effect_param_locals.iter().copied() {
-                mask.push(
-                    types::local_runtime_type(self.db, &self.target_layout, &func.body, local_id)
-                        != Type::Unit,
-                );
+                mask.push(declared_param_runtime_ty(local_id)? != Type::Unit);
             }
         }
 
@@ -569,12 +572,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             .zip(mask.iter().copied())
         {
             if keep {
-                params.push(types::local_runtime_type(
-                    self.db,
-                    &self.target_layout,
-                    &func.body,
-                    local_id,
-                ));
+                params.push(declared_param_runtime_ty(local_id)?);
             }
         }
 
@@ -1073,18 +1071,25 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
         let mut fb = self.builder.func_builder::<InstInserter>(func_ref);
         let is = self.isa.inst_set();
+        let param_locals: FxHashSet<_> = func
+            .body
+            .param_locals
+            .iter()
+            .chain(func.body.effect_param_locals.iter())
+            .copied()
+            .collect();
         let local_runtime_tys: Vec<_> = func
             .body
             .locals
             .iter()
             .enumerate()
-            .map(|(idx, _)| {
-                types::local_runtime_type(
-                    self.db,
-                    &self.target_layout,
-                    &func.body,
-                    mir::LocalId(idx as u32),
-                )
+            .map(|(idx, local)| {
+                let local_id = mir::LocalId(idx as u32);
+                if param_locals.contains(&local_id) {
+                    types::runtime_type(self.db, &self.target_layout, local.ty)
+                } else {
+                    types::local_runtime_type(self.db, &self.target_layout, &func.body, local_id)
+                }
             })
             .collect();
 
@@ -1157,6 +1162,12 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 let arg_val = arg_iter
                     .next()
                     .unwrap_or_else(|| types::zero_value(&mut fb, local_runtime_ty));
+                if fb.type_of(arg_val) != local_runtime_ty {
+                    return Err(LowerError::Internal(format!(
+                        "parameter type mismatch for {local_id:?}: expected {local_runtime_ty:?}, got {:?}",
+                        fb.type_of(arg_val)
+                    )));
+                }
                 fb.def_var(var, arg_val);
             }
         }

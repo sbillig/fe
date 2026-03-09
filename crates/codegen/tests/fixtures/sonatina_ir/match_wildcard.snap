@@ -25,7 +25,7 @@ func private %match_with_wildcard(v0.i256) -> i8 {
         br_table v6 block3 (0.i256 block1);
 }
 
-func private %wildcard_not_last(v0.i256) -> i8 {
+func private %wildcard_not_last(v0.i8) -> i8 {
     block0:
         jump block4;
 
@@ -40,8 +40,7 @@ func private %wildcard_not_last(v0.i256) -> i8 {
         jump block2;
 
     block4:
-        v6.i8 = trunc v0 i8;
-        br_table v6 block3 (0.i8 block1);
+        br_table v0 block3 (0.i8 block1);
 }
 
 func private %multiple_before_wildcard(v0.i256) -> i8 {

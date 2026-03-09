@@ -17,10 +17,9 @@ func private %store_word__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i2
         return;
 }
 
-func private %store_byte__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256, v2.i256) {
+func private %store_byte__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i8, v2.i256) {
     block0:
-        v3.i8 = trunc v1 i8;
-        evm_mstore8 v0 v3;
+        evm_mstore8 v0 v1;
         return;
 }
 

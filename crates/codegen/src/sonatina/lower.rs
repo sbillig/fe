@@ -4,7 +4,7 @@
 
 use driver::DriverDataBase;
 use hir::analysis::ty::adt_def::AdtRef;
-use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData};
+use hir::analysis::ty::ty_def::{CapabilityKind, PrimTy, TyBase, TyData};
 use hir::hir_def::expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp};
 use hir::projection::{IndexSource, Projection};
 use mir::ir::{
@@ -1351,6 +1351,10 @@ fn prim_for_runtime_value<'db>(
     db: &'db DriverDataBase,
     ty: hir::analysis::ty::ty_def::TyId<'db>,
 ) -> Option<PrimTy> {
+    let ty = match ty.as_capability(db) {
+        Some((CapabilityKind::View, inner)) => inner,
+        _ => ty,
+    };
     let ty = mir::repr::word_conversion_leaf_ty(db, ty);
     let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(db).data(db) else {
         return None;
