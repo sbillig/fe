@@ -658,13 +658,13 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 params.push(super::types::word_type());
             }
 
-            let ret_ty = if func.returns_value {
-                super::types::word_type()
+            let ret_tys = if func.returns_value {
+                vec![super::types::word_type()]
             } else {
-                super::types::unit_type()
+                Vec::new()
             };
 
-            let sig = Signature::new(name, linkage, &params, ret_ty);
+            let sig = Signature::new(name, linkage, &params, &ret_tys);
             let func_ref = self.builder.declare_function(sig).map_err(|e| {
                 LowerError::Internal(format!("failed to declare function {name}: {e}"))
             })?;
@@ -691,12 +691,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             )));
         }
 
-        let sig = Signature::new(
-            wrapper_name,
-            sonatina_ir::Linkage::Public,
-            &[],
-            super::types::unit_type(),
-        );
+        let sig = Signature::new(wrapper_name, sonatina_ir::Linkage::Public, &[], &[]);
         let func_ref = self.builder.declare_function(sig).map_err(|e| {
             LowerError::Internal(format!("failed to declare wrapper `{wrapper_name}`: {e}"))
         })?;

@@ -1,5 +1,5 @@
 use sonatina_ir::{
-    I256, Signature, Type, ValueId,
+    I256, Signature, ValueId,
     builder::ModuleBuilder,
     func_cursor::InstInserter,
     inst::{Inst, evm::EvmCreate2},
@@ -33,7 +33,7 @@ fn make_imm_value_is_interned() {
     let ctx = sonatina_ir::module::ModuleCtx::new(&isa);
     let builder = ModuleBuilder::new(ctx);
 
-    let sig = Signature::new("f", sonatina_ir::Linkage::Public, &[], Type::Unit);
+    let sig = Signature::new("f", sonatina_ir::Linkage::Public, &[], &[]);
     let func_ref = builder.declare_function(sig).unwrap();
     let mut fb = builder.func_builder::<InstInserter>(func_ref);
     let entry = fb.append_block();

@@ -132,12 +132,8 @@ func private %u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word(v0.i256
 
 func private %u256_h3271ca15373d4483_mul_h290dcc921ed80777_mul(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = mul v0 v1;
-        v4.i1 = ne v0 0.i256;
-        v5.i256 = evm_udiv v3 v0;
-        v6.i1 = ne v5 v1;
-        v7.i1 = and v4 v6;
-        br v7 block1 block2;
+        (v3.i256, v4.i1) = umulo v0 v1;
+        br v4 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;

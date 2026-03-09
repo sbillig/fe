@@ -6,8 +6,3 @@ use sonatina_ir::Type;
 pub fn word_type() -> Type {
     Type::I256
 }
-
-/// Returns the unit type (for functions returning nothing).
-pub fn unit_type() -> Type {
-    Type::Unit
-}

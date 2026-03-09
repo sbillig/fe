@@ -40,8 +40,7 @@ func private %test_effect_ptr_domains__Evm_hef0af3106e109414_Evm_hef0af3106e1094
 
 func private %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = add v0 v1;
-        v4.i1 = lt v3 v0;
+        (v3.i256, v4.i1) = uaddo v0 v1;
         br v4 block1 block2;
 
     block1:
@@ -89,8 +88,7 @@ func private %memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_from_ra
 
 func private %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = add v0 v1;
-        v4.i1 = lt v3 v0;
+        (v3.i256, v4.i1) = uaddo v0 v1;
         br v4 block1 block2;
 
     block1:

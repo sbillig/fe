@@ -25,8 +25,7 @@ func private %__GuardContract_init_contract(v0.i256) {
 func private %__GuardContract_recv_0_0(v0.i256, v1.i256) -> i256 {
     block0:
         v3.i256 = evm_sload v1;
-        v5.i256 = add v3 1.i256;
-        v6.i1 = lt v5 v3;
+        (v5.i256, v6.i1) = uaddo v3 1.i256;
         br v6 block1 block2;
 
     block1:
@@ -359,8 +358,7 @@ func private %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_r
 
 func private %u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = sub v0 v1;
-        v4.i1 = gt v1 v0;
+        (v3.i256, v4.i1) = usubo v0 v1;
         br v4 block1 block2;
 
     block1:
@@ -372,8 +370,7 @@ func private %u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub(v0.i256, v1.i256)
 
 func private %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = add v0 v1;
-        v4.i1 = lt v3 v0;
+        (v3.i256, v4.i1) = uaddo v0 v1;
         br v4 block1 block2;
 
     block1:

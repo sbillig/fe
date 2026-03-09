@@ -52,8 +52,7 @@ func private %counter_h872958864d1ad471_bump(v0.i256) {
         v2.*@__fe_Counter_0 = int_to_ptr v0 *@__fe_Counter_0;
         v3.*i256 = gep v2 0.i256 0.i256;
         v4.i256 = mload v3 i256;
-        v6.i256 = add v4 1.i256;
-        v7.i1 = lt v6 v4;
+        (v6.i256, v7.i1) = uaddo v4 1.i256;
         br v7 block1 block2;
 
     block1:
@@ -71,8 +70,7 @@ func private %wrapcounter_hbcbd3a74a267488b_bump(v0.i256) {
         v2.*@__fe_Counter_0 = int_to_ptr v0 *@__fe_Counter_0;
         v3.*i256 = gep v2 0.i256 0.i256;
         v4.i256 = mload v3 i256;
-        v6.i256 = add v4 1.i256;
-        v7.i1 = lt v6 v4;
+        (v6.i256, v7.i1) = uaddo v4 1.i256;
         br v7 block1 block2;
 
     block1:

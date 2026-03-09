@@ -590,13 +590,13 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         }
 
         // Convert return type - use Unit if function doesn't return a value
-        let ret_ty = if func.returns_value {
-            types::word_type() // TODO: proper return type lowering
+        let ret_tys = if func.returns_value {
+            vec![types::word_type()] // TODO: proper return type lowering
         } else {
-            types::unit_type()
+            Vec::new()
         };
 
-        Ok((Signature::new(name, linkage, &params, ret_ty), mask))
+        Ok((Signature::new(name, linkage, &params, &ret_tys), mask))
     }
 
     /// Lower all function bodies.
@@ -1038,12 +1038,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             )));
         }
 
-        let sig = Signature::new(
-            WRAPPER_NAME,
-            sonatina_ir::Linkage::Private,
-            &[],
-            types::unit_type(),
-        );
+        let sig = Signature::new(WRAPPER_NAME, sonatina_ir::Linkage::Private, &[], &[]);
         let func_ref = self.builder.declare_function(sig).map_err(|e| {
             LowerError::Internal(format!(
                 "failed to declare entry wrapper `{WRAPPER_NAME}`: {e}"
