@@ -2,12 +2,8 @@
 
 use driver::DriverDataBase;
 use hir::analysis::ty::ty_def::{CapabilityKind, PrimTy, TyBase, TyData, TyId};
-use mir::{
-    LocalId, MirBody, MirInst, Rvalue, ValueData, ValueOrigin, layout::TargetDataLayout, repr,
-};
+use mir::{ir::RuntimeWordKind, repr};
 use sonatina_ir::{Immediate, Type, ValueId, builder::FunctionBuilder, func_cursor::FuncCursor};
-
-use super::is_erased_runtime_ty;
 
 /// Returns the Sonatina scalar type for a Fe primitive, when one exists.
 pub fn prim_scalar_type(prim: PrimTy) -> Option<Type> {
@@ -45,76 +41,16 @@ pub fn value_type(db: &DriverDataBase, ty: TyId<'_>) -> Type {
     Type::I256
 }
 
-/// Returns the Sonatina runtime type for a Fe value, including erased types.
-pub fn runtime_type(db: &DriverDataBase, target_layout: &TargetDataLayout, ty: TyId<'_>) -> Type {
-    if is_erased_runtime_ty(db, target_layout, ty) {
-        Type::Unit
-    } else {
-        value_type(db, ty)
+pub fn runtime_word_type(kind: RuntimeWordKind) -> Type {
+    match kind {
+        RuntimeWordKind::I1 => Type::I1,
+        RuntimeWordKind::I8 => Type::I8,
+        RuntimeWordKind::I16 => Type::I16,
+        RuntimeWordKind::I32 => Type::I32,
+        RuntimeWordKind::I64 => Type::I64,
+        RuntimeWordKind::I128 => Type::I128,
+        RuntimeWordKind::I256 => Type::I256,
     }
-}
-
-fn repr_runtime_type(
-    db: &DriverDataBase,
-    target_layout: &TargetDataLayout,
-    ty: TyId<'_>,
-    repr_has_address_space: bool,
-) -> Type {
-    if repr_has_address_space {
-        Type::I256
-    } else {
-        runtime_type(db, target_layout, ty)
-    }
-}
-
-fn local_has_pointer_repr(body: &MirBody<'_>, local_id: LocalId) -> bool {
-    body.values.iter().any(|value| {
-        matches!(value.origin, ValueOrigin::Local(local) if local == local_id)
-            && value.repr.address_space().is_some()
-    }) || body
-        .blocks
-        .iter()
-        .flat_map(|block| block.insts.iter())
-        .any(|inst| {
-            matches!(
-                inst,
-                MirInst::Assign {
-                    dest: Some(dest_local),
-                    rvalue: Rvalue::Alloc { .. },
-                    ..
-                } if *dest_local == local_id
-            )
-        })
-}
-
-/// Returns the Sonatina runtime type for a MIR local after repr lowering.
-pub fn local_runtime_type(
-    db: &DriverDataBase,
-    target_layout: &TargetDataLayout,
-    body: &MirBody<'_>,
-    local_id: LocalId,
-) -> Type {
-    let local = &body.locals[local_id.index()];
-    repr_runtime_type(
-        db,
-        target_layout,
-        local.ty,
-        local_has_pointer_repr(body, local_id),
-    )
-}
-
-/// Returns the Sonatina runtime type for a MIR value after repr lowering.
-pub fn value_runtime_type(
-    db: &DriverDataBase,
-    target_layout: &TargetDataLayout,
-    value: &ValueData<'_>,
-) -> Type {
-    repr_runtime_type(
-        db,
-        target_layout,
-        value.ty,
-        value.repr.address_space().is_some(),
-    )
 }
 
 /// Creates a zero/undef value of the given Sonatina type.

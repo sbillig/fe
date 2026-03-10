@@ -710,12 +710,8 @@ fn collect_test_infos(db: &dyn HirDb, functions: &[MirFunction<'_>]) -> Vec<Test
                 .to_opt()
                 .map(|n| n.data(db).to_string())
                 .unwrap_or_else(|| "<anonymous>".to_string());
-            let value_param_count = mir_func.body.param_locals.len();
-            let effect_param_count = if mir_func.contract_function.is_none() {
-                mir_func.body.effect_param_locals.len()
-            } else {
-                0
-            };
+            let value_param_count = mir_func.runtime_param_count();
+            let effect_param_count = mir_func.runtime_effect_param_count();
             Some(TestInfo {
                 hir_name,
                 display_name: String::new(),

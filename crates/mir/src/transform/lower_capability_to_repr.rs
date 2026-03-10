@@ -290,6 +290,7 @@ impl<'db, 'a> LowerReprCtx<'db, 'a> {
                 source: SourceInfoId::SYNTHETIC,
                 repr: self.local_repr(local),
                 pointer_info: None,
+                runtime_shape: crate::ir::RuntimeShape::Unresolved,
             },
         );
         Some(MirInst::Store {
@@ -393,6 +394,7 @@ impl<'db, 'a> LowerReprCtx<'db, 'a> {
                         source: SourceInfoId::SYNTHETIC,
                         repr: base_repr,
                         pointer_info: None,
+                        runtime_shape: crate::ir::RuntimeShape::Unresolved,
                     },
                 )
             };
@@ -453,6 +455,7 @@ impl<'db, 'a> LowerReprCtx<'db, 'a> {
                     source: SourceInfoId::SYNTHETIC,
                     repr: self.local_repr(local),
                     pointer_info: None,
+                    runtime_shape: crate::ir::RuntimeShape::Unresolved,
                 },
             );
             let loaded_value = if loaded_ty == base_ty {
@@ -466,6 +469,7 @@ impl<'db, 'a> LowerReprCtx<'db, 'a> {
                         source: SourceInfoId::SYNTHETIC,
                         repr: self.local_repr(local),
                         pointer_info: None,
+                        runtime_shape: crate::ir::RuntimeShape::Unresolved,
                     },
                 )
             };
@@ -595,6 +599,7 @@ impl<'db, 'a> LowerReprCtx<'db, 'a> {
                                 self.locals[local.index()].address_space,
                             ),
                             pointer_info: None,
+                            runtime_shape: crate::ir::RuntimeShape::Unresolved,
                         },
                     ))
                 } else {
@@ -615,6 +620,7 @@ impl<'db, 'a> LowerReprCtx<'db, 'a> {
                                 source: SourceInfoId::SYNTHETIC,
                                 repr: self.local_repr(local),
                                 pointer_info: None,
+                                runtime_shape: crate::ir::RuntimeShape::Unresolved,
                             },
                         )
                     };
@@ -796,6 +802,7 @@ fn rewrite_place_root_value<'db>(
             source: SourceInfoId::SYNTHETIC,
             repr: local_repr,
             pointer_info: None,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         },
     );
     (target_ty == local_ty).then_some(local_value).or_else(|| {
@@ -807,6 +814,7 @@ fn rewrite_place_root_value<'db>(
                 source: SourceInfoId::SYNTHETIC,
                 repr: local_repr,
                 pointer_info: None,
+                runtime_shape: crate::ir::RuntimeShape::Unresolved,
             },
         ))
     })
@@ -858,6 +866,7 @@ impl<'db> PlaceOriginRewriteCtx<'db, '_> {
                     source: SourceInfoId::SYNTHETIC,
                     repr: local_repr,
                     pointer_info: None,
+                    runtime_shape: crate::ir::RuntimeShape::Unresolved,
                 },
             );
             let source_value = if projected_ty == local_ty {
@@ -871,6 +880,7 @@ impl<'db> PlaceOriginRewriteCtx<'db, '_> {
                         source: SourceInfoId::SYNTHETIC,
                         repr: local_repr,
                         pointer_info: None,
+                        runtime_shape: crate::ir::RuntimeShape::Unresolved,
                     },
                 )
             };
@@ -888,6 +898,7 @@ impl<'db> PlaceOriginRewriteCtx<'db, '_> {
                     source: SourceInfoId::SYNTHETIC,
                     repr: ValueRepr::Word,
                     pointer_info: None,
+                    runtime_shape: crate::ir::RuntimeShape::Unresolved,
                 },
             )
         });
@@ -1166,6 +1177,7 @@ pub(crate) fn lower_capability_to_repr<'db>(
                     source: SourceInfoId::SYNTHETIC,
                     address_space: AddressSpaceKind::Memory,
                     pointer_leaf_infos: owner_data.pointer_leaf_infos.clone(),
+                    runtime_shape: crate::ir::RuntimeShape::Unresolved,
                 },
             );
             body.spill_slots.insert(owner, spill);
@@ -1200,6 +1212,7 @@ pub(crate) fn lower_capability_to_repr<'db>(
                 source: SourceInfoId::SYNTHETIC,
                 repr: ValueRepr::Word,
                 pointer_info: None,
+                runtime_shape: crate::ir::RuntimeShape::Unresolved,
             },
         );
         spill_addr_value_for_owner[owner.index()] = Some(spill_value);
@@ -1287,6 +1300,7 @@ pub(crate) fn lower_capability_to_repr<'db>(
                 source: SourceInfoId::SYNTHETIC,
                 repr,
                 pointer_info: None,
+                runtime_shape: crate::ir::RuntimeShape::Unresolved,
             },
         );
         spill_prelude.push(MirInst::Store {
@@ -1381,6 +1395,7 @@ mod tests {
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos: Vec::new(),
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let base = body.alloc_value(ValueData {
             ty: local_ty,
@@ -1388,6 +1403,7 @@ mod tests {
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Word,
             pointer_info: None,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         (body, local, base)
     }
@@ -1438,6 +1454,7 @@ mod tests {
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos: Vec::new(),
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let root = body.alloc_value(ValueData {
             ty: TyId::u256(&db),
@@ -1445,6 +1462,7 @@ mod tests {
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Word,
             pointer_info: None,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         body.alloc_value(ValueData {
             ty: TyId::u256(&db),
@@ -1452,6 +1470,7 @@ mod tests {
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Word,
             pointer_info: None,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
 
         lower_capability_to_repr(&db, &core, MirBackend::EvmYul, &mut body);
@@ -1525,6 +1544,7 @@ pub fn field_ptr_origin_preserves_address_space(x: mut u256) {}
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Storage,
             pointer_leaf_infos: Vec::new(),
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let base = body.alloc_value(ValueData {
             ty: capability_ty,
@@ -1532,6 +1552,7 @@ pub fn field_ptr_origin_preserves_address_space(x: mut u256) {}
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ptr(AddressSpaceKind::Storage),
             pointer_info: None,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let field_ptr = body.alloc_value(ValueData {
             ty: capability_ty,
@@ -1543,6 +1564,7 @@ pub fn field_ptr_origin_preserves_address_space(x: mut u256) {}
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Word,
             pointer_info: None,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
 
         lower_capability_to_repr(&db, &core, MirBackend::EvmYul, &mut body);
@@ -1588,6 +1610,7 @@ pub fn store_place_root_projection_rewrites_through_spill_and_reloads_owner(x: m
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Word,
             pointer_info: None,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         body.blocks[0].insts.push(MirInst::Store {
             source: SourceInfoId::SYNTHETIC,
@@ -1671,6 +1694,7 @@ pub fn init_aggregate_place_root_projection_rewrites_through_spill_and_reloads_o
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Word,
             pointer_info: None,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         body.blocks[0].insts.push(MirInst::InitAggregate {
             source: SourceInfoId::SYNTHETIC,
@@ -1860,6 +1884,7 @@ pub fn transparent_cast_over_raw_pointer_handle_does_not_spill(x: mut Pair) {}
                     target_ty: Some(pair_ty),
                 },
             )],
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         body.effect_param_locals.push(raw_local);
 
@@ -1869,6 +1894,7 @@ pub fn transparent_cast_over_raw_pointer_handle_does_not_spill(x: mut Pair) {}
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Word,
             pointer_info: None,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let cast_base = body.alloc_value(ValueData {
             ty: pair_capability_ty,
@@ -1876,6 +1902,7 @@ pub fn transparent_cast_over_raw_pointer_handle_does_not_spill(x: mut Pair) {}
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Word,
             pointer_info: None,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let stored = body.alloc_value(ValueData {
             ty: u256_ty,
@@ -1883,6 +1910,7 @@ pub fn transparent_cast_over_raw_pointer_handle_does_not_spill(x: mut Pair) {}
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Word,
             pointer_info: None,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         body.blocks[0].insts.push(MirInst::Store {
             source: SourceInfoId::SYNTHETIC,
@@ -1962,6 +1990,7 @@ pub fn transparent_cast_over_raw_pointer_handle_does_not_spill(x: mut Pair) {}
                     target_ty: None,
                 },
             )],
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let base = body.alloc_value(ValueData {
             ty: TyId::u256(&db),
@@ -1969,6 +1998,7 @@ pub fn transparent_cast_over_raw_pointer_handle_does_not_spill(x: mut Pair) {}
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
             pointer_info: None,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let place = Place::new(base, crate::MirProjectionPath::new());
 

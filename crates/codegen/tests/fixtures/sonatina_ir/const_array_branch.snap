@@ -12,46 +12,46 @@ func private %const_array_branch(v0.i1) -> i256 {
         br v0 block1 block2;
 
     block1:
-        v4.*i8 = evm_malloc 32.i256;
-        v5.i256 = sym_addr $__fe_const_data_0;
-        v6.i256 = sym_size $__fe_const_data_0;
-        v7.i256 = ptr_to_int v4 i256;
-        evm_code_copy v7 v5 v6;
-        v8.*[i256; 1] = bitcast v4 *[i256; 1];
-        v9.*i256 = gep v8 0.i256 0.i256;
-        v10.i256 = ptr_to_int v9 i256;
-        v11.*i8 = bitcast v9 *i8;
-        v12.i256 = mload v11 i256;
+        v3.*i8 = evm_malloc 32.i256;
+        v4.i256 = sym_addr $__fe_const_data_0;
+        v5.i256 = sym_size $__fe_const_data_0;
+        v6.i256 = ptr_to_int v3 i256;
+        evm_code_copy v6 v4 v5;
+        v7.*[i256; 1] = bitcast v3 *[i256; 1];
+        v8.*i256 = gep v7 0.i256 0.i256;
+        v9.i256 = ptr_to_int v8 i256;
+        v10.*i8 = bitcast v8 *i8;
+        v11.i256 = mload v10 i256;
         jump block3;
 
     block2:
-        v13.*i8 = evm_malloc 32.i256;
-        v14.i256 = sym_addr $__fe_const_data_0;
-        v15.i256 = sym_size $__fe_const_data_0;
-        v16.i256 = ptr_to_int v13 i256;
-        evm_code_copy v16 v14 v15;
-        v17.*[i256; 1] = bitcast v13 *[i256; 1];
-        v18.*i256 = gep v17 0.i256 0.i256;
-        v19.i256 = ptr_to_int v18 i256;
-        v20.*i8 = bitcast v18 *i8;
-        v21.i256 = mload v20 i256;
+        v12.*i8 = evm_malloc 32.i256;
+        v13.i256 = sym_addr $__fe_const_data_0;
+        v14.i256 = sym_size $__fe_const_data_0;
+        v15.i256 = ptr_to_int v12 i256;
+        evm_code_copy v15 v13 v14;
+        v16.*[i256; 1] = bitcast v12 *[i256; 1];
+        v17.*i256 = gep v16 0.i256 0.i256;
+        v18.i256 = ptr_to_int v17 i256;
+        v19.*i8 = bitcast v17 *i8;
+        v20.i256 = mload v19 i256;
         jump block3;
 
     block3:
-        v32.i256 = phi (v12 block1) (v21 block2);
-        v22.*i8 = evm_malloc 32.i256;
-        v23.i256 = sym_addr $__fe_const_data_0;
-        v24.i256 = sym_size $__fe_const_data_0;
-        v25.i256 = ptr_to_int v22 i256;
-        evm_code_copy v25 v23 v24;
-        v26.*[i256; 1] = bitcast v22 *[i256; 1];
-        v27.*i8 = evm_malloc 32.i256;
-        v28.i256 = sym_addr $__fe_const_data_0;
-        v29.i256 = sym_size $__fe_const_data_0;
-        v30.i256 = ptr_to_int v27 i256;
-        evm_code_copy v30 v28 v29;
-        v31.*[i256; 1] = bitcast v27 *[i256; 1];
-        return v32;
+        v31.i256 = phi (v11 block1) (v20 block2);
+        v21.*i8 = evm_malloc 32.i256;
+        v22.i256 = sym_addr $__fe_const_data_0;
+        v23.i256 = sym_size $__fe_const_data_0;
+        v24.i256 = ptr_to_int v21 i256;
+        evm_code_copy v24 v22 v23;
+        v25.*[i256; 1] = bitcast v21 *[i256; 1];
+        v26.*i8 = evm_malloc 32.i256;
+        v27.i256 = sym_addr $__fe_const_data_0;
+        v28.i256 = sym_size $__fe_const_data_0;
+        v29.i256 = ptr_to_int v26 i256;
+        evm_code_copy v29 v27 v28;
+        v30.*[i256; 1] = bitcast v26 *[i256; 1];
+        return v31;
 }
 
 func private %__fe_sonatina_entry() {

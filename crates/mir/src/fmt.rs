@@ -40,6 +40,30 @@ pub fn format_function(db: &dyn HirAnalysisDb, func: &MirFunction<'_>) -> String
         "fn {}({}) -> {}:\n",
         func.symbol_name, params_str, return_ty
     ));
+    if func.runtime_abi.value_params.iter().any(|visible| !visible)
+        || func
+            .runtime_abi
+            .effect_params
+            .iter()
+            .any(|visible| !visible)
+    {
+        let runtime_value_params = func
+            .runtime_param_locals()
+            .into_iter()
+            .map(|local| format_local_decl(db, &func.body, local))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let runtime_effect_params = func
+            .runtime_effect_param_locals()
+            .into_iter()
+            .map(|local| format_local_decl(db, &func.body, local))
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!(
+            "  ; runtime_abi values=[{}] effects=[{}]\n",
+            runtime_value_params, runtime_effect_params
+        ));
+    }
 
     let mut defined_locals: HashSet<LocalId> = func
         .body

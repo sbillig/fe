@@ -365,7 +365,10 @@ pub fn lower_module<'db>(
         crate::transform::insert_temp_binds(db, &mut func.body);
         crate::transform::canonicalize_zero_sized(db, &mut func.body);
     }
-    Ok(MirModule { top_mod, functions })
+    let mut module = MirModule { top_mod, functions };
+    crate::transform::normalize_runtime_abi(db, &mut module);
+    crate::transform::normalize_runtime_shapes(db, &mut module);
+    Ok(module)
 }
 
 /// Lowers every function within every top-level module of an ingot into MIR.
@@ -491,10 +494,13 @@ pub fn lower_ingot<'db>(
         crate::transform::insert_temp_binds(db, &mut func.body);
         crate::transform::canonicalize_zero_sized(db, &mut func.body);
     }
-    Ok(MirModule {
+    let mut module = MirModule {
         top_mod: root_mod,
         functions,
-    })
+    };
+    crate::transform::normalize_runtime_abi(db, &mut module);
+    crate::transform::normalize_runtime_shapes(db, &mut module);
+    Ok(module)
 }
 
 /// Lowers a single HIR function (with its typed body) into a MIR function template.
@@ -545,7 +551,7 @@ pub(crate) fn lower_function<'db>(
     builder.lower_root(body.expr(db));
     builder.ensure_const_expr_values();
     if let Some(block) = builder.current_block() {
-        let ret_ty = func.return_ty(db);
+        let ret_ty = builder.return_ty;
         let returns_value = !builder.is_unit_ty(ret_ty) && !ret_ty.is_never(db);
         let source = builder.source_for_expr(body.expr(db));
         if returns_value {
@@ -568,6 +574,11 @@ pub(crate) fn lower_function<'db>(
         }
     }
     let deferred_error = builder.deferred_error.take();
+    let effect_param_provider_tys = builder.effect_param_provider_tys.clone();
+    let ret_ty = builder.return_ty;
+    let returns_value = !crate::layout::is_zero_sized_ty(db, ret_ty);
+    let runtime_return_shape =
+        crate::repr::runtime_return_shape_seed_for_ty(db, &builder.core, ret_ty);
     let mir_body = builder.finish();
 
     if let Some(err) = deferred_error {
@@ -591,8 +602,10 @@ pub(crate) fn lower_function<'db>(
     // Note: `MirFunction` may be used as a generic template during monomorphization.
     // Monomorphic instances get a fully-instantiated + normalized `ret_ty` in the
     // monomorphizer; this is the declared return type.
-    let ret_ty = func.return_ty(db);
-    let returns_value = !crate::layout::is_zero_sized_ty(db, ret_ty);
+    let runtime_abi = crate::ir::RuntimeAbi::source_shaped(
+        mir_body.param_locals.len(),
+        effect_param_provider_tys,
+    );
 
     Ok(MirFunction {
         origin: crate::ir::MirFunctionOrigin::Hir(func),
@@ -601,6 +614,8 @@ pub(crate) fn lower_function<'db>(
         generic_args,
         ret_ty,
         returns_value,
+        runtime_abi,
+        runtime_return_shape,
         contract_function,
         symbol_name,
         receiver_space,
@@ -631,6 +646,8 @@ pub(super) struct MirBuilder<'db, 'a> {
     pub(super) effect_param_spaces: Vec<AddressSpaceKind>,
     /// Address space overrides for effect bindings not tied to a function effect list.
     pub(super) effect_binding_spaces: FxHashMap<LocalBinding<'db>, AddressSpaceKind>,
+    /// Provider type metadata aligned to `MirBody::effect_param_locals`.
+    pub(super) effect_param_provider_tys: Vec<Option<TyId<'db>>>,
     /// Capability-space overrides for function parameters, indexed by parameter position.
     pub(super) param_capability_space_overrides:
         Vec<Vec<(MirProjectionPath<'db>, AddressSpaceKind)>>,
@@ -716,6 +733,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             receiver_space,
             effect_param_spaces: Vec::new(),
             effect_binding_spaces: FxHashMap::default(),
+            effect_param_provider_tys: Vec::new(),
             param_capability_space_overrides: param_capability_space_overrides.to_vec(),
             deferred_error: None,
         };
@@ -773,7 +791,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         generic_args: &'a [TyId<'db>],
         overrides: LoweringOverrides<'a, 'db>,
     ) -> Result<Self, MirLowerError> {
-        let return_ty = func.return_ty(db);
+        let declared_return_ty = CallableDef::Func(func).ret_ty(db);
+        let return_ty = hir::analysis::ty::normalize::normalize_ty(
+            db,
+            if generic_args.is_empty() {
+                declared_return_ty.instantiate_identity()
+            } else {
+                declared_return_ty.instantiate(db, generic_args)
+            },
+            crate::ty::normalization_scope_for_args(db, func, generic_args),
+            hir::analysis::ty::trait_resolution::PredicateListId::empty_list(db),
+        );
         Self::new(
             db,
             Some(func),
@@ -827,6 +855,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             source: crate::ir::SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         self.builder.body.param_locals.push(local);
         if let Some(binding) = binding {
@@ -849,6 +878,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             source: crate::ir::SourceInfoId::SYNTHETIC,
             address_space,
             pointer_leaf_infos: Vec::new(),
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         self.builder.body.effect_param_locals.push(local);
         self.binding_locals.insert(binding, local);
@@ -1279,6 +1309,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             source: crate::ir::SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         })
     }
 
@@ -1383,7 +1414,30 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             let full_projection = base_projection.concat(&place.projection);
             let infos = self.pointer_leaf_infos_for_projection_from_local(local, &full_projection);
             if !infos.is_empty() {
-                return infos;
+                if target_infos.is_empty() {
+                    return Vec::new();
+                }
+
+                let target_paths: FxHashSet<_> =
+                    target_infos.iter().map(|(path, _)| path.clone()).collect();
+                let local_infos: Vec<_> = infos
+                    .into_iter()
+                    .filter(|(path, _)| target_paths.contains(path))
+                    .collect();
+                if local_infos.is_empty() {
+                    return target_infos;
+                }
+
+                let local_paths: FxHashSet<_> =
+                    local_infos.iter().map(|(path, _)| path.clone()).collect();
+                return local_infos
+                    .into_iter()
+                    .chain(
+                        target_infos
+                            .into_iter()
+                            .filter(|(path, _)| !local_paths.contains(path)),
+                    )
+                    .collect();
             }
         }
 
@@ -2048,7 +2102,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     .map(|info| vec![(MirProjectionPath::new(), info)])
                     .unwrap_or_default()
             }
-            Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::ConstAggregate { .. } => Vec::new(),
+            Rvalue::Alloc { address_space } => vec![(
+                MirProjectionPath::new(),
+                PointerInfo {
+                    address_space: *address_space,
+                    target_ty: Some(dest_ty),
+                },
+            )],
+            Rvalue::ZeroInit | Rvalue::ConstAggregate { .. } => Vec::new(),
         }
     }
 
@@ -2196,6 +2257,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             source: crate::ir::SourceInfoId::SYNTHETIC,
             repr,
             pointer_info,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         })
     }
 
@@ -2596,6 +2658,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 source,
                 address_space,
                 pointer_leaf_infos,
+                runtime_shape: crate::ir::RuntimeShape::Unresolved,
             });
             self.builder.body.param_locals.push(local);
             self.binding_locals.insert(binding, local);
@@ -2646,9 +2709,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 source: effects_source,
                 address_space,
                 pointer_leaf_infos,
+                runtime_shape: crate::ir::RuntimeShape::Unresolved,
             });
             self.builder.body.effect_param_locals.push(local);
             self.binding_locals.insert(binding, local);
+            self.effect_param_provider_tys.push(inferred.provider_ty);
         }
     }
 
@@ -2692,18 +2757,21 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             } => self.source_for_func_param(*func, *idx),
             _ => crate::ir::SourceInfoId::SYNTHETIC,
         };
+        let pointer_leaf_infos = pointer_leaf_infos_for_ty_with_default(
+            self.db,
+            &self.core,
+            ty,
+            self.address_space_for_binding(&binding),
+        );
+        let address_space = self.address_space_for_binding(&binding);
         let local = self.builder.body.alloc_local(LocalData {
             name,
             ty,
             is_mut,
             source,
-            address_space: self.address_space_for_binding(&binding),
-            pointer_leaf_infos: pointer_leaf_infos_for_ty_with_default(
-                self.db,
-                &self.core,
-                ty,
-                self.address_space_for_binding(&binding),
-            ),
+            address_space,
+            pointer_leaf_infos,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         if needs_effect_param_local {
             self.builder.body.effect_param_locals.push(local);

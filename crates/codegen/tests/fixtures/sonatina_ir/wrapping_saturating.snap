@@ -16,14 +16,20 @@ func private %wrapping_ops_u64(v0.i64, v1.i64) -> *@__fe_tuple_0 {
         v6.*i8 = evm_malloc 96.i256;
         v7.*@__fe_tuple_0 = bitcast v6 *@__fe_tuple_0;
         v9.*i64 = gep v7 0.i256 0.i256;
-        v10.i256 = zext v2 i256;
-        mstore v9 v10 i256;
-        v12.*i64 = gep v7 0.i256 1.i256;
-        v13.i256 = zext v3 i256;
-        mstore v12 v13 i256;
-        v15.*i64 = gep v7 0.i256 2.i256;
-        v16.i256 = zext v4 i256;
-        mstore v15 v16 i256;
+        v10.i256 = ptr_to_int v9 i256;
+        v11.*i8 = bitcast v9 *i8;
+        v12.i256 = zext v2 i256;
+        mstore v11 v12 i256;
+        v14.*i64 = gep v7 0.i256 1.i256;
+        v15.i256 = ptr_to_int v14 i256;
+        v16.*i8 = bitcast v14 *i8;
+        v17.i256 = zext v3 i256;
+        mstore v16 v17 i256;
+        v19.*i64 = gep v7 0.i256 2.i256;
+        v20.i256 = ptr_to_int v19 i256;
+        v21.*i8 = bitcast v19 *i8;
+        v22.i256 = zext v4 i256;
+        mstore v21 v22 i256;
         return v7;
 }
 
@@ -35,14 +41,20 @@ func private %saturating_ops_u64(v0.i64, v1.i64) -> *@__fe_tuple_0 {
         v6.*i8 = evm_malloc 96.i256;
         v7.*@__fe_tuple_0 = bitcast v6 *@__fe_tuple_0;
         v9.*i64 = gep v7 0.i256 0.i256;
-        v10.i256 = zext v2 i256;
-        mstore v9 v10 i256;
-        v12.*i64 = gep v7 0.i256 1.i256;
-        v13.i256 = zext v3 i256;
-        mstore v12 v13 i256;
-        v15.*i64 = gep v7 0.i256 2.i256;
-        v16.i256 = zext v4 i256;
-        mstore v15 v16 i256;
+        v10.i256 = ptr_to_int v9 i256;
+        v11.*i8 = bitcast v9 *i8;
+        v12.i256 = zext v2 i256;
+        mstore v11 v12 i256;
+        v14.*i64 = gep v7 0.i256 1.i256;
+        v15.i256 = ptr_to_int v14 i256;
+        v16.*i8 = bitcast v14 *i8;
+        v17.i256 = zext v3 i256;
+        mstore v16 v17 i256;
+        v19.*i64 = gep v7 0.i256 2.i256;
+        v20.i256 = ptr_to_int v19 i256;
+        v21.*i8 = bitcast v19 *i8;
+        v22.i256 = zext v4 i256;
+        mstore v21 v22 i256;
         return v7;
 }
 
@@ -54,11 +66,17 @@ func private %wrapping_ops_u256(v0.i256, v1.i256) -> *@__fe_tuple_1 {
         v6.*i8 = evm_malloc 96.i256;
         v7.*@__fe_tuple_1 = bitcast v6 *@__fe_tuple_1;
         v9.*i256 = gep v7 0.i256 0.i256;
-        mstore v9 v2 i256;
-        v11.*i256 = gep v7 0.i256 1.i256;
-        mstore v11 v3 i256;
-        v13.*i256 = gep v7 0.i256 2.i256;
-        mstore v13 v4 i256;
+        v10.i256 = ptr_to_int v9 i256;
+        v11.*i8 = bitcast v9 *i8;
+        mstore v11 v2 i256;
+        v13.*i256 = gep v7 0.i256 1.i256;
+        v14.i256 = ptr_to_int v13 i256;
+        v15.*i8 = bitcast v13 *i8;
+        mstore v15 v3 i256;
+        v17.*i256 = gep v7 0.i256 2.i256;
+        v18.i256 = ptr_to_int v17 i256;
+        v19.*i8 = bitcast v17 *i8;
+        mstore v19 v4 i256;
         return v7;
 }
 
@@ -70,11 +88,17 @@ func private %saturating_ops_u256(v0.i256, v1.i256) -> *@__fe_tuple_1 {
         v6.*i8 = evm_malloc 96.i256;
         v7.*@__fe_tuple_1 = bitcast v6 *@__fe_tuple_1;
         v9.*i256 = gep v7 0.i256 0.i256;
-        mstore v9 v2 i256;
-        v11.*i256 = gep v7 0.i256 1.i256;
-        mstore v11 v3 i256;
-        v13.*i256 = gep v7 0.i256 2.i256;
-        mstore v13 v4 i256;
+        v10.i256 = ptr_to_int v9 i256;
+        v11.*i8 = bitcast v9 *i8;
+        mstore v11 v2 i256;
+        v13.*i256 = gep v7 0.i256 1.i256;
+        v14.i256 = ptr_to_int v13 i256;
+        v15.*i8 = bitcast v13 *i8;
+        mstore v15 v3 i256;
+        v17.*i256 = gep v7 0.i256 2.i256;
+        v18.i256 = ptr_to_int v17 i256;
+        v19.*i8 = bitcast v17 *i8;
+        mstore v19 v4 i256;
         return v7;
 }
 

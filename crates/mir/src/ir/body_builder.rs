@@ -4,8 +4,8 @@ use num_bigint::BigUint;
 
 use super::{
     AddressSpaceKind, BasicBlock, BasicBlockId, CodeRegionRoot, LocalData, LocalId, MirBody,
-    MirInst, MirProjectionPath, Place, Rvalue, SourceInfoId, SwitchTarget, SyntheticValue,
-    Terminator, ValueData, ValueId, ValueOrigin, ValueRepr,
+    MirInst, MirProjectionPath, Place, RuntimeShape, Rvalue, SourceInfoId, SwitchTarget,
+    SyntheticValue, Terminator, ValueData, ValueId, ValueOrigin, ValueRepr,
 };
 
 /// Convenience result for `BodyBuilder` helpers that materialize a value in a fresh local.
@@ -88,6 +88,7 @@ impl<'db> BodyBuilder<'db> {
             source: SourceInfoId::SYNTHETIC,
             address_space,
             pointer_leaf_infos: Vec::new(),
+            runtime_shape: RuntimeShape::Unresolved,
         })
     }
 
@@ -103,6 +104,7 @@ impl<'db> BodyBuilder<'db> {
             source: SourceInfoId::SYNTHETIC,
             repr,
             pointer_info: None,
+            runtime_shape: RuntimeShape::Unresolved,
         })
     }
 

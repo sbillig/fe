@@ -412,6 +412,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             source: crate::ir::SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Word,
             pointer_info: None,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         })
     }
 

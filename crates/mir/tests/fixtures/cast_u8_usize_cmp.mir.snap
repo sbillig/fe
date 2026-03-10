@@ -6,17 +6,18 @@ fn cast_u8_usize_cmp(v0: [u8; 8], v1: usize, v2: usize) -> u8:
   bb0:
     v4: u8 = load mem[v0].*[v1]
     v3: u8 = v4
-    br (v2 < v3) bb1 bb2
+    v5: bool = usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt(v2, v3)
+    br v5 bb1 bb2
   bb1:
     ret 1
   bb2:
-    v5: bool = usize_ha12462c6d36e68b0_eq_he50383edd273619f_eq(v2, v3)
-    br v5 bb3 bb4
+    v6: bool = usize_ha12462c6d36e68b0_eq_he50383edd273619f_eq(v2, v3)
+    br v6 bb3 bb4
   bb3:
     ret 2
   bb4:
-    v6: bool = usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_gt(v2, v3)
-    br v6 bb5 bb6
+    v7: bool = usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_gt(v2, v3)
+    br v7 bb5 bb6
   bb5:
     ret 3
   bb6:

@@ -6,14 +6,14 @@ input_file: tests/fixtures/effect_handle_field_deref.fe
 object "EffectHandleFieldDeref" {
   code {
     function $__EffectHandleFieldDeref_init() {
-      let v0 := $init_field__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a(0, 0)
+      let v0 := $init_field__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a(0)
       let v1 := dataoffset("EffectHandleFieldDeref_deployed")
       let v2 := datasize("EffectHandleFieldDeref_deployed")
       let v3 := datasize("EffectHandleFieldDeref")
       let v4 := codesize()
       let v5 := lt(v4, v3)
       if v5 {
-        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(0)
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
       }
       let v6 := sub(v4, v3)
       let v7 := mload(64)
@@ -51,17 +51,17 @@ object "EffectHandleFieldDeref" {
       ret := v0
       leave
     }
-    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self) {
+    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
       revert(0, 0)
     }
-    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Cell_hc7450704dd4a03d6__5989b97f954838c8($self, $slot) -> ret {
-      pop($self)
-      let v0 := $stor_ptr__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a(0, $slot)
+    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Cell_hc7450704dd4a03d6__5989b97f954838c8($slot) -> ret {
+      pop(0)
+      let v0 := $stor_ptr__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a($slot)
       ret := v0
       leave
     }
-    function $init_field__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a($self, $slot) -> ret {
-      let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Cell_hc7450704dd4a03d6__5989b97f954838c8($self, $slot)
+    function $init_field__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a($slot) -> ret {
+      let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Cell_hc7450704dd4a03d6__5989b97f954838c8($slot)
       ret := v0
       leave
     }
@@ -85,7 +85,7 @@ object "EffectHandleFieldDeref" {
       ret := v1
       leave
     }
-    function $stor_ptr__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a($self, $slot) -> ret {
+    function $stor_ptr__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a($slot) -> ret {
       let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Cell_hc7450704dd4a03d6__5989b97f954838c8($slot)
       ret := v0
       leave
@@ -99,20 +99,20 @@ object "EffectHandleFieldDeref" {
 
   object "EffectHandleFieldDeref_deployed" {
     code {
-      function $__EffectHandleFieldDeref_recv_0_0($args, $evm) -> ret {
+      function $__EffectHandleFieldDeref_recv_0_0($args) -> ret {
         let v0 := mload($args)
         let v1 := v0
         let v2 := mload(add($args, 32))
         let v3 := v2
-        let v4 := $stor_ptr_stor__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a($evm, v1)
+        let v4 := $stor_ptr_stor__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a(v1)
         let v5 := v4
         let v6 := $write_cell__StorPtr_Cell___f0e99f91b10888d5(v3, v5)
         ret := v6
         leave
       }
-      function $__EffectHandleFieldDeref_recv_0_1($args, $evm) -> ret {
+      function $__EffectHandleFieldDeref_recv_0_1($args) -> ret {
         let v0 := $args
-        let v1 := $stor_ptr_stor__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a($evm, v0)
+        let v1 := $stor_ptr_stor__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a(v0)
         let v2 := mload(0x40)
         if iszero(v2) {
           v2 := 0x80
@@ -136,27 +136,27 @@ object "EffectHandleFieldDeref" {
         leave
       }
       function $__EffectHandleFieldDeref_runtime() {
-        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Cell_hc7450704dd4a03d6__5989b97f954838c8(0, 0)
-        let v1 := $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(0)
-        let v2 := $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(0)
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Cell_hc7450704dd4a03d6__5989b97f954838c8(0)
+        let v1 := $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
+        let v2 := $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
         switch v1
           case 1 {
             let v3 := $seedslot_h54140d6d3003b4fb_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v2)
-            let v4 := $__EffectHandleFieldDeref_recv_0_0(v3, 0)
-            $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(0, v4)
+            let v4 := $__EffectHandleFieldDeref_recv_0_0(v3)
+            $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v4)
           }
           case 2 {
             let v5 := $readviaholder_h9a52c49def8cf7ae_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v2)
-            let v6 := $__EffectHandleFieldDeref_recv_0_1(v5, 0)
-            $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(0, v6)
+            let v6 := $__EffectHandleFieldDeref_recv_0_1(v5)
+            $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v6)
           }
           case 3 {
             let v7 := $bumpmover_hdc9ecd58bf94824a_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v2)
             let v8 := $__EffectHandleFieldDeref_recv_0_2(v7, v0)
-            $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(0, v8)
+            $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v8)
           }
           default {
-            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(0)
+            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
           }
       }
       function $bumpmover_hdc9ecd58bf94824a_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) -> ret {
@@ -166,11 +166,12 @@ object "EffectHandleFieldDeref" {
       }
       function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len($self) -> ret {
         let v0 := calldatasize()
-        ret := sub(v0, $self)
+        let v1 := $checked_sub_u256(v0, $self)
+        ret := v1
         leave
       }
       function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at($self, $byte_offset) -> ret {
-        let v0 := add($self, $byte_offset)
+        let v0 := $checked_add_u256($self, $byte_offset)
         let v1 := calldataload(v0)
         ret := v1
         leave
@@ -178,9 +179,44 @@ object "EffectHandleFieldDeref" {
       function $cellmover_h6dc2778b4a1f6bf1_bump_stor_arg0_root_stor($self, $by) -> ret {
         let v0 := $self
         let v1 := sload(v0)
-        sstore(v0, add(v1, $by))
-        let v2 := sload($self)
-        ret := v2
+        let v2 := $checked_add_u256(v1, $by)
+        sstore(v0, v2)
+        let v3 := sload($self)
+        ret := v3
+        leave
+      }
+      function $checked_add_u256($a, $b) -> ret {
+        let v0 := $checked_add_unsigned_impl__u256__3271ca15373d4483($a, $b)
+        ret := v0
+        leave
+      }
+      function $checked_add_unsigned_impl__u256__3271ca15373d4483($a, $b) -> ret {
+        let v0 := $u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add($a, $b)
+        let v1 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v0)
+        let v2 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($a)
+        let v3 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v1, v2)
+        let v4 := v3
+        if v4 {
+          revert(0, 0)
+        }
+        ret := v0
+        leave
+      }
+      function $checked_sub_u256($a, $b) -> ret {
+        let v0 := $checked_sub_unsigned_impl__u256__3271ca15373d4483($a, $b)
+        ret := v0
+        leave
+      }
+      function $checked_sub_unsigned_impl__u256__3271ca15373d4483($a, $b) -> ret {
+        let v0 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($b)
+        let v1 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($a)
+        let v2 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v0, v1)
+        let v3 := v2
+        if v3 {
+          revert(0, 0)
+        }
+        let v4 := $u256_h3271ca15373d4483_wrappingsub_h6880d1ff91f0a556_wrapping_sub($a, $b)
+        ret := v4
         leave
       }
       function $cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($self, $pos) -> ret {
@@ -206,20 +242,20 @@ object "EffectHandleFieldDeref" {
         ret := v0
         leave
       }
-      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self) {
+      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
         revert(0, 0)
       }
-      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Cell_hc7450704dd4a03d6__5989b97f954838c8($self, $slot) -> ret {
-        pop($self)
-        let v0 := $stor_ptr__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a(0, $slot)
+      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Cell_hc7450704dd4a03d6__5989b97f954838c8($slot) -> ret {
+        pop(0)
+        let v0 := $stor_ptr__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a($slot)
         ret := v0
         leave
       }
-      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input($self) -> ret {
+      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input() -> ret {
         ret := 0
         leave
       }
-      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes($self, $ptr, $len) {
+      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes($ptr, $len) {
         return($ptr, $len)
       }
       function $extract_ptr_arg0_f0_stor($holder) -> ret {
@@ -236,7 +272,7 @@ object "EffectHandleFieldDeref" {
         ret := v0
         leave
       }
-      function $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f($self, $value) {
+      function $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f($value) {
         let v0 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new()
         let v1 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v0, 32)
         pop(v1)
@@ -244,26 +280,27 @@ object "EffectHandleFieldDeref" {
         let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v0)
         let v3 := mload(v2)
         let v4 := mload(add(v2, 32))
-        pop($self)
-        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(0, v3, v4)
+        pop(0)
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v3, v4)
       }
-      function $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2($self) -> ret {
-        pop($self)
-        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(0)
+      function $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2() -> ret {
+        pop(0)
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input()
         let v1 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0, 4)
         ret := v1
         leave
       }
-      function $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2($self) -> ret {
-        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input($self)
+      function $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2() -> ret {
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input()
         let v1 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0)
-        let v2 := lt(v1, 4)
-        if v2 {
-          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self)
+        let v2 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v1, 4)
+        let v3 := v2
+        if v3 {
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
         }
-        let v3 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v0, 0)
-        let v4 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v3)
-        ret := v4
+        let v4 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v0, 0)
+        let v5 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v4)
+        ret := v5
         leave
       }
       function $s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35($self) -> ret {
@@ -304,21 +341,24 @@ object "EffectHandleFieldDeref" {
         let v0 := mload($self)
         let v1 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0)
         let v2 := mload(add($self, 32))
-        let v3 := add(v2, 32)
-        let v4 := mload(add($self, 32))
-        let v5 := lt(v3, v4)
-        if v5 {
+        let v3 := $checked_add_u256(v2, 32)
+        let v4 := v3
+        let v5 := mload(add($self, 32))
+        let v6 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v4, v5)
+        let v7 := v6
+        if v7 {
           revert(0, 0)
         }
-        let v6 := gt(v3, v1)
-        if v6 {
+        let v8 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v4, v1)
+        let v9 := v8
+        if v9 {
           revert(0, 0)
         }
-        let v7 := mload($self)
-        let v8 := mload(add($self, 32))
-        let v9 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v7, v8)
-        mstore(add($self, 32), v3)
-        ret := v9
+        let v10 := mload($self)
+        let v11 := mload(add($self, 32))
+        let v12 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v10, v11)
+        mstore(add($self, 32), v4)
+        ret := v12
         leave
       }
       function $soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input, $base) -> ret {
@@ -340,38 +380,42 @@ object "EffectHandleFieldDeref" {
         let v0 := mload($self)
         let v1 := v0
         let v2 := mload(add($self, 64))
-        let v3 := mload(0x40)
-        if iszero(v3) {
-          v3 := 0x80
+        let v3 := $checked_sub_u256(v2, v1)
+        let v4 := mload(0x40)
+        if iszero(v4) {
+          v4 := 0x80
         }
-        mstore(0x40, add(v3, 64))
-        mstore(v3, v1)
-        mstore(add(v3, 32), sub(v2, v1))
-        ret := v3
+        mstore(0x40, add(v4, 64))
+        mstore(v4, v1)
+        mstore(add(v4, 32), v3)
+        ret := v4
         leave
       }
       function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head($self, $bytes) -> ret {
         let v0 := mload($self)
-        let v1 := eq(v0, 0)
-        if v1 {
-          let v2 := mload(64)
-          if iszero(v2) {
-            v2 := 0x80
+        let v1 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0, 0)
+        let v2 := v1
+        if v2 {
+          let v3 := mload(64)
+          if iszero(v3) {
+            v3 := 0x80
           }
-          mstore(64, add(v2, $bytes))
-          mstore($self, v2)
-          mstore(add($self, 32), v2)
-          mstore(add($self, 64), add(v2, $bytes))
+          mstore(64, add(v3, $bytes))
+          mstore($self, v3)
+          mstore(add($self, 32), v3)
+          let v4 := $checked_add_u256(v3, $bytes)
+          mstore(add($self, 64), v4)
         }
-        let v3 := mload($self)
-        ret := v3
+        let v5 := mload($self)
+        ret := v5
         leave
       }
       function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($self, $v) {
         let v0 := mload(add($self, 32))
         let v1 := v0
         mstore(v1, $v)
-        mstore(add($self, 32), add(v1, 32))
+        let v2 := $checked_add_u256(v1, 32)
+        mstore(add($self, 32), v2)
         leave
       }
       function $solencoder_h1b9228b90dad6928_new() -> ret {
@@ -386,12 +430,12 @@ object "EffectHandleFieldDeref" {
         ret := v0
         leave
       }
-      function $stor_ptr__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a($self, $slot) -> ret {
+      function $stor_ptr__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a($slot) -> ret {
         let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Cell_hc7450704dd4a03d6__5989b97f954838c8($slot)
         ret := v0
         leave
       }
-      function $stor_ptr_stor__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a($self, $slot) -> ret {
+      function $stor_ptr_stor__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a($slot) -> ret {
         let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Cell_hc7450704dd4a03d6__5989b97f954838c8($slot)
         ret := v0
         leave
@@ -409,8 +453,33 @@ object "EffectHandleFieldDeref" {
         $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($e, $self)
         leave
       }
+      function $u256_h3271ca15373d4483_eq_he50383edd273619f_eq($self, $other) -> ret {
+        let v0 := eq($self, $other)
+        ret := v0
+        leave
+      }
       function $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($self) -> ret {
         ret := $self
+        leave
+      }
+      function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt($self, $other) -> ret {
+        let v0 := gt($self, $other)
+        ret := v0
+        leave
+      }
+      function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt($self, $other) -> ret {
+        let v0 := lt($self, $other)
+        ret := v0
+        leave
+      }
+      function $u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add($self, $other) -> ret {
+        let v0 := add($self, $other)
+        ret := v0
+        leave
+      }
+      function $u256_h3271ca15373d4483_wrappingsub_h6880d1ff91f0a556_wrapping_sub($self, $other) -> ret {
+        let v0 := sub($self, $other)
+        ret := v0
         leave
       }
       function $u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_from_word($word) -> ret {

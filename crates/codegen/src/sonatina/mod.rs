@@ -12,7 +12,7 @@ use common::ingot::Ingot;
 use driver::DriverDataBase;
 use hir::analysis::ty::ty_def::TyId;
 use hir::hir_def::TopLevelMod;
-use mir::ir::{PointerInfo, ValueRepr};
+use mir::ir::PointerInfo;
 use mir::{CoreLib, MirModule, layout, layout::TargetDataLayout, lower_ingot, lower_module};
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
@@ -91,48 +91,15 @@ pub(super) fn is_erased_runtime_ty(
 
 #[derive(Debug, Clone)]
 pub(super) struct RuntimeFunctionMetadata {
-    pub(super) params: Vec<Option<Type>>,
+    pub(super) params: Vec<Type>,
     pub(super) ret: Option<Type>,
 }
 
 impl RuntimeFunctionMetadata {
     fn signature(&self, name: &str, linkage: sonatina_ir::Linkage) -> Signature {
-        let params: Vec<_> = self.params.iter().copied().flatten().collect();
         let ret_tys: Vec<_> = self.ret.into_iter().collect();
-        Signature::new(name, linkage, &params, &ret_tys)
+        Signature::new(name, linkage, &self.params, &ret_tys)
     }
-}
-
-fn merge_runtime_type(
-    builder: &ModuleBuilder,
-    slot: &mut Option<Type>,
-    ty: Type,
-    what: &str,
-) -> Result<(), LowerError> {
-    if let Some(existing) = slot {
-        if *existing != ty {
-            let opaque_ptr = builder.ptr_type(Type::I8);
-            let merged = if *existing == opaque_ptr && ty.is_pointer(&builder.ctx) {
-                ty
-            } else if ty == opaque_ptr && existing.is_pointer(&builder.ctx) {
-                *existing
-            } else if !existing.is_pointer(&builder.ctx) && ty.is_pointer(&builder.ctx) {
-                ty
-            } else if existing.is_pointer(&builder.ctx) && !ty.is_pointer(&builder.ctx) {
-                *existing
-            } else {
-                return Err(LowerError::Internal(format!(
-                    "conflicting runtime sonatina types for {what}: {existing:?} vs {ty:?}"
-                )));
-            };
-            *slot = Some(merged);
-            return Ok(());
-        }
-        return Ok(());
-    }
-
-    *slot = Some(ty);
-    Ok(())
 }
 
 fn runtime_pointer_type_from_target(
@@ -168,261 +135,55 @@ fn function_core_lib<'db>(db: &'db DriverDataBase, func: &mir::MirFunction<'db>)
     CoreLib::new(db, scope)
 }
 
-fn infer_local_root_runtime_types(
+pub(super) fn runtime_type_for_pointer_info(
     builder: &ModuleBuilder,
     db: &DriverDataBase,
     core: &CoreLib<'_>,
     target_layout: &TargetDataLayout,
-    func: &mir::MirFunction<'_>,
+    info: PointerInfo<'_>,
     cache: &mut FxHashMap<String, Option<Type>>,
     name_counter: &mut usize,
-) -> Result<Vec<Option<Type>>, LowerError> {
-    let mut local_runtime_types = vec![None; func.body.locals.len()];
-    let mut runtime_type_cx = RuntimeTypeCx {
+) -> Type {
+    runtime_type_for_shape(
         builder,
         db,
         core,
         target_layout,
+        mir::repr::runtime_shape_for_pointer_info(info),
         cache,
         name_counter,
-    };
-
-    for (idx, value) in func.body.values.iter().enumerate() {
-        let Some(local) =
-            inferred_local_root_for_value(db, core, &func.body.values, &func.body.locals, value)
-        else {
-            continue;
-        };
-        let runtime_ty = runtime_type_cx.runtime_type_for_value_with_info(
-            value,
-            func.body.value_pointer_info(mir::ValueId(idx as u32)),
-        );
-        merge_runtime_type(
-            builder,
-            &mut local_runtime_types[local.index()],
-            runtime_ty,
-            &format!("local root {local:?}"),
-        )?;
-    }
-
-    Ok(local_runtime_types)
+    )
 }
 
-fn inferred_local_root_for_value<'db>(
-    db: &'db DriverDataBase,
-    core: &CoreLib<'db>,
-    values: &[mir::ValueData<'db>],
-    locals: &[mir::LocalData<'db>],
-    value: &mir::ValueData<'db>,
-) -> Option<mir::LocalId> {
-    match &value.origin {
-        mir::ValueOrigin::Local(local) => locals
-            .get(local.index())
-            .filter(|local_data| local_data.ty == value.ty)
-            .map(|_| *local),
-        mir::ValueOrigin::PlaceRef(place) | mir::ValueOrigin::MoveOut { place } => {
-            if !place.projection.is_empty() {
-                return None;
-            }
-            if mir::repr::resolve_place(db, core, values, locals, place)?
-                .segments
-                .iter()
-                .any(|segment| segment.start_kind.is_some())
-            {
-                return None;
-            }
-
-            let (local, prefix) = mir::ir::resolve_local_projection_root(values, place.base)?;
-            (prefix.is_empty()
-                && locals
-                    .get(local.index())
-                    .is_some_and(|local_data| local_data.ty == value.ty))
-            .then_some(local)
-        }
-        _ => None,
-    }
-}
-
-fn prefer_inferred_runtime_type(
+pub(super) fn runtime_type_for_shape(
     builder: &ModuleBuilder,
-    fallback: Type,
-    inferred_root: Option<Type>,
+    db: &DriverDataBase,
+    core: &CoreLib<'_>,
+    target_layout: &TargetDataLayout,
+    shape: mir::ir::RuntimeShape<'_>,
+    cache: &mut FxHashMap<String, Option<Type>>,
+    name_counter: &mut usize,
 ) -> Type {
-    let Some(inferred_root) = inferred_root else {
-        return fallback;
-    };
-    let fallback_is_ptr = fallback.is_pointer(&builder.ctx);
-    let inferred_is_ptr = inferred_root.is_pointer(&builder.ctx);
-
-    if !inferred_is_ptr {
-        return inferred_root;
-    }
-
-    if inferred_is_ptr && (!fallback_is_ptr || fallback == builder.ptr_type(Type::I8)) {
-        return inferred_root;
-    }
-
-    fallback
-}
-
-struct RuntimeTypeCx<'a, 'db> {
-    builder: &'a ModuleBuilder,
-    db: &'db DriverDataBase,
-    core: &'a CoreLib<'db>,
-    target_layout: &'a TargetDataLayout,
-    cache: &'a mut FxHashMap<String, Option<Type>>,
-    name_counter: &'a mut usize,
-}
-
-impl<'a, 'db> RuntimeTypeCx<'a, 'db> {
-    fn runtime_type_for_pointer_info(&mut self, info: PointerInfo<'db>) -> Type {
-        if info.address_space != mir::ir::AddressSpaceKind::Memory {
-            return Type::I256;
+    match shape {
+        mir::ir::RuntimeShape::Unresolved => {
+            panic!("unresolved MIR runtime shape reached Sonatina codegen")
         }
-
-        let Some(target_ty) = info.target_ty else {
-            return self.builder.ptr_type(Type::I8);
-        };
-
-        runtime_pointer_type_from_target(
-            self.builder,
-            self.db,
-            self.core,
-            self.target_layout,
-            target_ty,
-            self.cache,
-            self.name_counter,
-        )
-    }
-
-    fn runtime_type_for_value_with_info(
-        &mut self,
-        value: &mir::ValueData<'db>,
-        pointer_info: Option<PointerInfo<'db>>,
-    ) -> Type {
-        let ty = value.ty;
-        if is_erased_runtime_ty(self.db, self.target_layout, ty) {
-            return Type::Unit;
-        }
-
-        if let Some(info) = pointer_info {
-            return self.runtime_type_for_pointer_info(info);
-        }
-
-        match value.repr {
-            ValueRepr::Word => types::value_type(self.db, ty),
-            ValueRepr::Ptr(address_space) | ValueRepr::Ref(address_space) => {
-                self.runtime_type_for_plain_ty(ty, address_space)
-            }
-        }
-    }
-
-    fn runtime_type_for_plain_ty(
-        &mut self,
-        ty: TyId<'db>,
-        address_space: mir::ir::AddressSpaceKind,
-    ) -> Type {
-        if is_erased_runtime_ty(self.db, self.target_layout, ty) {
-            return Type::Unit;
-        }
-
-        mir::repr::runtime_pointer_info_for_ty(self.db, self.core, ty, address_space)
-            .map(|info| self.runtime_type_for_pointer_info(info))
-            .unwrap_or(types::runtime_type(self.db, self.target_layout, ty))
-    }
-
-    fn runtime_type_for_plain_local(&mut self, local: &mir::LocalData<'db>) -> Type {
-        let ty = local.ty;
-        if is_erased_runtime_ty(self.db, self.target_layout, ty) {
-            return Type::Unit;
-        }
-
-        if let Some((_, info)) = local
-            .pointer_leaf_infos
-            .iter()
-            .find(|(path, _)| path.is_empty())
-        {
-            return self.runtime_type_for_pointer_info(*info);
-        }
-
-        self.runtime_type_for_plain_ty(ty, local.address_space)
-    }
-
-    fn infer_function_return_runtime_type(
-        &mut self,
-        func: &mir::MirFunction<'db>,
-    ) -> Result<Option<Type>, LowerError> {
-        if !func.returns_value {
-            return Ok(None);
-        }
-
-        let mut ret = None;
-        for block in &func.body.blocks {
-            let mir::Terminator::Return {
-                value: Some(value_id),
-                ..
-            } = &block.terminator
-            else {
-                continue;
-            };
-            let value = func.body.values.get(value_id.index()).ok_or_else(|| {
-                LowerError::Internal(format!("unknown return value id {}", value_id.index()))
-            })?;
-            let runtime_ty = self
-                .runtime_type_for_value_with_info(value, func.body.value_pointer_info(*value_id));
-            merge_runtime_type(
-                self.builder,
-                &mut ret,
-                runtime_ty,
-                &format!("return of `{}`", func.symbol_name),
-            )?;
-        }
-
-        if ret.is_none() {
-            ret = Some(
-                self.runtime_type_for_plain_ty(func.ret_ty, mir::ir::AddressSpaceKind::Memory),
-            );
-        }
-
-        Ok(ret)
-    }
-
-    fn infer_function_local_runtime_types(
-        &mut self,
-        func: &mir::MirFunction<'db>,
-        metadata: &RuntimeFunctionMetadata,
-    ) -> Result<Vec<Type>, LowerError> {
-        let mut local_runtime_types = infer_local_root_runtime_types(
-            self.builder,
-            self.db,
-            self.core,
-            self.target_layout,
-            func,
-            self.cache,
-            self.name_counter,
-        )?;
-
-        for (slot, local_id) in func
-            .body
-            .param_locals
-            .iter()
-            .chain(func.body.effect_param_locals.iter())
-            .enumerate()
-        {
-            if let Some(param_ty) = metadata.params.get(slot).and_then(|ty| *ty) {
-                local_runtime_types[local_id.index()] = Some(param_ty);
-            }
-        }
-
-        let mut out = Vec::with_capacity(func.body.locals.len());
-        for (idx, local) in func.body.locals.iter().enumerate() {
-            let fallback = self.runtime_type_for_plain_local(local);
-            let runtime_ty =
-                prefer_inferred_runtime_type(self.builder, fallback, local_runtime_types[idx]);
-            out.push(runtime_ty);
-        }
-
-        Ok(out)
+        mir::ir::RuntimeShape::Erased => Type::Unit,
+        mir::ir::RuntimeShape::Word(kind) => types::runtime_word_type(kind),
+        mir::ir::RuntimeShape::MemoryPtr { target_ty } => target_ty
+            .map(|target_ty| {
+                runtime_pointer_type_from_target(
+                    builder,
+                    db,
+                    core,
+                    target_layout,
+                    target_ty,
+                    cache,
+                    name_counter,
+                )
+            })
+            .unwrap_or_else(|| builder.ptr_type(Type::I8)),
+        mir::ir::RuntimeShape::AddressWord(_) => Type::I256,
     }
 }
 
@@ -868,96 +629,44 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         &mut self,
         func: &mir::MirFunction<'db>,
     ) -> Result<(Signature, RuntimeFunctionMetadata), LowerError> {
-        use mir::ir::{ContractFunctionKind, MirFunctionOrigin, SyntheticId};
-
         let name = &func.symbol_name;
         // Keep lowered functions private so Sonatina DFE can eliminate dead functions.
         // Reachability roots are selected via object section entries, not linkage visibility.
         let linkage = sonatina_ir::Linkage::Private;
-        let declared_param_runtime_ty = |local_id: mir::LocalId| -> Result<Type, LowerError> {
-            let local_ty = func
-                .body
-                .locals
-                .get(local_id.index())
-                .ok_or_else(|| LowerError::Internal(format!("unknown param local: {local_id:?}")))?
-                .ty;
-            Ok(types::runtime_type(self.db, &self.target_layout, local_ty))
-        };
-
-        // Contract init/runtime entrypoints are executed directly by the EVM with an empty stack.
-        // Even though MIR models them as taking effect args (e.g. `StorPtr<Evm>`), we cannot
-        // expose those as real EVM stack parameters at entry.
-        let is_contract_entry = func.contract_function.as_ref().is_some_and(|cf| {
-            matches!(
-                cf.kind,
-                ContractFunctionKind::Init | ContractFunctionKind::Runtime
-            )
-        }) || matches!(
-            func.origin,
-            MirFunctionOrigin::Synthetic(
-                SyntheticId::ContractInitEntrypoint(_) | SyntheticId::ContractRuntimeEntrypoint(_)
-            )
-        );
-
-        // Compute which MIR parameters are runtime-visible (stack words).
-        // Entry functions have no parameters since the EVM starts with an empty stack.
-        let mut mask = Vec::new();
-        if is_contract_entry {
-            // Keep it empty; callers should never pass arguments to EVM entrypoints.
-        } else {
-            for local_id in func.body.param_locals.iter().copied() {
-                mask.push(declared_param_runtime_ty(local_id)? != Type::Unit);
-            }
-            for local_id in func.body.effect_param_locals.iter().copied() {
-                mask.push(declared_param_runtime_ty(local_id)? != Type::Unit);
-            }
-        }
-
         let core = function_core_lib(self.db, func);
+        let runtime_param_locals: Vec<_> = func
+            .runtime_param_locals()
+            .into_iter()
+            .chain(func.runtime_effect_param_locals())
+            .collect();
 
-        let inferred_param_runtime_types = infer_local_root_runtime_types(
-            &self.builder,
-            self.db,
-            &core,
-            &self.target_layout,
-            func,
-            &mut self.gep_type_cache,
-            &mut self.gep_name_counter,
-        )?;
-
-        let mut runtime_type_cx = RuntimeTypeCx {
-            builder: &self.builder,
-            db: self.db,
-            core: &core,
-            target_layout: &self.target_layout,
-            cache: &mut self.gep_type_cache,
-            name_counter: &mut self.gep_name_counter,
-        };
-
-        let mut params = Vec::with_capacity(mask.len());
-        for (&keep, local_id) in mask.iter().zip(
-            func.body
-                .param_locals
-                .iter()
-                .chain(func.body.effect_param_locals.iter()),
-        ) {
-            if !keep {
-                params.push(None);
-                continue;
-            }
-
+        let mut params = Vec::with_capacity(runtime_param_locals.len());
+        for local_id in runtime_param_locals {
             let local = func.body.locals.get(local_id.index()).ok_or_else(|| {
                 LowerError::Internal(format!("unknown param local: {local_id:?}"))
             })?;
-            let fallback = runtime_type_cx.runtime_type_for_plain_local(local);
-            params.push(Some(prefer_inferred_runtime_type(
+            params.push(runtime_type_for_shape(
                 &self.builder,
-                fallback,
-                inferred_param_runtime_types[local_id.index()],
-            )));
+                self.db,
+                &core,
+                &self.target_layout,
+                local.runtime_shape,
+                &mut self.gep_type_cache,
+                &mut self.gep_name_counter,
+            ));
         }
 
-        let ret = runtime_type_cx.infer_function_return_runtime_type(func)?;
+        let ret = (!func.runtime_return_shape.is_erased()).then(|| {
+            runtime_type_for_shape(
+                &self.builder,
+                self.db,
+                &core,
+                &self.target_layout,
+                func.runtime_return_shape,
+                &mut self.gep_type_cache,
+                &mut self.gep_name_counter,
+            )
+        });
 
         let metadata = RuntimeFunctionMetadata { params, ret };
         Ok((metadata.signature(name, linkage), metadata))
@@ -1426,8 +1135,8 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             })?;
         // Pass zero for all arguments (regular + effect params). Entry wrappers do not supply
         // source-level arguments, but the internal call still needs type-correct placeholders.
-        let mut args = Vec::with_capacity(runtime_metadata.params.iter().flatten().count());
-        for expected_ty in runtime_metadata.params.iter().copied().flatten() {
+        let mut args = Vec::with_capacity(runtime_metadata.params.len());
+        for expected_ty in runtime_metadata.params.iter().copied() {
             args.push(zero_value_for_type(&mut fb, expected_ty, is));
         }
         let call_inst = Call::new(is, entry_ref, args.into());
@@ -1469,15 +1178,22 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         let mut fb = self.builder.func_builder::<InstInserter>(func_ref);
         let is = self.isa.inst_set();
         let core = function_core_lib(self.db, func);
-        let local_runtime_types = RuntimeTypeCx {
-            builder: &self.builder,
-            db: self.db,
-            core: &core,
-            target_layout: &self.target_layout,
-            cache: &mut self.gep_type_cache,
-            name_counter: &mut self.gep_name_counter,
-        }
-        .infer_function_local_runtime_types(func, &func_metadata)?;
+        let local_runtime_types: Vec<_> = func
+            .body
+            .locals
+            .iter()
+            .map(|local| {
+                runtime_type_for_shape(
+                    &self.builder,
+                    self.db,
+                    &core,
+                    &self.target_layout,
+                    local.runtime_shape,
+                    &mut self.gep_type_cache,
+                    &mut self.gep_name_counter,
+                )
+            })
+            .collect();
 
         // Maps MIR block IDs to Sonatina block IDs
         let mut block_map: FxHashMap<mir::BasicBlockId, BlockId> = FxHashMap::default();
@@ -1512,6 +1228,11 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             .chain(func.body.effect_param_locals.iter())
             .copied()
             .collect();
+        let runtime_param_locals: FxHashSet<_> = func
+            .runtime_param_locals()
+            .into_iter()
+            .chain(func.runtime_effect_param_locals())
+            .collect();
 
         if is_entry {
             // Entry functions have no Sonatina parameters (EVM starts with empty stack).
@@ -1530,23 +1251,20 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             // Non-entry functions: map actual arguments to param locals.
             let args = fb.args().to_vec();
             let mut arg_iter = args.into_iter();
-            for (idx, local_id) in all_param_locals.iter().copied().enumerate() {
+            for local_id in all_param_locals.iter().copied() {
                 let var = local_vars.get(&local_id).copied().ok_or_else(|| {
                     LowerError::Internal(format!(
                         "missing SSA variable for param local {local_id:?}"
                     ))
                 })?;
 
-                if func_metadata.params.get(idx).is_some_and(Option::is_none) {
-                    let zero =
-                        zero_value_for_type(&mut fb, local_runtime_types[local_id.index()], is);
-                    fb.def_var(var, zero);
-                    continue;
-                }
-
-                let arg_val = arg_iter.next().unwrap_or_else(|| {
+                let arg_val = if runtime_param_locals.contains(&local_id) {
+                    arg_iter.next().unwrap_or_else(|| {
+                        zero_value_for_type(&mut fb, local_runtime_types[local_id.index()], is)
+                    })
+                } else {
                     zero_value_for_type(&mut fb, local_runtime_types[local_id.index()], is)
-                });
+                };
                 fb.def_var(var, arg_val);
             }
         }

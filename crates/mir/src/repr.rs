@@ -28,7 +28,8 @@ use hir::projection::{Projection, ProjectionPath};
 
 use crate::core_lib::CoreLib;
 use crate::ir::{
-    AddressSpaceKind, LocalData, MirProjection, Place, PointerInfo, ValueData, ValueId,
+    AddressSpaceKind, LocalData, MirProjection, Place, PointerInfo, RuntimeShape, RuntimeWordKind,
+    ValueData, ValueId, try_value_pointer_info_in,
 };
 use crate::layout;
 use common::indexmap::IndexMap;
@@ -824,8 +825,170 @@ fn repr_kind_for_ref_inner<'db>(
 
 /// Returns the leaf type that should drive word conversion (`WordRepr::{from_word,to_word}`).
 ///
-/// This peels transparent newtypes so `struct WrapU8 { inner: u8 }` is treated like `u8` for the
-/// purposes of masking/sign-extension.
+/// This peels transparent newtypes and view wrappers so `struct WrapU8 { inner: u8 }` and
+/// `view u8` are treated like `u8` for the purposes of masking/sign-extension.
 pub fn word_conversion_leaf_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-    peel_transparent_newtypes(db, ty)
+    let mut ty = ty;
+    loop {
+        if let Some((CapabilityKind::View, inner)) = ty.as_capability(db) {
+            ty = inner;
+            continue;
+        }
+        if let Some(inner) = transparent_newtype_field_ty(db, ty) {
+            ty = inner;
+            continue;
+        }
+        return ty;
+    }
+}
+
+pub fn runtime_word_kind_for_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> RuntimeWordKind {
+    let leaf_ty = word_conversion_leaf_ty(db, ty);
+    if let TyData::TyBase(TyBase::Prim(prim)) = leaf_ty.base_ty(db).data(db) {
+        return match prim {
+            hir::analysis::ty::ty_def::PrimTy::Bool => RuntimeWordKind::I1,
+            hir::analysis::ty::ty_def::PrimTy::U8 | hir::analysis::ty::ty_def::PrimTy::I8 => {
+                RuntimeWordKind::I8
+            }
+            hir::analysis::ty::ty_def::PrimTy::U16 | hir::analysis::ty::ty_def::PrimTy::I16 => {
+                RuntimeWordKind::I16
+            }
+            hir::analysis::ty::ty_def::PrimTy::U32 | hir::analysis::ty::ty_def::PrimTy::I32 => {
+                RuntimeWordKind::I32
+            }
+            hir::analysis::ty::ty_def::PrimTy::U64 | hir::analysis::ty::ty_def::PrimTy::I64 => {
+                RuntimeWordKind::I64
+            }
+            hir::analysis::ty::ty_def::PrimTy::U128 | hir::analysis::ty::ty_def::PrimTy::I128 => {
+                RuntimeWordKind::I128
+            }
+            hir::analysis::ty::ty_def::PrimTy::U256
+            | hir::analysis::ty::ty_def::PrimTy::I256
+            | hir::analysis::ty::ty_def::PrimTy::Usize
+            | hir::analysis::ty::ty_def::PrimTy::Isize
+            | hir::analysis::ty::ty_def::PrimTy::String
+            | hir::analysis::ty::ty_def::PrimTy::Array
+            | hir::analysis::ty::ty_def::PrimTy::Tuple(_)
+            | hir::analysis::ty::ty_def::PrimTy::Ptr
+            | hir::analysis::ty::ty_def::PrimTy::View
+            | hir::analysis::ty::ty_def::PrimTy::BorrowMut
+            | hir::analysis::ty::ty_def::PrimTy::BorrowRef => RuntimeWordKind::I256,
+        };
+    }
+
+    RuntimeWordKind::I256
+}
+
+pub fn runtime_shape_for_pointer_info<'db>(info: PointerInfo<'db>) -> RuntimeShape<'db> {
+    if info.address_space == AddressSpaceKind::Memory {
+        RuntimeShape::MemoryPtr {
+            target_ty: info.target_ty,
+        }
+    } else {
+        RuntimeShape::AddressWord(info)
+    }
+}
+
+fn runtime_shape_needs_dynamic_address_space<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> bool {
+    if let Some((capability, inner)) = ty.as_capability(db) {
+        return match capability {
+            CapabilityKind::Mut | CapabilityKind::Ref => true,
+            CapabilityKind::View => runtime_shape_needs_dynamic_address_space(db, inner),
+        };
+    }
+
+    transparent_newtype_field_ty(db, ty)
+        .is_some_and(|inner| runtime_shape_needs_dynamic_address_space(db, inner))
+}
+
+pub fn runtime_shape_for_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    ty: TyId<'db>,
+    default_ref_space: AddressSpaceKind,
+) -> RuntimeShape<'db> {
+    if layout::is_zero_sized_ty(db, ty) {
+        return RuntimeShape::Erased;
+    }
+
+    if let Some(info) = runtime_pointer_info_for_ty(db, core, ty, default_ref_space) {
+        return runtime_shape_for_pointer_info(info);
+    }
+
+    RuntimeShape::Word(runtime_word_kind_for_ty(db, ty))
+}
+
+pub fn runtime_return_shape_seed_for_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    ty: TyId<'db>,
+) -> RuntimeShape<'db> {
+    if layout::is_zero_sized_ty(db, ty) {
+        return RuntimeShape::Erased;
+    }
+
+    if runtime_shape_needs_dynamic_address_space(db, ty) {
+        return RuntimeShape::Unresolved;
+    }
+
+    runtime_shape_for_ty(db, core, ty, AddressSpaceKind::Memory)
+}
+
+pub fn runtime_shape_for_local<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    local: &LocalData<'db>,
+) -> RuntimeShape<'db> {
+    if let Some((_, info)) = local
+        .pointer_leaf_infos
+        .iter()
+        .find(|(path, _)| path.is_empty())
+    {
+        return runtime_shape_for_pointer_info(*info);
+    }
+
+    runtime_shape_for_ty(db, core, local.ty, local.address_space)
+}
+
+pub fn runtime_shape_for_value<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    values: &[ValueData<'db>],
+    locals: &[LocalData<'db>],
+    value: ValueId,
+) -> Option<RuntimeShape<'db>> {
+    let value_data = values.get(value.index())?;
+    if layout::is_zero_sized_ty(db, value_data.ty) {
+        return Some(RuntimeShape::Erased);
+    }
+
+    match value_data.repr {
+        crate::ir::ValueRepr::Word => Some(RuntimeShape::Word(runtime_word_kind_for_ty(
+            db,
+            value_data.ty,
+        ))),
+        crate::ir::ValueRepr::Ref(AddressSpaceKind::Memory) => Some(RuntimeShape::MemoryPtr {
+            target_ty: try_value_pointer_info_in(values, locals, value)
+                .and_then(|info| info.target_ty)
+                .or(Some(value_data.ty)),
+        }),
+        crate::ir::ValueRepr::Ref(space) => Some(RuntimeShape::AddressWord(PointerInfo {
+            address_space: space,
+            target_ty: try_value_pointer_info_in(values, locals, value)
+                .and_then(|info| info.target_ty)
+                .or(Some(value_data.ty)),
+        })),
+        crate::ir::ValueRepr::Ptr(space) => {
+            let info = try_value_pointer_info_in(values, locals, value)
+                .or_else(|| runtime_value_pointer_info_for_ty(db, core, value_data.ty, space))
+                .unwrap_or(PointerInfo {
+                    address_space: space,
+                    target_ty: None,
+                });
+            Some(runtime_shape_for_pointer_info(info))
+        }
+    }
 }

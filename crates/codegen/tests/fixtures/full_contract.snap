@@ -16,7 +16,7 @@ object "ShapeDispatcher" {
 
   object "ShapeDispatcher_deployed" {
     code {
-      function $abi_encode__Evm_hef0af3106e109414__3af54274b2985741($value, $ops) {
+      function $abi_encode__Evm_hef0af3106e109414__3af54274b2985741($value) {
         let v0 := 0
         mstore(v0, $value)
         return(v0, 32)
@@ -94,7 +94,7 @@ object "ShapeDispatcher" {
           let v11 := $checked_add_u256(v10, 2)
           mstore(add(v7, 32), v11)
           let v12 := $point_hac92469562809d28_area(v7)
-          $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v12, 0)
+          $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v12)
         }
         let v13 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v1, 2066295049)
         let v14 := v13
@@ -104,7 +104,7 @@ object "ShapeDispatcher" {
           let v17 := $checked_add_u256(v16, 3)
           v16 := v17
           let v18 := $square_h97afaa872b6ea17e_area(v16)
-          $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v18, 0)
+          $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v18)
         }
         return(0, 0)
       }

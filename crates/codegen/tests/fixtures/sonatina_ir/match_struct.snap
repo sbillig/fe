@@ -15,120 +15,104 @@ func private %match_struct_fields(v0.*@__fe_Point_0) -> i8 {
         jump block2;
 
     block2:
-        v2.i256 = phi (0.i256 block1) (v19 block3) (v35 block4) (v64 block5);
-        return v2;
+        v3.i8 = phi (0.i8 block1) (v16 block3) (v28 block4) (v49 block10);
+        return v3;
 
     block3:
-        v4.i256 = ptr_to_int v0 i256;
-        v5.*i8 = bitcast v0 *i8;
-        v6.*@__fe_Point_0 = bitcast v5 *@__fe_Point_0;
-        v7.i256 = ptr_to_int v0 i256;
-        v8.*i8 = bitcast v0 *i8;
-        v9.*@__fe_Point_0 = bitcast v8 *@__fe_Point_0;
-        v11.*i256 = gep v9 0.i256 1.i256;
-        v12.i256 = ptr_to_int v11 i256;
-        v13.*i8 = bitcast v11 *i8;
-        v14.*i256 = bitcast v13 *i256;
-        v15.i256 = ptr_to_int v14 i256;
-        v16.*i8 = bitcast v14 *i8;
-        v17.i256 = mload v16 i256;
-        v18.i8 = trunc v17 i8;
-        v19.i256 = zext v18 i256;
+        v5.i256 = ptr_to_int v0 i256;
+        v6.*i8 = bitcast v0 *i8;
+        v7.*@__fe_Point_0 = bitcast v6 *@__fe_Point_0;
+        v8.i256 = ptr_to_int v0 i256;
+        v9.*i8 = bitcast v0 *i8;
+        v10.*@__fe_Point_0 = bitcast v9 *@__fe_Point_0;
+        v12.*i8 = gep v10 0.i256 1.i256;
+        v13.i256 = ptr_to_int v12 i256;
+        v14.i256 = ptr_to_int v12 i256;
+        v15.i256 = mload v12 i256;
+        v16.i8 = trunc v15 i8;
         jump block2;
 
     block4:
+        v18.i256 = ptr_to_int v0 i256;
+        v19.*i8 = bitcast v0 *i8;
+        v20.*@__fe_Point_0 = bitcast v19 *@__fe_Point_0;
         v21.i256 = ptr_to_int v0 i256;
         v22.*i8 = bitcast v0 *i8;
         v23.*@__fe_Point_0 = bitcast v22 *@__fe_Point_0;
-        v24.i256 = ptr_to_int v0 i256;
-        v25.*i8 = bitcast v0 *i8;
-        v26.*@__fe_Point_0 = bitcast v25 *@__fe_Point_0;
-        v27.*i256 = gep v26 0.i256 0.i256;
-        v28.i256 = ptr_to_int v27 i256;
-        v29.*i8 = bitcast v27 *i8;
-        v30.*i256 = bitcast v29 *i256;
-        v31.i256 = ptr_to_int v30 i256;
-        v32.*i8 = bitcast v30 *i8;
-        v33.i256 = mload v32 i256;
-        v34.i8 = trunc v33 i8;
-        v35.i256 = zext v34 i256;
+        v24.*i8 = gep v23 0.i256 0.i256;
+        v25.i256 = ptr_to_int v24 i256;
+        v26.i256 = ptr_to_int v24 i256;
+        v27.i256 = mload v24 i256;
+        v28.i8 = trunc v27 i8;
         jump block2;
 
     block5:
-        v37.i256 = ptr_to_int v0 i256;
-        v38.*i8 = bitcast v0 *i8;
-        v39.*@__fe_Point_0 = bitcast v38 *@__fe_Point_0;
-        v40.i256 = ptr_to_int v0 i256;
-        v41.*i8 = bitcast v0 *i8;
-        v42.*@__fe_Point_0 = bitcast v41 *@__fe_Point_0;
-        v43.*i256 = gep v42 0.i256 1.i256;
-        v44.i256 = ptr_to_int v43 i256;
-        v45.*i8 = bitcast v43 *i8;
-        v46.*i256 = bitcast v45 *i256;
-        v47.i256 = ptr_to_int v0 i256;
-        v48.*i8 = bitcast v0 *i8;
-        v49.*@__fe_Point_0 = bitcast v48 *@__fe_Point_0;
-        v50.*i256 = gep v49 0.i256 0.i256;
-        v51.i256 = ptr_to_int v50 i256;
-        v52.*i8 = bitcast v50 *i8;
-        v53.*i256 = bitcast v52 *i256;
-        v54.i256 = ptr_to_int v53 i256;
-        v55.*i8 = bitcast v53 *i8;
-        v56.i256 = mload v55 i256;
-        v57.i8 = trunc v56 i8;
-        v58.i256 = zext v57 i256;
-        v59.i256 = ptr_to_int v46 i256;
-        v60.*i8 = bitcast v46 *i8;
-        v61.i256 = mload v60 i256;
-        v62.i8 = trunc v61 i8;
-        v63.i256 = zext v62 i256;
-        v64.i256 = add v58 v63;
-        jump block2;
+        v30.i256 = ptr_to_int v0 i256;
+        v31.*i8 = bitcast v0 *i8;
+        v32.*@__fe_Point_0 = bitcast v31 *@__fe_Point_0;
+        v33.i256 = ptr_to_int v0 i256;
+        v34.*i8 = bitcast v0 *i8;
+        v35.*@__fe_Point_0 = bitcast v34 *@__fe_Point_0;
+        v36.*i8 = gep v35 0.i256 1.i256;
+        v37.i256 = ptr_to_int v36 i256;
+        v38.i256 = ptr_to_int v0 i256;
+        v39.*i8 = bitcast v0 *i8;
+        v40.*@__fe_Point_0 = bitcast v39 *@__fe_Point_0;
+        v41.*i8 = gep v40 0.i256 0.i256;
+        v42.i256 = ptr_to_int v41 i256;
+        v43.i256 = ptr_to_int v41 i256;
+        v44.i256 = mload v41 i256;
+        v45.i8 = trunc v44 i8;
+        v46.i256 = ptr_to_int v36 i256;
+        v47.i256 = mload v36 i256;
+        v48.i8 = trunc v47 i8;
+        (v49.i8, v50.i1) = uaddo v45 v48;
+        br v50 block9 block10;
 
     block6:
+        v52.i256 = ptr_to_int v0 i256;
+        v53.*i8 = bitcast v0 *i8;
+        v54.*@__fe_Point_0 = bitcast v53 *@__fe_Point_0;
+        v55.i256 = ptr_to_int v0 i256;
+        v56.*i8 = bitcast v0 *i8;
+        v57.*@__fe_Point_0 = bitcast v56 *@__fe_Point_0;
+        v58.*i8 = gep v57 0.i256 1.i256;
+        v59.i256 = ptr_to_int v58 i256;
+        v60.i256 = mload v58 i256;
+        v61.i8 = trunc v60 i8;
+        br_table v61 block8 (0.i8 block7);
+
+    block7:
+        v63.i256 = ptr_to_int v0 i256;
+        v64.*i8 = bitcast v0 *i8;
+        v65.*@__fe_Point_0 = bitcast v64 *@__fe_Point_0;
         v66.i256 = ptr_to_int v0 i256;
         v67.*i8 = bitcast v0 *i8;
         v68.*@__fe_Point_0 = bitcast v67 *@__fe_Point_0;
-        v69.i256 = ptr_to_int v0 i256;
-        v70.*i8 = bitcast v0 *i8;
-        v71.*@__fe_Point_0 = bitcast v70 *@__fe_Point_0;
-        v72.*i256 = gep v71 0.i256 1.i256;
-        v73.i256 = ptr_to_int v72 i256;
-        v74.*i8 = bitcast v72 *i8;
-        v75.i256 = mload v74 i256;
-        v76.i8 = trunc v75 i8;
-        v77.i256 = zext v76 i256;
-        br_table v77 block8 (0.i256 block7);
-
-    block7:
-        v79.i256 = ptr_to_int v0 i256;
-        v80.*i8 = bitcast v0 *i8;
-        v81.*@__fe_Point_0 = bitcast v80 *@__fe_Point_0;
-        v82.i256 = ptr_to_int v0 i256;
-        v83.*i8 = bitcast v0 *i8;
-        v84.*@__fe_Point_0 = bitcast v83 *@__fe_Point_0;
-        v85.*i256 = gep v84 0.i256 0.i256;
-        v86.i256 = ptr_to_int v85 i256;
-        v87.*i8 = bitcast v85 *i8;
-        v88.i256 = mload v87 i256;
-        v89.i8 = trunc v88 i8;
-        v90.i256 = zext v89 i256;
-        br_table v90 block4 (0.i256 block1);
+        v69.*i8 = gep v68 0.i256 0.i256;
+        v70.i256 = ptr_to_int v69 i256;
+        v71.i256 = mload v69 i256;
+        v72.i8 = trunc v71 i8;
+        br_table v72 block4 (0.i8 block1);
 
     block8:
-        v92.i256 = ptr_to_int v0 i256;
-        v93.*i8 = bitcast v0 *i8;
-        v94.*@__fe_Point_0 = bitcast v93 *@__fe_Point_0;
-        v95.i256 = ptr_to_int v0 i256;
-        v96.*i8 = bitcast v0 *i8;
-        v97.*@__fe_Point_0 = bitcast v96 *@__fe_Point_0;
-        v98.*i256 = gep v97 0.i256 0.i256;
-        v99.i256 = ptr_to_int v98 i256;
-        v100.*i8 = bitcast v98 *i8;
-        v101.i256 = mload v100 i256;
-        v102.i8 = trunc v101 i8;
-        v103.i256 = zext v102 i256;
-        br_table v103 block5 (0.i256 block3);
+        v74.i256 = ptr_to_int v0 i256;
+        v75.*i8 = bitcast v0 *i8;
+        v76.*@__fe_Point_0 = bitcast v75 *@__fe_Point_0;
+        v77.i256 = ptr_to_int v0 i256;
+        v78.*i8 = bitcast v0 *i8;
+        v79.*@__fe_Point_0 = bitcast v78 *@__fe_Point_0;
+        v80.*i8 = gep v79 0.i256 0.i256;
+        v81.i256 = ptr_to_int v80 i256;
+        v82.i256 = mload v80 i256;
+        v83.i8 = trunc v82 i8;
+        br_table v83 block5 (0.i8 block3);
+
+    block9:
+        evm_revert 0.i256 0.i256;
+
+    block10:
+        jump block2;
 }
 
 func private %match_struct_wildcard(v0.*@__fe_Point_0) -> i8 {
@@ -149,34 +133,30 @@ func private %match_struct_wildcard(v0.*@__fe_Point_0) -> i8 {
         jump block2;
 
     block5:
-        v7.i256 = ptr_to_int v0 i256;
-        v8.*i8 = bitcast v0 *i8;
-        v9.*@__fe_Point_0 = bitcast v8 *@__fe_Point_0;
-        v10.i256 = ptr_to_int v0 i256;
-        v11.*i8 = bitcast v0 *i8;
-        v12.*@__fe_Point_0 = bitcast v11 *@__fe_Point_0;
-        v13.*i256 = gep v12 0.i256 0.i256;
-        v14.i256 = ptr_to_int v13 i256;
-        v15.*i8 = bitcast v13 *i8;
-        v16.i256 = mload v15 i256;
+        v8.i256 = ptr_to_int v0 i256;
+        v9.*i8 = bitcast v0 *i8;
+        v10.*@__fe_Point_0 = bitcast v9 *@__fe_Point_0;
+        v11.i256 = ptr_to_int v0 i256;
+        v12.*i8 = bitcast v0 *i8;
+        v13.*@__fe_Point_0 = bitcast v12 *@__fe_Point_0;
+        v14.*i8 = gep v13 0.i256 0.i256;
+        v15.i256 = ptr_to_int v14 i256;
+        v16.i256 = mload v14 i256;
         v17.i8 = trunc v16 i8;
-        v18.i256 = zext v17 i256;
-        br_table v18 block6 (0.i256 block1);
+        br_table v17 block6 (0.i8 block1);
 
     block6:
-        v20.i256 = ptr_to_int v0 i256;
-        v21.*i8 = bitcast v0 *i8;
-        v22.*@__fe_Point_0 = bitcast v21 *@__fe_Point_0;
-        v23.i256 = ptr_to_int v0 i256;
-        v24.*i8 = bitcast v0 *i8;
-        v25.*@__fe_Point_0 = bitcast v24 *@__fe_Point_0;
-        v26.*i256 = gep v25 0.i256 1.i256;
+        v19.i256 = ptr_to_int v0 i256;
+        v20.*i8 = bitcast v0 *i8;
+        v21.*@__fe_Point_0 = bitcast v20 *@__fe_Point_0;
+        v22.i256 = ptr_to_int v0 i256;
+        v23.*i8 = bitcast v0 *i8;
+        v24.*@__fe_Point_0 = bitcast v23 *@__fe_Point_0;
+        v26.*i8 = gep v24 0.i256 1.i256;
         v27.i256 = ptr_to_int v26 i256;
-        v28.*i8 = bitcast v26 *i8;
-        v29.i256 = mload v28 i256;
-        v30.i8 = trunc v29 i8;
-        v31.i256 = zext v30 i256;
-        br_table v31 block4 (0.i256 block3);
+        v28.i256 = mload v26 i256;
+        v29.i8 = trunc v28 i8;
+        br_table v29 block4 (0.i8 block3);
 }
 
 func private %__fe_sonatina_entry() {

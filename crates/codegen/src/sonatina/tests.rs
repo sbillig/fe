@@ -201,8 +201,8 @@ fn collect_tests(db: &DriverDataBase, functions: &[MirFunction<'_>]) -> Vec<Test
                 .to_opt()
                 .map(|n| n.data(db).to_string())
                 .unwrap_or_else(|| "<anonymous>".to_string());
-            let value_param_count = mir_func.body.param_locals.len();
-            let effect_param_count = mir_func.body.effect_param_locals.len();
+            let value_param_count = mir_func.runtime_param_count();
+            let effect_param_count = mir_func.runtime_effect_param_count();
             Some(TestInfo {
                 hir_name,
                 display_name: String::new(),
@@ -645,8 +645,8 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         let entry_block = fb.append_block();
         fb.switch_to_block(entry_block);
 
-        let mut args = Vec::with_capacity(runtime_metadata.params.iter().flatten().count());
-        for arg_ty in runtime_metadata.params.iter().copied().flatten() {
+        let mut args = Vec::with_capacity(runtime_metadata.params.len());
+        for arg_ty in runtime_metadata.params.iter().copied() {
             args.push(super::zero_value_for_type(&mut fb, arg_ty, is));
         }
 
@@ -1020,4 +1020,173 @@ fn wrap_as_init_code(runtime: &[u8]) -> Vec<u8> {
 
     init.extend_from_slice(runtime);
     init
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+    use common::InputDb;
+    use url::Url;
+
+    #[test]
+    fn erased_effect_params_do_not_reappear_as_pointer_runtime_args() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::from_file_path("/tmp/sonatina_erased_effect_params_test.fe")
+            .expect("fixture path should be absolute");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+contract C:
+    pub fn value() -> u256:
+        return 1
+
+@test
+fn smoke():
+    assert true
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O0,
+            &SonatinaTestDebugConfig::default(),
+        )
+        .expect("erased effect params should remain erased in Sonatina test modules");
+    }
+
+    #[test]
+    fn erased_generic_zst_params_do_not_reappear_in_runtime_signatures() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::from_file_path("/tmp/sonatina_erased_generic_zst_params_test.fe")
+            .expect("fixture path should be absolute");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+fn sum_three() -> u256:
+    let acc: u256 = 0
+    for i in 0..3:
+        acc += i as u256
+    return acc
+
+@test
+fn smoke():
+    assert sum_three() == 3
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O0,
+            &SonatinaTestDebugConfig::default(),
+        )
+        .expect("erased generic ZST params should remain erased in Sonatina signatures");
+    }
+
+    #[test]
+    fn memory_ref_aggregate_params_lower_as_pointers() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::from_file_path("/tmp/sonatina_memory_ref_aggregate_params_test.fe")
+            .expect("fixture path should be absolute");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+fn mix(input: [u256; 3]) -> [u256; 3]:
+    let out: [u256; 3] = [0, 0, 0]
+    for i in 0..3:
+        out[i] = input[i]
+    return out
+
+@test
+fn smoke():
+    let out: [u256; 3] = mix([1, 2, 3])
+    assert out[0] == 1
+    assert out[1] == 2
+    assert out[2] == 3
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O0,
+            &SonatinaTestDebugConfig::default(),
+        )
+        .expect("memory aggregate refs should stay pointer-typed in Sonatina lowering");
+    }
+
+    #[test]
+    fn compile_time_only_non_zst_params_do_not_reappear_in_runtime_signatures() {
+        let mut db = DriverDataBase::default();
+        let file_url =
+            Url::from_file_path("/tmp/sonatina_compile_time_only_non_zst_params_test.fe")
+                .expect("fixture path should be absolute");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+const M: [[u256; 3]; 3] = [
+    [2, 1, 1],
+    [1, 2, 1],
+    [1, 1, 2],
+]
+
+fn mix(state: [u256; 3]) -> [u256; 3]:
+    let mut out: [u256; 3] = [0, 0, 0]
+    for i in 0..3:
+        for j in 0..3:
+            out[i] = out[i] + M[i][j] + state[j]
+    return out
+
+@test
+fn smoke():
+    let output: [u256; 3] = mix([1, 0, 0])
+    assert output[0] == 4
+    assert output[1] == 3
+    assert output[2] == 3
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O0,
+            &SonatinaTestDebugConfig::default(),
+        )
+        .expect("compile-time-only non-ZST params should stay erased in Sonatina signatures");
+    }
 }

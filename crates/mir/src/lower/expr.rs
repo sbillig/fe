@@ -4412,6 +4412,67 @@ pub fn borrow_handles_readback() -> u256 {
     }
 
     #[test]
+    fn repr_lowered_mem_handle_root_scalar_loads_drop_handle_pointer_metadata() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse(
+            "file:///repr_lowered_mem_handle_root_scalar_loads_drop_handle_pointer_metadata.fe",
+        )
+        .unwrap();
+        let file = db.workspace().touch(
+            &mut db,
+            url,
+            Some(
+                include_str!("../../../codegen/tests/fixtures/explicit_raw_boundaries.fe")
+                    .to_owned(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let module = crate::lower_module(&db, top_mod).expect("module should lower");
+        let func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name.contains("bump__MemPtr_u256"))
+            .expect("expected `bump__MemPtr_u256` specialization");
+
+        let (loaded_local, loaded_value) = func.body.blocks[0]
+            .insts
+            .iter()
+            .find_map(|inst| match inst {
+                crate::ir::MirInst::Assign {
+                    dest: Some(local),
+                    rvalue: Rvalue::Load { place },
+                    ..
+                } if func.body.local(*local).ty.pretty_print(&db) == "u256"
+                    && func.body.value(place.base).ty.pretty_print(&db) == "u256"
+                    && place.projection.is_empty() =>
+                {
+                    let value = func
+                        .body
+                        .values
+                        .iter()
+                        .enumerate()
+                        .find_map(|(idx, value)| {
+                            matches!(value.origin, ValueOrigin::Local(origin) if origin == *local)
+                                .then_some(ValueId(idx as u32))
+                        })
+                        .expect("expected value for loaded scalar local");
+                    Some((*local, value))
+                }
+                _ => None,
+            })
+            .expect("expected scalar load rooted on the repr-lowered memory handle local");
+
+        assert!(
+            func.body.local(loaded_local).pointer_leaf_infos.is_empty(),
+            "repr-lowered scalar loads from a memory handle root must not retain handle leaf metadata",
+        );
+        assert!(
+            func.body.value_pointer_info(loaded_value).is_none(),
+            "repr-lowered scalar values must not carry the memory handle pointer metadata",
+        );
+    }
+
+    #[test]
     fn aug_assign_through_handle_local_stays_a_store() {
         let mut db = DriverDataBase::default();
         let url = Url::parse("file:///aug_assign_through_handle_local_stays_a_store.fe").unwrap();

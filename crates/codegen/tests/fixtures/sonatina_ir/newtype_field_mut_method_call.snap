@@ -67,11 +67,17 @@ func private %counter_h872958864d1ad471_bump(v0.*@__fe_Counter_0) {
         v3.i256 = ptr_to_int v2 i256;
         v4.*i8 = bitcast v2 *i8;
         v5.i256 = mload v4 i256;
-        v7.i256 = add v5 1.i256;
-        v8.*i256 = gep v0 0.i256 0.i256;
-        v9.i256 = ptr_to_int v8 i256;
-        v10.*i8 = bitcast v8 *i8;
-        mstore v10 v7 i256;
+        (v7.i256, v8.i1) = uaddo v5 1.i256;
+        br v8 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        v10.*i256 = gep v0 0.i256 0.i256;
+        v11.i256 = ptr_to_int v10 i256;
+        v12.*i8 = bitcast v10 *i8;
+        mstore v12 v7 i256;
         return;
 }
 
@@ -88,15 +94,21 @@ func private %wrapcounter_hbcbd3a74a267488b_bump(v0.*@__fe_Counter_0) {
         v10.i256 = ptr_to_int v9 i256;
         v11.*i8 = bitcast v9 *i8;
         v12.i256 = mload v11 i256;
-        v14.i256 = add v12 1.i256;
-        v15.*@__fe_Counter_0 = gep v0 0.i256;
-        v16.i256 = ptr_to_int v15 i256;
-        v17.*i8 = bitcast v15 *i8;
-        v18.*@__fe_Counter_0 = bitcast v17 *@__fe_Counter_0;
-        v19.*i256 = gep v18 0.i256 0.i256;
-        v20.i256 = ptr_to_int v19 i256;
-        v21.*i8 = bitcast v19 *i8;
-        mstore v21 v14 i256;
+        (v14.i256, v15.i1) = uaddo v12 1.i256;
+        br v15 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        v17.*@__fe_Counter_0 = gep v0 0.i256;
+        v18.i256 = ptr_to_int v17 i256;
+        v19.*i8 = bitcast v17 *i8;
+        v20.*@__fe_Counter_0 = bitcast v19 *@__fe_Counter_0;
+        v21.*i256 = gep v20 0.i256 0.i256;
+        v22.i256 = ptr_to_int v21 i256;
+        v23.*i8 = bitcast v21 *i8;
+        mstore v23 v14 i256;
         return;
 }
 

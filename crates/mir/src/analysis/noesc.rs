@@ -252,6 +252,7 @@ mod tests {
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Calldata,
             pointer_leaf_infos: Vec::new(),
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let base_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
@@ -259,6 +260,7 @@ mod tests {
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ref(AddressSpaceKind::Calldata),
             pointer_info: None,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let store_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
@@ -266,6 +268,7 @@ mod tests {
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Word,
             pointer_info: None,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         func.body.blocks.push(BasicBlock {
             insts: vec![MirInst::Store {

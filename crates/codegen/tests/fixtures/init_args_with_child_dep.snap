@@ -22,7 +22,7 @@ object "Parent" {
       let v3 := codesize()
       let v4 := lt(v3, v2)
       if v4 {
-        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(0)
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
       }
       let v5 := sub(v3, v2)
       let v6 := mload(64)
@@ -40,11 +40,11 @@ object "Parent" {
       mstore(add(v7, 32), v5)
       let v8 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v7)
       let v9 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6(v8)
-      $__Parent_init_contract(v9, 0)
+      $__Parent_init_contract(v9)
       codecopy(0, v0, v1)
       return(0, v1)
     }
-    function $__Parent_init_contract($seed, $create) {
+    function $__Parent_init_contract($seed) {
       let v0 := mload(0x40)
       if iszero(v0) {
         v0 := 0x80
@@ -52,7 +52,7 @@ object "Parent" {
       mstore(0x40, add(v0, 64))
       mstore(v0, $seed)
       mstore(add(v0, 32), $seed)
-      let v1 := $create_stor_arg0_root_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed($create, 0, v0)
+      let v1 := $create_stor_arg0_root_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed(0, v0)
       leave
     }
     function $_t0__t1__h61373471174c18a_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_u256_u256_SolEncoder_h1b9228b90dad6928__9e0831f7c11d9f64($self, $e) {
@@ -85,7 +85,7 @@ object "Parent" {
       ret := v0
       leave
     }
-    function $create_stor_arg0_root_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed($self, $value, $args) -> ret {
+    function $create_stor_arg0_root_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed($value, $args) -> ret {
       let v0 := $__Child_init_code_len()
       let v1 := $__Child_init_code_offset()
       let v2 := 64
@@ -110,7 +110,7 @@ object "Parent" {
       mstore(add(v9, 64), v8)
       let v10 := v9
       $_t0__t1__h61373471174c18a_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_u256_u256_SolEncoder_h1b9228b90dad6928__9e0831f7c11d9f64($args, v10)
-      let v11 := $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create_raw_stor_arg0_root_stor($self, $value, v5, v4)
+      let v11 := $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create_raw_stor_arg0_root_stor($value, v5, v4)
       let v12 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v11, 0)
       let v13 := v12
       if v13 {
@@ -139,10 +139,10 @@ object "Parent" {
       ret := v0
       leave
     }
-    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self) {
+    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
       revert(0, 0)
     }
-    function $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create_raw_stor_arg0_root_stor($self, $value, $offset, $len) -> ret {
+    function $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create_raw_stor_arg0_root_stor($value, $offset, $len) -> ret {
       let v0 := create($value, $offset, $len)
       ret := v0
       leave
@@ -168,21 +168,24 @@ object "Parent" {
       let v0 := $self
       let v1 := $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_len(v0)
       let v2 := mload(add($self, 64))
-      let v3 := add(v2, 32)
-      let v4 := mload(add($self, 64))
-      let v5 := lt(v3, v4)
-      if v5 {
+      let v3 := $checked_add_u256(v2, 32)
+      let v4 := v3
+      let v5 := mload(add($self, 64))
+      let v6 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v4, v5)
+      let v7 := v6
+      if v7 {
         revert(0, 0)
       }
-      let v6 := gt(v3, v1)
-      if v6 {
+      let v8 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v4, v1)
+      let v9 := v8
+      if v9 {
         revert(0, 0)
       }
-      let v7 := mload(add($self, 64))
-      let v8 := $self
-      let v9 := $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at(v8, v7)
-      mstore(add($self, 64), v3)
-      ret := v9
+      let v10 := mload(add($self, 64))
+      let v11 := $self
+      let v12 := $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at(v11, v10)
+      mstore(add($self, 64), v4)
+      ret := v12
       leave
     }
     function $soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
@@ -204,7 +207,8 @@ object "Parent" {
       let v0 := mload(add($self, 32))
       let v1 := v0
       mstore(v1, $v)
-      mstore(add($self, 32), add(v1, 32))
+      let v2 := $checked_add_u256(v1, 32)
+      mstore(add($self, 32), v2)
       leave
     }
     function $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6($d) -> ret {
@@ -246,12 +250,12 @@ object "Parent" {
   object "Parent_deployed" {
     code {
       function $__Parent_runtime() {
-        let v0 := $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(0)
-        let v1 := $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(0)
+        let v0 := $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
+        let v1 := $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
         switch v0
           default {
           }
-        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(0)
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
       }
       function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len($self) -> ret {
         let v0 := calldatasize()
@@ -322,27 +326,27 @@ object "Parent" {
         ret := v0
         leave
       }
-      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self) {
+      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
         revert(0, 0)
       }
-      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input($self) -> ret {
+      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input() -> ret {
         ret := 0
         leave
       }
-      function $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2($self) -> ret {
-        pop($self)
-        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(0)
+      function $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2() -> ret {
+        pop(0)
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input()
         let v1 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0, 4)
         ret := v1
         leave
       }
-      function $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2($self) -> ret {
-        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input($self)
+      function $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2() -> ret {
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input()
         let v1 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0)
         let v2 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v1, 4)
         let v3 := v2
         if v3 {
-          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self)
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
         }
         let v4 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v0, 0)
         let v5 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v4)
@@ -421,7 +425,7 @@ object "Parent" {
         let v3 := codesize()
         let v4 := lt(v3, v2)
         if v4 {
-          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(0)
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
         }
         let v5 := sub(v3, v2)
         let v6 := mload(64)
@@ -440,11 +444,11 @@ object "Parent" {
         let v8 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v7)
         let v9 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6(v8)
         let v10 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6(v8)
-        $__Child_init_contract(v9, v10)
+        $__Child_init_contract()
         codecopy(0, v0, v1)
         return(0, v1)
       }
-      function $__Child_init_contract($x, $y) {
+      function $__Child_init_contract() {
         leave
       }
       function $checked_add_u256($a, $b) -> ret {
@@ -477,7 +481,7 @@ object "Parent" {
         ret := v0
         leave
       }
-      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self) {
+      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
         revert(0, 0)
       }
       function $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_len($self) -> ret {
@@ -501,21 +505,24 @@ object "Parent" {
         let v0 := $self
         let v1 := $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_len(v0)
         let v2 := mload(add($self, 64))
-        let v3 := add(v2, 32)
-        let v4 := mload(add($self, 64))
-        let v5 := lt(v3, v4)
-        if v5 {
+        let v3 := $checked_add_u256(v2, 32)
+        let v4 := v3
+        let v5 := mload(add($self, 64))
+        let v6 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v4, v5)
+        let v7 := v6
+        if v7 {
           revert(0, 0)
         }
-        let v6 := gt(v3, v1)
-        if v6 {
+        let v8 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v4, v1)
+        let v9 := v8
+        if v9 {
           revert(0, 0)
         }
-        let v7 := mload(add($self, 64))
-        let v8 := $self
-        let v9 := $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at(v8, v7)
-        mstore(add($self, 64), v3)
-        ret := v9
+        let v10 := mload(add($self, 64))
+        let v11 := $self
+        let v12 := $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at(v11, v10)
+        mstore(add($self, 64), v4)
+        ret := v12
         leave
       }
       function $soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
@@ -563,12 +570,12 @@ object "Parent" {
     object "Child_deployed" {
       code {
         function $__Child_runtime() {
-          let v0 := $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(0)
-          let v1 := $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(0)
+          let v0 := $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
+          let v1 := $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
           switch v0
             default {
             }
-          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(0)
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
         }
         function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len($self) -> ret {
           let v0 := calldatasize()
@@ -639,27 +646,27 @@ object "Parent" {
           ret := v0
           leave
         }
-        function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self) {
+        function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
           revert(0, 0)
         }
-        function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input($self) -> ret {
+        function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input() -> ret {
           ret := 0
           leave
         }
-        function $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2($self) -> ret {
-          pop($self)
-          let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(0)
+        function $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2() -> ret {
+          pop(0)
+          let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input()
           let v1 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0, 4)
           ret := v1
           leave
         }
-        function $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2($self) -> ret {
-          let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input($self)
+        function $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2() -> ret {
+          let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input()
           let v1 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0)
           let v2 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v1, 4)
           let v3 := v2
           if v3 {
-            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self)
+            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
           }
           let v4 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v0, 0)
           let v5 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v4)

@@ -871,6 +871,10 @@ fn lower_init_handler<'db>(
             expr: expr_context,
         });
     }
+    let runtime_abi = crate::ir::RuntimeAbi::source_shaped(
+        mir_body.param_locals.len(),
+        vec![None; mir_body.effect_param_locals.len()],
+    );
 
     Ok(MirFunction {
         origin: MirFunctionOrigin::Synthetic(SyntheticId::ContractInitHandler(contract)),
@@ -879,6 +883,8 @@ fn lower_init_handler<'db>(
         generic_args: Vec::new(),
         ret_ty: TyId::unit(db),
         returns_value: false,
+        runtime_abi,
+        runtime_return_shape: crate::ir::RuntimeShape::Erased,
         contract_function: None,
         symbol_name: symbols.init_handler.clone(),
         receiver_space: None,
@@ -995,6 +1001,10 @@ fn lower_recv_arm_handler<'db>(
             expr: expr_context,
         });
     }
+    let runtime_abi = crate::ir::RuntimeAbi::source_shaped(
+        mir_body.param_locals.len(),
+        vec![None; mir_body.effect_param_locals.len()],
+    );
 
     Ok(MirFunction {
         origin: MirFunctionOrigin::Synthetic(SyntheticId::ContractRecvArmHandler {
@@ -1007,6 +1017,8 @@ fn lower_recv_arm_handler<'db>(
         generic_args: Vec::new(),
         ret_ty,
         returns_value: !layout::is_zero_sized_ty(db, ret_ty),
+        runtime_abi,
+        runtime_return_shape: crate::repr::runtime_return_shape_seed_for_ty(db, core, ret_ty),
         contract_function: None,
         symbol_name: symbols.recv_handler(recv_idx, arm_idx),
         receiver_space: None,
@@ -1285,6 +1297,8 @@ fn lower_init_entrypoint<'db>(
         generic_args: Vec::new(),
         ret_ty: TyId::unit(db),
         returns_value: false,
+        runtime_abi: crate::ir::RuntimeAbi::source_shaped(0, Vec::new()),
+        runtime_return_shape: crate::ir::RuntimeShape::Erased,
         contract_function: Some(contract_fn),
         symbol_name: symbols.init_entrypoint.clone(),
         receiver_space: None,
@@ -1415,6 +1429,8 @@ fn lower_runtime_entrypoint<'db>(
         generic_args: Vec::new(),
         ret_ty: TyId::unit(db),
         returns_value: false,
+        runtime_abi: crate::ir::RuntimeAbi::source_shaped(0, Vec::new()),
+        runtime_return_shape: crate::ir::RuntimeShape::Erased,
         contract_function: Some(contract_fn),
         symbol_name: symbols.runtime_entrypoint.clone(),
         receiver_space: None,
@@ -1491,6 +1507,12 @@ fn lower_code_region_query<'db>(
         generic_args: Vec::new(),
         ret_ty: TyId::u256(db),
         returns_value: true,
+        runtime_abi: crate::ir::RuntimeAbi::source_shaped(0, Vec::new()),
+        runtime_return_shape: crate::repr::runtime_return_shape_seed_for_ty(
+            db,
+            &CoreLib::new(db, contract.scope()),
+            TyId::u256(db),
+        ),
         contract_function: None,
         symbol_name,
         receiver_space: None,

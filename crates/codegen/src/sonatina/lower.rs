@@ -43,7 +43,8 @@ use sonatina_ir::{
 };
 
 use super::{
-    LowerCtx, LowerError, RuntimeTypeCx, is_erased_runtime_ty, types, zero_value_for_type,
+    LowerCtx, LowerError, is_erased_runtime_ty, runtime_type_for_pointer_info,
+    runtime_type_for_shape, types, zero_value_for_type,
 };
 
 /// Lower a MIR instruction.
@@ -634,9 +635,6 @@ fn lower_call_args<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             )));
         }
         for (expected_ty, arg) in metadata.params.iter().copied().zip(all_args) {
-            let Some(expected_ty) = expected_ty else {
-                continue;
-            };
             let arg_ty = ctx
                 .body
                 .values
@@ -644,7 +642,13 @@ fn lower_call_args<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 .ok_or_else(|| LowerError::Internal("unknown call argument".to_string()))?
                 .ty;
             let lowered = lower_value(ctx, arg)?;
-            args.push(coerce_value_to_runtime_ty(ctx, lowered, arg_ty, expected_ty));
+            args.push(coerce_value_to_runtime_ty(
+                ctx,
+                lowered,
+                arg_ty,
+                expected_ty,
+            ));
+            arg_tys.push(arg_ty);
         }
     } else {
         // Fallback for callees without a declared signature/mask (e.g. externs).
@@ -738,7 +742,15 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 ) -> Result<ValueId, LowerError> {
     use mir::ValueOrigin;
     let origin = &value_data.origin;
-    let result_ty = types::value_runtime_type(ctx.db, ctx.target_layout, value_data);
+    let result_ty = runtime_type_for_shape(
+        &ctx.fb.module_builder,
+        ctx.db,
+        ctx.core,
+        ctx.target_layout,
+        value_data.runtime_shape,
+        &mut *ctx.gep_type_cache,
+        &mut *ctx.gep_name_counter,
+    );
 
     match origin {
         ValueOrigin::Synthetic(syn) => match syn {
@@ -823,17 +835,14 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     .as_capability(ctx.db)
                     .map(|(_, inner_ty)| inner_ty)
                     .unwrap_or(value_data.ty);
-                let runtime_ty = RuntimeTypeCx {
-                    builder: &ctx.fb.module_builder,
-                    db: ctx.db,
-                    core: ctx.core,
-                    target_layout: ctx.target_layout,
-                    cache: &mut *ctx.gep_type_cache,
-                    name_counter: &mut *ctx.gep_name_counter,
-                }
-                .runtime_type_for_value_with_info(
-                    value_data,
-                    ctx.body.value_pointer_info(value_id),
+                let runtime_ty = runtime_type_for_shape(
+                    &ctx.fb.module_builder,
+                    ctx.db,
+                    ctx.core,
+                    ctx.target_layout,
+                    value_data.runtime_shape,
+                    &mut *ctx.gep_type_cache,
+                    &mut *ctx.gep_name_counter,
                 );
                 if place_yields_location_value(
                     ctx,
@@ -868,17 +877,14 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             {
                 lower_place_memory_ptr(ctx, place)
             } else if matches!(value_data.repr, mir::ValueRepr::Ptr(_)) {
-                let runtime_ty = RuntimeTypeCx {
-                    builder: &ctx.fb.module_builder,
-                    db: ctx.db,
-                    core: ctx.core,
-                    target_layout: ctx.target_layout,
-                    cache: &mut *ctx.gep_type_cache,
-                    name_counter: &mut *ctx.gep_name_counter,
-                }
-                .runtime_type_for_value_with_info(
-                    value_data,
-                    ctx.body.value_pointer_info(value_id),
+                let runtime_ty = runtime_type_for_shape(
+                    &ctx.fb.module_builder,
+                    ctx.db,
+                    ctx.core,
+                    ctx.target_layout,
+                    value_data.runtime_shape,
+                    &mut *ctx.gep_type_cache,
+                    &mut *ctx.gep_name_counter,
                 );
                 if place_yields_location_value(
                     ctx,
@@ -2121,20 +2127,18 @@ fn lower_place_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             (true, Some(mir::repr::DerefStepKind::LoadLocationValue), None) => {
                 let base_terminal =
                     lower_place_state_terminal(ctx, place, segment.before, root_runtime)?;
-                let runtime_ty = RuntimeTypeCx {
-                    builder: &ctx.fb.module_builder,
-                    db: ctx.db,
-                    core: ctx.core,
-                    target_layout: ctx.target_layout,
-                    cache: &mut *ctx.gep_type_cache,
-                    name_counter: &mut *ctx.gep_name_counter,
-                }
-                .runtime_type_for_pointer_info(
+                let runtime_ty = runtime_type_for_pointer_info(
+                    &ctx.fb.module_builder,
+                    ctx.db,
+                    ctx.core,
+                    ctx.target_layout,
                     segment.before.pointer_info.ok_or_else(|| {
                         LowerError::Internal(format!(
                             "missing pointer metadata at deref boundary for {place:?}"
                         ))
                     })?,
+                    &mut *ctx.gep_type_cache,
+                    &mut *ctx.gep_name_counter,
                 );
                 load_from_terminal(ctx, base_terminal, segment.before.ty, runtime_ty)?
             }
@@ -2142,20 +2146,18 @@ fn lower_place_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 terminal_runtime_value(ctx, terminal)
             }
             (false, Some(mir::repr::DerefStepKind::LoadLocationValue), Some(terminal)) => {
-                let runtime_ty = RuntimeTypeCx {
-                    builder: &ctx.fb.module_builder,
-                    db: ctx.db,
-                    core: ctx.core,
-                    target_layout: ctx.target_layout,
-                    cache: &mut *ctx.gep_type_cache,
-                    name_counter: &mut *ctx.gep_name_counter,
-                }
-                .runtime_type_for_pointer_info(
+                let runtime_ty = runtime_type_for_pointer_info(
+                    &ctx.fb.module_builder,
+                    ctx.db,
+                    ctx.core,
+                    ctx.target_layout,
                     segment.before.pointer_info.ok_or_else(|| {
                         LowerError::Internal(format!(
                             "missing pointer metadata at deref boundary for {place:?}"
                         ))
                     })?,
+                    &mut *ctx.gep_type_cache,
+                    &mut *ctx.gep_name_counter,
                 );
                 load_from_terminal(ctx, terminal, segment.before.ty, runtime_ty)?
             }
@@ -2866,15 +2868,15 @@ fn deep_copy_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     if let Some(info) =
         mir::repr::pointer_info_for_ty(ctx.db, ctx.core, value_ty, AddressSpaceKind::Memory)
     {
-        let runtime_ty = RuntimeTypeCx {
-            builder: &ctx.fb.module_builder,
-            db: ctx.db,
-            core: ctx.core,
-            target_layout: ctx.target_layout,
-            cache: &mut *ctx.gep_type_cache,
-            name_counter: &mut *ctx.gep_name_counter,
-        }
-        .runtime_type_for_pointer_info(info);
+        let runtime_ty = runtime_type_for_pointer_info(
+            &ctx.fb.module_builder,
+            ctx.db,
+            ctx.core,
+            ctx.target_layout,
+            info,
+            &mut *ctx.gep_type_cache,
+            &mut *ctx.gep_name_counter,
+        );
         let loaded = load_place_runtime(ctx, src_place, value_ty, runtime_ty)?;
         return store_runtime_value_to_place(ctx, dst_place, value_ty, loaded);
     }
@@ -2911,7 +2913,12 @@ fn deep_copy_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         return deep_copy_enum_from_places(ctx, dst_place, src_place, value_ty);
     }
 
-    let loaded = load_place_runtime(ctx, src_place, value_ty, types::value_type(ctx.db, value_ty))?;
+    let loaded = load_place_runtime(
+        ctx,
+        src_place,
+        value_ty,
+        types::value_type(ctx.db, value_ty),
+    )?;
     store_runtime_value_to_place(ctx, dst_place, value_ty, loaded)
 }
 
@@ -2935,7 +2942,12 @@ fn deep_copy_enum_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     // Copy discriminant first.
     let discr_ty =
         hir::analysis::ty::ty_def::TyId::new(ctx.db, TyData::TyBase(TyBase::Prim(PrimTy::U256)));
-    let discr = load_place_runtime(ctx, src_place, discr_ty, types::value_type(ctx.db, discr_ty))?;
+    let discr = load_place_runtime(
+        ctx,
+        src_place,
+        discr_ty,
+        types::value_type(ctx.db, discr_ty),
+    )?;
     store_word_to_place(ctx, dst_place, discr)?;
 
     let origin_block = ctx

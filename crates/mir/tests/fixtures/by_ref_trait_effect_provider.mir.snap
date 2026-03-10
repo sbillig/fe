@@ -15,7 +15,8 @@ fn pair_h956dff41e88ee341_ctx_h4952b3c1f066f039_sum(v0: Pair) -> u256:
   bb0:
     v1: u256 = load mem[v0].*.0
     v2: u256 = load mem[v0].*.1
-    ret (v1 + v2)
+    v3: u256 = checked_add<u256>(v1, v2)
+    ret v3
 
 fn use_ctx__Pair_h956dff41e88ee341__acec41afdc898140(v0: u256) -> u256:
   bb0:

@@ -33,7 +33,8 @@ function $match_struct_fields($p) -> ret {
           let v10 := v1
           let v11 := and(mload(v10), 0xff)
           let v12 := and(mload(v9), 0xff)
-          v0 := add(v11, v12)
+          let v13 := $checked_add_u8(v11, v12)
+          v0 := v13
         }
     }
   ret := v0

@@ -41,6 +41,10 @@ pub struct MirFunction<'db> {
     pub ret_ty: TyId<'db>,
     /// Whether this function has a runtime return value (`ret_ty` is not zero-sized).
     pub returns_value: bool,
+    /// Runtime ABI metadata after MIR runtime-ABI normalization.
+    pub runtime_abi: RuntimeAbi<'db>,
+    /// Backend-neutral runtime return shape after MIR normalization.
+    pub runtime_return_shape: RuntimeShape<'db>,
     /// Optional contract association declared via attributes.
     pub contract_function: Option<ContractFunction>,
     /// Symbol name used for codegen (includes monomorphization suffix when present).
@@ -51,6 +55,117 @@ pub struct MirFunction<'db> {
     /// as a root.  Used for dependency contract templates that should only be
     /// instantiated when referenced by `create2`.
     pub defer_root: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeAbi<'db> {
+    /// Runtime-visible value params aligned to `MirBody::param_locals`.
+    pub value_params: Vec<bool>,
+    /// Runtime-visible effect params aligned to `MirBody::effect_param_locals`.
+    pub effect_params: Vec<bool>,
+    /// Provider type metadata aligned to `MirBody::effect_param_locals`.
+    pub effect_param_provider_tys: Vec<Option<TyId<'db>>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RuntimeWordKind {
+    I1,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    I256,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RuntimeShape<'db> {
+    Unresolved,
+    Erased,
+    Word(RuntimeWordKind),
+    MemoryPtr { target_ty: Option<TyId<'db>> },
+    AddressWord(PointerInfo<'db>),
+}
+
+impl<'db> RuntimeShape<'db> {
+    pub fn is_unresolved(self) -> bool {
+        matches!(self, Self::Unresolved)
+    }
+
+    pub fn is_erased(self) -> bool {
+        matches!(self, Self::Erased)
+    }
+
+    pub fn pointer_info(self) -> Option<PointerInfo<'db>> {
+        match self {
+            Self::MemoryPtr { target_ty } => Some(PointerInfo {
+                address_space: AddressSpaceKind::Memory,
+                target_ty,
+            }),
+            Self::AddressWord(info) => Some(info),
+            Self::Unresolved | Self::Erased | Self::Word(_) => None,
+        }
+    }
+}
+
+impl<'db> RuntimeAbi<'db> {
+    pub fn source_shaped(
+        param_count: usize,
+        effect_param_provider_tys: Vec<Option<TyId<'db>>>,
+    ) -> Self {
+        let effect_count = effect_param_provider_tys.len();
+        Self {
+            value_params: vec![true; param_count],
+            effect_params: vec![true; effect_count],
+            effect_param_provider_tys,
+        }
+    }
+
+    pub fn value_param_visible(&self, idx: usize) -> bool {
+        self.value_params.get(idx).copied().unwrap_or(false)
+    }
+
+    pub fn effect_param_visible(&self, idx: usize) -> bool {
+        self.effect_params.get(idx).copied().unwrap_or(false)
+    }
+}
+
+impl<'db> MirFunction<'db> {
+    pub fn runtime_param_locals(&self) -> Vec<LocalId> {
+        self.body
+            .param_locals
+            .iter()
+            .copied()
+            .enumerate()
+            .filter_map(|(idx, local)| self.runtime_abi.value_param_visible(idx).then_some(local))
+            .collect()
+    }
+
+    pub fn runtime_effect_param_locals(&self) -> Vec<LocalId> {
+        self.body
+            .effect_param_locals
+            .iter()
+            .copied()
+            .enumerate()
+            .filter_map(|(idx, local)| self.runtime_abi.effect_param_visible(idx).then_some(local))
+            .collect()
+    }
+
+    pub fn runtime_param_count(&self) -> usize {
+        self.runtime_abi
+            .value_params
+            .iter()
+            .filter(|visible| **visible)
+            .count()
+    }
+
+    pub fn runtime_effect_param_count(&self) -> usize {
+        self.runtime_abi
+            .effect_params
+            .iter()
+            .filter(|visible| **visible)
+            .count()
+    }
 }
 
 /// Source identity of a MIR function.
@@ -548,6 +663,8 @@ pub struct LocalData<'db> {
     /// that path. Aggregate locals keep only nested pointer leaves here; root
     /// by-reference storage stays in `address_space`.
     pub pointer_leaf_infos: Vec<(MirProjectionPath<'db>, PointerInfo<'db>)>,
+    /// Backend-neutral runtime shape for this local after MIR normalization.
+    pub runtime_shape: RuntimeShape<'db>,
 }
 
 /// MIR projection using MIR value IDs for dynamic indices.
@@ -782,6 +899,8 @@ pub struct ValueData<'db> {
     pub repr: ValueRepr,
     /// Pointer metadata for pointer-like runtime values.
     pub pointer_info: Option<PointerInfo<'db>>,
+    /// Backend-neutral runtime shape for this value after MIR normalization.
+    pub runtime_shape: RuntimeShape<'db>,
 }
 
 #[derive(Debug, Clone)]
@@ -902,8 +1021,9 @@ impl ValueRepr {
 pub struct CallOrigin<'db> {
     pub expr: Option<ExprId>,
     pub hir_target: Option<HirCallTarget<'db>>,
+    /// Runtime-visible regular arguments in callee runtime-param order.
     pub args: Vec<ValueId>,
-    /// Explicit lowered effect arguments for this call, in callee effect-param order.
+    /// Runtime-visible explicit effect arguments in callee runtime-effect-param order.
     pub effect_args: Vec<ValueId>,
     /// Final lowered symbol name of the callee after monomorphization.
     pub resolved_name: Option<String>,
@@ -1116,6 +1236,7 @@ mod tests {
                     target_ty: Some(ty),
                 },
             )],
+            runtime_shape: RuntimeShape::Unresolved,
         }];
 
         assert_eq!(
@@ -1150,6 +1271,7 @@ mod tests {
                     target_ty: Some(ty),
                 },
             )],
+            runtime_shape: RuntimeShape::Unresolved,
         }];
 
         assert_eq!(
@@ -1176,6 +1298,7 @@ mod tests {
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos: Vec::new(),
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         }];
         let values = vec![ValueData {
             ty,
@@ -1183,6 +1306,7 @@ mod tests {
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Word,
             pointer_info: None,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         }];
 
         assert_eq!(

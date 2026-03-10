@@ -9,7 +9,7 @@ use hir::hir_def::{
 use hir::projection::{IndexSource, Projection};
 use hir::span::LazySpan;
 use mir::{
-    CallOrigin, ValueId, ValueOrigin,
+    CallOrigin, LocalId, ValueId, ValueOrigin,
     ir::{FieldPtrOrigin, MirFunctionOrigin, Place, SyntheticValue},
     layout,
     repr::{PlaceState, ResolvedPlace, ResolvedPlaceSegment},
@@ -25,6 +25,22 @@ use super::{
 };
 
 impl<'db> FunctionEmitter<'db> {
+    fn hidden_runtime_param_local(&self, local: LocalId) -> bool {
+        self.mir_func
+            .body
+            .param_locals
+            .iter()
+            .position(|&param_local| param_local == local)
+            .is_some_and(|idx| !self.mir_func.runtime_abi.value_param_visible(idx))
+            || self
+                .mir_func
+                .body
+                .effect_param_locals
+                .iter()
+                .position(|&effect_local| effect_local == local)
+                .is_some_and(|idx| !self.mir_func.runtime_abi.effect_param_visible(idx))
+    }
+
     /// Attempts to lower a call to a core numeric intrinsic directly to inline Yul.
     ///
     /// This is an optimization that avoids generating separate Yul functions for
@@ -514,15 +530,13 @@ impl<'db> FunctionEmitter<'db> {
                 if let Some(name) = state.resolve_local(*local) {
                     return Ok(name);
                 }
+                if self.hidden_runtime_param_local(*local) {
+                    return Ok("0".into());
+                }
 
                 let local_data = self.mir_func.body.local(*local);
                 let is_param = self.mir_func.body.param_locals.contains(local);
                 let is_effect = self.mir_func.body.effect_param_locals.contains(local);
-                if is_effect && self.mir_func.contract_function.is_some() {
-                    // Contract entrypoints lower host/effect handles as compile-time symbols
-                    // rather than runtime parameters.
-                    return Ok("0".into());
-                }
 
                 Err(YulError::Unsupported(format!(
                     "unbound MIR local reached codegen (func={}, local=l{} `{}`, ty={}, param={is_param}, effect={is_effect})",
@@ -535,6 +549,9 @@ impl<'db> FunctionEmitter<'db> {
             ValueOrigin::PlaceRoot(local) => {
                 if let Some(name) = state.resolve_local(*local) {
                     return Ok(name);
+                }
+                if self.hidden_runtime_param_local(*local) {
+                    return Ok("0".into());
                 }
                 Err(YulError::Unsupported(format!(
                     "unbound MIR place-root local reached codegen (func={}, local=l{} `{}`, ty={})",
