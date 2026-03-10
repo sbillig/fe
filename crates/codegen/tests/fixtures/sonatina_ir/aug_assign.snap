@@ -5,17 +5,29 @@ input_file: crates/codegen/tests/fixtures/aug_assign.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %aug_assign(v0.i256, v1.i256) -> i256 {
+func private %aug_assign(v0.i64, v1.i64) -> i64 {
     block0:
-        v3.i256 = add v0 v1;
-        v5.i256 = mul v3 2.i256;
-        v6.i256 = evm_udiv v5 2.i256;
-        return v6;
+        (v2.i64, v3.i1) = uaddo v0 v1;
+        br v3 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        (v6.i64, v7.i1) = umulo v2 2.i64;
+        br v7 block1 block3;
+
+    block3:
+        (v8.i64, v9.i1) = evm_udivo v6 2.i64;
+        br v9 block1 block4;
+
+    block4:
+        return v8;
 }
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.i256 = call %aug_assign 0.i256 0.i256;
+        v1.i64 = call %aug_assign 0.i64 0.i64;
         evm_stop;
 }
 

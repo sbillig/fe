@@ -711,6 +711,17 @@ impl<'db> TyChecker<'db> {
                             self.env.register_pending_method(pending);
                         }
                     }
+                    env::DeferredTask::PrimitiveOp(pending) => {
+                        match self.resolve_pending_primitive_op(&pending) {
+                            expr::PendingPrimitiveOpResolution::Pending => {
+                                self.env.register_pending_primitive_op(pending);
+                            }
+                            expr::PendingPrimitiveOpResolution::Resolved => {
+                                progressed = true;
+                            }
+                            expr::PendingPrimitiveOpResolution::Done => {}
+                        }
+                    }
                 }
             }
         }
@@ -805,6 +816,9 @@ impl<'db> TyChecker<'db> {
                             traits: viable.into_iter().collect(),
                         });
                     }
+                }
+                env::DeferredTask::PrimitiveOp(pending) => {
+                    let _ = self.resolve_pending_primitive_op(&pending);
                 }
             }
         }

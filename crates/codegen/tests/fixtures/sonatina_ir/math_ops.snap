@@ -5,18 +5,33 @@ input_file: crates/codegen/tests/fixtures/math_ops.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %math_ops() -> i256 {
+func private %math_ops() -> i64 {
     block0:
-        v3.i256 = sub 10.i256 3.i256;
-        v5.i256 = mul v3 2.i256;
-        v7.i256 = evm_udiv v5 7.i256;
-        v8.i256 = evm_umod v7 3.i256;
-        return v8;
+        (v2.i64, v3.i1) = usubo 10.i64 3.i64;
+        br v3 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        (v6.i64, v7.i1) = umulo v2 2.i64;
+        br v7 block1 block3;
+
+    block3:
+        (v9.i64, v10.i1) = evm_udivo v6 7.i64;
+        br v10 block1 block4;
+
+    block4:
+        (v11.i64, v12.i1) = evm_umodo v9 3.i64;
+        br v12 block1 block5;
+
+    block5:
+        return v11;
 }
 
 func private %__fe_sonatina_entry() {
     block0:
-        v0.i256 = call %math_ops;
+        v0.i64 = call %math_ops;
         evm_stop;
 }
 

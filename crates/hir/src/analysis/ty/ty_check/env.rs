@@ -1,8 +1,8 @@
 use crate::{
     analysis::place::Place,
     hir_def::{
-        Body, Contract, EffectParamListId, Expr, ExprId, Func, IdentId, IntegerId, ItemKind,
-        Partial, Pat, PatId, PathId, Stmt, StmtId, prim_ty::PrimTy, scope_graph::ScopeId,
+        BinOp, Body, Contract, EffectParamListId, Expr, ExprId, Func, IdentId, IntegerId, ItemKind,
+        Partial, Pat, PatId, PathId, Stmt, StmtId, UnOp, prim_ty::PrimTy, scope_graph::ScopeId,
     },
     span::DynLazySpan,
 };
@@ -946,6 +946,10 @@ impl<'db> TyCheckEnv<'db> {
         self.deferred.push(DeferredTask::Method(pending))
     }
 
+    pub(super) fn register_pending_primitive_op(&mut self, pending: PendingPrimitiveOp) {
+        self.deferred.push(DeferredTask::PrimitiveOp(pending))
+    }
+
     pub(super) fn record_implicit_move(&mut self, expr: ExprId) {
         self.implicit_moves.insert(expr);
     }
@@ -1429,12 +1433,36 @@ pub(super) struct PendingMethod<'db> {
 }
 
 #[derive(Debug, Clone)]
+pub(super) enum PendingPrimitiveOp {
+    Unary {
+        expr: ExprId,
+        inner: ExprId,
+        op: UnOp,
+    },
+    Binary {
+        expr: ExprId,
+        lhs: ExprId,
+        rhs: ExprId,
+        op: BinOp,
+    },
+}
+
+impl PendingPrimitiveOp {
+    pub(super) fn expr(&self) -> ExprId {
+        match self {
+            Self::Unary { expr, .. } | Self::Binary { expr, .. } => *expr,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub(super) enum DeferredTask<'db> {
     Confirm {
         inst: TraitInstId<'db>,
         span: DynLazySpan<'db>,
     },
     Method(PendingMethod<'db>),
+    PrimitiveOp(PendingPrimitiveOp),
 }
 
 impl<'db> TyCheckEnv<'db> {

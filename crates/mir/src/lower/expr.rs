@@ -5,7 +5,7 @@ use hir::{
     analysis::ty::{
         const_eval::{ConstValue, eval_const_expr},
         ty_check::{Callable, ForLoopSeq, ResolvedEffectArg},
-        ty_def::CapabilityKind,
+        ty_def::{CapabilityKind, PrimTy, TyBase, TyData, prim_int_bits},
     },
     projection::{IndexSource, Projection},
 };
@@ -97,6 +97,43 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             Partial::Present(Expr::Lit(LitKind::Int(int_id))) => Some(int_id.data(self.db).clone()),
             _ => None,
         }
+    }
+
+    fn negated_int_literal_word(&self, expr: ExprId, inner: ExprId) -> Option<BigUint> {
+        let value = self.u256_lit_from_expr(inner)?;
+        let expr_ty = self
+            .typed_body
+            .expr_ty(self.db, expr)
+            .as_capability(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or_else(|| self.typed_body.expr_ty(self.db, expr));
+        let TyData::TyBase(TyBase::Prim(prim)) = expr_ty.base_ty(self.db).data(self.db) else {
+            return None;
+        };
+        if !matches!(
+            prim,
+            PrimTy::I8
+                | PrimTy::I16
+                | PrimTy::I32
+                | PrimTy::I64
+                | PrimTy::I128
+                | PrimTy::I256
+                | PrimTy::Isize
+        ) {
+            return None;
+        }
+
+        let bits = prim_int_bits(*prim)?;
+        let modulus = BigUint::from(1u8) << bits;
+        Some((&modulus - (&value % &modulus)) % modulus)
+    }
+
+    fn try_lower_negated_int_literal(&mut self, expr: ExprId, inner: ExprId) -> Option<ValueId> {
+        let value = self.negated_int_literal_word(expr, inner)?;
+        let value_id = self.ensure_value(expr);
+        self.builder.body.values[value_id.index()].origin =
+            ValueOrigin::Synthetic(SyntheticValue::Int(value));
+        Some(value_id)
     }
 
     fn lower_index_source(&mut self, expr: ExprId) -> IndexSource<ValueId> {
@@ -277,6 +314,55 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 self.lower_call_expr(expr)
             }
             Partial::Present(Expr::Un(inner, op)) => {
+                let has_callable = self.typed_body.callable_expr(expr).is_some();
+                if matches!(op, hir::hir_def::expr::UnOp::Minus)
+                    && let Some(value_id) = self.try_lower_negated_int_literal(expr, *inner)
+                {
+                    return value_id;
+                }
+                // Checked arithmetic: unary minus with a callable (Neg::neg trait)
+                // uses call-based lowering for overflow detection.
+                if matches!(op, hir::hir_def::expr::UnOp::Minus) {
+                    let inner_ty = self
+                        .typed_body
+                        .expr_ty(self.db, *inner)
+                        .as_capability(self.db)
+                        .map(|(_, inner)| inner)
+                        .unwrap_or_else(|| self.typed_body.expr_ty(self.db, *inner));
+                    let is_const_minus = eval_const_expr(
+                        self.db,
+                        self.body,
+                        self.typed_body,
+                        self.generic_args,
+                        expr,
+                    )
+                    .ok()
+                    .flatten()
+                    .is_some();
+                    // When the core library is not available (standalone `.fe`
+                    // files), no callable is registered — allow unchecked fallback.
+                    let _ = inner_ty.is_integral(self.db) && !has_callable && !is_const_minus;
+                }
+                if matches!(op, hir::hir_def::expr::UnOp::Minus)
+                    && let Some(intrinsic) = self.direct_checked_intrinsic(
+                        expr,
+                        self.typed_body.expr_ty(self.db, *inner),
+                        "neg",
+                        crate::ir::CheckedArithmeticOp::Neg,
+                    )
+                {
+                    let inner_value = self.lower_expr(*inner);
+                    if self.current_block().is_none() {
+                        return self.ensure_value(expr);
+                    }
+                    let inner_value =
+                        self.coerce_primitive_operand_if_copy_capability(*inner, inner_value);
+                    return self.lower_checked_intrinsic_expr(expr, vec![inner_value], intrinsic);
+                }
+                if matches!(op, hir::hir_def::expr::UnOp::Minus) && has_callable {
+                    return self.lower_call_expr(expr);
+                }
+
                 if !matches!(
                     op,
                     hir::hir_def::expr::UnOp::Mut | hir::hir_def::expr::UnOp::Ref
@@ -329,22 +415,99 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 // Desugar range expression `start..end` into Range struct construction
                 self.lower_range_expr(expr, *lhs, *rhs)
             }
-            Partial::Present(Expr::Bin(lhs, rhs, _)) => {
-                if self.needs_op_trait_call(expr) {
-                    return self.lower_call_expr_inner(expr, None, None);
+            Partial::Present(Expr::Bin(lhs, rhs, op)) => {
+                if let Some((expected_name, checked_op)) = match op {
+                    BinOp::Arith(ArithBinOp::Add) => {
+                        Some(("add", crate::ir::CheckedArithmeticOp::Add))
+                    }
+                    BinOp::Arith(ArithBinOp::Sub) => {
+                        Some(("sub", crate::ir::CheckedArithmeticOp::Sub))
+                    }
+                    BinOp::Arith(ArithBinOp::Mul) => {
+                        Some(("mul", crate::ir::CheckedArithmeticOp::Mul))
+                    }
+                    BinOp::Arith(ArithBinOp::Div) => {
+                        Some(("div", crate::ir::CheckedArithmeticOp::Div))
+                    }
+                    BinOp::Arith(ArithBinOp::Rem) => {
+                        Some(("rem", crate::ir::CheckedArithmeticOp::Rem))
+                    }
+                    _ => None,
+                } && let Some(intrinsic) = self.direct_checked_intrinsic(
+                    expr,
+                    self.typed_body.expr_ty(self.db, *lhs),
+                    expected_name,
+                    checked_op,
+                ) {
+                    let lhs_value = self.lower_expr(*lhs);
+                    let rhs_value = self.lower_expr(*rhs);
+                    if self.current_block().is_none() {
+                        return self.ensure_value(expr);
+                    }
+                    let lhs_value =
+                        self.coerce_primitive_operand_if_copy_capability(*lhs, lhs_value);
+                    let rhs_value =
+                        self.coerce_primitive_operand_if_copy_capability(*rhs, rhs_value);
+                    return self.lower_checked_intrinsic_expr(
+                        expr,
+                        vec![lhs_value, rhs_value],
+                        intrinsic,
+                    );
                 }
-                let lhs_value = self.lower_expr(*lhs);
-                let rhs_value = self.lower_expr(*rhs);
-                let coerced_lhs = self.coerce_binary_operand_if_copy_capability(*lhs, lhs_value);
-                let coerced_rhs = self.coerce_binary_operand_if_copy_capability(*rhs, rhs_value);
-                let value_id = self.ensure_value(expr);
-                if let ValueOrigin::Binary { lhs, rhs, .. } =
-                    &mut self.builder.body.values[value_id.index()].origin
-                {
-                    *lhs = coerced_lhs;
-                    *rhs = coerced_rhs;
+
+                // Remaining primitive arithmetic/comparison ops still use
+                // call-based lowering when core/std provides the operator
+                // implementation.
+                let critical_primitive_op = matches!(
+                    op,
+                    BinOp::Arith(
+                        ArithBinOp::Add | ArithBinOp::Sub | ArithBinOp::Mul | ArithBinOp::Pow
+                    ) | BinOp::Comp(..)
+                );
+                let has_callable = self.typed_body.callable_expr(expr).is_some();
+                if critical_primitive_op {
+                    let lhs_ty = self
+                        .typed_body
+                        .expr_ty(self.db, *lhs)
+                        .as_capability(self.db)
+                        .map(|(_, inner)| inner)
+                        .unwrap_or_else(|| self.typed_body.expr_ty(self.db, *lhs));
+                    let rhs_ty = self
+                        .typed_body
+                        .expr_ty(self.db, *rhs)
+                        .as_capability(self.db)
+                        .map(|(_, inner)| inner)
+                        .unwrap_or_else(|| self.typed_body.expr_ty(self.db, *rhs));
+                    let primitive_operands = (lhs_ty.is_integral(self.db)
+                        || lhs_ty.is_bool(self.db))
+                        && (rhs_ty.is_integral(self.db) || rhs_ty.is_bool(self.db));
+                    // When the core library is available, every primitive
+                    // arithmetic / comparison op should have a callable registered
+                    // (for checked-arithmetic lowering). Standalone `.fe` files
+                    // without an ingot lack core, so the trait resolver returns
+                    // nothing — fall through to unchecked raw-binary in that case.
+                    let _ = primitive_operands;
                 }
-                value_id
+                if critical_primitive_op && has_callable {
+                    self.lower_call_expr(expr)
+                } else if self.needs_op_trait_call(expr) {
+                    self.lower_call_expr_inner(expr, None, None)
+                } else {
+                    let lhs_value = self.lower_expr(*lhs);
+                    let rhs_value = self.lower_expr(*rhs);
+                    let coerced_lhs =
+                        self.coerce_primitive_operand_if_copy_capability(*lhs, lhs_value);
+                    let coerced_rhs =
+                        self.coerce_primitive_operand_if_copy_capability(*rhs, rhs_value);
+                    let value_id = self.ensure_value(expr);
+                    if let ValueOrigin::Binary { lhs, rhs, .. } =
+                        &mut self.builder.body.values[value_id.index()].origin
+                    {
+                        *lhs = coerced_lhs;
+                        *rhs = coerced_rhs;
+                    }
+                    value_id
+                }
             }
             Partial::Present(Expr::Field(lhs, field_index)) => {
                 self.lower_field_expr(expr, *lhs, *field_index)
@@ -360,6 +523,92 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
     fn lower_call_expr(&mut self, expr: ExprId) -> ValueId {
         self.lower_call_expr_inner(expr, None, None)
+    }
+
+    fn assign_checked_intrinsic_call(
+        &mut self,
+        stmt: Option<StmtId>,
+        dest: LocalId,
+        args: Vec<ValueId>,
+        intrinsic: crate::ir::CheckedIntrinsic<'db>,
+        expr: Option<ExprId>,
+    ) {
+        let call_origin = CallOrigin {
+            expr,
+            hir_target: None,
+            args,
+            effect_args: Vec::new(),
+            resolved_name: None,
+            checked_intrinsic: Some(intrinsic),
+            builtin_terminator: None,
+            receiver_space: None,
+        };
+        self.assign(stmt, Some(dest), Rvalue::Call(call_origin));
+    }
+
+    fn lower_checked_intrinsic_expr(
+        &mut self,
+        expr: ExprId,
+        args: Vec<ValueId>,
+        intrinsic: crate::ir::CheckedIntrinsic<'db>,
+    ) -> ValueId {
+        let value_id = self.ensure_value(expr);
+        if self.current_block().is_none() {
+            return value_id;
+        }
+
+        let dest_ty = self.typed_body.expr_ty(self.db, expr);
+        let dest = self.alloc_temp_local(dest_ty, false, "checked");
+        self.builder.body.locals[dest.index()].address_space = self.expr_address_space(expr);
+        self.assign_checked_intrinsic_call(None, dest, args, intrinsic, Some(expr));
+        self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
+        value_id
+    }
+
+    fn direct_checked_intrinsic(
+        &self,
+        expr: ExprId,
+        operand_ty: TyId<'db>,
+        expected_name: &str,
+        op: crate::ir::CheckedArithmeticOp,
+    ) -> Option<crate::ir::CheckedIntrinsic<'db>> {
+        let callable = self.typed_body.callable_expr(expr)?;
+        match callable.callable_def.ingot(self.db).kind(self.db) {
+            IngotKind::Core | IngotKind::Std => {}
+            _ => return None,
+        }
+
+        let name = callable.callable_def.name(self.db)?;
+        if name.data(self.db).as_str() != expected_name {
+            return None;
+        }
+
+        let operand_ty = operand_ty
+            .as_capability(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(operand_ty);
+        let TyData::TyBase(TyBase::Prim(prim)) = operand_ty.base_ty(self.db).data(self.db) else {
+            return None;
+        };
+        if !prim.is_integral() {
+            return None;
+        }
+        if matches!(op, crate::ir::CheckedArithmeticOp::Neg)
+            && !matches!(
+                prim,
+                PrimTy::I8
+                    | PrimTy::I16
+                    | PrimTy::I32
+                    | PrimTy::I64
+                    | PrimTy::I128
+                    | PrimTy::I256
+                    | PrimTy::Isize
+            )
+        {
+            return None;
+        }
+
+        Some(crate::ir::CheckedIntrinsic { op, ty: operand_ty })
     }
 
     fn call_expected_arg_tys(&self, callable: &Callable<'db>) -> Vec<TyId<'db>> {
@@ -864,7 +1113,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.alloc_value(expected_ty, ValueOrigin::PlaceRef(place), expected_repr)
     }
 
-    fn coerce_binary_operand_if_copy_capability(
+    fn coerce_primitive_operand_if_copy_capability(
         &mut self,
         operand_expr: ExprId,
         operand_value: ValueId,
@@ -1002,8 +1251,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         if let Some(op) = self.intrinsic_kind(callable_def) {
             // Use pre-coercion args: `coerce_call_args_to_expected` wraps values in
-            // capability TransparentCasts which causes `coerce_binary_operand_if_copy_capability`
-            // to emit spurious loads. Intrinsics operate on raw word values.
+            // capability TransparentCasts which causes
+            // `coerce_primitive_operand_if_copy_capability` to emit spurious
+            // loads. Intrinsics operate on raw word values.
             let mut intrinsic_args = raw_args;
             let mut intrinsic_arg_exprs = arg_exprs.clone();
             if self.is_method_call(expr) && !intrinsic_args.is_empty() {
@@ -1014,7 +1264,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 let Some(&arg_expr) = intrinsic_arg_exprs.get(idx) else {
                     continue;
                 };
-                *arg = self.coerce_binary_operand_if_copy_capability(arg_expr, *arg);
+                *arg = self.coerce_primitive_operand_if_copy_capability(arg_expr, *arg);
             }
             if matches!(
                 op,
@@ -1152,12 +1402,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             generic_args: callable.generic_args().to_vec(),
             trait_inst: callable.trait_inst(),
         };
+        let checked_intrinsic = self.checked_intrinsic_kind(callable.callable_def, ty);
+        let builtin_terminator = self.builtin_terminator_kind(callable.callable_def);
         let call_origin = CallOrigin {
             expr: Some(expr),
             hir_target: Some(hir_target),
             args,
             effect_args,
             resolved_name: None,
+            checked_intrinsic,
+            builtin_terminator,
             receiver_space,
         };
         if ty.is_never(self.db) {
@@ -2258,15 +2512,44 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
         };
 
-        let updated = self.alloc_value(
-            lhs_place_ty,
-            ValueOrigin::Binary {
-                op: BinOp::Arith(op),
-                lhs: lhs_value,
-                rhs: rhs_value,
-            },
-            ValueRepr::Word,
-        );
+        let updated = if matches!(
+            op,
+            ArithBinOp::Add | ArithBinOp::Sub | ArithBinOp::Mul | ArithBinOp::Div | ArithBinOp::Rem
+        ) {
+            let checked_op = match op {
+                ArithBinOp::Add => crate::ir::CheckedArithmeticOp::Add,
+                ArithBinOp::Sub => crate::ir::CheckedArithmeticOp::Sub,
+                ArithBinOp::Mul => crate::ir::CheckedArithmeticOp::Mul,
+                ArithBinOp::Div => crate::ir::CheckedArithmeticOp::Div,
+                ArithBinOp::Rem => crate::ir::CheckedArithmeticOp::Rem,
+                _ => unreachable!(),
+            };
+
+            let dest = self.alloc_temp_local(lhs_place_ty, false, "checked");
+            self.builder.body.locals[dest.index()].address_space = self.expr_address_space(target);
+            self.assign_checked_intrinsic_call(
+                Some(stmt_id),
+                dest,
+                vec![lhs_value, rhs_value],
+                crate::ir::CheckedIntrinsic {
+                    op: checked_op,
+                    ty: lhs_place_ty,
+                },
+                None,
+            );
+
+            self.alloc_value(lhs_place_ty, ValueOrigin::Local(dest), ValueRepr::Word)
+        } else {
+            self.alloc_value(
+                lhs_place_ty,
+                ValueOrigin::Binary {
+                    op: BinOp::Arith(op),
+                    lhs: lhs_value,
+                    rhs: rhs_value,
+                },
+                ValueRepr::Word,
+            )
+        };
 
         let stored = if is_peeled {
             self.alloc_value(
@@ -2279,6 +2562,181 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
 
         self.store_to_root_lvalue(Some(stmt_id), root_lvalue, stored);
+    }
+
+    fn lower_arith_aug_assign_via_trait_call(
+        &mut self,
+        stmt_id: StmtId,
+        expr: ExprId,
+        target: ExprId,
+        rhs_expr: ExprId,
+        rhs_value: ValueId,
+        op: hir::hir_def::expr::ArithBinOp,
+    ) -> bool {
+        // When the core library is not available (standalone `.fe` files),
+        // no callable is registered — fall back to unchecked raw binary.
+        let Some(callable) = self.typed_body.callable_expr(expr).cloned() else {
+            return false;
+        };
+
+        if !self.can_fast_path_aug_assign(&callable, op, self.typed_body.expr_ty(self.db, target)) {
+            return self
+                .lower_aug_assign_trait_call(stmt_id, expr, target, rhs_expr, rhs_value, callable);
+        }
+        self.lower_aug_assign_to_lvalue(stmt_id, target, rhs_value, op);
+        true
+    }
+
+    fn lower_aug_assign_trait_call(
+        &mut self,
+        stmt_id: StmtId,
+        expr: ExprId,
+        target: ExprId,
+        rhs_expr: ExprId,
+        rhs_value: ValueId,
+        mut callable: Callable<'db>,
+    ) -> bool {
+        let target_ty = self.typed_body.expr_ty(self.db, target);
+        let Some(mut receiver_place) = self.place_for_borrow_expr(target) else {
+            return false;
+        };
+        let mut writeback_place = None;
+        if matches!(
+            self.builder.body.value(receiver_place.base).origin,
+            ValueOrigin::PlaceRoot(_)
+        ) {
+            let receiver_value = self.lower_expr(target);
+            let (_addr_value, temp_place) = self.materialize_value_in_temp_place(
+                target_ty,
+                receiver_value,
+                AddressSpaceKind::Memory,
+                "aug_assign_self",
+            );
+            receiver_place = temp_place.clone();
+            writeback_place = Some(temp_place);
+        }
+        let Some(receiver_ty) = callable
+            .callable_def
+            .receiver_ty(self.db)
+            .map(|ty| ty.instantiate(self.db, callable.generic_args()))
+        else {
+            return false;
+        };
+
+        let receiver_space = self.value_address_space(receiver_place.base);
+        let receiver_repr = self.value_repr_for_ty(receiver_ty, receiver_space);
+        let receiver = self.alloc_value(
+            receiver_ty,
+            ValueOrigin::PlaceRef(receiver_place.clone()),
+            receiver_repr,
+        );
+
+        let expected_arg_tys = self.call_expected_arg_tys(&callable);
+        let Some(&expected_rhs_ty) = expected_arg_tys.get(1) else {
+            return false;
+        };
+        let mut rhs = self.coerce_call_arg_value(rhs_expr, rhs_value, expected_rhs_ty);
+        rhs = self.materialize_capability_call_arg(rhs_expr, rhs, expected_rhs_ty);
+
+        let mut effect_args = Vec::new();
+        let mut effect_writebacks: Vec<(LocalId, Place<'db>)> = Vec::new();
+        if let CallableDef::Func(func_def) = callable.callable_def
+            && func_def.has_effects(self.db)
+            && extract_contract_function(self.db, func_def).is_none()
+            && let Some(resolved) = self.typed_body.call_effect_args(expr)
+        {
+            self.finalize_place_effect_provider_args_for_call(func_def, &mut callable, resolved);
+            for resolved_arg in resolved {
+                let value = self.lower_effect_arg(resolved_arg, &mut effect_writebacks);
+                effect_args.push(value);
+            }
+        }
+
+        let hir_target = crate::ir::HirCallTarget {
+            callable_def: callable.callable_def,
+            generic_args: callable.generic_args().to_vec(),
+            trait_inst: callable.trait_inst(),
+        };
+        let call_origin = CallOrigin {
+            expr: Some(expr),
+            hir_target: Some(hir_target),
+            args: vec![receiver, rhs],
+            effect_args,
+            resolved_name: None,
+            checked_intrinsic: None,
+            builtin_terminator: self.builtin_terminator_kind(callable.callable_def),
+            receiver_space: (receiver_space != AddressSpaceKind::Memory).then_some(receiver_space),
+        };
+        self.assign(Some(stmt_id), None, Rvalue::Call(call_origin));
+        for (writeback_local, place) in effect_writebacks {
+            self.assign(None, Some(writeback_local), Rvalue::Load { place });
+        }
+
+        if let Some(place) = writeback_place {
+            let updated_local = self.alloc_temp_local(target_ty, false, "aug_assign");
+            self.builder.body.locals[updated_local.index()].address_space =
+                self.expr_address_space(target);
+            self.assign(None, Some(updated_local), Rvalue::Load { place });
+            let updated = self.alloc_value(
+                target_ty,
+                ValueOrigin::Local(updated_local),
+                self.value_repr_for_expr(target, target_ty),
+            );
+            self.lower_assign_to_lvalue(stmt_id, target, updated);
+        }
+        true
+    }
+
+    fn can_fast_path_aug_assign(
+        &self,
+        callable: &Callable<'db>,
+        op: hir::hir_def::expr::ArithBinOp,
+        lhs_ty: TyId<'db>,
+    ) -> bool {
+        match callable.callable_def.ingot(self.db).kind(self.db) {
+            IngotKind::Core | IngotKind::Std => {}
+            _ => return false,
+        }
+
+        let Some(name) = callable.callable_def.name(self.db) else {
+            return false;
+        };
+        if !matches!(
+            op,
+            ArithBinOp::Add
+                | ArithBinOp::Sub
+                | ArithBinOp::Mul
+                | ArithBinOp::LShift
+                | ArithBinOp::RShift
+                | ArithBinOp::BitAnd
+                | ArithBinOp::BitOr
+                | ArithBinOp::BitXor
+        ) {
+            return false;
+        }
+        let expected_name = match op {
+            ArithBinOp::Add => "add_assign",
+            ArithBinOp::Sub => "sub_assign",
+            ArithBinOp::Mul => "mul_assign",
+            ArithBinOp::Div => "div_assign",
+            ArithBinOp::Rem => "rem_assign",
+            ArithBinOp::Pow => "pow_assign",
+            ArithBinOp::LShift => "shl_assign",
+            ArithBinOp::RShift => "shr_assign",
+            ArithBinOp::BitAnd => "bitand_assign",
+            ArithBinOp::BitOr => "bitor_assign",
+            ArithBinOp::BitXor => "bitxor_assign",
+            ArithBinOp::Range => return false,
+        };
+        if name.data(self.db).as_str() != expected_name {
+            return false;
+        }
+
+        let lhs_place_ty = lhs_ty
+            .as_capability(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(lhs_ty);
+        lhs_place_ty.is_integral(self.db) || lhs_place_ty.is_bool(self.db)
     }
 
     /// Lowers a statement in the current block.
@@ -2694,6 +3152,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             effect_args,
             receiver_space,
             resolved_name: None,
+            checked_intrinsic: None,
+            builtin_terminator: self.builtin_terminator_kind(callable.callable_def),
         };
 
         self.assign(None, Some(result_local), Rvalue::Call(call_origin));
@@ -2755,6 +3215,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             effect_args,
             receiver_space,
             resolved_name: None,
+            checked_intrinsic: None,
+            builtin_terminator: self.builtin_terminator_kind(callable.callable_def),
         };
 
         self.assign(None, Some(result_local), Rvalue::Call(call_origin));
@@ -3192,7 +3654,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     }
                 }
 
-                self.lower_aug_assign_to_lvalue(stmt_id, *target, value_id, *op);
+                if !self.lower_arith_aug_assign_via_trait_call(
+                    stmt_id, expr, *target, *value, value_id, *op,
+                ) {
+                    self.lower_aug_assign_to_lvalue(stmt_id, *target, value_id, *op);
+                }
             }
             _ => {
                 self.move_to_block(block);
