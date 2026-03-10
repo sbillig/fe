@@ -194,6 +194,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let name = func_def.name(self.db)?;
         match name.data(self.db).as_str() {
             "panic" | "todo" => Some(crate::ir::BuiltinTerminatorKind::Abort),
+            "panic_with_value" => Some(crate::ir::BuiltinTerminatorKind::AbortWithValue),
             _ => None,
         }
     }

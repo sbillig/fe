@@ -5,13 +5,15 @@ use std::{
 };
 
 use common::indexmap::IndexMap;
-use hir::analysis::ty::corelib::{resolve_core_trait, resolve_lib_type_path};
+use hir::analysis::ty::corelib::{
+    resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
+};
 use hir::analysis::{
     HirAnalysisDb,
     diagnostics::SpannedHirAnalysisDb,
     diagnostics::format_diags,
     ty::{
-        canonical::Canonicalized,
+        canonical::{Canonical, Canonicalized},
         const_ty::ConstTyData,
         effects::EffectKeyKind,
         fold::{TyFoldable, TyFolder},
@@ -115,6 +117,19 @@ struct CallSite<'db> {
     param_capability_space_overrides: ParamCapabilitySpaceOverrides<'db>,
 }
 
+/// An `AbortWithValue` call site: either a regular instruction or a terminator.
+enum AbortWithValueSite<'db> {
+    Inst {
+        bb_idx: usize,
+        inst_idx: usize,
+        concrete_t: TyId<'db>,
+    },
+    Term {
+        bb_idx: usize,
+        concrete_t: TyId<'db>,
+    },
+}
+
 fn resolve_default_root_effect_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -155,6 +170,31 @@ impl<'db> InstanceKey<'db> {
 }
 
 impl<'db> Monomorphizer<'db> {
+    /// Find the std ingot by searching all known templates for one whose ingot
+    /// has std as a dependency (or is std itself). Returns `None` only if std
+    /// is genuinely absent (e.g. a bare-core compilation).
+    fn find_std_ingot(&self, _func_idx: usize) -> Option<hir::Ingot<'db>> {
+        for template in &self.templates {
+            let ingot = match template.origin {
+                crate::ir::MirFunctionOrigin::Hir(func) => func.scope().ingot(self.db),
+                crate::ir::MirFunctionOrigin::Synthetic(synth) => {
+                    synth.contract().scope().ingot(self.db)
+                }
+            };
+            if ingot.kind(self.db) == common::ingot::IngotKind::Std {
+                return Some(ingot);
+            }
+            if let Some((_, std_dep)) = ingot
+                .resolved_external_ingots(self.db)
+                .iter()
+                .find(|(_, dep)| dep.kind(self.db) == common::ingot::IngotKind::Std)
+            {
+                return Some(*std_dep);
+            }
+        }
+        None
+    }
+
     fn core_for_origin(&self, origin: crate::ir::MirFunctionOrigin<'db>) -> CoreLib<'db> {
         let scope = match origin {
             crate::ir::MirFunctionOrigin::Hir(func) => func.scope(),
@@ -591,6 +631,252 @@ impl<'db> Monomorphizer<'db> {
                 &mut self.instances[func_idx].body.values[value_idx].origin
             {
                 target.symbol = Some(symbol);
+            }
+        }
+
+        // Rewrite AbortWithValue terminators: either redirect to std::evm::effects::revert<T>
+        // when T satisfies Encode<Sol> + AbiSize, or emit a compile error.
+        self.rewrite_abort_with_value(func_idx);
+    }
+
+    /// Scan the function at `func_idx` for `AbortWithValue` calls (both regular instructions
+    /// and terminators) and either redirect them to `std::evm::effects::revert<T>()` (when
+    /// the error type is ABI-encodable) or emit a compile error.
+    fn rewrite_abort_with_value(&mut self, func_idx: usize) {
+        let function = &self.instances[func_idx];
+
+        let mut sites: Vec<AbortWithValueSite<'db>> = Vec::new();
+
+        for (bb_idx, block) in function.body.blocks.iter().enumerate() {
+            // Check regular call instructions
+            for (inst_idx, inst) in block.insts.iter().enumerate() {
+                if let crate::MirInst::Assign {
+                    rvalue: crate::ir::Rvalue::Call(call),
+                    ..
+                } = inst
+                    && call.builtin_terminator
+                        == Some(crate::ir::BuiltinTerminatorKind::AbortWithValue)
+                    && let Some(hir_target) = &call.hir_target
+                    && let Some(&concrete_t) = hir_target.generic_args.first()
+                {
+                    sites.push(AbortWithValueSite::Inst {
+                        bb_idx,
+                        inst_idx,
+                        concrete_t,
+                    });
+                }
+            }
+
+            // Check terminating calls
+            if let crate::Terminator::TerminatingCall {
+                call: crate::ir::TerminatingCall::Call(call),
+                ..
+            } = &block.terminator
+                && call.builtin_terminator == Some(crate::ir::BuiltinTerminatorKind::AbortWithValue)
+                && let Some(hir_target) = &call.hir_target
+                && let Some(&concrete_t) = hir_target.generic_args.first()
+            {
+                sites.push(AbortWithValueSite::Term { bb_idx, concrete_t });
+            }
+        }
+
+        for site in sites {
+            let concrete_t = match &site {
+                AbortWithValueSite::Inst { concrete_t, .. } => *concrete_t,
+                AbortWithValueSite::Term { concrete_t, .. } => *concrete_t,
+            };
+
+            // We need a scope that can see both core traits (Encode, AbiSize)
+            // and std types (Sol, revert). The concrete type's ingot works for
+            // user-defined types, but primitives and core types return
+            // `None` from `ingot()`. In that case we fall back to the std
+            // ingot's root scope, which can see everything we need.
+            //
+            // If std is not available at all (bare-core compilation),
+            // `std_aware_scope` is `None` and we skip the trait check
+            // entirely, falling back to a plain empty revert.
+            let std_aware_scope = concrete_t
+                .ingot(self.db)
+                .filter(|ingot| {
+                    // Core ingot can't see std; skip it so we hit the
+                    // std-ingot fallback below.
+                    ingot.kind(self.db) != common::ingot::IngotKind::Core
+                })
+                .or_else(|| self.find_std_ingot(func_idx))
+                .map(|ingot| ingot.root_mod(self.db).scope());
+
+            // Check if T: Encode<Sol> + AbiSize (only possible when std is present).
+            let can_encode = std_aware_scope.and_then(|scope| {
+                let solve_cx = TraitSolveCx::new(self.db, scope);
+
+                let encode_trait = resolve_core_trait(self.db, scope, &["abi", "Encode"])?;
+                let abi_size_trait = resolve_core_trait(self.db, scope, &["abi", "AbiSize"])?;
+                let sol_ty = resolve_lib_type_path(self.db, scope, "std::abi::Sol")?;
+
+                let encode_inst = TraitInstId::new(
+                    self.db,
+                    encode_trait,
+                    vec![concrete_t, sol_ty],
+                    IndexMap::new(),
+                );
+                let encode_goal = Canonical::new(self.db, encode_inst);
+                if !is_goal_satisfiable(self.db, solve_cx, encode_goal).is_satisfied() {
+                    return None;
+                }
+
+                let abi_size_inst =
+                    TraitInstId::new(self.db, abi_size_trait, vec![concrete_t], IndexMap::new());
+                let abi_size_goal = Canonical::new(self.db, abi_size_inst);
+                if !is_goal_satisfiable(self.db, solve_cx, abi_size_goal).is_satisfied() {
+                    return None;
+                }
+
+                Some(scope)
+            });
+
+            // Helper: promote an instruction-level call to a TerminatingCall
+            // by removing the instruction and all subsequent ones, then setting
+            // the block terminator.
+            let promote_inst_to_terminator =
+                |instances: &mut Vec<MirFunction<'db>>,
+                 bb_idx: usize,
+                 inst_idx: usize,
+                 mut call: CallOrigin<'db>,
+                 source: crate::ir::SourceInfoId,
+                 resolved_name: Option<String>| {
+                    if let Some(name) = resolved_name {
+                        call.resolved_name = Some(name);
+                        call.builtin_terminator = None;
+                    } else {
+                        call.builtin_terminator = Some(crate::ir::BuiltinTerminatorKind::Abort);
+                    }
+                    let block = &mut instances[func_idx].body.blocks[bb_idx];
+                    block.insts.truncate(inst_idx);
+                    block.terminator = crate::Terminator::TerminatingCall {
+                        source,
+                        call: crate::ir::TerminatingCall::Call(call),
+                    };
+                };
+
+            if let Some(scope) = can_encode {
+                let revert_symbol =
+                    resolve_lib_func_path(self.db, scope, "std::evm::effects::revert").and_then(
+                        |revert_func| {
+                            self.ensure_instance(revert_func, &[concrete_t], None, &[], &[])
+                                .map(|(_, symbol)| symbol)
+                        },
+                    );
+
+                let Some(symbol) = revert_symbol else {
+                    let ty_name = concrete_t.pretty_print(self.db);
+                    let func_name = self
+                        .current_symbol
+                        .clone()
+                        .unwrap_or_else(|| self.instances[func_idx].symbol_name.clone());
+                    self.defer_error(MirLowerError::Unsupported {
+                        func_name,
+                        message: format!(
+                            "failed to instantiate `revert<{ty_name}>()` for `unwrap()`"
+                        ),
+                    });
+                    return;
+                };
+
+                match site {
+                    AbortWithValueSite::Inst {
+                        bb_idx, inst_idx, ..
+                    } => {
+                        // Extract the call from the instruction, then promote
+                        // it to a TerminatingCall.
+                        let inst =
+                            self.instances[func_idx].body.blocks[bb_idx].insts[inst_idx].clone();
+                        if let crate::MirInst::Assign {
+                            rvalue: crate::ir::Rvalue::Call(call),
+                            source,
+                            ..
+                        } = inst
+                        {
+                            promote_inst_to_terminator(
+                                &mut self.instances,
+                                bb_idx,
+                                inst_idx,
+                                call,
+                                source,
+                                Some(symbol),
+                            );
+                        }
+                    }
+                    AbortWithValueSite::Term { bb_idx, .. } => {
+                        let term = &mut self.instances[func_idx].body.blocks[bb_idx].terminator;
+                        if let crate::Terminator::TerminatingCall {
+                            call: crate::ir::TerminatingCall::Call(call),
+                            ..
+                        } = term
+                        {
+                            call.resolved_name = Some(symbol);
+                            call.builtin_terminator = None;
+                        }
+                    }
+                }
+            } else if std_aware_scope.is_some() {
+                // std is available but the type doesn't satisfy the bounds —
+                // this is a real user error.
+                let ty_name = concrete_t.pretty_print(self.db);
+                let func_name = self
+                    .current_symbol
+                    .clone()
+                    .unwrap_or_else(|| self.instances[func_idx].symbol_name.clone());
+                self.defer_error(MirLowerError::Unsupported {
+                    func_name,
+                    message: format!(
+                        "`unwrap()` requires the error type `{ty_name}` to implement `Encode<Sol>` and `AbiSize`"
+                    ),
+                });
+                return;
+            } else {
+                // std is not available (bare-core compilation) — no ABI
+                // encoding infrastructure exists, so fall back to empty revert.
+                self.downgrade_abort_with_value_to_abort(func_idx, site);
+            }
+        }
+    }
+
+    /// Downgrade an `AbortWithValue` call to a plain `Abort` (empty revert).
+    /// Used when std is not available and ABI encoding is impossible.
+    fn downgrade_abort_with_value_to_abort(
+        &mut self,
+        func_idx: usize,
+        site: AbortWithValueSite<'db>,
+    ) {
+        match site {
+            AbortWithValueSite::Inst {
+                bb_idx, inst_idx, ..
+            } => {
+                let inst = self.instances[func_idx].body.blocks[bb_idx].insts[inst_idx].clone();
+                if let crate::MirInst::Assign {
+                    rvalue: crate::ir::Rvalue::Call(mut call),
+                    source,
+                    ..
+                } = inst
+                {
+                    call.builtin_terminator = Some(crate::ir::BuiltinTerminatorKind::Abort);
+                    let block = &mut self.instances[func_idx].body.blocks[bb_idx];
+                    block.insts.truncate(inst_idx);
+                    block.terminator = crate::Terminator::TerminatingCall {
+                        source,
+                        call: crate::ir::TerminatingCall::Call(call),
+                    };
+                }
+            }
+            AbortWithValueSite::Term { bb_idx, .. } => {
+                let term = &mut self.instances[func_idx].body.blocks[bb_idx].terminator;
+                if let crate::Terminator::TerminatingCall {
+                    call: crate::ir::TerminatingCall::Call(call),
+                    ..
+                } = term
+                {
+                    call.builtin_terminator = Some(crate::ir::BuiltinTerminatorKind::Abort);
+                }
             }
         }
     }

@@ -301,6 +301,19 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 return Ok(Some(result));
             }
 
+            // Builtin terminators (Abort / AbortWithValue) that appear as regular
+            // call instructions (due to never-type coercion in match arms).
+            if let Some(builtin) = call.builtin_terminator {
+                match builtin {
+                    BuiltinTerminatorKind::Abort | BuiltinTerminatorKind::AbortWithValue => {
+                        let zero = ctx.fb.make_imm_value(I256::zero());
+                        ctx.fb
+                            .insert_inst_no_result(EvmRevert::new(ctx.is, zero, zero));
+                        return Ok(None);
+                    }
+                }
+            }
+
             // Get the callee function reference
             let callee_name = call.resolved_name.as_ref().ok_or_else(|| {
                 LowerError::Unsupported("call without resolved symbol name".to_string())
@@ -3629,7 +3642,7 @@ pub(super) fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 
                 if let Some(builtin) = call.builtin_terminator {
                     match builtin {
-                        BuiltinTerminatorKind::Abort => {
+                        BuiltinTerminatorKind::Abort | BuiltinTerminatorKind::AbortWithValue => {
                             let zero = ctx.fb.make_imm_value(I256::zero());
                             ctx.fb
                                 .insert_inst_no_result(EvmRevert::new(ctx.is, zero, zero));

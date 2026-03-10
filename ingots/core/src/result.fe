@@ -5,6 +5,7 @@ use ingot::Applicative
 use ingot::Monad
 use ingot::Option
 use ingot::panic
+use ingot::panic_with_value
 
 pub enum Result<E, T> {
     Err(E),
@@ -40,7 +41,7 @@ impl<E, T> Result<E, T> {
     pub fn unwrap(own self) -> T {
         match self {
             Self::Ok(value) => value
-            Self::Err(_) => panic()
+            Self::Err(e) => panic_with_value(e)
         }
     }
 

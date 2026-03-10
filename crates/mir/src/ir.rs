@@ -838,6 +838,10 @@ pub enum TerminatingCall<'db> {
 pub enum BuiltinTerminatorKind {
     /// Abort execution and revert with an empty payload.
     Abort,
+    /// Abort with a value that may be ABI-encoded by the monomorphizer.
+    /// The monomorphizer rewrites this to a `revert<T>()` call when the
+    /// type satisfies `Encode<Sol> + AbiSize`, or emits a compile error.
+    AbortWithValue,
 }
 
 #[derive(Debug, Clone)]

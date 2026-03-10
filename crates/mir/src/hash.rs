@@ -335,6 +335,9 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                 .or_else(|| {
                     call.builtin_terminator.map(|builtin| match builtin {
                         crate::ir::BuiltinTerminatorKind::Abort => "<builtin_abort>".to_string(),
+                        crate::ir::BuiltinTerminatorKind::AbortWithValue => {
+                            "<builtin_abort_with_value>".to_string()
+                        }
                     })
                 })
                 .unwrap_or_else(|| "<unknown>".to_string())

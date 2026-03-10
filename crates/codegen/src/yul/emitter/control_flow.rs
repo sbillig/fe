@@ -129,7 +129,8 @@ impl<'db> FunctionEmitter<'db> {
                 mir::TerminatingCall::Call(call) => {
                     if let Some(builtin) = call.builtin_terminator {
                         match builtin {
-                            BuiltinTerminatorKind::Abort => {
+                            BuiltinTerminatorKind::Abort
+                            | BuiltinTerminatorKind::AbortWithValue => {
                                 ctx.docs.push(YulDoc::line("revert(0, 0)"));
                                 return Ok(());
                             }

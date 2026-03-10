@@ -173,6 +173,18 @@ impl<'db> FunctionEmitter<'db> {
         call: &mir::CallOrigin<'db>,
         state: &mut BlockState,
     ) -> Result<(), YulError> {
+        // Builtin terminators (Abort / AbortWithValue) that appear as regular
+        // call instructions (due to never-type coercion in match arms).
+        if let Some(builtin) = call.builtin_terminator {
+            match builtin {
+                mir::ir::BuiltinTerminatorKind::Abort
+                | mir::ir::BuiltinTerminatorKind::AbortWithValue => {
+                    docs.push(YulDoc::line("revert(0, 0)"));
+                    return Ok(());
+                }
+            }
+        }
+
         let call_expr = self.lower_call_value(call, state)?;
         if let Some(dest) = dest {
             let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
