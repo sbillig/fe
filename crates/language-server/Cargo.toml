@@ -28,24 +28,30 @@ futures = { version = "0.3.31", default-features = false, features = ["std"] }
 futures-batch = "0.6.1"
 rustc-hash.workspace = true
 salsa.workspace = true
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.135"
 smol_str.workspace = true
-tokio = { version = "1.43.0", default-features = false, features = ["rt-multi-thread", "macros", "sync", "time", "io-std", "io-util"] }
+tokio = { version = "1.43.0", default-features = false, features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-std", "io-util"] }
+tokio-tungstenite = "0.26"
 tower = "0.5.2"
+axum = { version = "0.8", features = ["ws"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
-tracing-tree.workspace = true
 url = "2.5.4"
 
 codegen.workspace = true
 common.workspace = true
 driver.workspace = true
+fe-web.workspace = true
 mir.workspace = true
 fmt.workspace = true
 hir.workspace = true
 parser.workspace = true
 resolver.workspace = true
 tempfile = "3.20.0"
+
+[features]
+default = []
 
 [dev-dependencies]
 test-utils.workspace = true
