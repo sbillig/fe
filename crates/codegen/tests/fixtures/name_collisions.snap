@@ -14,7 +14,7 @@ function $a_b_h948d5ab23860c017_flattened_fn() -> ret {
 function $test_module_qualifier_flatten_collision() -> ret {
   let v0 := $a_b_h12fd23afeb13a092_flattened_fn()
   let v1 := $a_b_h948d5ab23860c017_flattened_fn()
-  let v2 := $u32_h20aa0c10687491ad_add_h4cebc227a0cfd3c0_add(v0, v1)
+  let v2 := $checked_add_u32(v0, v1)
   ret := v2
   leave
 }
@@ -41,14 +41,14 @@ function $test_trait_method_collision() -> ret {
   let v1 := $multitraitimpl_h60cc862fc809464_trait_h79853acec5b2b3ad_same_method(v0)
   let v2 := 100
   let v3 := $multitraitimpl_h60cc862fc809464_trait_ha6da5e54b37dd39c_same_method(v2)
-  let v4 := $u32_h20aa0c10687491ad_add_h4cebc227a0cfd3c0_add(v1, v3)
+  let v4 := $checked_add_u32(v1, v3)
   ret := v4
   leave
 }
 function $param_local_collision($v0) -> ret {
-  let v0 := $u32_h20aa0c10687491ad_add_h4cebc227a0cfd3c0_add($v0, 1)
+  let v0 := $checked_add_u32($v0, 1)
   let v1 := v0
-  let v2 := $u32_h20aa0c10687491ad_add_h4cebc227a0cfd3c0_add(v1, 2)
+  let v2 := $checked_add_u32(v1, 2)
   let v3 := v2
   ret := v3
   leave
@@ -69,7 +69,7 @@ function $test_cast_shim_collision() -> ret {
   leave
 }
 function $ret_param_collision($ret) -> ret {
-  let v0 := $u32_h20aa0c10687491ad_add_h4cebc227a0cfd3c0_add($ret, 1)
+  let v0 := $checked_add_u32($ret, 1)
   ret := v0
   leave
 }
@@ -109,31 +109,26 @@ function $main() -> ret {
 }
 function $widget_h8588afca9d68e578_process($self) -> ret {
   let v0 := $self
-  let v1 := $u32_h20aa0c10687491ad_mul_h290dcc921ed80777_mul(v0, 2)
+  let v1 := $checked_mul_u32(v0, 2)
   ret := v1
   leave
 }
 function $widget_h6847c0e3e0e4aa1e_process($self) -> ret {
   let v0 := $self
-  let v1 := $u64_haee7f05a097ffa16_mul_h290dcc921ed80777_mul(v0, 3)
+  let v1 := $checked_mul_u64(v0, 3)
   ret := v1
   leave
 }
 function $multitraitimpl_h60cc862fc809464_trait_h79853acec5b2b3ad_same_method($self) -> ret {
   let v0 := $self
-  let v1 := $u32_h20aa0c10687491ad_add_h4cebc227a0cfd3c0_add(v0, 1)
+  let v1 := $checked_add_u32(v0, 1)
   ret := v1
   leave
 }
 function $multitraitimpl_h60cc862fc809464_trait_ha6da5e54b37dd39c_same_method($self) -> ret {
   let v0 := $self
-  let v1 := $u32_h20aa0c10687491ad_add_h4cebc227a0cfd3c0_add(v0, 2)
+  let v1 := $checked_add_u32(v0, 2)
   ret := v1
-  leave
-}
-function $u32_h20aa0c10687491ad_add_h4cebc227a0cfd3c0_add($self, $other) -> ret {
-  let v0 := $checked_add_u32($self, $other)
-  ret := v0
   leave
 }
 function $generic_fn__S_h730d9dc564aaaf27__8d32801e7ec9d42b($val) -> ret {
@@ -142,16 +137,6 @@ function $generic_fn__S_h730d9dc564aaaf27__8d32801e7ec9d42b($val) -> ret {
 }
 function $generic_fn__S_h2db58d011b97b333__42a13489a1ec39e8($val) -> ret {
   ret := $val
-  leave
-}
-function $u32_h20aa0c10687491ad_mul_h290dcc921ed80777_mul($self, $other) -> ret {
-  let v0 := $checked_mul_u32($self, $other)
-  ret := v0
-  leave
-}
-function $u64_haee7f05a097ffa16_mul_h290dcc921ed80777_mul($self, $other) -> ret {
-  let v0 := $checked_mul_u64($self, $other)
-  ret := v0
   leave
 }
 function $checked_add_u32($a, $b) -> ret {

@@ -19,7 +19,7 @@ function $for_range_sum() -> ret {
   for { } lt(v4, v5) { v4 := add(v4, 1) } {
     let v6 := $range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_get(v3, v4)
     let v7 := v6
-    let v8 := $usize_ha12462c6d36e68b0_add_h4cebc227a0cfd3c0_add(v0, v7)
+    let v8 := $checked_add_usize(v0, v7)
     v0 := v8
   }
   ret := v0
@@ -37,7 +37,7 @@ function $range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len($s
   if iszero(v4) {
     let v5 := mload(add($self, 32))
     let v6 := mload($self)
-    let v7 := $usize_ha12462c6d36e68b0_sub_h7b686d389c07535e_sub(v5, v6)
+    let v7 := $checked_sub_usize(v5, v6)
     v0 := v7
   }
   ret := v0
@@ -45,22 +45,12 @@ function $range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len($s
 }
 function $range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_get($self, $i) -> ret {
   let v0 := mload($self)
-  let v1 := $usize_ha12462c6d36e68b0_add_h4cebc227a0cfd3c0_add(v0, $i)
+  let v1 := $checked_add_usize(v0, $i)
   ret := v1
-  leave
-}
-function $usize_ha12462c6d36e68b0_add_h4cebc227a0cfd3c0_add($self, $other) -> ret {
-  let v0 := $checked_add_usize($self, $other)
-  ret := v0
   leave
 }
 function $usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt($self, $other) -> ret {
   let v0 := lt($self, $other)
-  ret := v0
-  leave
-}
-function $usize_ha12462c6d36e68b0_sub_h7b686d389c07535e_sub($self, $other) -> ret {
-  let v0 := $checked_sub_usize($self, $other)
   ret := v0
   leave
 }

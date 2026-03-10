@@ -1174,6 +1174,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
         {
             let mut const_data_globals = FxHashMap::default();
+            let mut overflow_revert_block = None;
             let ptr_escape_summary = self.ptr_escape_summaries.get(&func.symbol_name);
             let mut ctx = LowerCtx {
                 fb: &mut fb,
@@ -1193,6 +1194,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 data_globals: &mut self.data_globals,
                 data_global_counter: &mut self.data_global_counter,
                 const_data_globals: &mut const_data_globals,
+                overflow_revert_block: &mut overflow_revert_block,
                 ptr_escape_summary,
             };
 
@@ -1246,6 +1248,8 @@ pub(super) struct LowerCtx<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> {
     pub(super) data_global_counter: &'a mut usize,
     /// Per-function dedupe for constant aggregate payloads.
     pub(super) const_data_globals: &'a mut FxHashMap<Vec<u8>, GlobalVariableRef>,
+    /// Lazily-created shared overflow trap block for checked arithmetic in this function.
+    pub(super) overflow_revert_block: &'a mut Option<BlockId>,
     /// Escape summary for the current function.
     pub(super) ptr_escape_summary: Option<&'a mir::analysis::escape::MirPtrEscapeSummary>,
 }

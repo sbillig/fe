@@ -4,15 +4,10 @@ expression: output
 input_file: tests/fixtures/local_bindings.fe
 ---
 function $local_bindings() -> ret {
-  let v0 := $u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add(1, 2)
+  let v0 := $checked_add_u64(1, 2)
   let v1 := v0
   let v2 := 3
   ret := v2
-  leave
-}
-function $u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add($self, $other) -> ret {
-  let v0 := $checked_add_u64($self, $other)
-  ret := v0
   leave
 }
 function $checked_add_u64($a, $b) -> ret {

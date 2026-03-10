@@ -2557,21 +2557,38 @@ fn bitcast_ptr<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         .insert_inst(Bitcast::new(ctx.is, ptr, ptr_ty), ptr_ty)
 }
 
-/// Emit a conditional branch to a revert block if `overflow_flag` (I1) is true.
-/// Returns the continue block that execution falls through to on no overflow.
-fn emit_overflow_revert<C: sonatina_ir::func_cursor::FuncCursor>(
-    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
-    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+fn ensure_overflow_revert_block<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+) -> Result<BlockId, LowerError> {
+    if let Some(block) = *ctx.overflow_revert_block {
+        return Ok(block);
+    }
+
+    let origin_block = ctx
+        .fb
+        .current_block()
+        .ok_or_else(|| LowerError::Internal("missing current block".to_string()))?;
+    let revert_block = ctx.fb.append_block();
+    ctx.fb.switch_to_block(revert_block);
+    let zero = ctx.fb.make_imm_value(I256::zero());
+    ctx.fb
+        .insert_inst_no_result(EvmRevert::new(ctx.is, zero, zero));
+    ctx.fb.switch_to_block(origin_block);
+    *ctx.overflow_revert_block = Some(revert_block);
+    Ok(revert_block)
+}
+
+/// Emit a conditional branch to the shared overflow revert block if `overflow_flag` (I1) is true.
+fn emit_overflow_revert<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
     overflow_flag: ValueId,
-) -> BlockId {
-    let revert_block = fb.append_block();
-    let continue_block = fb.append_block();
-    fb.insert_inst_no_result(Br::new(is, overflow_flag, revert_block, continue_block));
-    fb.switch_to_block(revert_block);
-    let zero = fb.make_imm_value(I256::zero());
-    fb.insert_inst_no_result(EvmRevert::new(is, zero, zero));
-    fb.switch_to_block(continue_block);
-    continue_block
+) -> Result<(), LowerError> {
+    let revert_block = ensure_overflow_revert_block(ctx)?;
+    let continue_block = ctx.fb.append_block();
+    ctx.fb
+        .insert_inst_no_result(Br::new(ctx.is, overflow_flag, revert_block, continue_block));
+    ctx.fb.switch_to_block(continue_block);
+    Ok(())
 }
 
 fn checked_intrinsic_prim<'db>(
@@ -2638,7 +2655,7 @@ fn lower_checked_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             } else {
                 ctx.fb.insert_uaddo(lhs, rhs)
             };
-            emit_overflow_revert(ctx.fb, ctx.is, overflow);
+            emit_overflow_revert(ctx, overflow)?;
             Ok(raw)
         }
         CheckedArithmeticOp::Sub => {
@@ -2657,7 +2674,7 @@ fn lower_checked_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             } else {
                 ctx.fb.insert_usubo(lhs, rhs)
             };
-            emit_overflow_revert(ctx.fb, ctx.is, overflow);
+            emit_overflow_revert(ctx, overflow)?;
             Ok(raw)
         }
         CheckedArithmeticOp::Mul => {
@@ -2676,7 +2693,7 @@ fn lower_checked_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             } else {
                 ctx.fb.insert_umulo(lhs, rhs)
             };
-            emit_overflow_revert(ctx.fb, ctx.is, overflow);
+            emit_overflow_revert(ctx, overflow)?;
             Ok(raw)
         }
         CheckedArithmeticOp::Neg => {
@@ -2695,7 +2712,7 @@ fn lower_checked_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             let val_word = lower_value(ctx, *arg)?;
             let val = lower_checked_operand(ctx.fb, ctx.is, val_word, op_ty, true);
             let [raw, overflow] = ctx.fb.insert_snego(val);
-            emit_overflow_revert(ctx.fb, ctx.is, overflow);
+            emit_overflow_revert(ctx, overflow)?;
             Ok(raw)
         }
     }

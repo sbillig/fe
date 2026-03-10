@@ -161,9 +161,9 @@ object "BalanceMap" {
         }
         mstore(64, add(v0, 0))
         let v1 := $u256_h3271ca15373d4483_storagekey_hf9e3d38a13ff4409_write_key(v0, $key)
-        let v2 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v0, v1)
+        let v2 := $checked_add_u256(v0, v1)
         mstore(v2, $salt)
-        let v3 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v1, 32)
+        let v3 := $checked_add_u256(v1, 32)
         let v4 := keccak256(v0, v3)
         ret := v4
         leave
@@ -178,18 +178,13 @@ object "BalanceMap" {
         }
         if iszero(v2) {
           let v3 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get__u256_u256_0__6a346ad3c930d971($balances, $to)
-          let v4 := $u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub(v0, $amount)
+          let v4 := $checked_sub_u256(v0, $amount)
           $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set__u256_u256_0__6a346ad3c930d971($balances, $from, v4)
-          let v5 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v3, $amount)
+          let v5 := $checked_add_u256(v3, $amount)
           $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set__u256_u256_0__6a346ad3c930d971($balances, $to, v5)
           ret := 0
           leave
         }
-      }
-      function $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add($self, $other) -> ret {
-        let v0 := $checked_add_u256($self, $other)
-        ret := v0
-        leave
       }
       function $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($self) -> ret {
         ret := $self
@@ -208,11 +203,6 @@ object "BalanceMap" {
       function $u256_h3271ca15373d4483_storagekey_hf9e3d38a13ff4409_write_key($ptr, $self) -> ret {
         mstore($ptr, $self)
         ret := 32
-        leave
-      }
-      function $u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub($self, $other) -> ret {
-        let v0 := $checked_sub_u256($self, $other)
-        ret := v0
         leave
       }
       function $u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_from_word($word) -> ret {

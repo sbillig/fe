@@ -13,13 +13,8 @@ object "main" {
       mstore(0x40, add(v0, 96))
       datacopy(v0, dataoffset("data_get_sum_0"), datasize("data_get_sum_0"))
       let v1 := mload(v0)
-      let v2 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(1, v1)
+      let v2 := $checked_add_u256(1, v1)
       ret := v2
-      leave
-    }
-    function $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add($self, $other) -> ret {
-      let v0 := $checked_add_u256($self, $other)
-      ret := v0
       leave
     }
     function $checked_add_u256($a, $b) -> ret {

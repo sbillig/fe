@@ -29,7 +29,7 @@ function $match_struct_fields($p) -> ret {
         default {
           let v7 := and(mload(add(v1, 32)), 0xff)
           let v8 := and(mload(v1), 0xff)
-          let v9 := $u8_hbc9d6eeaea22ffb5_add_h4cebc227a0cfd3c0_add(v8, v7)
+          let v9 := $checked_add_u8(v8, v7)
           v0 := v9
         }
     }
@@ -54,11 +54,6 @@ function $match_struct_wildcard($p) -> ret {
           v0 := 3
         }
     }
-  ret := v0
-  leave
-}
-function $u8_hbc9d6eeaea22ffb5_add_h4cebc227a0cfd3c0_add($self, $other) -> ret {
-  let v0 := $checked_add_u8($self, $other)
   ret := v0
   leave
 }

@@ -15,12 +15,9 @@ func private %aug_assign(v0.i64, v1.i64) -> i64 {
 
     block2:
         (v6.i64, v7.i1) = umulo v2 2.i64;
-        br v7 block3 block4;
+        br v7 block1 block3;
 
     block3:
-        evm_revert 0.i256 0.i256;
-
-    block4:
         v8.i64 = call %u64_haee7f05a097ffa16_div_h14000ca7bc1a1bc4_div v6 2.i64;
         return v8;
 }

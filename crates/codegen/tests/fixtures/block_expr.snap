@@ -4,12 +4,7 @@ expression: output
 input_file: tests/fixtures/block_expr.fe
 ---
 function $block_expr() -> ret {
-  let v0 := $u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add(1, 2)
-  ret := v0
-  leave
-}
-function $u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add($self, $other) -> ret {
-  let v0 := $checked_add_u64($self, $other)
+  let v0 := $checked_add_u64(1, 2)
   ret := v0
   leave
 }

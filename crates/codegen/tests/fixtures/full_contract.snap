@@ -82,10 +82,10 @@ object "ShapeDispatcher" {
           mstore(add(v6, 32), v5)
           let v7 := v6
           let v8 := mload(v7)
-          let v9 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v8, 1)
+          let v9 := $checked_add_u256(v8, 1)
           mstore(v7, v9)
           let v10 := mload(add(v7, 32))
-          let v11 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v10, 2)
+          let v11 := $checked_add_u256(v10, 2)
           mstore(add(v7, 32), v11)
           let v12 := $point_hac92469562809d28_area(v7)
           $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v12, 0)
@@ -95,7 +95,7 @@ object "ShapeDispatcher" {
         if v14 {
           let v15 := calldataload(4)
           let v16 := v15
-          let v17 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v16, 3)
+          let v17 := $checked_add_u256(v16, 3)
           v16 := v17
           let v18 := $square_h97afaa872b6ea17e_area(v16)
           $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v18, 0)
@@ -105,19 +105,14 @@ object "ShapeDispatcher" {
       function $point_hac92469562809d28_area($self) -> ret {
         let v0 := mload($self)
         let v1 := mload(add($self, 32))
-        let v2 := $u256_h3271ca15373d4483_mul_h290dcc921ed80777_mul(v0, v1)
+        let v2 := $checked_mul_u256(v0, v1)
         ret := v2
         leave
       }
       function $square_h97afaa872b6ea17e_area($self) -> ret {
         let v0 := $self
-        let v1 := $u256_h3271ca15373d4483_mul_h290dcc921ed80777_mul(v0, v0)
+        let v1 := $checked_mul_u256(v0, v0)
         ret := v1
-        leave
-      }
-      function $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add($self, $other) -> ret {
-        let v0 := $checked_add_u256($self, $other)
-        ret := v0
         leave
       }
       function $u256_h3271ca15373d4483_div_h14000ca7bc1a1bc4_div($self, $other) -> ret {
@@ -142,11 +137,6 @@ object "ShapeDispatcher" {
       }
       function $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($self) -> ret {
         ret := $self
-        leave
-      }
-      function $u256_h3271ca15373d4483_mul_h290dcc921ed80777_mul($self, $other) -> ret {
-        let v0 := $checked_mul_u256($self, $other)
-        ret := v0
         leave
       }
       function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt($self, $other) -> ret {

@@ -91,12 +91,12 @@ object "Factory" {
       }
       function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len($self) -> ret {
         let v0 := calldatasize()
-        let v1 := $u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub(v0, $self)
+        let v1 := $checked_sub_u256(v0, $self)
         ret := v1
         leave
       }
       function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at($self, $byte_offset) -> ret {
-        let v0 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add($self, $byte_offset)
+        let v0 := $checked_add_u256($self, $byte_offset)
         let v1 := calldataload(v0)
         ret := v1
         leave
@@ -139,7 +139,7 @@ object "Factory" {
         let v0 := $__Child_init_code_len()
         let v1 := $__Child_init_code_offset()
         let v2 := 64
-        let v3 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v0, v2)
+        let v3 := $checked_add_u256(v0, v2)
         let v4 := v3
         let v5 := mload(64)
         if iszero(v5) {
@@ -147,9 +147,9 @@ object "Factory" {
         }
         mstore(64, add(v5, v4))
         codecopy(v5, v1, v0)
-        let v6 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v5, v0)
+        let v6 := $checked_add_u256(v5, v0)
         let v7 := v6
-        let v8 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v7, v2)
+        let v8 := $checked_add_u256(v7, v2)
         let v9 := mload(0x40)
         if iszero(v9) {
           v9 := 0x80
@@ -180,7 +180,7 @@ object "Factory" {
         let v0 := $__Child_init_code_len()
         let v1 := $__Child_init_code_offset()
         let v2 := 64
-        let v3 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v0, v2)
+        let v3 := $checked_add_u256(v0, v2)
         let v4 := v3
         let v5 := mload(64)
         if iszero(v5) {
@@ -188,9 +188,9 @@ object "Factory" {
         }
         mstore(64, add(v5, v4))
         codecopy(v5, v1, v0)
-        let v6 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v5, v0)
+        let v6 := $checked_add_u256(v5, v0)
         let v7 := v6
-        let v8 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v7, v2)
+        let v8 := $checked_add_u256(v7, v2)
         let v9 := mload(0x40)
         if iszero(v9) {
           v9 := 0x80
@@ -342,7 +342,7 @@ object "Factory" {
         let v0 := mload($self)
         let v1 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0)
         let v2 := mload(add($self, 32))
-        let v3 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v2, 32)
+        let v3 := $checked_add_u256(v2, 32)
         let v4 := v3
         let v5 := mload(add($self, 32))
         let v6 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v4, v5)
@@ -380,7 +380,7 @@ object "Factory" {
       function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish($self) -> ret {
         let v0 := mload($self)
         let v1 := mload(add($self, 64))
-        let v2 := $u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub(v1, v0)
+        let v2 := $checked_sub_u256(v1, v0)
         let v3 := mload(0x40)
         if iszero(v3) {
           v3 := 0x80
@@ -403,7 +403,7 @@ object "Factory" {
           mstore(64, add(v3, $bytes))
           mstore($self, v3)
           mstore(add($self, 32), v3)
-          let v4 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v3, $bytes)
+          let v4 := $checked_add_u256(v3, $bytes)
           mstore(add($self, 64), v4)
         }
         let v5 := mload($self)
@@ -413,7 +413,7 @@ object "Factory" {
       function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($self, $v) {
         let v0 := mload(add($self, 32))
         mstore(v0, $v)
-        let v1 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v0, 32)
+        let v1 := $checked_add_u256(v0, 32)
         mstore(add($self, 32), v1)
         leave
       }
@@ -426,11 +426,6 @@ object "Factory" {
         mstore(v0, 0)
         mstore(add(v0, 32), 0)
         mstore(add(v0, 64), 0)
-        ret := v0
-        leave
-      }
-      function $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add($self, $other) -> ret {
-        let v0 := $checked_add_u256($self, $other)
         ret := v0
         leave
       }
@@ -459,11 +454,6 @@ object "Factory" {
       }
       function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt($self, $other) -> ret {
         let v0 := lt($self, $other)
-        ret := v0
-        leave
-      }
-      function $u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub($self, $other) -> ret {
-        let v0 := $checked_sub_u256($self, $other)
         ret := v0
         leave
       }
@@ -572,7 +562,7 @@ object "Factory" {
         }
         function $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at($self, $byte_offset) -> ret {
           let v0 := mload($self)
-          let v1 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v0, $byte_offset)
+          let v1 := $checked_add_u256(v0, $byte_offset)
           let v2 := mload(v1)
           ret := v2
           leave
@@ -585,7 +575,7 @@ object "Factory" {
         function $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($self) -> ret {
           let v0 := $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_len($self)
           let v1 := mload(add($self, 64))
-          let v2 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v1, 32)
+          let v2 := $checked_add_u256(v1, 32)
           let v3 := v2
           let v4 := mload(add($self, 64))
           let v5 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v3, v4)
@@ -628,11 +618,6 @@ object "Factory" {
           ret := $raw
           leave
         }
-        function $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add($self, $other) -> ret {
-          let v0 := $checked_add_u256($self, $other)
-          ret := v0
-          leave
-        }
         function $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6($d) -> ret {
           let v0 := $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($d)
           ret := v0
@@ -673,12 +658,12 @@ object "Factory" {
           }
           function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len($self) -> ret {
             let v0 := calldatasize()
-            let v1 := $u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub(v0, $self)
+            let v1 := $checked_sub_u256(v0, $self)
             ret := v1
             leave
           }
           function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at($self, $byte_offset) -> ret {
-            let v0 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add($self, $byte_offset)
+            let v0 := $checked_add_u256($self, $byte_offset)
             let v1 := calldataload(v0)
             ret := v1
             leave
@@ -811,11 +796,6 @@ object "Factory" {
             ret := $raw
             leave
           }
-          function $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add($self, $other) -> ret {
-            let v0 := $checked_add_u256($self, $other)
-            ret := v0
-            leave
-          }
           function $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($self) -> ret {
             ret := $self
             leave
@@ -827,11 +807,6 @@ object "Factory" {
           }
           function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt($self, $other) -> ret {
             let v0 := lt($self, $other)
-            ret := v0
-            leave
-          }
-          function $u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub($self, $other) -> ret {
-            let v0 := $checked_sub_u256($self, $other)
             ret := v0
             leave
           }

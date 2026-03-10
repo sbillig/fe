@@ -4,14 +4,9 @@ expression: output
 input_file: tests/fixtures/arg_bindings.fe
 ---
 function $arg_bindings($x, $y) -> ret {
-  let v0 := $u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add($x, $y)
+  let v0 := $checked_add_u64($x, $y)
   let v1 := v0
   ret := v1
-  leave
-}
-function $u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add($self, $other) -> ret {
-  let v0 := $checked_add_u64($self, $other)
-  ret := v0
   leave
 }
 function $checked_add_u64($a, $b) -> ret {

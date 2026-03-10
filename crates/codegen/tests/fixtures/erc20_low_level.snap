@@ -66,10 +66,10 @@ object "Erc20Contract" {
       function $_a__b__h47f120de72304a2d_storagekey_hf9e3d38a13ff4409_write_key__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2($ptr, $self) -> ret {
         let v0 := mload($self)
         let v1 := $address_h257056268eac7027_storagekey_hf9e3d38a13ff4409_write_key($ptr, v0)
-        let v2 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add($ptr, v1)
+        let v2 := $checked_add_u256($ptr, v1)
         let v3 := mload(add($self, 32))
         let v4 := $address_h257056268eac7027_storagekey_hf9e3d38a13ff4409_write_key(v2, v3)
-        let v5 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v1, v4)
+        let v5 := $checked_add_u256(v1, v4)
         ret := v5
         leave
       }
@@ -193,10 +193,10 @@ object "Erc20Contract" {
         }
         let v4 := $erc20_______h94f6fe6e679122ca_balance_of_stor_arg0_root_stor__0_1__e4c8be10cab939c2($self, $to)
         pop($self)
-        let v5 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v4, $amount)
+        let v5 := $checked_add_u256(v4, $amount)
         $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $to, v5)
         let v6 := sload($self)
-        let v7 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor(v6, $amount)
+        let v7 := $checked_add_u256(v6, $amount)
         sstore($self, v7)
         leave
       }
@@ -217,7 +217,7 @@ object "Erc20Contract" {
         mstore(0x40, add(v4, 64))
         mstore(v4, $owner)
         mstore(add(v4, 32), v0)
-        let v5 := $u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub(v1, $amount)
+        let v5 := $checked_sub_u256(v1, $amount)
         $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f(0, v4, v5)
         leave
       }
@@ -230,10 +230,10 @@ object "Erc20Contract" {
         }
         let v3 := $erc20_______h94f6fe6e679122ca_balance_of_stor_arg0_root_stor__0_1__e4c8be10cab939c2($self, $to)
         pop($self)
-        let v4 := $u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub(v0, $amount)
+        let v4 := $checked_sub_u256(v0, $amount)
         $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $from, v4)
         pop($self)
-        let v5 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v3, $amount)
+        let v5 := $checked_add_u256(v3, $amount)
         $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $to, v5)
         leave
       }
@@ -366,9 +366,9 @@ object "Erc20Contract" {
         }
         mstore(64, add(v0, 0))
         let v1 := $address_h257056268eac7027_storagekey_hf9e3d38a13ff4409_write_key(v0, $key)
-        let v2 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v0, v1)
+        let v2 := $checked_add_u256(v0, v1)
         mstore(v2, $salt)
-        let v3 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v1, 32)
+        let v3 := $checked_add_u256(v1, 32)
         let v4 := keccak256(v0, v3)
         ret := v4
         leave
@@ -380,9 +380,9 @@ object "Erc20Contract" {
         }
         mstore(64, add(v0, 0))
         let v1 := $_a__b__h47f120de72304a2d_storagekey_hf9e3d38a13ff4409_write_key__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2(v0, $key)
-        let v2 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v0, v1)
+        let v2 := $checked_add_u256(v0, v1)
         mstore(v2, $salt)
-        let v3 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v1, 32)
+        let v3 := $checked_add_u256(v1, 32)
         let v4 := keccak256(v0, v3)
         ret := v4
         leave
@@ -400,16 +400,6 @@ object "Erc20Contract" {
       function $transfer_from__0_1_StorPtr_Erc20_0__1___Evm_hef0af3106e109414_Evm_hef0af3106e109414__d36080519ce8fddb($from, $to, $amount, $erc20, $ctx, $ops) -> ret {
         $erc20_______h94f6fe6e679122ca_transfer_from_stor_arg0_root_stor__0_1_Evm_hef0af3106e109414_Evm_hef0af3106e109414__ca7def21e0c734ee($erc20, $from, $to, $amount, $ctx, $ops)
         ret := 1
-        leave
-      }
-      function $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add($self, $other) -> ret {
-        let v0 := $checked_add_u256($self, $other)
-        ret := v0
-        leave
-      }
-      function $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor($self, $other) -> ret {
-        let v0 := $checked_add_u256($self, $other)
-        ret := v0
         leave
       }
       function $u256_h3271ca15373d4483_eq_he50383edd273619f_eq_arg1_root_stor($self, $other) -> ret {
@@ -434,11 +424,6 @@ object "Erc20Contract" {
       function $u256_h3271ca15373d4483_storagekey_hf9e3d38a13ff4409_write_key($ptr, $self) -> ret {
         mstore($ptr, $self)
         ret := 32
-        leave
-      }
-      function $u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub($self, $other) -> ret {
-        let v0 := $checked_sub_u256($self, $other)
-        ret := v0
         leave
       }
       function $u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_from_word($word) -> ret {

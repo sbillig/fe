@@ -310,23 +310,35 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                 .map(|target| target.generic_args.len())
                 .unwrap_or(0),
         );
-        let symbol = call
-            .resolved_name
-            .as_ref()
-            .and_then(|name| {
-                self.symbol_to_idx
-                    .get(name)
-                    .and_then(|idx| self.canonical_symbols[*idx].as_ref())
-            })
-            .cloned()
-            .or_else(|| call.resolved_name.clone())
-            .unwrap_or_else(|| {
-                call.hir_target
-                    .as_ref()
-                    .and_then(|target| target.callable_def.name(self.db))
-                    .map(|n| n.data(self.db).to_string())
-                    .unwrap_or_else(|| "<unknown>".to_string())
-            });
+        let symbol = if let Some(checked) = call.checked_intrinsic {
+            format!(
+                "{}<{}>",
+                checked.op.helper_symbol_prefix(),
+                checked.ty.pretty_print(self.db)
+            )
+        } else {
+            call.resolved_name
+                .as_ref()
+                .and_then(|name| {
+                    self.symbol_to_idx
+                        .get(name)
+                        .and_then(|idx| self.canonical_symbols[*idx].as_ref())
+                })
+                .cloned()
+                .or_else(|| call.resolved_name.clone())
+                .or_else(|| {
+                    call.hir_target
+                        .as_ref()
+                        .and_then(|target| target.callable_def.name(self.db))
+                        .map(|n| n.data(self.db).to_string())
+                })
+                .or_else(|| {
+                    call.builtin_terminator.map(|builtin| match builtin {
+                        crate::ir::BuiltinTerminatorKind::Abort => "<builtin_abort>".to_string(),
+                    })
+                })
+                .unwrap_or_else(|| "<unknown>".to_string())
+        };
         self.write_str(&symbol);
     }
 

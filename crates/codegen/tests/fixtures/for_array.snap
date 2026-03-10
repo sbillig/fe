@@ -19,7 +19,7 @@ object "main" {
       for { } lt(v3, v4) { v3 := add(v3, 1) } {
         let v5 := $_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u64_25__540b817a073b29f5(v1, v3)
         let v6 := v5
-        let v7 := $u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add(v2, v6)
+        let v7 := $checked_add_u64(v2, v6)
         v2 := v7
       }
       ret := v2
@@ -31,11 +31,6 @@ object "main" {
     }
     function $_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u64_25__540b817a073b29f5($self, $i) -> ret {
       let v0 := and(mload(add($self, mul($i, 32))), 0xffffffffffffffff)
-      ret := v0
-      leave
-    }
-    function $u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add($self, $other) -> ret {
-      let v0 := $checked_add_u64($self, $other)
       ret := v0
       leave
     }

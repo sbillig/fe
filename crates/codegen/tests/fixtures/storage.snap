@@ -71,10 +71,10 @@ object "Coin" {
       }
       function $credit_alice__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78($amount, $store, $supply) -> ret {
         let v0 := sload($store)
-        let v1 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor(v0, $amount)
+        let v1 := $checked_add_u256(v0, $amount)
         sstore($store, v1)
         let v2 := sload($supply)
-        let v3 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor(v2, $amount)
+        let v3 := $checked_add_u256(v2, $amount)
         sstore($supply, v3)
         let v4 := sload($store)
         ret := v4
@@ -82,10 +82,10 @@ object "Coin" {
       }
       function $credit_bob__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78($amount, $store, $supply) -> ret {
         let v0 := sload(add($store, 1))
-        let v1 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor(v0, $amount)
+        let v1 := $checked_add_u256(v0, $amount)
         sstore(add($store, 1), v1)
         let v2 := sload($supply)
-        let v3 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor(v2, $amount)
+        let v3 := $checked_add_u256(v2, $amount)
         sstore($supply, v3)
         let v4 := sload(add($store, 1))
         ret := v4
@@ -184,10 +184,10 @@ object "Coin" {
         }
         if iszero(v2) {
           let v4 := sload($store)
-          let v5 := $u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub_stor(v4, $amount)
+          let v5 := $checked_sub_u256(v4, $amount)
           sstore($store, v5)
           let v6 := sload(add($store, 1))
-          let v7 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor(v6, $amount)
+          let v7 := $checked_add_u256(v6, $amount)
           sstore(add($store, 1), v7)
           let v8 := mload(0x40)
           if iszero(v8) {
@@ -215,10 +215,10 @@ object "Coin" {
         }
         if iszero(v2) {
           let v4 := sload(add($store, 1))
-          let v5 := $u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub_stor(v4, $amount)
+          let v5 := $checked_sub_u256(v4, $amount)
           sstore(add($store, 1), v5)
           let v6 := sload($store)
-          let v7 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor(v6, $amount)
+          let v7 := $checked_add_u256(v6, $amount)
           sstore($store, v7)
           let v8 := mload(0x40)
           if iszero(v8) {
@@ -245,11 +245,6 @@ object "Coin" {
         ret := v0
         leave
       }
-      function $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor($self, $other) -> ret {
-        let v0 := $checked_add_u256($self, $other)
-        ret := v0
-        leave
-      }
       function $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($self) -> ret {
         ret := $self
         leave
@@ -266,11 +261,6 @@ object "Coin" {
       }
       function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt_stor_arg0_root_stor($self, $other) -> ret {
         let v0 := lt($self, $other)
-        ret := v0
-        leave
-      }
-      function $u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub_stor($self, $other) -> ret {
-        let v0 := $checked_sub_u256($self, $other)
         ret := v0
         leave
       }

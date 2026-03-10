@@ -4,12 +4,7 @@ expression: output
 input_file: tests/fixtures/literal_sub.fe
 ---
 function $literal_sub() -> ret {
-  let v0 := $u64_haee7f05a097ffa16_sub_h7b686d389c07535e_sub(1, 2)
-  ret := v0
-  leave
-}
-function $u64_haee7f05a097ffa16_sub_h7b686d389c07535e_sub($self, $other) -> ret {
-  let v0 := $checked_sub_u64($self, $other)
+  let v0 := $checked_sub_u64(1, 2)
   ret := v0
   leave
 }

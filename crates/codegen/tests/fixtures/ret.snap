@@ -17,7 +17,7 @@ function $retfoo($b1, $x) -> ret {
       leave
     }
     if iszero(v2) {
-      let v3 := $u64_haee7f05a097ffa16_sub_h7b686d389c07535e_sub($x, 1)
+      let v3 := $checked_sub_u64($x, 1)
       let v4 := v3
       let v5 := $u64_haee7f05a097ffa16_eq_he50383edd273619f_eq(v4, 42)
       let v6 := v5
@@ -26,7 +26,7 @@ function $retfoo($b1, $x) -> ret {
         leave
       }
       if iszero(v6) {
-        let v7 := $u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add(v4, 1)
+        let v7 := $checked_add_u64(v4, 1)
         ret := v7
         leave
       }
@@ -38,18 +38,8 @@ function $u64_haee7f05a097ffa16_ord_h264f6d6d75097a_lt($self, $other) -> ret {
   ret := v0
   leave
 }
-function $u64_haee7f05a097ffa16_sub_h7b686d389c07535e_sub($self, $other) -> ret {
-  let v0 := $checked_sub_u64($self, $other)
-  ret := v0
-  leave
-}
 function $u64_haee7f05a097ffa16_eq_he50383edd273619f_eq($self, $other) -> ret {
   let v0 := eq(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff))
-  ret := v0
-  leave
-}
-function $u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add($self, $other) -> ret {
-  let v0 := $checked_add_u64($self, $other)
   ret := v0
   leave
 }

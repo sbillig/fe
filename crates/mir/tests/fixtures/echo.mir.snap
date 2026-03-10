@@ -145,7 +145,7 @@ fn soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__Memor
   bb0:
     v1: u256 = memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_len(&mem[&mem[v0].0].0)
     v3: u256 = load mem[&mem[v0].0].1
-    v4: u256 = u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v3, 32)
+    v4: u256 = checked_add<u256>(v3, 32)
     v2: u256 = v4
     v5: u256 = load mem[&mem[v0].0].1
     v6: bool = u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v2, v5)
@@ -173,7 +173,7 @@ fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(v0: Evm) -> CallDa
 fn calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0: CallData) -> u256:
   bb0:
     v1: u256 = calldatasize()
-    v2: u256 = u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub(v1, v0)
+    v2: u256 = checked_sub<u256>(v1, v0)
     ret v2
 
 fn u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v0: u256, v1: u256) -> bool:
@@ -183,7 +183,7 @@ fn u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v0: u256, v1: u256) -> bool:
 
 fn calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v0: CallData, v1: u256) -> u256:
   bb0:
-    v2: u256 = u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v0, v1)
+    v2: u256 = checked_add<u256>(v0, v1)
     v3: u256 = calldataload(v2)
     ret v3
 
@@ -211,7 +211,7 @@ fn solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v0: mu
     v4: u256 = alloc(v1)
     store mem[v0].0 = v4
     store mem[v0].1 = v4
-    v5: u256 = u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v4, v1)
+    v5: u256 = checked_add<u256>(v4, v1)
     store mem[v0].2 = v5
     jmp bb2
   bb2:
@@ -227,7 +227,7 @@ fn solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v0: SolEncod
   bb0:
     v1: u256 = load mem[v0].0
     v2: u256 = load mem[v0].2
-    v3: u256 = u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub(v2, v1)
+    v3: u256 = checked_sub<u256>(v2, v1)
     v4: (u256, u256) = alloc mem
     init mem[v4] { .0 = v1, .1 = v3 }
     ret v4
@@ -252,15 +252,10 @@ fn memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_len(v0: MemoryBytes
     v1: u256 = load mem[v0].1
     ret v1
 
-fn u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v0: u256, v1: u256) -> u256:
-  bb0:
-    v2: u256 = __checked_add__u256__3271ca15373d4483(v0, v1)
-    ret v2
-
 fn memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at(v0: MemoryBytes, v1: u256) -> u256:
   bb0:
     v2: u256 = load mem[v0].0
-    v3: u256 = u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v2, v1)
+    v3: u256 = checked_add<u256>(v2, v1)
     v4: u256 = mload(v3)
     ret v4
 
@@ -272,11 +267,6 @@ fn u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v0: u256, v1: u256) -> bool:
 fn storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26(v0: u256) -> StorPtr<Foo>:
   bb0:
     ret v0
-
-fn u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub(v0: u256, v1: u256) -> u256:
-  bb0:
-    v2: u256 = __checked_sub__u256__3271ca15373d4483(v0, v1)
-    ret v2
 
 fn s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35(v0: u256) -> u32:
   bb0:
@@ -307,7 +297,7 @@ fn solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word(v0: mut 
   bb0:
     v2: u256 = load mem[v0].1
     eval mstore(v2, v1)
-    v3: u256 = u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v2, 32)
+    v3: u256 = checked_add<u256>(v2, 32)
     store mem[v0].1 = v3
     ret
 
@@ -316,7 +306,7 @@ fn soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallD
     v2: CallData = load mem[&mem[v0].0].0
     v1: u256 = calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v2)
     v4: u256 = load mem[&mem[v0].0].1
-    v5: u256 = u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v4, 32)
+    v5: u256 = checked_add<u256>(v4, 32)
     v3: u256 = v5
     v6: u256 = load mem[&mem[v0].0].1
     v7: bool = u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v3, v6)

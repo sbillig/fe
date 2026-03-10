@@ -9,12 +9,7 @@ function $main() -> ret {
   leave
 }
 function $add($a, $b) -> ret {
-  let v0 := $u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add($a, $b)
-  ret := v0
-  leave
-}
-function $u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add($self, $other) -> ret {
-  let v0 := $checked_add_u64($self, $other)
+  let v0 := $checked_add_u64($a, $b)
   ret := v0
   leave
 }

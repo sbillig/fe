@@ -5,7 +5,7 @@ expression: mir_output
 fn bump_lock__StorPtr_u256___64779554cfbf0358(v0: u256) -> ():
   bb0:
     v1: u256 = load stor[v0]
-    v2: u256 = <unresolved>(v1, 1)
+    v2: u256 = checked_add<u256>(v1, 1)
     store stor[v0] = v2
     ret
 
@@ -57,7 +57,7 @@ fn __Guard_runtime() -> ():
 fn bump_lock__TStorPtr_u256___e67d09080c0f1393(v0: u256) -> ():
   bb0:
     v1: u256 = load tstor[v0]
-    v2: u256 = <unresolved>(v1, 1)
+    v2: u256 = checked_add<u256>(v1, 1)
     store tstor[v0] = v2
     ret
 
@@ -115,7 +115,7 @@ fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(v0: Evm) -> CallDa
 fn calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0: CallData) -> u256:
   bb0:
     v1: u256 = calldatasize()
-    v2: u256 = u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub(v1, v0)
+    v2: u256 = checked_sub<u256>(v1, v0)
     ret v2
 
 fn u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v0: u256, v1: u256) -> bool:
@@ -125,7 +125,7 @@ fn u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v0: u256, v1: u256) -> bool:
 
 fn calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v0: CallData, v1: u256) -> u256:
   bb0:
-    v2: u256 = u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v0, v1)
+    v2: u256 = checked_add<u256>(v0, v1)
     v3: u256 = calldataload(v2)
     ret v3
 
@@ -148,16 +148,6 @@ fn cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cc
     v1: Cursor<MemoryBytes> = alloc mem
     init mem[v1] { .0 = v0, .1 = 0 }
     ret v1
-
-fn u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub(v0: u256, v1: u256) -> u256:
-  bb0:
-    v2: u256 = __checked_sub__u256__3271ca15373d4483(v0, v1)
-    ret v2
-
-fn u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v0: u256, v1: u256) -> u256:
-  bb0:
-    v2: u256 = __checked_add__u256__3271ca15373d4483(v0, v1)
-    ret v2
 
 fn s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35(v0: u256) -> u32:
   bb0:
