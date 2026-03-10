@@ -163,27 +163,14 @@ pub enum Command {
         /// Path to a .fe file or ingot directory
         #[arg(default_value_t = default_project_path())]
         path: Utf8PathBuf,
-        /// Output path for generated docs
+        /// Output directory for generated docs
         #[arg(short, long)]
         output: Option<Utf8PathBuf>,
-        /// Output raw JSON instead of summary
-        #[arg(long)]
-        json: bool,
-        /// Start HTTP server to browse docs
-        #[arg(long)]
-        serve: bool,
-        /// Port for HTTP server (default: 8080)
-        #[arg(long, default_value = "8080")]
-        port: u16,
-        /// Generate a static site
-        #[arg(long = "static")]
-        static_site: bool,
-        /// Generate Starlight-compatible markdown pages
-        #[arg(long)]
-        markdown_pages: bool,
         /// Include builtin ingots (core, std) in generated docs
         #[arg(long)]
         builtins: bool,
+        #[command(subcommand)]
+        action: Option<DocAction>,
     },
     #[cfg(not(target_arch = "wasm32"))]
     Tree {
@@ -363,6 +350,28 @@ pub enum Command {
     },
 }
 
+#[derive(Debug, Clone, Subcommand)]
+pub enum DocAction {
+    /// Generate a self-contained static site (index.html)
+    Static,
+    /// Produce docs.json for web component consumption
+    Json,
+    /// Write the fe-web.js component bundle
+    Bundle,
+    /// Generate Starlight-compatible markdown pages
+    Pages {
+        /// Base URL prefix for generated links
+        #[arg(long, default_value = "/api")]
+        base_url: String,
+    },
+    /// Start an HTTP server to browse docs
+    Serve {
+        /// Port for HTTP server
+        #[arg(long, default_value = "8080")]
+        port: u16,
+    },
+}
+
 #[cfg(feature = "lsp")]
 #[derive(Debug, Clone, Subcommand)]
 pub enum LspMode {
@@ -476,24 +485,31 @@ pub fn run(opts: &Options) {
         Command::Doc {
             path,
             output,
-            json,
-            serve,
-            port,
-            static_site,
-            markdown_pages,
             builtins,
-        } => {
-            doc::generate_docs(
-                path,
-                output.as_ref(),
-                *json,
-                *serve,
-                *port,
-                *static_site,
-                *markdown_pages,
-                *builtins,
-            );
-        }
+            action,
+        } => match action {
+            Some(DocAction::Static) => {
+                doc::generate_docs(path, output.as_ref(), false, false, 8080, true, false, *builtins, "/api");
+            }
+            Some(DocAction::Json) => {
+                doc::generate_docs(path, output.as_ref(), true, false, 8080, false, false, *builtins, "/api");
+            }
+            Some(DocAction::Bundle) => {
+                let bundle_path = output
+                    .clone()
+                    .unwrap_or_else(|| Utf8PathBuf::from("fe-web.js"));
+                doc::write_bundle(&bundle_path);
+            }
+            Some(DocAction::Pages { base_url }) => {
+                doc::generate_docs(path, output.as_ref(), false, false, 8080, false, true, *builtins, base_url);
+            }
+            Some(DocAction::Serve { port }) => {
+                doc::generate_docs(path, output.as_ref(), false, true, *port, false, false, *builtins, "/api");
+            }
+            None => {
+                doc::generate_docs(path, output.as_ref(), false, false, 8080, false, false, *builtins, "/api");
+            }
+        },
         #[cfg(not(target_arch = "wasm32"))]
         Command::Tree { path } => {
             if tree::print_tree(path) {
