@@ -515,10 +515,8 @@ pub fn run(opts: &Options) {
                 );
             }
             Some(DocAction::Bundle) => {
-                let bundle_path = output
-                    .clone()
-                    .unwrap_or_else(|| Utf8PathBuf::from("fe-web.js"));
-                doc::write_bundle(&bundle_path);
+                let output_dir = output.clone().unwrap_or_else(|| Utf8PathBuf::from("."));
+                doc::write_bundle(&output_dir.join("fe-web.js"));
             }
             Some(DocAction::Pages { base_url }) => {
                 doc::generate_docs(
