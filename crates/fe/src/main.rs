@@ -489,10 +489,30 @@ pub fn run(opts: &Options) {
             action,
         } => match action {
             Some(DocAction::Static) => {
-                doc::generate_docs(path, output.as_ref(), false, false, 8080, true, false, *builtins, "/api");
+                doc::generate_docs(
+                    path,
+                    output.as_ref(),
+                    false,
+                    false,
+                    8080,
+                    true,
+                    false,
+                    *builtins,
+                    "/api",
+                );
             }
             Some(DocAction::Json) => {
-                doc::generate_docs(path, output.as_ref(), true, false, 8080, false, false, *builtins, "/api");
+                doc::generate_docs(
+                    path,
+                    output.as_ref(),
+                    true,
+                    false,
+                    8080,
+                    false,
+                    false,
+                    *builtins,
+                    "/api",
+                );
             }
             Some(DocAction::Bundle) => {
                 let bundle_path = output
@@ -501,13 +521,43 @@ pub fn run(opts: &Options) {
                 doc::write_bundle(&bundle_path);
             }
             Some(DocAction::Pages { base_url }) => {
-                doc::generate_docs(path, output.as_ref(), false, false, 8080, false, true, *builtins, base_url);
+                doc::generate_docs(
+                    path,
+                    output.as_ref(),
+                    false,
+                    false,
+                    8080,
+                    false,
+                    true,
+                    *builtins,
+                    base_url,
+                );
             }
             Some(DocAction::Serve { port }) => {
-                doc::generate_docs(path, output.as_ref(), false, true, *port, false, false, *builtins, "/api");
+                doc::generate_docs(
+                    path,
+                    output.as_ref(),
+                    false,
+                    true,
+                    *port,
+                    false,
+                    false,
+                    *builtins,
+                    "/api",
+                );
             }
             None => {
-                doc::generate_docs(path, output.as_ref(), false, false, 8080, false, false, *builtins, "/api");
+                doc::generate_docs(
+                    path,
+                    output.as_ref(),
+                    false,
+                    false,
+                    8080,
+                    false,
+                    false,
+                    *builtins,
+                    "/api",
+                );
             }
         },
         #[cfg(not(target_arch = "wasm32"))]
