@@ -7,9 +7,18 @@ target = "evm-ethereum-osaka"
 
 func private %unary_expr() -> i64 {
     block0:
-        v2.i64 = add 1.i64 2.i64;
-        v3.i64 = neg v2;
-        return v3;
+        (v2.i64, v3.i1) = saddo 1.i64 2.i64;
+        br v3 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        (v5.i64, v6.i1) = snego v2;
+        br v6 block1 block3;
+
+    block3:
+        return v5;
 }
 
 func private %__fe_sonatina_entry() {

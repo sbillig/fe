@@ -34,13 +34,15 @@ fn maybe_inc(v0: Opt) -> u64:
   bb5:
     unreachable
   bb6:
-    br (v6 < 3) bb7 bb8
+    v7: bool = u64_haee7f05a097ffa16_ord_h264f6d6d75097a_lt(v6, 3)
+    br v7 bb7 bb8
   bb7:
-    v6 = (v6 + 1)
+    v8: u64 = checked_add<u64>(v6, 1)
+    v6 = v8
     jmp bb6
   bb8:
-    v7: u64 = checked_add<u64>(v1, v6)
-    ret v7
+    v9: u64 = checked_add<u64>(v1, v6)
+    ret v9
 
 fn test_effects_and_aggregates__Evm_hef0af3106e109414_Evm_hef0af3106e109414__7ab75559784fbc59(v0: u256, v1: u256) -> ():
   bb0:
@@ -80,6 +82,11 @@ fn selector_match__Evm_hef0af3106e109414__3af54274b2985741(v0: u256) -> u256:
     jmp bb2
   bb5:
     switch v1 [151146943 => bb1, 2066295049 => bb3] else bb4
+
+fn u64_haee7f05a097ffa16_ord_h264f6d6d75097a_lt(v0: u64, v1: u64) -> bool:
+  bb0:
+    v2: bool = __lt_u64(v0, v1)
+    ret v2
 
 fn mem_ptr_stor_arg0_root_stor__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d(v0: Evm, v1: u256) -> MemPtr<Foo>:
   bb0:

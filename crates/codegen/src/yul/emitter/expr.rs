@@ -14,6 +14,7 @@ use mir::{
     ir::{FieldPtrOrigin, MirFunctionOrigin, Place, SyntheticValue},
     layout,
 };
+use num_bigint::BigUint;
 
 use crate::yul::state::BlockState;
 
@@ -535,7 +536,7 @@ impl<'db> FunctionEmitter<'db> {
                 );
                 Ok("0".into())
             }
-            ValueOrigin::Synthetic(synth) => self.lower_synthetic_value(synth),
+            ValueOrigin::Synthetic(synth) => self.lower_synthetic_value(synth, value.ty),
             ValueOrigin::FieldPtr(field_ptr) => self.lower_field_ptr(field_ptr, state),
             ValueOrigin::PlaceRef(place) => {
                 if value.repr.address_space().is_none()
@@ -646,9 +647,43 @@ impl<'db> FunctionEmitter<'db> {
     /// * `value` - Synthetic value emitted during MIR construction.
     ///
     /// Returns the literal Yul expression for the synthetic value.
-    fn lower_synthetic_value(&self, value: &SyntheticValue) -> Result<String, YulError> {
+    fn lower_synthetic_value(
+        &self,
+        value: &SyntheticValue,
+        ty: TyId<'db>,
+    ) -> Result<String, YulError> {
         match value {
-            SyntheticValue::Int(int) => Ok(int.to_string()),
+            SyntheticValue::Int(int) => {
+                let ty = ty
+                    .as_capability(self.db)
+                    .map(|(_, inner)| inner)
+                    .unwrap_or(ty);
+                let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(self.db).data(self.db) else {
+                    return Ok(int.to_string());
+                };
+                let maybe_signed_subword = match prim {
+                    PrimTy::I8 => Some((BigUint::from(0xffu16), BigUint::from(0x80u16), 0u8)),
+                    PrimTy::I16 => Some((BigUint::from(0xffffu32), BigUint::from(0x8000u32), 1)),
+                    PrimTy::I32 => Some((
+                        BigUint::from(0xffff_ffffu64),
+                        BigUint::from(0x8000_0000u64),
+                        3,
+                    )),
+                    PrimTy::I64 => Some((BigUint::from(u64::MAX), BigUint::from(1u128 << 63), 7)),
+                    PrimTy::I128 => {
+                        Some((BigUint::from(u128::MAX), BigUint::from(1u128 << 127), 15))
+                    }
+                    _ => None,
+                };
+                if let Some((mask, sign_bit, byte)) = maybe_signed_subword {
+                    let masked = int & mask;
+                    if (&masked & sign_bit) != BigUint::from(0u8) {
+                        return Ok(format!("signextend({byte}, {})", masked));
+                    }
+                    return Ok(masked.to_string());
+                }
+                Ok(int.to_string())
+            }
             SyntheticValue::Bool(flag) => Ok(if *flag { "1" } else { "0" }.into()),
             SyntheticValue::Bytes(bytes) => Ok(format!("0x{}", hex::encode(bytes))),
         }

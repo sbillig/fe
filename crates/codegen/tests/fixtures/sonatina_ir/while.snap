@@ -10,16 +10,28 @@ func private %do_while() -> i64 {
         jump block1;
 
     block1:
-        v1.i64 = phi (0.i64 block0) (v6 block2);
-        v3.i1 = lt v1 10.i64;
+        v1.i64 = phi (0.i64 block0) (v6 block5);
+        v3.i1 = call %u64_haee7f05a097ffa16_ord_h264f6d6d75097a_lt v1 10.i64;
         br v3 block2 block3;
 
     block2:
-        v6.i64 = add v1 1.i64;
-        jump block1;
+        (v6.i64, v7.i1) = uaddo v1 1.i64;
+        br v7 block4 block5;
 
     block3:
         return v1;
+
+    block4:
+        evm_revert 0.i256 0.i256;
+
+    block5:
+        jump block1;
+}
+
+func private %u64_haee7f05a097ffa16_ord_h264f6d6d75097a_lt(v0.i64, v1.i64) -> i1 {
+    block0:
+        v2.i1 = lt v0 v1;
+        return v2;
 }
 
 func private %__fe_sonatina_entry() {

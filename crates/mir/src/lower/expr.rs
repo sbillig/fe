@@ -5,7 +5,7 @@ use hir::{
     analysis::ty::{
         const_eval::{ConstValue, eval_const_expr},
         ty_check::{Callable, ForLoopSeq, ResolvedEffectArg},
-        ty_def::{CapabilityKind, PrimTy, TyBase, TyData},
+        ty_def::{CapabilityKind, PrimTy, TyBase, TyData, prim_int_bits},
     },
     projection::{IndexSource, Projection},
 };
@@ -97,6 +97,43 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             Partial::Present(Expr::Lit(LitKind::Int(int_id))) => Some(int_id.data(self.db).clone()),
             _ => None,
         }
+    }
+
+    fn negated_int_literal_word(&self, expr: ExprId, inner: ExprId) -> Option<BigUint> {
+        let value = self.u256_lit_from_expr(inner)?;
+        let expr_ty = self
+            .typed_body
+            .expr_ty(self.db, expr)
+            .as_capability(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or_else(|| self.typed_body.expr_ty(self.db, expr));
+        let TyData::TyBase(TyBase::Prim(prim)) = expr_ty.base_ty(self.db).data(self.db) else {
+            return None;
+        };
+        if !matches!(
+            prim,
+            PrimTy::I8
+                | PrimTy::I16
+                | PrimTy::I32
+                | PrimTy::I64
+                | PrimTy::I128
+                | PrimTy::I256
+                | PrimTy::Isize
+        ) {
+            return None;
+        }
+
+        let bits = prim_int_bits(*prim)?;
+        let modulus = BigUint::from(1u8) << bits;
+        Some((&modulus - (&value % &modulus)) % modulus)
+    }
+
+    fn try_lower_negated_int_literal(&mut self, expr: ExprId, inner: ExprId) -> Option<ValueId> {
+        let value = self.negated_int_literal_word(expr, inner)?;
+        let value_id = self.ensure_value(expr);
+        self.builder.body.values[value_id.index()].origin =
+            ValueOrigin::Synthetic(SyntheticValue::Int(value));
+        Some(value_id)
     }
 
     fn lower_index_source(&mut self, expr: ExprId) -> IndexSource<ValueId> {
@@ -278,6 +315,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
             Partial::Present(Expr::Un(inner, op)) => {
                 let has_callable = self.typed_body.callable_expr(expr).is_some();
+                if matches!(op, hir::hir_def::expr::UnOp::Minus)
+                    && let Some(value_id) = self.try_lower_negated_int_literal(expr, *inner)
+                {
+                    return value_id;
+                }
                 // Checked arithmetic: unary minus with a callable (Neg::neg trait)
                 // uses call-based lowering for overflow detection.
                 if matches!(op, hir::hir_def::expr::UnOp::Minus) {

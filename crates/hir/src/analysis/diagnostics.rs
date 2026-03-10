@@ -2647,6 +2647,24 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     error_code,
                 }
             }
+            Self::IntLiteralOutOfRange {
+                primary,
+                literal,
+                ty,
+            } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "integer literal out of range".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "`{literal}` is not representable in `{}`",
+                        ty.pretty_print(db),
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
             Self::AccessedFieldNotFound {
                 primary,
                 given_ty,
