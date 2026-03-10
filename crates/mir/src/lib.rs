@@ -22,3 +22,4 @@ pub use lower::{
     MirDiagnosticsMode, MirDiagnosticsOutput, MirLowerError, MirLowerResult,
     collect_mir_diagnostics, lower_ingot, lower_module,
 };
+pub use transform::prepare_module_for_evm_yul_codegen;

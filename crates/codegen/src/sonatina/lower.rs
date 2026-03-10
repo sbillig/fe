@@ -81,6 +81,10 @@ pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     ctx.local_runtime_types[dest_local.index()],
                 );
                 ctx.fb.def_var(dest_var, value);
+                ctx.initialized_locals.insert(*dest_local);
+                if ctx.local_place_roots.contains_key(dest_local) {
+                    store_runtime_value_to_local_slot(ctx, *dest_local, value)?;
+                }
                 return Ok(());
             }
 
@@ -109,6 +113,10 @@ pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     ctx.local_runtime_types[dest_local.index()],
                 );
                 ctx.fb.def_var(dest_var, value);
+                ctx.initialized_locals.insert(*dest_local);
+                if ctx.local_place_roots.contains_key(dest_local) {
+                    store_runtime_value_to_local_slot(ctx, *dest_local, value)?;
+                }
                 return Ok(());
             }
 
@@ -132,6 +140,10 @@ pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     ctx.local_runtime_types[dest_local.index()],
                 );
                 ctx.fb.def_var(dest_var, converted);
+                ctx.initialized_locals.insert(*dest_local);
+                if ctx.local_place_roots.contains_key(dest_local) {
+                    store_runtime_value_to_local_slot(ctx, *dest_local, converted)?;
+                }
             }
         }
         MirInst::Store { place, value, .. } => {
@@ -157,6 +169,117 @@ pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     }
 
     Ok(())
+}
+
+fn allocate_local_place_root_slot<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    local: mir::LocalId,
+) -> Result<ValueId, LowerError> {
+    let local_ty = ctx
+        .body
+        .locals
+        .get(local.index())
+        .ok_or_else(|| LowerError::Internal(format!("unknown local: {local:?}")))?
+        .ty;
+    let Some(size_bytes) = layout::ty_memory_size_or_word_in(ctx.db, ctx.target_layout, local_ty)
+    else {
+        return Err(LowerError::Unsupported(format!(
+            "cannot determine addressable slot size for `{}`",
+            local_ty.pretty_print(ctx.db)
+        )));
+    };
+    let opaque_ptr_ty = ctx.fb.ptr_type(Type::I8);
+    if size_bytes == 0 {
+        let zero = types::zero_value(ctx.fb, Type::I256);
+        return Ok(ctx
+            .fb
+            .insert_inst(IntToPtr::new(ctx.is, zero, opaque_ptr_ty), opaque_ptr_ty));
+    }
+    let size_val = ctx.fb.make_imm_value(I256::from(size_bytes as u64));
+    Ok(emit_evm_malloc_ptr(ctx.fb, size_val, ctx.is))
+}
+
+fn store_runtime_value_to_local_slot_ptr<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    local: mir::LocalId,
+    slot_ptr: ValueId,
+    value: ValueId,
+) -> Result<(), LowerError> {
+    let local_ty = ctx
+        .body
+        .locals
+        .get(local.index())
+        .ok_or_else(|| LowerError::Internal(format!("unknown local: {local:?}")))?
+        .ty;
+    if is_erased_runtime_ty(ctx.db, ctx.target_layout, local_ty) {
+        return Ok(());
+    }
+    let ptr_ty = ctx.fb.ptr_type(Type::I8);
+    let slot_ptr = bitcast_ptr(ctx, slot_ptr, ptr_ty);
+    let value_ty = ctx.fb.type_of(value);
+    if value_ty.is_pointer(&ctx.fb.module_builder.ctx) {
+        ctx.fb
+            .insert_inst_no_result(Mstore::new(ctx.is, slot_ptr, value, value_ty));
+        return Ok(());
+    }
+    let word = apply_to_word(ctx.fb, ctx.db, value, local_ty, ctx.is);
+    ctx.fb
+        .insert_inst_no_result(Mstore::new(ctx.is, slot_ptr, word, Type::I256));
+    Ok(())
+}
+
+pub(super) fn ensure_local_place_root_slot<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    local: mir::LocalId,
+) -> Result<ValueId, LowerError> {
+    if let Some(slot_ptr) = ctx.local_place_roots.get(&local).copied() {
+        return Ok(slot_ptr);
+    }
+
+    let slot_ptr = allocate_local_place_root_slot(ctx, local)?;
+    if ctx.initialized_locals.contains(&local) {
+        let var = ctx.local_vars.get(&local).copied().ok_or_else(|| {
+            LowerError::Internal(format!("missing SSA variable for local {local:?}"))
+        })?;
+        let current = ctx.fb.use_var(var);
+        store_runtime_value_to_local_slot_ptr(ctx, local, slot_ptr, current)?;
+    }
+    ctx.local_place_roots.insert(local, slot_ptr);
+    Ok(slot_ptr)
+}
+
+fn store_runtime_value_to_local_slot<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    local: mir::LocalId,
+    value: ValueId,
+) -> Result<(), LowerError> {
+    let slot_ptr = ensure_local_place_root_slot(ctx, local)?;
+    store_runtime_value_to_local_slot_ptr(ctx, local, slot_ptr, value)
+}
+
+fn load_runtime_value_from_local_slot<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    local: mir::LocalId,
+    expected_runtime_ty: Type,
+) -> Result<ValueId, LowerError> {
+    let slot_ptr = ensure_local_place_root_slot(ctx, local)?;
+    let local_ty = ctx
+        .body
+        .locals
+        .get(local.index())
+        .ok_or_else(|| LowerError::Internal(format!("unknown local: {local:?}")))?
+        .ty;
+    if expected_runtime_ty.is_pointer(&ctx.fb.module_builder.ctx) {
+        return Ok(ctx.fb.insert_inst(
+            Mload::new(ctx.is, slot_ptr, expected_runtime_ty),
+            expected_runtime_ty,
+        ));
+    }
+    let raw = ctx
+        .fb
+        .insert_inst(Mload::new(ctx.is, slot_ptr, Type::I256), Type::I256);
+    let loaded = apply_from_word(ctx.fb, ctx.db, raw, local_ty, ctx.is);
+    Ok(coerce_value_to_type(ctx, loaded, expected_runtime_ty))
 }
 
 /// Lower a MIR rvalue to a Sonatina value.
@@ -775,19 +898,17 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             }
         },
         ValueOrigin::Local(local_id) => {
+            if ctx.local_place_roots.contains_key(local_id) {
+                return load_runtime_value_from_local_slot(ctx, *local_id, result_ty);
+            }
             let var = ctx.local_vars.get(local_id).copied().ok_or_else(|| {
                 LowerError::Internal(format!("SSA variable not found for local {local_id:?}"))
             })?;
             Ok(ctx.fb.use_var(var))
         }
         ValueOrigin::PlaceRoot(local_id) => {
-            let var = ctx.local_vars.get(local_id).copied().ok_or_else(|| {
-                LowerError::Internal(format!(
-                    "SSA variable not found for place-root local {local_id:?}"
-                ))
-            })?;
-            let val = ctx.fb.use_var(var);
-            Ok(val)
+            let slot_ptr = ensure_local_place_root_slot(ctx, *local_id)?;
+            Ok(coerce_value_to_type(ctx, slot_ptr, result_ty))
         }
         ValueOrigin::Unit => Ok(types::zero_value(ctx.fb, result_ty)),
         ValueOrigin::Unary { op, inner } => {

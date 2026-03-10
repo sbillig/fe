@@ -352,15 +352,10 @@ pub fn lower_module<'db>(
     }
     run_borrow_checks_or_error(db, &functions)?;
 
-    // Lower semantic capability MIR into backend-specific representation MIR for codegen.
+    // Lower semantic capability MIR into backend-neutral runtime representation MIR.
     let core = CoreLib::new(db, top_mod.scope());
     for func in &mut functions {
-        crate::transform::lower_capability_to_repr(
-            db,
-            &core,
-            crate::ir::MirBackend::EvmYul,
-            &mut func.body,
-        );
+        crate::transform::lower_capability_to_repr(db, &core, &mut func.body);
         crate::transform::canonicalize_transparent_newtypes(db, &mut func.body);
         crate::transform::insert_temp_binds(db, &mut func.body);
         crate::transform::canonicalize_zero_sized(db, &mut func.body);
@@ -480,16 +475,11 @@ pub fn lower_ingot<'db>(
     }
     run_borrow_checks_or_error(db, &functions)?;
 
-    // Lower semantic capability MIR into backend-specific representation MIR for codegen.
+    // Lower semantic capability MIR into backend-neutral runtime representation MIR.
     let root_mod = ingot.root_mod(db);
     let core = CoreLib::new(db, root_mod.scope());
     for func in &mut functions {
-        crate::transform::lower_capability_to_repr(
-            db,
-            &core,
-            crate::ir::MirBackend::EvmYul,
-            &mut func.body,
-        );
+        crate::transform::lower_capability_to_repr(db, &core, &mut func.body);
         crate::transform::canonicalize_transparent_newtypes(db, &mut func.body);
         crate::transform::insert_temp_binds(db, &mut func.body);
         crate::transform::canonicalize_zero_sized(db, &mut func.body);

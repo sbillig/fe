@@ -4676,7 +4676,6 @@ fn newtype_u8_roundtrip(x: u8) -> u8 {
         crate::transform::lower_capability_to_repr(
             &db,
             &crate::CoreLib::new(&db, top_mod.scope()),
-            crate::ir::MirBackend::EvmYul,
             &mut body,
         );
         crate::transform::canonicalize_transparent_newtypes(&db, &mut body);

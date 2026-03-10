@@ -212,7 +212,8 @@ pub enum MirBackend {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MirStage {
     Capability,
-    Repr(MirBackend),
+    Repr,
+    BackendPrepared(MirBackend),
 }
 
 /// A function body expressed as basic blocks.

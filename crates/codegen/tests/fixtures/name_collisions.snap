@@ -19,24 +19,12 @@ function $test_module_qualifier_flatten_collision() -> ret {
   leave
 }
 function $test_generic_type_collision() -> ret {
-  let v0 := mload(0x40)
-  if iszero(v0) {
-    v0 := 0x80
-  }
-  mstore(0x40, add(v0, 32))
-  let v1 := mload(0x40)
-  if iszero(v1) {
-    v1 := 0x80
-  }
-  mstore(0x40, add(v1, 32))
-  let v2 := 1
-  mstore(v0, and(v2, 0xffffffff))
-  let v3 := 2
-  mstore(v1, and(v3, 0xffffffffffffffff))
-  let v4 := $generic_fn__S_h730d9dc564aaaf27__8d32801e7ec9d42b(and(mload(v0), 0xffffffff))
-  pop(v4)
-  let v5 := $generic_fn__S_h2db58d011b97b333__42a13489a1ec39e8(and(mload(v1), 0xffffffffffffffff))
-  pop(v5)
+  let v0 := 1
+  let v1 := 2
+  let v2 := $generic_fn__S_h730d9dc564aaaf27__8d32801e7ec9d42b(v0)
+  pop(v2)
+  let v3 := $generic_fn__S_h2db58d011b97b333__42a13489a1ec39e8(v1)
+  pop(v3)
   ret := 42
   leave
 }
@@ -140,23 +128,11 @@ function $multitraitimpl_h60cc862fc809464_trait_ha6da5e54b37dd39c_same_method($s
   leave
 }
 function $generic_fn__S_h730d9dc564aaaf27__8d32801e7ec9d42b($val) -> ret {
-  let v0 := mload(0x40)
-  if iszero(v0) {
-    v0 := 0x80
-  }
-  mstore(0x40, add(v0, 32))
-  mstore(v0, and($val, 0xffffffff))
-  ret := and(mload(v0), 0xffffffff)
+  ret := $val
   leave
 }
 function $generic_fn__S_h2db58d011b97b333__42a13489a1ec39e8($val) -> ret {
-  let v0 := mload(0x40)
-  if iszero(v0) {
-    v0 := 0x80
-  }
-  mstore(0x40, add(v0, 32))
-  mstore(v0, and($val, 0xffffffffffffffff))
-  ret := and(mload(v0), 0xffffffffffffffff)
+  ret := $val
   leave
 }
 function $checked_add_u32($a, $b) -> ret {

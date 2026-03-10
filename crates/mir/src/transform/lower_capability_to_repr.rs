@@ -1,5 +1,5 @@
 use hir::analysis::HirAnalysisDb;
-use hir::analysis::ty::ty_def::{CapabilityKind, TyId};
+use hir::analysis::ty::ty_def::TyId;
 use hir::hir_def::EnumVariant;
 use hir::projection::Projection;
 
@@ -121,30 +121,6 @@ fn apply_transparent_field0_chain<'db>(
         base_ty = repr::transparent_newtype_field_ty(db, base_ty)?;
     }
     Some(base_ty)
-}
-
-fn is_scalar_ref_inner_ty<'db>(
-    db: &'db dyn HirAnalysisDb,
-    core: &CoreLib<'db>,
-    ty: TyId<'db>,
-) -> bool {
-    matches!(
-        repr::repr_kind_for_ty(db, core, ty),
-        repr::ReprKind::Word | repr::ReprKind::Zst | repr::ReprKind::Ptr(_)
-    )
-}
-
-fn is_scalar_ref_word_capability_ty<'db>(
-    db: &'db dyn HirAnalysisDb,
-    core: &CoreLib<'db>,
-    ty: TyId<'db>,
-    desired: ValueRepr,
-) -> bool {
-    ty.as_capability(db).is_some_and(|(kind, inner)| {
-        matches!(kind, CapabilityKind::Ref)
-            && desired.address_space().is_none()
-            && is_scalar_ref_inner_ty(db, core, inner)
-    })
 }
 
 fn repr_for_plain_ty<'db>(
@@ -832,7 +808,8 @@ impl<'db> PlaceOriginRewriteCtx<'db, '_> {
     fn rewrite_place_like_origin(
         &mut self,
         mut place: Place<'db>,
-        _desired: ValueRepr,
+        desired: ValueRepr,
+        target_ty: TyId<'db>,
         as_move_out: bool,
     ) -> ValueOrigin<'db> {
         let make_place_origin = |place: Place<'db>| {
@@ -848,6 +825,28 @@ impl<'db> PlaceOriginRewriteCtx<'db, '_> {
         };
 
         let local_ty = self.locals[local.index()].ty;
+        if as_move_out && place.projection.is_empty() && desired.address_space().is_none() {
+            if target_ty == local_ty {
+                return ValueOrigin::Local(local);
+            }
+            let local_value = alloc_value(
+                self.values,
+                ValueData {
+                    ty: local_ty,
+                    origin: ValueOrigin::Local(local),
+                    source: SourceInfoId::SYNTHETIC,
+                    repr: repr_for_plain_ty(
+                        self.db,
+                        self.core,
+                        local_ty,
+                        self.locals[local.index()].address_space,
+                    ),
+                    pointer_info: None,
+                    runtime_shape: crate::ir::RuntimeShape::Unresolved,
+                },
+            );
+            return ValueOrigin::TransparentCast { value: local_value };
+        }
         if !place.projection.is_empty()
             && let Some(projected_ty) =
                 apply_transparent_field0_chain(self.db, local_ty, &place.projection)
@@ -911,19 +910,238 @@ fn rewrite_place_like_origin<'db>(
     ctx: &mut PlaceOriginRewriteCtx<'db, '_>,
     place: Place<'db>,
     desired: ValueRepr,
+    target_ty: TyId<'db>,
     as_move_out: bool,
 ) -> ValueOrigin<'db> {
-    ctx.rewrite_place_like_origin(place, desired, as_move_out)
+    ctx.rewrite_place_like_origin(place, desired, target_ty, as_move_out)
+}
+
+fn recompute_value_pointer_infos<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    body: &mut MirBody<'db>,
+) {
+    let recomputed_pointer_infos: Vec<_> = (0..body.values.len())
+        .map(|idx| {
+            repr::infer_value_pointer_info(
+                db,
+                core,
+                &body.values,
+                &body.locals,
+                ValueId(idx as u32),
+            )
+        })
+        .collect();
+    for (value, pointer_info) in body.values.iter_mut().zip(recomputed_pointer_infos) {
+        value.pointer_info = pointer_info;
+    }
 }
 
 pub(crate) fn lower_capability_to_repr<'db>(
     db: &'db dyn HirAnalysisDb,
     core: &CoreLib<'db>,
-    backend: MirBackend,
     body: &mut MirBody<'db>,
 ) {
     body.assert_stage(MirStage::Capability);
-    let spill_any_memory_local = matches!(backend, MirBackend::EvmYul);
+
+    let initial_values_len = body.values.len();
+    let desired_repr: Vec<ValueRepr> = {
+        let mut memo: Vec<Option<ValueRepr>> = vec![None; initial_values_len];
+
+        fn origin_address_space<'db>(
+            values: &[ValueData<'db>],
+            locals: &[LocalData<'db>],
+            origin: &ValueOrigin<'db>,
+        ) -> Option<AddressSpaceKind> {
+            match origin {
+                ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) => {
+                    locals.get(local.index()).map(|l| l.address_space)
+                }
+                ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
+                    crate::ir::try_value_address_space_in(values, locals, place.base)
+                }
+                ValueOrigin::FieldPtr(field_ptr) => Some(field_ptr.addr_space),
+                ValueOrigin::TransparentCast { value } => {
+                    origin_address_space(values, locals, &values.get(value.index())?.origin)
+                }
+                _ => None,
+            }
+        }
+
+        fn capability_space_from_origin<'db>(
+            values: &[ValueData<'db>],
+            locals: &[LocalData<'db>],
+            origin: &ValueOrigin<'db>,
+        ) -> Option<AddressSpaceKind> {
+            match origin {
+                ValueOrigin::TransparentCast { value } => {
+                    capability_space_from_origin(values, locals, &values.get(value.index())?.origin)
+                }
+                ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) => {
+                    crate::ir::lookup_local_pointer_leaf_info(
+                        locals,
+                        *local,
+                        &MirProjectionPath::new(),
+                    )
+                    .map(|info| info.address_space)
+                    .or_else(|| locals.get(local.index()).map(|l| l.address_space))
+                }
+                ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
+                    if let Some((local, prefix)) =
+                        crate::ir::resolve_local_projection_root(values, place.base)
+                    {
+                        let projection = prefix.concat(&place.projection);
+                        if let Some(info) =
+                            crate::ir::lookup_local_pointer_leaf_info(locals, local, &projection)
+                        {
+                            return Some(info.address_space);
+                        }
+                    }
+                    crate::ir::try_value_address_space_in(values, locals, place.base)
+                }
+                ValueOrigin::FieldPtr(field_ptr) => Some(field_ptr.addr_space),
+                _ => origin_address_space(values, locals, origin),
+            }
+        }
+
+        fn compute<'db>(
+            db: &'db dyn HirAnalysisDb,
+            core: &CoreLib<'db>,
+            values: &[ValueData<'db>],
+            locals: &[LocalData<'db>],
+            memo: &mut [Option<ValueRepr>],
+            value: ValueId,
+        ) -> ValueRepr {
+            if let Some(repr) = memo.get(value.index()).and_then(|slot| *slot) {
+                return repr;
+            }
+
+            let data = &values[value.index()];
+            let repr = match &data.origin {
+                ValueOrigin::TransparentCast { value: inner } => {
+                    compute(db, core, values, locals, memo, *inner)
+                }
+                _ if data.ty.as_capability(db).is_some() => {
+                    match repr::repr_kind_for_ty(db, core, data.ty) {
+                        repr::ReprKind::Zst | repr::ReprKind::Word => ValueRepr::Word,
+                        repr::ReprKind::Ptr(space_kind) => {
+                            if matches!(space_kind, AddressSpaceKind::Memory)
+                                && let Some(space) =
+                                    capability_space_from_origin(values, locals, &data.origin)
+                            {
+                                ValueRepr::Ptr(space)
+                            } else {
+                                ValueRepr::Ptr(space_kind)
+                            }
+                        }
+                        repr::ReprKind::Ref => {
+                            let space = capability_space_from_origin(values, locals, &data.origin)
+                                .unwrap_or(AddressSpaceKind::Memory);
+                            ValueRepr::Ref(space)
+                        }
+                    }
+                }
+                _ => data.repr,
+            };
+
+            memo[value.index()] = Some(repr);
+            repr
+        }
+
+        (0..initial_values_len)
+            .map(|idx| {
+                compute(
+                    db,
+                    core,
+                    &body.values,
+                    &body.locals,
+                    &mut memo,
+                    ValueId(idx as u32),
+                )
+            })
+            .collect()
+    };
+
+    let spill_local_for_owner = vec![None; body.locals.len()];
+    let owner_for_spill_local = vec![None; body.locals.len()];
+    let spill_addr_value_for_owner = vec![None; body.locals.len()];
+
+    for (value, desired) in body
+        .values
+        .iter_mut()
+        .zip(desired_repr.iter().copied())
+        .take(initial_values_len)
+    {
+        value.repr = desired;
+    }
+
+    {
+        let mut place_rewrite_ctx = PlaceOriginRewriteCtx {
+            db,
+            core,
+            values: &mut body.values,
+            locals: &body.locals,
+            spill_addr_value_for_owner: &spill_addr_value_for_owner,
+        };
+        for (idx, desired) in desired_repr
+            .iter()
+            .copied()
+            .enumerate()
+            .take(initial_values_len)
+        {
+            let origin = place_rewrite_ctx.values[idx].origin.clone();
+            let target_ty = place_rewrite_ctx.values[idx].ty;
+            let new_origin = match origin {
+                ValueOrigin::PlaceRef(place) => rewrite_place_like_origin(
+                    &mut place_rewrite_ctx,
+                    place,
+                    desired,
+                    target_ty,
+                    false,
+                ),
+                ValueOrigin::MoveOut { place } => rewrite_place_like_origin(
+                    &mut place_rewrite_ctx,
+                    place,
+                    desired,
+                    target_ty,
+                    true,
+                ),
+                other => other,
+            };
+            place_rewrite_ctx.values[idx].origin = new_origin;
+        }
+    }
+
+    {
+        let (blocks, values, locals) = (&mut body.blocks, &mut body.values, &body.locals);
+        let mut ctx = LowerReprCtx {
+            db,
+            core,
+            values,
+            locals,
+            spill_local_for_owner: &spill_local_for_owner,
+            owner_for_spill_local: &owner_for_spill_local,
+            spill_addr_value_for_owner: &spill_addr_value_for_owner,
+        };
+        for block in blocks {
+            ctx.rewrite_block(block);
+        }
+    }
+
+    recompute_value_pointer_infos(db, core, body);
+    body.stage = MirStage::Repr;
+}
+
+pub(crate) fn prepare_body_for_evm_yul_codegen<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    body: &mut MirBody<'db>,
+) {
+    body.assert_stage(MirStage::Repr);
+    debug_assert!(
+        body.spill_slots.is_empty(),
+        "generic MIR reached Yul prep with spill slots already populated",
+    );
     let live_values = crate::transform::compute_live_values(body);
 
     let initial_values_len = body.values.len();
@@ -1050,19 +1268,17 @@ pub(crate) fn lower_capability_to_repr<'db>(
 
     let mut locals_need_spill = vec![false; body.locals.len()];
 
-    if spill_any_memory_local {
-        for idx in 0..initial_values_len {
-            if !live_values[idx] || desired_repr[idx].address_space().is_none() {
-                continue;
-            }
-            let value = ValueId(idx as u32);
-            if matches!(
-                cast_stripped_origin(&body.values, value),
-                Some(ValueOrigin::FieldPtr(_))
-            ) && let Some(local) = resolve_memory_spill_owner(&body.values, &body.locals, value)
-            {
-                locals_need_spill[local.index()] = true;
-            }
+    for idx in 0..initial_values_len {
+        if !live_values[idx] || desired_repr[idx].address_space().is_none() {
+            continue;
+        }
+        let value = ValueId(idx as u32);
+        if matches!(
+            cast_stripped_origin(&body.values, value),
+            Some(ValueOrigin::FieldPtr(_))
+        ) && let Some(local) = resolve_memory_spill_owner(&body.values, &body.locals, value)
+        {
+            locals_need_spill[local.index()] = true;
         }
     }
 
@@ -1073,11 +1289,6 @@ pub(crate) fn lower_capability_to_repr<'db>(
         let (ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place }) = &value.origin else {
             continue;
         };
-        if !spill_any_memory_local
-            && is_scalar_ref_word_capability_ty(db, core, value.ty, desired_repr[idx])
-        {
-            continue;
-        }
         let Some(local) = resolve_memory_spill_owner(&body.values, &body.locals, place.base) else {
             continue;
         };
@@ -1100,6 +1311,7 @@ pub(crate) fn lower_capability_to_repr<'db>(
                     return;
                 };
                 if place.projection.is_empty() {
+                    locals_need_spill[local.index()] = true;
                     return;
                 }
                 let base_ty = body.values[place.base.index()].ty;
@@ -1119,43 +1331,41 @@ pub(crate) fn lower_capability_to_repr<'db>(
             }
         }
 
-        if spill_any_memory_local {
-            let mut check_direct_value = |value: ValueId| {
-                if desired_repr
-                    .get(value.index())
-                    .copied()
-                    .is_none_or(|repr| repr.address_space().is_none())
-                    || !direct_codegen_value_needs_spill(&body.values, value)
-                {
-                    return;
-                }
-                if let Some(local) = resolve_memory_spill_owner(&body.values, &body.locals, value) {
-                    locals_need_spill[local.index()] = true;
-                }
-            };
-
-            match &block.terminator {
-                crate::ir::Terminator::Return {
-                    value: Some(value), ..
-                } => check_direct_value(*value),
-                crate::ir::Terminator::TerminatingCall { call, .. } => match call {
-                    crate::ir::TerminatingCall::Call(call) => {
-                        for arg in call.args.iter().chain(call.effect_args.iter()) {
-                            check_direct_value(*arg);
-                        }
-                    }
-                    crate::ir::TerminatingCall::Intrinsic { args, .. } => {
-                        for arg in args {
-                            check_direct_value(*arg);
-                        }
-                    }
-                },
-                crate::ir::Terminator::Branch { cond, .. } => check_direct_value(*cond),
-                crate::ir::Terminator::Switch { discr, .. } => check_direct_value(*discr),
-                crate::ir::Terminator::Return { value: None, .. }
-                | crate::ir::Terminator::Goto { .. }
-                | crate::ir::Terminator::Unreachable { .. } => {}
+        let mut check_direct_value = |value: ValueId| {
+            if desired_repr
+                .get(value.index())
+                .copied()
+                .is_none_or(|repr| repr.address_space().is_none())
+                || !direct_codegen_value_needs_spill(&body.values, value)
+            {
+                return;
             }
+            if let Some(local) = resolve_memory_spill_owner(&body.values, &body.locals, value) {
+                locals_need_spill[local.index()] = true;
+            }
+        };
+
+        match &block.terminator {
+            crate::ir::Terminator::Return {
+                value: Some(value), ..
+            } => check_direct_value(*value),
+            crate::ir::Terminator::TerminatingCall { call, .. } => match call {
+                crate::ir::TerminatingCall::Call(call) => {
+                    for arg in call.args.iter().chain(call.effect_args.iter()) {
+                        check_direct_value(*arg);
+                    }
+                }
+                crate::ir::TerminatingCall::Intrinsic { args, .. } => {
+                    for arg in args {
+                        check_direct_value(*arg);
+                    }
+                }
+            },
+            crate::ir::Terminator::Branch { cond, .. } => check_direct_value(*cond),
+            crate::ir::Terminator::Switch { discr, .. } => check_direct_value(*discr),
+            crate::ir::Terminator::Return { value: None, .. }
+            | crate::ir::Terminator::Goto { .. }
+            | crate::ir::Terminator::Unreachable { .. } => {}
         }
     }
 
@@ -1242,13 +1452,22 @@ pub(crate) fn lower_capability_to_repr<'db>(
             .take(initial_values_len)
         {
             let origin = place_rewrite_ctx.values[idx].origin.clone();
+            let target_ty = place_rewrite_ctx.values[idx].ty;
             let new_origin = match origin {
-                ValueOrigin::PlaceRef(place) => {
-                    rewrite_place_like_origin(&mut place_rewrite_ctx, place, desired, false)
-                }
-                ValueOrigin::MoveOut { place } => {
-                    rewrite_place_like_origin(&mut place_rewrite_ctx, place, desired, true)
-                }
+                ValueOrigin::PlaceRef(place) => rewrite_place_like_origin(
+                    &mut place_rewrite_ctx,
+                    place,
+                    desired,
+                    target_ty,
+                    false,
+                ),
+                ValueOrigin::MoveOut { place } => rewrite_place_like_origin(
+                    &mut place_rewrite_ctx,
+                    place,
+                    desired,
+                    target_ty,
+                    true,
+                ),
                 other => other,
             };
             place_rewrite_ctx.values[idx].origin = new_origin;
@@ -1317,22 +1536,8 @@ pub(crate) fn lower_capability_to_repr<'db>(
         *entry_insts = new_insts;
     }
 
-    let recomputed_pointer_infos: Vec<_> = (0..body.values.len())
-        .map(|idx| {
-            repr::infer_value_pointer_info(
-                db,
-                core,
-                &body.values,
-                &body.locals,
-                ValueId(idx as u32),
-            )
-        })
-        .collect();
-    for (value, pointer_info) in body.values.iter_mut().zip(recomputed_pointer_infos) {
-        value.pointer_info = pointer_info;
-    }
-
-    body.stage = MirStage::Repr(backend);
+    recompute_value_pointer_infos(db, core, body);
+    body.stage = MirStage::BackendPrepared(MirBackend::EvmYul);
 }
 
 #[cfg(test)]
@@ -1346,13 +1551,13 @@ mod tests {
     use url::Url;
 
     use crate::{
-        MirBackend, MirInst, core_lib::CoreLib, ir::AddressSpaceKind, ir::BasicBlock,
-        ir::FieldPtrOrigin, ir::LocalData, ir::LocalId, ir::MirBody, ir::MirStage, ir::Place,
-        ir::PointerInfo, ir::Rvalue, ir::SourceInfoId, ir::Terminator, ir::ValueData,
-        ir::ValueOrigin, ir::ValueRepr,
+        MirInst, core_lib::CoreLib, ir::AddressSpaceKind, ir::BasicBlock, ir::FieldPtrOrigin,
+        ir::LocalData, ir::LocalId, ir::MirBody, ir::MirStage, ir::Place, ir::PointerInfo,
+        ir::Rvalue, ir::SourceInfoId, ir::Terminator, ir::ValueData, ir::ValueOrigin,
+        ir::ValueRepr,
     };
 
-    use super::lower_capability_to_repr;
+    use super::{lower_capability_to_repr, prepare_body_for_evm_yul_codegen};
 
     fn load_func_param_ty<'db>(
         db: &'db DriverDataBase,
@@ -1473,7 +1678,8 @@ mod tests {
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
 
-        lower_capability_to_repr(&db, &core, MirBackend::EvmYul, &mut body);
+        lower_capability_to_repr(&db, &core, &mut body);
+        prepare_body_for_evm_yul_codegen(&db, &core, &mut body);
 
         assert!(
             body.spill_slots.is_empty(),
@@ -1508,11 +1714,52 @@ pub fn live_terminator_place_root_value_creates_spill_slot(x: mut Pair) {}
             value: Some(base),
         };
 
-        lower_capability_to_repr(&db, &core, MirBackend::EvmYul, &mut body);
+        lower_capability_to_repr(&db, &core, &mut body);
+        prepare_body_for_evm_yul_codegen(&db, &core, &mut body);
 
         assert!(
             body.spill_slots.contains_key(&owner),
             "live terminator uses of place-root addresses must allocate spill slots",
+        );
+    }
+
+    #[test]
+    fn whole_local_word_move_out_rewrites_to_local_value() {
+        let mut db = DriverDataBase::default();
+        let url =
+            Url::parse("file:///whole_local_word_move_out_rewrites_to_local_value.fe").unwrap();
+        let src = r#"
+struct Start {
+    amount: u256,
+}
+
+pub fn whole_local_word_move_out_rewrites_to_local_value(x: Start) {}
+"#;
+        let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+        let top_mod = db.top_mod(file);
+        let (core, start_ty) = load_func_param_ty(
+            &db,
+            top_mod,
+            "whole_local_word_move_out_rewrites_to_local_value",
+        );
+
+        let (mut body, owner, base) = make_place_root_body(start_ty);
+        let move_out = body.alloc_value(ValueData {
+            ty: start_ty,
+            origin: ValueOrigin::MoveOut {
+                place: Place::new(base, crate::MirProjectionPath::new()),
+            },
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Word,
+            pointer_info: None,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
+        });
+
+        lower_capability_to_repr(&db, &core, &mut body);
+
+        assert!(
+            matches!(body.value(move_out).origin, ValueOrigin::Local(local) if local == owner),
+            "whole-local word move_out values should canonicalize to direct local values",
         );
     }
 
@@ -1567,7 +1814,7 @@ pub fn field_ptr_origin_preserves_address_space(x: mut u256) {}
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
 
-        lower_capability_to_repr(&db, &core, MirBackend::EvmYul, &mut body);
+        lower_capability_to_repr(&db, &core, &mut body);
 
         assert_eq!(
             body.values[field_ptr.index()].repr,
@@ -1621,7 +1868,8 @@ pub fn store_place_root_projection_rewrites_through_spill_and_reloads_owner(x: m
             value,
         });
 
-        lower_capability_to_repr(&db, &core, MirBackend::EvmYul, &mut body);
+        lower_capability_to_repr(&db, &core, &mut body);
+        prepare_body_for_evm_yul_codegen(&db, &core, &mut body);
 
         let spill = *body
             .spill_slots
@@ -1705,7 +1953,8 @@ pub fn init_aggregate_place_root_projection_rewrites_through_spill_and_reloads_o
             inits: vec![(crate::MirProjectionPath::new(), value)],
         });
 
-        lower_capability_to_repr(&db, &core, MirBackend::EvmYul, &mut body);
+        lower_capability_to_repr(&db, &core, &mut body);
+        prepare_body_for_evm_yul_codegen(&db, &core, &mut body);
 
         let spill = *body
             .spill_slots
@@ -1794,7 +2043,8 @@ pub fn set_discriminant_place_root_projection_rewrites_through_spill_and_reloads
             variant: variant_b,
         });
 
-        lower_capability_to_repr(&db, &core, MirBackend::EvmYul, &mut body);
+        lower_capability_to_repr(&db, &core, &mut body);
+        prepare_body_for_evm_yul_codegen(&db, &core, &mut body);
 
         let spill = *body
             .spill_slots
@@ -1921,7 +2171,8 @@ pub fn transparent_cast_over_raw_pointer_handle_does_not_spill(x: mut Pair) {}
             value: stored,
         });
 
-        lower_capability_to_repr(&db, &core, MirBackend::EvmYul, &mut body);
+        lower_capability_to_repr(&db, &core, &mut body);
+        prepare_body_for_evm_yul_codegen(&db, &core, &mut body);
 
         assert!(
             body.spill_slots.is_empty(),
@@ -1968,7 +2219,7 @@ pub fn transparent_cast_over_raw_pointer_handle_does_not_spill(x: mut Pair) {}
         let core = CoreLib::new(&db, top_mod.scope());
 
         let mut body = MirBody::new();
-        body.stage = MirStage::Repr(MirBackend::EvmYul);
+        body.stage = MirStage::Repr;
         body.blocks.push(BasicBlock {
             insts: Vec::new(),
             terminator: Terminator::Return {

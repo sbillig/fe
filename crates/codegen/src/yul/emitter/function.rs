@@ -45,7 +45,7 @@ impl<'db> FunctionEmitter<'db> {
     ) -> Result<Self, YulError> {
         mir_func
             .body
-            .assert_stage(MirStage::Repr(MirBackend::EvmYul));
+            .assert_stage(MirStage::BackendPrepared(MirBackend::EvmYul));
         if let MirFunctionOrigin::Hir(func) = mir_func.origin
             && func.body(db).is_none()
         {

@@ -15,7 +15,9 @@ use crate::layout;
 
 mod lower_capability_to_repr;
 
-pub(crate) use lower_capability_to_repr::lower_capability_to_repr;
+pub(crate) use lower_capability_to_repr::{
+    lower_capability_to_repr, prepare_body_for_evm_yul_codegen,
+};
 
 struct StabilizeCtx<'db, 'a, 'b> {
     db: &'db dyn HirAnalysisDb,
@@ -203,6 +205,20 @@ pub(crate) fn insert_temp_binds<'db>(db: &'db dyn HirAnalysisDb, body: &mut MirB
         }
         block.insts = rewritten;
     }
+}
+
+pub fn prepare_module_for_evm_yul_codegen<'db>(
+    db: &'db dyn HirAnalysisDb,
+    module: &mut MirModule<'db>,
+) {
+    for func in &mut module.functions {
+        let core = function_core_lib(db, func);
+        prepare_body_for_evm_yul_codegen(db, &core, &mut func.body);
+        canonicalize_transparent_newtypes(db, &mut func.body);
+        insert_temp_binds(db, &mut func.body);
+        canonicalize_zero_sized(db, &mut func.body);
+    }
+    normalize_runtime_shapes(db, module);
 }
 
 pub(crate) fn compute_live_values<'db>(body: &MirBody<'db>) -> Vec<bool> {

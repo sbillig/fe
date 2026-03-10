@@ -1205,6 +1205,8 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             let var = fb.declare_var(local_runtime_types[idx]);
             local_vars.insert(local_id, var);
         }
+        let mut local_place_roots = FxHashMap::default();
+        let mut initialized_locals = FxHashSet::default();
 
         // Create blocks
         for (idx, _block) in func.body.blocks.iter().enumerate() {
@@ -1238,7 +1240,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             // Entry functions have no Sonatina parameters (EVM starts with empty stack).
             // Initialize all param locals to zero - effect params are erased at runtime
             // and regular params shouldn't exist for entry functions.
-            for local_id in all_param_locals {
+            for local_id in all_param_locals.iter().copied() {
                 let var = local_vars.get(&local_id).copied().ok_or_else(|| {
                     LowerError::Internal(format!(
                         "missing SSA variable for param local {local_id:?}"
@@ -1268,6 +1270,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 fb.def_var(var, arg_val);
             }
         }
+        initialized_locals.extend(all_param_locals.iter().copied());
 
         {
             let mut const_data_globals = FxHashMap::default();
@@ -1280,6 +1283,8 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 target_layout: &self.target_layout,
                 body: &func.body,
                 local_vars: &local_vars,
+                local_place_roots: &mut local_place_roots,
+                initialized_locals: &mut initialized_locals,
                 name_map: &self.name_map,
                 runtime_function_metadata: &self.runtime_function_metadata,
                 current_function_metadata: &func_metadata,
@@ -1295,7 +1300,6 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 overflow_revert_block: &mut overflow_revert_block,
                 ptr_escape_summary,
             };
-
             for (idx, block) in ctx.body.blocks.iter().enumerate() {
                 let block_id = mir::BasicBlockId(idx as u32);
                 let sonatina_block = ctx.block_map[&block_id];
@@ -1330,6 +1334,8 @@ pub(super) struct LowerCtx<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> {
     pub(super) target_layout: &'a TargetDataLayout,
     pub(super) body: &'a mir::MirBody<'db>,
     pub(super) local_vars: &'a FxHashMap<mir::LocalId, Variable>,
+    pub(super) local_place_roots: &'a mut FxHashMap<mir::LocalId, ValueId>,
+    pub(super) initialized_locals: &'a mut FxHashSet<mir::LocalId>,
     pub(super) name_map: &'a FxHashMap<String, FuncRef>,
     pub(super) runtime_function_metadata: &'a FxHashMap<String, RuntimeFunctionMetadata>,
     pub(super) current_function_metadata: &'a RuntimeFunctionMetadata,

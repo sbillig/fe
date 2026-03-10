@@ -7,20 +7,14 @@ target = "evm-ethereum-osaka"
 
 func private %match_newtype_nested(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        v2.i256 = ptr_to_int v1 i256;
-        v3.*i8 = bitcast v1 *i8;
-        mstore v3 v0 i256;
         jump block4;
 
     block1:
         jump block2;
 
     block2:
-        v8.i256 = phi (0.i256 block1) (v0 block3);
-        v6.*i8 = int_to_ptr v2 *i8;
-        v7.i256 = mload v6 i256;
-        return v8;
+        v3.i256 = phi (0.i256 block1) (v0 block3);
+        return v3;
 
     block3:
         jump block2;
@@ -31,14 +25,8 @@ func private %match_newtype_nested(v0.i256) -> i256 {
 
 func private %f() -> i256 {
     block0:
-        v0.*i256 = alloca i256;
-        v1.i256 = ptr_to_int v0 i256;
-        v3.*i8 = bitcast v0 *i8;
-        mstore v3 10.i256 i256;
-        v4.*i8 = bitcast v0 *i8;
-        v5.i256 = mload v4 i256;
-        v6.i256 = call %match_newtype_nested v5;
-        return v6;
+        v1.i256 = call %match_newtype_nested 10.i256;
+        return v1;
 }
 
 func private %__fe_sonatina_entry() {

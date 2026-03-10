@@ -31,24 +31,8 @@ func private %test_module_qualifier_flatten_collision() -> i32 {
 
 func private %test_generic_type_collision() -> i32 {
     block0:
-        v0.*i32 = alloca i32;
-        v1.i32 = ptr_to_int v0 i32;
-        v2.*i64 = alloca i64;
-        v3.i64 = ptr_to_int v2 i64;
-        v5.*i8 = bitcast v0 *i8;
-        v6.i256 = zext 1.i32 i256;
-        mstore v5 v6 i256;
-        v8.*i8 = bitcast v2 *i8;
-        v9.i256 = zext 2.i64 i256;
-        mstore v8 v9 i256;
-        v10.*i8 = bitcast v0 *i8;
-        v11.i256 = mload v10 i256;
-        v12.i32 = trunc v11 i32;
-        v13.i32 = call %generic_fn__S_h730d9dc564aaaf27__8d32801e7ec9d42b v12;
-        v14.*i8 = bitcast v2 *i8;
-        v15.i256 = mload v14 i256;
-        v16.i64 = trunc v15 i64;
-        v17.i64 = call %generic_fn__S_h2db58d011b97b333__42a13489a1ec39e8 v16;
+        v2.i32 = call %generic_fn__S_h730d9dc564aaaf27__8d32801e7ec9d42b 1.i32;
+        v3.i64 = call %generic_fn__S_h2db58d011b97b333__42a13489a1ec39e8 2.i64;
         return 42.i32;
 }
 
@@ -198,28 +182,12 @@ func private %multitraitimpl_h60cc862fc809464_trait_ha6da5e54b37dd39c_same_metho
 
 func private %generic_fn__S_h730d9dc564aaaf27__8d32801e7ec9d42b(v0.i32) -> i32 {
     block0:
-        v1.*i32 = alloca i32;
-        v2.i32 = ptr_to_int v1 i32;
-        v3.*i8 = bitcast v1 *i8;
-        v4.i256 = zext v0 i256;
-        mstore v3 v4 i256;
-        v5.*i8 = bitcast v1 *i8;
-        v6.i256 = mload v5 i256;
-        v7.i32 = trunc v6 i32;
-        return v7;
+        return v0;
 }
 
 func private %generic_fn__S_h2db58d011b97b333__42a13489a1ec39e8(v0.i64) -> i64 {
     block0:
-        v1.*i64 = alloca i64;
-        v2.i64 = ptr_to_int v1 i64;
-        v3.*i8 = bitcast v1 *i8;
-        v4.i256 = zext v0 i256;
-        mstore v3 v4 i256;
-        v5.*i8 = bitcast v1 *i8;
-        v6.i256 = mload v5 i256;
-        v7.i64 = trunc v6 i64;
-        return v7;
+        return v0;
 }
 
 func private %__fe_sonatina_entry() {

@@ -1090,38 +1090,26 @@ object "CoolCoin" {
         leave
       }
       function $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_String_32___7798a45a8b22b7ed($value) {
-        let v0 := mload(0x40)
-        if iszero(v0) {
-          v0 := 0x80
-        }
-        mstore(0x40, add(v0, 32))
-        mstore(v0, $value)
-        let v1 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new()
-        let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v1, 32)
-        pop(v2)
-        $string_const_n__usize__h78b9b185054e88a2_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_32_SolEncoder_h1b9228b90dad6928__562228df2278c1ed(mload(v0), v1)
-        let v3 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v1)
-        let v4 := mload(v3)
-        let v5 := mload(add(v3, 32))
+        let v0 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new()
+        let v1 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v0, 32)
+        pop(v1)
+        $string_const_n__usize__h78b9b185054e88a2_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_32_SolEncoder_h1b9228b90dad6928__562228df2278c1ed($value, v0)
+        let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v0)
+        let v3 := mload(v2)
+        let v4 := mload(add(v2, 32))
         pop(0)
-        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v4, v5)
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v3, v4)
       }
       function $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_String_8___99627a2b067a3b64($value) {
-        let v0 := mload(0x40)
-        if iszero(v0) {
-          v0 := 0x80
-        }
-        mstore(0x40, add(v0, 32))
-        mstore(v0, $value)
-        let v1 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new()
-        let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v1, 32)
-        pop(v2)
-        $string_const_n__usize__h78b9b185054e88a2_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_8_SolEncoder_h1b9228b90dad6928__1811d65564ab2650(mload(v0), v1)
-        let v3 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v1)
-        let v4 := mload(v3)
-        let v5 := mload(add(v3, 32))
+        let v0 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new()
+        let v1 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v0, 32)
+        pop(v1)
+        $string_const_n__usize__h78b9b185054e88a2_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_8_SolEncoder_h1b9228b90dad6928__1811d65564ab2650($value, v0)
+        let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v0)
+        let v3 := mload(v2)
+        let v4 := mload(add(v2, 32))
         pop(0)
-        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v4, v5)
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v3, v4)
       }
       function $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_bool__397940bf296cce2a($value) {
         let v0 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new()

@@ -4,28 +4,15 @@ expression: output
 input_file: tests/fixtures/newtype_word_mut_method_call.fe
 ---
 function $newtype_word_mut_method_call($x) -> ret {
-  let v0 := mload(0x40)
-  if iszero(v0) {
-    v0 := 0x80
-  }
-  mstore(0x40, add(v0, 32))
-  let v1 := $x
-  mstore(v0, v1)
-  let v2 := $wrap_haf9e70905fcbd513_bump(mload(v0))
-  ret := v2
+  let v0 := $x
+  let v1 := $wrap_haf9e70905fcbd513_bump(v0)
+  ret := v1
   leave
 }
 function $wrap_haf9e70905fcbd513_bump($self) -> ret {
-  let v0 := mload(0x40)
-  if iszero(v0) {
-    v0 := 0x80
-  }
-  mstore(0x40, add(v0, 32))
-  mstore(v0, $self)
-  let v1 := $checked_add_u256($self, 1)
-  $self := v1
-  mstore(v0, $self)
-  ret := mload(v0)
+  let v0 := $checked_add_u256($self, 1)
+  $self := v0
+  ret := $self
   leave
 }
 function $checked_add_u256($a, $b) -> ret {
