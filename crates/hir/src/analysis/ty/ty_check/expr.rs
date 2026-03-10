@@ -11,7 +11,7 @@ use crate::span::DynLazySpan;
 
 use super::{
     ConstRef, RecordLike, Typeable,
-    env::{EffectOrigin, ExprProp, LocalBinding, ProvidedEffect, TyCheckEnv},
+    env::{EffectOrigin, ExprProp, LocalBinding, PendingPrimitiveOp, ProvidedEffect, TyCheckEnv},
     path::ResolvedPathInBody,
 };
 use crate::analysis::place::{Place, PlaceBase};
@@ -63,6 +63,12 @@ enum EffectSatisfaction<'db> {
     Direct,
     Provider { target_ty: TyId<'db> },
     TraitByValue,
+}
+
+pub(super) enum PendingPrimitiveOpResolution {
+    Pending,
+    Resolved,
+    Done,
 }
 
 impl<'db> TyChecker<'db> {
@@ -251,6 +257,14 @@ impl<'db> TyChecker<'db> {
 
         if prop.ty.is_integral_var(self.db) && matches!(op, UnOp::Plus | UnOp::Minus | UnOp::BitNot)
         {
+            if matches!(op, UnOp::Minus) {
+                self.env
+                    .register_pending_primitive_op(PendingPrimitiveOp::Unary {
+                        expr,
+                        inner: *lhs,
+                        op: *op,
+                    });
+            }
             return prop;
         }
 
@@ -557,6 +571,19 @@ impl<'db> TyChecker<'db> {
         }
     }
 
+    fn negated_int_literal_fits_in_ty(&self, value: &BigUint, target_ty: TyId<'db>) -> bool {
+        let leaf = self.peel_transparent_newtypes(target_ty);
+        let Some((signed, bits)) = self.prim_int_signed_bits(leaf) else {
+            return false;
+        };
+        if !signed {
+            return false;
+        }
+
+        let max = BigUint::from(1u8) << (bits - 1);
+        value <= &max
+    }
+
     fn check_binary(
         &mut self,
         expr: ExprId,
@@ -605,6 +632,25 @@ impl<'db> TyChecker<'db> {
             // - arithmetic: same integer type
             // - comparison: bool
             self.check_expr(rhs_expr, lhs.ty);
+            if matches!(
+                op,
+                BinOp::Arith(
+                    ArithBinOp::Add
+                        | ArithBinOp::Sub
+                        | ArithBinOp::Mul
+                        | ArithBinOp::Div
+                        | ArithBinOp::Rem
+                        | ArithBinOp::Pow
+                ) | BinOp::Comp(..)
+            ) {
+                self.env
+                    .register_pending_primitive_op(PendingPrimitiveOp::Binary {
+                        expr,
+                        lhs: lhs_expr,
+                        rhs: rhs_expr,
+                        op,
+                    });
+            }
 
             if matches!(op, BinOp::Comp(_)) {
                 return ExprProp::new(TyId::bool(self.db), true);
@@ -627,6 +673,115 @@ impl<'db> TyChecker<'db> {
         }
 
         self.check_ops_trait(expr, lhs_ty, &op, Some(rhs_expr))
+    }
+
+    pub(super) fn resolve_pending_primitive_op(
+        &mut self,
+        pending: &PendingPrimitiveOp,
+    ) -> PendingPrimitiveOpResolution {
+        if self.env.callable_expr(pending.expr()).is_some() {
+            return PendingPrimitiveOpResolution::Done;
+        }
+
+        let Some(expr_prop) = self.env.typed_expr(pending.expr()) else {
+            return PendingPrimitiveOpResolution::Done;
+        };
+        let expr_ty = {
+            let mut prober = super::env::Prober::new(&mut self.table);
+            expr_prop.ty.fold_with(self.db, &mut prober)
+        };
+        if expr_ty.has_invalid(self.db) {
+            return PendingPrimitiveOpResolution::Done;
+        }
+
+        let resolved = match pending {
+            PendingPrimitiveOp::Unary { expr, inner, op } => {
+                let Some(inner_prop) = self.env.typed_expr(*inner) else {
+                    return PendingPrimitiveOpResolution::Done;
+                };
+                let operand_ty = {
+                    let mut prober = super::env::Prober::new(&mut self.table);
+                    inner_prop.ty.fold_with(self.db, &mut prober)
+                };
+                let operand_ty = operand_ty
+                    .as_capability(self.db)
+                    .map(|(_, inner)| inner)
+                    .unwrap_or(operand_ty);
+                let operand_ty = self.normalize_ty(operand_ty);
+                if operand_ty.has_invalid(self.db) {
+                    return PendingPrimitiveOpResolution::Done;
+                }
+                if operand_ty.is_integral_var(self.db)
+                    || operand_ty.base_ty(self.db).is_ty_var(self.db)
+                {
+                    return PendingPrimitiveOpResolution::Pending;
+                }
+                if matches!(op, UnOp::Minus)
+                    && let Some(int_id) = self.try_get_literal_int(*inner)
+                {
+                    let literal = int_id.data(self.db);
+                    if self.negated_int_literal_fits_in_ty(literal, operand_ty) {
+                        return PendingPrimitiveOpResolution::Done;
+                    }
+                    if self
+                        .peel_transparent_newtypes(operand_ty)
+                        .base_ty(self.db)
+                        .is_prim(self.db)
+                    {
+                        self.push_diag(BodyDiag::IntLiteralOutOfRange {
+                            primary: expr.span(self.body()).into(),
+                            literal: format!("-{literal}"),
+                            ty: operand_ty,
+                        });
+                        return PendingPrimitiveOpResolution::Done;
+                    }
+                }
+                self.check_ops_trait(*expr, operand_ty, op, None)
+            }
+            PendingPrimitiveOp::Binary { expr, lhs, rhs, op } => {
+                let Some(lhs_prop) = self.env.typed_expr(*lhs) else {
+                    return PendingPrimitiveOpResolution::Done;
+                };
+                let Some(rhs_prop) = self.env.typed_expr(*rhs) else {
+                    return PendingPrimitiveOpResolution::Done;
+                };
+                let lhs_ty = {
+                    let mut prober = super::env::Prober::new(&mut self.table);
+                    lhs_prop.ty.fold_with(self.db, &mut prober)
+                };
+                let rhs_ty = {
+                    let mut prober = super::env::Prober::new(&mut self.table);
+                    rhs_prop.ty.fold_with(self.db, &mut prober)
+                };
+                let lhs_ty = lhs_ty
+                    .as_capability(self.db)
+                    .map(|(_, inner)| inner)
+                    .unwrap_or(lhs_ty);
+                let lhs_ty = self.normalize_ty(lhs_ty);
+                let rhs_ty = rhs_ty
+                    .as_capability(self.db)
+                    .map(|(_, inner)| inner)
+                    .unwrap_or(rhs_ty);
+                let rhs_ty = self.normalize_ty(rhs_ty);
+                if lhs_ty.has_invalid(self.db) || rhs_ty.has_invalid(self.db) {
+                    return PendingPrimitiveOpResolution::Done;
+                }
+                if lhs_ty.is_integral_var(self.db)
+                    || lhs_ty.base_ty(self.db).is_ty_var(self.db)
+                    || rhs_ty.is_integral_var(self.db)
+                    || rhs_ty.base_ty(self.db).is_ty_var(self.db)
+                {
+                    return PendingPrimitiveOpResolution::Pending;
+                }
+                self.check_ops_trait(*expr, lhs_ty, op, None)
+            }
+        };
+
+        if resolved.ty.has_invalid(self.db) {
+            return PendingPrimitiveOpResolution::Done;
+        }
+        self.table.unify(expr_ty, resolved.ty).ok();
+        PendingPrimitiveOpResolution::Resolved
     }
 
     fn check_let_condition(&mut self, pat: PatId, scrutinee: ExprId) -> ExprProp<'db> {
@@ -2449,6 +2604,9 @@ impl<'db> TyChecker<'db> {
             return unit;
         }
 
+        // `x += y` is semantically defined by the `*Assign` traits. Primitive
+        // integer fast paths are introduced later during MIR lowering without
+        // changing which trait method the source program resolves to here.
         self.check_ops_trait(expr, lhs_place_ty, &AugAssignOp(*op), Some(*rhs));
 
         // Return unit ty even if trait resolution fails

@@ -60,7 +60,7 @@ pub fn format_function(db: &dyn HirAnalysisDb, func: &MirFunction<'_>) -> String
         }
         out.push_str(&format!(
             "    {}\n",
-            format_terminator(&func.body, &block.terminator)
+            format_terminator(db, &func.body, &block.terminator)
         ));
     }
 
@@ -75,10 +75,10 @@ fn format_local_decl(db: &dyn HirAnalysisDb, body: &MirBody<'_>, local: LocalId)
 }
 
 /// Format a single MIR instruction.
-pub fn format_inst(_db: &dyn HirAnalysisDb, body: &MirBody<'_>, inst: &MirInst<'_>) -> String {
+pub fn format_inst(db: &dyn HirAnalysisDb, body: &MirBody<'_>, inst: &MirInst<'_>) -> String {
     match inst {
         MirInst::Assign { dest, rvalue, .. } => {
-            let rendered = format_rvalue(body, rvalue);
+            let rendered = format_rvalue(db, body, rvalue);
             if let Some(dest) = dest {
                 format!("{} = {}", format_local(*dest), rendered)
             } else {
@@ -114,7 +114,11 @@ pub fn format_inst(_db: &dyn HirAnalysisDb, body: &MirBody<'_>, inst: &MirInst<'
 }
 
 /// Format a MIR terminator.
-pub fn format_terminator(body: &MirBody<'_>, term: &Terminator<'_>) -> String {
+pub fn format_terminator(
+    db: &dyn HirAnalysisDb,
+    body: &MirBody<'_>,
+    term: &Terminator<'_>,
+) -> String {
     match term {
         Terminator::Return {
             value: Some(val), ..
@@ -122,7 +126,7 @@ pub fn format_terminator(body: &MirBody<'_>, term: &Terminator<'_>) -> String {
         Terminator::Return { value: None, .. } => "ret".into(),
         Terminator::TerminatingCall { call, .. } => match call {
             TerminatingCall::Call(call) => {
-                let rendered = format_call(body, call);
+                let rendered = format_call(db, body, call);
                 format!("terminate {rendered}")
             }
             TerminatingCall::Intrinsic { op, args } => {
@@ -163,22 +167,38 @@ pub fn format_terminator(body: &MirBody<'_>, term: &Terminator<'_>) -> String {
     }
 }
 
-fn format_call(body: &MirBody<'_>, call: &CallOrigin<'_>) -> String {
-    let name = call.resolved_name.as_deref().unwrap_or("<unresolved>");
+fn format_call(db: &dyn HirAnalysisDb, body: &MirBody<'_>, call: &CallOrigin<'_>) -> String {
+    let name = if let Some(checked) = call.checked_intrinsic {
+        format!(
+            "{}<{}>",
+            checked.op.helper_symbol_prefix(),
+            checked.ty.pretty_print(db)
+        )
+    } else {
+        call.resolved_name
+            .clone()
+            .or_else(|| {
+                call.hir_target
+                    .as_ref()
+                    .and_then(|target| target.callable_def.name(db))
+                    .map(|name| name.data(db).to_string())
+            })
+            .unwrap_or_else(|| "<unresolved>".to_string())
+    };
     let args: Vec<String> = call
         .args
         .iter()
         .chain(call.effect_args.iter())
         .map(|arg| format_value(body, *arg))
         .collect();
-    format!("{}({})", name, args.join(", "))
+    format!("{name}({})", args.join(", "))
 }
 
-fn format_rvalue(body: &MirBody<'_>, rvalue: &Rvalue<'_>) -> String {
+fn format_rvalue(db: &dyn HirAnalysisDb, body: &MirBody<'_>, rvalue: &Rvalue<'_>) -> String {
     match rvalue {
         Rvalue::ZeroInit => "0".into(),
         Rvalue::Value(value) => format_value(body, *value),
-        Rvalue::Call(call) => format_call(body, call),
+        Rvalue::Call(call) => format_call(db, body, call),
         Rvalue::Intrinsic { op, args } => {
             let args: Vec<String> = args.iter().map(|arg| format_value(body, *arg)).collect();
             format!("{}({})", format_intrinsic(*op), args.join(", "))
@@ -309,7 +329,7 @@ fn format_inst_with_local_types(
 ) -> String {
     match inst {
         MirInst::Assign { dest, rvalue, .. } => {
-            let rendered = format_rvalue(body, rvalue);
+            let rendered = format_rvalue(db, body, rvalue);
             if let Some(dest) = dest {
                 let local = *dest;
                 let local_name = format_local(local);

@@ -5,15 +5,21 @@ input_file: crates/codegen/tests/fixtures/arg_bindings.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %arg_bindings(v0.i256, v1.i256) -> i256 {
+func private %arg_bindings(v0.i64, v1.i64) -> i64 {
     block0:
-        v3.i256 = add v0 v1;
-        return v3;
+        (v2.i64, v3.i1) = uaddo v0 v1;
+        br v3 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v2;
 }
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.i256 = call %arg_bindings 0.i256 0.i256;
+        v1.i64 = call %arg_bindings 0.i64 0.i64;
         evm_stop;
 }
 

@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/for_range.fe
 ---
@@ -19,24 +18,28 @@ func private %for_range_sum() -> i256 {
         jump block1;
 
     block1:
-        v27.i256 = phi (0.i256 block0) (v19 block3);
-        v10.i256 = phi (0.i256 block0) (v22 block3);
+        v26.i256 = phi (0.i256 block0) (v17 block3);
+        v10.i256 = phi (0.i256 block0) (v21 block3);
         v12.i1 = lt v10 v9;
-        v13.i256 = zext v12 i256;
-        v14.i1 = ne v13 0.i256;
-        br v14 block2 block4;
+        br v12 block2 block4;
 
     block2:
-        v17.i256 = call %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_get v4 v10;
-        v19.i256 = add v27 v17;
-        jump block3;
+        v15.i256 = call %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_get v4 v10;
+        (v17.i256, v18.i1) = uaddo v26 v15;
+        br v18 block5 block6;
 
     block3:
-        v22.i256 = add v10 1.i256;
+        v21.i256 = add v10 1.i256;
         jump block1;
 
     block4:
-        return v27;
+        return v26;
+
+    block5:
+        evm_revert 0.i256 0.i256;
+
+    block6:
+        jump block3;
 }
 
 func private %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len(v0.i256) -> i256 {
@@ -46,34 +49,50 @@ func private %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_le
         v5.i256 = mload v4 i256;
         v6.*i256 = int_to_ptr v0 *i256;
         v7.i256 = mload v6 i256;
-        v8.i1 = lt v5 v7;
-        v9.i256 = zext v8 i256;
-        v10.i1 = ne v9 0.i256;
-        br v10 block1 block2;
+        v8.i1 = call %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt v5 v7;
+        br v8 block1 block2;
 
     block1:
         jump block3;
 
     block2:
-        v12.i256 = add v0 32.i256;
-        v13.*i256 = int_to_ptr v12 *i256;
+        v10.i256 = add v0 32.i256;
+        v11.*i256 = int_to_ptr v10 *i256;
+        v12.i256 = mload v11 i256;
+        v13.*i256 = int_to_ptr v0 *i256;
         v14.i256 = mload v13 i256;
-        v15.*i256 = int_to_ptr v0 *i256;
-        v16.i256 = mload v15 i256;
-        v17.i256 = sub v14 v16;
-        jump block3;
+        (v15.i256, v16.i1) = usubo v12 v14;
+        br v16 block4 block5;
 
     block3:
-        v18.i256 = phi (0.i256 block1) (v17 block2);
-        return v18;
+        v17.i256 = phi (0.i256 block1) (v15 block5);
+        return v17;
+
+    block4:
+        evm_revert 0.i256 0.i256;
+
+    block5:
+        jump block3;
 }
 
 func private %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_get(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.*i256 = int_to_ptr v0 *i256;
-        v4.i256 = mload v3 i256;
-        v5.i256 = add v4 v1;
-        return v5;
+        v2.*i256 = int_to_ptr v0 *i256;
+        v3.i256 = mload v2 i256;
+        (v4.i256, v5.i1) = uaddo v3 v1;
+        br v5 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v4;
+}
+
+func private %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt(v0.i256, v1.i256) -> i1 {
+    block0:
+        v2.i1 = lt v0 v1;
+        return v2;
 }
 
 func private %__fe_sonatina_entry() {
