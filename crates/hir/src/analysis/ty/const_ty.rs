@@ -260,17 +260,17 @@ pub(crate) fn evaluate_const_ty<'db>(
     ) -> Result<BigInt, ConstIntError> {
         match expr {
             Expr::Block(stmts) => {
-                let Some(last) = stmts.last() else {
-                    return Err(ConstIntError::Overflow);
+                let [stmt] = stmts.as_slice() else {
+                    return Err(ConstIntError::NotIntExpr);
                 };
-                let Partial::Present(stmt) = last.data(db, body) else {
-                    return Err(ConstIntError::Overflow);
+                let Partial::Present(stmt) = stmt.data(db, body) else {
+                    return Err(ConstIntError::NotIntExpr);
                 };
                 let Stmt::Expr(expr_id) = stmt else {
-                    return Err(ConstIntError::Overflow);
+                    return Err(ConstIntError::NotIntExpr);
                 };
                 let Partial::Present(inner) = expr_id.data(db, body) else {
-                    return Err(ConstIntError::Overflow);
+                    return Err(ConstIntError::NotIntExpr);
                 };
                 eval_int_expr(db, body, inner, expected)
             }
