@@ -2696,6 +2696,44 @@ fn lower_checked_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             emit_overflow_revert(ctx, overflow)?;
             Ok(raw)
         }
+        CheckedArithmeticOp::Div => {
+            let [a, b] = args else {
+                return Err(LowerError::Internal(format!(
+                    "checked div expects 2 arguments, got {}",
+                    args.len()
+                )));
+            };
+            let lhs_word = lower_value(ctx, *a)?;
+            let rhs_word = lower_value(ctx, *b)?;
+            let lhs = lower_checked_operand(ctx.fb, ctx.is, lhs_word, op_ty, signed);
+            let rhs = lower_checked_operand(ctx.fb, ctx.is, rhs_word, op_ty, signed);
+            let [raw, overflow] = if signed {
+                ctx.fb.insert_evm_sdivo(lhs, rhs)
+            } else {
+                ctx.fb.insert_evm_udivo(lhs, rhs)
+            };
+            emit_overflow_revert(ctx, overflow)?;
+            Ok(raw)
+        }
+        CheckedArithmeticOp::Rem => {
+            let [a, b] = args else {
+                return Err(LowerError::Internal(format!(
+                    "checked rem expects 2 arguments, got {}",
+                    args.len()
+                )));
+            };
+            let lhs_word = lower_value(ctx, *a)?;
+            let rhs_word = lower_value(ctx, *b)?;
+            let lhs = lower_checked_operand(ctx.fb, ctx.is, lhs_word, op_ty, signed);
+            let rhs = lower_checked_operand(ctx.fb, ctx.is, rhs_word, op_ty, signed);
+            let [raw, overflow] = if signed {
+                ctx.fb.insert_evm_smodo(lhs, rhs)
+            } else {
+                ctx.fb.insert_evm_umodo(lhs, rhs)
+            };
+            emit_overflow_revert(ctx, overflow)?;
+            Ok(raw)
+        }
         CheckedArithmeticOp::Neg => {
             let [arg] = args else {
                 return Err(LowerError::Internal(format!(

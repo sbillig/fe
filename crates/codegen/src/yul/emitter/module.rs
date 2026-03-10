@@ -546,14 +546,30 @@ fn link_yul_checked_arithmetic_helpers<'db>(
         ))
     }
 
-    let mut required_helpers = FxHashSet::default();
-    for func in &mut module.functions {
-        for block in &mut func.body.blocks {
-            for inst in &mut block.insts {
-                if let MirInst::Assign {
-                    rvalue: Rvalue::Call(call),
+    fn rewrite_checked_calls<'db>(
+        db: &'db DriverDataBase,
+        module: &mut mir::MirModule<'db>,
+    ) -> Result<FxHashSet<String>, EmitModuleError> {
+        let mut required_helpers = FxHashSet::default();
+        for func in &mut module.functions {
+            for block in &mut func.body.blocks {
+                for inst in &mut block.insts {
+                    if let MirInst::Assign {
+                        rvalue: Rvalue::Call(call),
+                        ..
+                    } = inst
+                        && let Some(intrinsic) = call.checked_intrinsic
+                    {
+                        let helper = helper_symbol_from_checked_intrinsic(db, intrinsic)?;
+                        required_helpers.insert(helper.clone());
+                        call.resolved_name = Some(helper);
+                    }
+                }
+
+                if let mir::Terminator::TerminatingCall {
+                    call: mir::TerminatingCall::Call(call),
                     ..
-                } = inst
+                } = &mut block.terminator
                     && let Some(intrinsic) = call.checked_intrinsic
                 {
                     let helper = helper_symbol_from_checked_intrinsic(db, intrinsic)?;
@@ -561,20 +577,11 @@ fn link_yul_checked_arithmetic_helpers<'db>(
                     call.resolved_name = Some(helper);
                 }
             }
-
-            if let mir::Terminator::TerminatingCall {
-                call: mir::TerminatingCall::Call(call),
-                ..
-            } = &mut block.terminator
-                && let Some(intrinsic) = call.checked_intrinsic
-            {
-                let helper = helper_symbol_from_checked_intrinsic(db, intrinsic)?;
-                required_helpers.insert(helper.clone());
-                call.resolved_name = Some(helper);
-            }
         }
+        Ok(required_helpers)
     }
 
+    let required_helpers = rewrite_checked_calls(db, module)?;
     if required_helpers.is_empty() {
         return Ok(());
     }
@@ -614,7 +621,9 @@ fn link_yul_checked_arithmetic_helpers<'db>(
     })?;
     let num_yul_top_mod = db.top_mod(num_yul_file);
 
-    let num_yul_module = lower_module(db, num_yul_top_mod).map_err(EmitModuleError::MirLower)?;
+    let mut num_yul_module =
+        lower_module(db, num_yul_top_mod).map_err(EmitModuleError::MirLower)?;
+    rewrite_checked_calls(db, &mut num_yul_module)?;
     let num_yul_call_graph = build_call_graph(&num_yul_module.functions);
 
     let mut required_symbols = FxHashSet::default();

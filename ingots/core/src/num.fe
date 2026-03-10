@@ -13,6 +13,8 @@ extern {
     fn __checked_add<T: IntWord>(_: T, _: T) -> T
     fn __checked_sub<T: IntWord>(_: T, _: T) -> T
     fn __checked_mul<T: IntWord>(_: T, _: T) -> T
+    fn __checked_div<T: IntWord>(_: T, _: T) -> T
+    fn __checked_rem<T: IntWord>(_: T, _: T) -> T
     fn __checked_neg<T: IntWord>(_: T) -> T
 }
 
@@ -618,10 +620,10 @@ impl<S: IntWord, T: IntWord> IntDowncast<T> for S {
 }
 
 /// Performs two's-complement sign extension within the provided mask/sign bit.
-fn sign_extend(word: u256, _ mask: u256, _ sign_bit: u256) -> u256 {
+pub fn sign_extend(word: u256, _ mask: u256, _ sign_bit: u256) -> u256 {
     let value = word & mask
     if value & sign_bit != 0 {
-        value | (!mask)
+        value | (~mask)
     } else {
         value
     }
@@ -671,14 +673,12 @@ impl Mul for u8 {
 }
 impl Div for u8 {
     fn div(own self, _ other: own u8) -> u8 {
-        if other == 0 { panic() }
-        __div_u8(self, other)
+        __checked_div(self, other)
     }
 }
 impl Rem for u8 {
     fn rem(own self, _ other: own u8) -> u8 {
-        if other == 0 { panic() }
-        __rem_u8(self, other)
+        __checked_rem(self, other)
     }
 }
 impl Pow for u8 { fn pow(own self, _ other: own u8) -> u8 { pow_checked(self, other) } }
@@ -759,16 +759,12 @@ impl Mul for i8 {
 }
 impl Div for i8 {
     fn div(own self, _ other: own i8) -> i8 {
-        if other == 0 { panic() }
-        let min: i8 = __bitcast(I8_SIGN_BIT)
-        if self == min && other == -1 { panic() }
-        __div_i8(self, other)
+        __checked_div(self, other)
     }
 }
 impl Rem for i8 {
     fn rem(own self, _ other: own i8) -> i8 {
-        if other == 0 { panic() }
-        __rem_i8(self, other)
+        __checked_rem(self, other)
     }
 }
 impl Pow for i8 { fn pow(own self, _ other: own i8) -> i8 { pow_checked(self, other) } }
@@ -874,16 +870,12 @@ impl Mul for i16 {
 }
 impl Div for i16 {
     fn div(own self, _ other: own i16) -> i16 {
-        if other == 0 { panic() }
-        let min: i16 = __bitcast(I16_SIGN_BIT)
-        if self == min && other == -1 { panic() }
-        __div_i16(self, other)
+        __checked_div(self, other)
     }
 }
 impl Rem for i16 {
     fn rem(own self, _ other: own i16) -> i16 {
-        if other == 0 { panic() }
-        __rem_i16(self, other)
+        __checked_rem(self, other)
     }
 }
 impl Pow for i16 { fn pow(own self, _ other: own i16) -> i16 { pow_checked(self, other) } }
@@ -984,14 +976,12 @@ impl Mul for u16 {
 }
 impl Div for u16 {
     fn div(own self, _ other: own u16) -> u16 {
-        if other == 0 { panic() }
-        __div_u16(self, other)
+        __checked_div(self, other)
     }
 }
 impl Rem for u16 {
     fn rem(own self, _ other: own u16) -> u16 {
-        if other == 0 { panic() }
-        __rem_u16(self, other)
+        __checked_rem(self, other)
     }
 }
 impl Pow for u16 { fn pow(own self, _ other: own u16) -> u16 { pow_checked(self, other) } }
@@ -1073,16 +1063,12 @@ impl Mul for i32 {
 }
 impl Div for i32 {
     fn div(own self, _ other: own i32) -> i32 {
-        if other == 0 { panic() }
-        let min: i32 = __bitcast(I32_SIGN_BIT)
-        if self == min && other == -1 { panic() }
-        __div_i32(self, other)
+        __checked_div(self, other)
     }
 }
 impl Rem for i32 {
     fn rem(own self, _ other: own i32) -> i32 {
-        if other == 0 { panic() }
-        __rem_i32(self, other)
+        __checked_rem(self, other)
     }
 }
 impl Pow for i32 { fn pow(own self, _ other: own i32) -> i32 { pow_checked(self, other) } }
@@ -1183,14 +1169,12 @@ impl Mul for u32 {
 }
 impl Div for u32 {
     fn div(own self, _ other: own u32) -> u32 {
-        if other == 0 { panic() }
-        __div_u32(self, other)
+        __checked_div(self, other)
     }
 }
 impl Rem for u32 {
     fn rem(own self, _ other: own u32) -> u32 {
-        if other == 0 { panic() }
-        __rem_u32(self, other)
+        __checked_rem(self, other)
     }
 }
 impl Pow for u32 { fn pow(own self, _ other: own u32) -> u32 { pow_checked(self, other) } }
@@ -1271,16 +1255,12 @@ impl Mul for i64 {
 }
 impl Div for i64 {
     fn div(own self, _ other: own i64) -> i64 {
-        if other == 0 { panic() }
-        let min: i64 = __bitcast(I64_SIGN_BIT)
-        if self == min && other == -1 { panic() }
-        __div_i64(self, other)
+        __checked_div(self, other)
     }
 }
 impl Rem for i64 {
     fn rem(own self, _ other: own i64) -> i64 {
-        if other == 0 { panic() }
-        __rem_i64(self, other)
+        __checked_rem(self, other)
     }
 }
 impl Pow for i64 { fn pow(own self, _ other: own i64) -> i64 { pow_checked(self, other) } }
@@ -1386,16 +1366,12 @@ impl Mul for i128 {
 }
 impl Div for i128 {
     fn div(own self, _ other: own i128) -> i128 {
-        if other == 0 { panic() }
-        let min: i128 = __bitcast(I128_SIGN_BIT)
-        if self == min && other == -1 { panic() }
-        __div_i128(self, other)
+        __checked_div(self, other)
     }
 }
 impl Rem for i128 {
     fn rem(own self, _ other: own i128) -> i128 {
-        if other == 0 { panic() }
-        __rem_i128(self, other)
+        __checked_rem(self, other)
     }
 }
 impl Pow for i128 { fn pow(own self, _ other: own i128) -> i128 { pow_checked(self, other) } }
@@ -1496,14 +1472,12 @@ impl Mul for u64 {
 }
 impl Div for u64 {
     fn div(own self, _ other: own u64) -> u64 {
-        if other == 0 { panic() }
-        __div_u64(self, other)
+        __checked_div(self, other)
     }
 }
 impl Rem for u64 {
     fn rem(own self, _ other: own u64) -> u64 {
-        if other == 0 { panic() }
-        __rem_u64(self, other)
+        __checked_rem(self, other)
     }
 }
 impl Pow for u64 { fn pow(own self, _ other: own u64) -> u64 { pow_checked(self, other) } }
@@ -1579,14 +1553,12 @@ impl Mul for u128 {
 }
 impl Div for u128 {
     fn div(own self, _ other: own u128) -> u128 {
-        if other == 0 { panic() }
-        __div_u128(self, other)
+        __checked_div(self, other)
     }
 }
 impl Rem for u128 {
     fn rem(own self, _ other: own u128) -> u128 {
-        if other == 0 { panic() }
-        __rem_u128(self, other)
+        __checked_rem(self, other)
     }
 }
 impl Pow for u128 { fn pow(own self, _ other: own u128) -> u128 { pow_checked(self, other) } }
@@ -1662,14 +1634,12 @@ impl Mul for usize {
 }
 impl Div for usize {
     fn div(own self, _ other: own usize) -> usize {
-        if other == 0 { panic() }
-        __div_usize(self, other)
+        __checked_div(self, other)
     }
 }
 impl Rem for usize {
     fn rem(own self, _ other: own usize) -> usize {
-        if other == 0 { panic() }
-        __rem_usize(self, other)
+        __checked_rem(self, other)
     }
 }
 impl Pow for usize { fn pow(own self, _ other: own usize) -> usize { pow_checked(self, other) } }
@@ -1745,16 +1715,12 @@ impl Mul for i256 {
 }
 impl Div for i256 {
     fn div(own self, _ other: own i256) -> i256 {
-        if other == 0 { panic() }
-        let min: i256 = __bitcast(I256_SIGN_BIT)
-        if self == min && other == -1 { panic() }
-        __div_i256(self, other)
+        __checked_div(self, other)
     }
 }
 impl Rem for i256 {
     fn rem(own self, _ other: own i256) -> i256 {
-        if other == 0 { panic() }
-        __rem_i256(self, other)
+        __checked_rem(self, other)
     }
 }
 impl Pow for i256 { fn pow(own self, _ other: own i256) -> i256 { pow_checked(self, other) } }
@@ -1855,14 +1821,12 @@ impl Mul for u256 {
 }
 impl Div for u256 {
     fn div(own self, _ other: own u256) -> u256 {
-        if other == 0 { panic() }
-        __div_u256(self, other)
+        __checked_div(self, other)
     }
 }
 impl Rem for u256 {
     fn rem(own self, _ other: own u256) -> u256 {
-        if other == 0 { panic() }
-        __rem_u256(self, other)
+        __checked_rem(self, other)
     }
 }
 impl Pow for u256 { fn pow(own self, _ other: own u256) -> u256 { pow_checked(self, other) } }
@@ -1943,16 +1907,12 @@ impl Mul for isize {
 }
 impl Div for isize {
     fn div(own self, _ other: own isize) -> isize {
-        if other == 0 { panic() }
-        let min: isize = __bitcast(I256_SIGN_BIT)
-        if self == min && other == -1 { panic() }
-        __div_isize(self, other)
+        __checked_div(self, other)
     }
 }
 impl Rem for isize {
     fn rem(own self, _ other: own isize) -> isize {
-        if other == 0 { panic() }
-        __rem_isize(self, other)
+        __checked_rem(self, other)
     }
 }
 impl Pow for isize { fn pow(own self, _ other: own isize) -> isize { pow_checked(self, other) } }

@@ -735,6 +735,8 @@ pub enum CheckedArithmeticOp {
     Add,
     Sub,
     Mul,
+    Div,
+    Rem,
     Neg,
 }
 
@@ -744,6 +746,8 @@ impl CheckedArithmeticOp {
             Self::Add => "checked_add",
             Self::Sub => "checked_sub",
             Self::Mul => "checked_mul",
+            Self::Div => "checked_div",
+            Self::Rem => "checked_rem",
             Self::Neg => "checked_neg",
         }
     }

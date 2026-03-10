@@ -164,6 +164,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             "__checked_add" => crate::ir::CheckedArithmeticOp::Add,
             "__checked_sub" => crate::ir::CheckedArithmeticOp::Sub,
             "__checked_mul" => crate::ir::CheckedArithmeticOp::Mul,
+            "__checked_div" => crate::ir::CheckedArithmeticOp::Div,
+            "__checked_rem" => crate::ir::CheckedArithmeticOp::Rem,
             "__checked_neg" => crate::ir::CheckedArithmeticOp::Neg,
             _ => return None,
         };

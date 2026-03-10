@@ -384,6 +384,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     BinOp::Arith(ArithBinOp::Mul) => {
                         Some(("mul", crate::ir::CheckedArithmeticOp::Mul))
                     }
+                    BinOp::Arith(ArithBinOp::Div) => {
+                        Some(("div", crate::ir::CheckedArithmeticOp::Div))
+                    }
+                    BinOp::Arith(ArithBinOp::Rem) => {
+                        Some(("rem", crate::ir::CheckedArithmeticOp::Rem))
+                    }
                     _ => None,
                 } && let Some(intrinsic) = self.direct_checked_intrinsic(
                     expr,
@@ -413,12 +419,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 let critical_primitive_op = matches!(
                     op,
                     BinOp::Arith(
-                        ArithBinOp::Add
-                            | ArithBinOp::Sub
-                            | ArithBinOp::Mul
-                            | ArithBinOp::Div
-                            | ArithBinOp::Rem
-                            | ArithBinOp::Pow
+                        ArithBinOp::Add | ArithBinOp::Sub | ArithBinOp::Mul | ArithBinOp::Pow
                     ) | BinOp::Comp(..)
                 );
                 let has_callable = self.typed_body.callable_expr(expr).is_some();
@@ -2469,11 +2470,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
         };
 
-        let updated = if matches!(op, ArithBinOp::Add | ArithBinOp::Sub | ArithBinOp::Mul) {
+        let updated = if matches!(
+            op,
+            ArithBinOp::Add | ArithBinOp::Sub | ArithBinOp::Mul | ArithBinOp::Div | ArithBinOp::Rem
+        ) {
             let checked_op = match op {
                 ArithBinOp::Add => crate::ir::CheckedArithmeticOp::Add,
                 ArithBinOp::Sub => crate::ir::CheckedArithmeticOp::Sub,
                 ArithBinOp::Mul => crate::ir::CheckedArithmeticOp::Mul,
+                ArithBinOp::Div => crate::ir::CheckedArithmeticOp::Div,
+                ArithBinOp::Rem => crate::ir::CheckedArithmeticOp::Rem,
                 _ => unreachable!(),
             };
 

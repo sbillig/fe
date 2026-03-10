@@ -132,6 +132,12 @@ function $u256_h3271ca15373d4483_mul_h290dcc921ed80777_mul($self, $other) -> ret
   ret := v0
   leave
 }
+function $checked_div_u256($a, $b) -> ret {
+  $ensure_nonzero_divisor__u256__3271ca15373d4483($b)
+  let v0 := div($a, $b)
+  ret := v0
+  leave
+}
 function $checked_mul_u256($a, $b) -> ret {
   let v0 := $checked_mul_unsigned_impl__u256__3271ca15373d4483($a, $b)
   ret := v0
@@ -143,7 +149,7 @@ function $checked_mul_unsigned_impl__u256__3271ca15373d4483($a, $b) -> ret {
   let v2 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v1, 0)
   let v3 := v2
   if v3 {
-    let v4 := $u256_h3271ca15373d4483_div_h14000ca7bc1a1bc4_div(v0, $a)
+    let v4 := $checked_div_u256(v0, $a)
     let v5 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v4)
     let v6 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($b)
     let v7 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v5, v6)
@@ -159,14 +165,13 @@ function $checked_mul_unsigned_impl__u256__3271ca15373d4483($a, $b) -> ret {
     leave
   }
 }
-function $u256_h3271ca15373d4483_div_h14000ca7bc1a1bc4_div($self, $other) -> ret {
-  let v0 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq($other, 0)
-  let v1 := v0
-  if v1 {
+function $ensure_nonzero_divisor__u256__3271ca15373d4483($b) {
+  let v0 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($b)
+  let v1 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0, 0)
+  let v2 := v1
+  if v2 {
     revert(0, 0)
   }
-  let v2 := div($self, $other)
-  ret := v2
   leave
 }
 function $u256_h3271ca15373d4483_eq_he50383edd273619f_eq($self, $other) -> ret {

@@ -153,28 +153,34 @@ func private %u64_haee7f05a097ffa16_saturatingmul_hf2bc6be7b84ff8f7_saturating_m
 
     block2:
         v6.i64 = mul v0 v1;
-        v7.i64 = call %u64_haee7f05a097ffa16_div_h14000ca7bc1a1bc4_div v6 v0;
-        v8.i1 = call %u64_haee7f05a097ffa16_eq_he50383edd273619f_ne v7 v1;
-        br v8 block4 block5;
+        (v7.i64, v8.i1) = evm_udivo v6 v0;
+        br v8 block8 block9;
 
     block3:
-        v10.i1 = call %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq v1 0.i64;
-        br v10 block1 block2;
+        v13.i1 = call %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq v1 0.i64;
+        br v13 block1 block2;
 
     block4:
-        v12.i64 = trunc 18446744073709551615.i256 i64;
+        v15.i64 = trunc 18446744073709551615.i256 i64;
         jump block6;
 
     block5:
         jump block6;
 
     block6:
-        v14.i64 = phi (v12 block4) (v6 block5);
+        v17.i64 = phi (v15 block4) (v6 block5);
         jump block7;
 
     block7:
-        v15.i64 = phi (0.i64 block1) (v14 block6);
-        return v15;
+        v18.i64 = phi (0.i64 block1) (v17 block6);
+        return v18;
+
+    block8:
+        evm_revert 0.i256 0.i256;
+
+    block9:
+        v11.i1 = call %u64_haee7f05a097ffa16_eq_he50383edd273619f_ne v7 v1;
+        br v11 block4 block5;
 }
 
 func private %u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add(v0.i256, v1.i256) -> i256 {
@@ -239,13 +245,12 @@ func private %u256_h3271ca15373d4483_saturatingmul_hf2bc6be7b84ff8f7_saturating_
 
     block2:
         v6.i256 = mul v0 v1;
-        v7.i256 = call %u256_h3271ca15373d4483_div_h14000ca7bc1a1bc4_div v6 v0;
-        v8.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_ne v7 v1;
-        br v8 block4 block5;
+        (v7.i256, v8.i1) = evm_udivo v6 v0;
+        br v8 block8 block9;
 
     block3:
-        v10.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v1 0.i256;
-        br v10 block1 block2;
+        v12.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v1 0.i256;
+        br v12 block1 block2;
 
     block4:
         jump block6;
@@ -254,31 +259,25 @@ func private %u256_h3271ca15373d4483_saturatingmul_hf2bc6be7b84ff8f7_saturating_
         jump block6;
 
     block6:
-        v13.i256 = phi (-1.i256 block4) (v6 block5);
+        v15.i256 = phi (-1.i256 block4) (v6 block5);
         jump block7;
 
     block7:
-        v14.i256 = phi (0.i256 block1) (v13 block6);
-        return v14;
+        v16.i256 = phi (0.i256 block1) (v15 block6);
+        return v16;
+
+    block8:
+        evm_revert 0.i256 0.i256;
+
+    block9:
+        v10.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_ne v7 v1;
+        br v10 block4 block5;
 }
 
 func private %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq(v0.i64, v1.i64) -> i1 {
     block0:
         v2.i1 = eq v0 v1;
         return v2;
-}
-
-func private %u64_haee7f05a097ffa16_div_h14000ca7bc1a1bc4_div(v0.i64, v1.i64) -> i64 {
-    block0:
-        v3.i1 = call %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq v1 0.i64;
-        br v3 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        (v7.i64, v8.i1) = evm_udivo v0 v1;
-        return v7;
 }
 
 func private %u64_haee7f05a097ffa16_eq_he50383edd273619f_ne(v0.i64, v1.i64) -> i1 {
@@ -292,19 +291,6 @@ func private %u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0.i256, v1.i256) -
     block0:
         v2.i1 = eq v0 v1;
         return v2;
-}
-
-func private %u256_h3271ca15373d4483_div_h14000ca7bc1a1bc4_div(v0.i256, v1.i256) -> i256 {
-    block0:
-        v3.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v1 0.i256;
-        br v3 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        (v6.i256, v7.i1) = evm_udivo v0 v1;
-        return v6;
 }
 
 func private %u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v0.i256, v1.i256) -> i1 {

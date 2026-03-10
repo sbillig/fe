@@ -156,6 +156,18 @@ function $checked_add_unsigned_impl__u32__20aa0c10687491ad($a, $b) -> ret {
   ret := v0
   leave
 }
+function $checked_div_u32($a, $b) -> ret {
+  $ensure_nonzero_divisor__u32__20aa0c10687491ad($b)
+  let v0 := and(div(and($a, 0xffffffff), and($b, 0xffffffff)), 0xffffffff)
+  ret := v0
+  leave
+}
+function $checked_div_u64($a, $b) -> ret {
+  $ensure_nonzero_divisor__u64__aee7f05a097ffa16($b)
+  let v0 := and(div(and($a, 0xffffffffffffffff), and($b, 0xffffffffffffffff)), 0xffffffffffffffff)
+  ret := v0
+  leave
+}
 function $checked_mul_u32($a, $b) -> ret {
   let v0 := $checked_mul_unsigned_impl__u32__20aa0c10687491ad($a, $b)
   ret := v0
@@ -172,7 +184,7 @@ function $checked_mul_unsigned_impl__u32__20aa0c10687491ad($a, $b) -> ret {
   let v2 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v1, 0)
   let v3 := v2
   if v3 {
-    let v4 := $u32_h20aa0c10687491ad_div_h14000ca7bc1a1bc4_div(v0, $a)
+    let v4 := $checked_div_u32(v0, $a)
     let v5 := $u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_to_word(v4)
     let v6 := $u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_to_word($b)
     let v7 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v5, v6)
@@ -194,7 +206,7 @@ function $checked_mul_unsigned_impl__u64__aee7f05a097ffa16($a, $b) -> ret {
   let v2 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v1, 0)
   let v3 := v2
   if v3 {
-    let v4 := $u64_haee7f05a097ffa16_div_h14000ca7bc1a1bc4_div(v0, $a)
+    let v4 := $checked_div_u64(v0, $a)
     let v5 := $u64_haee7f05a097ffa16_intword_h9a147c8c32b1323c_to_word(v4)
     let v6 := $u64_haee7f05a097ffa16_intword_h9a147c8c32b1323c_to_word($b)
     let v7 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v5, v6)
@@ -210,6 +222,29 @@ function $checked_mul_unsigned_impl__u64__aee7f05a097ffa16($a, $b) -> ret {
     leave
   }
 }
+function $ensure_nonzero_divisor__u32__20aa0c10687491ad($b) {
+  let v0 := $u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_to_word($b)
+  let v1 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0, 0)
+  let v2 := v1
+  if v2 {
+    revert(0, 0)
+  }
+  leave
+}
+function $ensure_nonzero_divisor__u64__aee7f05a097ffa16($b) {
+  let v0 := $u64_haee7f05a097ffa16_intword_h9a147c8c32b1323c_to_word($b)
+  let v1 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0, 0)
+  let v2 := v1
+  if v2 {
+    revert(0, 0)
+  }
+  leave
+}
+function $u256_h3271ca15373d4483_eq_he50383edd273619f_eq($self, $other) -> ret {
+  let v0 := eq($self, $other)
+  ret := v0
+  leave
+}
 function $u256_h3271ca15373d4483_eq_he50383edd273619f_ne($self, $other) -> ret {
   let v0 := iszero(eq($self, $other))
   ret := v0
@@ -217,21 +252,6 @@ function $u256_h3271ca15373d4483_eq_he50383edd273619f_ne($self, $other) -> ret {
 }
 function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt($self, $other) -> ret {
   let v0 := lt($self, $other)
-  ret := v0
-  leave
-}
-function $u32_h20aa0c10687491ad_div_h14000ca7bc1a1bc4_div($self, $other) -> ret {
-  let v0 := $u32_h20aa0c10687491ad_eq_he50383edd273619f_eq($other, 0)
-  let v1 := v0
-  if v1 {
-    revert(0, 0)
-  }
-  let v2 := and(div(and($self, 0xffffffff), and($other, 0xffffffff)), 0xffffffff)
-  ret := v2
-  leave
-}
-function $u32_h20aa0c10687491ad_eq_he50383edd273619f_eq($self, $other) -> ret {
-  let v0 := eq(and($self, 0xffffffff), and($other, 0xffffffff))
   ret := v0
   leave
 }
@@ -246,21 +266,6 @@ function $u32_h20aa0c10687491ad_wrappingadd_h14afa79b3047617f_wrapping_add($self
 }
 function $u32_h20aa0c10687491ad_wrappingmul_h64e6b83610cda761_wrapping_mul($self, $other) -> ret {
   let v0 := and(mul(and($self, 0xffffffff), and($other, 0xffffffff)), 0xffffffff)
-  ret := v0
-  leave
-}
-function $u64_haee7f05a097ffa16_div_h14000ca7bc1a1bc4_div($self, $other) -> ret {
-  let v0 := $u64_haee7f05a097ffa16_eq_he50383edd273619f_eq($other, 0)
-  let v1 := v0
-  if v1 {
-    revert(0, 0)
-  }
-  let v2 := and(div(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
-  ret := v2
-  leave
-}
-function $u64_haee7f05a097ffa16_eq_he50383edd273619f_eq($self, $other) -> ret {
-  let v0 := eq(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff))
   ret := v0
   leave
 }
