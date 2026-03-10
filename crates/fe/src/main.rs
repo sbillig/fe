@@ -859,6 +859,7 @@ fn build_doc_index(
 
     // Generate SCIP data
     let mut combined_scip = scip::types::Index::default();
+    let mut combined_doc_urls = std::collections::HashMap::new();
     let mut any_scip = false;
 
     let builtin_urls = [
@@ -869,7 +870,7 @@ fn build_doc_index(
 
     for ingot_url in &all_scip_urls {
         match crate::scip_index::generate_scip(db, ingot_url) {
-            Ok(mut scip_index) => {
+            Ok(mut result) => {
                 if ingot_url.scheme() == "file" {
                     if let Some(project_root) = ingot_url
                         .to_file_path()
@@ -880,7 +881,7 @@ fn build_doc_index(
                             db,
                             &project_root,
                             &mut index,
-                            &mut scip_index,
+                            &mut result.index,
                         );
                     }
                 } else {
@@ -889,10 +890,11 @@ fn build_doc_index(
                         camino::Utf8Path::new("/"),
                         Some(ingot_url),
                         &mut index,
-                        &mut scip_index,
+                        &mut result.index,
                     );
                 }
-                combined_scip.documents.extend(scip_index.documents);
+                combined_scip.documents.extend(result.index.documents);
+                combined_doc_urls.extend(result.doc_urls);
                 any_scip = true;
             }
             Err(e) => {
@@ -901,8 +903,10 @@ fn build_doc_index(
         }
     }
     if any_scip {
-        let json_data = crate::scip_index::scip_to_json_data(&combined_scip);
-        scip_json = Some(crate::scip_index::inject_doc_urls(&json_data, &index));
+        scip_json = Some(crate::scip_index::scip_to_json_data(
+            &combined_scip,
+            &combined_doc_urls,
+        ));
     }
 
     // Serialize DocIndex with HTML bodies injected
@@ -1053,7 +1057,7 @@ fn run_scip(path: &Utf8PathBuf, output: &Utf8PathBuf) {
         }
     };
 
-    if let Err(e) = scip::write_message_to_file(output.as_std_path(), index) {
+    if let Err(e) = scip::write_message_to_file(output.as_std_path(), index.index) {
         eprintln!("Error writing SCIP file: {e}");
         std::process::exit(1);
     }
