@@ -12,14 +12,10 @@ func private %make_dummy() -> *@__fe_Dummy_0 {
         v1.*i8 = evm_malloc 64.i256;
         v2.*@__fe_Dummy_0 = bitcast v1 *@__fe_Dummy_0;
         v5.*i64 = gep v2 0.i256 0.i256;
-        v6.i256 = ptr_to_int v5 i256;
-        v7.*i8 = bitcast v5 *i8;
-        v8.i256 = zext 42.i64 i256;
-        mstore v7 v8 i256;
-        v11.*i256 = gep v2 0.i256 1.i256;
-        v12.i256 = ptr_to_int v11 i256;
-        v13.*i8 = bitcast v11 *i8;
-        mstore v13 99.i256 i256;
+        v6.i256 = zext 42.i64 i256;
+        mstore v5 v6 i256;
+        v9.*i256 = gep v2 0.i256 1.i256;
+        mstore v9 99.i256 i256;
         return v2;
 }
 

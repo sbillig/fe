@@ -38,13 +38,9 @@ func private %test_effect_ptr_domains__Evm_hef0af3106e109414_Evm_hef0af3106e1094
         v5.*i8 = evm_malloc 64.i256;
         v6.*@__fe_Foo_0 = bitcast v5 *@__fe_Foo_0;
         v8.*i256 = gep v6 0.i256 0.i256;
-        v9.i256 = ptr_to_int v8 i256;
-        v10.*i8 = bitcast v8 *i8;
-        mstore v10 10.i256 i256;
-        v13.*i256 = gep v6 0.i256 1.i256;
-        v14.i256 = ptr_to_int v13 i256;
-        v15.*i8 = bitcast v13 *i8;
-        mstore v15 20.i256 i256;
+        mstore v8 10.i256 i256;
+        v11.*i256 = gep v6 0.i256 1.i256;
+        mstore v11 20.i256 i256;
         call %bump__MemPtr_Foo___cdd30998d577b6ea v6;
         return;
 }
@@ -58,32 +54,24 @@ func private %mem_ptr_stor__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6
 func private %bump__MemPtr_Foo___cdd30998d577b6ea(v0.*@__fe_Foo_0) {
     block0:
         v2.*i256 = gep v0 0.i256 0.i256;
-        v3.i256 = ptr_to_int v2 i256;
-        v4.*i8 = bitcast v2 *i8;
-        v5.i256 = mload v4 i256;
-        (v7.i256, v8.i1) = uaddo v5 1.i256;
-        br v8 block1 block2;
+        v3.i256 = mload v2 i256;
+        (v5.i256, v6.i1) = uaddo v3 1.i256;
+        br v6 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        v10.*i256 = gep v0 0.i256 0.i256;
-        v11.i256 = ptr_to_int v10 i256;
-        v12.*i8 = bitcast v10 *i8;
-        mstore v12 v7 i256;
-        v13.*i256 = gep v0 0.i256 1.i256;
-        v14.i256 = ptr_to_int v13 i256;
-        v15.*i8 = bitcast v13 *i8;
-        v16.i256 = mload v15 i256;
-        (v18.i256, v19.i1) = uaddo v16 2.i256;
-        br v19 block1 block3;
+        v8.*i256 = gep v0 0.i256 0.i256;
+        mstore v8 v5 i256;
+        v9.*i256 = gep v0 0.i256 1.i256;
+        v10.i256 = mload v9 i256;
+        (v12.i256, v13.i1) = uaddo v10 2.i256;
+        br v13 block1 block3;
 
     block3:
-        v21.*i256 = gep v0 0.i256 1.i256;
-        v22.i256 = ptr_to_int v21 i256;
-        v23.*i8 = bitcast v21 *i8;
-        mstore v23 v18 i256;
+        v15.*i256 = gep v0 0.i256 1.i256;
+        mstore v15 v12 i256;
         return;
 }
 

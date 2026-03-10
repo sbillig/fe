@@ -52,11 +52,9 @@ func private %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len__u
 func private %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u64_25__540b817a073b29f5(v0.*[i64; 25], v1.i256) -> i64 {
     block0:
         v3.*i64 = gep v0 0.i256 v1;
-        v4.i256 = ptr_to_int v3 i256;
-        v5.*i8 = bitcast v3 *i8;
-        v6.i256 = mload v5 i256;
-        v7.i64 = trunc v6 i64;
-        return v7;
+        v4.i256 = mload v3 i256;
+        v5.i64 = trunc v4 i64;
+        return v5;
 }
 
 func private %__fe_sonatina_entry() {

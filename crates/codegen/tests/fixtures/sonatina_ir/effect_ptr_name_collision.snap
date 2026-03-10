@@ -10,10 +10,8 @@ type @__fe_MemPtr_0 = {i256, i256};
 func private %read_tag(v0.*@__fe_MemPtr_0) -> i256 {
     block0:
         v3.*i256 = gep v0 0.i256 1.i256;
-        v4.i256 = ptr_to_int v3 i256;
-        v5.*i8 = bitcast v3 *i8;
-        v6.i256 = mload v5 i256;
-        return v6;
+        v4.i256 = mload v3 i256;
+        return v4;
 }
 
 func private %effect_ptr_name_collision() -> i256 {
@@ -21,15 +19,11 @@ func private %effect_ptr_name_collision() -> i256 {
         v1.*i8 = evm_malloc 64.i256;
         v2.*@__fe_MemPtr_0 = bitcast v1 *@__fe_MemPtr_0;
         v5.*i256 = gep v2 0.i256 0.i256;
-        v6.i256 = ptr_to_int v5 i256;
-        v7.*i8 = bitcast v5 *i8;
-        mstore v7 1.i256 i256;
-        v9.*i256 = gep v2 0.i256 1.i256;
-        v10.i256 = ptr_to_int v9 i256;
-        v11.*i8 = bitcast v9 *i8;
-        mstore v11 7.i256 i256;
-        v12.i256 = call %read_tag v2;
-        return v12;
+        mstore v5 1.i256 i256;
+        v7.*i256 = gep v2 0.i256 1.i256;
+        mstore v7 7.i256 i256;
+        v8.i256 = call %read_tag v2;
+        return v8;
 }
 
 func private %__fe_sonatina_entry() {

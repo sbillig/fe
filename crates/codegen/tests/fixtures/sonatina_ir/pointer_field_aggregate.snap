@@ -27,28 +27,18 @@ func private %pointer_field_aggregate__Evm_hef0af3106e109414__3af54274b2985741()
         v4.*i8 = evm_malloc 64.i256;
         v5.*@__fe_Holder_0 = bitcast v4 *@__fe_Holder_0;
         v6.**i256 = gep v5 0.i256 0.i256;
-        v7.i256 = ptr_to_int v6 i256;
-        v8.*i8 = bitcast v6 *i8;
-        mstore v8 v2 *i256;
-        v10.*i256 = gep v5 0.i256 1.i256;
-        v11.i256 = ptr_to_int v10 i256;
-        v12.*i8 = bitcast v10 *i8;
-        mstore v12 1.i256 i256;
+        mstore v6 v2 *i256;
+        v8.*i256 = gep v5 0.i256 1.i256;
+        mstore v8 1.i256 i256;
+        v9.**i256 = gep v5 0.i256 0.i256;
+        v10.*i256 = mload v9 *i256;
+        call %bump__MemPtr_u256___25949c86160e9382 v10;
+        v12.*i256 = call %mem_ptr_stor__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9 288.i256;
         v13.**i256 = gep v5 0.i256 0.i256;
-        v14.i256 = ptr_to_int v13 i256;
-        v15.*i8 = bitcast v13 *i8;
-        v16.*i256 = mload v15 *i256;
-        call %bump__MemPtr_u256___25949c86160e9382 v16;
-        v18.*i256 = call %mem_ptr_stor__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9 288.i256;
-        v19.**i256 = gep v5 0.i256 0.i256;
-        v20.i256 = ptr_to_int v19 i256;
-        v21.*i8 = bitcast v19 *i8;
-        mstore v21 v18 *i256;
-        v22.**i256 = gep v5 0.i256 0.i256;
-        v23.i256 = ptr_to_int v22 i256;
-        v24.*i8 = bitcast v22 *i8;
-        v25.*i256 = mload v24 *i256;
-        call %bump__MemPtr_u256___25949c86160e9382 v25;
+        mstore v13 v12 *i256;
+        v14.**i256 = gep v5 0.i256 0.i256;
+        v15.*i256 = mload v14 *i256;
+        call %bump__MemPtr_u256___25949c86160e9382 v15;
         return;
 }
 
@@ -60,19 +50,15 @@ func private %mem_ptr_stor__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9(v0.i256
 
 func private %bump__MemPtr_u256___25949c86160e9382(v0.*i256) {
     block0:
-        v1.i256 = ptr_to_int v0 i256;
-        v2.*i8 = bitcast v0 *i8;
-        v3.i256 = mload v2 i256;
-        (v5.i256, v6.i1) = uaddo v3 1.i256;
-        br v6 block1 block2;
+        v1.i256 = mload v0 i256;
+        (v3.i256, v4.i1) = uaddo v1 1.i256;
+        br v4 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        v9.i256 = ptr_to_int v0 i256;
-        v10.*i8 = bitcast v0 *i8;
-        mstore v10 v5 i256;
+        mstore v0 v3 i256;
         return;
 }
 

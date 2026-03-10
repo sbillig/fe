@@ -30,30 +30,24 @@ func private %match_bool_tuple(v0.*@__fe_tuple_0) -> i8 {
 
     block6:
         v9.*i1 = gep v0 0.i256 1.i256;
-        v10.i256 = ptr_to_int v9 i256;
-        v11.*i8 = bitcast v9 *i8;
-        v12.i256 = mload v11 i256;
-        v13.i1 = ne v12 0.i256;
-        br_table v13 block11 (1.i1 block7) (0.i1 block9);
+        v10.i256 = mload v9 i256;
+        v11.i1 = ne v10 0.i256;
+        br_table v11 block11 (1.i1 block7) (0.i1 block9);
 
     block7:
-        v17.*i1 = gep v0 0.i256 0.i256;
-        v18.i256 = ptr_to_int v17 i256;
-        v19.*i8 = bitcast v17 *i8;
-        v20.i256 = mload v19 i256;
-        v21.i1 = ne v20 0.i256;
-        br_table v21 block8 (1.i1 block1) (0.i1 block4);
+        v15.*i1 = gep v0 0.i256 0.i256;
+        v16.i256 = mload v15 i256;
+        v17.i1 = ne v16 0.i256;
+        br_table v17 block8 (1.i1 block1) (0.i1 block4);
 
     block8:
         evm_invalid;
 
     block9:
-        v23.*i1 = gep v0 0.i256 0.i256;
-        v24.i256 = ptr_to_int v23 i256;
-        v25.*i8 = bitcast v23 *i8;
-        v26.i256 = mload v25 i256;
-        v27.i1 = ne v26 0.i256;
-        br_table v27 block10 (1.i1 block3) (0.i1 block5);
+        v19.*i1 = gep v0 0.i256 0.i256;
+        v20.i256 = mload v19 i256;
+        v21.i1 = ne v20 0.i256;
+        br_table v21 block10 (1.i1 block3) (0.i1 block5);
 
     block10:
         evm_invalid;
@@ -78,11 +72,9 @@ func private %match_tuple_with_wildcard(v0.*@__fe_tuple_0) -> i8 {
 
     block4:
         v6.*i1 = gep v0 0.i256 0.i256;
-        v7.i256 = ptr_to_int v6 i256;
-        v8.*i8 = bitcast v6 *i8;
-        v9.i256 = mload v8 i256;
-        v10.i1 = ne v9 0.i256;
-        br_table v10 block5 (1.i1 block1) (0.i1 block3);
+        v7.i256 = mload v6 i256;
+        v8.i1 = ne v7 0.i256;
+        br_table v8 block5 (1.i1 block1) (0.i1 block3);
 
     block5:
         evm_invalid;
@@ -110,18 +102,15 @@ func private %match_mixed_tuple(v0.*@__fe_tuple_1) -> i8 {
 
     block6:
         v8.*i1 = gep v0 0.i256 0.i256;
-        v9.i256 = ptr_to_int v8 i256;
-        v10.*i8 = bitcast v8 *i8;
-        v11.i256 = mload v10 i256;
-        v12.i1 = ne v11 0.i256;
-        br_table v12 block8 (1.i1 block7) (0.i1 block5);
+        v9.i256 = mload v8 i256;
+        v10.i1 = ne v9 0.i256;
+        br_table v10 block8 (1.i1 block7) (0.i1 block5);
 
     block7:
-        v17.*i8 = gep v0 0.i256 1.i256;
-        v18.i256 = ptr_to_int v17 i256;
-        v19.i256 = mload v17 i256;
-        v20.i8 = trunc v19 i8;
-        br_table v20 block4 (0.i8 block1) (1.i8 block3);
+        v15.*i8 = gep v0 0.i256 1.i256;
+        v16.i256 = mload v15 i256;
+        v17.i8 = trunc v16 i8;
+        br_table v17 block4 (0.i8 block1) (1.i8 block3);
 
     block8:
         evm_invalid;

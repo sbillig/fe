@@ -14,47 +14,41 @@ func private %match_tuple_extract(v0.*@__fe_tuple_0) -> i8 {
 
     block1:
         v5.*i8 = gep v0 0.i256 1.i256;
-        v6.i256 = ptr_to_int v5 i256;
-        v7.i256 = mload v5 i256;
-        v8.i8 = trunc v7 i8;
+        v6.i256 = mload v5 i256;
+        v7.i8 = trunc v6 i8;
         jump block2;
 
     block2:
-        v10.i8 = phi (v8 block1) (v15 block3) (v25 block8);
-        return v10;
+        v9.i8 = phi (v7 block1) (v13 block3) (v21 block8);
+        return v9;
 
     block3:
-        v12.*i8 = gep v0 0.i256 0.i256;
-        v13.i256 = ptr_to_int v12 i256;
-        v14.i256 = mload v12 i256;
-        v15.i8 = trunc v14 i8;
+        v11.*i8 = gep v0 0.i256 0.i256;
+        v12.i256 = mload v11 i256;
+        v13.i8 = trunc v12 i8;
         jump block2;
 
     block4:
-        v17.*i8 = gep v0 0.i256 0.i256;
-        v18.i256 = ptr_to_int v17 i256;
-        v19.i256 = mload v17 i256;
+        v15.*i8 = gep v0 0.i256 0.i256;
+        v16.i256 = mload v15 i256;
+        v17.i8 = trunc v16 i8;
+        v18.*i8 = gep v0 0.i256 1.i256;
+        v19.i256 = mload v18 i256;
         v20.i8 = trunc v19 i8;
-        v21.*i8 = gep v0 0.i256 1.i256;
-        v22.i256 = ptr_to_int v21 i256;
-        v23.i256 = mload v21 i256;
-        v24.i8 = trunc v23 i8;
-        (v25.i8, v26.i1) = uaddo v20 v24;
-        br v26 block7 block8;
+        (v21.i8, v22.i1) = uaddo v17 v20;
+        br v22 block7 block8;
 
     block5:
-        v28.*i8 = gep v0 0.i256 0.i256;
-        v29.i256 = ptr_to_int v28 i256;
-        v30.i256 = mload v28 i256;
-        v31.i8 = trunc v30 i8;
-        br_table v31 block6 (0.i8 block1);
+        v24.*i8 = gep v0 0.i256 0.i256;
+        v25.i256 = mload v24 i256;
+        v26.i8 = trunc v25 i8;
+        br_table v26 block6 (0.i8 block1);
 
     block6:
-        v33.*i8 = gep v0 0.i256 1.i256;
-        v34.i256 = ptr_to_int v33 i256;
-        v35.i256 = mload v33 i256;
-        v36.i8 = trunc v35 i8;
-        br_table v36 block4 (0.i8 block3);
+        v28.*i8 = gep v0 0.i256 1.i256;
+        v29.i256 = mload v28 i256;
+        v30.i8 = trunc v29 i8;
+        br_table v30 block4 (0.i8 block3);
 
     block7:
         evm_revert 0.i256 0.i256;
@@ -69,66 +63,57 @@ func private %match_nested_extract(v0.*@__fe_tuple_1) -> i8 {
 
     block1:
         v5.*i8 = gep v0 0.i256 1.i256;
-        v6.i256 = ptr_to_int v5 i256;
-        v7.i256 = mload v5 i256;
-        v8.i8 = trunc v7 i8;
+        v6.i256 = mload v5 i256;
+        v7.i8 = trunc v6 i8;
         jump block2;
 
     block2:
-        v10.i8 = phi (v8 block1) (v20 block10) (v31 block11);
-        return v10;
+        v9.i8 = phi (v7 block1) (v17 block10) (v26 block11);
+        return v9;
 
     block3:
-        v12.*i8 = gep v0 0.i256 0.i256 1.i256;
-        v13.i256 = ptr_to_int v12 i256;
-        v14.i256 = mload v12 i256;
-        v15.i8 = trunc v14 i8;
-        v16.*i8 = gep v0 0.i256 0.i256 0.i256;
-        v17.i256 = ptr_to_int v16 i256;
-        v18.i256 = mload v16 i256;
-        v19.i8 = trunc v18 i8;
-        (v20.i8, v21.i1) = uaddo v19 v15;
-        br v21 block9 block10;
+        v11.*i8 = gep v0 0.i256 0.i256 1.i256;
+        v12.i256 = mload v11 i256;
+        v13.i8 = trunc v12 i8;
+        v14.*i8 = gep v0 0.i256 0.i256 0.i256;
+        v15.i256 = mload v14 i256;
+        v16.i8 = trunc v15 i8;
+        (v17.i8, v18.i1) = uaddo v16 v13;
+        br v18 block9 block10;
 
     block4:
-        v23.*i8 = gep v0 0.i256 0.i256 0.i256;
-        v24.i256 = ptr_to_int v23 i256;
-        v25.i256 = mload v23 i256;
-        v26.i8 = trunc v25 i8;
-        v27.*i8 = gep v0 0.i256 1.i256;
-        v28.i256 = ptr_to_int v27 i256;
-        v29.i256 = mload v27 i256;
-        v30.i8 = trunc v29 i8;
-        (v31.i8, v32.i1) = uaddo v26 v30;
-        br v32 block9 block11;
+        v20.*i8 = gep v0 0.i256 0.i256 0.i256;
+        v21.i256 = mload v20 i256;
+        v22.i8 = trunc v21 i8;
+        v23.*i8 = gep v0 0.i256 1.i256;
+        v24.i256 = mload v23 i256;
+        v25.i8 = trunc v24 i8;
+        (v26.i8, v27.i1) = uaddo v22 v25;
+        br v27 block9 block11;
 
     block5:
-        v34.*i8 = gep v0 0.i256 0.i256 1.i256;
-        v35.i256 = ptr_to_int v34 i256;
-        v36.i256 = mload v34 i256;
-        v37.i8 = trunc v36 i8;
-        br_table v37 block8 (0.i8 block6);
+        v29.*i8 = gep v0 0.i256 0.i256 1.i256;
+        v30.i256 = mload v29 i256;
+        v31.i8 = trunc v30 i8;
+        br_table v31 block8 (0.i8 block6);
 
     block6:
-        v39.*i8 = gep v0 0.i256 0.i256 0.i256;
-        v40.i256 = ptr_to_int v39 i256;
-        v41.i256 = mload v39 i256;
-        v42.i8 = trunc v41 i8;
-        br_table v42 block7 (0.i8 block1);
+        v33.*i8 = gep v0 0.i256 0.i256 0.i256;
+        v34.i256 = mload v33 i256;
+        v35.i8 = trunc v34 i8;
+        br_table v35 block7 (0.i8 block1);
 
     block7:
-        v44.*i8 = gep v0 0.i256 1.i256;
-        v45.i256 = ptr_to_int v44 i256;
-        v46.i256 = mload v44 i256;
-        v47.i8 = trunc v46 i8;
-        br_table v47 block4 (0.i8 block3);
+        v37.*i8 = gep v0 0.i256 1.i256;
+        v38.i256 = mload v37 i256;
+        v39.i8 = trunc v38 i8;
+        br_table v39 block4 (0.i8 block3);
 
     block8:
-        v49.*i8 = gep v0 0.i256 1.i256;
-        v50.i256 = ptr_to_int v49 i256;
-        v51.i256 = mload v49 i256;
-        v52.i8 = trunc v51 i8;
-        br_table v52 block4 (0.i8 block3);
+        v41.*i8 = gep v0 0.i256 1.i256;
+        v42.i256 = mload v41 i256;
+        v43.i8 = trunc v42 i8;
+        br_table v43 block4 (0.i8 block3);
 
     block9:
         evm_revert 0.i256 0.i256;

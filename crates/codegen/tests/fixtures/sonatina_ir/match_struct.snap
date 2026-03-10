@@ -15,98 +15,52 @@ func private %match_struct_fields(v0.*@__fe_Point_0) -> i8 {
         jump block2;
 
     block2:
-        v3.i8 = phi (0.i8 block1) (v16 block3) (v28 block4) (v49 block10);
+        v3.i8 = phi (0.i8 block1) (v9 block3) (v14 block4) (v24 block10);
         return v3;
 
     block3:
-        v5.i256 = ptr_to_int v0 i256;
-        v6.*i8 = bitcast v0 *i8;
-        v7.*@__fe_Point_0 = bitcast v6 *@__fe_Point_0;
-        v8.i256 = ptr_to_int v0 i256;
-        v9.*i8 = bitcast v0 *i8;
-        v10.*@__fe_Point_0 = bitcast v9 *@__fe_Point_0;
-        v12.*i8 = gep v10 0.i256 1.i256;
-        v13.i256 = ptr_to_int v12 i256;
-        v14.i256 = ptr_to_int v12 i256;
-        v15.i256 = mload v12 i256;
-        v16.i8 = trunc v15 i8;
+        v6.*i8 = gep v0 0.i256 1.i256;
+        v7.i256 = ptr_to_int v6 i256;
+        v8.i256 = mload v6 i256;
+        v9.i8 = trunc v8 i8;
         jump block2;
 
     block4:
-        v18.i256 = ptr_to_int v0 i256;
-        v19.*i8 = bitcast v0 *i8;
-        v20.*@__fe_Point_0 = bitcast v19 *@__fe_Point_0;
-        v21.i256 = ptr_to_int v0 i256;
-        v22.*i8 = bitcast v0 *i8;
-        v23.*@__fe_Point_0 = bitcast v22 *@__fe_Point_0;
-        v24.*i8 = gep v23 0.i256 0.i256;
-        v25.i256 = ptr_to_int v24 i256;
-        v26.i256 = ptr_to_int v24 i256;
-        v27.i256 = mload v24 i256;
-        v28.i8 = trunc v27 i8;
+        v11.*i8 = gep v0 0.i256 0.i256;
+        v12.i256 = ptr_to_int v11 i256;
+        v13.i256 = mload v11 i256;
+        v14.i8 = trunc v13 i8;
         jump block2;
 
     block5:
-        v30.i256 = ptr_to_int v0 i256;
-        v31.*i8 = bitcast v0 *i8;
-        v32.*@__fe_Point_0 = bitcast v31 *@__fe_Point_0;
-        v33.i256 = ptr_to_int v0 i256;
-        v34.*i8 = bitcast v0 *i8;
-        v35.*@__fe_Point_0 = bitcast v34 *@__fe_Point_0;
-        v36.*i8 = gep v35 0.i256 1.i256;
-        v37.i256 = ptr_to_int v36 i256;
-        v38.i256 = ptr_to_int v0 i256;
-        v39.*i8 = bitcast v0 *i8;
-        v40.*@__fe_Point_0 = bitcast v39 *@__fe_Point_0;
-        v41.*i8 = gep v40 0.i256 0.i256;
-        v42.i256 = ptr_to_int v41 i256;
-        v43.i256 = ptr_to_int v41 i256;
-        v44.i256 = mload v41 i256;
-        v45.i8 = trunc v44 i8;
-        v46.i256 = ptr_to_int v36 i256;
-        v47.i256 = mload v36 i256;
-        v48.i8 = trunc v47 i8;
-        (v49.i8, v50.i1) = uaddo v45 v48;
-        br v50 block9 block10;
+        v16.*i8 = gep v0 0.i256 1.i256;
+        v17.i256 = ptr_to_int v16 i256;
+        v18.*i8 = gep v0 0.i256 0.i256;
+        v19.i256 = ptr_to_int v18 i256;
+        v20.i256 = mload v18 i256;
+        v21.i8 = trunc v20 i8;
+        v22.i256 = mload v16 i256;
+        v23.i8 = trunc v22 i8;
+        (v24.i8, v25.i1) = uaddo v21 v23;
+        br v25 block9 block10;
 
     block6:
-        v52.i256 = ptr_to_int v0 i256;
-        v53.*i8 = bitcast v0 *i8;
-        v54.*@__fe_Point_0 = bitcast v53 *@__fe_Point_0;
-        v55.i256 = ptr_to_int v0 i256;
-        v56.*i8 = bitcast v0 *i8;
-        v57.*@__fe_Point_0 = bitcast v56 *@__fe_Point_0;
-        v58.*i8 = gep v57 0.i256 1.i256;
-        v59.i256 = ptr_to_int v58 i256;
-        v60.i256 = mload v58 i256;
-        v61.i8 = trunc v60 i8;
-        br_table v61 block8 (0.i8 block7);
+        v27.*i8 = gep v0 0.i256 1.i256;
+        v28.i256 = mload v27 i256;
+        v29.i8 = trunc v28 i8;
+        br_table v29 block8 (0.i8 block7);
 
     block7:
-        v63.i256 = ptr_to_int v0 i256;
-        v64.*i8 = bitcast v0 *i8;
-        v65.*@__fe_Point_0 = bitcast v64 *@__fe_Point_0;
-        v66.i256 = ptr_to_int v0 i256;
-        v67.*i8 = bitcast v0 *i8;
-        v68.*@__fe_Point_0 = bitcast v67 *@__fe_Point_0;
-        v69.*i8 = gep v68 0.i256 0.i256;
-        v70.i256 = ptr_to_int v69 i256;
-        v71.i256 = mload v69 i256;
-        v72.i8 = trunc v71 i8;
-        br_table v72 block4 (0.i8 block1);
+        v31.*i8 = gep v0 0.i256 0.i256;
+        v32.i256 = mload v31 i256;
+        v33.i8 = trunc v32 i8;
+        br_table v33 block4 (0.i8 block1);
 
     block8:
-        v74.i256 = ptr_to_int v0 i256;
-        v75.*i8 = bitcast v0 *i8;
-        v76.*@__fe_Point_0 = bitcast v75 *@__fe_Point_0;
-        v77.i256 = ptr_to_int v0 i256;
-        v78.*i8 = bitcast v0 *i8;
-        v79.*@__fe_Point_0 = bitcast v78 *@__fe_Point_0;
-        v80.*i8 = gep v79 0.i256 0.i256;
-        v81.i256 = ptr_to_int v80 i256;
-        v82.i256 = mload v80 i256;
-        v83.i8 = trunc v82 i8;
-        br_table v83 block5 (0.i8 block3);
+        v35.*i8 = gep v0 0.i256 0.i256;
+        v36.i256 = mload v35 i256;
+        v37.i8 = trunc v36 i8;
+        br_table v37 block5 (0.i8 block3);
 
     block9:
         evm_revert 0.i256 0.i256;
@@ -133,30 +87,16 @@ func private %match_struct_wildcard(v0.*@__fe_Point_0) -> i8 {
         jump block2;
 
     block5:
-        v8.i256 = ptr_to_int v0 i256;
-        v9.*i8 = bitcast v0 *i8;
-        v10.*@__fe_Point_0 = bitcast v9 *@__fe_Point_0;
-        v11.i256 = ptr_to_int v0 i256;
-        v12.*i8 = bitcast v0 *i8;
-        v13.*@__fe_Point_0 = bitcast v12 *@__fe_Point_0;
-        v14.*i8 = gep v13 0.i256 0.i256;
-        v15.i256 = ptr_to_int v14 i256;
-        v16.i256 = mload v14 i256;
-        v17.i8 = trunc v16 i8;
-        br_table v17 block6 (0.i8 block1);
+        v8.*i8 = gep v0 0.i256 0.i256;
+        v9.i256 = mload v8 i256;
+        v10.i8 = trunc v9 i8;
+        br_table v10 block6 (0.i8 block1);
 
     block6:
-        v19.i256 = ptr_to_int v0 i256;
-        v20.*i8 = bitcast v0 *i8;
-        v21.*@__fe_Point_0 = bitcast v20 *@__fe_Point_0;
-        v22.i256 = ptr_to_int v0 i256;
-        v23.*i8 = bitcast v0 *i8;
-        v24.*@__fe_Point_0 = bitcast v23 *@__fe_Point_0;
-        v26.*i8 = gep v24 0.i256 1.i256;
-        v27.i256 = ptr_to_int v26 i256;
-        v28.i256 = mload v26 i256;
-        v29.i8 = trunc v28 i8;
-        br_table v29 block4 (0.i8 block3);
+        v13.*i8 = gep v0 0.i256 1.i256;
+        v14.i256 = mload v13 i256;
+        v15.i8 = trunc v14 i8;
+        br_table v15 block4 (0.i8 block3);
 }
 
 func private %__fe_sonatina_entry() {

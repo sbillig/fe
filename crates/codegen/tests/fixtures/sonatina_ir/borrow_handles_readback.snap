@@ -13,12 +13,10 @@ func private %borrow_handles_readback() -> i256 {
         mstore v3 0.i256 i256;
         v4.*i8 = bitcast v0 *i8;
         v5.*i256 = bitcast v4 *i256;
-        v7.i256 = ptr_to_int v5 i256;
-        v8.*i8 = bitcast v5 *i8;
-        mstore v8 5.i256 i256;
-        v9.*i8 = bitcast v0 *i8;
-        v10.i256 = mload v9 i256;
-        return v10;
+        mstore v5 5.i256 i256;
+        v7.*i8 = bitcast v0 *i8;
+        v8.i256 = mload v7 i256;
+        return v8;
 }
 
 func private %__fe_sonatina_entry() {

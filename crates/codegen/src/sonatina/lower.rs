@@ -1893,10 +1893,51 @@ fn place_supports_gep<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 }
 
 #[derive(Debug, Clone, Copy)]
+enum LoweredPlaceAddr {
+    Word(ValueId),
+    MemoryPtr(ValueId),
+}
+
+#[derive(Debug, Clone, Copy)]
 struct LoweredPlaceTerminal<'db> {
     state: PlaceState<'db>,
-    word_addr: ValueId,
-    memory_ptr: Option<ValueId>,
+    addr: LoweredPlaceAddr,
+}
+
+impl<'db> LoweredPlaceTerminal<'db> {
+    fn word_addr<C: sonatina_ir::func_cursor::FuncCursor>(
+        self,
+        ctx: &mut LowerCtx<'_, 'db, C>,
+    ) -> ValueId {
+        match self.addr {
+            LoweredPlaceAddr::Word(addr) => addr,
+            LoweredPlaceAddr::MemoryPtr(ptr) => coerce_value_to_word(ctx, ptr),
+        }
+    }
+
+    fn memory_ptr<C: sonatina_ir::func_cursor::FuncCursor>(
+        self,
+        ctx: &mut LowerCtx<'_, 'db, C>,
+        expected_ty: Type,
+    ) -> Option<ValueId> {
+        match self.addr {
+            LoweredPlaceAddr::MemoryPtr(ptr) => Some(coerce_value_to_type(ctx, ptr, expected_ty)),
+            LoweredPlaceAddr::Word(_) => None,
+        }
+    }
+
+    fn runtime_addr(self) -> ValueId {
+        match self.addr {
+            LoweredPlaceAddr::Word(addr) | LoweredPlaceAddr::MemoryPtr(addr) => addr,
+        }
+    }
+
+    fn native_memory_ptr(self) -> Option<ValueId> {
+        match self.addr {
+            LoweredPlaceAddr::MemoryPtr(ptr) => Some(ptr),
+            LoweredPlaceAddr::Word(_) => None,
+        }
+    }
 }
 
 fn lower_place_state_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
@@ -1908,14 +1949,24 @@ fn lower_place_state_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     let address_space = state.location_address_space().ok_or_else(|| {
         LowerError::Internal(format!("non-location segment base for {debug_place:?}"))
     })?;
-    let word_addr = coerce_value_to_word(ctx, runtime);
-    let opaque_ptr_ty = ctx.fb.ptr_type(Type::I8);
-    let memory_ptr = matches!(address_space, AddressSpaceKind::Memory)
-        .then(|| coerce_value_to_type(ctx, runtime, opaque_ptr_ty));
     Ok(LoweredPlaceTerminal {
         state,
-        word_addr,
-        memory_ptr,
+        addr: if matches!(address_space, AddressSpaceKind::Memory) {
+            LoweredPlaceAddr::MemoryPtr(
+                if ctx
+                    .fb
+                    .type_of(runtime)
+                    .is_pointer(&ctx.fb.module_builder.ctx)
+                {
+                    runtime
+                } else {
+                    let opaque_ptr_ty = ctx.fb.ptr_type(Type::I8);
+                    coerce_word_addr_to_ptr(ctx, runtime, opaque_ptr_ty)
+                },
+            )
+        } else {
+            LoweredPlaceAddr::Word(coerce_value_to_word(ctx, runtime))
+        },
     })
 }
 
@@ -1962,15 +2013,12 @@ fn lower_place_runtime_location_value<'db, C: sonatina_ir::func_cursor::FuncCurs
 ) -> Result<ValueId, LowerError> {
     let terminal = lower_place_terminal(ctx, place)?;
     if expected_runtime_ty.is_pointer(&ctx.fb.module_builder.ctx)
-        && let Some(memory_ptr) = terminal.memory_ptr
+        && let Some(memory_ptr) = terminal.memory_ptr(ctx, expected_runtime_ty)
     {
         return Ok(coerce_value_to_type(ctx, memory_ptr, expected_runtime_ty));
     }
-    Ok(coerce_value_to_type(
-        ctx,
-        terminal.word_addr,
-        expected_runtime_ty,
-    ))
+    let word_addr = terminal.word_addr(ctx);
+    Ok(coerce_value_to_type(ctx, word_addr, expected_runtime_ty))
 }
 
 fn load_from_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
@@ -1985,10 +2033,9 @@ fn load_from_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         .ok_or_else(|| LowerError::Internal("place terminal is not a location".to_string()))?
     {
         AddressSpaceKind::Memory => {
-            let opaque_ptr_ty = ctx.fb.ptr_type(Type::I8);
-            let ptr_addr = terminal
-                .memory_ptr
-                .unwrap_or_else(|| coerce_word_addr_to_ptr(ctx, terminal.word_addr, opaque_ptr_ty));
+            let ptr_addr = terminal.native_memory_ptr().ok_or_else(|| {
+                LowerError::Internal("memory place terminal missing pointer".to_string())
+            })?;
             if expected_runtime_ty.is_pointer(&ctx.fb.module_builder.ctx) {
                 return Ok(ctx.fb.insert_inst(
                     Mload::new(ctx.is, ptr_addr, expected_runtime_ty),
@@ -2001,23 +2048,26 @@ fn load_from_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             Ok(apply_from_word(ctx.fb, ctx.db, raw, loaded_ty, ctx.is))
         }
         AddressSpaceKind::Storage => {
+            let word_addr = terminal.word_addr(ctx);
             let raw = ctx
                 .fb
-                .insert_inst(EvmSload::new(ctx.is, terminal.word_addr), Type::I256);
+                .insert_inst(EvmSload::new(ctx.is, word_addr), Type::I256);
             let loaded = apply_from_word(ctx.fb, ctx.db, raw, loaded_ty, ctx.is);
             Ok(coerce_value_to_type(ctx, loaded, expected_runtime_ty))
         }
         AddressSpaceKind::TransientStorage => {
+            let word_addr = terminal.word_addr(ctx);
             let raw = ctx
                 .fb
-                .insert_inst(EvmTload::new(ctx.is, terminal.word_addr), Type::I256);
+                .insert_inst(EvmTload::new(ctx.is, word_addr), Type::I256);
             let loaded = apply_from_word(ctx.fb, ctx.db, raw, loaded_ty, ctx.is);
             Ok(coerce_value_to_type(ctx, loaded, expected_runtime_ty))
         }
         AddressSpaceKind::Calldata => {
+            let word_addr = terminal.word_addr(ctx);
             let raw = ctx
                 .fb
-                .insert_inst(EvmCalldataLoad::new(ctx.is, terminal.word_addr), Type::I256);
+                .insert_inst(EvmCalldataLoad::new(ctx.is, word_addr), Type::I256);
             let loaded = apply_from_word(ctx.fb, ctx.db, raw, loaded_ty, ctx.is);
             Ok(coerce_value_to_type(ctx, loaded, expected_runtime_ty))
         }
@@ -2061,43 +2111,30 @@ fn lower_place_segment_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     {
         let gep_ptr =
             lower_place_address_gep(ctx, &segment.projections, segment_base, sonatina_ty)?;
-        let word_addr = ctx
-            .fb
-            .insert_inst(PtrToInt::new(ctx.is, gep_ptr, Type::I256), Type::I256);
-        let opaque_ptr_ty = ctx.fb.ptr_type(Type::I8);
-        let memory_ptr = Some(coerce_value_to_type(ctx, gep_ptr, opaque_ptr_ty));
         return Ok(LoweredPlaceTerminal {
             state: segment.terminal_state(),
-            word_addr,
-            memory_ptr,
+            addr: LoweredPlaceAddr::MemoryPtr(gep_ptr),
         });
     }
 
     let base_word = coerce_value_to_word(ctx, segment_base);
     let word_addr =
         lower_place_address_arithmetic(ctx, &segment.projections, base_word, is_slot_addressed)?;
-    let opaque_ptr_ty = ctx.fb.ptr_type(Type::I8);
-    let memory_ptr = matches!(address_space, AddressSpaceKind::Memory)
-        .then(|| coerce_word_addr_to_ptr(ctx, word_addr, opaque_ptr_ty));
     Ok(LoweredPlaceTerminal {
         state: segment.terminal_state(),
-        word_addr,
-        memory_ptr,
+        addr: if matches!(address_space, AddressSpaceKind::Memory) {
+            {
+                let opaque_ptr_ty = ctx.fb.ptr_type(Type::I8);
+                LoweredPlaceAddr::MemoryPtr(coerce_word_addr_to_ptr(ctx, word_addr, opaque_ptr_ty))
+            }
+        } else {
+            LoweredPlaceAddr::Word(word_addr)
+        },
     })
 }
 
-fn terminal_runtime_value<'db, C: sonatina_ir::func_cursor::FuncCursor>(
-    ctx: &mut LowerCtx<'_, 'db, C>,
-    terminal: LoweredPlaceTerminal<'db>,
-) -> ValueId {
-    if terminal.state.location_address_space() == Some(AddressSpaceKind::Memory) {
-        let opaque_ptr_ty = ctx.fb.ptr_type(Type::I8);
-        return terminal
-            .memory_ptr
-            .unwrap_or_else(|| coerce_word_addr_to_ptr(ctx, terminal.word_addr, opaque_ptr_ty));
-    }
-
-    terminal.word_addr
+fn terminal_runtime_value<'db>(terminal: LoweredPlaceTerminal<'db>) -> ValueId {
+    terminal.runtime_addr()
 }
 
 fn lower_place_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
@@ -2143,7 +2180,7 @@ fn lower_place_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 load_from_terminal(ctx, base_terminal, segment.before.ty, runtime_ty)?
             }
             (false, Some(mir::repr::DerefStepKind::ReuseLocation), Some(terminal)) => {
-                terminal_runtime_value(ctx, terminal)
+                terminal_runtime_value(terminal)
             }
             (false, Some(mir::repr::DerefStepKind::LoadLocationValue), Some(terminal)) => {
                 let runtime_ty = runtime_type_for_pointer_info(
@@ -2192,7 +2229,7 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
     place: &Place<'db>,
 ) -> Result<ValueId, LowerError> {
-    Ok(lower_place_terminal(ctx, place)?.word_addr)
+    Ok(lower_place_terminal(ctx, place)?.word_addr(ctx))
 }
 
 /// GEP-based place address computation for memory-addressed struct/array paths.
@@ -2270,7 +2307,7 @@ fn lower_place_memory_ptr<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     place: &Place<'db>,
 ) -> Result<ValueId, LowerError> {
     let lowered = lower_place_terminal(ctx, place)?;
-    let Some(ptr) = lowered.memory_ptr else {
+    let Some(ptr) = lowered.native_memory_ptr() else {
         return Err(LowerError::Internal(format!(
             "requested memory pointer for non-memory place: {place:?}"
         )));
@@ -2738,20 +2775,21 @@ fn store_word_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         .ok_or_else(|| LowerError::Internal(format!("store target is not a location: {place:?}")))?
     {
         AddressSpaceKind::Memory => {
-            let opaque_ptr_ty = ctx.fb.ptr_type(Type::I8);
-            let ptr_addr = lowered
-                .memory_ptr
-                .unwrap_or_else(|| coerce_word_addr_to_ptr(ctx, lowered.word_addr, opaque_ptr_ty));
+            let ptr_addr = lowered.native_memory_ptr().ok_or_else(|| {
+                LowerError::Internal("memory place terminal missing pointer".to_string())
+            })?;
             ctx.fb
                 .insert_inst_no_result(Mstore::new(ctx.is, ptr_addr, val, Type::I256));
         }
         AddressSpaceKind::Storage => {
+            let word_addr = lowered.word_addr(ctx);
             ctx.fb
-                .insert_inst_no_result(EvmSstore::new(ctx.is, lowered.word_addr, val));
+                .insert_inst_no_result(EvmSstore::new(ctx.is, word_addr, val));
         }
         AddressSpaceKind::TransientStorage => {
+            let word_addr = lowered.word_addr(ctx);
             ctx.fb
-                .insert_inst_no_result(EvmTstore::new(ctx.is, lowered.word_addr, val));
+                .insert_inst_no_result(EvmTstore::new(ctx.is, word_addr, val));
         }
         AddressSpaceKind::Calldata => {
             return Err(LowerError::Unsupported("store to calldata".to_string()));
@@ -2778,10 +2816,9 @@ fn store_runtime_value_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         .ok_or_else(|| LowerError::Internal(format!("store target is not a location: {place:?}")))?
     {
         AddressSpaceKind::Memory => {
-            let opaque_ptr_ty = ctx.fb.ptr_type(Type::I8);
-            let ptr_addr = lowered
-                .memory_ptr
-                .unwrap_or_else(|| coerce_word_addr_to_ptr(ctx, lowered.word_addr, opaque_ptr_ty));
+            let ptr_addr = lowered.native_memory_ptr().ok_or_else(|| {
+                LowerError::Internal("memory place terminal missing pointer".to_string())
+            })?;
             let value_ty = ctx.fb.type_of(value);
             if value_ty.is_pointer(&ctx.fb.module_builder.ctx) {
                 ctx.fb
@@ -2797,15 +2834,17 @@ fn store_runtime_value_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         AddressSpaceKind::Storage => {
             let raw = coerce_value_to_word(ctx, value);
             let val = apply_to_word(ctx.fb, ctx.db, raw, stored_ty, ctx.is);
+            let word_addr = lowered.word_addr(ctx);
             ctx.fb
-                .insert_inst_no_result(EvmSstore::new(ctx.is, lowered.word_addr, val));
+                .insert_inst_no_result(EvmSstore::new(ctx.is, word_addr, val));
             Ok(())
         }
         AddressSpaceKind::TransientStorage => {
             let raw = coerce_value_to_word(ctx, value);
             let val = apply_to_word(ctx.fb, ctx.db, raw, stored_ty, ctx.is);
+            let word_addr = lowered.word_addr(ctx);
             ctx.fb
-                .insert_inst_no_result(EvmTstore::new(ctx.is, lowered.word_addr, val));
+                .insert_inst_no_result(EvmTstore::new(ctx.is, word_addr, val));
             Ok(())
         }
         AddressSpaceKind::Calldata => Err(LowerError::Unsupported("store to calldata".to_string())),

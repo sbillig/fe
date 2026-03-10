@@ -16,17 +16,15 @@ func private %get_sum() -> i256 {
         evm_code_copy v4 v2 v3;
         v5.*[i256; 3] = bitcast v1 *[i256; 3];
         v7.*i256 = gep v5 0.i256 0.i256;
-        v8.i256 = ptr_to_int v7 i256;
-        v9.*i8 = bitcast v7 *i8;
-        v10.i256 = mload v9 i256;
-        (v12.i256, v13.i1) = uaddo 1.i256 v10;
-        br v13 block1 block2;
+        v8.i256 = mload v7 i256;
+        (v10.i256, v11.i1) = uaddo 1.i256 v8;
+        br v11 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        return v12;
+        return v10;
 }
 
 func private %__fe_sonatina_entry() {

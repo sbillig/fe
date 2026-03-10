@@ -19,16 +19,12 @@ func private %tuple_expr() -> *@__fe_tuple_0 {
         v6.*i8 = evm_malloc 64.i256;
         v7.*@__fe_tuple_0 = bitcast v6 *@__fe_tuple_0;
         v8.*i64 = gep v7 0.i256 0.i256;
-        v9.i256 = ptr_to_int v8 i256;
-        v10.*i8 = bitcast v8 *i8;
-        v11.i256 = zext v2 i256;
-        mstore v10 v11 i256;
-        v13.i1 = is_zero 0.i1;
-        v15.*i1 = gep v7 0.i256 1.i256;
-        v16.i256 = ptr_to_int v15 i256;
-        v17.*i8 = bitcast v15 *i8;
-        v18.i256 = zext v13 i256;
-        mstore v17 v18 i256;
+        v9.i256 = zext v2 i256;
+        mstore v8 v9 i256;
+        v11.i1 = is_zero 0.i1;
+        v13.*i1 = gep v7 0.i256 1.i256;
+        v14.i256 = zext v11 i256;
+        mstore v13 v14 i256;
         return v7;
 }
 
