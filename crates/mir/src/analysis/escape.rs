@@ -21,6 +21,7 @@ pub struct MirPtrEscapeSummary {
     /// through value dependency analysis.
     pub arg_may_escape: Vec<bool>,
     pub arg_may_be_returned: Vec<bool>,
+    pub arg_value_may_escape: Vec<bool>,
     pub local_alloc_may_escape: Vec<bool>,
 }
 
@@ -29,6 +30,7 @@ impl MirPtrEscapeSummary {
         Self {
             arg_may_escape: vec![false; arg_count],
             arg_may_be_returned: vec![false; arg_count],
+            arg_value_may_escape: vec![false; arg_count],
             local_alloc_may_escape: vec![false; local_count],
         }
     }
@@ -36,6 +38,7 @@ impl MirPtrEscapeSummary {
 
 pub type MirPtrEscapeSummaryMap = FxHashMap<String, MirPtrEscapeSummary>;
 
+#[derive(Clone)]
 struct LocalEscapeInfo {
     direct_side_effect: bool,
     direct_return: bool,
@@ -217,6 +220,9 @@ fn compute_ptr_escape_summary_for_function<'db>(
         out.arg_may_be_returned[idx] = borrow_summary
             .is_some_and(|summary| arg_is_returned_by_borrow_summary(summary, idx))
             || local_may_be_returned(body, local, summaries);
+        let value_info =
+            local_value_escape_info(body, local, summaries, &must_alias_in_states, &alloc_flags);
+        out.arg_value_may_escape[idx] = value_info.direct_side_effect || value_info.direct_return;
     }
 
     out
@@ -896,6 +902,15 @@ fn call_return_arg_mask<'a>(
         .map(|summary| summary.arg_may_be_returned.as_slice())
 }
 
+fn call_value_escape_arg_mask<'a>(
+    callee_name: Option<&str>,
+    ptr_escape_summaries: &'a MirPtrEscapeSummaryMap,
+) -> Option<&'a [bool]> {
+    callee_name
+        .and_then(|name| ptr_escape_summaries.get(name))
+        .map(|summary| summary.arg_value_may_escape.as_slice())
+}
+
 fn call_args_depend_on_local_with_mask<'db>(
     body: &MirBody<'db>,
     values: &[ValueId],
@@ -1204,6 +1219,278 @@ fn local_escape_info<'db>(
         }
 
         if terminator_may_escape_local(
+            body,
+            &block.terminator,
+            source_local,
+            ptr_escape_summaries,
+            &local_depends,
+            &mut dependency_value_visiting,
+        ) {
+            direct_side_effect = true;
+        }
+
+        if let Terminator::Return {
+            value: Some(returned),
+            ..
+        } = &block.terminator
+            && value_can_carry_pointer(body, *returned)
+            && value_depends_on_local(
+                body,
+                *returned,
+                source_local,
+                &local_depends,
+                &mut dependency_value_visiting,
+            )
+        {
+            direct_return = true;
+        }
+    }
+
+    LocalEscapeInfo {
+        direct_side_effect,
+        direct_return,
+        edges,
+    }
+}
+
+fn rvalue_may_escape_local_value<'db>(
+    body: &MirBody<'db>,
+    _dest_local: Option<LocalId>,
+    rvalue: &Rvalue<'db>,
+    local: LocalId,
+    ptr_escape_summaries: &MirPtrEscapeSummaryMap,
+    local_depends: &[bool],
+    value_visiting: &mut Vec<bool>,
+) -> bool {
+    match rvalue {
+        Rvalue::Call(call) => {
+            let arg_escape_mask =
+                call_value_escape_arg_mask(call.resolved_name.as_deref(), ptr_escape_summaries);
+            call_args_depend_on_local_with_mask(
+                body,
+                &call.args,
+                local,
+                local_depends,
+                arg_escape_mask,
+                0,
+                value_visiting,
+            ) || call_args_depend_on_local_with_mask(
+                body,
+                &call.effect_args,
+                local,
+                local_depends,
+                arg_escape_mask,
+                call.args.len(),
+                value_visiting,
+            )
+        }
+        Rvalue::Intrinsic { op, args } => args.iter().copied().enumerate().any(|(idx, value)| {
+            intrinsic_arg_may_escape(*op, idx)
+                && value_depends_on_local(body, value, local, local_depends, value_visiting)
+        }),
+        Rvalue::ZeroInit
+        | Rvalue::Value(_)
+        | Rvalue::Load { .. }
+        | Rvalue::Alloc { .. }
+        | Rvalue::ConstAggregate { .. } => false,
+    }
+}
+
+fn terminator_may_escape_local_value<'db>(
+    body: &MirBody<'db>,
+    terminator: &Terminator<'db>,
+    local: LocalId,
+    ptr_escape_summaries: &MirPtrEscapeSummaryMap,
+    local_depends: &[bool],
+    value_visiting: &mut Vec<bool>,
+) -> bool {
+    match terminator {
+        Terminator::TerminatingCall { call, .. } => match call {
+            TerminatingCall::Call(call) => {
+                let arg_escape_mask =
+                    call_value_escape_arg_mask(call.resolved_name.as_deref(), ptr_escape_summaries);
+                call_args_depend_on_local_with_mask(
+                    body,
+                    &call.args,
+                    local,
+                    local_depends,
+                    arg_escape_mask,
+                    0,
+                    value_visiting,
+                ) || call_args_depend_on_local_with_mask(
+                    body,
+                    &call.effect_args,
+                    local,
+                    local_depends,
+                    arg_escape_mask,
+                    call.args.len(),
+                    value_visiting,
+                )
+            }
+            TerminatingCall::Intrinsic { op, args } => {
+                args.iter().copied().enumerate().any(|(idx, value)| {
+                    intrinsic_arg_may_escape(*op, idx)
+                        && value_depends_on_local(body, value, local, local_depends, value_visiting)
+                })
+            }
+        },
+        Terminator::Return { .. }
+        | Terminator::Goto { .. }
+        | Terminator::Branch { .. }
+        | Terminator::Switch { .. }
+        | Terminator::Unreachable { .. } => false,
+    }
+}
+
+fn local_value_escape_info<'db>(
+    body: &MirBody<'db>,
+    source_local: LocalId,
+    ptr_escape_summaries: &MirPtrEscapeSummaryMap,
+    must_alias_in_states: &[Vec<Option<LocalId>>],
+    alloc_flags: &[bool],
+) -> LocalEscapeInfo {
+    let dependency_in_states =
+        compute_local_dependency_in_states(body, source_local, ptr_escape_summaries);
+    let mut dependency_state = LocalDependencyState::new(body);
+    let mut direct_side_effect = false;
+    let mut direct_return = false;
+    let mut edges = Vec::new();
+    let mut dependency_value_visiting = vec![false; body.values.len()];
+    let mut must_alias_visiting = vec![false; body.values.len()];
+
+    for (block_idx, block) in body.blocks.iter().enumerate() {
+        let mut local_depends = dependency_in_states
+            .get(block_idx)
+            .cloned()
+            .unwrap_or_else(|| initial_local_dependency_state(body, source_local));
+        let mut must_alias_state = must_alias_in_states
+            .get(block_idx)
+            .cloned()
+            .unwrap_or_else(|| vec![None; body.locals.len()]);
+        for inst in &block.insts {
+            match inst {
+                MirInst::Assign { dest, rvalue, .. } => {
+                    if rvalue_may_escape_local_value(
+                        body,
+                        *dest,
+                        rvalue,
+                        source_local,
+                        ptr_escape_summaries,
+                        &local_depends,
+                        &mut dependency_value_visiting,
+                    ) {
+                        direct_side_effect = true;
+                    }
+                    if let Some(dest_local) = dest {
+                        let must_alias = rvalue_must_alias_local_alloc(
+                            body,
+                            rvalue,
+                            *dest_local,
+                            &must_alias_state,
+                            alloc_flags,
+                            &mut must_alias_visiting,
+                        );
+                        must_alias_state[dest_local.index()] = must_alias;
+                    }
+                }
+                MirInst::Store { place, value, .. } => {
+                    if value_depends_on_local(
+                        body,
+                        *value,
+                        source_local,
+                        &local_depends,
+                        &mut dependency_value_visiting,
+                    ) && !value_is_direct_ref_to_local(
+                        body,
+                        *value,
+                        source_local,
+                        &must_alias_state,
+                        &mut must_alias_visiting,
+                    ) {
+                        if value_origin_local(body, place.base, &mut must_alias_visiting)
+                            == Some(source_local)
+                        {
+                            continue;
+                        }
+                        let target = store_target_alloc_local(
+                            body,
+                            place,
+                            &must_alias_state,
+                            &mut must_alias_visiting,
+                        )
+                        .and_then(|local| {
+                            alloc_flags
+                                .get(local.index())
+                                .copied()
+                                .unwrap_or(false)
+                                .then_some(local)
+                        });
+                        if let Some(target) = target {
+                            if target != source_local {
+                                edges.push(target);
+                            }
+                        } else {
+                            direct_side_effect = true;
+                        }
+                    }
+                }
+                MirInst::InitAggregate { place, inits, .. } => {
+                    for (_, value) in inits {
+                        if value_depends_on_local(
+                            body,
+                            *value,
+                            source_local,
+                            &local_depends,
+                            &mut dependency_value_visiting,
+                        ) && !value_is_direct_ref_to_local(
+                            body,
+                            *value,
+                            source_local,
+                            &must_alias_state,
+                            &mut must_alias_visiting,
+                        ) {
+                            if value_origin_local(body, place.base, &mut must_alias_visiting)
+                                == Some(source_local)
+                            {
+                                continue;
+                            }
+                            let target = store_target_alloc_local(
+                                body,
+                                place,
+                                &must_alias_state,
+                                &mut must_alias_visiting,
+                            )
+                            .and_then(|local| {
+                                alloc_flags
+                                    .get(local.index())
+                                    .copied()
+                                    .unwrap_or(false)
+                                    .then_some(local)
+                            });
+                            if let Some(target) = target {
+                                if target != source_local {
+                                    edges.push(target);
+                                }
+                            } else {
+                                direct_side_effect = true;
+                            }
+                        }
+                    }
+                }
+                MirInst::SetDiscriminant { .. } | MirInst::BindValue { .. } => {}
+            }
+
+            apply_local_dependency_effect(
+                body,
+                inst,
+                source_local,
+                ptr_escape_summaries,
+                &mut local_depends,
+                &mut dependency_state,
+            );
+        }
+
+        if terminator_may_escape_local_value(
             body,
             &block.terminator,
             source_local,

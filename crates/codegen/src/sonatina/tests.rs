@@ -1026,6 +1026,8 @@ fn wrap_as_init_code(runtime: &[u8]) -> Vec<u8> {
 mod regression_tests {
     use super::*;
     use common::InputDb;
+    use std::fs;
+    use std::path::PathBuf;
     use url::Url;
 
     #[test]
@@ -1188,5 +1190,38 @@ fn smoke():
             &SonatinaTestDebugConfig::default(),
         )
         .expect("compile-time-only non-ZST params should stay erased in Sonatina signatures");
+    }
+
+    #[test]
+    fn tuple_encoder_reborrows_pointer_params_without_heap_spilling() {
+        let mut db = DriverDataBase::default();
+        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../fe/tests/fixtures/fe_test/factory.fe");
+        let fixture_source =
+            fs::read_to_string(&fixture_path).expect("factory fixture should be readable");
+        let file_url = Url::from_file_path(&fixture_path).expect("fixture path should be absolute");
+        db.workspace()
+            .touch(&mut db, file_url.clone(), Some(fixture_source));
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let ir = crate::emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O0, None)
+            .expect("module should lower to Sonatina IR");
+        let start = ir
+            .find("func private %_t0__t1__")
+            .expect("tuple encoder helper should be present");
+        let body = &ir[start
+            ..ir[start..]
+                .find("}\n\n")
+                .map(|end| start + end + 1)
+                .unwrap_or(ir.len())];
+
+        assert!(
+            !body.contains("evm_malloc 32.i256"),
+            "tuple encoder helper should reuse the existing encoder pointer, not heap-spill it:\n{body}"
+        );
     }
 }

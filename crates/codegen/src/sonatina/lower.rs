@@ -195,8 +195,12 @@ fn allocate_local_place_root_slot<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             .fb
             .insert_inst(IntToPtr::new(ctx.is, zero, opaque_ptr_ty), opaque_ptr_ty));
     }
-    let size_val = ctx.fb.make_imm_value(I256::from(size_bytes as u64));
-    Ok(emit_evm_malloc_ptr(ctx.fb, size_val, ctx.is))
+    if local_place_root_slot_may_escape(ctx, local) {
+        let size_val = ctx.fb.make_imm_value(I256::from(size_bytes as u64));
+        return Ok(emit_evm_malloc_ptr(ctx.fb, size_val, ctx.is));
+    }
+    let alloca_ty = ctx.fb.declare_array_type(Type::I8, size_bytes);
+    Ok(emit_alloca_ptr(ctx.fb, alloca_ty, ctx.is))
 }
 
 fn store_runtime_value_to_local_slot_ptr<'db, C: sonatina_ir::func_cursor::FuncCursor>(
@@ -3295,6 +3299,29 @@ fn local_may_escape<C: sonatina_ir::func_cursor::FuncCursor>(
 ) -> bool {
     ctx.ptr_escape_summary
         .and_then(|summary| summary.local_alloc_may_escape.get(local.index()))
+        .copied()
+        .unwrap_or(true)
+}
+
+fn local_place_root_slot_may_escape<C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &LowerCtx<'_, '_, C>,
+    local: mir::LocalId,
+) -> bool {
+    let Some(summary) = ctx.ptr_escape_summary else {
+        return true;
+    };
+    let mut arg_locals = ctx
+        .body
+        .param_locals
+        .iter()
+        .chain(ctx.body.effect_param_locals.iter())
+        .copied();
+    let Some(arg_idx) = arg_locals.position(|arg_local| arg_local == local) else {
+        return true;
+    };
+    summary
+        .arg_value_may_escape
+        .get(arg_idx)
         .copied()
         .unwrap_or(true)
 }

@@ -201,7 +201,7 @@ object "ByRefTraitProviderStorageBug" {
           mstore(64, add(v3, $bytes))
           mstore($self, v3)
           mstore(add($self, 32), v3)
-          let v4 := $checked_add_u256(v3, $bytes)
+          let v4 := $u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add(v3, $bytes)
           mstore(add($self, 64), v4)
         }
         let v5 := mload($self)
@@ -212,7 +212,7 @@ object "ByRefTraitProviderStorageBug" {
         let v0 := mload(add($self, 32))
         let v1 := v0
         mstore(v1, $v)
-        let v2 := $checked_add_u256(v1, 32)
+        let v2 := $u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add(v1, 32)
         mstore(add($self, 32), v2)
         leave
       }
