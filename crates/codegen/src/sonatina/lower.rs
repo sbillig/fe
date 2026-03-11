@@ -1930,39 +1930,52 @@ fn fe_ty_to_sonatina_inner<'db>(
             }
             _ => Some(types::value_type(db, ty)),
         },
-        TyData::TyBase(TyBase::Adt(adt_def)) => {
-            match adt_def.adt_ref(db) {
-                AdtRef::Struct(_) => {
-                    let field_tys = ty.field_types(db);
-                    let mut sonatina_fields = Vec::with_capacity(field_tys.len());
-                    for ft in &field_tys {
-                        sonatina_fields.push(fe_ty_to_sonatina(
-                            builder,
-                            db,
-                            core,
-                            target_layout,
-                            *ft,
-                            cache,
-                            name_counter,
-                        )?);
-                    }
-                    let name = adt_def
-                        .adt_ref(db)
-                        .name(db)
-                        .map(|id| id.data(db).to_string())
-                        .unwrap_or_else(|| "anon".to_string());
-                    let id = *name_counter;
-                    *name_counter += 1;
-                    Some(builder.declare_struct_type(
-                        &format!("__fe_{name}_{id}"),
-                        &sonatina_fields,
-                        false,
-                    ))
+        TyData::TyBase(TyBase::Adt(adt_def)) => match adt_def.adt_ref(db) {
+            AdtRef::Struct(_) => {
+                let field_tys = ty.field_types(db);
+                let mut sonatina_fields = Vec::with_capacity(field_tys.len());
+                for ft in &field_tys {
+                    sonatina_fields.push(fe_ty_to_sonatina(
+                        builder,
+                        db,
+                        core,
+                        target_layout,
+                        *ft,
+                        cache,
+                        name_counter,
+                    )?);
                 }
-                // Enums: fall back to manual arithmetic
-                AdtRef::Enum(_) => None,
+                let name = adt_def
+                    .adt_ref(db)
+                    .name(db)
+                    .map(|id| id.data(db).to_string())
+                    .unwrap_or_else(|| "anon".to_string());
+                let id = *name_counter;
+                *name_counter += 1;
+                Some(builder.declare_struct_type(
+                    &format!("__fe_{name}_{id}"),
+                    &sonatina_fields,
+                    false,
+                ))
             }
-        }
+            AdtRef::Enum(_) => {
+                let payload_bytes = layout::ty_memory_size_in(db, target_layout, ty)?
+                    .saturating_sub(target_layout.discriminant_size_bytes);
+                let payload_words = payload_bytes / target_layout.word_size_bytes;
+                let mut fields = vec![Type::I256];
+                if payload_words != 0 {
+                    fields.push(builder.declare_array_type(Type::I256, payload_words));
+                }
+                let name = adt_def
+                    .adt_ref(db)
+                    .name(db)
+                    .map(|id| id.data(db).to_string())
+                    .unwrap_or_else(|| "anon".to_string());
+                let id = *name_counter;
+                *name_counter += 1;
+                Some(builder.declare_struct_type(&format!("__fe_{name}_{id}"), &fields, false))
+            }
+        },
         TyData::TyBase(TyBase::Contract(_)) | TyData::TyBase(TyBase::Func(_)) => Some(Type::Unit),
         _ => None,
     }

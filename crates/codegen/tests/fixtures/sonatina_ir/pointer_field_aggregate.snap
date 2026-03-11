@@ -26,19 +26,19 @@ func private %pointer_field_aggregate__Evm_hef0af3106e109414__3af54274b2985741()
         v2.*i256 = call %mem_ptr_stor__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9 256.i256;
         v4.*i8 = evm_malloc 64.i256;
         v5.*@__fe_Holder_0 = bitcast v4 *@__fe_Holder_0;
-        v6.**i256 = gep v5 0.i256 0.i256;
-        mstore v6 v2 *i256;
-        v8.*i256 = gep v5 0.i256 1.i256;
-        mstore v8 1.i256 i256;
-        v9.**i256 = gep v5 0.i256 0.i256;
-        v10.*i256 = mload v9 *i256;
-        call %bump__MemPtr_u256___25949c86160e9382 v10;
-        v12.*i256 = call %mem_ptr_stor__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9 288.i256;
-        v13.**i256 = gep v5 0.i256 0.i256;
-        mstore v13 v12 *i256;
+        v7.**i256 = gep v5 0.i256 0.i256;
+        mstore v7 v2 *i256;
+        v9.*i256 = gep v5 0.i256 1.i256;
+        mstore v9 1.i256 i256;
+        v10.**i256 = gep v5 0.i256 0.i256;
+        v11.*i256 = mload v10 *i256;
+        call %bump__MemPtr_u256___25949c86160e9382 v11;
+        v13.*i256 = call %mem_ptr_stor__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9 288.i256;
         v14.**i256 = gep v5 0.i256 0.i256;
-        v15.*i256 = mload v14 *i256;
-        call %bump__MemPtr_u256___25949c86160e9382 v15;
+        mstore v14 v13 *i256;
+        v15.**i256 = gep v5 0.i256 0.i256;
+        v16.*i256 = mload v15 *i256;
+        call %bump__MemPtr_u256___25949c86160e9382 v16;
         return;
 }
 

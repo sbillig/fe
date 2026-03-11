@@ -99,7 +99,7 @@ fn solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v0: mu
     v4: u256 = alloc(v1)
     store mem[v0].*.0 = v4
     store mem[v0].*.1 = v4
-    v5: u256 = u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add(v4, v1)
+    v5: u256 = checked_add<u256>(v4, v1)
     store mem[v0].*.2 = v5
     jmp bb2
   bb2:
@@ -143,17 +143,12 @@ fn u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0: u256, v1: u256) -> bool:
     v2: bool = __eq_u256(v0, v1)
     ret v2
 
-fn u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add(v0: u256, v1: u256) -> u256:
-  bb0:
-    v2: u256 = __add_u256(v0, v1)
-    ret v2
-
 fn solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word(v0: mut SolEncoder, v1: u256) -> ():
   bb0:
     v3: u256 = load mem[v0].*.1
     v2: u256 = v3
     eval mstore(v2, v1)
-    v4: u256 = u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add(v2, 32)
+    v4: u256 = checked_add<u256>(v2, 32)
     store mem[v0].*.1 = v4
     ret
 

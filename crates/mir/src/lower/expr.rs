@@ -211,14 +211,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         )
     }
 
-    fn coerce_contextual_capability_expr_value(
+    fn coerce_capability_value_to_target_ty(
         &mut self,
         expr: ExprId,
         source_value: ValueId,
         source_ty: TyId<'db>,
+        target_ty: TyId<'db>,
+        target_repr: ValueRepr,
     ) -> ValueId {
-        let expr_ty = self.typed_body.expr_ty(self.db, expr);
-        if expr_ty == source_ty {
+        if target_ty == source_ty {
             return source_value;
         }
 
@@ -226,17 +227,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return source_value;
         };
         debug_assert_eq!(
-            expr_ty,
+            target_ty,
             inner_ty,
             "unexpected capability coercion from `{}` to `{}`",
             source_ty.pretty_print(self.db),
-            expr_ty.pretty_print(self.db),
+            target_ty.pretty_print(self.db),
         );
-
-        let target_repr = self.value_repr_for_expr(expr, expr_ty);
         if matches!(kind, CapabilityKind::View) {
             return self.alloc_value(
-                expr_ty,
+                target_ty,
                 ValueOrigin::TransparentCast {
                     value: source_value,
                 },
@@ -246,20 +245,20 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         if let Some(place) = self.place_from_derefable_value(source_value, source_ty) {
             let place_space = self.place_address_space(&place);
-            let dest = self.alloc_temp_local(expr_ty, false, "coerce");
-            let load_space = self.load_result_address_space(expr, expr_ty, place_space);
+            let dest = self.alloc_temp_local(target_ty, false, "coerce");
+            let load_space = self.load_result_address_space(expr, target_ty, place_space);
             self.builder.body.locals[dest.index()].address_space = load_space;
             self.assign(None, Some(dest), Rvalue::Load { place });
             return self.alloc_value(
-                expr_ty,
+                target_ty,
                 ValueOrigin::Local(dest),
-                self.value_repr_for_ty(expr_ty, load_space),
+                self.value_repr_for_ty(target_ty, load_space),
             );
         }
 
         if target_repr.address_space().is_some() {
             return self.alloc_value(
-                expr_ty,
+                target_ty,
                 ValueOrigin::TransparentCast {
                     value: source_value,
                 },
@@ -268,10 +267,27 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         self.alloc_value(
-            expr_ty,
+            target_ty,
             ValueOrigin::TransparentCast {
                 value: source_value,
             },
+            target_repr,
+        )
+    }
+
+    fn coerce_contextual_capability_expr_value(
+        &mut self,
+        expr: ExprId,
+        source_value: ValueId,
+        source_ty: TyId<'db>,
+    ) -> ValueId {
+        let expr_ty = self.typed_body.expr_ty(self.db, expr);
+        let target_repr = self.value_repr_for_expr(expr, expr_ty);
+        self.coerce_capability_value_to_target_ty(
+            expr,
+            source_value,
+            source_ty,
+            expr_ty,
             target_repr,
         )
     }
@@ -2896,11 +2912,19 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     let ret_ty = self.return_ty;
                     let returns_value = !self.is_unit_ty(ret_ty) && !ret_ty.is_never(self.db);
                     if returns_value {
-                        let ret_value = Some(self.lower_expr(*expr));
+                        let expr_ty = self.typed_body.expr_ty(self.db, *expr);
+                        let ret_value = self.lower_expr(*expr);
+                        let ret_value = self.coerce_capability_value_to_target_ty(
+                            *expr,
+                            ret_value,
+                            expr_ty,
+                            ret_ty,
+                            self.value_repr_for_ty(ret_ty, AddressSpaceKind::Memory),
+                        );
                         if self.current_block().is_some() {
                             self.set_current_terminator(Terminator::Return {
                                 source,
-                                value: ret_value,
+                                value: Some(ret_value),
                             });
                         }
                     } else {
@@ -4116,6 +4140,68 @@ fn extract_ptr() -> StorPtr<Cell> uses (st: mut RawStorage) {
                 func.symbol_name,
             );
         }
+    }
+
+    #[test]
+    fn match_arm_scalar_payload_return_loads_the_payload_value() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///match_arm_scalar_payload_return_loads_the_payload_value.fe")
+            .unwrap();
+        let src = r#"
+enum E {
+    A(u256),
+    B,
+}
+
+fn f(e: E) -> u256 {
+    match e {
+        E::A(v) => return v
+        E::B => return 0
+    }
+}
+"#;
+
+        let file = db.workspace().touch(&mut db, url, Some(src.to_owned()));
+        let top_mod = db.top_mod(file);
+        let module = crate::lower_module(&db, top_mod).expect("module should lower");
+        let func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "f")
+            .expect("expected `f`");
+
+        let return_value = func
+            .body
+            .blocks
+            .iter()
+            .filter_map(|block| match &block.terminator {
+                crate::ir::Terminator::Return {
+                    value: Some(value), ..
+                } => Some(*value),
+                _ => None,
+            })
+            .find(|value| !matches!(func.body.value(*value).origin, ValueOrigin::Synthetic(_)))
+            .expect("expected non-synthetic scalar return value");
+
+        assert!(
+            matches!(func.body.value(return_value).origin, ValueOrigin::Local(_)),
+            "match-arm scalar payload return should materialize a scalar local after contextual return coercion",
+        );
+
+        assert_eq!(
+            func.body.value(return_value).repr,
+            ValueRepr::Word,
+            "scalar enum payload returns must stay word-represented",
+        );
+        assert_eq!(
+            func.body.value(return_value).runtime_shape,
+            crate::ir::RuntimeShape::Word(crate::ir::RuntimeWordKind::I256),
+            "scalar enum payload returns must stay word-shaped",
+        );
+        assert!(
+            func.body.value_pointer_info(return_value).is_none(),
+            "scalar enum payload returns must not retain pointer metadata",
+        );
     }
 
     #[test]

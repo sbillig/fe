@@ -38,33 +38,33 @@ func private %init__StorPtr_Evm___207f35a85ac4062e() {
 
 func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block0:
-        v1.i256 = call %stor_ptr_stor__Evm_hef0af3106e109414_Outer_hccd04e332bd35653__177c3c9a6f7ae368 0.i256;
-        v2.i256 = evm_calldata_load 0.i256;
-        v4.i256 = shr 224.i256 v2;
+        v2.i256 = call %stor_ptr_stor__Evm_hef0af3106e109414_Outer_hccd04e332bd35653__177c3c9a6f7ae368 0.i256;
+        v3.i256 = evm_calldata_load 0.i256;
+        v5.i256 = shr 224.i256 v3;
         jump block5;
 
     block1:
-        v6.i256 = evm_calldata_load 4.i256;
-        call %write_inner__StorPtr_Outer___dab28b9da6c3e28 v6 v1;
-        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v6;
+        v7.i256 = evm_calldata_load 4.i256;
+        call %write_inner__StorPtr_Outer___dab28b9da6c3e28 v7 v2;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v7;
         evm_invalid;
 
     block2:
-        v9.i256 = call %read_inner__StorPtr_Outer___dab28b9da6c3e28 v1;
-        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v9;
+        v10.i256 = call %read_inner__StorPtr_Outer___dab28b9da6c3e28 v2;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v10;
         evm_invalid;
 
     block3:
-        v10.i256 = evm_calldata_load 4.i256;
-        v11.i256 = call %mem_read v10;
-        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v11;
+        v11.i256 = evm_calldata_load 4.i256;
+        v12.i256 = call %mem_read v11;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v12;
         evm_invalid;
 
     block4:
         evm_return 0.i256 0.i256;
 
     block5:
-        br_table v4 block4 (3091856072.i256 block1) (3513050253.i256 block2) (2154770637.i256 block3);
+        br_table v5 block4 (3091856072.i256 block1) (3513050253.i256 block2) (2154770637.i256 block3);
 }
 
 func private %stor_ptr_stor__Evm_hef0af3106e109414_Outer_hccd04e332bd35653__177c3c9a6f7ae368(v0.i256) -> i256 {

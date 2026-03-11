@@ -716,13 +716,13 @@ fn removable_memory_root_local_for_place<'db>(
     .then_some(local)
 }
 
-fn removable_assign_rvalue<'db>(body: &MirBody<'db>, rvalue: &Rvalue<'db>) -> bool {
+fn removable_assign_rvalue<'db>(_body: &MirBody<'db>, rvalue: &Rvalue<'db>) -> bool {
     match rvalue {
         Rvalue::ZeroInit
         | Rvalue::Alloc { .. }
         | Rvalue::ConstAggregate { .. }
         | Rvalue::Value(_) => true,
-        Rvalue::Load { place } => removable_memory_root_local_for_place(body, place).is_some(),
+        Rvalue::Load { .. } => true,
         Rvalue::Call(_) | Rvalue::Intrinsic { .. } => false,
     }
 }
@@ -1082,6 +1082,8 @@ fn merge_runtime_shapes<'db>(
 }
 
 fn assert_normalized_runtime_shapes<'db>(db: &'db dyn HirAnalysisDb, func: &MirFunction<'db>) {
+    let live_values = compute_live_values(&func.body);
+
     for (idx, local) in func.body.locals.iter().enumerate() {
         if local.runtime_shape.is_unresolved() {
             panic!(
@@ -1096,6 +1098,9 @@ fn assert_normalized_runtime_shapes<'db>(db: &'db dyn HirAnalysisDb, func: &MirF
     }
 
     for (idx, value) in func.body.values.iter().enumerate() {
+        if !live_values.get(idx).copied().unwrap_or(false) {
+            continue;
+        }
         if value.runtime_shape.is_unresolved() {
             panic!(
                 "unresolved value runtime shape after MIR normalization in `{}` for v{idx}: origin={:?}, ty={}, repr={:?}, pointer_info={:?}",
@@ -1135,9 +1140,39 @@ pub(crate) fn normalize_runtime_shapes<'db>(
 ) {
     for func in &mut module.functions {
         let core = function_core_lib(db, func);
+        let live_values = compute_live_values(&func.body);
 
         for local in &mut func.body.locals {
             local.runtime_shape = crate::repr::runtime_shape_for_local(db, &core, local);
+        }
+
+        for (idx, local_id) in func.body.param_locals.iter().copied().enumerate() {
+            if func.runtime_abi.value_param_visible(idx) {
+                continue;
+            }
+            if !live_values.iter().enumerate().any(|(value_idx, live)| {
+                *live
+                    && matches!(
+                        func.body.values[value_idx].origin,
+                        ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) if local == local_id
+                    )
+            }) {
+                func.body.locals[local_id.index()].runtime_shape = RuntimeShape::Erased;
+            }
+        }
+        for (idx, local_id) in func.body.effect_param_locals.iter().copied().enumerate() {
+            if func.runtime_abi.effect_param_visible(idx) {
+                continue;
+            }
+            if !live_values.iter().enumerate().any(|(value_idx, live)| {
+                *live
+                    && matches!(
+                        func.body.values[value_idx].origin,
+                        ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) if local == local_id
+                    )
+            }) {
+                func.body.locals[local_id.index()].runtime_shape = RuntimeShape::Erased;
+            }
         }
 
         for idx in 0..func.body.values.len() {

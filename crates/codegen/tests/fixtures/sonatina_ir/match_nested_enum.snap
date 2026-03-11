@@ -5,7 +5,9 @@ input_file: crates/codegen/tests/fixtures/match_nested_enum.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %match_nested_enum(v0.*i8) -> i8 {
+type @__fe_Outer_0 = {i256, [i256; 2]};
+
+func private %match_nested_enum(v0.*@__fe_Outer_0) -> i8 {
     block0:
         jump block5;
 
@@ -34,15 +36,16 @@ func private %match_nested_enum(v0.*i8) -> i8 {
 
     block5:
         v19.i256 = ptr_to_int v0 i256;
-        v20.i256 = mload v0 i256;
-        br_table v20 block8 (0.i256 block6) (1.i256 block4);
+        v20.*i8 = bitcast v0 *i8;
+        v21.i256 = mload v20 i256;
+        br_table v21 block8 (0.i256 block6) (1.i256 block4);
 
     block6:
-        v23.i256 = ptr_to_int v0 i256;
-        v24.i256 = add v23 32.i256;
-        v25.*i8 = int_to_ptr v24 *i8;
-        v26.i256 = mload v25 i256;
-        br_table v26 block7 (0.i256 block1) (1.i256 block3);
+        v24.i256 = ptr_to_int v0 i256;
+        v25.i256 = add v24 32.i256;
+        v26.*i8 = int_to_ptr v25 *i8;
+        v27.i256 = mload v26 i256;
+        br_table v27 block7 (0.i256 block1) (1.i256 block3);
 
     block7:
         evm_invalid;
@@ -53,7 +56,7 @@ func private %match_nested_enum(v0.*i8) -> i8 {
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.*i8 = int_to_ptr 0.i256 *i8;
+        v1.*@__fe_Outer_0 = int_to_ptr 0.i256 *@__fe_Outer_0;
         v2.i8 = call %match_nested_enum v1;
         evm_stop;
 }

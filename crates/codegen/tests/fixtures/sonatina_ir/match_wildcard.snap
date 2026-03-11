@@ -5,7 +5,9 @@ input_file: crates/codegen/tests/fixtures/match_wildcard.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %match_with_wildcard(v0.*i8) -> i8 {
+type @__fe_Color_0 = {i256};
+
+func private %match_with_wildcard(v0.*@__fe_Color_0) -> i8 {
     block0:
         jump block4;
 
@@ -21,8 +23,9 @@ func private %match_with_wildcard(v0.*i8) -> i8 {
 
     block4:
         v6.i256 = ptr_to_int v0 i256;
-        v7.i256 = mload v0 i256;
-        br_table v7 block3 (0.i256 block1);
+        v7.*i8 = bitcast v0 *i8;
+        v8.i256 = mload v7 i256;
+        br_table v8 block3 (0.i256 block1);
 }
 
 func private %wildcard_not_last(v0.i8) -> i8 {
@@ -43,7 +46,7 @@ func private %wildcard_not_last(v0.i8) -> i8 {
         br_table v0 block3 (0.i8 block1);
 }
 
-func private %multiple_before_wildcard(v0.*i8) -> i8 {
+func private %multiple_before_wildcard(v0.*@__fe_Color_0) -> i8 {
     block0:
         jump block5;
 
@@ -62,13 +65,14 @@ func private %multiple_before_wildcard(v0.*i8) -> i8 {
 
     block5:
         v8.i256 = ptr_to_int v0 i256;
-        v9.i256 = mload v0 i256;
-        br_table v9 block4 (0.i256 block1) (1.i256 block3);
+        v9.*i8 = bitcast v0 *i8;
+        v10.i256 = mload v9 i256;
+        br_table v10 block4 (0.i256 block1) (1.i256 block3);
 }
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.*i8 = int_to_ptr 0.i256 *i8;
+        v1.*@__fe_Color_0 = int_to_ptr 0.i256 *@__fe_Color_0;
         v2.i8 = call %match_with_wildcard v1;
         evm_stop;
 }

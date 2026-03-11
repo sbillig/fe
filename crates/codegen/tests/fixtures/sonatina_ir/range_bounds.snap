@@ -140,19 +140,19 @@ func private %sum_dynamic(v0.i256, v1.i256) -> i256 {
 
 func private %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_len__0_4__f9605efabd18106c() -> i256 {
     block0:
-        v2.i1 = call %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt 4.i256 0.i256;
-        br v2 block1 block2;
+        v3.i1 = call %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt 4.i256 0.i256;
+        br v3 block1 block2;
 
     block1:
         jump block3;
 
     block2:
-        (v3.i256, v4.i1) = usubo 4.i256 0.i256;
-        br v4 block4 block5;
+        (v4.i256, v5.i1) = usubo 4.i256 0.i256;
+        br v5 block4 block5;
 
     block3:
-        v5.i256 = phi (0.i256 block1) (v3 block5);
-        return v5;
+        v6.i256 = phi (0.i256 block1) (v4 block5);
+        return v6;
 
     block4:
         evm_revert 0.i256 0.i256;
@@ -163,14 +163,14 @@ func private %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd
 
 func private %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_get__0_4__f9605efabd18106c(v0.i256) -> i256 {
     block0:
-        (v2.i256, v3.i1) = uaddo 0.i256 v0;
-        br v3 block1 block2;
+        (v3.i256, v4.i1) = uaddo 0.i256 v0;
+        br v4 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        return v2;
+        return v3;
 }
 
 func private %range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5(v0.*i8) -> i256 {
