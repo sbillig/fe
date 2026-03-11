@@ -133,6 +133,7 @@ pub fn build(
     opt_level: OptLevel,
     emit: &[BuildEmit],
     out_dir: Option<&Utf8PathBuf>,
+    profile: &str,
     solc: Option<&str>,
     report_out: Option<&Utf8PathBuf>,
     report_failed_only: bool,
@@ -143,6 +144,9 @@ pub fn build(
     db.compiler_options()
         .set_recovery_mode(&mut db)
         .to(use_recovery_mode);
+    db.compilation_settings()
+        .set_profile(&mut db)
+        .to(profile.into());
 
     let report_root = match report_out
         .map(|out| -> Result<_, String> {
