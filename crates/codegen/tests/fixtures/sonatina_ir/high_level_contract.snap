@@ -33,8 +33,8 @@ func private %__EchoContract_recv_0_1(v0.i256) -> i256 {
 
 func private %__EchoContract_recv_0_2(v0.i256) -> i256 {
     block0:
-        v2.i256 = evm_sload v0;
-        return v2;
+        v1.i256 = evm_sload v0;
+        return v1;
 }
 
 func private %__EchoContract_init() {
@@ -85,7 +85,6 @@ func private %__EchoContract_runtime() {
         evm_invalid;
 
     block2:
-        call %answer_he729876072a4af6_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966;
         v7.i256 = call %__EchoContract_recv_0_0;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v7;
         evm_invalid;
@@ -97,7 +96,6 @@ func private %__EchoContract_runtime() {
         evm_invalid;
 
     block4:
-        call %getx_hdbb0a53a8b757989_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966;
         v12.i256 = call %__EchoContract_recv_0_2 v1;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v12;
         evm_invalid;
@@ -159,12 +157,6 @@ func private %runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3
         return v4;
 }
 
-func private %answer_he729876072a4af6_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966() {
-    block0:
-        v1.*@__fe_SolDecoder_4 = int_to_ptr 0.i256 *@__fe_SolDecoder_4;
-        return;
-}
-
 func private %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v0.i256) {
     block0:
         v2.*i8 = int_to_ptr 0.i256 *i8;
@@ -184,12 +176,6 @@ func private %echo_h9f932a87feb06bd2_decode_h624c3cd8c996d995_decode__SolDecoder
     block0:
         v1.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v0;
         return v1;
-}
-
-func private %getx_hdbb0a53a8b757989_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966() {
-    block0:
-        v1.*@__fe_SolDecoder_4 = int_to_ptr 0.i256 *@__fe_SolDecoder_4;
-        return;
 }
 
 func private %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0.*@__fe_MemoryBytes_0) -> *@__fe_SolDecoder_2 {

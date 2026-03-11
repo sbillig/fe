@@ -9,27 +9,6 @@ object "EffectHandleFieldDeref" {
       let v0 := $init_field__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a(0)
       let v1 := dataoffset("EffectHandleFieldDeref_deployed")
       let v2 := datasize("EffectHandleFieldDeref_deployed")
-      let v3 := datasize("EffectHandleFieldDeref")
-      let v4 := codesize()
-      let v5 := lt(v4, v3)
-      if v5 {
-        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-      }
-      let v6 := sub(v4, v3)
-      let v7 := mload(64)
-      if iszero(v7) {
-        v7 := 0x80
-      }
-      mstore(64, add(v7, v6))
-      codecopy(v7, v3, v6)
-      let v8 := mload(0x40)
-      if iszero(v8) {
-        v8 := 0x80
-      }
-      mstore(0x40, add(v8, 64))
-      mstore(v8, v7)
-      mstore(add(v8, 32), v6)
-      let v9 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v8)
       $__EffectHandleFieldDeref_init_contract(v0)
       codecopy(0, v1, v2)
       return(0, v2)
@@ -37,22 +16,6 @@ object "EffectHandleFieldDeref" {
     function $__EffectHandleFieldDeref_init_contract($live) {
       sstore($live, 0)
       leave
-    }
-    function $cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
-      let v0 := mload(0x40)
-      if iszero(v0) {
-        v0 := 0x80
-      }
-      mstore(0x40, add(v0, 96))
-      let v1 := $input
-      mstore(v0, mload(v1))
-      mstore(add(v0, 32), mload(add(v1, 32)))
-      mstore(add(v0, 64), 0)
-      ret := v0
-      leave
-    }
-    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
-      revert(0, 0)
     }
     function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Cell_hc7450704dd4a03d6__5989b97f954838c8($slot) -> ret {
       let v0 := $stor_ptr__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a($slot)
@@ -62,26 +25,6 @@ object "EffectHandleFieldDeref" {
     function $init_field__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a($slot) -> ret {
       let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Cell_hc7450704dd4a03d6__5989b97f954838c8($slot)
       ret := v0
-      leave
-    }
-    function $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
-      let v0 := $soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input)
-      ret := v0
-      leave
-    }
-    function $soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
-      let v0 := $cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input)
-      let v1 := mload(0x40)
-      if iszero(v1) {
-        v1 := 0x80
-      }
-      mstore(0x40, add(v1, 128))
-      let v2 := v0
-      mstore(v1, mload(v2))
-      mstore(add(v1, 32), mload(add(v2, 32)))
-      mstore(add(v1, 64), mload(add(v2, 64)))
-      mstore(add(v1, 96), 0)
-      ret := v1
       leave
     }
     function $stor_ptr__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a($slot) -> ret {

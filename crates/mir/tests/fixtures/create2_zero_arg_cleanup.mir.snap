@@ -18,19 +18,6 @@ fn __Counter_init() -> ():
   bb0:
     v0: u256 = code_region_offset(func_item(__Counter_runtime))
     v1: u256 = code_region_len(func_item(__Counter_runtime))
-    v2: u256 = current_code_region_len()
-    v3: u256 = codesize()
-    br (v3 < v2) bb1 bb2
-  bb1:
-    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-  bb2:
-    bind (v3 - v2)
-    v4: u256 = alloc((v3 - v2))
-    eval codecopy(v4, v2, (v3 - v2))
-    v5: MemoryBytes = alloc mem
-    store mem[v5].0 = v4
-    store mem[v5].1 = (v3 - v2)
-    v6: SolDecoder<MemoryBytes> = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v5)
     eval __Counter_init_contract()
     eval codecopy(0, v0, v1)
     terminate return_data(0, v1)
@@ -38,7 +25,6 @@ fn __Counter_init() -> ():
 fn __Counter_runtime() -> ():
   bb0:
     v0: u32 = runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
-    v1: SolDecoder<CallData> = runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
     switch v0 [] else bb1
   bb1:
     terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
@@ -81,16 +67,6 @@ fn assert(v0: bool) -> ():
   bb2:
     ret
 
-fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(v0: Evm) -> !:
-  ; runtime_abi values=[] effects=[]
-  bb0:
-    terminate revert(0, 0)
-
-fn sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0: MemoryBytes) -> SolDecoder<MemoryBytes>:
-  bb0:
-    v1: SolDecoder<MemoryBytes> = soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0)
-    ret v1
-
 fn runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(v0: Evm) -> u32:
   ; runtime_abi values=[] effects=[]
   bb0:
@@ -105,12 +81,10 @@ fn runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805
     v5: u32 = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v4)
     ret v5
 
-fn runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(v0: mut Evm) -> SolDecoder<CallData>:
+fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(v0: Evm) -> !:
   ; runtime_abi values=[] effects=[]
   bb0:
-    v2: CallData = evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input()
-    v3: SolDecoder<CallData> = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v2, 4)
-    ret v3
+    terminate revert(0, 0)
 
 fn __Counter_init_code_len() -> u256:
   bb0:
@@ -136,13 +110,6 @@ fn evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw_stor_arg0_root_sto
 fn u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0: u256, v1: u256) -> bool:
   bb0:
     v2: bool = __eq_u256(v0, v1)
-    ret v2
-
-fn soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0: MemoryBytes) -> SolDecoder<MemoryBytes>:
-  bb0:
-    v1: Cursor<MemoryBytes> = cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0)
-    v2: SolDecoder<MemoryBytes> = alloc mem
-    init mem[v2] { .0 = v1, .1 = 0 }
     ret v2
 
 fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(v0: Evm) -> CallData:
@@ -172,30 +139,11 @@ fn sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v0: u256) ->
     v1: u32 = s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35((v0 >> 224))
     ret v1
 
-fn sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0: CallData, v1: u256) -> SolDecoder<CallData>:
-  bb0:
-    v2: SolDecoder<CallData> = soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0, v1)
-    ret v2
-
-fn cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0: MemoryBytes) -> Cursor<MemoryBytes>:
-  bb0:
-    v1: Cursor<MemoryBytes> = alloc mem
-    init mem[v1] { .0 = v0, .1 = 0 }
-    ret v1
-
 fn s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35(v0: u256) -> u32:
   bb0:
     v1: u256 = u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v0)
     v2: u32 = u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_from_word(v1)
     ret v2
-
-fn soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0: CallData, v1: u256) -> SolDecoder<CallData>:
-  bb0:
-    v2: Cursor<CallData> = cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0)
-    v3: Cursor<CallData> = cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v2, v1)
-    v4: SolDecoder<CallData> = alloc mem
-    init mem[v4] { .0 = v3, .1 = v1 }
-    ret v4
 
 fn u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v0: u256) -> u256:
   bb0:
@@ -204,16 +152,3 @@ fn u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v0: u256) -> u256:
 fn u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_from_word(v0: u256) -> u32:
   bb0:
     ret v0
-
-fn cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0: CallData) -> Cursor<CallData>:
-  bb0:
-    v1: Cursor<CallData> = alloc mem
-    init mem[v1] { .0 = v0, .1 = 0 }
-    ret v1
-
-fn cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0: Cursor<CallData>, v1: u256) -> Cursor<CallData>:
-  bb0:
-    v2: CallData = load mem[v0].*.0
-    v3: Cursor<CallData> = alloc mem
-    init mem[v3] { .0 = v2, .1 = v1 }
-    ret v3

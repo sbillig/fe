@@ -649,22 +649,18 @@ object "CoolCoin" {
             $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v13)
           }
           case 404098525 {
-            $totalsupply_h6bf4f2c3498c901c_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966()
             let v14 := $__CoolCoin_recv_0_5(v0)
             $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v14)
           }
           case 117300739 {
-            $name_h327e3db4a53b027e_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966()
             let v15 := $__CoolCoin_recv_0_6()
             $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_String_32___7798a45a8b22b7ed(v15)
           }
           case 2514000705 {
-            $symbol_h6dabcb627bde53b9_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966()
             let v16 := $__CoolCoin_recv_0_7()
             $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_String_8___99627a2b067a3b64(v16)
           }
           case 826074471 {
-            $decimals_h247e095089bd9dcb_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966()
             let v17 := $__CoolCoin_recv_0_8()
             $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u8__5f40d25b4a1c5efd(v17)
           }
@@ -967,9 +963,6 @@ object "CoolCoin" {
         ret := v0
         leave
       }
-      function $decimals_h247e095089bd9dcb_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966() {
-        leave
-      }
       function $decreaseallowance_h635474f45639c83d_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) -> ret {
         let v0 := $address_h257056268eac7027_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
         let v1 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
@@ -1061,9 +1054,6 @@ object "CoolCoin" {
         mstore(v2, v0)
         mstore(add(v2, 32), v1)
         ret := v2
-        leave
-      }
-      function $name_h327e3db4a53b027e_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966() {
         leave
       }
       function $ne__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2($self, $other) -> ret {
@@ -1395,12 +1385,6 @@ object "CoolCoin" {
       function $string_const_n__usize__h78b9b185054e88a2_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_8_SolEncoder_h1b9228b90dad6928__1811d65564ab2650($self, $e) {
         let v0 := $self
         $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($e, v0)
-        leave
-      }
-      function $symbol_h6dabcb627bde53b9_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966() {
-        leave
-      }
-      function $totalsupply_h6bf4f2c3498c901c_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966() {
         leave
       }
       function $transfer__0_1_StorPtr_TokenStore_0__1___Evm_hef0af3106e109414__4094b60766812ceb($from, $to, $amount, $store) {

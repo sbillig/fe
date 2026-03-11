@@ -8,8 +8,7 @@ fn __EchoContract_init_contract(v0: u256, v1: u256, v2: u256) -> ():
     store stor[v2].1 = v1
     ret
 
-fn __EchoContract_recv_0_0(v0: Answer) -> u256:
-  ; runtime_abi values=[] effects=[]
+fn __EchoContract_recv_0_0() -> u256:
   bb0:
     ret 42
 
@@ -18,11 +17,10 @@ fn __EchoContract_recv_0_1(v0: Echo) -> u256:
     v1: u256 = v0
     ret v1
 
-fn __EchoContract_recv_0_2(v0: GetX, v1: u256) -> u256:
-  ; runtime_abi values=[] effects=[v1: u256]
+fn __EchoContract_recv_0_2(v0: u256) -> u256:
   bb0:
-    v2: u256 = load stor[v1].0
-    ret v2
+    v1: u256 = load stor[v0].0
+    ret v1
 
 fn __EchoContract_init() -> ():
   bb0:
@@ -57,7 +55,6 @@ fn __EchoContract_runtime() -> ():
   bb1:
     terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
   bb2:
-    eval answer_he729876072a4af6_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966()
     v3: u256 = __EchoContract_recv_0_0()
     terminate return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v3)
   bb3:
@@ -65,7 +62,6 @@ fn __EchoContract_runtime() -> ():
     v5: u256 = __EchoContract_recv_0_1(v4)
     terminate return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v5)
   bb4:
-    eval getx_hdbb0a53a8b757989_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966()
     v6: u256 = __EchoContract_recv_0_2(v0)
     terminate return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v6)
 
@@ -117,11 +113,6 @@ fn runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a
     v3: SolDecoder<CallData> = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v2, 4)
     ret v3
 
-fn answer_he729876072a4af6_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v0: mut SolDecoder<CallData>) -> Answer:
-  ; runtime_abi values=[] effects=[]
-  bb0:
-    ret
-
 fn return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v0: mut Evm, v1: u256) -> !:
   ; runtime_abi values=[v1: u256] effects=[]
   bb0:
@@ -137,11 +128,6 @@ fn echo_h9f932a87feb06bd2_decode_h624c3cd8c996d995_decode__SolDecoder_CallData__
   bb0:
     v1: u256 = u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98(v0)
     ret v1
-
-fn getx_hdbb0a53a8b757989_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v0: mut SolDecoder<CallData>) -> GetX:
-  ; runtime_abi values=[] effects=[]
-  bb0:
-    ret
 
 fn soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0: MemoryBytes) -> SolDecoder<MemoryBytes>:
   bb0:

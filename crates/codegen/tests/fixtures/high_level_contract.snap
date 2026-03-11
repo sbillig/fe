@@ -198,7 +198,6 @@ object "EchoContract" {
         let v2 := $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
         switch v1
           case 1 {
-            $answer_he729876072a4af6_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966()
             let v3 := $__EchoContract_recv_0_0()
             $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v3)
           }
@@ -208,16 +207,12 @@ object "EchoContract" {
             $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v5)
           }
           case 3 {
-            $getx_hdbb0a53a8b757989_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966()
             let v6 := $__EchoContract_recv_0_2(v0)
             $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v6)
           }
           default {
             $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
           }
-      }
-      function $answer_he729876072a4af6_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966() {
-        leave
       }
       function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len($self) -> ret {
         let v0 := calldatasize()
@@ -307,9 +302,6 @@ object "EchoContract" {
       }
       function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes($ptr, $len) {
         return($ptr, $len)
-      }
-      function $getx_hdbb0a53a8b757989_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966() {
-        leave
       }
       function $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f($value) {
         let v0 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new()

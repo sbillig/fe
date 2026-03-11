@@ -2331,4 +2331,46 @@ contract C:
             )
         }
     }
+
+    #[test]
+    fn zero_sized_contract_init_params_are_not_lowered_as_handler_params() {
+        let src = r#"
+msg ZeroMsg {
+    #[selector = 0]
+    Ping -> u256,
+}
+
+pub contract ZeroPayloadContractArgs {
+    init(dummy: ()) {
+        let kept = dummy
+    }
+
+    recv ZeroMsg {
+        Ping -> u256 {
+            7
+        }
+    }
+}
+"#;
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(&mut db, "file:///zero_payload_contract_args.fe", src);
+
+        let init_handler = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "__ZeroPayloadContractArgs_init_contract")
+            .expect("expected zero-payload init handler");
+        assert!(
+            init_handler.body.param_locals.is_empty(),
+            "zero-sized init params should not remain in the lowered handler signature",
+        );
+        assert!(
+            init_handler
+                .body
+                .locals
+                .iter()
+                .any(|local| local.name == "dummy"),
+            "zero-sized init param should still be materialized as a body local when referenced",
+        );
+    }
 }

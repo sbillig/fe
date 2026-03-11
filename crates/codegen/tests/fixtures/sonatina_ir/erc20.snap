@@ -100,8 +100,8 @@ func private %__CoolCoin_recv_0_4(v0.*@__fe_Allowance_3, v1.i256) -> i256 {
 
 func private %__CoolCoin_recv_0_5(v0.i256) -> i256 {
     block0:
-        v2.i256 = evm_sload v0;
-        return v2;
+        v1.i256 = evm_sload v0;
+        return v1;
 }
 
 func private %__CoolCoin_recv_0_6() -> i256 {
@@ -281,25 +281,21 @@ func private %__CoolCoin_runtime() {
         evm_invalid;
 
     block7:
-        call %totalsupply_h6bf4f2c3498c901c_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966;
         v41.i256 = call %__CoolCoin_recv_0_5 v1;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v41;
         evm_invalid;
 
     block8:
-        call %name_h327e3db4a53b027e_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966;
         v42.i256 = call %__CoolCoin_recv_0_6;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_String_32___7798a45a8b22b7ed v42;
         evm_invalid;
 
     block9:
-        call %symbol_h6dabcb627bde53b9_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966;
         v43.i256 = call %__CoolCoin_recv_0_7;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_String_8___99627a2b067a3b64 v43;
         evm_invalid;
 
     block10:
-        call %decimals_h247e095089bd9dcb_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966;
         v44.i8 = call %__CoolCoin_recv_0_8;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u8__5f40d25b4a1c5efd v44;
         evm_invalid;
@@ -728,18 +724,6 @@ func private %allowance_h4bb1267f662bd2a8_decode_h624c3cd8c996d995_decode__SolDe
         return v5;
 }
 
-func private %totalsupply_h6bf4f2c3498c901c_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966() {
-    block0:
-        v1.*@__fe_SolDecoder_13 = int_to_ptr 0.i256 *@__fe_SolDecoder_13;
-        return;
-}
-
-func private %name_h327e3db4a53b027e_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966() {
-    block0:
-        v1.*@__fe_SolDecoder_13 = int_to_ptr 0.i256 *@__fe_SolDecoder_13;
-        return;
-}
-
 func private %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_String_32___7798a45a8b22b7ed(v0.i256) {
     block0:
         v2.*i8 = int_to_ptr 0.i256 *i8;
@@ -755,12 +739,6 @@ func private %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_String_3
         evm_invalid;
 }
 
-func private %symbol_h6dabcb627bde53b9_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966() {
-    block0:
-        v1.*@__fe_SolDecoder_13 = int_to_ptr 0.i256 *@__fe_SolDecoder_13;
-        return;
-}
-
 func private %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_String_8___99627a2b067a3b64(v0.i256) {
     block0:
         v2.*i8 = int_to_ptr 0.i256 *i8;
@@ -774,12 +752,6 @@ func private %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_String_8
         v11.i256 = mload v10 i256;
         call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes v8 v11;
         evm_invalid;
-}
-
-func private %decimals_h247e095089bd9dcb_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966() {
-    block0:
-        v1.*@__fe_SolDecoder_13 = int_to_ptr 0.i256 *@__fe_SolDecoder_13;
-        return;
 }
 
 func private %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u8__5f40d25b4a1c5efd(v0.i8) {
