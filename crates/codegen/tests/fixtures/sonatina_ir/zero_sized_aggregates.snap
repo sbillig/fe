@@ -35,9 +35,6 @@ func private %struct_with_empty() -> i256 {
 
 func private %empty_field_assign() {
     block0:
-        v0.*@__fe_Wrap_1 = alloca @__fe_Wrap_1;
-        v3.*i256 = gep v0 0.i256 1.i256;
-        mstore v3 1.i256 i256;
         return;
 }
 

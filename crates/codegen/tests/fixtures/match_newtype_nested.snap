@@ -13,7 +13,6 @@ function $match_newtype_nested($a) -> ret {
       let v1 := $a
       v0 := v1
     }
-  let v2 := $a
   ret := v0
   leave
 }

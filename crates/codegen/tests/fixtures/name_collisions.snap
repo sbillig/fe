@@ -22,9 +22,7 @@ function $test_generic_type_collision() -> ret {
   let v0 := 1
   let v1 := 2
   let v2 := $generic_fn__S_h730d9dc564aaaf27__8d32801e7ec9d42b(v0)
-  pop(v2)
   let v3 := $generic_fn__S_h2db58d011b97b333__42a13489a1ec39e8(v1)
-  pop(v3)
   ret := 42
   leave
 }
@@ -89,21 +87,13 @@ function $test_yul_reserved_fn_collision() -> ret {
 }
 function $main() -> ret {
   let v0 := $test_module_qualifier_flatten_collision()
-  pop(v0)
   let v1 := $test_generic_type_collision()
-  pop(v1)
   let v2 := $test_impl_method_collision()
-  pop(v2)
   let v3 := $test_trait_method_collision()
-  pop(v3)
   let v4 := $test_param_local_collision()
-  pop(v4)
   let v5 := $test_cast_shim_collision()
-  pop(v5)
   let v6 := $test_ret_param_collision()
-  pop(v6)
   let v7 := $test_yul_reserved_fn_collision()
-  pop(v7)
   ret := 0
   leave
 }

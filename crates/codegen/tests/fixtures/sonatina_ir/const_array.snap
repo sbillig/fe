@@ -32,18 +32,6 @@ func private %sum_two(v0.i256, v1.i256) -> i256 {
         evm_revert 0.i256 0.i256;
 
     block2:
-        v20.*i8 = evm_malloc 96.i256;
-        v21.i256 = sym_addr $__fe_const_data_0;
-        v22.i256 = sym_size $__fe_const_data_0;
-        v23.i256 = ptr_to_int v20 i256;
-        evm_code_copy v23 v21 v22;
-        v24.*[i256; 3] = bitcast v20 *[i256; 3];
-        v25.*i8 = evm_malloc 96.i256;
-        v26.i256 = sym_addr $__fe_const_data_0;
-        v27.i256 = sym_size $__fe_const_data_0;
-        v28.i256 = ptr_to_int v25 i256;
-        evm_code_copy v28 v26 v27;
-        v29.*[i256; 3] = bitcast v25 *[i256; 3];
         return v18;
 }
 

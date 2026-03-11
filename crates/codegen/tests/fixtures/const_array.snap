@@ -21,18 +21,6 @@ object "main" {
       datacopy(v2, dataoffset("data_sum_two_0"), datasize("data_sum_two_0"))
       let v3 := mload(add(v2, mul($j, 32)))
       let v4 := $checked_add_u256(v1, v3)
-      let v5 := mload(0x40)
-      if iszero(v5) {
-        v5 := 0x80
-      }
-      mstore(0x40, add(v5, 96))
-      datacopy(v5, dataoffset("data_sum_two_0"), datasize("data_sum_two_0"))
-      let v6 := mload(0x40)
-      if iszero(v6) {
-        v6 := 0x80
-      }
-      mstore(0x40, add(v6, 96))
-      datacopy(v6, dataoffset("data_sum_two_0"), datasize("data_sum_two_0"))
       ret := v4
       leave
     }

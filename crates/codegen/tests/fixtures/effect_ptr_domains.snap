@@ -27,7 +27,6 @@ function $test_effect_ptr_domains__Evm_hef0af3106e109414_Evm_hef0af3106e109414__
   mstore(v4, 10)
   mstore(add(v4, 32), 20)
   let v5 := v4
-  let v6 := v5
   $bump__MemPtr_Foo___cdd30998d577b6ea(v5)
   leave
 }

@@ -362,6 +362,7 @@ pub fn lower_module<'db>(
     }
     let mut module = MirModule { top_mod, functions };
     crate::transform::normalize_runtime_abi(db, &mut module);
+    crate::transform::eliminate_dead_erased_arg_materializations(db, &mut module);
     crate::transform::normalize_runtime_shapes(db, &mut module);
     Ok(module)
 }
@@ -489,6 +490,7 @@ pub fn lower_ingot<'db>(
         functions,
     };
     crate::transform::normalize_runtime_abi(db, &mut module);
+    crate::transform::eliminate_dead_erased_arg_materializations(db, &mut module);
     crate::transform::normalize_runtime_shapes(db, &mut module);
     Ok(module)
 }

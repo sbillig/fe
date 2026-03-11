@@ -211,11 +211,11 @@ func private %erc20_______h94f6fe6e679122ca_transfer_stor_arg0_root_stor__0_1_Ev
 
     block4:
         call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3 v1 v12;
-        (v18.i256, v19.i1) = uaddo v9 v3;
-        br v19 block3 block5;
+        (v17.i256, v18.i1) = uaddo v9 v3;
+        br v18 block3 block5;
 
     block5:
-        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3 v2 v18;
+        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3 v2 v17;
         return;
 }
 

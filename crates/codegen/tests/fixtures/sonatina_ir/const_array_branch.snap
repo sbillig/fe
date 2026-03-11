@@ -34,20 +34,8 @@ func private %const_array_branch(v0.i1) -> i256 {
         jump block3;
 
     block3:
-        v27.i256 = phi (v9 block1) (v16 block2);
-        v17.*i8 = evm_malloc 32.i256;
-        v18.i256 = sym_addr $__fe_const_data_0;
-        v19.i256 = sym_size $__fe_const_data_0;
-        v20.i256 = ptr_to_int v17 i256;
-        evm_code_copy v20 v18 v19;
-        v21.*[i256; 1] = bitcast v17 *[i256; 1];
-        v22.*i8 = evm_malloc 32.i256;
-        v23.i256 = sym_addr $__fe_const_data_0;
-        v24.i256 = sym_size $__fe_const_data_0;
-        v25.i256 = ptr_to_int v22 i256;
-        evm_code_copy v25 v23 v24;
-        v26.*[i256; 1] = bitcast v22 *[i256; 1];
-        return v27;
+        v17.i256 = phi (v9 block1) (v16 block2);
+        return v17;
 }
 
 func private %__fe_sonatina_entry() {

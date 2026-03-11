@@ -31,16 +31,16 @@ func private %match_option(v0.*i8) -> i64 {
         jump block2;
 
     block2:
-        v11.i64 = phi (v9 block1) (0.i64 block3);
-        return v11;
+        v10.i64 = phi (v9 block1) (0.i64 block3);
+        return v10;
 
     block3:
         jump block2;
 
     block4:
-        v13.i256 = ptr_to_int v0 i256;
-        v14.i256 = mload v0 i256;
-        br_table v14 block5 (1.i256 block1) (0.i256 block3);
+        v12.i256 = ptr_to_int v0 i256;
+        v13.i256 = mload v0 i256;
+        br_table v13 block5 (1.i256 block1) (0.i256 block3);
 
     block5:
         evm_invalid;

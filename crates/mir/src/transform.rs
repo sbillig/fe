@@ -7,9 +7,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::CoreLib;
 use crate::ir::{
-    CallOrigin, LocalData, LocalId, MirBody, MirFunction, MirInst, MirModule, MirProjectionPath,
-    Place, RuntimeAbi, RuntimeShape, Rvalue, SourceInfoId, TerminatingCall, Terminator, ValueData,
-    ValueId, ValueOrigin, ValueRepr,
+    AddressSpaceKind, CallOrigin, LocalData, LocalId, MirBody, MirFunction, MirInst, MirModule,
+    MirProjectionPath, Place, RuntimeAbi, RuntimeShape, Rvalue, SourceInfoId, TerminatingCall,
+    Terminator, ValueData, ValueId, ValueOrigin, ValueRepr,
 };
 use crate::layout;
 
@@ -697,6 +697,274 @@ fn rewrite_runtime_call_args<'db>(
         .enumerate()
         .filter_map(|(idx, arg)| runtime_abi.effect_param_visible(idx).then_some(arg))
         .collect();
+}
+
+fn path_has_deref<'db>(path: &MirProjectionPath<'db>) -> bool {
+    path.iter().any(|proj| matches!(proj, Projection::Deref))
+}
+
+fn removable_memory_root_local_for_place<'db>(
+    body: &MirBody<'db>,
+    place: &Place<'db>,
+) -> Option<LocalId> {
+    let (local, prefix) = crate::ir::resolve_local_projection_root(&body.values, place.base)?;
+    if path_has_deref(&prefix) || path_has_deref(&place.projection) {
+        return None;
+    }
+    (crate::ir::try_place_address_space_in(&body.values, &body.locals, place)
+        == Some(AddressSpaceKind::Memory))
+    .then_some(local)
+}
+
+fn removable_assign_rvalue<'db>(body: &MirBody<'db>, rvalue: &Rvalue<'db>) -> bool {
+    match rvalue {
+        Rvalue::ZeroInit
+        | Rvalue::Alloc { .. }
+        | Rvalue::ConstAggregate { .. }
+        | Rvalue::Value(_) => true,
+        Rvalue::Load { place } => removable_memory_root_local_for_place(body, place).is_some(),
+        Rvalue::Call(_) | Rvalue::Intrinsic { .. } => false,
+    }
+}
+
+fn mark_value_runtime_live<'db>(
+    body: &MirBody<'db>,
+    live_values: &mut [bool],
+    live_locals: &mut FxHashSet<LocalId>,
+    value: ValueId,
+) -> bool {
+    let Some(slot) = live_values.get_mut(value.index()) else {
+        return false;
+    };
+    if *slot {
+        return false;
+    }
+    *slot = true;
+
+    let Some(data) = body.values.get(value.index()) else {
+        return true;
+    };
+    let mut changed = true;
+    match &data.origin {
+        ValueOrigin::Unary { inner, .. } => {
+            changed |= mark_value_runtime_live(body, live_values, live_locals, *inner);
+        }
+        ValueOrigin::Binary { lhs, rhs, .. } => {
+            changed |= mark_value_runtime_live(body, live_values, live_locals, *lhs);
+            changed |= mark_value_runtime_live(body, live_values, live_locals, *rhs);
+        }
+        ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) => {
+            changed |= live_locals.insert(*local);
+        }
+        ValueOrigin::FieldPtr(field_ptr) => {
+            changed |= mark_value_runtime_live(body, live_values, live_locals, field_ptr.base);
+        }
+        ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
+            changed |= mark_value_runtime_live(body, live_values, live_locals, place.base);
+            for proj in place.projection.iter() {
+                if let Projection::Index(IndexSource::Dynamic(value)) = proj {
+                    changed |= mark_value_runtime_live(body, live_values, live_locals, *value);
+                }
+            }
+        }
+        ValueOrigin::TransparentCast { value } => {
+            changed |= mark_value_runtime_live(body, live_values, live_locals, *value);
+        }
+        ValueOrigin::Expr(..)
+        | ValueOrigin::ControlFlowResult { .. }
+        | ValueOrigin::Unit
+        | ValueOrigin::Synthetic(..)
+        | ValueOrigin::FuncItem(..) => {}
+    }
+    changed
+}
+
+fn mark_place_runtime_live<'db>(
+    body: &MirBody<'db>,
+    live_values: &mut [bool],
+    live_locals: &mut FxHashSet<LocalId>,
+    place: &Place<'db>,
+) -> bool {
+    let mut changed = mark_value_runtime_live(body, live_values, live_locals, place.base);
+    for proj in place.projection.iter() {
+        if let Projection::Index(IndexSource::Dynamic(value)) = proj {
+            changed |= mark_value_runtime_live(body, live_values, live_locals, *value);
+        }
+    }
+    changed
+}
+
+fn instruction_is_runtime_root<'db>(
+    body: &MirBody<'db>,
+    inst: &MirInst<'db>,
+    live_values: &[bool],
+    live_locals: &FxHashSet<LocalId>,
+) -> bool {
+    match inst {
+        MirInst::Assign { dest, rvalue, .. } => match dest {
+            Some(local) if removable_assign_rvalue(body, rvalue) => live_locals.contains(local),
+            None if removable_assign_rvalue(body, rvalue) => false,
+            _ => true,
+        },
+        MirInst::Store { place, .. }
+        | MirInst::InitAggregate { place, .. }
+        | MirInst::SetDiscriminant { place, .. } => {
+            removable_memory_root_local_for_place(body, place)
+                .is_none_or(|local| live_locals.contains(&local))
+        }
+        MirInst::BindValue { value, .. } => {
+            live_values.get(value.index()).copied().unwrap_or(false)
+        }
+    }
+}
+
+fn mark_runtime_inst_live_operands<'db>(
+    body: &MirBody<'db>,
+    inst: &MirInst<'db>,
+    live_values: &mut [bool],
+    live_locals: &mut FxHashSet<LocalId>,
+) -> bool {
+    let mut changed = false;
+    match inst {
+        MirInst::Assign { rvalue, .. } => match rvalue {
+            Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::ConstAggregate { .. } => {}
+            Rvalue::Value(value) => {
+                changed |= mark_value_runtime_live(body, live_values, live_locals, *value);
+            }
+            Rvalue::Call(call) => {
+                for arg in call.args.iter().chain(call.effect_args.iter()) {
+                    changed |= mark_value_runtime_live(body, live_values, live_locals, *arg);
+                }
+            }
+            Rvalue::Intrinsic { args, .. } => {
+                for arg in args {
+                    changed |= mark_value_runtime_live(body, live_values, live_locals, *arg);
+                }
+            }
+            Rvalue::Load { place } => {
+                changed |= mark_place_runtime_live(body, live_values, live_locals, place);
+            }
+        },
+        MirInst::Store { place, value, .. } => {
+            changed |= mark_place_runtime_live(body, live_values, live_locals, place);
+            changed |= mark_value_runtime_live(body, live_values, live_locals, *value);
+        }
+        MirInst::InitAggregate { place, inits, .. } => {
+            changed |= mark_place_runtime_live(body, live_values, live_locals, place);
+            for (path, value) in inits {
+                for proj in path.iter() {
+                    if let Projection::Index(IndexSource::Dynamic(index)) = proj {
+                        changed |= mark_value_runtime_live(body, live_values, live_locals, *index);
+                    }
+                }
+                changed |= mark_value_runtime_live(body, live_values, live_locals, *value);
+            }
+        }
+        MirInst::SetDiscriminant { place, .. } => {
+            changed |= mark_place_runtime_live(body, live_values, live_locals, place);
+        }
+        MirInst::BindValue { value, .. } => {
+            changed |= mark_value_runtime_live(body, live_values, live_locals, *value);
+        }
+    }
+    changed
+}
+
+fn mark_runtime_terminator_live_operands<'db>(
+    body: &MirBody<'db>,
+    terminator: &Terminator<'db>,
+    live_values: &mut [bool],
+    live_locals: &mut FxHashSet<LocalId>,
+) -> bool {
+    let mut changed = false;
+    match terminator {
+        Terminator::Return {
+            value: Some(value), ..
+        } => {
+            changed |= mark_value_runtime_live(body, live_values, live_locals, *value);
+        }
+        Terminator::TerminatingCall { call, .. } => match call {
+            TerminatingCall::Call(call) => {
+                for arg in call.args.iter().chain(call.effect_args.iter()) {
+                    changed |= mark_value_runtime_live(body, live_values, live_locals, *arg);
+                }
+            }
+            TerminatingCall::Intrinsic { args, .. } => {
+                for arg in args {
+                    changed |= mark_value_runtime_live(body, live_values, live_locals, *arg);
+                }
+            }
+        },
+        Terminator::Branch { cond, .. } => {
+            changed |= mark_value_runtime_live(body, live_values, live_locals, *cond);
+        }
+        Terminator::Switch { discr, .. } => {
+            changed |= mark_value_runtime_live(body, live_values, live_locals, *discr);
+        }
+        Terminator::Return { value: None, .. }
+        | Terminator::Goto { .. }
+        | Terminator::Unreachable { .. } => {}
+    }
+    changed
+}
+
+pub(crate) fn eliminate_dead_erased_arg_materializations<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    module: &mut MirModule<'db>,
+) {
+    for func in &mut module.functions {
+        let body = &func.body;
+        let mut live_values = vec![false; body.values.len()];
+        let mut live_locals = FxHashSet::default();
+
+        loop {
+            let mut changed = false;
+            for block in &body.blocks {
+                changed |= mark_runtime_terminator_live_operands(
+                    body,
+                    &block.terminator,
+                    &mut live_values,
+                    &mut live_locals,
+                );
+                for inst in &block.insts {
+                    if instruction_is_runtime_root(body, inst, &live_values, &live_locals) {
+                        changed |= mark_runtime_inst_live_operands(
+                            body,
+                            inst,
+                            &mut live_values,
+                            &mut live_locals,
+                        );
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        let body_ref = &func.body;
+        let keep_insts: Vec<Vec<bool>> = body_ref
+            .blocks
+            .iter()
+            .map(|block| {
+                block
+                    .insts
+                    .iter()
+                    .map(|inst| {
+                        instruction_is_runtime_root(body_ref, inst, &live_values, &live_locals)
+                    })
+                    .collect()
+            })
+            .collect();
+
+        for (block, keep) in func.body.blocks.iter_mut().zip(keep_insts) {
+            block.insts = std::mem::take(&mut block.insts)
+                .into_iter()
+                .zip(keep)
+                .filter_map(|(inst, keep)| keep.then_some(inst))
+                .collect();
+        }
+    }
 }
 
 pub(crate) fn normalize_runtime_abi<'db>(db: &'db dyn HirAnalysisDb, module: &mut MirModule<'db>) {
@@ -1532,6 +1800,7 @@ mod tests {
     use url::Url;
 
     use crate::{
+        MirInst,
         ir::{
             AddressSpaceKind, BasicBlock, LocalData, MirBody, MirProjectionPath, Place,
             PointerInfo, RuntimeShape, RuntimeWordKind, Rvalue, SourceInfoId, Terminator,
@@ -1758,6 +2027,58 @@ pub fn transparent_newtype_projection_keeps_non_memory_space(w: mut Wrap) {}
         assert!(
             call.args.is_empty() && call.effect_args.is_empty(),
             "calls to erased helpers must be rewritten to the runtime ABI",
+        );
+    }
+
+    #[test]
+    fn runtime_abi_cleanup_removes_dead_zero_arg_create2_encoder_materialization() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///runtime_abi_cleanup_removes_dead_zero_arg_create2_encoder_materialization.fe",
+            r#"
+pub contract Counter {
+    init() {}
+}
+
+#[test]
+fn runtime_abi_cleanup_removes_dead_zero_arg_create2_encoder_materialization() uses (evm: mut Evm) {
+    let addr = evm.create2<Counter>(value: 0, args: (), salt: 0)
+    assert(addr.inner != 0)
+}
+"#,
+        );
+
+        let helper_body = module
+            .functions
+            .iter()
+            .find(|func| {
+                func.symbol_name.contains("create2_stor_arg0_root_stor")
+                    && func.symbol_name.contains("Counter")
+            })
+            .expect("expected create2 helper")
+            .body
+            .clone();
+        drop(module);
+
+        let has_dead_materialization_chain = helper_body.blocks.iter().any(|block| {
+            block.insts.iter().any(|inst| match inst {
+                MirInst::Assign {
+                    dest: Some(_),
+                    rvalue: Rvalue::Alloc { .. },
+                    ..
+                } => true,
+                MirInst::InitAggregate { .. } => true,
+                MirInst::Store { .. }
+                | MirInst::SetDiscriminant { .. }
+                | MirInst::BindValue { .. }
+                | MirInst::Assign { .. } => false,
+            })
+        });
+
+        assert!(
+            !has_dead_materialization_chain,
+            "zero-arg create2 helpers should not retain dead alloc/init materialization chains after runtime ABI cleanup",
         );
     }
 

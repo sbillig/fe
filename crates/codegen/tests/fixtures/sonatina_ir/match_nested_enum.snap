@@ -13,36 +13,36 @@ func private %match_nested_enum(v0.*i8) -> i8 {
         jump block2;
 
     block2:
-        v4.i8 = phi (0.i8 block1) (v11 block3) (v18 block4);
-        return v4;
+        v3.i8 = phi (0.i8 block1) (v10 block3) (v17 block4);
+        return v3;
 
     block3:
-        v6.i256 = ptr_to_int v0 i256;
-        v8.i256 = add v6 64.i256;
-        v9.*i8 = int_to_ptr v8 *i8;
-        v10.i256 = mload v9 i256;
-        v11.i8 = trunc v10 i8;
+        v5.i256 = ptr_to_int v0 i256;
+        v7.i256 = add v5 64.i256;
+        v8.*i8 = int_to_ptr v7 *i8;
+        v9.i256 = mload v8 i256;
+        v10.i8 = trunc v9 i8;
         jump block2;
 
     block4:
-        v13.i256 = ptr_to_int v0 i256;
-        v15.i256 = add v13 32.i256;
-        v16.*i8 = int_to_ptr v15 *i8;
-        v17.i256 = mload v16 i256;
-        v18.i8 = trunc v17 i8;
+        v12.i256 = ptr_to_int v0 i256;
+        v14.i256 = add v12 32.i256;
+        v15.*i8 = int_to_ptr v14 *i8;
+        v16.i256 = mload v15 i256;
+        v17.i8 = trunc v16 i8;
         jump block2;
 
     block5:
-        v20.i256 = ptr_to_int v0 i256;
-        v21.i256 = mload v0 i256;
-        br_table v21 block8 (0.i256 block6) (1.i256 block4);
+        v19.i256 = ptr_to_int v0 i256;
+        v20.i256 = mload v0 i256;
+        br_table v20 block8 (0.i256 block6) (1.i256 block4);
 
     block6:
-        v24.i256 = ptr_to_int v0 i256;
-        v25.i256 = add v24 32.i256;
-        v26.*i8 = int_to_ptr v25 *i8;
-        v27.i256 = mload v26 i256;
-        br_table v27 block7 (0.i256 block1) (1.i256 block3);
+        v23.i256 = ptr_to_int v0 i256;
+        v24.i256 = add v23 32.i256;
+        v25.*i8 = int_to_ptr v24 *i8;
+        v26.i256 = mload v25 i256;
+        br_table v26 block7 (0.i256 block1) (1.i256 block3);
 
     block7:
         evm_invalid;

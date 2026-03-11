@@ -334,7 +334,6 @@ object "Parent" {
         leave
       }
       function $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2() -> ret {
-        pop(0)
         let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input()
         let v1 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0, 4)
         ret := v1
@@ -654,7 +653,6 @@ object "Parent" {
           leave
         }
         function $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2() -> ret {
-          pop(0)
           let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input()
           let v1 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0, 4)
           ret := v1

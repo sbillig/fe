@@ -55,7 +55,6 @@ object "EffectHandleFieldDeref" {
       revert(0, 0)
     }
     function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Cell_hc7450704dd4a03d6__5989b97f954838c8($slot) -> ret {
-      pop(0)
       let v0 := $stor_ptr__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a($slot)
       ret := v0
       leave
@@ -246,7 +245,6 @@ object "EffectHandleFieldDeref" {
         revert(0, 0)
       }
       function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Cell_hc7450704dd4a03d6__5989b97f954838c8($slot) -> ret {
-        pop(0)
         let v0 := $stor_ptr__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a($slot)
         ret := v0
         leave
@@ -275,16 +273,13 @@ object "EffectHandleFieldDeref" {
       function $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f($value) {
         let v0 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new()
         let v1 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v0, 32)
-        pop(v1)
         $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($value, v0)
         let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v0)
         let v3 := mload(v2)
         let v4 := mload(add(v2, 32))
-        pop(0)
         $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v3, v4)
       }
       function $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2() -> ret {
-        pop(0)
         let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input()
         let v1 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0, 4)
         ret := v1

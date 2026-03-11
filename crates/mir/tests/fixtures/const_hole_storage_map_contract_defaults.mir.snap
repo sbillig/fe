@@ -114,7 +114,6 @@ fn sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e38101
 fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Store_0__1___2a5ced58fcfdee44(v0: mut Evm, v1: u256) -> StorPtr<Store<0, 1>>:
   ; runtime_abi values=[v1: u256] effects=[]
   bb0:
-    eval v0
     v3: StorPtr<Store<0, 1>> = stor_ptr__Evm_hef0af3106e109414_Store_0__1___20b3d78bbd2b6198(v1)
     ret v3
 
@@ -135,7 +134,6 @@ fn runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805
 fn runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(v0: mut Evm) -> SolDecoder<CallData>:
   ; runtime_abi values=[] effects=[]
   bb0:
-    eval v0
     v2: CallData = evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input()
     v3: SolDecoder<CallData> = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v2, 4)
     ret v3
@@ -163,12 +161,10 @@ fn return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef
   bb0:
     v2: SolEncoder = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new()
     v3: u256 = solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v2, 32)
-    eval v3
     eval u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383(v1, &mem[v2])
     v4: (u256, u256) = solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v2)
     v5: u256 = load mem[v4].0
     v6: u256 = load mem[v4].1
-    eval v0
     terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v5, v6)
 
 fn u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word(v0: u256) -> u256:

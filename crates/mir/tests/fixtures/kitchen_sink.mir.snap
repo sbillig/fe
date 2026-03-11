@@ -24,7 +24,6 @@ fn maybe_inc(v0: Opt) -> u64:
     v2 = v3
     jmp bb3
   bb3:
-    bind move_out(mem[v0])
     v1: u64 = v2
     v6: u64 = 0
     jmp bb6
@@ -56,10 +55,8 @@ fn test_effects_and_aggregates__Evm_hef0af3106e109414_Evm_hef0af3106e109414__7ab
     v5: Foo = alloc mem
     init mem[v5] { .0 = 10, .1 = 20 }
     v4: Foo = v5
-    bind v4
     eval bump__MemPtr_Foo___cdd30998d577b6ea(v4)
     v6: StorPtr<StorageMap<u256, u256, 0>> = stor_ptr_stor__Evm_hef0af3106e109414_StorageMap_u256__u256__0___25d90c867c72c521(0)
-    bind v6
     eval set_balance__0_StorPtr_StorageMap_u256__u256__0____94067de1d730f5c7(1, 7)
     v7: u256 = get_balance__0_StorPtr_StorageMap_u256__u256__0____94067de1d730f5c7(1)
     ret

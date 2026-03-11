@@ -297,16 +297,13 @@ object "Factory" {
       function $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_Address_h257056268eac7027__2d9a2ca106cd007c($value) {
         let v0 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new()
         let v1 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v0, 32)
-        pop(v1)
         $address_h257056268eac7027_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($value, v0)
         let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v0)
         let v3 := mload(v2)
         let v4 := mload(add(v2, 32))
-        pop(0)
         $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v3, v4)
       }
       function $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2() -> ret {
-        pop(0)
         let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input()
         let v1 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0, 4)
         ret := v1
@@ -556,7 +553,6 @@ object "Factory" {
           revert(0, 0)
         }
         function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Pair_h956dff41e88ee341__acec41afdc898140($slot) -> ret {
-          pop(0)
           let v0 := $stor_ptr__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785($slot)
           ret := v0
           leave
@@ -742,7 +738,6 @@ object "Factory" {
             revert(0, 0)
           }
           function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Pair_h956dff41e88ee341__acec41afdc898140($slot) -> ret {
-            pop(0)
             let v0 := $stor_ptr__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785($slot)
             ret := v0
             leave
@@ -752,7 +747,6 @@ object "Factory" {
             leave
           }
           function $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2() -> ret {
-            pop(0)
             let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input()
             let v1 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0, 4)
             ret := v1
