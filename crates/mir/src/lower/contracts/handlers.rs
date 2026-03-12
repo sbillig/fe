@@ -23,7 +23,7 @@ use crate::{
 };
 
 use super::{
-    MirBuilder, MirLowerError, MirLowerResult,
+    MirBuilder, MirLowerResult,
     plan::{InitHandlerPlan, RecvHandlerPlan},
     symbols::SymbolMangler,
 };
@@ -205,12 +205,7 @@ fn finish_handler<'db>(
     if let Some(err) = deferred_error {
         return Err(err);
     }
-    if let Some(expr) = super::super::first_unlowered_expr_used_by_mir(&mir_body) {
-        return Err(MirLowerError::UnloweredHirExpr {
-            func_name: spec.symbol_name.clone(),
-            expr: super::super::format_hir_expr_context(db, spec.body, expr),
-        });
-    }
+    super::super::validate_lowered_mir_body(db, &spec.symbol_name, spec.body, &mir_body)?;
 
     let runtime_abi = RuntimeAbi::source_shaped(
         mir_body.param_locals.len(),
