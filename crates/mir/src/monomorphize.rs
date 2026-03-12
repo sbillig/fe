@@ -31,10 +31,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     CallOrigin, MirFunction,
-    capability_space::{
-        capability_leaf_paths_for_ty, capability_spaces_for_ty_with_default,
-        normalize_capability_space_entries,
-    },
+    capability_space::{pointer_leaf_infos_for_ty_with_default, pointer_leaf_paths_for_ty},
+    core_lib::CoreLib,
     dedup::deduplicate_mir,
     ir::AddressSpaceKind,
     lower::{MirLowerError, MirLowerResult, lower_function},
@@ -157,6 +155,14 @@ impl<'db> InstanceKey<'db> {
 }
 
 impl<'db> Monomorphizer<'db> {
+    fn core_for_origin(&self, origin: crate::ir::MirFunctionOrigin<'db>) -> CoreLib<'db> {
+        let scope = match origin {
+            crate::ir::MirFunctionOrigin::Hir(func) => func.scope(),
+            crate::ir::MirFunctionOrigin::Synthetic(synth) => synth.contract().scope(),
+        };
+        CoreLib::new(self.db, scope)
+    }
+
     /// Build the bookkeeping structures (template lookup + lowered FuncDef cache).
     fn new(db: &'db dyn SpannedHirAnalysisDb, templates: Vec<MirFunction<'db>>) -> Self {
         let func_index = templates
@@ -842,21 +848,32 @@ impl<'db> Monomorphizer<'db> {
             AddressSpaceKind,
         )>],
     ) {
+        let core = self.core_for_origin(instance.origin);
         for (idx, entries) in param_capability_space_overrides.iter().enumerate() {
             let Some(&param_local) = instance.body.param_locals.get(idx) else {
                 break;
             };
             let local = &mut instance.body.locals[param_local.index()];
-            let mut capability_spaces =
-                capability_spaces_for_ty_with_default(self.db, local.ty, local.address_space);
+            let mut pointer_leaf_infos = pointer_leaf_infos_for_ty_with_default(
+                self.db,
+                &core,
+                local.ty,
+                local.address_space,
+            );
             for (path, space) in entries {
-                capability_spaces.retain(|(existing, _)| existing != path);
-                capability_spaces.push((path.clone(), *space));
-                if path.is_empty() {
+                if let Some((_, info)) = pointer_leaf_infos
+                    .iter_mut()
+                    .find(|(existing, _)| existing == path)
+                {
+                    info.address_space = *space;
+                }
+                if path.is_empty()
+                    && !capability_root_tracks_aggregate_storage(self.db, &core, local.ty)
+                {
                     local.address_space = *space;
                 }
             }
-            local.capability_spaces = capability_spaces;
+            local.pointer_leaf_infos = pointer_leaf_infos;
         }
     }
 
@@ -1371,10 +1388,10 @@ impl<'db> Monomorphizer<'db> {
             crate::ir::resolve_local_projection_root(&caller.body.values, arg_value)
         {
             let lookup = prefix.concat(path);
-            if let Some(space) =
-                crate::ir::lookup_local_capability_space(&caller.body.locals, local, &lookup)
+            if let Some(info) =
+                crate::ir::lookup_local_pointer_leaf_info(&caller.body.locals, local, &lookup)
             {
-                return Some(space);
+                return Some(info.address_space);
             }
         }
 
@@ -1412,6 +1429,7 @@ impl<'db> Monomorphizer<'db> {
         let param_count = func.params(self.db).count();
         let mut overrides: Vec<Vec<(crate::MirProjectionPath<'db>, AddressSpaceKind)>> =
             vec![Vec::new(); param_count];
+        let core = CoreLib::new(self.db, func.scope());
 
         for (param_idx, param) in func.params(self.db).enumerate() {
             let Some(&arg_value) = call.args.get(param_idx) else {
@@ -1420,7 +1438,8 @@ impl<'db> Monomorphizer<'db> {
 
             let mut folder = ParamSubstFolder { args };
             let param_ty = param.ty(self.db).fold_with(self.db, &mut folder);
-            for path in capability_leaf_paths_for_ty(self.db, param_ty) {
+            let paths = pointer_leaf_paths_for_ty(self.db, &core, param_ty);
+            for path in paths {
                 if let Some(space) = self.arg_capability_space_at_path(caller, arg_value, &path)
                     && !matches!(space, AddressSpaceKind::Memory)
                 {
@@ -1529,13 +1548,14 @@ impl<'db> Monomorphizer<'db> {
         let param_count = template.body.param_locals.len();
         let mut overrides: Vec<Vec<(crate::MirProjectionPath<'db>, AddressSpaceKind)>> =
             vec![Vec::new(); param_count];
+        let core = self.core_for_origin(template.origin);
 
         for (param_idx, param_local) in template.body.param_locals.iter().enumerate() {
             let Some(&arg_value) = call.args.get(param_idx) else {
                 continue;
             };
             let param_ty = template.body.local(*param_local).ty;
-            for path in capability_leaf_paths_for_ty(self.db, param_ty) {
+            for path in pointer_leaf_paths_for_ty(self.db, &core, param_ty) {
                 if let Some(space) = self.arg_capability_space_at_path(caller, arg_value, &path)
                     && !matches!(space, AddressSpaceKind::Memory)
                 {
@@ -1636,24 +1656,40 @@ impl<'db> Monomorphizer<'db> {
             vec![Vec::new(); param_count];
         let len = std::cmp::min(param_count, overrides.len());
         for (idx, entries) in overrides.iter().take(len).enumerate() {
-            normalized[idx] = normalize_capability_space_entries(
-                entries
-                    .iter()
-                    .filter_map(|(path, space)| {
-                        (!matches!(space, AddressSpaceKind::Memory)).then_some((path.clone(), *space))
-                    }),
-            )
-            .unwrap_or_else(|conflict| {
-                let current = self.current_symbol.as_deref().unwrap_or("<unknown function>");
+            let mut merged: FxHashMap<crate::MirProjectionPath<'db>, AddressSpaceKind> =
+                FxHashMap::default();
+            let mut conflict = None;
+            for (path, space) in entries.iter().filter_map(|(path, space)| {
+                (!matches!(space, AddressSpaceKind::Memory)).then_some((path.clone(), *space))
+            }) {
+                let Some(existing) = merged.get(&path).copied() else {
+                    merged.insert(path, space);
+                    continue;
+                };
+                if existing == space {
+                    continue;
+                }
+                conflict = Some((path, existing, space));
+                break;
+            }
+            normalized[idx] = if let Some((path, existing, incoming)) = conflict {
+                let current = self
+                    .current_symbol
+                    .as_deref()
+                    .unwrap_or("<unknown function>");
                 self.defer_error(MirLowerError::Unsupported {
                     func_name: current.to_owned(),
                     message: format!(
                         "conflicting non-memory capability-space override for param {idx} path `{:?}`: `{:?}` vs `{:?}`",
-                        conflict.path, conflict.existing, conflict.incoming
+                        path, existing, incoming
                     ),
                 });
                 Vec::new()
-            });
+            } else {
+                let mut entries: Vec<_> = merged.into_iter().collect();
+                entries.sort_by_cached_key(|(path, _)| format!("{path:?}"));
+                entries
+            };
         }
 
         if normalized.iter().all(|entries| entries.is_empty()) {
@@ -1718,6 +1754,21 @@ fn canonicalize_receiver_space(
         None | Some(AddressSpaceKind::Memory) => None,
         Some(space) => Some(space),
     }
+}
+
+fn capability_root_tracks_aggregate_storage<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    ty: TyId<'db>,
+) -> bool {
+    ty.as_capability(db).is_some_and(|(_, inner)| {
+        matches!(
+            crate::repr::repr_kind_for_ty(db, core, inner),
+            crate::repr::ReprKind::Ref
+        ) && !pointer_leaf_paths_for_ty(db, core, ty)
+            .iter()
+            .any(crate::MirProjectionPath::is_empty)
+    })
 }
 
 fn effect_param_space_suffix(spaces: &[Option<AddressSpaceKind>]) -> String {

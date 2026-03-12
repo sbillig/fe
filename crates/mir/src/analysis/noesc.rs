@@ -251,19 +251,24 @@ mod tests {
             is_mut: false,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Calldata,
-            capability_spaces: Vec::new(),
+            pointer_leaf_infos: Vec::new(),
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let base_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Local(base_local),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Ref(AddressSpaceKind::Calldata),
+            pointer_info: None,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let store_value = func.body.alloc_value(ValueData {
             ty: u256_ty,
             origin: ValueOrigin::Synthetic(crate::ir::SyntheticValue::Int(1u8.into())),
             source: SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Word,
+            pointer_info: None,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         func.body.blocks.push(BasicBlock {
             insts: vec![MirInst::Store {

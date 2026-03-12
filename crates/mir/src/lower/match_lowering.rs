@@ -72,7 +72,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         },
                         inner_repr,
                     )
-                } else if self.capability_value_is_address_backed(scrutinee_value) {
+                } else if self.value_supports_direct_deref(scrutinee_value) {
                     let space = self.value_address_space(scrutinee_value);
                     self.alloc_value(
                         inner_ty,
@@ -82,9 +82,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         self.value_repr_for_ty(inner_ty, space),
                     )
                 } else if let Some(place) =
-                    self.place_from_capability_value(scrutinee_value, scrutinee_expr_ty)
+                    self.place_from_derefable_value(scrutinee_value, scrutinee_expr_ty)
                 {
-                    let space = self.value_address_space(place.base);
+                    let space = self.place_address_space(&place);
                     self.alloc_value(
                         inner_ty,
                         ValueOrigin::PlaceRef(place),
@@ -271,7 +271,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         },
                         inner_repr,
                     )
-                } else if self.capability_value_is_address_backed(scrutinee_value) {
+                } else if self.value_supports_direct_deref(scrutinee_value) {
                     let space = self.value_address_space(scrutinee_value);
                     self.alloc_value(
                         inner_ty,
@@ -281,9 +281,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         self.value_repr_for_ty(inner_ty, space),
                     )
                 } else if let Some(place) =
-                    self.place_from_capability_value(scrutinee_value, scrutinee_expr_ty)
+                    self.place_from_derefable_value(scrutinee_value, scrutinee_expr_ty)
                 {
-                    let space = self.value_address_space(place.base);
+                    let space = self.place_address_space(&place);
                     self.alloc_value(
                         inner_ty,
                         ValueOrigin::PlaceRef(place),
@@ -481,7 +481,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             ValueOrigin::MoveOut {
                 place: place.clone(),
             },
-            self.value_repr_for_ty(scrutinee_ty, self.value_address_space(place.base)),
+            self.value_repr_for_ty(scrutinee_ty, self.place_address_space(&place)),
         );
         let source = self.source_for_expr(scrutinee);
         self.builder.body.values[moved.index()].source = source;
@@ -825,17 +825,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         {
             return (cast, cast);
         }
-        let addr_space = if binding_ty.as_capability(self.db).is_some() {
-            self.capability_binding_space_from_container(scrutinee_value)
-        } else {
-            self.value_address_space(scrutinee_value)
-        };
-
         // Create the Place
         let place = Place::new(
             scrutinee_value,
             self.mir_projection_from_decision_path(path),
         );
+        let addr_space =
+            if !place.projection.is_empty() || binding_ty.as_capability(self.db).is_some() {
+                self.place_address_space(&place)
+            } else {
+                self.value_address_space(scrutinee_value)
+            };
 
         let place_ref_id = self.alloc_value(
             binding_ty,
@@ -916,7 +916,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     }
                 }
                 Projection::Deref => {
-                    return TyId::invalid(self.db, InvalidCause::Other);
+                    if let Some((_, inner)) = current_ty.as_capability(self.db) {
+                        current_ty = inner;
+                    } else if let Some(inner) =
+                        crate::repr::effect_provider_target_ty(self.db, &self.core, current_ty)
+                    {
+                        current_ty = inner;
+                    } else {
+                        return TyId::invalid(self.db, InvalidCause::Other);
+                    }
                 }
             }
         }

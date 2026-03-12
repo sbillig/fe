@@ -201,8 +201,8 @@ fn collect_tests(db: &DriverDataBase, functions: &[MirFunction<'_>]) -> Vec<Test
                 .to_opt()
                 .map(|n| n.data(db).to_string())
                 .unwrap_or_else(|| "<anonymous>".to_string());
-            let value_param_count = mir_func.body.param_locals.len();
-            let effect_param_count = mir_func.body.effect_param_locals.len();
+            let value_param_count = mir_func.runtime_param_count();
+            let effect_param_count = mir_func.runtime_effect_param_count();
             Some(TestInfo {
                 hir_name,
                 display_name: String::new(),
@@ -487,7 +487,15 @@ fn create_code_regions_object(
             .ok_or_else(|| LowerError::Internal(format!("unknown function: {root}")))?;
 
         let wrapper_name = format!("__fe_sonatina_code_region_entry_{}", sanitize_symbol(root));
-        let wrapper_ref = lowerer.create_call_and_stop_wrapper(&wrapper_name, root_ref)?;
+        let runtime_metadata = lowerer
+            .runtime_function_metadata
+            .get(root)
+            .cloned()
+            .ok_or_else(|| {
+                LowerError::Internal(format!("missing runtime type metadata for `{root}`"))
+            })?;
+        let wrapper_ref =
+            lowerer.create_call_and_stop_wrapper(&wrapper_name, root_ref, &runtime_metadata)?;
 
         let section_name = code_region_sections
             .get(root)
@@ -546,7 +554,18 @@ fn create_test_object(
         .ok_or_else(|| LowerError::Internal(format!("unknown function: {}", test.symbol_name)))?;
 
     let wrapper_name = format!("__fe_sonatina_test_entry_{}", test.object_name);
-    let wrapper_ref = lowerer.create_call_and_stop_wrapper(&wrapper_name, test_ref)?;
+    let runtime_metadata = lowerer
+        .runtime_function_metadata
+        .get(&test.symbol_name)
+        .cloned()
+        .ok_or_else(|| {
+            LowerError::Internal(format!(
+                "missing runtime type metadata for `{}`",
+                test.symbol_name
+            ))
+        })?;
+    let wrapper_ref =
+        lowerer.create_call_and_stop_wrapper(&wrapper_name, test_ref, &runtime_metadata)?;
 
     let reachable = reachable_functions(call_graph, &test.symbol_name);
     let deps = collect_code_region_deps(&reachable, funcs_by_symbol);
@@ -589,61 +608,16 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             }
 
             let name = &func.symbol_name;
-            let linkage = sonatina_ir::Linkage::Public;
-
-            let mut params = Vec::new();
-            let mut mask = Vec::new();
-            for local_id in func.body.param_locals.iter().copied() {
-                let local_ty = func
-                    .body
-                    .locals
-                    .get(local_id.index())
-                    .ok_or_else(|| {
-                        LowerError::Internal(format!("unknown param local: {local_id:?}"))
-                    })?
-                    .ty;
-                if layout::ty_size_bytes_in(self.db, &layout::EVM_LAYOUT, local_ty)
-                    .is_some_and(|s| s == 0)
-                {
-                    mask.push(false);
-                    continue;
-                }
-                mask.push(true);
-                params.push(super::types::value_type(self.db, local_ty));
-            }
-            for local_id in func.body.effect_param_locals.iter().copied() {
-                let local_ty = func
-                    .body
-                    .locals
-                    .get(local_id.index())
-                    .ok_or_else(|| {
-                        LowerError::Internal(format!("unknown effect param local: {local_id:?}"))
-                    })?
-                    .ty;
-                if layout::ty_size_bytes_in(self.db, &layout::EVM_LAYOUT, local_ty)
-                    .is_some_and(|s| s == 0)
-                {
-                    mask.push(false);
-                    continue;
-                }
-                mask.push(true);
-                params.push(super::types::value_type(self.db, local_ty));
-            }
-
-            let ret_tys = if func.returns_value {
-                vec![super::types::value_type(self.db, func.ret_ty)]
-            } else {
-                Vec::new()
-            };
-
-            let sig = Signature::new(name, linkage, &params, &ret_tys);
+            let (_sig, metadata) = self.lower_signature_and_metadata(func)?;
+            let sig = metadata.signature(name, sonatina_ir::Linkage::Public);
             let func_ref = self.builder.declare_function(sig).map_err(|e| {
                 LowerError::Internal(format!("failed to declare function {name}: {e}"))
             })?;
 
             self.func_map.insert(idx, func_ref);
             self.name_map.insert(name.clone(), func_ref);
-            self.runtime_param_masks.insert(name.clone(), mask);
+            self.runtime_function_metadata
+                .insert(name.clone(), metadata);
         }
         Ok(())
     }
@@ -652,6 +626,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         &mut self,
         wrapper_name: &str,
         callee_ref: sonatina_ir::module::FuncRef,
+        runtime_metadata: &super::RuntimeFunctionMetadata,
     ) -> Result<sonatina_ir::module::FuncRef, LowerError> {
         if self.name_map.contains_key(wrapper_name) {
             return Err(LowerError::Internal(format!(
@@ -670,16 +645,13 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         let entry_block = fb.append_block();
         fb.switch_to_block(entry_block);
 
-        let (arg_tys, ret_ty) = fb.module_builder.ctx.func_sig(callee_ref, |sig| {
-            (sig.args().to_vec(), sig.ret_tys().first().copied())
-        });
-        let mut args = Vec::with_capacity(arg_tys.len());
-        for ty in arg_tys {
-            args.push(super::types::zero_value(&mut fb, ty));
+        let mut args = Vec::with_capacity(runtime_metadata.params.len());
+        for arg_ty in runtime_metadata.params.iter().copied() {
+            args.push(super::zero_value_for_type(&mut fb, arg_ty, is));
         }
 
         let call_inst = Call::new(is, callee_ref, args.into());
-        if let Some(ret_ty) = ret_ty {
+        if let Some(ret_ty) = runtime_metadata.ret {
             let _ = fb.insert_inst(call_inst, ret_ty);
         } else {
             fb.insert_inst_no_result(call_inst);
@@ -1048,4 +1020,208 @@ fn wrap_as_init_code(runtime: &[u8]) -> Vec<u8> {
 
     init.extend_from_slice(runtime);
     init
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+    use common::InputDb;
+    use std::fs;
+    use std::path::PathBuf;
+    use url::Url;
+
+    fn temp_fixture_url(name: &str) -> Url {
+        let fixture_path = std::env::temp_dir().join(name);
+        Url::from_file_path(&fixture_path).expect("fixture path should be absolute")
+    }
+
+    #[test]
+    fn erased_effect_params_do_not_reappear_as_pointer_runtime_args() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_erased_effect_params_test.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+contract C:
+    pub fn value() -> u256:
+        return 1
+
+@test
+fn smoke():
+    assert true
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O0,
+            &SonatinaTestDebugConfig::default(),
+        )
+        .expect("erased effect params should remain erased in Sonatina test modules");
+    }
+
+    #[test]
+    fn erased_generic_zst_params_do_not_reappear_in_runtime_signatures() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_erased_generic_zst_params_test.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+fn sum_three() -> u256:
+    let acc: u256 = 0
+    for i in 0..3:
+        acc += i as u256
+    return acc
+
+@test
+fn smoke():
+    assert sum_three() == 3
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O0,
+            &SonatinaTestDebugConfig::default(),
+        )
+        .expect("erased generic ZST params should remain erased in Sonatina signatures");
+    }
+
+    #[test]
+    fn memory_ref_aggregate_params_lower_as_pointers() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_memory_ref_aggregate_params_test.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+fn mix(input: [u256; 3]) -> [u256; 3]:
+    let out: [u256; 3] = [0, 0, 0]
+    for i in 0..3:
+        out[i] = input[i]
+    return out
+
+@test
+fn smoke():
+    let out: [u256; 3] = mix([1, 2, 3])
+    assert out[0] == 1
+    assert out[1] == 2
+    assert out[2] == 3
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O0,
+            &SonatinaTestDebugConfig::default(),
+        )
+        .expect("memory aggregate refs should stay pointer-typed in Sonatina lowering");
+    }
+
+    #[test]
+    fn compile_time_only_non_zst_params_do_not_reappear_in_runtime_signatures() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_compile_time_only_non_zst_params_test.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+const M: [[u256; 3]; 3] = [
+    [2, 1, 1],
+    [1, 2, 1],
+    [1, 1, 2],
+]
+
+fn mix(state: [u256; 3]) -> [u256; 3]:
+    let mut out: [u256; 3] = [0, 0, 0]
+    for i in 0..3:
+        for j in 0..3:
+            out[i] = out[i] + M[i][j] + state[j]
+    return out
+
+@test
+fn smoke():
+    let output: [u256; 3] = mix([1, 0, 0])
+    assert output[0] == 4
+    assert output[1] == 3
+    assert output[2] == 3
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O0,
+            &SonatinaTestDebugConfig::default(),
+        )
+        .expect("compile-time-only non-ZST params should stay erased in Sonatina signatures");
+    }
+
+    #[test]
+    fn tuple_encoder_reborrows_pointer_params_without_heap_spilling() {
+        let mut db = DriverDataBase::default();
+        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../fe/tests/fixtures/fe_test/factory.fe");
+        let fixture_source =
+            fs::read_to_string(&fixture_path).expect("factory fixture should be readable");
+        let file_url = Url::from_file_path(&fixture_path).expect("fixture path should be absolute");
+        db.workspace()
+            .touch(&mut db, file_url.clone(), Some(fixture_source));
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let ir = crate::emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O0, None)
+            .expect("module should lower to Sonatina IR");
+        let start = ir
+            .find("func private %_t0__t1__")
+            .expect("tuple encoder helper should be present");
+        let body = &ir[start
+            ..ir[start..]
+                .find("}\n\n")
+                .map(|end| start + end + 1)
+                .unwrap_or(ir.len())];
+
+        assert!(
+            !body.contains("evm_malloc 32.i256"),
+            "tuple encoder helper should reuse the existing encoder pointer, not heap-spill it:\n{body}"
+        );
+    }
 }

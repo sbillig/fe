@@ -19,7 +19,7 @@ func private %arg_bindings(v0.i64, v1.i64) -> i64 {
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.i64 = call %arg_bindings 0.i64 0.i64;
+        v2.i64 = call %arg_bindings 0.i64 0.i64;
         evm_stop;
 }
 

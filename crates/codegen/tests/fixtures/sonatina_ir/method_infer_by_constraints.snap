@@ -7,30 +7,28 @@ target = "evm-ethereum-osaka"
 
 type @__fe_tuple_0 = {i64, i64};
 
-func private %call() -> i256 {
+func private %call() -> *@__fe_tuple_0 {
     block0:
-        v1.i256 = call %s_t__h10779c135f64b393_foo_h6dbce71a6ea992b8_foo__u64__aee7f05a097ffa16 10.i64;
+        v1.*@__fe_tuple_0 = call %s_t__h10779c135f64b393_foo_h6dbce71a6ea992b8_foo__u64__aee7f05a097ffa16 10.i64;
         return v1;
 }
 
-func private %s_t__h10779c135f64b393_foo_h6dbce71a6ea992b8_foo__u64__aee7f05a097ffa16(v0.i64) -> i256 {
+func private %s_t__h10779c135f64b393_foo_h6dbce71a6ea992b8_foo__u64__aee7f05a097ffa16(v0.i64) -> *@__fe_tuple_0 {
     block0:
         v2.*i8 = evm_malloc 64.i256;
-        v3.i256 = ptr_to_int v2 i256;
-        v4.i256 = zext v0 i256;
-        v5.*@__fe_tuple_0 = bitcast v2 *@__fe_tuple_0;
-        v7.*i64 = gep v5 0.i256 0.i256;
-        mstore v7 v4 i256;
-        v9.i256 = zext 1.i64 i256;
-        v10.*@__fe_tuple_0 = bitcast v2 *@__fe_tuple_0;
-        v12.*i64 = gep v10 0.i256 1.i256;
-        mstore v12 v9 i256;
+        v3.*@__fe_tuple_0 = bitcast v2 *@__fe_tuple_0;
+        v5.*i64 = gep v3 0.i256 0.i256;
+        v6.i256 = zext v0 i256;
+        mstore v5 v6 i256;
+        v9.*i64 = gep v3 0.i256 1.i256;
+        v10.i256 = zext 1.i64 i256;
+        mstore v9 v10 i256;
         return v3;
 }
 
 func private %__fe_sonatina_entry() {
     block0:
-        v0.i256 = call %call;
+        v0.*@__fe_tuple_0 = call %call;
         evm_stop;
 }
 

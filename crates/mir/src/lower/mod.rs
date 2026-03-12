@@ -23,20 +23,21 @@ use hir::analysis::{
 use hir::hir_def::{
     Attr, AttrArg, AttrArgValue, Body, CallableDef, Cond, CondId, Const, Expr, ExprId, Field,
     FieldIndex, Func, HirIngot, IdentId, ItemKind, LitKind, MatchArm, Partial, Pat, PatId, Stmt,
-    StmtId, TopLevelMod, VariantKind, expr::BinOp,
+    StmtId, TopLevelMod, VariantKind,
 };
 
 use crate::{
     capability_space::{
-        CapabilitySpaceConflict, capability_spaces_for_ty_with_default,
-        normalize_capability_space_entries,
+        PointerInfoConflict, normalize_pointer_leaf_info_entries,
+        pointer_leaf_infos_for_ty_with_default,
     },
     core_lib::CoreLib,
     ir::{
         AddressSpaceKind, BasicBlockId, BodyBuilder, CallOrigin, CodeRegionRoot, ContractFunction,
         ContractFunctionKind, IntrinsicOp, LocalData, LocalId, LoopInfo, MirBody, MirFunction,
-        MirInst, MirModule, MirProjection, MirProjectionPath, Place, Rvalue, SwitchTarget,
-        SwitchValue, SyntheticValue, Terminator, ValueData, ValueId, ValueOrigin, ValueRepr,
+        MirInst, MirModule, MirProjection, MirProjectionPath, Place, PointerInfo, Rvalue,
+        SwitchTarget, SwitchValue, SyntheticValue, Terminator, ValueData, ValueId, ValueOrigin,
+        ValueRepr,
     },
     monomorphize::monomorphize_functions,
 };
@@ -351,20 +352,19 @@ pub fn lower_module<'db>(
     }
     run_borrow_checks_or_error(db, &functions)?;
 
-    // Lower semantic capability MIR into backend-specific representation MIR for codegen.
+    // Lower semantic capability MIR into backend-neutral runtime representation MIR.
     let core = CoreLib::new(db, top_mod.scope());
     for func in &mut functions {
-        crate::transform::lower_capability_to_repr(
-            db,
-            &core,
-            crate::ir::MirBackend::EvmYul,
-            &mut func.body,
-        );
+        crate::transform::lower_capability_to_repr(db, &core, &mut func.body);
         crate::transform::canonicalize_transparent_newtypes(db, &mut func.body);
         crate::transform::insert_temp_binds(db, &mut func.body);
         crate::transform::canonicalize_zero_sized(db, &mut func.body);
     }
-    Ok(MirModule { top_mod, functions })
+    let mut module = MirModule { top_mod, functions };
+    crate::transform::normalize_runtime_abi(db, &mut module);
+    crate::transform::eliminate_dead_erased_arg_materializations(db, &mut module);
+    crate::transform::normalize_runtime_shapes(db, &mut module);
+    Ok(module)
 }
 
 /// Lowers every function within every top-level module of an ingot into MIR.
@@ -476,24 +476,23 @@ pub fn lower_ingot<'db>(
     }
     run_borrow_checks_or_error(db, &functions)?;
 
-    // Lower semantic capability MIR into backend-specific representation MIR for codegen.
+    // Lower semantic capability MIR into backend-neutral runtime representation MIR.
     let root_mod = ingot.root_mod(db);
     let core = CoreLib::new(db, root_mod.scope());
     for func in &mut functions {
-        crate::transform::lower_capability_to_repr(
-            db,
-            &core,
-            crate::ir::MirBackend::EvmYul,
-            &mut func.body,
-        );
+        crate::transform::lower_capability_to_repr(db, &core, &mut func.body);
         crate::transform::canonicalize_transparent_newtypes(db, &mut func.body);
         crate::transform::insert_temp_binds(db, &mut func.body);
         crate::transform::canonicalize_zero_sized(db, &mut func.body);
     }
-    Ok(MirModule {
+    let mut module = MirModule {
         top_mod: root_mod,
         functions,
-    })
+    };
+    crate::transform::normalize_runtime_abi(db, &mut module);
+    crate::transform::eliminate_dead_erased_arg_materializations(db, &mut module);
+    crate::transform::normalize_runtime_shapes(db, &mut module);
+    Ok(module)
 }
 
 /// Lowers a single HIR function (with its typed body) into a MIR function template.
@@ -544,7 +543,7 @@ pub(crate) fn lower_function<'db>(
     builder.lower_root(body.expr(db));
     builder.ensure_const_expr_values();
     if let Some(block) = builder.current_block() {
-        let ret_ty = func.return_ty(db);
+        let ret_ty = builder.return_ty;
         let returns_value = !builder.is_unit_ty(ret_ty) && !ret_ty.is_never(db);
         let source = builder.source_for_expr(body.expr(db));
         if returns_value {
@@ -567,6 +566,11 @@ pub(crate) fn lower_function<'db>(
         }
     }
     let deferred_error = builder.deferred_error.take();
+    let effect_param_provider_tys = builder.effect_param_provider_tys.clone();
+    let ret_ty = builder.return_ty;
+    let returns_value = !crate::layout::is_zero_sized_ty(db, ret_ty);
+    let runtime_return_shape =
+        crate::repr::runtime_return_shape_seed_for_ty(db, &builder.core, ret_ty);
     let mir_body = builder.finish();
 
     if let Some(err) = deferred_error {
@@ -590,8 +594,10 @@ pub(crate) fn lower_function<'db>(
     // Note: `MirFunction` may be used as a generic template during monomorphization.
     // Monomorphic instances get a fully-instantiated + normalized `ret_ty` in the
     // monomorphizer; this is the declared return type.
-    let ret_ty = func.return_ty(db);
-    let returns_value = !crate::layout::is_zero_sized_ty(db, ret_ty);
+    let runtime_abi = crate::ir::RuntimeAbi::source_shaped(
+        mir_body.param_locals.len(),
+        effect_param_provider_tys,
+    );
 
     Ok(MirFunction {
         origin: crate::ir::MirFunctionOrigin::Hir(func),
@@ -600,6 +606,8 @@ pub(crate) fn lower_function<'db>(
         generic_args,
         ret_ty,
         returns_value,
+        runtime_abi,
+        runtime_return_shape,
         contract_function,
         symbol_name,
         receiver_space,
@@ -623,12 +631,15 @@ pub(super) struct MirBuilder<'db, 'a> {
     pub(super) source_info_cache: FxHashMap<Span, crate::ir::SourceInfoId>,
     pub(super) pat_address_space: FxHashMap<PatId, AddressSpaceKind>,
     pub(super) binding_locals: FxHashMap<LocalBinding<'db>, LocalId>,
+    pub(super) address_taken_locals: FxHashSet<LocalId>,
     /// For methods, the address space variant being lowered.
     pub(super) receiver_space: Option<AddressSpaceKind>,
     /// Address space for each effect parameter, indexed by effect param position.
     pub(super) effect_param_spaces: Vec<AddressSpaceKind>,
     /// Address space overrides for effect bindings not tied to a function effect list.
     pub(super) effect_binding_spaces: FxHashMap<LocalBinding<'db>, AddressSpaceKind>,
+    /// Provider type metadata aligned to `MirBody::effect_param_locals`.
+    pub(super) effect_param_provider_tys: Vec<Option<TyId<'db>>>,
     /// Capability-space overrides for function parameters, indexed by parameter position.
     pub(super) param_capability_space_overrides:
         Vec<Vec<(MirProjectionPath<'db>, AddressSpaceKind)>>,
@@ -646,6 +657,7 @@ pub(super) struct LoopScope {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum EffectProviderInferenceRationale {
     ConcreteProviderTy,
+    DeclaredEffectKeyProviderTy,
     ByRefProviderDefaultsToMemory,
     ContractFieldProviderTy,
     ByTempPlaceMemPtr,
@@ -709,9 +721,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             source_info_cache: FxHashMap::default(),
             pat_address_space: FxHashMap::default(),
             binding_locals: FxHashMap::default(),
+            address_taken_locals: FxHashSet::default(),
             receiver_space,
             effect_param_spaces: Vec::new(),
             effect_binding_spaces: FxHashMap::default(),
+            effect_param_provider_tys: Vec::new(),
             param_capability_space_overrides: param_capability_space_overrides.to_vec(),
             deferred_error: None,
         };
@@ -769,7 +783,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         generic_args: &'a [TyId<'db>],
         overrides: LoweringOverrides<'a, 'db>,
     ) -> Result<Self, MirLowerError> {
-        let return_ty = func.return_ty(db);
+        let declared_return_ty = CallableDef::Func(func).ret_ty(db);
+        let return_ty = hir::analysis::ty::normalize::normalize_ty(
+            db,
+            if generic_args.is_empty() {
+                declared_return_ty.instantiate_identity()
+            } else {
+                declared_return_ty.instantiate(db, generic_args)
+            },
+            crate::ty::normalization_scope_for_args(db, func, generic_args),
+            hir::analysis::ty::trait_resolution::PredicateListId::empty_list(db),
+        );
         Self::new(
             db,
             Some(func),
@@ -810,15 +834,20 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         is_mut: bool,
         binding: Option<LocalBinding<'db>>,
     ) -> LocalId {
-        let capability_spaces =
-            capability_spaces_for_ty_with_default(self.db, ty, AddressSpaceKind::Memory);
+        let pointer_leaf_infos = pointer_leaf_infos_for_ty_with_default(
+            self.db,
+            &self.core,
+            ty,
+            AddressSpaceKind::Memory,
+        );
         let local = self.builder.body.alloc_local(LocalData {
             name,
             ty,
             is_mut,
             source: crate::ir::SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces,
+            pointer_leaf_infos,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         self.builder.body.param_locals.push(local);
         if let Some(binding) = binding {
@@ -834,14 +863,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         address_space: AddressSpaceKind,
     ) -> LocalId {
         let ty = self.u256_ty();
-        let capability_spaces = capability_spaces_for_ty_with_default(self.db, ty, address_space);
         let local = self.builder.body.alloc_local(LocalData {
             name,
             ty,
             is_mut: binding.is_mut(),
             source: crate::ir::SourceInfoId::SYNTHETIC,
             address_space,
-            capability_spaces,
+            pointer_leaf_infos: Vec::new(),
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         self.builder.body.effect_param_locals.push(local);
         self.binding_locals.insert(binding, local);
@@ -875,6 +904,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         provider_ty: TyId<'db>,
         concrete_rationale: EffectProviderInferenceRationale,
     ) -> Option<InferredEffectProvider<'db>> {
+        if let Some(space) = self.raw_effect_space_for_provider_ty(provider_ty) {
+            return Some(InferredEffectProvider {
+                provider_ty: Some(provider_ty),
+                address_space: space,
+                rationale: concrete_rationale,
+            });
+        }
+
         if let Some(space) = self.effect_provider_space_for_provider_ty(provider_ty) {
             return Some(InferredEffectProvider {
                 provider_ty: Some(provider_ty),
@@ -899,17 +936,80 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         None
     }
 
+    fn raw_effect_space_for_provider_ty(&self, provider_ty: TyId<'db>) -> Option<AddressSpaceKind> {
+        let scope = self.body.scope();
+        let raw_mem =
+            hir::analysis::ty::corelib::resolve_lib_type_path(self.db, scope, "std::evm::RawMem")?;
+        if provider_ty == raw_mem {
+            return Some(AddressSpaceKind::Memory);
+        }
+
+        let raw_storage = hir::analysis::ty::corelib::resolve_lib_type_path(
+            self.db,
+            scope,
+            "std::evm::RawStorage",
+        )?;
+        (provider_ty == raw_storage).then_some(AddressSpaceKind::Storage)
+    }
+
     fn infer_effect_provider_for_effect_param(
         &self,
         func: Func<'db>,
         effect_idx: usize,
         provider_arg_idx_by_effect: &[Option<usize>],
     ) -> InferredEffectProvider<'db> {
+        let assumptions = hir::analysis::ty::trait_resolution::PredicateListId::empty_list(self.db);
         if let Some(provider_arg_idx) = provider_arg_idx_by_effect
             .get(effect_idx)
             .copied()
             .flatten()
             && let Some(provider_ty) = self.generic_args.get(provider_arg_idx).copied()
+            && let Some(inferred) = self.infer_effect_provider_from_provider_ty(
+                provider_ty,
+                EffectProviderInferenceRationale::ConcreteProviderTy,
+            )
+        {
+            return inferred;
+        }
+
+        if let Some(effect) = func.effect_params(self.db).nth(effect_idx)
+            && let Some(key_path) = effect.key_path(self.db)
+            && let Some(provider_ty) =
+                hir::analysis::ty::effects::resolve_normalized_type_effect_key(
+                    self.db,
+                    key_path,
+                    func.scope(),
+                    hir::analysis::ty::trait_resolution::PredicateListId::empty_list(self.db),
+                )
+            && let Some(inferred) = self.infer_effect_provider_from_provider_ty(
+                provider_ty,
+                EffectProviderInferenceRationale::DeclaredEffectKeyProviderTy,
+            )
+        {
+            return inferred;
+        }
+
+        if let Some(provider_ty) = func
+            .effect_params(self.db)
+            .nth(effect_idx)
+            .and_then(|effect| effect.key_path(self.db))
+            .and_then(
+                |key_path| match hir::analysis::name_resolution::path_resolver::resolve_path(
+                    self.db,
+                    key_path,
+                    func.scope(),
+                    assumptions,
+                    false,
+                )
+                .ok()?
+                {
+                    hir::analysis::name_resolution::path_resolver::PathRes::Ty(ty)
+                    | hir::analysis::name_resolution::path_resolver::PathRes::TyAlias(_, ty) => {
+                        Some(ty)
+                    }
+                    _ => None,
+                },
+            )
             && let Some(inferred) = self.infer_effect_provider_from_provider_ty(
                 provider_ty,
                 EffectProviderInferenceRationale::ConcreteProviderTy,
@@ -1188,15 +1288,20 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     pub(super) fn alloc_temp_local(&mut self, ty: TyId<'db>, is_mut: bool, hint: &str) -> LocalId {
         let idx = self.builder.body.locals.len();
         let name = format!("tmp_{hint}{idx}");
-        let capability_spaces =
-            capability_spaces_for_ty_with_default(self.db, ty, AddressSpaceKind::Memory);
+        let pointer_leaf_infos = pointer_leaf_infos_for_ty_with_default(
+            self.db,
+            &self.core,
+            ty,
+            AddressSpaceKind::Memory,
+        );
         self.builder.body.alloc_local(LocalData {
             name,
             ty,
             is_mut,
             source: crate::ir::SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
-            capability_spaces,
+            pointer_leaf_infos,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         })
     }
 
@@ -1215,20 +1320,20 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
     }
 
-    fn normalize_capability_spaces(
+    fn normalize_pointer_leaf_infos(
         &mut self,
-        spaces: Vec<(MirProjectionPath<'db>, AddressSpaceKind)>,
-    ) -> Vec<(MirProjectionPath<'db>, AddressSpaceKind)> {
-        match normalize_capability_space_entries(spaces) {
+        infos: Vec<(MirProjectionPath<'db>, PointerInfo<'db>)>,
+    ) -> Vec<(MirProjectionPath<'db>, PointerInfo<'db>)> {
+        match normalize_pointer_leaf_info_entries(infos) {
             Ok(normalized) => normalized,
             Err(conflict) => {
-                self.defer_capability_space_conflict(conflict);
+                self.defer_pointer_info_conflict(conflict);
                 Vec::new()
             }
         }
     }
 
-    fn defer_capability_space_conflict(&mut self, conflict: CapabilitySpaceConflict<'db>) {
+    fn defer_pointer_info_conflict(&mut self, conflict: PointerInfoConflict<'db>) {
         if self.deferred_error.is_some() {
             return;
         }
@@ -1239,67 +1344,102 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.deferred_error = Some(MirLowerError::Unsupported {
             func_name,
             message: format!(
-                "conflicting non-memory capability spaces for path `{:?}`: `{:?}` vs `{:?}`",
+                "conflicting pointer metadata for path `{:?}`: `{:?}` vs `{:?}`",
                 conflict.path, conflict.existing, conflict.incoming
             ),
         });
     }
 
-    fn capability_spaces_for_projection_from_local(
+    fn pointer_leaf_infos_for_projection_from_local(
         &mut self,
         local: LocalId,
         projection: &MirProjectionPath<'db>,
-    ) -> Vec<(MirProjectionPath<'db>, AddressSpaceKind)> {
+    ) -> Vec<(MirProjectionPath<'db>, PointerInfo<'db>)> {
         let Some(local_data) = self.builder.body.locals.get(local.index()) else {
             return Vec::new();
         };
-        let local_capability_spaces = local_data.capability_spaces.clone();
+        let local_pointer_leaf_infos = local_data.pointer_leaf_infos.clone();
 
-        let mut spaces = Vec::new();
-        for (path, space) in &local_capability_spaces {
+        let mut infos = Vec::new();
+        for (path, info) in &local_pointer_leaf_infos {
             if let Some(suffix) = crate::ir::projection_strip_prefix(path, projection) {
-                spaces.push((suffix, *space));
-                continue;
-            }
-            if path.is_prefix_of(projection) {
-                spaces.push((MirProjectionPath::new(), *space));
+                infos.push((suffix, *info));
             }
         }
-        self.normalize_capability_spaces(spaces)
+        self.normalize_pointer_leaf_infos(infos)
     }
 
-    fn capability_spaces_for_place(
+    fn pointer_leaf_infos_for_place(
         &mut self,
         place: &Place<'db>,
         target_ty: TyId<'db>,
-    ) -> Vec<(MirProjectionPath<'db>, AddressSpaceKind)> {
-        if let Some((local, base_projection)) =
-            crate::ir::resolve_local_projection_root(&self.builder.body.values, place.base)
+    ) -> Vec<(MirProjectionPath<'db>, PointerInfo<'db>)> {
+        let resolved = crate::repr::resolve_place(
+            self.db,
+            &self.core,
+            &self.builder.body.values,
+            &self.builder.body.locals,
+            place,
+        );
+        let crosses_deref_boundary = resolved.as_ref().is_some_and(|resolved| {
+            resolved
+                .segments
+                .iter()
+                .any(|segment| segment.start_kind.is_some())
+        });
+        let target_space = resolved
+            .as_ref()
+            .and_then(|resolved| {
+                let final_state = resolved.final_state();
+                final_state
+                    .pointer_info
+                    .map(|info| info.address_space)
+                    .or(final_state.location_address_space())
+            })
+            .unwrap_or_else(|| self.place_address_space(place));
+        let target_infos =
+            pointer_leaf_infos_for_ty_with_default(self.db, &self.core, target_ty, target_space);
+        if !crosses_deref_boundary
+            && let Some((local, base_projection)) =
+                crate::ir::resolve_local_projection_root(&self.builder.body.values, place.base)
         {
             let full_projection = base_projection.concat(&place.projection);
-            let spaces = self.capability_spaces_for_projection_from_local(local, &full_projection);
-            if !spaces.is_empty() {
-                return spaces;
+            let infos = self.pointer_leaf_infos_for_projection_from_local(local, &full_projection);
+            if !infos.is_empty() {
+                if target_infos.is_empty() {
+                    return Vec::new();
+                }
+
+                let target_paths: FxHashSet<_> =
+                    target_infos.iter().map(|(path, _)| path.clone()).collect();
+                let local_infos: Vec<_> = infos
+                    .into_iter()
+                    .filter(|(path, _)| target_paths.contains(path))
+                    .collect();
+                if local_infos.is_empty() {
+                    return target_infos;
+                }
+
+                let local_paths: FxHashSet<_> =
+                    local_infos.iter().map(|(path, _)| path.clone()).collect();
+                return local_infos
+                    .into_iter()
+                    .chain(
+                        target_infos
+                            .into_iter()
+                            .filter(|(path, _)| !local_paths.contains(path)),
+                    )
+                    .collect();
             }
         }
 
-        if target_ty.as_capability(self.db).is_some()
-            && let Some(space) = crate::ir::try_value_address_space_in(
-                &self.builder.body.values,
-                &self.builder.body.locals,
-                place.base,
-            )
-        {
-            return vec![(MirProjectionPath::new(), space)];
-        }
-
-        Vec::new()
+        target_infos
     }
 
-    fn capability_spaces_for_value(
+    fn pointer_leaf_infos_for_value(
         &mut self,
         value: ValueId,
-    ) -> Vec<(MirProjectionPath<'db>, AddressSpaceKind)> {
+    ) -> Vec<(MirProjectionPath<'db>, PointerInfo<'db>)> {
         let (ty, origin) = {
             let data = self.builder.body.value(value);
             (data.ty, data.origin.clone())
@@ -1310,36 +1450,56 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 .body
                 .locals
                 .get(local.index())
-                .map(|local| local.capability_spaces.clone())
+                .map(|local| local.pointer_leaf_infos.clone())
                 .unwrap_or_default(),
-            ValueOrigin::TransparentCast { value } => self.capability_spaces_for_value(value),
+            ValueOrigin::TransparentCast { value } => {
+                let infos = self.pointer_leaf_infos_for_value(value);
+                if !infos.is_empty() {
+                    return infos;
+                }
+                crate::ir::try_value_address_space_in(
+                    &self.builder.body.values,
+                    &self.builder.body.locals,
+                    value,
+                )
+                .and_then(|space| {
+                    crate::repr::runtime_pointer_info_for_ty(self.db, &self.core, ty, space)
+                })
+                .map(|info| vec![(MirProjectionPath::new(), info)])
+                .unwrap_or_default()
+            }
             ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
-                self.capability_spaces_for_place(&place, ty)
+                self.pointer_leaf_infos_for_place(&place, ty)
             }
-            ValueOrigin::FieldPtr(field_ptr) if ty.as_capability(self.db).is_some() => {
-                vec![(MirProjectionPath::new(), field_ptr.addr_space)]
+            ValueOrigin::FieldPtr(field_ptr) => {
+                crate::repr::pointer_info_for_ty(self.db, &self.core, ty, field_ptr.addr_space)
+                    .map(|info| vec![(MirProjectionPath::new(), info)])
+                    .unwrap_or_default()
             }
-            _ if ty.as_capability(self.db).is_some() => crate::ir::try_value_address_space_in(
+            _ => crate::ir::try_value_pointer_info_in(
                 &self.builder.body.values,
                 &self.builder.body.locals,
                 value,
             )
-            .map(|space| vec![(MirProjectionPath::new(), space)])
+            .filter(|_| {
+                crate::repr::pointer_info_for_ty(self.db, &self.core, ty, AddressSpaceKind::Memory)
+                    .is_some()
+            })
+            .map(|info| vec![(MirProjectionPath::new(), info)])
             .unwrap_or_default(),
-            _ => Vec::new(),
         }
     }
 
     fn value_root_capability_space_hint(&self, value: ValueId) -> AddressSpaceKind {
         if let Some((local, projection)) =
             crate::ir::resolve_local_projection_root(&self.builder.body.values, value)
-            && let Some(space) = crate::ir::lookup_local_capability_space(
+            && let Some(info) = crate::ir::lookup_local_pointer_leaf_info(
                 &self.builder.body.locals,
                 local,
                 &projection,
             )
         {
-            return space;
+            return info.address_space;
         }
         self.value_address_space_or_memory_fallback(value)
     }
@@ -1865,26 +2025,36 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         space_hint
     }
 
-    fn capability_spaces_for_rvalue(
+    fn pointer_leaf_infos_for_rvalue(
         &mut self,
         dest: LocalId,
         rvalue: &Rvalue<'db>,
-    ) -> Vec<(MirProjectionPath<'db>, AddressSpaceKind)> {
+    ) -> Vec<(MirProjectionPath<'db>, PointerInfo<'db>)> {
         let (dest_ty, dest_address_space) = {
             let dest_local = self.builder.body.local(dest);
             (dest_local.ty, dest_local.address_space)
         };
         match rvalue {
-            Rvalue::Value(value) => self.capability_spaces_for_value(*value),
-            Rvalue::Load { place } => self.capability_spaces_for_place(place, dest_ty),
+            Rvalue::Value(value) => self.pointer_leaf_infos_for_value(*value),
+            Rvalue::Load { place } => self.pointer_leaf_infos_for_place(place, dest_ty),
             Rvalue::Call(call) => {
-                let mut spaces = capability_spaces_for_ty_with_default(
+                let mut infos = pointer_leaf_infos_for_ty_with_default(
                     self.db,
+                    &self.core,
                     dest_ty,
                     AddressSpaceKind::Memory,
                 );
-                if spaces.is_empty() && hir::analysis::ty::ty_is_noesc(self.db, dest_ty) {
-                    spaces.push((MirProjectionPath::new(), AddressSpaceKind::Memory));
+                let declared_provider_space = self.effect_provider_space_for_provider_ty(dest_ty);
+                if infos.is_empty()
+                    && hir::analysis::ty::ty_is_noesc(self.db, dest_ty)
+                    && let Some(info) = crate::repr::pointer_info_for_ty(
+                        self.db,
+                        &self.core,
+                        dest_ty,
+                        AddressSpaceKind::Memory,
+                    )
+                {
+                    infos.push((MirProjectionPath::new(), info));
                 }
                 let call_space_hint = self
                     .call_return_space_hint_from_args(call, dest_ty)
@@ -1892,37 +2062,105 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         call.receiver_space
                             .filter(|space| !matches!(space, AddressSpaceKind::Memory))
                     });
-                if let Some(space) = call_space_hint
+                if declared_provider_space.is_none()
+                    && let Some(space) = call_space_hint
                     && !matches!(space, AddressSpaceKind::Memory)
                 {
-                    if spaces.is_empty() && hir::analysis::ty::ty_is_noesc(self.db, dest_ty) {
-                        spaces.push((MirProjectionPath::new(), space));
+                    if infos.is_empty()
+                        && hir::analysis::ty::ty_is_noesc(self.db, dest_ty)
+                        && let Some(info) =
+                            crate::repr::pointer_info_for_ty(self.db, &self.core, dest_ty, space)
+                    {
+                        infos.push((MirProjectionPath::new(), info));
                     }
-                    for (_, mapped_space) in &mut spaces {
-                        *mapped_space = space;
+                    for (_, mapped_info) in &mut infos {
+                        mapped_info.address_space = space;
                     }
                 }
-                if spaces.is_empty() && dest_ty.as_capability(self.db).is_some() {
-                    return vec![(MirProjectionPath::new(), dest_address_space)];
+                if infos.is_empty()
+                    && let Some(info) = crate::repr::pointer_info_for_ty(
+                        self.db,
+                        &self.core,
+                        dest_ty,
+                        dest_address_space,
+                    )
+                {
+                    return vec![(MirProjectionPath::new(), info)];
                 }
-                spaces
+                infos
             }
             Rvalue::Intrinsic { .. } => {
-                if dest_ty.as_capability(self.db).is_some() {
-                    vec![(MirProjectionPath::new(), dest_address_space)]
-                } else {
-                    Vec::new()
-                }
+                crate::repr::pointer_info_for_ty(self.db, &self.core, dest_ty, dest_address_space)
+                    .map(|info| vec![(MirProjectionPath::new(), info)])
+                    .unwrap_or_default()
             }
-            Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::ConstAggregate { .. } => Vec::new(),
+            Rvalue::Alloc { address_space } => vec![(
+                MirProjectionPath::new(),
+                PointerInfo {
+                    address_space: *address_space,
+                    target_ty: Some(dest_ty),
+                },
+            )],
+            Rvalue::ZeroInit | Rvalue::ConstAggregate { .. } => Vec::new(),
+        }
+    }
+
+    fn local_type_tracks_address_space(&self, ty: TyId<'db>) -> bool {
+        crate::repr::pointer_info_for_ty(self.db, &self.core, ty, AddressSpaceKind::Memory)
+            .is_some()
+    }
+
+    fn local_address_space_for_rvalue(
+        &mut self,
+        dest: LocalId,
+        rvalue: &Rvalue<'db>,
+        infos: &[(MirProjectionPath<'db>, PointerInfo<'db>)],
+    ) -> Option<AddressSpaceKind> {
+        let dest_ty = self.builder.body.local(dest).ty;
+        if !self.local_type_tracks_address_space(dest_ty) {
+            return None;
+        }
+
+        if let Some(space) = infos
+            .iter()
+            .find(|(path, _)| path.is_empty())
+            .map(|(_, info)| info.address_space)
+        {
+            return Some(space);
+        }
+
+        match rvalue {
+            Rvalue::Value(value) => crate::ir::try_value_address_space_in(
+                &self.builder.body.values,
+                &self.builder.body.locals,
+                *value,
+            ),
+            Rvalue::Load { place } => Some(self.place_address_space(place)),
+            Rvalue::Call(call) => self
+                .call_return_space_hint_from_args(call, dest_ty)
+                .or(call.receiver_space)
+                .or(self.effect_provider_space_for_provider_ty(dest_ty)),
+            Rvalue::Intrinsic { .. } => crate::repr::runtime_pointer_info_for_ty(
+                self.db,
+                &self.core,
+                dest_ty,
+                self.builder.body.local(dest).address_space,
+            )
+            .map(|info| info.address_space),
+            Rvalue::Alloc { address_space } => Some(*address_space),
+            Rvalue::ZeroInit | Rvalue::ConstAggregate { .. } => None,
         }
     }
 
     fn assign(&mut self, stmt: Option<StmtId>, dest: Option<LocalId>, rvalue: Rvalue<'db>) {
         if let Some(dest) = dest {
-            let spaces = self.capability_spaces_for_rvalue(dest, &rvalue);
-            self.builder.body.locals[dest.index()].capability_spaces =
-                self.normalize_capability_spaces(spaces);
+            let infos = self.pointer_leaf_infos_for_rvalue(dest, &rvalue);
+            let infos = self.normalize_pointer_leaf_infos(infos);
+            let address_space = self.local_address_space_for_rvalue(dest, &rvalue, &infos);
+            self.builder.body.locals[dest.index()].pointer_leaf_infos = infos;
+            if let Some(address_space) = address_space {
+                self.builder.body.locals[dest.index()].address_space = address_space;
+            }
         }
 
         let source = stmt
@@ -1935,12 +2173,83 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         });
     }
 
-    fn alloc_value(&mut self, ty: TyId<'db>, origin: ValueOrigin<'db>, repr: ValueRepr) -> ValueId {
+    pub(super) fn refresh_value_pointer_info(&mut self, value: ValueId) {
+        let info = crate::repr::infer_value_pointer_info(
+            self.db,
+            &self.core,
+            &self.builder.body.values,
+            &self.builder.body.locals,
+            value,
+        );
+        self.builder.body.values[value.index()].pointer_info = info;
+    }
+
+    fn alloc_value(
+        &mut self,
+        ty: TyId<'db>,
+        mut origin: ValueOrigin<'db>,
+        repr: ValueRepr,
+    ) -> ValueId {
+        if let ValueOrigin::TransparentCast { value } = origin
+            && self.builder.body.value(value).ty == ty
+            && self.builder.body.value(value).repr == repr
+        {
+            origin = self.builder.body.value(value).origin.clone();
+        }
+
+        let place_pointer_info = match &origin {
+            ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => self
+                .builder
+                .body
+                .place_pointer_info(place)
+                .and_then(|info| {
+                    crate::repr::runtime_value_pointer_info_for_ty(
+                        self.db,
+                        &self.core,
+                        ty,
+                        info.address_space,
+                    )
+                }),
+            _ => None,
+        };
+        let default_space = repr
+            .address_space()
+            .or_else(|| match &origin {
+                ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) => {
+                    crate::ir::lookup_local_pointer_leaf_info(
+                        &self.builder.body.locals,
+                        *local,
+                        &MirProjectionPath::new(),
+                    )
+                    .map(|info| info.address_space)
+                    .or_else(|| {
+                        ty.as_capability(self.db)
+                            .is_some()
+                            .then_some(self.builder.body.local(*local).address_space)
+                    })
+                }
+                ValueOrigin::TransparentCast { value } => crate::ir::try_value_address_space_in(
+                    &self.builder.body.values,
+                    &self.builder.body.locals,
+                    *value,
+                ),
+                ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
+                    Some(self.place_address_space(place))
+                }
+                ValueOrigin::FieldPtr(field_ptr) => Some(field_ptr.addr_space),
+                _ => None,
+            })
+            .unwrap_or(AddressSpaceKind::Memory);
+        let pointer_info = place_pointer_info.or_else(|| {
+            crate::repr::runtime_value_pointer_info_for_ty(self.db, &self.core, ty, default_space)
+        });
         self.builder.body.alloc_value(ValueData {
             ty,
             origin,
             source: crate::ir::SourceInfoId::SYNTHETIC,
             repr,
+            pointer_info,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         })
     }
 
@@ -2012,27 +2321,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// # Returns
     /// The address space kind for the expression.
     pub(super) fn expr_address_space(&self, expr: ExprId) -> AddressSpaceKind {
-        // Propagate storage space through projections so nested fields continue to be treated as
-        // storage pointers.
-        let exprs = self.body.exprs(self.db);
-        if let Partial::Present(expr_data) = &exprs[expr] {
-            match expr_data {
-                Expr::Field(base, _) => {
-                    let base_space = self.expr_address_space(*base);
-                    if !matches!(base_space, AddressSpaceKind::Memory) {
-                        return base_space;
-                    }
-                }
-                Expr::Bin(base, _, BinOp::Index) => {
-                    let base_space = self.expr_address_space(*base);
-                    if !matches!(base_space, AddressSpaceKind::Memory) {
-                        return base_space;
-                    }
-                }
-                _ => {}
-            }
-        }
-
         let prop = self.typed_body.expr_prop(self.db, expr);
         if let Some(binding) = prop.binding {
             self.address_space_for_binding(&binding)
@@ -2071,7 +2359,22 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         match crate::repr::repr_kind_for_ty(self.db, &self.core, ty) {
-            crate::repr::ReprKind::Ptr(space) => ValueRepr::Ptr(space),
+            crate::repr::ReprKind::Ptr(space) => {
+                if matches!(space, AddressSpaceKind::Memory)
+                    && crate::repr::effect_provider_space_for_ty(self.db, &self.core, ty).is_none()
+                    && crate::repr::pointer_info_for_ty(
+                        self.db,
+                        &self.core,
+                        ty,
+                        self.expr_address_space(expr),
+                    )
+                    .is_some()
+                {
+                    ValueRepr::Ptr(self.expr_address_space(expr))
+                } else {
+                    ValueRepr::Ptr(space)
+                }
+            }
             crate::repr::ReprKind::Ref => ValueRepr::Ref(self.expr_address_space(expr)),
             crate::repr::ReprKind::Zst | crate::repr::ReprKind::Word => ValueRepr::Word,
         }
@@ -2090,7 +2393,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         match crate::repr::repr_kind_for_ty(self.db, &self.core, ty) {
-            crate::repr::ReprKind::Ptr(space) => ValueRepr::Ptr(space),
+            crate::repr::ReprKind::Ptr(ptr_space) => {
+                if matches!(ptr_space, AddressSpaceKind::Memory)
+                    && crate::repr::effect_provider_space_for_ty(self.db, &self.core, ty).is_none()
+                    && crate::repr::pointer_info_for_ty(self.db, &self.core, ty, space).is_some()
+                {
+                    ValueRepr::Ptr(space)
+                } else {
+                    ValueRepr::Ptr(ptr_space)
+                }
+            }
             crate::repr::ReprKind::Ref => ValueRepr::Ref(space),
             crate::repr::ReprKind::Zst | crate::repr::ReprKind::Word => ValueRepr::Word,
         }
@@ -2123,17 +2435,26 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
         }
 
-        let base_space = self.value_address_space(tuple_value);
-        let place = Place::new(
-            tuple_value,
-            MirProjectionPath::from_projection(hir::projection::Projection::Field(field_idx)),
-        );
+        let place = if self.deref_target_ty(tuple_ty).is_some() {
+            let mut place = self
+                .place_from_derefable_value(tuple_value, tuple_ty)
+                .expect("derefable tuple projection requires an address-backed place");
+            place
+                .projection
+                .push(hir::projection::Projection::Field(field_idx));
+            place
+        } else {
+            Place::new(
+                tuple_value,
+                MirProjectionPath::from_projection(hir::projection::Projection::Field(field_idx)),
+            )
+        };
+        let base_space = self.place_address_space(&place);
         if is_borrow_binding {
-            let field_space = self.value_address_space(tuple_value);
             return self.alloc_value(
                 field_ty,
                 ValueOrigin::PlaceRef(place),
-                self.value_repr_for_ty(field_ty, field_space),
+                self.value_repr_for_ty(field_ty, base_space),
             );
         }
         if self.is_by_ref_ty(field_ty) {
@@ -2179,12 +2500,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     .is_some()
                     || pat_ty.as_capability(self.db).is_some();
                 if carries_space {
-                    let space = crate::ir::try_value_address_space_in(
-                        &self.builder.body.values,
+                    let space = crate::ir::lookup_local_pointer_leaf_info(
                         &self.builder.body.locals,
-                        value,
+                        local,
+                        &MirProjectionPath::new(),
                     )
-                    .unwrap_or(AddressSpaceKind::Memory);
+                    .map(|info| info.address_space)
+                    .unwrap_or(self.builder.body.local(local).address_space);
                     self.set_pat_address_space(pat, space);
                 }
             }
@@ -2304,14 +2626,22 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 _ => param.ty(self.db),
             };
             let address_space = self.address_space_for_binding(&binding);
-            let mut capability_spaces =
-                capability_spaces_for_ty_with_default(self.db, ty, address_space);
+            let mut pointer_leaf_infos =
+                pointer_leaf_infos_for_ty_with_default(self.db, &self.core, ty, address_space);
             if let Some(overrides) = self.param_capability_space_overrides.get(idx) {
                 for (path, space) in overrides {
-                    capability_spaces.retain(|(existing, _)| existing != path);
-                    capability_spaces.push((path.clone(), *space));
+                    if let Some((_, info)) = pointer_leaf_infos
+                        .iter_mut()
+                        .find(|(existing, _)| existing == path)
+                    {
+                        info.address_space = *space;
+                    } else if let Some(info) =
+                        crate::repr::runtime_pointer_info_for_ty(self.db, &self.core, ty, *space)
+                    {
+                        pointer_leaf_infos.push((path.clone(), info));
+                    }
                 }
-                capability_spaces = self.normalize_capability_spaces(capability_spaces);
+                pointer_leaf_infos = self.normalize_pointer_leaf_infos(pointer_leaf_infos);
             }
             let local = self.builder.body.alloc_local(LocalData {
                 name,
@@ -2319,13 +2649,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 is_mut: binding.is_mut(),
                 source,
                 address_space,
-                capability_spaces,
+                pointer_leaf_infos,
+                runtime_shape: crate::ir::RuntimeShape::Unresolved,
             });
             self.builder.body.param_locals.push(local);
             self.binding_locals.insert(binding, local);
         }
-
         let effects_source = self.source_info_for_span(func.span().effects().resolve(self.db));
+        let provider_arg_idx_by_effect =
+            hir::analysis::ty::effects::place_effect_provider_param_index_map(self.db, func);
         for effect in func.effect_params(self.db) {
             let idx = effect.index();
             let Some(key_path) = effect.key_path(self.db) else {
@@ -2347,16 +2679,33 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         .map(|ident| ident.data(self.db).to_string())
                 })
                 .unwrap_or_else(|| format!("effect{idx}"));
+            let address_space = self.address_space_for_binding(&binding);
+            let inferred =
+                self.infer_effect_provider_for_effect_param(func, idx, provider_arg_idx_by_effect);
+            let pointer_leaf_infos = inferred
+                .provider_ty
+                .and_then(|provider_ty| {
+                    crate::repr::runtime_pointer_info_for_ty(
+                        self.db,
+                        &self.core,
+                        provider_ty,
+                        address_space,
+                    )
+                })
+                .map(|info| vec![(MirProjectionPath::new(), info)])
+                .unwrap_or_default();
             let local = self.builder.body.alloc_local(LocalData {
                 name,
                 ty: self.u256_ty(),
                 is_mut: binding.is_mut(),
                 source: effects_source,
-                address_space: self.address_space_for_binding(&binding),
-                capability_spaces: Vec::new(),
+                address_space,
+                pointer_leaf_infos,
+                runtime_shape: crate::ir::RuntimeShape::Unresolved,
             });
             self.builder.body.effect_param_locals.push(local);
             self.binding_locals.insert(binding, local);
+            self.effect_param_provider_tys.push(inferred.provider_ty);
         }
     }
 
@@ -2400,17 +2749,21 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             } => self.source_for_func_param(*func, *idx),
             _ => crate::ir::SourceInfoId::SYNTHETIC,
         };
+        let pointer_leaf_infos = pointer_leaf_infos_for_ty_with_default(
+            self.db,
+            &self.core,
+            ty,
+            self.address_space_for_binding(&binding),
+        );
+        let address_space = self.address_space_for_binding(&binding);
         let local = self.builder.body.alloc_local(LocalData {
             name,
             ty,
             is_mut,
             source,
-            address_space: self.address_space_for_binding(&binding),
-            capability_spaces: capability_spaces_for_ty_with_default(
-                self.db,
-                ty,
-                self.address_space_for_binding(&binding),
-            ),
+            address_space,
+            pointer_leaf_infos,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         if needs_effect_param_local {
             self.builder.body.effect_param_locals.push(local);
@@ -2545,6 +2898,18 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.builder.body.value_address_space(value)
     }
 
+    pub(super) fn place_address_space(&self, place: &Place<'db>) -> AddressSpaceKind {
+        crate::repr::resolve_place(
+            self.db,
+            &self.core,
+            &self.builder.body.values,
+            &self.builder.body.locals,
+            place,
+        )
+        .and_then(|resolved| resolved.final_state().location_address_space())
+        .unwrap_or_else(|| self.builder.body.place_address_space(place))
+    }
+
     pub(super) fn value_address_space_or_memory_fallback(
         &self,
         value: ValueId,
@@ -2585,45 +2950,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         self.value_address_space_or_memory_fallback(container)
-    }
-
-    pub(super) fn ty_contains_capability(&self, ty: TyId<'db>) -> bool {
-        fn visit<'db>(
-            builder: &MirBuilder<'db, '_>,
-            ty: TyId<'db>,
-            seen: &mut FxHashSet<TyId<'db>>,
-        ) -> bool {
-            if !seen.insert(ty) {
-                return false;
-            }
-
-            if ty.as_capability(builder.db).is_some() {
-                return true;
-            }
-
-            if let Some(inner) = crate::repr::transparent_newtype_field_ty(builder.db, ty)
-                && visit(builder, inner, seen)
-            {
-                return true;
-            }
-
-            for arg in ty.generic_args(builder.db) {
-                if visit(builder, *arg, seen) {
-                    return true;
-                }
-            }
-
-            for field_ty in ty.field_types(builder.db) {
-                if visit(builder, field_ty, seen) {
-                    return true;
-                }
-            }
-
-            false
-        }
-
-        let mut seen = FxHashSet::default();
-        visit(self, ty, &mut seen)
     }
 
     /// Associates a pattern with an address space.

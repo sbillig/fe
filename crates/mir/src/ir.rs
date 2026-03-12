@@ -41,6 +41,10 @@ pub struct MirFunction<'db> {
     pub ret_ty: TyId<'db>,
     /// Whether this function has a runtime return value (`ret_ty` is not zero-sized).
     pub returns_value: bool,
+    /// Runtime ABI metadata after MIR runtime-ABI normalization.
+    pub runtime_abi: RuntimeAbi<'db>,
+    /// Backend-neutral runtime return shape after MIR normalization.
+    pub runtime_return_shape: RuntimeShape<'db>,
     /// Optional contract association declared via attributes.
     pub contract_function: Option<ContractFunction>,
     /// Symbol name used for codegen (includes monomorphization suffix when present).
@@ -51,6 +55,117 @@ pub struct MirFunction<'db> {
     /// as a root.  Used for dependency contract templates that should only be
     /// instantiated when referenced by `create2`.
     pub defer_root: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeAbi<'db> {
+    /// Runtime-visible value params aligned to `MirBody::param_locals`.
+    pub value_params: Vec<bool>,
+    /// Runtime-visible effect params aligned to `MirBody::effect_param_locals`.
+    pub effect_params: Vec<bool>,
+    /// Provider type metadata aligned to `MirBody::effect_param_locals`.
+    pub effect_param_provider_tys: Vec<Option<TyId<'db>>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RuntimeWordKind {
+    I1,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    I256,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RuntimeShape<'db> {
+    Unresolved,
+    Erased,
+    Word(RuntimeWordKind),
+    MemoryPtr { target_ty: Option<TyId<'db>> },
+    AddressWord(PointerInfo<'db>),
+}
+
+impl<'db> RuntimeShape<'db> {
+    pub fn is_unresolved(self) -> bool {
+        matches!(self, Self::Unresolved)
+    }
+
+    pub fn is_erased(self) -> bool {
+        matches!(self, Self::Erased)
+    }
+
+    pub fn pointer_info(self) -> Option<PointerInfo<'db>> {
+        match self {
+            Self::MemoryPtr { target_ty } => Some(PointerInfo {
+                address_space: AddressSpaceKind::Memory,
+                target_ty,
+            }),
+            Self::AddressWord(info) => Some(info),
+            Self::Unresolved | Self::Erased | Self::Word(_) => None,
+        }
+    }
+}
+
+impl<'db> RuntimeAbi<'db> {
+    pub fn source_shaped(
+        param_count: usize,
+        effect_param_provider_tys: Vec<Option<TyId<'db>>>,
+    ) -> Self {
+        let effect_count = effect_param_provider_tys.len();
+        Self {
+            value_params: vec![true; param_count],
+            effect_params: vec![true; effect_count],
+            effect_param_provider_tys,
+        }
+    }
+
+    pub fn value_param_visible(&self, idx: usize) -> bool {
+        self.value_params.get(idx).copied().unwrap_or(false)
+    }
+
+    pub fn effect_param_visible(&self, idx: usize) -> bool {
+        self.effect_params.get(idx).copied().unwrap_or(false)
+    }
+}
+
+impl<'db> MirFunction<'db> {
+    pub fn runtime_param_locals(&self) -> Vec<LocalId> {
+        self.body
+            .param_locals
+            .iter()
+            .copied()
+            .enumerate()
+            .filter_map(|(idx, local)| self.runtime_abi.value_param_visible(idx).then_some(local))
+            .collect()
+    }
+
+    pub fn runtime_effect_param_locals(&self) -> Vec<LocalId> {
+        self.body
+            .effect_param_locals
+            .iter()
+            .copied()
+            .enumerate()
+            .filter_map(|(idx, local)| self.runtime_abi.effect_param_visible(idx).then_some(local))
+            .collect()
+    }
+
+    pub fn runtime_param_count(&self) -> usize {
+        self.runtime_abi
+            .value_params
+            .iter()
+            .filter(|visible| **visible)
+            .count()
+    }
+
+    pub fn runtime_effect_param_count(&self) -> usize {
+        self.runtime_abi
+            .effect_params
+            .iter()
+            .filter(|visible| **visible)
+            .count()
+    }
 }
 
 /// Source identity of a MIR function.
@@ -97,7 +212,8 @@ pub enum MirBackend {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MirStage {
     Capability,
-    Repr(MirBackend),
+    Repr,
+    BackendPrepared(MirBackend),
 }
 
 /// A function body expressed as basic blocks.
@@ -215,11 +331,31 @@ impl<'db> MirBody<'db> {
 
     /// Determines the address space associated with a place.
     pub fn place_address_space(&self, place: &Place<'db>) -> AddressSpaceKind {
-        self.value_address_space(place.base)
+        if let Some(space) = try_place_address_space_in(&self.values, &self.locals, place) {
+            return space;
+        }
+
+        let value_data = self.value(place.base);
+        panic!(
+            "requested address space for MIR place without one: {place:?} (base repr={:?}, origin={:?})",
+            value_data.repr, value_data.origin
+        );
     }
 
     fn try_value_address_space(&self, value: ValueId) -> Option<AddressSpaceKind> {
         try_value_address_space_in(&self.values, &self.locals, value)
+    }
+
+    fn try_value_pointer_info(&self, value: ValueId) -> Option<PointerInfo<'db>> {
+        try_value_pointer_info_in(&self.values, &self.locals, value)
+    }
+
+    pub fn value_pointer_info(&self, value: ValueId) -> Option<PointerInfo<'db>> {
+        self.try_value_pointer_info(value)
+    }
+
+    pub fn place_pointer_info(&self, place: &Place<'db>) -> Option<PointerInfo<'db>> {
+        try_place_pointer_info_in(&self.values, &self.locals, place)
     }
 }
 
@@ -228,43 +364,199 @@ pub(crate) fn try_value_address_space_in<'db>(
     locals: &[LocalData<'db>],
     value: ValueId,
 ) -> Option<AddressSpaceKind> {
-    let value_data = values.get(value.index())?;
-    if let Some(space) = value_data.repr.address_space() {
-        return Some(space);
+    if let Some(info) = try_value_pointer_info_in(values, locals, value) {
+        return Some(info.address_space);
     }
+
+    let value_data = values.get(value.index())?;
     match &value_data.origin {
-        ValueOrigin::Local(local) => locals.get(local.index()).map(|l| l.address_space),
-        ValueOrigin::PlaceRoot(local) => locals.get(local.index()).map(|l| l.address_space),
+        ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) => {
+            locals.get(local.index()).map(|local| local.address_space)
+        }
         ValueOrigin::TransparentCast { value } => {
             try_value_address_space_in(values, locals, *value)
         }
         ValueOrigin::FieldPtr(field_ptr) => Some(field_ptr.addr_space),
-        ValueOrigin::PlaceRef(place) => try_value_address_space_in(values, locals, place.base),
-        ValueOrigin::MoveOut { place } => try_value_address_space_in(values, locals, place.base),
+        ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => value_data
+            .pointer_info
+            .map(|info| info.address_space)
+            .or_else(|| try_place_address_space_in(values, locals, place)),
         _ => None,
     }
 }
 
-pub(crate) fn lookup_local_capability_space<'db>(
+pub(crate) fn try_place_address_space_in<'db>(
+    values: &[ValueData<'db>],
+    locals: &[LocalData<'db>],
+    place: &Place<'db>,
+) -> Option<AddressSpaceKind> {
+    let mut current_pointer_info = try_value_pointer_info_in(values, locals, place.base);
+    let mut local_root = resolve_local_projection_root(values, place.base);
+    let mut current_space = current_pointer_info
+        .map(|info| info.address_space)
+        .or_else(|| {
+            local_root
+                .as_ref()
+                .filter(|(_, path)| path.is_empty())
+                .and_then(|(local, _)| locals.get(local.index()).map(|local| local.address_space))
+        })
+        .or_else(|| match values.get(place.base.index())? {
+            value
+                if value.repr.is_ref()
+                    || matches!(
+                        value.origin,
+                        ValueOrigin::PlaceRoot(_)
+                            | ValueOrigin::PlaceRef(_)
+                            | ValueOrigin::FieldPtr(_)
+                    ) =>
+            {
+                try_value_address_space_in(values, locals, place.base)
+            }
+            _ => None,
+        });
+
+    for proj in place.projection.iter() {
+        match proj {
+            Projection::Deref => {
+                let deref_space = if let Some((local, path)) = &local_root {
+                    lookup_local_pointer_leaf_info(locals, *local, path)
+                        .map(|info| info.address_space)
+                        .or(current_pointer_info.map(|info| info.address_space))
+                        .or_else(|| {
+                            path.is_empty()
+                                .then(|| locals.get(local.index()).map(|local| local.address_space))
+                                .flatten()
+                        })
+                } else {
+                    current_pointer_info.map(|info| info.address_space)
+                }?;
+                current_space = Some(deref_space);
+                current_pointer_info = current_pointer_info.and_then(|info| {
+                    info.target_ty.map(|target_ty| PointerInfo {
+                        address_space: deref_space,
+                        target_ty: Some(target_ty),
+                    })
+                });
+                local_root = None;
+            }
+            _ => {
+                if let Some((local, path)) = &mut local_root {
+                    path.push(proj.clone());
+                    current_pointer_info = lookup_local_pointer_leaf_info(locals, *local, path);
+                } else {
+                    current_pointer_info = None;
+                }
+            }
+        }
+    }
+
+    current_space
+}
+
+pub(crate) fn try_value_pointer_info_in<'db>(
+    values: &[ValueData<'db>],
+    locals: &[LocalData<'db>],
+    value: ValueId,
+) -> Option<PointerInfo<'db>> {
+    let value_data = values.get(value.index())?;
+    match &value_data.origin {
+        ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) => {
+            lookup_local_pointer_leaf_info(locals, *local, &MirProjectionPath::new()).or(value_data
+                .repr
+                .address_space()
+                .map(|address_space| PointerInfo {
+                    address_space,
+                    target_ty: matches!(value_data.repr, ValueRepr::Ref(_))
+                        .then_some(value_data.ty),
+                }))
+        }
+        ValueOrigin::TransparentCast { value } => value_data
+            .pointer_info
+            .or_else(|| try_value_pointer_info_in(values, locals, *value))
+            .or(value_data
+                .repr
+                .address_space()
+                .map(|address_space| PointerInfo {
+                    address_space,
+                    target_ty: matches!(value_data.repr, ValueRepr::Ref(_))
+                        .then_some(value_data.ty),
+                })),
+        ValueOrigin::FieldPtr(field_ptr) => value_data.pointer_info.or(Some(PointerInfo {
+            address_space: field_ptr.addr_space,
+            target_ty: None,
+        })),
+        ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => value_data
+            .pointer_info
+            .or_else(|| try_place_pointer_info_in(values, locals, place))
+            .or(value_data
+                .repr
+                .address_space()
+                .map(|address_space| PointerInfo {
+                    address_space,
+                    target_ty: matches!(value_data.repr, ValueRepr::Ref(_))
+                        .then_some(value_data.ty),
+                })),
+        _ => value_data
+            .pointer_info
+            .or(value_data
+                .repr
+                .address_space()
+                .map(|address_space| PointerInfo {
+                    address_space,
+                    target_ty: matches!(value_data.repr, ValueRepr::Ref(_))
+                        .then_some(value_data.ty),
+                })),
+    }
+}
+
+pub(crate) fn try_place_pointer_info_in<'db>(
+    values: &[ValueData<'db>],
+    locals: &[LocalData<'db>],
+    place: &Place<'db>,
+) -> Option<PointerInfo<'db>> {
+    let mut current = try_value_pointer_info_in(values, locals, place.base);
+    let mut local_root = resolve_local_projection_root(values, place.base);
+
+    for proj in place.projection.iter() {
+        match proj {
+            Projection::Deref => {
+                let info = if let Some((local, path)) = &local_root {
+                    lookup_local_pointer_leaf_info(locals, *local, path).or(current)
+                } else {
+                    current
+                }?;
+                current = info.target_ty.map(|target_ty| PointerInfo {
+                    address_space: info.address_space,
+                    target_ty: Some(target_ty),
+                });
+                local_root = None;
+            }
+            _ => {
+                if let Some((local, path)) = &mut local_root {
+                    path.push(proj.clone());
+                    current = lookup_local_pointer_leaf_info(locals, *local, path);
+                } else if !place.projection.is_empty() {
+                    current = None;
+                }
+            }
+        }
+    }
+
+    current
+}
+
+pub(crate) fn lookup_local_pointer_leaf_info<'db>(
     locals: &[LocalData<'db>],
     local: LocalId,
     projection: &MirProjectionPath<'db>,
-) -> Option<AddressSpaceKind> {
+) -> Option<PointerInfo<'db>> {
     let local = locals.get(local.index())?;
-    let mut best: Option<(usize, AddressSpaceKind)> = None;
-    for (path, space) in &local.capability_spaces {
-        if !path.is_prefix_of(projection) {
-            continue;
-        }
-        let path_len = path.len();
-        if best
-            .map(|(best_len, _)| path_len > best_len)
-            .unwrap_or(true)
-        {
-            best = Some((path_len, *space));
+    for (path, info) in &local.pointer_leaf_infos {
+        if path == projection {
+            return Some(*info);
         }
     }
-    best.map(|(_, space)| space)
+    None
 }
 
 pub(crate) fn projection_strip_prefix<'db>(
@@ -282,7 +574,7 @@ pub(crate) fn projection_strip_prefix<'db>(
     Some(suffix)
 }
 
-pub(crate) fn resolve_local_projection_root<'db>(
+pub fn resolve_local_projection_root<'db>(
     values: &[ValueData<'db>],
     value: ValueId,
 ) -> Option<(LocalId, MirProjectionPath<'db>)> {
@@ -366,11 +658,14 @@ pub struct LocalData<'db> {
     /// For non-pointer scalars this is ignored, but storing it here lets codegen
     /// interpret locals that represent aggregate pointers (memory vs storage).
     pub address_space: AddressSpaceKind,
-    /// Capability pointee-space metadata for values stored in this local.
+    /// Pointer metadata for leaves stored in this local.
     ///
-    /// Entries map projection paths (from the local root) to the address space
-    /// of capability leaves at that path.
-    pub capability_spaces: Vec<(MirProjectionPath<'db>, AddressSpaceKind)>,
+    /// Entries map projection paths (from the local root) to pointer-like leaves at
+    /// that path. Aggregate locals keep only nested pointer leaves here; root
+    /// by-reference storage stays in `address_space`.
+    pub pointer_leaf_infos: Vec<(MirProjectionPath<'db>, PointerInfo<'db>)>,
+    /// Backend-neutral runtime shape for this local after MIR normalization.
+    pub runtime_shape: RuntimeShape<'db>,
 }
 
 /// MIR projection using MIR value IDs for dynamic indices.
@@ -603,6 +898,10 @@ pub struct ValueData<'db> {
     /// Most values are represented as a single EVM word. Aggregate values (structs/tuples/arrays/enums)
     /// are represented by-reference as an address/slot pointing at their backing storage.
     pub repr: ValueRepr,
+    /// Pointer metadata for pointer-like runtime values.
+    pub pointer_info: Option<PointerInfo<'db>>,
+    /// Backend-neutral runtime shape for this value after MIR normalization.
+    pub runtime_shape: RuntimeShape<'db>,
 }
 
 #[derive(Debug, Clone)]
@@ -684,6 +983,12 @@ pub enum AddressSpaceKind {
     TransientStorage,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PointerInfo<'db> {
+    pub address_space: AddressSpaceKind,
+    pub target_ty: Option<TyId<'db>>,
+}
+
 /// Runtime representation category for a MIR value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ValueRepr {
@@ -717,8 +1022,9 @@ impl ValueRepr {
 pub struct CallOrigin<'db> {
     pub expr: Option<ExprId>,
     pub hir_target: Option<HirCallTarget<'db>>,
+    /// Runtime-visible regular arguments in callee runtime-param order.
     pub args: Vec<ValueId>,
-    /// Explicit lowered effect arguments for this call, in callee effect-param order.
+    /// Runtime-visible explicit effect arguments in callee runtime-effect-param order.
     pub effect_args: Vec<ValueId>,
     /// Final lowered symbol name of the callee after monomorphization.
     pub resolved_name: Option<String>,
@@ -898,5 +1204,119 @@ impl IntrinsicOp {
                 | IntrinsicOp::Caller
                 | IntrinsicOp::Alloc
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData};
+    use hir::test_db::TestDb;
+
+    use super::*;
+
+    fn u256_ty<'db>(db: &'db TestDb) -> TyId<'db> {
+        TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U256)))
+    }
+
+    #[test]
+    fn lookup_local_pointer_leaf_info_requires_exact_projection_match() {
+        let db = TestDb::default();
+        let ty = u256_ty(&db);
+        let root = MirProjectionPath::new();
+        let field = MirProjectionPath::from_projection(Projection::Field(0));
+        let locals = vec![LocalData {
+            name: "v0".to_string(),
+            ty,
+            is_mut: false,
+            source: SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Memory,
+            pointer_leaf_infos: vec![(
+                root.clone(),
+                PointerInfo {
+                    address_space: AddressSpaceKind::Memory,
+                    target_ty: Some(ty),
+                },
+            )],
+            runtime_shape: RuntimeShape::Unresolved,
+        }];
+
+        assert_eq!(
+            lookup_local_pointer_leaf_info(&locals, LocalId(0), &root),
+            Some(PointerInfo {
+                address_space: AddressSpaceKind::Memory,
+                target_ty: Some(ty),
+            })
+        );
+        assert_eq!(
+            lookup_local_pointer_leaf_info(&locals, LocalId(0), &field),
+            None
+        );
+    }
+
+    #[test]
+    fn lookup_local_pointer_leaf_info_keeps_nested_leaf_matches_exact() {
+        let db = TestDb::default();
+        let ty = u256_ty(&db);
+        let field = MirProjectionPath::from_projection(Projection::Field(1));
+        let deeper = field.concat(&MirProjectionPath::from_projection(Projection::Field(0)));
+        let locals = vec![LocalData {
+            name: "v0".to_string(),
+            ty,
+            is_mut: false,
+            source: SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Memory,
+            pointer_leaf_infos: vec![(
+                field.clone(),
+                PointerInfo {
+                    address_space: AddressSpaceKind::Storage,
+                    target_ty: Some(ty),
+                },
+            )],
+            runtime_shape: RuntimeShape::Unresolved,
+        }];
+
+        assert_eq!(
+            lookup_local_pointer_leaf_info(&locals, LocalId(0), &field),
+            Some(PointerInfo {
+                address_space: AddressSpaceKind::Storage,
+                target_ty: Some(ty),
+            })
+        );
+        assert_eq!(
+            lookup_local_pointer_leaf_info(&locals, LocalId(0), &deeper),
+            None
+        );
+    }
+
+    #[test]
+    fn place_root_does_not_infer_pointer_info_from_local_address_space() {
+        let db = TestDb::default();
+        let ty = u256_ty(&db);
+        let locals = vec![LocalData {
+            name: "v0".to_string(),
+            ty,
+            is_mut: false,
+            source: SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Memory,
+            pointer_leaf_infos: Vec::new(),
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
+        }];
+        let values = vec![ValueData {
+            ty,
+            origin: ValueOrigin::PlaceRoot(LocalId(0)),
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Word,
+            pointer_info: None,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
+        }];
+
+        assert_eq!(
+            try_value_pointer_info_in(&values, &locals, ValueId(0)),
+            None
+        );
+        assert_eq!(
+            try_value_address_space_in(&values, &locals, ValueId(0)),
+            Some(AddressSpaceKind::Memory)
+        );
     }
 }

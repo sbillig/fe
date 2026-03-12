@@ -13,12 +13,10 @@ fn next_idx__StorPtr_Counter___3ec10ccd701e934a(v0: u256) -> usize:
 fn zst_load_index_eval() -> usize:
   bb0:
     v3: Counter = 0
-    bind v3
     v5: Counter = alloc mem
     store mem[v5] = v3
     v6: usize = next_idx__MemPtr_Counter___f160915c54d975dc(v5)
     v3 = load mem[v5]
-    eval v6
     ret v3
 
 fn next_idx__MemPtr_Counter___f160915c54d975dc(v0: u256) -> usize:

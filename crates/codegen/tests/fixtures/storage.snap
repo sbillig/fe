@@ -16,7 +16,7 @@ object "Coin" {
 
   object "Coin_deployed" {
     code {
-      function $abi_encode__Evm_hef0af3106e109414__3af54274b2985741($value, $ops) {
+      function $abi_encode__Evm_hef0af3106e109414__3af54274b2985741($value) {
         let v0 := 0
         mstore(v0, $value)
         return(v0, 32)
@@ -92,8 +92,8 @@ object "Coin" {
         leave
       }
       function $runtime__StorPtr_Evm___207f35a85ac4062e() {
-        let v0 := $stor_ptr_stor__Evm_hef0af3106e109414_CoinStore_hd26a92ca525e0e79__b6feb5585dda62f1(0, 0)
-        let v1 := $stor_ptr_stor__Evm_hef0af3106e109414_TotalSupply_hddb16bb19b5b088e__f5679b0709de743a(0, 2)
+        let v0 := $stor_ptr_stor__Evm_hef0af3106e109414_CoinStore_hd26a92ca525e0e79__b6feb5585dda62f1(0)
+        let v1 := $stor_ptr_stor__Evm_hef0af3106e109414_TotalSupply_hddb16bb19b5b088e__f5679b0709de743a(2)
         let v2 := v0
         let v3 := v1
         let v4 := calldataload(0)
@@ -113,12 +113,12 @@ object "Coin" {
                 v8 := v10
               }
             let v11 := v8
-            $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v11, 0)
+            $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v11)
           }
           case 1818602213 {
             let v12 := calldataload(4)
             let v13 := $balance_of_raw__StorPtr_CoinStore___ba1c0d0726e89ba2(v12, v2)
-            $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v13, 0)
+            $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v13)
           }
           case 217554442 {
             let v14 := calldataload(4)
@@ -135,22 +135,22 @@ object "Coin" {
               }
             let v19 := v16
             let v20 := $transfer_result_code(v19)
-            $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v20, 0)
+            $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v20)
           }
           case 960555502 {
             let v21 := $total_supply__StorPtr_TotalSupply___2e654c25952f42f9(v3)
-            $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v21, 0)
+            $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v21)
           }
           default {
             return(0, 0)
           }
       }
-      function $stor_ptr_stor__Evm_hef0af3106e109414_CoinStore_hd26a92ca525e0e79__b6feb5585dda62f1($self, $slot) -> ret {
+      function $stor_ptr_stor__Evm_hef0af3106e109414_CoinStore_hd26a92ca525e0e79__b6feb5585dda62f1($slot) -> ret {
         let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__CoinStore_hd26a92ca525e0e79__a9c0a742c4f0cede($slot)
         ret := v0
         leave
       }
-      function $stor_ptr_stor__Evm_hef0af3106e109414_TotalSupply_hddb16bb19b5b088e__f5679b0709de743a($self, $slot) -> ret {
+      function $stor_ptr_stor__Evm_hef0af3106e109414_TotalSupply_hddb16bb19b5b088e__f5679b0709de743a($slot) -> ret {
         let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__TotalSupply_hddb16bb19b5b088e__4092604729aa99eb($slot)
         ret := v0
         leave
@@ -170,7 +170,7 @@ object "Coin" {
       }
       function $transfer_from_alice__StorPtr_CoinStore___ba1c0d0726e89ba2($amount, $store) -> ret {
         let v0 := sload($store)
-        let v1 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt_stor_arg0_root_stor(v0, $amount)
+        let v1 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt_stor(v0, $amount)
         let v2 := v1
         if v2 {
           let v3 := mload(0x40)
@@ -201,7 +201,7 @@ object "Coin" {
       }
       function $transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2($amount, $store) -> ret {
         let v0 := sload(add($store, 1))
-        let v1 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt_stor_arg0_root_stor(v0, $amount)
+        let v1 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt_stor(v0, $amount)
         let v2 := v1
         if v2 {
           let v3 := mload(0x40)
@@ -259,7 +259,7 @@ object "Coin" {
         ret := v0
         leave
       }
-      function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt_stor_arg0_root_stor($self, $other) -> ret {
+      function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt_stor($self, $other) -> ret {
         let v0 := lt($self, $other)
         ret := v0
         leave

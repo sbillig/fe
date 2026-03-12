@@ -27,7 +27,7 @@ func private %aug_assign(v0.i64, v1.i64) -> i64 {
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.i64 = call %aug_assign 0.i64 0.i64;
+        v2.i64 = call %aug_assign 0.i64 0.i64;
         evm_stop;
 }
 

@@ -1,7 +1,6 @@
 //! Expression and value lowering helpers shared across the Yul emitter.
 
 use common::ingot::IngotKind;
-use hir::analysis::ty::simplified_pattern::ConstructorKind;
 use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData, TyId};
 use hir::hir_def::{
     CallableDef,
@@ -10,9 +9,10 @@ use hir::hir_def::{
 use hir::projection::{IndexSource, Projection};
 use hir::span::LazySpan;
 use mir::{
-    CallOrigin, ValueId, ValueOrigin,
+    CallOrigin, LocalId, ValueId, ValueOrigin,
     ir::{FieldPtrOrigin, MirFunctionOrigin, Place, SyntheticValue},
     layout,
+    repr::{PlaceState, ResolvedPlace, ResolvedPlaceSegment},
 };
 use num_bigint::BigUint;
 
@@ -25,6 +25,22 @@ use super::{
 };
 
 impl<'db> FunctionEmitter<'db> {
+    fn hidden_runtime_param_local(&self, local: LocalId) -> bool {
+        self.mir_func
+            .body
+            .param_locals
+            .iter()
+            .position(|&param_local| param_local == local)
+            .is_some_and(|idx| !self.mir_func.runtime_abi.value_param_visible(idx))
+            || self
+                .mir_func
+                .body
+                .effect_param_locals
+                .iter()
+                .position(|&effect_local| effect_local == local)
+                .is_some_and(|idx| !self.mir_func.runtime_abi.effect_param_visible(idx))
+    }
+
     /// Attempts to lower a call to a core numeric intrinsic directly to inline Yul.
     ///
     /// This is an optimization that avoids generating separate Yul functions for
@@ -349,6 +365,13 @@ impl<'db> FunctionEmitter<'db> {
 
         Ok(lowered)
     }
+    pub(super) fn core_lib(&self) -> mir::CoreLib<'db> {
+        let scope = match self.mir_func.origin {
+            MirFunctionOrigin::Hir(func) => func.scope(),
+            MirFunctionOrigin::Synthetic(synth) => synth.contract().scope(),
+        };
+        mir::CoreLib::new(self.db, scope)
+    }
 
     fn format_hir_expr_context(&self, expr: hir::hir_def::ExprId) -> String {
         let Some(body) = (match self.mir_func.origin {
@@ -507,15 +530,13 @@ impl<'db> FunctionEmitter<'db> {
                 if let Some(name) = state.resolve_local(*local) {
                     return Ok(name);
                 }
+                if self.hidden_runtime_param_local(*local) {
+                    return Ok("0".into());
+                }
 
                 let local_data = self.mir_func.body.local(*local);
                 let is_param = self.mir_func.body.param_locals.contains(local);
                 let is_effect = self.mir_func.body.effect_param_locals.contains(local);
-                if is_effect && self.mir_func.contract_function.is_some() {
-                    // Contract entrypoints lower host/effect handles as compile-time symbols
-                    // rather than runtime parameters.
-                    return Ok("0".into());
-                }
 
                 Err(YulError::Unsupported(format!(
                     "unbound MIR local reached codegen (func={}, local=l{} `{}`, ty={}, param={is_param}, effect={is_effect})",
@@ -525,9 +546,21 @@ impl<'db> FunctionEmitter<'db> {
                     local_data.ty.pretty_print(self.db),
                 )))
             }
-            ValueOrigin::PlaceRoot(_) => Err(YulError::Unsupported(
-                "capability-stage place root reached codegen".into(),
-            )),
+            ValueOrigin::PlaceRoot(local) => {
+                if let Some(name) = state.resolve_local(*local) {
+                    return Ok(name);
+                }
+                if self.hidden_runtime_param_local(*local) {
+                    return Ok("0".into());
+                }
+                Err(YulError::Unsupported(format!(
+                    "unbound MIR place-root local reached codegen (func={}, local=l{} `{}`, ty={})",
+                    self.mir_func.symbol_name,
+                    local.index(),
+                    self.mir_func.body.local(*local).name,
+                    self.mir_func.body.local(*local).ty.pretty_print(self.db),
+                )))
+            }
             ValueOrigin::FuncItem(_) => {
                 debug_assert!(
                     layout::is_zero_sized_ty_in(self.db, &self.layout, value.ty),
@@ -539,18 +572,48 @@ impl<'db> FunctionEmitter<'db> {
             ValueOrigin::Synthetic(synth) => self.lower_synthetic_value(synth, value.ty),
             ValueOrigin::FieldPtr(field_ptr) => self.lower_field_ptr(field_ptr, state),
             ValueOrigin::PlaceRef(place) => {
-                if value.repr.address_space().is_none()
-                    && let Some((_, inner_ty)) = value.ty.as_capability(self.db)
-                {
-                    return self.lower_place_load(place, inner_ty, state);
+                if !value.repr.is_ref() {
+                    if self.place_yields_location_value(
+                        place,
+                        value.ty,
+                        self.mir_func.body.value_pointer_info(value_id),
+                    )? {
+                        return self.lower_place_address(place, state);
+                    }
+                    let loaded_ty = if value.repr.address_space().is_none() {
+                        value
+                            .ty
+                            .as_capability(self.db)
+                            .map(|(_, inner_ty)| inner_ty)
+                            .unwrap_or(value.ty)
+                    } else {
+                        value.ty
+                    };
+                    return self.lower_place_load(place, loaded_ty, state);
                 }
                 self.lower_place_ref(place, state)
             }
             ValueOrigin::MoveOut { place } => {
-                if value.repr.address_space().is_some() {
+                if value.repr.is_ref() {
                     self.lower_place_ref(place, state)
                 } else {
-                    self.lower_place_load(place, value.ty, state)
+                    if self.place_yields_location_value(
+                        place,
+                        value.ty,
+                        self.mir_func.body.value_pointer_info(value_id),
+                    )? {
+                        return self.lower_place_address(place, state);
+                    }
+                    let loaded_ty = if value.repr.address_space().is_none() {
+                        value
+                            .ty
+                            .as_capability(self.db)
+                            .map(|(_, inner_ty)| inner_ty)
+                            .unwrap_or(value.ty)
+                    } else {
+                        value.ty
+                    };
+                    self.lower_place_load(place, loaded_ty, state)
                 }
             }
             ValueOrigin::TransparentCast { value } => self.lower_value(*value, state),
@@ -731,8 +794,11 @@ impl<'db> FunctionEmitter<'db> {
             return Ok("0".into());
         }
 
-        let addr = self.lower_place_address(place, state)?;
-        let raw_load = match self.mir_func.body.place_address_space(place) {
+        let (addr, place_state) = self.lower_place_terminal(place, state)?;
+        let raw_load = match place_state
+            .location_address_space()
+            .ok_or_else(|| YulError::Unsupported(format!("place is not a location: {place:?}")))?
+        {
             mir::ir::AddressSpaceKind::Memory => format!("mload({addr})"),
             mir::ir::AddressSpaceKind::Calldata => format!("calldataload({addr})"),
             mir::ir::AddressSpaceKind::Storage => format!("sload({addr})"),
@@ -858,83 +924,101 @@ impl<'db> FunctionEmitter<'db> {
         self.lower_place_address(place, state)
     }
 
-    /// Computes the address for a place by walking the projection path.
-    ///
-    /// Returns a Yul expression representing the memory/storage address.
-    /// For memory, computes byte offsets. For storage, computes slot offsets.
-    fn lower_place_address(
+    pub(super) fn lower_place_space(
         &self,
         place: &Place<'db>,
-        state: &BlockState,
-    ) -> Result<String, YulError> {
-        let base_value = self.mir_func.body.value(place.base);
-        let mut base_expr = if let ValueOrigin::Local(local) = &base_value.origin
-            && base_value.repr.is_ref()
-            && let Some(spill) = self.mir_func.body.spill_slots.get(local)
-        {
-            state.resolve_local(*spill).ok_or_else(|| {
-                let local_data = self.mir_func.body.local(*spill);
-                YulError::Unsupported(format!(
-                    "unbound MIR spill slot local reached codegen (func={}, local=l{} `{}`, ty={})",
-                    self.mir_func.symbol_name,
-                    spill.index(),
-                    local_data.name,
-                    local_data.ty.pretty_print(self.db),
-                ))
-            })?
-        } else {
-            self.lower_value(place.base, state)?
-        };
+    ) -> Result<mir::ir::AddressSpaceKind, YulError> {
+        let resolved = self.resolve_place(place)?;
+        resolved
+            .final_state()
+            .location_address_space()
+            .ok_or_else(|| YulError::Unsupported(format!("place is not a location: {place:?}")))
+    }
 
-        if place.projection.is_empty() {
-            return Ok(base_expr);
+    fn resolve_place(&self, place: &Place<'db>) -> Result<ResolvedPlace<'db>, YulError> {
+        let core = self.core_lib();
+        mir::repr::resolve_place(
+            self.db,
+            &core,
+            &self.mir_func.body.values,
+            &self.mir_func.body.locals,
+            place,
+        )
+        .ok_or_else(|| {
+            let base = self.mir_func.body.value(place.base);
+            YulError::Unsupported(format!(
+                "failed to resolve MIR place {place:?} (base ty={}, repr={:?}, origin={:?}, pointer_info={:?})",
+                base.ty.pretty_print(self.db),
+                base.repr,
+                base.origin,
+                base.pointer_info,
+            ))
+        })
+    }
+
+    fn place_yields_location_value(
+        &self,
+        place: &Place<'db>,
+        value_ty: TyId<'db>,
+        pointer_info: Option<mir::ir::PointerInfo<'db>>,
+    ) -> Result<bool, YulError> {
+        mir::repr::place_yields_location_value(
+            self.db,
+            &self.core_lib(),
+            &self.mir_func.body.values,
+            &self.mir_func.body.locals,
+            place,
+            value_ty,
+            pointer_info,
+        )
+        .ok_or_else(|| YulError::Unsupported(format!("failed to resolve MIR place {place:?}")))
+    }
+
+    fn lower_place_segment_terminal(
+        &self,
+        segment_base_expr: String,
+        segment: &ResolvedPlaceSegment<'db>,
+        state: &BlockState,
+    ) -> Result<(String, PlaceState<'db>), YulError> {
+        let address_space = segment
+            .base
+            .location_address_space()
+            .ok_or_else(|| YulError::Unsupported("place segment is not a location".to_string()))?;
+        if segment.projections.is_empty() {
+            return Ok((segment_base_expr, segment.terminal_state()));
         }
 
-        // Get the base value's type to navigate projections
-        let mut current_ty = base_value.ty;
+        let mut base_expr = segment_base_expr;
         let mut total_offset: usize = 0;
         let is_slot_addressed = matches!(
-            self.mir_func.body.place_address_space(place),
+            address_space,
             mir::ir::AddressSpaceKind::Storage | mir::ir::AddressSpaceKind::TransientStorage
         );
 
-        for proj in place.projection.iter() {
-            match proj {
+        for step in &segment.projections {
+            match &step.projection {
                 Projection::Field(field_idx) => {
-                    let field_types = current_ty.field_types(self.db);
-                    if field_types.is_empty() {
-                        return Err(YulError::Unsupported(format!(
-                            "place projection: no field types for type but accessing field {}",
-                            field_idx
-                        )));
+                    if mir::repr::transparent_field0_inner_ty(self.db, step.owner.ty, *field_idx)
+                        == Some(step.result.ty)
+                    {
+                        continue;
                     }
-                    // Use slot-based offsets for storage, byte-based for memory
                     total_offset += if is_slot_addressed {
-                        layout::field_offset_slots(self.db, current_ty, *field_idx)
+                        layout::field_offset_slots(self.db, step.owner.ty, *field_idx)
                     } else {
                         layout::field_offset_memory_in(
                             self.db,
                             &self.layout,
-                            current_ty,
+                            step.owner.ty,
                             *field_idx,
                         )
                     };
-                    // Update current type to the field's type
-                    current_ty = *field_types.get(*field_idx).ok_or_else(|| {
-                        YulError::Unsupported(format!(
-                            "place projection: target field {} out of bounds (have {} fields)",
-                            field_idx,
-                            field_types.len()
-                        ))
-                    })?;
                 }
                 Projection::VariantField {
                     variant,
                     enum_ty,
                     field_idx,
                 } => {
-                    // Skip discriminant then compute field offset
-                    // Use slot-based offsets for storage, byte-based for memory
                     if is_slot_addressed {
                         total_offset += 1;
                         total_offset += layout::variant_field_offset_slots(
@@ -950,25 +1034,13 @@ impl<'db> FunctionEmitter<'db> {
                             *field_idx,
                         );
                     }
-                    // Update current type to the field's type
-                    let ctor = ConstructorKind::Variant(*variant, *enum_ty);
-                    let field_types = ctor.field_types(self.db);
-                    current_ty = *field_types.get(*field_idx).ok_or_else(|| {
-                        YulError::Unsupported(format!(
-                            "place projection: target variant field {} out of bounds (have {} fields)",
-                            field_idx,
-                            field_types.len()
-                        ))
-                    })?;
                 }
-                Projection::Discriminant => {
-                    current_ty = TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::U256)));
-                }
+                Projection::Discriminant => {}
                 Projection::Index(idx_source) => {
                     let stride = if is_slot_addressed {
-                        layout::array_elem_stride_slots(self.db, current_ty)
+                        layout::array_elem_stride_slots(self.db, step.owner.ty)
                     } else {
-                        layout::array_elem_stride_memory_in(self.db, &self.layout, current_ty)
+                        layout::array_elem_stride_memory_in(self.db, &self.layout, step.owner.ty)
                     }
                     .ok_or_else(|| {
                         YulError::Unsupported(
@@ -994,19 +1066,10 @@ impl<'db> FunctionEmitter<'db> {
                             base_expr = format!("add({base_expr}, {offset_expr})");
                         }
                     }
-
-                    // Update current type to the element type.
-                    let (base_ty, args) = current_ty.decompose_ty_app(self.db);
-                    if !base_ty.is_array(self.db) || args.is_empty() {
-                        return Err(YulError::Unsupported(
-                            "place projection: array index on non-array type".to_string(),
-                        ));
-                    }
-                    current_ty = args[0];
                 }
                 Projection::Deref => {
                     return Err(YulError::Unsupported(
-                        "place projection: pointer dereference not yet implemented".to_string(),
+                        "place projection: deref reached segment walker".to_string(),
                     ));
                 }
             }
@@ -1015,6 +1078,95 @@ impl<'db> FunctionEmitter<'db> {
         if total_offset != 0 {
             base_expr = format!("add({base_expr}, {total_offset})");
         }
-        Ok(base_expr)
+
+        Ok((base_expr, segment.terminal_state()))
+    }
+
+    fn lower_place_terminal(
+        &self,
+        place: &Place<'db>,
+        state: &BlockState,
+    ) -> Result<(String, PlaceState<'db>), YulError> {
+        let resolved = self.resolve_place(place)?;
+        let root_expr = if let ValueOrigin::Local(local) =
+            &self.mir_func.body.value(place.base).origin
+            && let Some(spill) = self.mir_func.body.spill_slots.get(local)
+        {
+            state.resolve_local(*spill).ok_or_else(|| {
+                let local_data = self.mir_func.body.local(*spill);
+                YulError::Unsupported(format!(
+                    "unbound MIR spill slot local reached codegen (func={}, local=l{} `{}`, ty={})",
+                    self.mir_func.symbol_name,
+                    spill.index(),
+                    local_data.name,
+                    local_data.ty.pretty_print(self.db),
+                ))
+            })?
+        } else {
+            self.lower_value(place.base, state)?
+        };
+        let mut current_terminal: Option<(String, PlaceState<'db>)> = None;
+
+        for (idx, segment) in resolved.segments.iter().enumerate() {
+            let segment_base_expr = match (idx == 0, segment.start_kind, current_terminal.take()) {
+                (true, None, None)
+                | (true, Some(mir::repr::DerefStepKind::ReuseLocation), None)
+                | (true, Some(mir::repr::DerefStepKind::UseBaseValue), None) => root_expr.clone(),
+                (true, Some(mir::repr::DerefStepKind::LoadLocationValue), None) => self
+                    .apply_from_word_conversion(
+                        &Self::yul_load(
+                            segment.before.location_address_space().ok_or_else(|| {
+                                YulError::Unsupported(
+                                    "place terminal is not a location".to_string(),
+                                )
+                            })?,
+                            &root_expr,
+                        ),
+                        segment.before.ty,
+                    ),
+                (false, Some(mir::repr::DerefStepKind::ReuseLocation), Some((addr, _))) => addr,
+                (
+                    false,
+                    Some(mir::repr::DerefStepKind::LoadLocationValue),
+                    Some((addr, terminal_state)),
+                ) => self.apply_from_word_conversion(
+                    &Self::yul_load(
+                        terminal_state.location_address_space().ok_or_else(|| {
+                            YulError::Unsupported("place terminal is not a location".to_string())
+                        })?,
+                        &addr,
+                    ),
+                    segment.before.ty,
+                ),
+                (false, None, Some(_))
+                | (false, Some(mir::repr::DerefStepKind::UseBaseValue), Some(_))
+                | (true, None, Some(_))
+                | (true, Some(_), Some(_))
+                | (false, _, None) => {
+                    return Err(YulError::Unsupported(format!(
+                        "invalid resolved place segment sequence: {place:?}"
+                    )));
+                }
+            };
+            current_terminal =
+                Some(self.lower_place_segment_terminal(segment_base_expr, segment, state)?);
+        }
+
+        current_terminal.ok_or_else(|| {
+            YulError::Unsupported(format!("resolved place produced no segments: {place:?}"))
+        })
+    }
+
+    /// Computes the address for a place by walking the projection path.
+    ///
+    /// Returns a Yul expression representing the memory/storage address.
+    /// For memory, computes byte offsets. For storage, computes slot offsets.
+    fn lower_place_address(
+        &self,
+        place: &Place<'db>,
+        state: &BlockState,
+    ) -> Result<String, YulError> {
+        self.lower_place_terminal(place, state)
+            .map(|(addr, _)| addr)
     }
 }

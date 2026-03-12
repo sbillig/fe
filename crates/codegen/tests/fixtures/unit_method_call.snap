@@ -3,10 +3,10 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/unit_method_call.fe
 ---
-function $call_unit_method($c) {
-  $counter_h872958864d1ad471_increment($c)
+function $call_unit_method() {
+  $counter_h872958864d1ad471_increment()
   leave
 }
-function $counter_h872958864d1ad471_increment($self) {
+function $counter_h872958864d1ad471_increment() {
   leave
 }

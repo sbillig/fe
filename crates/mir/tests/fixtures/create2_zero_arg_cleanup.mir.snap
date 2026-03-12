@@ -1,0 +1,154 @@
+---
+source: crates/mir/tests/lowering_snapshots.rs
+expression: mir_output
+---
+fn create2_zero_arg_cleanup__StorPtr_Evm___207f35a85ac4062e(v0: u256) -> ():
+  ; runtime_abi values=[] effects=[]
+  bb0:
+    v1: Address = create2_stor_arg0_root_stor__Evm_hef0af3106e109414_Counter_h872958864d1ad471__aedc4c977fa26d57(0, 0)
+    v2: bool = u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v1, 0)
+    eval assert(v2)
+    ret
+
+fn __Counter_init_contract() -> ():
+  bb0:
+    ret
+
+fn __Counter_init() -> ():
+  bb0:
+    v0: u256 = code_region_offset(func_item(__Counter_runtime))
+    v1: u256 = code_region_len(func_item(__Counter_runtime))
+    eval __Counter_init_contract()
+    eval codecopy(0, v0, v1)
+    terminate return_data(0, v1)
+
+fn __Counter_runtime() -> ():
+  bb0:
+    v0: u32 = runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
+    switch v0 [] else bb1
+  bb1:
+    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+
+fn create2_stor_arg0_root_stor__Evm_hef0af3106e109414_Counter_h872958864d1ad471__aedc4c977fa26d57(v0: mut Evm, v1: u256, v2: (), v3: u256) -> Address:
+  ; runtime_abi values=[v1: u256, v3: u256] effects=[]
+  bb0:
+    v4: u256 = __Counter_init_code_len()
+    v5: u256 = __Counter_init_code_offset()
+    v6: u256 = 0
+    v8: u256 = checked_add<u256>(v4, v6)
+    v7: u256 = v8
+    v9: u256 = alloc(v7)
+    eval codecopy(v9, v5, v4)
+    v11: u256 = checked_add<u256>(v9, v4)
+    v10: u256 = v11
+    v13: u256 = checked_add<u256>(v10, v6)
+    eval ___h2439715d39cd513_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383()
+    v15: Address = evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw_stor_arg0_root_stor(v1, v9, v7, v3)
+    v16: bool = u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v15, 0)
+    br v16 bb1 bb2
+  bb1:
+    v17: u256 = returndatasize()
+    v18: u256 = alloc(v17)
+    eval returndatacopy(v18, 0, v17)
+    terminate revert(v18, v17)
+  bb2:
+    ret v15
+
+fn u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v0: u256, v1: u256) -> bool:
+  bb0:
+    v2: bool = __ne_u256(v0, v1)
+    ret v2
+
+fn assert(v0: bool) -> ():
+  bb0:
+    br (!v0) bb1 bb2
+  bb1:
+    terminate revert(0, 0)
+  bb2:
+    ret
+
+fn runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(v0: Evm) -> u32:
+  ; runtime_abi values=[] effects=[]
+  bb0:
+    v1: CallData = evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input()
+    v2: u256 = calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v1)
+    v3: bool = u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v2, 4)
+    br v3 bb1 bb2
+  bb1:
+    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+  bb2:
+    v4: u256 = calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v1, 0)
+    v5: u32 = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v4)
+    ret v5
+
+fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(v0: Evm) -> !:
+  ; runtime_abi values=[] effects=[]
+  bb0:
+    terminate revert(0, 0)
+
+fn __Counter_init_code_len() -> u256:
+  bb0:
+    v0: u256 = code_region_len(func_item(__Counter_init))
+    ret v0
+
+fn __Counter_init_code_offset() -> u256:
+  bb0:
+    v0: u256 = code_region_offset(func_item(__Counter_init))
+    ret v0
+
+fn ___h2439715d39cd513_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383(v0: (), v1: mut SolEncoder) -> ():
+  ; runtime_abi values=[] effects=[]
+  bb0:
+    ret
+
+fn evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw_stor_arg0_root_stor(v0: mut Evm, v1: u256, v2: u256, v3: u256, v4: u256) -> Address:
+  ; runtime_abi values=[v1: u256, v2: u256, v3: u256, v4: u256] effects=[]
+  bb0:
+    v5: u256 = create2(v1, v2, v3, v4)
+    ret v5
+
+fn u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0: u256, v1: u256) -> bool:
+  bb0:
+    v2: bool = __eq_u256(v0, v1)
+    ret v2
+
+fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(v0: Evm) -> CallData:
+  ; runtime_abi values=[] effects=[]
+  bb0:
+    ret 0
+
+fn calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0: CallData) -> u256:
+  bb0:
+    v1: u256 = calldatasize()
+    v2: u256 = checked_sub<u256>(v1, v0)
+    ret v2
+
+fn u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v0: u256, v1: u256) -> bool:
+  bb0:
+    v2: bool = __lt_u256(v0, v1)
+    ret v2
+
+fn calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v0: CallData, v1: u256) -> u256:
+  bb0:
+    v2: u256 = checked_add<u256>(v0, v1)
+    v3: u256 = calldataload(v2)
+    ret v3
+
+fn sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v0: u256) -> u32:
+  bb0:
+    v1: u32 = s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35((v0 >> 224))
+    ret v1
+
+fn s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35(v0: u256) -> u32:
+  bb0:
+    v1: u256 = u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v0)
+    v2: u32 = u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_from_word(v1)
+    ret v2
+
+fn u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v0: u256) -> u256:
+  bb0:
+    ret v0
+
+fn u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_from_word(v0: u256) -> u32:
+  bb0:
+    ret v0

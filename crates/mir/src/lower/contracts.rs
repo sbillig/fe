@@ -138,6 +138,7 @@ fn lower_single_contract<'db>(
         contract,
         target,
         &symbols,
+        &core_lib,
         &slot_offsets,
     )?);
     out.push(lower_runtime_entrypoint(
@@ -145,6 +146,7 @@ fn lower_single_contract<'db>(
         contract,
         target,
         &symbols,
+        &core_lib,
         &slot_offsets,
     )?);
     out.push(lower_init_code_offset(db, contract, &symbols)?);
@@ -390,21 +392,32 @@ impl<'db> AbiContext<'db> {
 
 struct ContractMirCx<'db, 'a> {
     db: &'db dyn SpannedHirAnalysisDb,
+    core: &'a CoreLib<'db>,
     host: &'a TargetHostContext<'db>,
     abi: &'a AbiContext<'db>,
 }
 
 impl<'db, 'a> ContractMirCx<'db, 'a> {
-    fn new(db: &'db dyn SpannedHirAnalysisDb, target: &'a TargetContext<'db>) -> Self {
-        Self::new_with_abi(db, &target.host, &target.abi)
+    fn new(
+        db: &'db dyn SpannedHirAnalysisDb,
+        core: &'a CoreLib<'db>,
+        target: &'a TargetContext<'db>,
+    ) -> Self {
+        Self::new_with_abi(db, core, &target.host, &target.abi)
     }
 
     fn new_with_abi(
         db: &'db dyn SpannedHirAnalysisDb,
+        core: &'a CoreLib<'db>,
         host: &'a TargetHostContext<'db>,
         abi: &'a AbiContext<'db>,
     ) -> Self {
-        Self { db, host, abi }
+        Self {
+            db,
+            core,
+            host,
+            abi,
+        }
     }
 
     fn call_hir(
@@ -446,6 +459,45 @@ impl<'db, 'a> ContractMirCx<'db, 'a> {
             builtin_terminator: None,
             receiver_space: None,
         }
+    }
+
+    fn value_repr_for_ty(
+        &self,
+        stage: crate::ir::MirStage,
+        ty: TyId<'db>,
+        space: AddressSpaceKind,
+    ) -> ValueRepr {
+        if ty.as_capability(self.db).is_some() {
+            if matches!(stage, crate::ir::MirStage::Capability) {
+                return ValueRepr::Word;
+            }
+            return match repr::repr_kind_for_ty(self.db, self.core, ty) {
+                repr::ReprKind::Ptr(_) => ValueRepr::Ptr(space),
+                repr::ReprKind::Ref => ValueRepr::Ref(space),
+                repr::ReprKind::Zst | repr::ReprKind::Word => ValueRepr::Word,
+            };
+        }
+
+        match repr::repr_kind_for_ty(self.db, self.core, ty) {
+            repr::ReprKind::Ptr(space) => ValueRepr::Ptr(space),
+            repr::ReprKind::Ref => ValueRepr::Ref(space),
+            repr::ReprKind::Zst | repr::ReprKind::Word => ValueRepr::Word,
+        }
+    }
+
+    fn assign_runtime_local(
+        &self,
+        builder: &mut BodyBuilder<'db>,
+        name: impl Into<String>,
+        ty: TyId<'db>,
+        is_mut: bool,
+        address_space: AddressSpaceKind,
+        rvalue: Rvalue<'db>,
+    ) -> ValueId {
+        let repr = self.value_repr_for_ty(builder.body.stage, ty, address_space);
+        builder
+            .assign_to_new_local(name, ty, is_mut, address_space, repr, rvalue)
+            .value
     }
 
     fn host_abort(&self, root_value: ValueId) -> CallOrigin<'db> {
@@ -598,15 +650,14 @@ impl<'db, 'a> ContractMirCx<'db, 'a> {
                     field.declared_ty,
                     field.is_provider,
                 );
-                builder
-                    .assign_to_new_local(
-                        format!("field{idx}"),
-                        u256_ty,
-                        true,
-                        AddressSpaceKind::Memory,
-                        Rvalue::Call(call),
-                    )
-                    .value
+                self.assign_runtime_local(
+                    builder,
+                    format!("field{idx}"),
+                    u256_ty,
+                    true,
+                    AddressSpaceKind::Memory,
+                    Rvalue::Call(call),
+                )
             })
             .collect()
     }
@@ -648,16 +699,19 @@ impl<'db, 'a> ContractMirCx<'db, 'a> {
             return builder.unit_value(target_ty);
         }
 
-        builder
-            .assign_to_new_local(
-                name_hint,
-                target_ty,
-                false,
-                AddressSpaceKind::Memory,
-                Rvalue::Call(self.decode_decode(decoder_value, decoder_ty, target_ty)),
-            )
-            .value
+        self.assign_runtime_local(
+            builder,
+            name_hint,
+            target_ty,
+            false,
+            AddressSpaceKind::Memory,
+            Rvalue::Call(self.decode_decode(decoder_value, decoder_ty, target_ty)),
+        )
     }
+}
+
+fn abi_payload_is_empty(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> bool {
+    layout::is_zero_sized_ty(db, ty)
 }
 
 fn resolve_assoc_ty<'db>(
@@ -766,6 +820,9 @@ fn lower_init_handler<'db>(
     }
 
     let mut builder = MirBuilder::new_for_body_owner(db, body, typed_body, &[], TyId::unit(db))?;
+    let mut zero_sized_param_bindings = Vec::new();
+    let mut zero_sized_param_locals = Vec::new();
+    let init_param_tys = contract.init_args_ty(db).field_types(db);
 
     // Seed explicit value params.
     for (idx, param) in init.params(db).data(db).iter().enumerate() {
@@ -787,7 +844,12 @@ fn lower_init_handler<'db>(
             LocalBinding::Param { ty, .. } => ty,
             _ => TyId::invalid(db, InvalidCause::Other),
         };
-        builder.seed_synthetic_param_local(name, ty, binding.is_mut(), Some(binding));
+        let source_param_ty = init_param_tys.get(idx).copied().unwrap_or(ty);
+        if abi_payload_is_empty(db, source_param_ty) {
+            zero_sized_param_bindings.push((binding, ty));
+        } else {
+            builder.seed_synthetic_param_local(name, ty, binding.is_mut(), Some(binding));
+        }
     }
 
     let init_env = contract
@@ -797,6 +859,13 @@ fn lower_init_handler<'db>(
 
     let entry = builder.builder.entry_block();
     builder.move_to_block(entry);
+    for (binding, ty) in zero_sized_param_bindings {
+        if let Some(local) = builder.local_for_binding(binding) {
+            zero_sized_param_locals.push(local);
+            let value = builder.builder.unit_value(ty);
+            builder.assign(None, Some(local), Rvalue::Value(value));
+        }
+    }
     builder.lower_root(body.expr(db));
     builder.ensure_const_expr_values();
     if let Some(block) = builder.current_block() {
@@ -809,7 +878,10 @@ fn lower_init_handler<'db>(
         );
     }
     let deferred_error = builder.deferred_error.take();
-    let mir_body = builder.finish();
+    let mut mir_body = builder.finish();
+    mir_body
+        .param_locals
+        .retain(|local| !zero_sized_param_locals.contains(local));
     if let Some(err) = deferred_error {
         return Err(err);
     }
@@ -821,6 +893,10 @@ fn lower_init_handler<'db>(
             expr: expr_context,
         });
     }
+    let runtime_abi = crate::ir::RuntimeAbi::source_shaped(
+        mir_body.param_locals.len(),
+        vec![None; mir_body.effect_param_locals.len()],
+    );
 
     Ok(MirFunction {
         origin: MirFunctionOrigin::Synthetic(SyntheticId::ContractInitHandler(contract)),
@@ -829,6 +905,8 @@ fn lower_init_handler<'db>(
         generic_args: Vec::new(),
         ret_ty: TyId::unit(db),
         returns_value: false,
+        runtime_abi,
+        runtime_return_shape: crate::ir::RuntimeShape::Erased,
         contract_function: None,
         symbol_name: symbols.init_handler.clone(),
         receiver_space: None,
@@ -877,21 +955,25 @@ fn lower_recv_arm_handler<'db>(
     let ret_ty = abi_info.ret_ty.unwrap_or_else(|| TyId::unit(db));
 
     let mut builder = MirBuilder::new_for_body_owner(db, body, typed_body, &[], ret_ty)?;
-
-    let args_local = builder.seed_synthetic_param_local("args".to_string(), args_ty, false, None);
+    let args_local = (!abi_payload_is_empty(db, args_ty))
+        .then(|| builder.seed_synthetic_param_local("args".to_string(), args_ty, false, None));
 
     let effects = arm.effective_effect_env(db).bindings(db);
     seed_effect_param_locals(db, &mut builder, contract, effects, core);
 
     // Prologue: destructure decoded args tuple into pattern bindings.
     let arg_bindings = arm.arg_bindings(db);
-    let args_value = builder.alloc_value(
-        args_ty,
-        ValueOrigin::Local(args_local),
-        builder.value_repr_for_ty(args_ty, AddressSpaceKind::Memory),
-    );
     let entry = builder.builder.entry_block();
     builder.move_to_block(entry);
+    let args_value = if let Some(args_local) = args_local {
+        builder.alloc_value(
+            args_ty,
+            ValueOrigin::Local(args_local),
+            builder.value_repr_for_ty(args_ty, AddressSpaceKind::Memory),
+        )
+    } else {
+        builder.builder.unit_value(args_ty)
+    };
     for binding in arg_bindings {
         let tuple_index = binding.tuple_index as usize;
         let elem_value = builder.project_tuple_elem_value(
@@ -945,6 +1027,10 @@ fn lower_recv_arm_handler<'db>(
             expr: expr_context,
         });
     }
+    let runtime_abi = crate::ir::RuntimeAbi::source_shaped(
+        mir_body.param_locals.len(),
+        vec![None; mir_body.effect_param_locals.len()],
+    );
 
     Ok(MirFunction {
         origin: MirFunctionOrigin::Synthetic(SyntheticId::ContractRecvArmHandler {
@@ -957,6 +1043,8 @@ fn lower_recv_arm_handler<'db>(
         generic_args: Vec::new(),
         ret_ty,
         returns_value: !layout::is_zero_sized_ty(db, ret_ty),
+        runtime_abi,
+        runtime_return_shape: crate::repr::runtime_return_shape_seed_for_ty(db, core, ret_ty),
         contract_function: None,
         symbol_name: symbols.recv_handler(recv_idx, arm_idx),
         receiver_space: None,
@@ -1016,6 +1104,7 @@ fn lower_init_entrypoint<'db>(
     contract: Contract<'db>,
     target: &TargetContext<'db>,
     symbols: &ContractSymbols,
+    core: &CoreLib<'db>,
     slot_offsets: &[BigUint],
 ) -> MirLowerResult<MirFunction<'db>> {
     let contract_fn = ContractFunction {
@@ -1023,7 +1112,7 @@ fn lower_init_entrypoint<'db>(
         kind: ContractFunctionKind::Init,
     };
 
-    let cx = ContractMirCx::new(db, target);
+    let cx = ContractMirCx::new(db, core, target);
     let mut builder = BodyBuilder::new();
     let entry = builder.entry_block();
     builder.move_to_block(entry);
@@ -1049,38 +1138,37 @@ fn lower_init_entrypoint<'db>(
             symbol: None,
         },
     );
-    let runtime_offset = builder
-        .assign_to_new_local(
-            "runtime_offset",
-            TyId::u256(db),
-            false,
-            AddressSpaceKind::Memory,
-            Rvalue::Intrinsic {
-                op: IntrinsicOp::CodeRegionOffset,
-                args: vec![runtime_func_item],
-            },
-        )
-        .value;
-    let runtime_len = builder
-        .assign_to_new_local(
-            "runtime_len",
-            TyId::u256(db),
-            false,
-            AddressSpaceKind::Memory,
-            Rvalue::Intrinsic {
-                op: IntrinsicOp::CodeRegionLen,
-                args: vec![runtime_func_item],
-            },
-        )
-        .value;
+    let runtime_offset = cx.assign_runtime_local(
+        &mut builder,
+        "runtime_offset",
+        TyId::u256(db),
+        false,
+        AddressSpaceKind::Memory,
+        Rvalue::Intrinsic {
+            op: IntrinsicOp::CodeRegionOffset,
+            args: vec![runtime_func_item],
+        },
+    );
+    let runtime_len = cx.assign_runtime_local(
+        &mut builder,
+        "runtime_len",
+        TyId::u256(db),
+        false,
+        AddressSpaceKind::Memory,
+        Rvalue::Intrinsic {
+            op: IntrinsicOp::CodeRegionLen,
+            args: vec![runtime_func_item],
+        },
+    );
 
     if contract.init(db).is_some()
         && let Some(init_env) = contract.init_effect_env(db)
     {
         let init_args_ty = contract.init_args_ty(db);
-        // Inline `ContractHost::init_input` semantics (avoids needing a synthetic HIR function-item type).
-        let args_offset_value = builder
-            .assign_to_new_local(
+        let mut decoded_params = Vec::new();
+        if !abi_payload_is_empty(db, init_args_ty) {
+            let args_offset_value = cx.assign_runtime_local(
+                &mut builder,
                 "init_code_len",
                 TyId::u256(db),
                 false,
@@ -1089,10 +1177,9 @@ fn lower_init_entrypoint<'db>(
                     op: IntrinsicOp::CurrentCodeRegionLen,
                     args: Vec::new(),
                 },
-            )
-            .value;
-        let code_size = builder
-            .assign_to_new_local(
+            );
+            let code_size = cx.assign_runtime_local(
+                &mut builder,
                 "code_size",
                 TyId::u256(db),
                 false,
@@ -1101,42 +1188,39 @@ fn lower_init_entrypoint<'db>(
                     op: IntrinsicOp::Codesize,
                     args: Vec::new(),
                 },
-            )
-            .value;
-        let cond_value = builder.alloc_value(
-            TyId::bool(db),
-            ValueOrigin::Binary {
-                op: BinOp::Comp(CompBinOp::Lt),
-                lhs: code_size,
-                rhs: args_offset_value,
-            },
-            ValueRepr::Word,
-        );
+            );
+            let cond_value = builder.alloc_value(
+                TyId::bool(db),
+                ValueOrigin::Binary {
+                    op: BinOp::Comp(CompBinOp::Lt),
+                    lhs: code_size,
+                    rhs: args_offset_value,
+                },
+                ValueRepr::Word,
+            );
 
-        let abort_block = builder.make_block();
-        let cont_block = builder.make_block();
-        builder.branch(cond_value, abort_block, cont_block);
+            let abort_block = builder.make_block();
+            let cont_block = builder.make_block();
+            builder.branch(cond_value, abort_block, cont_block);
 
-        // abort: `root.abort()`
-        builder.move_to_block(abort_block);
-        builder.terminate_current(Terminator::TerminatingCall {
-            source: crate::ir::SourceInfoId::SYNTHETIC,
-            call: TerminatingCall::Call(cx.host_abort(root_value)),
-        });
+            builder.move_to_block(abort_block);
+            builder.terminate_current(Terminator::TerminatingCall {
+                source: crate::ir::SourceInfoId::SYNTHETIC,
+                call: TerminatingCall::Call(cx.host_abort(root_value)),
+            });
 
-        // continue block builds the init-input decoder, calls init handler, then returns the runtime region.
-        builder.move_to_block(cont_block);
-        let args_len_value = builder.alloc_value(
-            TyId::u256(db),
-            ValueOrigin::Binary {
-                op: BinOp::Arith(ArithBinOp::Sub),
-                lhs: code_size,
-                rhs: args_offset_value,
-            },
-            ValueRepr::Word,
-        );
-        let args_ptr_value = builder
-            .assign_to_new_local(
+            builder.move_to_block(cont_block);
+            let args_len_value = builder.alloc_value(
+                TyId::u256(db),
+                ValueOrigin::Binary {
+                    op: BinOp::Arith(ArithBinOp::Sub),
+                    lhs: code_size,
+                    rhs: args_offset_value,
+                },
+                ValueRepr::Word,
+            );
+            let args_ptr_value = cx.assign_runtime_local(
+                &mut builder,
                 "args_ptr",
                 TyId::u256(db),
                 false,
@@ -1145,19 +1229,17 @@ fn lower_init_entrypoint<'db>(
                     op: IntrinsicOp::Alloc,
                     args: vec![args_len_value],
                 },
-            )
-            .value;
-        builder.assign(
-            None,
-            Rvalue::Intrinsic {
-                op: IntrinsicOp::Codecopy,
-                args: vec![args_ptr_value, args_offset_value, args_len_value],
-            },
-        );
+            );
+            builder.assign(
+                None,
+                Rvalue::Intrinsic {
+                    op: IntrinsicOp::Codecopy,
+                    args: vec![args_ptr_value, args_offset_value, args_len_value],
+                },
+            );
 
-        // Construct `InitInput` (MemoryBytes) with `{ base: args_ptr, len: args_len }`.
-        let input_value = builder
-            .assign_to_new_local(
+            let input_value = cx.assign_runtime_local(
+                &mut builder,
                 "input",
                 target.host.init_input_ty,
                 false,
@@ -1165,32 +1247,36 @@ fn lower_init_entrypoint<'db>(
                 Rvalue::Alloc {
                     address_space: AddressSpaceKind::Memory,
                 },
-            )
-            .value;
-        builder.store_field(input_value, 0, args_ptr_value);
-        builder.store_field(input_value, 1, args_len_value);
+            );
+            builder.store_field(input_value, 0, args_ptr_value);
+            builder.store_field(input_value, 1, args_len_value);
 
-        // Decoder: `A::decoder_new(input)`.
-        let decoder_value = builder
-            .assign_to_new_local(
+            let decoder_value = cx.assign_runtime_local(
+                &mut builder,
                 "decoder",
                 target.abi.init_decoder_ty,
                 false,
                 AddressSpaceKind::Memory,
                 Rvalue::Call(cx.abi_decoder_new(input_value, target.host.init_input_ty)),
-            )
-            .value;
+            );
 
-        // Decode init params in order.
-        let mut decoded_params = Vec::new();
-        for (idx, param_ty) in init_args_ty.field_types(db).iter().copied().enumerate() {
-            decoded_params.push(cx.emit_decode_or_unit(
-                &mut builder,
-                decoder_value,
-                target.abi.init_decoder_ty,
-                param_ty,
-                format!("init_arg{idx}"),
-            ));
+            for (idx, param_ty) in init_args_ty.field_types(db).iter().copied().enumerate() {
+                if abi_payload_is_empty(db, param_ty) {
+                    continue;
+                }
+                decoded_params.push(cx.assign_runtime_local(
+                    &mut builder,
+                    format!("init_arg{idx}"),
+                    param_ty,
+                    false,
+                    AddressSpaceKind::Memory,
+                    Rvalue::Call(cx.decode_decode(
+                        decoder_value,
+                        target.abi.init_decoder_ty,
+                        param_ty,
+                    )),
+                ));
+            }
         }
 
         // Call init handler with decoded args + effects.
@@ -1241,6 +1327,8 @@ fn lower_init_entrypoint<'db>(
         generic_args: Vec::new(),
         ret_ty: TyId::unit(db),
         returns_value: false,
+        runtime_abi: crate::ir::RuntimeAbi::source_shaped(0, Vec::new()),
+        runtime_return_shape: crate::ir::RuntimeShape::Erased,
         contract_function: Some(contract_fn),
         symbol_name: symbols.init_entrypoint.clone(),
         receiver_space: None,
@@ -1253,6 +1341,7 @@ fn lower_runtime_entrypoint<'db>(
     contract: Contract<'db>,
     target: &TargetContext<'db>,
     symbols: &ContractSymbols,
+    core: &CoreLib<'db>,
     slot_offsets: &[BigUint],
 ) -> MirLowerResult<MirFunction<'db>> {
     let contract_fn = ContractFunction {
@@ -1260,7 +1349,7 @@ fn lower_runtime_entrypoint<'db>(
         kind: ContractFunctionKind::Runtime,
     };
 
-    let cx = ContractMirCx::new(db, target);
+    let cx = ContractMirCx::new(db, core, target);
     let mut builder = BodyBuilder::new();
     let entry = builder.entry_block();
     builder.move_to_block(entry);
@@ -1275,26 +1364,30 @@ fn lower_runtime_entrypoint<'db>(
         root_value,
         target.host.field_fn,
     );
+    let needs_runtime_decoder = contract.recv_views(db).any(|recv| {
+        recv.arms(db)
+            .any(|arm| !abi_payload_is_empty(db, arm.abi_info(db, target.abi.abi_ty).args_ty))
+    });
 
     // Selector + decoder.
-    let selector_value = builder
-        .assign_to_new_local(
-            "selector",
-            target.abi.selector_ty,
-            false,
-            AddressSpaceKind::Memory,
-            Rvalue::Call(cx.host_runtime_selector(root_value)),
-        )
-        .value;
-    let decoder_value = builder
-        .assign_to_new_local(
+    let selector_value = cx.assign_runtime_local(
+        &mut builder,
+        "selector",
+        target.abi.selector_ty,
+        false,
+        AddressSpaceKind::Memory,
+        Rvalue::Call(cx.host_runtime_selector(root_value)),
+    );
+    let decoder_value = needs_runtime_decoder.then(|| {
+        cx.assign_runtime_local(
+            &mut builder,
             "decoder",
             target.abi.runtime_decoder_ty,
             false,
             AddressSpaceKind::Memory,
             Rvalue::Call(cx.host_runtime_decoder(root_value)),
         )
-        .value;
+    });
 
     // Dispatch switch.
     let mut targets = Vec::new();
@@ -1312,13 +1405,15 @@ fn lower_runtime_entrypoint<'db>(
             });
 
             builder.move_to_block(block);
-            let args_value = cx.emit_decode_or_unit(
-                &mut builder,
-                decoder_value,
-                target.abi.runtime_decoder_ty,
-                abi_info.args_ty,
-                format!("args_{recv_idx}_{arm_idx}"),
-            );
+            let args_value = (!abi_payload_is_empty(db, abi_info.args_ty)).then(|| {
+                cx.emit_decode_or_unit(
+                    &mut builder,
+                    decoder_value.expect("runtime decoder required for payload arm"),
+                    target.abi.runtime_decoder_ty,
+                    abi_info.args_ty,
+                    format!("args_{recv_idx}_{arm_idx}"),
+                )
+            });
             let effect_args = cx.effect_args_from_sources(
                 arm.effective_effect_env(db).bindings(db),
                 zero_u256,
@@ -1327,15 +1422,18 @@ fn lower_runtime_entrypoint<'db>(
             let handler_symbol = symbols.recv_handler(recv_idx, arm_idx);
 
             if let Some(ret_ty) = abi_info.ret_ty {
-                let result_value = builder
-                    .assign_to_new_local(
-                        format!("result_{recv_idx}_{arm_idx}"),
-                        ret_ty,
-                        false,
-                        AddressSpaceKind::Memory,
-                        Rvalue::Call(cx.call_symbol(handler_symbol, vec![args_value], effect_args)),
-                    )
-                    .value;
+                let result_value = cx.assign_runtime_local(
+                    &mut builder,
+                    format!("result_{recv_idx}_{arm_idx}"),
+                    ret_ty,
+                    false,
+                    AddressSpaceKind::Memory,
+                    Rvalue::Call(cx.call_symbol(
+                        handler_symbol,
+                        args_value.into_iter().collect(),
+                        effect_args,
+                    )),
+                );
                 builder.terminate_current(Terminator::TerminatingCall {
                     source: SourceInfoId::SYNTHETIC,
                     call: TerminatingCall::Call(cx.host_return_value(
@@ -1347,7 +1445,11 @@ fn lower_runtime_entrypoint<'db>(
             } else {
                 builder.assign(
                     None,
-                    Rvalue::Call(cx.call_symbol(handler_symbol, vec![args_value], effect_args)),
+                    Rvalue::Call(cx.call_symbol(
+                        handler_symbol,
+                        args_value.into_iter().collect(),
+                        effect_args,
+                    )),
                 );
                 builder.terminate_current(Terminator::TerminatingCall {
                     source: SourceInfoId::SYNTHETIC,
@@ -1373,6 +1475,8 @@ fn lower_runtime_entrypoint<'db>(
         generic_args: Vec::new(),
         ret_ty: TyId::unit(db),
         returns_value: false,
+        runtime_abi: crate::ir::RuntimeAbi::source_shaped(0, Vec::new()),
+        runtime_return_shape: crate::ir::RuntimeShape::Erased,
         contract_function: Some(contract_fn),
         symbol_name: symbols.runtime_entrypoint.clone(),
         receiver_space: None,
@@ -1433,6 +1537,7 @@ fn lower_code_region_query<'db>(
             TyId::u256(db),
             false,
             AddressSpaceKind::Memory,
+            ValueRepr::Word,
             Rvalue::Intrinsic {
                 op,
                 args: vec![func_item],
@@ -1448,6 +1553,12 @@ fn lower_code_region_query<'db>(
         generic_args: Vec::new(),
         ret_ty: TyId::u256(db),
         returns_value: true,
+        runtime_abi: crate::ir::RuntimeAbi::source_shaped(0, Vec::new()),
+        runtime_return_shape: crate::repr::runtime_return_shape_seed_for_ty(
+            db,
+            &CoreLib::new(db, contract.scope()),
+            TyId::u256(db),
+        ),
         contract_function: None,
         symbol_name,
         receiver_space: None,

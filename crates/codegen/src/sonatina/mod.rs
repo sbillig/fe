@@ -10,8 +10,10 @@ mod types;
 use crate::{BackendError, OptLevel};
 use common::ingot::Ingot;
 use driver::DriverDataBase;
+use hir::analysis::ty::ty_def::TyId;
 use hir::hir_def::TopLevelMod;
-use mir::{MirModule, layout, layout::TargetDataLayout, lower_ingot, lower_module};
+use mir::ir::PointerInfo;
+use mir::{CoreLib, MirModule, layout, layout::TargetDataLayout, lower_ingot, lower_module};
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, GlobalVariableRef, Module, Signature, Type, ValueId,
@@ -85,6 +87,119 @@ pub(super) fn is_erased_runtime_ty(
     ty: hir::analysis::ty::ty_def::TyId<'_>,
 ) -> bool {
     layout::ty_size_bytes_in(db, target_layout, ty).is_some_and(|s| s == 0)
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct RuntimeFunctionMetadata {
+    pub(super) params: Vec<Type>,
+    pub(super) ret: Option<Type>,
+}
+
+impl RuntimeFunctionMetadata {
+    fn signature(&self, name: &str, linkage: sonatina_ir::Linkage) -> Signature {
+        let ret_tys: Vec<_> = self.ret.into_iter().collect();
+        Signature::new(name, linkage, &self.params, &ret_tys)
+    }
+}
+
+fn runtime_pointer_type_from_target(
+    builder: &ModuleBuilder,
+    db: &DriverDataBase,
+    core: &CoreLib<'_>,
+    target_layout: &TargetDataLayout,
+    target_ty: TyId<'_>,
+    cache: &mut FxHashMap<String, Option<Type>>,
+    name_counter: &mut usize,
+) -> Type {
+    let pointee = lower::fe_ty_to_sonatina(
+        builder,
+        db,
+        core,
+        target_layout,
+        target_ty,
+        cache,
+        name_counter,
+    )
+    .unwrap_or(Type::I8);
+    if pointee == Type::Unit {
+        return builder.ptr_type(Type::I8);
+    }
+    builder.ptr_type(pointee)
+}
+
+fn function_core_lib<'db>(db: &'db DriverDataBase, func: &mir::MirFunction<'db>) -> CoreLib<'db> {
+    let scope = match func.origin {
+        mir::ir::MirFunctionOrigin::Hir(hir_func) => hir_func.scope(),
+        mir::ir::MirFunctionOrigin::Synthetic(synth) => synth.contract().scope(),
+    };
+    CoreLib::new(db, scope)
+}
+
+pub(super) fn runtime_type_for_pointer_info(
+    builder: &ModuleBuilder,
+    db: &DriverDataBase,
+    core: &CoreLib<'_>,
+    target_layout: &TargetDataLayout,
+    info: PointerInfo<'_>,
+    cache: &mut FxHashMap<String, Option<Type>>,
+    name_counter: &mut usize,
+) -> Type {
+    runtime_type_for_shape(
+        builder,
+        db,
+        core,
+        target_layout,
+        mir::repr::runtime_shape_for_pointer_info(info),
+        cache,
+        name_counter,
+    )
+}
+
+pub(super) fn runtime_type_for_shape(
+    builder: &ModuleBuilder,
+    db: &DriverDataBase,
+    core: &CoreLib<'_>,
+    target_layout: &TargetDataLayout,
+    shape: mir::ir::RuntimeShape<'_>,
+    cache: &mut FxHashMap<String, Option<Type>>,
+    name_counter: &mut usize,
+) -> Type {
+    match shape {
+        mir::ir::RuntimeShape::Unresolved => {
+            panic!("unresolved MIR runtime shape reached Sonatina codegen")
+        }
+        mir::ir::RuntimeShape::Erased => Type::Unit,
+        mir::ir::RuntimeShape::Word(kind) => types::runtime_word_type(kind),
+        mir::ir::RuntimeShape::MemoryPtr { target_ty } => target_ty
+            .map(|target_ty| {
+                runtime_pointer_type_from_target(
+                    builder,
+                    db,
+                    core,
+                    target_layout,
+                    target_ty,
+                    cache,
+                    name_counter,
+                )
+            })
+            .unwrap_or_else(|| builder.ptr_type(Type::I8)),
+        mir::ir::RuntimeShape::AddressWord(_) => Type::I256,
+    }
+}
+
+pub(super) fn zero_value_for_type<C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    ty: Type,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> ValueId {
+    if ty == Type::Unit {
+        return types::zero_value(fb, ty);
+    }
+    let zero = types::zero_value(fb, Type::I256);
+    if ty.is_pointer(&fb.module_builder.ctx) {
+        return fb.insert_inst(sonatina_ir::inst::cast::IntToPtr::new(is, zero, ty), ty);
+    }
+    types::zero_value(fb, ty)
 }
 
 #[derive(Debug, Clone)]
@@ -415,11 +530,8 @@ struct ModuleLowerer<'db, 'a> {
     func_map: FxHashMap<usize, FuncRef>,
     /// Maps function symbol names to Sonatina function references.
     name_map: FxHashMap<String, FuncRef>,
-    /// Maps function symbol names to a parameter mask indicating which MIR arguments are
-    /// runtime-visible (not erased) and therefore must be passed on the EVM stack.
-    ///
-    /// The mask is in the same order as `param_locals` followed by `effect_param_locals`.
-    runtime_param_masks: FxHashMap<String, Vec<bool>>,
+    /// Runtime Sonatina signature metadata keyed by lowered symbol name.
+    runtime_function_metadata: FxHashMap<String, RuntimeFunctionMetadata>,
     /// Indices of functions executed directly by the EVM (empty stack).
     ///
     /// These entry functions emit `evm_stop` instead of internal `Return`.
@@ -458,7 +570,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             contract_selection,
             func_map: FxHashMap::default(),
             name_map: FxHashMap::default(),
-            runtime_param_masks: FxHashMap::default(),
+            runtime_function_metadata: FxHashMap::default(),
             entry_func_idxs: FxHashSet::default(),
             gep_type_cache: FxHashMap::default(),
             gep_name_counter: 0,
@@ -498,7 +610,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 continue;
             }
             let name = &func.symbol_name;
-            let (sig, mask) = self.lower_signature_and_mask(func)?;
+            let (sig, metadata) = self.lower_signature_and_metadata(func)?;
 
             let func_ref = self.builder.declare_function(sig).map_err(|e| {
                 LowerError::Internal(format!("failed to declare function {name}: {e}"))
@@ -506,84 +618,58 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
             self.func_map.insert(idx, func_ref);
             self.name_map.insert(name.clone(), func_ref);
-            self.runtime_param_masks.insert(name.clone(), mask);
+            self.runtime_function_metadata
+                .insert(name.clone(), metadata);
         }
         Ok(())
     }
 
     /// Lower function signatures.
-    fn lower_signature_and_mask(
-        &self,
+    fn lower_signature_and_metadata(
+        &mut self,
         func: &mir::MirFunction<'db>,
-    ) -> Result<(Signature, Vec<bool>), LowerError> {
-        use mir::ir::{ContractFunctionKind, MirFunctionOrigin, SyntheticId};
-
+    ) -> Result<(Signature, RuntimeFunctionMetadata), LowerError> {
         let name = &func.symbol_name;
         // Keep lowered functions private so Sonatina DFE can eliminate dead functions.
         // Reachability roots are selected via object section entries, not linkage visibility.
         let linkage = sonatina_ir::Linkage::Private;
-        let declared_param_runtime_ty = |local_id: mir::LocalId| -> Result<Type, LowerError> {
-            let local_ty = func
-                .body
-                .locals
-                .get(local_id.index())
-                .ok_or_else(|| LowerError::Internal(format!("unknown param local: {local_id:?}")))?
-                .ty;
-            Ok(types::runtime_type(self.db, &self.target_layout, local_ty))
-        };
+        let core = function_core_lib(self.db, func);
+        let runtime_param_locals: Vec<_> = func
+            .runtime_param_locals()
+            .into_iter()
+            .chain(func.runtime_effect_param_locals())
+            .collect();
 
-        // Contract init/runtime entrypoints are executed directly by the EVM with an empty stack.
-        // Even though MIR models them as taking effect args (e.g. `StorPtr<Evm>`), we cannot
-        // expose those as real EVM stack parameters at entry.
-        let is_contract_entry = func.contract_function.as_ref().is_some_and(|cf| {
-            matches!(
-                cf.kind,
-                ContractFunctionKind::Init | ContractFunctionKind::Runtime
-            )
-        }) || matches!(
-            func.origin,
-            MirFunctionOrigin::Synthetic(
-                SyntheticId::ContractInitEntrypoint(_) | SyntheticId::ContractRuntimeEntrypoint(_)
-            )
-        );
-
-        // Compute which MIR parameters are runtime-visible (stack words).
-        // Entry functions have no parameters since the EVM starts with an empty stack.
-        let mut mask = Vec::new();
-        if is_contract_entry {
-            // Keep it empty; callers should never pass arguments to EVM entrypoints.
-        } else {
-            for local_id in func.body.param_locals.iter().copied() {
-                mask.push(declared_param_runtime_ty(local_id)? != Type::Unit);
-            }
-            for local_id in func.body.effect_param_locals.iter().copied() {
-                mask.push(declared_param_runtime_ty(local_id)? != Type::Unit);
-            }
+        let mut params = Vec::with_capacity(runtime_param_locals.len());
+        for local_id in runtime_param_locals {
+            let local = func.body.locals.get(local_id.index()).ok_or_else(|| {
+                LowerError::Internal(format!("unknown param local: {local_id:?}"))
+            })?;
+            params.push(runtime_type_for_shape(
+                &self.builder,
+                self.db,
+                &core,
+                &self.target_layout,
+                local.runtime_shape,
+                &mut self.gep_type_cache,
+                &mut self.gep_name_counter,
+            ));
         }
 
-        // Convert parameter types to their runtime Sonatina types.
-        let mut params = Vec::new();
-        for (local_id, keep) in func
-            .body
-            .param_locals
-            .iter()
-            .chain(func.body.effect_param_locals.iter())
-            .copied()
-            .zip(mask.iter().copied())
-        {
-            if keep {
-                params.push(declared_param_runtime_ty(local_id)?);
-            }
-        }
+        let ret = (!func.runtime_return_shape.is_erased()).then(|| {
+            runtime_type_for_shape(
+                &self.builder,
+                self.db,
+                &core,
+                &self.target_layout,
+                func.runtime_return_shape,
+                &mut self.gep_type_cache,
+                &mut self.gep_name_counter,
+            )
+        });
 
-        // Convert return type - use Unit if function doesn't return a value.
-        let ret_tys = if func.returns_value {
-            vec![types::value_type(self.db, func.ret_ty)]
-        } else {
-            Vec::new()
-        };
-
-        Ok((Signature::new(name, linkage, &params, &ret_tys), mask))
+        let metadata = RuntimeFunctionMetadata { params, ret };
+        Ok((metadata.signature(name, linkage), metadata))
     }
 
     /// Lower all function bodies.
@@ -736,7 +822,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
         // No contract annotations: fall back to compiling a single "main" entry. This is used by
         // snapshot tests for simple files and debugging.
-        let Some((entry_idx, _entry_mir_func)) = self
+        let Some((entry_idx, entry_mir_func)) = self
             .mir
             .functions
             .iter()
@@ -748,7 +834,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         };
 
         let entry_ref = self.func_map[&entry_idx];
-        let wrapper_ref = self.create_entry_wrapper(entry_ref)?;
+        let wrapper_ref = self.create_entry_wrapper(entry_ref, entry_mir_func)?;
         let mut directives = vec![Directive::Entry(wrapper_ref)];
         for &gv in &self.data_globals {
             directives.push(Directive::Data(gv));
@@ -1013,7 +1099,11 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     /// The wrapper calls the actual entry function and then halts with `evm_stop`.
     /// This is needed because the entry function uses internal `Return` which requires
     /// a return address on the stack (pushed by `Call`).
-    fn create_entry_wrapper(&mut self, entry_ref: FuncRef) -> Result<FuncRef, LowerError> {
+    fn create_entry_wrapper(
+        &mut self,
+        entry_ref: FuncRef,
+        entry_mir_func: &mir::MirFunction<'db>,
+    ) -> Result<FuncRef, LowerError> {
         const WRAPPER_NAME: &str = "__fe_sonatina_entry";
         if self.name_map.contains_key(WRAPPER_NAME) {
             return Err(LowerError::Internal(format!(
@@ -1034,17 +1124,23 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         let entry_block = fb.append_block();
         fb.switch_to_block(entry_block);
 
-        // Pass zero for all arguments (regular + effect params). Test entry functions
-        // generally don't use effect params meaningfully.
-        let (arg_tys, ret_ty) = fb.module_builder.ctx.func_sig(entry_ref, |sig| {
-            (sig.args().to_vec(), sig.ret_tys().first().copied())
-        });
-        let mut args = Vec::with_capacity(arg_tys.len());
-        for ty in arg_tys {
-            args.push(types::zero_value(&mut fb, ty));
+        let runtime_metadata = self
+            .runtime_function_metadata
+            .get(&entry_mir_func.symbol_name)
+            .ok_or_else(|| {
+                LowerError::Internal(format!(
+                    "missing runtime type metadata for `{}`",
+                    entry_mir_func.symbol_name
+                ))
+            })?;
+        // Pass zero for all arguments (regular + effect params). Entry wrappers do not supply
+        // source-level arguments, but the internal call still needs type-correct placeholders.
+        let mut args = Vec::with_capacity(runtime_metadata.params.len());
+        for expected_ty in runtime_metadata.params.iter().copied() {
+            args.push(zero_value_for_type(&mut fb, expected_ty, is));
         }
         let call_inst = Call::new(is, entry_ref, args.into());
-        if let Some(ret_ty) = ret_ty {
+        if let Some(ret_ty) = runtime_metadata.ret {
             let _ = fb.insert_inst(call_inst, ret_ty);
         } else {
             fb.insert_inst_no_result(call_inst);
@@ -1068,28 +1164,34 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         is_entry: bool,
     ) -> Result<(), LowerError> {
         let data_globals_before = self.data_globals.len();
+        let func_metadata = self
+            .runtime_function_metadata
+            .get(&func.symbol_name)
+            .cloned()
+            .ok_or_else(|| {
+                LowerError::Internal(format!(
+                    "missing runtime type metadata for `{}`",
+                    func.symbol_name
+                ))
+            })?;
 
         let mut fb = self.builder.func_builder::<InstInserter>(func_ref);
         let is = self.isa.inst_set();
-        let param_locals: FxHashSet<_> = func
-            .body
-            .param_locals
-            .iter()
-            .chain(func.body.effect_param_locals.iter())
-            .copied()
-            .collect();
-        let local_runtime_tys: Vec<_> = func
+        let core = function_core_lib(self.db, func);
+        let local_runtime_types: Vec<_> = func
             .body
             .locals
             .iter()
-            .enumerate()
-            .map(|(idx, local)| {
-                let local_id = mir::LocalId(idx as u32);
-                if param_locals.contains(&local_id) {
-                    types::runtime_type(self.db, &self.target_layout, local.ty)
-                } else {
-                    types::local_runtime_type(self.db, &self.target_layout, &func.body, local_id)
-                }
+            .map(|local| {
+                runtime_type_for_shape(
+                    &self.builder,
+                    self.db,
+                    &core,
+                    &self.target_layout,
+                    local.runtime_shape,
+                    &mut self.gep_type_cache,
+                    &mut self.gep_name_counter,
+                )
             })
             .collect();
 
@@ -1100,10 +1202,11 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         let mut local_vars: FxHashMap<mir::LocalId, Variable> = FxHashMap::default();
         for (idx, _local) in func.body.locals.iter().enumerate() {
             let local_id = mir::LocalId(idx as u32);
-            let var_ty = local_runtime_tys[idx];
-            let var = fb.declare_var(var_ty);
+            let var = fb.declare_var(local_runtime_types[idx]);
             local_vars.insert(local_id, var);
         }
+        let mut local_place_roots = FxHashMap::default();
+        let mut initialized_locals = FxHashSet::default();
 
         // Create blocks
         for (idx, _block) in func.body.blocks.iter().enumerate() {
@@ -1127,50 +1230,47 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             .chain(func.body.effect_param_locals.iter())
             .copied()
             .collect();
+        let runtime_param_locals: FxHashSet<_> = func
+            .runtime_param_locals()
+            .into_iter()
+            .chain(func.runtime_effect_param_locals())
+            .collect();
 
         if is_entry {
             // Entry functions have no Sonatina parameters (EVM starts with empty stack).
             // Initialize all param locals to zero - effect params are erased at runtime
             // and regular params shouldn't exist for entry functions.
-            for local_id in all_param_locals {
+            for local_id in all_param_locals.iter().copied() {
                 let var = local_vars.get(&local_id).copied().ok_or_else(|| {
                     LowerError::Internal(format!(
                         "missing SSA variable for param local {local_id:?}"
                     ))
                 })?;
-                let zero = types::zero_value(&mut fb, local_runtime_tys[local_id.index()]);
+                let zero = zero_value_for_type(&mut fb, local_runtime_types[local_id.index()], is);
                 fb.def_var(var, zero);
             }
         } else {
             // Non-entry functions: map actual arguments to param locals.
             let args = fb.args().to_vec();
             let mut arg_iter = args.into_iter();
-            for local_id in all_param_locals {
+            for local_id in all_param_locals.iter().copied() {
                 let var = local_vars.get(&local_id).copied().ok_or_else(|| {
                     LowerError::Internal(format!(
                         "missing SSA variable for param local {local_id:?}"
                     ))
                 })?;
 
-                let local_runtime_ty = local_runtime_tys[local_id.index()];
-                if local_runtime_ty == Type::Unit {
-                    let zero = types::zero_value(&mut fb, Type::Unit);
-                    fb.def_var(var, zero);
-                    continue;
-                }
-
-                let arg_val = arg_iter
-                    .next()
-                    .unwrap_or_else(|| types::zero_value(&mut fb, local_runtime_ty));
-                if fb.type_of(arg_val) != local_runtime_ty {
-                    return Err(LowerError::Internal(format!(
-                        "parameter type mismatch for {local_id:?}: expected {local_runtime_ty:?}, got {:?}",
-                        fb.type_of(arg_val)
-                    )));
-                }
+                let arg_val = if runtime_param_locals.contains(&local_id) {
+                    arg_iter.next().unwrap_or_else(|| {
+                        zero_value_for_type(&mut fb, local_runtime_types[local_id.index()], is)
+                    })
+                } else {
+                    zero_value_for_type(&mut fb, local_runtime_types[local_id.index()], is)
+                };
                 fb.def_var(var, arg_val);
             }
         }
+        initialized_locals.extend(all_param_locals.iter().copied());
 
         {
             let mut const_data_globals = FxHashMap::default();
@@ -1179,13 +1279,16 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             let mut ctx = LowerCtx {
                 fb: &mut fb,
                 db: self.db,
+                core: &core,
                 target_layout: &self.target_layout,
                 body: &func.body,
-                ret_ty: func.returns_value.then_some(func.ret_ty),
-                local_runtime_tys: &local_runtime_tys,
                 local_vars: &local_vars,
+                local_place_roots: &mut local_place_roots,
+                initialized_locals: &mut initialized_locals,
                 name_map: &self.name_map,
-                runtime_param_masks: &self.runtime_param_masks,
+                runtime_function_metadata: &self.runtime_function_metadata,
+                current_function_metadata: &func_metadata,
+                local_runtime_types: &local_runtime_types,
                 block_map: &block_map,
                 is,
                 is_entry,
@@ -1197,7 +1300,6 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 overflow_revert_block: &mut overflow_revert_block,
                 ptr_escape_summary,
             };
-
             for (idx, block) in ctx.body.blocks.iter().enumerate() {
                 let block_id = mir::BasicBlockId(idx as u32);
                 let sonatina_block = ctx.block_map[&block_id];
@@ -1228,13 +1330,16 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 pub(super) struct LowerCtx<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> {
     pub(super) fb: &'a mut sonatina_ir::builder::FunctionBuilder<C>,
     pub(super) db: &'db DriverDataBase,
+    pub(super) core: &'a CoreLib<'db>,
     pub(super) target_layout: &'a TargetDataLayout,
     pub(super) body: &'a mir::MirBody<'db>,
-    pub(super) ret_ty: Option<hir::analysis::ty::ty_def::TyId<'db>>,
-    pub(super) local_runtime_tys: &'a [Type],
     pub(super) local_vars: &'a FxHashMap<mir::LocalId, Variable>,
+    pub(super) local_place_roots: &'a mut FxHashMap<mir::LocalId, ValueId>,
+    pub(super) initialized_locals: &'a mut FxHashSet<mir::LocalId>,
     pub(super) name_map: &'a FxHashMap<String, FuncRef>,
-    pub(super) runtime_param_masks: &'a FxHashMap<String, Vec<bool>>,
+    pub(super) runtime_function_metadata: &'a FxHashMap<String, RuntimeFunctionMetadata>,
+    pub(super) current_function_metadata: &'a RuntimeFunctionMetadata,
+    pub(super) local_runtime_types: &'a [Type],
     pub(super) block_map: &'a FxHashMap<mir::BasicBlockId, BlockId>,
     pub(super) is: &'a sonatina_ir::inst::evm::inst_set::EvmInstSet,
     pub(super) is_entry: bool,

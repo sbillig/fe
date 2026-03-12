@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 33
 expression: output
 input_file: tests/fixtures/match_newtype_nested.fe
 ---
@@ -14,7 +13,6 @@ function $match_newtype_nested($a) -> ret {
       let v1 := $a
       v0 := v1
     }
-  let v2 := $a
   ret := v0
   leave
 }

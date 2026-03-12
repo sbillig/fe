@@ -45,7 +45,7 @@ impl<'db> FunctionEmitter<'db> {
     ) -> Result<Self, YulError> {
         mir_func
             .body
-            .assert_stage(MirStage::Repr(MirBackend::EvmYul));
+            .assert_stage(MirStage::BackendPrepared(MirBackend::EvmYul));
         if let MirFunctionOrigin::Hir(func) = mir_func.origin
             && func.body(db).is_none()
         {
@@ -113,19 +113,23 @@ impl<'db> FunctionEmitter<'db> {
         let mut state = BlockState::new();
         let mut params_out = Vec::new();
         let mut used_names = FxHashSet::default();
-        for &local in &self.mir_func.body.param_locals {
+        for (idx, &local) in self.mir_func.body.param_locals.iter().enumerate() {
+            if !self.mir_func.runtime_abi.value_param_visible(idx) {
+                continue;
+            }
             let raw_name = self.mir_func.body.local(local).name.clone();
             let name = unique_yul_name(&raw_name, &mut used_names);
             params_out.push(name.clone());
             state.insert_local(local, name);
         }
-        if self.mir_func.contract_function.is_none() {
-            for &local in &self.mir_func.body.effect_param_locals {
-                let raw_name = self.mir_func.body.local(local).name.clone();
-                let binding = unique_yul_name(&raw_name, &mut used_names);
-                params_out.push(binding.clone());
-                state.insert_local(local, binding);
+        for (idx, &local) in self.mir_func.body.effect_param_locals.iter().enumerate() {
+            if !self.mir_func.runtime_abi.effect_param_visible(idx) {
+                continue;
             }
+            let raw_name = self.mir_func.body.local(local).name.clone();
+            let binding = unique_yul_name(&raw_name, &mut used_names);
+            params_out.push(binding.clone());
+            state.insert_local(local, binding);
         }
         (params_out, state)
     }

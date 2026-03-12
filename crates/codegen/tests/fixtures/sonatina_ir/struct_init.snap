@@ -7,23 +7,21 @@ target = "evm-ethereum-osaka"
 
 type @__fe_Dummy_0 = {i64, i256};
 
-func private %make_dummy() -> i256 {
+func private %make_dummy() -> *@__fe_Dummy_0 {
     block0:
         v1.*i8 = evm_malloc 64.i256;
-        v2.i256 = ptr_to_int v1 i256;
-        v4.i256 = zext 42.i64 i256;
-        v5.*@__fe_Dummy_0 = bitcast v1 *@__fe_Dummy_0;
-        v7.*i64 = gep v5 0.i256 0.i256;
-        mstore v7 v4 i256;
-        v9.*@__fe_Dummy_0 = bitcast v1 *@__fe_Dummy_0;
-        v11.*i256 = gep v9 0.i256 1.i256;
-        mstore v11 99.i256 i256;
+        v2.*@__fe_Dummy_0 = bitcast v1 *@__fe_Dummy_0;
+        v5.*i64 = gep v2 0.i256 0.i256;
+        v6.i256 = zext 42.i64 i256;
+        mstore v5 v6 i256;
+        v9.*i256 = gep v2 0.i256 1.i256;
+        mstore v9 99.i256 i256;
         return v2;
 }
 
 func private %__fe_sonatina_entry() {
     block0:
-        v0.i256 = call %make_dummy;
+        v0.*@__fe_Dummy_0 = call %make_dummy;
         evm_stop;
 }
 

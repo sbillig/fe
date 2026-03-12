@@ -17,7 +17,7 @@ use mir::{
     MirFunction, MirInst, MirModule, Rvalue, ValueOrigin,
     ir::{IntrinsicOp, MirFunctionOrigin},
     layout::{self, TargetDataLayout},
-    lower_ingot, lower_module,
+    lower_ingot, lower_module, prepare_module_for_evm_yul_codegen,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::{collections::VecDeque, sync::Arc};
@@ -90,6 +90,7 @@ pub fn emit_module_yul_with_layout(
 ) -> Result<String, EmitModuleError> {
     let mut module = lower_module(db, top_mod).map_err(EmitModuleError::MirLower)?;
     link_yul_checked_arithmetic_helpers(db, &mut module)?;
+    prepare_module_for_evm_yul_codegen(db, &mut module);
     emit_lowered_module_yul_with_layout(db, &module, layout)
 }
 
@@ -105,6 +106,7 @@ pub fn emit_ingot_yul_with_layout(
 ) -> Result<String, EmitModuleError> {
     let mut module = lower_ingot(db, ingot).map_err(EmitModuleError::MirLower)?;
     link_yul_checked_arithmetic_helpers(db, &mut module)?;
+    prepare_module_for_evm_yul_codegen(db, &mut module);
     emit_lowered_module_yul_with_layout(db, &module, layout)
 }
 
@@ -310,6 +312,7 @@ pub fn emit_test_module_yul_with_layout(
     let ingot = top_mod.ingot(db);
     let mut module = lower_ingot(db, ingot).map_err(EmitModuleError::MirLower)?;
     link_yul_checked_arithmetic_helpers(db, &mut module)?;
+    prepare_module_for_evm_yul_codegen(db, &mut module);
 
     let contract_graph = build_contract_graph(&module.functions);
 
@@ -710,12 +713,8 @@ fn collect_test_infos(db: &dyn HirDb, functions: &[MirFunction<'_>]) -> Vec<Test
                 .to_opt()
                 .map(|n| n.data(db).to_string())
                 .unwrap_or_else(|| "<anonymous>".to_string());
-            let value_param_count = mir_func.body.param_locals.len();
-            let effect_param_count = if mir_func.contract_function.is_none() {
-                mir_func.body.effect_param_locals.len()
-            } else {
-                0
-            };
+            let value_param_count = mir_func.runtime_param_count();
+            let effect_param_count = mir_func.runtime_effect_param_count();
             Some(TestInfo {
                 hir_name,
                 display_name: String::new(),

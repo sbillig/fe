@@ -7,7 +7,7 @@ target = "evm-ethereum-osaka"
 
 type @__fe_tuple_0 = {i256, i256, i256, i256, i256};
 
-func private %bit_ops(v0.i256, v1.i256) -> i256 {
+func private %bit_ops(v0.i256, v1.i256) -> *@__fe_tuple_0 {
     block0:
         v2.i256 = and v0 v1;
         v3.i256 = or v0 v1;
@@ -15,22 +15,17 @@ func private %bit_ops(v0.i256, v1.i256) -> i256 {
         v6.i256 = shl 8.i256 v0;
         v8.i256 = shr 2.i256 v0;
         v10.*i8 = evm_malloc 160.i256;
-        v11.i256 = ptr_to_int v10 i256;
-        v12.*@__fe_tuple_0 = bitcast v10 *@__fe_tuple_0;
-        v14.*i256 = gep v12 0.i256 0.i256;
-        mstore v14 v2 i256;
-        v15.*@__fe_tuple_0 = bitcast v10 *@__fe_tuple_0;
-        v17.*i256 = gep v15 0.i256 1.i256;
-        mstore v17 v3 i256;
-        v18.*@__fe_tuple_0 = bitcast v10 *@__fe_tuple_0;
-        v19.*i256 = gep v18 0.i256 2.i256;
-        mstore v19 v4 i256;
-        v20.*@__fe_tuple_0 = bitcast v10 *@__fe_tuple_0;
-        v22.*i256 = gep v20 0.i256 3.i256;
-        mstore v22 v6 i256;
-        v23.*@__fe_tuple_0 = bitcast v10 *@__fe_tuple_0;
-        v25.*i256 = gep v23 0.i256 4.i256;
-        mstore v25 v8 i256;
+        v11.*@__fe_tuple_0 = bitcast v10 *@__fe_tuple_0;
+        v13.*i256 = gep v11 0.i256 0.i256;
+        mstore v13 v2 i256;
+        v15.*i256 = gep v11 0.i256 1.i256;
+        mstore v15 v3 i256;
+        v16.*i256 = gep v11 0.i256 2.i256;
+        mstore v16 v4 i256;
+        v18.*i256 = gep v11 0.i256 3.i256;
+        mstore v18 v6 i256;
+        v20.*i256 = gep v11 0.i256 4.i256;
+        mstore v20 v8 i256;
         return v11;
 }
 
@@ -137,7 +132,7 @@ func private %u256_h3271ca15373d4483_mul_h290dcc921ed80777_mul(v0.i256, v1.i256)
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.i256 = call %bit_ops 0.i256 0.i256;
+        v1.*@__fe_tuple_0 = call %bit_ops 0.i256 0.i256;
         evm_stop;
 }
 

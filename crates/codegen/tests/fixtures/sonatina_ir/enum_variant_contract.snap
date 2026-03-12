@@ -5,7 +5,9 @@ input_file: crates/codegen/tests/fixtures/enum_variant_contract.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256) {
+type @__fe_MyOption_0 = {i256, [i256; 1]};
+
+func private %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741(v0.i256) {
     block0:
         mstore 0.i256 v0 i256;
         evm_return 0.i256 32.i256;
@@ -21,90 +23,96 @@ func private %init__StorPtr_Evm___207f35a85ac4062e() {
 
 func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block0:
-        v1.i256 = evm_calldata_load 0.i256;
-        v3.i256 = shr 224.i256 v1;
-        v5.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v3 1817627404.i256;
-        br v5 block1 block2;
+        v2.i256 = evm_calldata_load 0.i256;
+        v4.i256 = shr 224.i256 v2;
+        v6.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v4 1817627404.i256;
+        br v6 block1 block2;
 
     block1:
-        v7.i256 = evm_calldata_load 4.i256;
-        v8.*[i8; 64] = alloca [i8; 64];
-        v9.i256 = ptr_to_int v8 i256;
-        v11.*i256 = bitcast v8 *i256;
-        mstore v11 1.i256 i256;
-        v13.i256 = add v9 32.i256;
-        v14.*i256 = int_to_ptr v13 *i256;
-        mstore v14 v7 i256;
+        v8.i256 = evm_calldata_load 4.i256;
+        v9.*@__fe_MyOption_0 = alloca @__fe_MyOption_0;
+        v11.i256 = ptr_to_int v9 i256;
+        v12.*i8 = bitcast v9 *i8;
+        mstore v12 1.i256 i256;
+        v13.i256 = ptr_to_int v9 i256;
+        v15.i256 = add v13 32.i256;
+        v16.*i8 = int_to_ptr v15 *i8;
+        mstore v16 v8 i256;
         jump block6;
 
     block2:
-        v17.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v3 1163776883.i256;
-        br v17 block8 block9;
+        v19.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v4 1163776883.i256;
+        br v19 block8 block9;
 
     block3:
-        v19.i256 = add v9 32.i256;
-        v20.*i256 = int_to_ptr v19 *i256;
-        v21.i256 = mload v20 i256;
+        v21.i256 = ptr_to_int v9 i256;
+        v22.i256 = add v21 32.i256;
+        v23.*i8 = int_to_ptr v22 *i8;
+        v24.i256 = mload v23 i256;
         jump block4;
 
     block4:
-        v23.i256 = phi (v21 block3) (0.i256 block5);
-        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v23 0.i256;
+        v25.i256 = phi (v24 block3) (0.i256 block5);
+        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v25;
         evm_invalid;
 
     block5:
         jump block4;
 
     block6:
-        v26.*i256 = int_to_ptr v9 *i256;
-        v27.i256 = mload v26 i256;
-        br_table v27 block7 (1.i256 block3) (0.i256 block5);
+        v27.i256 = ptr_to_int v9 i256;
+        v28.*i8 = bitcast v9 *i8;
+        v29.i256 = mload v28 i256;
+        br_table v29 block7 (1.i256 block3) (0.i256 block5);
 
     block7:
         evm_invalid;
 
     block8:
-        v28.*[i8; 64] = alloca [i8; 64];
-        v29.i256 = ptr_to_int v28 i256;
-        v30.*i256 = bitcast v28 *i256;
-        mstore v30 0.i256 i256;
+        v30.*@__fe_MyOption_0 = alloca @__fe_MyOption_0;
+        v31.i256 = ptr_to_int v30 i256;
+        v32.*i8 = bitcast v30 *i8;
+        mstore v32 0.i256 i256;
         jump block13;
 
     block9:
-        v33.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v3 3572425762.i256;
-        br v33 block15 block16;
+        v35.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v4 3572425762.i256;
+        br v35 block15 block16;
 
     block10:
-        v35.i256 = add v29 32.i256;
-        v36.*i256 = int_to_ptr v35 *i256;
-        v37.i256 = mload v36 i256;
+        v37.i256 = ptr_to_int v30 i256;
+        v38.i256 = add v37 32.i256;
+        v39.*i8 = int_to_ptr v38 *i8;
+        v40.i256 = mload v39 i256;
         jump block11;
 
     block11:
-        v39.i256 = phi (v37 block10) (0.i256 block12);
-        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v39 0.i256;
+        v41.i256 = phi (v40 block10) (0.i256 block12);
+        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v41;
         evm_invalid;
 
     block12:
         jump block11;
 
     block13:
-        v42.*i256 = int_to_ptr v29 *i256;
-        v43.i256 = mload v42 i256;
-        br_table v43 block14 (1.i256 block10) (0.i256 block12);
+        v43.i256 = ptr_to_int v30 i256;
+        v44.*i8 = bitcast v30 *i8;
+        v45.i256 = mload v44 i256;
+        br_table v45 block14 (1.i256 block10) (0.i256 block12);
 
     block14:
         evm_invalid;
 
     block15:
-        v44.i256 = evm_calldata_load 4.i256;
-        v45.*[i8; 64] = alloca [i8; 64];
-        v46.i256 = ptr_to_int v45 i256;
-        v47.*i256 = bitcast v45 *i256;
-        mstore v47 1.i256 i256;
-        v48.i256 = add v46 32.i256;
-        v49.*i256 = int_to_ptr v48 *i256;
-        mstore v49 v44 i256;
+        v46.i256 = evm_calldata_load 4.i256;
+        v47.*@__fe_MyOption_0 = alloca @__fe_MyOption_0;
+        v48.i256 = ptr_to_int v47 i256;
+        v49.*i8 = bitcast v47 *i8;
+        mstore v49 1.i256 i256;
+        v50.i256 = ptr_to_int v47 i256;
+        v51.i256 = add v50 32.i256;
+        v52.*i8 = int_to_ptr v51 *i8;
+        mstore v52 v46 i256;
         jump block20;
 
     block16:
@@ -114,17 +122,18 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
         jump block18;
 
     block18:
-        v50.i256 = phi (1.i256 block17) (0.i256 block19);
-        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v50 0.i256;
+        v53.i256 = phi (1.i256 block17) (0.i256 block19);
+        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v53;
         evm_invalid;
 
     block19:
         jump block18;
 
     block20:
-        v53.*i256 = int_to_ptr v46 *i256;
-        v54.i256 = mload v53 i256;
-        br_table v54 block21 (1.i256 block17) (0.i256 block19);
+        v55.i256 = ptr_to_int v47 i256;
+        v56.*i8 = bitcast v47 *i8;
+        v57.i256 = mload v56 i256;
+        br_table v57 block21 (1.i256 block17) (0.i256 block19);
 
     block21:
         evm_invalid;

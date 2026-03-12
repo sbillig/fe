@@ -1239,7 +1239,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3550,7 +3550,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4755,7 +4755,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5281,7 +5281,7 @@ dependencies = [
 [[package]]
 name = "sonatina-codegen"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=f1d0743#f1d0743d1490ff7e0eeab4defaec31395ee0b8de"
+source = "git+https://github.com/fe-lang/sonatina?rev=b5f600f#b5f600fc61fb9e67527c79356fc7de444c362979"
 dependencies = [
  "bit-set",
  "cranelift-entity 0.126.2",
@@ -5301,8 +5301,9 @@ dependencies = [
 [[package]]
 name = "sonatina-ir"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=f1d0743#f1d0743d1490ff7e0eeab4defaec31395ee0b8de"
+source = "git+https://github.com/fe-lang/sonatina?rev=b5f600f#b5f600fc61fb9e67527c79356fc7de444c362979"
 dependencies = [
+ "bit-set",
  "bitflags 2.11.0",
  "cranelift-entity 0.126.2",
  "dashmap",
@@ -5322,7 +5323,7 @@ dependencies = [
 [[package]]
 name = "sonatina-macros"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=f1d0743#f1d0743d1490ff7e0eeab4defaec31395ee0b8de"
+source = "git+https://github.com/fe-lang/sonatina?rev=b5f600f#b5f600fc61fb9e67527c79356fc7de444c362979"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5332,7 +5333,7 @@ dependencies = [
 [[package]]
 name = "sonatina-parser"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=f1d0743#f1d0743d1490ff7e0eeab4defaec31395ee0b8de"
+source = "git+https://github.com/fe-lang/sonatina?rev=b5f600f#b5f600fc61fb9e67527c79356fc7de444c362979"
 dependencies = [
  "annotate-snippets",
  "bimap",
@@ -5353,7 +5354,7 @@ dependencies = [
 [[package]]
 name = "sonatina-triple"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=f1d0743#f1d0743d1490ff7e0eeab4defaec31395ee0b8de"
+source = "git+https://github.com/fe-lang/sonatina?rev=b5f600f#b5f600fc61fb9e67527c79356fc7de444c362979"
 dependencies = [
  "thiserror 2.0.18",
 ]
@@ -5361,7 +5362,7 @@ dependencies = [
 [[package]]
 name = "sonatina-verifier"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=f1d0743#f1d0743d1490ff7e0eeab4defaec31395ee0b8de"
+source = "git+https://github.com/fe-lang/sonatina?rev=b5f600f#b5f600fc61fb9e67527c79356fc7de444c362979"
 dependencies = [
  "cranelift-entity 0.126.2",
  "rayon",
@@ -6381,15 +6382,6 @@ name = "windows-sys"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
-dependencies = [
- "windows-targets 0.52.6",
-]
-
-[[package]]
-name = "windows-sys"
-version = "0.59.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
 dependencies = [
  "windows-targets 0.52.6",
 ]

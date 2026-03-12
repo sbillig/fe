@@ -6,31 +6,10 @@ input_file: tests/fixtures/newtype_storage_field_mut_method_call.fe
 object "NewtypeStorageFieldMutMethodCall" {
   code {
     function $__NewtypeStorageFieldMutMethodCall_init() {
-      let v0 := $init_field__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9(0, 0)
-      let v1 := $init_field__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24(0, 1)
+      let v0 := $init_field__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9(0)
+      let v1 := $init_field__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24(1)
       let v2 := dataoffset("NewtypeStorageFieldMutMethodCall_deployed")
       let v3 := datasize("NewtypeStorageFieldMutMethodCall_deployed")
-      let v4 := datasize("NewtypeStorageFieldMutMethodCall")
-      let v5 := codesize()
-      let v6 := lt(v5, v4)
-      if v6 {
-        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(0)
-      }
-      let v7 := sub(v5, v4)
-      let v8 := mload(64)
-      if iszero(v8) {
-        v8 := 0x80
-      }
-      mstore(64, add(v8, v7))
-      codecopy(v8, v4, v7)
-      let v9 := mload(0x40)
-      if iszero(v9) {
-        v9 := 0x80
-      }
-      mstore(0x40, add(v9, 64))
-      mstore(v9, v8)
-      mstore(add(v9, 32), v7)
-      let v10 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v9)
       $__NewtypeStorageFieldMutMethodCall_init_contract()
       codecopy(0, v2, v3)
       return(0, v3)
@@ -38,68 +17,32 @@ object "NewtypeStorageFieldMutMethodCall" {
     function $__NewtypeStorageFieldMutMethodCall_init_contract() {
       leave
     }
-    function $cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
-      let v0 := mload(0x40)
-      if iszero(v0) {
-        v0 := 0x80
-      }
-      mstore(0x40, add(v0, 96))
-      let v1 := $input
-      mstore(v0, mload(v1))
-      mstore(add(v0, 32), mload(add(v1, 32)))
-      mstore(add(v0, 64), 0)
+    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Wrap_haf9e70905fcbd513__945a70bbbf171dbd($slot) -> ret {
+      let v0 := $stor_ptr__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24($slot)
       ret := v0
       leave
     }
-    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self) {
-      revert(0, 0)
-    }
-    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Wrap_haf9e70905fcbd513__945a70bbbf171dbd($self, $slot) -> ret {
-      let v0 := $stor_ptr__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24(0, $slot)
+    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__u256__3271ca15373d4483($slot) -> ret {
+      let v0 := $stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9($slot)
       ret := v0
       leave
     }
-    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__u256__3271ca15373d4483($self, $slot) -> ret {
-      let v0 := $stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9(0, $slot)
+    function $init_field__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24($slot) -> ret {
+      let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Wrap_haf9e70905fcbd513__945a70bbbf171dbd($slot)
       ret := v0
       leave
     }
-    function $init_field__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24($self, $slot) -> ret {
-      let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Wrap_haf9e70905fcbd513__945a70bbbf171dbd($self, $slot)
+    function $init_field__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9($slot) -> ret {
+      let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__u256__3271ca15373d4483($slot)
       ret := v0
       leave
     }
-    function $init_field__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9($self, $slot) -> ret {
-      let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__u256__3271ca15373d4483($self, $slot)
-      ret := v0
-      leave
-    }
-    function $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
-      let v0 := $soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input)
-      ret := v0
-      leave
-    }
-    function $soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
-      let v0 := $cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input)
-      let v1 := mload(0x40)
-      if iszero(v1) {
-        v1 := 0x80
-      }
-      mstore(0x40, add(v1, 128))
-      let v2 := v0
-      mstore(v1, mload(v2))
-      mstore(add(v1, 32), mload(add(v2, 32)))
-      mstore(add(v1, 64), mload(add(v2, 64)))
-      mstore(add(v1, 96), 0)
-      ret := v1
-      leave
-    }
-    function $stor_ptr__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24($self, $slot) -> ret {
+    function $stor_ptr__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24($slot) -> ret {
       let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Wrap_haf9e70905fcbd513__945a70bbbf171dbd($slot)
       ret := v0
       leave
     }
-    function $stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9($self, $slot) -> ret {
+    function $stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9($slot) -> ret {
       let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483($slot)
       ret := v0
       leave
@@ -117,30 +60,24 @@ object "NewtypeStorageFieldMutMethodCall" {
 
   object "NewtypeStorageFieldMutMethodCall_deployed" {
     code {
-      function $__NewtypeStorageFieldMutMethodCall_recv_0_0($args, $w) -> ret {
-        let v0 := sload($w)
+      function $__NewtypeStorageFieldMutMethodCall_recv_0_0($w) -> ret {
         $wrap_haf9e70905fcbd513_bump_stor_arg0_root_stor($w)
-        let v1 := sload($w)
-        ret := v1
+        let v0 := sload($w)
+        ret := v0
         leave
       }
       function $__NewtypeStorageFieldMutMethodCall_runtime() {
-        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__u256__3271ca15373d4483(0, 0)
-        let v1 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Wrap_haf9e70905fcbd513__945a70bbbf171dbd(0, 1)
-        let v2 := $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(0)
-        let v3 := $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(0)
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__u256__3271ca15373d4483(0)
+        let v1 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Wrap_haf9e70905fcbd513__945a70bbbf171dbd(1)
+        let v2 := $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
         switch v2
           case 1 {
-            $bump_hfb5a53c6af92b8a6_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v3)
-            let v4 := $__NewtypeStorageFieldMutMethodCall_recv_0_0(0, v1)
-            $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(0, v4)
+            let v3 := $__NewtypeStorageFieldMutMethodCall_recv_0_0(v1)
+            $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v3)
           }
           default {
-            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(0)
+            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
           }
-      }
-      function $bump_hfb5a53c6af92b8a6_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) {
-        leave
       }
       function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len($self) -> ret {
         let v0 := calldatasize()
@@ -188,72 +125,42 @@ object "NewtypeStorageFieldMutMethodCall" {
         ret := v4
         leave
       }
-      function $cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($self, $pos) -> ret {
-        let v0 := mload($self)
-        let v1 := mload(0x40)
-        if iszero(v1) {
-          v1 := 0x80
-        }
-        mstore(0x40, add(v1, 64))
-        mstore(v1, v0)
-        mstore(add(v1, 32), $pos)
-        ret := v1
-        leave
-      }
-      function $cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input) -> ret {
-        let v0 := mload(0x40)
-        if iszero(v0) {
-          v0 := 0x80
-        }
-        mstore(0x40, add(v0, 64))
-        mstore(v0, $input)
-        mstore(add(v0, 32), 0)
-        ret := v0
-        leave
-      }
-      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self) {
+      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
         revert(0, 0)
       }
-      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Wrap_haf9e70905fcbd513__945a70bbbf171dbd($self, $slot) -> ret {
-        let v0 := $stor_ptr__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24(0, $slot)
+      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Wrap_haf9e70905fcbd513__945a70bbbf171dbd($slot) -> ret {
+        let v0 := $stor_ptr__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24($slot)
         ret := v0
         leave
       }
-      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__u256__3271ca15373d4483($self, $slot) -> ret {
-        let v0 := $stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9(0, $slot)
+      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__u256__3271ca15373d4483($slot) -> ret {
+        let v0 := $stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9($slot)
         ret := v0
         leave
       }
-      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input($self) -> ret {
+      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input() -> ret {
         ret := 0
         leave
       }
-      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes($self, $ptr, $len) {
+      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes($ptr, $len) {
         return($ptr, $len)
       }
-      function $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f($self, $value) {
+      function $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f($value) {
         let v0 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new()
         let v1 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v0, 32)
-        pop(v1)
         $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($value, v0)
         let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v0)
         let v3 := mload(v2)
         let v4 := mload(add(v2, 32))
-        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(0, v3, v4)
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v3, v4)
       }
-      function $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2($self) -> ret {
-        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(0)
-        let v1 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0, 4)
-        ret := v1
-        leave
-      }
-      function $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2($self) -> ret {
-        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input($self)
+      function $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2() -> ret {
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input()
         let v1 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0)
         let v2 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v1, 4)
         let v3 := v2
         if v3 {
-          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self)
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
         }
         let v4 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v0, 0)
         let v5 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v4)
@@ -266,11 +173,6 @@ object "NewtypeStorageFieldMutMethodCall" {
         ret := v1
         leave
       }
-      function $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input, $base) -> ret {
-        let v0 := $soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input, $base)
-        ret := v0
-        leave
-      }
       function $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new() -> ret {
         let v0 := $solencoder_h1b9228b90dad6928_new()
         ret := v0
@@ -281,33 +183,19 @@ object "NewtypeStorageFieldMutMethodCall" {
         ret := v0
         leave
       }
-      function $soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input, $base) -> ret {
-        let v0 := $cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input)
-        let v1 := $cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0, $base)
-        let v2 := mload(0x40)
-        if iszero(v2) {
-          v2 := 0x80
-        }
-        mstore(0x40, add(v2, 96))
-        let v3 := v1
-        mstore(v2, mload(v3))
-        mstore(add(v2, 32), mload(add(v3, 32)))
-        mstore(add(v2, 64), $base)
-        ret := v2
-        leave
-      }
       function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish($self) -> ret {
         let v0 := mload($self)
-        let v1 := mload(add($self, 64))
-        let v2 := $checked_sub_u256(v1, v0)
-        let v3 := mload(0x40)
-        if iszero(v3) {
-          v3 := 0x80
+        let v1 := v0
+        let v2 := mload(add($self, 64))
+        let v3 := $checked_sub_u256(v2, v1)
+        let v4 := mload(0x40)
+        if iszero(v4) {
+          v4 := 0x80
         }
-        mstore(0x40, add(v3, 64))
-        mstore(v3, v0)
-        mstore(add(v3, 32), v2)
-        ret := v3
+        mstore(0x40, add(v4, 64))
+        mstore(v4, v1)
+        mstore(add(v4, 32), v3)
+        ret := v4
         leave
       }
       function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head($self, $bytes) -> ret {
@@ -331,9 +219,10 @@ object "NewtypeStorageFieldMutMethodCall" {
       }
       function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($self, $v) {
         let v0 := mload(add($self, 32))
-        mstore(v0, $v)
-        let v1 := $checked_add_u256(v0, 32)
-        mstore(add($self, 32), v1)
+        let v1 := v0
+        mstore(v1, $v)
+        let v2 := $checked_add_u256(v1, 32)
+        mstore(add($self, 32), v2)
         leave
       }
       function $solencoder_h1b9228b90dad6928_new() -> ret {
@@ -348,12 +237,12 @@ object "NewtypeStorageFieldMutMethodCall" {
         ret := v0
         leave
       }
-      function $stor_ptr__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24($self, $slot) -> ret {
+      function $stor_ptr__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24($slot) -> ret {
         let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Wrap_haf9e70905fcbd513__945a70bbbf171dbd($slot)
         ret := v0
         leave
       }
-      function $stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9($self, $slot) -> ret {
+      function $stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9($slot) -> ret {
         let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483($slot)
         ret := v0
         leave
@@ -404,10 +293,9 @@ object "NewtypeStorageFieldMutMethodCall" {
         leave
       }
       function $wrap_haf9e70905fcbd513_bump_stor_arg0_root_stor($self) {
-        let v0 := $self
-        let v1 := sload($self)
-        let v2 := $checked_add_u256(v1, 1)
-        sstore($self, v2)
+        let v0 := sload($self)
+        let v1 := $checked_add_u256(v0, 1)
+        sstore($self, v1)
         leave
       }
       $__NewtypeStorageFieldMutMethodCall_runtime()

@@ -7,7 +7,7 @@ target = "evm-ethereum-osaka"
 
 type @__fe_tuple_0 = {i1, i1, i1, i1, i1, i1};
 
-func private %comparison_ops() -> i256 {
+func private %comparison_ops() -> *@__fe_tuple_0 {
     block0:
         v3.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq 1.i256 1.i256;
         v4.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_ne 1.i256 2.i256;
@@ -16,31 +16,25 @@ func private %comparison_ops() -> i256 {
         v7.i1 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt 3.i256 2.i256;
         v8.i1 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_ge 3.i256 3.i256;
         v10.*i8 = evm_malloc 192.i256;
-        v11.i256 = ptr_to_int v10 i256;
-        v12.i256 = zext v3 i256;
-        v13.*@__fe_tuple_0 = bitcast v10 *@__fe_tuple_0;
-        v15.*i1 = gep v13 0.i256 0.i256;
-        mstore v15 v12 i256;
+        v11.*@__fe_tuple_0 = bitcast v10 *@__fe_tuple_0;
+        v13.*i1 = gep v11 0.i256 0.i256;
+        v14.i256 = zext v3 i256;
+        mstore v13 v14 i256;
+        v15.*i1 = gep v11 0.i256 1.i256;
         v16.i256 = zext v4 i256;
-        v17.*@__fe_tuple_0 = bitcast v10 *@__fe_tuple_0;
-        v18.*i1 = gep v17 0.i256 1.i256;
-        mstore v18 v16 i256;
-        v19.i256 = zext v5 i256;
-        v20.*@__fe_tuple_0 = bitcast v10 *@__fe_tuple_0;
-        v21.*i1 = gep v20 0.i256 2.i256;
-        mstore v21 v19 i256;
-        v22.i256 = zext v6 i256;
-        v23.*@__fe_tuple_0 = bitcast v10 *@__fe_tuple_0;
-        v24.*i1 = gep v23 0.i256 3.i256;
-        mstore v24 v22 i256;
-        v25.i256 = zext v7 i256;
-        v26.*@__fe_tuple_0 = bitcast v10 *@__fe_tuple_0;
-        v28.*i1 = gep v26 0.i256 4.i256;
-        mstore v28 v25 i256;
-        v29.i256 = zext v8 i256;
-        v30.*@__fe_tuple_0 = bitcast v10 *@__fe_tuple_0;
-        v32.*i1 = gep v30 0.i256 5.i256;
-        mstore v32 v29 i256;
+        mstore v15 v16 i256;
+        v17.*i1 = gep v11 0.i256 2.i256;
+        v18.i256 = zext v5 i256;
+        mstore v17 v18 i256;
+        v19.*i1 = gep v11 0.i256 3.i256;
+        v20.i256 = zext v6 i256;
+        mstore v19 v20 i256;
+        v22.*i1 = gep v11 0.i256 4.i256;
+        v23.i256 = zext v7 i256;
+        mstore v22 v23 i256;
+        v25.*i1 = gep v11 0.i256 5.i256;
+        v26.i256 = zext v8 i256;
+        mstore v25 v26 i256;
         return v11;
 }
 
@@ -85,7 +79,7 @@ func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_ge(v0.i256, v1.i256) ->
 
 func private %__fe_sonatina_entry() {
     block0:
-        v0.i256 = call %comparison_ops;
+        v0.*@__fe_tuple_0 = call %comparison_ops;
         evm_stop;
 }
 
