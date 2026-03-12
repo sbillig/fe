@@ -175,15 +175,10 @@ func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v0.i256, v1.i256) ->
 
 func private %calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v0.i256, v1.i256) -> i256 {
     block0:
-        (v2.i256, v3.i1) = uaddo v0 v1;
-        br v3 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        v5.i256 = evm_calldata_load v2;
-        return v5;
+        v2.i256 = add v0 v1;
+        v3.i256 = add v0 v1;
+        v4.i256 = evm_calldata_load v3;
+        return v4;
 }
 
 func private %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v0.i256) -> i32 {
@@ -213,21 +208,15 @@ func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_
         obj.store v10 v8;
         v12.objref<i256> = obj.proj v0 1.i256;
         obj.store v12 v8;
-        (v13.i256, v14.i1) = uaddo v8 v1;
-        br v14 block3 block4;
+        v13.i256 = add v8 v1;
+        v15.objref<i256> = obj.proj v0 2.i256;
+        obj.store v15 v13;
+        jump block2;
 
     block2:
-        v19.objref<i256> = obj.proj v0 0.i256;
-        v20.i256 = obj.load v19;
-        return v20;
-
-    block3:
-        evm_revert 0.i256 0.i256;
-
-    block4:
-        v17.objref<i256> = obj.proj v0 2.i256;
-        obj.store v17 v13;
-        jump block2;
+        v17.objref<i256> = obj.proj v0 0.i256;
+        v18.i256 = obj.load v17;
+        return v18;
 }
 
 func private %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383(v0.i256, v1.objref<@__fe_obj_SolEncoder_1>) {
@@ -242,19 +231,13 @@ func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v
         v3.i256 = obj.load v2;
         v5.objref<i256> = obj.proj v0 2.i256;
         v6.i256 = obj.load v5;
-        (v7.i256, v8.i1) = usubo v6 v3;
-        br v8 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        v9.objref<@__fe_obj_tuple_2> = obj.alloc @__fe_obj_tuple_2;
-        v11.objref<i256> = obj.proj v9 0.i256;
-        obj.store v11 v3;
-        v13.objref<i256> = obj.proj v9 1.i256;
-        obj.store v13 v7;
-        return v9;
+        v7.objref<@__fe_obj_tuple_2> = obj.alloc @__fe_obj_tuple_2;
+        v8.objref<i256> = obj.proj v7 0.i256;
+        obj.store v8 v3;
+        v9.i256 = sub v6 v3;
+        v11.objref<i256> = obj.proj v7 1.i256;
+        obj.store v11 v9;
+        return v7;
 }
 
 func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v0.i256, v1.i256) {
@@ -297,15 +280,9 @@ func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_wo
         v3.objref<i256> = obj.proj v0 1.i256;
         v4.i256 = obj.load v3;
         mstore v4 v1 i256;
-        (v6.i256, v7.i1) = uaddo v4 32.i256;
-        br v7 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        v10.objref<i256> = obj.proj v0 1.i256;
-        obj.store v10 v6;
+        v6.i256 = add v4 32.i256;
+        v7.objref<i256> = obj.proj v0 1.i256;
+        obj.store v7 v6;
         return;
 }
 

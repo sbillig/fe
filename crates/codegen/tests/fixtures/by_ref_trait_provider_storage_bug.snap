@@ -75,7 +75,7 @@ object "ByRefTraitProviderStorageBug" {
         leave
       }
       function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at($self, $byte_offset) -> ret {
-        let v0 := $checked_add_u256($self, $byte_offset)
+        let v0 := add($self, $byte_offset)
         let v1 := calldataload(v0)
         ret := v1
         leave
@@ -178,15 +178,14 @@ object "ByRefTraitProviderStorageBug" {
         let v0 := mload($self)
         let v1 := v0
         let v2 := mload(add($self, 64))
-        let v3 := $checked_sub_u256(v2, v1)
-        let v4 := mload(0x40)
-        if iszero(v4) {
-          v4 := 0x80
+        let v3 := mload(0x40)
+        if iszero(v3) {
+          v3 := 0x80
         }
-        mstore(0x40, add(v4, 64))
-        mstore(v4, v1)
-        mstore(add(v4, 32), v3)
-        ret := v4
+        mstore(0x40, add(v3, 64))
+        mstore(v3, v1)
+        mstore(add(v3, 32), sub(v2, v1))
+        ret := v3
         leave
       }
       function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head($self, $bytes) -> ret {
@@ -201,19 +200,17 @@ object "ByRefTraitProviderStorageBug" {
           mstore(64, add(v3, $bytes))
           mstore($self, v3)
           mstore(add($self, 32), v3)
-          let v4 := $checked_add_u256(v3, $bytes)
-          mstore(add($self, 64), v4)
+          mstore(add($self, 64), add(v3, $bytes))
         }
-        let v5 := mload($self)
-        ret := v5
+        let v4 := mload($self)
+        ret := v4
         leave
       }
       function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($self, $v) {
         let v0 := mload(add($self, 32))
         let v1 := v0
         mstore(v1, $v)
-        let v2 := $checked_add_u256(v1, 32)
-        mstore(add($self, 32), v2)
+        mstore(add($self, 32), add(v1, 32))
         leave
       }
       function $solencoder_h1b9228b90dad6928_new() -> ret {

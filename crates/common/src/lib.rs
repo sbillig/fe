@@ -103,8 +103,6 @@ macro_rules! define_input_db {
             graph: Option<$crate::dependencies::DependencyGraph>,
             options: Option<$crate::options::CompilerOptions>,
             settings: Option<$crate::compilation::CompilationSettings>,
-            options: Option<$crate::options::CompilerOptions>,
-            settings: Option<$crate::compilation::CompilationSettings>,
         }
 
         #[salsa::db]
