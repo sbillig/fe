@@ -1030,11 +1030,15 @@ mod regression_tests {
     use std::path::PathBuf;
     use url::Url;
 
+    fn temp_fixture_url(name: &str) -> Url {
+        let fixture_path = std::env::temp_dir().join(name);
+        Url::from_file_path(&fixture_path).expect("fixture path should be absolute")
+    }
+
     #[test]
     fn erased_effect_params_do_not_reappear_as_pointer_runtime_args() {
         let mut db = DriverDataBase::default();
-        let file_url = Url::from_file_path("/tmp/sonatina_erased_effect_params_test.fe")
-            .expect("fixture path should be absolute");
+        let file_url = temp_fixture_url("sonatina_erased_effect_params_test.fe");
         db.workspace().touch(
             &mut db,
             file_url.clone(),
@@ -1069,8 +1073,7 @@ fn smoke():
     #[test]
     fn erased_generic_zst_params_do_not_reappear_in_runtime_signatures() {
         let mut db = DriverDataBase::default();
-        let file_url = Url::from_file_path("/tmp/sonatina_erased_generic_zst_params_test.fe")
-            .expect("fixture path should be absolute");
+        let file_url = temp_fixture_url("sonatina_erased_generic_zst_params_test.fe");
         db.workspace().touch(
             &mut db,
             file_url.clone(),
@@ -1107,8 +1110,7 @@ fn smoke():
     #[test]
     fn memory_ref_aggregate_params_lower_as_pointers() {
         let mut db = DriverDataBase::default();
-        let file_url = Url::from_file_path("/tmp/sonatina_memory_ref_aggregate_params_test.fe")
-            .expect("fixture path should be absolute");
+        let file_url = temp_fixture_url("sonatina_memory_ref_aggregate_params_test.fe");
         db.workspace().touch(
             &mut db,
             file_url.clone(),
@@ -1147,9 +1149,7 @@ fn smoke():
     #[test]
     fn compile_time_only_non_zst_params_do_not_reappear_in_runtime_signatures() {
         let mut db = DriverDataBase::default();
-        let file_url =
-            Url::from_file_path("/tmp/sonatina_compile_time_only_non_zst_params_test.fe")
-                .expect("fixture path should be absolute");
+        let file_url = temp_fixture_url("sonatina_compile_time_only_non_zst_params_test.fe");
         db.workspace().touch(
             &mut db,
             file_url.clone(),
