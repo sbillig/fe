@@ -776,6 +776,8 @@ pub(super) struct MirBuilder<'db, 'a> {
     pub(super) pat_address_space: FxHashMap<PatId, AddressSpaceKind>,
     pub(super) binding_locals: FxHashMap<LocalBinding<'db>, LocalId>,
     pub(super) address_taken_locals: FxHashSet<LocalId>,
+    pub(super) lowering_exprs: FxHashSet<ExprId>,
+    pub(super) lowered_exprs: FxHashSet<ExprId>,
     /// For methods, the address space variant being lowered.
     pub(super) receiver_space: Option<AddressSpaceKind>,
     /// Address space for each effect parameter, indexed by effect param position.
@@ -870,6 +872,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             pat_address_space: FxHashMap::default(),
             binding_locals: FxHashMap::default(),
             address_taken_locals: FxHashSet::default(),
+            lowering_exprs: FxHashSet::default(),
+            lowered_exprs: FxHashSet::default(),
             receiver_space,
             effect_param_spaces: Vec::new(),
             effect_binding_spaces: FxHashMap::default(),
