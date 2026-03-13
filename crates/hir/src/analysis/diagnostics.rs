@@ -645,6 +645,51 @@ impl DiagnosticVoucher for crate::EventError {
     }
 }
 
+impl DiagnosticVoucher for crate::InlineAttrError {
+    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        use crate::hir_def::InlineAttrErrorKind;
+
+        let primary_span = Span::new(self.file, self.primary_range, SpanKind::Original);
+        let func_name = self.func_name.as_deref().unwrap_or("<anonymous>");
+
+        let (code, message, label, notes) = match self.kind {
+            InlineAttrErrorKind::Duplicate => (
+                1,
+                format!("duplicate `#[inline]` attribute on function `{func_name}`"),
+                "remove the extra `#[inline]` attribute".to_string(),
+                vec![
+                    "functions support at most one inline hint".to_string(),
+                    "use one of `#[inline]`, `#[inline(always)]`, or `#[inline(never)]`"
+                        .to_string(),
+                ],
+            ),
+            InlineAttrErrorKind::InvalidForm => (
+                2,
+                format!("invalid `#[inline]` attribute on function `{func_name}`"),
+                "expected `#[inline]`, `#[inline(always)]`, or `#[inline(never)]`".to_string(),
+                vec![
+                    "supported inline hints are `#[inline]`, `#[inline(always)]`, and `#[inline(never)]`"
+                        .to_string(),
+                ],
+            ),
+        };
+
+        let error_code = GlobalErrorCode::new(DiagnosticPass::InlineLower, code);
+
+        CompleteDiagnostic::new(
+            Severity::Error,
+            message,
+            vec![SubDiagnostic::new(
+                LabelStyle::Primary,
+                label,
+                Some(primary_span),
+            )],
+            notes,
+            error_code,
+        )
+    }
+}
+
 pub trait LazyDiagnostic<'db> {
     fn to_complete(&self, db: &'db dyn SpannedHirAnalysisDb) -> CompleteDiagnostic;
 }

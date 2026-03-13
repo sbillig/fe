@@ -18,6 +18,98 @@ impl ArithmeticMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub enum InlineHint {
+    Hint,
+    Always,
+    Never,
+}
+
+impl InlineHint {
+    pub fn pretty_print(self) -> &'static str {
+        match self {
+            Self::Hint => "#[inline]",
+            Self::Always => "#[inline(always)]",
+            Self::Never => "#[inline(never)]",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub enum InlineAttrErrorKind {
+    Duplicate,
+    InvalidForm,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub enum InlineAttr {
+    Hint(InlineHint),
+    Error(InlineAttrErrorKind),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InlineAttrSpec {
+    pub has_value: bool,
+    pub args: Vec<InlineAttrArgSpec>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InlineAttrArgSpec {
+    pub key: Option<String>,
+    pub has_value: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InlineAttrParseError {
+    pub kind: InlineAttrErrorKind,
+    pub attr_index: usize,
+}
+
+pub(crate) fn parse_inline_attr_specs(
+    attrs: impl IntoIterator<Item = InlineAttrSpec>,
+) -> Result<Option<InlineHint>, InlineAttrParseError> {
+    let mut inline_hint = None;
+
+    for (attr_index, attr) in attrs.into_iter().enumerate() {
+        let parsed_hint = parse_inline_attr_spec(&attr)
+            .map_err(|kind| InlineAttrParseError { kind, attr_index })?;
+
+        if inline_hint.is_some() {
+            return Err(InlineAttrParseError {
+                kind: InlineAttrErrorKind::Duplicate,
+                attr_index,
+            });
+        }
+
+        inline_hint = Some(parsed_hint);
+    }
+
+    Ok(inline_hint)
+}
+
+fn parse_inline_attr_spec(attr: &InlineAttrSpec) -> Result<InlineHint, InlineAttrErrorKind> {
+    if attr.has_value {
+        return Err(InlineAttrErrorKind::InvalidForm);
+    }
+    if attr.args.is_empty() {
+        return Ok(InlineHint::Hint);
+    }
+    if attr.args.len() != 1 {
+        return Err(InlineAttrErrorKind::InvalidForm);
+    }
+
+    let arg = &attr.args[0];
+    if arg.has_value {
+        return Err(InlineAttrErrorKind::InvalidForm);
+    }
+
+    match arg.key.as_deref() {
+        Some("always") => Ok(InlineHint::Always),
+        Some("never") => Ok(InlineHint::Never),
+        Some(_) | None => Err(InlineAttrErrorKind::InvalidForm),
+    }
+}
+
 #[salsa::interned]
 #[derive(Debug)]
 pub struct AttrListId<'db> {
@@ -90,6 +182,27 @@ impl<'db> AttrListId<'db> {
             })
             .last()
     }
+    pub fn inline_attr(self, db: &'db dyn HirDb) -> Option<InlineAttr> {
+        match parse_inline_attr_specs(self.data(db).iter().filter_map(|attr| {
+            let Attr::Normal(normal_attr) = attr else {
+                return None;
+            };
+            if normal_attr
+                .path
+                .to_opt()
+                .and_then(|path| path.as_ident(db))
+                .is_none_or(|ident| ident.data(db) != "inline")
+            {
+                return None;
+            }
+
+            Some(normal_attr.inline_attr_spec(db))
+        })) {
+            Ok(Some(hint)) => Some(InlineAttr::Hint(hint)),
+            Ok(None) => None,
+            Err(err) => Some(InlineAttr::Error(err.kind)),
+        }
+    }
 }
 
 impl<'db> NormalAttr<'db> {
@@ -121,6 +234,20 @@ impl<'db> NormalAttr<'db> {
             .map(|ident| ident.data(db).as_str())?;
         ArithmeticMode::parse(mode)
     }
+
+    pub(crate) fn inline_attr_spec(&self, db: &'db dyn HirDb) -> InlineAttrSpec {
+        InlineAttrSpec {
+            has_value: self.value.is_some(),
+            args: self
+                .args
+                .iter()
+                .map(|arg| InlineAttrArgSpec {
+                    key: arg.key_str(db).map(str::to_owned),
+                    has_value: arg.value.is_some(),
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From)]
@@ -132,6 +259,8 @@ pub enum Attr<'db> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NormalAttr<'db> {
     pub path: Partial<PathId<'db>>,
+    /// The value after `=` in `#[attr = value]`.
+    pub value: Option<AttrArgValue<'db>>,
     pub args: Vec<AttrArg<'db>>,
 }
 

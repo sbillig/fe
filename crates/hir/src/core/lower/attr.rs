@@ -45,6 +45,7 @@ impl<'db> Attr<'db> {
 impl<'db> NormalAttr<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::NormalAttr) -> Self {
         let path = PathId::lower_ast_partial(ctxt, ast.path());
+        let value = AttrArgValue::lower_ast_opt(ctxt, ast.value());
         let args = ast
             .args()
             .map(|args| {
@@ -54,7 +55,7 @@ impl<'db> NormalAttr<'db> {
             })
             .unwrap_or_default();
 
-        Self { path, args }
+        Self { path, value, args }
     }
 }
 

@@ -176,6 +176,9 @@ pub enum DiagnosticPass {
     ArithmeticAttr,
     PayableAttr,
 
+    InlineLower,
+    LoopUnrollLower,
+
     NameResolution,
 
     TypeDefinition,
@@ -198,6 +201,8 @@ impl DiagnosticPass {
             Self::EventLower => 10,
             Self::ArithmeticAttr => 12,
             Self::PayableAttr => 13,
+            Self::InlineLower => 14,
+            Self::LoopUnrollLower => 15,
             Self::NameResolution => 2,
             Self::TypeDefinition => 3,
             Self::TraitDefinition => 4,

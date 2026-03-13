@@ -7,7 +7,9 @@ pub use body_builder::{BodyBuilder, LocalValue};
 use common::diagnostics::Span;
 use hir::analysis::ty::trait_def::TraitInstId;
 use hir::analysis::ty::ty_def::TyId;
-use hir::hir_def::{CallableDef, Contract, EnumVariant, ExprId, Func, PatId, TopLevelMod};
+use hir::hir_def::{
+    CallableDef, Contract, EnumVariant, ExprId, Func, InlineHint, PatId, TopLevelMod,
+};
 use hir::projection::{Projection, ProjectionPath};
 use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
@@ -47,6 +49,8 @@ pub struct MirFunction<'db> {
     pub runtime_return_shape: RuntimeShape<'db>,
     /// Optional contract association declared via attributes.
     pub contract_function: Option<ContractFunction>,
+    /// Inline hint declared via `#[inline]`-family source attributes.
+    pub inline_hint: Option<InlineHint>,
     /// Symbol name used for codegen (includes monomorphization suffix when present).
     pub symbol_name: String,
     /// For methods, the address space variant of the receiver for this instance.

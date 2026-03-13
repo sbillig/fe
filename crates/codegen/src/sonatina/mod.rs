@@ -11,7 +11,7 @@ use crate::{BackendError, OptLevel};
 use common::ingot::Ingot;
 use driver::DriverDataBase;
 use hir::analysis::ty::ty_def::TyId;
-use hir::hir_def::TopLevelMod;
+use hir::hir_def::{InlineHint, TopLevelMod};
 use mir::{CoreLib, MirModule, layout, layout::TargetDataLayout, lower_ingot, lower_module};
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
@@ -21,7 +21,7 @@ use sonatina_ir::{
     inst::{control_flow::Call, evm::EvmStop},
     ir_writer::ModuleWriter,
     isa::{Isa, evm::Evm},
-    module::{FuncRef, ModuleCtx},
+    module::{FuncRef, InlineHint as SonatinaInlineHint, ModuleCtx},
     object::{Directive, Embed, EmbedSymbol, Object, ObjectName, Section, SectionName, SectionRef},
 };
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
@@ -666,6 +666,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             let func_ref = self.builder.declare_function(sig).map_err(|e| {
                 LowerError::Internal(format!("failed to declare function {name}: {e}"))
             })?;
+            self.apply_inline_hint(func_ref, func);
 
             self.func_map.insert(idx, func_ref);
             self.name_map.insert(name.clone(), func_ref);
@@ -673,6 +674,16 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 .insert(name.clone(), metadata);
         }
         Ok(())
+    }
+
+    fn apply_inline_hint(&self, func_ref: FuncRef, func: &mir::MirFunction<'db>) {
+        let sonatina_hint = match func.inline_hint {
+            Some(InlineHint::Hint) => SonatinaInlineHint::Inline,
+            Some(InlineHint::Always) => SonatinaInlineHint::Always,
+            Some(InlineHint::Never) => SonatinaInlineHint::Never,
+            None => SonatinaInlineHint::Auto,
+        };
+        self.builder.ctx.set_inline_hint(func_ref, sonatina_hint);
     }
 
     /// Lower function signatures.
@@ -1481,5 +1492,82 @@ impl<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> LowerCtx<'a, 'db, C> {
             &self.body.locals,
             place,
         )
+    }
+}
+
+#[cfg(test)]
+mod inline_hint_tests {
+    use common::InputDb;
+    use sonatina_ir::module::InlineHint as SonatinaInlineHint;
+    use url::Url;
+
+    use super::*;
+
+    fn compile_source(source: &str) -> Result<Module, LowerError> {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///inline_hints.fe").unwrap();
+        let file = db.workspace().touch(&mut db, url, Some(source.to_string()));
+        let top_mod = db.top_mod(file);
+        compile_module(&db, top_mod, layout::EVM_LAYOUT)
+    }
+
+    fn inline_hint(module: &Module, name: &str) -> SonatinaInlineHint {
+        module
+            .funcs()
+            .into_iter()
+            .find(|func_ref| module.ctx.func_sig(*func_ref, |sig| sig.name() == name))
+            .map(|func_ref| module.ctx.inline_hint(func_ref))
+            .unwrap_or_else(|| panic!("missing function `{name}`"))
+    }
+
+    #[test]
+    fn lowers_function_inline_hints_to_sonatina() {
+        let module = compile_source(
+            r#"
+#[inline]
+fn hinted() {}
+
+#[inline(always)]
+fn forced() {}
+
+#[inline(never)]
+fn blocked() {}
+
+fn caller() {
+    hinted();
+    forced();
+    blocked();
+}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(inline_hint(&module, "hinted"), SonatinaInlineHint::Inline);
+        assert_eq!(inline_hint(&module, "forced"), SonatinaInlineHint::Always);
+        assert_eq!(inline_hint(&module, "blocked"), SonatinaInlineHint::Never);
+    }
+
+    #[test]
+    fn rejects_invalid_inline_attribute_forms() {
+        let err = match compile_source(
+            r#"
+#[inline(sometimes)]
+fn bad() {}
+"#,
+        ) {
+            Ok(_) => panic!("invalid inline attribute should fail lowering"),
+            Err(err) => err,
+        };
+
+        let LowerError::MirLower(mir::MirLowerError::AnalysisDiagnostics {
+            func_name,
+            diagnostics,
+        }) = err
+        else {
+            panic!("expected MIR analysis diagnostics, got {err:?}");
+        };
+
+        assert!(func_name.contains("bad"), "func name is {func_name}");
+        assert!(diagnostics.contains("expected `#[inline]`"));
     }
 }

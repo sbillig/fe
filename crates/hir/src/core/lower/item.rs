@@ -1,10 +1,12 @@
 use parser::ast::{self, prelude::*};
+use salsa::Accumulator as _;
 
 use super::FileLowerCtxt;
 use crate::{
     hir_def::{
-        AttrListId, Body, EffectParamListId, FuncParamListId, GenericParamListId, IdentId, PathId,
-        TraitRefId, TupleTypeId, TypeBound, TypeId, WhereClauseId, item::*,
+        AttrListId, Body, EffectParamListId, FuncParamListId, GenericParamListId, IdentId,
+        InlineAttrArgSpec, InlineAttrErrorKind, InlineAttrSpec, PathId, TraitRefId, TupleTypeId,
+        TypeBound, TypeId, WhereClauseId, item::*, parse_inline_attr_specs,
     },
     lower::msg::lower_msg_as_mod,
     span::HirOrigin,
@@ -38,6 +40,15 @@ pub enum SelectorErrorKind {
         first_variant_name: String,
         selector: u32,
     },
+}
+
+#[salsa::accumulator]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct InlineAttrError {
+    pub kind: InlineAttrErrorKind,
+    pub file: common::file::File,
+    pub primary_range: parser::TextRange,
+    pub func_name: Option<String>,
 }
 
 pub(crate) fn lower_module_items(ctxt: &mut FileLowerCtxt<'_>, items: ast::ItemList) {
@@ -321,6 +332,7 @@ impl<'db> Func<'db> {
         let id = ctxt.joined_id(TrackedItemVariant::Func(name));
         ctxt.enter_item_scope(id, false);
 
+        validate_inline_attr(ctxt, &ast);
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let generic_params = GenericParamListId::lower_ast_opt(ctxt, sig.generic_params());
         let where_clause = WhereClauseId::lower_ast_opt(ctxt, sig.where_clause());
@@ -357,6 +369,62 @@ impl<'db> Func<'db> {
         );
         ctxt.leave_item_scope(fn_)
     }
+}
+
+fn validate_inline_attr<'db>(ctxt: &mut FileLowerCtxt<'db>, func: &ast::Func) {
+    let Some(attrs) = func.attr_list() else {
+        return;
+    };
+
+    let db = ctxt.db();
+    let file = ctxt.top_mod().file(db);
+    let func_name = func.sig().name().map(|name| name.text().to_string());
+    let inline_attrs = attrs
+        .normal_attrs()
+        .filter(|attr| attr.path().is_some_and(|path| path.text() == "inline"))
+        .map(|attr| {
+            let spec = InlineAttrSpec {
+                has_value: attr.value().is_some(),
+                args: attr
+                    .args()
+                    .map(|args| {
+                        args.into_iter()
+                            .map(|arg| InlineAttrArgSpec {
+                                key: arg.key().map(|key| key.text().to_string()),
+                                has_value: arg.value().is_some(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            };
+            (spec, attr.syntax().text_range())
+        })
+        .collect::<Vec<_>>();
+
+    let Err(err) = parse_inline_attr_specs(inline_attrs.iter().map(|(spec, _)| spec.clone()))
+    else {
+        return;
+    };
+
+    if let Some((_, range)) = inline_attrs.get(err.attr_index) {
+        lower_inline_attr_error(db, file, *range, func_name, err.kind);
+    }
+}
+
+fn lower_inline_attr_error(
+    db: &dyn crate::HirDb,
+    file: common::file::File,
+    primary_range: parser::TextRange,
+    func_name: Option<String>,
+    kind: InlineAttrErrorKind,
+) {
+    InlineAttrError {
+        kind,
+        file,
+        primary_range,
+        func_name,
+    }
+    .accumulate(db);
 }
 
 impl<'db> Struct<'db> {

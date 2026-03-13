@@ -85,6 +85,12 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
             Some(AddressSpaceKind::TransientStorage) => self.write_u8(4),
             None => self.write_u8(0),
         }
+        match func.inline_hint {
+            Some(hir::hir_def::InlineHint::Hint) => self.write_u8(1),
+            Some(hir::hir_def::InlineHint::Always) => self.write_u8(2),
+            Some(hir::hir_def::InlineHint::Never) => self.write_u8(3),
+            None => self.write_u8(0),
+        }
 
         self.write_usize(func.body.entry.index());
         self.write_usize(func.body.values.len());

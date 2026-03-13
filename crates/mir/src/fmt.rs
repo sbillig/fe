@@ -25,6 +25,10 @@ pub fn format_module(db: &dyn HirAnalysisDb, module: &MirModule<'_>) -> String {
 /// Format a single MIR function.
 pub fn format_function(db: &dyn HirAnalysisDb, func: &MirFunction<'_>) -> String {
     let mut out = String::new();
+    if let Some(hint) = func.inline_hint {
+        out.push_str(hint.pretty_print());
+        out.push('\n');
+    }
 
     // Function signature with parameters
     let params: Vec<String> = func

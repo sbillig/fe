@@ -22,8 +22,8 @@ use hir::analysis::{
 };
 use hir::hir_def::{
     ArithmeticMode, Attr, AttrArg, AttrArgValue, Body, CallableDef, Cond, CondId, Const, Expr,
-    ExprId, Field, FieldIndex, Func, HirIngot, IdentId, ItemKind, LitKind, MatchArm, Partial, Pat,
-    PatId, Stmt, StmtId, TopLevelMod, VariantKind,
+    ExprId, Field, FieldIndex, Func, HirIngot, IdentId, InlineAttrErrorKind, ItemKind, LitKind,
+    MatchArm, Partial, Pat, PatId, Stmt, StmtId, TopLevelMod, VariantKind,
 };
 
 use crate::{
@@ -170,6 +170,34 @@ fn mir_func_name<'db>(db: &'db dyn SpannedHirAnalysisDb, func: &MirFunction<'db>
     }
 }
 
+fn invalid_inline_attr_error<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    func: Func<'db>,
+) -> Option<MirLowerError> {
+    let kind = func.inline_attr_error(db)?;
+    let func_name = func
+        .name(db)
+        .to_opt()
+        .map(|ident| ident.data(db).to_string())
+        .unwrap_or_else(|| "<anonymous>".to_string());
+
+    let diagnostics = match kind {
+        InlineAttrErrorKind::Duplicate => {
+            "duplicate `#[inline]` attribute; functions support at most one inline hint"
+                .to_string()
+        }
+        InlineAttrErrorKind::InvalidForm => {
+            "invalid `#[inline]` attribute; expected `#[inline]`, `#[inline(always)]`, or `#[inline(never)]`"
+                .to_string()
+        }
+    };
+
+    Some(MirLowerError::AnalysisDiagnostics {
+        func_name,
+        diagnostics,
+    })
+}
+
 fn run_borrow_checks_collect<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     functions: &[MirFunction<'db>],
@@ -224,6 +252,10 @@ pub fn collect_mir_diagnostics<'db>(
 
     for func in collect_funcs_to_lower(db, top_mod) {
         if func.body(db).is_none() {
+            continue;
+        }
+        if let Some(err) = invalid_inline_attr_error(db, func) {
+            output.internal_errors.push(err);
             continue;
         }
         let (diags, typed_body) = check_func_body(db, func);
@@ -300,6 +332,9 @@ pub fn lower_module<'db>(
     for func in collect_funcs_to_lower(db, top_mod) {
         if func.body(db).is_none() {
             continue;
+        }
+        if let Some(err) = invalid_inline_attr_error(db, func) {
+            return Err(err);
         }
         let (diags, typed_body) = check_func_body(db, func);
         if !diags.is_empty() {
@@ -410,6 +445,9 @@ pub fn lower_ingot<'db>(
     for func in funcs_to_lower {
         if func.body(db).is_none() {
             continue;
+        }
+        if let Some(err) = invalid_inline_attr_error(db, func) {
+            return Err(err);
         }
         let (diags, typed_body) = check_func_body(db, func);
         if !diags.is_empty() {
@@ -609,6 +647,7 @@ pub(crate) fn lower_function<'db>(
         runtime_abi,
         runtime_return_shape,
         contract_function,
+        inline_hint: func.inline_hint(db),
         symbol_name,
         receiver_space,
         defer_root: false,
