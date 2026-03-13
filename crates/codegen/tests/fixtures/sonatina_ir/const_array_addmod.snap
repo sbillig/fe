@@ -13,7 +13,7 @@ func private %get_sum() -> i256 {
         v1.*[i256; 3] = int_to_ptr v0 *[i256; 3];
         v3.*i256 = gep v1 0.i256 0.i256;
         v4.i256 = ptr_to_int v3 i256;
-        v6.*i8 = evm_malloc 32.i256;
+        v6.*i256 = alloca i256;
         v7.i256 = ptr_to_int v6 i256;
         evm_code_copy v7 v4 32.i256;
         v8.i256 = mload v7 i256;

@@ -2824,7 +2824,7 @@ fn load_from_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             let word_addr = terminal.word_addr(ctx);
             let copy_size = if packed { 1 } else { 32 };
             let size_val = ctx.fb.make_imm_value(I256::from(copy_size));
-            let scratch = emit_evm_malloc_word_addr(ctx.fb, size_val, ctx.is);
+            let scratch = emit_alloca_word_addr(ctx.fb, Type::I256, ctx.is);
             ctx.fb
                 .insert_inst_no_result(EvmCodeCopy::new(ctx.is, scratch, word_addr, size_val));
             let word = ctx
@@ -4233,6 +4233,15 @@ fn emit_evm_malloc_word_addr<C: sonatina_ir::func_cursor::FuncCursor>(
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> ValueId {
     let ptr = emit_evm_malloc_ptr(fb, size, is);
+    fb.insert_inst(PtrToInt::new(is, ptr, Type::I256), Type::I256)
+}
+
+fn emit_alloca_word_addr<C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    alloca_ty: Type,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> ValueId {
+    let ptr = emit_alloca_ptr(fb, alloca_ty, is);
     fb.insert_inst(PtrToInt::new(is, ptr, Type::I256), Type::I256)
 }
 

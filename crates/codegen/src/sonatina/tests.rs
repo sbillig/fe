@@ -10,78 +10,40 @@ use mir::{
 use num_bigint::BigUint;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_codegen::{
-    domtree::DomTree,
     isa::evm::EvmBackend,
-    liveness::Liveness,
-    machinst::lower::{LowerBackend, SectionLoweringCtx},
-    object::{CompileOptions, ObjectArtifact, SymbolId, compile_all_objects},
-    stackalloc::StackifyBuilder,
+    object::{CompileOptions, ObjectArtifact, compile_all_objects},
 };
 use sonatina_ir::{
     Module, Signature,
     builder::ModuleBuilder,
-    cfg::ControlFlowGraph,
     func_cursor::InstInserter,
     inst::{control_flow::Call, evm::EvmStop},
-    ir_writer::{FuncWriteCtx, FunctionSignature, IrWrite},
     isa::Isa,
-    module::{FuncRef, ModuleCtx},
+    module::ModuleCtx,
     object::{Directive, Embed, EmbedSymbol, Object, ObjectName, Section, SectionName, SectionRef},
 };
 use sonatina_verifier::{VerificationLevel, VerifierConfig};
-use std::io::Write as _;
 
 use crate::{ExpectedRevert, OptLevel, TestMetadata, TestModuleOutput};
 
 use super::{ContractObjectSelection, LowerError, ModuleLowerer};
 
-#[derive(Debug, Clone)]
-pub struct SonatinaTestDebugConfig {
-    pub symtab_output: Option<DebugOutputSink>,
-    pub evm_debug_output: Option<DebugOutputSink>,
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SonatinaTestOptions {
     pub emit_observability: bool,
-    pub runtime_byte_offsets: Vec<usize>,
-    pub stackify_reach_depth: u8,
-}
-
-impl Default for SonatinaTestDebugConfig {
-    fn default() -> Self {
-        Self {
-            symtab_output: None,
-            evm_debug_output: None,
-            emit_observability: false,
-            runtime_byte_offsets: Vec::new(),
-            stackify_reach_depth: 16,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct DebugOutputSink {
-    pub path: Option<std::path::PathBuf>,
-    pub write_stderr: bool,
-}
-
-impl Default for DebugOutputSink {
-    fn default() -> Self {
-        Self {
-            path: None,
-            write_stderr: true,
-        }
-    }
 }
 
 pub fn emit_test_module_sonatina(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
     opt_level: OptLevel,
-    debug: &SonatinaTestDebugConfig,
+    options: SonatinaTestOptions,
+    filter: Option<&str>,
 ) -> Result<TestModuleOutput, LowerError> {
     let ingot = top_mod.ingot(db);
     let mir_module = lower_ingot(db, ingot)?;
 
-    let tests = collect_tests(db, &mir_module.functions)?;
-
+    let tests =  collect_tests(db, &mir_module.functions, filter)?;
     if tests.is_empty() {
         return Ok(TestModuleOutput { tests: Vec::new() });
     }
@@ -113,19 +75,27 @@ pub fn emit_test_module_sonatina(
         region_reachable.insert(root.clone(), reachable);
         region_deps.insert(root.clone(), deps);
     }
-
-    // Detect cycles among region embeds early (Sonatina's embed mechanism expands bytes).
-    detect_code_region_cycles(&region_deps)?;
+    let (needed_symbols, needed_code_regions) = collect_needed_symbols_for_tests(
+        &tests,
+        &call_graph,
+        &funcs_by_symbol,
+        &region_reachable,
+        &region_deps,
+    )?;
+    detect_code_region_cycles(&filter_code_region_graph(
+        &needed_code_regions,
+        &region_deps,
+    ))?;
 
     let mut module = compile_test_objects(
         db,
         &mir_module,
         &tests,
+        &needed_symbols,
+        &needed_code_regions,
         &call_graph,
         &funcs_by_symbol,
-        &code_region_roots,
         &code_region_sections,
-        &region_reachable,
         &region_deps,
     )?;
     super::ensure_module_sonatina_ir_valid(&module)?;
@@ -135,12 +105,11 @@ pub fn emit_test_module_sonatina(
     // Compile all objects at once to avoid repeated prepare_section mutations
     // on shared functions. compile_all_objects builds a single section cache
     // so each function is lowered exactly once.
-    let all_artifacts = compile_all_objects_for_tests(&module, debug)?;
+    let all_artifacts = compile_all_objects_for_tests(&module, options)?;
 
     let mut output_tests = Vec::with_capacity(tests.len());
     for test in tests {
-        let runtime =
-            extract_runtime_from_artifact(&module, &all_artifacts, &test.object_name, debug)?;
+        let runtime = extract_runtime_from_artifact(&all_artifacts, &test.object_name)?;
         let init_bytecode = wrap_as_init_code(&runtime.bytes);
 
         output_tests.push(TestMetadata {
@@ -150,7 +119,6 @@ pub fn emit_test_module_sonatina(
             object_name: test.object_name,
             yul: String::new(),
             bytecode: init_bytecode,
-            sonatina_observability_text: runtime.observability_text,
             sonatina_observability_json: runtime.observability_json,
             value_param_count: test.value_param_count,
             effect_param_count: test.effect_param_count,
@@ -187,6 +155,7 @@ struct TestInfo {
 fn collect_tests(
     db: &DriverDataBase,
     functions: &[MirFunction<'_>],
+    filter: Option<&str>,
 ) -> Result<Vec<TestInfo>, LowerError> {
     let mut tests: Vec<TestInfo> = functions
         .iter()
@@ -229,6 +198,7 @@ fn collect_tests(
 
     assign_test_display_names(&mut tests);
     assign_test_object_names(&mut tests);
+    tests.retain(|test| test_info_matches_filter(test, filter));
     Ok(tests)
 }
 
@@ -263,6 +233,14 @@ fn parse_test_balance_arg<'db>(
     }
 
     Ok(None)
+}
+fn test_info_matches_filter(test: &TestInfo, filter: Option<&str>) -> bool {
+    let Some(pattern) = filter else {
+        return true;
+    };
+    test.hir_name.contains(pattern)
+        || test.symbol_name.contains(pattern)
+        || test.display_name.contains(pattern)
 }
 
 fn assign_test_display_names(tests: &mut [TestInfo]) {
@@ -446,6 +424,98 @@ fn detect_code_region_cycles(
     Ok(())
 }
 
+fn collect_needed_symbols_for_tests(
+    tests: &[TestInfo],
+    call_graph: &CallGraph,
+    funcs_by_symbol: &FxHashMap<&str, &MirFunction<'_>>,
+    region_reachable: &FxHashMap<String, FxHashSet<String>>,
+    region_deps: &FxHashMap<String, FxHashSet<String>>,
+) -> Result<(FxHashSet<String>, Vec<String>), LowerError> {
+    fn include_code_region(
+        root: &str,
+        needed_symbols: &mut FxHashSet<String>,
+        needed_code_regions: &mut FxHashSet<String>,
+        region_reachable: &FxHashMap<String, FxHashSet<String>>,
+        region_deps: &FxHashMap<String, FxHashSet<String>>,
+    ) -> Result<(), LowerError> {
+        if !needed_code_regions.insert(root.to_string()) {
+            return Ok(());
+        }
+        let Some(region_symbols) = region_reachable.get(root) else {
+            return Err(LowerError::Internal(format!(
+                "test depends on unknown code region `{root}`"
+            )));
+        };
+        needed_symbols.extend(region_symbols.iter().cloned());
+
+        let mut deps = region_deps
+            .get(root)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<Vec<_>>();
+        deps.sort();
+        for dep in deps {
+            if dep != root {
+                include_code_region(
+                    &dep,
+                    needed_symbols,
+                    needed_code_regions,
+                    region_reachable,
+                    region_deps,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    let mut needed_symbols = FxHashSet::default();
+    let mut needed_code_regions = FxHashSet::default();
+
+    for test in tests {
+        let reachable = reachable_functions(call_graph, &test.symbol_name);
+        needed_symbols.extend(reachable.iter().cloned());
+
+        let mut deps = collect_code_region_deps(&reachable, funcs_by_symbol)
+            .into_iter()
+            .collect::<Vec<_>>();
+        deps.sort();
+        for dep in deps {
+            include_code_region(
+                &dep,
+                &mut needed_symbols,
+                &mut needed_code_regions,
+                region_reachable,
+                region_deps,
+            )?;
+        }
+    }
+
+    let mut needed_code_regions: Vec<String> = needed_code_regions.into_iter().collect();
+    needed_code_regions.sort();
+    Ok((needed_symbols, needed_code_regions))
+}
+
+fn filter_code_region_graph(
+    needed_code_regions: &[String],
+    region_deps: &FxHashMap<String, FxHashSet<String>>,
+) -> FxHashMap<String, FxHashSet<String>> {
+    let needed_set: FxHashSet<String> = needed_code_regions.iter().cloned().collect();
+    needed_code_regions
+        .iter()
+        .map(|root| {
+            let deps = region_deps
+                .get(root)
+                .into_iter()
+                .flatten()
+                .filter(|dep| needed_set.contains(*dep))
+                .cloned()
+                .collect();
+            (root.clone(), deps)
+        })
+        .collect()
+}
+
 fn code_region_section_name(symbol: &str) -> SectionName {
     SectionName::from(format!("code_region_{}", sanitize_symbol(symbol)))
 }
@@ -455,11 +525,11 @@ fn compile_test_objects(
     db: &DriverDataBase,
     mir_module: &mir::MirModule<'_>,
     tests: &[TestInfo],
+    needed_symbols: &FxHashSet<String>,
+    needed_code_regions: &[String],
     call_graph: &CallGraph,
     funcs_by_symbol: &FxHashMap<&str, &MirFunction<'_>>,
-    code_region_roots: &[String],
     code_region_sections: &FxHashMap<String, SectionName>,
-    region_reachable: &FxHashMap<String, FxHashSet<String>>,
     region_deps: &FxHashMap<String, FxHashSet<String>>,
 ) -> Result<Module, LowerError> {
     let isa = super::create_evm_isa();
@@ -474,20 +544,23 @@ fn compile_test_objects(
         layout::EVM_LAYOUT,
         ContractObjectSelection::All,
     );
-    lowerer.declare_all_functions_for_tests()?;
+    lowerer.declare_functions_for_tests(needed_symbols)?;
 
-    let code_regions_object = create_code_regions_object(
-        &mut lowerer,
-        funcs_by_symbol,
-        code_region_roots,
-        code_region_sections,
-        region_reachable,
-        region_deps,
-    )?;
-    lowerer
-        .builder
-        .declare_object(code_regions_object)
-        .map_err(|e| LowerError::Internal(format!("failed to declare CodeRegions object: {e}")))?;
+    if !needed_code_regions.is_empty() {
+        let code_regions_object = create_code_regions_object(
+            &mut lowerer,
+            funcs_by_symbol,
+            needed_code_regions,
+            code_region_sections,
+            region_deps,
+        )?;
+        lowerer
+            .builder
+            .declare_object(code_regions_object)
+            .map_err(|e| {
+                LowerError::Internal(format!("failed to declare CodeRegions object: {e}"))
+            })?;
+    }
 
     for test in tests {
         let object = create_test_object(
@@ -514,7 +587,6 @@ fn create_code_regions_object(
     funcs_by_symbol: &FxHashMap<&str, &MirFunction<'_>>,
     code_region_roots: &[String],
     code_region_sections: &FxHashMap<String, SectionName>,
-    _region_reachable: &FxHashMap<String, FxHashSet<String>>,
     region_deps: &FxHashMap<String, FxHashSet<String>>,
 ) -> Result<Object, LowerError> {
     let object_name = ObjectName::from("CodeRegions");
@@ -646,9 +718,12 @@ fn create_test_object(
 }
 
 impl<'db, 'a> ModuleLowerer<'db, 'a> {
-    fn declare_all_functions_for_tests(&mut self) -> Result<(), LowerError> {
+    fn declare_functions_for_tests(
+        &mut self,
+        needed_symbols: &FxHashSet<String>,
+    ) -> Result<(), LowerError> {
         for (idx, func) in self.mir.functions.iter().enumerate() {
-            if func.symbol_name.is_empty() {
+            if func.symbol_name.is_empty() || !needed_symbols.contains(&func.symbol_name) {
                 continue;
             }
 
@@ -713,7 +788,6 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
 struct RuntimeCompileOutput {
     bytes: Vec<u8>,
-    observability_text: Option<String>,
     observability_json: Option<String>,
 }
 
@@ -722,7 +796,7 @@ struct RuntimeCompileOutput {
 /// `prepare_section` calls).
 fn compile_all_objects_for_tests(
     module: &Module,
-    debug: &SonatinaTestDebugConfig,
+    options: SonatinaTestOptions,
 ) -> Result<Vec<ObjectArtifact>, LowerError> {
     let isa = super::create_evm_isa();
     let backend = EvmBackend::new(isa);
@@ -731,7 +805,7 @@ fn compile_all_objects_for_tests(
     let mut verifier_cfg = VerifierConfig::for_level(VerificationLevel::Full);
     verifier_cfg.allow_detached_entities = true;
     opts.verifier_cfg = verifier_cfg;
-    opts.emit_observability = debug.emit_observability;
+    opts.emit_observability = options.emit_observability;
 
     compile_all_objects(module, &backend, &opts).map_err(|errors| {
         let msg = errors
@@ -745,10 +819,8 @@ fn compile_all_objects_for_tests(
 
 /// Extract the runtime section for a specific object from pre-compiled artifacts.
 fn extract_runtime_from_artifact(
-    module: &Module,
     all_artifacts: &[ObjectArtifact],
     object_name: &str,
-    debug: &SonatinaTestDebugConfig,
 ) -> Result<RuntimeCompileOutput, LowerError> {
     let artifact = all_artifacts
         .iter()
@@ -765,254 +837,12 @@ fn extract_runtime_from_artifact(
             "compiled object `{object_name}` has no runtime section"
         ))
     })?;
-
-    let mut runtime_funcs: Vec<(u32, FuncRef)> = Vec::new();
-    for (sym, def) in &runtime_section.symtab {
-        if let SymbolId::Func(func_ref) = sym {
-            runtime_funcs.push((def.offset, *func_ref));
-        }
-    }
-    runtime_funcs.sort_by_key(|(offset, _)| *offset);
-    let mut ordered_runtime_funcs = Vec::with_capacity(runtime_funcs.len());
-    let mut seen_runtime_funcs: FxHashSet<FuncRef> = FxHashSet::default();
-    for (_, func_ref) in runtime_funcs {
-        if seen_runtime_funcs.insert(func_ref) {
-            ordered_runtime_funcs.push(func_ref);
-        }
-    }
-
-    if let Some(sink) = &debug.symtab_output {
-        let mut defs: Vec<(u32, u32, String)> = Vec::new();
-        for (sym, def) in &runtime_section.symtab {
-            let name = match sym {
-                SymbolId::Func(func_ref) => {
-                    module.ctx.func_sig(*func_ref, |sig| sig.name().to_string())
-                }
-                SymbolId::Global(gv) => format!("{gv:?}"),
-                SymbolId::Embed(embed) => format!("&{}", embed.0.as_str()),
-                SymbolId::CurrentSection => "<current_section>".to_string(),
-            };
-            defs.push((def.offset, def.size, name));
-        }
-        defs.sort_by_key(|(offset, _, _)| *offset);
-
-        let mut out = String::new();
-        out.push_str(&format!(
-            "SONATINA SYMTAB object={object_name} section=runtime bytes={}\n",
-            runtime_section.bytes.len()
-        ));
-        for (offset, size, name) in defs {
-            out.push_str(&format!("  off={offset:>6} size={size:>6} {name}\n"));
-        }
-        emit_debug_output(sink, &out);
-    }
-
-    if let Some(sink) = &debug.evm_debug_output
-        && let Err(err) =
-            emit_runtime_evm_debug(module, object_name, &ordered_runtime_funcs, debug, sink)
-    {
-        tracing::warn!("failed to write Sonatina EVM debug output for `{object_name}`: {err}",);
-    }
-
-    for &offset in &debug.runtime_byte_offsets {
-        match runtime_section.bytes.get(offset) {
-            Some(byte) => tracing::debug!(
-                "SONATINA BYTE object={object_name} section=runtime off={offset} byte=0x{byte:02x}"
-            ),
-            None => tracing::warn!(
-                "SONATINA BYTE object={object_name} section=runtime off={offset} (out of bounds, len={})",
-                runtime_section.bytes.len()
-            ),
-        }
-    }
-
-    let observability_text = artifact.observability_text();
     let observability_json = artifact.observability_json();
 
     Ok(RuntimeCompileOutput {
         bytes: runtime_section.bytes.clone(),
-        observability_text,
         observability_json,
     })
-}
-
-fn emit_runtime_evm_debug(
-    module: &Module,
-    object_name: &str,
-    funcs: &[FuncRef],
-    debug: &SonatinaTestDebugConfig,
-    sink: &DebugOutputSink,
-) -> Result<(), LowerError> {
-    let (object_name_ref, section_name, embed_symbols) =
-        runtime_section_lowering_inputs(module, object_name)?;
-    if funcs.is_empty() {
-        return Err(LowerError::Internal(format!(
-            "runtime section for `{object_name}` has no lowered functions in compiled artifact"
-        )));
-    }
-
-    let isa = super::create_evm_isa();
-    let backend = EvmBackend::new(isa);
-
-    let section_ctx = SectionLoweringCtx {
-        object: &object_name_ref,
-        section: &section_name,
-        embed_symbols: &embed_symbols,
-    };
-    backend.prepare_section(module, funcs, &section_ctx);
-
-    let mut out = Vec::new();
-    writeln!(
-        &mut out,
-        "SONATINA EVM DEBUG object={} section={}",
-        object_name_ref.0.as_str(),
-        section_name.0.as_str(),
-    )
-    .unwrap();
-    writeln!(&mut out).unwrap();
-
-    let mem_plan = backend.snapshot_mem_plan_detail(module, funcs);
-    if !mem_plan.trim().is_empty() {
-        writeln!(&mut out, "SONATINA MEMORY PLAN").unwrap();
-        writeln!(&mut out, "{mem_plan}").unwrap();
-    }
-
-    for &func in funcs {
-        let lowered = backend
-            .lower_function(module, func, &section_ctx)
-            .map_err(|err| {
-                let func_name = module.ctx.func_sig(func, |sig| sig.name().to_string());
-                LowerError::Internal(format!(
-                    "failed to lower `{func_name}` for Sonatina EVM debug output: {err}"
-                ))
-            })?;
-
-        let reach_depth = debug.stackify_reach_depth.clamp(1, 16);
-        let (stackify_dump, lowered_dump) =
-            module
-                .func_store
-                .view(func, |function| -> Result<(String, String), LowerError> {
-                    let mut cfg = ControlFlowGraph::new();
-                    cfg.compute(function);
-
-                    let mut liveness = Liveness::new();
-                    liveness.compute(function, &cfg);
-                    let mut dom = DomTree::new();
-                    dom.compute(&cfg);
-
-                    let (_alloc, stackify_trace) =
-                        StackifyBuilder::new(function, &cfg, &dom, &liveness, reach_depth)
-                            .compute_with_trace();
-
-                    let ctx = FuncWriteCtx::new(function, func);
-
-                    let mut stackify_buf = Vec::new();
-                    write!(&mut stackify_buf, "// ").unwrap();
-                    FunctionSignature
-                        .write(&mut stackify_buf, &ctx)
-                        .map_err(|err| {
-                            LowerError::Internal(format!(
-                                "failed to render stackify signature for `{object_name}`: {err}"
-                            ))
-                        })?;
-                    writeln!(&mut stackify_buf).unwrap();
-                    writeln!(&mut stackify_buf, "{stackify_trace}").unwrap();
-
-                    let mut lowered_buf = Vec::new();
-                    lowered.vcode.write(&mut lowered_buf, &ctx).map_err(|err| {
-                        LowerError::Internal(format!(
-                            "failed to render lowered EVM vcode for `{object_name}`: {err}"
-                        ))
-                    })?;
-                    writeln!(&mut lowered_buf).unwrap();
-
-                    let stackify_dump = String::from_utf8(stackify_buf).map_err(|err| {
-                    LowerError::Internal(format!(
-                        "invalid UTF-8 while rendering stackify trace for `{object_name}`: {err}"
-                    ))
-                })?;
-                    let lowered_dump = String::from_utf8(lowered_buf).map_err(|err| {
-                    LowerError::Internal(format!(
-                        "invalid UTF-8 while rendering lowered EVM vcode for `{object_name}`: {err}"
-                    ))
-                })?;
-
-                    Ok((stackify_dump, lowered_dump))
-                })?;
-
-        out.extend_from_slice(stackify_dump.as_bytes());
-        out.extend_from_slice(lowered_dump.as_bytes());
-    }
-
-    let rendered = String::from_utf8(out).map_err(|err| {
-        LowerError::Internal(format!(
-            "invalid UTF-8 while rendering Sonatina EVM debug output for `{object_name}`: {err}"
-        ))
-    })?;
-    emit_debug_output(sink, &rendered);
-
-    Ok(())
-}
-
-fn runtime_section_lowering_inputs(
-    module: &Module,
-    object_name: &str,
-) -> Result<(ObjectName, SectionName, Vec<EmbedSymbol>), LowerError> {
-    let Some(object) = module.objects.get(object_name) else {
-        return Err(LowerError::Internal(format!(
-            "missing Sonatina object `{object_name}` while preparing EVM debug output"
-        )));
-    };
-
-    let Some(runtime_section) = object
-        .sections
-        .iter()
-        .find(|section| section.name.0.as_str() == "runtime")
-    else {
-        return Err(LowerError::Internal(format!(
-            "object `{object_name}` has no runtime section while preparing EVM debug output"
-        )));
-    };
-
-    let mut embed_symbols = Vec::new();
-    for directive in &runtime_section.directives {
-        match directive {
-            Directive::Entry(_) | Directive::Include(_) => {}
-            Directive::Embed(embed) => embed_symbols.push(embed.as_symbol.clone()),
-            Directive::Data(_) => {}
-        }
-    }
-
-    Ok((
-        object.name.clone(),
-        runtime_section.name.clone(),
-        embed_symbols,
-    ))
-}
-
-fn emit_debug_output(sink: &DebugOutputSink, contents: &str) {
-    if let Some(path) = &sink.path {
-        match std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .and_then(|mut f| f.write_all(contents.as_bytes()))
-        {
-            Ok(()) => {}
-            Err(err) => {
-                tracing::error!(
-                    "failed to write Sonatina debug output `{}`: {err}",
-                    path.display()
-                );
-                tracing::debug!("{contents}");
-                return;
-            }
-        }
-    }
-
-    if sink.write_stderr {
-        tracing::debug!("{contents}");
-    }
 }
 
 fn wrap_as_init_code(runtime: &[u8]) -> Vec<u8> {
@@ -1108,13 +938,15 @@ fn smoke() {
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
 
-        emit_test_module_sonatina(
+        let output = emit_test_module_sonatina(
             &db,
             top_mod,
             OptLevel::O0,
-            &SonatinaTestDebugConfig::default(),
+            SonatinaTestOptions::default(),
+            None,
         )
         .expect("erased effect params should remain erased in Sonatina test modules");
+        assert_eq!(output.tests.len(), 1, "expected one runnable smoke test");
     }
 
     #[test]
@@ -1148,13 +980,15 @@ fn smoke() {
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
 
-        emit_test_module_sonatina(
+        let output = emit_test_module_sonatina(
             &db,
             top_mod,
             OptLevel::O0,
-            &SonatinaTestDebugConfig::default(),
+            SonatinaTestOptions::default(),
+            None,
         )
         .expect("erased generic ZST params should remain erased in Sonatina signatures");
+        assert_eq!(output.tests.len(), 1, "expected one runnable smoke test");
     }
 
     #[test]
@@ -1185,7 +1019,7 @@ fn smoke() {
         let top_mod = db.top_mod(file);
         let ingot = top_mod.ingot(&db);
         let mir_module = lower_ingot(&db, ingot).expect("module should lower to MIR");
-        let tests = collect_tests(&db, &mir_module.functions)
+        let tests = collect_tests(&db, &mir_module.functions, None)
             .expect("test metadata collection should succeed");
         let call_graph = build_call_graph(&mir_module.functions);
         let funcs_by_symbol = build_funcs_by_symbol(&mir_module.functions);
@@ -1203,15 +1037,28 @@ fn smoke() {
             region_deps.insert(root.clone(), deps);
         }
 
+        let (needed_symbols, needed_code_regions) = collect_needed_symbols_for_tests(
+            &tests,
+            &call_graph,
+            &funcs_by_symbol,
+            &region_reachable,
+            &region_deps,
+        )
+        .expect("test requirements should be collected");
+        detect_code_region_cycles(&filter_code_region_graph(
+            &needed_code_regions,
+            &region_deps,
+        ))
+        .expect("region cycle detection should succeed");
         let module = compile_test_objects(
             &db,
             &mir_module,
             &tests,
+            &needed_symbols,
+            &needed_code_regions,
             &call_graph,
             &funcs_by_symbol,
-            &code_region_roots,
             &code_region_sections,
-            &region_reachable,
             &region_deps,
         )
         .expect("test object compilation should succeed");
@@ -1342,13 +1189,87 @@ fn smoke() {
             .get(&db, &file_url)
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
-        emit_test_module_sonatina(
+        let output = emit_test_module_sonatina(
             &db,
             top_mod,
             OptLevel::O0,
-            &SonatinaTestDebugConfig::default(),
+            SonatinaTestOptions::default(),
+            None,
         )
         .expect("compile-time-only non-ZST params should stay erased in Sonatina signatures");
+        assert_eq!(output.tests.len(), 1, "expected one runnable smoke test");
+    }
+
+    #[test]
+    fn test_filter_matches_hir_symbol_and_display_names() {
+        let test = TestInfo {
+            hir_name: "alpha".to_string(),
+            display_name: "alpha [module::alpha]".to_string(),
+            symbol_name: "module_h123_alpha".to_string(),
+            object_name: "test_alpha".to_string(),
+            value_param_count: 0,
+            effect_param_count: 0,
+            expected_revert: None,
+        };
+
+        assert!(test_info_matches_filter(&test, None));
+        assert!(test_info_matches_filter(&test, Some("alpha")));
+        assert!(test_info_matches_filter(&test, Some("module_h123")));
+        assert!(!test_info_matches_filter(&test, Some("beta")));
+    }
+
+    #[test]
+    fn filtered_test_run_ignores_unrelated_code_region_cycles() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_filtered_test_ignores_cycle.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+use std::evm::Evm
+
+#[contract_init(A)]
+fn a_init() uses (evm: mut Evm) {
+    let len = evm.code_region_len(b_init)
+    let offset = evm.code_region_offset(b_init)
+    evm.codecopy(dest: 0, offset, len)
+    evm.return_data(0, len)
+}
+
+#[contract_init(B)]
+fn b_init() uses (evm: mut Evm) {
+    let len = evm.code_region_len(a_init)
+    let offset = evm.code_region_offset(a_init)
+    evm.codecopy(dest: 0, offset, len)
+    evm.return_data(0, len)
+}
+
+#[test]
+fn keep() {
+    assert(true)
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let output = emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O0,
+            SonatinaTestOptions::default(),
+            Some("keep"),
+        )
+        .expect("filtered Sonatina test emission should ignore unrelated code-region cycles");
+
+        assert_eq!(output.tests.len(), 1, "expected exactly one filtered test");
+        assert_eq!(output.tests[0].hir_name, "keep");
     }
 
     #[test]
@@ -1404,7 +1325,8 @@ fn smoke() {
             &db,
             top_mod,
             OptLevel::O2,
-            &SonatinaTestDebugConfig::default(),
+            SonatinaTestOptions::default(),
+            None,
         )
         .expect("branch-proven nested enum payload loads should verify after O2 test lowering");
     }
@@ -1497,6 +1419,219 @@ fn allocates_dynamic_init_args() uses (evm: mut Evm) {
         assert!(
             ir.contains("evm_malloc"),
             "dynamic raw allocations must still lower through evm_malloc:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_module_prunes_unreachable_functions_and_omits_empty_code_regions_object() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_test_module_prunes_reachability.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+fn keep() -> bool {
+    return true
+}
+
+fn drop_helper() -> bool {
+    return false
+}
+
+#[test]
+fn smoke() {
+    assert(keep())
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let ingot = top_mod.ingot(&db);
+        let mir_module = lower_ingot(&db, ingot).expect("lowering should succeed");
+
+        let tests = collect_tests(&db, &mir_module.functions, None)
+            .expect("test metadata collection should succeed");
+        assert_eq!(tests.len(), 1, "expected exactly one filtered test");
+
+        let call_graph = build_call_graph(&mir_module.functions);
+        let funcs_by_symbol = build_funcs_by_symbol(&mir_module.functions);
+        let code_region_roots = collect_code_region_roots(&mir_module.functions);
+        let code_region_sections = code_region_roots
+            .iter()
+            .map(|sym| (sym.clone(), code_region_section_name(sym)))
+            .collect::<FxHashMap<_, _>>();
+
+        let mut region_reachable: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
+        let mut region_deps: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
+        for root in &code_region_roots {
+            let reachable = reachable_functions(&call_graph, root);
+            let deps = collect_code_region_deps(&reachable, &funcs_by_symbol);
+            region_reachable.insert(root.clone(), reachable);
+            region_deps.insert(root.clone(), deps);
+        }
+
+        let (needed_symbols, needed_code_regions) = collect_needed_symbols_for_tests(
+            &tests,
+            &call_graph,
+            &funcs_by_symbol,
+            &region_reachable,
+            &region_deps,
+        )
+        .expect("test requirements should be collected");
+        detect_code_region_cycles(&filter_code_region_graph(
+            &needed_code_regions,
+            &region_deps,
+        ))
+        .expect("region cycle detection should succeed");
+        let module = compile_test_objects(
+            &db,
+            &mir_module,
+            &tests,
+            &needed_symbols,
+            &needed_code_regions,
+            &call_graph,
+            &funcs_by_symbol,
+            &code_region_sections,
+            &region_deps,
+        )
+        .expect("test object lowering should succeed");
+
+        let lowered_names: FxHashSet<String> = module
+            .funcs()
+            .iter()
+            .map(|func| module.ctx.func_sig(*func, |sig| sig.name().to_string()))
+            .collect();
+        let keep_symbol = mir_module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name.contains("keep"))
+            .map(|func| func.symbol_name.clone())
+            .expect("keep symbol should exist");
+        let drop_symbol = mir_module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name.contains("drop_helper"))
+            .map(|func| func.symbol_name.clone())
+            .expect("drop_helper symbol should exist");
+
+        assert!(
+            lowered_names.contains(&keep_symbol),
+            "reachable helper should be lowered"
+        );
+        assert!(
+            !lowered_names.contains(&drop_symbol),
+            "unreachable helper should not be lowered"
+        );
+        assert!(
+            !module.objects.contains_key("CodeRegions"),
+            "test module should not emit an empty CodeRegions object"
+        );
+    }
+
+    #[test]
+    fn test_collect_needed_symbols_includes_transitive_code_region_dependencies() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_test_module_code_region_transitive_deps.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+msg CounterMsg {
+    #[selector = 0xd09de08a]
+    Increment,
+    #[selector = 0x6d4ce63c]
+    Get -> u256,
+}
+
+struct CounterStore {
+    value: u256,
+}
+
+pub contract Counter {
+    mut store: CounterStore
+
+    init() uses (mut store) {
+        store.value = 0
+    }
+
+    recv CounterMsg {
+        Increment uses (mut store) {
+            store.value = store.value + 1
+        }
+
+        Get -> u256 uses (store) {
+            store.value
+        }
+    }
+}
+
+#[test]
+fn smoke() uses (evm: mut Evm) {
+    let addr = evm.create2<Counter>(value: 0, args: (), salt: 0)
+    assert(addr.inner != 0)
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let ingot = top_mod.ingot(&db);
+        let mir_module = lower_ingot(&db, ingot).expect("lowering should succeed");
+
+        let tests = collect_tests(&db, &mir_module.functions, Some("smoke"))
+            .expect("test metadata collection should succeed");
+        assert_eq!(tests.len(), 1, "expected exactly one filtered test");
+
+        let call_graph = build_call_graph(&mir_module.functions);
+        let funcs_by_symbol = build_funcs_by_symbol(&mir_module.functions);
+        let code_region_roots = collect_code_region_roots(&mir_module.functions);
+        let init_root = code_region_roots
+            .iter()
+            .find(|sym| sym.contains("Counter_init"))
+            .expect("Counter init code region should exist")
+            .clone();
+        let runtime_root = code_region_roots
+            .iter()
+            .find(|sym| sym.contains("Counter_runtime"))
+            .expect("Counter runtime code region should exist")
+            .clone();
+
+        let mut region_reachable: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
+        let mut region_deps: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
+        for root in &code_region_roots {
+            let reachable = reachable_functions(&call_graph, root);
+            let deps = collect_code_region_deps(&reachable, &funcs_by_symbol);
+            region_reachable.insert(root.clone(), reachable);
+            region_deps.insert(root.clone(), deps);
+        }
+
+        let (_needed_symbols, needed_code_regions) = collect_needed_symbols_for_tests(
+            &tests,
+            &call_graph,
+            &funcs_by_symbol,
+            &region_reachable,
+            &region_deps,
+        )
+        .expect("needed symbol collection should succeed");
+
+        assert!(
+            needed_code_regions.contains(&init_root),
+            "directly referenced init code region should be included"
+        );
+        assert!(
+            needed_code_regions.contains(&runtime_root),
+            "transitive runtime code region dependency should be included"
         );
     }
 }

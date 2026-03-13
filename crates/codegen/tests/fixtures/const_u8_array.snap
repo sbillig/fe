@@ -10,7 +10,6 @@ object "main" {
       if iszero(v0) {
         v0 := 0x80
       }
-      mstore(0x40, add(v0, 32))
       datacopy(v0, add(dataoffset("data_index_direct_0"), 1), 1)
       let v1 := and(byte(0, mload(v0)), 0xff)
       ret := v1
@@ -51,7 +50,6 @@ object "main" {
       if iszero(v0) {
         v0 := 0x80
       }
-      mstore(0x40, add(v0, 32))
       datacopy(v0, add(dataoffset("data_big_index_0"), 39), 1)
       let v1 := and(byte(0, mload(v0)), 0xff)
       ret := v1

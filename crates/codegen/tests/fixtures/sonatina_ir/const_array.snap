@@ -13,7 +13,7 @@ func private %sum_two(v0.i256, v1.i256) -> i256 {
         v3.*[i256; 3] = int_to_ptr v2 *[i256; 3];
         v5.*i256 = gep v3 0.i256 v0;
         v6.i256 = ptr_to_int v5 i256;
-        v8.*i8 = evm_malloc 32.i256;
+        v8.*i256 = alloca i256;
         v9.i256 = ptr_to_int v8 i256;
         evm_code_copy v9 v6 32.i256;
         v10.i256 = mload v9 i256;
@@ -21,7 +21,7 @@ func private %sum_two(v0.i256, v1.i256) -> i256 {
         v12.*[i256; 3] = int_to_ptr v11 *[i256; 3];
         v13.*i256 = gep v12 0.i256 v1;
         v14.i256 = ptr_to_int v13 i256;
-        v15.*i8 = evm_malloc 32.i256;
+        v15.*i256 = alloca i256;
         v16.i256 = ptr_to_int v15 i256;
         evm_code_copy v16 v14 32.i256;
         v17.i256 = mload v16 i256;

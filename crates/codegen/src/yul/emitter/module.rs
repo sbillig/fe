@@ -44,8 +44,6 @@ pub struct TestMetadata {
     ///
     /// When emitting Yul, this is left empty and the runner compiles `yul` via `solc`.
     pub bytecode: Vec<u8>,
-    /// Optional Sonatina object-level observability text snapshot.
-    pub sonatina_observability_text: Option<String>,
     /// Optional Sonatina object-level observability JSON snapshot.
     pub sonatina_observability_json: Option<String>,
     pub value_param_count: usize,
@@ -304,13 +302,15 @@ fn emit_lowered_module_yul_with_layout(
 pub fn emit_test_module_yul(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
+    filter: Option<&str>,
 ) -> Result<TestModuleOutput, EmitModuleError> {
-    emit_test_module_yul_with_layout(db, top_mod, layout::EVM_LAYOUT)
+    emit_test_module_yul_with_layout(db, top_mod, filter, layout::EVM_LAYOUT)
 }
 
 pub fn emit_test_module_yul_with_layout(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
+    filter: Option<&str>,
     layout: TargetDataLayout,
 ) -> Result<TestModuleOutput, EmitModuleError> {
     let ingot = top_mod.ingot(db);
@@ -340,59 +340,58 @@ pub fn emit_test_module_yul_with_layout(
     }
     let code_regions = Arc::new(code_regions);
 
-    // Emit Yul docs for each function
-    let mut function_docs: Vec<(Vec<YulDoc>, Vec<YulDataRegion>)> =
-        Vec::with_capacity(module.functions.len());
-    for func in module.functions.iter() {
-        let emitter =
-            FunctionEmitter::new(db, func, &code_regions, layout).map_err(EmitModuleError::Yul)?;
-        let is_test = match func.origin {
-            MirFunctionOrigin::Hir(hir_func) => ItemKind::from(hir_func)
-                .attrs(db)
-                .is_some_and(|attrs| attrs.has_attr(db, "test")),
-            MirFunctionOrigin::Synthetic(_) => false,
-        };
-        if is_test {
-            validate_test_function(db, func, emitter.returns_value())?;
-        }
-        let (docs, data_regions) = emitter.emit_doc().map_err(EmitModuleError::Yul)?;
-        function_docs.push((docs, data_regions));
-    }
-
-    // Index function docs by symbol for region assembly.
-    let mut docs_by_symbol = FxHashMap::default();
-    for (idx, func) in module.functions.iter().enumerate() {
-        let (docs, data_regions) = &function_docs[idx];
-        docs_by_symbol.insert(
-            func.symbol_name.clone(),
-            FunctionDocInfo {
-                docs: docs.clone(),
-                data_regions: data_regions.clone(),
-            },
-        );
-    }
-
     let call_graph = build_call_graph(&module.functions);
-
-    let mut tests = collect_test_infos(db, &module.functions)?;
+    let tests =  collect_test_infos(db, &module.functions, filter)?;
     if tests.is_empty() {
         return Ok(TestModuleOutput { tests: Vec::new() });
     }
-    assign_test_display_names(&mut tests);
-    assign_test_object_names(&mut tests);
-
     let test_symbols: FxHashSet<_> = tests.iter().map(|test| test.symbol_name.clone()).collect();
     let funcs_by_symbol = build_funcs_by_symbol(&module.functions);
+    let test_deps: Vec<_> = tests
+        .iter()
+        .map(|test| {
+            collect_test_dependencies(
+                &funcs_by_symbol,
+                &call_graph,
+                &contract_graph,
+                &test.symbol_name,
+                &test_symbols,
+            )
+        })
+        .collect();
+    let mut needed_symbols = FxHashSet::default();
+    for (test, deps) in tests.iter().zip(test_deps.iter()) {
+        needed_symbols.extend(reachable_functions(&call_graph, &test.symbol_name));
+        for root in &deps.code_region_roots {
+            needed_symbols.extend(reachable_functions(&call_graph, root));
+        }
+        for (region, reachable) in &contract_graph.region_reachable {
+            if deps.contracts.contains(&region.contract_name) {
+                needed_symbols.extend(reachable.iter().cloned());
+            }
+        }
+    }
+
+    let mut docs_by_symbol = FxHashMap::default();
+    for func in module
+        .functions
+        .iter()
+        .filter(|func| needed_symbols.contains(&func.symbol_name))
+    {
+        let emitter =
+            FunctionEmitter::new(db, func, &code_regions, layout).map_err(EmitModuleError::Yul)?;
+        if test_symbols.contains(&func.symbol_name) {
+            validate_test_function(db, func, emitter.returns_value())?;
+        }
+        let (docs, data_regions) = emitter.emit_doc().map_err(EmitModuleError::Yul)?;
+        docs_by_symbol.insert(
+            func.symbol_name.clone(),
+            FunctionDocInfo { docs, data_regions },
+        );
+    }
 
     let mut output_tests = Vec::new();
-    for test in tests {
-        let deps = collect_test_dependencies(
-            &funcs_by_symbol,
-            &call_graph,
-            &contract_graph,
-            &test.symbol_name,
-            &test_symbols,
-        );
+    for (test, deps) in tests.into_iter().zip(test_deps) {
         let contract_docs = emit_contract_docs(&contract_graph, &docs_by_symbol, &deps.contracts)?;
         let code_region_docs = emit_code_region_docs(
             &call_graph,
@@ -416,7 +415,6 @@ pub fn emit_test_module_yul_with_layout(
             object_name: test.object_name,
             yul,
             bytecode: Vec::new(),
-            sonatina_observability_text: None,
             sonatina_observability_json: None,
             value_param_count: test.value_param_count,
             effect_param_count: test.effect_param_count,
@@ -852,8 +850,9 @@ struct TestDependencies {
 fn collect_test_infos(
     db: &dyn HirDb,
     functions: &[MirFunction<'_>],
+    filter: Option<&str>,
 ) -> Result<Vec<TestInfo>, EmitModuleError> {
-    functions
+    let mut tests = functions
         .iter()
         .filter_map(|mir_func| {
             let MirFunctionOrigin::Hir(hir_func) = mir_func.origin else {
@@ -892,7 +891,12 @@ fn collect_test_infos(
                 initial_balance,
             }))
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+
+    assign_test_display_names(&mut tests);
+    assign_test_object_names(&mut tests);
+    tests.retain(|test| test_info_matches_filter(test, filter));
+    Ok(tests)
 }
 
 /// Extracts the `balance` argument from `#[test(balance = N)]`, if present.
@@ -926,6 +930,14 @@ fn parse_test_balance_arg<'db>(
     }
 
     Ok(None)
+}
+fn test_info_matches_filter(test: &TestInfo, filter: Option<&str>) -> bool {
+    let Some(pattern) = filter else {
+        return true;
+    };
+    test.hir_name.contains(pattern)
+        || test.symbol_name.contains(pattern)
+        || test.display_name.contains(pattern)
 }
 
 /// Validates that a `#[test]` function conforms to runner constraints.
@@ -1660,7 +1672,7 @@ fn emit_data_sections(data_regions: &[YulDataRegion]) -> Vec<YulDoc> {
 
 #[cfg(test)]
 mod tests {
-    use super::{TestInfo, assign_test_object_names};
+    use super::{TestInfo, assign_test_object_names, test_info_matches_filter};
 
     /// Ensures test object names are disambiguated with numeric suffixes.
     #[test]
@@ -1697,5 +1709,23 @@ mod tests {
 
         assert_eq!(by_name.remove("foo bar").as_deref(), Some("test_foo_bar_1"));
         assert_eq!(by_name.remove("foo_bar").as_deref(), Some("test_foo_bar_2"));
+    }
+
+    #[test]
+    fn test_filter_matches_hir_symbol_and_display_names() {
+        let test = TestInfo {
+            hir_name: "alpha".to_string(),
+            display_name: "alpha [module::alpha]".to_string(),
+            symbol_name: "module_h123_alpha".to_string(),
+            object_name: "test_alpha".to_string(),
+            value_param_count: 0,
+            effect_param_count: 0,
+            expected_revert: None,
+        };
+
+        assert!(test_info_matches_filter(&test, None));
+        assert!(test_info_matches_filter(&test, Some("alpha")));
+        assert!(test_info_matches_filter(&test, Some("module_h123")));
+        assert!(!test_info_matches_filter(&test, Some("beta")));
     }
 }

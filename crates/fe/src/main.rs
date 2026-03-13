@@ -271,10 +271,7 @@ pub enum Command {
         /// How many stack items to print per EVM step in traces.
         #[arg(long, default_value_t = 16)]
         trace_evm_stack_n: usize,
-        /// Dump the Sonatina runtime symbol table (function offsets/sizes).
-        #[arg(long)]
-        sonatina_symtab: bool,
-        /// Directory to write debug outputs (traces, symtabs) into.
+        /// Directory to write debug outputs (traces) into.
         #[arg(long)]
         debug_dir: Option<Utf8PathBuf>,
         /// Write a debugging report as a `.tar.gz` file (includes sources, IR, bytecode, traces).
@@ -546,7 +543,6 @@ pub fn run(opts: &Options) {
             trace_evm,
             trace_evm_keep,
             trace_evm_stack_n,
-            sonatina_symtab,
             debug_dir,
             report,
             report_out,
@@ -576,9 +572,6 @@ pub fn run(opts: &Options) {
                 trace_evm: *trace_evm,
                 trace_evm_keep: *trace_evm_keep,
                 trace_evm_stack_n: *trace_evm_stack_n,
-                sonatina_symtab: *sonatina_symtab,
-                sonatina_evm_debug: false,
-                sonatina_observability: false,
                 dump_yul_on_failure: matches!(test_debug, Some(TestDebug::Failures)),
                 dump_yul_for_all: matches!(test_debug, Some(TestDebug::All)),
                 debug_dir: debug_dir.clone(),

@@ -15,7 +15,7 @@ func private %index_direct() -> i8 {
     block0:
         v0.i256 = sym_addr $__fe_const_data_0;
         v2.i256 = add v0 1.i256;
-        v3.*i8 = evm_malloc 1.i256;
+        v3.*i256 = alloca i256;
         v4.i256 = ptr_to_int v3 i256;
         evm_code_copy v4 v2 1.i256;
         v5.i256 = mload v4 i256;
@@ -65,7 +65,7 @@ func private %big_index() -> i8 {
     block0:
         v0.i256 = sym_addr $__fe_const_data_3;
         v2.i256 = add v0 39.i256;
-        v4.*i8 = evm_malloc 1.i256;
+        v4.*i256 = alloca i256;
         v5.i256 = ptr_to_int v4 i256;
         evm_code_copy v5 v2 1.i256;
         v6.i256 = mload v5 i256;

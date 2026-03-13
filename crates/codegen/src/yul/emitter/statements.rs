@@ -236,6 +236,16 @@ impl<'db> FunctionEmitter<'db> {
         docs.push(YulDoc::line(format!("mstore(0x40, add({name}, {size}))")));
     }
 
+    fn emit_code_load_scratch(&self, docs: &mut Vec<YulDoc>, state: &mut BlockState) -> String {
+        let scratch = state.alloc_local();
+        docs.push(YulDoc::line(format!("let {scratch} := mload(0x40)")));
+        docs.push(YulDoc::block(
+            format!("if iszero({scratch}) "),
+            vec![YulDoc::line(format!("{scratch} := 0x80"))],
+        ));
+        scratch
+    }
+
     fn emit_alloc_inst(
         &mut self,
         docs: &mut Vec<YulDoc>,
@@ -291,8 +301,7 @@ impl<'db> FunctionEmitter<'db> {
         let rhs = if space == mir::ir::AddressSpaceKind::Code {
             let addr = self.lower_place_address(place, state)?;
             let packed = self.is_packed_scalar_array_access(place, ty)?;
-            let scratch = state.alloc_local();
-            self.emit_alloc_value(docs, &scratch, 32, true);
+            let scratch = self.emit_code_load_scratch(docs, state);
             if packed {
                 docs.push(YulDoc::line(format!("datacopy({scratch}, {addr}, 1)")));
                 self.apply_from_word_conversion(&format!("byte(0, mload({scratch}))"), ty)
@@ -461,8 +470,7 @@ impl<'db> FunctionEmitter<'db> {
         let packed_src = self.is_packed_scalar_array_access(src_place, value_ty)?;
         let rhs = if src_space == mir::ir::AddressSpaceKind::Code {
             let src_addr = self.lower_place_address(src_place, state)?;
-            let scratch = state.alloc_local();
-            self.emit_alloc_value(docs, &scratch, 32, true);
+            let scratch = self.emit_code_load_scratch(docs, state);
             if packed_src {
                 docs.push(YulDoc::line(format!("datacopy({scratch}, {src_addr}, 1)")));
                 self.apply_from_word_conversion(&format!("byte(0, mload({scratch}))"), value_ty)
@@ -498,8 +506,7 @@ impl<'db> FunctionEmitter<'db> {
         let src_space = self.lower_place_space(src_place)?;
         let dst_space = self.lower_place_space(dst_place)?;
         let discr = if src_space == mir::ir::AddressSpaceKind::Code {
-            let scratch = state.alloc_local();
-            self.emit_alloc_value(docs, &scratch, 32, true);
+            let scratch = self.emit_code_load_scratch(docs, state);
             docs.push(YulDoc::line(format!("datacopy({scratch}, {src_addr}, 32)")));
             format!("mload({scratch})")
         } else {
