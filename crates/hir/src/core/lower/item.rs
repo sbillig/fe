@@ -1,7 +1,7 @@
 use parser::ast::{self, prelude::*};
 use salsa::Accumulator as _;
 
-use super::FileLowerCtxt;
+use super::{FileLowerCtxt, attr::named_attr_specs};
 use crate::{
     hir_def::{
         AttrListId, Body, EffectParamListId, FuncParamListId, GenericParamListId, IdentId,
@@ -372,32 +372,24 @@ impl<'db> Func<'db> {
 }
 
 fn validate_inline_attr<'db>(ctxt: &mut FileLowerCtxt<'db>, func: &ast::Func) {
-    let Some(attrs) = func.attr_list() else {
-        return;
-    };
-
     let db = ctxt.db();
     let file = ctxt.top_mod().file(db);
     let func_name = func.sig().name().map(|name| name.text().to_string());
-    let inline_attrs = attrs
-        .normal_attrs()
-        .filter(|attr| attr.path().is_some_and(|path| path.text() == "inline"))
+    let inline_attrs = named_attr_specs(func.attr_list(), "inline")
+        .into_iter()
         .map(|attr| {
             let spec = InlineAttrSpec {
-                has_value: attr.value().is_some(),
+                has_value: attr.value.is_some(),
                 args: attr
-                    .args()
-                    .map(|args| {
-                        args.into_iter()
-                            .map(|arg| InlineAttrArgSpec {
-                                key: arg.key().map(|key| key.text().to_string()),
-                                has_value: arg.value().is_some(),
-                            })
-                            .collect()
+                    .args
+                    .into_iter()
+                    .map(|arg| InlineAttrArgSpec {
+                        key: arg.key,
+                        has_value: arg.value.is_some(),
                     })
-                    .unwrap_or_default(),
+                    .collect(),
             };
-            (spec, attr.syntax().text_range())
+            (spec, attr.range)
         })
         .collect::<Vec<_>>();
 

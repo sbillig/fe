@@ -1,7 +1,10 @@
 use parser::ast::{self, AttrListOwner as _};
 use salsa::Accumulator as _;
 
-use super::hir_builder::HirBuilder;
+use super::{
+    attr::named_attr_specs,
+    hir_builder::HirBuilder,
+};
 
 use crate::{
     HirDb, SelectorError, SelectorErrorKind,
@@ -389,23 +392,10 @@ fn parse_selector_attr<'db>(
 ) -> Option<ParsedSelector> {
     use crate::hir_def::LitKind;
     use num_bigint::BigUint;
-    use parser::ast::prelude::*;
 
-    for attr in attr_list {
-        let ast::AttrKind::Normal(normal_attr) = attr.kind() else {
-            continue;
-        };
-        let is_selector = normal_attr
-            .path()
-            .map(|p| p.text() == "selector")
-            .unwrap_or(false);
-        if !is_selector {
-            continue;
-        }
-
-        let range = attr.syntax().text_range();
-
-        if let Some(value) = normal_attr.value() {
+    for attr in named_attr_specs(Some(attr_list), "selector") {
+        let range = attr.range;
+        if let Some(value) = attr.value {
             let expr = match value {
                 ast::AttrArgValueKind::Expr(expr) => Some(expr),
                 _ => None,
@@ -438,10 +428,10 @@ fn parse_selector_attr<'db>(
         }
 
         // Reject `#[selector(value)]` form with helpful error
-        if normal_attr.args().is_some() {
+        if !attr.args.is_empty() {
             return Some(ParsedSelector {
                 expr: None,
-                range,
+                range: attr.range,
                 error: Some(SelectorErrorKind::InvalidForm),
             });
         }

@@ -17,6 +17,14 @@ impl AttrList {
         })
     }
 
+    /// Returns only normal attributes with the given simple path name.
+    pub fn normal_attrs_named<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> impl Iterator<Item = NormalAttr> + 'a {
+        self.normal_attrs().filter(move |attr| attr.is_named(name))
+    }
+
     /// Returns only doc comment attributes in the attribute list.
     pub fn doc_attrs(&self) -> impl Iterator<Item = DocCommentAttr> {
         self.iter().filter_map(|attr| match attr.kind() {
@@ -53,6 +61,10 @@ ast_node! {
 impl NormalAttr {
     pub fn path(&self) -> Option<Path> {
         support::child(self.syntax())
+    }
+
+    pub fn is_named(&self, name: &str) -> bool {
+        self.path().is_some_and(|path| path.text() == name)
     }
 
     pub fn args(&self) -> Option<AttrArgList> {
