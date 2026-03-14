@@ -4,8 +4,7 @@ expression: output
 input_file: tests/fixtures/match_return.fe
 ---
 function $f__Evm_hef0af3106e109414__3af54274b2985741($e) {
-  let v0 := mload($e)
-  switch v0
+  switch $e
     case 0 {
       return(0, 0)
     }

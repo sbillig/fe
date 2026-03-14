@@ -260,6 +260,16 @@ pub fn supports_object_ref_runtime_ty<'db>(
     }
 }
 
+pub fn enum_is_payload_free<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    let Some(enum_) = ty.as_enum(db) else {
+        return false;
+    };
+    (0..enum_.len_variants(db)).all(|idx| {
+        let ctor = ConstructorKind::Variant(EnumVariant::new(enum_, idx), ty);
+        ctor.field_types(db).is_empty()
+    })
+}
+
 /// Returns the effect provider's address space for a type, looking through transparent newtype wrappers.
 pub fn effect_provider_space_for_ty<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -875,9 +885,17 @@ pub fn repr_kind_for_ty<'db>(
 
     if ty
         .adt_ref(db)
-        .is_some_and(|adt| matches!(adt, AdtRef::Struct(_) | AdtRef::Enum(_)))
+        .is_some_and(|adt| matches!(adt, AdtRef::Struct(_)))
     {
         return ReprKind::Ref;
+    }
+
+    if ty.as_enum(db).is_some() {
+        return if enum_is_payload_free(db, ty) {
+            ReprKind::Word
+        } else {
+            ReprKind::Ref
+        };
     }
 
     ReprKind::Word

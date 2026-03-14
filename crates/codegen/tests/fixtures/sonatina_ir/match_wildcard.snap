@@ -5,13 +5,7 @@ input_file: crates/codegen/tests/fixtures/match_wildcard.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @__fe_obj_Color_0 = enum {
-    #Red,
-    #Green,
-    #Blue,
-};
-
-func private %match_with_wildcard(v0.objref<@__fe_obj_Color_0>) -> i8 {
+func private %match_with_wildcard(v0.i256) -> i8 {
     block0:
         jump block4;
 
@@ -26,8 +20,7 @@ func private %match_with_wildcard(v0.objref<@__fe_obj_Color_0>) -> i8 {
         jump block2;
 
     block4:
-        v6.enumtag(@__fe_obj_Color_0) = enum.get_tag v0;
-        br_table v6 block3 (0.enumtag(@__fe_obj_Color_0) block1);
+        br_table v0 block3 (0.i256 block1);
 }
 
 func private %wildcard_not_last(v0.i8) -> i8 {
@@ -48,7 +41,7 @@ func private %wildcard_not_last(v0.i8) -> i8 {
         br_table v0 block3 (0.i8 block1);
 }
 
-func private %multiple_before_wildcard(v0.objref<@__fe_obj_Color_0>) -> i8 {
+func private %multiple_before_wildcard(v0.i256) -> i8 {
     block0:
         jump block5;
 
@@ -66,13 +59,12 @@ func private %multiple_before_wildcard(v0.objref<@__fe_obj_Color_0>) -> i8 {
         jump block2;
 
     block5:
-        v8.enumtag(@__fe_obj_Color_0) = enum.get_tag v0;
-        br_table v8 block4 (0.enumtag(@__fe_obj_Color_0) block1) (1.enumtag(@__fe_obj_Color_0) block3);
+        br_table v0 block4 (0.i256 block1) (1.i256 block3);
 }
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.i8 = call %match_with_wildcard undef.objref<@__fe_obj_Color_0>;
+        v1.i8 = call %match_with_wildcard 0.i256;
         evm_stop;
 }
 

@@ -1,13 +1,11 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 42
 expression: output
 input_file: tests/fixtures/match_wildcard.fe
 ---
 function $match_with_wildcard($c) -> ret {
   let v0 := 0
-  let v1 := mload($c)
-  switch v1
+  switch $c
     case 0 {
       v0 := 1
     }
@@ -31,8 +29,7 @@ function $wildcard_not_last($x) -> ret {
 }
 function $multiple_before_wildcard($c) -> ret {
   let v0 := 0
-  let v1 := mload($c)
-  switch v1
+  switch $c
     case 0 {
       v0 := 1
     }

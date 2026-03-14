@@ -30,7 +30,8 @@ use sonatina_ir::{
         control_flow::{Br, BrTable, Call, Jump, Return},
         data::{
             Alloca, EnumAssertVariantRef, EnumGetTag, EnumProj, EnumSetTag, Gep, Mload, Mstore,
-            ObjAlloc, ObjIndex, ObjLoad, ObjProj, ObjStore, SymAddr, SymSize, SymbolRef,
+            ObjAlloc, ObjIndex, ObjLoad, ObjMaterializeStack, ObjProj, ObjStore, SymAddr, SymSize,
+            SymbolRef,
         },
         evm::{
             EvmAddMod, EvmAddress, EvmBaseFee, EvmBlockHash, EvmCall, EvmCallValue,
@@ -1984,6 +1985,52 @@ fn object_field_uses_object_ref<'db>(
         )
 }
 
+fn const_aggregate_object_copy_compatible<'db>(
+    db: &'db DriverDataBase,
+    core: &mir::CoreLib<'db>,
+    ty: hir::analysis::ty::ty_def::TyId<'db>,
+) -> bool {
+    let ty = mir::repr::object_layout_ty(db, core, ty);
+
+    if layout::is_zero_sized_ty(db, ty) {
+        return true;
+    }
+
+    if let Some((CapabilityKind::View, inner)) = ty.as_capability(db) {
+        return const_aggregate_object_copy_compatible(db, core, inner);
+    }
+
+    if let Some(inner) = mir::repr::transparent_newtype_field_ty(db, ty) {
+        return const_aggregate_object_copy_compatible(db, core, inner);
+    }
+
+    match mir::repr::repr_kind_for_ty(db, core, ty) {
+        mir::repr::ReprKind::Zst | mir::repr::ReprKind::Word => true,
+        mir::repr::ReprKind::Ptr(_) => false,
+        mir::repr::ReprKind::Ref => {
+            if ty.is_array(db) {
+                return layout::array_elem_ty(db, ty).is_some_and(|elem_ty| {
+                    const_aggregate_object_copy_compatible(db, core, elem_ty)
+                });
+            }
+
+            if ty.is_tuple(db)
+                || ty
+                    .adt_ref(db)
+                    .is_some_and(|adt| matches!(adt, AdtRef::Struct(_)))
+            {
+                return ty
+                    .field_types(db)
+                    .iter()
+                    .copied()
+                    .all(|field_ty| const_aggregate_object_copy_compatible(db, core, field_ty));
+            }
+
+            false
+        }
+    }
+}
+
 struct FeEnumTypeDeclCtx<'a, 'db> {
     builder: &'a sonatina_ir::builder::ModuleBuilder,
     db: &'db DriverDataBase,
@@ -2117,6 +2164,13 @@ fn fe_ty_to_sonatina_inner<'db>(
 
     if let Some(inner) = mir::repr::transparent_newtype_field_ty(db, ty) {
         return fe_ty_to_sonatina(builder, db, core, target_layout, inner, cache, name_counter);
+    }
+
+    if matches!(
+        mir::repr::repr_kind_for_ty(db, core, ty),
+        mir::repr::ReprKind::Word
+    ) {
+        return Some(types::value_type(db, ty));
     }
 
     let base_ty = ty.base_ty(db);
@@ -2296,6 +2350,13 @@ fn fe_object_ty_to_sonatina_inner<'db>(
             cache,
             name_counter,
         );
+    }
+
+    if matches!(
+        mir::repr::repr_kind_for_ty(db, core, ty),
+        mir::repr::ReprKind::Word
+    ) {
+        return Some(types::value_type(db, ty));
     }
 
     let base_ty = ty.base_ty(db);
@@ -2839,10 +2900,7 @@ fn lower_object_place_segment<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 );
             }
             Projection::Index(idx_source) => {
-                let idx = match idx_source {
-                    IndexSource::Constant(idx) => ctx.fb.make_imm_value(I256::from(*idx as u64)),
-                    IndexSource::Dynamic(value_id) => lower_value(ctx, *value_id)?,
-                };
+                let idx = lower_array_index_with_bounds_check(ctx, step.owner.ty, idx_source)?;
                 object_elem_ty = sonatina_array_elem_ty(ctx, object_elem_ty)?;
                 let result_ty = ctx.fb.module_builder.objref_type(object_elem_ty);
                 object_ref = ctx
@@ -3256,6 +3314,40 @@ fn object_ref_elem_ty<C: sonatina_ir::func_cursor::FuncCursor>(
         )));
     };
     Ok(elem_ty)
+}
+
+fn lower_array_index_with_bounds_check<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    array_ty: TyId<'db>,
+    idx_source: &IndexSource<mir::ValueId>,
+) -> Result<ValueId, LowerError> {
+    let arr_len = layout::array_len(ctx.db, array_ty).ok_or_else(|| {
+        LowerError::Unsupported(format!(
+            "projection: array index on non-array type `{}`",
+            array_ty.pretty_print(ctx.db),
+        ))
+    })?;
+
+    match idx_source {
+        IndexSource::Constant(idx) => {
+            if *idx >= arr_len {
+                let revert_block = ensure_overflow_revert_block(ctx)?;
+                ctx.fb
+                    .insert_inst_no_result(Jump::new(ctx.is, revert_block));
+                let unreachable_block = ctx.fb.append_block();
+                ctx.fb.switch_to_block(unreachable_block);
+            }
+            Ok(ctx.fb.make_imm_value(I256::from(*idx as u64)))
+        }
+        IndexSource::Dynamic(value_id) => {
+            let idx = lower_value(ctx, *value_id)?;
+            let len_val = ctx.fb.make_imm_value(I256::from(arr_len as u64));
+            let in_bounds = ctx.fb.insert_inst(Lt::new(ctx.is, idx, len_val), Type::I1);
+            let oob = ctx.fb.insert_inst(IsZero::new(ctx.is, in_bounds), Type::I1);
+            emit_overflow_revert(ctx, oob)?;
+            Ok(idx)
+        }
+    }
 }
 
 /// Manual offset arithmetic path for place address computation.
@@ -4134,6 +4226,45 @@ fn lower_const_aggregate<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             ctx.gep_name_counter,
         )
         .unwrap_or_else(|| ctx.fb.declare_array_type(Type::I8, size_bytes));
+        if const_aggregate_object_copy_compatible(ctx.db, ctx.core, ty) {
+            let gv_ref = if let Some(&existing) = ctx.const_data_globals.get(data) {
+                existing
+            } else {
+                let elems: Vec<GvInitializer> = data
+                    .iter()
+                    .map(|&b| GvInitializer::make_imm(Immediate::I8(b as i8)))
+                    .collect();
+                let array_init = GvInitializer::make_array(elems);
+                let label = format!("__fe_const_data_{}", *ctx.data_global_counter);
+                *ctx.data_global_counter += 1;
+                let array_ty = ctx
+                    .fb
+                    .module_builder
+                    .declare_array_type(Type::I8, data.len());
+                let gv_data =
+                    GlobalVariableData::constant(label, array_ty, Linkage::Private, array_init);
+                let gv_ref = ctx.fb.module_builder.declare_gv(gv_data);
+                ctx.const_data_globals.insert(data.to_vec(), gv_ref);
+                ctx.data_globals.push(gv_ref);
+                gv_ref
+            };
+
+            let object_ref = emit_obj_alloc_ref(ctx.fb, object_ty, ctx.is);
+            let object_ptr_ty = ctx.fb.ptr_type(object_ty);
+            let object_ptr = ctx
+                .fb
+                .insert_inst(ObjMaterializeStack::new(ctx.is, object_ref), object_ptr_ty);
+            let sym = SymbolRef::Global(gv_ref);
+            let code_offset = ctx
+                .fb
+                .insert_inst(SymAddr::new(ctx.is, sym.clone()), Type::I256);
+            let code_size = ctx.fb.insert_inst(SymSize::new(ctx.is, sym), Type::I256);
+            let dst = coerce_value_to_word(ctx, object_ptr);
+            ctx.fb
+                .insert_inst_no_result(EvmCodeCopy::new(ctx.is, dst, code_offset, code_size));
+            return Ok(object_ref);
+        }
+
         let object_ref = emit_obj_alloc_ref(ctx.fb, object_ty, ctx.is);
         init_const_array_object(ctx, object_ref, ty, data)?;
         return Ok(object_ref);

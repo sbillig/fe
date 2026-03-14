@@ -404,9 +404,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         if let Some(value) = self.try_lower_variant_ctor(expr, None) {
+            let expr_value = self.ensure_value(expr);
+            self.set_expr_value_from_lowered_value(expr_value, value);
             return value;
         }
         if let Some(value) = self.try_lower_unit_variant(expr, None) {
+            let expr_value = self.ensure_value(expr);
+            self.set_expr_value_from_lowered_value(expr_value, value);
             return value;
         }
 
@@ -1789,9 +1793,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         if let Some(value_id) = self.try_lower_variant_ctor(expr, Some(dest)) {
+            let expr_value = self.ensure_value(expr);
+            self.set_expr_value_from_lowered_value(expr_value, value_id);
             return value_id;
         }
         if let Some(value_id) = self.try_lower_unit_variant(expr, Some(dest)) {
+            let expr_value = self.ensure_value(expr);
+            self.set_expr_value_from_lowered_value(expr_value, value_id);
             return value_id;
         }
 

@@ -39,6 +39,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return Some(self.ensure_value(expr));
         }
 
+        if !self.is_by_ref_ty(enum_ty) {
+            return Some(self.synthetic_u256(BigUint::from(variant.idx as u64)));
+        }
+
         let value_id = if let Some(dest) = dest_override {
             self.emit_alloc_into_local(expr, dest)
         } else {
@@ -104,6 +108,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
 
         self.move_to_block(block);
+        if !self.is_by_ref_ty(enum_ty) {
+            return Some(self.synthetic_u256(BigUint::from(variant.idx as u64)));
+        }
         let value_id = if let Some(dest) = dest_override {
             self.emit_alloc_into_local(expr, dest)
         } else {

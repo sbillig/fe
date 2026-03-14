@@ -5,13 +5,7 @@ input_file: crates/codegen/tests/fixtures/match_enum.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @__fe_obj_MyEnum_0 = enum {
-    #A,
-    #B,
-    #C,
-};
-
-func private %match_enum(v0.objref<@__fe_obj_MyEnum_0>) -> i8 {
+func private %match_enum(v0.i256) -> i8 {
     block0:
         jump block6;
 
@@ -32,13 +26,12 @@ func private %match_enum(v0.objref<@__fe_obj_MyEnum_0>) -> i8 {
         jump block2;
 
     block6:
-        v9.enumtag(@__fe_obj_MyEnum_0) = enum.get_tag v0;
-        br_table v9 block5 (0.enumtag(@__fe_obj_MyEnum_0) block1) (1.enumtag(@__fe_obj_MyEnum_0) block3) (2.enumtag(@__fe_obj_MyEnum_0) block4);
+        br_table v0 block5 (0.i256 block1) (1.i256 block3) (2.i256 block4);
 }
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.i8 = call %match_enum undef.objref<@__fe_obj_MyEnum_0>;
+        v1.i8 = call %match_enum 0.i256;
         evm_stop;
 }
 

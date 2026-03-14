@@ -5,29 +5,37 @@ input_file: crates/codegen/tests/fixtures/const_array_branch.fe
 ---
 target = "evm-ethereum-osaka"
 
+global private const [i8; 32] $__fe_const_data_0 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+
 func private %const_array_branch(v0.i1) -> i256 {
     block0:
         br v0 block1 block2;
 
     block1:
         v2.objref<[i256; 1]> = obj.alloc [i256; 1];
-        v3.objref<i256> = obj.index v2 0.i256;
-        obj.store v3 1.i256;
-        v5.objref<i256> = obj.index v2 0.i256;
-        v6.i256 = obj.load v5;
+        v3.*[i256; 1] = obj.materialize.stack v2;
+        v4.i256 = sym_addr $__fe_const_data_0;
+        v5.i256 = sym_size $__fe_const_data_0;
+        v6.i256 = ptr_to_int v3 i256;
+        evm_code_copy v6 v4 v5;
+        v7.objref<i256> = obj.index v2 0.i256;
+        v8.i256 = obj.load v7;
         jump block3;
 
     block2:
-        v7.objref<[i256; 1]> = obj.alloc [i256; 1];
-        v8.objref<i256> = obj.index v7 0.i256;
-        obj.store v8 1.i256;
-        v9.objref<i256> = obj.index v7 0.i256;
-        v10.i256 = obj.load v9;
+        v9.objref<[i256; 1]> = obj.alloc [i256; 1];
+        v10.*[i256; 1] = obj.materialize.stack v9;
+        v11.i256 = sym_addr $__fe_const_data_0;
+        v12.i256 = sym_size $__fe_const_data_0;
+        v13.i256 = ptr_to_int v10 i256;
+        evm_code_copy v13 v11 v12;
+        v14.objref<i256> = obj.index v9 0.i256;
+        v15.i256 = obj.load v14;
         jump block3;
 
     block3:
-        v11.i256 = phi (v6 block1) (v10 block2);
-        return v11;
+        v16.i256 = phi (v8 block1) (v15 block2);
+        return v16;
 }
 
 func private %__fe_sonatina_entry() {
@@ -40,5 +48,6 @@ func private %__fe_sonatina_entry() {
 object @Contract {
     section runtime {
         entry %__fe_sonatina_entry;
+        data $__fe_const_data_0;
     }
 }
