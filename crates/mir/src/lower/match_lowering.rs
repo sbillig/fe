@@ -689,6 +689,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             place: Place<'db>,
         ) -> ValueId {
             let dest = builder.alloc_temp_local(ty, false, "load");
+            builder.builder.body.locals[dest.index()].address_space =
+                builder.place_address_space(&place);
             builder.assign(None, Some(dest), crate::ir::Rvalue::Load { place });
             alloc_local_value(builder, ty, dest)
         }

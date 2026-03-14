@@ -921,19 +921,30 @@ fn recompute_value_pointer_infos<'db>(
     core: &CoreLib<'db>,
     body: &mut MirBody<'db>,
 ) {
-    let recomputed_pointer_infos: Vec<_> = (0..body.values.len())
+    let original_pointer_infos: Vec<_> =
+        body.values.iter().map(|value| value.pointer_info).collect();
+    let mut values_without_pointer_cache = body.values.clone();
+    for value in &mut values_without_pointer_cache {
+        value.pointer_info = None;
+    }
+    let recomputed_pointer_infos: Vec<_> = (0..values_without_pointer_cache.len())
         .map(|idx| {
             repr::infer_value_pointer_info(
                 db,
                 core,
-                &body.values,
+                &values_without_pointer_cache,
                 &body.locals,
                 ValueId(idx as u32),
             )
         })
         .collect();
-    for (value, pointer_info) in body.values.iter_mut().zip(recomputed_pointer_infos) {
-        value.pointer_info = pointer_info;
+    for ((value, recomputed), original) in body
+        .values
+        .iter_mut()
+        .zip(recomputed_pointer_infos)
+        .zip(original_pointer_infos)
+    {
+        value.pointer_info = recomputed.or(original);
     }
 }
 
@@ -2265,5 +2276,83 @@ pub fn transparent_cast_over_raw_pointer_handle_does_not_spill(x: mut Pair) {}
             Some(AddressSpaceKind::Memory),
         );
         assert_eq!(resolved.final_state(), resolved.base);
+    }
+
+    #[test]
+    fn lower_capability_to_repr_recomputes_pointer_info_after_origin_rewrite() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse(
+            "file:///lower_capability_to_repr_recomputes_pointer_info_after_origin_rewrite.fe",
+        )
+        .unwrap();
+        let src = r#"
+struct Wrap {
+    inner: u256,
+}
+
+pub fn lower_capability_to_repr_recomputes_pointer_info_after_origin_rewrite(x: mut Wrap) {}
+"#;
+        let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+        let top_mod = db.top_mod(file);
+        let (core, wrap_capability_ty) = load_func_param_ty(
+            &db,
+            top_mod,
+            "lower_capability_to_repr_recomputes_pointer_info_after_origin_rewrite",
+        );
+        let (_, wrap_ty) = wrap_capability_ty
+            .as_capability(&db)
+            .expect("param should be a capability");
+        let inner_ty = wrap_ty.field_types(&db)[0];
+
+        let mut body = MirBody::new();
+        body.stage = MirStage::Capability;
+        body.blocks.push(BasicBlock {
+            insts: Vec::new(),
+            terminator: Terminator::Return {
+                source: SourceInfoId::SYNTHETIC,
+                value: None,
+            },
+        });
+
+        let local = body.alloc_local(LocalData {
+            name: "tmp_alloc1".to_string(),
+            ty: inner_ty,
+            is_mut: true,
+            source: SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Memory,
+            pointer_leaf_infos: Vec::new(),
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
+        });
+        let root = body.alloc_value(ValueData {
+            ty: inner_ty,
+            origin: ValueOrigin::Local(local),
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Ref(AddressSpaceKind::Memory),
+            pointer_info: None,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
+        });
+        let wrapped = body.alloc_value(ValueData {
+            ty: wrap_capability_ty,
+            origin: ValueOrigin::TransparentCast { value: root },
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Ref(AddressSpaceKind::Storage),
+            pointer_info: Some(PointerInfo {
+                address_space: AddressSpaceKind::Storage,
+                target_ty: Some(wrap_ty),
+            }),
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
+        });
+
+        lower_capability_to_repr(&db, &core, &mut body);
+
+        let info = body
+            .value_pointer_info(wrapped)
+            .expect("rewritten transparent cast should still carry pointer info");
+        assert_eq!(
+            info.address_space,
+            AddressSpaceKind::Memory,
+            "origin-rewritten transparent casts must drop stale storage pointer metadata",
+        );
+        assert_eq!(info.target_ty, Some(wrap_ty));
     }
 }

@@ -83,6 +83,7 @@ pub enum RuntimeShape<'db> {
     Unresolved,
     Erased,
     Word(RuntimeWordKind),
+    EnumTag { enum_ty: TyId<'db> },
     ObjectRef { target_ty: TyId<'db> },
     MemoryPtr { target_ty: Option<TyId<'db>> },
     AddressWord(PointerInfo<'db>),
@@ -99,7 +100,7 @@ impl<'db> RuntimeShape<'db> {
 
     pub fn pointer_info(self) -> Option<PointerInfo<'db>> {
         match self {
-            Self::ObjectRef { .. } => None,
+            Self::EnumTag { .. } | Self::ObjectRef { .. } => None,
             Self::MemoryPtr { target_ty } => Some(PointerInfo {
                 address_space: AddressSpaceKind::Memory,
                 target_ty,

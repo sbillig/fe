@@ -1108,6 +1108,19 @@ fn merge_runtime_shapes<'db>(
         (RuntimeShape::Word(lhs), RuntimeShape::Word(rhs)) if lhs == rhs => {
             Some(RuntimeShape::Word(lhs))
         }
+        (RuntimeShape::EnumTag { enum_ty: lhs }, RuntimeShape::EnumTag { enum_ty: rhs })
+            if lhs == rhs =>
+        {
+            Some(RuntimeShape::EnumTag { enum_ty: lhs })
+        }
+        (
+            RuntimeShape::Word(crate::ir::RuntimeWordKind::I256),
+            RuntimeShape::EnumTag { enum_ty },
+        )
+        | (
+            RuntimeShape::EnumTag { enum_ty },
+            RuntimeShape::Word(crate::ir::RuntimeWordKind::I256),
+        ) => Some(RuntimeShape::EnumTag { enum_ty }),
         (
             RuntimeShape::ObjectRef {
                 target_ty: lhs_target,
@@ -1218,13 +1231,25 @@ fn assigned_rvalue_runtime_shape<'db>(
         }),
         Rvalue::ZeroInit
         | Rvalue::Intrinsic { .. }
-        | Rvalue::Load { .. }
         | Rvalue::Alloc { .. }
         | Rvalue::ConstAggregate { .. } => func
             .body
             .locals
             .get(dest.index())
             .map(|local| local.runtime_shape),
+        Rvalue::Load { place } => crate::repr::runtime_shape_for_loaded_place(
+            db,
+            core,
+            &func.body.values,
+            &func.body.locals,
+            place,
+        )
+        .or_else(|| {
+            func.body
+                .locals
+                .get(dest.index())
+                .map(|local| local.runtime_shape)
+        }),
     }
 }
 
@@ -1628,6 +1653,7 @@ pub(crate) fn canonicalize_transparent_newtypes<'db>(
             let ValueOrigin::TransparentCast { value: mut inner } = values[idx].origin else {
                 continue;
             };
+            let original_inner = inner;
             // Bound the walk defensively (cycles should be impossible).
             for _ in 0..values.len() {
                 match values.get(inner.index()).map(|v| &v.origin) {
@@ -1636,6 +1662,12 @@ pub(crate) fn canonicalize_transparent_newtypes<'db>(
                 }
             }
             values[idx].origin = ValueOrigin::TransparentCast { value: inner };
+            if inner != original_inner {
+                // Transparent-cast flattening can invalidate any cached pointee metadata inherited
+                // from the outer cast chain. Let later queries re-derive it from the new inner
+                // value instead of preserving stale address-space information.
+                values[idx].pointer_info = None;
+            }
         }
     }
 
@@ -1722,11 +1754,7 @@ pub(crate) fn canonicalize_transparent_newtypes<'db>(
                         },
                         source: SourceInfoId::SYNTHETIC,
                         repr,
-                        pointer_info: crate::ir::try_value_pointer_info_in(
-                            values,
-                            locals,
-                            base_at_point,
-                        ),
+                        pointer_info: None,
                         runtime_shape: crate::ir::RuntimeShape::Unresolved,
                     },
                 );
@@ -2309,6 +2337,71 @@ pub fn transparent_newtype_projection_keeps_non_memory_space(w: mut Wrap) {}
             body.value(place.base).repr.address_space(),
             Some(AddressSpaceKind::Storage),
             "peeled base must preserve non-memory address space",
+        );
+    }
+
+    #[test]
+    fn canonicalize_transparent_newtypes_clears_stale_pointer_info_on_flattened_casts() {
+        let db = DriverDataBase::default();
+        let mut body = MirBody::new();
+        body.blocks.push(BasicBlock {
+            insts: Vec::new(),
+            terminator: Terminator::Return {
+                source: SourceInfoId::SYNTHETIC,
+                value: None,
+            },
+        });
+
+        let local = body.alloc_local(LocalData {
+            name: "mem".to_string(),
+            ty: TyId::u256(&db),
+            is_mut: false,
+            source: SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Memory,
+            pointer_leaf_infos: Vec::new(),
+            runtime_shape: RuntimeShape::Unresolved,
+        });
+        let root = body.alloc_value(ValueData {
+            ty: TyId::u256(&db),
+            origin: ValueOrigin::Local(local),
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Ref(AddressSpaceKind::Memory),
+            pointer_info: None,
+            runtime_shape: RuntimeShape::Unresolved,
+        });
+        let inner = body.alloc_value(ValueData {
+            ty: TyId::u256(&db),
+            origin: ValueOrigin::TransparentCast { value: root },
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Ref(AddressSpaceKind::Memory),
+            pointer_info: Some(PointerInfo {
+                address_space: AddressSpaceKind::Storage,
+                target_ty: Some(TyId::u256(&db)),
+            }),
+            runtime_shape: RuntimeShape::Unresolved,
+        });
+        let outer = body.alloc_value(ValueData {
+            ty: TyId::u256(&db),
+            origin: ValueOrigin::TransparentCast { value: inner },
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Ref(AddressSpaceKind::Memory),
+            pointer_info: Some(PointerInfo {
+                address_space: AddressSpaceKind::Storage,
+                target_ty: Some(TyId::u256(&db)),
+            }),
+            runtime_shape: RuntimeShape::Unresolved,
+        });
+
+        super::canonicalize_transparent_newtypes(&db, &mut body);
+
+        let ValueOrigin::TransparentCast { value } = body.value(outer).origin else {
+            panic!("outer cast should remain a transparent cast");
+        };
+        assert_eq!(value, root, "cast chain should collapse to the root value");
+        assert_eq!(
+            crate::ir::try_value_address_space_in(&body.values, &body.locals, outer),
+            Some(AddressSpaceKind::Memory),
+            "flattened transparent casts must not keep stale non-memory pointer metadata",
         );
     }
 

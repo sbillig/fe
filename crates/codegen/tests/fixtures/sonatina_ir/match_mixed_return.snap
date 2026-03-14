@@ -5,9 +5,12 @@ input_file: crates/codegen/tests/fixtures/match_mixed_return.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @__fe_E_0 = {i256};
+type @__fe_obj_E_0 = enum {
+    #A,
+    #B,
+};
 
-func private %f(v0.*@__fe_E_0) -> i256 {
+func private %f(v0.objref<@__fe_obj_E_0>) -> i256 {
     block0:
         jump block4;
 
@@ -22,10 +25,8 @@ func private %f(v0.*@__fe_E_0) -> i256 {
         br v5 block6 block7;
 
     block4:
-        v7.i256 = ptr_to_int v0 i256;
-        v8.*i8 = bitcast v0 *i8;
-        v9.i256 = mload v8 i256;
-        br_table v9 block5 (0.i256 block1) (1.i256 block2);
+        v7.enumtag(@__fe_obj_E_0) = enum.get_tag v0;
+        br_table v7 block5 (0.enumtag(@__fe_obj_E_0) block1) (1.enumtag(@__fe_obj_E_0) block2);
 
     block5:
         evm_invalid;
@@ -39,8 +40,7 @@ func private %f(v0.*@__fe_E_0) -> i256 {
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.*@__fe_E_0 = int_to_ptr 0.i256 *@__fe_E_0;
-        v2.i256 = call %f v1;
+        v1.i256 = call %f undef.objref<@__fe_obj_E_0>;
         evm_stop;
 }
 

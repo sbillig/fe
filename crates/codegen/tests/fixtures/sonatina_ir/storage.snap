@@ -5,10 +5,16 @@ input_file: crates/codegen/tests/fixtures/storage.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @__fe_TransferResult_0 = {i256};
-type @__fe_User_1 = {i256};
+type @__fe_obj_TransferResult_0 = enum {
+    #Ok,
+    #Insufficient,
+};
+type @__fe_obj_User_1 = enum {
+    #Alice,
+    #Bob,
+};
 
-func private %transfer_result_code(v0.*@__fe_TransferResult_0) -> i256 {
+func private %transfer_result_code(v0.objref<@__fe_obj_TransferResult_0>) -> i256 {
     block0:
         jump block4;
 
@@ -23,10 +29,8 @@ func private %transfer_result_code(v0.*@__fe_TransferResult_0) -> i256 {
         jump block2;
 
     block4:
-        v5.i256 = ptr_to_int v0 i256;
-        v6.*i8 = bitcast v0 *i8;
-        v7.i256 = mload v6 i256;
-        br_table v7 block5 (0.i256 block1) (1.i256 block3);
+        v5.enumtag(@__fe_obj_TransferResult_0) = enum.get_tag v0;
+        br_table v5 block5 (0.enumtag(@__fe_obj_TransferResult_0) block1) (1.enumtag(@__fe_obj_TransferResult_0) block3);
 
     block5:
         evm_invalid;
@@ -38,7 +42,7 @@ func private %abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v0.i256) {
         evm_return 0.i256 32.i256;
 }
 
-func private %credit__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78(v0.*@__fe_User_1, v1.i256, v2.i256, v3.i256) -> i256 {
+func private %credit__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78(v0.objref<@__fe_obj_User_1>, v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
         jump block4;
 
@@ -55,43 +59,38 @@ func private %credit__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78(
         jump block2;
 
     block4:
-        v15.i256 = ptr_to_int v0 i256;
-        v16.*i8 = bitcast v0 *i8;
-        v17.i256 = mload v16 i256;
-        br_table v17 block5 (0.i256 block1) (1.i256 block3);
+        v15.enumtag(@__fe_obj_User_1) = enum.get_tag v0;
+        br_table v15 block5 (0.enumtag(@__fe_obj_User_1) block1) (1.enumtag(@__fe_obj_User_1) block3);
 
     block5:
         evm_invalid;
 }
 
-func private %transfer__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.*@__fe_User_1, v1.i256, v2.i256) -> *@__fe_TransferResult_0 {
+func private %transfer__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.objref<@__fe_obj_User_1>, v1.i256, v2.i256) -> objref<@__fe_obj_TransferResult_0> {
     block0:
-        v4.*@__fe_TransferResult_0 = int_to_ptr 0.i256 *@__fe_TransferResult_0;
         jump block4;
 
     block1:
-        v7.*@__fe_TransferResult_0 = call %transfer_from_alice__StorPtr_CoinStore___ba1c0d0726e89ba2 v1 v2;
+        v6.objref<@__fe_obj_TransferResult_0> = call %transfer_from_alice__StorPtr_CoinStore___ba1c0d0726e89ba2 v1 v2;
         jump block2;
 
     block2:
-        v8.*@__fe_TransferResult_0 = phi (v7 block1) (v11 block3);
-        return v8;
+        v7.objref<@__fe_obj_TransferResult_0> = phi (v6 block1) (v10 block3);
+        return v7;
 
     block3:
-        v11.*@__fe_TransferResult_0 = call %transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2 v1 v2;
+        v10.objref<@__fe_obj_TransferResult_0> = call %transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2 v1 v2;
         jump block2;
 
     block4:
-        v13.i256 = ptr_to_int v0 i256;
-        v14.*i8 = bitcast v0 *i8;
-        v15.i256 = mload v14 i256;
-        br_table v15 block5 (0.i256 block1) (1.i256 block3);
+        v12.enumtag(@__fe_obj_User_1) = enum.get_tag v0;
+        br_table v12 block5 (0.enumtag(@__fe_obj_User_1) block1) (1.enumtag(@__fe_obj_User_1) block3);
 
     block5:
         evm_invalid;
 }
 
-func private %balance_of__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.*@__fe_User_1, v1.i256) -> i256 {
+func private %balance_of__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.objref<@__fe_obj_User_1>, v1.i256) -> i256 {
     block0:
         jump block4;
 
@@ -109,10 +108,8 @@ func private %balance_of__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.*@__fe_User_1,
         jump block2;
 
     block4:
-        v11.i256 = ptr_to_int v0 i256;
-        v12.*i8 = bitcast v0 *i8;
-        v13.i256 = mload v12 i256;
-        br_table v13 block5 (0.i256 block1) (1.i256 block3);
+        v11.enumtag(@__fe_obj_User_1) = enum.get_tag v0;
+        br_table v11 block5 (0.enumtag(@__fe_obj_User_1) block1) (1.enumtag(@__fe_obj_User_1) block3);
 
     block5:
         evm_invalid;
@@ -190,47 +187,41 @@ func private %credit_bob__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9b
         return v19;
 }
 
-func private %transfer_from_alice__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.i256, v1.i256) -> *@__fe_TransferResult_0 {
+func private %transfer_from_alice__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.i256, v1.i256) -> objref<@__fe_obj_TransferResult_0> {
     block0:
         v2.i256 = evm_sload v1;
         v3.i1 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt_stor v2 v0;
         br v3 block1 block2;
 
     block1:
-        v5.*i8 = evm_malloc 32.i256;
-        v6.*@__fe_TransferResult_0 = bitcast v5 *@__fe_TransferResult_0;
-        v8.i256 = ptr_to_int v6 i256;
-        v9.*i8 = bitcast v6 *i8;
-        mstore v9 1.i256 i256;
-        return v6;
+        v4.objref<@__fe_obj_TransferResult_0> = obj.alloc @__fe_obj_TransferResult_0;
+        enum.set_tag v4 #Insufficient;
+        return v4;
 
     block2:
-        v11.i256 = evm_sload v1;
-        (v13.i256, v14.i1) = usubo v11 v0;
-        br v14 block3 block4;
+        v6.i256 = evm_sload v1;
+        (v8.i256, v9.i1) = usubo v6 v0;
+        br v9 block3 block4;
 
     block3:
         evm_revert 0.i256 0.i256;
 
     block4:
-        evm_sstore v1 v13;
-        v17.i256 = add v1 1.i256;
-        v18.i256 = evm_sload v17;
-        (v20.i256, v21.i1) = uaddo v18 v0;
-        br v21 block3 block5;
+        evm_sstore v1 v8;
+        v13.i256 = add v1 1.i256;
+        v14.i256 = evm_sload v13;
+        (v16.i256, v17.i1) = uaddo v14 v0;
+        br v17 block3 block5;
 
     block5:
-        v23.i256 = add v1 1.i256;
-        evm_sstore v23 v20;
-        v24.*i8 = evm_malloc 32.i256;
-        v25.*@__fe_TransferResult_0 = bitcast v24 *@__fe_TransferResult_0;
-        v26.i256 = ptr_to_int v25 i256;
-        v27.*i8 = bitcast v25 *i8;
-        mstore v27 0.i256 i256;
-        return v25;
+        v19.i256 = add v1 1.i256;
+        evm_sstore v19 v16;
+        v20.objref<@__fe_obj_TransferResult_0> = obj.alloc @__fe_obj_TransferResult_0;
+        enum.set_tag v20 #Ok;
+        return v20;
 }
 
-func private %transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.i256, v1.i256) -> *@__fe_TransferResult_0 {
+func private %transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.i256, v1.i256) -> objref<@__fe_obj_TransferResult_0> {
     block0:
         v3.i256 = add v1 1.i256;
         v4.i256 = evm_sload v3;
@@ -238,37 +229,31 @@ func private %transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.i256, v
         br v5 block1 block2;
 
     block1:
-        v7.*i8 = evm_malloc 32.i256;
-        v8.*@__fe_TransferResult_0 = bitcast v7 *@__fe_TransferResult_0;
-        v9.i256 = ptr_to_int v8 i256;
-        v10.*i8 = bitcast v8 *i8;
-        mstore v10 1.i256 i256;
-        return v8;
+        v6.objref<@__fe_obj_TransferResult_0> = obj.alloc @__fe_obj_TransferResult_0;
+        enum.set_tag v6 #Insufficient;
+        return v6;
 
     block2:
-        v12.i256 = add v1 1.i256;
-        v13.i256 = evm_sload v12;
-        (v15.i256, v16.i1) = usubo v13 v0;
-        br v16 block3 block4;
+        v8.i256 = add v1 1.i256;
+        v9.i256 = evm_sload v8;
+        (v11.i256, v12.i1) = usubo v9 v0;
+        br v12 block3 block4;
 
     block3:
         evm_revert 0.i256 0.i256;
 
     block4:
-        v19.i256 = add v1 1.i256;
-        evm_sstore v19 v15;
-        v20.i256 = evm_sload v1;
-        (v22.i256, v23.i1) = uaddo v20 v0;
-        br v23 block3 block5;
+        v15.i256 = add v1 1.i256;
+        evm_sstore v15 v11;
+        v16.i256 = evm_sload v1;
+        (v18.i256, v19.i1) = uaddo v16 v0;
+        br v19 block3 block5;
 
     block5:
-        evm_sstore v1 v22;
-        v25.*i8 = evm_malloc 32.i256;
-        v26.*@__fe_TransferResult_0 = bitcast v25 *@__fe_TransferResult_0;
-        v27.i256 = ptr_to_int v26 i256;
-        v28.*i8 = bitcast v26 *i8;
-        mstore v28 0.i256 i256;
-        return v26;
+        evm_sstore v1 v18;
+        v21.objref<@__fe_obj_TransferResult_0> = obj.alloc @__fe_obj_TransferResult_0;
+        enum.set_tag v21 #Ok;
+        return v21;
 }
 
 func private %init__StorPtr_Evm___207f35a85ac4062e() {
@@ -317,21 +302,20 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block7:
         v25.i256 = evm_calldata_load 4.i256;
         v26.i256 = evm_calldata_load 36.i256;
-        v27.*@__fe_TransferResult_0 = int_to_ptr 0.i256 *@__fe_TransferResult_0;
         jump block11;
 
     block8:
-        v30.*@__fe_TransferResult_0 = call %transfer_from_alice__StorPtr_CoinStore___ba1c0d0726e89ba2 v26 v2;
+        v30.objref<@__fe_obj_TransferResult_0> = call %transfer_from_alice__StorPtr_CoinStore___ba1c0d0726e89ba2 v26 v2;
         jump block9;
 
     block9:
-        v31.*@__fe_TransferResult_0 = phi (v30 block8) (v35 block10);
+        v31.objref<@__fe_obj_TransferResult_0> = phi (v30 block8) (v35 block10);
         v32.i256 = call %transfer_result_code v31;
         call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v32;
         evm_invalid;
 
     block10:
-        v35.*@__fe_TransferResult_0 = call %transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2 v26 v2;
+        v35.objref<@__fe_obj_TransferResult_0> = call %transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2 v26 v2;
         jump block9;
 
     block11:

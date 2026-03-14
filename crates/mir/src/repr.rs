@@ -19,6 +19,7 @@ use hir::analysis::ty::ty_def::{TyBase, TyData, TyId};
 use hir::analysis::ty::{
     canonical::Canonicalized,
     corelib::resolve_core_trait,
+    simplified_pattern::ConstructorKind,
     trait_def::TraitInstId,
     trait_resolution::{GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable},
     ty_def::CapabilityKind,
@@ -236,9 +237,19 @@ pub fn supports_object_ref_runtime_ty<'db>(
             .all(|field_ty| supports_object_ref_runtime_ty(db, core, field_ty));
     }
 
+    if let Some(enum_) = ty.as_enum(db) {
+        return (0..enum_.len_variants(db)).all(|idx| {
+            let ctor = ConstructorKind::Variant(EnumVariant::new(enum_, idx), ty);
+            ctor.field_types(db)
+                .iter()
+                .copied()
+                .all(|field_ty| supports_object_ref_runtime_ty(db, core, field_ty))
+        });
+    }
+
     match ty.base_ty(db).data(db) {
         TyData::TyBase(TyBase::Adt(adt_def)) => match adt_def.adt_ref(db) {
-            AdtRef::Enum(_) => false,
+            AdtRef::Enum(_) => true,
             AdtRef::Struct(_) => ty
                 .field_types(db)
                 .iter()
@@ -1051,7 +1062,8 @@ pub fn runtime_shape_for_local<'db>(
         .pointer_leaf_infos
         .iter()
         .find(|(path, _)| path.is_empty())
-        && matches!(type_shape, RuntimeShape::Word(_))
+        && (info.address_space != AddressSpaceKind::Memory
+            || matches!(type_shape, RuntimeShape::Word(_)))
     {
         return runtime_shape_for_pointer_info(*info);
     }
@@ -1070,6 +1082,69 @@ fn value_inherits_object_root_runtime_shape<'db>(
         runtime_shape_for_value(db, core, values, locals, value),
         Some(RuntimeShape::ObjectRef { .. })
     )
+}
+
+pub fn place_object_ref_target_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    values: &[ValueData<'db>],
+    locals: &[LocalData<'db>],
+    place: &Place<'db>,
+) -> Option<TyId<'db>> {
+    let resolved = resolve_place(db, core, values, locals, place)?;
+    if !matches!(
+        runtime_shape_for_value(db, core, values, locals, place.base)?,
+        RuntimeShape::ObjectRef { .. }
+    ) {
+        return None;
+    }
+
+    for segment in &resolved.segments {
+        if segment.base.location_address_space() != Some(AddressSpaceKind::Memory) {
+            return None;
+        }
+        for projection in &segment.projections {
+            if matches!(
+                projection.projection,
+                Projection::Discriminant | Projection::Deref
+            ) {
+                return None;
+            }
+        }
+    }
+
+    runtime_object_ref_target_ty(
+        db,
+        core,
+        resolved.final_state().ty,
+        AddressSpaceKind::Memory,
+    )
+}
+
+pub fn runtime_shape_for_loaded_place<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    values: &[ValueData<'db>],
+    locals: &[LocalData<'db>],
+    place: &Place<'db>,
+) -> Option<RuntimeShape<'db>> {
+    let Some(Projection::Discriminant) = place.projection.iter().last() else {
+        return None;
+    };
+
+    let mut owner_projection = crate::MirProjectionPath::new();
+    for projection in place
+        .projection
+        .iter()
+        .take(place.projection.len().saturating_sub(1))
+    {
+        owner_projection.push(projection.clone());
+    }
+    let owner_place = Place::new(place.base, owner_projection);
+    let enum_ty = place_object_ref_target_ty(db, core, values, locals, &owner_place)?;
+    enum_ty
+        .as_enum(db)
+        .map(|_| RuntimeShape::EnumTag { enum_ty })
 }
 
 pub fn runtime_shape_for_value<'db>(
@@ -1091,8 +1166,31 @@ pub fn runtime_shape_for_value<'db>(
             }
         });
     }
+    if let crate::ir::ValueOrigin::TransparentCast { value: inner } = value_data.origin
+        && let Some(inner_shape) = runtime_shape_for_value(db, core, values, locals, inner)
+        && !matches!(inner_shape, RuntimeShape::Word(_))
+    {
+        return Some(inner_shape);
+    }
     if layout::is_zero_sized_ty(db, value_data.ty) {
         return Some(RuntimeShape::Erased);
+    }
+    if let Some(info) = value_data.pointer_info
+        && info.address_space != AddressSpaceKind::Memory
+    {
+        return Some(RuntimeShape::AddressWord(info));
+    }
+    if let crate::ir::ValueOrigin::PlaceRef(place) | crate::ir::ValueOrigin::MoveOut { place } =
+        &value_data.origin
+    {
+        if value_data.repr.address_space() == Some(AddressSpaceKind::Memory)
+            && let Some(target_ty) = place_object_ref_target_ty(db, core, values, locals, place)
+        {
+            return Some(RuntimeShape::ObjectRef { target_ty });
+        }
+        if let Some(shape) = runtime_shape_for_loaded_place(db, core, values, locals, place) {
+            return Some(shape);
+        }
     }
 
     match value_data.repr {

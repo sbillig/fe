@@ -5,6 +5,7 @@
 use driver::DriverDataBase;
 use hir::analysis::ty::adt_def::AdtRef;
 use hir::analysis::ty::normalize::normalize_ty;
+use hir::analysis::ty::simplified_pattern::ConstructorKind;
 use hir::analysis::ty::trait_resolution::PredicateListId;
 use hir::analysis::ty::ty_def::{CapabilityKind, PrimTy, TyBase, TyData, TyId};
 use hir::hir_def::expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp};
@@ -28,8 +29,8 @@ use sonatina_ir::{
         cmp::{Eq, Gt, IsZero, Lt, Ne, Slt},
         control_flow::{Br, BrTable, Call, Jump, Return},
         data::{
-            Alloca, Gep, Mload, Mstore, ObjAlloc, ObjIndex, ObjLoad, ObjProj, ObjStore, SymAddr,
-            SymSize, SymbolRef,
+            Alloca, EnumAssertVariantRef, EnumGetTag, EnumProj, EnumSetTag, Gep, Mload, Mstore,
+            ObjAlloc, ObjIndex, ObjLoad, ObjProj, ObjStore, SymAddr, SymSize, SymbolRef,
         },
         evm::{
             EvmAddMod, EvmAddress, EvmBaseFee, EvmBlockHash, EvmCall, EvmCallValue,
@@ -45,6 +46,7 @@ use sonatina_ir::{
     },
     module::FuncRef,
     object::EmbedSymbol,
+    types::{EnumReprHint, EnumVariantRef, VariantData},
 };
 
 use super::{
@@ -169,8 +171,10 @@ pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             }
         }
         MirInst::SetDiscriminant { place, variant, .. } => {
-            let val = ctx.fb.make_imm_value(I256::from(variant.idx as u64));
-            store_word_to_place(ctx, place, val)?;
+            if !lower_enum_set_tag_for_place(ctx, place, *variant)? {
+                let val = ctx.fb.make_imm_value(I256::from(variant.idx as u64));
+                store_word_to_place(ctx, place, val)?;
+            }
         }
         MirInst::BindValue { value, .. } => {
             // Ensure the value is lowered and cached
@@ -1980,6 +1984,82 @@ fn object_field_uses_object_ref<'db>(
         )
 }
 
+struct FeEnumTypeDeclCtx<'a, 'db> {
+    builder: &'a sonatina_ir::builder::ModuleBuilder,
+    db: &'db DriverDataBase,
+    core: &'a mir::CoreLib<'db>,
+    target_layout: &'a TargetDataLayout,
+    cache: &'a mut FxHashMap<String, Option<Type>>,
+    name_counter: &'a mut usize,
+}
+
+impl<'db> FeEnumTypeDeclCtx<'_, 'db> {
+    fn variant_data(
+        &mut self,
+        enum_ty: hir::analysis::ty::ty_def::TyId<'db>,
+        object_layout: bool,
+    ) -> Option<Vec<VariantData>> {
+        let enum_ = enum_ty.as_enum(self.db)?;
+        let mut variants = Vec::with_capacity(enum_.len_variants(self.db));
+        for idx in 0..enum_.len_variants(self.db) {
+            let variant = hir::hir_def::EnumVariant::new(enum_, idx);
+            let ctor = ConstructorKind::Variant(variant, enum_ty);
+            let mut fields = Vec::with_capacity(ctor.field_types(self.db).len());
+            for field_ty in ctor.field_types(self.db).iter().copied() {
+                let lowered = if object_layout {
+                    fe_object_ty_to_sonatina(
+                        self.builder,
+                        self.db,
+                        self.core,
+                        self.target_layout,
+                        field_ty,
+                        self.cache,
+                        self.name_counter,
+                    )
+                } else {
+                    fe_ty_to_sonatina(
+                        self.builder,
+                        self.db,
+                        self.core,
+                        self.target_layout,
+                        field_ty,
+                        self.cache,
+                        self.name_counter,
+                    )
+                }?;
+                fields.push(lowered);
+            }
+            variants.push(VariantData {
+                name: variant.name(self.db).unwrap_or("anon").to_string(),
+                explicit_discriminant: Some(idx as u128),
+                fields,
+            });
+        }
+        Some(variants)
+    }
+
+    fn declare_enum_type(
+        &mut self,
+        enum_ty: hir::analysis::ty::ty_def::TyId<'db>,
+        object_layout: bool,
+    ) -> Option<Type> {
+        let variants = self.variant_data(enum_ty, object_layout)?;
+        let name = enum_ty
+            .adt_ref(self.db)
+            .and_then(|adt_ref| adt_ref.name(self.db))
+            .map(|id| id.data(self.db).to_string())
+            .unwrap_or_else(|| "anon".to_string());
+        let id = *self.name_counter;
+        *self.name_counter += 1;
+        let prefix = if object_layout { "__fe_obj" } else { "__fe" };
+        Some(self.builder.declare_enum_type(
+            &format!("{prefix}_{name}_{id}"),
+            &variants,
+            EnumReprHint::Default,
+        ))
+    }
+}
+
 fn fe_ty_to_sonatina_inner<'db>(
     builder: &sonatina_ir::builder::ModuleBuilder,
     db: &'db DriverDataBase,
@@ -2112,23 +2192,15 @@ fn fe_ty_to_sonatina_inner<'db>(
                     false,
                 ))
             }
-            AdtRef::Enum(_) => {
-                let payload_bytes = layout::ty_memory_size_in(db, target_layout, ty)?
-                    .saturating_sub(target_layout.discriminant_size_bytes);
-                let payload_words = payload_bytes / target_layout.word_size_bytes;
-                let mut fields = vec![Type::I256];
-                if payload_words != 0 {
-                    fields.push(builder.declare_array_type(Type::I256, payload_words));
-                }
-                let name = adt_def
-                    .adt_ref(db)
-                    .name(db)
-                    .map(|id| id.data(db).to_string())
-                    .unwrap_or_else(|| "anon".to_string());
-                let id = *name_counter;
-                *name_counter += 1;
-                Some(builder.declare_struct_type(&format!("__fe_{name}_{id}"), &fields, false))
+            AdtRef::Enum(_) => FeEnumTypeDeclCtx {
+                builder,
+                db,
+                core,
+                target_layout,
+                cache,
+                name_counter,
             }
+            .declare_enum_type(ty, false),
         },
         TyData::TyBase(TyBase::Contract(_)) | TyData::TyBase(TyBase::Func(_)) => Some(Type::Unit),
         _ => None,
@@ -2299,23 +2371,15 @@ fn fe_object_ty_to_sonatina_inner<'db>(
                     false,
                 ))
             }
-            AdtRef::Enum(_) => {
-                let payload_bytes = layout::ty_memory_size_in(db, target_layout, ty)?
-                    .saturating_sub(target_layout.discriminant_size_bytes);
-                let payload_words = payload_bytes / target_layout.word_size_bytes;
-                let mut fields = vec![Type::I256];
-                if payload_words != 0 {
-                    fields.push(builder.declare_array_type(Type::I256, payload_words));
-                }
-                let name = adt_def
-                    .adt_ref(db)
-                    .name(db)
-                    .map(|id| id.data(db).to_string())
-                    .unwrap_or_else(|| "anon".to_string());
-                let id = *name_counter;
-                *name_counter += 1;
-                Some(builder.declare_struct_type(&format!("__fe_{name}_{id}"), &fields, false))
+            AdtRef::Enum(_) => FeEnumTypeDeclCtx {
+                builder,
+                db,
+                core,
+                target_layout,
+                cache,
+                name_counter,
             }
+            .declare_enum_type(ty, true),
         },
         TyData::TyBase(TyBase::Contract(_)) | TyData::TyBase(TyBase::Func(_)) => Some(Type::Unit),
         _ => None,
@@ -2392,9 +2456,9 @@ impl<'db> LoweredPlaceTerminal<'db> {
         match self.addr {
             LoweredPlaceAddr::Word(addr) => addr,
             LoweredPlaceAddr::MemoryPtr(ptr) => coerce_value_to_word(ctx, ptr),
-            LoweredPlaceAddr::ObjectRef(_) => {
-                panic!("attempted to coerce object-backed place to a raw word address")
-            }
+            LoweredPlaceAddr::ObjectRef(_) => unreachable!(
+                "object-backed place must not be coerced to a raw word address without an explicit load"
+            ),
         }
     }
 
@@ -2529,6 +2593,11 @@ fn lower_place_runtime_location_value<'db, C: sonatina_ir::func_cursor::FuncCurs
     {
         return Ok(coerce_value_to_type(ctx, memory_ptr, expected_runtime_ty));
     }
+    if terminal.object_ref().is_some() {
+        return Err(LowerError::Internal(format!(
+            "object-backed place location value requires object-ref runtime type for {place:?} (expected {expected_runtime_ty:?})"
+        )));
+    }
     let word_addr = terminal.word_addr(ctx);
     Ok(coerce_value_to_type(ctx, word_addr, expected_runtime_ty))
 }
@@ -2607,6 +2676,137 @@ fn load_from_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     }
 }
 
+fn split_place_discriminant_tail<'db>(place: &Place<'db>) -> Option<Place<'db>> {
+    let tail = place.projection.iter().last()?.clone();
+    if !matches!(tail, Projection::Discriminant) {
+        return None;
+    }
+    let mut owner_projection = mir::MirProjectionPath::new();
+    for projection in place
+        .projection
+        .iter()
+        .take(place.projection.len().saturating_sub(1))
+    {
+        owner_projection.push(projection.clone());
+    }
+    Some(Place::new(place.base, owner_projection))
+}
+
+fn sonatina_enum_variant_ref<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    enum_ty: TyId<'db>,
+    variant: hir::hir_def::EnumVariant<'db>,
+) -> Result<EnumVariantRef, LowerError> {
+    let sonatina_enum_ty = fe_object_ty_to_sonatina(
+        &ctx.fb.module_builder,
+        ctx.db,
+        ctx.core,
+        ctx.target_layout,
+        enum_ty,
+        ctx.gep_type_cache,
+        ctx.gep_name_counter,
+    )
+    .ok_or_else(|| {
+        LowerError::Internal(format!(
+            "failed to lower enum type `{}` to Sonatina",
+            enum_ty.pretty_print(ctx.db)
+        ))
+    })?;
+    let Type::Compound(cmpd_ref) = sonatina_enum_ty else {
+        return Err(LowerError::Internal(format!(
+            "expected Sonatina enum compound type for `{}`",
+            enum_ty.pretty_print(ctx.db)
+        )));
+    };
+    Ok(EnumVariantRef::new(cmpd_ref, variant.idx.into()))
+}
+
+fn lower_enum_owner_object_ref<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    owner_place: &Place<'db>,
+) -> Result<Option<(ValueId, TyId<'db>)>, LowerError> {
+    let Some(enum_ty) = mir::repr::place_object_ref_target_ty(
+        ctx.db,
+        ctx.core,
+        &ctx.body.values,
+        &ctx.body.locals,
+        owner_place,
+    )
+    .filter(|enum_ty| enum_ty.as_enum(ctx.db).is_some()) else {
+        return Ok(None);
+    };
+    let terminal = lower_place_terminal(ctx, owner_place)?;
+    Ok(terminal
+        .object_ref()
+        .map(|object_ref| (object_ref, enum_ty)))
+}
+
+fn lower_enum_discriminant_load<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    place: &Place<'db>,
+    expected_runtime_ty: Type,
+) -> Result<Option<ValueId>, LowerError> {
+    let Some(owner_place) = split_place_discriminant_tail(place) else {
+        return Ok(None);
+    };
+    let Some((object_ref, _enum_ty)) = lower_enum_owner_object_ref(ctx, &owner_place)? else {
+        return Ok(None);
+    };
+    if !expected_runtime_ty.is_enum_tag() {
+        return Err(LowerError::Unsupported(format!(
+            "object-backed enum discriminant load requires enum-tag runtime type for {place:?}"
+        )));
+    }
+    Ok(Some(ctx.fb.insert_inst(
+        EnumGetTag::new(ctx.is, object_ref),
+        expected_runtime_ty,
+    )))
+}
+
+fn lower_enum_set_tag_for_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    place: &Place<'db>,
+    variant: hir::hir_def::EnumVariant<'db>,
+) -> Result<bool, LowerError> {
+    let Some((object_ref, enum_ty)) = lower_enum_owner_object_ref(ctx, place)? else {
+        return Ok(false);
+    };
+    let variant_ref = sonatina_enum_variant_ref(ctx, enum_ty, variant)?;
+    ctx.fb
+        .insert_inst_no_result(EnumSetTag::new(ctx.is, object_ref, variant_ref));
+    Ok(true)
+}
+
+fn lower_enum_discriminant_store<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    place: &Place<'db>,
+    variant_idx: usize,
+) -> Result<bool, LowerError> {
+    let Some(owner_place) = split_place_discriminant_tail(place) else {
+        return Ok(false);
+    };
+    let Some((object_ref, enum_ty)) = lower_enum_owner_object_ref(ctx, &owner_place)? else {
+        return Ok(false);
+    };
+    let enum_ = enum_ty.as_enum(ctx.db).ok_or_else(|| {
+        LowerError::Internal(format!(
+            "expected enum type for discriminant store, found `{}`",
+            enum_ty.pretty_print(ctx.db)
+        ))
+    })?;
+    if variant_idx >= enum_.len_variants(ctx.db) {
+        return Err(LowerError::Internal(format!(
+            "discriminant {variant_idx} out of bounds for enum `{}`",
+            enum_ty.pretty_print(ctx.db)
+        )));
+    }
+    let variant = hir::hir_def::EnumVariant::new(enum_, variant_idx);
+    let variant_ref = sonatina_enum_variant_ref(ctx, enum_ty, variant)?;
+    ctx.fb
+        .insert_inst_no_result(EnumSetTag::new(ctx.is, object_ref, variant_ref));
+    Ok(true)
+}
+
 fn lower_object_place_segment<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
     segment_base: ValueId,
@@ -2649,10 +2849,43 @@ fn lower_object_place_segment<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     .fb
                     .insert_inst(ObjIndex::new(ctx.is, object_ref, idx), result_ty);
             }
-            Projection::Discriminant | Projection::VariantField { .. } => {
-                return Err(LowerError::Unsupported(
-                    "object-backed enum projections are not yet supported".to_string(),
+            Projection::VariantField {
+                variant,
+                enum_ty,
+                field_idx,
+            } => {
+                let field_idx_val = ctx.fb.make_imm_value(I256::from(*field_idx as u64));
+                object_elem_ty = fe_object_ty_to_sonatina(
+                    &ctx.fb.module_builder,
+                    ctx.db,
+                    ctx.core,
+                    ctx.target_layout,
+                    step.result.ty,
+                    ctx.gep_type_cache,
+                    ctx.gep_name_counter,
+                )
+                .ok_or_else(|| {
+                    LowerError::Internal(format!(
+                        "failed to lower enum payload field type `{}`",
+                        step.result.ty.pretty_print(ctx.db)
+                    ))
+                })?;
+                let result_ty = ctx.fb.module_builder.objref_type(object_elem_ty);
+                let variant_ref = sonatina_enum_variant_ref(ctx, *enum_ty, *variant)?;
+                ctx.fb.insert_inst_no_result(EnumAssertVariantRef::new(
+                    ctx.is,
+                    object_ref,
+                    variant_ref,
                 ));
+                object_ref = ctx.fb.insert_inst(
+                    EnumProj::new(ctx.is, object_ref, variant_ref, field_idx_val),
+                    result_ty,
+                );
+            }
+            Projection::Discriminant => {
+                return Err(LowerError::Unsupported(format!(
+                    "object-backed enum discriminant projections are handled directly for {segment:?}"
+                )));
             }
             Projection::Deref => {
                 return Err(LowerError::Unsupported(
@@ -2719,6 +2952,15 @@ fn lower_place_segment_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         });
     }
 
+    if ctx
+        .fb
+        .type_of(segment_base)
+        .is_obj_ref(&ctx.fb.module_builder.ctx)
+    {
+        return Err(LowerError::Internal(format!(
+            "object-backed place segment did not lower through the object path for {debug_place:?}",
+        )));
+    }
     let base_word = coerce_value_to_word(ctx, segment_base);
     let word_addr =
         lower_place_address_arithmetic(ctx, &segment.projections, base_word, is_slot_addressed)?;
@@ -3438,6 +3680,13 @@ fn lower_store_inst<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     if is_erased_runtime_ty(ctx.db, ctx.target_layout, value_ty) {
         return Ok(());
     }
+    if split_place_discriminant_tail(place).is_some()
+        && let mir::ValueOrigin::Synthetic(SyntheticValue::Int(value)) = &value_data.origin
+        && let Ok(variant_idx) = usize::try_from(value)
+        && lower_enum_discriminant_store(ctx, place, variant_idx)?
+    {
+        return Ok(());
+    }
 
     if value_data.repr.is_ref() {
         let src_place = mir::ir::Place::new(value, mir::ir::MirProjectionPath::new());
@@ -3569,6 +3818,9 @@ fn load_place_runtime<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     if is_erased_runtime_ty(ctx.db, ctx.target_layout, loaded_ty) {
         return Ok(zero_value_for_type(ctx.fb, expected_runtime_ty, ctx.is));
     }
+    if let Some(discriminant) = lower_enum_discriminant_load(ctx, place, expected_runtime_ty)? {
+        return Ok(discriminant);
+    }
 
     if is_transparent_field0_place(ctx, place) {
         let base = lower_value(ctx, place.base)?;
@@ -3628,6 +3880,13 @@ fn deep_copy_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         return Ok(());
     }
 
+    if value_ty
+        .adt_ref(ctx.db)
+        .is_some_and(|adt| matches!(adt, AdtRef::Enum(_)))
+    {
+        return deep_copy_enum_from_places(ctx, dst_place, src_place, value_ty);
+    }
+
     if let Some(info) =
         mir::repr::pointer_info_for_ty(ctx.db, ctx.core, value_ty, AddressSpaceKind::Memory)
     {
@@ -3669,13 +3928,6 @@ fn deep_copy_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         return Ok(());
     }
 
-    if value_ty
-        .adt_ref(ctx.db)
-        .is_some_and(|adt| matches!(adt, AdtRef::Enum(_)))
-    {
-        return deep_copy_enum_from_places(ctx, dst_place, src_place, value_ty);
-    }
-
     let loaded = load_place_runtime(
         ctx,
         src_place,
@@ -3702,16 +3954,29 @@ fn deep_copy_enum_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         ));
     };
 
-    // Copy discriminant first.
     let discr_ty =
         hir::analysis::ty::ty_def::TyId::new(ctx.db, TyData::TyBase(TyBase::Prim(PrimTy::U256)));
-    let discr = load_place_runtime(
-        ctx,
-        src_place,
-        discr_ty,
-        types::value_type(ctx.db, discr_ty),
-    )?;
-    store_word_to_place(ctx, dst_place, discr)?;
+    let src_discr_place = extend_place(src_place, Projection::Discriminant);
+    let discr_shape = mir::repr::runtime_shape_for_loaded_place(
+        ctx.db,
+        ctx.core,
+        &ctx.body.values,
+        &ctx.body.locals,
+        &src_discr_place,
+    )
+    .unwrap_or(mir::ir::RuntimeShape::Word(
+        mir::repr::runtime_word_kind_for_ty(ctx.db, discr_ty),
+    ));
+    let discr_runtime_ty = runtime_type_for_shape(
+        &ctx.fb.module_builder,
+        ctx.db,
+        ctx.core,
+        ctx.target_layout,
+        discr_shape,
+        &mut *ctx.gep_type_cache,
+        &mut *ctx.gep_name_counter,
+    );
+    let discr = load_place_runtime(ctx, &src_discr_place, discr_ty, discr_runtime_ty)?;
 
     let origin_block = ctx
         .fb
@@ -3725,7 +3990,11 @@ fn deep_copy_enum_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     for (idx, _) in variants.iter().enumerate() {
         let case_block = ctx.fb.append_block();
         case_blocks.push(case_block);
-        cases.push((ctx.fb.make_imm_value(I256::from(idx as u64)), case_block));
+        let case_value = ctx.fb.make_imm_value(Immediate::from_i256(
+            I256::from(idx as u64),
+            discr_runtime_ty,
+        ));
+        cases.push((case_value, case_block));
     }
 
     ctx.fb.switch_to_block(origin_block);
@@ -3758,6 +4027,11 @@ fn deep_copy_enum_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     for (idx, case_block) in case_blocks.into_iter().enumerate() {
         ctx.fb.switch_to_block(case_block);
         let enum_variant = hir::hir_def::EnumVariant::new(enm, idx);
+        if !lower_enum_set_tag_for_place(ctx, dst_place, enum_variant)? {
+            let dst_discr_place = extend_place(dst_place, Projection::Discriminant);
+            let discr_value = ctx.fb.make_imm_value(I256::from(idx as u64));
+            store_word_to_place(ctx, &dst_discr_place, discr_value)?;
+        }
         let ctor =
             hir::analysis::ty::simplified_pattern::ConstructorKind::Variant(enum_variant, enum_ty);
         for (field_idx, field_ty) in ctor.field_types(ctx.db).iter().copied().enumerate() {

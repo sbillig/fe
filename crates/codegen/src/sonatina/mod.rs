@@ -152,6 +152,31 @@ fn runtime_object_ref_type_from_target<'db>(
     builder.objref_type(object_ty)
 }
 
+fn runtime_enum_tag_type_from_target<'db>(
+    builder: &ModuleBuilder,
+    db: &'db DriverDataBase,
+    core: &CoreLib<'db>,
+    target_layout: &TargetDataLayout,
+    enum_ty: TyId<'db>,
+    cache: &mut FxHashMap<String, Option<Type>>,
+    name_counter: &mut usize,
+) -> Type {
+    let enum_ty = lower::fe_object_ty_to_sonatina(
+        builder,
+        db,
+        core,
+        target_layout,
+        enum_ty,
+        cache,
+        name_counter,
+    )
+    .expect("enum-tag runtime shapes must lower to a Sonatina enum type");
+    let Type::Compound(enum_ty) = enum_ty else {
+        panic!("enum-tag runtime shapes must lower to a Sonatina compound enum type");
+    };
+    Type::EnumTag(enum_ty)
+}
+
 fn function_core_lib<'db>(db: &'db DriverDataBase, func: &mir::MirFunction<'db>) -> CoreLib<'db> {
     let scope = match func.origin {
         mir::ir::MirFunctionOrigin::Hir(hir_func) => hir_func.scope(),
@@ -174,6 +199,15 @@ pub(super) fn runtime_type_for_shape<'db>(
             panic!("unresolved MIR runtime shape reached Sonatina codegen")
         }
         mir::ir::RuntimeShape::Erased => Type::Unit,
+        mir::ir::RuntimeShape::EnumTag { enum_ty } => runtime_enum_tag_type_from_target(
+            builder,
+            db,
+            core,
+            target_layout,
+            enum_ty,
+            cache,
+            name_counter,
+        ),
         mir::ir::RuntimeShape::ObjectRef { target_ty } => runtime_object_ref_type_from_target(
             builder,
             db,
@@ -208,6 +242,9 @@ pub(super) fn zero_value_for_type<C: sonatina_ir::func_cursor::FuncCursor>(
 ) -> ValueId {
     if ty == Type::Unit {
         return types::zero_value(fb, ty);
+    }
+    if ty.is_enum_tag() {
+        return fb.make_undef_value(ty);
     }
     if ty.is_obj_ref(&fb.module_builder.ctx) {
         return fb.make_undef_value(ty);
@@ -1208,6 +1245,44 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 )
             })
             .collect();
+        for (idx, local) in func.body.locals.iter().enumerate() {
+            if !matches!(local.address_space, mir::ir::AddressSpaceKind::Memory)
+                && local_runtime_types[idx].is_obj_ref(&self.builder.ctx)
+            {
+                return Err(LowerError::Internal(format!(
+                    "non-memory local v{idx} `{}` in `{}` lowered to object ref: address_space={:?}, ty={}, runtime_shape={:?}",
+                    local.name,
+                    func.symbol_name,
+                    local.address_space,
+                    local.ty.pretty_print(self.db),
+                    local.runtime_shape,
+                )));
+            }
+        }
+        for (idx, value) in func.body.values.iter().enumerate() {
+            let runtime_ty = runtime_type_for_shape(
+                &self.builder,
+                self.db,
+                &core,
+                &self.target_layout,
+                value.runtime_shape,
+                &mut self.gep_type_cache,
+                &mut self.gep_name_counter,
+            );
+            if runtime_ty.is_obj_ref(&self.builder.ctx)
+                && let Some(address_space) = value.repr.address_space()
+                && !matches!(address_space, mir::ir::AddressSpaceKind::Memory)
+            {
+                return Err(LowerError::Internal(format!(
+                    "non-memory value v{idx} in `{}` lowered to object ref: origin={:?}, repr_address_space={address_space:?}, ty={}, repr={:?}, runtime_shape={:?}",
+                    func.symbol_name,
+                    value.origin,
+                    value.ty.pretty_print(self.db),
+                    value.repr,
+                    value.runtime_shape,
+                )));
+            }
+        }
 
         // Maps MIR block IDs to Sonatina block IDs
         let mut block_map: FxHashMap<mir::BasicBlockId, BlockId> = FxHashMap::default();
