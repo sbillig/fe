@@ -97,23 +97,15 @@ fn variant_struct_ty<'db>(db: &'db dyn HirDb, struct_: Struct<'db>) -> TypeId<'d
 }
 
 fn lower_msg_variant_field_specs<'db>(
-    ctxt: &mut FileLowerCtxt<'db>,
-    variant: &ast::MsgVariant,
+    db: &'db dyn HirDb,
+    struct_: Struct<'db>,
 ) -> Vec<(IdentId<'db>, TypeId<'db>)> {
-    let mut fields = Vec::new();
-    if let Some(params_ast) = variant.params() {
-        for field in params_ast.into_iter() {
-            let Some(name_token) = field.name() else {
-                continue;
-            };
-            let field_name = IdentId::lower_token(ctxt, name_token);
-            let Some(field_ty) = TypeId::lower_ast_partial(ctxt, field.ty()).to_opt() else {
-                continue;
-            };
-            fields.push((field_name, field_ty));
-        }
-    }
-    fields
+    struct_
+        .hir_fields(db)
+        .data(db)
+        .iter()
+        .filter_map(|field| Some((field.name.to_opt()?, field.type_ref().to_opt()?)))
+        .collect()
 }
 
 fn lower_msg_variant_encode_decode_impls<'db>(
@@ -464,10 +456,10 @@ fn build_encoded_size_body_expr<'db>(
 
 fn lower_msg_variant_decode_trait_impl<'db>(
     builder: &mut HirBuilder<'_, 'db, MsgDesugared>,
-    variant: &ast::MsgVariant,
+    _variant: &ast::MsgVariant,
     struct_: Struct<'db>,
 ) -> ImplTrait<'db> {
-    let fields = lower_msg_variant_field_specs(builder.ctxt(), variant);
+    let fields = lower_msg_variant_field_specs(builder.db(), struct_);
     let field_names = fields.iter().map(|(name, _)| *name).collect::<Vec<_>>();
 
     let trait_ref = builder.core_abi_trait_ref_sol("Decode");
@@ -505,16 +497,17 @@ fn lower_msg_variant_struct<'db>(
     let name = IdentId::lower_token_partial(builder.ctxt(), variant.name());
     super::payable::report_payable_attr_on_msg_variant(builder.ctxt(), variant.attr_list());
     let attributes = filter_msg_variant_attrs(builder.ctxt(), variant.attr_list());
-    let fields = lower_msg_variant_fields(builder.ctxt(), variant.params());
+    let fields = lower_msg_variant_fields(builder, variant, variant.params());
     builder.pub_struct(name, attributes, fields)
 }
 
 /// Lowers msg variant params to field definitions, making all fields public.
 fn lower_msg_variant_fields<'db>(
-    ctxt: &mut FileLowerCtxt<'db>,
+    builder: &mut HirBuilder<'_, 'db, MsgDesugared>,
+    variant: &ast::MsgVariant,
     params: Option<ast::MsgVariantParams>,
 ) -> FieldDefListId<'db> {
-    let db = ctxt.db();
+    let db = builder.db();
     match params {
         Some(params) => {
             let fields = params
@@ -525,9 +518,12 @@ fn lower_msg_variant_fields<'db>(
                         field.attr_list(),
                         "field",
                     );
-                    let attributes = AttrListId::lower_ast_opt(ctxt, field.attr_list());
-                    let name = IdentId::lower_token_partial(ctxt, field.name());
-                    let type_ref = TypeId::lower_ast_partial(ctxt, field.ty());
+                    let attributes = AttrListId::lower_ast_opt(builder.ctxt(), field.attr_list());
+                    let name = IdentId::lower_token_partial(builder.ctxt(), field.name());
+                    let type_ref = TypeId::lower_ast_partial(builder.ctxt(), field.ty())
+                        .to_opt()
+                        .map(|ty| lower_msg_variant_field_ty(builder, variant, name, ty))
+                        .into();
                     // All msg variant fields are public
                     FieldDef::new(attributes, name, type_ref, Visibility::Public)
                 })
@@ -536,6 +532,30 @@ fn lower_msg_variant_fields<'db>(
         }
         None => FieldDefListId::new(db, vec![]),
     }
+}
+
+fn lower_msg_variant_field_ty<'db>(
+    builder: &mut HirBuilder<'_, 'db, MsgDesugared>,
+    variant: &ast::MsgVariant,
+    field_name: Partial<IdentId<'db>>,
+    field_ty: TypeId<'db>,
+) -> TypeId<'db> {
+    if matches!(field_ty.data(builder.db()), TypeKind::Path(_)) {
+        return field_ty;
+    }
+
+    let db = builder.db();
+    let variant_name = IdentId::lower_token_partial(builder.ctxt(), variant.name())
+        .to_opt()
+        .map(|ident| ident.data(db).to_string())
+        .unwrap_or_else(|| "_".to_string());
+    let field_name = field_name
+        .to_opt()
+        .map(|ident| ident.data(db).to_string())
+        .unwrap_or_else(|| "_".to_string());
+    let alias_name = IdentId::new(db, format!("__msg_{variant_name}_{field_name}_ty"));
+    builder.type_alias_simple(Partial::Present(alias_name), Partial::Present(field_ty));
+    builder.ty_path(PathId::from_ident(db, alias_name))
 }
 
 /// Creates an `impl MsgVariant for VariantStruct` block.
