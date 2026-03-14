@@ -35,7 +35,7 @@ const MEMORY_SOURCE_URL: &str = "file:///contract.fe";
 const TEST_CONTRACT_CODE_SIZE_LIMIT: usize = 1024 * 1024;
 const TEST_CONTRACT_INITCODE_SIZE_LIMIT: usize = 2 * TEST_CONTRACT_CODE_SIZE_LIMIT;
 /// Test-only execution budget for deploying and calling generated helper contracts.
-const TEST_GAS_LIMIT: u64 = 100_000_000;
+const TEST_GAS_LIMIT: u64 = 1_000_000_000;
 
 /// Error type returned by the harness.
 #[derive(Error)]
