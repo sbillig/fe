@@ -5,23 +5,21 @@ input_file: crates/codegen/tests/fixtures/struct_init.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @__fe_Dummy_0 = {i64, i256};
+type @__fe_obj_Dummy_0 = {i64, i256};
 
-func private %make_dummy() -> *@__fe_Dummy_0 {
+func private %make_dummy() -> objref<@__fe_obj_Dummy_0> {
     block0:
-        v1.*i8 = evm_malloc 64.i256;
-        v2.*@__fe_Dummy_0 = bitcast v1 *@__fe_Dummy_0;
-        v5.*i64 = gep v2 0.i256 0.i256;
-        v6.i256 = zext 42.i64 i256;
-        mstore v5 v6 i256;
-        v9.*i256 = gep v2 0.i256 1.i256;
-        mstore v9 99.i256 i256;
-        return v2;
+        v0.objref<@__fe_obj_Dummy_0> = obj.alloc @__fe_obj_Dummy_0;
+        v3.objref<i64> = obj.proj v0 0.i256;
+        obj.store v3 42.i64;
+        v6.objref<i256> = obj.proj v0 1.i256;
+        obj.store v6 99.i256;
+        return v0;
 }
 
 func private %__fe_sonatina_entry() {
     block0:
-        v0.*@__fe_Dummy_0 = call %make_dummy;
+        v0.objref<@__fe_obj_Dummy_0> = call %make_dummy;
         evm_stop;
 }
 

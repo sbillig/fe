@@ -15,19 +15,18 @@ func private %f(v0.*@__fe_E_0) -> i256 {
         v2.i256 = ptr_to_int v0 i256;
         v4.i256 = add v2 32.i256;
         v5.*i8 = int_to_ptr v4 *i8;
-        v6.i256 = ptr_to_int v5 i256;
-        v7.*i256 = bitcast v5 *i256;
-        v8.i256 = mload v7 i256;
-        return v8;
+        v6.*i256 = bitcast v5 *i256;
+        v7.i256 = mload v6 i256;
+        return v7;
 
     block2:
         return 0.i256;
 
     block3:
-        v11.i256 = ptr_to_int v0 i256;
-        v12.*i8 = bitcast v0 *i8;
-        v13.i256 = mload v12 i256;
-        br_table v13 block4 (0.i256 block1) (1.i256 block2);
+        v10.i256 = ptr_to_int v0 i256;
+        v11.*i8 = bitcast v0 *i8;
+        v12.i256 = mload v11 i256;
+        br_table v12 block4 (0.i256 block1) (1.i256 block2);
 
     block4:
         evm_invalid;

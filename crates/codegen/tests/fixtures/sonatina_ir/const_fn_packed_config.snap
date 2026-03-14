@@ -5,48 +5,38 @@ input_file: crates/codegen/tests/fixtures/const_fn_packed_config.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @__fe_tuple_0 = {i8, i16};
+type @__fe_obj_tuple_0 = {i8, i16};
 
-func private %token_params(v0.i8) -> *@__fe_tuple_0 {
+func private %token_params(v0.i8) -> objref<@__fe_obj_tuple_0> {
     block0:
-        v2.*@__fe_tuple_0 = int_to_ptr 0.i256 *@__fe_tuple_0;
         jump block5;
 
     block1:
-        v4.*i8 = evm_malloc 64.i256;
-        v5.*@__fe_tuple_0 = bitcast v4 *@__fe_tuple_0;
-        v7.*i8 = gep v5 0.i256 0.i256;
-        v8.i256 = zext 18.i8 i256;
-        mstore v7 v8 i256;
-        v11.*i16 = gep v5 0.i256 1.i256;
-        v12.i256 = zext 30.i16 i256;
-        mstore v11 v12 i256;
+        v2.objref<@__fe_obj_tuple_0> = obj.alloc @__fe_obj_tuple_0;
+        v5.objref<i8> = obj.proj v2 0.i256;
+        obj.store v5 18.i8;
+        v8.objref<i16> = obj.proj v2 1.i256;
+        obj.store v8 30.i16;
         jump block2;
 
     block2:
-        v13.*@__fe_tuple_0 = phi (v5 block1) (v15 block3) (v23 block4);
-        return v13;
+        v9.objref<@__fe_obj_tuple_0> = phi (v2 block1) (v10 block3) (v15 block4);
+        return v9;
 
     block3:
-        v14.*i8 = evm_malloc 64.i256;
-        v15.*@__fe_tuple_0 = bitcast v14 *@__fe_tuple_0;
-        v17.*i8 = gep v15 0.i256 0.i256;
-        v18.i256 = zext 6.i8 i256;
-        mstore v17 v18 i256;
-        v20.*i16 = gep v15 0.i256 1.i256;
-        v21.i256 = zext 5.i16 i256;
-        mstore v20 v21 i256;
+        v10.objref<@__fe_obj_tuple_0> = obj.alloc @__fe_obj_tuple_0;
+        v12.objref<i8> = obj.proj v10 0.i256;
+        obj.store v12 6.i8;
+        v14.objref<i16> = obj.proj v10 1.i256;
+        obj.store v14 5.i16;
         jump block2;
 
     block4:
-        v22.*i8 = evm_malloc 64.i256;
-        v23.*@__fe_tuple_0 = bitcast v22 *@__fe_tuple_0;
-        v24.*i8 = gep v23 0.i256 0.i256;
-        v25.i256 = zext 18.i8 i256;
-        mstore v24 v25 i256;
-        v27.*i16 = gep v23 0.i256 1.i256;
-        v28.i256 = zext 0.i16 i256;
-        mstore v27 v28 i256;
+        v15.objref<@__fe_obj_tuple_0> = obj.alloc @__fe_obj_tuple_0;
+        v16.objref<i8> = obj.proj v15 0.i256;
+        obj.store v16 18.i8;
+        v18.objref<i16> = obj.proj v15 1.i256;
+        obj.store v18 0.i16;
         jump block2;
 
     block5:
@@ -76,15 +66,13 @@ func private %pack_config(v0.i8, v1.i1, v2.i16) -> i256 {
 
 func private %packed_token_config(v0.i8, v1.i1) -> i256 {
     block0:
-        v2.*@__fe_tuple_0 = call %token_params v0;
-        v4.*i8 = gep v2 0.i256 0.i256;
-        v5.i256 = mload v4 i256;
-        v6.i8 = trunc v5 i8;
-        v8.*i16 = gep v2 0.i256 1.i256;
-        v9.i256 = mload v8 i256;
-        v10.i16 = trunc v9 i16;
-        v11.i256 = call %pack_config v6 v1 v10;
-        return v11;
+        v2.objref<@__fe_obj_tuple_0> = call %token_params v0;
+        v4.objref<i8> = obj.proj v2 0.i256;
+        v5.i8 = obj.load v4;
+        v7.objref<i16> = obj.proj v2 1.i256;
+        v8.i16 = obj.load v7;
+        v9.i256 = call %pack_config v5 v1 v8;
+        return v9;
 }
 
 func private %main() -> i256 {
@@ -94,7 +82,7 @@ func private %main() -> i256 {
 
 func private %__fe_sonatina_entry() {
     block0:
-        v2.*@__fe_tuple_0 = call %token_params 0.i8;
+        v2.objref<@__fe_obj_tuple_0> = call %token_params 0.i8;
         evm_stop;
 }
 

@@ -186,6 +186,69 @@ pub fn peel_transparent_newtypes<'db>(db: &'db dyn HirAnalysisDb, mut ty: TyId<'
     ty
 }
 
+pub fn object_layout_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    mut ty: TyId<'db>,
+) -> TyId<'db> {
+    let assumptions = PredicateListId::empty_list(db);
+    loop {
+        ty = normalize_ty(db, ty, core.scope, assumptions);
+        if let Some((CapabilityKind::View, inner)) = ty.as_capability(db) {
+            ty = inner;
+            continue;
+        }
+
+        if let Some(inner) = transparent_newtype_field_ty(db, ty) {
+            ty = inner;
+            continue;
+        }
+
+        if let Some((capability, inner)) = ty.as_capability(db)
+            && matches!(capability, CapabilityKind::Mut | CapabilityKind::Ref)
+            && matches!(repr_kind_for_ty(db, core, inner), ReprKind::Ref)
+        {
+            ty = inner;
+            continue;
+        }
+
+        return ty;
+    }
+}
+
+pub fn supports_object_ref_runtime_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    ty: TyId<'db>,
+) -> bool {
+    let ty = object_layout_ty(db, core, ty);
+
+    if ty.is_array(db) {
+        return layout::array_elem_ty(db, ty)
+            .is_none_or(|elem_ty| supports_object_ref_runtime_ty(db, core, elem_ty));
+    }
+
+    if ty.is_tuple(db) {
+        return ty
+            .field_types(db)
+            .iter()
+            .copied()
+            .all(|field_ty| supports_object_ref_runtime_ty(db, core, field_ty));
+    }
+
+    match ty.base_ty(db).data(db) {
+        TyData::TyBase(TyBase::Adt(adt_def)) => match adt_def.adt_ref(db) {
+            AdtRef::Enum(_) => false,
+            AdtRef::Struct(_) => ty
+                .field_types(db)
+                .iter()
+                .copied()
+                .all(|field_ty| supports_object_ref_runtime_ty(db, core, field_ty)),
+        },
+        _ => true,
+    }
+}
+
 /// Returns the effect provider's address space for a type, looking through transparent newtype wrappers.
 pub fn effect_provider_space_for_ty<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -271,13 +334,10 @@ pub fn pointer_info_for_ty<'db>(
                 address_space: default_ref_space,
                 target_ty: Some(inner),
             }),
-            CapabilityKind::Ref => match repr_kind_for_ref_inner(db, core, inner) {
-                ReprKind::Ptr(AddressSpaceKind::Memory) => Some(PointerInfo {
-                    address_space: default_ref_space,
-                    target_ty: Some(inner),
-                }),
-                ReprKind::Zst | ReprKind::Word | ReprKind::Ptr(_) | ReprKind::Ref => None,
-            },
+            CapabilityKind::Ref => Some(PointerInfo {
+                address_space: default_ref_space,
+                target_ty: Some(inner),
+            }),
             CapabilityKind::View => pointer_info_for_ty(db, core, inner, default_ref_space),
         };
     }
@@ -818,7 +878,9 @@ fn repr_kind_for_ref_inner<'db>(
     inner: TyId<'db>,
 ) -> ReprKind {
     match repr_kind_for_ty(db, core, inner) {
-        ReprKind::Word | ReprKind::Zst | ReprKind::Ptr(_) => ReprKind::Word,
+        ReprKind::Word | ReprKind::Zst | ReprKind::Ptr(_) => {
+            ReprKind::Ptr(AddressSpaceKind::Memory)
+        }
         ReprKind::Ref => ReprKind::Ptr(AddressSpaceKind::Memory),
     }
 }
@@ -880,13 +942,51 @@ pub fn runtime_word_kind_for_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) 
 }
 
 pub fn runtime_shape_for_pointer_info<'db>(info: PointerInfo<'db>) -> RuntimeShape<'db> {
-    if info.address_space == AddressSpaceKind::Memory {
-        RuntimeShape::MemoryPtr {
-            target_ty: info.target_ty,
-        }
-    } else {
-        RuntimeShape::AddressWord(info)
+    if info.address_space != AddressSpaceKind::Memory {
+        return RuntimeShape::AddressWord(info);
     }
+
+    RuntimeShape::MemoryPtr {
+        target_ty: info.target_ty,
+    }
+}
+
+fn runtime_object_ref_target_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    ty: TyId<'db>,
+    default_ref_space: AddressSpaceKind,
+) -> Option<TyId<'db>> {
+    let assumptions = PredicateListId::empty_list(db);
+    let ty = normalize_ty(db, ty, core.scope, assumptions);
+    if default_ref_space != AddressSpaceKind::Memory {
+        return None;
+    }
+
+    if let Some((capability, inner)) = ty.as_capability(db) {
+        return match capability {
+            CapabilityKind::View => {
+                runtime_object_ref_target_ty(db, core, inner, default_ref_space)
+            }
+            CapabilityKind::Mut | CapabilityKind::Ref => {
+                runtime_object_ref_target_ty(db, core, inner, default_ref_space)
+            }
+        };
+    }
+
+    if effect_provider_space_for_ty(db, core, ty).is_some() {
+        return None;
+    }
+
+    if let Some(inner) = transparent_newtype_field_ty(db, ty) {
+        return runtime_object_ref_target_ty(db, core, inner, default_ref_space);
+    }
+
+    if !supports_object_ref_runtime_ty(db, core, ty) {
+        return None;
+    }
+
+    matches!(repr_kind_for_ty(db, core, ty), ReprKind::Ref).then(|| object_layout_ty(db, core, ty))
 }
 
 fn runtime_shape_needs_dynamic_address_space<'db>(
@@ -912,6 +1012,10 @@ pub fn runtime_shape_for_ty<'db>(
 ) -> RuntimeShape<'db> {
     if layout::is_zero_sized_ty(db, ty) {
         return RuntimeShape::Erased;
+    }
+
+    if let Some(target_ty) = runtime_object_ref_target_ty(db, core, ty, default_ref_space) {
+        return RuntimeShape::ObjectRef { target_ty };
     }
 
     if let Some(info) = runtime_pointer_info_for_ty(db, core, ty, default_ref_space) {
@@ -942,15 +1046,30 @@ pub fn runtime_shape_for_local<'db>(
     core: &CoreLib<'db>,
     local: &LocalData<'db>,
 ) -> RuntimeShape<'db> {
+    let type_shape = runtime_shape_for_ty(db, core, local.ty, local.address_space);
     if let Some((_, info)) = local
         .pointer_leaf_infos
         .iter()
         .find(|(path, _)| path.is_empty())
+        && matches!(type_shape, RuntimeShape::Word(_))
     {
         return runtime_shape_for_pointer_info(*info);
     }
 
-    runtime_shape_for_ty(db, core, local.ty, local.address_space)
+    type_shape
+}
+
+fn value_inherits_object_root_runtime_shape<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    values: &[ValueData<'db>],
+    locals: &[LocalData<'db>],
+    value: ValueId,
+) -> bool {
+    matches!(
+        runtime_shape_for_value(db, core, values, locals, value),
+        Some(RuntimeShape::ObjectRef { .. })
+    )
 }
 
 pub fn runtime_shape_for_value<'db>(
@@ -961,6 +1080,17 @@ pub fn runtime_shape_for_value<'db>(
     value: ValueId,
 ) -> Option<RuntimeShape<'db>> {
     let value_data = values.get(value.index())?;
+    if let crate::ir::ValueOrigin::Local(local) | crate::ir::ValueOrigin::PlaceRoot(local) =
+        value_data.origin
+    {
+        return locals.get(local.index()).map(|local| {
+            if local.runtime_shape.is_unresolved() {
+                runtime_shape_for_local(db, core, local)
+            } else {
+                local.runtime_shape
+            }
+        });
+    }
     if layout::is_zero_sized_ty(db, value_data.ty) {
         return Some(RuntimeShape::Erased);
     }
@@ -970,11 +1100,55 @@ pub fn runtime_shape_for_value<'db>(
             db,
             value_data.ty,
         ))),
-        crate::ir::ValueRepr::Ref(AddressSpaceKind::Memory) => Some(RuntimeShape::MemoryPtr {
-            target_ty: try_value_pointer_info_in(values, locals, value)
+        crate::ir::ValueRepr::Ref(AddressSpaceKind::Memory) => {
+            if let Some(target_ty) =
+                runtime_object_ref_target_ty(db, core, value_data.ty, AddressSpaceKind::Memory)
+            {
+                return Some(RuntimeShape::ObjectRef { target_ty });
+            }
+
+            if let Some(target_ty) = try_value_pointer_info_in(values, locals, value)
                 .and_then(|info| info.target_ty)
-                .or(Some(value_data.ty)),
-        }),
+                .filter(|target_ty| supports_object_ref_runtime_ty(db, core, *target_ty))
+            {
+                let target_ty = object_layout_ty(db, core, target_ty);
+                match &value_data.origin {
+                    crate::ir::ValueOrigin::PlaceRef(place)
+                    | crate::ir::ValueOrigin::MoveOut { place }
+                        if value_inherits_object_root_runtime_shape(
+                            db, core, values, locals, place.base,
+                        ) =>
+                    {
+                        return Some(RuntimeShape::ObjectRef { target_ty });
+                    }
+                    crate::ir::ValueOrigin::FieldPtr(field_ptr)
+                        if value_inherits_object_root_runtime_shape(
+                            db,
+                            core,
+                            values,
+                            locals,
+                            field_ptr.base,
+                        ) =>
+                    {
+                        return Some(RuntimeShape::ObjectRef { target_ty });
+                    }
+                    crate::ir::ValueOrigin::TransparentCast { value: inner }
+                        if value_inherits_object_root_runtime_shape(
+                            db, core, values, locals, *inner,
+                        ) =>
+                    {
+                        return Some(RuntimeShape::ObjectRef { target_ty });
+                    }
+                    _ => {}
+                }
+            }
+
+            Some(RuntimeShape::MemoryPtr {
+                target_ty: try_value_pointer_info_in(values, locals, value)
+                    .and_then(|info| info.target_ty)
+                    .or(Some(value_data.ty)),
+            })
+        }
         crate::ir::ValueRepr::Ref(space) => Some(RuntimeShape::AddressWord(PointerInfo {
             address_space: space,
             target_ty: try_value_pointer_info_in(values, locals, value)
@@ -988,6 +1162,47 @@ pub fn runtime_shape_for_value<'db>(
                     address_space: space,
                     target_ty: None,
                 });
+            if let Some(target_ty) = runtime_object_ref_target_ty(db, core, value_data.ty, space) {
+                return Some(RuntimeShape::ObjectRef { target_ty });
+            }
+
+            if info.address_space == AddressSpaceKind::Memory
+                && effect_provider_space_for_ty(db, core, value_data.ty).is_none()
+                && let Some(target_ty) = info.target_ty
+                && supports_object_ref_runtime_ty(db, core, target_ty)
+            {
+                let target_ty = object_layout_ty(db, core, target_ty);
+                match &value_data.origin {
+                    crate::ir::ValueOrigin::PlaceRef(place)
+                    | crate::ir::ValueOrigin::MoveOut { place }
+                        if value_inherits_object_root_runtime_shape(
+                            db, core, values, locals, place.base,
+                        ) =>
+                    {
+                        return Some(RuntimeShape::ObjectRef { target_ty });
+                    }
+                    crate::ir::ValueOrigin::FieldPtr(field_ptr)
+                        if value_inherits_object_root_runtime_shape(
+                            db,
+                            core,
+                            values,
+                            locals,
+                            field_ptr.base,
+                        ) =>
+                    {
+                        return Some(RuntimeShape::ObjectRef { target_ty });
+                    }
+                    crate::ir::ValueOrigin::TransparentCast { value: inner }
+                        if value_inherits_object_root_runtime_shape(
+                            db, core, values, locals, *inner,
+                        ) =>
+                    {
+                        return Some(RuntimeShape::ObjectRef { target_ty });
+                    }
+                    _ => {}
+                }
+            }
+
             Some(runtime_shape_for_pointer_info(info))
         }
     }

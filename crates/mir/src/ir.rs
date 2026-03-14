@@ -83,6 +83,7 @@ pub enum RuntimeShape<'db> {
     Unresolved,
     Erased,
     Word(RuntimeWordKind),
+    ObjectRef { target_ty: TyId<'db> },
     MemoryPtr { target_ty: Option<TyId<'db>> },
     AddressWord(PointerInfo<'db>),
 }
@@ -98,6 +99,7 @@ impl<'db> RuntimeShape<'db> {
 
     pub fn pointer_info(self) -> Option<PointerInfo<'db>> {
         match self {
+            Self::ObjectRef { .. } => None,
             Self::MemoryPtr { target_ty } => Some(PointerInfo {
                 address_space: AddressSpaceKind::Memory,
                 target_ty,
@@ -765,7 +767,13 @@ pub enum Rvalue<'db> {
     Intrinsic { op: IntrinsicOp, args: Vec<ValueId> },
     /// Load a scalar value from a place.
     Load { place: Place<'db> },
-    /// Allocate an address in the given address space.
+    /// Allocate a fresh statically sized typed object for the destination local.
+    ///
+    /// Semantics:
+    /// - the allocated object has the destination local's type
+    /// - for `AddressSpaceKind::Memory`, codegen lowers this to Sonatina `obj.alloc`
+    /// - this does not choose stack vs heap placement
+    /// - this is distinct from dynamic raw-memory allocation (`IntrinsicOp::Alloc`)
     Alloc { address_space: AddressSpaceKind },
     /// Backend-neutral constant aggregate data.
     ///
@@ -1179,7 +1187,8 @@ pub enum IntrinsicOp {
     Revert,
     /// `caller()`
     Caller,
-    /// `alloc(size)` - allocate `size` bytes in EVM linear memory and return the start pointer.
+    /// `alloc(size)` - allocate `size` bytes of dynamic raw EVM memory and return the base
+    /// address.
     Alloc,
 }
 

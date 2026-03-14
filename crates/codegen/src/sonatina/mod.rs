@@ -12,7 +12,6 @@ use common::ingot::Ingot;
 use driver::DriverDataBase;
 use hir::analysis::ty::ty_def::TyId;
 use hir::hir_def::TopLevelMod;
-use mir::ir::PointerInfo;
 use mir::{CoreLib, MirModule, layout, layout::TargetDataLayout, lower_ingot, lower_module};
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
@@ -102,12 +101,12 @@ impl RuntimeFunctionMetadata {
     }
 }
 
-fn runtime_pointer_type_from_target(
+fn runtime_pointer_type_from_target<'db>(
     builder: &ModuleBuilder,
-    db: &DriverDataBase,
-    core: &CoreLib<'_>,
+    db: &'db DriverDataBase,
+    core: &CoreLib<'db>,
     target_layout: &TargetDataLayout,
-    target_ty: TyId<'_>,
+    target_ty: TyId<'db>,
     cache: &mut FxHashMap<String, Option<Type>>,
     name_counter: &mut usize,
 ) -> Type {
@@ -127,6 +126,32 @@ fn runtime_pointer_type_from_target(
     builder.ptr_type(pointee)
 }
 
+fn runtime_object_ref_type_from_target<'db>(
+    builder: &ModuleBuilder,
+    db: &'db DriverDataBase,
+    core: &CoreLib<'db>,
+    target_layout: &TargetDataLayout,
+    target_ty: TyId<'db>,
+    cache: &mut FxHashMap<String, Option<Type>>,
+    name_counter: &mut usize,
+) -> Type {
+    let object_ty = lower::fe_object_ty_to_sonatina(
+        builder,
+        db,
+        core,
+        target_layout,
+        target_ty,
+        cache,
+        name_counter,
+    )
+    .unwrap_or_else(|| {
+        let size = layout::ty_memory_size_or_word_in(db, target_layout, target_ty)
+            .expect("object-backed runtime types must have a known memory size");
+        builder.declare_array_type(Type::I8, size)
+    });
+    builder.objref_type(object_ty)
+}
+
 fn function_core_lib<'db>(db: &'db DriverDataBase, func: &mir::MirFunction<'db>) -> CoreLib<'db> {
     let scope = match func.origin {
         mir::ir::MirFunctionOrigin::Hir(hir_func) => hir_func.scope(),
@@ -135,32 +160,12 @@ fn function_core_lib<'db>(db: &'db DriverDataBase, func: &mir::MirFunction<'db>)
     CoreLib::new(db, scope)
 }
 
-pub(super) fn runtime_type_for_pointer_info(
+pub(super) fn runtime_type_for_shape<'db>(
     builder: &ModuleBuilder,
-    db: &DriverDataBase,
-    core: &CoreLib<'_>,
+    db: &'db DriverDataBase,
+    core: &CoreLib<'db>,
     target_layout: &TargetDataLayout,
-    info: PointerInfo<'_>,
-    cache: &mut FxHashMap<String, Option<Type>>,
-    name_counter: &mut usize,
-) -> Type {
-    runtime_type_for_shape(
-        builder,
-        db,
-        core,
-        target_layout,
-        mir::repr::runtime_shape_for_pointer_info(info),
-        cache,
-        name_counter,
-    )
-}
-
-pub(super) fn runtime_type_for_shape(
-    builder: &ModuleBuilder,
-    db: &DriverDataBase,
-    core: &CoreLib<'_>,
-    target_layout: &TargetDataLayout,
-    shape: mir::ir::RuntimeShape<'_>,
+    shape: mir::ir::RuntimeShape<'db>,
     cache: &mut FxHashMap<String, Option<Type>>,
     name_counter: &mut usize,
 ) -> Type {
@@ -169,6 +174,15 @@ pub(super) fn runtime_type_for_shape(
             panic!("unresolved MIR runtime shape reached Sonatina codegen")
         }
         mir::ir::RuntimeShape::Erased => Type::Unit,
+        mir::ir::RuntimeShape::ObjectRef { target_ty } => runtime_object_ref_type_from_target(
+            builder,
+            db,
+            core,
+            target_layout,
+            target_ty,
+            cache,
+            name_counter,
+        ),
         mir::ir::RuntimeShape::Word(kind) => types::runtime_word_type(kind),
         mir::ir::RuntimeShape::MemoryPtr { target_ty } => target_ty
             .map(|target_ty| {
@@ -194,6 +208,9 @@ pub(super) fn zero_value_for_type<C: sonatina_ir::func_cursor::FuncCursor>(
 ) -> ValueId {
     if ty == Type::Unit {
         return types::zero_value(fb, ty);
+    }
+    if ty.is_obj_ref(&fb.module_builder.ctx) {
+        return fb.make_undef_value(ty);
     }
     let zero = types::zero_value(fb, Type::I256);
     if ty.is_pointer(&fb.module_builder.ctx) {
@@ -548,8 +565,6 @@ struct ModuleLowerer<'db, 'a> {
     data_globals_by_symbol: FxHashMap<String, Vec<GlobalVariableRef>>,
     /// Counter for generating unique data global names.
     data_global_counter: usize,
-    /// Interprocedural pointer escape summaries keyed by lowered symbol name.
-    ptr_escape_summaries: mir::analysis::escape::MirPtrEscapeSummaryMap,
 }
 
 impl<'db, 'a> ModuleLowerer<'db, 'a> {
@@ -577,7 +592,6 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             data_globals: Vec::new(),
             data_globals_by_symbol: FxHashMap::default(),
             data_global_counter: 0,
-            ptr_escape_summaries: mir::analysis::escape::compute_ptr_escape_summaries(db, mir),
         }
     }
 
@@ -1275,7 +1289,6 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         {
             let mut const_data_globals = FxHashMap::default();
             let mut overflow_revert_block = None;
-            let ptr_escape_summary = self.ptr_escape_summaries.get(&func.symbol_name);
             let mut ctx = LowerCtx {
                 fb: &mut fb,
                 db: self.db,
@@ -1298,7 +1311,6 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 data_global_counter: &mut self.data_global_counter,
                 const_data_globals: &mut const_data_globals,
                 overflow_revert_block: &mut overflow_revert_block,
-                ptr_escape_summary,
             };
             for (idx, block) in ctx.body.blocks.iter().enumerate() {
                 let block_id = mir::BasicBlockId(idx as u32);
@@ -1355,6 +1367,4 @@ pub(super) struct LowerCtx<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> {
     pub(super) const_data_globals: &'a mut FxHashMap<Vec<u8>, GlobalVariableRef>,
     /// Lazily-created shared overflow trap block for checked arithmetic in this function.
     pub(super) overflow_revert_block: &'a mut Option<BlockId>,
-    /// Escape summary for the current function.
-    pub(super) ptr_escape_summary: Option<&'a mir::analysis::escape::MirPtrEscapeSummary>,
 }

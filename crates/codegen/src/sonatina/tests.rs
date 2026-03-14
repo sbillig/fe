@@ -609,7 +609,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
             let name = &func.symbol_name;
             let (_sig, metadata) = self.lower_signature_and_metadata(func)?;
-            let sig = metadata.signature(name, sonatina_ir::Linkage::Public);
+            let sig = metadata.signature(name, sonatina_ir::Linkage::Private);
             let func_ref = self.builder.declare_function(sig).map_err(|e| {
                 LowerError::Internal(format!("failed to declare function {name}: {e}"))
             })?;
@@ -634,7 +634,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             )));
         }
 
-        let sig = Signature::new(wrapper_name, sonatina_ir::Linkage::Public, &[], &[]);
+        let sig = Signature::new(wrapper_name, sonatina_ir::Linkage::Private, &[], &[]);
         let func_ref = self.builder.declare_function(sig).map_err(|e| {
             LowerError::Internal(format!("failed to declare wrapper `{wrapper_name}`: {e}"))
         })?;
@@ -1108,7 +1108,7 @@ fn smoke():
     }
 
     #[test]
-    fn memory_ref_aggregate_params_lower_as_pointers() {
+    fn memory_ref_aggregate_params_lower_as_object_refs() {
         let mut db = DriverDataBase::default();
         let file_url = temp_fixture_url("sonatina_memory_ref_aggregate_params_test.fe");
         db.workspace().touch(
@@ -1116,18 +1116,30 @@ fn smoke():
             file_url.clone(),
             Some(
                 r#"
-fn mix(input: [u256; 3]) -> [u256; 3]:
-    let out: [u256; 3] = [0, 0, 0]
-    for i in 0..3:
-        out[i] = input[i]
-    return out
+msg FooMsg {
+    #[selector = 0x01]
+    Run -> u256,
+}
 
-@test
-fn smoke():
-    let out: [u256; 3] = mix([1, 2, 3])
-    assert out[0] == 1
-    assert out[1] == 2
-    assert out[2] == 3
+struct Mixer {}
+
+impl Mixer {
+    fn mix(input: [u256; 3]) -> [u256; 3] {
+        let out: [u256; 3] = [0, 0, 0]
+        for i in 0..3:
+            out[i] = input[i]
+        return out
+    }
+}
+
+pub contract Foo {
+    recv FooMsg {
+        Run -> u256 {
+            let out: [u256; 3] = Mixer::mix([1, 2, 3])
+            out[0] + out[1] + out[2]
+        }
+    }
+}
 "#
                 .to_string(),
             ),
@@ -1137,13 +1149,12 @@ fn smoke():
             .get(&db, &file_url)
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
-        emit_test_module_sonatina(
-            &db,
-            top_mod,
-            OptLevel::O0,
-            &SonatinaTestDebugConfig::default(),
-        )
-        .expect("memory aggregate refs should stay pointer-typed in Sonatina lowering");
+        let ir = crate::emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O0, None)
+            .expect("module should lower to Sonatina IR");
+        assert!(
+            ir.contains("objref<"),
+            "memory aggregate refs should lower as object refs:\n{ir}"
+        );
     }
 
     #[test]
@@ -1222,6 +1233,91 @@ fn smoke():
         assert!(
             !body.contains("evm_malloc 32.i256"),
             "tuple encoder helper should reuse the existing encoder pointer, not heap-spill it:\n{body}"
+        );
+    }
+
+    #[test]
+    fn static_typed_allocations_lower_to_obj_alloc() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_static_typed_allocations_lower_to_obj_alloc.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+msg FooMsg {
+    #[selector = 0x01]
+    Run -> u256,
+}
+
+struct Builders {}
+
+impl Builders {
+    fn make_a() -> [u256; 3] {
+        return [1, 2, 3]
+    }
+
+    fn make_sum() -> u256 {
+        let a: [u256; 3] = Builders::make_a()
+        return a[0] + a[1] + a[2]
+    }
+}
+
+pub contract Foo {
+    recv FooMsg {
+        Run -> u256 {
+            Builders::make_sum()
+        }
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let ir = crate::emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O0, None)
+            .expect("module should lower to Sonatina IR");
+        assert!(
+            ir.contains("obj.alloc"),
+            "expected object allocations:\n{ir}"
+        );
+        assert!(
+            !ir.contains("alloca"),
+            "typed allocations must not lower through alloca:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn dynamic_alloc_stays_on_evm_malloc() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_dynamic_alloc_stays_on_evm_malloc.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+pub contract Foo {
+    init(seed: u256) {}
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let ir = crate::emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O0, None)
+            .expect("module should lower to Sonatina IR");
+
+        assert!(
+            ir.contains("evm_malloc"),
+            "dynamic raw allocations must still lower through evm_malloc:\n{ir}"
         );
     }
 }

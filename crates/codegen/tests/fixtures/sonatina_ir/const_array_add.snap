@@ -5,26 +5,25 @@ input_file: crates/codegen/tests/fixtures/const_array_add.fe
 ---
 target = "evm-ethereum-osaka"
 
-global private const [i8; 96] $__fe_const_data_0 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 30];
-
 func private %get_sum() -> i256 {
     block0:
-        v1.*i8 = evm_malloc 96.i256;
-        v2.i256 = sym_addr $__fe_const_data_0;
-        v3.i256 = sym_size $__fe_const_data_0;
-        v4.i256 = ptr_to_int v1 i256;
-        evm_code_copy v4 v2 v3;
-        v5.*[i256; 3] = bitcast v1 *[i256; 3];
-        v7.*i256 = gep v5 0.i256 0.i256;
-        v8.i256 = mload v7 i256;
-        (v10.i256, v11.i1) = uaddo 1.i256 v8;
-        br v11 block1 block2;
+        v0.objref<[i256; 3]> = obj.alloc [i256; 3];
+        v2.objref<i256> = obj.index v0 0.i256;
+        obj.store v2 10.i256;
+        v5.objref<i256> = obj.index v0 1.i256;
+        obj.store v5 20.i256;
+        v8.objref<i256> = obj.index v0 2.i256;
+        obj.store v8 30.i256;
+        v10.objref<i256> = obj.index v0 0.i256;
+        v11.i256 = obj.load v10;
+        (v12.i256, v13.i1) = uaddo 1.i256 v11;
+        br v13 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        return v10;
+        return v12;
 }
 
 func private %__fe_sonatina_entry() {
@@ -37,6 +36,5 @@ func private %__fe_sonatina_entry() {
 object @Contract {
     section runtime {
         entry %__fe_sonatina_entry;
-        data $__fe_const_data_0;
     }
 }

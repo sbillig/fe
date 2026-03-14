@@ -5,10 +5,10 @@ input_file: crates/codegen/tests/fixtures/match_tuple.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @__fe_tuple_0 = {i1, i1};
-type @__fe_tuple_1 = {i1, i8};
+type @__fe_obj_tuple_0 = {i1, i1};
+type @__fe_obj_tuple_1 = {i1, i8};
 
-func private %match_bool_tuple(v0.*@__fe_tuple_0) -> i8 {
+func private %match_bool_tuple(v0.objref<@__fe_obj_tuple_0>) -> i8 {
     block0:
         jump block6;
 
@@ -29,25 +29,22 @@ func private %match_bool_tuple(v0.*@__fe_tuple_0) -> i8 {
         jump block2;
 
     block6:
-        v9.*i1 = gep v0 0.i256 1.i256;
-        v10.i256 = mload v9 i256;
-        v11.i1 = ne v10 0.i256;
-        br_table v11 block11 (1.i1 block7) (0.i1 block9);
+        v9.objref<i1> = obj.proj v0 1.i256;
+        v10.i1 = obj.load v9;
+        br_table v10 block11 (1.i1 block7) (0.i1 block9);
 
     block7:
-        v15.*i1 = gep v0 0.i256 0.i256;
-        v16.i256 = mload v15 i256;
-        v17.i1 = ne v16 0.i256;
-        br_table v17 block8 (1.i1 block1) (0.i1 block4);
+        v14.objref<i1> = obj.proj v0 0.i256;
+        v15.i1 = obj.load v14;
+        br_table v15 block8 (1.i1 block1) (0.i1 block4);
 
     block8:
         evm_invalid;
 
     block9:
-        v19.*i1 = gep v0 0.i256 0.i256;
-        v20.i256 = mload v19 i256;
-        v21.i1 = ne v20 0.i256;
-        br_table v21 block10 (1.i1 block3) (0.i1 block5);
+        v17.objref<i1> = obj.proj v0 0.i256;
+        v18.i1 = obj.load v17;
+        br_table v18 block10 (1.i1 block3) (0.i1 block5);
 
     block10:
         evm_invalid;
@@ -56,7 +53,7 @@ func private %match_bool_tuple(v0.*@__fe_tuple_0) -> i8 {
         evm_invalid;
 }
 
-func private %match_tuple_with_wildcard(v0.*@__fe_tuple_0) -> i8 {
+func private %match_tuple_with_wildcard(v0.objref<@__fe_obj_tuple_0>) -> i8 {
     block0:
         jump block4;
 
@@ -71,16 +68,15 @@ func private %match_tuple_with_wildcard(v0.*@__fe_tuple_0) -> i8 {
         jump block2;
 
     block4:
-        v6.*i1 = gep v0 0.i256 0.i256;
-        v7.i256 = mload v6 i256;
-        v8.i1 = ne v7 0.i256;
-        br_table v8 block5 (1.i1 block1) (0.i1 block3);
+        v6.objref<i1> = obj.proj v0 0.i256;
+        v7.i1 = obj.load v6;
+        br_table v7 block5 (1.i1 block1) (0.i1 block3);
 
     block5:
         evm_invalid;
 }
 
-func private %match_mixed_tuple(v0.*@__fe_tuple_1) -> i8 {
+func private %match_mixed_tuple(v0.objref<@__fe_obj_tuple_1>) -> i8 {
     block0:
         jump block6;
 
@@ -101,16 +97,14 @@ func private %match_mixed_tuple(v0.*@__fe_tuple_1) -> i8 {
         jump block2;
 
     block6:
-        v8.*i1 = gep v0 0.i256 0.i256;
-        v9.i256 = mload v8 i256;
-        v10.i1 = ne v9 0.i256;
-        br_table v10 block8 (1.i1 block7) (0.i1 block5);
+        v8.objref<i1> = obj.proj v0 0.i256;
+        v9.i1 = obj.load v8;
+        br_table v9 block8 (1.i1 block7) (0.i1 block5);
 
     block7:
-        v15.*i8 = gep v0 0.i256 1.i256;
-        v16.i256 = mload v15 i256;
-        v17.i8 = trunc v16 i8;
-        br_table v17 block4 (0.i8 block1) (1.i8 block3);
+        v14.objref<i8> = obj.proj v0 1.i256;
+        v15.i8 = obj.load v14;
+        br_table v15 block4 (0.i8 block1) (1.i8 block3);
 
     block8:
         evm_invalid;
@@ -118,8 +112,7 @@ func private %match_mixed_tuple(v0.*@__fe_tuple_1) -> i8 {
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.*@__fe_tuple_0 = int_to_ptr 0.i256 *@__fe_tuple_0;
-        v2.i8 = call %match_bool_tuple v1;
+        v1.i8 = call %match_bool_tuple undef.objref<@__fe_obj_tuple_0>;
         evm_stop;
 }
 

@@ -30,11 +30,10 @@ func private %explicit_raw_boundaries__Evm_hef0af3106e109414__3af54274b2985741()
     block0:
         v2.*i256 = call %mem_ptr_stor__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9 256.i256;
         call %bump__MemPtr_u256___25949c86160e9382 v2;
-        v5.*i8 = evm_malloc 32.i256;
-        v6.*i256 = bitcast v5 *i256;
-        mstore v6 7.i256 i256;
-        call %raw_store__MemPtr_Data__Evm_hef0af3106e109414__239cf9c159fd8b13 v6;
-        v7.i256 = mload v6 i256;
+        v4.objref<i256> = obj.alloc i256;
+        obj.store v4 7.i256;
+        call %raw_store__MemPtr_Data__Evm_hef0af3106e109414__239cf9c159fd8b13 v4;
+        v5.i256 = obj.load v4;
         return;
 }
 
@@ -58,9 +57,9 @@ func private %bump__MemPtr_u256___25949c86160e9382(v0.*i256) {
         return;
 }
 
-func private %raw_store__MemPtr_Data__Evm_hef0af3106e109414__239cf9c159fd8b13(v0.*i256) {
+func private %raw_store__MemPtr_Data__Evm_hef0af3106e109414__239cf9c159fd8b13(v0.objref<i256>) {
     block0:
-        v2.i256 = mload v0 i256;
+        v2.i256 = obj.load v0;
         mstore v2 8.i256 i256;
         return;
 }

@@ -1109,6 +1109,16 @@ fn merge_runtime_shapes<'db>(
             Some(RuntimeShape::Word(lhs))
         }
         (
+            RuntimeShape::ObjectRef {
+                target_ty: lhs_target,
+            },
+            RuntimeShape::ObjectRef {
+                target_ty: rhs_target,
+            },
+        ) if lhs_target == rhs_target => Some(RuntimeShape::ObjectRef {
+            target_ty: lhs_target,
+        }),
+        (
             RuntimeShape::MemoryPtr {
                 target_ty: lhs_target,
             },
@@ -1142,8 +1152,152 @@ fn merge_runtime_shapes<'db>(
     }
 }
 
+fn merge_runtime_shapes_in_context<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    existing: RuntimeShape<'db>,
+    next: RuntimeShape<'db>,
+) -> Option<RuntimeShape<'db>> {
+    merge_runtime_shapes(existing, next).or_else(|| match (existing, next) {
+        (
+            RuntimeShape::MemoryPtr { target_ty },
+            RuntimeShape::ObjectRef {
+                target_ty: object_target_ty,
+            },
+        )
+        | (
+            RuntimeShape::ObjectRef {
+                target_ty: object_target_ty,
+            },
+            RuntimeShape::MemoryPtr { target_ty },
+        ) => target_ty
+            .filter(|target_ty| {
+                crate::repr::object_layout_ty(db, core, *target_ty) == object_target_ty
+            })
+            .map(|_| RuntimeShape::ObjectRef {
+                target_ty: object_target_ty,
+            }),
+        _ => None,
+    })
+}
+
+fn assigned_rvalue_runtime_shape<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    func: &MirFunction<'db>,
+    dest: LocalId,
+    rvalue: &Rvalue<'db>,
+    return_shapes: &[RuntimeShape<'db>],
+    func_indices: &FxHashMap<String, usize>,
+) -> Option<RuntimeShape<'db>> {
+    match rvalue {
+        Rvalue::Value(value) => func
+            .body
+            .values
+            .get(value.index())
+            .map(|value| value.runtime_shape),
+        Rvalue::Call(call) => call
+            .resolved_name
+            .as_deref()
+            .and_then(|name| func_indices.get(name).copied())
+            .map(|callee_idx| return_shapes[callee_idx])
+            .or_else(|| {
+                func.body
+                    .locals
+                    .get(dest.index())
+                    .map(|local| local.runtime_shape)
+            }),
+        Rvalue::Alloc {
+            address_space: AddressSpaceKind::Memory,
+        } => func.body.locals.get(dest.index()).and_then(|local| {
+            (!layout::is_zero_sized_ty(db, local.ty)
+                && crate::repr::supports_object_ref_runtime_ty(db, core, local.ty))
+            .then(|| RuntimeShape::ObjectRef {
+                target_ty: crate::repr::object_layout_ty(db, core, local.ty),
+            })
+        }),
+        Rvalue::ZeroInit
+        | Rvalue::Intrinsic { .. }
+        | Rvalue::Load { .. }
+        | Rvalue::Alloc { .. }
+        | Rvalue::ConstAggregate { .. } => func
+            .body
+            .locals
+            .get(dest.index())
+            .map(|local| local.runtime_shape),
+    }
+}
+
+fn refine_call_param_local_shapes<'db>(
+    db: &'db dyn HirAnalysisDb,
+    module: &MirModule<'db>,
+    caller_idx: usize,
+    call: &CallOrigin<'db>,
+    next_local_shapes: &mut [Vec<RuntimeShape<'db>>],
+    func_indices: &FxHashMap<String, usize>,
+) {
+    let Some(callee_name) = call.resolved_name.as_deref() else {
+        return;
+    };
+    let Some(&callee_idx) = func_indices.get(callee_name) else {
+        return;
+    };
+    let caller = &module.functions[caller_idx];
+    let callee = &module.functions[callee_idx];
+    let core = function_core_lib(db, callee);
+
+    let runtime_value_params = callee.runtime_param_locals();
+    assert_eq!(
+        runtime_value_params.len(),
+        call.args.len(),
+        "runtime value arg shape mismatch for `{callee_name}`: params={}, args={}",
+        runtime_value_params.len(),
+        call.args.len(),
+    );
+    for (local, arg) in runtime_value_params.into_iter().zip(&call.args) {
+        if !matches!(
+            callee.body.local(local).address_space,
+            AddressSpaceKind::Memory
+        ) {
+            continue;
+        }
+        let arg_shape = caller.body.value(*arg).runtime_shape;
+        let local_shape = next_local_shapes[callee_idx][local.index()];
+        let Some(merged) = merge_runtime_shapes_in_context(db, &core, local_shape, arg_shape)
+        else {
+            continue;
+        };
+        next_local_shapes[callee_idx][local.index()] = merged;
+    }
+
+    let runtime_effect_params = callee.runtime_effect_param_locals();
+    assert_eq!(
+        runtime_effect_params.len(),
+        call.effect_args.len(),
+        "runtime effect arg shape mismatch for `{callee_name}`: params={}, args={}",
+        runtime_effect_params.len(),
+        call.effect_args.len(),
+    );
+    for (local, arg) in runtime_effect_params.into_iter().zip(&call.effect_args) {
+        if !matches!(
+            callee.body.local(local).address_space,
+            AddressSpaceKind::Memory
+        ) {
+            continue;
+        }
+        let arg_shape = caller.body.value(*arg).runtime_shape;
+        let local_shape = next_local_shapes[callee_idx][local.index()];
+        let Some(merged) = merge_runtime_shapes_in_context(db, &core, local_shape, arg_shape)
+        else {
+            continue;
+        };
+        next_local_shapes[callee_idx][local.index()] = merged;
+    }
+}
+
 fn assert_normalized_runtime_shapes<'db>(db: &'db dyn HirAnalysisDb, func: &MirFunction<'db>) {
     let live_values = compute_live_values(&func.body);
+    let core = function_core_lib(db, func);
 
     for (idx, local) in func.body.locals.iter().enumerate() {
         if local.runtime_shape.is_unresolved() {
@@ -1179,7 +1333,7 @@ fn assert_normalized_runtime_shapes<'db>(db: &'db dyn HirAnalysisDb, func: &MirF
             continue;
         };
         let local_shape = func.body.local(local).runtime_shape;
-        if merge_runtime_shapes(local_shape, value.runtime_shape).is_none() {
+        if merge_runtime_shapes_in_context(db, &core, local_shape, value.runtime_shape).is_none() {
             panic!(
                 "incompatible root local runtime shapes after MIR normalization in `{}` for v{idx}: local v{} `{}` has {:?}, value has {:?}, origin={:?}, ty={}, repr={:?}",
                 func.symbol_name,
@@ -1199,6 +1353,21 @@ pub(crate) fn normalize_runtime_shapes<'db>(
     db: &'db dyn HirAnalysisDb,
     module: &mut MirModule<'db>,
 ) {
+    let func_indices: FxHashMap<_, _> = module
+        .functions
+        .iter()
+        .enumerate()
+        .map(|(idx, func)| (func.symbol_name.clone(), idx))
+        .collect();
+    let return_shape_seeds: Vec<_> = module
+        .functions
+        .iter()
+        .map(|func| {
+            let core = function_core_lib(db, func);
+            crate::repr::runtime_return_shape_seed_for_ty(db, &core, func.ret_ty)
+        })
+        .collect();
+
     for func in &mut module.functions {
         let core = function_core_lib(db, func);
         let live_values = compute_live_values(&func.body);
@@ -1235,59 +1404,199 @@ pub(crate) fn normalize_runtime_shapes<'db>(
                 func.body.locals[local_id.index()].runtime_shape = RuntimeShape::Erased;
             }
         }
+    }
 
-        for idx in 0..func.body.values.len() {
-            let value_id = ValueId(idx as u32);
-            let shape = crate::repr::runtime_shape_for_value(
-                db,
-                &core,
-                &func.body.values,
-                &func.body.locals,
-                value_id,
-            )
-            .unwrap_or(RuntimeShape::Unresolved);
-            func.body.values[idx].runtime_shape = shape;
-        }
+    let mut changed = true;
+    while changed {
+        changed = false;
 
-        let mut runtime_return_shape = if func.runtime_return_shape.is_unresolved() {
-            crate::repr::runtime_return_shape_seed_for_ty(db, &core, func.ret_ty)
-        } else {
-            func.runtime_return_shape
-        };
-
-        for block in &func.body.blocks {
-            let Terminator::Return {
-                value: Some(value), ..
-            } = &block.terminator
-            else {
-                continue;
+        for func_idx in 0..module.functions.len() {
+            let core = {
+                let func = &module.functions[func_idx];
+                function_core_lib(db, func)
             };
-            let Some(returned) = func
-                .body
-                .values
-                .get(value.index())
-                .map(|value| value.runtime_shape)
-            else {
-                continue;
+            let value_shapes: Vec<_> = {
+                let func = &module.functions[func_idx];
+                (0..func.body.values.len())
+                    .map(|idx| {
+                        crate::repr::runtime_shape_for_value(
+                            db,
+                            &core,
+                            &func.body.values,
+                            &func.body.locals,
+                            ValueId(idx as u32),
+                        )
+                        .unwrap_or(RuntimeShape::Unresolved)
+                    })
+                    .collect()
             };
-            runtime_return_shape = merge_runtime_shapes(runtime_return_shape, returned)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "incompatible runtime return shapes in `{}`: {:?} vs {:?}",
-                        func.symbol_name, runtime_return_shape, returned
-                    )
-                });
+            for (idx, shape) in value_shapes.into_iter().enumerate() {
+                module.functions[func_idx].body.values[idx].runtime_shape = shape;
+            }
         }
 
-        if runtime_return_shape.is_unresolved() {
-            panic!(
-                "failed to resolve runtime return shape in `{}` for `{}`",
-                func.symbol_name,
-                func.ret_ty.pretty_print(db)
-            );
+        let current_return_shapes: Vec<_> = module
+            .functions
+            .iter()
+            .map(|func| func.runtime_return_shape)
+            .collect();
+        let mut next_return_shapes = current_return_shapes.clone();
+
+        for func_idx in 0..module.functions.len() {
+            let func = &module.functions[func_idx];
+            let core = function_core_lib(db, func);
+            let mut runtime_return_shape = return_shape_seeds[func_idx];
+
+            for block in &func.body.blocks {
+                let Terminator::Return {
+                    value: Some(value), ..
+                } = &block.terminator
+                else {
+                    continue;
+                };
+                let Some(returned) = func
+                    .body
+                    .values
+                    .get(value.index())
+                    .map(|value| value.runtime_shape)
+                else {
+                    continue;
+                };
+                runtime_return_shape =
+                    merge_runtime_shapes_in_context(db, &core, runtime_return_shape, returned)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "incompatible runtime return shapes in `{}`: {:?} vs {:?}",
+                                func.symbol_name, runtime_return_shape, returned
+                            )
+                        });
+            }
+
+            if runtime_return_shape.is_unresolved() {
+                panic!(
+                    "failed to resolve runtime return shape in `{}` for `{}`",
+                    func.symbol_name,
+                    func.ret_ty.pretty_print(db)
+                );
+            }
+
+            next_return_shapes[func_idx] = runtime_return_shape;
         }
 
-        func.runtime_return_shape = runtime_return_shape;
+        for (func_idx, next_shape) in next_return_shapes.into_iter().enumerate() {
+            if module.functions[func_idx].runtime_return_shape != next_shape {
+                module.functions[func_idx].runtime_return_shape = next_shape;
+                changed = true;
+            }
+        }
+
+        let mut next_local_shapes: Vec<Vec<_>> = module
+            .functions
+            .iter()
+            .map(|func| {
+                func.body
+                    .locals
+                    .iter()
+                    .map(|local| local.runtime_shape)
+                    .collect()
+            })
+            .collect();
+        let return_shapes: Vec<_> = module
+            .functions
+            .iter()
+            .map(|func| func.runtime_return_shape)
+            .collect();
+
+        for (func_idx, local_shapes) in next_local_shapes.iter_mut().enumerate() {
+            let func = &module.functions[func_idx];
+            let core = function_core_lib(db, func);
+
+            for block in &func.body.blocks {
+                for inst in &block.insts {
+                    let MirInst::Assign {
+                        dest: Some(dest),
+                        rvalue,
+                        ..
+                    } = inst
+                    else {
+                        continue;
+                    };
+                    let Some(shape) = assigned_rvalue_runtime_shape(
+                        db,
+                        &core,
+                        func,
+                        *dest,
+                        rvalue,
+                        &return_shapes,
+                        &func_indices,
+                    ) else {
+                        continue;
+                    };
+                    if !matches!(
+                        func.body.local(*dest).address_space,
+                        AddressSpaceKind::Memory
+                    ) {
+                        continue;
+                    }
+                    let local_shape = local_shapes[dest.index()];
+                    let Some(merged) =
+                        merge_runtime_shapes_in_context(db, &core, local_shape, shape)
+                    else {
+                        continue;
+                    };
+                    local_shapes[dest.index()] = merged;
+                }
+            }
+        }
+
+        for caller_idx in 0..module.functions.len() {
+            let func = &module.functions[caller_idx];
+            for block in &func.body.blocks {
+                for inst in &block.insts {
+                    let MirInst::Assign {
+                        rvalue: Rvalue::Call(call),
+                        ..
+                    } = inst
+                    else {
+                        continue;
+                    };
+                    refine_call_param_local_shapes(
+                        db,
+                        module,
+                        caller_idx,
+                        call,
+                        &mut next_local_shapes,
+                        &func_indices,
+                    );
+                }
+                if let Terminator::TerminatingCall {
+                    call: TerminatingCall::Call(call),
+                    ..
+                } = &block.terminator
+                {
+                    refine_call_param_local_shapes(
+                        db,
+                        module,
+                        caller_idx,
+                        call,
+                        &mut next_local_shapes,
+                        &func_indices,
+                    );
+                }
+            }
+        }
+
+        for (func_idx, local_shapes) in next_local_shapes.into_iter().enumerate() {
+            for (local_idx, next_shape) in local_shapes.into_iter().enumerate() {
+                if module.functions[func_idx].body.locals[local_idx].runtime_shape != next_shape {
+                    module.functions[func_idx].body.locals[local_idx].runtime_shape = next_shape;
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    for func in &module.functions {
         assert_normalized_runtime_shapes(db, func);
     }
 }
@@ -2214,16 +2523,18 @@ contract C:
                 func.symbol_name.contains("bump")
                     && func
                         .body
-                        .effect_param_locals
-                        .first()
-                        .is_some_and(|effect_local| {
+                        .param_locals
+                        .iter()
+                        .chain(func.body.effect_param_locals.iter())
+                        .copied()
+                        .any(|local| {
                             matches!(
-                                func.body.local(*effect_local).runtime_shape,
+                                func.body.local(local).runtime_shape,
                                 RuntimeShape::MemoryPtr { target_ty: Some(_) }
                             )
                         })
             }),
-            "expected at least one memory-specialized bump helper with a typed memory-pointer effect param",
+            "expected at least one memory-specialized bump helper with a typed memory-pointer runtime param",
         );
     }
 
@@ -2337,12 +2648,105 @@ contract C:
             .expect("expected aug-assign temp place local");
 
         let target_ty = match temp_local.runtime_shape {
-            RuntimeShape::MemoryPtr { target_ty } => target_ty,
+            RuntimeShape::ObjectRef { target_ty } => Some(target_ty),
             other => panic!("unexpected aug-assign temp runtime shape: {other:?}"),
         };
         assert!(
             target_ty.is_some(),
-            "alloc-backed aug-assign temp locals must normalize as typed memory pointers",
+            "alloc-backed aug-assign temp locals must normalize as typed object refs",
+        );
+    }
+
+    #[test]
+    fn runtime_shapes_refine_object_backed_scalar_handle_params() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///runtime_shapes_refine_object_backed_scalar_handle_params.fe",
+            include_str!("../../fe/tests/fixtures/fe_test/borrow_handle_forwarding.fe"),
+        );
+
+        let read_balance = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "read_balance")
+            .expect("expected read_balance helper");
+        let test_func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "test_borrow_handle_forwarding")
+            .expect("expected borrow_handle_forwarding test");
+        let balance_ref = test_func
+            .body
+            .locals
+            .iter()
+            .find(|local| local.name == "b_ref")
+            .expect("expected b_ref local");
+        let balance_ref_idx = test_func
+            .body
+            .locals
+            .iter()
+            .position(|local| local.name == "b_ref")
+            .expect("expected b_ref local index");
+        assert!(
+            matches!(balance_ref.runtime_shape, RuntimeShape::ObjectRef { .. }),
+            "b_ref local v{balance_ref_idx} should refine to an object ref first, got {:?}",
+            balance_ref.runtime_shape,
+        );
+        let call_arg = test_func
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                MirInst::Assign {
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } if call.resolved_name.as_deref() == Some("read_balance") => {
+                    call.args.first().copied()
+                }
+                _ => None,
+            })
+            .expect("expected read_balance call arg");
+        let call_arg_origin = &test_func.body.value(call_arg).origin;
+        if let ValueOrigin::Local(local) = call_arg_origin {
+            assert_eq!(
+                local.index(),
+                balance_ref_idx,
+                "read_balance should receive the `b_ref` local directly",
+            );
+        }
+        let call_arg_shape = test_func.body.value(call_arg).runtime_shape;
+        assert!(
+            matches!(call_arg_shape, RuntimeShape::ObjectRef { .. }),
+            "read_balance call arg should already be an object ref, got {:?} from {:?}",
+            call_arg_shape,
+            call_arg_origin,
+        );
+
+        let read_balance_param = read_balance.body.local(read_balance.body.param_locals[0]);
+        assert!(
+            matches!(
+                read_balance_param.runtime_shape,
+                RuntimeShape::ObjectRef { .. }
+            ),
+            "object-backed scalar refs should refine helper params to object refs, got {:?}",
+            read_balance_param.runtime_shape,
+        );
+
+        let bump_nonce = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "bump_nonce")
+            .expect("expected bump_nonce helper");
+        let bump_nonce_param = bump_nonce.body.local(bump_nonce.body.param_locals[0]);
+        assert!(
+            matches!(
+                bump_nonce_param.runtime_shape,
+                RuntimeShape::ObjectRef { .. }
+            ),
+            "object-backed scalar mut handles should refine helper params to object refs, got {:?}",
+            bump_nonce_param.runtime_shape,
         );
     }
 

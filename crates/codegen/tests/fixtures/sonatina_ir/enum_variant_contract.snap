@@ -30,89 +30,92 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
 
     block1:
         v8.i256 = evm_calldata_load 4.i256;
-        v9.*@__fe_MyOption_0 = alloca @__fe_MyOption_0;
-        v11.i256 = ptr_to_int v9 i256;
-        v12.*i8 = bitcast v9 *i8;
-        mstore v12 1.i256 i256;
-        v13.i256 = ptr_to_int v9 i256;
-        v15.i256 = add v13 32.i256;
-        v16.*i8 = int_to_ptr v15 *i8;
-        mstore v16 v8 i256;
+        v10.*i8 = evm_malloc 64.i256;
+        v11.*@__fe_MyOption_0 = bitcast v10 *@__fe_MyOption_0;
+        v13.i256 = ptr_to_int v11 i256;
+        v14.*i8 = bitcast v11 *i8;
+        mstore v14 1.i256 i256;
+        v15.i256 = ptr_to_int v11 i256;
+        v17.i256 = add v15 32.i256;
+        v18.*i8 = int_to_ptr v17 *i8;
+        mstore v18 v8 i256;
         jump block6;
 
     block2:
-        v19.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v4 1163776883.i256;
-        br v19 block8 block9;
+        v21.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v4 1163776883.i256;
+        br v21 block8 block9;
 
     block3:
-        v21.i256 = ptr_to_int v9 i256;
-        v22.i256 = add v21 32.i256;
-        v23.*i8 = int_to_ptr v22 *i8;
-        v24.i256 = mload v23 i256;
+        v23.i256 = ptr_to_int v11 i256;
+        v24.i256 = add v23 32.i256;
+        v25.*i8 = int_to_ptr v24 *i8;
+        v26.i256 = mload v25 i256;
         jump block4;
 
     block4:
-        v25.i256 = phi (v24 block3) (0.i256 block5);
-        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v25;
+        v27.i256 = phi (v26 block3) (0.i256 block5);
+        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v27;
         evm_invalid;
 
     block5:
         jump block4;
 
     block6:
-        v27.i256 = ptr_to_int v9 i256;
-        v28.*i8 = bitcast v9 *i8;
-        v29.i256 = mload v28 i256;
-        br_table v29 block7 (1.i256 block3) (0.i256 block5);
+        v29.i256 = ptr_to_int v11 i256;
+        v30.*i8 = bitcast v11 *i8;
+        v31.i256 = mload v30 i256;
+        br_table v31 block7 (1.i256 block3) (0.i256 block5);
 
     block7:
         evm_invalid;
 
     block8:
-        v30.*@__fe_MyOption_0 = alloca @__fe_MyOption_0;
-        v31.i256 = ptr_to_int v30 i256;
-        v32.*i8 = bitcast v30 *i8;
-        mstore v32 0.i256 i256;
+        v32.*i8 = evm_malloc 64.i256;
+        v33.*@__fe_MyOption_0 = bitcast v32 *@__fe_MyOption_0;
+        v34.i256 = ptr_to_int v33 i256;
+        v35.*i8 = bitcast v33 *i8;
+        mstore v35 0.i256 i256;
         jump block13;
 
     block9:
-        v35.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v4 3572425762.i256;
-        br v35 block15 block16;
+        v38.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v4 3572425762.i256;
+        br v38 block15 block16;
 
     block10:
-        v37.i256 = ptr_to_int v30 i256;
-        v38.i256 = add v37 32.i256;
-        v39.*i8 = int_to_ptr v38 *i8;
-        v40.i256 = mload v39 i256;
+        v40.i256 = ptr_to_int v33 i256;
+        v41.i256 = add v40 32.i256;
+        v42.*i8 = int_to_ptr v41 *i8;
+        v43.i256 = mload v42 i256;
         jump block11;
 
     block11:
-        v41.i256 = phi (v40 block10) (0.i256 block12);
-        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v41;
+        v44.i256 = phi (v43 block10) (0.i256 block12);
+        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v44;
         evm_invalid;
 
     block12:
         jump block11;
 
     block13:
-        v43.i256 = ptr_to_int v30 i256;
-        v44.*i8 = bitcast v30 *i8;
-        v45.i256 = mload v44 i256;
-        br_table v45 block14 (1.i256 block10) (0.i256 block12);
+        v46.i256 = ptr_to_int v33 i256;
+        v47.*i8 = bitcast v33 *i8;
+        v48.i256 = mload v47 i256;
+        br_table v48 block14 (1.i256 block10) (0.i256 block12);
 
     block14:
         evm_invalid;
 
     block15:
-        v46.i256 = evm_calldata_load 4.i256;
-        v47.*@__fe_MyOption_0 = alloca @__fe_MyOption_0;
-        v48.i256 = ptr_to_int v47 i256;
-        v49.*i8 = bitcast v47 *i8;
-        mstore v49 1.i256 i256;
-        v50.i256 = ptr_to_int v47 i256;
-        v51.i256 = add v50 32.i256;
-        v52.*i8 = int_to_ptr v51 *i8;
-        mstore v52 v46 i256;
+        v49.i256 = evm_calldata_load 4.i256;
+        v50.*i8 = evm_malloc 64.i256;
+        v51.*@__fe_MyOption_0 = bitcast v50 *@__fe_MyOption_0;
+        v52.i256 = ptr_to_int v51 i256;
+        v53.*i8 = bitcast v51 *i8;
+        mstore v53 1.i256 i256;
+        v54.i256 = ptr_to_int v51 i256;
+        v55.i256 = add v54 32.i256;
+        v56.*i8 = int_to_ptr v55 *i8;
+        mstore v56 v49 i256;
         jump block20;
 
     block16:
@@ -122,18 +125,18 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
         jump block18;
 
     block18:
-        v53.i256 = phi (1.i256 block17) (0.i256 block19);
-        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v53;
+        v57.i256 = phi (1.i256 block17) (0.i256 block19);
+        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v57;
         evm_invalid;
 
     block19:
         jump block18;
 
     block20:
-        v55.i256 = ptr_to_int v47 i256;
-        v56.*i8 = bitcast v47 *i8;
-        v57.i256 = mload v56 i256;
-        br_table v57 block21 (1.i256 block17) (0.i256 block19);
+        v59.i256 = ptr_to_int v51 i256;
+        v60.*i8 = bitcast v51 *i8;
+        v61.i256 = mload v60 i256;
+        br_table v61 block21 (1.i256 block17) (0.i256 block19);
 
     block21:
         evm_invalid;
