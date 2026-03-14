@@ -9,7 +9,7 @@ use parser::syntax_node::NodeOrToken;
 
 use super::types::{
     Doc, ToDoc, TokenPiece, block_list_auto, block_list_spaced_auto, block_list_with_comments,
-    hardlines, has_comment_tokens, newline_count, token_doc,
+    hardlines, has_comment_tokens, newline_count, singleton_tuple, token_doc,
 };
 
 // ============================================================================
@@ -1266,6 +1266,17 @@ impl ToDoc for ast::WithParamList {
 
 impl ToDoc for ast::TupleExpr {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        if !has_comment_tokens(self.syntax()) {
+            let mut items: Vec<_> = self
+                .elems()
+                .flatten()
+                .map(|elem| elem.to_doc(ctx))
+                .collect();
+            if items.len() == 1 {
+                return singleton_tuple(ctx, "(", ")", items.pop().unwrap());
+            }
+        }
+
         let indent = ctx.config.indent_width as isize;
         block_list_auto(ctx, self.syntax(), "(", ")", ast::Expr::cast, indent, true)
     }

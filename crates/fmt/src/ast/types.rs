@@ -64,6 +64,20 @@ pub fn block_list_spaced<'a>(
     block_list_inner(ctx, open, close, items, indent, trailing_comma, true)
 }
 
+pub fn singleton_tuple<'a>(
+    ctx: &'a RewriteContext<'a>,
+    open: &'a str,
+    close: &'a str,
+    item: Doc<'a>,
+) -> Doc<'a> {
+    let alloc = &ctx.alloc;
+    alloc
+        .text(open)
+        .append(item)
+        .append(alloc.text(","))
+        .append(alloc.text(close))
+}
+
 macro_rules! block_list_auto_impl {
     ($name:ident, $mk:ident) => {
         pub fn $name<'a, T: ToDoc>(
@@ -1060,6 +1074,13 @@ impl ToDoc for ast::AssocTypeGenericArg {
 
 impl ToDoc for ast::TupleType {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        if !has_comment_tokens(self.syntax()) {
+            let mut items: Vec<_> = self.elem_tys().map(|ty| ty.to_doc(ctx)).collect();
+            if items.len() == 1 {
+                return singleton_tuple(ctx, "(", ")", items.pop().unwrap());
+            }
+        }
+
         let indent = ctx.config.indent_width as isize;
         block_list_auto(ctx, self.syntax(), "(", ")", ast::Type::cast, indent, true)
     }

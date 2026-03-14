@@ -2,7 +2,6 @@
 
 use super::*;
 use hir::{
-    analysis::ty::const_eval::{ConstValue, try_eval_const_body},
     hir_def::{Expr, LitKind, Partial},
     projection::{IndexSource, Projection},
 };
@@ -313,18 +312,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return fallback;
         }
 
-        let Some(len_body) = len.to_opt() else {
-            return fallback;
-        };
-        let expected_len_ty = TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)));
-        let Some(ConstValue::Int(count)) = try_eval_const_body(self.db, len_body, expected_len_ty)
+        let Some(count) =
+            crate::layout::array_len_with_generic_args(self.db, array_ty, self.generic_args)
         else {
+            let _ = len;
             return fallback;
         };
-        let Some(count) = count.to_u32() else {
-            return fallback;
-        };
-        let count = count as usize;
 
         let elem_value = self.lower_expr(elem);
         if self.current_block().is_none() {
@@ -392,6 +385,35 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         Some(field_types[idx])
     }
 
+    /// Returns the ABI-encoded byte width for statically-sized values.
+    ///
+    /// This matches the head size used by the ABI encoder/decoder: primitive values occupy one
+    /// 32-byte word, while tuples/records are the concatenation of their fields.
+    pub(super) fn abi_static_size_bytes(&self, ty: TyId<'db>) -> Option<usize> {
+        if ty.is_array(self.db) {
+            let elem_ty = crate::layout::array_elem_ty(self.db, ty)?;
+            let len = crate::layout::array_len_with_generic_args(self.db, ty, self.generic_args)?;
+            return Some(len * self.abi_static_size_bytes(elem_ty)?);
+        }
+
+        if ty.is_tuple(self.db)
+            || ty
+                .adt_ref(self.db)
+                .is_some_and(|adt| matches!(adt, AdtRef::Struct(_)))
+        {
+            let mut size = 0;
+            for field_ty in ty.field_types(self.db) {
+                size += self.abi_static_size_bytes(field_ty)?;
+            }
+            return Some(size);
+        }
+
+        if let TyData::TyBase(TyBase::Prim(_)) = ty.base_ty(self.db).data(self.db) {
+            return Some(32);
+        }
+
+        None
+    }
     /// Emits a synthetic `u256` literal value.
     ///
     /// # Parameters

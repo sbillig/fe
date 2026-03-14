@@ -187,6 +187,12 @@ impl<const N: usize> AbiSize for String<N> {
     const ENCODED_SIZE: u256 = 32
 }
 
+impl<T, const N: usize> AbiSize for [T; N]
+    where T: AbiSize
+{
+    const ENCODED_SIZE: u256 = T::ENCODED_SIZE * (N as u256)
+}
+
 impl AbiSize for bool {
     const ENCODED_SIZE: u256 = 32
 }
@@ -421,6 +427,41 @@ impl<A: Abi, const N: usize> Encode<A> for String<N> {
 
     fn encode_to_ptr(own self, ptr: u256) {
         super::panic()
+    }
+}
+
+impl<A: Abi, T, const N: usize> Decode<A> for [T; N]
+    where T: Decode<A> + Copy
+{
+    fn decode<D: AbiDecoder<A>>(_ d: mut D) -> Self {
+        let mut out: [T; N] = [T::decode(mut d); N]
+        let mut i: usize = 1
+        while i < N {
+            out[i] = T::decode(mut d)
+            i += 1
+        }
+        out
+    }
+}
+
+impl<A: Abi, T, const N: usize> Encode<A> for [T; N]
+    where T: Encode<A> + AbiSize + Copy
+{
+    const DIRECT_ENCODE: bool = T::DIRECT_ENCODE
+
+    fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
+        for item in self {
+            item.encode(mut e)
+        }
+    }
+
+    #[arithmetic(unchecked)]
+    fn encode_to_ptr(own self, ptr: u256) {
+        let mut i: usize = 0
+        while i < N {
+            self[i].encode_to_ptr(ptr + ((i as u256) * T::ENCODED_SIZE))
+            i += 1
+        }
     }
 }
 
