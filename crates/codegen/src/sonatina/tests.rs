@@ -1237,6 +1237,31 @@ fn smoke():
     }
 
     #[test]
+    fn branch_proven_nested_enum_variant_loads_survive_o2_test_codegen() {
+        let mut db = DriverDataBase::default();
+        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../fe/tests/fixtures/fe_test/if_let_while_let.fe");
+        let fixture_source =
+            fs::read_to_string(&fixture_path).expect("if_let_while_let fixture should be readable");
+        let file_url = Url::from_file_path(&fixture_path).expect("fixture path should be absolute");
+        db.workspace()
+            .touch(&mut db, file_url.clone(), Some(fixture_source));
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O2,
+            &SonatinaTestDebugConfig::default(),
+        )
+        .expect("branch-proven nested enum payload loads should verify after O2 test lowering");
+    }
+
+    #[test]
     fn static_typed_allocations_lower_to_obj_alloc() {
         let mut db = DriverDataBase::default();
         let file_url = temp_fixture_url("sonatina_static_typed_allocations_lower_to_obj_alloc.fe");
