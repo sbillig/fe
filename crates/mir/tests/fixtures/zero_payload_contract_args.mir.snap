@@ -2,10 +2,6 @@
 source: crates/mir/tests/lowering_snapshots.rs
 expression: mir_output
 ---
-fn __ZeroPayloadContractArgs_init_contract() -> ():
-  bb0:
-    ret
-
 fn __ZeroPayloadContractArgs_recv_0_0() -> u256:
   bb0:
     ret 7
@@ -14,7 +10,6 @@ fn __ZeroPayloadContractArgs_init() -> ():
   bb0:
     v0: u256 = code_region_offset(func_item(__ZeroPayloadContractArgs_runtime))
     v1: u256 = code_region_len(func_item(__ZeroPayloadContractArgs_runtime))
-    eval __ZeroPayloadContractArgs_init_contract()
     eval codecopy(0, v0, v1)
     terminate return_data(0, v1)
 

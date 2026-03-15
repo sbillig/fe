@@ -1328,6 +1328,12 @@ pub contract Foo {
 pub contract Foo {
     init(seed: u256) {}
 }
+
+#[test]
+fn allocates_dynamic_init_args() uses (evm: mut Evm) {
+    let addr = evm.create2<Foo>(value: 0, args: (1,), salt: 0)
+    assert(addr.inner != 0)
+}
 "#
                 .to_string(),
             ),

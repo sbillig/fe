@@ -50,12 +50,12 @@ func private %__ByRefTraitProviderStorageBug_recv_0_0(v0.i256) -> i256 {
 
 func private %__ByRefTraitProviderStorageBug_init() {
     block0:
-        v1.i256 = call %init_field__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785 0.i256;
-        v2.i256 = sym_addr &__ByRefTraitProviderStorageBug_runtime;
-        v3.i256 = sym_size &__ByRefTraitProviderStorageBug_runtime;
-        call %__ByRefTraitProviderStorageBug_init_contract v1;
-        evm_code_copy 0.i256 v2 v3;
-        evm_return 0.i256 v3;
+        v0.i256 = sym_addr &__ByRefTraitProviderStorageBug_runtime;
+        v1.i256 = sym_size &__ByRefTraitProviderStorageBug_runtime;
+        v3.i256 = call %init_field__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785 0.i256;
+        call %__ByRefTraitProviderStorageBug_init_contract v3;
+        evm_code_copy 0.i256 v0 v1;
+        evm_return 0.i256 v1;
 }
 
 func private %__ByRefTraitProviderStorageBug_runtime() {

@@ -22,11 +22,6 @@ func private %bump__StorPtr_Wrap___5036bb3e02939b91(v0.i256) {
         return;
 }
 
-func private %__NewtypeByPlaceEffectArg_init_contract() {
-    block0:
-        return;
-}
-
 func private %__NewtypeByPlaceEffectArg_recv_0_0(v0.i256, v1.i256) -> i256 {
     block0:
         call %bump__StorPtr_Wrap___5036bb3e02939b91 v0;
@@ -45,13 +40,10 @@ func private %__NewtypeByPlaceEffectArg_recv_0_0(v0.i256, v1.i256) -> i256 {
 
 func private %__NewtypeByPlaceEffectArg_init() {
     block0:
-        v1.i256 = call %init_field__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9 0.i256;
-        v3.i256 = call %init_field__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24 1.i256;
-        v4.i256 = sym_addr &__NewtypeByPlaceEffectArg_runtime;
-        v5.i256 = sym_size &__NewtypeByPlaceEffectArg_runtime;
-        call %__NewtypeByPlaceEffectArg_init_contract;
-        evm_code_copy 0.i256 v4 v5;
-        evm_return 0.i256 v5;
+        v0.i256 = sym_addr &__NewtypeByPlaceEffectArg_runtime;
+        v1.i256 = sym_size &__NewtypeByPlaceEffectArg_runtime;
+        evm_code_copy 0.i256 v0 v1;
+        evm_return 0.i256 v1;
 }
 
 func private %__NewtypeByPlaceEffectArg_runtime() {
@@ -69,18 +61,6 @@ func private %__NewtypeByPlaceEffectArg_runtime() {
         v8.i256 = call %__NewtypeByPlaceEffectArg_recv_0_0 v3 v1;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v8;
         evm_invalid;
-}
-
-func private %init_field__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9(v0.i256) -> i256 {
-    block0:
-        v2.i256 = call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__u256__3271ca15373d4483 v0;
-        return v2;
-}
-
-func private %init_field__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24(v0.i256) -> i256 {
-    block0:
-        v2.i256 = call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Wrap_haf9e70905fcbd513__945a70bbbf171dbd v0;
-        return v2;
 }
 
 func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__u256__3271ca15373d4483(v0.i256) -> i256 {

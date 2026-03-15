@@ -36,13 +36,13 @@ func private %__GuardContract_recv_0_0(v0.i256, v1.i256) -> i1 {
 
 func private %__GuardContract_init() {
     block0:
-        v1.i256 = call %init_field__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9 0.i256;
-        v2.i256 = call %tstorptr_t__hb73db5b342ccdc03_effecthandle_hfc52f915596f993a_from_raw__bool__947c0c03c59c6f07 0.i256;
-        v3.i256 = sym_addr &__GuardContract_runtime;
-        v4.i256 = sym_size &__GuardContract_runtime;
-        call %__GuardContract_init_contract v2;
-        evm_code_copy 0.i256 v3 v4;
-        evm_return 0.i256 v4;
+        v0.i256 = sym_addr &__GuardContract_runtime;
+        v1.i256 = sym_size &__GuardContract_runtime;
+        v3.i256 = call %init_field__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9 0.i256;
+        v4.i256 = call %tstorptr_t__hb73db5b342ccdc03_effecthandle_hfc52f915596f993a_from_raw__bool__947c0c03c59c6f07 0.i256;
+        call %__GuardContract_init_contract v4;
+        evm_code_copy 0.i256 v0 v1;
+        evm_return 0.i256 v1;
 }
 
 func private %__GuardContract_runtime() {

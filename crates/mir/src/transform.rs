@@ -2235,8 +2235,8 @@ mod tests {
     use crate::{
         MirInst,
         ir::{
-            AddressSpaceKind, BasicBlock, LocalData, MirBody, MirProjectionPath, Place,
-            PointerInfo, RuntimeShape, RuntimeWordKind, Rvalue, SourceInfoId, Terminator,
+            AddressSpaceKind, BasicBlock, IntrinsicOp, LocalData, MirBody, MirProjectionPath,
+            Place, PointerInfo, RuntimeShape, RuntimeWordKind, Rvalue, SourceInfoId, Terminator,
             ValueData, ValueOrigin, ValueRepr,
         },
         lower::{lower_function, lower_module},
@@ -2934,13 +2934,16 @@ msg ZeroMsg {
 }
 
 pub contract ZeroPayloadContractArgs {
-    init(dummy: ()) {
+    mut value: u256
+
+    init(dummy: ()) uses (mut value) {
         let kept = dummy
+        value = 1
     }
 
     recv ZeroMsg {
-        Ping -> u256 {
-            7
+        Ping -> u256 uses (value) {
+            value
         }
     }
 }
@@ -2964,6 +2967,77 @@ pub contract ZeroPayloadContractArgs {
                 .iter()
                 .any(|local| local.name == "dummy"),
             "zero-sized init param should still be materialized as a body local when referenced",
+        );
+    }
+
+    #[test]
+    fn contract_init_that_only_restores_fresh_storage_zero_is_elided() {
+        let src = r#"
+msg ZeroStoreMsg {
+    #[selector = 0]
+    Ping -> u256,
+}
+
+struct Store {
+    x: u256,
+    y: u256,
+}
+
+pub contract RedundantZeroInit {
+    mut store: Store
+
+    init() uses (mut store) {
+        store.x = 0
+        store.y = 0
+    }
+
+    recv ZeroStoreMsg {
+        Ping -> u256 uses (store) {
+            store.x + store.y
+        }
+    }
+}
+"#;
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(&mut db, "file:///redundant_zero_init.fe", src);
+
+        assert!(
+            module
+                .functions
+                .iter()
+                .all(|func| func.symbol_name != "__RedundantZeroInit_init_contract"),
+            "redundant zero-only init handlers should be dropped entirely",
+        );
+
+        let init_entry = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "__RedundantZeroInit_init")
+            .expect("expected init entrypoint");
+        assert!(
+            init_entry
+                .body
+                .blocks
+                .iter()
+                .all(|block| block.insts.iter().all(|inst| match inst {
+                    MirInst::Assign {
+                        rvalue:
+                            Rvalue::Intrinsic {
+                                op:
+                                    IntrinsicOp::CodeRegionOffset
+                                    | IntrinsicOp::CodeRegionLen
+                                    | IntrinsicOp::Codecopy,
+                                ..
+                            },
+                        ..
+                    } => true,
+                    MirInst::Assign { .. } => false,
+                    MirInst::Store { .. }
+                    | MirInst::InitAggregate { .. }
+                    | MirInst::SetDiscriminant { .. }
+                    | MirInst::BindValue { .. } => false,
+                })),
+            "zero-only init should collapse to the minimal runtime codecopy/return sequence",
         );
     }
 }

@@ -6,54 +6,10 @@ input_file: tests/fixtures/newtype_storage_byplace_effect_arg.fe
 object "NewtypeByPlaceEffectArg" {
   code {
     function $__NewtypeByPlaceEffectArg_init() {
-      let v0 := $init_field__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9(0)
-      let v1 := $init_field__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24(1)
-      let v2 := dataoffset("NewtypeByPlaceEffectArg_deployed")
-      let v3 := datasize("NewtypeByPlaceEffectArg_deployed")
-      $__NewtypeByPlaceEffectArg_init_contract()
-      codecopy(0, v2, v3)
-      return(0, v3)
-    }
-    function $__NewtypeByPlaceEffectArg_init_contract() {
-      leave
-    }
-    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Wrap_haf9e70905fcbd513__945a70bbbf171dbd($slot) -> ret {
-      let v0 := $stor_ptr__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24($slot)
-      ret := v0
-      leave
-    }
-    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__u256__3271ca15373d4483($slot) -> ret {
-      let v0 := $stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9($slot)
-      ret := v0
-      leave
-    }
-    function $init_field__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24($slot) -> ret {
-      let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Wrap_haf9e70905fcbd513__945a70bbbf171dbd($slot)
-      ret := v0
-      leave
-    }
-    function $init_field__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9($slot) -> ret {
-      let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__u256__3271ca15373d4483($slot)
-      ret := v0
-      leave
-    }
-    function $stor_ptr__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24($slot) -> ret {
-      let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Wrap_haf9e70905fcbd513__945a70bbbf171dbd($slot)
-      ret := v0
-      leave
-    }
-    function $stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9($slot) -> ret {
-      let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483($slot)
-      ret := v0
-      leave
-    }
-    function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Wrap_haf9e70905fcbd513__945a70bbbf171dbd($raw) -> ret {
-      ret := $raw
-      leave
-    }
-    function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483($raw) -> ret {
-      ret := $raw
-      leave
+      let v0 := dataoffset("NewtypeByPlaceEffectArg_deployed")
+      let v1 := datasize("NewtypeByPlaceEffectArg_deployed")
+      codecopy(0, v0, v1)
+      return(0, v1)
     }
     $__NewtypeByPlaceEffectArg_init()
   }

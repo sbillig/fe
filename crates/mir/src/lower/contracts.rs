@@ -39,8 +39,9 @@ use crate::{
     core_lib::CoreLib,
     ir::{
         AddressSpaceKind, BodyBuilder, CallOrigin, CodeRegionRoot, ContractFunction,
-        ContractFunctionKind, HirCallTarget, IntrinsicOp, MirFunction, MirFunctionOrigin, Rvalue,
-        SourceInfoId, SwitchTarget, SwitchValue, SyntheticId, TerminatingCall, Terminator, ValueId,
+        ContractFunctionKind, HirCallTarget, IntrinsicOp, LocalId, MirBody, MirFunction,
+        MirFunctionOrigin, MirInst, MirProjectionPath, Place, Rvalue, SourceInfoId, SwitchTarget,
+        SwitchValue, SyntheticId, SyntheticValue, TerminatingCall, Terminator, ValueId,
         ValueOrigin, ValueRepr,
     },
     layout, repr,
@@ -116,8 +117,14 @@ fn lower_single_contract<'db>(
         .collect::<Vec<_>>();
 
     // User-body handlers first (so entrypoints can call them by symbol).
+    let mut needs_init_handler = false;
     if contract.init(db).is_some() {
-        out.push(lower_init_handler(db, contract, &symbols, &core_lib)?);
+        let mut init_handler = lower_init_handler(db, contract, &symbols, &core_lib)?;
+        prune_redundant_fresh_storage_zero_stores(&mut init_handler.body);
+        needs_init_handler = init_handler_has_observable_effects(&init_handler.body);
+        if needs_init_handler {
+            out.push(init_handler);
+        }
     }
     for recv in contract.recv_views(db) {
         for arm in recv.arms(db) {
@@ -140,6 +147,7 @@ fn lower_single_contract<'db>(
         &symbols,
         &core_lib,
         &slot_offsets,
+        needs_init_handler,
     )?);
     out.push(lower_runtime_entrypoint(
         db,
@@ -153,6 +161,144 @@ fn lower_single_contract<'db>(
     out.push(lower_init_code_len(db, contract, &symbols)?);
 
     Ok(out)
+}
+
+fn init_handler_has_observable_effects<'db>(body: &MirBody<'db>) -> bool {
+    body.blocks.iter().any(|block| {
+        block.insts.iter().any(|inst| {
+            matches!(
+                inst,
+                MirInst::Assign {
+                    rvalue: Rvalue::Call(_) | Rvalue::Intrinsic { .. },
+                    ..
+                } | MirInst::Store { .. }
+                    | MirInst::InitAggregate { .. }
+                    | MirInst::SetDiscriminant { .. }
+            )
+        }) || matches!(
+            block.terminator,
+            Terminator::TerminatingCall { .. }
+                | Terminator::Branch { .. }
+                | Terminator::Switch { .. }
+                | Terminator::Goto { .. }
+                | Terminator::Unreachable { .. }
+        )
+    })
+}
+
+fn prune_redundant_fresh_storage_zero_stores<'db>(body: &mut MirBody<'db>) {
+    if body.blocks.len() != 1
+        || body.blocks[0].insts.iter().any(|inst| {
+            matches!(
+                inst,
+                MirInst::Assign {
+                    rvalue: Rvalue::Call(_) | Rvalue::Intrinsic { .. } | Rvalue::Load { .. },
+                    ..
+                } | MirInst::InitAggregate { .. }
+                    | MirInst::SetDiscriminant { .. }
+                    | MirInst::BindValue { .. }
+            )
+        })
+    {
+        return;
+    }
+
+    let insts = std::mem::take(&mut body.blocks[0].insts);
+    let mut dirty_places = Vec::<(LocalId, MirProjectionPath<'db>)>::new();
+    let mut rewritten = Vec::with_capacity(insts.len());
+    for inst in insts {
+        let MirInst::Store {
+            source,
+            place,
+            value,
+        } = inst
+        else {
+            rewritten.push(inst);
+            continue;
+        };
+
+        let Some((local, path)) = static_storage_place_path(body, &place) else {
+            rewritten.push(MirInst::Store {
+                source,
+                place,
+                value,
+            });
+            continue;
+        };
+
+        if value_is_zero_literal(body, value)
+            && !dirty_places.iter().any(|(dirty_local, dirty_path)| {
+                storage_places_overlap(*dirty_local, dirty_path, local, &path)
+            })
+        {
+            continue;
+        }
+
+        dirty_places.push((local, path));
+        rewritten.push(MirInst::Store {
+            source,
+            place,
+            value,
+        });
+    }
+    body.blocks[0].insts = rewritten;
+}
+
+fn static_storage_place_path<'db>(
+    body: &MirBody<'db>,
+    place: &Place<'db>,
+) -> Option<(LocalId, MirProjectionPath<'db>)> {
+    if body.place_address_space(place) != AddressSpaceKind::Storage {
+        return None;
+    }
+
+    let (local, prefix) = crate::ir::resolve_local_projection_root(&body.values, place.base)?;
+    if projection_path_has_deref(&prefix)
+        || projection_path_has_deref(&place.projection)
+        || projection_path_has_index(&prefix)
+        || projection_path_has_index(&place.projection)
+    {
+        return None;
+    }
+
+    Some((local, prefix.concat(&place.projection)))
+}
+
+fn storage_places_overlap<'db>(
+    lhs_local: LocalId,
+    lhs_path: &MirProjectionPath<'db>,
+    rhs_local: LocalId,
+    rhs_path: &MirProjectionPath<'db>,
+) -> bool {
+    lhs_local == rhs_local
+        && (projection_path_is_prefix(lhs_path, rhs_path)
+            || projection_path_is_prefix(rhs_path, lhs_path))
+}
+
+fn projection_path_is_prefix<'db>(
+    prefix: &MirProjectionPath<'db>,
+    full: &MirProjectionPath<'db>,
+) -> bool {
+    prefix.len() <= full.len() && prefix.iter().zip(full.iter()).all(|(lhs, rhs)| lhs == rhs)
+}
+
+fn projection_path_has_deref<'db>(path: &MirProjectionPath<'db>) -> bool {
+    path.iter()
+        .any(|proj| matches!(proj, hir::projection::Projection::Deref))
+}
+
+fn projection_path_has_index<'db>(path: &MirProjectionPath<'db>) -> bool {
+    path.iter()
+        .any(|proj| matches!(proj, hir::projection::Projection::Index(_)))
+}
+
+fn value_is_zero_literal<'db>(body: &MirBody<'db>, value: ValueId) -> bool {
+    match &body.value(value).origin {
+        ValueOrigin::Synthetic(SyntheticValue::Int(int)) => *int == BigUint::from(0u8),
+        ValueOrigin::Synthetic(SyntheticValue::Bool(false)) | ValueOrigin::Unit => true,
+        ValueOrigin::TransparentCast { value } => value_is_zero_literal(body, *value),
+        _ => false,
+    }
 }
 
 struct ContractSymbols {
@@ -1106,6 +1252,7 @@ fn lower_init_entrypoint<'db>(
     symbols: &ContractSymbols,
     core: &CoreLib<'db>,
     slot_offsets: &[BigUint],
+    needs_init_handler: bool,
 ) -> MirLowerResult<MirFunction<'db>> {
     let contract_fn = ContractFunction {
         contract_name: symbols.contract_name.clone(),
@@ -1119,14 +1266,6 @@ fn lower_init_entrypoint<'db>(
 
     let root_value = builder.unit_value(target.host.root_effect_ty);
     let zero_u256 = builder.const_int_value(TyId::u256(db), BigUint::from(0u8));
-
-    let field_values = cx.emit_field_providers(
-        &mut builder,
-        contract,
-        slot_offsets,
-        root_value,
-        target.host.init_field_fn,
-    );
 
     // Code region queries for the runtime entrypoint are shared by init-input decoding and
     // contract creation.
@@ -1162,8 +1301,16 @@ fn lower_init_entrypoint<'db>(
     );
 
     if contract.init(db).is_some()
+        && needs_init_handler
         && let Some(init_env) = contract.init_effect_env(db)
     {
+        let field_values = cx.emit_field_providers(
+            &mut builder,
+            contract,
+            slot_offsets,
+            root_value,
+            target.host.init_field_fn,
+        );
         let init_args_ty = contract.init_args_ty(db);
         let mut decoded_params = Vec::new();
         if !abi_payload_is_empty(db, init_args_ty) {
