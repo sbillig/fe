@@ -502,7 +502,7 @@ fn create_code_regions_object(
             .cloned()
             .ok_or_else(|| LowerError::Internal(format!("missing section name for `{root}`")))?;
 
-        let mut directives = vec![Directive::Entry(wrapper_ref), Directive::Include(root_ref)];
+        let mut directives = vec![Directive::Entry(wrapper_ref)];
 
         let deps = region_deps.get(root).cloned().unwrap_or_default();
         let mut deps: Vec<String> = deps.into_iter().collect();
@@ -570,7 +570,7 @@ fn create_test_object(
     let reachable = reachable_functions(call_graph, &test.symbol_name);
     let deps = collect_code_region_deps(&reachable, funcs_by_symbol);
 
-    let mut directives = vec![Directive::Entry(wrapper_ref), Directive::Include(test_ref)];
+    let mut directives = vec![Directive::Entry(wrapper_ref)];
 
     let code_regions_obj = ObjectName::from("CodeRegions");
     let mut deps: Vec<String> = deps.into_iter().collect();
@@ -1105,6 +1105,100 @@ fn smoke():
             &SonatinaTestDebugConfig::default(),
         )
         .expect("erased generic ZST params should remain erased in Sonatina signatures");
+    }
+
+    #[test]
+    fn wrapped_test_and_code_region_roots_are_not_forced_as_section_includes() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_test_object_include_roots_test.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+pub contract C {
+    pub fn ping() -> u256 {
+        1
+    }
+}
+
+#[test]
+fn smoke() {
+    assert true
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let ingot = top_mod.ingot(&db);
+        let mir_module = lower_ingot(&db, ingot).expect("module should lower to MIR");
+        let tests = collect_tests(&db, &mir_module.functions);
+        let call_graph = build_call_graph(&mir_module.functions);
+        let funcs_by_symbol = build_funcs_by_symbol(&mir_module.functions);
+        let code_region_roots = collect_code_region_roots(&mir_module.functions);
+        let code_region_sections = code_region_roots
+            .iter()
+            .map(|sym| (sym.clone(), code_region_section_name(sym)))
+            .collect::<FxHashMap<_, _>>();
+        let mut region_reachable = FxHashMap::default();
+        let mut region_deps = FxHashMap::default();
+        for root in &code_region_roots {
+            let reachable = reachable_functions(&call_graph, root);
+            let deps = collect_code_region_deps(&reachable, &funcs_by_symbol);
+            region_reachable.insert(root.clone(), reachable);
+            region_deps.insert(root.clone(), deps);
+        }
+
+        let module = compile_test_objects(
+            &db,
+            &mir_module,
+            &tests,
+            &call_graph,
+            &funcs_by_symbol,
+            &code_region_roots,
+            &code_region_sections,
+            &region_reachable,
+            &region_deps,
+        )
+        .expect("test object compilation should succeed");
+
+        let test_object = module
+            .objects
+            .values()
+            .find(|object| object.name.0.as_str().starts_with("test_smoke"))
+            .expect("test object should be present");
+        let test_runtime = test_object
+            .sections
+            .iter()
+            .find(|section| section.name.0.as_str() == "runtime")
+            .expect("test runtime section should be present");
+        assert!(
+            test_runtime
+                .directives
+                .iter()
+                .all(|directive| !matches!(directive, Directive::Include(_))),
+            "test runtime should only root the wrapper entry: {test_runtime:?}"
+        );
+
+        let code_regions = module
+            .objects
+            .get("CodeRegions")
+            .expect("code region object should be present");
+        for section in &code_regions.sections {
+            assert!(
+                section
+                    .directives
+                    .iter()
+                    .all(|directive| !matches!(directive, Directive::Include(_))),
+                "code region section `{}` should only root its wrapper entry: {section:?}",
+                section.name.0
+            );
+        }
     }
 
     #[test]
