@@ -1417,6 +1417,35 @@ fn test_cli_test_opt_level_flag_is_error() {
 
 #[cfg(unix)]
 #[test]
+fn test_cli_test_default_opt_level_enables_solc_optimizer_for_yul() {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test_runner/pass.fe");
+    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
+
+    let temp = tempdir().expect("tempdir");
+    let fake_solc = write_fake_solc(&temp);
+    let fake_solc_str = fake_solc.to_str().expect("fake solc utf8");
+
+    let (output, exit_code) = run_fe_main_with_env(
+        &[
+            "test",
+            "--backend",
+            "yul",
+            "--solc",
+            fake_solc_str,
+            fixture_path_str,
+        ],
+        &[
+            ("FE_SOLC_PATH", "/no/such/solc"),
+            ("FAKE_SOLC_CONTRACT", "test_test_pass"),
+            ("FAKE_SOLC_EXPECT_OPTIMIZE", "true"),
+        ],
+    );
+    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
+}
+
+#[cfg(unix)]
+#[test]
 fn test_cli_test_optimize_s_enables_solc_optimizer_for_yul() {
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/fe_test_runner/pass.fe");
@@ -1537,6 +1566,39 @@ fn test_cli_test_optimize_0_disables_solc_optimizer_for_yul() {
         ],
     );
     assert_eq!(exit_code, 0, "fe test failed:\n{output}");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_cli_build_default_opt_level_enables_solc_optimizer_for_yul() {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/build/simple_contract.fe");
+    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
+
+    let temp = tempdir().expect("tempdir");
+    let fake_solc = write_fake_solc(&temp);
+
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main_with_env(
+        &[
+            "build",
+            "--backend",
+            "yul",
+            "--contract",
+            "Foo",
+            "--out-dir",
+            out_dir_str.as_str(),
+            fixture_path_str,
+        ],
+        &[
+            ("FE_SOLC_PATH", fake_solc.to_str().expect("fake solc utf8")),
+            ("FAKE_SOLC_CONTRACT", "Foo"),
+            ("FAKE_SOLC_EXPECT_OPTIMIZE", "true"),
+        ],
+    );
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
 }
 
 #[cfg(unix)]

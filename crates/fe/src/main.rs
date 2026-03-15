@@ -971,7 +971,7 @@ fn effective_opt_level(
     backend_kind: codegen::BackendKind,
     optimize: Option<&str>,
 ) -> Result<codegen::OptLevel, String> {
-    let level: codegen::OptLevel = optimize.unwrap_or("2").parse()?;
+    let level: codegen::OptLevel = optimize.unwrap_or("s").parse()?;
 
     if backend_kind == codegen::BackendKind::Yul
         && let Some(optimize @ ("1" | "2")) = optimize
