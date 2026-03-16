@@ -1443,3 +1443,43 @@ pub(super) struct LowerCtx<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> {
     /// Lazily-created shared overflow trap block for checked arithmetic in this function.
     pub(super) overflow_revert_block: &'a mut Option<BlockId>,
 }
+
+impl<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> LowerCtx<'a, 'db, C> {
+    pub(super) fn runtime_type_for_shape(&mut self, shape: mir::ir::RuntimeShape<'db>) -> Type {
+        runtime_type_for_shape(
+            &self.fb.module_builder,
+            self.db,
+            self.core,
+            self.target_layout,
+            shape,
+            &mut *self.gep_type_cache,
+            &mut *self.gep_name_counter,
+        )
+    }
+
+    pub(super) fn runtime_shape_for_loaded_place(
+        &self,
+        place: &mir::ir::Place<'db>,
+    ) -> Option<mir::ir::RuntimeShape<'db>> {
+        mir::repr::runtime_shape_for_loaded_place(
+            self.db,
+            self.core,
+            &self.body.values,
+            &self.body.locals,
+            place,
+        )
+    }
+
+    pub(super) fn resolve_place(
+        &self,
+        place: &mir::ir::Place<'db>,
+    ) -> Option<mir::repr::ResolvedPlace<'db>> {
+        mir::repr::resolve_place(
+            self.db,
+            self.core,
+            &self.body.values,
+            &self.body.locals,
+            place,
+        )
+    }
+}

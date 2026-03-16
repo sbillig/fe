@@ -21,7 +21,7 @@ use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 use sonatina_ir::{
-    BlockId, GlobalVariableData, I256, Immediate, Linkage, Type, Value, ValueId,
+    BlockId, GlobalVariableData, GlobalVariableRef, I256, Immediate, Linkage, Type, Value, ValueId,
     global_variable::GvInitializer,
     inst::{
         arith::{Add, Mul, Neg, Sar, Shl, Shr, Sub},
@@ -70,30 +70,7 @@ pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     ));
                 };
                 let value = lower_alloc(ctx, *dest_local, *address_space)?;
-                let dest_ty = ctx
-                    .body
-                    .locals
-                    .get(dest_local.index())
-                    .ok_or_else(|| {
-                        LowerError::Internal(format!("missing local type for {dest_local:?}"))
-                    })?
-                    .ty;
-                let dest_var = ctx.local_vars.get(dest_local).copied().ok_or_else(|| {
-                    LowerError::Internal(format!("missing SSA variable for local {dest_local:?}"))
-                })?;
-                let value = coerce_value_to_runtime_ty(
-                    ctx,
-                    value,
-                    dest_ty,
-                    ctx.local_runtime_types[dest_local.index()],
-                );
-                ctx.fb.def_var(dest_var, value);
-                ctx.initialized_locals.insert(*dest_local);
-                if ctx.local_place_roots.contains_key(dest_local)
-                    && !local_has_object_ref_root(ctx, *dest_local)
-                {
-                    store_runtime_value_to_local_slot(ctx, *dest_local, value)?;
-                }
+                write_local_result(ctx, *dest_local, value)?;
                 return Ok(());
             }
 
@@ -104,59 +81,13 @@ pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     ));
                 };
                 let value = lower_const_aggregate(ctx, *dest_local, *ty, data)?;
-                let dest_ty = ctx
-                    .body
-                    .locals
-                    .get(dest_local.index())
-                    .ok_or_else(|| {
-                        LowerError::Internal(format!("missing local type for {dest_local:?}"))
-                    })?
-                    .ty;
-                let dest_var = ctx.local_vars.get(dest_local).copied().ok_or_else(|| {
-                    LowerError::Internal(format!("missing SSA variable for local {dest_local:?}"))
-                })?;
-                let value = coerce_value_to_runtime_ty(
-                    ctx,
-                    value,
-                    dest_ty,
-                    ctx.local_runtime_types[dest_local.index()],
-                );
-                ctx.fb.def_var(dest_var, value);
-                ctx.initialized_locals.insert(*dest_local);
-                if ctx.local_place_roots.contains_key(dest_local)
-                    && !local_has_object_ref_root(ctx, *dest_local)
-                {
-                    store_runtime_value_to_local_slot(ctx, *dest_local, value)?;
-                }
+                write_local_result(ctx, *dest_local, value)?;
                 return Ok(());
             }
 
             let result = lower_rvalue(ctx, rvalue, *dest)?;
             if let (Some(dest_local), Some(result_val)) = (dest, result) {
-                let dest_ty = ctx
-                    .body
-                    .locals
-                    .get(dest_local.index())
-                    .ok_or_else(|| {
-                        LowerError::Internal(format!("missing local type for {dest_local:?}"))
-                    })?
-                    .ty;
-                let dest_var = ctx.local_vars.get(dest_local).copied().ok_or_else(|| {
-                    LowerError::Internal(format!("missing SSA variable for local {dest_local:?}"))
-                })?;
-                let converted = coerce_value_to_runtime_ty(
-                    ctx,
-                    result_val,
-                    dest_ty,
-                    ctx.local_runtime_types[dest_local.index()],
-                );
-                ctx.fb.def_var(dest_var, converted);
-                ctx.initialized_locals.insert(*dest_local);
-                if ctx.local_place_roots.contains_key(dest_local)
-                    && !local_has_object_ref_root(ctx, *dest_local)
-                {
-                    store_runtime_value_to_local_slot(ctx, *dest_local, converted)?;
-                }
+                write_local_result(ctx, *dest_local, result_val)?;
             }
         }
         MirInst::Store { place, value, .. } => {
@@ -191,6 +122,36 @@ fn local_has_object_ref_root<C: sonatina_ir::func_cursor::FuncCursor>(
     local: mir::LocalId,
 ) -> bool {
     ctx.local_runtime_types[local.index()].is_obj_ref(&ctx.fb.module_builder.ctx)
+}
+
+fn write_local_result<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    dest_local: mir::LocalId,
+    value: ValueId,
+) -> Result<(), LowerError> {
+    let dest_ty = ctx
+        .body
+        .locals
+        .get(dest_local.index())
+        .ok_or_else(|| LowerError::Internal(format!("missing local type for {dest_local:?}")))?
+        .ty;
+    let dest_var = ctx.local_vars.get(&dest_local).copied().ok_or_else(|| {
+        LowerError::Internal(format!("missing SSA variable for local {dest_local:?}"))
+    })?;
+    let value = coerce_value_to_runtime_ty(
+        ctx,
+        value,
+        dest_ty,
+        ctx.local_runtime_types[dest_local.index()],
+    );
+    ctx.fb.def_var(dest_var, value);
+    ctx.initialized_locals.insert(dest_local);
+    if ctx.local_place_roots.contains_key(&dest_local)
+        && !local_has_object_ref_root(ctx, dest_local)
+    {
+        store_runtime_value_to_local_slot(ctx, dest_local, value)?;
+    }
+    Ok(())
 }
 
 fn allocate_local_place_root_slot<'db, C: sonatina_ir::func_cursor::FuncCursor>(
@@ -2599,18 +2560,16 @@ fn resolve_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
     place: &Place<'db>,
 ) -> Result<ResolvedPlace<'db>, LowerError> {
-    mir::repr::resolve_place(ctx.db, ctx.core, &ctx.body.values, &ctx.body.locals, place).ok_or_else(
-        || {
-            let base = ctx.body.value(place.base);
-            LowerError::Internal(format!(
-                "failed to resolve MIR place {place:?} (base ty={}, repr={:?}, origin={:?}, pointer_info={:?})",
-                base.ty.pretty_print(ctx.db),
-                base.repr,
-                base.origin,
-                base.pointer_info,
-            ))
-        },
-    )
+    ctx.resolve_place(place).ok_or_else(|| {
+        let base = ctx.body.value(place.base);
+        LowerError::Internal(format!(
+            "failed to resolve MIR place {place:?} (base ty={}, repr={:?}, origin={:?}, pointer_info={:?})",
+            base.ty.pretty_print(ctx.db),
+            base.repr,
+            base.origin,
+            base.pointer_info,
+        ))
+    })
 }
 
 fn place_yields_location_value<'db, C: sonatina_ir::func_cursor::FuncCursor>(
@@ -2637,17 +2596,8 @@ fn lower_place_runtime_location_value<'db, C: sonatina_ir::func_cursor::FuncCurs
     expected_runtime_ty: Type,
 ) -> Result<ValueId, LowerError> {
     let terminal = lower_place_terminal(ctx, place)?;
-    if expected_runtime_ty.is_obj_ref(&ctx.fb.module_builder.ctx)
-        && let Some(object_ref) = terminal.object_ref()
-    {
-        let object_elem_ty = object_ref_elem_ty(ctx, ctx.fb.type_of(object_ref))?;
-        if object_elem_ty.is_obj_ref(&ctx.fb.module_builder.ctx) {
-            let loaded = ctx
-                .fb
-                .insert_inst(ObjLoad::new(ctx.is, object_ref), object_elem_ty);
-            return Ok(coerce_value_to_type(ctx, loaded, expected_runtime_ty));
-        }
-        return Ok(coerce_value_to_type(ctx, object_ref, expected_runtime_ty));
+    if let Some(value) = lower_object_ref_terminal_value(ctx, terminal, expected_runtime_ty)? {
+        return Ok(value);
     }
     if expected_runtime_ty.is_pointer(&ctx.fb.module_builder.ctx)
         && let Some(memory_ptr) = terminal.memory_ptr(ctx, expected_runtime_ty)
@@ -2663,17 +2613,99 @@ fn lower_place_runtime_location_value<'db, C: sonatina_ir::func_cursor::FuncCurs
     Ok(coerce_value_to_type(ctx, word_addr, expected_runtime_ty))
 }
 
+fn lower_object_ref_terminal_value<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    terminal: LoweredPlaceTerminal<'db>,
+    expected_runtime_ty: Type,
+) -> Result<Option<ValueId>, LowerError> {
+    if !expected_runtime_ty.is_obj_ref(&ctx.fb.module_builder.ctx) {
+        return Ok(None);
+    }
+
+    let Some(object_ref) = terminal.object_ref() else {
+        return Ok(None);
+    };
+    let object_elem_ty = object_ref_elem_ty(ctx, ctx.fb.type_of(object_ref))?;
+    if object_elem_ty.is_obj_ref(&ctx.fb.module_builder.ctx) {
+        let loaded = ctx
+            .fb
+            .insert_inst(ObjLoad::new(ctx.is, object_ref), object_elem_ty);
+        return Ok(Some(coerce_value_to_type(ctx, loaded, expected_runtime_ty)));
+    }
+    Ok(Some(coerce_value_to_type(
+        ctx,
+        object_ref,
+        expected_runtime_ty,
+    )))
+}
+
+fn terminal_address_space<'db>(
+    terminal: &LoweredPlaceTerminal<'db>,
+    place: &Place<'db>,
+) -> Result<AddressSpaceKind, LowerError> {
+    terminal
+        .state
+        .location_address_space()
+        .ok_or_else(|| LowerError::Internal(format!("store target is not a location: {place:?}")))
+}
+
+fn terminal_native_memory_ptr<'db>(
+    terminal: &LoweredPlaceTerminal<'db>,
+    place: &Place<'db>,
+) -> Result<ValueId, LowerError> {
+    terminal.native_memory_ptr().ok_or_else(|| {
+        LowerError::Internal(format!(
+            "memory place terminal missing pointer for {place:?}"
+        ))
+    })
+}
+
+fn store_word_to_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    place: &Place<'db>,
+    terminal: LoweredPlaceTerminal<'db>,
+    val: ValueId,
+) -> Result<(), LowerError> {
+    match terminal_address_space(&terminal, place)? {
+        AddressSpaceKind::Memory => {
+            if terminal.object_ref().is_some() {
+                return Err(LowerError::Unsupported(
+                    "word stores into object-backed memory places are not yet supported"
+                        .to_string(),
+                ));
+            }
+            ctx.fb.insert_inst_no_result(Mstore::new(
+                ctx.is,
+                terminal_native_memory_ptr(&terminal, place)?,
+                val,
+                Type::I256,
+            ));
+        }
+        AddressSpaceKind::Storage => {
+            let word_addr = terminal.word_addr(ctx);
+            ctx.fb
+                .insert_inst_no_result(EvmSstore::new(ctx.is, word_addr, val));
+        }
+        AddressSpaceKind::TransientStorage => {
+            let word_addr = terminal.word_addr(ctx);
+            ctx.fb
+                .insert_inst_no_result(EvmTstore::new(ctx.is, word_addr, val));
+        }
+        AddressSpaceKind::Calldata => {
+            return Err(LowerError::Unsupported("store to calldata".to_string()));
+        }
+    }
+    Ok(())
+}
+
 fn load_from_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
     terminal: LoweredPlaceTerminal<'db>,
+    place: &Place<'db>,
     loaded_ty: TyId<'db>,
     expected_runtime_ty: Type,
 ) -> Result<ValueId, LowerError> {
-    match terminal
-        .state
-        .location_address_space()
-        .ok_or_else(|| LowerError::Internal("place terminal is not a location".to_string()))?
-    {
+    match terminal_address_space(&terminal, place)? {
         AddressSpaceKind::Memory => {
             if let Some(object_ref) = terminal.object_ref() {
                 let object_elem_ty = object_ref_elem_ty(ctx, ctx.fb.type_of(object_ref))?;
@@ -2696,9 +2728,7 @@ fn load_from_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     expected_runtime_ty,
                 ));
             }
-            let ptr_addr = terminal.native_memory_ptr().ok_or_else(|| {
-                LowerError::Internal("memory place terminal missing pointer".to_string())
-            })?;
+            let ptr_addr = terminal_native_memory_ptr(&terminal, place)?;
             if expected_runtime_ty.is_pointer(&ctx.fb.module_builder.ctx) {
                 return Ok(ctx.fb.insert_inst(
                     Mload::new(ctx.is, ptr_addr, expected_runtime_ty),
@@ -3066,57 +3096,15 @@ fn lower_place_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             (true, Some(mir::repr::DerefStepKind::LoadLocationValue), None) => {
                 let base_terminal =
                     lower_place_state_terminal(ctx, place, segment.before, root_runtime)?;
-                let runtime_ty = runtime_type_for_shape(
-                    &ctx.fb.module_builder,
-                    ctx.db,
-                    ctx.core,
-                    ctx.target_layout,
-                    mir::repr::runtime_shape_for_ty(
-                        ctx.db,
-                        ctx.core,
-                        segment.before.ty,
-                        segment
-                            .before
-                            .pointer_info
-                            .ok_or_else(|| {
-                                LowerError::Internal(format!(
-                                    "missing pointer metadata at deref boundary for {place:?}"
-                                ))
-                            })?
-                            .address_space,
-                    ),
-                    &mut *ctx.gep_type_cache,
-                    &mut *ctx.gep_name_counter,
-                );
-                load_from_terminal(ctx, base_terminal, segment.before.ty, runtime_ty)?
+                let runtime_ty = deref_boundary_runtime_ty(ctx, place, segment.before)?;
+                load_from_terminal(ctx, base_terminal, place, segment.before.ty, runtime_ty)?
             }
             (false, Some(mir::repr::DerefStepKind::ReuseLocation), Some(terminal)) => {
                 terminal_runtime_value(terminal)
             }
             (false, Some(mir::repr::DerefStepKind::LoadLocationValue), Some(terminal)) => {
-                let runtime_ty = runtime_type_for_shape(
-                    &ctx.fb.module_builder,
-                    ctx.db,
-                    ctx.core,
-                    ctx.target_layout,
-                    mir::repr::runtime_shape_for_ty(
-                        ctx.db,
-                        ctx.core,
-                        segment.before.ty,
-                        segment
-                            .before
-                            .pointer_info
-                            .ok_or_else(|| {
-                                LowerError::Internal(format!(
-                                    "missing pointer metadata at deref boundary for {place:?}"
-                                ))
-                            })?
-                            .address_space,
-                    ),
-                    &mut *ctx.gep_type_cache,
-                    &mut *ctx.gep_name_counter,
-                );
-                load_from_terminal(ctx, terminal, segment.before.ty, runtime_ty)?
+                let runtime_ty = deref_boundary_runtime_ty(ctx, place, segment.before)?;
+                load_from_terminal(ctx, terminal, place, segment.before.ty, runtime_ty)?
             }
             (false, None, Some(_))
             | (false, Some(mir::repr::DerefStepKind::UseBaseValue), Some(_))
@@ -3139,6 +3127,27 @@ fn lower_place_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     current_terminal.ok_or_else(|| {
         LowerError::Internal(format!("resolved place produced no segments for {place:?}"))
     })
+}
+
+fn deref_boundary_runtime_ty<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    place: &Place<'db>,
+    state: PlaceState<'db>,
+) -> Result<Type, LowerError> {
+    let address_space = state
+        .pointer_info
+        .ok_or_else(|| {
+            LowerError::Internal(format!(
+                "missing pointer metadata at deref boundary for {place:?}"
+            ))
+        })?
+        .address_space;
+    Ok(ctx.runtime_type_for_shape(mir::repr::runtime_shape_for_ty(
+        ctx.db,
+        ctx.core,
+        state.ty,
+        address_space,
+    )))
 }
 
 /// Computes the address for a place by walking the projection path.
@@ -3795,40 +3804,8 @@ fn store_word_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     place: &Place<'db>,
     val: ValueId,
 ) -> Result<(), LowerError> {
-    let lowered = lower_place_terminal(ctx, place)?;
-    match lowered
-        .state
-        .location_address_space()
-        .ok_or_else(|| LowerError::Internal(format!("store target is not a location: {place:?}")))?
-    {
-        AddressSpaceKind::Memory => {
-            if lowered.object_ref().is_some() {
-                return Err(LowerError::Unsupported(
-                    "word stores into object-backed memory places are not yet supported"
-                        .to_string(),
-                ));
-            }
-            let ptr_addr = lowered.native_memory_ptr().ok_or_else(|| {
-                LowerError::Internal("memory place terminal missing pointer".to_string())
-            })?;
-            ctx.fb
-                .insert_inst_no_result(Mstore::new(ctx.is, ptr_addr, val, Type::I256));
-        }
-        AddressSpaceKind::Storage => {
-            let word_addr = lowered.word_addr(ctx);
-            ctx.fb
-                .insert_inst_no_result(EvmSstore::new(ctx.is, word_addr, val));
-        }
-        AddressSpaceKind::TransientStorage => {
-            let word_addr = lowered.word_addr(ctx);
-            ctx.fb
-                .insert_inst_no_result(EvmTstore::new(ctx.is, word_addr, val));
-        }
-        AddressSpaceKind::Calldata => {
-            return Err(LowerError::Unsupported("store to calldata".to_string()));
-        }
-    }
-    Ok(())
+    let terminal = lower_place_terminal(ctx, place)?;
+    store_word_to_terminal(ctx, place, terminal, val)
 }
 
 fn store_runtime_value_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
@@ -3843,11 +3820,7 @@ fn store_runtime_value_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     }
 
     let lowered = lower_place_terminal(ctx, place)?;
-    match lowered
-        .state
-        .location_address_space()
-        .ok_or_else(|| LowerError::Internal(format!("store target is not a location: {place:?}")))?
-    {
+    match terminal_address_space(&lowered, place)? {
         AddressSpaceKind::Memory => {
             if let Some(object_ref) = lowered.object_ref() {
                 let object_elem_ty = object_ref_elem_ty(ctx, ctx.fb.type_of(object_ref))?;
@@ -3866,9 +3839,7 @@ fn store_runtime_value_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     .insert_inst_no_result(ObjStore::new(ctx.is, object_ref, stored));
                 return Ok(());
             }
-            let ptr_addr = lowered.native_memory_ptr().ok_or_else(|| {
-                LowerError::Internal("memory place terminal missing pointer".to_string())
-            })?;
+            let ptr_addr = terminal_native_memory_ptr(&lowered, place)?;
             let value_ty = ctx.fb.type_of(value);
             if value_ty.is_pointer(&ctx.fb.module_builder.ctx) {
                 ctx.fb
@@ -3881,21 +3852,10 @@ fn store_runtime_value_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 .insert_inst_no_result(Mstore::new(ctx.is, ptr_addr, val, Type::I256));
             Ok(())
         }
-        AddressSpaceKind::Storage => {
+        AddressSpaceKind::Storage | AddressSpaceKind::TransientStorage => {
             let raw = coerce_value_to_word(ctx, value);
             let val = apply_to_word(ctx.fb, ctx.db, raw, stored_ty, ctx.is);
-            let word_addr = lowered.word_addr(ctx);
-            ctx.fb
-                .insert_inst_no_result(EvmSstore::new(ctx.is, word_addr, val));
-            Ok(())
-        }
-        AddressSpaceKind::TransientStorage => {
-            let raw = coerce_value_to_word(ctx, value);
-            let val = apply_to_word(ctx.fb, ctx.db, raw, stored_ty, ctx.is);
-            let word_addr = lowered.word_addr(ctx);
-            ctx.fb
-                .insert_inst_no_result(EvmTstore::new(ctx.is, word_addr, val));
-            Ok(())
+            store_word_to_terminal(ctx, place, lowered, val)
         }
         AddressSpaceKind::Calldata => Err(LowerError::Unsupported("store to calldata".to_string())),
     }
@@ -3928,19 +3888,10 @@ fn load_place_runtime<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     }
 
     let lowered = lower_place_terminal(ctx, place)?;
-    if expected_runtime_ty.is_obj_ref(&ctx.fb.module_builder.ctx)
-        && let Some(object_ref) = lowered.object_ref()
-    {
-        let object_elem_ty = object_ref_elem_ty(ctx, ctx.fb.type_of(object_ref))?;
-        if object_elem_ty.is_obj_ref(&ctx.fb.module_builder.ctx) {
-            let loaded = ctx
-                .fb
-                .insert_inst(ObjLoad::new(ctx.is, object_ref), object_elem_ty);
-            return Ok(coerce_value_to_type(ctx, loaded, expected_runtime_ty));
-        }
-        return Ok(coerce_value_to_type(ctx, object_ref, expected_runtime_ty));
+    if let Some(value) = lower_object_ref_terminal_value(ctx, lowered, expected_runtime_ty)? {
+        return Ok(value);
     }
-    load_from_terminal(ctx, lowered, loaded_ty, expected_runtime_ty)
+    load_from_terminal(ctx, lowered, place, loaded_ty, expected_runtime_ty)
 }
 
 fn is_transparent_field0_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
@@ -3982,15 +3933,12 @@ fn deep_copy_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     if let Some(info) =
         mir::repr::pointer_info_for_ty(ctx.db, ctx.core, value_ty, AddressSpaceKind::Memory)
     {
-        let runtime_ty = runtime_type_for_shape(
-            &ctx.fb.module_builder,
+        let runtime_ty = ctx.runtime_type_for_shape(mir::repr::runtime_shape_for_ty(
             ctx.db,
             ctx.core,
-            ctx.target_layout,
-            mir::repr::runtime_shape_for_ty(ctx.db, ctx.core, value_ty, info.address_space),
-            &mut *ctx.gep_type_cache,
-            &mut *ctx.gep_name_counter,
-        );
+            value_ty,
+            info.address_space,
+        ));
         let loaded = load_place_runtime(ctx, src_place, value_ty, runtime_ty)?;
         return store_runtime_value_to_place(ctx, dst_place, value_ty, loaded);
     }
@@ -4049,25 +3997,12 @@ fn deep_copy_enum_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     let discr_ty =
         hir::analysis::ty::ty_def::TyId::new(ctx.db, TyData::TyBase(TyBase::Prim(PrimTy::U256)));
     let src_discr_place = extend_place(src_place, Projection::Discriminant);
-    let discr_shape = mir::repr::runtime_shape_for_loaded_place(
-        ctx.db,
-        ctx.core,
-        &ctx.body.values,
-        &ctx.body.locals,
-        &src_discr_place,
-    )
-    .unwrap_or(mir::ir::RuntimeShape::Word(
-        mir::repr::runtime_word_kind_for_ty(ctx.db, discr_ty),
-    ));
-    let discr_runtime_ty = runtime_type_for_shape(
-        &ctx.fb.module_builder,
-        ctx.db,
-        ctx.core,
-        ctx.target_layout,
-        discr_shape,
-        &mut *ctx.gep_type_cache,
-        &mut *ctx.gep_name_counter,
-    );
+    let discr_shape = ctx
+        .runtime_shape_for_loaded_place(&src_discr_place)
+        .unwrap_or(mir::ir::RuntimeShape::Word(
+            mir::repr::runtime_word_kind_for_ty(ctx.db, discr_ty),
+        ));
+    let discr_runtime_ty = ctx.runtime_type_for_shape(discr_shape);
     let discr = load_place_runtime(ctx, &src_discr_place, discr_ty, discr_runtime_ty)?;
 
     let origin_block = ctx
@@ -4190,6 +4125,32 @@ fn emit_obj_alloc_ref<C: sonatina_ir::func_cursor::FuncCursor>(
     fb.insert_inst(ObjAlloc::new(is, object_ty), object_ref_ty)
 }
 
+fn const_data_global<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    data: &[u8],
+) -> GlobalVariableRef {
+    if let Some(&existing) = ctx.const_data_globals.get(data) {
+        return existing;
+    }
+
+    let elems: Vec<GvInitializer> = data
+        .iter()
+        .map(|&b| GvInitializer::make_imm(Immediate::I8(b as i8)))
+        .collect();
+    let array_init = GvInitializer::make_array(elems);
+    let label = format!("__fe_const_data_{}", *ctx.data_global_counter);
+    *ctx.data_global_counter += 1;
+    let array_ty = ctx
+        .fb
+        .module_builder
+        .declare_array_type(Type::I8, data.len());
+    let gv_data = GlobalVariableData::constant(label, array_ty, Linkage::Private, array_init);
+    let gv_ref = ctx.fb.module_builder.declare_gv(gv_data);
+    ctx.const_data_globals.insert(data.to_vec(), gv_ref);
+    ctx.data_globals.push(gv_ref);
+    gv_ref
+}
+
 /// Lower a `ConstAggregate` by registering a global data section and using CODECOPY.
 ///
 /// Registers the constant bytes as a Sonatina global variable (data section),
@@ -4227,28 +4188,7 @@ fn lower_const_aggregate<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         )
         .unwrap_or_else(|| ctx.fb.declare_array_type(Type::I8, size_bytes));
         if const_aggregate_object_copy_compatible(ctx.db, ctx.core, ty) {
-            let gv_ref = if let Some(&existing) = ctx.const_data_globals.get(data) {
-                existing
-            } else {
-                let elems: Vec<GvInitializer> = data
-                    .iter()
-                    .map(|&b| GvInitializer::make_imm(Immediate::I8(b as i8)))
-                    .collect();
-                let array_init = GvInitializer::make_array(elems);
-                let label = format!("__fe_const_data_{}", *ctx.data_global_counter);
-                *ctx.data_global_counter += 1;
-                let array_ty = ctx
-                    .fb
-                    .module_builder
-                    .declare_array_type(Type::I8, data.len());
-                let gv_data =
-                    GlobalVariableData::constant(label, array_ty, Linkage::Private, array_init);
-                let gv_ref = ctx.fb.module_builder.declare_gv(gv_data);
-                ctx.const_data_globals.insert(data.to_vec(), gv_ref);
-                ctx.data_globals.push(gv_ref);
-                gv_ref
-            };
-
+            let gv_ref = const_data_global(ctx, data);
             let object_ref = emit_obj_alloc_ref(ctx.fb, object_ty, ctx.is);
             let object_ptr_ty = ctx.fb.ptr_type(object_ty);
             let object_ptr = ctx
@@ -4270,30 +4210,7 @@ fn lower_const_aggregate<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         return Ok(object_ref);
     }
 
-    let gv_ref = if let Some(&existing) = ctx.const_data_globals.get(data) {
-        existing
-    } else {
-        // Build array initializer from raw bytes (each element is one byte)
-        let elems: Vec<GvInitializer> = data
-            .iter()
-            .map(|&b| GvInitializer::make_imm(Immediate::I8(b as i8)))
-            .collect();
-        let array_init = GvInitializer::make_array(elems);
-
-        // Register as a const global variable
-        let label = format!("__fe_const_data_{}", *ctx.data_global_counter);
-        *ctx.data_global_counter += 1;
-        let array_ty = ctx
-            .fb
-            .module_builder
-            .declare_array_type(Type::I8, data.len());
-        let gv_data = GlobalVariableData::constant(label, array_ty, Linkage::Private, array_init);
-        let gv_ref = ctx.fb.module_builder.declare_gv(gv_data);
-        ctx.const_data_globals.insert(data.to_vec(), gv_ref);
-        ctx.data_globals.push(gv_ref);
-        gv_ref
-    };
-
+    let gv_ref = const_data_global(ctx, data);
     // Emit: malloc + codecopy
     let size_val = ctx.fb.make_imm_value(I256::from(data.len() as u64));
     let ptr = emit_evm_malloc_ptr(ctx.fb, size_val, ctx.is);

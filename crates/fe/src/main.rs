@@ -81,7 +81,7 @@ pub enum Command {
         /// Code generation backend to use (yul or sonatina).
         #[arg(long, default_value = "sonatina")]
         backend: String,
-        /// Optimization level (0 = none, s = size-oriented, 1/2 = speed-oriented).
+        /// Optimization level (0 = none, s = size-oriented, 2 = speed-oriented).
         ///
         /// Defaults to `2`.
         ///
@@ -971,7 +971,7 @@ fn effective_opt_level(
     backend_kind: codegen::BackendKind,
     optimize: Option<&str>,
 ) -> Result<codegen::OptLevel, String> {
-    let level: codegen::OptLevel = optimize.unwrap_or("s").parse()?;
+    let level: codegen::OptLevel = optimize.unwrap_or("2").parse()?;
 
     if backend_kind == codegen::BackendKind::Yul
         && let Some(optimize @ ("1" | "2")) = optimize

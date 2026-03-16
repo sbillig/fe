@@ -628,16 +628,16 @@ pub(super) fn evm_runtime_metrics_from_hex(runtime_hex: &str) -> Option<EvmRunti
     Some(evm_runtime_metrics_from_bytes(&bytes))
 }
 
+fn csv_optional_cell<T: std::fmt::Display>(value: Option<T>) -> String {
+    value.map(|v| v.to_string()).unwrap_or_default()
+}
+
 fn usize_cell(value: Option<usize>) -> String {
-    value
-        .map(|v| v.to_string())
-        .unwrap_or_else(|| "n/a".to_string())
+    csv_optional_cell(value)
 }
 
 fn u64_cell(value: Option<u64>) -> String {
-    value
-        .map(|v| v.to_string())
-        .unwrap_or_else(|| "n/a".to_string())
+    csv_optional_cell(value)
 }
 
 fn ratio_cell_usize(numerator: Option<usize>, denominator: Option<usize>) -> String {
@@ -739,8 +739,9 @@ fn write_comparison_totals_rows(
         format_ratio_percent(comparison.equal, tests_in_scope)
     ));
     out.push_str(&format!(
-        "{baseline},incomplete,{},n/a,{}\n",
+        "{baseline},incomplete,{},{},{}\n",
         comparison.incomplete,
+        String::new(),
         format_ratio_percent(comparison.incomplete, tests_in_scope)
     ));
 }
@@ -749,8 +750,9 @@ fn write_gas_totals_csv(path: &Utf8PathBuf, totals: GasTotals) {
     let mut out = String::new();
     out.push_str("baseline,metric,count,pct_of_compared,pct_of_scope\n");
     out.push_str(&format!(
-        "all,tests_in_scope,{},n/a,{}\n",
+        "all,tests_in_scope,{},{},{}\n",
         totals.tests_in_scope,
+        String::new(),
         format_ratio_percent(totals.tests_in_scope, totals.tests_in_scope)
     ));
     write_comparison_totals_rows(
@@ -943,10 +945,10 @@ fn write_gas_hotspots_csv(path: &Utf8PathBuf, rows: &[GasHotspotRow]) {
         cumulative += row.delta_vs_yul_opt;
         let share = ratio_percent_i128(row.delta_vs_yul_opt, total_delta)
             .map(|v| format!("{v:.2}%"))
-            .unwrap_or_else(|| "n/a".to_string());
+            .unwrap_or_default();
         let cumulative_share = ratio_percent_i128(cumulative, total_delta)
             .map(|v| format!("{v:.2}%"))
-            .unwrap_or_else(|| "n/a".to_string());
+            .unwrap_or_default();
         out.push_str(&format!(
             "{},{},{},{},{},{},{},{},{},{}\n",
             idx + 1,
@@ -973,7 +975,7 @@ fn write_suite_delta_summary_csv(path: &Utf8PathBuf, suite_rollup: &[(String, Su
     out.push_str("suite,tests_with_delta,delta_vs_yul_opt_sum,avg_delta_vs_yul_opt,share_of_total_delta_pct\n");
     for (suite, totals) in suite_rollup {
         let avg = if totals.tests_with_delta == 0 {
-            "n/a".to_string()
+            String::new()
         } else {
             format!(
                 "{:.2}",
@@ -982,7 +984,7 @@ fn write_suite_delta_summary_csv(path: &Utf8PathBuf, suite_rollup: &[(String, Su
         };
         let share = ratio_percent_i128(totals.delta_vs_yul_opt_sum, total_delta)
             .map(|v| format!("{v:.2}%"))
-            .unwrap_or_else(|| "n/a".to_string());
+            .unwrap_or_default();
         out.push_str(&format!(
             "{},{},{},{},{}\n",
             csv_escape(suite),
@@ -1008,7 +1010,7 @@ fn write_trace_symbol_hotspots_csv(path: &Utf8PathBuf, rows: &[TraceSymbolHotspo
     out.push_str("suite,test,symbol,tail_steps_total,tail_steps_mapped,steps_in_symbol,symbol_share_of_tail_pct\n");
     for row in sorted {
         let pct = if row.tail_steps_total == 0 {
-            "n/a".to_string()
+            String::new()
         } else {
             format!(
                 "{:.2}%",
@@ -1042,7 +1044,7 @@ fn write_observability_coverage_csv(path: &Utf8PathBuf, rows: &[ObservabilityCov
     out.push_str("suite,test,section,schema_version,section_bytes,code_bytes,data_bytes,embed_bytes,mapped_code_bytes,unmapped_code_bytes,mapped_code_pct,unmapped_code_pct,unmapped_no_ir_inst,unmapped_label_or_fixup_only,unmapped_synthetic,unmapped_unknown\n");
     for row in sorted {
         let mapped_pct = if row.code_bytes == 0 {
-            "n/a".to_string()
+            String::new()
         } else {
             format!(
                 "{:.2}%",
@@ -1050,7 +1052,7 @@ fn write_observability_coverage_csv(path: &Utf8PathBuf, rows: &[ObservabilityCov
             )
         };
         let unmapped_pct = if row.code_bytes == 0 {
-            "n/a".to_string()
+            String::new()
         } else {
             format!(
                 "{:.2}%",
@@ -1098,7 +1100,7 @@ fn write_trace_observability_hotspots_csv(
     out.push_str("suite,test,function,reason,tail_steps_total,tail_steps_mapped,steps_in_bucket,bucket_share_of_tail_pct\n");
     for row in sorted {
         let pct = if row.tail_steps_total == 0 {
-            "n/a".to_string()
+            String::new()
         } else {
             format!(
                 "{:.2}%",
@@ -1332,7 +1334,7 @@ fn record_delta(
         }
         _ => {
             totals.incomplete += 1;
-            ("n/a".to_string(), "n/a".to_string())
+            (String::new(), String::new())
         }
     }
 }
@@ -1343,7 +1345,7 @@ fn delta_cells(baseline_gas: Option<u64>, sonatina_gas: Option<u64>) -> (String,
             let diff = sonatina_gas as i128 - baseline_gas as i128;
             (diff.to_string(), format_delta_percent(diff, baseline_gas))
         }
-        _ => ("n/a".to_string(), "n/a".to_string()),
+        _ => (String::new(), String::new()),
     }
 }
 
@@ -2071,16 +2073,12 @@ pub(super) fn write_gas_comparison_report(
         let sonatina_total_gas = sonatina
             .as_ref()
             .and_then(|measurement| measurement.total_gas_used);
-        let yul_opt_cell = yul_opt_gas.map_or_else(|| "n/a".to_string(), |gas| gas.to_string());
-        let sonatina_cell = sonatina_gas.map_or_else(|| "n/a".to_string(), |gas| gas.to_string());
-        let yul_opt_deploy_cell =
-            yul_opt_deploy_gas.map_or_else(|| "n/a".to_string(), |gas| gas.to_string());
-        let sonatina_deploy_cell =
-            sonatina_deploy_gas.map_or_else(|| "n/a".to_string(), |gas| gas.to_string());
-        let yul_opt_total_cell =
-            yul_opt_total_gas.map_or_else(|| "n/a".to_string(), |gas| gas.to_string());
-        let sonatina_total_cell =
-            sonatina_total_gas.map_or_else(|| "n/a".to_string(), |gas| gas.to_string());
+        let yul_opt_cell = u64_cell(yul_opt_gas);
+        let sonatina_cell = u64_cell(sonatina_gas);
+        let yul_opt_deploy_cell = u64_cell(yul_opt_deploy_gas);
+        let sonatina_deploy_cell = u64_cell(sonatina_deploy_gas);
+        let yul_opt_total_cell = u64_cell(yul_opt_total_gas);
+        let sonatina_total_cell = u64_cell(sonatina_total_gas);
         let yul_opt_profile = yul_opt
             .as_ref()
             .and_then(|measurement| measurement.gas_profile);
@@ -2930,4 +2928,20 @@ pub(super) fn write_run_gas_comparison_summary(
         );
     }
     let _ = std::fs::write(artifacts_dir.join("gas_comparison_summary.md"), summary);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{delta_cells, u64_cell};
+
+    #[test]
+    fn missing_csv_gas_cells_are_blank() {
+        assert_eq!(u64_cell(None), "");
+    }
+
+    #[test]
+    fn incomplete_delta_csv_cells_are_blank() {
+        assert_eq!(delta_cells(None, Some(1)), (String::new(), String::new()));
+        assert_eq!(delta_cells(Some(1), None), (String::new(), String::new()));
+    }
 }
