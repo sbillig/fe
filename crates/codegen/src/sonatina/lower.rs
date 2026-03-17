@@ -2960,11 +2960,10 @@ fn lower_object_place_segment<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 })?;
                 let result_ty = ctx.fb.module_builder.objref_type(object_elem_ty);
                 let variant_ref = sonatina_enum_variant_ref(ctx, *enum_ty, *variant)?;
-                ctx.fb.insert_inst_no_result(EnumAssertVariantRef::new(
-                    ctx.is,
-                    object_ref,
-                    variant_ref,
-                ));
+                object_ref = ctx.fb.insert_inst(
+                    EnumAssertVariantRef::new(ctx.is, object_ref, variant_ref),
+                    ctx.fb.func.dfg.value_ty(object_ref),
+                );
                 object_ref = ctx.fb.insert_inst(
                     EnumProj::new(ctx.is, object_ref, variant_ref, field_idx_val),
                     result_ty,
