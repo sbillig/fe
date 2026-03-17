@@ -5,10 +5,15 @@ input_file: crates/codegen/tests/fixtures/match_nested_default.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @__fe_Outer_0 = {i256, [i256; 1]};
-type @__fe_Deep_1 = {i256, [i256; 2]};
+type @__fe_obj_Outer_0 = enum {
+    #First(i256),
+    #Second(i256),
+};
+type @__fe_obj_Deep_1 = enum {
+    #Wrap(@__fe_obj_Outer_0),
+};
 
-func private %nested_with_defaults(v0.*@__fe_Outer_0) -> i8 {
+func private %nested_with_defaults(v0.objref<@__fe_obj_Outer_0>) -> i8 {
     block0:
         jump block5;
 
@@ -26,27 +31,23 @@ func private %nested_with_defaults(v0.*@__fe_Outer_0) -> i8 {
         jump block2;
 
     block5:
-        v7.i256 = ptr_to_int v0 i256;
-        v8.*i8 = bitcast v0 *i8;
-        v9.i256 = mload v8 i256;
-        br_table v9 block4 (0.i256 block6) (1.i256 block7);
+        v7.enumtag(@__fe_obj_Outer_0) = enum.get_tag v0;
+        br_table v7 block4 (0.enumtag(@__fe_obj_Outer_0) block6) (1.enumtag(@__fe_obj_Outer_0) block7);
 
     block6:
-        v12.i256 = ptr_to_int v0 i256;
-        v14.i256 = add v12 32.i256;
-        v15.*i8 = int_to_ptr v14 *i8;
-        v16.i256 = mload v15 i256;
-        br_table v16 block4 (0.i256 block1);
+        v11.objref<@__fe_obj_Outer_0> = enum.assert_variant_ref v0 #First;
+        v12.objref<i256> = enum.proj v11 #First 0.i256;
+        v13.i256 = obj.load v12;
+        br_table v13 block4 (0.i256 block1);
 
     block7:
-        v18.i256 = ptr_to_int v0 i256;
-        v19.i256 = add v18 32.i256;
-        v20.*i8 = int_to_ptr v19 *i8;
-        v21.i256 = mload v20 i256;
-        br_table v21 block4 (1.i256 block3);
+        v15.objref<@__fe_obj_Outer_0> = enum.assert_variant_ref v0 #Second;
+        v16.objref<i256> = enum.proj v15 #Second 0.i256;
+        v17.i256 = obj.load v16;
+        br_table v17 block4 (1.i256 block3);
 }
 
-func private %outer_specific_inner_wildcard(v0.*@__fe_Outer_0) -> i8 {
+func private %outer_specific_inner_wildcard(v0.objref<@__fe_obj_Outer_0>) -> i8 {
     block0:
         jump block5;
 
@@ -64,20 +65,17 @@ func private %outer_specific_inner_wildcard(v0.*@__fe_Outer_0) -> i8 {
         jump block2;
 
     block5:
-        v8.i256 = ptr_to_int v0 i256;
-        v9.*i8 = bitcast v0 *i8;
-        v10.i256 = mload v9 i256;
-        br_table v10 block4 (0.i256 block6);
+        v8.enumtag(@__fe_obj_Outer_0) = enum.get_tag v0;
+        br_table v8 block4 (0.enumtag(@__fe_obj_Outer_0) block6);
 
     block6:
-        v12.i256 = ptr_to_int v0 i256;
-        v14.i256 = add v12 32.i256;
-        v15.*i8 = int_to_ptr v14 *i8;
-        v16.i256 = mload v15 i256;
-        br_table v16 block3 (0.i256 block1);
+        v11.objref<@__fe_obj_Outer_0> = enum.assert_variant_ref v0 #First;
+        v12.objref<i256> = enum.proj v11 #First 0.i256;
+        v13.i256 = obj.load v12;
+        br_table v13 block3 (0.i256 block1);
 }
 
-func private %deeply_nested_wildcard(v0.*@__fe_Deep_1) -> i8 {
+func private %deeply_nested_wildcard(v0.objref<@__fe_obj_Deep_1>) -> i8 {
     block0:
         jump block4;
 
@@ -92,27 +90,25 @@ func private %deeply_nested_wildcard(v0.*@__fe_Deep_1) -> i8 {
         jump block2;
 
     block4:
-        v6.i256 = ptr_to_int v0 i256;
-        v7.*i8 = bitcast v0 *i8;
-        v8.i256 = mload v7 i256;
-        br_table v8 block3 (0.i256 block5);
+        v6.enumtag(@__fe_obj_Deep_1) = enum.get_tag v0;
+        br_table v6 block3 (0.enumtag(@__fe_obj_Deep_1) block5);
 
     block5:
-        v10.i256 = ptr_to_int v0 i256;
-        v12.i256 = add v10 32.i256;
-        v13.*i8 = int_to_ptr v12 *i8;
-        v14.i256 = mload v13 i256;
-        br_table v14 block3 (0.i256 block6);
+        v9.objref<@__fe_obj_Deep_1> = enum.assert_variant_ref v0 #Wrap;
+        v10.objref<@__fe_obj_Outer_0> = enum.proj v9 #Wrap 0.i256;
+        v11.enumtag(@__fe_obj_Outer_0) = enum.get_tag v10;
+        br_table v11 block3 (0.enumtag(@__fe_obj_Outer_0) block6);
 
     block6:
-        v16.i256 = ptr_to_int v0 i256;
-        v18.i256 = add v16 64.i256;
-        v19.*i8 = int_to_ptr v18 *i8;
-        v20.i256 = mload v19 i256;
-        br_table v20 block3 (0.i256 block1);
+        v14.objref<@__fe_obj_Deep_1> = enum.assert_variant_ref v0 #Wrap;
+        v15.objref<@__fe_obj_Outer_0> = enum.proj v14 #Wrap 0.i256;
+        v16.objref<@__fe_obj_Outer_0> = enum.assert_variant_ref v15 #First;
+        v17.objref<i256> = enum.proj v16 #First 0.i256;
+        v18.i256 = obj.load v17;
+        br_table v18 block3 (0.i256 block1);
 }
 
-func private %exhaustive_inner_outer_wildcard(v0.*@__fe_Outer_0) -> i8 {
+func private %exhaustive_inner_outer_wildcard(v0.objref<@__fe_obj_Outer_0>) -> i8 {
     block0:
         jump block6;
 
@@ -133,23 +129,19 @@ func private %exhaustive_inner_outer_wildcard(v0.*@__fe_Outer_0) -> i8 {
         jump block2;
 
     block6:
-        v8.i256 = ptr_to_int v0 i256;
-        v9.*i8 = bitcast v0 *i8;
-        v10.i256 = mload v9 i256;
-        br_table v10 block5 (0.i256 block7);
+        v8.enumtag(@__fe_obj_Outer_0) = enum.get_tag v0;
+        br_table v8 block5 (0.enumtag(@__fe_obj_Outer_0) block7);
 
     block7:
-        v12.i256 = ptr_to_int v0 i256;
-        v14.i256 = add v12 32.i256;
-        v15.*i8 = int_to_ptr v14 *i8;
-        v16.i256 = mload v15 i256;
-        br_table v16 block5 (0.i256 block1) (1.i256 block3) (2.i256 block4);
+        v11.objref<@__fe_obj_Outer_0> = enum.assert_variant_ref v0 #First;
+        v12.objref<i256> = enum.proj v11 #First 0.i256;
+        v13.i256 = obj.load v12;
+        br_table v13 block5 (0.i256 block1) (1.i256 block3) (2.i256 block4);
 }
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.*@__fe_Outer_0 = int_to_ptr 0.i256 *@__fe_Outer_0;
-        v2.i8 = call %nested_with_defaults v1;
+        v1.i8 = call %nested_with_defaults undef.objref<@__fe_obj_Outer_0>;
         evm_stop;
 }
 

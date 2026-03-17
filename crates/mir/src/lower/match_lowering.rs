@@ -689,6 +689,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             place: Place<'db>,
         ) -> ValueId {
             let dest = builder.alloc_temp_local(ty, false, "load");
+            builder.builder.body.locals[dest.index()].address_space =
+                builder.place_address_space(&place);
             builder.assign(None, Some(dest), crate::ir::Rvalue::Load { place });
             alloc_local_value(builder, ty, dest)
         }
@@ -706,7 +708,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         // Empty path means access the scrutinee directly
         // But we still need to extract discriminant for enums
         if path.is_empty() {
-            if !is_enum_type(self.db, scrutinee_ty) {
+            if !is_enum_type(self.db, scrutinee_ty) || !self.is_by_ref_ty(scrutinee_ty) {
                 return scrutinee_value;
             }
             let place = Place::new(
@@ -747,7 +749,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
 
         // For enums, extract the discriminant for switching
-        if is_enum_type(self.db, result_ty) {
+        if is_enum_type(self.db, result_ty) && self.is_by_ref_ty(result_ty) {
             let mut discr_path = self.mir_projection_from_decision_path(path);
             discr_path.push(MirProjection::Discriminant);
             let place = Place::new(scrutinee_value, discr_path);

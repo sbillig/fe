@@ -190,7 +190,7 @@ Optimization is controlled by `--opt-level <level>` (and the `--optimize` shorth
 
 Defaults:
 
-- `--opt-level` defaults to `1` (for both backends).
+- `--opt-level` defaults to `s` (for both backends).
 
 Backend behavior:
 
@@ -198,7 +198,8 @@ Backend behavior:
   - Note: `--opt-level 2` currently has no additional effect over `--opt-level 1` for solc; the CLI prints a warning.
 - Sonatina backend: `--opt-level <level>` controls Sonatina optimizations:
   - `0`: none
-  - `1`: balanced (default)
+  - `s`: size-optimized (default)
+  - `1`: balanced
   - `2`: aggressive
 
 `--optimize` is shorthand for `--opt-level 1`.

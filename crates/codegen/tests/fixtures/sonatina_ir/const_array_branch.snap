@@ -12,30 +12,30 @@ func private %const_array_branch(v0.i1) -> i256 {
         br v0 block1 block2;
 
     block1:
-        v3.*i8 = evm_malloc 32.i256;
+        v2.objref<[i256; 1]> = obj.alloc [i256; 1];
+        v3.*[i256; 1] = obj.materialize.stack v2;
         v4.i256 = sym_addr $__fe_const_data_0;
         v5.i256 = sym_size $__fe_const_data_0;
         v6.i256 = ptr_to_int v3 i256;
         evm_code_copy v6 v4 v5;
-        v7.*[i256; 1] = bitcast v3 *[i256; 1];
-        v8.*i256 = gep v7 0.i256 0.i256;
-        v9.i256 = mload v8 i256;
+        v7.objref<i256> = obj.index v2 0.i256;
+        v8.i256 = obj.load v7;
         jump block3;
 
     block2:
-        v10.*i8 = evm_malloc 32.i256;
+        v9.objref<[i256; 1]> = obj.alloc [i256; 1];
+        v10.*[i256; 1] = obj.materialize.stack v9;
         v11.i256 = sym_addr $__fe_const_data_0;
         v12.i256 = sym_size $__fe_const_data_0;
         v13.i256 = ptr_to_int v10 i256;
         evm_code_copy v13 v11 v12;
-        v14.*[i256; 1] = bitcast v10 *[i256; 1];
-        v15.*i256 = gep v14 0.i256 0.i256;
-        v16.i256 = mload v15 i256;
+        v14.objref<i256> = obj.index v9 0.i256;
+        v15.i256 = obj.load v14;
         jump block3;
 
     block3:
-        v17.i256 = phi (v9 block1) (v16 block2);
-        return v17;
+        v16.i256 = phi (v8 block1) (v15 block2);
+        return v16;
 }
 
 func private %__fe_sonatina_entry() {

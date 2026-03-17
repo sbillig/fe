@@ -5,7 +5,10 @@ input_file: crates/codegen/tests/fixtures/enum_variant_contract.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @__fe_MyOption_0 = {i256, [i256; 1]};
+type @__fe_obj_MyOption_0 = enum {
+    #None,
+    #Some(i256),
+};
 
 func private %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741(v0.i256) {
     block0:
@@ -30,89 +33,75 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
 
     block1:
         v8.i256 = evm_calldata_load 4.i256;
-        v9.*@__fe_MyOption_0 = alloca @__fe_MyOption_0;
-        v11.i256 = ptr_to_int v9 i256;
-        v12.*i8 = bitcast v9 *i8;
-        mstore v12 1.i256 i256;
-        v13.i256 = ptr_to_int v9 i256;
-        v15.i256 = add v13 32.i256;
-        v16.*i8 = int_to_ptr v15 *i8;
-        mstore v16 v8 i256;
+        v9.objref<@__fe_obj_MyOption_0> = obj.alloc @__fe_obj_MyOption_0;
+        enum.set_tag v9 #Some;
+        v10.objref<@__fe_obj_MyOption_0> = enum.assert_variant_ref v9 #Some;
+        v11.objref<i256> = enum.proj v10 #Some 0.i256;
+        obj.store v11 v8;
         jump block6;
 
     block2:
-        v19.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v4 1163776883.i256;
-        br v19 block8 block9;
+        v14.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v4 1163776883.i256;
+        br v14 block8 block9;
 
     block3:
-        v21.i256 = ptr_to_int v9 i256;
-        v22.i256 = add v21 32.i256;
-        v23.*i8 = int_to_ptr v22 *i8;
-        v24.i256 = mload v23 i256;
+        v16.objref<@__fe_obj_MyOption_0> = enum.assert_variant_ref v9 #Some;
+        v17.objref<i256> = enum.proj v16 #Some 0.i256;
+        v18.i256 = obj.load v17;
         jump block4;
 
     block4:
-        v25.i256 = phi (v24 block3) (0.i256 block5);
-        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v25;
+        v19.i256 = phi (v18 block3) (0.i256 block5);
+        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v19;
         evm_invalid;
 
     block5:
         jump block4;
 
     block6:
-        v27.i256 = ptr_to_int v9 i256;
-        v28.*i8 = bitcast v9 *i8;
-        v29.i256 = mload v28 i256;
-        br_table v29 block7 (1.i256 block3) (0.i256 block5);
+        v21.enumtag(@__fe_obj_MyOption_0) = enum.get_tag v9;
+        br_table v21 block7 (1.enumtag(@__fe_obj_MyOption_0) block3) (0.enumtag(@__fe_obj_MyOption_0) block5);
 
     block7:
         evm_invalid;
 
     block8:
-        v30.*@__fe_MyOption_0 = alloca @__fe_MyOption_0;
-        v31.i256 = ptr_to_int v30 i256;
-        v32.*i8 = bitcast v30 *i8;
-        mstore v32 0.i256 i256;
+        v24.objref<@__fe_obj_MyOption_0> = obj.alloc @__fe_obj_MyOption_0;
+        enum.set_tag v24 #None;
         jump block13;
 
     block9:
-        v35.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v4 3572425762.i256;
-        br v35 block15 block16;
+        v27.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v4 3572425762.i256;
+        br v27 block15 block16;
 
     block10:
-        v37.i256 = ptr_to_int v30 i256;
-        v38.i256 = add v37 32.i256;
-        v39.*i8 = int_to_ptr v38 *i8;
-        v40.i256 = mload v39 i256;
+        v29.objref<@__fe_obj_MyOption_0> = enum.assert_variant_ref v24 #Some;
+        v30.objref<i256> = enum.proj v29 #Some 0.i256;
+        v31.i256 = obj.load v30;
         jump block11;
 
     block11:
-        v41.i256 = phi (v40 block10) (0.i256 block12);
-        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v41;
+        v32.i256 = phi (v31 block10) (0.i256 block12);
+        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v32;
         evm_invalid;
 
     block12:
         jump block11;
 
     block13:
-        v43.i256 = ptr_to_int v30 i256;
-        v44.*i8 = bitcast v30 *i8;
-        v45.i256 = mload v44 i256;
-        br_table v45 block14 (1.i256 block10) (0.i256 block12);
+        v34.enumtag(@__fe_obj_MyOption_0) = enum.get_tag v24;
+        br_table v34 block14 (1.enumtag(@__fe_obj_MyOption_0) block10) (0.enumtag(@__fe_obj_MyOption_0) block12);
 
     block14:
         evm_invalid;
 
     block15:
-        v46.i256 = evm_calldata_load 4.i256;
-        v47.*@__fe_MyOption_0 = alloca @__fe_MyOption_0;
-        v48.i256 = ptr_to_int v47 i256;
-        v49.*i8 = bitcast v47 *i8;
-        mstore v49 1.i256 i256;
-        v50.i256 = ptr_to_int v47 i256;
-        v51.i256 = add v50 32.i256;
-        v52.*i8 = int_to_ptr v51 *i8;
-        mstore v52 v46 i256;
+        v35.i256 = evm_calldata_load 4.i256;
+        v36.objref<@__fe_obj_MyOption_0> = obj.alloc @__fe_obj_MyOption_0;
+        enum.set_tag v36 #Some;
+        v37.objref<@__fe_obj_MyOption_0> = enum.assert_variant_ref v36 #Some;
+        v38.objref<i256> = enum.proj v37 #Some 0.i256;
+        obj.store v38 v35;
         jump block20;
 
     block16:
@@ -122,18 +111,16 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
         jump block18;
 
     block18:
-        v53.i256 = phi (1.i256 block17) (0.i256 block19);
-        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v53;
+        v40.i256 = phi (1.i256 block17) (0.i256 block19);
+        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v40;
         evm_invalid;
 
     block19:
         jump block18;
 
     block20:
-        v55.i256 = ptr_to_int v47 i256;
-        v56.*i8 = bitcast v47 *i8;
-        v57.i256 = mload v56 i256;
-        br_table v57 block21 (1.i256 block17) (0.i256 block19);
+        v42.enumtag(@__fe_obj_MyOption_0) = enum.get_tag v36;
+        br_table v42 block21 (1.enumtag(@__fe_obj_MyOption_0) block17) (0.enumtag(@__fe_obj_MyOption_0) block19);
 
     block21:
         evm_invalid;

@@ -81,7 +81,7 @@ pub enum Command {
         /// Code generation backend to use (yul or sonatina).
         #[arg(long, default_value = "sonatina")]
         backend: String,
-        /// Optimization level (0 = none, s = size-oriented, 1/2 = speed-oriented).
+        /// Optimization level (0 = none, s = size-oriented, 2 = speed-oriented).
         ///
         /// Defaults to `2`.
         ///

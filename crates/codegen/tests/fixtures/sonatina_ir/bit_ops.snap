@@ -5,28 +5,27 @@ input_file: crates/codegen/tests/fixtures/bit_ops.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @__fe_tuple_0 = {i256, i256, i256, i256, i256};
+type @__fe_obj_tuple_0 = {i256, i256, i256, i256, i256};
 
-func private %bit_ops(v0.i256, v1.i256) -> *@__fe_tuple_0 {
+func private %bit_ops(v0.i256, v1.i256) -> objref<@__fe_obj_tuple_0> {
     block0:
         v2.i256 = and v0 v1;
         v3.i256 = or v0 v1;
         v4.i256 = xor v0 v1;
         v6.i256 = shl 8.i256 v0;
         v8.i256 = shr 2.i256 v0;
-        v10.*i8 = evm_malloc 160.i256;
-        v11.*@__fe_tuple_0 = bitcast v10 *@__fe_tuple_0;
-        v13.*i256 = gep v11 0.i256 0.i256;
-        mstore v13 v2 i256;
-        v15.*i256 = gep v11 0.i256 1.i256;
-        mstore v15 v3 i256;
-        v16.*i256 = gep v11 0.i256 2.i256;
-        mstore v16 v4 i256;
-        v18.*i256 = gep v11 0.i256 3.i256;
-        mstore v18 v6 i256;
-        v20.*i256 = gep v11 0.i256 4.i256;
-        mstore v20 v8 i256;
-        return v11;
+        v9.objref<@__fe_obj_tuple_0> = obj.alloc @__fe_obj_tuple_0;
+        v11.objref<i256> = obj.proj v9 0.i256;
+        obj.store v11 v2;
+        v13.objref<i256> = obj.proj v9 1.i256;
+        obj.store v13 v3;
+        v14.objref<i256> = obj.proj v9 2.i256;
+        obj.store v14 v4;
+        v16.objref<i256> = obj.proj v9 3.i256;
+        obj.store v16 v6;
+        v18.objref<i256> = obj.proj v9 4.i256;
+        obj.store v18 v8;
+        return v9;
 }
 
 func private %pow_op(v0.i256, v1.i256) -> i256 {
@@ -132,7 +131,7 @@ func private %u256_h3271ca15373d4483_mul_h290dcc921ed80777_mul(v0.i256, v1.i256)
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.*@__fe_tuple_0 = call %bit_ops 0.i256 0.i256;
+        v1.objref<@__fe_obj_tuple_0> = call %bit_ops 0.i256 0.i256;
         evm_stop;
 }
 

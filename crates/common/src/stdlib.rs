@@ -12,15 +12,25 @@ use crate::{
 pub static BUILTIN_CORE_BASE_URL: &str = "builtin-core:///";
 pub static BUILTIN_STD_BASE_URL: &str = "builtin-std:///";
 
+fn is_library_file(path: &Utf8Path) -> bool {
+    matches!(path.file_name(), Some("fe.toml")) || matches!(path.extension(), Some("fe"))
+}
+
 fn initialize_builtin<E: Embed>(db: &mut dyn InputDb, base_url: &str) {
     let base = Url::parse(base_url).unwrap();
 
-    for (path, contents) in E::iter().filter_map(|path| {
-        E::get(&path).map(|content| {
-            let contents = String::from_utf8(content.data.into_owned()).unwrap();
-            (Utf8PathBuf::from(path.to_string()), contents)
-        })
-    }) {
+    for path in E::iter().map(|path| Utf8PathBuf::from(path.to_string())) {
+        if !is_library_file(&path) {
+            continue;
+        }
+
+        let contents = String::from_utf8(
+            E::get(path.as_str())
+                .unwrap_or_else(|| panic!("missing embedded builtin `{path}`"))
+                .data
+                .into_owned(),
+        )
+        .unwrap_or_else(|_| panic!("embedded builtin `{path}` must be UTF-8"));
         base.touch(db, path, contents.into());
     }
 }
@@ -41,6 +51,9 @@ fn load_library_dir(db: &mut dyn InputDb, base_url: &str, root: &Utf8Path) -> Re
                 .map_err(|err| format!("Failed to read file type: {err}"))?;
             if file_type.is_dir() {
                 stack.push(path);
+                continue;
+            }
+            if !is_library_file(&path) {
                 continue;
             }
             let relative = path
@@ -108,5 +121,21 @@ impl<T: InputDb> HasBuiltinStd for T {
             .workspace()
             .containing_ingot(self, Url::parse(BUILTIN_STD_BASE_URL).unwrap());
         std.expect("Built-in std ingot failed to initialize")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use camino::Utf8Path;
+
+    use super::is_library_file;
+
+    #[test]
+    fn library_loader_filters_non_fe_files() {
+        assert!(is_library_file(Utf8Path::new("fe.toml")));
+        assert!(is_library_file(Utf8Path::new("src/lib.fe")));
+        assert!(!is_library_file(Utf8Path::new(".DS_Store")));
+        assert!(!is_library_file(Utf8Path::new("src/lib.rs")));
+        assert!(!is_library_file(Utf8Path::new("README.md")));
     }
 }

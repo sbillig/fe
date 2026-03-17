@@ -173,29 +173,17 @@ object "Coin" {
         let v1 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt_stor(v0, $amount)
         let v2 := v1
         if v2 {
-          let v3 := mload(0x40)
-          if iszero(v3) {
-            v3 := 0x80
-          }
-          mstore(0x40, add(v3, 32))
-          mstore(v3, 1)
-          ret := v3
+          ret := 1
           leave
         }
         if iszero(v2) {
-          let v4 := sload($store)
-          let v5 := $checked_sub_u256(v4, $amount)
-          sstore($store, v5)
-          let v6 := sload(add($store, 1))
-          let v7 := $checked_add_u256(v6, $amount)
-          sstore(add($store, 1), v7)
-          let v8 := mload(0x40)
-          if iszero(v8) {
-            v8 := 0x80
-          }
-          mstore(0x40, add(v8, 32))
-          mstore(v8, 0)
-          ret := v8
+          let v3 := sload($store)
+          let v4 := $checked_sub_u256(v3, $amount)
+          sstore($store, v4)
+          let v5 := sload(add($store, 1))
+          let v6 := $checked_add_u256(v5, $amount)
+          sstore(add($store, 1), v6)
+          ret := 0
           leave
         }
       }
@@ -204,36 +192,23 @@ object "Coin" {
         let v1 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt_stor(v0, $amount)
         let v2 := v1
         if v2 {
-          let v3 := mload(0x40)
-          if iszero(v3) {
-            v3 := 0x80
-          }
-          mstore(0x40, add(v3, 32))
-          mstore(v3, 1)
-          ret := v3
+          ret := 1
           leave
         }
         if iszero(v2) {
-          let v4 := sload(add($store, 1))
-          let v5 := $checked_sub_u256(v4, $amount)
-          sstore(add($store, 1), v5)
-          let v6 := sload($store)
-          let v7 := $checked_add_u256(v6, $amount)
-          sstore($store, v7)
-          let v8 := mload(0x40)
-          if iszero(v8) {
-            v8 := 0x80
-          }
-          mstore(0x40, add(v8, 32))
-          mstore(v8, 0)
-          ret := v8
+          let v3 := sload(add($store, 1))
+          let v4 := $checked_sub_u256(v3, $amount)
+          sstore(add($store, 1), v4)
+          let v5 := sload($store)
+          let v6 := $checked_add_u256(v5, $amount)
+          sstore($store, v6)
+          ret := 0
           leave
         }
       }
       function $transfer_result_code($res) -> ret {
         let v0 := 0
-        let v1 := mload($res)
-        switch v1
+        switch $res
           case 0 {
             v0 := 0
           }

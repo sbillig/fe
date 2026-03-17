@@ -5,30 +5,27 @@ input_file: crates/codegen/tests/fixtures/momo.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @__fe_MyStruct_0 = {i8, i8};
+type @__fe_obj_MyStruct_0 = {i8, i8};
 
-func private %read_x(v0.*@__fe_MyStruct_0) -> i8 {
+func private %read_x(v0.objref<@__fe_obj_MyStruct_0>) -> i8 {
     block0:
-        v2.*i8 = gep v0 0.i256 0.i256;
-        v3.i256 = mload v2 i256;
-        v4.i8 = trunc v3 i8;
-        v6.*i8 = gep v0 0.i256 1.i256;
-        v7.i256 = mload v6 i256;
-        v8.i8 = trunc v7 i8;
-        (v9.i8, v10.i1) = uaddo v4 v8;
-        br v10 block1 block2;
+        v2.objref<i8> = obj.proj v0 0.i256;
+        v3.i8 = obj.load v2;
+        v5.objref<i8> = obj.proj v0 1.i256;
+        v6.i8 = obj.load v5;
+        (v7.i8, v8.i1) = uaddo v3 v6;
+        br v8 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        return v9;
+        return v7;
 }
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.*@__fe_MyStruct_0 = int_to_ptr 0.i256 *@__fe_MyStruct_0;
-        v2.i8 = call %read_x v1;
+        v1.i8 = call %read_x undef.objref<@__fe_obj_MyStruct_0>;
         evm_stop;
 }
 

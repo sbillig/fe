@@ -5,6 +5,10 @@ input_file: crates/codegen/tests/fixtures/range_bounds.fe
 ---
 target = "evm-ethereum-osaka"
 
+type @__fe_obj_Range_0 = {unit, i256};
+type @__fe_obj_Range_1 = {i256, unit};
+type @__fe_obj_Range_2 = {i256, i256};
+
 func private %sum_const() -> i256 {
     block0:
         v1.i256 = call %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_len__0_4__f9605efabd18106c;
@@ -37,29 +41,29 @@ func private %sum_const() -> i256 {
 
 func private %sum_dynamic_end(v0.i256) -> i256 {
     block0:
-        v3.*i8 = evm_malloc 32.i256;
-        v4.i256 = ptr_to_int v3 i256;
-        mstore v3 v0 i256;
-        v5.i256 = call %range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5 v3;
+        v2.objref<@__fe_obj_Range_0> = obj.alloc @__fe_obj_Range_0;
+        v4.objref<i256> = obj.proj v2 1.i256;
+        obj.store v4 v0;
+        v5.i256 = call %range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5 v2;
         jump block1;
 
     block1:
-        v19.i256 = phi (0.i256 block0) (v12 block3);
-        v6.i256 = phi (0.i256 block0) (v16 block3);
+        v18.i256 = phi (0.i256 block0) (v12 block3);
+        v6.i256 = phi (0.i256 block0) (v15 block3);
         v8.i1 = lt v6 v5;
         br v8 block2 block4;
 
     block2:
         v10.i256 = call %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_get__0_4__f9605efabd18106c v6;
-        (v12.i256, v13.i1) = uaddo v19 v10;
+        (v12.i256, v13.i1) = uaddo v18 v10;
         br v13 block5 block6;
 
     block3:
-        v16.i256 = add v6 1.i256;
+        v15.i256 = add v6 1.i256;
         jump block1;
 
     block4:
-        return v19;
+        return v18;
 
     block5:
         evm_revert 0.i256 0.i256;
@@ -70,29 +74,29 @@ func private %sum_dynamic_end(v0.i256) -> i256 {
 
 func private %sum_dynamic_start(v0.i256) -> i256 {
     block0:
-        v3.*i8 = evm_malloc 32.i256;
-        v4.i256 = ptr_to_int v3 i256;
-        mstore v3 v0 i256;
-        v5.i256 = call %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_len__4__f248ae0e02044d7e v3;
+        v2.objref<@__fe_obj_Range_1> = obj.alloc @__fe_obj_Range_1;
+        v3.objref<i256> = obj.proj v2 0.i256;
+        obj.store v3 v0;
+        v4.i256 = call %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_len__4__f248ae0e02044d7e v2;
         jump block1;
 
     block1:
-        v22.i256 = phi (0.i256 block0) (v13 block3);
-        v6.i256 = phi (0.i256 block0) (v17 block3);
-        v8.i1 = lt v6 v5;
-        br v8 block2 block4;
+        v21.i256 = phi (0.i256 block0) (v12 block3);
+        v5.i256 = phi (0.i256 block0) (v16 block3);
+        v7.i1 = lt v5 v4;
+        br v7 block2 block4;
 
     block2:
-        v11.i256 = call %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_get__4__f248ae0e02044d7e v3 v6;
-        (v13.i256, v14.i1) = uaddo v22 v11;
-        br v14 block5 block6;
+        v10.i256 = call %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_get__4__f248ae0e02044d7e v2 v5;
+        (v12.i256, v13.i1) = uaddo v21 v10;
+        br v13 block5 block6;
 
     block3:
-        v17.i256 = add v6 1.i256;
+        v16.i256 = add v5 1.i256;
         jump block1;
 
     block4:
-        return v22;
+        return v21;
 
     block5:
         evm_revert 0.i256 0.i256;
@@ -103,33 +107,31 @@ func private %sum_dynamic_start(v0.i256) -> i256 {
 
 func private %sum_dynamic(v0.i256, v1.i256) -> i256 {
     block0:
-        v4.*i8 = evm_malloc 64.i256;
-        v5.i256 = ptr_to_int v4 i256;
-        mstore v4 v0 i256;
-        v6.i256 = ptr_to_int v4 i256;
-        v8.i256 = add v6 32.i256;
-        v9.*i8 = int_to_ptr v8 *i8;
-        mstore v9 v1 i256;
-        v10.i256 = call %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len v4;
+        v3.objref<@__fe_obj_Range_2> = obj.alloc @__fe_obj_Range_2;
+        v4.objref<i256> = obj.proj v3 0.i256;
+        obj.store v4 v0;
+        v6.objref<i256> = obj.proj v3 1.i256;
+        obj.store v6 v1;
+        v7.i256 = call %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len v3;
         jump block1;
 
     block1:
-        v27.i256 = phi (0.i256 block0) (v18 block3);
-        v11.i256 = phi (0.i256 block0) (v22 block3);
-        v13.i1 = lt v11 v10;
-        br v13 block2 block4;
+        v23.i256 = phi (0.i256 block0) (v15 block3);
+        v8.i256 = phi (0.i256 block0) (v18 block3);
+        v10.i1 = lt v8 v7;
+        br v10 block2 block4;
 
     block2:
-        v16.i256 = call %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_get v4 v11;
-        (v18.i256, v19.i1) = uaddo v27 v16;
-        br v19 block5 block6;
+        v13.i256 = call %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_get v3 v8;
+        (v15.i256, v16.i1) = uaddo v23 v13;
+        br v16 block5 block6;
 
     block3:
-        v22.i256 = add v11 1.i256;
+        v18.i256 = add v8 1.i256;
         jump block1;
 
     block4:
-        return v27;
+        return v23;
 
     block5:
         evm_revert 0.i256 0.i256;
@@ -173,25 +175,25 @@ func private %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd
         return v3;
 }
 
-func private %range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5(v0.*i8) -> i256 {
+func private %range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5(v0.objref<@__fe_obj_Range_0>) -> i256 {
     block0:
-        v2.i256 = ptr_to_int v0 i256;
-        v3.i256 = mload v0 i256;
-        v4.i1 = call %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt v3 0.i256;
-        br v4 block1 block2;
+        v3.objref<i256> = obj.proj v0 1.i256;
+        v4.i256 = obj.load v3;
+        v5.i1 = call %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt v4 0.i256;
+        br v5 block1 block2;
 
     block1:
         jump block3;
 
     block2:
-        v6.i256 = ptr_to_int v0 i256;
-        v7.i256 = mload v0 i256;
-        (v8.i256, v9.i1) = usubo v7 0.i256;
-        br v9 block4 block5;
+        v7.objref<i256> = obj.proj v0 1.i256;
+        v8.i256 = obj.load v7;
+        (v9.i256, v10.i1) = usubo v8 0.i256;
+        br v10 block4 block5;
 
     block3:
-        v10.i256 = phi (0.i256 block1) (v8 block5);
-        return v10;
+        v11.i256 = phi (0.i256 block1) (v9 block5);
+        return v11;
 
     block4:
         evm_revert 0.i256 0.i256;
@@ -200,10 +202,10 @@ func private %range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d
         jump block3;
 }
 
-func private %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_len__4__f248ae0e02044d7e(v0.*i8) -> i256 {
+func private %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_len__4__f248ae0e02044d7e(v0.objref<@__fe_obj_Range_1>) -> i256 {
     block0:
-        v2.i256 = ptr_to_int v0 i256;
-        v3.i256 = mload v0 i256;
+        v2.objref<i256> = obj.proj v0 0.i256;
+        v3.i256 = obj.load v2;
         v5.i1 = call %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt 4.i256 v3;
         br v5 block1 block2;
 
@@ -211,8 +213,8 @@ func private %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2
         jump block3;
 
     block2:
-        v7.i256 = ptr_to_int v0 i256;
-        v8.i256 = mload v0 i256;
+        v7.objref<i256> = obj.proj v0 0.i256;
+        v8.i256 = obj.load v7;
         (v9.i256, v10.i1) = usubo 4.i256 v8;
         br v10 block4 block5;
 
@@ -227,47 +229,43 @@ func private %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2
         jump block3;
 }
 
-func private %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_get__4__f248ae0e02044d7e(v0.*i8, v1.i256) -> i256 {
+func private %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_get__4__f248ae0e02044d7e(v0.objref<@__fe_obj_Range_1>, v1.i256) -> i256 {
     block0:
-        v2.i256 = ptr_to_int v0 i256;
-        v3.i256 = mload v0 i256;
-        (v4.i256, v5.i1) = uaddo v3 v1;
-        br v5 block1 block2;
+        v3.objref<i256> = obj.proj v0 0.i256;
+        v4.i256 = obj.load v3;
+        (v5.i256, v6.i1) = uaddo v4 v1;
+        br v6 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        return v4;
+        return v5;
 }
 
-func private %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len(v0.*i8) -> i256 {
+func private %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len(v0.objref<@__fe_obj_Range_2>) -> i256 {
     block0:
-        v2.i256 = ptr_to_int v0 i256;
-        v4.i256 = add v2 32.i256;
-        v5.*i8 = int_to_ptr v4 *i8;
-        v6.i256 = mload v5 i256;
-        v7.i256 = ptr_to_int v0 i256;
-        v8.i256 = mload v0 i256;
-        v9.i1 = call %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt v6 v8;
-        br v9 block1 block2;
+        v3.objref<i256> = obj.proj v0 1.i256;
+        v4.i256 = obj.load v3;
+        v5.objref<i256> = obj.proj v0 0.i256;
+        v6.i256 = obj.load v5;
+        v7.i1 = call %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt v4 v6;
+        br v7 block1 block2;
 
     block1:
         jump block3;
 
     block2:
-        v11.i256 = ptr_to_int v0 i256;
-        v12.i256 = add v11 32.i256;
-        v13.*i8 = int_to_ptr v12 *i8;
-        v14.i256 = mload v13 i256;
-        v15.i256 = ptr_to_int v0 i256;
-        v16.i256 = mload v0 i256;
-        (v17.i256, v18.i1) = usubo v14 v16;
-        br v18 block4 block5;
+        v9.objref<i256> = obj.proj v0 1.i256;
+        v10.i256 = obj.load v9;
+        v11.objref<i256> = obj.proj v0 0.i256;
+        v12.i256 = obj.load v11;
+        (v13.i256, v14.i1) = usubo v10 v12;
+        br v14 block4 block5;
 
     block3:
-        v19.i256 = phi (0.i256 block1) (v17 block5);
-        return v19;
+        v15.i256 = phi (0.i256 block1) (v13 block5);
+        return v15;
 
     block4:
         evm_revert 0.i256 0.i256;
@@ -276,18 +274,18 @@ func private %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_le
         jump block3;
 }
 
-func private %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_get(v0.*i8, v1.i256) -> i256 {
+func private %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_get(v0.objref<@__fe_obj_Range_2>, v1.i256) -> i256 {
     block0:
-        v2.i256 = ptr_to_int v0 i256;
-        v3.i256 = mload v0 i256;
-        (v4.i256, v5.i1) = uaddo v3 v1;
-        br v5 block1 block2;
+        v3.objref<i256> = obj.proj v0 0.i256;
+        v4.i256 = obj.load v3;
+        (v5.i256, v6.i1) = uaddo v4 v1;
+        br v6 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        return v4;
+        return v5;
 }
 
 func private %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt(v0.i256, v1.i256) -> i1 {

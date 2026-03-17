@@ -502,7 +502,7 @@ fn create_code_regions_object(
             .cloned()
             .ok_or_else(|| LowerError::Internal(format!("missing section name for `{root}`")))?;
 
-        let mut directives = vec![Directive::Entry(wrapper_ref), Directive::Include(root_ref)];
+        let mut directives = vec![Directive::Entry(wrapper_ref)];
 
         let deps = region_deps.get(root).cloned().unwrap_or_default();
         let mut deps: Vec<String> = deps.into_iter().collect();
@@ -570,7 +570,7 @@ fn create_test_object(
     let reachable = reachable_functions(call_graph, &test.symbol_name);
     let deps = collect_code_region_deps(&reachable, funcs_by_symbol);
 
-    let mut directives = vec![Directive::Entry(wrapper_ref), Directive::Include(test_ref)];
+    let mut directives = vec![Directive::Entry(wrapper_ref)];
 
     let code_regions_obj = ObjectName::from("CodeRegions");
     let mut deps: Vec<String> = deps.into_iter().collect();
@@ -609,7 +609,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
             let name = &func.symbol_name;
             let (_sig, metadata) = self.lower_signature_and_metadata(func)?;
-            let sig = metadata.signature(name, sonatina_ir::Linkage::Public);
+            let sig = metadata.signature(name, sonatina_ir::Linkage::Private);
             let func_ref = self.builder.declare_function(sig).map_err(|e| {
                 LowerError::Internal(format!("failed to declare function {name}: {e}"))
             })?;
@@ -634,7 +634,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             )));
         }
 
-        let sig = Signature::new(wrapper_name, sonatina_ir::Linkage::Public, &[], &[]);
+        let sig = Signature::new(wrapper_name, sonatina_ir::Linkage::Private, &[], &[]);
         let func_ref = self.builder.declare_function(sig).map_err(|e| {
             LowerError::Internal(format!("failed to declare wrapper `{wrapper_name}`: {e}"))
         })?;
@@ -1108,26 +1108,24 @@ fn smoke():
     }
 
     #[test]
-    fn memory_ref_aggregate_params_lower_as_pointers() {
+    fn wrapped_test_and_code_region_roots_are_not_forced_as_section_includes() {
         let mut db = DriverDataBase::default();
-        let file_url = temp_fixture_url("sonatina_memory_ref_aggregate_params_test.fe");
+        let file_url = temp_fixture_url("sonatina_test_object_include_roots_test.fe");
         db.workspace().touch(
             &mut db,
             file_url.clone(),
             Some(
                 r#"
-fn mix(input: [u256; 3]) -> [u256; 3]:
-    let out: [u256; 3] = [0, 0, 0]
-    for i in 0..3:
-        out[i] = input[i]
-    return out
+pub contract C {
+    pub fn ping() -> u256 {
+        1
+    }
+}
 
-@test
-fn smoke():
-    let out: [u256; 3] = mix([1, 2, 3])
-    assert out[0] == 1
-    assert out[1] == 2
-    assert out[2] == 3
+#[test]
+fn smoke() {
+    assert true
+}
 "#
                 .to_string(),
             ),
@@ -1137,13 +1135,120 @@ fn smoke():
             .get(&db, &file_url)
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
-        emit_test_module_sonatina(
+        let ingot = top_mod.ingot(&db);
+        let mir_module = lower_ingot(&db, ingot).expect("module should lower to MIR");
+        let tests = collect_tests(&db, &mir_module.functions);
+        let call_graph = build_call_graph(&mir_module.functions);
+        let funcs_by_symbol = build_funcs_by_symbol(&mir_module.functions);
+        let code_region_roots = collect_code_region_roots(&mir_module.functions);
+        let code_region_sections = code_region_roots
+            .iter()
+            .map(|sym| (sym.clone(), code_region_section_name(sym)))
+            .collect::<FxHashMap<_, _>>();
+        let mut region_reachable = FxHashMap::default();
+        let mut region_deps = FxHashMap::default();
+        for root in &code_region_roots {
+            let reachable = reachable_functions(&call_graph, root);
+            let deps = collect_code_region_deps(&reachable, &funcs_by_symbol);
+            region_reachable.insert(root.clone(), reachable);
+            region_deps.insert(root.clone(), deps);
+        }
+
+        let module = compile_test_objects(
             &db,
-            top_mod,
-            OptLevel::O0,
-            &SonatinaTestDebugConfig::default(),
+            &mir_module,
+            &tests,
+            &call_graph,
+            &funcs_by_symbol,
+            &code_region_roots,
+            &code_region_sections,
+            &region_reachable,
+            &region_deps,
         )
-        .expect("memory aggregate refs should stay pointer-typed in Sonatina lowering");
+        .expect("test object compilation should succeed");
+
+        let test_object = module
+            .objects
+            .values()
+            .find(|object| object.name.0.as_str().starts_with("test_smoke"))
+            .expect("test object should be present");
+        let test_runtime = test_object
+            .sections
+            .iter()
+            .find(|section| section.name.0.as_str() == "runtime")
+            .expect("test runtime section should be present");
+        assert!(
+            test_runtime
+                .directives
+                .iter()
+                .all(|directive| !matches!(directive, Directive::Include(_))),
+            "test runtime should only root the wrapper entry: {test_runtime:?}"
+        );
+
+        let code_regions = module
+            .objects
+            .get("CodeRegions")
+            .expect("code region object should be present");
+        for section in &code_regions.sections {
+            assert!(
+                section
+                    .directives
+                    .iter()
+                    .all(|directive| !matches!(directive, Directive::Include(_))),
+                "code region section `{}` should only root its wrapper entry: {section:?}",
+                section.name.0
+            );
+        }
+    }
+
+    #[test]
+    fn memory_ref_aggregate_params_lower_as_object_refs() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_memory_ref_aggregate_params_test.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+msg FooMsg {
+    #[selector = 0x01]
+    Run -> u256,
+}
+
+struct Mixer {}
+
+impl Mixer {
+    fn mix(input: [u256; 3]) -> [u256; 3] {
+        let out: [u256; 3] = [0, 0, 0]
+        for i in 0..3:
+            out[i] = input[i]
+        return out
+    }
+}
+
+pub contract Foo {
+    recv FooMsg {
+        Run -> u256 {
+            let out: [u256; 3] = Mixer::mix([1, 2, 3])
+            out[0] + out[1] + out[2]
+        }
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let ir = crate::emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O0, None)
+            .expect("module should lower to Sonatina IR");
+        assert!(
+            ir.contains("objref<"),
+            "memory aggregate refs should lower as object refs:\n{ir}"
+        );
     }
 
     #[test]
@@ -1222,6 +1327,122 @@ fn smoke():
         assert!(
             !body.contains("evm_malloc 32.i256"),
             "tuple encoder helper should reuse the existing encoder pointer, not heap-spill it:\n{body}"
+        );
+    }
+
+    #[test]
+    fn branch_proven_nested_enum_variant_loads_survive_o2_test_codegen() {
+        let mut db = DriverDataBase::default();
+        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../fe/tests/fixtures/fe_test/if_let_while_let.fe");
+        let fixture_source =
+            fs::read_to_string(&fixture_path).expect("if_let_while_let fixture should be readable");
+        let file_url = Url::from_file_path(&fixture_path).expect("fixture path should be absolute");
+        db.workspace()
+            .touch(&mut db, file_url.clone(), Some(fixture_source));
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O2,
+            &SonatinaTestDebugConfig::default(),
+        )
+        .expect("branch-proven nested enum payload loads should verify after O2 test lowering");
+    }
+
+    #[test]
+    fn static_typed_allocations_lower_to_obj_alloc() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_static_typed_allocations_lower_to_obj_alloc.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+msg FooMsg {
+    #[selector = 0x01]
+    Run -> u256,
+}
+
+struct Builders {}
+
+impl Builders {
+    fn make_a() -> [u256; 3] {
+        return [1, 2, 3]
+    }
+
+    fn make_sum() -> u256 {
+        let a: [u256; 3] = Builders::make_a()
+        return a[0] + a[1] + a[2]
+    }
+}
+
+pub contract Foo {
+    recv FooMsg {
+        Run -> u256 {
+            Builders::make_sum()
+        }
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let ir = crate::emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O0, None)
+            .expect("module should lower to Sonatina IR");
+        assert!(
+            ir.contains("obj.alloc"),
+            "expected object allocations:\n{ir}"
+        );
+        assert!(
+            !ir.contains("alloca"),
+            "typed allocations must not lower through alloca:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn dynamic_alloc_stays_on_evm_malloc() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_dynamic_alloc_stays_on_evm_malloc.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+pub contract Foo {
+    init(seed: u256) {}
+}
+
+#[test]
+fn allocates_dynamic_init_args() uses (evm: mut Evm) {
+    let addr = evm.create2<Foo>(value: 0, args: (1,), salt: 0)
+    assert(addr.inner != 0)
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let ir = crate::emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O0, None)
+            .expect("module should lower to Sonatina IR");
+
+        assert!(
+            ir.contains("evm_malloc"),
+            "dynamic raw allocations must still lower through evm_malloc:\n{ir}"
         );
     }
 }

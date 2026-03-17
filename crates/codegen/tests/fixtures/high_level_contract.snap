@@ -6,9 +6,9 @@ input_file: tests/fixtures/high_level_contract.fe
 object "EchoContract" {
   code {
     function $__EchoContract_init() {
-      let v0 := $init_field__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d(0)
-      let v1 := dataoffset("EchoContract_deployed")
-      let v2 := datasize("EchoContract_deployed")
+      let v0 := dataoffset("EchoContract_deployed")
+      let v1 := datasize("EchoContract_deployed")
+      let v2 := $init_field__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d(0)
       let v3 := datasize("EchoContract")
       let v4 := codesize()
       let v5 := lt(v4, v3)
@@ -32,9 +32,9 @@ object "EchoContract" {
       let v9 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v8)
       let v10 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6(v9)
       let v11 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6(v9)
-      $__EchoContract_init_contract(v10, v11, v0)
-      codecopy(0, v1, v2)
-      return(0, v2)
+      $__EchoContract_init_contract(v10, v11, v2)
+      codecopy(0, v0, v1)
+      return(0, v1)
     }
     function $__EchoContract_init_contract($x, $y, $state) {
       sstore($state, $x)

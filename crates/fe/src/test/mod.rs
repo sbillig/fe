@@ -135,7 +135,6 @@ pub(super) struct ComparisonTotals {
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct GasTotals {
     pub(super) tests_in_scope: usize,
-    pub(super) vs_yul_unopt: ComparisonTotals,
     pub(super) vs_yul_opt: ComparisonTotals,
 }
 
@@ -153,7 +152,6 @@ pub(super) struct DeltaMagnitudeTotals {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct GasMagnitudeTotals {
-    pub(super) vs_yul_unopt: DeltaMagnitudeTotals,
     pub(super) vs_yul_opt: DeltaMagnitudeTotals,
 }
 
@@ -291,25 +289,18 @@ pub(super) struct TraceObservabilityHotspotRow {
 pub(super) struct DeploymentGasAttributionRow {
     pub(super) test: String,
     pub(super) symbol: String,
-    pub(super) yul_unopt_step_total_gas: Option<u64>,
     pub(super) yul_opt_step_total_gas: Option<u64>,
     pub(super) sonatina_step_total_gas: Option<u64>,
-    pub(super) yul_unopt_create_opcode_gas: Option<u64>,
     pub(super) yul_opt_create_opcode_gas: Option<u64>,
     pub(super) sonatina_create_opcode_gas: Option<u64>,
-    pub(super) yul_unopt_create2_opcode_gas: Option<u64>,
     pub(super) yul_opt_create2_opcode_gas: Option<u64>,
     pub(super) sonatina_create2_opcode_gas: Option<u64>,
-    pub(super) yul_unopt_constructor_frame_gas: Option<u64>,
     pub(super) yul_opt_constructor_frame_gas: Option<u64>,
     pub(super) sonatina_constructor_frame_gas: Option<u64>,
-    pub(super) yul_unopt_non_constructor_frame_gas: Option<u64>,
     pub(super) yul_opt_non_constructor_frame_gas: Option<u64>,
     pub(super) sonatina_non_constructor_frame_gas: Option<u64>,
-    pub(super) yul_unopt_create_opcode_steps: Option<u64>,
     pub(super) yul_opt_create_opcode_steps: Option<u64>,
     pub(super) sonatina_create_opcode_steps: Option<u64>,
-    pub(super) yul_unopt_create2_opcode_steps: Option<u64>,
     pub(super) yul_opt_create2_opcode_steps: Option<u64>,
     pub(super) sonatina_create2_opcode_steps: Option<u64>,
     pub(super) note: String,
@@ -330,9 +321,9 @@ pub(super) struct DeploymentGasAttributionTotals {
     pub(super) sonatina_non_constructor_frame_gas: u128,
 }
 
-pub(super) const DEPLOYMENT_ATTRIBUTION_CSV_HEADER: &str = "test,symbol,yul_unopt_step_total_gas,yul_opt_step_total_gas,sonatina_step_total_gas,yul_unopt_create_opcode_gas,yul_opt_create_opcode_gas,sonatina_create_opcode_gas,yul_unopt_create2_opcode_gas,yul_opt_create2_opcode_gas,sonatina_create2_opcode_gas,yul_unopt_constructor_frame_gas,yul_opt_constructor_frame_gas,sonatina_constructor_frame_gas,yul_unopt_non_constructor_frame_gas,yul_opt_non_constructor_frame_gas,sonatina_non_constructor_frame_gas,yul_unopt_create_opcode_steps,yul_opt_create_opcode_steps,sonatina_create_opcode_steps,yul_unopt_create2_opcode_steps,yul_opt_create2_opcode_steps,sonatina_create2_opcode_steps,note";
-pub(super) const DEPLOYMENT_ATTRIBUTION_CSV_HEADER_WITH_SUITE: &str = "suite,test,symbol,yul_unopt_step_total_gas,yul_opt_step_total_gas,sonatina_step_total_gas,yul_unopt_create_opcode_gas,yul_opt_create_opcode_gas,sonatina_create_opcode_gas,yul_unopt_create2_opcode_gas,yul_opt_create2_opcode_gas,sonatina_create2_opcode_gas,yul_unopt_constructor_frame_gas,yul_opt_constructor_frame_gas,sonatina_constructor_frame_gas,yul_unopt_non_constructor_frame_gas,yul_opt_non_constructor_frame_gas,sonatina_non_constructor_frame_gas,yul_unopt_create_opcode_steps,yul_opt_create_opcode_steps,sonatina_create_opcode_steps,yul_unopt_create2_opcode_steps,yul_opt_create2_opcode_steps,sonatina_create2_opcode_steps,note";
-pub(super) const DEPLOYMENT_ATTRIBUTION_FIELD_COUNT: usize = 24;
+pub(super) const DEPLOYMENT_ATTRIBUTION_CSV_HEADER: &str = "test,symbol,yul_opt_step_total_gas,sonatina_step_total_gas,yul_opt_create_opcode_gas,sonatina_create_opcode_gas,yul_opt_create2_opcode_gas,sonatina_create2_opcode_gas,yul_opt_constructor_frame_gas,sonatina_constructor_frame_gas,yul_opt_non_constructor_frame_gas,sonatina_non_constructor_frame_gas,yul_opt_create_opcode_steps,sonatina_create_opcode_steps,yul_opt_create2_opcode_steps,sonatina_create2_opcode_steps,note";
+pub(super) const DEPLOYMENT_ATTRIBUTION_CSV_HEADER_WITH_SUITE: &str = "suite,test,symbol,yul_opt_step_total_gas,sonatina_step_total_gas,yul_opt_create_opcode_gas,sonatina_create_opcode_gas,yul_opt_create2_opcode_gas,sonatina_create2_opcode_gas,yul_opt_constructor_frame_gas,sonatina_constructor_frame_gas,yul_opt_non_constructor_frame_gas,sonatina_non_constructor_frame_gas,yul_opt_create_opcode_steps,sonatina_create_opcode_steps,yul_opt_create2_opcode_steps,sonatina_create2_opcode_steps,note";
+pub(super) const DEPLOYMENT_ATTRIBUTION_FIELD_COUNT: usize = 17;
 
 impl GasMeasurement {
     pub(super) fn from_test_outcome(outcome: &TestOutcome) -> Self {
@@ -378,11 +369,6 @@ impl DeploymentGasAttributionTotals {
 impl GasTotals {
     pub(super) fn add(&mut self, other: Self) {
         self.tests_in_scope += other.tests_in_scope;
-        self.vs_yul_unopt.compared_with_gas += other.vs_yul_unopt.compared_with_gas;
-        self.vs_yul_unopt.sonatina_lower += other.vs_yul_unopt.sonatina_lower;
-        self.vs_yul_unopt.sonatina_higher += other.vs_yul_unopt.sonatina_higher;
-        self.vs_yul_unopt.equal += other.vs_yul_unopt.equal;
-        self.vs_yul_unopt.incomplete += other.vs_yul_unopt.incomplete;
         self.vs_yul_opt.compared_with_gas += other.vs_yul_opt.compared_with_gas;
         self.vs_yul_opt.sonatina_lower += other.vs_yul_opt.sonatina_lower;
         self.vs_yul_opt.sonatina_higher += other.vs_yul_opt.sonatina_higher;
@@ -461,7 +447,6 @@ impl DeltaMagnitudeTotals {
 
 impl GasMagnitudeTotals {
     pub(super) fn add(&mut self, other: Self) {
-        self.vs_yul_unopt.add(other.vs_yul_unopt);
         self.vs_yul_opt.add(other.vs_yul_opt);
     }
 }
@@ -2921,26 +2906,6 @@ pub(super) fn write_yul_case_artifacts(
 
     let _ = std::fs::write(dir.join("source.yul"), &case.yul);
 
-    let unopt = compile_single_contract_with_solc(
-        &case.object_name,
-        &case.yul,
-        false,
-        YUL_VERIFY_RUNTIME,
-        solc,
-    );
-    if let Ok(contract) = unopt {
-        let _ = std::fs::write(dir.join("bytecode.unopt.hex"), &contract.bytecode);
-        let _ = std::fs::write(dir.join("runtime.unopt.hex"), &contract.runtime_bytecode);
-        write_evm_mnemonic_artifact(
-            dir.join("bytecode.unopt.evm.txt"),
-            contract.bytecode_opcodes.as_deref(),
-        );
-        write_evm_mnemonic_artifact(
-            dir.join("runtime.unopt.evm.txt"),
-            contract.runtime_bytecode_opcodes.as_deref(),
-        );
-    }
-
     let opt = compile_single_contract_with_solc(
         &case.object_name,
         &case.yul,
@@ -3024,7 +2989,7 @@ fn write_report_manifest(
     out.push_str(&format!("fe_version: {}\n", env!("CARGO_PKG_VERSION")));
     out.push_str("details: see `meta/args.txt` and `meta/git.txt` for exact repro context\n");
     out.push_str("gas_comparison: see `artifacts/gas_comparison.md`, `artifacts/gas_comparison.csv`, `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_breakdown_comparison.csv`, `artifacts/gas_breakdown_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_deployment_attribution.csv`, and `artifacts/gas_comparison_settings.txt` when available\n");
-    out.push_str("gas_comparison_yul_artifacts: in Sonatina comparison runs, Yul baselines are stored under `artifacts/tests/<test>/yul/{source.yul,bytecode.unopt.hex,bytecode.unopt.evm.txt,bytecode.opt.hex,bytecode.opt.evm.txt,runtime.unopt.hex,runtime.unopt.evm.txt,runtime.opt.hex,runtime.opt.evm.txt}`\n");
+    out.push_str("gas_comparison_yul_artifacts: in Sonatina comparison runs, Yul baselines are stored under `artifacts/tests/<test>/yul/{source.yul,bytecode.opt.hex,bytecode.opt.evm.txt,runtime.opt.hex,runtime.opt.evm.txt}`\n");
     out.push_str("sonatina_observability: when available, Sonatina test artifacts include `artifacts/tests/<test>/sonatina/{observability.txt,observability.json}`\n");
     out.push_str("gas_comparison_aggregate: run-level reports also include `artifacts/gas_comparison_all.csv`, `artifacts/gas_breakdown_comparison_all.csv`, `artifacts/gas_comparison_summary.md`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_breakdown_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_deployment_attribution_all.csv`, `artifacts/gas_hotspots_vs_yul_opt.csv`, `artifacts/gas_suite_delta_summary.csv`, `artifacts/gas_tail_trace_symbol_hotspots.csv`, and `artifacts/gas_tail_trace_observability_hotspots.csv`\n");
     out.push_str("sonatina_observability_aggregate: run-level reports also include `artifacts/observability_coverage_all.csv` for per-test coverage totals from observability maps\n");

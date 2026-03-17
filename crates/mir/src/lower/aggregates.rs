@@ -29,13 +29,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         Some(fallback)
     }
 
-    /// Emits an allocation for the given type and binds it to the expression.
+    /// Emits a fresh typed memory allocation for the given type and binds it to the expression.
     ///
     /// # Parameters
     /// - `expr`: Expression id associated with the allocation.
     ///
     /// # Returns
-    /// The `ValueId` of the allocated pointer.
+    /// The `ValueId` of the allocated object reference.
     pub(super) fn emit_alloc(&mut self, expr: ExprId, alloc_ty: TyId<'db>) -> ValueId {
         let value_id = self.ensure_value(expr);
         if self.current_block().is_none() {
