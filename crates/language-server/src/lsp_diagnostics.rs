@@ -9,8 +9,8 @@ use common::{
 use driver::{DriverDataBase, MirDiagnosticsMode};
 use hir::Ingot;
 use hir::analysis::analysis_pass::{
-    AnalysisPassManager, ArithmeticAttrPass, EventLowerPass, InlineAttrPass, LoopUnrollAttrPass, MsgLowerPass,
-    ParsingPass,
+    AnalysisPassManager, ArithmeticAttrPass, EventLowerPass, InlineAttrPass, LoopUnrollAttrPass,
+    MsgLowerPass, ParsingPass,
     PayableAttrPass,
 };
 use hir::analysis::name_resolution::ImportAnalysisPass;
