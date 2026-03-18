@@ -690,6 +690,43 @@ impl DiagnosticVoucher for crate::InlineAttrError {
     }
 }
 
+impl DiagnosticVoucher for crate::LoopUnrollAttrError {
+    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        use crate::hir_def::LoopUnrollAttrErrorKind;
+
+        let primary_span = Span::new(self.file, self.primary_range, SpanKind::Original);
+
+        let (code, message, label, notes) = match self.kind {
+            LoopUnrollAttrErrorKind::Duplicate => (
+                1,
+                "duplicate loop unroll attribute on `for` loop".to_string(),
+                "remove the extra loop unroll attribute".to_string(),
+                vec!["use at most one of `#[unroll]` or `#[no_unroll]`".to_string()],
+            ),
+            LoopUnrollAttrErrorKind::InvalidForm => (
+                2,
+                "invalid loop unroll attribute on `for` loop".to_string(),
+                "expected `#[unroll]` or `#[no_unroll]`".to_string(),
+                vec!["loop unroll attributes do not accept values or arguments".to_string()],
+            ),
+        };
+
+        let error_code = GlobalErrorCode::new(DiagnosticPass::LoopUnrollLower, code);
+
+        CompleteDiagnostic::new(
+            Severity::Error,
+            message,
+            vec![SubDiagnostic::new(
+                LabelStyle::Primary,
+                label,
+                Some(primary_span),
+            )],
+            notes,
+            error_code,
+        )
+    }
+}
+
 pub trait LazyDiagnostic<'db> {
     fn to_complete(&self, db: &'db dyn SpannedHirAnalysisDb) -> CompleteDiagnostic;
 }

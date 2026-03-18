@@ -25,6 +25,7 @@ pub use event::{EventError, EventErrorKind};
 pub use item::{InlineAttrError, SelectorError, SelectorErrorKind};
 pub use parse::parse_file_impl;
 pub use payable::{PayableError, PayableErrorKind};
+pub use stmt::LoopUnrollAttrError;
 
 pub(crate) mod parse;
 

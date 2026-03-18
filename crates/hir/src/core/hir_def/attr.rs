@@ -42,9 +42,21 @@ pub enum InlineAttrErrorKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub enum LoopUnrollAttrErrorKind {
+    Duplicate,
+    InvalidForm,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub enum InlineAttr {
     Hint(InlineHint),
     Error(InlineAttrErrorKind),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub enum LoopUnrollAttr {
+    Hint(bool),
+    Error(LoopUnrollAttrErrorKind),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +74,19 @@ pub(crate) struct InlineAttrArgSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct InlineAttrParseError {
     pub kind: InlineAttrErrorKind,
+    pub attr_index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LoopUnrollAttrSpec {
+    pub enabled: bool,
+    pub has_value: bool,
+    pub has_args: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LoopUnrollAttrParseError {
+    pub kind: LoopUnrollAttrErrorKind,
     pub attr_index: usize,
 }
 
@@ -85,6 +110,32 @@ pub(crate) fn parse_inline_attr_specs(
     }
 
     Ok(inline_hint)
+}
+
+pub(crate) fn parse_loop_unroll_attr_specs(
+    attrs: impl IntoIterator<Item = LoopUnrollAttrSpec>,
+) -> Result<Option<bool>, LoopUnrollAttrParseError> {
+    let mut unroll_hint = None;
+
+    for (attr_index, attr) in attrs.into_iter().enumerate() {
+        if attr.has_value || attr.has_args {
+            return Err(LoopUnrollAttrParseError {
+                kind: LoopUnrollAttrErrorKind::InvalidForm,
+                attr_index,
+            });
+        }
+
+        if unroll_hint.is_some() {
+            return Err(LoopUnrollAttrParseError {
+                kind: LoopUnrollAttrErrorKind::Duplicate,
+                attr_index,
+            });
+        }
+
+        unroll_hint = Some(attr.enabled);
+    }
+
+    Ok(unroll_hint)
 }
 
 fn parse_inline_attr_spec(attr: &InlineAttrSpec) -> Result<InlineHint, InlineAttrErrorKind> {
@@ -203,6 +254,26 @@ impl<'db> AttrListId<'db> {
             Err(err) => Some(InlineAttr::Error(err.kind)),
         }
     }
+
+    pub(crate) fn parse_loop_unroll_attr(
+        self,
+        db: &'db dyn HirDb,
+    ) -> Result<Option<bool>, LoopUnrollAttrParseError> {
+        parse_loop_unroll_attr_specs(self.data(db).iter().filter_map(|attr| {
+            let Attr::Normal(normal_attr) = attr else {
+                return None;
+            };
+            normal_attr.loop_unroll_attr_spec(db)
+        }))
+    }
+
+    pub fn loop_unroll_attr(self, db: &'db dyn HirDb) -> Option<LoopUnrollAttr> {
+        match self.parse_loop_unroll_attr(db) {
+            Ok(Some(hint)) => Some(LoopUnrollAttr::Hint(hint)),
+            Ok(None) => None,
+            Err(err) => Some(LoopUnrollAttr::Error(err.kind)),
+        }
+    }
 }
 
 impl<'db> NormalAttr<'db> {
@@ -247,6 +318,25 @@ impl<'db> NormalAttr<'db> {
                 })
                 .collect(),
         }
+    }
+
+    pub(crate) fn loop_unroll_attr_spec(&self, db: &'db dyn HirDb) -> Option<LoopUnrollAttrSpec> {
+        let enabled = match self
+            .path
+            .to_opt()
+            .and_then(|path| path.as_ident(db))
+            .map(|ident| ident.data(db).as_str())
+        {
+            Some("unroll") => true,
+            Some("no_unroll") => false,
+            Some(_) | None => return None,
+        };
+
+        Some(LoopUnrollAttrSpec {
+            enabled,
+            has_value: self.value.is_some(),
+            has_args: !self.args.is_empty(),
+        })
     }
 }
 
