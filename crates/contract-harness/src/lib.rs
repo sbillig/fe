@@ -750,6 +750,22 @@ impl RuntimeInstance {
         }
     }
 
+    /// Gives the deployed contract the specified balance (in wei).
+    ///
+    /// This is useful for tests that need the contract to send ETH
+    /// via internal calls (e.g. `evm.call(value: 1, ...)`).
+    pub fn fund_contract(&mut self, amount: U256) {
+        let db = &mut self.evm.ctx.journaled_state.database;
+        let mut info = db
+            .cache
+            .accounts
+            .get(&self.address)
+            .map(|a| a.info.clone())
+            .unwrap_or_default();
+        info.balance = info.balance.saturating_add(amount);
+        db.insert_account_info(self.address, info);
+    }
+
     fn effective_nonce(&mut self, options: ExecutionOptions) -> u64 {
         if let Some(nonce) = options.nonce {
             let entry = self.next_nonce_by_caller.entry(options.caller).or_insert(0);
