@@ -33,11 +33,11 @@ use crate::{
     },
     core_lib::CoreLib,
     ir::{
-        AddressSpaceKind, BasicBlockId, BodyBuilder, CallOrigin, CodeRegionRoot, ContractFunction,
-        ContractFunctionKind, IntrinsicOp, LocalData, LocalId, LoopInfo, MirBody, MirFunction,
-        MirInst, MirModule, MirProjection, MirProjectionPath, Place, PointerInfo, Rvalue,
-        SwitchTarget, SwitchValue, SyntheticValue, Terminator, ValueData, ValueId, ValueOrigin,
-        ValueRepr,
+        AddressSpaceKind, BasicBlockId, BodyBuilder, CallOrigin, CallTargetRef, CodeRegionRef,
+        ContractFunction, ContractFunctionKind, IntrinsicOp, LocalData, LocalId, LoopInfo, MirBody,
+        MirFunction, MirInst, MirModule, MirProjection, MirProjectionPath, Place, PointerInfo,
+        Rvalue, SwitchTarget, SwitchValue, SyntheticValue, Terminator, ValueData, ValueId,
+        ValueOrigin, ValueRepr,
     },
     monomorphize::monomorphize_functions,
 };
@@ -1934,7 +1934,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     }
 
     fn call_return_param_sources(&self, call: &CallOrigin<'db>) -> Option<Vec<usize>> {
-        let hir_target = call.hir_target.as_ref()?;
+        let CallTargetRef::Hir(hir_target) = call.target.as_ref()? else {
+            return None;
+        };
         let CallableDef::Func(func) = hir_target.callable_def else {
             return None;
         };
@@ -1984,13 +1986,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             .map(|func| func.pretty_print_signature(self.db))
             .unwrap_or_else(|| "<body owner>".to_owned());
         let callee = call
-            .hir_target
+            .target
             .as_ref()
-            .and_then(|target| {
-                if let CallableDef::Func(func) = target.callable_def {
-                    return Some(func.pretty_print_signature(self.db));
+            .and_then(|target| match target {
+                CallTargetRef::Hir(target) => {
+                    if let CallableDef::Func(func) = target.callable_def {
+                        return Some(func.pretty_print_signature(self.db));
+                    }
+                    None
                 }
-                None
+                CallTargetRef::Synthetic(id) => Some(format!("{id:?}")),
             })
             .unwrap_or_else(|| "<call target>".to_owned());
         self.deferred_error = Some(MirLowerError::Unsupported {
@@ -2007,9 +2012,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         dest_ty: TyId<'db>,
     ) -> Option<AddressSpaceKind> {
         let has_receiver = call
-            .hir_target
+            .target
             .as_ref()
-            .and_then(|target| target.callable_def.receiver_ty(self.db))
+            .and_then(|target| match target {
+                CallTargetRef::Hir(target) => target.callable_def.receiver_ty(self.db),
+                CallTargetRef::Synthetic(_) => None,
+            })
             .is_some();
 
         if let Some(return_param_indices) = self.call_return_param_sources(call) {
@@ -2038,7 +2046,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
         }
 
-        let hir_target = call.hir_target.as_ref()?;
+        let CallTargetRef::Hir(hir_target) = call.target.as_ref()? else {
+            return None;
+        };
         let expected_arg_tys = hir_target
             .callable_def
             .arg_tys(self.db)

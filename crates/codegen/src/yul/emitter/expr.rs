@@ -346,7 +346,7 @@ impl<'db> FunctionEmitter<'db> {
         call: &CallOrigin<'_>,
         state: &BlockState,
     ) -> Result<Option<String>, YulError> {
-        let Some(target) = call.hir_target.as_ref() else {
+        let Some(mir::CallTargetRef::Hir(target)) = call.target.as_ref() else {
             return Ok(None);
         };
         let CallableDef::Func(func) = target.callable_def else {
@@ -361,10 +361,10 @@ impl<'db> FunctionEmitter<'db> {
             _ => return Ok(None),
         }
 
-        let Some(name) = target.callable_def.name(self.db) else {
+        let Some(name_id) = target.callable_def.name(self.db) else {
             return Ok(None);
         };
-        let name = name.data(self.db).as_str();
+        let name = name_id.data(self.db).as_str();
         if name == "__bitcast" || !name.starts_with("__") {
             return Ok(None);
         }
@@ -686,10 +686,10 @@ impl<'db> FunctionEmitter<'db> {
                     self.mir_func.body.local(*local).ty.pretty_print(self.db),
                 )))
             }
-            ValueOrigin::FuncItem(_) => {
+            ValueOrigin::CodeRegionRef(_) => {
                 debug_assert!(
                     layout::is_zero_sized_ty_in(self.db, &self.layout, value.ty),
-                    "function item values should be zero-sized (ty={})",
+                    "code-region values should be zero-sized (ty={})",
                     value.ty.pretty_print(self.db)
                 );
                 Ok("0".into())
@@ -756,13 +756,13 @@ impl<'db> FunctionEmitter<'db> {
         call: &CallOrigin<'_>,
         state: &BlockState,
     ) -> Result<String, YulError> {
-        if let Some(target) = call.hir_target.as_ref()
+        if let Some(mir::CallTargetRef::Hir(target)) = call.target.as_ref()
             && matches!(
                 target.callable_def.ingot(self.db).kind(self.db),
                 IngotKind::Core
             )
-            && target.callable_def.name(self.db).is_some_and(|name| {
-                matches!(name.data(self.db).as_str(), "__as_bytes" | "__keccak256")
+            && target.callable_def.name(self.db).is_some_and(|name_id| {
+                matches!(name_id.data(self.db).as_str(), "__as_bytes" | "__keccak256")
             })
         {
             return Err(YulError::Unsupported(
@@ -771,10 +771,13 @@ impl<'db> FunctionEmitter<'db> {
         }
 
         if call
-            .hir_target
+            .target
             .as_ref()
-            .and_then(|target| target.callable_def.name(self.db))
-            .is_some_and(|name| name.data(self.db) == "contract_field_slot")
+            .and_then(|target| match target {
+                mir::CallTargetRef::Hir(target) => target.callable_def.name(self.db),
+                mir::CallTargetRef::Synthetic(_) => None,
+            })
+            .is_some_and(|name_id| name_id.data(self.db) == "contract_field_slot")
         {
             return Err(YulError::Unsupported(
                 "`contract_field_slot` must be constant-folded before codegen".into(),
@@ -785,19 +788,19 @@ impl<'db> FunctionEmitter<'db> {
             return Ok(intrinsic);
         }
 
-        let is_evm_op = match call.hir_target.as_ref() {
-            Some(target) => {
+        let is_evm_op = match call.target.as_ref() {
+            Some(mir::CallTargetRef::Hir(target)) => {
                 matches!(
                     target.callable_def,
                     CallableDef::Func(func) if is_std_evm_ops(self.db, func)
                 )
             }
-            None => false,
+            Some(mir::CallTargetRef::Synthetic(_)) | None => false,
         };
         let callee = if let Some(name) = &call.resolved_name {
             name.clone()
         } else {
-            let Some(target) = call.hir_target.as_ref() else {
+            let Some(mir::CallTargetRef::Hir(target)) = call.target.as_ref() else {
                 return Err(YulError::Unsupported(
                     "call is missing a resolved symbol name".into(),
                 ));

@@ -696,7 +696,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     ) {
         let call_origin = CallOrigin {
             expr,
-            hir_target: None,
+            target: None,
             args,
             effect_args: Vec::new(),
             resolved_name: None,
@@ -1508,7 +1508,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             {
                 let ty = self.builder.body.value(*arg).ty;
                 let repr = self.builder.body.value(*arg).repr;
-                *arg = self.alloc_value(ty, ValueOrigin::FuncItem(target), repr);
+                *arg = self.alloc_value(ty, ValueOrigin::CodeRegionRef(target), repr);
             }
             if op.returns_value() {
                 // Intrinsics are word-producing operations, but some std/core APIs wrap them
@@ -1629,7 +1629,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let builtin_terminator = self.builtin_terminator_kind(callable.callable_def);
         let call_origin = CallOrigin {
             expr: Some(expr),
-            hir_target: Some(hir_target),
+            target: Some(crate::ir::CallTargetRef::Hir(hir_target)),
             args,
             effect_args,
             resolved_name: None,
@@ -2793,7 +2793,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
         let call_origin = CallOrigin {
             expr: Some(expr),
-            hir_target: Some(hir_target),
+            target: Some(crate::ir::CallTargetRef::Hir(hir_target)),
             args: vec![receiver, rhs],
             effect_args,
             resolved_name: None,
@@ -3291,7 +3291,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
         let call_origin = CallOrigin {
             expr: None,
-            hir_target: Some(hir_target),
+            target: Some(crate::ir::CallTargetRef::Hir(hir_target)),
             args: vec![receiver],
             effect_args,
             receiver_space,
@@ -3354,7 +3354,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
         let call_origin = CallOrigin {
             expr: None,
-            hir_target: Some(hir_target),
+            target: Some(crate::ir::CallTargetRef::Hir(hir_target)),
             args: vec![receiver, index],
             effect_args,
             receiver_space,

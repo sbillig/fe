@@ -669,14 +669,12 @@ impl<'db> FunctionEmitter<'db> {
             arg = *value;
         }
         let symbol = match &self.mir_func.body.value(arg).origin {
-            mir::ValueOrigin::FuncItem(root) => root.symbol.as_deref().ok_or_else(|| {
-                YulError::Unsupported(
-                    "code region function item is missing a resolved symbol".into(),
-                )
+            mir::ValueOrigin::CodeRegionRef(root) => root.symbol.as_deref().ok_or_else(|| {
+                YulError::Unsupported("code region reference is missing a resolved symbol".into())
             })?,
             _ => {
                 return Err(YulError::Unsupported(
-                    "code region intrinsic argument must be a function item".into(),
+                    "code region intrinsic argument must be a code-region reference".into(),
                 ));
             }
         };

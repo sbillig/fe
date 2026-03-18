@@ -955,11 +955,11 @@ pub enum ValueOrigin<'db> {
     /// This is used by capability-stage MIR to model "place" operations (load/store/projections)
     /// over locals/params without implying the local is backed by a runtime address.
     PlaceRoot(LocalId),
-    /// A first-class reference to a function item (compile-time only).
+    /// A first-class semantic reference to a code region (compile-time only).
     ///
     /// This is not a runtime value, but can be consumed by intrinsics like
     /// `code_region_offset/len` that refer to function code regions.
-    FuncItem(CodeRegionRoot<'db>),
+    CodeRegionRef(CodeRegionRef<'db>),
     /// Pointer arithmetic for accessing a nested struct field (no load, just offset).
     FieldPtr(FieldPtrOrigin),
     /// Reference to a place (for aggregates - pointer arithmetic only, no load).
@@ -1038,7 +1038,7 @@ impl ValueRepr {
 #[derive(Debug, Clone)]
 pub struct CallOrigin<'db> {
     pub expr: Option<ExprId>,
-    pub hir_target: Option<HirCallTarget<'db>>,
+    pub target: Option<CallTargetRef<'db>>,
     /// Runtime-visible regular arguments in callee runtime-param order.
     pub args: Vec<ValueId>,
     /// Runtime-visible explicit effect arguments in callee runtime-effect-param order.
@@ -1090,6 +1090,12 @@ pub struct HirCallTarget<'db> {
     pub trait_inst: Option<TraitInstId<'db>>,
 }
 
+#[derive(Debug, Clone)]
+pub enum CallTargetRef<'db> {
+    Hir(HirCallTarget<'db>),
+    Synthetic(SyntheticId<'db>),
+}
+
 /// Pointer offset for accessing a nested aggregate field (struct within struct).
 /// This represents pure pointer arithmetic with no load/store.
 #[derive(Debug, Clone)]
@@ -1129,7 +1135,7 @@ pub struct IntrinsicValue {
 
 /// Identifies the root function for a code region along with its concrete instantiation.
 #[derive(Debug, Clone)]
-pub struct CodeRegionRoot<'db> {
+pub struct CodeRegionRef<'db> {
     pub origin: MirFunctionOrigin<'db>,
     pub generic_args: Vec<TyId<'db>>,
     pub symbol: Option<String>,

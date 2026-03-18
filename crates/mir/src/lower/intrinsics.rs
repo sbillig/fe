@@ -230,8 +230,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// - `expr`: Path expression referencing a function.
     ///
     /// # Returns
-    /// A `CodeRegionRoot` describing the referenced function, or `None` on failure.
-    pub(super) fn code_region_target(&self, expr: ExprId) -> Option<CodeRegionRoot<'db>> {
+    /// A `CodeRegionRef` describing the referenced function, or `None` on failure.
+    pub(super) fn code_region_target(&self, expr: ExprId) -> Option<CodeRegionRef<'db>> {
         let ty = self
             .typed_body
             .expr_ty(self.db, expr)
@@ -250,7 +250,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 .all(|ty| !matches!(ty.data(self.db), TyData::TyVar(_))),
             "code_region target generic args should never contain TyVar; this should be canonicalized during typing"
         );
-        Some(CodeRegionRoot {
+        Some(CodeRegionRef {
             origin: crate::ir::MirFunctionOrigin::Hir(*func),
             generic_args,
             symbol: None,
@@ -262,7 +262,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// This is used when contract code regions are passed through locals/params (e.g. `fn f<F>(x: F)`),
     /// where the value has no runtime representation but the *type* still uniquely identifies the
     /// referenced contract entrypoint.
-    pub(super) fn code_region_target_from_ty(&self, ty: TyId<'db>) -> Option<CodeRegionRoot<'db>> {
+    pub(super) fn code_region_target_from_ty(&self, ty: TyId<'db>) -> Option<CodeRegionRef<'db>> {
         let ty = ty
             .as_capability(self.db)
             .map(|(_, inner)| inner)
@@ -272,7 +272,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return None;
         };
         let _ = extract_contract_function(self.db, *func)?;
-        Some(CodeRegionRoot {
+        Some(CodeRegionRef {
             origin: crate::ir::MirFunctionOrigin::Hir(*func),
             generic_args: args.to_vec(),
             symbol: None,

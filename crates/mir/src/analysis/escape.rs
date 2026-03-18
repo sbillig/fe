@@ -636,7 +636,7 @@ fn value_depends_on_local<'db>(
         | ValueOrigin::ControlFlowResult { .. }
         | ValueOrigin::Unit
         | ValueOrigin::Synthetic(_)
-        | ValueOrigin::FuncItem(_) => false,
+        | ValueOrigin::CodeRegionRef(_) => false,
     };
     value_visiting[value.index()] = false;
     depends
@@ -962,7 +962,7 @@ fn value_must_alias_local_alloc<'db>(
         | ValueOrigin::Unary { .. }
         | ValueOrigin::Binary { .. }
         | ValueOrigin::Synthetic(_)
-        | ValueOrigin::FuncItem(_) => None,
+        | ValueOrigin::CodeRegionRef(_) => None,
     };
 
     value_visiting[value.index()] = false;
@@ -994,7 +994,7 @@ fn value_origin_local<'db>(
         | ValueOrigin::Unary { .. }
         | ValueOrigin::Binary { .. }
         | ValueOrigin::Synthetic(_)
-        | ValueOrigin::FuncItem(_) => None,
+        | ValueOrigin::CodeRegionRef(_) => None,
     };
 
     value_visiting[value.index()] = false;
@@ -1696,7 +1696,7 @@ mod tests {
                     dest: None,
                     rvalue: Rvalue::Call(CallOrigin {
                         expr: None,
-                        hir_target: None,
+                        target: None,
                         args: vec![alloc_value],
                         effect_args: vec![],
                         resolved_name: Some("escape_id".to_string()),
@@ -1773,7 +1773,7 @@ mod tests {
                     dest: Some(call_result_local),
                     rvalue: Rvalue::Call(CallOrigin {
                         expr: None,
-                        hir_target: None,
+                        target: None,
                         args: vec![alloc_value],
                         effect_args: vec![],
                         resolved_name: Some("escape_id".to_string()),
@@ -1850,7 +1850,7 @@ mod tests {
                     dest: Some(call_result_local),
                     rvalue: Rvalue::Call(CallOrigin {
                         expr: None,
-                        hir_target: None,
+                        target: None,
                         args: vec![],
                         effect_args: vec![alloc_value],
                         resolved_name: Some("escape_effect_id".to_string()),
@@ -1911,7 +1911,7 @@ mod tests {
                 dest: Some(local),
                 rvalue: Rvalue::Call(CallOrigin {
                     expr: None,
-                    hir_target: None,
+                    target: None,
                     args: vec![size_value],
                     effect_args: vec![],
                     resolved_name: Some("alloc".to_string()),

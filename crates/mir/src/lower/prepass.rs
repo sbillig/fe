@@ -146,7 +146,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         );
                         ValueOrigin::Unit
                     } else if let Some(target) = self.code_region_target_from_ty(ty) {
-                        ValueOrigin::FuncItem(target)
+                        ValueOrigin::CodeRegionRef(target)
                     } else if let Some(local) = self.local_for_binding(binding) {
                         if self.effect_param_key_is_type(binding)
                             && matches!(repr, ValueRepr::Word)
@@ -160,12 +160,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         }
                         ValueOrigin::Local(local)
                     } else if let Some(target) = self.code_region_target(expr) {
-                        ValueOrigin::FuncItem(target)
+                        ValueOrigin::CodeRegionRef(target)
                     } else {
                         ValueOrigin::Expr(expr)
                     }
                 } else if let Some(target) = self.code_region_target(expr) {
-                    ValueOrigin::FuncItem(target)
+                    ValueOrigin::CodeRegionRef(target)
                 } else {
                     ValueOrigin::Expr(expr)
                 }

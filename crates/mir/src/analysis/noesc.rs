@@ -145,9 +145,12 @@ fn check_call_args<'db>(
     call: &CallOrigin<'db>,
 ) -> Option<CompleteDiagnostic> {
     let receiver_arg_count = call
-        .hir_target
+        .target
         .as_ref()
-        .and_then(|target| target.callable_def.receiver_ty(db))
+        .and_then(|target| match target {
+            crate::ir::CallTargetRef::Hir(target) => target.callable_def.receiver_ty(db),
+            crate::ir::CallTargetRef::Synthetic(_) => None,
+        })
         .map(|_| 1usize)
         .unwrap_or(0);
 

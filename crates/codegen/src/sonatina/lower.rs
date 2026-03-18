@@ -1070,11 +1070,11 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     .insert_inst(Add::new(ctx.is, base, offset_val), Type::I256))
             }
         }
-        ValueOrigin::FuncItem(_) => {
-            // Function items are zero-sized and should never be used as runtime values.
+        ValueOrigin::CodeRegionRef(_) => {
+            // Code-region refs are zero-sized and should never be used as runtime values.
             // If we reach here, MIR lowering failed to eliminate this usage.
             Err(LowerError::Internal(
-                "FuncItem value reached codegen - should be zero-sized".to_string(),
+                "code-region ref reached codegen as a runtime value".to_string(),
             ))
         }
         ValueOrigin::Expr(_) => {
@@ -1328,14 +1328,14 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             .get(func_item.index())
             .ok_or_else(|| LowerError::Internal("unknown code region argument".to_string()))?;
         let symbol = match &value_data.origin {
-            mir::ValueOrigin::FuncItem(root) => root.symbol.as_deref().ok_or_else(|| {
+            mir::ValueOrigin::CodeRegionRef(root) => root.symbol.as_deref().ok_or_else(|| {
                 LowerError::Unsupported(
-                    "code region function item is missing a resolved symbol".to_string(),
+                    "code region reference is missing a resolved symbol".to_string(),
                 )
             })?,
             _ => {
                 return Err(LowerError::Unsupported(
-                    "code region intrinsic argument must be a function item".to_string(),
+                    "code region intrinsic argument must be a code-region reference".to_string(),
                 ));
             }
         };
