@@ -23,7 +23,7 @@ use common::{
     config::{Config, WorkspaceMemberSelection},
     ingot::Ingot,
 };
-use contract_harness::{CallGasProfile, EvmTraceOptions, ExecutionOptions, RuntimeInstance};
+use contract_harness::{CallGasProfile, EvmTraceOptions, ExecutionOptions, RuntimeInstance, U256};
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod, item::ItemKind};
@@ -2796,6 +2796,21 @@ pub(super) fn compile_and_run_test(
         ));
     }
 
+    let initial_balance = match case
+        .initial_balance
+        .as_deref()
+        .map(be_bytes_to_u256)
+        .transpose()
+    {
+        Ok(balance) => balance,
+        Err(err) => {
+            return failure(format!(
+                "invalid initial balance for test `{}`: {err}",
+                case.display_name
+            ));
+        }
+    };
+
     if backend == "sonatina" {
         if case.bytecode.is_empty() {
             return failure(format!("missing test bytecode for `{}`", case.display_name));
@@ -2816,6 +2831,7 @@ pub(super) fn compile_and_run_test(
             evm_trace,
             call_trace,
             collect_step_count,
+            initial_balance,
         );
         return TestOutcome {
             result,
@@ -2860,6 +2876,7 @@ pub(super) fn compile_and_run_test(
         evm_trace,
         call_trace,
         collect_step_count,
+        initial_balance,
     );
     TestOutcome {
         result,
@@ -3025,6 +3042,18 @@ fn write_report_manifest(
 /// * `show_logs` - Whether to execute with log collection enabled.
 ///
 /// Returns the test result and any emitted logs.
+fn be_bytes_to_u256(bytes: &[u8]) -> Result<U256, &'static str> {
+    if bytes.len() > 32 {
+        return Err("initial balance exceeds u256");
+    }
+    let mut buf = [0u8; 32];
+    // Pad on the left (big-endian): short value goes into the low bytes.
+    let start = 32 - bytes.len();
+    buf[start..].copy_from_slice(bytes);
+    Ok(U256::from_be_bytes(buf))
+}
+
+#[allow(clippy::too_many_arguments)]
 fn execute_test(
     name: &str,
     bytecode_hex: &str,
@@ -3033,6 +3062,7 @@ fn execute_test(
     evm_trace: Option<&EvmTraceOptions>,
     call_trace: bool,
     collect_step_count: bool,
+    initial_balance: Option<U256>,
 ) -> (
     TestResult,
     Vec<String>,
@@ -3061,6 +3091,11 @@ fn execute_test(
             );
         }
     };
+    // Optionally seed the test contract with ETH (opt-in via #[test(balance = N)]).
+    if let Some(balance) = initial_balance {
+        instance.fund_contract(balance);
+    }
+
     instance.set_trace_options(evm_trace.cloned());
 
     // Execute the test (empty calldata since test functions take no args)

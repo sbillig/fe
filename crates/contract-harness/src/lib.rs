@@ -755,15 +755,26 @@ impl RuntimeInstance {
     /// This is useful for tests that need the contract to send ETH
     /// via internal calls (e.g. `evm.call(value: 1, ...)`).
     pub fn fund_contract(&mut self, amount: U256) {
-        let db = &mut self.evm.ctx.journaled_state.database;
-        let mut info = db
+        let address = self.address;
+        let js = &mut self.evm.ctx.journaled_state;
+
+        // Update the underlying DB cache so future loads see the balance.
+        let mut info = js
+            .database
             .cache
             .accounts
-            .get(&self.address)
+            .get(&address)
             .map(|a| a.info.clone())
             .unwrap_or_default();
         info.balance = info.balance.saturating_add(amount);
-        db.insert_account_info(self.address, info);
+        js.database.insert_account_info(address, info.clone());
+
+        // Also update the live journal state — after deploy the account is
+        // already loaded there, and value transfers read from the journal
+        // rather than reloading from the DB cache.
+        if let Some(account) = js.state.get_mut(&address) {
+            account.info.balance = info.balance;
+        }
     }
 
     fn effective_nonce(&mut self, options: ExecutionOptions) -> u64 {

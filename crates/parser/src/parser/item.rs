@@ -274,17 +274,30 @@ impl super::Parse for ContractScope {
 
             parser.parse(ContractFieldsScope::default())?;
 
-            // Optional `init` block
+            // Optional `init` block (possibly preceded by attributes). If the
+            // leading attributes actually belong to the first `recv` block, we
+            // must reuse the same checkpoint instead of dropping it here.
+            let mut checkpoint = parse_attr_list(parser)?;
             if parser.is_ident("init") {
-                parser.parse(ContractInitScope::default())?;
+                parser.parse_cp(ContractInitScope::default(), checkpoint)?;
+                checkpoint = parse_attr_list(parser)?;
             }
 
-            // Zero or more `recv` blocks
+            // Zero or more `recv` blocks (each possibly preceded by attributes)
             loop {
-                if !parser.is_ident("recv") {
+                if parser.is_ident("recv") {
+                    parser.parse_cp(ContractRecvScope::default(), checkpoint)?;
+                    checkpoint = parse_attr_list(parser)?;
+                } else {
                     break;
                 }
-                parser.parse(ContractRecvScope::default())?;
+            }
+
+            // If trailing attributes were consumed but no init/recv follows,
+            // emit a parse error so they don't silently vanish.
+            if checkpoint.is_some() {
+                let _ =
+                    parser.error_msg_on_current_token("expected `init` or `recv` after attribute");
             }
 
             parser.bump_or_recover(
@@ -309,6 +322,18 @@ impl super::Parse for ContractFieldsScope {
             // Stop conditions
             match parser.current_kind() {
                 Some(SyntaxKind::RBrace) | None => break,
+                Some(SyntaxKind::Pound) | Some(SyntaxKind::DocComment) => {
+                    // Lookahead: break only if the attribute/doc comment is followed by
+                    // `init` or `recv`, otherwise it's a field attribute
+                    // (e.g. `#[field_attr] total: u256`).
+                    let is_init_or_recv_attr = parser.dry_run(|p| {
+                        let _ = attr::parse_attr_list(p);
+                        p.is_ident("init") || p.is_ident("recv")
+                    });
+                    if is_init_or_recv_attr {
+                        break;
+                    }
+                }
                 Some(SyntaxKind::Ident)
                     if matches!(parser.current_token().unwrap().text(), "init" | "recv") =>
                 {
@@ -399,6 +424,8 @@ impl super::Parse for RecvArmScope {
     type Error = Recovery<ErrProof>;
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parse_attr_list(parser)?;
+
         parser.set_newline_as_trivia(false);
 
         parse_recv_arm_pat(parser)?;

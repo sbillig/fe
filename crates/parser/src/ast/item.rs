@@ -199,6 +199,7 @@ ast_node! {
     pub struct ContractInit,
     SK::ContractInit,
 }
+impl super::AttrListOwner for ContractInit {}
 impl ContractInit {
     pub fn params(&self) -> Option<super::FuncParamList> {
         support::child(self.syntax())
@@ -218,6 +219,7 @@ ast_node! {
     pub struct ContractRecv,
     SK::ContractRecv,
 }
+impl super::AttrListOwner for ContractRecv {}
 impl ContractRecv {
     /// Optional root message type path (`recv Type { ... }`).
     pub fn path(&self) -> Option<super::Path> {
@@ -242,6 +244,7 @@ ast_node! {
     pub struct RecvArm,
     SK::RecvArm,
 }
+impl super::AttrListOwner for RecvArm {}
 impl RecvArm {
     /// The pattern being matched (e.g., `Transfer { to, amount }`).
     pub fn pat(&self) -> Option<super::Pat> {

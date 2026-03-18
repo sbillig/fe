@@ -646,6 +646,50 @@ impl<'db, 'a> ContractMirCx<'db, 'a> {
             .value
     }
 
+    /// Emit a CALLVALUE != 0 guard that reverts via host_abort.
+    ///
+    /// Inserts a branch: if `callvalue() != 0`, jump to an abort block;
+    /// otherwise continue in a new block.  The builder cursor is left on
+    /// the continuation block.
+    fn emit_callvalue_guard(
+        &self,
+        builder: &mut BodyBuilder<'db>,
+        label: impl Into<String>,
+        zero_u256: ValueId,
+        root_value: ValueId,
+    ) {
+        let db = self.db;
+        let callvalue = self.assign_runtime_local(
+            builder,
+            label,
+            TyId::u256(db),
+            false,
+            AddressSpaceKind::Memory,
+            Rvalue::Intrinsic {
+                op: IntrinsicOp::Callvalue,
+                args: vec![],
+            },
+        );
+        let is_nonzero = builder.alloc_value(
+            TyId::bool(db),
+            ValueOrigin::Binary {
+                op: BinOp::Comp(CompBinOp::NotEq),
+                lhs: callvalue,
+                rhs: zero_u256,
+            },
+            ValueRepr::Word,
+        );
+        let abort_block = builder.make_block();
+        let cont_block = builder.make_block();
+        builder.branch(is_nonzero, abort_block, cont_block);
+        builder.move_to_block(abort_block);
+        builder.terminate_current(Terminator::TerminatingCall {
+            source: SourceInfoId::SYNTHETIC,
+            call: TerminatingCall::Call(self.host_abort(root_value)),
+        });
+        builder.move_to_block(cont_block);
+    }
+
     fn host_abort(&self, root_value: ValueId) -> CallOrigin<'db> {
         self.call_hir(
             CallableDef::Func(self.host.abort_fn),
@@ -1267,6 +1311,12 @@ fn lower_init_entrypoint<'db>(
     let root_value = builder.unit_value(target.host.root_effect_ty);
     let zero_u256 = builder.const_int_value(TyId::u256(db), BigUint::from(0u8));
 
+    // CALLVALUE guard: revert if ETH is sent to a non-payable init.
+    let init_is_payable = contract.init(db).is_some_and(|init| init.is_payable(db));
+    if !init_is_payable {
+        cx.emit_callvalue_guard(&mut builder, "callvalue_init", zero_u256, root_value);
+    }
+
     // Code region queries for the runtime entrypoint are shared by init-input decoding and
     // contract creation.
     let runtime_func_item = builder.func_item_value(
@@ -1552,6 +1602,18 @@ fn lower_runtime_entrypoint<'db>(
             });
 
             builder.move_to_block(block);
+
+            // CALLVALUE guard: revert if ETH is sent to a non-payable arm.
+            let is_payable = arm.arm(db).is_some_and(|a| a.is_payable(db));
+            if !is_payable {
+                cx.emit_callvalue_guard(
+                    &mut builder,
+                    format!("callvalue_{recv_idx}_{arm_idx}"),
+                    zero_u256,
+                    root_value,
+                );
+            }
+
             let args_value = (!abi_payload_is_empty(db, abi_info.args_ty)).then(|| {
                 cx.emit_decode_or_unit(
                     &mut builder,

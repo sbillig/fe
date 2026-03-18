@@ -6,10 +6,18 @@ input_file: tests/fixtures/newtype_storage_field_mut_method_call.fe
 object "NewtypeStorageFieldMutMethodCall" {
   code {
     function $__NewtypeStorageFieldMutMethodCall_init() {
-      let v0 := dataoffset("NewtypeStorageFieldMutMethodCall_deployed")
-      let v1 := datasize("NewtypeStorageFieldMutMethodCall_deployed")
-      codecopy(0, v0, v1)
-      return(0, v1)
+      let v0 := callvalue()
+      let v1 := iszero(eq(v0, 0))
+      if v1 {
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+      }
+      let v2 := dataoffset("NewtypeStorageFieldMutMethodCall_deployed")
+      let v3 := datasize("NewtypeStorageFieldMutMethodCall_deployed")
+      codecopy(0, v2, v3)
+      return(0, v3)
+    }
+    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
+      revert(0, 0)
     }
     $__NewtypeStorageFieldMutMethodCall_init()
   }
@@ -28,8 +36,13 @@ object "NewtypeStorageFieldMutMethodCall" {
         let v2 := $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
         switch v2
           case 1 {
-            let v3 := $__NewtypeStorageFieldMutMethodCall_recv_0_0(v1)
-            $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v3)
+            let v3 := callvalue()
+            let v4 := iszero(eq(v3, 0))
+            if v4 {
+              $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+            }
+            let v5 := $__NewtypeStorageFieldMutMethodCall_recv_0_0(v1)
+            $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v5)
           }
           default {
             $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()

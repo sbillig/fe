@@ -1527,6 +1527,9 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             )))
         }
         IntrinsicOp::Caller => Ok(Some(ctx.fb.insert_inst(EvmCaller::new(ctx.is), Type::I256))),
+        IntrinsicOp::Callvalue => Ok(Some(
+            ctx.fb.insert_inst(EvmCallValue::new(ctx.is), Type::I256),
+        )),
         IntrinsicOp::ReturnData | IntrinsicOp::Revert => Err(LowerError::Internal(
             "terminating intrinsic must be lowered as Terminator::TerminatingCall".to_string(),
         )),

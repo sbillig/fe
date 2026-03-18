@@ -42,6 +42,23 @@ impl<'db> AttrListId<'db> {
         })
     }
 
+    /// Returns true if this attribute list contains a marker attribute with the given name.
+    ///
+    /// Marker attributes have no arguments in lowered HIR, for example `#[payable]`.
+    pub fn has_marker_attr(self, db: &'db dyn HirDb, name: &str) -> bool {
+        self.data(db).iter().any(|attr| {
+            if let Attr::Normal(normal_attr) = attr
+                && normal_attr.args.is_empty()
+                && let Some(path) = normal_attr.path.to_opt()
+                && let Some(ident) = path.as_ident(db)
+            {
+                ident.data(db) == name
+            } else {
+                false
+            }
+        })
+    }
+
     /// Returns the attribute with the given name, if present.
     pub fn get_attr(self, db: &'db dyn HirDb, name: &str) -> Option<&'db NormalAttr<'db>> {
         self.data(db).iter().find_map(|attr| {

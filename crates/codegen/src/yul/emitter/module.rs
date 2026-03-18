@@ -19,6 +19,7 @@ use mir::{
     layout::{self, TargetDataLayout},
     lower_ingot, lower_module, prepare_module_for_evm_yul_codegen,
 };
+use num_bigint::BigUint;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::{collections::VecDeque, sync::Arc};
 
@@ -50,6 +51,9 @@ pub struct TestMetadata {
     pub value_param_count: usize,
     pub effect_param_count: usize,
     pub expected_revert: Option<ExpectedRevert>,
+    /// Optional initial ETH balance (in wei) to seed the deployed test contract.
+    /// When `None`, the contract starts with zero balance.
+    pub initial_balance: Option<Vec<u8>>,
 }
 
 /// Describes the expected revert behavior for a test.
@@ -370,7 +374,7 @@ pub fn emit_test_module_yul_with_layout(
 
     let call_graph = build_call_graph(&module.functions);
 
-    let mut tests = collect_test_infos(db, &module.functions);
+    let mut tests = collect_test_infos(db, &module.functions)?;
     if tests.is_empty() {
         return Ok(TestModuleOutput { tests: Vec::new() });
     }
@@ -417,6 +421,7 @@ pub fn emit_test_module_yul_with_layout(
             value_param_count: test.value_param_count,
             effect_param_count: test.effect_param_count,
             expected_revert: test.expected_revert,
+            initial_balance: test.initial_balance.map(|b| b.to_bytes_be()),
         });
     }
 
@@ -677,6 +682,7 @@ struct TestInfo {
     value_param_count: usize,
     effect_param_count: usize,
     expected_revert: Option<ExpectedRevert>,
+    initial_balance: Option<BigUint>,
 }
 
 /// Dependency set required to emit a single test object.
@@ -691,7 +697,10 @@ struct TestDependencies {
 /// * `functions` - Monomorphized MIR functions to scan.
 ///
 /// Returns a list of test info entries with placeholder names filled in.
-fn collect_test_infos(db: &dyn HirDb, functions: &[MirFunction<'_>]) -> Vec<TestInfo> {
+fn collect_test_infos(
+    db: &dyn HirDb,
+    functions: &[MirFunction<'_>],
+) -> Result<Vec<TestInfo>, EmitModuleError> {
     functions
         .iter()
         .filter_map(|mir_func| {
@@ -713,9 +722,14 @@ fn collect_test_infos(db: &dyn HirDb, functions: &[MirFunction<'_>]) -> Vec<Test
                 .to_opt()
                 .map(|n| n.data(db).to_string())
                 .unwrap_or_else(|| "<anonymous>".to_string());
+            // Check for #[test(balance = N)]
+            let initial_balance = match parse_test_balance_arg(db, &hir_name, test_attr) {
+                Ok(balance) => balance,
+                Err(err) => return Some(Err(err)),
+            };
             let value_param_count = mir_func.runtime_param_count();
             let effect_param_count = mir_func.runtime_effect_param_count();
-            Some(TestInfo {
+            Some(Ok(TestInfo {
                 hir_name,
                 display_name: String::new(),
                 symbol_name: mir_func.symbol_name.clone(),
@@ -723,9 +737,43 @@ fn collect_test_infos(db: &dyn HirDb, functions: &[MirFunction<'_>]) -> Vec<Test
                 value_param_count,
                 effect_param_count,
                 expected_revert,
-            })
+                initial_balance,
+            }))
         })
         .collect()
+}
+
+/// Extracts the `balance` argument from `#[test(balance = N)]`, if present.
+fn parse_test_balance_arg<'db>(
+    db: &'db dyn HirDb,
+    test_name: &str,
+    test_attr: &hir::hir_def::attr::NormalAttr<'db>,
+) -> Result<Option<BigUint>, EmitModuleError> {
+    for arg in &test_attr.args {
+        if arg.key_str(db) != Some("balance") {
+            continue;
+        }
+        let Some(value) = arg.value.as_ref() else {
+            return Err(EmitModuleError::Yul(YulError::Unsupported(format!(
+                "invalid #[test] function `{test_name}`: #[test(balance = ...)] expects an integer literal"
+            ))));
+        };
+        let hir::hir_def::attr::AttrArgValue::Lit(hir::hir_def::LitKind::Int(int_id)) = value
+        else {
+            return Err(EmitModuleError::Yul(YulError::Unsupported(format!(
+                "invalid #[test] function `{test_name}`: #[test(balance = ...)] expects an integer literal"
+            ))));
+        };
+        let balance = int_id.data(db).clone();
+        if balance.to_bytes_be().len() > 32 {
+            return Err(EmitModuleError::Yul(YulError::Unsupported(format!(
+                "invalid #[test] function `{test_name}`: #[test(balance = ...)] must fit in u256"
+            ))));
+        };
+        return Ok(Some(balance));
+    }
+
+    Ok(None)
 }
 
 /// Validates that a `#[test]` function conforms to runner constraints.
@@ -1474,6 +1522,7 @@ mod tests {
                 value_param_count: 0,
                 effect_param_count: 0,
                 expected_revert: None,
+                initial_balance: None,
             },
             TestInfo {
                 hir_name: "foo_bar".to_string(),
@@ -1483,6 +1532,7 @@ mod tests {
                 value_param_count: 0,
                 effect_param_count: 0,
                 expected_revert: None,
+                initial_balance: None,
             },
         ];
 

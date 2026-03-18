@@ -827,6 +827,7 @@ pub struct ContractInit<'db> {
     #[id]
     id: TrackedItemId<'db>,
 
+    pub attributes: AttrListId<'db>,
     pub params: FuncParamListId<'db>,
     pub effects: EffectParamListId<'db>,
     pub body: Body<'db>,
@@ -834,6 +835,13 @@ pub struct ContractInit<'db> {
 
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::ContractInit>,
+}
+
+impl<'db> ContractInit<'db> {
+    /// Returns `true` if this init block is marked `#[payable]`.
+    pub fn is_payable(self, db: &'db dyn HirDb) -> bool {
+        self.attributes(db).has_marker_attr(db, "payable")
+    }
 }
 
 #[salsa::interned]
@@ -862,6 +870,7 @@ pub struct ContractRecvArm<'db> {
     pub ret_ty: Option<TypeId<'db>>,
     pub effects: EffectParamListId<'db>,
     pub body: Body<'db>,
+    pub attributes: AttrListId<'db>,
 }
 
 impl<'db> ContractRecvArm<'db> {
@@ -880,6 +889,11 @@ impl<'db> ContractRecvArm<'db> {
             | Pat::Record(Partial::Present(path), ..) => Some(*path),
             _ => None,
         }
+    }
+
+    /// Returns `true` if this recv arm is marked `#[payable]`.
+    pub fn is_payable(&self, db: &'db dyn HirDb) -> bool {
+        self.attributes.has_marker_attr(db, "payable")
     }
 }
 

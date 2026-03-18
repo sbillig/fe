@@ -18,6 +18,11 @@ impl<'db> Stmt<'db> {
                 (Stmt::Let(pat, ty, init), HirOrigin::raw(&ast))
             }
             ast::StmtKind::For(for_) => {
+                super::payable::report_payable_attr_on_unsupported_item(
+                    ctxt.f_ctxt,
+                    for_.attr_list(),
+                    "for statement",
+                );
                 let bind = Pat::lower_ast_opt(ctxt, for_.pat());
                 let iter = Expr::push_to_body_opt(ctxt, for_.iterable());
                 let body = Expr::push_to_body_opt(

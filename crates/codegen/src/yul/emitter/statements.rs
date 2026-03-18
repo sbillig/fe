@@ -800,6 +800,7 @@ impl<'db> FunctionEmitter<'db> {
             IntrinsicOp::Addmod => "addmod",
             IntrinsicOp::Mulmod => "mulmod",
             IntrinsicOp::Caller => "caller",
+            IntrinsicOp::Callvalue => "callvalue",
         }
     }
 }

@@ -3026,7 +3026,8 @@ pub contract RedundantZeroInit {
                                 op:
                                     IntrinsicOp::CodeRegionOffset
                                     | IntrinsicOp::CodeRegionLen
-                                    | IntrinsicOp::Codecopy,
+                                    | IntrinsicOp::Codecopy
+                                    | IntrinsicOp::Callvalue,
                                 ..
                             },
                         ..

@@ -6,10 +6,18 @@ input_file: tests/fixtures/create_contract.fe
 object "Factory" {
   code {
     function $__Factory_init() {
-      let v0 := dataoffset("Factory_deployed")
-      let v1 := datasize("Factory_deployed")
-      codecopy(0, v0, v1)
-      return(0, v1)
+      let v0 := callvalue()
+      let v1 := iszero(eq(v0, 0))
+      if v1 {
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+      }
+      let v2 := dataoffset("Factory_deployed")
+      let v3 := datasize("Factory_deployed")
+      codecopy(0, v2, v3)
+      return(0, v3)
+    }
+    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
+      revert(0, 0)
     }
     $__Factory_init()
   }
@@ -65,14 +73,24 @@ object "Factory" {
         let v1 := $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
         switch v0
           case 1 {
-            let v2 := $deploy_h5c6b1804553edb1_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v1)
-            let v3 := $__Factory_recv_0_0(v2)
-            $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_Address_h257056268eac7027__2d9a2ca106cd007c(v3)
+            let v2 := callvalue()
+            let v3 := iszero(eq(v2, 0))
+            if v3 {
+              $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+            }
+            let v4 := $deploy_h5c6b1804553edb1_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v1)
+            let v5 := $__Factory_recv_0_0(v4)
+            $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_Address_h257056268eac7027__2d9a2ca106cd007c(v5)
           }
           case 2 {
-            let v4 := $deploy2_ha2b981aa2f8bf9fd_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v1)
-            let v5 := $__Factory_recv_0_1(v4)
-            $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_Address_h257056268eac7027__2d9a2ca106cd007c(v5)
+            let v6 := callvalue()
+            let v7 := iszero(eq(v6, 0))
+            if v7 {
+              $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+            }
+            let v8 := $deploy2_ha2b981aa2f8bf9fd_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v1)
+            let v9 := $__Factory_recv_0_1(v8)
+            $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_Address_h257056268eac7027__2d9a2ca106cd007c(v9)
           }
           default {
             $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
@@ -456,35 +474,40 @@ object "Factory" {
     object "Child" {
       code {
         function $__Child_init() {
-          let v0 := dataoffset("Child_deployed")
-          let v1 := datasize("Child_deployed")
-          let v2 := $init_field__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785(0)
-          let v3 := datasize("Child")
-          let v4 := codesize()
-          let v5 := lt(v4, v3)
-          if v5 {
+          let v0 := callvalue()
+          let v1 := iszero(eq(v0, 0))
+          if v1 {
             $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
           }
-          let v6 := sub(v4, v3)
-          let v7 := mload(64)
-          if iszero(v7) {
-            v7 := 0x80
+          let v2 := dataoffset("Child_deployed")
+          let v3 := datasize("Child_deployed")
+          let v4 := $init_field__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785(0)
+          let v5 := datasize("Child")
+          let v6 := codesize()
+          let v7 := lt(v6, v5)
+          if v7 {
+            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
           }
-          mstore(64, add(v7, v6))
-          codecopy(v7, v3, v6)
-          let v8 := mload(0x40)
-          if iszero(v8) {
-            v8 := 0x80
+          let v8 := sub(v6, v5)
+          let v9 := mload(64)
+          if iszero(v9) {
+            v9 := 0x80
           }
-          mstore(0x40, add(v8, 64))
-          mstore(v8, v7)
-          mstore(add(v8, 32), v6)
-          let v9 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v8)
-          let v10 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6(v9)
-          let v11 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6(v9)
-          $__Child_init_contract(v10, v11, v2)
-          codecopy(0, v0, v1)
-          return(0, v1)
+          mstore(64, add(v9, v8))
+          codecopy(v9, v5, v8)
+          let v10 := mload(0x40)
+          if iszero(v10) {
+            v10 := 0x80
+          }
+          mstore(0x40, add(v10, 64))
+          mstore(v10, v9)
+          mstore(add(v10, 32), v8)
+          let v11 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v10)
+          let v12 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6(v11)
+          let v13 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6(v11)
+          $__Child_init_contract(v12, v13, v4)
+          codecopy(0, v2, v3)
+          return(0, v3)
         }
         function $__Child_init_contract($x, $y, $state) {
           sstore($state, $x)

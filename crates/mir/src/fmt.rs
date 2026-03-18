@@ -465,5 +465,6 @@ fn format_intrinsic(op: IntrinsicOp) -> &'static str {
         IntrinsicOp::Mulmod => "mulmod",
         IntrinsicOp::Revert => "revert",
         IntrinsicOp::Caller => "caller",
+        IntrinsicOp::Callvalue => "callvalue",
     }
 }

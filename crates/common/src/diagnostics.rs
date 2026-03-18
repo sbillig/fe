@@ -174,6 +174,7 @@ pub enum DiagnosticPass {
     MsgLower,
     EventLower,
     ArithmeticAttr,
+    PayableAttr,
 
     NameResolution,
 
@@ -196,6 +197,7 @@ impl DiagnosticPass {
             Self::MsgLower => 9,
             Self::EventLower => 10,
             Self::ArithmeticAttr => 12,
+            Self::PayableAttr => 13,
             Self::NameResolution => 2,
             Self::TypeDefinition => 3,
             Self::TraitDefinition => 4,
