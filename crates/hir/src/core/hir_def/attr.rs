@@ -282,7 +282,7 @@ impl<'db> NormalAttr<'db> {
     /// For example, `#[test(should_revert)]` has the argument `should_revert`.
     pub fn has_arg(&self, db: &'db dyn HirDb, key: &str) -> bool {
         self.args.iter().any(|arg| {
-            arg.value.is_none()
+            !arg.has_value
                 && arg
                     .key
                     .to_opt()
@@ -295,7 +295,7 @@ impl<'db> NormalAttr<'db> {
         let [arg] = self.args.as_slice() else {
             return None;
         };
-        if arg.value.is_some() {
+        if arg.has_value {
             return None;
         }
         let mode = arg
@@ -308,13 +308,13 @@ impl<'db> NormalAttr<'db> {
 
     pub(crate) fn inline_attr_spec(&self, db: &'db dyn HirDb) -> InlineAttrSpec {
         InlineAttrSpec {
-            has_value: self.value.is_some(),
+            has_value: self.has_value,
             args: self
                 .args
                 .iter()
                 .map(|arg| InlineAttrArgSpec {
                     key: arg.key_str(db).map(str::to_owned),
-                    has_value: arg.value.is_some(),
+                    has_value: arg.has_value,
                 })
                 .collect(),
         }
@@ -334,7 +334,7 @@ impl<'db> NormalAttr<'db> {
 
         Some(LoopUnrollAttrSpec {
             enabled,
-            has_value: self.value.is_some(),
+            has_value: self.has_value,
             has_args: !self.args.is_empty(),
         })
     }
@@ -351,6 +351,8 @@ pub struct NormalAttr<'db> {
     pub path: Partial<PathId<'db>>,
     /// The value after `=` in `#[attr = value]`.
     pub value: Option<AttrArgValue<'db>>,
+    /// True when the source contained `= ...`, even if the typed value was not lowerable.
+    pub has_value: bool,
     pub args: Vec<AttrArg<'db>>,
 }
 
@@ -363,8 +365,10 @@ pub struct DocCommentAttr<'db> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AttrArg<'db> {
     pub key: Partial<PathId<'db>>,
-    /// The value after `=` in `#[attr(key = value)]`. None for `#[attr(key)]` form.
+    /// The value after `=` in `#[attr(key = value)]`.
     pub value: Option<AttrArgValue<'db>>,
+    /// True when the source contained `= ...`, even if the typed value was not lowerable.
+    pub has_value: bool,
 }
 
 impl<'db> AttrArg<'db> {
