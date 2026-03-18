@@ -12,6 +12,21 @@ impl<'db> AttrListId<'db> {
         Self::new(ctxt.db(), attrs)
     }
 
+    pub(super) fn lower_ast_merged(
+        ctxt: &mut FileLowerCtxt<'db>,
+        first: Option<ast::AttrList>,
+        second: Option<ast::AttrList>,
+    ) -> Self {
+        let mut attrs = Vec::new();
+        if let Some(first) = first {
+            attrs.extend(first.into_iter().map(|attr| Attr::lower_ast(ctxt, attr)));
+        }
+        if let Some(second) = second {
+            attrs.extend(second.into_iter().map(|attr| Attr::lower_ast(ctxt, attr)));
+        }
+        Self::new(ctxt.db(), attrs)
+    }
+
     pub(super) fn lower_ast_opt(ctxt: &mut FileLowerCtxt<'db>, ast: Option<ast::AttrList>) -> Self {
         ast.map(|ast| Self::lower_ast(ctxt, ast))
             .unwrap_or_else(|| Self::new(ctxt.db(), vec![]))

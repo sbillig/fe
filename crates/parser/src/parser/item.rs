@@ -1,6 +1,6 @@
 use super::{
     Checkpoint, ErrProof, Parser, Recovery,
-    attr::{self, parse_attr_list},
+    attr::{self, parse_attr_list, parse_inner_attr_list},
     define_scope,
     expr::parse_expr,
     expr_atom::BlockExprScope,
@@ -56,6 +56,8 @@ impl super::Parse for ItemListScope {
             parser.bump_expected(LBrace);
             parser.set_scope_recovery_stack(&[RBrace]);
         }
+
+        parse_inner_attr_list(parser)?;
 
         loop {
             parser.set_newline_as_trivia(true);

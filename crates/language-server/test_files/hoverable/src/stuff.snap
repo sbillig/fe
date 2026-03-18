@@ -1,8 +1,105 @@
 ---
 source: crates/language-server/src/functionality/references.rs
+assertion_line: 410
 expression: snapshot
 input_file: test_files/hoverable/src/stuff.fe
 ---
+note: 
+  ┌─ stuff.fe:2:9
+  │
+2 │ pub mod calculations {
+  │         ^^^^^^^^^^^^ def: defined here @ 2:8 (5 refs)
+
+note: 
+  ┌─ stuff.fe:4:10
+  │
+4 │   pub fn return_three() -> u32 {
+  │          ^^^^^^^^^^^^ def: defined here @ 4:9 (3 refs)
+
+note: 
+  ┌─ stuff.fe:9:10
+  │
+9 │   pub fn return_four() {
+  │          ^^^^^^^^^^^ def: defined here @ 9:9 (3 refs)
+
+note: 
+   ┌─ stuff.fe:14:11
+   │
+14 │   pub mod ambiguous {
+   │           ^^^^^^^^^ def: defined here @ 14:10 (3 refs)
+
+note: 
+   ┌─ stuff.fe:18:10
+   │
+18 │   pub fn ambiguous() {}
+   │          ^^^^^^^^^ def: defined here @ 18:9 (1 refs)
+
+note: 
+   ┌─ stuff.fe:21:10
+   │
+21 │ pub enum Color {
+   │          ^^^^^ def: defined here @ 21:9 (12 refs)
+
+note: 
+   ┌─ stuff.fe:22:3
+   │
+22 │   Red,
+   │   ^^^ def: defined here @ 22:2 (4 refs)
+
+note: 
+   ┌─ stuff.fe:23:3
+   │
+23 │   Green,
+   │   ^^^^^ def: defined here @ 23:2 (3 refs)
+
+note: 
+   ┌─ stuff.fe:24:3
+   │
+24 │   Blue
+   │   ^^^^ def: defined here @ 24:2 (3 refs)
+
+note: 
+   ┌─ stuff.fe:27:8
+   │
+27 │ pub fn is_red(c: Color) -> bool {
+   │        ^^^^^^ def: defined here @ 27:7 (1 refs)
+
+note: 
+   ┌─ stuff.fe:27:15
+   │
+27 │ pub fn is_red(c: Color) -> bool {
+   │               ^ def: defined here @ 27:14 (2 refs)
+
+note: 
+   ┌─ stuff.fe:27:18
+   │
+27 │ pub fn is_red(c: Color) -> bool {
+   │                  ^^^^^ ref: 27:17
+
+note: 
+   ┌─ stuff.fe:28:9
+   │
+28 │   match c {
+   │         ^ ref: 28:8
+
+note: 
+   ┌─ stuff.fe:29:5
+   │
+29 │     Color::Red => true
+   │     ^^^^^^^^^^ ref: 29:4
+
+note: 
+   ┌─ stuff.fe:30:5
+   │
+30 │     Color::Green => false
+   │     ^^^^^^^^^^^^ ref: 30:4
+
+note: 
+   ┌─ stuff.fe:31:5
+   │
+31 │     Color::Blue => false
+   │     ^^^^^^^^^^^ ref: 31:11
+
 note: 
   ┌─ lib.fe:1:5
   │
@@ -667,99 +764,3 @@ note:
     │
 108 │       supply -= amount
     │                 ^^^^^^ ref: 108:16
-
-note: 
-  ┌─ stuff.fe:2:9
-  │
-2 │ pub mod calculations {
-  │         ^^^^^^^^^^^^ def: defined here @ 2:8 (5 refs)
-
-note: 
-  ┌─ stuff.fe:4:10
-  │
-4 │   pub fn return_three() -> u32 {
-  │          ^^^^^^^^^^^^ def: defined here @ 4:9 (3 refs)
-
-note: 
-  ┌─ stuff.fe:9:10
-  │
-9 │   pub fn return_four() {
-  │          ^^^^^^^^^^^ def: defined here @ 9:9 (3 refs)
-
-note: 
-   ┌─ stuff.fe:14:11
-   │
-14 │   pub mod ambiguous {
-   │           ^^^^^^^^^ def: defined here @ 14:10 (3 refs)
-
-note: 
-   ┌─ stuff.fe:18:10
-   │
-18 │   pub fn ambiguous() {}
-   │          ^^^^^^^^^ def: defined here @ 18:9 (1 refs)
-
-note: 
-   ┌─ stuff.fe:21:10
-   │
-21 │ pub enum Color {
-   │          ^^^^^ def: defined here @ 21:9 (12 refs)
-
-note: 
-   ┌─ stuff.fe:22:3
-   │
-22 │   Red,
-   │   ^^^ def: defined here @ 22:2 (4 refs)
-
-note: 
-   ┌─ stuff.fe:23:3
-   │
-23 │   Green,
-   │   ^^^^^ def: defined here @ 23:2 (3 refs)
-
-note: 
-   ┌─ stuff.fe:24:3
-   │
-24 │   Blue
-   │   ^^^^ def: defined here @ 24:2 (3 refs)
-
-note: 
-   ┌─ stuff.fe:27:8
-   │
-27 │ pub fn is_red(c: Color) -> bool {
-   │        ^^^^^^ def: defined here @ 27:7 (1 refs)
-
-note: 
-   ┌─ stuff.fe:27:15
-   │
-27 │ pub fn is_red(c: Color) -> bool {
-   │               ^ def: defined here @ 27:14 (2 refs)
-
-note: 
-   ┌─ stuff.fe:27:18
-   │
-27 │ pub fn is_red(c: Color) -> bool {
-   │                  ^^^^^ ref: 27:17
-
-note: 
-   ┌─ stuff.fe:28:9
-   │
-28 │   match c {
-   │         ^ ref: 28:8
-
-note: 
-   ┌─ stuff.fe:29:5
-   │
-29 │     Color::Red => true
-   │     ^^^^^^^^^^ ref: 29:4
-
-note: 
-   ┌─ stuff.fe:30:5
-   │
-30 │     Color::Green => false
-   │     ^^^^^^^^^^^^ ref: 30:4
-
-note: 
-   ┌─ stuff.fe:31:5
-   │
-31 │     Color::Blue => false
-   │     ^^^^^^^^^^^ ref: 31:11

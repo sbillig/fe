@@ -651,6 +651,7 @@ struct SuitePreparation {
 struct WorkerSharedConfig {
     show_logs: bool,
     backend: String,
+    profile: String,
     yul_optimize: bool,
     solc: Option<String>,
     opt_level: OptLevel,
@@ -1149,6 +1150,7 @@ pub fn run_tests(
     grouped: bool,
     show_logs: bool,
     backend: &str,
+    profile: &str,
     yul_optimize: bool,
     solc: Option<&str>,
     opt_level: OptLevel,
@@ -1205,6 +1207,7 @@ pub fn run_tests(
     let shared = Arc::new(WorkerSharedConfig {
         show_logs,
         backend: backend.to_string(),
+        profile: profile.to_string(),
         yul_optimize,
         solc: solc.map(str::to_owned),
         opt_level,
@@ -1815,6 +1818,9 @@ fn prepare_suite_job(
     db.compiler_options()
         .set_recovery_mode(&mut db)
         .to(shared.use_recovery);
+    db.compilation_settings()
+        .set_profile(&mut db)
+        .to(shared.profile.clone().into());
     let prep = if plan.path.is_file() && plan.path.extension() == Some("fe") {
         prepare_tests_single_file(
             &mut db,

@@ -39,6 +39,7 @@ pub fn check(
     path: &Utf8PathBuf,
     ingot: Option<&str>,
     force_standalone: bool,
+    profile: &str,
     dump_mir: bool,
     report_out: Option<&Utf8PathBuf>,
     report_failed_only: bool,
@@ -48,6 +49,9 @@ pub fn check(
     db.compiler_options()
         .set_recovery_mode(&mut db)
         .to(recovery_mode);
+    db.compilation_settings()
+        .set_profile(&mut db)
+        .to(profile.into());
 
     let report_root = report_out
         .map(|out| -> Result<_, String> {

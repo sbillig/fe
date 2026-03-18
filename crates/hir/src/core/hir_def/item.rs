@@ -88,6 +88,7 @@ impl<'db> ItemKind<'db> {
     /// Returns attributes being applied to this item.
     pub fn attrs(self, db: &'db dyn HirDb) -> Option<AttrListId<'db>> {
         match self {
+            Self::TopMod(top_mod) => top_mod.attributes(db),
             Self::Mod(mod_) => mod_.attributes(db),
             Self::Func(func) => func.attributes(db),
             Self::Struct(struct_) => struct_.attributes(db),
@@ -410,6 +411,10 @@ impl<'db> TopLevelMod<'db> {
 
     pub fn lazy_span(self) -> LazyTopModSpan<'db> {
         LazyTopModSpan::new(self)
+    }
+
+    pub fn attributes(self, db: &'db dyn HirDb) -> AttrListId<'db> {
+        lower::top_mod_attributes_impl(db, self)
     }
 
     pub fn scope(self) -> ScopeId<'db> {

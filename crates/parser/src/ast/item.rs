@@ -20,6 +20,11 @@ ast_node! {
     SK::ItemList,
     IntoIterator<Item=Item>
 }
+impl ItemList {
+    pub fn inner_attr_list(&self) -> Option<super::AttrList> {
+        support::child(self.syntax())
+    }
+}
 
 ast_node! {
     /// A single item in a module.
@@ -763,6 +768,50 @@ mod tests {
         }
 
         assert_eq!(i, 2);
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn mod_with_inner_attr() {
+        let source = r"
+            pub mod foo {
+                #![arithmetic(unchecked)]
+                pub fn bar() {}
+            }
+        ";
+        let mod_: Mod = parse_item(source);
+        let item_list = mod_.items().expect("module should have items");
+        assert_eq!(
+            item_list
+                .inner_attr_list()
+                .expect("module should have inner attrs")
+                .normal_attrs()
+                .count(),
+            1
+        );
+        assert_eq!(item_list.into_iter().count(), 1);
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn root_with_inner_attr() {
+        let source = r"
+            #![arithmetic(unchecked)]
+            fn foo() {}
+        ";
+        let (node, errs) = crate::parse_source_file(source, RecoveryMode::Recover);
+        assert!(errs.is_empty(), "unexpected parse errors: {errs:?}");
+        let root = Root::cast(rowan::SyntaxNode::new_root(node)).expect("root");
+        let item_list = root.items().expect("root should have items");
+        assert_eq!(
+            item_list
+                .inner_attr_list()
+                .expect("root should have inner attrs")
+                .normal_attrs()
+                .count(),
+            1
+        );
+        assert_eq!(item_list.into_iter().count(), 1);
     }
 
     #[test]
