@@ -70,11 +70,9 @@ pub(super) fn report_invalid_function_arithmetic_attrs<'db>(
 
 pub(super) fn report_invalid_mod_arithmetic_attrs<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
-    mod_: &ast::Mod,
+    attrs: Option<ast::AttrList>,
 ) {
-    let Some(attrs) = mod_.attr_list() else {
-        return;
-    };
+    let Some(attrs) = attrs else { return };
     let db = ctxt.db();
     let file = ctxt.top_mod().file(db);
 
@@ -91,6 +89,13 @@ pub(super) fn report_invalid_mod_arithmetic_attrs<'db>(
             .accumulate(db);
         }
     }
+}
+
+pub(super) fn report_invalid_top_mod_arithmetic_attrs<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    attrs: Option<ast::AttrList>,
+) {
+    report_invalid_mod_arithmetic_attrs(ctxt, attrs);
 }
 
 fn is_arithmetic_attr(attr: &ast::NormalAttr) -> bool {

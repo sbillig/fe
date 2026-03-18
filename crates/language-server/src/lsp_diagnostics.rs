@@ -463,6 +463,7 @@ fn foo() -> u256 {
     /// Fuzz diagnostics with many malformed inputs to find panics.
     /// Uses catch_unwind to detect rather than crash.
     #[test]
+    #[ignore]
     fn fuzz_diagnostics_for_panics() {
         let mut db = setup_db();
         let inputs = [

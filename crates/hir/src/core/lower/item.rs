@@ -54,7 +54,7 @@ impl<'db> ItemKind<'db> {
 
         match kind {
             ast::ItemKind::Mod(mod_) => {
-                super::arithmetic::report_invalid_mod_arithmetic_attrs(ctxt, &mod_);
+                super::arithmetic::report_invalid_mod_arithmetic_attrs(ctxt, mod_.attr_list());
                 super::event::report_event_attr_on_non_struct_item(ctxt, mod_.attr_list(), "mod");
                 Mod::lower_ast(ctxt, mod_);
             }
@@ -211,7 +211,15 @@ impl<'db> Mod<'db> {
 
         ctxt.insert_synthetic_prelude_use();
 
-        let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
+        super::arithmetic::report_invalid_mod_arithmetic_attrs(
+            ctxt,
+            ast.items().and_then(|items| items.inner_attr_list()),
+        );
+        let attributes = AttrListId::lower_ast_merged(
+            ctxt,
+            ast.attr_list(),
+            ast.items().and_then(|items| items.inner_attr_list()),
+        );
         let vis = super::lower_visibility(&ast);
         if let Some(items) = ast.items() {
             lower_module_items(ctxt, items);

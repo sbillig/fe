@@ -10,8 +10,28 @@ use crate::{ExpectedKind, SyntaxKind};
 pub(super) fn parse_attr_list<S: TokenStream>(
     parser: &mut Parser<S>,
 ) -> Result<Option<Checkpoint>, Recovery<ErrProof>> {
-    if let Some(SyntaxKind::DocComment) | Some(SyntaxKind::Pound) = parser.current_kind() {
+    let lookahead = parser.peek_n_non_trivia(2);
+    if matches!(
+        lookahead.as_slice(),
+        [SyntaxKind::Pound, SyntaxKind::LBracket]
+    ) || parser.current_kind() == Some(SyntaxKind::DocComment)
+    {
         parser.parse_cp(AttrListScope::default(), None).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+pub(super) fn parse_inner_attr_list<S: TokenStream>(
+    parser: &mut Parser<S>,
+) -> Result<Option<Checkpoint>, Recovery<ErrProof>> {
+    if matches!(
+        parser.peek_n_non_trivia(3).as_slice(),
+        [SyntaxKind::Pound, SyntaxKind::Not, SyntaxKind::LBracket]
+    ) {
+        parser
+            .parse_cp(InnerAttrListScope::default(), None)
+            .map(Some)
     } else {
         Ok(None)
     }
@@ -33,6 +53,35 @@ impl super::Parse for AttrListScope {
                     .unwrap_infallible(),
                 _ => break,
             };
+            parser.set_newline_as_trivia(false);
+            if parser.find(
+                SyntaxKind::Newline,
+                ExpectedKind::Separator {
+                    separator: SyntaxKind::Newline,
+                    element: SyntaxKind::Attr,
+                },
+            )? {
+                parser.bump();
+            }
+        }
+        Ok(())
+    }
+}
+
+define_scope! { pub(crate) InnerAttrListScope, AttrList, (Newline) }
+impl super::Parse for InnerAttrListScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        loop {
+            parser.set_newline_as_trivia(true);
+            if !matches!(
+                parser.peek_n_non_trivia(3).as_slice(),
+                [SyntaxKind::Pound, SyntaxKind::Not, SyntaxKind::LBracket]
+            ) {
+                break;
+            }
+            parser.parse(InnerAttrScope::default())?;
             parser.set_newline_as_trivia(false);
             if parser.find(
                 SyntaxKind::Newline,
@@ -76,6 +125,34 @@ impl super::Parse for AttrScope {
         }
 
         // Expect the closing bracket of the attribute.
+        parser.bump_or_recover(SyntaxKind::RBracket, "expected `]` to close attribute")?;
+        Ok(())
+    }
+}
+
+define_scope! { InnerAttrScope, Attr, (RBracket) }
+impl super::Parse for InnerAttrScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.set_newline_as_trivia(false);
+        parser.bump_expected(SyntaxKind::Pound);
+        parser.bump_or_recover(SyntaxKind::Not, "expected `!` after `#` in inner attribute")?;
+        parser.bump_or_recover(SyntaxKind::LBracket, "expected `[` after `#!`")?;
+
+        parser.parse_or_recover(PathScope::default())?;
+
+        match parser.current_kind() {
+            Some(SyntaxKind::LParen) => {
+                parser.parse(AttrArgListScope::default())?;
+            }
+            Some(SyntaxKind::Eq) => {
+                parser.bump();
+                parser.parse(AttrValueExprScope::default())?;
+            }
+            _ => {}
+        }
+
         parser.bump_or_recover(SyntaxKind::RBracket, "expected `]` to close attribute")?;
         Ok(())
     }
