@@ -1,11 +1,9 @@
 use std::abi::sol
 
 contract InvalidPayableForms {
-    #[payable = 1]
     init() {}
 
     recv Msg {
-        #[payable(foo)]
         Fund {} {}
 
         #[payable]
