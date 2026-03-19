@@ -16,5 +16,6 @@ pub use seq::Seq
 
 extern {
     pub fn panic() -> !
+    pub fn panic_with_value<T>(value: own T) -> !
     pub fn todo() -> !
 }
