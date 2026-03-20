@@ -625,6 +625,80 @@ fn test_fe_test_both_backends_call_trace() {
     }
 }
 
+#[test]
+fn test_fe_test_rejects_oversized_balance_literal() {
+    let temp = tempdir().expect("tempdir");
+    let path = temp.path().join("oversized_balance.fe");
+    fs::write(
+        &path,
+        r#"
+#[test(balance = 0x10000000000000000000000000000000000000000000000000000000000000000)]
+fn too_big_balance() {}
+"#,
+    )
+    .expect("write fixture");
+    let path = path
+        .to_str()
+        .unwrap_or_else(|| panic!("fixture path is not utf-8: {}", path.display()));
+
+    for backend in ["sonatina", "yul"] {
+        let (output, exit_code) = run_fe_main(&["test", "--backend", backend, path]);
+        assert_ne!(
+            exit_code, 0,
+            "expected fe test to reject oversized #[test(balance = ...)] for backend {backend}:\n{output}"
+        );
+        assert!(
+            output.contains(
+                "invalid #[test] function `too_big_balance`: #[test(balance = ...)] must fit in u256"
+            ),
+            "expected oversized balance error for backend {backend}, got:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn test_fe_test_rejects_malformed_balance_literal() {
+    let temp = tempdir().expect("tempdir");
+    let cases = [
+        (
+            "missing_balance_value",
+            r#"
+#[test(balance)]
+fn missing_balance_value() {}
+"#,
+            "invalid #[test] function `missing_balance_value`: #[test(balance = ...)] expects an integer literal",
+        ),
+        (
+            "non_integer_balance_value",
+            r#"
+#[test(balance = true)]
+fn non_integer_balance_value() {}
+"#,
+            "invalid #[test] function `non_integer_balance_value`: #[test(balance = ...)] expects an integer literal",
+        ),
+    ];
+
+    for (filename, source, expected) in cases {
+        let path = temp.path().join(format!("{filename}.fe"));
+        fs::write(&path, source).expect("write fixture");
+        let path = path
+            .to_str()
+            .unwrap_or_else(|| panic!("fixture path is not utf-8: {}", path.display()));
+
+        for backend in ["sonatina", "yul"] {
+            let (output, exit_code) = run_fe_main(&["test", "--backend", backend, path]);
+            assert_ne!(
+                exit_code, 0,
+                "expected fe test to reject malformed #[test(balance = ...)] for backend {backend}:\n{output}"
+            );
+            assert!(
+                output.contains(expected),
+                "expected malformed balance error for backend {backend}, got:\n{output}"
+            );
+        }
+    }
+}
+
 #[allow(clippy::print_stderr)]
 fn assert_fe_test_backends_agree(path: &str, call_trace: bool) {
     let mut yul_args = vec!["test", "--backend", "yul", path];

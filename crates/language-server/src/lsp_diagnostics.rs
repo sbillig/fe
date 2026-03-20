@@ -9,7 +9,8 @@ use common::{
 use driver::{DriverDataBase, MirDiagnosticsMode};
 use hir::Ingot;
 use hir::analysis::analysis_pass::{
-    AnalysisPassManager, EventLowerPass, MsgLowerPass, ParsingPass,
+    AnalysisPassManager, ArithmeticAttrPass, EventLowerPass, MsgLowerPass, ParsingPass,
+    PayableAttrPass,
 };
 use hir::analysis::name_resolution::ImportAnalysisPass;
 use hir::analysis::ty::{
@@ -207,6 +208,8 @@ impl<'a> cs_files::Files<'a> for LspDb<'a> {
 fn initialize_analysis_pass() -> AnalysisPassManager {
     let mut pass_manager = AnalysisPassManager::new();
     pass_manager.add_module_pass("Parsing", Box::new(ParsingPass {}));
+    pass_manager.add_module_pass("ArithmeticAttr", Box::new(ArithmeticAttrPass {}));
+    pass_manager.add_module_pass("PayableAttr", Box::new(PayableAttrPass {}));
     pass_manager.add_module_pass("MsgLower", Box::new(MsgLowerPass {}));
     pass_manager.add_module_pass("EventLower", Box::new(EventLowerPass {}));
     pass_manager.add_module_pass("MsgSelector", Box::new(MsgSelectorAnalysisPass {}));

@@ -6,12 +6,17 @@ input_file: tests/fixtures/by_ref_trait_provider_storage_bug.fe
 object "ByRefTraitProviderStorageBug" {
   code {
     function $__ByRefTraitProviderStorageBug_init() {
-      let v0 := dataoffset("ByRefTraitProviderStorageBug_deployed")
-      let v1 := datasize("ByRefTraitProviderStorageBug_deployed")
-      let v2 := $init_field__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785(0)
-      $__ByRefTraitProviderStorageBug_init_contract(v2)
-      codecopy(0, v0, v1)
-      return(0, v1)
+      let v0 := callvalue()
+      let v1 := iszero(eq(v0, 0))
+      if v1 {
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+      }
+      let v2 := dataoffset("ByRefTraitProviderStorageBug_deployed")
+      let v3 := datasize("ByRefTraitProviderStorageBug_deployed")
+      let v4 := $init_field__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785(0)
+      $__ByRefTraitProviderStorageBug_init_contract(v4)
+      codecopy(0, v2, v3)
+      return(0, v3)
     }
     function $__ByRefTraitProviderStorageBug_init_contract($ctx) {
       let v0 := mload(0x40)
@@ -25,6 +30,9 @@ object "ByRefTraitProviderStorageBug" {
       sstore($ctx, mload(v1))
       sstore(add($ctx, 1), mload(add(v1, 32)))
       leave
+    }
+    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
+      revert(0, 0)
     }
     function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Pair_h956dff41e88ee341__acec41afdc898140($slot) -> ret {
       let v0 := $stor_ptr__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785($slot)
@@ -61,8 +69,13 @@ object "ByRefTraitProviderStorageBug" {
         let v1 := $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
         switch v1
           case 1 {
-            let v2 := $__ByRefTraitProviderStorageBug_recv_0_0(v0)
-            $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v2)
+            let v2 := callvalue()
+            let v3 := iszero(eq(v2, 0))
+            if v3 {
+              $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+            }
+            let v4 := $__ByRefTraitProviderStorageBug_recv_0_0(v0)
+            $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v4)
           }
           default {
             $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()

@@ -111,6 +111,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             "addmod" => Some(IntrinsicOp::Addmod),
             "mulmod" => Some(IntrinsicOp::Mulmod),
             "caller" => Some(IntrinsicOp::Caller),
+            "callvalue" => Some(IntrinsicOp::Callvalue),
             _ => None,
         }
     }

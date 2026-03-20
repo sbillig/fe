@@ -212,7 +212,8 @@ fn lower_msg_variant_struct<'db>(
     variant: &ast::MsgVariant,
 ) -> Struct<'db> {
     let name = IdentId::lower_token_partial(builder.ctxt(), variant.name());
-    let attributes = filter_selector_attr(builder.ctxt(), variant.attr_list());
+    super::payable::report_payable_attr_on_msg_variant(builder.ctxt(), variant.attr_list());
+    let attributes = filter_msg_variant_attrs(builder.ctxt(), variant.attr_list());
     let fields = lower_msg_variant_fields(builder.ctxt(), variant.params());
     builder.pub_struct(name, attributes, fields)
 }
@@ -228,6 +229,11 @@ fn lower_msg_variant_fields<'db>(
             let fields = params
                 .into_iter()
                 .map(|field| {
+                    super::payable::report_payable_attr_on_unsupported_item(
+                        ctxt,
+                        field.attr_list(),
+                        "field",
+                    );
                     let attributes = AttrListId::lower_ast_opt(ctxt, field.attr_list());
                     let name = IdentId::lower_token_partial(ctxt, field.name());
                     let type_ref = TypeId::lower_ast_partial(ctxt, field.ty());
@@ -444,9 +450,9 @@ fn parse_selector_attr<'db>(
     None
 }
 
-/// Filters out the #[selector] attribute from an attribute list.
-/// Returns an AttrListId containing all attributes except selector.
-fn filter_selector_attr<'db>(
+/// Filters out msg-variant attributes that are handled specially during lowering.
+/// Currently this removes `#[selector]` and invalid `#[payable]`.
+fn filter_msg_variant_attrs<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     attr_list: Option<ast::AttrList>,
 ) -> AttrListId<'db> {
@@ -463,7 +469,8 @@ fn filter_selector_attr<'db>(
             if let ast::AttrKind::Normal(normal_attr) = attr.kind()
                 && let Some(path) = normal_attr.path()
             {
-                return path.text() != "selector";
+                let text = path.text();
+                return text != "selector" && text != "payable";
             }
             true
         })

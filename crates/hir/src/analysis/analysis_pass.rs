@@ -1,6 +1,6 @@
 use crate::analysis::{HirAnalysisDb, diagnostics::DiagnosticVoucher};
 use crate::{
-    ArithmeticAttrError, EventError, ParserError, SelectorError,
+    ArithmeticAttrError, EventError, ParserError, PayableError, SelectorError,
     hir_def::{ModuleTree, TopLevelMod},
     lower::{parse_file_impl, scope_graph_impl},
 };
@@ -124,6 +124,22 @@ impl ModuleAnalysisPass for ArithmeticAttrPass {
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher>> {
         scope_graph_impl::accumulated::<ArithmeticAttrError>(db, top_mod)
+            .into_iter()
+            .map(|d| Box::new(d.clone()) as _)
+            .collect::<Vec<_>>()
+    }
+}
+
+/// Analysis pass that collects payable attribute validation errors.
+pub struct PayableAttrPass {}
+
+impl ModuleAnalysisPass for PayableAttrPass {
+    fn run_on_module<'db>(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        top_mod: TopLevelMod<'db>,
+    ) -> Vec<Box<dyn DiagnosticVoucher>> {
+        scope_graph_impl::accumulated::<PayableError>(db, top_mod)
             .into_iter()
             .map(|d| Box::new(d.clone()) as _)
             .collect::<Vec<_>>()

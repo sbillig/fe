@@ -1,4 +1,5 @@
 use driver::DriverDataBase;
+use hir::HirDb;
 use hir::hir_def::{ItemKind, TopLevelMod};
 use mir::analysis::{CallGraph, build_call_graph, reachable_functions};
 use mir::{
@@ -6,6 +7,7 @@ use mir::{
     ir::{IntrinsicOp, MirFunctionOrigin},
     layout, lower_ingot,
 };
+use num_bigint::BigUint;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_codegen::{
     domtree::DomTree,
@@ -78,7 +80,7 @@ pub fn emit_test_module_sonatina(
     let ingot = top_mod.ingot(db);
     let mir_module = lower_ingot(db, ingot)?;
 
-    let tests = collect_tests(db, &mir_module.functions);
+    let tests = collect_tests(db, &mir_module.functions)?;
 
     if tests.is_empty() {
         return Ok(TestModuleOutput { tests: Vec::new() });
@@ -153,6 +155,7 @@ pub fn emit_test_module_sonatina(
             value_param_count: test.value_param_count,
             effect_param_count: test.effect_param_count,
             expected_revert: test.expected_revert.clone(),
+            initial_balance: test.initial_balance.map(|b| b.to_bytes_be()),
         });
     }
 
@@ -178,9 +181,13 @@ struct TestInfo {
     value_param_count: usize,
     effect_param_count: usize,
     expected_revert: Option<ExpectedRevert>,
+    initial_balance: Option<BigUint>,
 }
 
-fn collect_tests(db: &DriverDataBase, functions: &[MirFunction<'_>]) -> Vec<TestInfo> {
+fn collect_tests(
+    db: &DriverDataBase,
+    functions: &[MirFunction<'_>],
+) -> Result<Vec<TestInfo>, LowerError> {
     let mut tests: Vec<TestInfo> = functions
         .iter()
         .filter_map(|mir_func| {
@@ -201,9 +208,13 @@ fn collect_tests(db: &DriverDataBase, functions: &[MirFunction<'_>]) -> Vec<Test
                 .to_opt()
                 .map(|n| n.data(db).to_string())
                 .unwrap_or_else(|| "<anonymous>".to_string());
+            let initial_balance = match parse_test_balance_arg(db, &hir_name, test_attr) {
+                Ok(balance) => balance,
+                Err(err) => return Some(Err(err)),
+            };
             let value_param_count = mir_func.runtime_param_count();
             let effect_param_count = mir_func.runtime_effect_param_count();
-            Some(TestInfo {
+            Some(Ok(TestInfo {
                 hir_name,
                 display_name: String::new(),
                 symbol_name: mir_func.symbol_name.clone(),
@@ -211,13 +222,47 @@ fn collect_tests(db: &DriverDataBase, functions: &[MirFunction<'_>]) -> Vec<Test
                 value_param_count,
                 effect_param_count,
                 expected_revert,
-            })
+                initial_balance,
+            }))
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     assign_test_display_names(&mut tests);
     assign_test_object_names(&mut tests);
-    tests
+    Ok(tests)
+}
+
+/// Extracts the `balance` argument from `#[test(balance = N)]`, if present.
+fn parse_test_balance_arg<'db>(
+    db: &'db dyn HirDb,
+    test_name: &str,
+    test_attr: &hir::hir_def::attr::NormalAttr<'db>,
+) -> Result<Option<BigUint>, LowerError> {
+    for arg in &test_attr.args {
+        if arg.key_str(db) != Some("balance") {
+            continue;
+        }
+        let Some(value) = arg.value.as_ref() else {
+            return Err(LowerError::Unsupported(format!(
+                "invalid #[test] function `{test_name}`: #[test(balance = ...)] expects an integer literal"
+            )));
+        };
+        let hir::hir_def::attr::AttrArgValue::Lit(hir::hir_def::LitKind::Int(int_id)) = value
+        else {
+            return Err(LowerError::Unsupported(format!(
+                "invalid #[test] function `{test_name}`: #[test(balance = ...)] expects an integer literal"
+            )));
+        };
+        let balance = int_id.data(db).clone();
+        if balance.to_bytes_be().len() > 32 {
+            return Err(LowerError::Unsupported(format!(
+                "invalid #[test] function `{test_name}`: #[test(balance = ...)] must fit in u256"
+            )));
+        };
+        return Ok(Some(balance));
+    }
+
+    Ok(None)
 }
 
 fn assign_test_display_names(tests: &mut [TestInfo]) {
@@ -1137,7 +1182,8 @@ fn smoke() {
         let top_mod = db.top_mod(file);
         let ingot = top_mod.ingot(&db);
         let mir_module = lower_ingot(&db, ingot).expect("module should lower to MIR");
-        let tests = collect_tests(&db, &mir_module.functions);
+        let tests = collect_tests(&db, &mir_module.functions)
+            .expect("test metadata collection should succeed");
         let call_graph = build_call_graph(&mir_module.functions);
         let funcs_by_symbol = build_funcs_by_symbol(&mir_module.functions);
         let code_region_roots = collect_code_region_roots(&mir_module.functions);

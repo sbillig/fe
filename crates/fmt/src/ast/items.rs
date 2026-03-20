@@ -921,6 +921,8 @@ impl ToDoc for ast::ContractInit {
 
         token_doc_item_like_if_comments!(self, ctx);
 
+        let attrs = attrs_doc(self, ctx);
+
         let params_doc = self
             .params()
             .map(|params| params.to_doc(ctx))
@@ -936,8 +938,8 @@ impl ToDoc for ast::ContractInit {
             .map(|b| alloc.line().append(b.to_doc(ctx)))
             .unwrap_or_else(|| alloc.nil());
 
-        alloc
-            .text("init")
+        attrs
+            .append(alloc.text("init"))
             .append(params_doc)
             .append(uses_doc)
             .append(body_doc)
@@ -951,6 +953,8 @@ impl ToDoc for ast::ContractRecv {
 
         token_doc_item_like_if_comments!(self, ctx);
 
+        let attrs = attrs_doc(self, ctx);
+
         let path_doc = self
             .path()
             .map(|p| alloc.text(" ").append(p.to_doc(ctx)))
@@ -961,7 +965,10 @@ impl ToDoc for ast::ContractRecv {
             .map(|arms| alloc.text(" ").append(arms.to_doc(ctx)))
             .unwrap_or_else(|| alloc.text(" {}"));
 
-        alloc.text("recv").append(path_doc).append(arms_doc)
+        attrs
+            .append(alloc.text("recv"))
+            .append(path_doc)
+            .append(arms_doc)
     }
 }
 
@@ -976,6 +983,8 @@ impl ToDoc for ast::RecvArm {
         let alloc = &ctx.alloc;
 
         token_doc_item_like_if_comments!(self, ctx);
+
+        let attrs = attrs_doc(self, ctx);
 
         let pat_doc = self
             .pat()
@@ -1026,7 +1035,11 @@ impl ToDoc for ast::RecvArm {
             })
             .unwrap_or_else(|| alloc.nil());
 
-        pat_doc.append(ret_ty_doc).append(uses_doc).append(body_doc)
+        attrs
+            .append(pat_doc)
+            .append(ret_ty_doc)
+            .append(uses_doc)
+            .append(body_doc)
     }
 }
 

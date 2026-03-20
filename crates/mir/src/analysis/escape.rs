@@ -788,6 +788,7 @@ fn intrinsic_arg_may_escape(op: IntrinsicOp, arg_idx: usize) -> bool {
         | IntrinsicOp::Addmod
         | IntrinsicOp::Mulmod
         | IntrinsicOp::Caller
+        | IntrinsicOp::Callvalue
         | IntrinsicOp::Alloc => false,
     }
 }

@@ -1192,6 +1192,8 @@ pub enum IntrinsicOp {
     Revert,
     /// `caller()`
     Caller,
+    /// `callvalue()`
+    Callvalue,
     /// `alloc(size)` - allocate `size` bytes of dynamic raw EVM memory and return the base
     /// address.
     Alloc,
@@ -1216,6 +1218,7 @@ impl IntrinsicOp {
                 | IntrinsicOp::Addmod
                 | IntrinsicOp::Mulmod
                 | IntrinsicOp::Caller
+                | IntrinsicOp::Callvalue
                 | IntrinsicOp::Alloc
         )
     }

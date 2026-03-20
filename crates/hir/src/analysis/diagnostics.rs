@@ -437,6 +437,61 @@ impl DiagnosticVoucher for crate::ArithmeticAttrError {
     }
 }
 
+impl DiagnosticVoucher for crate::PayableError {
+    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        let span = Span::new(self.file, self.primary_range, SpanKind::Original);
+        let (local_code, message, label) = match &self.kind {
+            crate::PayableErrorKind::PayableAttrOnUnsupportedItem { item_kind } => (
+                1,
+                format!(
+                    "`#[payable]` is only valid on `init` blocks and `recv` arms (found on {item_kind})"
+                ),
+                "move this attribute to an `init` block or `recv` arm".to_string(),
+            ),
+            crate::PayableErrorKind::PayableAttrOnMsgVariant => (
+                3,
+                "`#[payable]` must be placed on the corresponding `recv` arm, not the `msg` variant"
+                    .to_string(),
+                "move this attribute to the matching `recv` arm".to_string(),
+            ),
+            crate::PayableErrorKind::InvalidPayableAttrForm => (
+                2,
+                "invalid `#[payable]` attribute form".to_string(),
+                "expected `#[payable]` with no arguments".to_string(),
+            ),
+            crate::PayableErrorKind::UnknownAttrOnContractEntry {
+                attr_name,
+                entry_kind,
+            } => {
+                if *entry_kind == "recv block" {
+                    (
+                        4,
+                        format!("unknown attribute `#[{attr_name}]` on recv block"),
+                        "remove this attribute; `recv` blocks do not support normal attributes"
+                            .to_string(),
+                    )
+                } else {
+                    (
+                        4,
+                        format!(
+                            "unknown attribute `#[{attr_name}]` on {entry_kind} (only `#[payable]` is allowed)"
+                        ),
+                        "remove this attribute or use `#[payable]`".to_string(),
+                    )
+                }
+            }
+        };
+
+        CompleteDiagnostic::new(
+            Severity::Error,
+            message,
+            vec![SubDiagnostic::new(LabelStyle::Primary, label, Some(span))],
+            vec![],
+            GlobalErrorCode::new(DiagnosticPass::PayableAttr, local_code),
+        )
+    }
+}
+
 impl DiagnosticVoucher for crate::SelectorError {
     fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
         use crate::SelectorErrorKind;
