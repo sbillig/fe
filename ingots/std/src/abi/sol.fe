@@ -1,4 +1,4 @@
-use core::abi::{Abi, AbiDecoder, AbiEncoder, ByteInput, Cursor, Encode}
+use core::abi::{Abi, AbiDecoder, AbiEncoder, AbiSize, ByteInput, Cursor, Encode}
 use core::{AsBytes, keccak}
 use ingot::evm::mem
 use ingot::evm::ops::{mstore, mstore8, revert}
@@ -38,6 +38,10 @@ impl Abi for Sol {
 
     fn encoder_new() -> Self::Encoder {
         SolEncoder::new()
+    }
+
+    fn store_word(ptr: u256, value: u256) {
+        mstore(ptr, value)
     }
 }
 
@@ -329,7 +333,11 @@ impl SolCompat for Uint24 {
     const SOL_TYPE: Self::S = "uint24"
 }
 impl<A: Abi> Encode<A> for Uint24 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val as u256) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val as u256) }
 }
 
 // Unsigned newtypes wrapping u64
@@ -339,7 +347,11 @@ impl SolCompat for Uint40 {
     const SOL_TYPE: Self::S = "uint40"
 }
 impl<A: Abi> Encode<A> for Uint40 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val as u256) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val as u256) }
 }
 pub struct Uint48 { pub val: u64 }
 impl SolCompat for Uint48 {
@@ -347,7 +359,11 @@ impl SolCompat for Uint48 {
     const SOL_TYPE: Self::S = "uint48"
 }
 impl<A: Abi> Encode<A> for Uint48 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val as u256) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val as u256) }
 }
 pub struct Uint56 { pub val: u64 }
 impl SolCompat for Uint56 {
@@ -355,7 +371,11 @@ impl SolCompat for Uint56 {
     const SOL_TYPE: Self::S = "uint56"
 }
 impl<A: Abi> Encode<A> for Uint56 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val as u256) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val as u256) }
 }
 
 // Unsigned newtypes wrapping u128
@@ -365,7 +385,11 @@ impl SolCompat for Uint72 {
     const SOL_TYPE: Self::S = "uint72"
 }
 impl<A: Abi> Encode<A> for Uint72 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val as u256) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val as u256) }
 }
 pub struct Uint80 { pub val: u128 }
 impl SolCompat for Uint80 {
@@ -373,7 +397,11 @@ impl SolCompat for Uint80 {
     const SOL_TYPE: Self::S = "uint80"
 }
 impl<A: Abi> Encode<A> for Uint80 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val as u256) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val as u256) }
 }
 pub struct Uint88 { pub val: u128 }
 impl SolCompat for Uint88 {
@@ -381,7 +409,11 @@ impl SolCompat for Uint88 {
     const SOL_TYPE: Self::S = "uint88"
 }
 impl<A: Abi> Encode<A> for Uint88 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val as u256) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val as u256) }
 }
 pub struct Uint96 { pub val: u128 }
 impl SolCompat for Uint96 {
@@ -389,7 +421,11 @@ impl SolCompat for Uint96 {
     const SOL_TYPE: Self::S = "uint96"
 }
 impl<A: Abi> Encode<A> for Uint96 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val as u256) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val as u256) }
 }
 pub struct Uint104 { pub val: u128 }
 impl SolCompat for Uint104 {
@@ -397,7 +433,11 @@ impl SolCompat for Uint104 {
     const SOL_TYPE: Self::S = "uint104"
 }
 impl<A: Abi> Encode<A> for Uint104 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val as u256) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val as u256) }
 }
 pub struct Uint112 { pub val: u128 }
 impl SolCompat for Uint112 {
@@ -405,7 +445,11 @@ impl SolCompat for Uint112 {
     const SOL_TYPE: Self::S = "uint112"
 }
 impl<A: Abi> Encode<A> for Uint112 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val as u256) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val as u256) }
 }
 pub struct Uint120 { pub val: u128 }
 impl SolCompat for Uint120 {
@@ -413,7 +457,11 @@ impl SolCompat for Uint120 {
     const SOL_TYPE: Self::S = "uint120"
 }
 impl<A: Abi> Encode<A> for Uint120 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val as u256) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val as u256) }
 }
 
 // Unsigned newtypes wrapping u256
@@ -423,7 +471,11 @@ impl SolCompat for Uint136 {
     const SOL_TYPE: Self::S = "uint136"
 }
 impl<A: Abi> Encode<A> for Uint136 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val) }
 }
 pub struct Uint144 { pub val: u256 }
 impl SolCompat for Uint144 {
@@ -431,7 +483,11 @@ impl SolCompat for Uint144 {
     const SOL_TYPE: Self::S = "uint144"
 }
 impl<A: Abi> Encode<A> for Uint144 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val) }
 }
 pub struct Uint152 { pub val: u256 }
 impl SolCompat for Uint152 {
@@ -439,7 +495,11 @@ impl SolCompat for Uint152 {
     const SOL_TYPE: Self::S = "uint152"
 }
 impl<A: Abi> Encode<A> for Uint152 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val) }
 }
 pub struct Uint160 { pub val: u256 }
 impl SolCompat for Uint160 {
@@ -447,7 +507,11 @@ impl SolCompat for Uint160 {
     const SOL_TYPE: Self::S = "uint160"
 }
 impl<A: Abi> Encode<A> for Uint160 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val) }
 }
 pub struct Uint168 { pub val: u256 }
 impl SolCompat for Uint168 {
@@ -455,7 +519,11 @@ impl SolCompat for Uint168 {
     const SOL_TYPE: Self::S = "uint168"
 }
 impl<A: Abi> Encode<A> for Uint168 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val) }
 }
 pub struct Uint176 { pub val: u256 }
 impl SolCompat for Uint176 {
@@ -463,7 +531,11 @@ impl SolCompat for Uint176 {
     const SOL_TYPE: Self::S = "uint176"
 }
 impl<A: Abi> Encode<A> for Uint176 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val) }
 }
 pub struct Uint184 { pub val: u256 }
 impl SolCompat for Uint184 {
@@ -471,7 +543,11 @@ impl SolCompat for Uint184 {
     const SOL_TYPE: Self::S = "uint184"
 }
 impl<A: Abi> Encode<A> for Uint184 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val) }
 }
 pub struct Uint192 { pub val: u256 }
 impl SolCompat for Uint192 {
@@ -479,7 +555,11 @@ impl SolCompat for Uint192 {
     const SOL_TYPE: Self::S = "uint192"
 }
 impl<A: Abi> Encode<A> for Uint192 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val) }
 }
 pub struct Uint200 { pub val: u256 }
 impl SolCompat for Uint200 {
@@ -487,7 +567,11 @@ impl SolCompat for Uint200 {
     const SOL_TYPE: Self::S = "uint200"
 }
 impl<A: Abi> Encode<A> for Uint200 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val) }
 }
 pub struct Uint208 { pub val: u256 }
 impl SolCompat for Uint208 {
@@ -495,7 +579,11 @@ impl SolCompat for Uint208 {
     const SOL_TYPE: Self::S = "uint208"
 }
 impl<A: Abi> Encode<A> for Uint208 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val) }
 }
 pub struct Uint216 { pub val: u256 }
 impl SolCompat for Uint216 {
@@ -503,7 +591,11 @@ impl SolCompat for Uint216 {
     const SOL_TYPE: Self::S = "uint216"
 }
 impl<A: Abi> Encode<A> for Uint216 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val) }
 }
 pub struct Uint224 { pub val: u256 }
 impl SolCompat for Uint224 {
@@ -511,7 +603,11 @@ impl SolCompat for Uint224 {
     const SOL_TYPE: Self::S = "uint224"
 }
 impl<A: Abi> Encode<A> for Uint224 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val) }
 }
 pub struct Uint232 { pub val: u256 }
 impl SolCompat for Uint232 {
@@ -519,7 +615,11 @@ impl SolCompat for Uint232 {
     const SOL_TYPE: Self::S = "uint232"
 }
 impl<A: Abi> Encode<A> for Uint232 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val) }
 }
 pub struct Uint240 { pub val: u256 }
 impl SolCompat for Uint240 {
@@ -527,7 +627,11 @@ impl SolCompat for Uint240 {
     const SOL_TYPE: Self::S = "uint240"
 }
 impl<A: Abi> Encode<A> for Uint240 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val) }
 }
 pub struct Uint248 { pub val: u256 }
 impl SolCompat for Uint248 {
@@ -535,8 +639,39 @@ impl SolCompat for Uint248 {
     const SOL_TYPE: Self::S = "uint248"
 }
 impl<A: Abi> Encode<A> for Uint248 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val) }
 }
+
+impl AbiSize for Uint24 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint40 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint48 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint56 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint72 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint80 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint88 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint96 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint104 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint112 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint120 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint136 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint144 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint152 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint160 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint168 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint176 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint184 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint192 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint200 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint208 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint216 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint224 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint232 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint240 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Uint248 { const ENCODED_SIZE: u256 = 32 }
 
 // Signed newtypes wrapping i32
 pub struct Int24 { pub val: i32 }
@@ -545,7 +680,11 @@ impl SolCompat for Int24 {
     const SOL_TYPE: Self::S = "int24"
 }
 impl<A: Abi> Encode<A> for Int24 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 
 // Signed newtypes wrapping i64
@@ -555,7 +694,11 @@ impl SolCompat for Int40 {
     const SOL_TYPE: Self::S = "int40"
 }
 impl<A: Abi> Encode<A> for Int40 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 pub struct Int48 { pub val: i64 }
 impl SolCompat for Int48 {
@@ -563,7 +706,11 @@ impl SolCompat for Int48 {
     const SOL_TYPE: Self::S = "int48"
 }
 impl<A: Abi> Encode<A> for Int48 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 pub struct Int56 { pub val: i64 }
 impl SolCompat for Int56 {
@@ -571,7 +718,11 @@ impl SolCompat for Int56 {
     const SOL_TYPE: Self::S = "int56"
 }
 impl<A: Abi> Encode<A> for Int56 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 
 // Signed newtypes wrapping i128
@@ -581,7 +732,11 @@ impl SolCompat for Int72 {
     const SOL_TYPE: Self::S = "int72"
 }
 impl<A: Abi> Encode<A> for Int72 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 pub struct Int80 { pub val: i128 }
 impl SolCompat for Int80 {
@@ -589,7 +744,11 @@ impl SolCompat for Int80 {
     const SOL_TYPE: Self::S = "int80"
 }
 impl<A: Abi> Encode<A> for Int80 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 pub struct Int88 { pub val: i128 }
 impl SolCompat for Int88 {
@@ -597,7 +756,11 @@ impl SolCompat for Int88 {
     const SOL_TYPE: Self::S = "int88"
 }
 impl<A: Abi> Encode<A> for Int88 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 pub struct Int96 { pub val: i128 }
 impl SolCompat for Int96 {
@@ -605,7 +768,11 @@ impl SolCompat for Int96 {
     const SOL_TYPE: Self::S = "int96"
 }
 impl<A: Abi> Encode<A> for Int96 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 pub struct Int104 { pub val: i128 }
 impl SolCompat for Int104 {
@@ -613,7 +780,11 @@ impl SolCompat for Int104 {
     const SOL_TYPE: Self::S = "int104"
 }
 impl<A: Abi> Encode<A> for Int104 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 pub struct Int112 { pub val: i128 }
 impl SolCompat for Int112 {
@@ -621,7 +792,11 @@ impl SolCompat for Int112 {
     const SOL_TYPE: Self::S = "int112"
 }
 impl<A: Abi> Encode<A> for Int112 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 pub struct Int120 { pub val: i128 }
 impl SolCompat for Int120 {
@@ -629,7 +804,11 @@ impl SolCompat for Int120 {
     const SOL_TYPE: Self::S = "int120"
 }
 impl<A: Abi> Encode<A> for Int120 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 
 // Signed newtypes wrapping i256
@@ -639,7 +818,11 @@ impl SolCompat for Int136 {
     const SOL_TYPE: Self::S = "int136"
 }
 impl<A: Abi> Encode<A> for Int136 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 pub struct Int144 { pub val: i256 }
 impl SolCompat for Int144 {
@@ -647,7 +830,11 @@ impl SolCompat for Int144 {
     const SOL_TYPE: Self::S = "int144"
 }
 impl<A: Abi> Encode<A> for Int144 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 pub struct Int152 { pub val: i256 }
 impl SolCompat for Int152 {
@@ -655,7 +842,11 @@ impl SolCompat for Int152 {
     const SOL_TYPE: Self::S = "int152"
 }
 impl<A: Abi> Encode<A> for Int152 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 pub struct Int160 { pub val: i256 }
 impl SolCompat for Int160 {
@@ -663,7 +854,11 @@ impl SolCompat for Int160 {
     const SOL_TYPE: Self::S = "int160"
 }
 impl<A: Abi> Encode<A> for Int160 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 pub struct Int168 { pub val: i256 }
 impl SolCompat for Int168 {
@@ -671,7 +866,11 @@ impl SolCompat for Int168 {
     const SOL_TYPE: Self::S = "int168"
 }
 impl<A: Abi> Encode<A> for Int168 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 pub struct Int176 { pub val: i256 }
 impl SolCompat for Int176 {
@@ -679,7 +878,11 @@ impl SolCompat for Int176 {
     const SOL_TYPE: Self::S = "int176"
 }
 impl<A: Abi> Encode<A> for Int176 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 pub struct Int184 { pub val: i256 }
 impl SolCompat for Int184 {
@@ -687,7 +890,11 @@ impl SolCompat for Int184 {
     const SOL_TYPE: Self::S = "int184"
 }
 impl<A: Abi> Encode<A> for Int184 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 pub struct Int192 { pub val: i256 }
 impl SolCompat for Int192 {
@@ -695,7 +902,11 @@ impl SolCompat for Int192 {
     const SOL_TYPE: Self::S = "int192"
 }
 impl<A: Abi> Encode<A> for Int192 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 pub struct Int200 { pub val: i256 }
 impl SolCompat for Int200 {
@@ -703,7 +914,11 @@ impl SolCompat for Int200 {
     const SOL_TYPE: Self::S = "int200"
 }
 impl<A: Abi> Encode<A> for Int200 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 pub struct Int208 { pub val: i256 }
 impl SolCompat for Int208 {
@@ -711,7 +926,11 @@ impl SolCompat for Int208 {
     const SOL_TYPE: Self::S = "int208"
 }
 impl<A: Abi> Encode<A> for Int208 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 pub struct Int216 { pub val: i256 }
 impl SolCompat for Int216 {
@@ -719,7 +938,11 @@ impl SolCompat for Int216 {
     const SOL_TYPE: Self::S = "int216"
 }
 impl<A: Abi> Encode<A> for Int216 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 pub struct Int224 { pub val: i256 }
 impl SolCompat for Int224 {
@@ -727,7 +950,11 @@ impl SolCompat for Int224 {
     const SOL_TYPE: Self::S = "int224"
 }
 impl<A: Abi> Encode<A> for Int224 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 pub struct Int232 { pub val: i256 }
 impl SolCompat for Int232 {
@@ -735,7 +962,11 @@ impl SolCompat for Int232 {
     const SOL_TYPE: Self::S = "int232"
 }
 impl<A: Abi> Encode<A> for Int232 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 pub struct Int240 { pub val: i256 }
 impl SolCompat for Int240 {
@@ -743,7 +974,11 @@ impl SolCompat for Int240 {
     const SOL_TYPE: Self::S = "int240"
 }
 impl<A: Abi> Encode<A> for Int240 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
 pub struct Int248 { pub val: i256 }
 impl SolCompat for Int248 {
@@ -751,8 +986,39 @@ impl SolCompat for Int248 {
     const SOL_TYPE: Self::S = "int248"
 }
 impl<A: Abi> Encode<A> for Int248 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.val.downcast_unchecked()) }
+
+    fn encode_to_ptr(own self, ptr: u256) { A::store_word(ptr, self.val.downcast_unchecked()) }
 }
+
+impl AbiSize for Int24 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int40 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int48 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int56 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int72 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int80 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int88 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int96 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int104 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int112 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int120 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int136 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int144 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int152 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int160 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int168 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int176 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int184 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int192 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int200 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int208 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int216 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int224 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int232 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int240 { const ENCODED_SIZE: u256 = 32 }
+impl AbiSize for Int248 { const ENCODED_SIZE: u256 = 32 }
 
 // ---------------------------------------------------------------------------
 // TopicValue implementations for newtype wrappers

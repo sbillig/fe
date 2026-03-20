@@ -96,6 +96,7 @@ pub trait Abi {
     fn decoder_with_base<I: ByteInput>(_: own I, base: u256) -> Self::Decoder<I>
 
     fn encoder_new() -> Self::Encoder
+    fn store_word(ptr: u256, value: u256)
 }
 
 /// ABI decoder with cursor state and an allocation hook.
@@ -142,7 +143,10 @@ pub trait Decode<A: Abi> {
 }
 
 pub trait Encode<A: Abi> {
+    const DIRECT_ENCODE: bool
+
     fn encode<E: AbiEncoder<A>>(own self, _: mut E)
+    fn encode_to_ptr(own self, ptr: u256)
 }
 
 pub fn decode_or_revert<A: Abi, T, D>(d: mut D) -> T
@@ -391,8 +395,14 @@ impl<A: Abi> Decode<A> for u256 {
 }
 
 impl<A: Abi> Encode<A> for u256 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         e.write_word(self)
+    }
+
+    fn encode_to_ptr(own self, ptr: u256) {
+        A::store_word(ptr, self)
     }
 }
 
@@ -403,8 +413,14 @@ impl<A: Abi, const N: usize> Decode<A> for String<N> {
 }
 
 impl<A: Abi, const N: usize> Encode<A> for String<N> {
+    const DIRECT_ENCODE: bool = false
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         e.write_word(super::addr_of(self))
+    }
+
+    fn encode_to_ptr(own self, ptr: u256) {
+        super::panic()
     }
 }
 
@@ -415,11 +431,21 @@ impl<A: Abi> Decode<A> for bool {
 }
 
 impl<A: Abi> Encode<A> for bool {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         if self {
             e.write_word(1)
         } else {
             e.write_word(0)
+        }
+    }
+
+    fn encode_to_ptr(own self, ptr: u256) {
+        if self {
+            A::store_word(ptr, 1)
+        } else {
+            A::store_word(ptr, 0)
         }
     }
 }
@@ -431,8 +457,14 @@ impl<A: Abi> Decode<A> for u8 {
 }
 
 impl<A: Abi> Encode<A> for u8 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         e.write_word(self as u256)
+    }
+
+    fn encode_to_ptr(own self, ptr: u256) {
+        A::store_word(ptr, self as u256)
     }
 }
 
@@ -443,8 +475,14 @@ impl<A: Abi> Decode<A> for u16 {
 }
 
 impl<A: Abi> Encode<A> for u16 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         e.write_word(self as u256)
+    }
+
+    fn encode_to_ptr(own self, ptr: u256) {
+        A::store_word(ptr, self as u256)
     }
 }
 
@@ -455,8 +493,14 @@ impl<A: Abi> Decode<A> for u32 {
 }
 
 impl<A: Abi> Encode<A> for u32 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         e.write_word(self as u256)
+    }
+
+    fn encode_to_ptr(own self, ptr: u256) {
+        A::store_word(ptr, self as u256)
     }
 }
 
@@ -467,8 +511,14 @@ impl<A: Abi> Decode<A> for u64 {
 }
 
 impl<A: Abi> Encode<A> for u64 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         e.write_word(self as u256)
+    }
+
+    fn encode_to_ptr(own self, ptr: u256) {
+        A::store_word(ptr, self as u256)
     }
 }
 
@@ -479,8 +529,14 @@ impl<A: Abi> Decode<A> for u128 {
 }
 
 impl<A: Abi> Encode<A> for u128 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         e.write_word(self as u256)
+    }
+
+    fn encode_to_ptr(own self, ptr: u256) {
+        A::store_word(ptr, self as u256)
     }
 }
 
@@ -491,8 +547,14 @@ impl<A: Abi> Decode<A> for i8 {
 }
 
 impl<A: Abi> Encode<A> for i8 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         e.write_word(self.downcast_unchecked())
+    }
+
+    fn encode_to_ptr(own self, ptr: u256) {
+        A::store_word(ptr, self.downcast_unchecked())
     }
 }
 
@@ -503,8 +565,14 @@ impl<A: Abi> Decode<A> for i16 {
 }
 
 impl<A: Abi> Encode<A> for i16 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         e.write_word(self.downcast_unchecked())
+    }
+
+    fn encode_to_ptr(own self, ptr: u256) {
+        A::store_word(ptr, self.downcast_unchecked())
     }
 }
 
@@ -515,8 +583,14 @@ impl<A: Abi> Decode<A> for i32 {
 }
 
 impl<A: Abi> Encode<A> for i32 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         e.write_word(self.downcast_unchecked())
+    }
+
+    fn encode_to_ptr(own self, ptr: u256) {
+        A::store_word(ptr, self.downcast_unchecked())
     }
 }
 
@@ -527,8 +601,14 @@ impl<A: Abi> Decode<A> for i64 {
 }
 
 impl<A: Abi> Encode<A> for i64 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         e.write_word(self.downcast_unchecked())
+    }
+
+    fn encode_to_ptr(own self, ptr: u256) {
+        A::store_word(ptr, self.downcast_unchecked())
     }
 }
 
@@ -539,8 +619,14 @@ impl<A: Abi> Decode<A> for i128 {
 }
 
 impl<A: Abi> Encode<A> for i128 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         e.write_word(self.downcast_unchecked())
+    }
+
+    fn encode_to_ptr(own self, ptr: u256) {
+        A::store_word(ptr, self.downcast_unchecked())
     }
 }
 
@@ -551,8 +637,14 @@ impl<A: Abi> Decode<A> for i256 {
 }
 
 impl<A: Abi> Encode<A> for i256 {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         e.write_word(self.downcast_unchecked())
+    }
+
+    fn encode_to_ptr(own self, ptr: u256) {
+        A::store_word(ptr, self.downcast_unchecked())
     }
 }
 
@@ -563,8 +655,14 @@ impl<A: Abi> Decode<A> for usize {
 }
 
 impl<A: Abi> Encode<A> for usize {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         e.write_word(self as u256)
+    }
+
+    fn encode_to_ptr(own self, ptr: u256) {
+        A::store_word(ptr, self as u256)
     }
 }
 
@@ -575,8 +673,14 @@ impl<A: Abi> Decode<A> for isize {
 }
 
 impl<A: Abi> Encode<A> for isize {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         e.write_word(self.downcast_unchecked())
+    }
+
+    fn encode_to_ptr(own self, ptr: u256) {
+        A::store_word(ptr, self.downcast_unchecked())
     }
 }
 
@@ -587,7 +691,12 @@ impl<A: Abi> Decode<A> for () {
 }
 
 impl<A: Abi> Encode<A> for () {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
+    }
+
+    fn encode_to_ptr(own self, ptr: u256) {
     }
 }
 
@@ -600,10 +709,16 @@ impl<A: Abi, T0> Decode<A> for (T0,)
 }
 
 impl<A: Abi, T0> Encode<A> for (T0,)
-    where T0: Encode<A>
+    where T0: Encode<A> + AbiSize
 {
+    const DIRECT_ENCODE: bool = T0::DIRECT_ENCODE
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         self.0.encode(mut e)
+    }
+
+    fn encode_to_ptr(own self, ptr: u256) {
+        self.0.encode_to_ptr(ptr)
     }
 }
 
@@ -616,11 +731,19 @@ impl<A: Abi, T0, T1> Decode<A> for (T0, T1)
 }
 
 impl<A: Abi, T0, T1> Encode<A> for (T0, T1)
-    where T0: Encode<A>, T1: Encode<A>
+    where T0: Encode<A> + AbiSize, T1: Encode<A> + AbiSize
 {
+    const DIRECT_ENCODE: bool = T0::DIRECT_ENCODE && T1::DIRECT_ENCODE
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         self.0.encode(mut e)
         self.1.encode(mut e)
+    }
+
+    #[arithmetic(unchecked)]
+    fn encode_to_ptr(own self, ptr: u256) {
+        self.0.encode_to_ptr(ptr)
+        self.1.encode_to_ptr(ptr + T0::ENCODED_SIZE)
     }
 }
 
@@ -633,12 +756,22 @@ impl<A: Abi, T0, T1, T2> Decode<A> for (T0, T1, T2)
 }
 
 impl<A: Abi, T0, T1, T2> Encode<A> for (T0, T1, T2)
-    where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>
+    where T0: Encode<A> + AbiSize, T1: Encode<A> + AbiSize, T2: Encode<A> + AbiSize
 {
+    const DIRECT_ENCODE: bool = T0::DIRECT_ENCODE && T1::DIRECT_ENCODE && T2::DIRECT_ENCODE
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         self.0.encode(mut e)
         self.1.encode(mut e)
         self.2.encode(mut e)
+    }
+
+    #[arithmetic(unchecked)]
+    fn encode_to_ptr(own self, ptr: u256) {
+        self.0.encode_to_ptr(ptr)
+        self.1.encode_to_ptr(ptr + T0::ENCODED_SIZE)
+        self.2
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE)
     }
 }
 
@@ -651,13 +784,29 @@ impl<A: Abi, T0, T1, T2, T3> Decode<A> for (T0, T1, T2, T3)
 }
 
 impl<A: Abi, T0, T1, T2, T3> Encode<A> for (T0, T1, T2, T3)
-    where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize
 {
+    const DIRECT_ENCODE: bool =
+        T0::DIRECT_ENCODE && T1::DIRECT_ENCODE && T2::DIRECT_ENCODE && T3::DIRECT_ENCODE
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         self.0.encode(mut e)
         self.1.encode(mut e)
         self.2.encode(mut e)
         self.3.encode(mut e)
+    }
+
+    #[arithmetic(unchecked)]
+    fn encode_to_ptr(own self, ptr: u256) {
+        self.0.encode_to_ptr(ptr)
+        self.1.encode_to_ptr(ptr + T0::ENCODED_SIZE)
+        self.2
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE)
+        self.3
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE)
     }
 }
 
@@ -676,14 +825,33 @@ impl<A: Abi, T0, T1, T2, T3, T4> Decode<A> for (T0, T1, T2, T3, T4)
 }
 
 impl<A: Abi, T0, T1, T2, T3, T4> Encode<A> for (T0, T1, T2, T3, T4)
-    where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>, T4: Encode<A>
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize,
+          T4: Encode<A> + AbiSize
 {
+    const DIRECT_ENCODE: bool =
+        T0::DIRECT_ENCODE && T1::DIRECT_ENCODE && T2::DIRECT_ENCODE && T3::DIRECT_ENCODE && T4::DIRECT_ENCODE
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         self.0.encode(mut e)
         self.1.encode(mut e)
         self.2.encode(mut e)
         self.3.encode(mut e)
         self.4.encode(mut e)
+    }
+
+    #[arithmetic(unchecked)]
+    fn encode_to_ptr(own self, ptr: u256) {
+        self.0.encode_to_ptr(ptr)
+        self.1.encode_to_ptr(ptr + T0::ENCODED_SIZE)
+        self.2
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE)
+        self.3
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE)
+        self.4
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE)
     }
 }
 
@@ -703,8 +871,16 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5> Decode<A> for (T0, T1, T2, T3, T4, T5)
 }
 
 impl<A: Abi, T0, T1, T2, T3, T4, T5> Encode<A> for (T0, T1, T2, T3, T4, T5)
-    where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>, T4: Encode<A>, T5: Encode<A>
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize,
+          T4: Encode<A> + AbiSize,
+          T5: Encode<A> + AbiSize
 {
+    const DIRECT_ENCODE: bool =
+        T0::DIRECT_ENCODE && T1::DIRECT_ENCODE && T2::DIRECT_ENCODE && T3::DIRECT_ENCODE && T4::DIRECT_ENCODE && T5::DIRECT_ENCODE
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         self.0.encode(mut e)
         self.1.encode(mut e)
@@ -712,6 +888,20 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5> Encode<A> for (T0, T1, T2, T3, T4, T5)
         self.3.encode(mut e)
         self.4.encode(mut e)
         self.5.encode(mut e)
+    }
+
+    #[arithmetic(unchecked)]
+    fn encode_to_ptr(own self, ptr: u256) {
+        self.0.encode_to_ptr(ptr)
+        self.1.encode_to_ptr(ptr + T0::ENCODED_SIZE)
+        self.2
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE)
+        self.3
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE)
+        self.4
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE)
+        self.5
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE)
     }
 }
 
@@ -732,8 +922,17 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6> Decode<A> for (T0, T1, T2, T3, T4, T5, 
 }
 
 impl<A: Abi, T0, T1, T2, T3, T4, T5, T6> Encode<A> for (T0, T1, T2, T3, T4, T5, T6)
-    where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>, T4: Encode<A>, T5: Encode<A>, T6: Encode<A>
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize,
+          T4: Encode<A> + AbiSize,
+          T5: Encode<A> + AbiSize,
+          T6: Encode<A> + AbiSize
 {
+    const DIRECT_ENCODE: bool =
+        T0::DIRECT_ENCODE && T1::DIRECT_ENCODE && T2::DIRECT_ENCODE && T3::DIRECT_ENCODE && T4::DIRECT_ENCODE && T5::DIRECT_ENCODE && T6::DIRECT_ENCODE
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         self.0.encode(mut e)
         self.1.encode(mut e)
@@ -742,6 +941,22 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6> Encode<A> for (T0, T1, T2, T3, T4, T5, 
         self.4.encode(mut e)
         self.5.encode(mut e)
         self.6.encode(mut e)
+    }
+
+    #[arithmetic(unchecked)]
+    fn encode_to_ptr(own self, ptr: u256) {
+        self.0.encode_to_ptr(ptr)
+        self.1.encode_to_ptr(ptr + T0::ENCODED_SIZE)
+        self.2
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE)
+        self.3
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE)
+        self.4
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE)
+        self.5
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE)
+        self.6
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE)
     }
 }
 
@@ -763,8 +978,18 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7> Decode<A> for (T0, T1, T2, T3, T4, 
 }
 
 impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7> Encode<A> for (T0, T1, T2, T3, T4, T5, T6, T7)
-    where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>, T4: Encode<A>, T5: Encode<A>, T6: Encode<A>, T7: Encode<A>
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize,
+          T4: Encode<A> + AbiSize,
+          T5: Encode<A> + AbiSize,
+          T6: Encode<A> + AbiSize,
+          T7: Encode<A> + AbiSize
 {
+    const DIRECT_ENCODE: bool =
+        T0::DIRECT_ENCODE && T1::DIRECT_ENCODE && T2::DIRECT_ENCODE && T3::DIRECT_ENCODE && T4::DIRECT_ENCODE && T5::DIRECT_ENCODE && T6::DIRECT_ENCODE && T7::DIRECT_ENCODE
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         self.0.encode(mut e)
         self.1.encode(mut e)
@@ -774,6 +999,24 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7> Encode<A> for (T0, T1, T2, T3, T4, 
         self.5.encode(mut e)
         self.6.encode(mut e)
         self.7.encode(mut e)
+    }
+
+    #[arithmetic(unchecked)]
+    fn encode_to_ptr(own self, ptr: u256) {
+        self.0.encode_to_ptr(ptr)
+        self.1.encode_to_ptr(ptr + T0::ENCODED_SIZE)
+        self.2
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE)
+        self.3
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE)
+        self.4
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE)
+        self.5
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE)
+        self.6
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE)
+        self.7
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE + T6::ENCODED_SIZE)
     }
 }
 
@@ -796,8 +1039,19 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8> Decode<A> for (T0, T1, T2, T3, 
 }
 
 impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8> Encode<A> for (T0, T1, T2, T3, T4, T5, T6, T7, T8)
-    where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>, T4: Encode<A>, T5: Encode<A>, T6: Encode<A>, T7: Encode<A>, T8: Encode<A>
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize,
+          T4: Encode<A> + AbiSize,
+          T5: Encode<A> + AbiSize,
+          T6: Encode<A> + AbiSize,
+          T7: Encode<A> + AbiSize,
+          T8: Encode<A> + AbiSize
 {
+    const DIRECT_ENCODE: bool =
+        T0::DIRECT_ENCODE && T1::DIRECT_ENCODE && T2::DIRECT_ENCODE && T3::DIRECT_ENCODE && T4::DIRECT_ENCODE && T5::DIRECT_ENCODE && T6::DIRECT_ENCODE && T7::DIRECT_ENCODE && T8::DIRECT_ENCODE
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         self.0.encode(mut e)
         self.1.encode(mut e)
@@ -808,6 +1062,26 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8> Encode<A> for (T0, T1, T2, T3, 
         self.6.encode(mut e)
         self.7.encode(mut e)
         self.8.encode(mut e)
+    }
+
+    #[arithmetic(unchecked)]
+    fn encode_to_ptr(own self, ptr: u256) {
+        self.0.encode_to_ptr(ptr)
+        self.1.encode_to_ptr(ptr + T0::ENCODED_SIZE)
+        self.2
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE)
+        self.3
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE)
+        self.4
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE)
+        self.5
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE)
+        self.6
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE)
+        self.7
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE + T6::ENCODED_SIZE)
+        self.8
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE + T6::ENCODED_SIZE + T7::ENCODED_SIZE)
     }
 }
 
@@ -833,8 +1107,20 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> Decode<A>
 
 impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> Encode<A>
     for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)
-    where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>, T4: Encode<A>, T5: Encode<A>, T6: Encode<A>, T7: Encode<A>, T8: Encode<A>, T9: Encode<A>
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize,
+          T4: Encode<A> + AbiSize,
+          T5: Encode<A> + AbiSize,
+          T6: Encode<A> + AbiSize,
+          T7: Encode<A> + AbiSize,
+          T8: Encode<A> + AbiSize,
+          T9: Encode<A> + AbiSize
 {
+    const DIRECT_ENCODE: bool =
+        T0::DIRECT_ENCODE && T1::DIRECT_ENCODE && T2::DIRECT_ENCODE && T3::DIRECT_ENCODE && T4::DIRECT_ENCODE && T5::DIRECT_ENCODE && T6::DIRECT_ENCODE && T7::DIRECT_ENCODE && T8::DIRECT_ENCODE && T9::DIRECT_ENCODE
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         self.0.encode(mut e)
         self.1.encode(mut e)
@@ -846,6 +1132,28 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> Encode<A>
         self.7.encode(mut e)
         self.8.encode(mut e)
         self.9.encode(mut e)
+    }
+
+    #[arithmetic(unchecked)]
+    fn encode_to_ptr(own self, ptr: u256) {
+        self.0.encode_to_ptr(ptr)
+        self.1.encode_to_ptr(ptr + T0::ENCODED_SIZE)
+        self.2
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE)
+        self.3
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE)
+        self.4
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE)
+        self.5
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE)
+        self.6
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE)
+        self.7
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE + T6::ENCODED_SIZE)
+        self.8
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE + T6::ENCODED_SIZE + T7::ENCODED_SIZE)
+        self.9
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE + T6::ENCODED_SIZE + T7::ENCODED_SIZE + T8::ENCODED_SIZE)
     }
 }
 
@@ -872,8 +1180,21 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> Decode<A>
 
 impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> Encode<A>
     for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)
-    where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>, T4: Encode<A>, T5: Encode<A>, T6: Encode<A>, T7: Encode<A>, T8: Encode<A>, T9: Encode<A>, T10: Encode<A>
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize,
+          T4: Encode<A> + AbiSize,
+          T5: Encode<A> + AbiSize,
+          T6: Encode<A> + AbiSize,
+          T7: Encode<A> + AbiSize,
+          T8: Encode<A> + AbiSize,
+          T9: Encode<A> + AbiSize,
+          T10: Encode<A> + AbiSize
 {
+    const DIRECT_ENCODE: bool =
+        T0::DIRECT_ENCODE && T1::DIRECT_ENCODE && T2::DIRECT_ENCODE && T3::DIRECT_ENCODE && T4::DIRECT_ENCODE && T5::DIRECT_ENCODE && T6::DIRECT_ENCODE && T7::DIRECT_ENCODE && T8::DIRECT_ENCODE && T9::DIRECT_ENCODE && T10::DIRECT_ENCODE
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         self.0.encode(mut e)
         self.1.encode(mut e)
@@ -886,6 +1207,30 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> Encode<A>
         self.8.encode(mut e)
         self.9.encode(mut e)
         self.10.encode(mut e)
+    }
+
+    #[arithmetic(unchecked)]
+    fn encode_to_ptr(own self, ptr: u256) {
+        self.0.encode_to_ptr(ptr)
+        self.1.encode_to_ptr(ptr + T0::ENCODED_SIZE)
+        self.2
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE)
+        self.3
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE)
+        self.4
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE)
+        self.5
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE)
+        self.6
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE)
+        self.7
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE + T6::ENCODED_SIZE)
+        self.8
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE + T6::ENCODED_SIZE + T7::ENCODED_SIZE)
+        self.9
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE + T6::ENCODED_SIZE + T7::ENCODED_SIZE + T8::ENCODED_SIZE)
+        self.10
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE + T6::ENCODED_SIZE + T7::ENCODED_SIZE + T8::ENCODED_SIZE + T9::ENCODED_SIZE)
     }
 }
 
@@ -913,8 +1258,22 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> Decode<A>
 
 impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> Encode<A>
     for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)
-    where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>, T4: Encode<A>, T5: Encode<A>, T6: Encode<A>, T7: Encode<A>, T8: Encode<A>, T9: Encode<A>, T10: Encode<A>, T11: Encode<A>
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize,
+          T4: Encode<A> + AbiSize,
+          T5: Encode<A> + AbiSize,
+          T6: Encode<A> + AbiSize,
+          T7: Encode<A> + AbiSize,
+          T8: Encode<A> + AbiSize,
+          T9: Encode<A> + AbiSize,
+          T10: Encode<A> + AbiSize,
+          T11: Encode<A> + AbiSize
 {
+    const DIRECT_ENCODE: bool =
+        T0::DIRECT_ENCODE && T1::DIRECT_ENCODE && T2::DIRECT_ENCODE && T3::DIRECT_ENCODE && T4::DIRECT_ENCODE && T5::DIRECT_ENCODE && T6::DIRECT_ENCODE && T7::DIRECT_ENCODE && T8::DIRECT_ENCODE && T9::DIRECT_ENCODE && T10::DIRECT_ENCODE && T11::DIRECT_ENCODE
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         self.0.encode(mut e)
         self.1.encode(mut e)
@@ -928,5 +1287,31 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> Encode<A>
         self.9.encode(mut e)
         self.10.encode(mut e)
         self.11.encode(mut e)
+    }
+
+    #[arithmetic(unchecked)]
+    fn encode_to_ptr(own self, ptr: u256) {
+        self.0.encode_to_ptr(ptr)
+        self.1.encode_to_ptr(ptr + T0::ENCODED_SIZE)
+        self.2
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE)
+        self.3
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE)
+        self.4
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE)
+        self.5
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE)
+        self.6
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE)
+        self.7
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE + T6::ENCODED_SIZE)
+        self.8
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE + T6::ENCODED_SIZE + T7::ENCODED_SIZE)
+        self.9
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE + T6::ENCODED_SIZE + T7::ENCODED_SIZE + T8::ENCODED_SIZE)
+        self.10
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE + T6::ENCODED_SIZE + T7::ENCODED_SIZE + T8::ENCODED_SIZE + T9::ENCODED_SIZE)
+        self.11
+            .encode_to_ptr(ptr + T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE + T6::ENCODED_SIZE + T7::ENCODED_SIZE + T8::ENCODED_SIZE + T9::ENCODED_SIZE + T10::ENCODED_SIZE)
     }
 }

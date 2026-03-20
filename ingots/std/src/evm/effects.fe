@@ -24,9 +24,7 @@ use ingot::evm::ops
 ///
 /// Represented as a single `u256` ABI word with the address stored in the low
 /// 160 bits.
-pub struct Address {
-    pub inner: u256
-}
+pub struct Address { pub inner: u256 }
 
 impl Address {
     pub fn zero() -> Self {
@@ -53,8 +51,14 @@ impl<A: Abi> Decode<A> for Address {
 }
 
 impl<A: Abi> Encode<A> for Address {
+    const DIRECT_ENCODE: bool = true
+
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         e.write_word(self.inner)
+    }
+
+    fn encode_to_ptr(own self, ptr: u256) {
+        A::store_word(ptr, self.inner)
     }
 }
 
@@ -74,9 +78,7 @@ pub use core::effect_ref::MemPtr
 pub use core::effect_ref::StorPtr
 
 /// Calldata pointer to a value of type `T` (read-only).
-pub struct CalldataPtr<T> {
-    pub offset: u256
-}
+pub struct CalldataPtr<T> { pub offset: u256 }
 
 impl<T> EffectHandle for CalldataPtr<T> {
     type Target = T
@@ -98,9 +100,7 @@ impl<T> EffectRef<T> for CalldataPtr<T> {}
 ///
 /// This is like `StorPtr<T>`, but reads/writes are intended to compile to
 /// EVM transient storage operations (TLOAD/TSTORE).
-pub struct TStorPtr<T> {
-    pub slot: u256
-}
+pub struct TStorPtr<T> { pub slot: u256 }
 
 impl<T> EffectHandle for TStorPtr<T> {
     type Target = T
@@ -178,15 +178,21 @@ pub trait Log {
     fn log1(mut self, offset: u256, len: u256, topic0: u256)
     fn log2(mut self, offset: u256, len: u256, topic0: u256, topic1: u256)
     fn log3(mut self, offset: u256, len: u256, topic0: u256, topic1: u256, topic2: u256)
-    fn log4(mut self, offset: u256, len: u256, topic0: u256, topic1: u256, topic2: u256, topic3: u256)
+    fn log4(
+        mut self,
+        offset: u256,
+        len: u256,
+        topic0: u256,
+        topic1: u256,
+        topic2: u256,
+        topic3: u256,
+    )
 
     /// Emit a Solidity-compatible event log (`log1`-`log4`).
     ///
     /// This delegates to the `std::evm::Event` implementation generated for
     /// `#[event]` structs.
-    fn emit<E>(mut self, event: E)
-        where E: super::event::Event
-    {
+    fn emit<E>(mut self, event: E) where E: super::event::Event {
         event.emit(self)
     }
 }
@@ -276,25 +282,21 @@ pub trait Create {
 /// High-level contract calls with ABI encoding/decoding.
 pub trait Call {
     fn call<M>(mut self, addr: own Address, gas: u256, value: u256, message: own M) -> M::Return
-        where M: MsgVariant<Sol> + Encode<Sol>,
-              M::Return: Decode<Sol>
+    where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol>
 
     fn static<M>(mut self, addr: own Address, gas: u256, message: own M) -> M::Return
-        where M: MsgVariant<Sol> + Encode<Sol>,
-              M::Return: Decode<Sol>
+    where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol>
 
     fn delegate<M>(mut self, addr: own Address, gas: u256, message: own M) -> M::Return
-        where M: MsgVariant<Sol> + Encode<Sol>,
-              M::Return: Decode<Sol>
+    where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol>
 }
 
 impl Address {
     /// Call a contract at this address with a typed message.
     ///
     /// Forwards all available gas and sends no value. Reverts on failure.
-    pub fn call<M>(self, _ message: own M) -> M::Return uses (call: mut Call)
-        where M: MsgVariant<Sol> + Encode<Sol>,
-              M::Return: Decode<Sol>
+    pub fn call<M>(self, _ message: own M) -> M::Return
+    uses (call: mut Call) where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol>
     {
         call.call(addr: self, gas: ops::gas(), value: 0, message)
     }
@@ -306,37 +308,61 @@ pub trait Super: Ctx + RawOps + Log + Create + Call {}
 struct Private {}
 
 /// Default EVM effect provider (zero-sized).
-pub struct Evm {
-    seal: Private
-}
+pub struct Evm { seal: Private }
 
 impl Ctx for Evm {
-    fn address(self) -> Address { Address { inner: ops::address() } }
-    fn caller(self) -> Address { Address { inner: ops::caller() } }
-    fn value(self) -> u256 { ops::callvalue() }
-    fn timestamp(self) -> u256 { ops::timestamp() }
-    fn block_number(self) -> u256 { ops::number() }
+    fn address(self) -> Address {
+        Address { inner: ops::address() }
+    }
+    fn caller(self) -> Address {
+        Address { inner: ops::caller() }
+    }
+    fn value(self) -> u256 {
+        ops::callvalue()
+    }
+    fn timestamp(self) -> u256 {
+        ops::timestamp()
+    }
+    fn block_number(self) -> u256 {
+        ops::number()
+    }
 }
 
 impl RawMem for Evm {
-    fn mload(self, addr: u256) -> u256 { ops::mload(addr) }
-    fn mstore(mut self, addr: u256, value: u256) { ops::mstore(addr, value) }
-    fn mstore8(mut self, addr: u256, value: u8) { ops::mstore8(addr, value) }
+    fn mload(self, addr: u256) -> u256 {
+        ops::mload(addr)
+    }
+    fn mstore(mut self, addr: u256, value: u256) {
+        ops::mstore(addr, value)
+    }
+    fn mstore8(mut self, addr: u256, value: u8) {
+        ops::mstore8(addr, value)
+    }
 }
 
 impl RawStorage for Evm {
-    fn sload(self, slot: u256) -> u256 { ops::sload(slot) }
-    fn sstore(mut self, slot: u256, value: u256) { ops::sstore(slot: slot, value: value) }
+    fn sload(self, slot: u256) -> u256 {
+        ops::sload(slot)
+    }
+    fn sstore(mut self, slot: u256, value: u256) {
+        ops::sstore(slot: slot, value: value)
+    }
 }
 
 impl RawOps for Evm {
-    fn calldataload(self, offset: u256) -> u256 { ops::calldataload(offset) }
-    fn calldatasize(self) -> u256 { ops::calldatasize() }
+    fn calldataload(self, offset: u256) -> u256 {
+        ops::calldataload(offset)
+    }
+    fn calldatasize(self) -> u256 {
+        ops::calldatasize()
+    }
     fn calldatacopy(mut self, dest: u256, offset: u256, len: u256) {
         ops::calldatacopy(dest: dest, offset: offset, len: len)
     }
 
-    fn returndatasize(self) -> u256 { ops::returndatasize() }
+    fn returndatasize(self) -> u256 {
+        ops::returndatasize()
+    }
     fn returndatacopy(mut self, dest: u256, offset: u256, len: u256) {
         ops::returndatacopy(dest: dest, offset: offset, len: len)
     }
@@ -345,24 +371,67 @@ impl RawOps for Evm {
         ops::codecopy(dest: dest, offset: offset, len: len)
     }
 
-    fn codesize(self) -> u256 { ops::codesize() }
+    fn codesize(self) -> u256 {
+        ops::codesize()
+    }
 
-    fn keccak256(self, offset: u256, len: u256) -> u256 { ops::keccak256(offset, len) }
+    fn keccak256(self, offset: u256, len: u256) -> u256 {
+        ops::keccak256(offset, len)
+    }
 
-    fn revert(self, offset: u256, len: u256) -> ! { ops::revert(offset, len) }
-    fn return_data(self, offset: u256, len: u256) -> ! { ops::return_data(offset, len) }
+    fn revert(self, offset: u256, len: u256) -> ! {
+        ops::revert(offset, len)
+    }
+    fn return_data(self, offset: u256, len: u256) -> ! {
+        ops::return_data(offset, len)
+    }
 
-    fn code_region_offset<F>(self, f: F) -> u256 { intrinsic_code_region_offset(f) }
-    fn code_region_len<F>(self, f: F) -> u256 { intrinsic_code_region_len(f) }
+    fn code_region_offset<F>(self, f: F) -> u256 {
+        intrinsic_code_region_offset(f)
+    }
+    fn code_region_len<F>(self, f: F) -> u256 {
+        intrinsic_code_region_len(f)
+    }
 }
 
 impl Log for Evm {
     // Logging opcodes.
-    fn log0(mut self, offset: u256, len: u256) { ops::log0(offset: offset, len: len) }
-    fn log1(mut self, offset: u256, len: u256, topic0: u256) { ops::log1(offset: offset, len: len, topic0: topic0) }
-    fn log2(mut self, offset: u256, len: u256, topic0: u256, topic1: u256) { ops::log2(offset: offset, len: len, topic0: topic0, topic1: topic1) }
-    fn log3(mut self, offset: u256, len: u256, topic0: u256, topic1: u256, topic2: u256) { ops::log3(offset: offset, len: len, topic0: topic0, topic1: topic1, topic2: topic2) }
-    fn log4(mut self, offset: u256, len: u256, topic0: u256, topic1: u256, topic2: u256, topic3: u256) { ops::log4(offset: offset, len: len, topic0: topic0, topic1: topic1, topic2: topic2, topic3: topic3) }
+    fn log0(mut self, offset: u256, len: u256) {
+        ops::log0(offset: offset, len: len)
+    }
+    fn log1(mut self, offset: u256, len: u256, topic0: u256) {
+        ops::log1(offset: offset, len: len, topic0: topic0)
+    }
+    fn log2(mut self, offset: u256, len: u256, topic0: u256, topic1: u256) {
+        ops::log2(offset: offset, len: len, topic0: topic0, topic1: topic1)
+    }
+    fn log3(mut self, offset: u256, len: u256, topic0: u256, topic1: u256, topic2: u256) {
+        ops::log3(
+            offset: offset,
+            len: len,
+            topic0: topic0,
+            topic1: topic1,
+            topic2: topic2,
+        )
+    }
+    fn log4(
+        mut self,
+        offset: u256,
+        len: u256,
+        topic0: u256,
+        topic1: u256,
+        topic2: u256,
+        topic3: u256,
+    ) {
+        ops::log4(
+            offset: offset,
+            len: len,
+            topic0: topic0,
+            topic1: topic1,
+            topic2: topic2,
+            topic3: topic3,
+        )
+    }
 }
 
 impl Create for Evm {
@@ -375,17 +444,25 @@ impl Create for Evm {
 }
 
 fn encode_calldata<M>(selector: u32, message: own M) -> (u256, u256)
-    where M: Encode<Sol>
+where M: Encode<Sol>
 {
     let selector_size = size_of<Sol::Selector>()
-    let head_size = selector_size + encoded_size<M>()
+    let selector_word = (selector as u256) << 224
 
+    if M::DIRECT_ENCODE {
+        let size = selector_size + M::ENCODED_SIZE
+        let ptr = mem::alloc(size)
+        ops::mstore(ptr, selector_word)
+        message.encode_to_ptr(ptr + selector_size)
+        return (ptr, size)
+    }
+
+    let head_size = selector_size + M::ENCODED_SIZE
     let mut enc = SolEncoder::new()
     let base = enc.reserve_head(head_size)
 
     // Encode the 4-byte selector into the first word (big-endian),
     // leaving the remaining 28 bytes as zeros.
-    let selector_word = (selector as u256) << 224
     ops::mstore(base, selector_word)
 
     enc.set_pos(base + selector_size)
@@ -393,9 +470,7 @@ fn encode_calldata<M>(selector: u32, message: own M) -> (u256, u256)
     enc.finish()
 }
 
-fn decode_returndata<R>(ptr: u256, len: u256) -> R
-    where R: Decode<Sol>
-{
+fn decode_returndata<R>(ptr: u256, len: u256) -> R where R: Decode<Sol> {
     if len < encoded_size<R>() {
         ops::revert(0, 0)
     }
@@ -407,8 +482,7 @@ fn decode_returndata<R>(ptr: u256, len: u256) -> R
 
 impl Call for Evm {
     fn call<M>(mut self, addr: own Address, gas: u256, value: u256, message: own M) -> M::Return
-        where M: MsgVariant<Sol> + Encode<Sol>,
-              M::Return: Decode<Sol>
+    where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol>
     {
         let out: (u256, u256) = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
         let ok = ops::call(
@@ -433,8 +507,7 @@ impl Call for Evm {
     }
 
     fn static<M>(mut self, addr: own Address, gas: u256, message: own M) -> M::Return
-        where M: MsgVariant<Sol> + Encode<Sol>,
-              M::Return: Decode<Sol>
+    where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol>
     {
         let out: (u256, u256) = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
         let ok = ops::staticcall(
@@ -458,8 +531,7 @@ impl Call for Evm {
     }
 
     fn delegate<M>(mut self, addr: own Address, gas: u256, message: own M) -> M::Return
-        where M: MsgVariant<Sol> + Encode<Sol>,
-              M::Return: Decode<Sol>
+    where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol>
     {
         let out: (u256, u256) = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
         let ok = ops::delegatecall(
@@ -484,9 +556,7 @@ impl Call for Evm {
 }
 
 pub fn assert(_ b: own bool) {
-    if !b {
-        ops::revert(0, 0)
-    }
+    if !b { ops::revert(0, 0) }
 }
 
 /// Revert the current transaction with ABI-encoded data.
@@ -563,5 +633,26 @@ impl ContractHost for Evm {
 
     fn return_bytes(self, ptr: u256, len: u256) -> ! {
         self.return_data(ptr, len)
+    }
+
+    fn return_value<A: Abi, T>(mut self, value: own T) -> !
+        where T: Encode<A> + AbiSize
+    {
+        if T::DIRECT_ENCODE {
+            if T::ENCODED_SIZE <= 64 {
+                value.encode_to_ptr(0)
+                self.return_data(0, T::ENCODED_SIZE)
+            } else {
+                let ptr = mem::alloc(T::ENCODED_SIZE)
+                value.encode_to_ptr(ptr)
+                self.return_data(ptr, T::ENCODED_SIZE)
+            }
+        } else {
+            let mut enc = A::encoder_new()
+            enc.reserve_head(T::ENCODED_SIZE)
+            value.encode(mut enc)
+            let out: (u256, u256) = enc.finish()
+            self.return_bytes(out.0, out.1)
+        }
     }
 }

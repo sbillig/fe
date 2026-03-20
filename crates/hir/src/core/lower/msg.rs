@@ -6,13 +6,16 @@ use super::{attr::named_attr_specs, hir_builder::HirBuilder};
 use crate::{
     HirDb, SelectorError, SelectorErrorKind,
     hir_def::{
-        AssocConstDef, AttrListId, Body, BodyKind, FieldDef, FieldDefListId, FuncModifiers,
-        IdentId, ImplTrait, Mod, Partial, PathId, Struct, TrackedItemVariant, TraitRefId,
-        TupleTypeId, TypeId, TypeKind, Visibility,
+        ArithBinOp, AssocConstDef, AttrListId, BinOp, Body, BodyKind, Expr, FieldDef,
+        FieldDefListId, FieldIndex, FuncModifiers, FuncParam, FuncParamMode, FuncParamName,
+        GenericArgListId, IdentId, ImplTrait, LitKind, LogicalBinOp, Mod, Partial, Pat, PathId,
+        Stmt, Struct, TrackedItemVariant, TraitRefId, TupleTypeId, TypeId, TypeKind, Visibility,
     },
     lower::FileLowerCtxt,
     span::{MsgDesugared, MsgDesugaredFocus},
 };
+
+use super::body::BodyCtxt;
 
 /// Desugars a `msg` block into a module containing structs and trait impls.
 ///
@@ -92,22 +95,6 @@ fn variant_struct_ty<'db>(db: &'db dyn HirDb, struct_: Struct<'db>) -> TypeId<'d
     TypeId::new(db, TypeKind::Path(Partial::Present(self_type_path)))
 }
 
-fn lower_msg_variant_field_names<'db>(
-    ctxt: &mut FileLowerCtxt<'db>,
-    variant: &ast::MsgVariant,
-) -> Vec<IdentId<'db>> {
-    let mut names = Vec::new();
-    if let Some(params_ast) = variant.params() {
-        for field in params_ast.into_iter() {
-            let Some(name_token) = field.name() else {
-                continue;
-            };
-            names.push(IdentId::lower_token(ctxt, name_token));
-        }
-    }
-    names
-}
-
 fn lower_msg_variant_field_specs<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     variant: &ast::MsgVariant,
@@ -142,33 +129,200 @@ fn lower_msg_variant_encode_impl<'db>(
     variant: &ast::MsgVariant,
     struct_: Struct<'db>,
 ) -> ImplTrait<'db> {
-    let field_names = lower_msg_variant_field_names(builder.ctxt(), variant);
+    let field_specs = lower_msg_variant_field_specs(builder.ctxt(), variant);
+    let field_names = field_specs
+        .iter()
+        .map(|(name, _)| *name)
+        .collect::<Vec<_>>();
 
-    let trait_ref = builder.core_abi_trait_ref_sol("Encode");
-    let ty = variant_struct_ty(builder.db(), struct_);
+    let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
+    let trait_ref = Partial::Present(builder.core_abi_trait_ref_sol("Encode"));
+    let ty = Partial::Present(variant_struct_ty(builder.db(), struct_));
+    let roots = builder.roots();
 
-    builder.impl_trait(trait_ref, ty, |builder| {
-        let abi_encoder_trait_ref = builder.core_abi_trait_ref_sol("AbiEncoder");
-        let (e_generic_params, e_ty) =
-            builder.type_param_with_trait_bound("E", abi_encoder_trait_ref);
+    builder.with_item_scope(
+        TrackedItemVariant::ImplTrait(impl_trait_idx),
+        |builder, id| {
+            let direct_encode_const = create_direct_encode_assoc_const(builder, &field_specs);
+            let impl_trait = builder.new_impl_trait(
+                id,
+                trait_ref,
+                ty,
+                vec![],
+                vec![direct_encode_const],
+                builder.origin(),
+            );
 
-        let encoder_ident = builder.ident("e");
-        let params = builder.params([
-            builder.param_own_self(),
-            builder.param_mut_underscore_named(encoder_ident, e_ty),
-        ]);
+            let abi_encoder_trait_ref = builder.core_abi_trait_ref_sol("AbiEncoder");
+            let (e_generic_params, e_ty) =
+                builder.type_param_with_trait_bound("E", abi_encoder_trait_ref);
 
-        builder.func_generic(
-            "encode",
-            e_generic_params,
-            params,
-            None,
-            FuncModifiers::new(Visibility::Private, false, false, false),
-            |body| {
-                body.encode_fields(&field_names, encoder_ident);
-            },
+            let encoder_ident = builder.ident("e");
+            let params = builder.params([
+                builder.param_own_self(),
+                builder.param_mut_underscore_named(encoder_ident, e_ty),
+            ]);
+
+            builder.func_generic(
+                "encode",
+                e_generic_params,
+                params,
+                None,
+                FuncModifiers::new(Visibility::Private, false, false, false),
+                |body| {
+                    body.encode_fields(&field_names, encoder_ident);
+                },
+            );
+
+            let ptr_ident = builder.ident("ptr");
+            let ptr_ty = builder.ty_ident(builder.ident("u256"));
+            let ptr_param = FuncParam {
+                mode: FuncParamMode::View,
+                is_mut: false,
+                has_ref_prefix: false,
+                has_own_prefix: false,
+                is_label_suppressed: false,
+                name: Partial::Present(FuncParamName::Ident(ptr_ident)),
+                ty: Partial::Present(ptr_ty),
+                self_ty_fallback: false,
+            };
+            let params = builder.params([builder.param_own_self(), ptr_param]);
+            let encode_to_ptr_ident = builder.ident("encode_to_ptr");
+
+            builder.func_with_body(
+                encode_to_ptr_ident,
+                builder.empty_generic_params(),
+                params,
+                None,
+                FuncModifiers::new(Visibility::Private, false, false, false),
+                |body| {
+                    let db = body.db();
+                    let self_expr = body.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
+                    let mut field_ptr_ident = ptr_ident;
+
+                    for (index, (field_name, field_ty)) in field_specs.iter().copied().enumerate() {
+                        let receiver = body.push_expr(Expr::Field(
+                            self_expr,
+                            Partial::Present(FieldIndex::Ident(field_name)),
+                        ));
+                        let field_ptr = body.ident_expr(field_ptr_ident);
+                        let call =
+                            body.method_call_expr(receiver, encode_to_ptr_ident, vec![field_ptr]);
+                        body.emit_expr_stmt(call);
+
+                        if index + 1 != field_specs.len() {
+                            let next_ptr_ident = IdentId::new(db, format!("__field_ptr{index}"));
+                            let current_ptr = body.ident_expr(field_ptr_ident);
+                            let field_size = build_encoded_size_call(body, roots, field_ty);
+                            let next_ptr = body.push_expr(Expr::Bin(
+                                current_ptr,
+                                field_size,
+                                BinOp::Arith(ArithBinOp::Add),
+                            ));
+                            let next_ptr_pat = body.push_pat(Pat::Path(
+                                Partial::Present(PathId::from_ident(db, next_ptr_ident)),
+                                false,
+                            ));
+                            body.emit_stmt(Stmt::Let(next_ptr_pat, None, Some(next_ptr)));
+                            field_ptr_ident = next_ptr_ident;
+                        }
+                    }
+                },
+            );
+            impl_trait
+        },
+    )
+}
+
+fn create_direct_encode_assoc_const<'db>(
+    builder: &mut HirBuilder<'_, 'db, MsgDesugared>,
+    fields: &[(IdentId<'db>, TypeId<'db>)],
+) -> AssocConstDef<'db> {
+    let db = builder.db();
+    let name = builder.ident("DIRECT_ENCODE");
+    let ty = builder.ty_ident(builder.ident("bool"));
+    let id = builder.ctxt().joined_id(TrackedItemVariant::NamelessBody);
+    let origin = builder.origin();
+    let mut body_ctxt = BodyCtxt::new(builder.ctxt(), id);
+    let mut expr = push_bool_expr(&mut body_ctxt, origin.clone(), true);
+    for (_, field_ty) in fields.iter().copied() {
+        let field_expr = build_direct_encode_expr(&mut body_ctxt, origin.clone(), field_ty);
+        expr = body_ctxt.push_expr(
+            Expr::Bin(expr, field_expr, BinOp::Logical(LogicalBinOp::And)),
+            origin.clone(),
         );
-    })
+    }
+    let body = body_ctxt.build(None, expr, BodyKind::Anonymous);
+
+    AssocConstDef {
+        attributes: AttrListId::new(db, vec![]),
+        name: Partial::Present(name),
+        ty: Partial::Present(ty),
+        value: Partial::Present(body),
+    }
+}
+
+fn build_direct_encode_expr<'db>(
+    body_ctxt: &mut BodyCtxt<'_, 'db>,
+    origin: crate::span::HirOrigin<ast::Expr>,
+    ty: TypeId<'db>,
+) -> crate::hir_def::ExprId {
+    let db = body_ctxt.f_ctxt.db();
+
+    match ty.data(db) {
+        TypeKind::Path(path) => path
+            .to_opt()
+            .map(|path| {
+                body_ctxt.push_expr(
+                    Expr::Path(Partial::Present(path.push_str(db, "DIRECT_ENCODE"))),
+                    origin.clone(),
+                )
+            })
+            .unwrap_or_else(|| push_bool_expr(body_ctxt, origin.clone(), false)),
+        TypeKind::Tuple(tuple) => {
+            let mut expr = push_bool_expr(body_ctxt, origin.clone(), true);
+            for elem_ty in tuple.data(db).iter().copied() {
+                let elem_expr = elem_ty
+                    .to_opt()
+                    .map(|elem_ty| build_direct_encode_expr(body_ctxt, origin.clone(), elem_ty))
+                    .unwrap_or_else(|| push_bool_expr(body_ctxt, origin.clone(), false));
+                expr = body_ctxt.push_expr(
+                    Expr::Bin(expr, elem_expr, BinOp::Logical(LogicalBinOp::And)),
+                    origin.clone(),
+                );
+            }
+            expr
+        }
+        TypeKind::Mode(_, inner) => inner
+            .to_opt()
+            .map(|inner| build_direct_encode_expr(body_ctxt, origin.clone(), inner))
+            .unwrap_or_else(|| push_bool_expr(body_ctxt, origin.clone(), false)),
+        TypeKind::Ptr(_) | TypeKind::Array(_, _) | TypeKind::Never => {
+            push_bool_expr(body_ctxt, origin, false)
+        }
+    }
+}
+
+fn push_bool_expr<'db>(
+    body_ctxt: &mut BodyCtxt<'_, 'db>,
+    origin: crate::span::HirOrigin<ast::Expr>,
+    value: bool,
+) -> crate::hir_def::ExprId {
+    body_ctxt.push_expr(Expr::Lit(LitKind::Bool(value)), origin)
+}
+
+fn build_encoded_size_call<'db>(
+    body: &mut super::hir_builder::BodyBuilder<'_, 'db, MsgDesugared>,
+    roots: super::hir_builder::LibRoots<'db>,
+    ty: TypeId<'db>,
+) -> crate::hir_def::ExprId {
+    let db = body.db();
+    let args = GenericArgListId::given1_type(db, ty);
+    let path = PathId::from_ident(db, roots.std)
+        .push_str(db, "abi")
+        .push_str_args(db, "encoded_size", args);
+    let callee = body.path_expr(path);
+    body.call_expr(callee, vec![])
 }
 
 fn lower_msg_variant_decode_trait_impl<'db>(
