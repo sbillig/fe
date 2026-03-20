@@ -23,11 +23,12 @@ use crate::analysis::{
     name_resolution::{PathRes, resolve_path},
     ty::{
         const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
+        context::LoweringMode,
         effects::{EffectKeyKind, effect_key_kind, place_effect_provider_param_index_map},
         fold::{TyFoldable, TyFolder},
         trait_def::TraitInstId,
         trait_resolution::{
-            PredicateListId,
+            PredicateListId, TraitSolveCx,
             constraint::{collect_constraints, collect_func_def_constraints},
         },
         ty_contains_const_hole,
@@ -151,6 +152,15 @@ impl<'db> TyCheckEnv<'db> {
                     (preds, assumptions)
                 }
             }
+            BodyOwner::AnonConstBodyInMode { solve_cx, mode, .. } => {
+                let mut preds = solve_cx.assumptions().list(db).to_vec();
+                if let Some(trait_inst) = mode.trait_inst() {
+                    preds.push(trait_inst);
+                }
+                let preds = PredicateListId::new(db, preds);
+                let assumptions = preds.extend_all_bounds(db);
+                (preds, assumptions)
+            }
             _ => {
                 let empty = PredicateListId::empty_list(db);
                 (empty, empty)
@@ -213,7 +223,9 @@ impl<'db> TyCheckEnv<'db> {
                     };
                 }
             }
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => {}
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::AnonConstBodyInMode { .. } => {}
             BodyOwner::ContractInit { contract } => {
                 let Some(init) = contract.init(db) else {
                     return Ok(env);
@@ -270,7 +282,9 @@ impl<'db> TyCheckEnv<'db> {
                     self.seed_func_effects(func, base_assumptions)
                 }
             }
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => {}
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::AnonConstBodyInMode { .. } => {}
             BodyOwner::ContractInit { .. } => self.seed_contract_effects(base_assumptions),
             BodyOwner::ContractRecvArm { .. } => self.seed_contract_effects(base_assumptions),
         }
@@ -371,7 +385,9 @@ impl<'db> TyCheckEnv<'db> {
                     arm_idx,
                 },
             ),
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => return,
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::AnonConstBodyInMode { .. } => return,
         };
 
         let assumptions = self.assumptions();
@@ -388,9 +404,9 @@ impl<'db> TyCheckEnv<'db> {
 
         let body_effects = match self.owner {
             BodyOwner::Func(func) => func.effects(self.db),
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => {
-                EffectParamListId::new(self.db, Vec::new())
-            }
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::AnonConstBodyInMode { .. } => EffectParamListId::new(self.db, Vec::new()),
             BodyOwner::ContractInit { contract } => {
                 let Some(init) = contract.init(self.db) else {
                     return;
@@ -641,6 +657,23 @@ impl<'db> TyCheckEnv<'db> {
         self.assumptions
     }
 
+    pub(super) fn trait_solve_cx(&self) -> TraitSolveCx<'db> {
+        match self.owner {
+            BodyOwner::AnonConstBodyInMode { solve_cx, .. } => {
+                solve_cx.with_assumptions(self.assumptions())
+            }
+            _ => TraitSolveCx::new(self.db, self.scope()).with_assumptions(self.assumptions()),
+        }
+    }
+
+    pub(super) fn lowering_mode(&self) -> LoweringMode<'db> {
+        match self.owner {
+            BodyOwner::Func(func) => func.signature_lowering_mode(self.db),
+            BodyOwner::AnonConstBodyInMode { mode, .. } => mode,
+            _ => LoweringMode::Normal,
+        }
+    }
+
     pub(super) fn body(&self) -> Body<'db> {
         self.body
     }
@@ -671,7 +704,8 @@ impl<'db> TyCheckEnv<'db> {
                     TyId::invalid(self.db, InvalidCause::Other)
                 }
             }
-            BodyOwner::AnonConstBody { expected, .. } => {
+            BodyOwner::AnonConstBody { expected, .. }
+            | BodyOwner::AnonConstBodyInMode { expected, .. } => {
                 if expected.is_star_kind(self.db) {
                     expected
                 } else {

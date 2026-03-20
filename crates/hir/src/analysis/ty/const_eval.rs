@@ -63,7 +63,7 @@ pub fn eval_const_ref<'db>(
         }
         ConstRef::TraitConst { inst, name } => {
             let solve_cx = TraitSolveCx::new(db, inst.def(db).top_mod(db).scope());
-            const_ty_from_trait_const(db, solve_cx, inst, name).ok_or(InvalidCause::Other)?
+            const_ty_from_trait_const(db, solve_cx, inst, name, None).ok_or(InvalidCause::Other)?
         }
     };
     eval_const_ty(db, const_ty, Some(expected_ty))

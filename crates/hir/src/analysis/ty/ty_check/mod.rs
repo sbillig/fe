@@ -43,13 +43,14 @@ use crate::analysis::place::Place;
 
 use super::{
     canonical::{Canonical, Canonicalized},
+    context::{AnalysisCx, ImplOverlay, LoweringMode, ProofCx},
     diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
     effects::{EffectKeyKind, resolve_normalized_type_effect_key},
-    trait_def::TraitInstId,
+    trait_def::{ImplementorId, TraitInstId},
     trait_resolution::{GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable},
     ty_contains_const_hole,
     ty_def::{BorrowKind, CapabilityKind, InvalidCause, Kind, TyId, TyVarSort},
-    ty_lower::lower_hir_ty,
+    ty_lower::{contextual_path_resolution_in_mode, lower_hir_ty, lower_hir_ty_in_mode},
     unify::{InferenceKey, UnificationError, UnificationTable},
 };
 use crate::analysis::ty::ty_def::{TyBase, TyData};
@@ -58,7 +59,7 @@ use crate::analysis::ty::{
     ctfe::{CtfeConfig, CtfeInterpreter},
     fold::AssocTySubst,
     normalize::normalize_ty,
-    ty_error::collect_ty_lower_errors,
+    ty_error::collect_ty_lower_errors_in_mode,
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -84,13 +85,98 @@ pub fn check_const_body<'db>(
     check_body(db, BodyOwner::Const(const_))
 }
 
-#[salsa::tracked(return_ref)]
+fn check_anon_const_body_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _body: Body<'db>,
+    _expected: TyId<'db>,
+) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    (Vec::new(), TypedBody::empty())
+}
+
+fn check_anon_const_body_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &(Vec<FuncBodyDiag<'db>>, TypedBody<'db>),
+    _count: u32,
+    _body: Body<'db>,
+    _expected: TyId<'db>,
+) -> salsa::CycleRecoveryAction<(Vec<FuncBodyDiag<'db>>, TypedBody<'db>)> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
+#[salsa::tracked(
+    return_ref,
+    cycle_fn=check_anon_const_body_cycle_recover,
+    cycle_initial=check_anon_const_body_cycle_initial
+)]
 pub fn check_anon_const_body<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
     expected: TyId<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
     check_body(db, BodyOwner::AnonConstBody { body, expected })
+}
+
+fn check_anon_const_body_in_mode_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _body: Body<'db>,
+    _expected: TyId<'db>,
+    _solve_cx: TraitSolveCx<'db>,
+    _mode: LoweringMode<'db>,
+) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    (Vec::new(), TypedBody::empty())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_anon_const_body_in_mode_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &(Vec<FuncBodyDiag<'db>>, TypedBody<'db>),
+    _count: u32,
+    _body: Body<'db>,
+    _expected: TyId<'db>,
+    _solve_cx: TraitSolveCx<'db>,
+    _mode: LoweringMode<'db>,
+) -> salsa::CycleRecoveryAction<(Vec<FuncBodyDiag<'db>>, TypedBody<'db>)> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
+#[salsa::tracked(
+    return_ref,
+    cycle_fn=check_anon_const_body_in_mode_cycle_recover,
+    cycle_initial=check_anon_const_body_in_mode_cycle_initial
+)]
+pub fn check_anon_const_body_in_mode<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    expected: TyId<'db>,
+    solve_cx: TraitSolveCx<'db>,
+    mode: LoweringMode<'db>,
+) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    check_body(
+        db,
+        BodyOwner::AnonConstBodyInMode {
+            body,
+            expected,
+            solve_cx,
+            mode,
+        },
+    )
+}
+
+pub fn check_anon_const_body_for_trait_inst<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    expected: TyId<'db>,
+    solve_cx: TraitSolveCx<'db>,
+    trait_inst: TraitInstId<'db>,
+    current_implementor: Option<ImplementorId<'db>>,
+) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    let mode = LoweringMode::SelectedTraitBody {
+        trait_inst,
+        self_ty: trait_inst.self_ty(db),
+        current_impl: current_implementor,
+    };
+    let result = check_anon_const_body_in_mode(db, body, expected, solve_cx, mode);
+    (result.0.clone(), result.1.clone())
 }
 
 pub(super) fn check_body<'db>(
@@ -232,6 +318,7 @@ impl<'db> TyChecker<'db> {
             }
             BodyOwner::Const(_)
             | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::AnonConstBodyInMode { .. }
             | BodyOwner::ContractRecvArm { .. } => {}
         }
     }
@@ -247,7 +334,9 @@ impl<'db> TyChecker<'db> {
                     self.check_free_func_effect_list(func, func.effects(self.db));
                 }
             }
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => {}
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::AnonConstBodyInMode { .. } => {}
             owner @ BodyOwner::ContractInit { contract } => {
                 self.check_contract_scoped_effect_list(owner, contract, owner.effects(self.db));
             }
@@ -297,7 +386,9 @@ impl<'db> TyChecker<'db> {
     ) {
         let owner = match owner {
             BodyOwner::Func(func) => EffectParamOwner::Func(func),
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => unreachable!(),
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::AnonConstBodyInMode { .. } => unreachable!(),
             BodyOwner::ContractInit { contract } => EffectParamOwner::ContractInit { contract },
             BodyOwner::ContractRecvArm {
                 contract,
@@ -527,30 +618,6 @@ impl<'db> TyChecker<'db> {
             result
         };
 
-        let dedup_equivalent_insts = |insts: Vec<TraitInstId<'db>>| -> Vec<TraitInstId<'db>> {
-            let mut unique: Vec<TraitInstId<'db>> = Vec::new();
-            'outer: for inst in insts {
-                for &seen in &unique {
-                    if inst.def(db) != seen.def(db) {
-                        continue;
-                    }
-
-                    let mut table = UnificationTable::new(db);
-                    let lhs = table.instantiate_with_fresh_vars(
-                        crate::analysis::ty::binder::Binder::bind(inst),
-                    );
-                    let rhs = table.instantiate_with_fresh_vars(
-                        crate::analysis::ty::binder::Binder::bind(seen),
-                    );
-                    if table.unify(lhs, rhs).is_ok() {
-                        continue 'outer;
-                    }
-                }
-                unique.push(inst);
-            }
-            unique
-        };
-
         // Fixed-point pass over deferred tasks.
         let mut progressed = true;
         while progressed {
@@ -567,7 +634,7 @@ impl<'db> TyChecker<'db> {
                         let canonical_inst = Canonicalized::new(db, inst);
                         match is_goal_satisfiable(
                             db,
-                            TraitSolveCx::new(db, scope).with_assumptions(assumptions),
+                            self.env.trait_solve_cx(),
                             canonical_inst.value,
                         ) {
                             GoalSatisfiability::Satisfied(solution) => {
@@ -582,7 +649,8 @@ impl<'db> TyChecker<'db> {
                                 }
                             }
                             GoalSatisfiability::NeedsConfirmation(ambiguous) => {
-                                let cands = dedup_equivalent_insts(
+                                let cands = super::dedup_equivalent_trait_insts(
+                                    db,
                                     ambiguous
                                         .iter()
                                         .map(|s| {
@@ -640,7 +708,7 @@ impl<'db> TyChecker<'db> {
                                 )
                             })
                             .collect();
-                        let viable = dedup_equivalent_insts(viable);
+                        let viable = super::dedup_equivalent_trait_insts(db, viable);
 
                         if let [inst] = viable.as_slice() {
                             if self.env.callable_expr(pending.expr).is_none() {
@@ -736,13 +804,10 @@ impl<'db> TyChecker<'db> {
                     };
                     let inst = inst.normalize(db, scope, assumptions);
                     let canonical_inst = Canonicalized::new(db, inst);
-                    match is_goal_satisfiable(
-                        db,
-                        TraitSolveCx::new(db, scope).with_assumptions(assumptions),
-                        canonical_inst.value,
-                    ) {
+                    match is_goal_satisfiable(db, self.env.trait_solve_cx(), canonical_inst.value) {
                         GoalSatisfiability::NeedsConfirmation(ambiguous) => {
-                            let cands = dedup_equivalent_insts(
+                            let cands = super::dedup_equivalent_trait_insts(
+                                db,
                                 ambiguous
                                     .iter()
                                     .map(|s| {
@@ -808,7 +873,7 @@ impl<'db> TyChecker<'db> {
                             )
                         })
                         .collect();
-                    let viable = dedup_equivalent_insts(viable);
+                    let viable = super::dedup_equivalent_trait_insts(db, viable);
                     if viable.len() > 1 {
                         self.push_diag(BodyDiag::AmbiguousTrait {
                             primary: pending.span.clone(),
@@ -1142,16 +1207,23 @@ impl<'db> TyChecker<'db> {
         span: LazyTySpan<'db>,
         star_kind_required: bool,
     ) -> TyId<'db> {
-        let ty = lower_hir_ty(self.db, hir_ty, self.env.scope(), self.env.assumptions());
+        let ty = lower_hir_ty_in_mode(
+            self.db,
+            hir_ty,
+            self.env.scope(),
+            self.env.assumptions(),
+            self.env.lowering_mode(),
+        );
 
         // If lowering failed, try to produce precise diagnostics (e.g., path resolution errors)
         if ty.has_invalid(self.db) {
-            let diags = collect_ty_lower_errors(
+            let diags = collect_ty_lower_errors_in_mode(
                 self.db,
                 self.env.scope(),
                 hir_ty,
                 span.clone(),
                 self.env.assumptions(),
+                self.env.lowering_mode(),
             );
             if !diags.is_empty() {
                 for d in diags {
@@ -1399,6 +1471,17 @@ impl<'db> TyChecker<'db> {
         resolve_tail_as_value: bool,
         span: LazyPathSpan<'db>,
     ) -> Result<PathRes<'db>, PathResError<'db>> {
+        if let Some(res) = contextual_path_resolution_in_mode(
+            self.db,
+            self.env.scope(),
+            path,
+            self.env.assumptions(),
+            resolve_tail_as_value,
+            self.env.lowering_mode(),
+        ) {
+            return Ok(res.map_over_ty(|ty| self.instantiate_to_term(ty)));
+        }
+
         let scope = self.env.scope();
         let mut invisible = None;
         let mut check_visibility = |path: PathId<'db>, reso: &PathRes<'db>| {
@@ -1459,6 +1542,26 @@ impl<'db> TyChecker<'db> {
         self.instantiate_to_term(ty)
     }
 
+    fn instantiate_trait_const_declared_ty_to_term(
+        &mut self,
+        inst: TraitInstId<'db>,
+        name: IdentId<'db>,
+    ) -> TyId<'db> {
+        let cx = AnalysisCx::new(ProofCx::from_solve_cx(self.env.trait_solve_cx()))
+            .with_overlay(
+                self.env
+                    .lowering_mode()
+                    .current_impl()
+                    .map(ImplOverlay::with_current_impl)
+                    .unwrap_or_default(),
+            )
+            .with_mode(self.env.lowering_mode());
+        let Some(ty) = super::assoc_items::assoc_const_declared_ty(self.db, &cx, inst, name) else {
+            return TyId::invalid(self.db, InvalidCause::Other);
+        };
+        self.instantiate_to_term(ty)
+    }
+
     fn instantiate_callable_to_term(
         &mut self,
         mut ty: TyId<'db>,
@@ -1487,12 +1590,20 @@ impl<'db> TyChecker<'db> {
 
     /// Resolve associated type to concrete type if possible
     fn normalize_ty(&mut self, ty: TyId<'db>) -> TyId<'db> {
-        normalize_ty(
-            self.db,
-            ty.fold_with(self.db, &mut self.table),
-            self.env.scope(),
-            self.env.assumptions(),
-        )
+        let ty = ty.fold_with(self.db, &mut self.table);
+        let mode = self.env.lowering_mode();
+        if let Some(trait_inst) = mode.trait_inst() {
+            let cx = AnalysisCx::new(ProofCx::from_solve_cx(self.env.trait_solve_cx()))
+                .with_overlay(
+                    mode.current_impl()
+                        .map(ImplOverlay::with_current_impl)
+                        .unwrap_or_default(),
+                )
+                .with_mode(mode);
+            return super::assoc_items::normalize_ty_for_trait_inst(self.db, &cx, ty, trait_inst);
+        }
+
+        normalize_ty(self.db, ty, self.env.scope(), self.env.assumptions())
     }
 }
 
@@ -1880,6 +1991,7 @@ struct TyCheckerFinalizer<'db> {
     db: &'db dyn HirAnalysisDb,
     body: TypedBody<'db>,
     assumptions: PredicateListId<'db>,
+    solve_cx: TraitSolveCx<'db>,
     ty_vars: FxHashSet<InferenceKey<'db>>,
     effect_provider_keys: FxHashSet<InferenceKey<'db>>,
     diags: Vec<FuncBodyDiag<'db>>,
@@ -1940,6 +2052,7 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
 impl<'db> TyCheckerFinalizer<'db> {
     fn new(mut checker: TyChecker<'db>) -> Self {
         let assumptions = checker.env.assumptions();
+        let solve_cx = checker.env.trait_solve_cx();
         checker.resolve_deferred();
         let body = checker.env.finish(&mut checker.table);
 
@@ -1947,6 +2060,7 @@ impl<'db> TyCheckerFinalizer<'db> {
             db: checker.db,
             body,
             assumptions,
+            solve_cx,
             ty_vars: FxHashSet::default(),
             effect_provider_keys: checker.effect_provider_keys,
             diags: checker.diags,
@@ -1999,8 +2113,7 @@ impl<'db> TyCheckerFinalizer<'db> {
             return;
         }
 
-        let solve_cx = TraitSolveCx::new(self.db, self.body.body.unwrap().scope());
-        if let Some(diag) = ty.emit_wf_diag(self.db, solve_cx, self.assumptions, span) {
+        if let Some(diag) = ty.emit_wf_diag(self.db, self.solve_cx, self.assumptions, span) {
             self.diags.push(diag.into());
         }
     }

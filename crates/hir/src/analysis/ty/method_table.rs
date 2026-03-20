@@ -40,7 +40,7 @@ fn collect_methods_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
-#[salsa::tracked(return_ref)]
+#[salsa::tracked(return_ref, cycle_fn=probe_method_cycle_recover, cycle_initial=probe_method_cycle_initial)]
 pub(crate) fn probe_method<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
@@ -49,6 +49,26 @@ pub(crate) fn probe_method<'db>(
 ) -> Vec<CallableDef<'db>> {
     let table = collect_methods(db, ingot);
     table.probe(db, ty, name)
+}
+
+fn probe_method_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _ingot: Ingot<'db>,
+    _ty: Canonical<TyId<'db>>,
+    _name: IdentId<'db>,
+) -> Vec<CallableDef<'db>> {
+    Vec::new()
+}
+
+fn probe_method_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &Vec<CallableDef<'db>>,
+    _count: u32,
+    _ingot: Ingot<'db>,
+    _ty: Canonical<TyId<'db>>,
+    _name: IdentId<'db>,
+) -> salsa::CycleRecoveryAction<Vec<CallableDef<'db>>> {
+    salsa::CycleRecoveryAction::Iterate
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Update)]

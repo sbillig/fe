@@ -11,3 +11,12 @@ error[5-0001]: conflicting trait implementations
    ·
 20 │ impl MyTrait for Container<Marked> {
    │                  ----------------- conflicts with this trait implementation
+
+error[5-0001]: conflicting trait implementations
+   ┌─ impl_conflict_trait_bounds.fe:20:18
+   │
+12 │ impl<T: Marker> MyTrait for Container<T> {
+   │                             ------------ conflicts with this trait implementation
+   ·
+20 │ impl MyTrait for Container<Marked> {
+   │                  ^^^^^^^^^^^^^^^^^ this trait implementation

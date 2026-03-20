@@ -267,7 +267,7 @@ struct GeneratorNodeData<'db> {
     ///  A list of consumer nodes that depend on this generator node.
     dependents: Vec<ConsumerNode>,
     ///  A list of candidate implementors for the trait.
-    cands: &'db [Binder<ImplementorId<'db>>],
+    cands: Vec<Binder<ImplementorId<'db>>>,
     /// The list of assumptions for the goal.
     assumptions: PredicateListId<'db>,
     /// The index of the next candidate to be tried.
@@ -289,15 +289,27 @@ impl<'db> GeneratorNodeData<'db> {
         let mut table = PersistentUnificationTable::new(db);
         let extracted_goal = goal.extract_identity(&mut table);
         let (primary, secondary) = solve_cx.search_ingots_for_trait_inst(db, extracted_goal);
-        let cands = impls_for_trait_in_ingots(db, primary, secondary, goal);
-
+        let mut cands: IndexSet<_> =
+            impls_for_trait_in_ingots(db, primary, secondary, goal.value.def(db))
+                .iter()
+                .copied()
+                .collect();
+        cands.extend(
+            solve_cx
+                .local_implementors(db)
+                .iter()
+                .copied()
+                .filter(|implementor| {
+                    implementor.instantiate_identity().trait_def(db) == extracted_goal.def(db)
+                }),
+        );
         Self {
             table,
             goal,
             extracted_goal,
             solutions: IndexSet::default(),
             dependents: Vec::new(),
-            cands: cands.as_slice(),
+            cands: cands.into_iter().collect(),
             assumptions,
             next_cand: 0,
             children: Vec::new(),
@@ -363,9 +375,12 @@ impl GeneratorNode {
         let scope = pf
             .solve_cx
             .normalization_scope_for_trait_inst(db, g_node.extracted_goal);
-        let normalized_goal = g_node
-            .extracted_goal
-            .normalize(db, scope, g_node.assumptions);
+        let normalized_goal = g_node.extracted_goal.normalize_with_solve_cx(
+            db,
+            pf.solve_cx,
+            scope,
+            g_node.assumptions,
+        );
 
         while let Some(&cand) = g_node.cands.get(g_node.next_cand) {
             g_node.next_cand += 1;
@@ -377,9 +392,12 @@ impl GeneratorNode {
             // TODO: require candidates to be pre-normalized
             // Normalize trait instance arguments before unification
             let normalized_gen_cand = {
-                gen_cand
-                    .trait_inst(db)
-                    .normalize(db, scope, g_node.assumptions)
+                gen_cand.trait_inst(db).normalize_with_solve_cx(
+                    db,
+                    pf.solve_cx,
+                    scope,
+                    g_node.assumptions,
+                )
             };
 
             if table.unify(normalized_gen_cand, normalized_goal).is_err() {
@@ -502,15 +520,18 @@ impl ConsumerNode {
             let assumptions = pf.g_nodes[c_node.root].assumptions;
             pending_inst
                 .fold_with(db, &mut table)
-                .normalize(db, scope, assumptions)
+                .normalize_with_solve_cx(db, pf.solve_cx, scope, assumptions)
         };
 
         let normalized_solution = {
             let scope = pf.solve_cx.normalization_scope_for_trait_inst(db, solution);
             let assumptions = pf.g_nodes[c_node.root].assumptions;
-            solution
-                .fold_with(db, &mut table)
-                .normalize(db, scope, assumptions)
+            solution.fold_with(db, &mut table).normalize_with_solve_cx(
+                db,
+                pf.solve_cx,
+                scope,
+                assumptions,
+            )
         };
 
         // Try to unifies pending inst and solution.

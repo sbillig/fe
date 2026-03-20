@@ -6,15 +6,20 @@ use num_traits::{One, Zero};
 
 use super::const_expr::{ConstExpr, ConstExprId};
 use super::{
-    ctfe::{CtfeConfig, CtfeInterpreter, instantiate_typed_body},
+    assoc_items::{AssocConstSelection, resolve_assoc_const_selection},
+    context::{AnalysisCx, ImplOverlay, LoweringMode},
+    ctfe::{
+        CtfeConfig, CtfeInterpreter, instantiate_typed_body, instantiate_typed_body_for_trait_inst,
+    },
     diagnostics::{BodyDiag, FuncBodyDiag},
-    trait_def::TraitInstId,
+    trait_def::{AssocConstBodyOrigin, ImplementorId, TraitInstId},
     trait_resolution::{
         TraitSolveCx,
         constraint::{collect_constraints, collect_func_def_constraints},
     },
-    ty_check::{check_anon_const_body, check_const_body},
+    ty_check::{check_anon_const_body, check_anon_const_body_in_mode, check_const_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
+    ty_lower::contextual_path_resolution_in_mode,
     unify::UnificationTable,
 };
 use crate::analysis::{
@@ -23,8 +28,50 @@ use crate::analysis::{
     ty::trait_resolution::PredicateListId,
     ty::ty_def::{Kind, PrimTy, TyBase, TyData, TyVarSort},
 };
-use crate::hir_def::ItemKind;
+use crate::hir_def::{ItemKind, PathId, PathKind};
 use common::indexmap::IndexMap;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConstBodyModeKind {
+    Normal,
+    ImplTraitSignature,
+    SelectedTraitBody,
+}
+
+impl ConstBodyModeKind {
+    fn from_lowering_mode(mode: LoweringMode<'_>) -> Self {
+        match mode {
+            LoweringMode::Normal => Self::Normal,
+            LoweringMode::ImplTraitSignature { .. } => Self::ImplTraitSignature,
+            LoweringMode::SelectedTraitBody { .. } => Self::SelectedTraitBody,
+        }
+    }
+
+    fn lowering_mode<'db>(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        trait_inst: Option<TraitInstId<'db>>,
+        current_implementor: Option<ImplementorId<'db>>,
+    ) -> LoweringMode<'db> {
+        let Some(trait_inst) = trait_inst else {
+            return LoweringMode::Normal;
+        };
+
+        match self {
+            Self::Normal => LoweringMode::Normal,
+            Self::ImplTraitSignature => LoweringMode::ImplTraitSignature {
+                trait_inst,
+                self_ty: trait_inst.self_ty(db),
+                current_impl: current_implementor,
+            },
+            Self::SelectedTraitBody => LoweringMode::SelectedTraitBody {
+                trait_inst,
+                self_ty: trait_inst.self_ty(db),
+                current_impl: current_implementor,
+            },
+        }
+    }
+}
 
 #[salsa::interned]
 #[derive(Debug)]
@@ -39,6 +86,38 @@ pub(crate) fn evaluate_const_ty<'db>(
     const_ty: ConstTyId<'db>,
     expected_ty: Option<TyId<'db>>,
 ) -> ConstTyId<'db> {
+    evaluate_const_ty_impl(db, const_ty, expected_ty, None)
+}
+
+#[salsa::tracked(
+    cycle_initial=evaluate_const_ty_with_solve_cx_cycle_initial,
+    cycle_fn=evaluate_const_ty_with_solve_cx_cycle_recover
+)]
+pub(crate) fn evaluate_const_ty_with_solve_cx<'db>(
+    db: &'db dyn HirAnalysisDb,
+    const_ty: ConstTyId<'db>,
+    expected_ty: Option<TyId<'db>>,
+    solve_cx: TraitSolveCx<'db>,
+) -> ConstTyId<'db> {
+    evaluate_const_ty_impl(db, const_ty, expected_ty, Some(solve_cx))
+}
+
+fn evaluate_const_ty_impl<'db>(
+    db: &'db dyn HirAnalysisDb,
+    const_ty: ConstTyId<'db>,
+    expected_ty: Option<TyId<'db>>,
+    solve_cx: Option<TraitSolveCx<'db>>,
+) -> ConstTyId<'db> {
+    type UnevaluatedConstData<'db> = (
+        Body<'db>,
+        Option<TyId<'db>>,
+        Option<crate::core::hir_def::Const<'db>>,
+        Vec<TyId<'db>>,
+        Option<TraitInstId<'db>>,
+        ConstBodyModeKind,
+        Option<ImplementorId<'db>>,
+    );
+
     if let ConstTyData::Hole(ty) = const_ty.data(db) {
         if let Some(expected_ty) = expected_ty {
             return const_ty.swap_ty(db, expected_ty);
@@ -51,12 +130,17 @@ pub(crate) fn evaluate_const_ty<'db>(
         && let ConstExpr::TraitConst { inst, name } = expr.data(db)
         && let Some(resolved) = const_ty_from_trait_const(
             db,
-            TraitSolveCx::new(db, inst.def(db).top_mod(db).scope()),
+            solve_cx.unwrap_or_else(|| TraitSolveCx::new(db, inst.def(db).top_mod(db).scope())),
             *inst,
             *name,
+            None,
         )
     {
-        let evaluated = resolved.evaluate(db, expected_ty.or(Some(*ty)));
+        let evaluated = if let Some(solve_cx) = solve_cx {
+            resolved.evaluate_with_solve_cx(db, expected_ty.or(Some(*ty)), solve_cx)
+        } else {
+            resolved.evaluate(db, expected_ty.or(Some(*ty)))
+        };
         if matches!(
             evaluated.ty(db).invalid_cause(db),
             Some(InvalidCause::ConstEvalUnsupported { .. })
@@ -67,13 +151,32 @@ pub(crate) fn evaluate_const_ty<'db>(
         return evaluated;
     }
 
-    let (body, const_ty_ty, const_def, generic_args) = match const_ty.data(db) {
+    let (
+        body,
+        const_ty_ty,
+        const_def,
+        generic_args,
+        trait_inst,
+        mode_kind,
+        current_implementor,
+    ): UnevaluatedConstData<'db> = match const_ty.data(db) {
         ConstTyData::UnEvaluated {
             body,
             ty,
             const_def,
             generic_args,
-        } => (*body, *ty, *const_def, generic_args.clone()),
+            trait_inst,
+            mode_kind,
+            current_implementor,
+        } => (
+            *body,
+            *ty,
+            *const_def,
+            generic_args.clone(),
+            *trait_inst,
+            *mode_kind,
+            *current_implementor,
+        ),
         _ => {
             let const_ty_ty = const_ty.ty(db);
             return match check_const_ty(
@@ -90,6 +193,7 @@ pub(crate) fn evaluate_const_ty<'db>(
             };
         }
     };
+    let lowering_mode = mode_kind.lowering_mode(db, trait_inst, current_implementor);
 
     let expected_ty = expected_ty.or(const_ty_ty);
     let check_ty = if generic_args.is_empty() {
@@ -107,6 +211,10 @@ pub(crate) fn evaluate_const_ty<'db>(
     };
 
     let expr = expr.clone();
+    let assumptions = const_body_assumptions(db, body, lowering_mode);
+    let path_solve_cx = solve_cx
+        .unwrap_or_else(|| TraitSolveCx::new(db, body.scope()))
+        .with_assumptions(assumptions);
 
     #[derive(Clone, Copy, Debug)]
     struct CheckedIntTy {
@@ -252,11 +360,20 @@ pub(crate) fn evaluate_const_ty<'db>(
         NotIntExpr,
     }
 
+    #[derive(Clone, Copy)]
+    struct IntEvalCx<'db> {
+        assumptions: PredicateListId<'db>,
+        solve_cx: TraitSolveCx<'db>,
+        lowering_mode: LoweringMode<'db>,
+        current_implementor: Option<ImplementorId<'db>>,
+    }
+
     fn eval_int_expr<'db>(
         db: &'db dyn HirAnalysisDb,
         body: Body<'db>,
         expr: &Expr<'db>,
         expected: Option<CheckedIntTy>,
+        cx: IntEvalCx<'db>,
     ) -> Result<BigInt, ConstIntError> {
         match expr {
             Expr::Block(stmts) => {
@@ -272,7 +389,7 @@ pub(crate) fn evaluate_const_ty<'db>(
                 let Partial::Present(inner) = expr_id.data(db, body) else {
                     return Err(ConstIntError::NotIntExpr);
                 };
-                eval_int_expr(db, body, inner, expected)
+                eval_int_expr(db, body, inner, expected, cx)
             }
 
             Expr::Lit(LitKind::Int(i)) => Ok(BigInt::from(i.data(db).clone())),
@@ -281,7 +398,7 @@ pub(crate) fn evaluate_const_ty<'db>(
                 let Partial::Present(inner) = inner.data(db, body) else {
                     return Err(ConstIntError::Overflow);
                 };
-                let value = eval_int_expr(db, body, inner, expected)?;
+                let value = eval_int_expr(db, body, inner, expected, cx)?;
                 match op {
                     crate::core::hir_def::expr::UnOp::Minus => {
                         let Some(expected) = expected else {
@@ -310,8 +427,8 @@ pub(crate) fn evaluate_const_ty<'db>(
                     signed: false,
                 });
 
-                let lhs = eval_int_expr(db, body, lhs, Some(expected))?;
-                let rhs = eval_int_expr(db, body, rhs, Some(expected))?;
+                let lhs = eval_int_expr(db, body, lhs, Some(expected), cx)?;
+                let rhs = eval_int_expr(db, body, rhs, Some(expected), cx)?;
 
                 match op {
                     crate::core::hir_def::expr::BinOp::Arith(op) => match op {
@@ -405,9 +522,17 @@ pub(crate) fn evaluate_const_ty<'db>(
                 let Some(path) = path.to_opt() else {
                     return Err(ConstIntError::NotIntExpr);
                 };
-                let assumptions = PredicateListId::empty_list(db);
-                let resolved = resolve_path(db, path, body.scope(), assumptions, true)
-                    .map_err(|_| ConstIntError::NotIntExpr)?;
+                let resolved = contextual_path_resolution_in_mode(
+                    db,
+                    body.scope(),
+                    path,
+                    cx.assumptions,
+                    true,
+                    cx.lowering_mode,
+                )
+                .map(Ok)
+                .unwrap_or_else(|| resolve_path(db, path, body.scope(), cx.assumptions, true))
+                .map_err(|_| ConstIntError::NotIntExpr)?;
 
                 let const_ty = match resolved {
                     PathRes::Const(const_def, declared_ty) => {
@@ -417,11 +542,14 @@ pub(crate) fn evaluate_const_ty<'db>(
                             .ok_or(ConstIntError::NotIntExpr)?;
                         ConstTyId::from_body(db, body, Some(declared_ty), Some(const_def))
                     }
-                    PathRes::TraitConst(_recv_ty, inst, name) => {
-                        let solve_cx = TraitSolveCx::new(db, inst.def(db).top_mod(db).scope());
-                        const_ty_from_trait_const(db, solve_cx, inst, name)
-                            .ok_or(ConstIntError::NotIntExpr)?
-                    }
+                    PathRes::TraitConst(_recv_ty, inst, name) => const_ty_from_trait_const(
+                        db,
+                        cx.solve_cx,
+                        inst,
+                        name,
+                        cx.current_implementor,
+                    )
+                    .ok_or(ConstIntError::NotIntExpr)?,
                     _ => return Err(ConstIntError::NotIntExpr),
                 };
 
@@ -454,48 +582,22 @@ pub(crate) fn evaluate_const_ty<'db>(
             );
         };
 
-        let containing_func = match body.scope().parent_item(db) {
-            Some(ItemKind::Func(func)) => Some(func),
-            Some(ItemKind::Body(parent)) => parent.containing_func(db),
-            _ => None,
-        };
-        let assumptions = if let Some(func) = containing_func {
-            let mut preds =
-                collect_func_def_constraints(db, func.into(), true).instantiate_identity();
-            // Methods inside a trait implicitly assume `Self: Trait` in their bodies.
-            if let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) {
-                let self_pred =
-                    TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
-                let mut merged = preds.list(db).to_vec();
-                merged.push(self_pred);
-                preds = PredicateListId::new(db, merged);
-            }
-            preds.extend_all_bounds(db)
+        let resolved_path = if matches!(mode_kind, ConstBodyModeKind::SelectedTraitBody)
+            && let Some(trait_inst) = trait_inst
+            && let Some(parent) = path.parent(db)
+            && parent.is_self_ty(db)
+            && let Some(name) = path.ident(db).to_opt()
+            && trait_inst.def(db).const_(db, name).is_some()
+        {
+            Ok(PathRes::TraitConst(
+                trait_inst.self_ty(db),
+                trait_inst,
+                name,
+            ))
         } else {
-            // Walk up through nested body scopes to find an enclosing item (trait/impl).
-            let mut enclosing = body.scope();
-            let mut parent_item = enclosing.parent_item(db);
-            while let Some(ItemKind::Body(parent)) = parent_item {
-                enclosing = parent.scope();
-                parent_item = enclosing.parent_item(db);
-            }
-
-            match parent_item {
-                Some(ItemKind::Trait(trait_)) => {
-                    let self_pred =
-                        TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
-                    PredicateListId::new(db, vec![self_pred]).extend_all_bounds(db)
-                }
-                Some(ItemKind::ImplTrait(impl_trait)) => collect_constraints(db, impl_trait.into())
-                    .instantiate_identity()
-                    .extend_all_bounds(db),
-                Some(ItemKind::Impl(impl_)) => collect_constraints(db, impl_.into())
-                    .instantiate_identity()
-                    .extend_all_bounds(db),
-                _ => PredicateListId::empty_list(db),
-            }
+            resolve_path(db, path, body.scope(), assumptions, true)
         };
-        if let Ok(resolved_path) = resolve_path(db, path, body.scope(), assumptions, true) {
+        if let Ok(resolved_path) = resolved_path {
             match resolved_path {
                 PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
                     if let TyData::ConstTy(const_ty) = ty.data(db) {
@@ -510,25 +612,33 @@ pub(crate) fn evaluate_const_ty<'db>(
                     }
                 }
                 PathRes::TraitConst(recv_ty, inst, name) => {
-                    let mut args = inst.args(db).clone();
-                    if let Some(self_arg) = args.first_mut() {
-                        *self_arg = recv_ty;
-                    }
-                    let inst = TraitInstId::new(
-                        db,
-                        inst.def(db),
-                        args,
-                        inst.assoc_type_bindings(db).clone(),
-                    );
+                    let inst = if matches!(mode_kind, ConstBodyModeKind::SelectedTraitBody)
+                        && let Some(trait_inst) = trait_inst
+                        && selected_trait_body_receiver_is_self(db, path)
+                    {
+                        crate::analysis::ty::trait_def::specialize_trait_const_inst_to_receiver(
+                            db,
+                            trait_inst.self_ty(db),
+                            inst,
+                        )
+                    } else {
+                        crate::analysis::ty::trait_def::specialize_trait_const_inst_to_receiver(
+                            db, recv_ty, inst,
+                        )
+                    };
 
                     let mk_abstract = |expected_ty: TyId<'db>| {
                         let expr = ConstExprId::new(db, ConstExpr::TraitConst { inst, name });
                         ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty))
                     };
 
-                    let solve_cx =
-                        TraitSolveCx::new(db, body.scope()).with_assumptions(assumptions);
-                    if let Some(const_ty) = const_ty_from_trait_const(db, solve_cx, inst, name) {
+                    if let Some(const_ty) = const_ty_from_trait_const(
+                        db,
+                        path_solve_cx,
+                        inst,
+                        name,
+                        current_implementor,
+                    ) {
                         let evaluated = const_ty.evaluate(db, expected_ty);
                         if matches!(
                             evaluated.ty(db).invalid_cause(db),
@@ -559,7 +669,16 @@ pub(crate) fn evaluate_const_ty<'db>(
         // unevaluated and assume the expected type if available, avoiding
         // spurious diagnostics here. Downstream checks will validate usage.
         if path.parent(db).is_some() {
-            return ConstTyId::from_body(db, body, expected_ty, None);
+            return ConstTyId::from_body_with_generic_args(
+                db,
+                body,
+                expected_ty,
+                None,
+                generic_args,
+                trait_inst,
+                mode_kind,
+                current_implementor,
+            );
         }
 
         return ConstTyId::new(
@@ -577,7 +696,13 @@ pub(crate) fn evaluate_const_ty<'db>(
         Expr::Block(..) | Expr::Un(..) | Expr::Bin(..) | Expr::Lit(LitKind::Int(..))
     ) {
         let expected_int_ty = expected_ty.and_then(|ty| checked_int_ty_from_ty(db, Some(ty)));
-        match eval_int_expr(db, body, &expr, expected_int_ty) {
+        let int_eval_cx = IntEvalCx {
+            assumptions,
+            solve_cx: path_solve_cx,
+            lowering_mode,
+            current_implementor,
+        };
+        match eval_int_expr(db, body, &expr, expected_int_ty, int_eval_cx) {
             Ok(value) => {
                 if let Some(word) = bigint_to_u256_word(&value) {
                     let mut table = UnificationTable::new(db);
@@ -620,10 +745,7 @@ pub(crate) fn evaluate_const_ty<'db>(
             let result = check_const_body(db, const_def);
             (result.0.clone(), result.1.clone())
         }
-        None => {
-            let result = check_anon_const_body(db, body, check_ty);
-            (result.0.clone(), result.1.clone())
-        }
+        None => check_anon_const_body_in_context(db, body, check_ty, solve_cx, lowering_mode),
     };
 
     if let Some((expected, given)) = diags.iter().find_map(|diag| match diag {
@@ -651,11 +773,17 @@ pub(crate) fn evaluate_const_ty<'db>(
         );
     }
 
-    let mut interp = CtfeInterpreter::new(db, CtfeConfig::default());
-    let typed_body = if generic_args.is_empty() {
-        typed_body
+    let mut interp = if let Some(solve_cx) = solve_cx {
+        CtfeInterpreter::new_with_solve_cx(db, CtfeConfig::default(), solve_cx, current_implementor)
     } else {
-        instantiate_typed_body(db, typed_body.clone(), &generic_args)
+        CtfeInterpreter::new(db, CtfeConfig::default())
+    };
+    let typed_body = match (trait_inst, generic_args.is_empty()) {
+        (Some(trait_inst), _) => {
+            instantiate_typed_body_for_trait_inst(db, typed_body.clone(), trait_inst, &generic_args)
+        }
+        (None, true) => typed_body,
+        (None, false) => instantiate_typed_body(db, typed_body.clone(), &generic_args),
     };
     let evaluated = interp
         .eval_expr_in_body(body, typed_body, generic_args, body.expr(db))
@@ -669,11 +797,20 @@ pub(crate) fn evaluate_const_ty<'db>(
 }
 
 fn evaluate_const_ty_cycle_initial<'db>(
-    _db: &'db dyn HirAnalysisDb,
+    db: &'db dyn HirAnalysisDb,
     const_ty: ConstTyId<'db>,
     _expected_ty: Option<TyId<'db>>,
 ) -> ConstTyId<'db> {
-    const_ty
+    match const_ty.data(db) {
+        ConstTyData::UnEvaluated { body, .. } => ConstTyId::invalid(
+            db,
+            InvalidCause::ConstEvalRecursionLimitExceeded {
+                body: *body,
+                expr: body.expr(db),
+            },
+        ),
+        _ => const_ty,
+    }
 }
 
 fn evaluate_const_ty_cycle_recover<'db>(
@@ -686,36 +823,158 @@ fn evaluate_const_ty_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
+fn evaluate_const_ty_with_solve_cx_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    const_ty: ConstTyId<'db>,
+    _expected_ty: Option<TyId<'db>>,
+    _solve_cx: TraitSolveCx<'db>,
+) -> ConstTyId<'db> {
+    evaluate_const_ty_cycle_initial(db, const_ty, None)
+}
+
+fn evaluate_const_ty_with_solve_cx_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &ConstTyId<'db>,
+    _count: u32,
+    _const_ty: ConstTyId<'db>,
+    _expected_ty: Option<TyId<'db>>,
+    _solve_cx: TraitSolveCx<'db>,
+) -> salsa::CycleRecoveryAction<ConstTyId<'db>> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
+fn const_body_assumptions<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    mode: LoweringMode<'db>,
+) -> PredicateListId<'db> {
+    if let LoweringMode::SelectedTraitBody { trait_inst, .. } = mode {
+        return PredicateListId::new(db, vec![trait_inst]).extend_all_bounds(db);
+    }
+
+    let containing_func = match body.scope().parent_item(db) {
+        Some(ItemKind::Func(func)) => Some(func),
+        Some(ItemKind::Body(parent)) => parent.containing_func(db),
+        _ => None,
+    };
+    if let Some(func) = containing_func {
+        let mut preds = collect_func_def_constraints(db, func.into(), true).instantiate_identity();
+        if let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) {
+            let self_pred =
+                TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
+            let mut merged = preds.list(db).to_vec();
+            merged.push(self_pred);
+            preds = PredicateListId::new(db, merged);
+        }
+        return preds.extend_all_bounds(db);
+    }
+
+    let mut enclosing = body.scope();
+    let mut parent_item = enclosing.parent_item(db);
+    while let Some(ItemKind::Body(parent)) = parent_item {
+        enclosing = parent.scope();
+        parent_item = enclosing.parent_item(db);
+    }
+
+    match parent_item {
+        Some(ItemKind::Trait(trait_)) => {
+            let self_pred =
+                TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
+            PredicateListId::new(db, vec![self_pred]).extend_all_bounds(db)
+        }
+        Some(ItemKind::ImplTrait(impl_trait)) => collect_constraints(db, impl_trait.into())
+            .instantiate_identity()
+            .extend_all_bounds(db),
+        Some(ItemKind::Impl(impl_)) => collect_constraints(db, impl_.into())
+            .instantiate_identity()
+            .extend_all_bounds(db),
+        _ => PredicateListId::empty_list(db),
+    }
+}
+
+fn selected_trait_body_receiver_is_self<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+) -> bool {
+    path.parent(db).is_some_and(|parent| {
+        parent.is_self_ty(db)
+            || matches!(
+                parent.kind(db),
+                PathKind::QualifiedType { type_, .. } if type_.is_self_ty(db)
+            )
+    })
+}
+
+fn check_anon_const_body_in_context<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    expected: TyId<'db>,
+    solve_cx: Option<TraitSolveCx<'db>>,
+    mode: LoweringMode<'db>,
+) -> (
+    Vec<FuncBodyDiag<'db>>,
+    crate::analysis::ty::ty_check::TypedBody<'db>,
+) {
+    let assumptions = const_body_assumptions(db, body, mode);
+    let result = if mode != LoweringMode::Normal {
+        check_anon_const_body_in_mode(
+            db,
+            body,
+            expected,
+            solve_cx
+                .unwrap_or_else(|| TraitSolveCx::new(db, body.scope()))
+                .with_assumptions(
+                    solve_cx
+                        .map(|cx| {
+                            cx.assumptions()
+                                .merge(db, assumptions)
+                                .extend_all_bounds(db)
+                        })
+                        .unwrap_or(assumptions),
+                ),
+            mode,
+        )
+    } else {
+        check_anon_const_body(db, body, expected)
+    };
+    (result.0.clone(), result.1.clone())
+}
+
+pub(super) fn const_ty_from_selected_assoc_const<'db>(
+    db: &'db dyn HirAnalysisDb,
+    selection: &AssocConstSelection<'db>,
+) -> Option<ConstTyId<'db>> {
+    let source = selection.body.as_ref()?;
+    let mode_kind = match source.origin {
+        AssocConstBodyOrigin::TraitDefault => ConstBodyModeKind::SelectedTraitBody,
+        AssocConstBodyOrigin::ImplOverride => ConstBodyModeKind::ImplTraitSignature,
+    };
+
+    Some(ConstTyId::from_body_with_generic_args(
+        db,
+        source.body,
+        Some(selection.declared_ty),
+        None,
+        source.impl_args.clone(),
+        Some(selection.trait_inst),
+        mode_kind,
+        Some(source.implementor),
+    ))
+}
+
 pub(super) fn const_ty_from_trait_const<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     inst: TraitInstId<'db>,
     name: IdentId<'db>,
+    current_implementor: Option<ImplementorId<'db>>,
 ) -> Option<ConstTyId<'db>> {
-    let trait_ = inst.def(db);
-    let (body, generic_args) =
-        crate::analysis::ty::trait_def::assoc_const_body_and_impl_args_for_trait_inst(
-            db, solve_cx, inst, name,
-        )
-        .or_else(|| {
-            trait_
-                .const_(db, name)
-                .and_then(|c| c.default_body(db))
-                .map(|body| (body, inst.args(db).clone()))
-        })?;
-
-    let declared_ty = trait_
-        .const_(db, name)
-        .and_then(|v| v.ty_binder(db))
-        .map(|b| b.instantiate(db, inst.args(db)));
-
-    Some(ConstTyId::from_body_with_generic_args(
-        db,
-        body,
-        declared_ty,
-        None,
-        generic_args,
-    ))
+    let overlay = current_implementor
+        .map(ImplOverlay::with_current_impl)
+        .unwrap_or_default();
+    let cx = AnalysisCx::from_solve_cx(solve_cx).with_overlay(overlay);
+    let selection = resolve_assoc_const_selection(db, &cx, inst, name)?;
+    const_ty_from_selected_assoc_const(db, &selection)
 }
 
 // FIXME: When we add type inference, we need to use the inference engine to
@@ -816,12 +1075,21 @@ impl<'db> ConstTyId<'db> {
         }
     }
 
-    pub(super) fn evaluate(
+    pub(crate) fn evaluate(
         self,
         db: &'db dyn HirAnalysisDb,
         expected_ty: Option<TyId<'db>>,
     ) -> Self {
         evaluate_const_ty(db, self, expected_ty)
+    }
+
+    pub(crate) fn evaluate_with_solve_cx(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        expected_ty: Option<TyId<'db>>,
+        solve_cx: TraitSolveCx<'db>,
+    ) -> Self {
+        evaluate_const_ty_with_solve_cx(db, self, expected_ty, solve_cx)
     }
 
     pub(super) fn from_body(
@@ -830,23 +1098,59 @@ impl<'db> ConstTyId<'db> {
         ty: Option<TyId<'db>>,
         const_def: Option<Const<'db>>,
     ) -> Self {
-        Self::from_body_with_generic_args(db, body, ty, const_def, Vec::new())
+        Self::from_body_with_generic_args(
+            db,
+            body,
+            ty,
+            const_def,
+            Vec::new(),
+            None,
+            ConstBodyModeKind::Normal,
+            None,
+        )
     }
 
-    pub(super) fn from_body_with_generic_args(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_body_with_generic_args(
         db: &'db dyn HirAnalysisDb,
         body: Body<'db>,
         ty: Option<TyId<'db>>,
         const_def: Option<Const<'db>>,
         generic_args: Vec<TyId<'db>>,
+        trait_inst: Option<TraitInstId<'db>>,
+        mode_kind: ConstBodyModeKind,
+        current_implementor: Option<ImplementorId<'db>>,
     ) -> Self {
         let data = ConstTyData::UnEvaluated {
             body,
             ty,
             const_def,
             generic_args,
+            trait_inst,
+            mode_kind,
+            current_implementor,
         };
         Self::new(db, data)
+    }
+
+    pub fn from_opt_body_in_mode(
+        db: &'db dyn HirAnalysisDb,
+        body: Partial<Body<'db>>,
+        mode: LoweringMode<'db>,
+    ) -> Self {
+        match body {
+            Partial::Present(body) => Self::from_body_with_generic_args(
+                db,
+                body,
+                None,
+                None,
+                Vec::new(),
+                mode.trait_inst(),
+                ConstBodyModeKind::from_lowering_mode(mode),
+                mode.current_impl(),
+            ),
+            Partial::Absent => Self::invalid(db, InvalidCause::ParseError),
+        }
     }
 
     pub fn from_opt_body(db: &'db dyn HirAnalysisDb, body: Partial<Body<'db>>) -> Self {
@@ -882,12 +1186,18 @@ impl<'db> ConstTyId<'db> {
                 body,
                 const_def,
                 generic_args,
+                trait_inst,
+                mode_kind,
+                current_implementor,
                 ..
             } => ConstTyData::UnEvaluated {
                 body: *body,
                 ty: Some(ty),
                 const_def: *const_def,
                 generic_args: generic_args.clone(),
+                trait_inst: *trait_inst,
+                mode_kind: *mode_kind,
+                current_implementor: *current_implementor,
             },
         };
 
@@ -907,6 +1217,9 @@ pub enum ConstTyData<'db> {
         ty: Option<TyId<'db>>,
         const_def: Option<Const<'db>>,
         generic_args: Vec<TyId<'db>>,
+        trait_inst: Option<TraitInstId<'db>>,
+        mode_kind: ConstBodyModeKind,
+        current_implementor: Option<ImplementorId<'db>>,
     },
 }
 

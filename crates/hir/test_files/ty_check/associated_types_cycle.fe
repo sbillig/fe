@@ -1,5 +1,5 @@
 trait Abi {
-    type Selector: Encode<Self>
+    type Selector
     type Encoder: AbiEncoder
 }
 
@@ -26,12 +26,12 @@ impl AbiEncoder for SolEncoder {
     }
 }
 
-trait Encode<A: Abi> {
-    fn encode(self, _ e: mut A::Encoder)
+trait Encode<E> {
+    fn encode(self, _ e: mut E)
 }
 
-impl Encode<SolAbi> for [u8; 4] {
-    fn encode(self, _ e: mut SolAbi::Encoder) {
+impl Encode<SolEncoder> for [u8; 4] {
+    fn encode(self, _ e: mut SolEncoder) {
         e.write_byte(self[0])
         e.write_byte(self[1])
         e.write_byte(self[2])
@@ -43,6 +43,6 @@ fn f() {
     let mut enc1 = SolAbi::Encoder::with_encoded_size(1024)
     let enc2 = SolEncoder::with_encoded_size(256)
     let enc3: SolEncoder = AbiEncoder::with_encoded_size(128)
-    let selector = [0, 1, 2, 3]
+    let selector: SolAbi::Selector = [0, 1, 2, 3]
     selector.encode(mut enc1)
 }

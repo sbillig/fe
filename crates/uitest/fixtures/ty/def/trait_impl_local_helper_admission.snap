@@ -1,0 +1,73 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/trait_impl_local_helper_admission.fe
+---
+error[6-0002]: not all trait methods are implemented
+  ┌─ trait_impl_local_helper_admission.fe:9:22
+  │
+9 │ impl SuperMethod for BadMethod {}
+  │                      ^^^^^^^^^ missing implementations: run
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_local_helper_admission.fe:11:22
+   │
+11 │ impl ChildMethod for BadMethod {}
+   │                      ^^^^^^^^^ `BadMethod` doesn't implement `SuperMethod`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_local_helper_admission.fe:16:5
+   │
+16 │     needs_child_method(value)
+   │     ^^^^^^^^^^^^^^^^^^ `BadMethod` doesn't implement `ChildMethod`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_local_helper_admission.fe:33:19
+   │
+33 │ impl ChildSig for BadSig {}
+   │                   ^^^^^^ `BadSig` doesn't implement `SuperSig`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_local_helper_admission.fe:38:5
+   │
+38 │     needs_child_sig(value)
+   │     ^^^^^^^^^^^^^^^ `BadSig` doesn't implement `ChildSig`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_local_helper_admission.fe:53:21
+   │
+53 │ impl ChildConst for BadConst {}
+   │                     ^^^^^^^^ `BadConst` doesn't implement `SuperConst`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_local_helper_admission.fe:58:5
+   │
+58 │     needs_child_const(value)
+   │     ^^^^^^^^^^^^^^^^^ `BadConst` doesn't implement `ChildConst`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_impl_local_helper_admission.fe:377:14
+    │
+377 │     type X = SelfWrapCycle<SelfCycle>
+    │              ^^^^^^^^^^^^^^^^^^^^^^^^ `SelfWrapCycle<SelfCycle>` doesn't implement `SelfHelperCycle`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_impl_local_helper_admission.fe:383:5
+    │
+383 │     needs_self_foo_cycle(value)
+    │     ^^^^^^^^^^^^^^^^^^^^ `SelfCycle` doesn't implement `SelfFooCycle`
+
+error[6-0008]: method `run` has incompatible return type
+   ┌─ trait_impl_local_helper_admission.fe:28:8
+   │
+20 │     fn run(self) -> u32
+   │        --- trait requires this return type
+   ·
+28 │     fn run(self) -> bool {
+   │        ^^^ expected `u32`, found `bool`
+
+error[6-0017]: invalid associated const in trait implementation
+   ┌─ trait_impl_local_helper_admission.fe:50:14
+   │
+50 │     const C: u32 = missing()
+   │              ^^^ associated const `C` from trait `SuperConst` has an invalid value

@@ -13,9 +13,26 @@ error[5-0001]: conflicting trait implementations
   │                          ------ conflicts with this trait implementation
 
 error[5-0001]: conflicting trait implementations
+  ┌─ trait_impl_conflict.fe:8:26
+  │
+4 │ impl<T, U> Foo<T, U> for (i32, i32) {}
+  │                          ---------- conflicts with this trait implementation
+  ·
+8 │ impl<T, U> Foo<T, U> for (T, T) {}
+  │                          ^^^^^^ this trait implementation
+
+error[5-0001]: conflicting trait implementations
    ┌─ trait_impl_conflict.fe:16:28
    │
 16 │ impl<T, U> Foo<T, i32> for S<T, T> {}
    │                            ^^^^^^^ this trait implementation
 17 │ impl<T, U> Foo<T, i32> for S<i32, i32> {}
    │                            ----------- conflicts with this trait implementation
+
+error[5-0001]: conflicting trait implementations
+   ┌─ trait_impl_conflict.fe:17:28
+   │
+16 │ impl<T, U> Foo<T, i32> for S<T, T> {}
+   │                            ------- conflicts with this trait implementation
+17 │ impl<T, U> Foo<T, i32> for S<i32, i32> {}
+   │                            ^^^^^^^^^^^ this trait implementation

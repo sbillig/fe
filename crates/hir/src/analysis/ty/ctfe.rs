@@ -9,8 +9,8 @@ use crate::analysis::{
     ty::{
         const_expr::{ConstExpr, ConstExprId},
         const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
-        fold::{TyFoldable, TyFolder},
-        trait_def::{TraitInstId, resolve_trait_method_instance},
+        fold::{AssocTySubst, TyFoldable, TyFolder},
+        trait_def::{ImplementorId, TraitInstId, resolve_trait_method_instance},
         trait_resolution::{PredicateListId, TraitSolveCx},
         ty_check::{
             ConstRef, LocalBinding, RecordLike, TypedBody, check_anon_const_body, check_func_body,
@@ -42,6 +42,8 @@ impl Default for CtfeConfig {
 pub(crate) struct CtfeInterpreter<'db> {
     db: &'db dyn HirAnalysisDb,
     config: CtfeConfig,
+    solve_cx: Option<TraitSolveCx<'db>>,
+    current_implementor: Option<ImplementorId<'db>>,
     steps_left: usize,
     recursion_depth: usize,
     frames: Vec<Frame<'db>>,
@@ -81,6 +83,25 @@ impl<'db> CtfeInterpreter<'db> {
             steps_left: config.step_limit,
             recursion_depth: 0,
             config,
+            solve_cx: None,
+            current_implementor: None,
+            frames: Vec::new(),
+        }
+    }
+
+    pub(crate) fn new_with_solve_cx(
+        db: &'db dyn HirAnalysisDb,
+        config: CtfeConfig,
+        solve_cx: TraitSolveCx<'db>,
+        current_implementor: Option<ImplementorId<'db>>,
+    ) -> Self {
+        Self {
+            db,
+            steps_left: config.step_limit,
+            recursion_depth: 0,
+            config,
+            solve_cx: Some(solve_cx),
+            current_implementor,
             frames: Vec::new(),
         }
     }
@@ -749,9 +770,11 @@ impl<'db> CtfeInterpreter<'db> {
 
                 if let Some(const_ty) = crate::analysis::ty::const_ty::const_ty_from_trait_const(
                     self.db,
-                    TraitSolveCx::new(self.db, self.body().scope()),
+                    self.solve_cx
+                        .unwrap_or_else(|| TraitSolveCx::new(self.db, self.body().scope())),
                     inst,
                     name,
+                    self.current_implementor,
                 ) {
                     const_ty
                 } else {
@@ -762,7 +785,11 @@ impl<'db> CtfeInterpreter<'db> {
             }
         };
 
-        let evaluated = const_ty.evaluate(self.db, Some(expected_ty));
+        let evaluated = if let Some(solve_cx) = self.solve_cx {
+            const_ty.evaluate_with_solve_cx(self.db, Some(expected_ty), solve_cx)
+        } else {
+            const_ty.evaluate(self.db, Some(expected_ty))
+        };
         evaluated
             .ty(self.db)
             .invalid_cause(self.db)
@@ -1496,13 +1523,54 @@ impl<'db> CtfeInterpreter<'db> {
     }
 }
 
-pub(super) fn instantiate_typed_body<'db>(
+pub(crate) fn instantiate_typed_body<'db>(
     db: &'db dyn HirAnalysisDb,
     typed_body: TypedBody<'db>,
     generic_args: &[TyId<'db>],
 ) -> TypedBody<'db> {
     let mut subst = GenericSubst { generic_args };
     typed_body.fold_with(db, &mut subst)
+}
+
+pub(crate) fn instantiate_typed_body_for_trait_inst<'db>(
+    db: &'db dyn HirAnalysisDb,
+    typed_body: TypedBody<'db>,
+    trait_inst: TraitInstId<'db>,
+    generic_args: &[TyId<'db>],
+) -> TypedBody<'db> {
+    struct TraitInstSubst<'db> {
+        trait_inst: TraitInstId<'db>,
+    }
+
+    impl<'db> TyFolder<'db> for TraitInstSubst<'db> {
+        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            match ty.data(db) {
+                TyData::TyParam(param) if param.owner == self.trait_inst.def(db).scope() => self
+                    .trait_inst
+                    .args(db)
+                    .get(param.idx)
+                    .copied()
+                    .unwrap_or(ty),
+                TyData::ConstTy(const_ty) => {
+                    if let ConstTyData::TyParam(param, _) = const_ty.data(db)
+                        && param.owner == self.trait_inst.def(db).scope()
+                        && let Some(arg) = self.trait_inst.args(db).get(param.idx).copied()
+                    {
+                        arg
+                    } else {
+                        ty.super_fold_with(db, self)
+                    }
+                }
+                _ => ty.super_fold_with(db, self),
+            }
+        }
+    }
+
+    let mut trait_inst_subst = TraitInstSubst { trait_inst };
+    let typed_body = typed_body.fold_with(db, &mut trait_inst_subst);
+    let mut assoc_subst = AssocTySubst::new(trait_inst);
+    let typed_body = typed_body.fold_with(db, &mut assoc_subst);
+    instantiate_typed_body(db, typed_body, generic_args)
 }
 
 struct GenericSubst<'a, 'db> {

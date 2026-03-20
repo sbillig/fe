@@ -1,0 +1,58 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/trait_impl_assoc_const_cycle_admissibility.fe
+---
+error[3-0027]: const evaluation exceeded the recursion limit
+  ┌─ trait_impl_assoc_const_cycle_admissibility.fe:8:20
+  │
+8 │     const C: u32 = RecursiveConst::C
+  │                    ^^^^^^^^^^^^^^^^^ const evaluation recurses too deeply
+
+error[3-0027]: const evaluation exceeded the recursion limit
+   ┌─ trait_impl_assoc_const_cycle_admissibility.fe:60:20
+   │
+60 │     const A: u32 = <Self as DefaultCycle>::B
+   │                    ^^^^^^^^^^^^^^^^^^^^^^^^^ const evaluation recurses too deeply
+
+error[3-0027]: const evaluation exceeded the recursion limit
+   ┌─ trait_impl_assoc_const_cycle_admissibility.fe:67:20
+   │
+67 │     const B: u32 = <DefaultRecursive as DefaultCycle>::A
+   │                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ const evaluation recurses too deeply
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_assoc_const_cycle_admissibility.fe:14:5
+   │
+14 │     needs_self_const(value)
+   │     ^^^^^^^^^^^^^^^^ `RecursiveConst` doesn't implement `SelfConst`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_assoc_const_cycle_admissibility.fe:73:5
+   │
+73 │     needs_default_cycle(value)
+   │     ^^^^^^^^^^^^^^^^^^^ `DefaultRecursive` doesn't implement `DefaultCycle`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_assoc_const_cycle_admissibility.fe:87:20
+   │
+87 │     const C: u32 = <CrossRecursive as RightCycle>::D
+   │                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `CrossRecursive` doesn't implement `RightCycle`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_assoc_const_cycle_admissibility.fe:91:20
+   │
+91 │     const D: u32 = <CrossRecursive as LeftCycle>::C
+   │                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `CrossRecursive` doesn't implement `LeftCycle`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_assoc_const_cycle_admissibility.fe:99:5
+   │
+99 │     needs_left_cycle(value)
+   │     ^^^^^^^^^^^^^^^^ `CrossRecursive` doesn't implement `LeftCycle`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_impl_assoc_const_cycle_admissibility.fe:100:5
+    │
+100 │     needs_right_cycle(value)
+    │     ^^^^^^^^^^^^^^^^^ `CrossRecursive` doesn't implement `RightCycle`

@@ -3,12 +3,13 @@ use std::hash::Hash;
 use crate::core::hir_def::IdentId;
 use crate::hir_def::{ItemKind, Trait};
 use common::indexmap::{IndexMap, IndexSet};
+use rustc_hash::FxHashSet;
 
 use super::{
     trait_def::{ImplementorId, TraitInstId},
     trait_resolution::{PredicateListId, TraitGoalSolution},
     ty_check::{EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
-    ty_def::{TyData, TyId},
+    ty_def::{AssocTy, TyData, TyId},
     visitor::TyVisitable,
 };
 use crate::analysis::{
@@ -106,6 +107,9 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                         ty,
                         const_def,
                         generic_args,
+                        trait_inst,
+                        mode_kind,
+                        current_implementor,
                     } => {
                         let ty = ty.map(|t| folder.fold_ty(db, t));
                         let generic_args = generic_args
@@ -113,11 +117,17 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                             .copied()
                             .map(|arg| folder.fold_ty(db, arg))
                             .collect();
+                        let trait_inst = trait_inst.map(|inst| inst.fold_with(db, folder));
+                        let current_implementor = current_implementor
+                            .map(|implementor| implementor.fold_with(db, folder));
                         UnEvaluated {
                             body: *body,
                             ty,
                             const_def: *const_def,
                             generic_args,
+                            trait_inst,
+                            mode_kind: *mode_kind,
+                            current_implementor,
                         }
                     }
                 };
@@ -425,11 +435,15 @@ impl<'db> TyFoldable<'db> for ResolvedEffectArg<'db> {
 /// A type folder that substitutes associated types based on a trait instance's bindings
 pub struct AssocTySubst<'db> {
     trait_inst: TraitInstId<'db>,
+    in_progress: FxHashSet<AssocTy<'db>>,
 }
 
 impl<'db> AssocTySubst<'db> {
     pub fn new(trait_inst: TraitInstId<'db>) -> Self {
-        Self { trait_inst }
+        Self {
+            trait_inst,
+            in_progress: FxHashSet::default(),
+        }
     }
 }
 
@@ -459,14 +473,37 @@ impl<'db> TyFolder<'db> for AssocTySubst<'db> {
             TyData::AssocTy(assoc_ty) => {
                 // First fold the trait instance to handle any Self substitutions
                 let folded_trait = assoc_ty.trait_.fold_with(db, self);
+                let matches_current_trait = folded_trait.def(db) == self.trait_inst.def(db)
+                    && folded_trait.self_ty(db) == self.trait_inst.self_ty(db)
+                    && folded_trait.args(db).len() <= self.trait_inst.args(db).len()
+                    && folded_trait
+                        .args(db)
+                        .iter()
+                        .skip(1)
+                        .zip(self.trait_inst.args(db).iter().skip(1))
+                        .all(|(lhs, rhs)| lhs == rhs)
+                    && folded_trait
+                        .assoc_type_bindings(db)
+                        .iter()
+                        .all(|(name, ty)| {
+                            self.trait_inst
+                                .assoc_type_bindings(db)
+                                .get(name)
+                                .is_some_and(|bound| bound == ty)
+                        });
 
                 // Check if this associated type belongs to our trait instance
-                if assoc_ty.trait_.def(db) == self.trait_inst.def(db) {
+                if matches_current_trait {
                     // Check if we have a binding for this associated type
                     if let Some(&bound_ty) =
                         self.trait_inst.assoc_type_bindings(db).get(&assoc_ty.name)
                     {
-                        return bound_ty.fold_with(db, self);
+                        if !self.in_progress.insert(*assoc_ty) {
+                            return ty;
+                        }
+                        let bound_ty = bound_ty.fold_with(db, self);
+                        self.in_progress.remove(assoc_ty);
+                        return bound_ty;
                     }
                 }
 

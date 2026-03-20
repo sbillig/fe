@@ -1075,6 +1075,11 @@ pub enum InvalidCause<'db> {
         expr: ExprId,
     },
 
+    TraitConstNotImplemented {
+        inst: TraitInstId<'db>,
+        name: IdentId<'db>,
+    },
+
     // TraitConstraintNotSat(PredicateId),
     ParseError,
 
@@ -1142,6 +1147,11 @@ impl InvalidCause<'_> {
             InvalidCause::ConstEvalRecursionLimitExceeded { .. } => {
                 "ConstEvalRecursionLimitExceeded".into()
             }
+            InvalidCause::TraitConstNotImplemented { inst, name } => format!(
+                "TraitConstNotImplemented {{ inst: {}, name: {} }}",
+                inst.pretty_print(db, false),
+                name.data(db),
+            ),
         }
     }
 }

@@ -1027,6 +1027,32 @@ fn select_assoc_const_candidate<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> AssocConstSelection<'db> {
+    let mut enclosing_scope = scope;
+    let enclosing_body = scope.body();
+    let mut parent_item = enclosing_scope.parent_item(db);
+    while let Some(ItemKind::Body(parent)) = parent_item {
+        enclosing_scope = parent.scope();
+        parent_item = enclosing_scope.parent_item(db);
+    }
+
+    if let Some(ItemKind::ImplTrait(impl_trait)) = parent_item
+        && enclosing_body.is_some_and(|body| {
+            impl_trait
+                .assoc_consts(db)
+                .any(|assoc| assoc.value_body(db) == Some(body))
+        })
+        && let Some(trait_inst) = impl_trait.trait_inst(db)
+        && trait_inst.self_ty(db) == receiver_ty
+        && trait_inst.def(db).const_(db, name).is_some()
+    {
+        // While checking an impl-associated-const body, keep `SelfTy::CONST`
+        // on the trait currently being implemented instead of probing the
+        // global trait env. That lets same-impl const references participate in
+        // admission-time cycle checks without changing general method/body path
+        // resolution precedence.
+        return AssocConstSelection::Found(trait_inst);
+    }
+
     // Qualified type: `<A as T>::C` must resolve against the explicit trait instance.
     if let TyData::QualifiedTy(trait_inst) = receiver_ty.data(db) {
         return if trait_inst.def(db).const_(db, name).is_some() {
@@ -1166,6 +1192,12 @@ pub fn find_associated_type<'db>(
             }
             table.rollback_to(snapshot);
         }
+
+        // Generic parameters can only project associated types through their
+        // in-scope bounds. Searching impls here is both semantically wrong and
+        // can recurse through local impl admission while the bounds themselves
+        // are still being lowered.
+        return candidates;
     }
 
     let search_ingots = [

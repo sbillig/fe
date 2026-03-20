@@ -3,7 +3,7 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/assoc_const_missing.fe
 ---
-error[6-0015]: missing associated const in trait implementation
+error[6-0016]: missing associated const in trait implementation
   ┌─ assoc_const_missing.fe:7:12
   │
 7 │ impl T for S {}

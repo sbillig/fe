@@ -10,7 +10,6 @@ use crate::analysis::{
     ty::{
         binder::Binder,
         diagnostics::BodyDiag,
-        trait_def::TraitInstId,
         ty_def::{InvalidCause, Kind, TyId, TyVarSort},
         ty_lower::lower_hir_ty,
     },
@@ -160,26 +159,12 @@ impl<'db> TyChecker<'db> {
             }
 
             Ok(PathRes::TraitConst(recv_ty, inst, name)) => {
-                let mut args = inst.args(self.db).clone();
-                if let Some(self_arg) = args.first_mut() {
-                    *self_arg = recv_ty;
-                }
-                let inst = TraitInstId::new(
-                    self.db,
-                    inst.def(self.db),
-                    args,
-                    inst.assoc_type_bindings(self.db).clone(),
+                let inst = crate::analysis::ty::trait_def::specialize_trait_const_inst_to_receiver(
+                    self.db, recv_ty, inst,
                 );
 
-                let trait_ = inst.def(self.db);
-                if let Some(const_view) = trait_.const_(self.db, name)
-                    && let Some(ty_binder) = const_view.ty_binder(self.db)
-                {
-                    let instantiated = ty_binder.instantiate(self.db, inst.args(self.db));
-                    self.table.instantiate_to_term(instantiated)
-                } else {
-                    TyId::invalid(self.db, InvalidCause::Other)
-                }
+                self.env.register_confirmation(inst, span.into());
+                self.instantiate_trait_const_declared_ty_to_term(inst, name)
             }
 
             Ok(PathRes::Trait(trait_)) => {

@@ -129,6 +129,9 @@ impl<'db> TyFolder<'db> for InstantiateFolder<'db, '_> {
                         ty,
                         const_def,
                         generic_args,
+                        trait_inst,
+                        mode_kind,
+                        current_implementor,
                     } = const_ty.data(db)
                     && generic_args.is_empty()
                     && !self.args.is_empty()
@@ -140,6 +143,10 @@ impl<'db> TyFolder<'db> for InstantiateFolder<'db, '_> {
                             ty: *ty,
                             const_def: *const_def,
                             generic_args: self.args.to_vec(),
+                            trait_inst: *trait_inst,
+                            mode_kind: *mode_kind,
+                            current_implementor: current_implementor
+                                .map(|implementor| implementor.fold_with(db, self)),
                         },
                     );
                     return TyId::const_ty(db, const_ty);

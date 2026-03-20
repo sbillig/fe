@@ -1,4 +1,4 @@
-use crate::analysis::ty::ty_def::TyId;
+use crate::analysis::ty::{context::LoweringMode, trait_resolution::TraitSolveCx, ty_def::TyId};
 use crate::span::DynLazySpan;
 use crate::{
     analysis::HirAnalysisDb,
@@ -15,6 +15,12 @@ pub enum BodyOwner<'db> {
     AnonConstBody {
         body: Body<'db>,
         expected: TyId<'db>,
+    },
+    AnonConstBodyInMode {
+        body: Body<'db>,
+        expected: TyId<'db>,
+        solve_cx: TraitSolveCx<'db>,
+        mode: LoweringMode<'db>,
     },
     ContractInit {
         contract: Contract<'db>,
@@ -101,7 +107,9 @@ impl<'db> BodyOwner<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> Option<crate::hir_def::ContractRecvArm<'db>> {
         match self {
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => None,
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::AnonConstBodyInMode { .. } => None,
             BodyOwner::ContractInit { .. } => None,
             BodyOwner::ContractRecvArm {
                 contract,
@@ -125,7 +133,9 @@ impl<'db> BodyOwner<'db> {
         match self {
             BodyOwner::Func(func) => func.body(db),
             BodyOwner::Const(const_) => const_.body(db).to_opt(),
-            BodyOwner::AnonConstBody { body, .. } => Some(body),
+            BodyOwner::AnonConstBody { body, .. } | BodyOwner::AnonConstBodyInMode { body, .. } => {
+                Some(body)
+            }
             BodyOwner::ContractInit { contract } => Some(contract.init(db)?.body(db)),
             BodyOwner::ContractRecvArm {
                 contract,
@@ -144,7 +154,9 @@ impl<'db> BodyOwner<'db> {
         match self {
             BodyOwner::Func(func) => func.scope(),
             BodyOwner::Const(const_) => const_.scope(),
-            BodyOwner::AnonConstBody { body, .. } => body.scope(),
+            BodyOwner::AnonConstBody { body, .. } | BodyOwner::AnonConstBodyInMode { body, .. } => {
+                body.scope()
+            }
             BodyOwner::ContractInit { contract } => contract.scope(),
             BodyOwner::ContractRecvArm { contract, .. } => contract.scope(),
         }
@@ -153,9 +165,9 @@ impl<'db> BodyOwner<'db> {
     pub fn effects(self, db: &'db dyn HirAnalysisDb) -> EffectParamListId<'db> {
         match self {
             BodyOwner::Func(func) => func.effects(db),
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => {
-                EffectParamListId::new(db, Vec::new())
-            }
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::AnonConstBodyInMode { .. } => EffectParamListId::new(db, Vec::new()),
             BodyOwner::ContractInit { contract } => contract
                 .init(db)
                 .map(|init| init.effects(db))
@@ -179,7 +191,9 @@ impl<'db> BodyOwner<'db> {
     ) -> DynLazySpan<'db> {
         match self {
             BodyOwner::Func(func) => func.span().effects().param_idx(idx).path().into(),
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => DynLazySpan::invalid(),
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::AnonConstBodyInMode { .. } => DynLazySpan::invalid(),
             BodyOwner::ContractInit { contract } => contract
                 .span()
                 .init_block()

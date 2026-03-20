@@ -15,7 +15,7 @@ use crate::analysis::{
         corelib::resolve_core_trait,
         effects::{EffectKeyKind, effect_key_kind, place_effect_provider_param_index_map},
         trait_def::TraitInstId,
-        trait_lower::{lower_impl_trait, lower_trait_ref},
+        trait_lower::lower_trait_ref,
         trait_resolution::PredicateListId,
         ty_def::{TyBase, TyData, TyId, TyVarSort},
         ty_lower::{collect_generic_params, lower_hir_ty},
@@ -225,8 +225,11 @@ pub(crate) fn collect_func_def_constraints<'db>(
         Some(ItemKind::Impl(impl_)) => collect_constraints(db, impl_.into()),
 
         Some(ItemKind::ImplTrait(impl_trait)) => {
-            // Only include constraints if the impl trait lowers successfully
-            if lower_impl_trait(db, impl_trait).is_none() {
+            // Method body checking only needs impl-local assumptions when the
+            // impl's own type and trait-ref lower successfully. Using the
+            // stricter trait-solver admission gate here creates cycles through
+            // the trait environment while checking method bodies.
+            if impl_trait.lowered_implementor_preconditions(db).is_err() {
                 return func_constraints;
             }
             collect_constraints(db, impl_trait.into())

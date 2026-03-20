@@ -4319,6 +4319,26 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                 error_code,
             },
 
+            Self::AssocTypeNotDefinedInTrait {
+                primary,
+                trait_,
+                type_name,
+            } => CompleteDiagnostic {
+                severity,
+                message: "associated type not defined in trait".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "associated type `{}` is not defined in trait `{}`",
+                        type_name.data(db),
+                        trait_.name(db).unwrap().data(db)
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
             Self::MissingAssociatedConstValue {
                 primary,
                 const_name,
@@ -4370,6 +4390,26 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                     style: LabelStyle::Primary,
                     message: format!(
                         "missing associated const `{}` from trait `{}`",
+                        const_name.data(db),
+                        trait_.name(db).unwrap().data(db)
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::InvalidAssociatedConst {
+                primary,
+                const_name,
+                trait_,
+            } => CompleteDiagnostic {
+                severity,
+                message: "invalid associated const in trait implementation".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "associated const `{}` from trait `{}` has an invalid value",
                         const_name.data(db),
                         trait_.name(db).unwrap().data(db)
                     ),

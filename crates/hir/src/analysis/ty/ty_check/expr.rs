@@ -26,8 +26,8 @@ use crate::analysis::ty::{
     fold::{AssocTySubst, TyFoldable as _, TyFolder},
     trait_def::TraitInstId,
     trait_resolution::{
-        GoalSatisfiability, PredicateListId, TraitSolveCx,
-        constraint::collect_func_def_constraints, is_goal_satisfiable,
+        GoalSatisfiability, PredicateListId, constraint::collect_func_def_constraints,
+        is_goal_satisfiable,
     },
     ty_check::callable::Callable,
     ty_def::{CapabilityKind, PrimTy, TyBase, TyData, prim_int_bits},
@@ -1072,8 +1072,7 @@ impl<'db> TyChecker<'db> {
                 return Some(inner_ty);
             }
 
-            let solve_cx = TraitSolveCx::new(this.db, this.env.scope())
-                .with_assumptions(this.env.assumptions());
+            let solve_cx = this.env.trait_solve_cx();
             let effect_handle_inst = TraitInstId::new(
                 this.db,
                 effect_handle_trait,
@@ -1246,8 +1245,7 @@ impl<'db> TyChecker<'db> {
                             if !matches!(
                                 is_goal_satisfiable(
                                     self.db,
-                                    TraitSolveCx::new(self.db, self.env.scope())
-                                        .with_assumptions(self.env.assumptions()),
+                                    self.env.trait_solve_cx(),
                                     canonical.value
                                 ),
                                 GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
@@ -1352,8 +1350,7 @@ impl<'db> TyChecker<'db> {
                             let canonical = Canonicalized::new(self.db, trait_req);
                             let sat = is_goal_satisfiable(
                                 self.db,
-                                TraitSolveCx::new(self.db, self.env.scope())
-                                    .with_assumptions(self.env.assumptions()),
+                                self.env.trait_solve_cx(),
                                 canonical.value,
                             );
 
@@ -2068,34 +2065,19 @@ impl<'db> TyChecker<'db> {
                     ExprProp::new(func_ty, true)
                 }
                 PathRes::TraitConst(recv_ty, inst, name) => {
-                    let mut args = inst.args(self.db).clone();
-                    if let Some(self_arg) = args.first_mut() {
-                        *self_arg = recv_ty;
-                    }
-                    let inst = TraitInstId::new(
-                        self.db,
-                        inst.def(self.db),
-                        args,
-                        inst.assoc_type_bindings(self.db).clone(),
-                    );
+                    let inst =
+                        crate::analysis::ty::trait_def::specialize_trait_const_inst_to_receiver(
+                            self.db, recv_ty, inst,
+                        );
 
                     self.env
+                        .register_confirmation(inst, path_expr_span.clone().into());
+                    self.env
                         .register_const_ref(expr, ConstRef::TraitConst { inst, name });
-                    // Look up the associated const's declared type in the trait and
-                    // instantiate it with the trait instance's args (including Self).
-                    let trait_ = inst.def(self.db);
-                    if let Some(const_view) = trait_.const_(self.db, name)
-                        && let Some(ty_binder) = const_view.ty_binder(self.db)
-                    {
-                        // Instantiate with the concrete args of the trait instance
-                        let instantiated = ty_binder.instantiate(self.db, inst.args(self.db));
-                        let ty = self.table.instantiate_to_term(instantiated);
-
-                        ExprProp::new(ty, true)
-                    } else {
-                        // Fallback to invalid type if the declaration isn't found
-                        ExprProp::invalid(self.db)
-                    }
+                    ExprProp::new(
+                        self.instantiate_trait_const_declared_ty_to_term(inst, name),
+                        true,
+                    )
                 }
                 PathRes::Mod(scope) => {
                     let diag = BodyDiag::NotValue {

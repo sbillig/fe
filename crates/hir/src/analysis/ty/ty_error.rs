@@ -14,10 +14,11 @@ use crate::analysis::{
 };
 
 use super::{
+    context::LoweringMode,
     diagnostics::{TyDiagCollection, TyLowerDiag},
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, TyData, TyId},
-    ty_lower::lower_hir_ty,
+    ty_lower::{contextual_path_resolution_in_mode, lower_hir_ty_in_mode},
 };
 use crate::visitor::prelude::LazyTraitRefSpan;
 
@@ -33,14 +34,25 @@ pub fn collect_hir_ty_diags<'db>(
     span: LazyTySpan<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
+    collect_hir_ty_diags_in_mode(db, scope, hir_ty, span, assumptions, LoweringMode::Normal)
+}
+
+pub fn collect_hir_ty_diags_in_mode<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    hir_ty: TypeId<'db>,
+    span: LazyTySpan<'db>,
+    assumptions: PredicateListId<'db>,
+    mode: LoweringMode<'db>,
+) -> Vec<TyDiagCollection<'db>> {
     // Try precise HIR-based errors first
-    let diags = collect_ty_lower_errors(db, scope, hir_ty, span.clone(), assumptions);
+    let diags = collect_ty_lower_errors_in_mode(db, scope, hir_ty, span.clone(), assumptions, mode);
     if !diags.is_empty() {
         return diags;
     }
 
     // Fall back to semantic errors
-    let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
+    let ty = lower_hir_ty_in_mode(db, hir_ty, scope, assumptions, mode);
     emit_invalid_ty_error(db, ty, span.into())
         .into_iter()
         .collect()
@@ -53,10 +65,22 @@ pub fn collect_ty_lower_errors<'db>(
     span: LazyTySpan<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
+    collect_ty_lower_errors_in_mode(db, scope, hir_ty, span, assumptions, LoweringMode::Normal)
+}
+
+pub fn collect_ty_lower_errors_in_mode<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    hir_ty: TypeId<'db>,
+    span: LazyTySpan<'db>,
+    assumptions: PredicateListId<'db>,
+    mode: LoweringMode<'db>,
+) -> Vec<TyDiagCollection<'db>> {
     let mut vis = HirTyErrVisitor {
         db,
         assumptions,
         diags: Vec::new(),
+        mode,
     };
     let mut ctxt = VisitorCtxt::new(db, scope, span);
     vis.visit_ty(&mut ctxt, hir_ty);
@@ -67,6 +91,7 @@ struct HirTyErrVisitor<'db> {
     db: &'db dyn HirAnalysisDb,
     diags: Vec<TyDiagCollection<'db>>,
     assumptions: PredicateListId<'db>,
+    mode: LoweringMode<'db>,
 }
 
 impl<'db> HirTyErrVisitor<'db> {
@@ -74,6 +99,22 @@ impl<'db> HirTyErrVisitor<'db> {
         if let Some(diag) = diag {
             self.diags.push(diag)
         }
+    }
+
+    fn contextual_path_resolution(
+        &self,
+        scope: ScopeId<'db>,
+        path: PathId<'db>,
+        resolve_tail_as_value: bool,
+    ) -> Option<PathRes<'db>> {
+        contextual_path_resolution_in_mode(
+            self.db,
+            scope,
+            path,
+            self.assumptions,
+            resolve_tail_as_value,
+            self.mode,
+        )
     }
 }
 
@@ -90,7 +131,9 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
             && let Some(hir_ty) = type_arg.ty.to_opt()
             && let TypeKind::Path(path_partial) = hir_ty.data(self.db)
             && let Some(path) = path_partial.to_opt()
-            && let Ok(resolved) = resolve_path(self.db, path, ctxt.scope(), self.assumptions, true)
+            && let Some(resolved) = self
+                .contextual_path_resolution(ctxt.scope(), path, true)
+                .or_else(|| resolve_path(self.db, path, ctxt.scope(), self.assumptions, true).ok())
         {
             let is_const_like = match resolved {
                 PathRes::Const(..) | PathRes::TraitConst(..) => true,
@@ -108,47 +151,53 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                     // Preserve path visibility diagnostics even though we suppress
                     // "expected type" errors for const-like paths in generic-arg
                     // position.
-                    let scope = ctxt.scope();
-                    let mut invisible = None;
-                    let mut check_visibility = |path: PathId<'db>, reso: &PathRes<'db>| {
-                        if invisible.is_some() {
-                            return;
-                        }
-                        if !reso.is_visible_from(self.db, scope) {
-                            invisible = Some((path, reso.name_span(self.db)));
-                        }
-                    };
+                    if self
+                        .contextual_path_resolution(ctxt.scope(), path, true)
+                        .is_none()
+                    {
+                        let scope = ctxt.scope();
+                        let mut invisible = None;
+                        let mut check_visibility = |path: PathId<'db>, reso: &PathRes<'db>| {
+                            if invisible.is_some() {
+                                return;
+                            }
+                            if !reso.is_visible_from(self.db, scope) {
+                                invisible = Some((path, reso.name_span(self.db)));
+                            }
+                        };
 
-                    match resolve_path_with_observer(
-                        self.db,
-                        path,
-                        scope,
-                        self.assumptions,
-                        true,
-                        &mut check_visibility,
-                    ) {
-                        Ok(_) => {
-                            if let Some((path, deriv_span)) = invisible
-                                && let Some(ident) = path.ident(self.db).to_opt()
-                            {
-                                let span = path_span
-                                    .clone()
-                                    .segment(path.segment_index(self.db))
-                                    .ident();
-                                let diag = PathResDiag::Invisible(span.into(), ident, deriv_span);
-                                self.diags.push(diag.into());
+                        match resolve_path_with_observer(
+                            self.db,
+                            path,
+                            scope,
+                            self.assumptions,
+                            true,
+                            &mut check_visibility,
+                        ) {
+                            Ok(_) => {
+                                if let Some((path, deriv_span)) = invisible
+                                    && let Some(ident) = path.ident(self.db).to_opt()
+                                {
+                                    let span = path_span
+                                        .clone()
+                                        .segment(path.segment_index(self.db))
+                                        .ident();
+                                    let diag =
+                                        PathResDiag::Invisible(span.into(), ident, deriv_span);
+                                    self.diags.push(diag.into());
+                                }
                             }
-                        }
-                        Err(err) => {
-                            if let Some(diag) = err.into_diag(
-                                self.db,
-                                path,
-                                path_span.clone(),
-                                ExpectedPathKind::Value,
-                            ) {
-                                self.diags.push(diag.into());
+                            Err(err) => {
+                                if let Some(diag) = err.into_diag(
+                                    self.db,
+                                    path,
+                                    path_span.clone(),
+                                    ExpectedPathKind::Value,
+                                ) {
+                                    self.diags.push(diag.into());
+                                }
                             }
-                        }
+                        };
                     }
 
                     // Walk the underlying path to validate any nested generic arguments,
@@ -175,7 +224,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
     }
 
     fn visit_ty(&mut self, ctxt: &mut VisitorCtxt<'db, LazyTySpan<'db>>, hir_ty: TypeId<'db>) {
-        let ty = lower_hir_ty(self.db, hir_ty, ctxt.scope(), self.assumptions);
+        let ty = lower_hir_ty_in_mode(self.db, hir_ty, ctxt.scope(), self.assumptions, self.mode);
 
         // This will report errors with nested types that are fundamental to the nested type,
         // but will not catch cases where the nested type is fine on its own, but incompatible
@@ -231,23 +280,27 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
             }
         };
 
-        let res = match resolve_path_with_observer(
-            self.db,
-            path,
-            scope,
-            self.assumptions,
-            false,
-            &mut check_visibility,
-        ) {
-            Ok(res) => res,
+        let res = if let Some(res) = self.contextual_path_resolution(scope, path, false) {
+            res
+        } else {
+            match resolve_path_with_observer(
+                self.db,
+                path,
+                scope,
+                self.assumptions,
+                false,
+                &mut check_visibility,
+            ) {
+                Ok(res) => res,
 
-            Err(err) => {
-                if let Some(diag) =
-                    err.into_diag(self.db, path, path_span.clone(), ExpectedPathKind::Type)
-                {
-                    self.diags.push(diag.into());
+                Err(err) => {
+                    if let Some(diag) =
+                        err.into_diag(self.db, path, path_span.clone(), ExpectedPathKind::Type)
+                    {
+                        self.diags.push(diag.into());
+                    }
+                    return;
                 }
-                return;
             }
         };
 
@@ -458,6 +511,15 @@ fn diag_from_invalid_cause<'db>(
 
         InvalidCause::ConstEvalRecursionLimitExceeded { body, expr } => {
             TyLowerDiag::ConstEvalRecursionLimitExceeded(expr.span(body).into()).into()
+        }
+
+        InvalidCause::TraitConstNotImplemented { inst, .. } => {
+            crate::analysis::ty::diagnostics::TraitConstraintDiag::TraitBoundNotSat {
+                span,
+                primary_goal: inst,
+                unsat_subgoal: None,
+            }
+            .into()
         }
 
         InvalidCause::NotAType(_) => return None,

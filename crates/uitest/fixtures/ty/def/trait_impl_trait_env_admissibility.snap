@@ -1,0 +1,169 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/trait_impl_trait_env_admissibility.fe
+---
+error[2-0002]: `MissingType` is not found
+    ┌─ trait_impl_trait_env_admissibility.fe:126:14
+    │
+126 │     const C: MissingType = 0
+    │              ^^^^^^^^^^^ `MissingType` is not found
+
+error[3-0011]: given type doesn't match the expected const type
+   ┌─ trait_impl_trait_env_admissibility.fe:98:20
+   │
+98 │     const C: u32 = true
+   │                    ^^^^ expected `u32` type here, but `bool` is given
+
+error[3-0011]: given type doesn't match the expected const type
+    ┌─ trait_impl_trait_env_admissibility.fe:114:14
+    │
+114 │     const C: bool = 0
+    │              ^^^^ expected `u32` type here, but `bool` is given
+
+error[6-0003]: trait bound is not satisfied
+  ┌─ trait_impl_trait_env_admissibility.fe:8:6
+  │
+8 │ impl Foo<U> for Bar {}
+  │      ^^^^^^ `U` doesn't implement `Hashable`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_trait_env_admissibility.fe:10:26
+   │
+10 │ fn needs_hashable_foo<T: Foo<U>>(_value: T) {}
+   │                          ^^^^^^ `U` doesn't implement `Hashable`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_trait_env_admissibility.fe:13:5
+   │
+13 │     needs_hashable_foo(value)
+   │     ^^^^^^^^^^^^^^^^^^ `Bar` doesn't implement `Foo<U>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_trait_env_admissibility.fe:21:16
+   │
+21 │ impl Child for Baz {}
+   │                ^^^ `Baz` doesn't implement `Super`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_trait_env_admissibility.fe:26:5
+   │
+26 │     needs_child(value)
+   │     ^^^^^^^^^^^ `Baz` doesn't implement `Child`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_trait_env_admissibility.fe:40:5
+   │
+40 │     needs_item(value)
+   │     ^^^^^^^^^^ `MissingItem` doesn't implement `WithItem`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_trait_env_admissibility.fe:50:17
+   │
+50 │     type Item = U
+   │                 ^ `U` doesn't implement `Hashable`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_trait_env_admissibility.fe:56:5
+   │
+56 │     needs_hashable_item(value)
+   │     ^^^^^^^^^^^^^^^^^^^ `BadItem` doesn't implement `WithHashableItem`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_trait_env_admissibility.fe:74:5
+   │
+74 │     needs_callable(value)
+   │     ^^^^^^^^^^^^^^ `BadCallable` doesn't implement `Callable`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_trait_env_admissibility.fe:88:5
+   │
+88 │     needs_const(value)
+   │     ^^^^^^^^^^^ `MissingConst` doesn't implement `WithConst`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_impl_trait_env_admissibility.fe:104:5
+    │
+104 │     needs_typed_const(value)
+    │     ^^^^^^^^^^^^^^^^^ `WrongConst` doesn't implement `WithTypedConst`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_impl_trait_env_admissibility.fe:120:5
+    │
+120 │     needs_header_const(value)
+    │     ^^^^^^^^^^^^^^^^^^ `WrongHeaderConst` doesn't implement `WithHeaderConst`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_impl_trait_env_admissibility.fe:130:5
+    │
+130 │     needs_header_const(value)
+    │     ^^^^^^^^^^^^^^^^^^ `MissingHeaderTypeConst` doesn't implement `WithHeaderConst`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_impl_trait_env_admissibility.fe:160:5
+    │
+160 │     needs_body_const(value)
+    │     ^^^^^^^^^^^^^^^^ `BadBodyConst` doesn't implement `WithBodyConst`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_impl_trait_env_admissibility.fe:174:5
+    │
+174 │     needs_marker(value)
+    │     ^^^^^^^^^^^^ `ExtraConst` doesn't implement `Marker`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_impl_trait_env_admissibility.fe:208:5
+    │
+208 │     needs_default_item(value)
+    │     ^^^^^^^^^^^^^^^^^^ `ExtraOnlyItem` doesn't implement `WithDefaultItem`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_impl_trait_env_admissibility.fe:219:5
+    │
+219 │     needs_item(value)
+    │     ^^^^^^^^^^ `MixedExtraItem` doesn't implement `WithItem`
+
+error[6-0008]: method `call` has incompatible return type
+   ┌─ trait_impl_trait_env_admissibility.fe:66:8
+   │
+60 │     fn call(self) -> u32
+   │        ---- trait requires this return type
+   ·
+66 │     fn call(self) -> bool {
+   │        ^^^^ expected `u32`, found `bool`
+
+error[6-0012]: missing associated type in trait implementation
+   ┌─ trait_impl_trait_env_admissibility.fe:35:19
+   │
+35 │ impl WithItem for MissingItem {}
+   │                   ^^^^^^^^^^^ missing associated type `Item` from trait `WithItem`
+
+error[6-0013]: associated type not defined in trait
+    ┌─ trait_impl_trait_env_admissibility.fe:204:10
+    │
+204 │     type Extra = bool
+    │          ^^^^^ associated type `Extra` is not defined in trait `WithDefaultItem`
+
+error[6-0013]: associated type not defined in trait
+    ┌─ trait_impl_trait_env_admissibility.fe:215:10
+    │
+215 │     type Extra = bool
+    │          ^^^^^ associated type `Extra` is not defined in trait `WithItem`
+
+error[6-0015]: associated const not defined in trait
+    ┌─ trait_impl_trait_env_admissibility.fe:168:11
+    │
+168 │     const C: u32 = 1
+    │           ^ associated const `C` is not defined in trait `Marker`
+
+error[6-0016]: missing associated const in trait implementation
+   ┌─ trait_impl_trait_env_admissibility.fe:83:20
+   │
+83 │ impl WithConst for MissingConst {}
+   │                    ^^^^^^^^^^^^ missing associated const `C` from trait `WithConst`
+
+error[6-0017]: invalid associated const in trait implementation
+    ┌─ trait_impl_trait_env_admissibility.fe:154:14
+    │
+154 │     const C: u32 = missing()
+    │              ^^^ associated const `C` from trait `WithBodyConst` has an invalid value

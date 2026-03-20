@@ -2,20 +2,19 @@
 
 use crate::{
     core::hir_def::{
-        AssocTypeGenericArg, ConstGenericArgValue, HirIngot, IdentId, ImplTrait, ItemKind, Partial,
-        PathId, Trait, TraitRefId, params::GenericArg, scope_graph::ScopeId,
+        AssocTypeGenericArg, ConstGenericArgValue, HirIngot, IdentId, ItemKind, Partial, PathId,
+        Trait, TraitRefId, params::GenericArg, scope_graph::ScopeId,
     },
     hir_def::Func,
 };
 use common::{indexmap::IndexMap, ingot::Ingot};
-use rustc_hash::FxHashMap;
 use salsa::Update;
 
 use super::{
-    binder::Binder,
+    admission::{AdmissionEngine, TraitImplTable},
     const_ty::ConstTyId,
     fold::{TyFoldable, TyFolder},
-    trait_def::{ImplementorId, ImplementorOrigin, TraitInstId, does_impl_trait_conflict},
+    trait_def::{ImplementorId, TraitInstId},
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, TyId},
     ty_lower::lower_hir_ty,
@@ -29,14 +28,32 @@ use crate::analysis::{
     },
 };
 
-type TraitImplTable<'db> = FxHashMap<Trait<'db>, Vec<Binder<ImplementorId<'db>>>>;
+fn collect_trait_impls_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _ingot: Ingot<'db>,
+) -> TraitImplTable<'db> {
+    TraitImplTable::default()
+}
+
+fn collect_trait_impls_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &TraitImplTable<'db>,
+    _count: u32,
+    _ingot: Ingot<'db>,
+) -> salsa::CycleRecoveryAction<TraitImplTable<'db>> {
+    salsa::CycleRecoveryAction::Iterate
+}
 
 /// Collect all trait implementors in the ingot.
 /// The returned table doesn't contain the const(external) ingot
 /// implementors. If you need to obtain the environment that contains all
 /// available implementors in the ingot, please use
 /// [`TraitEnv`](super::trait_def::TraitEnv).
-#[salsa::tracked(return_ref)]
+#[salsa::tracked(
+    return_ref,
+    cycle_fn=collect_trait_impls_cycle_recover,
+    cycle_initial=collect_trait_impls_cycle_initial
+)]
 pub(crate) fn collect_trait_impls<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
@@ -48,37 +65,7 @@ pub(crate) fn collect_trait_impls<'db>(
         .collect();
 
     let impl_traits = ingot.all_impl_traits(db);
-    ImplementorCollector::new(db, const_impls).collect(impl_traits)
-}
-
-/// Returns the corresponding implementors for the given [`ImplTrait`].
-/// If the implementor type or the trait reference is ill-formed, returns
-/// `None`.
-pub(crate) fn lower_impl_trait<'db>(
-    db: &'db dyn HirAnalysisDb,
-    impl_trait: ImplTrait<'db>,
-) -> Option<Binder<ImplementorId<'db>>> {
-    // Delegate trait-ref lowering and ingot checks to the semantic helper on
-    // `ImplTrait`. If lowering fails or the ingot rule is violated, this
-    // returns `None`.
-    let trait_inst = impl_trait.trait_inst_result(db).ok()?;
-
-    // Semantic generic parameters for this impl-trait block.
-    let params = impl_trait.impl_params(db);
-
-    // Semantic associated-type bindings for this impl-trait block, including
-    // merged trait defaults.
-    let types = impl_trait.assoc_type_bindings_for_trait_inst(db, trait_inst);
-
-    let implementor = ImplementorId::new(
-        db,
-        trait_inst,
-        params,
-        types,
-        ImplementorOrigin::Hir(impl_trait),
-    );
-
-    Some(Binder::bind(implementor))
+    AdmissionEngine::new(db, const_impls).collect(impl_traits)
 }
 
 /// Lower a trait reference to a trait instance.
@@ -291,59 +278,4 @@ pub(crate) enum TraitRefLowerError<'db> {
     InvalidDomain(PathRes<'db>),
     /// Error is expected to be reported elsewhere.
     Ignored,
-}
-
-/// Collect all implementors in an ingot.
-struct ImplementorCollector<'db> {
-    db: &'db dyn HirAnalysisDb,
-    impl_table: TraitImplTable<'db>,
-    const_impl_maps: Vec<&'db TraitImplTable<'db>>,
-}
-
-impl<'db> ImplementorCollector<'db> {
-    fn new(db: &'db dyn HirAnalysisDb, const_impl_maps: Vec<&'db TraitImplTable>) -> Self {
-        Self {
-            db,
-            impl_table: TraitImplTable::default(),
-            const_impl_maps,
-        }
-    }
-
-    fn collect(mut self, impl_traits: &[ImplTrait<'db>]) -> TraitImplTable<'db> {
-        for &impl_ in impl_traits {
-            let Some(implementor) = lower_impl_trait(self.db, impl_) else {
-                continue;
-            };
-
-            if !self.does_conflict(implementor) {
-                self.impl_table
-                    .entry(implementor.instantiate_identity().trait_def(self.db))
-                    .or_default()
-                    .push(implementor);
-            }
-        }
-
-        self.impl_table
-    }
-
-    /// Returns `true` if `implementor` conflicts with any existing implementor.
-    fn does_conflict(&mut self, implementor: Binder<ImplementorId>) -> bool {
-        let def = implementor.instantiate_identity().trait_def(self.db);
-        for impl_map in self
-            .const_impl_maps
-            .iter()
-            .chain(std::iter::once(&&self.impl_table))
-        {
-            let Some(impls) = impl_map.get(&def) else {
-                continue;
-            };
-            for &already_implemented in impls {
-                if does_impl_trait_conflict(self.db, already_implemented, implementor) {
-                    return true;
-                }
-            }
-        }
-
-        false
-    }
 }
