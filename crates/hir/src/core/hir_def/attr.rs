@@ -60,13 +60,13 @@ pub enum LoopUnrollAttr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct InlineAttrSpec {
+pub(crate) struct KeywordAttrSpec {
     pub has_value: bool,
-    pub args: Vec<InlineAttrArgSpec>,
+    pub args: Vec<KeywordAttrArgSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct InlineAttrArgSpec {
+pub(crate) struct KeywordAttrArgSpec {
     pub key: Option<String>,
     pub has_value: bool,
 }
@@ -77,13 +77,6 @@ pub(crate) struct InlineAttrParseError {
     pub attr_index: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LoopUnrollAttrSpec {
-    pub enabled: bool,
-    pub has_value: bool,
-    pub has_args: bool,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LoopUnrollAttrParseError {
     pub kind: LoopUnrollAttrErrorKind,
@@ -91,7 +84,7 @@ pub(crate) struct LoopUnrollAttrParseError {
 }
 
 pub(crate) fn parse_inline_attr_specs(
-    attrs: impl IntoIterator<Item = InlineAttrSpec>,
+    attrs: impl IntoIterator<Item = KeywordAttrSpec>,
 ) -> Result<Option<InlineHint>, InlineAttrParseError> {
     let mut inline_hint = None;
 
@@ -113,17 +106,14 @@ pub(crate) fn parse_inline_attr_specs(
 }
 
 pub(crate) fn parse_loop_unroll_attr_specs(
-    attrs: impl IntoIterator<Item = LoopUnrollAttrSpec>,
+    attrs: impl IntoIterator<Item = KeywordAttrSpec>,
 ) -> Result<Option<bool>, LoopUnrollAttrParseError> {
     let mut unroll_hint = None;
 
     for (attr_index, attr) in attrs.into_iter().enumerate() {
-        if attr.has_value || attr.has_args {
-            return Err(LoopUnrollAttrParseError {
-                kind: LoopUnrollAttrErrorKind::InvalidForm,
-                attr_index,
-            });
-        }
+        let parsed_hint = parse_keyword_attr_spec(&attr, true, &[("never", false)])
+            .map_err(|()| LoopUnrollAttrErrorKind::InvalidForm)
+            .map_err(|kind| LoopUnrollAttrParseError { kind, attr_index })?;
 
         if unroll_hint.is_some() {
             return Err(LoopUnrollAttrParseError {
@@ -132,33 +122,44 @@ pub(crate) fn parse_loop_unroll_attr_specs(
             });
         }
 
-        unroll_hint = Some(attr.enabled);
+        unroll_hint = Some(parsed_hint);
     }
 
     Ok(unroll_hint)
 }
 
-fn parse_inline_attr_spec(attr: &InlineAttrSpec) -> Result<InlineHint, InlineAttrErrorKind> {
+fn parse_inline_attr_spec(attr: &KeywordAttrSpec) -> Result<InlineHint, InlineAttrErrorKind> {
+    parse_keyword_attr_spec(
+        attr,
+        InlineHint::Hint,
+        &[("always", InlineHint::Always), ("never", InlineHint::Never)],
+    )
+    .map_err(|()| InlineAttrErrorKind::InvalidForm)
+}
+
+fn parse_keyword_attr_spec<T: Copy>(
+    attr: &KeywordAttrSpec,
+    bare: T,
+    args: &[(&str, T)],
+) -> Result<T, ()> {
     if attr.has_value {
-        return Err(InlineAttrErrorKind::InvalidForm);
+        return Err(());
     }
     if attr.args.is_empty() {
-        return Ok(InlineHint::Hint);
+        return Ok(bare);
     }
     if attr.args.len() != 1 {
-        return Err(InlineAttrErrorKind::InvalidForm);
+        return Err(());
     }
 
     let arg = &attr.args[0];
     if arg.has_value {
-        return Err(InlineAttrErrorKind::InvalidForm);
+        return Err(());
     }
 
-    match arg.key.as_deref() {
-        Some("always") => Ok(InlineHint::Always),
-        Some("never") => Ok(InlineHint::Never),
-        Some(_) | None => Err(InlineAttrErrorKind::InvalidForm),
-    }
+    args.iter()
+        .find_map(|(name, value)| (arg.key.as_deref() == Some(*name)).then_some(*value))
+        .ok_or(())
 }
 
 #[salsa::interned]
@@ -306,13 +307,13 @@ impl<'db> NormalAttr<'db> {
         ArithmeticMode::parse(mode)
     }
 
-    pub(crate) fn inline_attr_spec(&self, db: &'db dyn HirDb) -> InlineAttrSpec {
-        InlineAttrSpec {
+    pub(crate) fn inline_attr_spec(&self, db: &'db dyn HirDb) -> KeywordAttrSpec {
+        KeywordAttrSpec {
             has_value: self.has_value,
             args: self
                 .args
                 .iter()
-                .map(|arg| InlineAttrArgSpec {
+                .map(|arg| KeywordAttrArgSpec {
                     key: arg.key_str(db).map(str::to_owned),
                     has_value: arg.has_value,
                 })
@@ -320,23 +321,18 @@ impl<'db> NormalAttr<'db> {
         }
     }
 
-    pub(crate) fn loop_unroll_attr_spec(&self, db: &'db dyn HirDb) -> Option<LoopUnrollAttrSpec> {
-        let enabled = match self
+    pub(crate) fn loop_unroll_attr_spec(&self, db: &'db dyn HirDb) -> Option<KeywordAttrSpec> {
+        match self
             .path
             .to_opt()
             .and_then(|path| path.as_ident(db))
             .map(|ident| ident.data(db).as_str())
         {
-            Some("unroll") => true,
-            Some("no_unroll") => false,
+            Some("unroll") => {}
             Some(_) | None => return None,
-        };
+        }
 
-        Some(LoopUnrollAttrSpec {
-            enabled,
-            has_value: self.has_value,
-            has_args: !self.args.is_empty(),
-        })
+        Some(self.inline_attr_spec(db))
     }
 }
 

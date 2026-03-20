@@ -1,5 +1,5 @@
 fn bad(xs: [u256; 2]) {
     #[unroll]
-    #[no_unroll]
+    #[unroll(never)]
     for x in xs {}
 }

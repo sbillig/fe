@@ -6,7 +6,7 @@ input_file: fixtures/ty_check/loop_unroll_attr_duplicate.fe
 error[14-0001]: duplicate loop unroll attribute on `for` loop
   ┌─ loop_unroll_attr_duplicate.fe:3:5
   │
-3 │     #[no_unroll]
-  │     ^^^^^^^^^^^^ remove the extra loop unroll attribute
+3 │     #[unroll(never)]
+  │     ^^^^^^^^^^^^^^^^ remove the extra loop unroll attribute
   │
-  = use at most one of `#[unroll]` or `#[no_unroll]`
+  = use at most one of `#[unroll]` or `#[unroll(never)]`

@@ -7,6 +7,6 @@ error[14-0002]: invalid loop unroll attribute on `for` loop
   ┌─ loop_unroll_attr_expr_value_form.fe:2:5
   │
 2 │     #[unroll = 1 + 2]
-  │     ^^^^^^^^^^^^^^^^^ expected `#[unroll]` or `#[no_unroll]`
+  │     ^^^^^^^^^^^^^^^^^ expected `#[unroll]` or `#[unroll(never)]`
   │
-  = loop unroll attributes do not accept values or arguments
+  = supported loop unroll hints are `#[unroll]` and `#[unroll(never)]`

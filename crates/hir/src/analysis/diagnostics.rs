@@ -701,13 +701,16 @@ impl DiagnosticVoucher for crate::LoopUnrollAttrError {
                 1,
                 "duplicate loop unroll attribute on `for` loop".to_string(),
                 "remove the extra loop unroll attribute".to_string(),
-                vec!["use at most one of `#[unroll]` or `#[no_unroll]`".to_string()],
+                vec!["use at most one of `#[unroll]` or `#[unroll(never)]`".to_string()],
             ),
             LoopUnrollAttrErrorKind::InvalidForm => (
                 2,
                 "invalid loop unroll attribute on `for` loop".to_string(),
-                "expected `#[unroll]` or `#[no_unroll]`".to_string(),
-                vec!["loop unroll attributes do not accept values or arguments".to_string()],
+                "expected `#[unroll]` or `#[unroll(never)]`".to_string(),
+                vec![
+                    "supported loop unroll hints are `#[unroll]` and `#[unroll(never)]`"
+                        .to_string(),
+                ],
             ),
         };
 

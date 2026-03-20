@@ -5,7 +5,7 @@ use super::{FileLowerCtxt, attr::named_attr_specs};
 use crate::{
     hir_def::{
         AttrListId, Body, EffectParamListId, FuncParamListId, GenericParamListId, IdentId,
-        InlineAttrArgSpec, InlineAttrErrorKind, InlineAttrSpec, PathId, TraitRefId, TupleTypeId,
+        InlineAttrErrorKind, KeywordAttrArgSpec, KeywordAttrSpec, PathId, TraitRefId, TupleTypeId,
         TypeBound, TypeId, WhereClauseId, item::*, parse_inline_attr_specs,
     },
     lower::msg::lower_msg_as_mod,
@@ -378,12 +378,12 @@ fn validate_inline_attr<'db>(ctxt: &mut FileLowerCtxt<'db>, func: &ast::Func) {
     let inline_attrs = named_attr_specs(func.attr_list(), "inline")
         .into_iter()
         .map(|attr| {
-            let spec = InlineAttrSpec {
+            let spec = KeywordAttrSpec {
                 has_value: attr.value.is_some(),
                 args: attr
                     .args
                     .into_iter()
-                    .map(|arg| InlineAttrArgSpec {
+                    .map(|arg| KeywordAttrArgSpec {
                         key: arg.key,
                         has_value: arg.value.is_some(),
                     })

@@ -100,11 +100,6 @@ fn lower_loop_unroll_hint<'db>(
                     normal_attr
                         .is_named("unroll")
                         .then_some(attr.syntax().text_range())
-                        .or_else(|| {
-                            normal_attr
-                                .is_named("no_unroll")
-                                .then_some(attr.syntax().text_range())
-                        })
                 })
                 .collect::<Vec<_>>();
 

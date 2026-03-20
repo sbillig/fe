@@ -966,7 +966,7 @@ impl<'db> Stmt<'db> {
 
                 let prefix = match unroll {
                     Some(true) => "#[unroll]\n",
-                    Some(false) => "#[no_unroll]\n",
+                    Some(false) => "#[unroll(never)]\n",
                     None => "",
                 };
                 format!(
