@@ -43,7 +43,6 @@ impl<'db> ContractRecvArm<'db> {
         let body = body_ctxt.build(body_ast.as_ref(), body_expr, BodyKind::FuncBody);
         let ret_ty = ast.ret_ty().map(|ty| TypeId::lower_ast(ctxt, ty));
         let effects = lower_uses_clause_opt(ctxt, ast.uses_clause());
-        super::payable::validate_payable_attr_form(ctxt, ast.attr_list());
         super::payable::report_unknown_attrs_on_contract_entry(ctxt, ast.attr_list(), "recv arm");
         let attributes = super::payable::lower_contract_entry_attrs_opt(ctxt, ast.attr_list());
 
@@ -154,7 +153,6 @@ fn lower_contract_init<'db>(
 ) -> ContractInit<'db> {
     let db = ctxt.db();
 
-    super::payable::validate_payable_attr_form(ctxt, init_ast.attr_list());
     super::payable::report_unknown_attrs_on_contract_entry(
         ctxt,
         init_ast.attr_list(),

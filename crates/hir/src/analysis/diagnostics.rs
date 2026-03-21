@@ -674,7 +674,7 @@ impl DiagnosticVoucher for crate::InlineAttrError {
             ),
         };
 
-        let error_code = GlobalErrorCode::new(DiagnosticPass::InlineLower, code);
+        let error_code = GlobalErrorCode::new(DiagnosticPass::InlineAttr, code);
 
         CompleteDiagnostic::new(
             Severity::Error,
@@ -714,7 +714,7 @@ impl DiagnosticVoucher for crate::LoopUnrollAttrError {
             ),
         };
 
-        let error_code = GlobalErrorCode::new(DiagnosticPass::LoopUnrollLower, code);
+        let error_code = GlobalErrorCode::new(DiagnosticPass::LoopUnrollAttr, code);
 
         CompleteDiagnostic::new(
             Severity::Error,

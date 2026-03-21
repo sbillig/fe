@@ -71,3 +71,54 @@ fn unroll_never_attr_prevents_unrolling() {
 
     assert_eq!(unroll_hint, Some(Some(false)));
 }
+
+#[test]
+fn invalid_payable_init_attr_does_not_mark_init_payable() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "payable_init_invalid.fe".into(),
+        r#"contract C {
+    #[payable = 1]
+    init() {}
+}"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let contracts = top_mod.all_contracts(&db);
+    let [contract] = contracts.as_slice() else {
+        panic!("expected exactly one contract");
+    };
+    let init = contract.init(&db).expect("expected contract init");
+
+    assert!(!init.is_payable(&db));
+}
+
+#[test]
+fn invalid_payable_recv_arm_attr_does_not_mark_arm_payable() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "payable_recv_arm_invalid.fe".into(),
+        r#"use std::abi::sol
+
+msg M {
+    #[selector = sol("ping()")]
+    Ping,
+}
+
+contract C {
+    recv M {
+        #[payable(foo)]
+        Ping {} {}
+    }
+}"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let contracts = top_mod.all_contracts(&db);
+    let [contract] = contracts.as_slice() else {
+        panic!("expected exactly one contract");
+    };
+    let arm = contract
+        .recv_arm(&db, 0, 0)
+        .expect("expected one recv arm at 0:0");
+
+    assert!(!arm.is_payable(&db));
+}

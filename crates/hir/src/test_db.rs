@@ -314,7 +314,6 @@ impl Default for HirPropertyFormatter<'_> {
 pub fn initialize_analysis_pass() -> AnalysisPassManager {
     let mut pass_manager = AnalysisPassManager::new();
     pass_manager.add_module_pass("Parsing", Box::new(ParsingPass {}));
-    pass_manager.add_module_pass("PayableAttr", Box::new(PayableAttrPass {}));
     pass_manager.add_module_pass("ArithmeticAttr", Box::new(ArithmeticAttrPass {}));
     pass_manager.add_module_pass("PayableAttr", Box::new(PayableAttrPass {}));
     pass_manager.add_module_pass("MsgLower", Box::new(MsgLowerPass {}));

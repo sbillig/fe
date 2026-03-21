@@ -83,6 +83,11 @@ pub(crate) struct LoopUnrollAttrParseError {
     pub attr_index: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MarkerAttrParseError {
+    pub attr_index: usize,
+}
+
 pub(crate) fn parse_inline_attr_specs(
     attrs: impl IntoIterator<Item = KeywordAttrSpec>,
 ) -> Result<Option<InlineHint>, InlineAttrParseError> {
@@ -128,6 +133,19 @@ pub(crate) fn parse_loop_unroll_attr_specs(
     Ok(unroll_hint)
 }
 
+pub(crate) fn parse_marker_attr_specs(
+    attrs: impl IntoIterator<Item = KeywordAttrSpec>,
+) -> Result<bool, MarkerAttrParseError> {
+    let mut has_attr = false;
+
+    for (attr_index, attr) in attrs.into_iter().enumerate() {
+        parse_marker_attr_spec(&attr).map_err(|()| MarkerAttrParseError { attr_index })?;
+        has_attr = true;
+    }
+
+    Ok(has_attr)
+}
+
 fn parse_inline_attr_spec(attr: &KeywordAttrSpec) -> Result<InlineHint, InlineAttrErrorKind> {
     parse_keyword_attr_spec(
         attr,
@@ -135,6 +153,10 @@ fn parse_inline_attr_spec(attr: &KeywordAttrSpec) -> Result<InlineHint, InlineAt
         &[("always", InlineHint::Always), ("never", InlineHint::Never)],
     )
     .map_err(|()| InlineAttrErrorKind::InvalidForm)
+}
+
+pub(crate) fn parse_marker_attr_spec(attr: &KeywordAttrSpec) -> Result<(), ()> {
+    parse_keyword_attr_spec(attr, (), &[])
 }
 
 fn parse_keyword_attr_spec<T: Copy>(
@@ -188,19 +210,9 @@ impl<'db> AttrListId<'db> {
 
     /// Returns true if this attribute list contains a marker attribute with the given name.
     ///
-    /// Marker attributes have no arguments in lowered HIR, for example `#[payable]`.
+    /// Marker attributes have no arguments or values in lowered HIR, for example `#[payable]`.
     pub fn has_marker_attr(self, db: &'db dyn HirDb, name: &str) -> bool {
-        self.data(db).iter().any(|attr| {
-            if let Attr::Normal(normal_attr) = attr
-                && normal_attr.args.is_empty()
-                && let Some(path) = normal_attr.path.to_opt()
-                && let Some(ident) = path.as_ident(db)
-            {
-                ident.data(db) == name
-            } else {
-                false
-            }
-        })
+        self.parse_marker_attr(db, name).unwrap_or_default()
     }
 
     /// Returns the attribute with the given name, if present.
@@ -248,7 +260,7 @@ impl<'db> AttrListId<'db> {
                 return None;
             }
 
-            Some(normal_attr.inline_attr_spec(db))
+            Some(normal_attr.keyword_attr_spec(db))
         })) {
             Ok(Some(hint)) => Some(InlineAttr::Hint(hint)),
             Ok(None) => None,
@@ -274,6 +286,28 @@ impl<'db> AttrListId<'db> {
             Ok(None) => None,
             Err(err) => Some(LoopUnrollAttr::Error(err.kind)),
         }
+    }
+
+    pub(crate) fn parse_marker_attr(
+        self,
+        db: &'db dyn HirDb,
+        name: &str,
+    ) -> Result<bool, MarkerAttrParseError> {
+        parse_marker_attr_specs(self.data(db).iter().filter_map(|attr| {
+            let Attr::Normal(normal_attr) = attr else {
+                return None;
+            };
+            if normal_attr
+                .path
+                .to_opt()
+                .and_then(|path| path.as_ident(db))
+                .is_none_or(|ident| ident.data(db) != name)
+            {
+                return None;
+            }
+
+            Some(normal_attr.keyword_attr_spec(db))
+        }))
     }
 }
 
@@ -307,7 +341,7 @@ impl<'db> NormalAttr<'db> {
         ArithmeticMode::parse(mode)
     }
 
-    pub(crate) fn inline_attr_spec(&self, db: &'db dyn HirDb) -> KeywordAttrSpec {
+    pub(crate) fn keyword_attr_spec(&self, db: &'db dyn HirDb) -> KeywordAttrSpec {
         KeywordAttrSpec {
             has_value: self.has_value,
             args: self
@@ -332,7 +366,7 @@ impl<'db> NormalAttr<'db> {
             Some(_) | None => return None,
         }
 
-        Some(self.inline_attr_spec(db))
+        Some(self.keyword_attr_spec(db))
     }
 }
 
