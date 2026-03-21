@@ -658,6 +658,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             let func_ref = self.builder.declare_function(sig).map_err(|e| {
                 LowerError::Internal(format!("failed to declare function {name}: {e}"))
             })?;
+            self.apply_inline_hint(func_ref, func);
 
             self.func_map.insert(idx, func_ref);
             self.name_map.insert(name.clone(), func_ref);

@@ -2,7 +2,10 @@ use parser::ast::{self, prelude::AstNode as _};
 use salsa::Accumulator as _;
 
 use super::FileLowerCtxt;
-use crate::hir_def::{AttrListId, attr::Attr};
+use crate::hir_def::{
+    AttrListId, KeywordAttrSpec,
+    attr::{Attr, parse_marker_attr_spec},
+};
 
 /// Payable-related errors accumulated during lowering / validation.
 #[salsa::accumulator]
@@ -120,62 +123,72 @@ pub(super) fn report_unknown_attrs_on_contract_entry<'db>(
     }
 }
 
-/// Validate that a `#[payable]` attribute on an init block or recv arm has the
-/// correct form (no arguments, no value).
-pub(super) fn validate_payable_attr_form<'db>(
+/// Lower contract-entry attributes and report malformed `#[payable]` forms
+/// through the shared lowered-attribute validation pathway.
+pub(super) fn lower_contract_entry_attrs_opt<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     attrs: Option<ast::AttrList>,
+) -> AttrListId<'db> {
+    let lowered_attrs = AttrListId::lower_ast_opt(ctxt, attrs.clone());
+    report_invalid_payable_attr_forms(ctxt, attrs, lowered_attrs);
+    lowered_attrs
+}
+
+fn report_invalid_payable_attr_forms<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    attrs: Option<ast::AttrList>,
+    lowered_attrs: AttrListId<'db>,
 ) {
-    let Some(attrs) = attrs else { return };
     let db = ctxt.db();
     let file = ctxt.top_mod().file(db);
+    let ranges = attrs
+        .into_iter()
+        .flatten()
+        .filter_map(|attr| {
+            let ast::AttrKind::Normal(normal) = attr.kind() else {
+                return None;
+            };
+            normal
+                .path()
+                .is_some_and(|path| path.text() == "payable")
+                .then_some(attr.syntax().text_range())
+        })
+        .collect::<Vec<_>>();
+    let specs = payable_attr_specs(db, lowered_attrs);
 
-    for attr in attrs {
-        let ast::AttrKind::Normal(normal) = attr.kind() else {
-            continue;
-        };
-        let is_payable = normal.path().is_some_and(|p| p.text() == "payable");
-        if !is_payable {
-            continue;
-        }
-
-        // #[payable] must have no arguments and no value
-        let has_args = normal.args().is_some();
-        let has_value = normal.value().is_some();
-        if has_args || has_value {
+    for (range, spec) in ranges.into_iter().zip(specs) {
+        if parse_marker_attr_spec(&spec).is_err() {
             PayableError {
                 kind: PayableErrorKind::InvalidPayableAttrForm,
                 file,
-                primary_range: attr.syntax().text_range(),
+                primary_range: range,
             }
             .accumulate(db);
         }
     }
 }
 
-/// Lower contract-entry attributes while dropping malformed `#[payable]` forms
-/// so they do not affect downstream payability semantics.
-pub(super) fn lower_contract_entry_attrs_opt<'db>(
-    ctxt: &mut FileLowerCtxt<'db>,
-    attrs: Option<ast::AttrList>,
-) -> AttrListId<'db> {
-    let Some(attrs) = attrs else {
-        return AttrListId::new(ctxt.db(), vec![]);
-    };
+fn payable_attr_specs<'db>(
+    db: &'db dyn crate::HirDb,
+    attrs: AttrListId<'db>,
+) -> Vec<KeywordAttrSpec> {
+    attrs
+        .data(db)
+        .iter()
+        .filter_map(|attr| {
+            let Attr::Normal(normal_attr) = attr else {
+                return None;
+            };
+            if normal_attr
+                .path
+                .to_opt()
+                .and_then(|path| path.as_ident(db))
+                .is_none_or(|ident| ident.data(db) != "payable")
+            {
+                return None;
+            }
 
-    let attrs: Vec<_> = attrs
-        .into_iter()
-        .filter(|attr| !is_malformed_payable_attr(attr))
-        .map(|attr| Attr::lower_ast(ctxt, attr))
-        .collect();
-    AttrListId::new(ctxt.db(), attrs)
-}
-
-fn is_malformed_payable_attr(attr: &ast::Attr) -> bool {
-    let ast::AttrKind::Normal(normal) = attr.kind() else {
-        return false;
-    };
-
-    normal.path().is_some_and(|p| p.text() == "payable")
-        && (normal.args().is_some() || normal.value().is_some())
+            Some(normal_attr.keyword_attr_spec(db))
+        })
+        .collect()
 }

@@ -22,9 +22,10 @@ use crate::{
 };
 pub use arithmetic::{ArithmeticAttrError, ArithmeticAttrErrorKind};
 pub use event::{EventError, EventErrorKind};
-pub use item::{SelectorError, SelectorErrorKind};
+pub use item::{InlineAttrError, SelectorError, SelectorErrorKind};
 pub use parse::parse_file_impl;
 pub use payable::{PayableError, PayableErrorKind};
+pub use stmt::LoopUnrollAttrError;
 
 pub(crate) mod parse;
 

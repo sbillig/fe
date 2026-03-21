@@ -41,7 +41,7 @@ struct ForLoopParams {
     /// Unroll hint from attributes:
     /// - `None`: auto-unroll if < 10 iterations
     /// - `Some(true)`: #[unroll] forces unrolling
-    /// - `Some(false)`: #[no_unroll] prevents unrolling
+    /// - `Some(false)`: #[unroll(never)] prevents unrolling
     unroll_hint: Option<bool>,
 }
 

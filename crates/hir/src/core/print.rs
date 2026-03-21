@@ -183,7 +183,9 @@ impl<'db> NormalAttr<'db> {
     /// Pretty-prints a normal attribute like `#[foo(bar = "baz")]`.
     pub fn pretty_print(&self, db: &'db dyn HirDb) -> String {
         let path = unwrap_partial(self.path, "Attr::path").pretty_print(db);
-        if self.args.is_empty() {
+        if let Some(value) = &self.value {
+            format!("#[{path} = {}]", value.pretty_print(db))
+        } else if self.args.is_empty() {
             format!("#[{}]", path)
         } else {
             let args = self
@@ -964,7 +966,7 @@ impl<'db> Stmt<'db> {
 
                 let prefix = match unroll {
                     Some(true) => "#[unroll]\n",
-                    Some(false) => "#[no_unroll]\n",
+                    Some(false) => "#[unroll(never)]\n",
                     None => "",
                 };
                 format!(
