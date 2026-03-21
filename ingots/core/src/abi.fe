@@ -142,7 +142,7 @@ pub trait Decode<A: Abi> {
     fn decode<D: AbiDecoder<A>>(_: mut D) -> Self
 }
 
-pub trait Encode<A: Abi> {
+pub trait Encode<A: Abi>: AbiSize {
     const DIRECT_ENCODE: bool
 
     fn encode<E: AbiEncoder<A>>(own self, _: mut E)

@@ -350,16 +350,12 @@ impl<'db> Monomorphizer<'db> {
                             break;
                         }
                         trait_args[0] = root_effect_ty;
-                        let goal = Canonicalized::new(
+                        let goal = TraitInstId::new(
                             self.db,
-                            TraitInstId::new(
-                                self.db,
-                                key_trait.def(self.db),
-                                trait_args,
-                                key_trait.assoc_type_bindings(self.db).clone(),
-                            ),
-                        )
-                        .value;
+                            key_trait.def(self.db),
+                            trait_args,
+                            key_trait.assoc_type_bindings(self.db).clone(),
+                        );
                         if !matches!(
                             is_goal_satisfiable(
                                 self.db,
@@ -978,7 +974,7 @@ impl<'db> Monomorphizer<'db> {
             param_capability_space_overrides,
         );
         let norm_scope = crate::ty::normalization_scope_for_args(self.db, func, &normalized_args);
-        let assumptions = PredicateListId::empty_list(self.db);
+        let mut assumptions = PredicateListId::empty_list(self.db);
 
         let key = InstanceKey::new(
             crate::ir::MirFunctionOrigin::Hir(func),
@@ -1025,6 +1021,7 @@ impl<'db> Monomorphizer<'db> {
                 args: &normalized_args,
             };
             let typed_body = typed_body.clone().fold_with(self.db, &mut folder);
+            assumptions = typed_body.assumptions();
 
             // After substitution, normalize any remaining associated types.
             let mut normalizer = NormalizeFolder {

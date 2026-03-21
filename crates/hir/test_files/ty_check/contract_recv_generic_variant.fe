@@ -4,6 +4,12 @@ struct GenericMsg<T> {
     pub value: T,
 }
 
+impl<T> core::abi::AbiSize for GenericMsg<T>
+    where T: core::abi::AbiSize
+{
+    const ENCODED_SIZE: u256 = T::ENCODED_SIZE
+}
+
 impl<T> core::abi::Encode<std::abi::Sol> for GenericMsg<T>
     where T: core::abi::Encode<std::abi::Sol>
 {

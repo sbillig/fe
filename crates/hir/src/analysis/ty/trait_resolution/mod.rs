@@ -23,6 +23,79 @@ use salsa::Update;
 pub(crate) mod constraint;
 mod proof_forest;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub struct TraitSolverQuery<'db> {
+    pub goal: TraitInstId<'db>,
+    pub assumptions: PredicateListId<'db>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanonicalGoalQuery<'db> {
+    raw: TraitSolverQuery<'db>,
+    canonical: Canonical<TraitSolverQuery<'db>>,
+    original: Canonicalized<'db, TraitSolverQuery<'db>>,
+}
+
+impl<'db> CanonicalGoalQuery<'db> {
+    pub fn new(
+        db: &'db dyn HirAnalysisDb,
+        goal: TraitInstId<'db>,
+        assumptions: PredicateListId<'db>,
+    ) -> Self {
+        Self::from_query(
+            db,
+            TraitSolverQuery {
+                goal,
+                assumptions: assumptions.extend_all_bounds(db),
+            },
+        )
+    }
+
+    pub fn from_query(db: &'db dyn HirAnalysisDb, raw: TraitSolverQuery<'db>) -> Self {
+        let original = Canonicalized::new(db, raw);
+        Self {
+            raw,
+            canonical: original.value,
+            original,
+        }
+    }
+
+    pub fn goal(&self) -> TraitInstId<'db> {
+        self.raw.goal
+    }
+
+    pub fn assumptions(&self) -> PredicateListId<'db> {
+        self.raw.assumptions
+    }
+
+    pub fn canonical(&self) -> Canonical<TraitSolverQuery<'db>> {
+        self.canonical
+    }
+
+    pub fn extract_solution<S, U>(
+        &self,
+        table: &mut crate::analysis::ty::unify::UnificationTableBase<'db, S>,
+        solution: Solution<U>,
+    ) -> U
+    where
+        S: crate::analysis::ty::unify::UnificationStore<'db>,
+        U: TyFoldable<'db> + Update,
+    {
+        self.original.extract_solution(table, solution)
+    }
+
+    pub fn extract_subgoal<S>(
+        &self,
+        table: &mut crate::analysis::ty::unify::UnificationTableBase<'db, S>,
+        solution: Solution<TraitInstId<'db>>,
+    ) -> TraitInstId<'db>
+    where
+        S: crate::analysis::ty::unify::UnificationStore<'db>,
+    {
+        self.extract_solution(table, solution)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum Selection<T> {
     Unique(T),
@@ -55,6 +128,10 @@ impl<'db> TraitSolveCx<'db> {
         self.assumptions
     }
 
+    pub(crate) fn origin_ingot(self) -> Ingot<'db> {
+        self.origin_ingot
+    }
+
     pub(crate) fn select_impl(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -62,8 +139,7 @@ impl<'db> TraitSolveCx<'db> {
     ) -> Selection<ImplementorId<'db>> {
         let scope = self.normalization_scope_for_trait_inst(db, inst);
         let inst = inst.normalize(db, scope, self.assumptions);
-        let goal = Canonical::new(db, inst);
-        match is_goal_satisfiable(db, self, goal) {
+        match is_goal_satisfiable(db, self, inst) {
             GoalSatisfiability::Satisfied(solution) => {
                 Selection::Unique(solution.value.implementor)
             }
@@ -81,6 +157,14 @@ impl<'db> TraitSolveCx<'db> {
         db: &'db dyn HirAnalysisDb,
         inst: TraitInstId<'db>,
     ) -> (Ingot<'db>, Option<Ingot<'db>>) {
+        Self::search_ingots_for_trait_inst_with_origin(db, self.origin_ingot, inst)
+    }
+
+    pub(crate) fn search_ingots_for_trait_inst_with_origin(
+        db: &'db dyn HirAnalysisDb,
+        origin_ingot: Ingot<'db>,
+        inst: TraitInstId<'db>,
+    ) -> (Ingot<'db>, Option<Ingot<'db>>) {
         let trait_ingot = inst.def(db).ingot(db);
         let self_ty = inst.self_ty(db);
         let self_ingot = self_ty.ingot(db).or_else(|| {
@@ -94,7 +178,7 @@ impl<'db> TraitSolveCx<'db> {
             }
         });
 
-        let primary = self_ingot.unwrap_or(self.origin_ingot);
+        let primary = self_ingot.unwrap_or(origin_ingot);
         if primary == trait_ingot {
             (primary, None)
         } else {
@@ -107,11 +191,19 @@ impl<'db> TraitSolveCx<'db> {
         db: &'db dyn HirAnalysisDb,
         inst: TraitInstId<'db>,
     ) -> ScopeId<'db> {
+        Self::normalization_scope_for_trait_inst_with_origin(db, self.origin_ingot, inst)
+    }
+
+    pub(crate) fn normalization_scope_for_trait_inst_with_origin(
+        db: &'db dyn HirAnalysisDb,
+        origin_ingot: Ingot<'db>,
+        inst: TraitInstId<'db>,
+    ) -> ScopeId<'db> {
         let norm_ingot = inst
             .self_ty(db)
             .ingot(db)
             .or_else(|| inst.args(db).iter().find_map(|ty| ty.ingot(db)))
-            .unwrap_or(self.origin_ingot);
+            .unwrap_or(origin_ingot);
         norm_ingot.root_mod(db).scope()
     }
 
@@ -121,17 +213,34 @@ impl<'db> TraitSolveCx<'db> {
 }
 
 #[salsa::tracked(return_ref)]
-pub fn is_goal_satisfiable<'db>(
+fn is_query_satisfiable<'db>(
     db: &'db dyn HirAnalysisDb,
-    solve_cx: TraitSolveCx<'db>,
-    goal: Canonical<TraitInstId<'db>>,
+    origin_ingot: Ingot<'db>,
+    query: Canonical<TraitSolverQuery<'db>>,
 ) -> GoalSatisfiability<'db> {
-    let flags = collect_flags(db, goal.value);
+    let flags = collect_flags(db, query.value);
     if flags.contains(TyFlags::HAS_INVALID) {
         return GoalSatisfiability::ContainsInvalid;
     };
 
-    ProofForest::new(db, solve_cx, goal).solve()
+    ProofForest::new(db, origin_ingot, query).solve()
+}
+
+pub fn is_goal_query_satisfiable<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    query: &CanonicalGoalQuery<'db>,
+) -> GoalSatisfiability<'db> {
+    is_query_satisfiable(db, solve_cx.origin_ingot(), query.canonical()).clone()
+}
+
+pub fn is_goal_satisfiable<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    goal: TraitInstId<'db>,
+) -> GoalSatisfiability<'db> {
+    let query = CanonicalGoalQuery::new(db, goal, solve_cx.assumptions());
+    is_goal_query_satisfiable(db, solve_cx, &query)
 }
 
 /// Checks if the given type is well-formed, i.e., the arguments of the given
@@ -167,13 +276,11 @@ pub(crate) fn check_ty_wf<'db>(
 
     for &goal in normalized_constraints.list(db) {
         let mut table = UnificationTable::new(db);
-        let canonical_goal = Canonicalized::new(db, goal);
+        let query = CanonicalGoalQuery::new(db, goal, assumptions);
 
-        if let GoalSatisfiability::UnSat(subgoal) =
-            is_goal_satisfiable(db, solve_cx, canonical_goal.value)
+        if let GoalSatisfiability::UnSat(subgoal) = is_goal_query_satisfiable(db, solve_cx, &query)
         {
-            let subgoal =
-                subgoal.map(|subgoal| canonical_goal.extract_solution(&mut table, subgoal));
+            let subgoal = subgoal.map(|subgoal| query.extract_subgoal(&mut table, subgoal));
             return WellFormedness::IllFormed { goal, subgoal };
         }
     }
@@ -221,12 +328,10 @@ pub(crate) fn check_trait_inst_wf<'db>(
 
     for &goal in normalized_constraints.list(db) {
         let mut table = UnificationTable::new(db);
-        let canonical_goal = Canonicalized::new(db, goal);
-        if let GoalSatisfiability::UnSat(subgoal) =
-            is_goal_satisfiable(db, solve_cx, canonical_goal.value)
+        let query = CanonicalGoalQuery::new(db, goal, assumptions);
+        if let GoalSatisfiability::UnSat(subgoal) = is_goal_query_satisfiable(db, solve_cx, &query)
         {
-            let subgoal =
-                subgoal.map(|subgoal| canonical_goal.extract_solution(&mut table, subgoal));
+            let subgoal = subgoal.map(|subgoal| query.extract_subgoal(&mut table, subgoal));
             return WellFormedness::IllFormed { goal, subgoal };
         }
     }
@@ -350,5 +455,111 @@ impl<'db> PredicateListId<'db> {
         }
 
         Self::new(db, all_predicates.into_iter().collect::<Vec<_>>())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use common::indexmap::IndexMap;
+
+    use super::{
+        CanonicalGoalQuery, GoalSatisfiability, TraitInstId, TraitSolveCx,
+        is_goal_query_satisfiable,
+    };
+    use crate::{
+        analysis::ty::{
+            trait_resolution::constraint::collect_func_def_constraints, ty_def::TyId,
+            ty_lower::collect_generic_params,
+        },
+        hir_def::{Func, Trait},
+        test_db::HirAnalysisTestDb,
+    };
+
+    #[test]
+    fn solver_query_includes_assumptions() {
+        fn query_for<'db>(
+            db: &'db HirAnalysisTestDb,
+            func: Func<'db>,
+            needs_a: Trait<'db>,
+        ) -> (CanonicalGoalQuery<'db>, TraitSolveCx<'db>) {
+            let ty_param = collect_generic_params(db, func.into()).explicit_params(db)[0];
+            let assumptions =
+                collect_func_def_constraints(db, func.into(), true).instantiate_identity();
+            let goal =
+                TraitInstId::new(db, needs_a, vec![TyId::unit(db), ty_param], IndexMap::new());
+            let query = CanonicalGoalQuery::new(db, goal, assumptions);
+            let solve_cx = TraitSolveCx::new(db, func.scope()).with_assumptions(assumptions);
+            (query, solve_cx)
+        }
+
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "trait_solver_query_includes_assumptions.fe".into(),
+            r#"
+trait A {}
+trait NeedsA<T> {}
+
+impl<T: A> NeedsA<T> for () {}
+
+fn with_a<T: A>() -> bool {
+    true
+}
+
+fn without_a<T>() -> bool {
+    true
+}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+
+        let needs_a = top_mod
+            .all_traits(&db)
+            .iter()
+            .copied()
+            .find(|trait_| {
+                trait_
+                    .name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "NeedsA")
+            })
+            .unwrap();
+        let with_a = top_mod
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "with_a")
+            })
+            .unwrap();
+        let without_a = top_mod
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "without_a")
+            })
+            .unwrap();
+
+        let (with_query, with_cx) = query_for(&db, with_a, needs_a);
+        let (without_query, without_cx) = query_for(&db, without_a, needs_a);
+
+        assert_eq!(
+            with_query.goal().pretty_print(&db, true),
+            without_query.goal().pretty_print(&db, true)
+        );
+        assert_ne!(with_query.canonical(), without_query.canonical());
+        assert!(matches!(
+            is_goal_query_satisfiable(&db, with_cx, &with_query),
+            GoalSatisfiability::Satisfied(_)
+        ));
+        assert!(matches!(
+            is_goal_query_satisfiable(&db, without_cx, &without_query),
+            GoalSatisfiability::UnSat(_)
+        ));
     }
 }

@@ -8,11 +8,12 @@ use crate::analysis::{
     name_resolution::{available_traits_in_scope, is_scope_visible_from},
     ty::{
         binder::Binder,
-        canonical::{Canonical, Canonicalized, Solution},
+        canonical::{Canonical, Solution},
         method_table::probe_method,
         trait_def::{TraitInstId, impls_for_ty},
         trait_resolution::{
-            GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
+            CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitSolveCx,
+            is_goal_query_satisfiable,
         },
         ty_def::{TyData, TyId},
         unify::UnificationTable,
@@ -354,21 +355,21 @@ impl<'db> MethodSelector<'db> {
         // whose signatures don't mention those args (e.g. `AbiDecoder<A>::read_word`).
         let receiver_is_ty_param = receiver_is_ty_param_like(self.db, self.receiver.value);
 
-        let canonical_cand = Canonicalized::new(self.db, inst);
+        let query = CanonicalGoalQuery::new(self.db, inst, self.assumptions);
         let inst = if receiver_is_ty_param {
             inst
         } else {
             table.instantiate_with_fresh_vars(Binder::bind(inst))
         };
 
-        match is_goal_satisfiable(
+        match is_goal_query_satisfiable(
             self.db,
             TraitSolveCx::new(self.db, self.scope).with_assumptions(self.assumptions),
-            canonical_cand.value,
+            &query,
         ) {
             GoalSatisfiability::Satisfied(solution) => {
                 // Map back the solution to the current context.
-                let solution = canonical_cand.extract_solution(&mut table, *solution).inst;
+                let solution = query.extract_solution(&mut table, solution).inst;
                 // Replace TyParams in the solved instance with fresh inference vars so
                 // downstream unification can bind them (e.g., T = u32). For receiver type
                 // parameters, keep the bound's args intact.
@@ -385,7 +386,7 @@ impl<'db> MethodSelector<'db> {
                 ))
             }
 
-            &GoalSatisfiability::NeedsConfirmation(_)
+            GoalSatisfiability::NeedsConfirmation(_)
             | GoalSatisfiability::ContainsInvalid
             | GoalSatisfiability::UnSat(_) => {
                 MethodCandidate::NeedsConfirmation(TraitMethodCand::new(

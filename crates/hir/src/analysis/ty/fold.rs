@@ -6,7 +6,7 @@ use common::indexmap::{IndexMap, IndexSet};
 
 use super::{
     trait_def::{ImplementorId, TraitInstId},
-    trait_resolution::{PredicateListId, TraitGoalSolution},
+    trait_resolution::{PredicateListId, TraitGoalSolution, TraitSolverQuery},
     ty_check::{EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
     ty_def::{TyData, TyId},
     visitor::TyVisitable,
@@ -220,9 +220,9 @@ where
             let to = folder.fold_ty(db, *to);
             ConstExprId::new(db, ConstExpr::Cast { expr, to })
         }
-        ConstExpr::TraitConst { inst, name } => {
-            let inst = inst.fold_with(db, folder);
-            ConstExprId::new(db, ConstExpr::TraitConst { inst, name: *name })
+        ConstExpr::TraitConst(assoc) => {
+            let assoc = assoc.fold_with(db, folder);
+            ConstExprId::new(db, ConstExpr::TraitConst(assoc))
         }
         ConstExpr::LocalBinding(binding) => ConstExprId::new(db, ConstExpr::LocalBinding(*binding)),
     }
@@ -313,6 +313,18 @@ impl<'db> TyFoldable<'db> for PredicateListId<'db> {
             .collect::<Vec<_>>();
 
         Self::new(db, predicates)
+    }
+}
+
+impl<'db> TyFoldable<'db> for TraitSolverQuery<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        Self {
+            goal: self.goal.fold_with(db, folder),
+            assumptions: self.assumptions.fold_with(db, folder),
+        }
     }
 }
 

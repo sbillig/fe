@@ -20,8 +20,8 @@ use crate::analysis::ty::visitor::TyVisitable;
 use crate::hir_def::CallableDef;
 use crate::{
     hir_def::{
-        Body, Const, Contract, ContractRecvArm, Expr, ExprId, Func, IdentId, LitKind, Partial, Pat,
-        PatId, PathId, StmtId, TypeId as HirTyId,
+        Body, Const, Contract, ContractRecvArm, Expr, ExprId, Func, LitKind, Partial, Pat, PatId,
+        PathId, StmtId, TypeId as HirTyId,
     },
     span::{
         DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan,
@@ -42,11 +42,15 @@ use salsa::Update;
 use crate::analysis::place::Place;
 
 use super::{
-    canonical::{Canonical, Canonicalized},
+    assoc_const::AssocConstUse,
+    canonical::Canonical,
     diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
     effects::{EffectKeyKind, resolve_normalized_type_effect_key},
     trait_def::TraitInstId,
-    trait_resolution::{GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable},
+    trait_resolution::{
+        CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitSolveCx,
+        is_goal_query_satisfiable, is_goal_satisfiable,
+    },
     ty_contains_const_hole,
     ty_def::{BorrowKind, CapabilityKind, InvalidCause, Kind, TyId, TyVarSort},
     ty_lower::lower_hir_ty,
@@ -98,7 +102,7 @@ pub(super) fn check_body<'db>(
     owner: BodyOwner<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
     let Ok(mut checker) = TyChecker::new(db, owner) else {
-        return (Vec::new(), TypedBody::empty());
+        return (Vec::new(), TypedBody::empty(db));
     };
 
     checker.run();
@@ -349,12 +353,11 @@ impl<'db> TyChecker<'db> {
                         };
                         let trait_req =
                             super::instantiate_trait_self(self.db, trait_inst, root_effect_ty);
-                        let goal = Canonicalized::new(self.db, trait_req).value;
                         if matches!(
                             is_goal_satisfiable(
                                 self.db,
                                 TraitSolveCx::new(self.db, contract.scope()),
-                                goal
+                                trait_req
                             ),
                             GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
                         ) {
@@ -564,20 +567,16 @@ impl<'db> TyChecker<'db> {
                             inst.fold_with(db, &mut prober)
                         };
                         let inst = inst.normalize(db, scope, assumptions);
-                        let canonical_inst = Canonicalized::new(db, inst);
-                        match is_goal_satisfiable(
-                            db,
-                            TraitSolveCx::new(db, scope).with_assumptions(assumptions),
-                            canonical_inst.value,
-                        ) {
+                        let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+                        let query = CanonicalGoalQuery::new(db, inst, assumptions);
+                        match is_goal_query_satisfiable(db, solve_cx, &query) {
                             GoalSatisfiability::Satisfied(solution) => {
-                                let solution = canonical_inst
-                                    .extract_solution(&mut self.table, *solution)
-                                    .inst;
+                                let solution =
+                                    query.extract_solution(&mut self.table, solution).inst;
                                 self.table.unify(inst, solution).unwrap();
                                 let new_can =
                                     Canonical::new(db, inst.fold_with(db, &mut self.table));
-                                if new_can != canonical_inst.value {
+                                if new_can.value != query.canonical().value.goal {
                                     progressed = true;
                                 }
                             }
@@ -585,11 +584,7 @@ impl<'db> TyChecker<'db> {
                                 let cands = dedup_equivalent_insts(
                                     ambiguous
                                         .iter()
-                                        .map(|s| {
-                                            canonical_inst
-                                                .extract_solution(&mut self.table, *s)
-                                                .inst
-                                        })
+                                        .map(|s| query.extract_solution(&mut self.table, *s).inst)
                                         .collect(),
                                 );
                                 if let [solution] = cands.as_slice() {
@@ -735,19 +730,14 @@ impl<'db> TyChecker<'db> {
                         inst.fold_with(db, &mut prober)
                     };
                     let inst = inst.normalize(db, scope, assumptions);
-                    let canonical_inst = Canonicalized::new(db, inst);
-                    match is_goal_satisfiable(
-                        db,
-                        TraitSolveCx::new(db, scope).with_assumptions(assumptions),
-                        canonical_inst.value,
-                    ) {
+                    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+                    let query = CanonicalGoalQuery::new(db, inst, assumptions);
+                    match is_goal_query_satisfiable(db, solve_cx, &query) {
                         GoalSatisfiability::NeedsConfirmation(ambiguous) => {
                             let cands = dedup_equivalent_insts(
                                 ambiguous
                                     .iter()
-                                    .map(|s| {
-                                        canonical_inst.extract_solution(&mut self.table, *s).inst
-                                    })
+                                    .map(|s| query.extract_solution(&mut self.table, *s).inst)
                                     .collect(),
                             );
                             if cands.len() > 1 && !inst.self_ty(db).has_var(db) {
@@ -759,8 +749,8 @@ impl<'db> TyChecker<'db> {
                         }
                         GoalSatisfiability::UnSat(subgoal) => {
                             if !inst.self_ty(db).has_var(db) {
-                                let unsat = subgoal
-                                    .map(|s| canonical_inst.extract_solution(&mut self.table, s));
+                                let unsat =
+                                    subgoal.map(|s| query.extract_subgoal(&mut self.table, s));
                                 self.push_diag(TyDiagCollection::from(
                                     TraitConstraintDiag::TraitBoundNotSat {
                                         span: span.clone(),
@@ -1528,10 +1518,7 @@ pub struct ResolvedEffectArg<'db> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub enum ConstRef<'db> {
     Const(Const<'db>),
-    TraitConst {
-        inst: TraitInstId<'db>,
-        name: IdentId<'db>,
-    },
+    TraitConst(AssocConstUse<'db>),
 }
 
 impl<'db> TyVisitable<'db> for ConstRef<'db> {
@@ -1541,7 +1528,7 @@ impl<'db> TyVisitable<'db> for ConstRef<'db> {
     {
         match self {
             ConstRef::Const(_) => {}
-            ConstRef::TraitConst { inst, .. } => inst.visit_with(visitor),
+            ConstRef::TraitConst(assoc) => assoc.visit_with(visitor),
         }
     }
 }
@@ -1553,10 +1540,7 @@ impl<'db> TyFoldable<'db> for ConstRef<'db> {
     {
         match self {
             ConstRef::Const(const_def) => ConstRef::Const(const_def),
-            ConstRef::TraitConst { inst, name } => ConstRef::TraitConst {
-                inst: inst.fold_with(db, folder),
-                name,
-            },
+            ConstRef::TraitConst(assoc) => ConstRef::TraitConst(assoc.fold_with(db, folder)),
         }
     }
 }
@@ -1564,6 +1548,7 @@ impl<'db> TyFoldable<'db> for ConstRef<'db> {
 #[derive(Debug, Clone, PartialEq, Eq, Update)]
 pub struct TypedBody<'db> {
     body: Option<Body<'db>>,
+    assumptions: PredicateListId<'db>,
     pat_ty: FxHashMap<PatId, TyId<'db>>,
     expr_ty: FxHashMap<ExprId, ExprProp<'db>>,
     implicit_moves: FxHashSet<ExprId>,
@@ -1585,6 +1570,7 @@ impl<'db> TyVisitable<'db> for TypedBody<'db> {
     where
         V: crate::analysis::ty::visitor::TyVisitor<'db> + ?Sized,
     {
+        self.assumptions.visit_with(visitor);
         for ty in self.pat_ty.values() {
             ty.visit_with(visitor);
         }
@@ -1608,6 +1594,7 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
     where
         F: crate::analysis::ty::fold::TyFolder<'db>,
     {
+        let assumptions = self.assumptions.fold_with(db, folder);
         let pat_ty = self
             .pat_ty
             .into_iter()
@@ -1658,6 +1645,7 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
 
         Self {
             body: self.body,
+            assumptions,
             pat_ty,
             expr_ty,
             implicit_moves: self.implicit_moves,
@@ -1675,6 +1663,10 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
 impl<'db> TypedBody<'db> {
     pub fn body(&self) -> Option<Body<'db>> {
         self.body
+    }
+
+    pub fn assumptions(&self) -> PredicateListId<'db> {
+        self.assumptions
     }
 
     pub fn expr_ty(&self, db: &'db dyn HirAnalysisDb, expr: ExprId) -> TyId<'db> {
@@ -1808,9 +1800,10 @@ impl<'db> TypedBody<'db> {
             .collect()
     }
 
-    fn empty() -> Self {
+    fn empty(db: &'db dyn HirAnalysisDb) -> Self {
         Self {
             body: None,
+            assumptions: PredicateListId::empty_list(db),
             pat_ty: FxHashMap::default(),
             expr_ty: FxHashMap::default(),
             implicit_moves: FxHashSet::default(),

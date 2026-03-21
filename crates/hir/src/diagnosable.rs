@@ -380,12 +380,11 @@ impl<'db> Trait<'db> {
                 continue;
             };
             for trait_inst in assoc.bounds_on_subject(db, default_ty) {
-                let canonical_inst = ty::canonical::Canonical::new(db, trait_inst);
                 match ty::trait_resolution::is_goal_satisfiable(
                     db,
                     ty::trait_resolution::TraitSolveCx::new(db, self.scope())
                         .with_assumptions(assumptions),
-                    canonical_inst,
+                    trait_inst,
                 ) {
                     ty::trait_resolution::GoalSatisfiability::Satisfied(_) => {}
                     ty::trait_resolution::GoalSatisfiability::UnSat(_) => {
@@ -733,12 +732,11 @@ impl<'db> ImplTrait<'db> {
                     trait_args,
                 };
                 let bound_inst = bound_inst.fold_with(db, &mut folder);
-                let canonical_bound = ty::canonical::Canonical::new(db, bound_inst);
                 use ty::trait_resolution::{GoalSatisfiability, TraitSolveCx, is_goal_satisfiable};
                 if let GoalSatisfiability::UnSat(_) = is_goal_satisfiable(
                     db,
                     TraitSolveCx::new(db, self.scope()).with_assumptions(assumptions),
-                    canonical_bound,
+                    bound_inst,
                 ) {
                     let assoc_ty_span = self
                         .associated_type_span(db, name)
@@ -761,7 +759,6 @@ impl<'db> ImplTrait<'db> {
 
     /// Diagnostics for trait-ref WF and satisfiability for this impl-trait.
     pub fn diags_trait_ref_and_wf(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        use ty::canonical::Canonicalized;
         use ty::trait_lower::lower_impl_trait;
         use ty::trait_resolution::{self, GoalSatisfiability, constraint::collect_constraints};
 
@@ -781,8 +778,7 @@ impl<'db> ImplTrait<'db> {
             trait_resolution::TraitSolveCx::new(db, self.scope()).with_assumptions(assumptions);
 
         let is_satisfied = |goal, span: DynLazySpan<'db>, out: &mut Vec<_>| {
-            let canonical_goal = Canonicalized::new(db, goal);
-            match trait_resolution::is_goal_satisfiable(db, solve_cx, canonical_goal.value) {
+            match trait_resolution::is_goal_satisfiable(db, solve_cx, goal) {
                 GoalSatisfiability::Satisfied(_) | GoalSatisfiability::ContainsInvalid => {}
                 GoalSatisfiability::NeedsConfirmation(_) => {}
                 GoalSatisfiability::UnSat(_) => {

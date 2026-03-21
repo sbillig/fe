@@ -118,9 +118,7 @@ fn check_ty_decodable<'db>(
     }
 
     let inst = TraitInstId::new(db, decode_trait, vec![ty, sol_ty], IndexMap::new());
-    let canonical_inst = Canonical::new(db, inst);
-
-    if let GoalSatisfiability::UnSat(_) = is_goal_satisfiable(db, solve_cx, canonical_inst) {
+    if let GoalSatisfiability::UnSat(_) = is_goal_satisfiable(db, solve_cx, inst) {
         diags.push(
             TyDiagCollection::from(TraitConstraintDiag::TraitBoundNotSat {
                 span,

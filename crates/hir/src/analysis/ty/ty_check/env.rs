@@ -75,6 +75,26 @@ pub(super) struct TyCheckEnv<'db> {
 
 impl<'db> TyCheckEnv<'db> {
     pub(super) fn new(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -> Result<Self, ()> {
+        fn const_owner_preds<'db>(
+            db: &'db dyn HirAnalysisDb,
+            scope: ScopeId<'db>,
+        ) -> PredicateListId<'db> {
+            match scope.parent_item(db) {
+                Some(ItemKind::Trait(trait_)) => {
+                    let self_pred =
+                        TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
+                    PredicateListId::new(db, vec![self_pred])
+                }
+                Some(ItemKind::ImplTrait(impl_trait)) => {
+                    collect_constraints(db, impl_trait.into()).instantiate_identity()
+                }
+                Some(ItemKind::Impl(impl_)) => {
+                    collect_constraints(db, impl_.into()).instantiate_identity()
+                }
+                _ => PredicateListId::empty_list(db),
+            }
+        }
+
         let Some(body) = owner.body(db) else {
             return Err(());
         };
@@ -129,27 +149,15 @@ impl<'db> TyCheckEnv<'db> {
                         parent_item = enclosing.parent_item(db);
                     }
 
-                    let preds = match parent_item {
-                        Some(ItemKind::Trait(trait_)) => {
-                            let self_pred = TraitInstId::new(
-                                db,
-                                trait_,
-                                trait_.params(db).to_vec(),
-                                IndexMap::new(),
-                            );
-                            PredicateListId::new(db, vec![self_pred])
-                        }
-                        Some(ItemKind::ImplTrait(impl_trait)) => {
-                            collect_constraints(db, impl_trait.into()).instantiate_identity()
-                        }
-                        Some(ItemKind::Impl(impl_)) => {
-                            collect_constraints(db, impl_.into()).instantiate_identity()
-                        }
-                        _ => PredicateListId::empty_list(db),
-                    };
+                    let preds = const_owner_preds(db, enclosing);
                     let assumptions = preds.extend_all_bounds(db);
                     (preds, assumptions)
                 }
+            }
+            BodyOwner::Const(const_) => {
+                let preds = const_owner_preds(db, const_.scope());
+                let assumptions = preds.extend_all_bounds(db);
+                (preds, assumptions)
             }
             _ => {
                 let empty = PredicateListId::empty_list(db);
@@ -992,6 +1000,7 @@ impl<'db> TyCheckEnv<'db> {
                     .map(|ty| ty.fold_with(self.db, &mut prober));
             }
         });
+        let assumptions = self.assumptions.fold_with(self.db, &mut prober);
 
         let callables = self
             .callables
@@ -1007,6 +1016,7 @@ impl<'db> TyCheckEnv<'db> {
 
         TypedBody {
             body: Some(self.body),
+            assumptions,
             pat_ty: self.pat_ty,
             expr_ty: self.expr_ty,
             implicit_moves: self.implicit_moves,

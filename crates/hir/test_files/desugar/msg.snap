@@ -18,6 +18,10 @@ mod CounterMsg {
         const SELECTOR: u32 = 1
     }
 
+    impl core::abi::AbiSize for Increment {
+        const ENCODED_SIZE: u256 = 0
+    }
+
     impl core::abi::Encode<std::abi::Sol> for Increment {
         const DIRECT_ENCODE: bool = true
     
@@ -38,6 +42,10 @@ mod CounterMsg {
     impl core::message::MsgVariant<std::abi::Sol> for Get {
         type Return = (u64, u64)
         const SELECTOR: u32 = 2
+    }
+
+    impl core::abi::AbiSize for Get {
+        const ENCODED_SIZE: u256 = 0
     }
 
     impl core::abi::Encode<std::abi::Sol> for Get {
@@ -64,8 +72,12 @@ mod CounterMsg {
         const SELECTOR: u32 = 3
     }
 
+    impl core::abi::AbiSize for Set {
+        const ENCODED_SIZE: u256 = 0 + u64::ENCODED_SIZE
+    }
+
     impl core::abi::Encode<std::abi::Sol> for Set {
-        const DIRECT_ENCODE: bool = true && u64::DIRECT_ENCODE
+        const DIRECT_ENCODE: bool = true && <u64 as core::abi::Encode<std::abi::Sol> >::DIRECT_ENCODE
     
         fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
             self.val.encode(e)
