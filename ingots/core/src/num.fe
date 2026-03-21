@@ -18,6 +18,13 @@ extern {
     fn __checked_neg<T: IntWord>(_: T) -> T
 }
 
+// Generic saturating arithmetic intrinsics for primitive integer types.
+extern {
+    fn __saturating_add<T: IntWord>(_: T, _: T) -> T
+    fn __saturating_sub<T: IntWord>(_: T, _: T) -> T
+    fn __saturating_mul<T: IntWord>(_: T, _: T) -> T
+}
+
 // Extern intrinsics for u8
 extern {
     fn __add_u8(_: u8, _: u8) -> u8
@@ -685,27 +692,9 @@ impl Pow for u8 { fn pow(own self, _ other: own u8) -> u8 { pow_checked(self, ot
 impl WrappingAdd for u8 { fn wrapping_add(self, _ other: u8) -> u8 { __add_u8(self, other) } }
 impl WrappingSub for u8 { fn wrapping_sub(self, _ other: u8) -> u8 { __sub_u8(self, other) } }
 impl WrappingMul for u8 { fn wrapping_mul(self, _ other: u8) -> u8 { __mul_u8(self, other) } }
-impl SaturatingAdd for u8 {
-    fn saturating_add(self, _ other: u8) -> u8 {
-        let result = __add_u8(self, other)
-        if __lt_u8(result, self) { __bitcast(U8_MASK) } else { result }
-    }
-}
-impl SaturatingSub for u8 {
-    fn saturating_sub(self, _ other: u8) -> u8 {
-        if __gt_u8(other, self) { 0 } else { __sub_u8(self, other) }
-    }
-}
-impl SaturatingMul for u8 {
-    fn saturating_mul(self, _ other: u8) -> u8 {
-        if self == 0 || other == 0 {
-            0
-        } else {
-            let result = __mul_u8(self, other)
-            if result / self != other { __bitcast(U8_MASK) } else { result }
-        }
-    }
-}
+impl SaturatingAdd for u8 { fn saturating_add(self, _ other: u8) -> u8 { __saturating_add(self, other) } }
+impl SaturatingSub for u8 { fn saturating_sub(self, _ other: u8) -> u8 { __saturating_sub(self, other) } }
+impl SaturatingMul for u8 { fn saturating_mul(self, _ other: u8) -> u8 { __saturating_mul(self, other) } }
 impl Shl for u8 { fn shl(own self, _ other: own u8) -> u8 { __shl_u8(self, other) } }
 impl Shr for u8 { fn shr(own self, _ other: own u8) -> u8 { __shr_u8(self, other) } }
 impl BitAnd for u8 { fn bitand(own self, _ other: own u8) -> u8 { __bitand_u8(self, other) } }
@@ -771,52 +760,9 @@ impl Pow for i8 { fn pow(own self, _ other: own i8) -> i8 { pow_checked(self, ot
 impl WrappingAdd for i8 { fn wrapping_add(self, _ other: i8) -> i8 { __add_i8(self, other) } }
 impl WrappingSub for i8 { fn wrapping_sub(self, _ other: i8) -> i8 { __sub_i8(self, other) } }
 impl WrappingMul for i8 { fn wrapping_mul(self, _ other: i8) -> i8 { __mul_i8(self, other) } }
-impl SaturatingAdd for i8 {
-    fn saturating_add(self, _ other: i8) -> i8 {
-        let result = __add_i8(self, other)
-        let self_sign = (self.to_word() & I8_SIGN_BIT) != 0
-        let other_sign = (other.to_word() & I8_SIGN_BIT) != 0
-        let result_sign = (result.to_word() & I8_SIGN_BIT) != 0
-        if self_sign == other_sign && self_sign != result_sign {
-            if self_sign { __bitcast(I8_SIGN_BIT) } else { __bitcast(I8_SIGN_BIT - 1) }
-        } else {
-            result
-        }
-    }
-}
-impl SaturatingSub for i8 {
-    fn saturating_sub(self, _ other: i8) -> i8 {
-        let result = __sub_i8(self, other)
-        let self_sign = (self.to_word() & I8_SIGN_BIT) != 0
-        let other_sign = (other.to_word() & I8_SIGN_BIT) != 0
-        let result_sign = (result.to_word() & I8_SIGN_BIT) != 0
-        if self_sign != other_sign && self_sign != result_sign {
-            if self_sign { __bitcast(I8_SIGN_BIT) } else { __bitcast(I8_SIGN_BIT - 1) }
-        } else {
-            result
-        }
-    }
-}
-impl SaturatingMul for i8 {
-    fn saturating_mul(self, _ other: i8) -> i8 {
-        if self == 0 || other == 0 {
-            0
-        } else {
-            let min: i8 = __bitcast(I8_SIGN_BIT)
-            if (self == min && other == -1) || (other == min && self == -1) {
-                __bitcast(I8_SIGN_BIT - 1)
-            } else {
-                let result = __mul_i8(self, other)
-                if result / self != other {
-                    let negative = ((self.to_word() ^ other.to_word()) & I8_SIGN_BIT) != 0
-                    if negative { __bitcast(I8_SIGN_BIT) } else { __bitcast(I8_SIGN_BIT - 1) }
-                } else {
-                    result
-                }
-            }
-        }
-    }
-}
+impl SaturatingAdd for i8 { fn saturating_add(self, _ other: i8) -> i8 { __saturating_add(self, other) } }
+impl SaturatingSub for i8 { fn saturating_sub(self, _ other: i8) -> i8 { __saturating_sub(self, other) } }
+impl SaturatingMul for i8 { fn saturating_mul(self, _ other: i8) -> i8 { __saturating_mul(self, other) } }
 impl Shl for i8 { fn shl(own self, _ other: own i8) -> i8 { __shl_i8(self, other) } }
 impl Shr for i8 { fn shr(own self, _ other: own i8) -> i8 { __shr_i8(self, other) } }
 impl BitAnd for i8 { fn bitand(own self, _ other: own i8) -> i8 { __bitand_i8(self, other) } }
@@ -882,52 +828,9 @@ impl Pow for i16 { fn pow(own self, _ other: own i16) -> i16 { pow_checked(self,
 impl WrappingAdd for i16 { fn wrapping_add(self, _ other: i16) -> i16 { __add_i16(self, other) } }
 impl WrappingSub for i16 { fn wrapping_sub(self, _ other: i16) -> i16 { __sub_i16(self, other) } }
 impl WrappingMul for i16 { fn wrapping_mul(self, _ other: i16) -> i16 { __mul_i16(self, other) } }
-impl SaturatingAdd for i16 {
-    fn saturating_add(self, _ other: i16) -> i16 {
-        let result = __add_i16(self, other)
-        let self_sign = (self.to_word() & I16_SIGN_BIT) != 0
-        let other_sign = (other.to_word() & I16_SIGN_BIT) != 0
-        let result_sign = (result.to_word() & I16_SIGN_BIT) != 0
-        if self_sign == other_sign && self_sign != result_sign {
-            if self_sign { __bitcast(I16_SIGN_BIT) } else { __bitcast(I16_SIGN_BIT - 1) }
-        } else {
-            result
-        }
-    }
-}
-impl SaturatingSub for i16 {
-    fn saturating_sub(self, _ other: i16) -> i16 {
-        let result = __sub_i16(self, other)
-        let self_sign = (self.to_word() & I16_SIGN_BIT) != 0
-        let other_sign = (other.to_word() & I16_SIGN_BIT) != 0
-        let result_sign = (result.to_word() & I16_SIGN_BIT) != 0
-        if self_sign != other_sign && self_sign != result_sign {
-            if self_sign { __bitcast(I16_SIGN_BIT) } else { __bitcast(I16_SIGN_BIT - 1) }
-        } else {
-            result
-        }
-    }
-}
-impl SaturatingMul for i16 {
-    fn saturating_mul(self, _ other: i16) -> i16 {
-        if self == 0 || other == 0 {
-            0
-        } else {
-            let min: i16 = __bitcast(I16_SIGN_BIT)
-            if (self == min && other == -1) || (other == min && self == -1) {
-                __bitcast(I16_SIGN_BIT - 1)
-            } else {
-                let result = __mul_i16(self, other)
-                if result / self != other {
-                    let negative = ((self.to_word() ^ other.to_word()) & I16_SIGN_BIT) != 0
-                    if negative { __bitcast(I16_SIGN_BIT) } else { __bitcast(I16_SIGN_BIT - 1) }
-                } else {
-                    result
-                }
-            }
-        }
-    }
-}
+impl SaturatingAdd for i16 { fn saturating_add(self, _ other: i16) -> i16 { __saturating_add(self, other) } }
+impl SaturatingSub for i16 { fn saturating_sub(self, _ other: i16) -> i16 { __saturating_sub(self, other) } }
+impl SaturatingMul for i16 { fn saturating_mul(self, _ other: i16) -> i16 { __saturating_mul(self, other) } }
 impl Shl for i16 { fn shl(own self, _ other: own i16) -> i16 { __shl_i16(self, other) } }
 impl Shr for i16 { fn shr(own self, _ other: own i16) -> i16 { __shr_i16(self, other) } }
 impl BitAnd for i16 { fn bitand(own self, _ other: own i16) -> i16 { __bitand_i16(self, other) } }
@@ -988,27 +891,9 @@ impl Pow for u16 { fn pow(own self, _ other: own u16) -> u16 { pow_checked(self,
 impl WrappingAdd for u16 { fn wrapping_add(self, _ other: u16) -> u16 { __add_u16(self, other) } }
 impl WrappingSub for u16 { fn wrapping_sub(self, _ other: u16) -> u16 { __sub_u16(self, other) } }
 impl WrappingMul for u16 { fn wrapping_mul(self, _ other: u16) -> u16 { __mul_u16(self, other) } }
-impl SaturatingAdd for u16 {
-    fn saturating_add(self, _ other: u16) -> u16 {
-        let result = __add_u16(self, other)
-        if __lt_u16(result, self) { __bitcast(U16_MASK) } else { result }
-    }
-}
-impl SaturatingSub for u16 {
-    fn saturating_sub(self, _ other: u16) -> u16 {
-        if __gt_u16(other, self) { 0 } else { __sub_u16(self, other) }
-    }
-}
-impl SaturatingMul for u16 {
-    fn saturating_mul(self, _ other: u16) -> u16 {
-        if self == 0 || other == 0 {
-            0
-        } else {
-            let result = __mul_u16(self, other)
-            if result / self != other { __bitcast(U16_MASK) } else { result }
-        }
-    }
-}
+impl SaturatingAdd for u16 { fn saturating_add(self, _ other: u16) -> u16 { __saturating_add(self, other) } }
+impl SaturatingSub for u16 { fn saturating_sub(self, _ other: u16) -> u16 { __saturating_sub(self, other) } }
+impl SaturatingMul for u16 { fn saturating_mul(self, _ other: u16) -> u16 { __saturating_mul(self, other) } }
 impl Shl for u16 { fn shl(own self, _ other: own u16) -> u16 { __shl_u16(self, other) } }
 impl Shr for u16 { fn shr(own self, _ other: own u16) -> u16 { __shr_u16(self, other) } }
 impl BitAnd for u16 { fn bitand(own self, _ other: own u16) -> u16 { __bitand_u16(self, other) } }
@@ -1075,52 +960,9 @@ impl Pow for i32 { fn pow(own self, _ other: own i32) -> i32 { pow_checked(self,
 impl WrappingAdd for i32 { fn wrapping_add(self, _ other: i32) -> i32 { __add_i32(self, other) } }
 impl WrappingSub for i32 { fn wrapping_sub(self, _ other: i32) -> i32 { __sub_i32(self, other) } }
 impl WrappingMul for i32 { fn wrapping_mul(self, _ other: i32) -> i32 { __mul_i32(self, other) } }
-impl SaturatingAdd for i32 {
-    fn saturating_add(self, _ other: i32) -> i32 {
-        let result = __add_i32(self, other)
-        let self_sign = (self.to_word() & I32_SIGN_BIT) != 0
-        let other_sign = (other.to_word() & I32_SIGN_BIT) != 0
-        let result_sign = (result.to_word() & I32_SIGN_BIT) != 0
-        if self_sign == other_sign && self_sign != result_sign {
-            if self_sign { __bitcast(I32_SIGN_BIT) } else { __bitcast(I32_SIGN_BIT - 1) }
-        } else {
-            result
-        }
-    }
-}
-impl SaturatingSub for i32 {
-    fn saturating_sub(self, _ other: i32) -> i32 {
-        let result = __sub_i32(self, other)
-        let self_sign = (self.to_word() & I32_SIGN_BIT) != 0
-        let other_sign = (other.to_word() & I32_SIGN_BIT) != 0
-        let result_sign = (result.to_word() & I32_SIGN_BIT) != 0
-        if self_sign != other_sign && self_sign != result_sign {
-            if self_sign { __bitcast(I32_SIGN_BIT) } else { __bitcast(I32_SIGN_BIT - 1) }
-        } else {
-            result
-        }
-    }
-}
-impl SaturatingMul for i32 {
-    fn saturating_mul(self, _ other: i32) -> i32 {
-        if self == 0 || other == 0 {
-            0
-        } else {
-            let min: i32 = __bitcast(I32_SIGN_BIT)
-            if (self == min && other == -1) || (other == min && self == -1) {
-                __bitcast(I32_SIGN_BIT - 1)
-            } else {
-                let result = __mul_i32(self, other)
-                if result / self != other {
-                    let negative = ((self.to_word() ^ other.to_word()) & I32_SIGN_BIT) != 0
-                    if negative { __bitcast(I32_SIGN_BIT) } else { __bitcast(I32_SIGN_BIT - 1) }
-                } else {
-                    result
-                }
-            }
-        }
-    }
-}
+impl SaturatingAdd for i32 { fn saturating_add(self, _ other: i32) -> i32 { __saturating_add(self, other) } }
+impl SaturatingSub for i32 { fn saturating_sub(self, _ other: i32) -> i32 { __saturating_sub(self, other) } }
+impl SaturatingMul for i32 { fn saturating_mul(self, _ other: i32) -> i32 { __saturating_mul(self, other) } }
 impl Shl for i32 { fn shl(own self, _ other: own i32) -> i32 { __shl_i32(self, other) } }
 impl Shr for i32 { fn shr(own self, _ other: own i32) -> i32 { __shr_i32(self, other) } }
 impl BitAnd for i32 { fn bitand(own self, _ other: own i32) -> i32 { __bitand_i32(self, other) } }
@@ -1181,27 +1023,9 @@ impl Pow for u32 { fn pow(own self, _ other: own u32) -> u32 { pow_checked(self,
 impl WrappingAdd for u32 { fn wrapping_add(self, _ other: u32) -> u32 { __add_u32(self, other) } }
 impl WrappingSub for u32 { fn wrapping_sub(self, _ other: u32) -> u32 { __sub_u32(self, other) } }
 impl WrappingMul for u32 { fn wrapping_mul(self, _ other: u32) -> u32 { __mul_u32(self, other) } }
-impl SaturatingAdd for u32 {
-    fn saturating_add(self, _ other: u32) -> u32 {
-        let result = __add_u32(self, other)
-        if __lt_u32(result, self) { __bitcast(U32_MASK) } else { result }
-    }
-}
-impl SaturatingSub for u32 {
-    fn saturating_sub(self, _ other: u32) -> u32 {
-        if __gt_u32(other, self) { 0 } else { __sub_u32(self, other) }
-    }
-}
-impl SaturatingMul for u32 {
-    fn saturating_mul(self, _ other: u32) -> u32 {
-        if self == 0 || other == 0 {
-            0
-        } else {
-            let result = __mul_u32(self, other)
-            if result / self != other { __bitcast(U32_MASK) } else { result }
-        }
-    }
-}
+impl SaturatingAdd for u32 { fn saturating_add(self, _ other: u32) -> u32 { __saturating_add(self, other) } }
+impl SaturatingSub for u32 { fn saturating_sub(self, _ other: u32) -> u32 { __saturating_sub(self, other) } }
+impl SaturatingMul for u32 { fn saturating_mul(self, _ other: u32) -> u32 { __saturating_mul(self, other) } }
 impl Shl for u32 { fn shl(own self, _ other: own u32) -> u32 { __shl_u32(self, other) } }
 impl Shr for u32 { fn shr(own self, _ other: own u32) -> u32 { __shr_u32(self, other) } }
 impl BitAnd for u32 { fn bitand(own self, _ other: own u32) -> u32 { __bitand_u32(self, other) } }
@@ -1267,52 +1091,9 @@ impl Pow for i64 { fn pow(own self, _ other: own i64) -> i64 { pow_checked(self,
 impl WrappingAdd for i64 { fn wrapping_add(self, _ other: i64) -> i64 { __add_i64(self, other) } }
 impl WrappingSub for i64 { fn wrapping_sub(self, _ other: i64) -> i64 { __sub_i64(self, other) } }
 impl WrappingMul for i64 { fn wrapping_mul(self, _ other: i64) -> i64 { __mul_i64(self, other) } }
-impl SaturatingAdd for i64 {
-    fn saturating_add(self, _ other: i64) -> i64 {
-        let result = __add_i64(self, other)
-        let self_sign = (self.to_word() & I64_SIGN_BIT) != 0
-        let other_sign = (other.to_word() & I64_SIGN_BIT) != 0
-        let result_sign = (result.to_word() & I64_SIGN_BIT) != 0
-        if self_sign == other_sign && self_sign != result_sign {
-            if self_sign { __bitcast(I64_SIGN_BIT) } else { __bitcast(I64_SIGN_BIT - 1) }
-        } else {
-            result
-        }
-    }
-}
-impl SaturatingSub for i64 {
-    fn saturating_sub(self, _ other: i64) -> i64 {
-        let result = __sub_i64(self, other)
-        let self_sign = (self.to_word() & I64_SIGN_BIT) != 0
-        let other_sign = (other.to_word() & I64_SIGN_BIT) != 0
-        let result_sign = (result.to_word() & I64_SIGN_BIT) != 0
-        if self_sign != other_sign && self_sign != result_sign {
-            if self_sign { __bitcast(I64_SIGN_BIT) } else { __bitcast(I64_SIGN_BIT - 1) }
-        } else {
-            result
-        }
-    }
-}
-impl SaturatingMul for i64 {
-    fn saturating_mul(self, _ other: i64) -> i64 {
-        if self == 0 || other == 0 {
-            0
-        } else {
-            let min: i64 = __bitcast(I64_SIGN_BIT)
-            if (self == min && other == -1) || (other == min && self == -1) {
-                __bitcast(I64_SIGN_BIT - 1)
-            } else {
-                let result = __mul_i64(self, other)
-                if result / self != other {
-                    let negative = ((self.to_word() ^ other.to_word()) & I64_SIGN_BIT) != 0
-                    if negative { __bitcast(I64_SIGN_BIT) } else { __bitcast(I64_SIGN_BIT - 1) }
-                } else {
-                    result
-                }
-            }
-        }
-    }
-}
+impl SaturatingAdd for i64 { fn saturating_add(self, _ other: i64) -> i64 { __saturating_add(self, other) } }
+impl SaturatingSub for i64 { fn saturating_sub(self, _ other: i64) -> i64 { __saturating_sub(self, other) } }
+impl SaturatingMul for i64 { fn saturating_mul(self, _ other: i64) -> i64 { __saturating_mul(self, other) } }
 impl Shl for i64 { fn shl(own self, _ other: own i64) -> i64 { __shl_i64(self, other) } }
 impl Shr for i64 { fn shr(own self, _ other: own i64) -> i64 { __shr_i64(self, other) } }
 impl BitAnd for i64 { fn bitand(own self, _ other: own i64) -> i64 { __bitand_i64(self, other) } }
@@ -1378,52 +1159,9 @@ impl Pow for i128 { fn pow(own self, _ other: own i128) -> i128 { pow_checked(se
 impl WrappingAdd for i128 { fn wrapping_add(self, _ other: i128) -> i128 { __add_i128(self, other) } }
 impl WrappingSub for i128 { fn wrapping_sub(self, _ other: i128) -> i128 { __sub_i128(self, other) } }
 impl WrappingMul for i128 { fn wrapping_mul(self, _ other: i128) -> i128 { __mul_i128(self, other) } }
-impl SaturatingAdd for i128 {
-    fn saturating_add(self, _ other: i128) -> i128 {
-        let result = __add_i128(self, other)
-        let self_sign = (self.to_word() & I128_SIGN_BIT) != 0
-        let other_sign = (other.to_word() & I128_SIGN_BIT) != 0
-        let result_sign = (result.to_word() & I128_SIGN_BIT) != 0
-        if self_sign == other_sign && self_sign != result_sign {
-            if self_sign { __bitcast(I128_SIGN_BIT) } else { __bitcast(I128_SIGN_BIT - 1) }
-        } else {
-            result
-        }
-    }
-}
-impl SaturatingSub for i128 {
-    fn saturating_sub(self, _ other: i128) -> i128 {
-        let result = __sub_i128(self, other)
-        let self_sign = (self.to_word() & I128_SIGN_BIT) != 0
-        let other_sign = (other.to_word() & I128_SIGN_BIT) != 0
-        let result_sign = (result.to_word() & I128_SIGN_BIT) != 0
-        if self_sign != other_sign && self_sign != result_sign {
-            if self_sign { __bitcast(I128_SIGN_BIT) } else { __bitcast(I128_SIGN_BIT - 1) }
-        } else {
-            result
-        }
-    }
-}
-impl SaturatingMul for i128 {
-    fn saturating_mul(self, _ other: i128) -> i128 {
-        if self == 0 || other == 0 {
-            0
-        } else {
-            let min: i128 = __bitcast(I128_SIGN_BIT)
-            if (self == min && other == -1) || (other == min && self == -1) {
-                __bitcast(I128_SIGN_BIT - 1)
-            } else {
-                let result = __mul_i128(self, other)
-                if result / self != other {
-                    let negative = ((self.to_word() ^ other.to_word()) & I128_SIGN_BIT) != 0
-                    if negative { __bitcast(I128_SIGN_BIT) } else { __bitcast(I128_SIGN_BIT - 1) }
-                } else {
-                    result
-                }
-            }
-        }
-    }
-}
+impl SaturatingAdd for i128 { fn saturating_add(self, _ other: i128) -> i128 { __saturating_add(self, other) } }
+impl SaturatingSub for i128 { fn saturating_sub(self, _ other: i128) -> i128 { __saturating_sub(self, other) } }
+impl SaturatingMul for i128 { fn saturating_mul(self, _ other: i128) -> i128 { __saturating_mul(self, other) } }
 impl Shl for i128 { fn shl(own self, _ other: own i128) -> i128 { __shl_i128(self, other) } }
 impl Shr for i128 { fn shr(own self, _ other: own i128) -> i128 { __shr_i128(self, other) } }
 impl BitAnd for i128 { fn bitand(own self, _ other: own i128) -> i128 { __bitand_i128(self, other) } }
@@ -1484,27 +1222,9 @@ impl Pow for u64 { fn pow(own self, _ other: own u64) -> u64 { pow_checked(self,
 impl WrappingAdd for u64 { fn wrapping_add(self, _ other: u64) -> u64 { __add_u64(self, other) } }
 impl WrappingSub for u64 { fn wrapping_sub(self, _ other: u64) -> u64 { __sub_u64(self, other) } }
 impl WrappingMul for u64 { fn wrapping_mul(self, _ other: u64) -> u64 { __mul_u64(self, other) } }
-impl SaturatingAdd for u64 {
-    fn saturating_add(self, _ other: u64) -> u64 {
-        let result = __add_u64(self, other)
-        if __lt_u64(result, self) { __bitcast(U64_MASK) } else { result }
-    }
-}
-impl SaturatingSub for u64 {
-    fn saturating_sub(self, _ other: u64) -> u64 {
-        if __gt_u64(other, self) { 0 } else { __sub_u64(self, other) }
-    }
-}
-impl SaturatingMul for u64 {
-    fn saturating_mul(self, _ other: u64) -> u64 {
-        if self == 0 || other == 0 {
-            0
-        } else {
-            let result = __mul_u64(self, other)
-            if result / self != other { __bitcast(U64_MASK) } else { result }
-        }
-    }
-}
+impl SaturatingAdd for u64 { fn saturating_add(self, _ other: u64) -> u64 { __saturating_add(self, other) } }
+impl SaturatingSub for u64 { fn saturating_sub(self, _ other: u64) -> u64 { __saturating_sub(self, other) } }
+impl SaturatingMul for u64 { fn saturating_mul(self, _ other: u64) -> u64 { __saturating_mul(self, other) } }
 impl Shl for u64 { fn shl(own self, _ other: own u64) -> u64 { __shl_u64(self, other) } }
 impl Shr for u64 { fn shr(own self, _ other: own u64) -> u64 { __shr_u64(self, other) } }
 impl BitAnd for u64 { fn bitand(own self, _ other: own u64) -> u64 { __bitand_u64(self, other) } }
@@ -1565,27 +1285,9 @@ impl Pow for u128 { fn pow(own self, _ other: own u128) -> u128 { pow_checked(se
 impl WrappingAdd for u128 { fn wrapping_add(self, _ other: u128) -> u128 { __add_u128(self, other) } }
 impl WrappingSub for u128 { fn wrapping_sub(self, _ other: u128) -> u128 { __sub_u128(self, other) } }
 impl WrappingMul for u128 { fn wrapping_mul(self, _ other: u128) -> u128 { __mul_u128(self, other) } }
-impl SaturatingAdd for u128 {
-    fn saturating_add(self, _ other: u128) -> u128 {
-        let result = __add_u128(self, other)
-        if __lt_u128(result, self) { __bitcast(U128_MASK) } else { result }
-    }
-}
-impl SaturatingSub for u128 {
-    fn saturating_sub(self, _ other: u128) -> u128 {
-        if __gt_u128(other, self) { 0 } else { __sub_u128(self, other) }
-    }
-}
-impl SaturatingMul for u128 {
-    fn saturating_mul(self, _ other: u128) -> u128 {
-        if self == 0 || other == 0 {
-            0
-        } else {
-            let result = __mul_u128(self, other)
-            if result / self != other { __bitcast(U128_MASK) } else { result }
-        }
-    }
-}
+impl SaturatingAdd for u128 { fn saturating_add(self, _ other: u128) -> u128 { __saturating_add(self, other) } }
+impl SaturatingSub for u128 { fn saturating_sub(self, _ other: u128) -> u128 { __saturating_sub(self, other) } }
+impl SaturatingMul for u128 { fn saturating_mul(self, _ other: u128) -> u128 { __saturating_mul(self, other) } }
 impl Shl for u128 { fn shl(own self, _ other: own u128) -> u128 { __shl_u128(self, other) } }
 impl Shr for u128 { fn shr(own self, _ other: own u128) -> u128 { __shr_u128(self, other) } }
 impl BitAnd for u128 { fn bitand(own self, _ other: own u128) -> u128 { __bitand_u128(self, other) } }
@@ -1646,27 +1348,9 @@ impl Pow for usize { fn pow(own self, _ other: own usize) -> usize { pow_checked
 impl WrappingAdd for usize { fn wrapping_add(self, _ other: usize) -> usize { __add_usize(self, other) } }
 impl WrappingSub for usize { fn wrapping_sub(self, _ other: usize) -> usize { __sub_usize(self, other) } }
 impl WrappingMul for usize { fn wrapping_mul(self, _ other: usize) -> usize { __mul_usize(self, other) } }
-impl SaturatingAdd for usize {
-    fn saturating_add(self, _ other: usize) -> usize {
-        let result = __add_usize(self, other)
-        if __lt_usize(result, self) { __bitcast(U256_MASK) } else { result }
-    }
-}
-impl SaturatingSub for usize {
-    fn saturating_sub(self, _ other: usize) -> usize {
-        if __gt_usize(other, self) { 0 } else { __sub_usize(self, other) }
-    }
-}
-impl SaturatingMul for usize {
-    fn saturating_mul(self, _ other: usize) -> usize {
-        if self == 0 || other == 0 {
-            0
-        } else {
-            let result = __mul_usize(self, other)
-            if result / self != other { __bitcast(U256_MASK) } else { result }
-        }
-    }
-}
+impl SaturatingAdd for usize { fn saturating_add(self, _ other: usize) -> usize { __saturating_add(self, other) } }
+impl SaturatingSub for usize { fn saturating_sub(self, _ other: usize) -> usize { __saturating_sub(self, other) } }
+impl SaturatingMul for usize { fn saturating_mul(self, _ other: usize) -> usize { __saturating_mul(self, other) } }
 impl Shl for usize { fn shl(own self, _ other: own usize) -> usize { __shl_usize(self, other) } }
 impl Shr for usize { fn shr(own self, _ other: own usize) -> usize { __shr_usize(self, other) } }
 impl BitAnd for usize { fn bitand(own self, _ other: own usize) -> usize { __bitand_usize(self, other) } }
@@ -1727,52 +1411,9 @@ impl Pow for i256 { fn pow(own self, _ other: own i256) -> i256 { pow_checked(se
 impl WrappingAdd for i256 { fn wrapping_add(self, _ other: i256) -> i256 { __add_i256(self, other) } }
 impl WrappingSub for i256 { fn wrapping_sub(self, _ other: i256) -> i256 { __sub_i256(self, other) } }
 impl WrappingMul for i256 { fn wrapping_mul(self, _ other: i256) -> i256 { __mul_i256(self, other) } }
-impl SaturatingAdd for i256 {
-    fn saturating_add(self, _ other: i256) -> i256 {
-        let result = __add_i256(self, other)
-        let self_sign = (self.to_word() & I256_SIGN_BIT) != 0
-        let other_sign = (other.to_word() & I256_SIGN_BIT) != 0
-        let result_sign = (result.to_word() & I256_SIGN_BIT) != 0
-        if self_sign == other_sign && self_sign != result_sign {
-            if self_sign { __bitcast(I256_SIGN_BIT) } else { __bitcast(I256_SIGN_BIT - 1) }
-        } else {
-            result
-        }
-    }
-}
-impl SaturatingSub for i256 {
-    fn saturating_sub(self, _ other: i256) -> i256 {
-        let result = __sub_i256(self, other)
-        let self_sign = (self.to_word() & I256_SIGN_BIT) != 0
-        let other_sign = (other.to_word() & I256_SIGN_BIT) != 0
-        let result_sign = (result.to_word() & I256_SIGN_BIT) != 0
-        if self_sign != other_sign && self_sign != result_sign {
-            if self_sign { __bitcast(I256_SIGN_BIT) } else { __bitcast(I256_SIGN_BIT - 1) }
-        } else {
-            result
-        }
-    }
-}
-impl SaturatingMul for i256 {
-    fn saturating_mul(self, _ other: i256) -> i256 {
-        if self == 0 || other == 0 {
-            0
-        } else {
-            let min: i256 = __bitcast(I256_SIGN_BIT)
-            if (self == min && other == -1) || (other == min && self == -1) {
-                __bitcast(I256_SIGN_BIT - 1)
-            } else {
-                let result = __mul_i256(self, other)
-                if result / self != other {
-                    let negative = ((self.to_word() ^ other.to_word()) & I256_SIGN_BIT) != 0
-                    if negative { __bitcast(I256_SIGN_BIT) } else { __bitcast(I256_SIGN_BIT - 1) }
-                } else {
-                    result
-                }
-            }
-        }
-    }
-}
+impl SaturatingAdd for i256 { fn saturating_add(self, _ other: i256) -> i256 { __saturating_add(self, other) } }
+impl SaturatingSub for i256 { fn saturating_sub(self, _ other: i256) -> i256 { __saturating_sub(self, other) } }
+impl SaturatingMul for i256 { fn saturating_mul(self, _ other: i256) -> i256 { __saturating_mul(self, other) } }
 impl Shl for i256 { fn shl(own self, _ other: own i256) -> i256 { __shl_i256(self, other) } }
 impl Shr for i256 { fn shr(own self, _ other: own i256) -> i256 { __shr_i256(self, other) } }
 impl BitAnd for i256 { fn bitand(own self, _ other: own i256) -> i256 { __bitand_i256(self, other) } }
@@ -1833,27 +1474,9 @@ impl Pow for u256 { fn pow(own self, _ other: own u256) -> u256 { pow_checked(se
 impl WrappingAdd for u256 { fn wrapping_add(self, _ other: u256) -> u256 { __add_u256(self, other) } }
 impl WrappingSub for u256 { fn wrapping_sub(self, _ other: u256) -> u256 { __sub_u256(self, other) } }
 impl WrappingMul for u256 { fn wrapping_mul(self, _ other: u256) -> u256 { __mul_u256(self, other) } }
-impl SaturatingAdd for u256 {
-    fn saturating_add(self, _ other: u256) -> u256 {
-        let result = __add_u256(self, other)
-        if __lt_u256(result, self) { U256_MASK } else { result }
-    }
-}
-impl SaturatingSub for u256 {
-    fn saturating_sub(self, _ other: u256) -> u256 {
-        if __gt_u256(other, self) { 0 } else { __sub_u256(self, other) }
-    }
-}
-impl SaturatingMul for u256 {
-    fn saturating_mul(self, _ other: u256) -> u256 {
-        if self == 0 || other == 0 {
-            0
-        } else {
-            let result = __mul_u256(self, other)
-            if result / self != other { U256_MASK } else { result }
-        }
-    }
-}
+impl SaturatingAdd for u256 { fn saturating_add(self, _ other: u256) -> u256 { __saturating_add(self, other) } }
+impl SaturatingSub for u256 { fn saturating_sub(self, _ other: u256) -> u256 { __saturating_sub(self, other) } }
+impl SaturatingMul for u256 { fn saturating_mul(self, _ other: u256) -> u256 { __saturating_mul(self, other) } }
 impl Shl for u256 { fn shl(own self, _ other: own u256) -> u256 { __shl_u256(self, other) } }
 impl Shr for u256 { fn shr(own self, _ other: own u256) -> u256 { __shr_u256(self, other) } }
 impl BitAnd for u256 { fn bitand(own self, _ other: own u256) -> u256 { __bitand_u256(self, other) } }
@@ -1919,52 +1542,9 @@ impl Pow for isize { fn pow(own self, _ other: own isize) -> isize { pow_checked
 impl WrappingAdd for isize { fn wrapping_add(self, _ other: isize) -> isize { __add_isize(self, other) } }
 impl WrappingSub for isize { fn wrapping_sub(self, _ other: isize) -> isize { __sub_isize(self, other) } }
 impl WrappingMul for isize { fn wrapping_mul(self, _ other: isize) -> isize { __mul_isize(self, other) } }
-impl SaturatingAdd for isize {
-    fn saturating_add(self, _ other: isize) -> isize {
-        let result = __add_isize(self, other)
-        let self_sign = (self.to_word() & I256_SIGN_BIT) != 0
-        let other_sign = (other.to_word() & I256_SIGN_BIT) != 0
-        let result_sign = (result.to_word() & I256_SIGN_BIT) != 0
-        if self_sign == other_sign && self_sign != result_sign {
-            if self_sign { __bitcast(I256_SIGN_BIT) } else { __bitcast(I256_SIGN_BIT - 1) }
-        } else {
-            result
-        }
-    }
-}
-impl SaturatingSub for isize {
-    fn saturating_sub(self, _ other: isize) -> isize {
-        let result = __sub_isize(self, other)
-        let self_sign = (self.to_word() & I256_SIGN_BIT) != 0
-        let other_sign = (other.to_word() & I256_SIGN_BIT) != 0
-        let result_sign = (result.to_word() & I256_SIGN_BIT) != 0
-        if self_sign != other_sign && self_sign != result_sign {
-            if self_sign { __bitcast(I256_SIGN_BIT) } else { __bitcast(I256_SIGN_BIT - 1) }
-        } else {
-            result
-        }
-    }
-}
-impl SaturatingMul for isize {
-    fn saturating_mul(self, _ other: isize) -> isize {
-        if self == 0 || other == 0 {
-            0
-        } else {
-            let min: isize = __bitcast(I256_SIGN_BIT)
-            if (self == min && other == -1) || (other == min && self == -1) {
-                __bitcast(I256_SIGN_BIT - 1)
-            } else {
-                let result = __mul_isize(self, other)
-                if result / self != other {
-                    let negative = ((self.to_word() ^ other.to_word()) & I256_SIGN_BIT) != 0
-                    if negative { __bitcast(I256_SIGN_BIT) } else { __bitcast(I256_SIGN_BIT - 1) }
-                } else {
-                    result
-                }
-            }
-        }
-    }
-}
+impl SaturatingAdd for isize { fn saturating_add(self, _ other: isize) -> isize { __saturating_add(self, other) } }
+impl SaturatingSub for isize { fn saturating_sub(self, _ other: isize) -> isize { __saturating_sub(self, other) } }
+impl SaturatingMul for isize { fn saturating_mul(self, _ other: isize) -> isize { __saturating_mul(self, other) } }
 impl Shl for isize { fn shl(own self, _ other: own isize) -> isize { __shl_isize(self, other) } }
 impl Shr for isize { fn shr(own self, _ other: own isize) -> isize { __shr_isize(self, other) } }
 impl BitAnd for isize { fn bitand(own self, _ other: own isize) -> isize { __bitand_isize(self, other) } }
