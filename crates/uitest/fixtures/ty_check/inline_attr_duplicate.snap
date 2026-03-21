@@ -3,7 +3,7 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/inline_attr_duplicate.fe
 ---
-error[13-0001]: duplicate `#[inline]` attribute on function `bad`
+error[14-0001]: duplicate `#[inline]` attribute on function `bad`
   ┌─ inline_attr_duplicate.fe:2:1
   │
 2 │ #[inline(always)]

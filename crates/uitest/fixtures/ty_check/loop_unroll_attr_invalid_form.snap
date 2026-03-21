@@ -3,7 +3,7 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/loop_unroll_attr_invalid_form.fe
 ---
-error[14-0002]: invalid loop unroll attribute on `for` loop
+error[15-0002]: invalid loop unroll attribute on `for` loop
   ┌─ loop_unroll_attr_invalid_form.fe:2:5
   │
 2 │     #[unroll(always)]

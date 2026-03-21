@@ -1,10 +1,7 @@
 use parser::ast::{self, AttrListOwner as _};
 use salsa::Accumulator as _;
 
-use super::{
-    attr::named_attr_specs,
-    hir_builder::HirBuilder,
-};
+use super::{attr::named_attr_specs, hir_builder::HirBuilder};
 
 use crate::{
     HirDb, SelectorError, SelectorErrorKind,

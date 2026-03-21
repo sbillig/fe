@@ -1,7 +1,7 @@
 use crate::analysis::{HirAnalysisDb, diagnostics::DiagnosticVoucher};
 use crate::{
-    ArithmeticAttrError, EventError, InlineAttrError, LoopUnrollAttrError, ParserError, PayableError,
-    SelectorError,
+    ArithmeticAttrError, EventError, InlineAttrError, LoopUnrollAttrError, ParserError,
+    PayableError, SelectorError,
     hir_def::{ModuleTree, TopLevelMod},
     lower::{parse_file_impl, scope_graph_impl},
 };

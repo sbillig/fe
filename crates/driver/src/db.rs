@@ -11,8 +11,7 @@ use common::{
 use hir::analysis::{
     analysis_pass::{
         AnalysisPassManager, ArithmeticAttrPass, EventLowerPass, InlineAttrPass,
-        LoopUnrollAttrPass, MsgLowerPass, ParsingPass,
-        PayableAttrPass,
+        LoopUnrollAttrPass, MsgLowerPass, ParsingPass, PayableAttrPass,
     },
     diagnostics::DiagnosticVoucher,
     name_resolution::ImportAnalysisPass,
