@@ -62,6 +62,7 @@ pub enum LoopUnrollAttr {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct KeywordAttrSpec {
     pub has_value: bool,
+    pub has_args: bool,
     pub args: Vec<KeywordAttrArgSpec>,
 }
 
@@ -80,11 +81,6 @@ pub(crate) struct InlineAttrParseError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LoopUnrollAttrParseError {
     pub kind: LoopUnrollAttrErrorKind,
-    pub attr_index: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct MarkerAttrParseError {
     pub attr_index: usize,
 }
 
@@ -133,19 +129,6 @@ pub(crate) fn parse_loop_unroll_attr_specs(
     Ok(unroll_hint)
 }
 
-pub(crate) fn parse_marker_attr_specs(
-    attrs: impl IntoIterator<Item = KeywordAttrSpec>,
-) -> Result<bool, MarkerAttrParseError> {
-    let mut has_attr = false;
-
-    for (attr_index, attr) in attrs.into_iter().enumerate() {
-        parse_marker_attr_spec(&attr).map_err(|()| MarkerAttrParseError { attr_index })?;
-        has_attr = true;
-    }
-
-    Ok(has_attr)
-}
-
 fn parse_inline_attr_spec(attr: &KeywordAttrSpec) -> Result<InlineHint, InlineAttrErrorKind> {
     parse_keyword_attr_spec(
         attr,
@@ -167,7 +150,7 @@ fn parse_keyword_attr_spec<T: Copy>(
     if attr.has_value {
         return Err(());
     }
-    if attr.args.is_empty() {
+    if !attr.has_args {
         return Ok(bare);
     }
     if attr.args.len() != 1 {
@@ -210,9 +193,24 @@ impl<'db> AttrListId<'db> {
 
     /// Returns true if this attribute list contains a marker attribute with the given name.
     ///
-    /// Marker attributes have no arguments or values in lowered HIR, for example `#[payable]`.
+    /// Marker attributes have no arguments, no value, and no `()` in lowered HIR,
+    /// for example `#[payable]`.
     pub fn has_marker_attr(self, db: &'db dyn HirDb, name: &str) -> bool {
-        self.parse_marker_attr(db, name).unwrap_or_default()
+        self.data(db).iter().any(|attr| {
+            let Attr::Normal(normal_attr) = attr else {
+                return false;
+            };
+            if normal_attr
+                .path
+                .to_opt()
+                .and_then(|path| path.as_ident(db))
+                .is_none_or(|ident| ident.data(db) != name)
+            {
+                return false;
+            }
+
+            parse_marker_attr_spec(&normal_attr.keyword_attr_spec(db)).is_ok()
+        })
     }
 
     /// Returns the attribute with the given name, if present.
@@ -287,28 +285,6 @@ impl<'db> AttrListId<'db> {
             Err(err) => Some(LoopUnrollAttr::Error(err.kind)),
         }
     }
-
-    pub(crate) fn parse_marker_attr(
-        self,
-        db: &'db dyn HirDb,
-        name: &str,
-    ) -> Result<bool, MarkerAttrParseError> {
-        parse_marker_attr_specs(self.data(db).iter().filter_map(|attr| {
-            let Attr::Normal(normal_attr) = attr else {
-                return None;
-            };
-            if normal_attr
-                .path
-                .to_opt()
-                .and_then(|path| path.as_ident(db))
-                .is_none_or(|ident| ident.data(db) != name)
-            {
-                return None;
-            }
-
-            Some(normal_attr.keyword_attr_spec(db))
-        }))
-    }
 }
 
 impl<'db> NormalAttr<'db> {
@@ -344,6 +320,7 @@ impl<'db> NormalAttr<'db> {
     pub(crate) fn keyword_attr_spec(&self, db: &'db dyn HirDb) -> KeywordAttrSpec {
         KeywordAttrSpec {
             has_value: self.has_value,
+            has_args: self.has_args,
             args: self
                 .args
                 .iter()
@@ -383,6 +360,8 @@ pub struct NormalAttr<'db> {
     pub value: Option<AttrArgValue<'db>>,
     /// True when the source contained `= ...`, even if the typed value was not lowerable.
     pub has_value: bool,
+    /// True when the source contained `(...)`, even if the lowered arg list is empty.
+    pub has_args: bool,
     pub args: Vec<AttrArg<'db>>,
 }
 

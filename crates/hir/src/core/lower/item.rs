@@ -380,6 +380,7 @@ fn validate_inline_attr<'db>(ctxt: &mut FileLowerCtxt<'db>, func: &ast::Func) {
         .map(|attr| {
             let spec = KeywordAttrSpec {
                 has_value: attr.value.is_some(),
+                has_args: attr.has_args,
                 args: attr
                     .args
                     .into_iter()

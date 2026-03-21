@@ -16,20 +16,22 @@ pub(super) struct AstAttrArgSpec {
 pub(super) struct AstAttrSpec {
     pub range: TextRange,
     pub value: Option<ast::AttrArgValueKind>,
+    pub has_args: bool,
     pub args: Vec<AstAttrArgSpec>,
 }
 
 impl AstAttrSpec {
     pub(super) fn is_bare(&self) -> bool {
-        self.value.is_none() && self.args.is_empty()
+        self.value.is_none() && !self.has_args
     }
 
     fn lower_ast(ast: ast::NormalAttr) -> Self {
+        let args = ast.args();
         Self {
             range: ast.syntax().text_range(),
             value: ast.value(),
-            args: ast
-                .args()
+            has_args: args.is_some(),
+            args: args
                 .map(|args| {
                     args.into_iter()
                         .map(|arg| AstAttrArgSpec {
@@ -138,8 +140,9 @@ impl<'db> NormalAttr<'db> {
         let value = ast.value();
         let has_value = value.is_some();
         let value = AttrArgValue::lower_ast_opt(ctxt, value);
-        let args = ast
-            .args()
+        let args = ast.args();
+        let has_args = args.is_some();
+        let args = args
             .map(|args| {
                 args.into_iter()
                     .map(|arg| AttrArg::lower_ast(ctxt, arg))
@@ -151,6 +154,7 @@ impl<'db> NormalAttr<'db> {
             path,
             value,
             has_value,
+            has_args,
             args,
         }
     }
