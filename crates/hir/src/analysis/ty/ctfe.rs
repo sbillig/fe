@@ -1476,8 +1476,19 @@ pub(super) fn instantiate_typed_body<'db>(
     typed_body: TypedBody<'db>,
     generic_args: &[TyId<'db>],
 ) -> TypedBody<'db> {
+    instantiate_with_generic_args(db, typed_body, generic_args)
+}
+
+pub(crate) fn instantiate_with_generic_args<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    value: T,
+    generic_args: &[TyId<'db>],
+) -> T
+where
+    T: TyFoldable<'db>,
+{
     let mut subst = GenericSubst { generic_args };
-    typed_body.fold_with(db, &mut subst)
+    value.fold_with(db, &mut subst)
 }
 
 struct GenericSubst<'a, 'db> {

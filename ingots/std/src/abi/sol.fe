@@ -14,10 +14,6 @@ pub const fn sol<T: AsBytes>(sig: T) -> u32 {
     (keccak(sig) >> 224) as u32
 }
 
-extern {
-    pub const fn encoded_size<T>() -> u256
-}
-
 impl Abi for Sol {
     type Selector = u32
     type Decoder = SolDecoder

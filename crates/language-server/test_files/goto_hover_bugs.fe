@@ -1,23 +1,23 @@
 // Reproduction of hover/goto bugs seen in effects.fe.
 //
-// Bug 1: Hovering over `InitArgs` in `encoded_size<C::InitArgs>()`
-//         should underline `InitArgs`, not `encoded_size`.
+// Bug 1: Hovering over `InitArgs` in `C::InitArgs::ENCODED_SIZE`
+//         should underline `InitArgs`, not the full assoc-const path.
 //         reference_at() finds the outer reference first.
 //
 // Bug 2: Zero-arg calls like `ops::returndatasize()` produce no
 //         underline at all in Zed. Adding a dummy arg fixes it.
 
-trait Encode<A> {}
+trait AbiSize {
+    const ENCODED_SIZE: u256
+}
+
+trait Encode<A>: AbiSize {}
 
 trait Contract {
     type InitArgs: Encode<u256>
 
     fn init_code_offset() -> u256
     fn init_code_len() -> u256
-}
-
-fn encoded_size<T>() -> u256 {
-    0
 }
 
 pub struct Address {
@@ -48,11 +48,11 @@ mod mem {
 
 // Mirrors effects.fe Create::create<C: Contract>
 fn create<C: Contract>() {
-    // Bug 1: C::InitArgs as generic arg — hover over InitArgs should
-    // underline InitArgs, not encoded_size
+    // Bug 1: C::InitArgs in an assoc-const path — hover over InitArgs should
+    // underline InitArgs, not the full ENCODED_SIZE access
     let init_len = C::init_code_len()
     let init_off = C::init_code_offset()
-    let args_len = encoded_size<C::InitArgs>()
+    let args_len = C::InitArgs::ENCODED_SIZE
     let total_len = init_len + args_len
 
     let init_ptr = mem::alloc(total_len)

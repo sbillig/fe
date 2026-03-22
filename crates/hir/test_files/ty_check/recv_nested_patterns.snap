@@ -25,7 +25,7 @@ note:
    ┌─ recv_nested_patterns.fe:12:5
    │
 12 │     Multi { a: (u64, u64), b: (bool, bool) } -> bool,
-   │     ^^^^^ () | (bool, bool) | (u64, u64) | Multi | bool | fn decode<bool, Sol, D> | fn decode<u64, Sol, D> | fn encoded_size<(u64, u64)> | mut D | mut E | u256 | u64
+   │     ^^^^^ () | (bool, bool) | (u64, u64) | Multi | bool | fn decode<bool, Sol, D> | fn decode<u64, Sol, D> | mut D | mut E | u256 | u64
 
 note: 
    ┌─ recv_nested_patterns.fe:20:9

@@ -58,7 +58,7 @@ impl<'db> ScopeId<'db> {
     /// Find the most specific reference at a cursor position within this scope.
     ///
     /// When references are nested (e.g. `C::InitArgs` inside
-    /// `encoded_size<C::InitArgs>()`), selects the narrowest span containing
+    /// `C::InitArgs::ENCODED_SIZE`), selects the narrowest span containing
     /// the cursor so that goto-definition resolves the inner type argument
     /// rather than the outer function call.
     pub fn reference_at(

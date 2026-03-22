@@ -1,21 +1,21 @@
 // Reproduction of hover/goto bugs from effects.fe.
 //
-// Bug 1: Hovering over associated type in generic arg position
-//         should underline just that type, not the whole call.
+// Bug 1: Hovering over associated type in an assoc-const path
+//         should underline just that type, not the whole access.
 //
 // Bug 2: Zero-arg calls get no underline at all in Zed.
 
-trait Encode<A> {}
+trait AbiSize {
+    const ENCODED_SIZE: u256
+}
+
+trait Encode<A>: AbiSize {}
 
 trait Contract {
     type InitArgs: Encode<u256>
 
     fn init_code_offset() -> u256
     fn init_code_len() -> u256
-}
-
-fn encoded_size<T>() -> u256 {
-    0
 }
 
 pub struct Address {
@@ -47,7 +47,7 @@ mod mem {
 fn create<C: Contract>() {
     let init_len = C::init_code_len()
     let init_off = C::init_code_offset()
-    let args_len = encoded_size<C::InitArgs>()
+    let args_len = C::InitArgs::ENCODED_SIZE
     let total_len = init_len + args_len
 
     let init_ptr = mem::alloc(total_len)

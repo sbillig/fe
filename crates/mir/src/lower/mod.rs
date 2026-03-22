@@ -683,7 +683,7 @@ pub(super) struct MirBuilder<'db, 'a> {
     /// Capability-space overrides for function parameters, indexed by parameter position.
     pub(super) param_capability_space_overrides:
         Vec<Vec<(MirProjectionPath<'db>, AddressSpaceKind)>>,
-    /// Deferred error from intrinsic lowering (e.g. `encoded_size` on a non-static type).
+    /// Deferred error from intrinsic lowering (e.g. `size_of` on an unsupported type).
     pub(super) deferred_error: Option<MirLowerError>,
 }
 

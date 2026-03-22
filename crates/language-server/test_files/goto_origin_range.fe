@@ -1,10 +1,14 @@
-trait Contract {
-    fn init_code_offset() -> u256
-    fn init_code_len() -> u256
+trait AbiSize {
+    const ENCODED_SIZE: u256
 }
 
-fn encoded_size<T>() -> u256 {
-    0
+trait Encode<A>: AbiSize {}
+
+trait Contract {
+    type InitArgs: Encode<u256>
+
+    fn init_code_offset() -> u256
+    fn init_code_len() -> u256
 }
 
 mod ops {
@@ -25,7 +29,7 @@ mod mem {
 fn create<C: Contract>() {
     let init_len = C::init_code_len()
     let init_off = C::init_code_offset()
-    let args_len = encoded_size<C>()
+    let args_len = C::InitArgs::ENCODED_SIZE
     let total_len = init_len + init_off
 
     let init_ptr = mem::alloc(total_len)

@@ -9,9 +9,8 @@ use crate::{
     hir_def::{
         ArithBinOp, AssocConstDef, AttrListId, BinOp, Body, BodyKind, Expr, FieldDef,
         FieldDefListId, FieldIndex, FuncModifiers, FuncParam, FuncParamMode, FuncParamName,
-        GenericArgListId, IdentId, ImplTrait, IntegerId, LitKind, LogicalBinOp, Mod, Partial, Pat,
-        PathId, PathKind, Stmt, Struct, TrackedItemVariant, TraitRefId, TupleTypeId, TypeId,
-        TypeKind, Visibility,
+        IdentId, ImplTrait, IntegerId, LitKind, LogicalBinOp, Mod, Partial, Pat, PathId, PathKind,
+        Stmt, Struct, TrackedItemVariant, TraitRefId, TupleTypeId, TypeId, TypeKind, Visibility,
     },
     lower::FileLowerCtxt,
     span::{MsgDesugared, MsgDesugaredFocus},
@@ -161,8 +160,6 @@ fn lower_msg_variant_encode_impl<'db>(
     let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
     let trait_ref = Partial::Present(builder.core_abi_trait_ref_sol("Encode"));
     let ty = Partial::Present(variant_struct_ty(builder.db(), struct_));
-    let roots = builder.roots();
-
     builder.with_item_scope(
         TrackedItemVariant::ImplTrait(impl_trait_idx),
         |builder, id| {
@@ -236,7 +233,7 @@ fn lower_msg_variant_encode_impl<'db>(
                         if index + 1 != field_specs.len() {
                             let next_ptr_ident = IdentId::new(db, format!("__field_ptr{index}"));
                             let current_ptr = body.ident_expr(field_ptr_ident);
-                            let field_size = build_encoded_size_call(body, roots, field_ty);
+                            let field_size = build_encoded_size_body_expr(body, field_ty);
                             let next_ptr = body.push_expr(Expr::Bin(
                                 current_ptr,
                                 field_size,
@@ -427,18 +424,42 @@ fn build_encoded_size_expr<'db>(
     }
 }
 
-fn build_encoded_size_call<'db>(
+fn build_encoded_size_body_expr<'db>(
     body: &mut super::hir_builder::BodyBuilder<'_, 'db, MsgDesugared>,
-    roots: super::hir_builder::LibRoots<'db>,
     ty: TypeId<'db>,
 ) -> crate::hir_def::ExprId {
     let db = body.db();
-    let args = GenericArgListId::given1_type(db, ty);
-    let path = PathId::from_ident(db, roots.std)
-        .push_str(db, "abi")
-        .push_str_args(db, "encoded_size", args);
-    let callee = body.path_expr(path);
-    body.call_expr(callee, vec![])
+
+    match ty.data(db) {
+        TypeKind::Path(path) => path
+            .to_opt()
+            .map(|path| body.path_expr(path.push_str(db, "ENCODED_SIZE")))
+            .unwrap_or_else(|| {
+                body.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, 0))))
+            }),
+        TypeKind::Tuple(tuple) => {
+            let mut expr = body.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, 0))));
+            for elem_ty in tuple.data(db).iter().copied() {
+                let elem_expr = elem_ty
+                    .to_opt()
+                    .map(|elem_ty| build_encoded_size_body_expr(body, elem_ty))
+                    .unwrap_or_else(|| {
+                        body.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, 0))))
+                    });
+                expr = body.push_expr(Expr::Bin(expr, elem_expr, BinOp::Arith(ArithBinOp::Add)));
+            }
+            expr
+        }
+        TypeKind::Mode(_, inner) => inner
+            .to_opt()
+            .map(|inner| build_encoded_size_body_expr(body, inner))
+            .unwrap_or_else(|| {
+                body.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, 0))))
+            }),
+        TypeKind::Ptr(_) | TypeKind::Array(_, _) | TypeKind::Never => {
+            body.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, 0))))
+        }
+    }
 }
 
 fn lower_msg_variant_decode_trait_impl<'db>(

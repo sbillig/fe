@@ -253,6 +253,7 @@ pub(crate) fn evaluate_const_ty<'db>(
         body: Body<'db>,
         expr: &Expr<'db>,
         expected: Option<CheckedIntTy>,
+        generic_args: &[TyId<'db>],
     ) -> Result<BigInt, ConstIntError> {
         match expr {
             Expr::Block(stmts) => {
@@ -268,7 +269,7 @@ pub(crate) fn evaluate_const_ty<'db>(
                 let Partial::Present(inner) = expr_id.data(db, body) else {
                     return Err(ConstIntError::NotIntExpr);
                 };
-                eval_int_expr(db, body, inner, expected)
+                eval_int_expr(db, body, inner, expected, generic_args)
             }
 
             Expr::Lit(LitKind::Int(i)) => Ok(BigInt::from(i.data(db).clone())),
@@ -277,7 +278,7 @@ pub(crate) fn evaluate_const_ty<'db>(
                 let Partial::Present(inner) = inner.data(db, body) else {
                     return Err(ConstIntError::Overflow);
                 };
-                let value = eval_int_expr(db, body, inner, expected)?;
+                let value = eval_int_expr(db, body, inner, expected, generic_args)?;
                 match op {
                     crate::core::hir_def::expr::UnOp::Minus => {
                         let Some(expected) = expected else {
@@ -306,8 +307,8 @@ pub(crate) fn evaluate_const_ty<'db>(
                     signed: false,
                 });
 
-                let lhs = eval_int_expr(db, body, lhs, Some(expected))?;
-                let rhs = eval_int_expr(db, body, rhs, Some(expected))?;
+                let lhs = eval_int_expr(db, body, lhs, Some(expected), generic_args)?;
+                let rhs = eval_int_expr(db, body, rhs, Some(expected), generic_args)?;
 
                 match op {
                     crate::core::hir_def::expr::BinOp::Arith(op) => match op {
@@ -398,6 +399,9 @@ pub(crate) fn evaluate_const_ty<'db>(
             }
 
             Expr::Path(path) => {
+                if !generic_args.is_empty() {
+                    return Err(ConstIntError::NotIntExpr);
+                }
                 let Some(path) = path.to_opt() else {
                     return Err(ConstIntError::NotIntExpr);
                 };
@@ -440,7 +444,9 @@ pub(crate) fn evaluate_const_ty<'db>(
         }
     }
 
-    if let Expr::Path(path) = &expr {
+    if generic_args.is_empty()
+        && let Expr::Path(path) = &expr
+    {
         let Some(path) = path.to_opt() else {
             return ConstTyId::new(
                 db,
@@ -542,7 +548,7 @@ pub(crate) fn evaluate_const_ty<'db>(
         Expr::Block(..) | Expr::Un(..) | Expr::Bin(..) | Expr::Lit(LitKind::Int(..))
     ) {
         let expected_int_ty = expected_ty.and_then(|ty| checked_int_ty_from_ty(db, Some(ty)));
-        match eval_int_expr(db, body, &expr, expected_int_ty) {
+        match eval_int_expr(db, body, &expr, expected_int_ty, &generic_args) {
             Ok(value) => {
                 if let Some(word) = bigint_to_u256_word(&value) {
                     let mut table = UnificationTable::new(db);

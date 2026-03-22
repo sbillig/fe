@@ -46,7 +46,7 @@ struct ForLoopParams {
 }
 
 impl<'db, 'a> MirBuilder<'db, 'a> {
-    /// Try to lower a `size_of<T>()` or `encoded_size<T>()` call to a constant.
+    /// Try to lower a `size_of<T>()` call to a constant.
     fn try_lower_size_intrinsic_call(&mut self, expr: ExprId) -> Option<ValueId> {
         let callable = self.typed_body.callable_expr(expr)?;
         let ingot_kind = callable.callable_def.ingot(self.db).kind(self.db);
@@ -57,7 +57,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         let size_bytes = match (ingot_kind, name.data(self.db).as_str()) {
             (IngotKind::Core, "size_of") => layout::ty_size_bytes(self.db, ty)?,
-            (IngotKind::Std, "encoded_size") => self.abi_static_size_bytes(ty)?,
             _ => return None,
         };
 

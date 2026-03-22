@@ -376,47 +376,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         Some(field_types[idx])
     }
 
-    /// Returns the ABI-encoded byte width for statically-sized values.
-    ///
-    /// This matches the head size used by the ABI encoder/decoder: primitive values occupy one
-    /// 32-byte word, while tuples/records are the concatenation of their fields.
-    pub(super) fn abi_static_size_bytes(&self, ty: TyId<'db>) -> Option<usize> {
-        if ty.is_tuple(self.db)
-            || ty
-                .adt_ref(self.db)
-                .is_some_and(|adt| matches!(adt, AdtRef::Struct(_)))
-        {
-            let mut size = 0;
-            for field_ty in ty.field_types(self.db) {
-                size += self.abi_static_size_bytes(field_ty)?;
-            }
-            return Some(size);
-        }
-
-        if let TyData::TyBase(TyBase::Prim(_)) = ty.base_ty(self.db).data(self.db) {
-            return Some(32);
-        }
-
-        // Enums: discriminant (one 32-byte word) + max variant payload.
-        if let Some(adt_def) = ty.adt_def(self.db)
-            && let AdtRef::Enum(enm) = adt_def.adt_ref(self.db)
-        {
-            let mut max_payload = 0;
-            for variant in enm.variants(self.db) {
-                let ev = EnumVariant::new(enm, variant.idx);
-                let ctor = ConstructorKind::Variant(ev, ty);
-                let mut payload = 0;
-                for field_ty in ctor.field_types(self.db) {
-                    payload += self.abi_static_size_bytes(field_ty)?;
-                }
-                max_payload = max_payload.max(payload);
-            }
-            return Some(32 + max_payload);
-        }
-
-        None
-    }
-
     /// Emits a synthetic `u256` literal value.
     ///
     /// # Parameters
