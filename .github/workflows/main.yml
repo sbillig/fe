@@ -118,6 +118,8 @@ jobs:
     needs: [lint, test, wasm-wasi-check]
     permissions:
       contents: write
+    env:
+      RELEASE_FEATURES: "--features vendored-openssl"
     strategy:
       matrix:
         include:
@@ -125,31 +127,26 @@ jobs:
             target: x86_64-unknown-linux-gnu
             BIN_FILE: fe_linux_amd64
             EXT: ""
-            EXTRA_FEATURES: ""
             STRIP: strip
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             BIN_FILE: fe_linux_arm64
             EXT: ""
-            EXTRA_FEATURES: "--features vendored-openssl"
             STRIP: aarch64-linux-gnu-strip
           - os: macOS-latest
             target: aarch64-apple-darwin
             BIN_FILE: fe_mac_arm64
             EXT: ""
-            EXTRA_FEATURES: ""
             STRIP: strip
           - os: macOS-latest
             target: x86_64-apple-darwin
             BIN_FILE: fe_mac_amd64
             EXT: ""
-            EXTRA_FEATURES: "--features vendored-openssl"
             STRIP: strip
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             BIN_FILE: fe_windows_amd64.exe
             EXT: ".exe"
-            EXTRA_FEATURES: ""
             STRIP: ""
 
     steps:
@@ -167,7 +164,7 @@ jobs:
       - name: Build
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-        run: cargo build --locked --release --target ${{ matrix.target }} ${{ matrix.EXTRA_FEATURES }}
+        run: cargo build --locked --release --target ${{ matrix.target }} ${{ env.RELEASE_FEATURES }}
       - name: Strip binary (Unix)
         if: runner.os != 'Windows'
         run: ${{ matrix.STRIP }} target/${{ matrix.target }}/release/fe
