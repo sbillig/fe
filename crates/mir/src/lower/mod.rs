@@ -36,8 +36,8 @@ use crate::{
         AddressSpaceKind, BasicBlockId, BodyBuilder, CallOrigin, CallTargetRef, CodeRegionRef,
         ContractFunction, ContractFunctionKind, IntrinsicOp, LocalData, LocalId, LoopInfo, MirBody,
         MirFunction, MirInst, MirModule, MirProjection, MirProjectionPath, Place, PointerInfo,
-        Rvalue, SwitchTarget, SwitchValue, SyntheticValue, Terminator, ValueData, ValueId,
-        ValueOrigin, ValueRepr,
+        Rvalue, SwitchTarget, SwitchValue, SymbolSource, SyntheticValue, Terminator, ValueData,
+        ValueId, ValueOrigin, ValueRepr,
     },
     monomorphize::monomorphize_functions,
 };
@@ -196,6 +196,13 @@ fn invalid_inline_attr_error<'db>(
         func_name,
         diagnostics,
     })
+}
+
+fn symbol_source_for_ingot_kind(kind: IngotKind) -> SymbolSource {
+    match kind {
+        IngotKind::Core | IngotKind::Std => SymbolSource::Internal,
+        IngotKind::StandAlone | IngotKind::Local | IngotKind::External => SymbolSource::User,
+    }
 }
 
 fn run_borrow_checks_collect<'db>(
@@ -556,6 +563,7 @@ pub(crate) fn lower_function<'db>(
         .to_opt()
         .map(|ident| ident.data(db).to_string())
         .unwrap_or_else(|| "<anonymous>".into());
+    let symbol_source = symbol_source_for_ingot_kind(func.top_mod(db).ingot(db).kind(db));
     let contract_function = extract_contract_function(db, func);
 
     let Some(body) = func.body(db) else {
@@ -649,6 +657,7 @@ pub(crate) fn lower_function<'db>(
         contract_function,
         inline_hint: func.inline_hint(db),
         symbol_name,
+        symbol_source,
         receiver_space,
         defer_root: false,
     })

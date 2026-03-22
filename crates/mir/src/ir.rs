@@ -31,6 +31,13 @@ impl<'db> MirModule<'db> {
     }
 }
 
+/// Whether a MIR symbol is user-defined or compiler-internal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SymbolSource {
+    User,
+    Internal,
+}
+
 /// MIR for a single function.
 #[derive(Debug, Clone)]
 pub struct MirFunction<'db> {
@@ -53,6 +60,8 @@ pub struct MirFunction<'db> {
     pub inline_hint: Option<InlineHint>,
     /// Symbol name used for codegen (includes monomorphization suffix when present).
     pub symbol_name: String,
+    /// Whether the symbol is user-defined or compiler-internal.
+    pub symbol_source: SymbolSource,
     /// For methods, the address space variant of the receiver for this instance.
     pub receiver_space: Option<AddressSpaceKind>,
     /// When true, the monomorphizer will NOT automatically seed this template

@@ -15,7 +15,7 @@ use mir::analysis::{
 };
 use mir::{
     MirFunction, MirInst, MirModule, Rvalue, ValueOrigin,
-    ir::{IntrinsicOp, MirFunctionOrigin},
+    ir::{IntrinsicOp, MirFunctionOrigin, SymbolSource},
     layout::{self, TargetDataLayout},
     lower_ingot, lower_module, prepare_module_for_evm_yul_codegen,
 };
@@ -638,6 +638,94 @@ fn link_yul_numeric_intrinsic_helpers<'db>(
         Ok(required_helpers)
     }
 
+    fn rewrite_numeric_call_aliases<'db>(
+        db: &'db DriverDataBase,
+        module: &mut mir::MirModule<'db>,
+        aliases: &FxHashMap<String, String>,
+    ) -> Result<(), EmitModuleError> {
+        let rewrite_call = |call: &mut mir::CallOrigin<'db>| -> Result<(), EmitModuleError> {
+            let helper = if let Some(intrinsic) = call.checked_intrinsic {
+                Some(helper_symbol_from_checked_intrinsic(db, intrinsic)?)
+            } else {
+                helper_symbol_from_saturating_intrinsic(db, call)?
+            };
+            if let Some(helper) = helper
+                && let Some(alias) = aliases.get(&helper)
+            {
+                call.resolved_name = Some(alias.clone());
+            }
+            Ok(())
+        };
+
+        for func in &mut module.functions {
+            for block in &mut func.body.blocks {
+                for inst in &mut block.insts {
+                    if let MirInst::Assign {
+                        rvalue: Rvalue::Call(call),
+                        ..
+                    } = inst
+                    {
+                        rewrite_call(call)?;
+                    }
+                }
+
+                if let mir::Terminator::TerminatingCall {
+                    call: mir::TerminatingCall::Call(call),
+                    ..
+                } = &mut block.terminator
+                {
+                    rewrite_call(call)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn rewrite_call_targets<'db>(
+        functions: &mut [mir::MirFunction<'db>],
+        aliases: &FxHashMap<String, String>,
+    ) {
+        for func in functions {
+            for block in &mut func.body.blocks {
+                for inst in &mut block.insts {
+                    if let MirInst::Assign {
+                        rvalue: Rvalue::Call(call),
+                        ..
+                    } = inst
+                        && let Some(name) = &call.resolved_name
+                        && let Some(alias) = aliases.get(name)
+                        && alias != name
+                    {
+                        call.resolved_name = Some(alias.clone());
+                    }
+                }
+
+                if let mir::Terminator::TerminatingCall {
+                    call: mir::TerminatingCall::Call(call),
+                    ..
+                } = &mut block.terminator
+                    && let Some(name) = &call.resolved_name
+                    && let Some(alias) = aliases.get(name)
+                    && alias != name
+                {
+                    call.resolved_name = Some(alias.clone());
+                }
+            }
+        }
+    }
+
+    fn fresh_internal_symbol(symbol: &str, known: &mut FxHashSet<String>) -> String {
+        let base = format!("__internal_{symbol}");
+        let mut candidate = base.clone();
+        let mut suffix = 0;
+        while !known.insert(candidate.clone()) {
+            suffix += 1;
+            candidate = format!("{base}_{suffix}");
+        }
+        candidate
+    }
+
     let required_helpers = rewrite_numeric_calls(db, module)?;
     if required_helpers.is_empty() {
         return Ok(());
@@ -695,24 +783,39 @@ fn link_yul_numeric_intrinsic_helpers<'db>(
         .collect();
 
     let mut known = FxHashSet::default();
+    let mut known_sources = FxHashMap::default();
     for func in &module.functions {
         known.insert(func.symbol_name.clone());
+        known_sources.insert(func.symbol_name.clone(), func.symbol_source);
     }
 
+    let mut helper_aliases = FxHashMap::default();
+    let mut imported_helpers = Vec::new();
     let mut symbols: Vec<_> = required_symbols.into_iter().collect();
     symbols.sort();
     for symbol in symbols {
-        if known.contains(&symbol) {
+        if known_sources.get(&symbol) == Some(&SymbolSource::Internal) {
+            helper_aliases.insert(symbol.clone(), symbol);
             continue;
         }
-        let Some(func) = by_symbol.remove(&symbol) else {
+        let Some(mut func) = by_symbol.remove(&symbol) else {
             return Err(EmitModuleError::Yul(YulError::Unsupported(format!(
                 "missing required numeric helper function `{symbol}`"
             ))));
         };
-        known.insert(symbol);
-        module.functions.push(func);
+        let final_symbol = if known.contains(&symbol) {
+            fresh_internal_symbol(&symbol, &mut known)
+        } else {
+            known.insert(symbol.clone());
+            symbol.clone()
+        };
+        helper_aliases.insert(symbol, final_symbol.clone());
+        func.symbol_name = final_symbol;
+        imported_helpers.push(func);
     }
+    rewrite_numeric_call_aliases(db, module, &helper_aliases)?;
+    rewrite_call_targets(&mut imported_helpers, &helper_aliases);
+    module.functions.extend(imported_helpers);
 
     Ok(())
 }
