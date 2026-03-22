@@ -17,6 +17,7 @@ use super::{
 use crate::analysis::place::{Place, PlaceBase};
 use crate::analysis::ty::{
     adt_def::AdtRef,
+    assoc_const::AssocConstUse,
     binder::Binder,
     canonical::Canonicalized,
     corelib::{resolve_core_range_types, resolve_core_trait, resolve_lib_type_path},
@@ -1080,8 +1081,7 @@ impl<'db> TyChecker<'db> {
                 vec![provided_ty],
                 IndexMap::new(),
             );
-            let canonical_handle = Canonicalized::new(this.db, effect_handle_inst);
-            let handle_sat = is_goal_satisfiable(this.db, solve_cx, canonical_handle.value);
+            let handle_sat = is_goal_satisfiable(this.db, solve_cx, effect_handle_inst);
 
             let target_ty = match handle_sat {
                 GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid => provided_ty,
@@ -1103,8 +1103,7 @@ impl<'db> TyChecker<'db> {
                 vec![provided_ty, target_ty],
                 IndexMap::new(),
             );
-            let canonical_ref = Canonicalized::new(this.db, effect_ref_inst);
-            let ref_sat = is_goal_satisfiable(this.db, solve_cx, canonical_ref.value);
+            let ref_sat = is_goal_satisfiable(this.db, solve_cx, effect_ref_inst);
             if matches!(
                 ref_sat,
                 GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
@@ -1119,8 +1118,7 @@ impl<'db> TyChecker<'db> {
                     vec![provided_ty, target_ty],
                     IndexMap::new(),
                 );
-                let canonical_mut = Canonicalized::new(this.db, effect_ref_mut_inst);
-                let mut_sat = is_goal_satisfiable(this.db, solve_cx, canonical_mut.value);
+                let mut_sat = is_goal_satisfiable(this.db, solve_cx, effect_ref_mut_inst);
                 if matches!(
                     mut_sat,
                     GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
@@ -1242,13 +1240,12 @@ impl<'db> TyChecker<'db> {
                             }
                         }
                         EffectRequirement::Trait(trait_req) => {
-                            let canonical = Canonicalized::new(self.db, trait_req);
                             if !matches!(
                                 is_goal_satisfiable(
                                     self.db,
                                     TraitSolveCx::new(self.db, self.env.scope())
                                         .with_assumptions(self.env.assumptions()),
-                                    canonical.value
+                                    trait_req
                                 ),
                                 GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
                             ) {
@@ -1349,12 +1346,11 @@ impl<'db> TyChecker<'db> {
                             }
                         }
                         EffectRequirement::Trait(trait_req) => {
-                            let canonical = Canonicalized::new(self.db, trait_req);
                             let sat = is_goal_satisfiable(
                                 self.db,
                                 TraitSolveCx::new(self.db, self.env.scope())
                                     .with_assumptions(self.env.assumptions()),
-                                canonical.value,
+                                trait_req,
                             );
 
                             if matches!(
@@ -2079,8 +2075,15 @@ impl<'db> TyChecker<'db> {
                         inst.assoc_type_bindings(self.db).clone(),
                     );
 
-                    self.env
-                        .register_const_ref(expr, ConstRef::TraitConst { inst, name });
+                    self.env.register_const_ref(
+                        expr,
+                        ConstRef::TraitConst(AssocConstUse::new(
+                            self.env.scope(),
+                            self.env.assumptions(),
+                            inst,
+                            name,
+                        )),
+                    );
                     // Look up the associated const's declared type in the trait and
                     // instantiate it with the trait instance's args (including Self).
                     let trait_ = inst.def(self.db);

@@ -200,7 +200,7 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                 self.write_u8(0x18);
                 self.write_u32(local.0);
             }
-            ValueOrigin::FuncItem(root) => {
+            ValueOrigin::CodeRegionRef(root) => {
                 self.write_u8(0x09);
                 let symbol = root
                     .symbol
@@ -310,12 +310,10 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
             let slot = self.placeholder_value(*arg);
             self.write_u32(slot);
         }
-        self.write_usize(
-            call.hir_target
-                .as_ref()
-                .map(|target| target.generic_args.len())
-                .unwrap_or(0),
-        );
+        self.write_usize(match call.target.as_ref() {
+            Some(crate::ir::CallTargetRef::Hir(target)) => target.generic_args.len(),
+            _ => 0,
+        });
         let symbol = if let Some(checked) = call.checked_intrinsic {
             format!(
                 "{}<{}>",
@@ -332,11 +330,12 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                 })
                 .cloned()
                 .or_else(|| call.resolved_name.clone())
-                .or_else(|| {
-                    call.hir_target
-                        .as_ref()
-                        .and_then(|target| target.callable_def.name(self.db))
-                        .map(|n| n.data(self.db).to_string())
+                .or_else(|| match call.target.as_ref()? {
+                    crate::ir::CallTargetRef::Hir(target) => target
+                        .callable_def
+                        .name(self.db)
+                        .map(|n| n.data(self.db).to_string()),
+                    crate::ir::CallTargetRef::Synthetic(id) => Some(format!("{id:?}")),
                 })
                 .or_else(|| {
                     call.builtin_terminator.map(|builtin| match builtin {

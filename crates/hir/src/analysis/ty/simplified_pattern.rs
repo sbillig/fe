@@ -5,6 +5,7 @@
 
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution::{PathRes, ResolvedVariant, resolve_path};
+use crate::analysis::ty::assoc_const::AssocConstUse;
 use crate::analysis::ty::const_eval::{ConstValue, try_eval_const_ref};
 use crate::analysis::ty::trait_resolution::PredicateListId;
 use crate::analysis::ty::ty_check::ConstRef;
@@ -304,7 +305,7 @@ impl<'db> SimplifiedPattern<'db> {
                 }
             }
             PathRes::TraitConst(_recv_ty, inst, name) => {
-                let cref = ConstRef::TraitConst { inst, name };
+                let cref = ConstRef::TraitConst(AssocConstUse::new(scope, assumptions, inst, name));
                 match try_eval_const_ref(db, cref, expected_ty)? {
                     ConstValue::Int(int) => Some(LitKind::Int(IntegerId::new(db, int))),
                     ConstValue::Bool(flag) => Some(LitKind::Bool(flag)),

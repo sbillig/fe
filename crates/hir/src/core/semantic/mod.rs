@@ -32,7 +32,6 @@ pub use symbol::{
 
 use crate::HirDb;
 use crate::analysis::HirAnalysisDb;
-use crate::analysis::ty::canonical::Canonicalized;
 use crate::analysis::ty::corelib::{resolve_core_trait, resolve_lib_type_path};
 use crate::analysis::ty::diagnostics::{ImplDiag, TyLowerDiag};
 use crate::analysis::ty::normalize::normalize_ty;
@@ -1302,9 +1301,8 @@ fn contract_field_address_space<'db>(
     fallback_space: TyId<'db>,
 ) -> TyId<'db> {
     let inst = TraitInstId::new(db, effect_handle, vec![field_ty], IndexMap::new());
-    let goal = Canonicalized::new(db, inst).value;
 
-    match is_goal_satisfiable(db, TraitSolveCx::new(db, scope), goal) {
+    match is_goal_satisfiable(db, TraitSolveCx::new(db, scope), inst) {
         GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => fallback_space,
         GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation(_) => inst
             .assoc_ty(db, address_space_ident)
@@ -1393,9 +1391,8 @@ impl<'db> Contract<'db> {
                 concretize_contract_layout_holes_and_count(db, lowered_ty, next_slot);
 
             let inst = TraitInstId::new(db, effect_handle, vec![declared_ty], IndexMap::new());
-            let goal = Canonicalized::new(db, inst).value;
             let (is_provider, target_ty) =
-                match is_goal_satisfiable(db, TraitSolveCx::new(db, scope), goal) {
+                match is_goal_satisfiable(db, TraitSolveCx::new(db, scope), inst) {
                     GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid => {
                         (false, None)
                     }

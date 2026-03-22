@@ -17,7 +17,6 @@ use hir::analysis::ty::adt_def::AdtRef;
 use hir::analysis::ty::normalize::normalize_ty;
 use hir::analysis::ty::ty_def::{TyBase, TyData, TyId};
 use hir::analysis::ty::{
-    canonical::Canonicalized,
     corelib::resolve_core_trait,
     simplified_pattern::ConstructorKind,
     trait_def::TraitInstId,
@@ -317,11 +316,10 @@ pub fn direct_deref_target_ty<'db>(
     let assumptions = PredicateListId::empty_list(db);
     let target_ident = IdentId::new(db, "Target".to_string());
     let inst = TraitInstId::new(db, effect_handle, vec![ty], IndexMap::new());
-    let goal = Canonicalized::new(db, inst).value;
     match is_goal_satisfiable(
         db,
         TraitSolveCx::new(db, core.scope).with_assumptions(assumptions),
-        goal,
+        inst,
     ) {
         GoalSatisfiability::Satisfied(_) => inst
             .assoc_ty(db, target_ident)
@@ -808,11 +806,10 @@ fn effect_provider_space_via_domain_trait<'db>(
 
     // First, determine whether `ty` is an effect provider at all.
     let inst = TraitInstId::new(db, effect_handle, vec![ty], IndexMap::new());
-    let goal = Canonicalized::new(db, inst).value;
     match is_goal_satisfiable(
         db,
         TraitSolveCx::new(db, core.scope).with_assumptions(assumptions),
-        goal,
+        inst,
     ) {
         GoalSatisfiability::Satisfied(_) => {}
         GoalSatisfiability::NeedsConfirmation(_) => return None,
@@ -831,11 +828,10 @@ fn effect_provider_space_via_domain_trait<'db>(
         let mut assoc = IndexMap::new();
         assoc.insert(address_space_ident, space_ty);
         let inst = TraitInstId::new(db, effect_handle, vec![ty], assoc);
-        let goal = Canonicalized::new(db, inst).value;
         match is_goal_satisfiable(
             db,
             TraitSolveCx::new(db, core.scope).with_assumptions(assumptions),
-            goal,
+            inst,
         ) {
             GoalSatisfiability::Satisfied(_) => return Some(space_kind),
             GoalSatisfiability::NeedsConfirmation(_) => return None,

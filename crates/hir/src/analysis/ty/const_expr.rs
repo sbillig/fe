@@ -1,8 +1,8 @@
 use crate::analysis::HirAnalysisDb;
-use crate::analysis::ty::trait_def::TraitInstId;
+use crate::analysis::ty::assoc_const::AssocConstUse;
 use crate::analysis::ty::ty_check::LocalBinding;
 use crate::analysis::ty::ty_def::TyId;
-use crate::hir_def::{ArithBinOp, Func, IdentId, UnOp};
+use crate::hir_def::{ArithBinOp, Func, UnOp};
 use salsa::Update;
 
 #[salsa::interned]
@@ -37,10 +37,7 @@ pub enum ConstExpr<'db> {
         expr: TyId<'db>,
         to: TyId<'db>,
     },
-    TraitConst {
-        inst: TraitInstId<'db>,
-        name: IdentId<'db>,
-    },
+    TraitConst(AssocConstUse<'db>),
     LocalBinding(LocalBinding<'db>),
 }
 
@@ -146,7 +143,9 @@ impl<'db> ConstExprId<'db> {
             ConstExpr::Cast { expr, to } => {
                 format!("({} as {})", expr.pretty_print(db), to.pretty_print(db))
             }
-            ConstExpr::TraitConst { inst, name } => {
+            ConstExpr::TraitConst(assoc) => {
+                let inst = assoc.inst();
+                let name = assoc.name();
                 format!("{}::{}", inst.self_ty(db).pretty_print(db), name.data(db))
             }
             ConstExpr::LocalBinding(binding) => format!("{binding:?}"),

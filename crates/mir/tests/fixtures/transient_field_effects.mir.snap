@@ -9,6 +9,11 @@ fn bump_lock__StorPtr_u256___64779554cfbf0358(v0: u256) -> ():
     store stor[v0] = v2
     ret
 
+fn enter_h591c597fc9aaddcc_encode_hf98aaef2e32b4927_encode_to_ptr(v0: Enter, v1: u256) -> ():
+  ; runtime_abi values=[] effects=[]
+  bb0:
+    ret
+
 fn __Guard_init_contract(v0: u256) -> ():
   bb0:
     store tstor[v0] = 0
@@ -26,8 +31,8 @@ fn __Guard_init() -> ():
   bb1:
     terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
   bb2:
-    v1: u256 = code_region_offset(func_item(__Guard_runtime))
-    v2: u256 = code_region_len(func_item(__Guard_runtime))
+    v1: u256 = code_region_offset(code_region(__Guard_runtime))
+    v2: u256 = code_region_len(code_region(__Guard_runtime))
     v3: u256 = tstorptr_t__hb73db5b342ccdc03_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483(0)
     eval __Guard_init_contract(v3)
     eval codecopy(0, v1, v2)

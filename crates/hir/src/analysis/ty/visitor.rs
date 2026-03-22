@@ -5,7 +5,7 @@ use super::{
     const_expr::ConstExpr,
     const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
     trait_def::{ImplementorId, TraitInstId},
-    trait_resolution::{PredicateListId, TraitGoalSolution},
+    trait_resolution::{PredicateListId, TraitGoalSolution, TraitSolverQuery},
     ty_check::{EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
     ty_def::{AssocTy, InvalidCause, PrimTy, TyBase, TyData, TyFlags, TyId, TyParam, TyVar},
 };
@@ -145,8 +145,8 @@ where
                 expr.visit_with(visitor);
                 to.visit_with(visitor);
             }
-            ConstExpr::TraitConst { inst, .. } => {
-                inst.visit_with(visitor);
+            ConstExpr::TraitConst(assoc) => {
+                assoc.visit_with(visitor);
             }
             ConstExpr::LocalBinding(_) => {}
         },
@@ -235,6 +235,16 @@ impl<'db> TyVisitable<'db> for PredicateListId<'db> {
         V: TyVisitor<'db> + ?Sized,
     {
         self.list(visitor.db()).visit_with(visitor)
+    }
+}
+
+impl<'db> TyVisitable<'db> for TraitSolverQuery<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.goal.visit_with(visitor);
+        self.assumptions.visit_with(visitor);
     }
 }
 

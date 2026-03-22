@@ -403,7 +403,7 @@ fn add_value_runtime_uses<'db>(
         | ValueOrigin::ControlFlowResult { .. }
         | ValueOrigin::Unit
         | ValueOrigin::Synthetic(..)
-        | ValueOrigin::FuncItem(..) => {}
+        | ValueOrigin::CodeRegionRef(..) => {}
     }
 }
 
@@ -834,7 +834,7 @@ fn mark_value_runtime_live<'db>(
         | ValueOrigin::ControlFlowResult { .. }
         | ValueOrigin::Unit
         | ValueOrigin::Synthetic(..)
-        | ValueOrigin::FuncItem(..) => {}
+        | ValueOrigin::CodeRegionRef(..) => {}
     }
     changed
 }
@@ -2103,7 +2103,7 @@ fn value_should_bind(
                 | ValueOrigin::Synthetic(..)
                 | ValueOrigin::Local(..)
                 | ValueOrigin::PlaceRoot(..)
-                | ValueOrigin::FuncItem(..)
+                | ValueOrigin::CodeRegionRef(..)
         )
 }
 
@@ -2128,7 +2128,7 @@ fn value_deps_in_eval_order(origin: &ValueOrigin<'_>) -> Vec<ValueId> {
         | ValueOrigin::Synthetic(..)
         | ValueOrigin::Local(..)
         | ValueOrigin::PlaceRoot(..)
-        | ValueOrigin::FuncItem(..) => Vec::new(),
+        | ValueOrigin::CodeRegionRef(..) => Vec::new(),
     }
 }
 

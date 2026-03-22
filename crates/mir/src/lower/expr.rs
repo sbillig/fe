@@ -46,7 +46,7 @@ struct ForLoopParams {
 }
 
 impl<'db, 'a> MirBuilder<'db, 'a> {
-    /// Try to lower a `size_of<T>()` or `encoded_size<T>()` call to a constant.
+    /// Try to lower a `size_of<T>()` call to a constant.
     fn try_lower_size_intrinsic_call(&mut self, expr: ExprId) -> Option<ValueId> {
         let callable = self.typed_body.callable_expr(expr)?;
         let ingot_kind = callable.callable_def.ingot(self.db).kind(self.db);
@@ -57,7 +57,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         let size_bytes = match (ingot_kind, name.data(self.db).as_str()) {
             (IngotKind::Core, "size_of") => layout::ty_size_bytes(self.db, ty)?,
-            (IngotKind::Std, "encoded_size") => self.abi_static_size_bytes(ty)?,
             _ => return None,
         };
 
@@ -696,7 +695,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     ) {
         let call_origin = CallOrigin {
             expr,
-            hir_target: None,
+            target: None,
             args,
             effect_args: Vec::new(),
             resolved_name: None,
@@ -1508,7 +1507,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             {
                 let ty = self.builder.body.value(*arg).ty;
                 let repr = self.builder.body.value(*arg).repr;
-                *arg = self.alloc_value(ty, ValueOrigin::FuncItem(target), repr);
+                *arg = self.alloc_value(ty, ValueOrigin::CodeRegionRef(target), repr);
             }
             if op.returns_value() {
                 // Intrinsics are word-producing operations, but some std/core APIs wrap them
@@ -1629,7 +1628,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let builtin_terminator = self.builtin_terminator_kind(callable.callable_def);
         let call_origin = CallOrigin {
             expr: Some(expr),
-            hir_target: Some(hir_target),
+            target: Some(crate::ir::CallTargetRef::Hir(hir_target)),
             args,
             effect_args,
             resolved_name: None,
@@ -2793,7 +2792,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
         let call_origin = CallOrigin {
             expr: Some(expr),
-            hir_target: Some(hir_target),
+            target: Some(crate::ir::CallTargetRef::Hir(hir_target)),
             args: vec![receiver, rhs],
             effect_args,
             resolved_name: None,
@@ -3291,7 +3290,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
         let call_origin = CallOrigin {
             expr: None,
-            hir_target: Some(hir_target),
+            target: Some(crate::ir::CallTargetRef::Hir(hir_target)),
             args: vec![receiver],
             effect_args,
             receiver_space,
@@ -3354,7 +3353,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
         let call_origin = CallOrigin {
             expr: None,
-            hir_target: Some(hir_target),
+            target: Some(crate::ir::CallTargetRef::Hir(hir_target)),
             args: vec![receiver, index],
             effect_args,
             receiver_space,

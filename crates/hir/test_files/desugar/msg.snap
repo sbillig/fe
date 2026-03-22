@@ -18,9 +18,16 @@ mod CounterMsg {
         const SELECTOR: u32 = 1
     }
 
+    impl core::abi::AbiSize for Increment {
+        const ENCODED_SIZE: u256 = 0
+    }
+
     impl core::abi::Encode<std::abi::Sol> for Increment {
+        const DIRECT_ENCODE: bool = true
     
         fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {}
+    
+        fn encode_to_ptr(own self, ptr: u256) {}
     }
 
     impl core::abi::Decode<std::abi::Sol> for Increment {
@@ -37,9 +44,16 @@ mod CounterMsg {
         const SELECTOR: u32 = 2
     }
 
+    impl core::abi::AbiSize for Get {
+        const ENCODED_SIZE: u256 = 0
+    }
+
     impl core::abi::Encode<std::abi::Sol> for Get {
+        const DIRECT_ENCODE: bool = true
     
         fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {}
+    
+        fn encode_to_ptr(own self, ptr: u256) {}
     }
 
     impl core::abi::Decode<std::abi::Sol> for Get {
@@ -58,10 +72,19 @@ mod CounterMsg {
         const SELECTOR: u32 = 3
     }
 
+    impl core::abi::AbiSize for Set {
+        const ENCODED_SIZE: u256 = 0 + u64::ENCODED_SIZE
+    }
+
     impl core::abi::Encode<std::abi::Sol> for Set {
+        const DIRECT_ENCODE: bool = true && <u64 as core::abi::Encode<std::abi::Sol> >::DIRECT_ENCODE
     
         fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
             self.val.encode(e)
+        }
+    
+        fn encode_to_ptr(own self, ptr: u256) {
+            self.val.encode_to_ptr(ptr)
         }
     }
 

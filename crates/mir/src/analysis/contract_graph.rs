@@ -175,7 +175,8 @@ fn collect_region_deps(
                         ..
                     } => {
                         let arg = args.first().unwrap();
-                        let ValueOrigin::FuncItem(target) = &func.body.value(*arg).origin else {
+                        let ValueOrigin::CodeRegionRef(target) = &func.body.value(*arg).origin
+                        else {
                             continue;
                         };
                         let Some(target_symbol) = &target.symbol else {

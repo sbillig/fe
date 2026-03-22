@@ -1074,6 +1074,38 @@ fn select_assoc_const_candidate<'db>(
             table.rollback_to(snapshot);
         }
 
+        if let TyData::AssocTy(assoc_ty) = receiver_ty.data(db) {
+            let trait_ = assoc_ty.trait_.def(db);
+            let assoc_name = assoc_ty.name;
+            if let Some(decl) = trait_.assoc_ty(db, assoc_name) {
+                let subject = extracted_receiver_ty.fold_with(db, &mut table);
+                let owner_self = assoc_ty.trait_.self_ty(db);
+                for bound in &decl.bounds {
+                    if let TypeBound::Trait(trait_ref) = *bound
+                        && let Ok(inst) = crate::analysis::ty::trait_lower::lower_trait_ref(
+                            db,
+                            subject,
+                            trait_ref,
+                            scope,
+                            assumptions,
+                            Some(owner_self),
+                        )
+                    {
+                        if inst.def(db).const_(db, name).is_some() {
+                            matches.insert(inst);
+                        }
+
+                        for super_trait in inst.def(db).super_traits(db) {
+                            let super_inst = super_trait.instantiate(db, inst.args(db));
+                            if super_inst.def(db).const_(db, name).is_some() {
+                                matches.insert(super_inst);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         return match matches.len() {
             0 => AssocConstSelection::NotFound,
             1 => AssocConstSelection::Found(*matches.iter().next().unwrap()),

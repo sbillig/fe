@@ -1,9 +1,10 @@
 use thin_vec::ThinVec;
 
 use super::{
-    canonical::Canonical,
+    assoc_const::AssocConstUse,
     const_expr::ConstExpr,
-    const_ty::const_ty_from_trait_const,
+    const_ty::{ConstTyData, const_ty_from_assoc_const_use},
+    ctfe::instantiate_typed_body,
     diagnostics::{ImplDiag, TyDiagCollection},
     fold::{AssocTySubst, TyFoldable, TyFolder},
     normalize::normalize_ty,
@@ -12,6 +13,7 @@ use super::{
         GoalSatisfiability, TraitSolveCx, constraint::collect_func_def_constraints,
         is_goal_satisfiable,
     },
+    ty_check::{ConstRef, check_anon_const_body},
     ty_def::{InvalidCause, TyData, TyId},
 };
 use crate::analysis::HirAnalysisDb;
@@ -203,8 +205,13 @@ fn compare_ty<'db>(
     let trait_m_arg_tys = trait_m.arg_tys(db);
 
     let mut substituter = AssocTySubst::new(trait_inst);
-    let assumptions = collect_func_def_constraints(db, impl_m, true).instantiate_identity();
-    let solve_cx = TraitSolveCx::new(db, impl_m.scope()).with_assumptions(assumptions);
+    let impl_assumptions = collect_func_def_constraints(db, impl_m, true).instantiate_identity();
+    let trait_assumptions =
+        collect_func_def_constraints(db, trait_m, true).instantiate(db, map_to_impl);
+    let compare_assumptions = impl_assumptions
+        .merge(db, trait_assumptions)
+        .extend_all_bounds(db);
+    let trait_scope = impl_m.scope();
 
     for (idx, (trait_m_ty, impl_m_ty)) in trait_m_arg_tys
         .iter()
@@ -223,12 +230,24 @@ fn compare_ty<'db>(
 
         // 3) Normalize both types to resolve any further nested associated types.
         let trait_m_ty_normalized =
-            normalize_ty(db, trait_m_ty_substituted, impl_m.scope(), assumptions);
-        let impl_m_ty_normalized = normalize_ty(db, impl_m_ty, impl_m.scope(), assumptions);
-        let trait_m_ty_normalized =
-            normalize_const_tys(db, trait_m_ty_normalized, solve_cx, trait_inst);
-        let impl_m_ty_normalized =
-            normalize_const_tys(db, impl_m_ty_normalized, solve_cx, trait_inst);
+            normalize_ty(db, trait_m_ty_substituted, trait_scope, compare_assumptions);
+        let impl_m_ty_normalized = normalize_ty(db, impl_m_ty, trait_scope, compare_assumptions);
+        let trait_m_ty_normalized = normalize_compare_assoc_consts(
+            db,
+            trait_m_ty_normalized,
+            trait_scope,
+            compare_assumptions,
+            trait_inst,
+            true,
+        );
+        let impl_m_ty_normalized = normalize_compare_assoc_consts(
+            db,
+            impl_m_ty_normalized,
+            trait_scope,
+            compare_assumptions,
+            trait_inst,
+            false,
+        );
 
         // 4) Compare for equality
         if !impl_m_ty.has_invalid(db) && trait_m_ty_normalized != impl_m_ty_normalized {
@@ -251,13 +270,30 @@ fn compare_ty<'db>(
 
     // Substitute and normalize the return type as well.
     let trait_m_ret_ty_substituted = trait_m_ret_ty.fold_with(db, &mut substituter);
-    let trait_m_ret_ty_normalized =
-        normalize_ty(db, trait_m_ret_ty_substituted, impl_m.scope(), assumptions);
-    let impl_m_ret_ty_normalized = normalize_ty(db, impl_m_ret_ty, impl_m.scope(), assumptions);
-    let trait_m_ret_ty_normalized =
-        normalize_const_tys(db, trait_m_ret_ty_normalized, solve_cx, trait_inst);
+    let trait_m_ret_ty_normalized = normalize_ty(
+        db,
+        trait_m_ret_ty_substituted,
+        trait_scope,
+        compare_assumptions,
+    );
     let impl_m_ret_ty_normalized =
-        normalize_const_tys(db, impl_m_ret_ty_normalized, solve_cx, trait_inst);
+        normalize_ty(db, impl_m_ret_ty, trait_scope, compare_assumptions);
+    let trait_m_ret_ty_normalized = normalize_compare_assoc_consts(
+        db,
+        trait_m_ret_ty_normalized,
+        trait_scope,
+        compare_assumptions,
+        trait_inst,
+        true,
+    );
+    let impl_m_ret_ty_normalized = normalize_compare_assoc_consts(
+        db,
+        impl_m_ret_ty_normalized,
+        trait_scope,
+        compare_assumptions,
+        trait_inst,
+        false,
+    );
 
     if !impl_m_ret_ty.has_invalid(db)
         && !trait_m_ret_ty.has_invalid(db)
@@ -279,91 +315,161 @@ fn compare_ty<'db>(
     !err
 }
 
-fn normalize_const_tys<'db>(
+fn normalize_compare_assoc_consts<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
-    solve_cx: TraitSolveCx<'db>,
+    scope: crate::hir_def::scope_graph::ScopeId<'db>,
+    assumptions: super::trait_resolution::PredicateListId<'db>,
     trait_inst: TraitInstId<'db>,
+    rebase_same_trait_uses: bool,
 ) -> TyId<'db> {
-    struct ConstFolder<'db> {
-        solve_cx: TraitSolveCx<'db>,
-        trait_inst: TraitInstId<'db>,
+    fn is_identity_trait_inst<'db>(db: &'db dyn HirAnalysisDb, inst: TraitInstId<'db>) -> bool {
+        let trait_def = inst.def(db);
+        inst.assoc_type_bindings(db).is_empty() && inst.args(db) == trait_def.params(db)
     }
 
-    impl<'db> TyFolder<'db> for ConstFolder<'db> {
+    struct CompareAssocConstNormalizer<'db> {
+        scope: crate::hir_def::scope_graph::ScopeId<'db>,
+        assumptions: super::trait_resolution::PredicateListId<'db>,
+        trait_inst: TraitInstId<'db>,
+        rebase_same_trait_uses: bool,
+    }
+
+    impl<'db> CompareAssocConstNormalizer<'db> {
+        fn canonicalize_assoc_use(
+            &self,
+            db: &'db dyn HirAnalysisDb,
+            assoc: AssocConstUse<'db>,
+        ) -> AssocConstUse<'db> {
+            let assoc = assoc.with_env(self.scope, self.assumptions);
+            if self.rebase_same_trait_uses
+                && assoc.inst().def(db) == self.trait_inst.def(db)
+                && is_identity_trait_inst(db, assoc.inst())
+            {
+                assoc.with_inst(self.trait_inst)
+            } else {
+                assoc
+            }
+        }
+
+        fn normalize_assoc_const_ty(
+            &mut self,
+            db: &'db dyn HirAnalysisDb,
+            assoc: AssocConstUse<'db>,
+            expected_ty: TyId<'db>,
+        ) -> Option<TyId<'db>> {
+            let assoc = self.canonicalize_assoc_use(db, assoc);
+            let const_ty = const_ty_from_assoc_const_use(db, assoc)?;
+            let evaluated = const_ty.evaluate(db, Some(expected_ty));
+            if matches!(
+                evaluated.ty(db).invalid_cause(db),
+                Some(InvalidCause::ConstEvalUnsupported { .. })
+            ) {
+                return None;
+            }
+
+            Some(self.fold_ty(db, TyId::new(db, TyData::ConstTy(evaluated))))
+        }
+
+        fn normalize_unevaluated_assoc_const(
+            &mut self,
+            db: &'db dyn HirAnalysisDb,
+            body: crate::hir_def::Body<'db>,
+            expected_ty: TyId<'db>,
+            generic_args: &[TyId<'db>],
+        ) -> Option<TyId<'db>> {
+            let (diags, typed_body) = check_anon_const_body(db, body, expected_ty);
+            if !diags.is_empty() {
+                return None;
+            }
+
+            let typed_body = if generic_args.is_empty() {
+                typed_body.clone()
+            } else {
+                instantiate_typed_body(db, typed_body.clone(), generic_args)
+            };
+            let ConstRef::TraitConst(assoc) = typed_body.expr_const_ref(body.expr(db))? else {
+                return None;
+            };
+
+            self.normalize_assoc_const_ty(db, assoc, expected_ty)
+        }
+    }
+
+    impl<'db> TyFolder<'db> for CompareAssocConstNormalizer<'db> {
         fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            let ty = ty.super_fold_with(db, self);
             let TyData::ConstTy(const_ty) = ty.data(db) else {
-                return ty.super_fold_with(db, self);
+                return ty;
             };
 
             match const_ty.data(db) {
-                super::const_ty::ConstTyData::Abstract(expr, expected_ty) => {
-                    let ConstExpr::TraitConst { inst, name } = expr.data(db) else {
-                        return ty.super_fold_with(db, self);
+                ConstTyData::Abstract(expr, expected_ty) => {
+                    let ConstExpr::TraitConst(assoc) = expr.data(db) else {
+                        return ty;
                     };
-
-                    let Some(const_ty) = const_ty_from_trait_const(db, self.solve_cx, *inst, *name)
-                    else {
-                        return ty.super_fold_with(db, self);
-                    };
-
-                    let evaluated = const_ty.evaluate(db, Some(*expected_ty));
-                    if matches!(
-                        evaluated.ty(db).invalid_cause(db),
-                        Some(InvalidCause::ConstEvalUnsupported { .. })
-                    ) {
-                        return ty.super_fold_with(db, self);
+                    let assoc = self.canonicalize_assoc_use(db, *assoc);
+                    if let Some(ty) = self.normalize_assoc_const_ty(db, assoc, *expected_ty) {
+                        return ty;
                     }
 
-                    TyId::new(db, TyData::ConstTy(evaluated))
-                }
-                super::const_ty::ConstTyData::UnEvaluated {
-                    body,
-                    ty: expected_ty,
-                    ..
-                } => {
-                    let Some(expected_ty) = *expected_ty else {
-                        return ty.super_fold_with(db, self);
-                    };
-                    let expr = body.expr(db);
-                    let Partial::Present(expr) = expr.data(db, *body) else {
-                        return ty.super_fold_with(db, self);
-                    };
-                    let Expr::Path(path) = expr else {
-                        return ty.super_fold_with(db, self);
-                    };
-                    let Some(path) = path.to_opt() else {
-                        return ty.super_fold_with(db, self);
-                    };
-
-                    let mut const_ty = *const_ty;
-                    if let Some(parent) = path.parent(db)
-                        && parent.is_self_ty(db)
-                        && let PathKind::Ident {
-                            ident,
-                            generic_args,
-                        } = path.kind(db)
-                        && generic_args.is_empty(db)
-                        && let Some(name) = ident.to_opt()
-                        && let Some(repl) =
-                            const_ty_from_trait_const(db, self.solve_cx, self.trait_inst, name)
-                    {
-                        const_ty = repl;
-                    }
-
+                    let expr =
+                        super::const_expr::ConstExprId::new(db, ConstExpr::TraitConst(assoc));
                     TyId::new(
                         db,
-                        TyData::ConstTy(const_ty.evaluate(db, Some(expected_ty))),
+                        TyData::ConstTy(super::const_ty::ConstTyId::new(
+                            db,
+                            ConstTyData::Abstract(expr, *expected_ty),
+                        )),
                     )
                 }
-                _ => ty.super_fold_with(db, self),
+                ConstTyData::UnEvaluated {
+                    body,
+                    ty: expected_ty,
+                    const_def,
+                    generic_args,
+                    ..
+                } => {
+                    if const_def.is_some() {
+                        return ty;
+                    }
+                    let Some(expected_ty) = *expected_ty else {
+                        return ty;
+                    };
+                    let expr = body.expr(db);
+                    let Partial::Present(Expr::Path(path)) = expr.data(db, *body) else {
+                        return ty;
+                    };
+                    let Some(path) = path.to_opt() else {
+                        return ty;
+                    };
+                    let Some(parent) = path.parent(db) else {
+                        return ty;
+                    };
+                    let PathKind::Ident {
+                        generic_args: path_generic_args,
+                        ..
+                    } = path.kind(db)
+                    else {
+                        return ty;
+                    };
+                    if !parent.is_self_ty(db) || !path_generic_args.is_empty(db) {
+                        return ty;
+                    }
+
+                    self.normalize_unevaluated_assoc_const(db, *body, expected_ty, generic_args)
+                        .unwrap_or(ty)
+                }
+                _ => ty,
             }
         }
     }
 
-    let mut folder = ConstFolder {
-        solve_cx,
+    let mut folder = CompareAssocConstNormalizer {
+        scope,
+        assumptions,
         trait_inst,
+        rebase_same_trait_uses,
     };
     ty.fold_with(db, &mut folder)
 }
@@ -385,11 +491,10 @@ fn compare_constraints<'db>(
         collect_func_def_constraints(db, trait_m, false).instantiate(db, map_to_impl);
     let mut unsatisfied_goals = ThinVec::new();
     for &goal in impl_m_constraints.list(db) {
-        let canonical_goal = Canonical::new(db, goal);
         match is_goal_satisfiable(
             db,
             TraitSolveCx::new(db, trait_m.scope()).with_assumptions(trait_m_constraints),
-            canonical_goal,
+            goal,
         ) {
             GoalSatisfiability::Satisfied(_) | GoalSatisfiability::ContainsInvalid => {}
             GoalSatisfiability::NeedsConfirmation(_) => unreachable!(),

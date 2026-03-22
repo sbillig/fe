@@ -1,9 +1,10 @@
+use hir::analysis::HirAnalysisDb;
 use hir::analysis::ty::ty_def::TyId;
 use hir::projection::Projection;
 use num_bigint::BigUint;
 
 use super::{
-    AddressSpaceKind, BasicBlock, BasicBlockId, CodeRegionRoot, LocalData, LocalId, MirBody,
+    AddressSpaceKind, BasicBlock, BasicBlockId, CodeRegionRef, LocalData, LocalId, MirBody,
     MirInst, MirProjectionPath, Place, RuntimeShape, Rvalue, SourceInfoId, SwitchTarget,
     SyntheticValue, Terminator, ValueData, ValueId, ValueOrigin, ValueRepr,
 };
@@ -132,8 +133,16 @@ impl<'db> BodyBuilder<'db> {
         self.alloc_value(ty, ValueOrigin::Local(local), repr)
     }
 
-    pub fn func_item_value(&mut self, ty: TyId<'db>, root: CodeRegionRoot<'db>) -> ValueId {
-        self.alloc_value(ty, ValueOrigin::FuncItem(root), ValueRepr::Word)
+    pub fn code_region_value(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        root: CodeRegionRef<'db>,
+    ) -> ValueId {
+        self.alloc_value(
+            TyId::unit(db),
+            ValueOrigin::CodeRegionRef(root),
+            ValueRepr::Word,
+        )
     }
 
     pub fn assign(&mut self, dest: Option<LocalId>, rvalue: Rvalue<'db>) {

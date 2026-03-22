@@ -205,11 +205,12 @@ fn format_call(db: &dyn HirAnalysisDb, body: &MirBody<'_>, call: &CallOrigin<'_>
     } else {
         call.resolved_name
             .clone()
-            .or_else(|| {
-                call.hir_target
-                    .as_ref()
-                    .and_then(|target| target.callable_def.name(db))
-                    .map(|name| name.data(db).to_string())
+            .or_else(|| match call.target.as_ref()? {
+                crate::ir::CallTargetRef::Hir(target) => target
+                    .callable_def
+                    .name(db)
+                    .map(|name| name.data(db).to_string()),
+                crate::ir::CallTargetRef::Synthetic(id) => Some(format!("{id:?}")),
             })
             .unwrap_or_else(|| "<unresolved>".to_string())
     };
@@ -306,8 +307,8 @@ fn format_value_inner(
         },
         ValueOrigin::Local(local) => format_local(*local),
         ValueOrigin::PlaceRoot(local) => format!("place_root({})", format_local(*local)),
-        ValueOrigin::FuncItem(root) => format!(
-            "func_item({})",
+        ValueOrigin::CodeRegionRef(root) => format!(
+            "code_region({})",
             root.symbol.as_deref().unwrap_or("<unresolved>")
         ),
         ValueOrigin::FieldPtr(field_ptr) => {

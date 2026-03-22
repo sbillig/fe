@@ -8,7 +8,6 @@ use hir::analysis::ty::const_eval::{
 use hir::analysis::ty::const_ty::{ConstTyData, EvaluatedConstTy};
 use hir::analysis::ty::fold::TyFoldable;
 use hir::analysis::ty::normalize::normalize_ty;
-use hir::analysis::ty::trait_resolution::PredicateListId;
 
 impl<'db, 'a> MirBuilder<'db, 'a> {
     /// Helper to iterate expressions and conditionally force value lowering.
@@ -146,7 +145,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         );
                         ValueOrigin::Unit
                     } else if let Some(target) = self.code_region_target_from_ty(ty) {
-                        ValueOrigin::FuncItem(target)
+                        ValueOrigin::CodeRegionRef(target)
                     } else if let Some(local) = self.local_for_binding(binding) {
                         if self.effect_param_key_is_type(binding)
                             && matches!(repr, ValueRepr::Word)
@@ -160,12 +159,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         }
                         ValueOrigin::Local(local)
                     } else if let Some(target) = self.code_region_target(expr) {
-                        ValueOrigin::FuncItem(target)
+                        ValueOrigin::CodeRegionRef(target)
                     } else {
                         ValueOrigin::Expr(expr)
                     }
                 } else if let Some(target) = self.code_region_target(expr) {
-                    ValueOrigin::FuncItem(target)
+                    ValueOrigin::CodeRegionRef(target)
                 } else {
                     ValueOrigin::Expr(expr)
                 }
@@ -298,31 +297,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 generic_args: self.generic_args,
             };
             cref = cref.fold_with(self.db, &mut subst);
-            if let hir::analysis::ty::ty_check::ConstRef::TraitConst { inst, name } = cref
-                && matches!(
-                    inst.self_ty(self.db).data(self.db),
-                    hir::analysis::ty::ty_def::TyData::TyParam(_)
-                        | hir::analysis::ty::ty_def::TyData::TyVar(_)
-                )
-                && let Some(&self_arg) = self.generic_args.first()
-            {
-                let mut args = inst.args(self.db).to_vec();
-                if let Some(arg) = args.first_mut() {
-                    *arg = self_arg;
-                }
-                cref = hir::analysis::ty::ty_check::ConstRef::TraitConst {
-                    inst: hir::analysis::ty::trait_def::TraitInstId::new(
-                        self.db,
-                        inst.def(self.db),
-                        args,
-                        inst.assoc_type_bindings(self.db).clone(),
-                    ),
-                    name,
-                };
-            }
 
             let ty = self.typed_body.expr_ty(self.db, expr);
-            let assumptions = PredicateListId::empty_list(self.db);
+            let assumptions = self.typed_body.assumptions();
             let expected_ty = normalize_ty(self.db, ty, self.body.scope(), assumptions);
             let capability_expected_ty = expected_ty.as_capability(self.db).map(|(_, ty)| ty);
             let base_expected_ty = expected_ty.base_ty(self.db);
@@ -375,7 +352,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return None;
         }
 
-        let assumptions = PredicateListId::empty_list(self.db);
+        let assumptions = self.typed_body.assumptions();
         let resolved = resolve_path(self.db, path, self.body.scope(), assumptions, true).ok()?;
         let ty = match resolved {
             PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => ty,

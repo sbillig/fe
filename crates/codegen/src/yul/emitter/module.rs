@@ -480,7 +480,7 @@ fn collect_code_region_roots(db: &dyn HirDb, functions: &[MirFunction<'_>]) -> V
                     )
                     && args.len() == 1
                     && let Some(arg) = args.first().copied()
-                    && let mir::ValueOrigin::FuncItem(target) = &func.body.value(arg).origin
+                    && let mir::ValueOrigin::CodeRegionRef(target) = &func.body.value(arg).origin
                     && let Some(symbol) = &target.symbol
                 {
                     roots.insert(symbol.clone());
@@ -1014,7 +1014,7 @@ fn collect_code_region_targets(
             let Some(arg) = args.first().copied() else {
                 continue;
             };
-            let ValueOrigin::FuncItem(target) = &func.body.value(arg).origin else {
+            let ValueOrigin::CodeRegionRef(target) = &func.body.value(arg).origin else {
                 continue;
             };
             let Some(target_symbol) = &target.symbol else {

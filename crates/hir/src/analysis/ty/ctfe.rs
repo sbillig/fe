@@ -11,7 +11,7 @@ use crate::analysis::{
         const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
         fold::{TyFoldable, TyFolder},
         trait_def::{TraitInstId, resolve_trait_method_instance},
-        trait_resolution::{PredicateListId, TraitSolveCx},
+        trait_resolution::TraitSolveCx,
         ty_check::{
             ConstRef, LocalBinding, RecordLike, TypedBody, check_anon_const_body, check_func_body,
         },
@@ -466,7 +466,7 @@ impl<'db> CtfeInterpreter<'db> {
                 }
                 // Try enum variant comparison
                 if let Partial::Present(path) = path_partial {
-                    let assumptions = PredicateListId::empty_list(self.db);
+                    let assumptions = self.typed_body().assumptions();
                     if let Ok(PathRes::EnumVariant(resolved)) =
                         resolve_path(self.db, *path, body.scope(), assumptions, true)
                         && resolved.ty.is_unit_variant_only_enum(self.db)
@@ -672,7 +672,7 @@ impl<'db> CtfeInterpreter<'db> {
             return Ok(self.eval_const_ref(cref, expected_ty)?);
         }
 
-        let assumptions = PredicateListId::empty_list(self.db);
+        let assumptions = self.typed_body().assumptions();
         match resolve_path(self.db, path, body.scope(), assumptions, true) {
             Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => {
                 if let TyData::ConstTy(const_ty) = ty.data(self.db)
@@ -720,44 +720,18 @@ impl<'db> CtfeInterpreter<'db> {
                     .ok_or(InvalidCause::ParseError)?;
                 ConstTyId::from_body(self.db, body, Some(expected_ty), Some(const_def))
             }
-            ConstRef::TraitConst { inst, name } => {
+            ConstRef::TraitConst(assoc) => {
                 let mut subst = GenericSubst {
                     generic_args: self.generic_args(),
                 };
-                let inst = inst.fold_with(self.db, &mut subst);
-                let inst = if matches!(
-                    inst.self_ty(self.db).data(self.db),
-                    TyData::TyParam(_) | TyData::TyVar(_)
-                ) {
-                    if let Some(&self_arg) = self.generic_args().first() {
-                        let mut args = inst.args(self.db).to_vec();
-                        if let Some(arg) = args.first_mut() {
-                            *arg = self_arg;
-                        }
-                        TraitInstId::new(
-                            self.db,
-                            inst.def(self.db),
-                            args,
-                            inst.assoc_type_bindings(self.db).clone(),
-                        )
-                    } else {
-                        inst
-                    }
-                } else {
-                    inst
-                };
+                let assoc = assoc.fold_with(self.db, &mut subst);
 
-                if let Some(const_ty) = crate::analysis::ty::const_ty::const_ty_from_trait_const(
-                    self.db,
-                    TraitSolveCx::new(self.db, self.body().scope()),
-                    inst,
-                    name,
-                ) {
+                if let Some(const_ty) =
+                    crate::analysis::ty::const_ty::const_ty_from_assoc_const_use(self.db, assoc)
+                {
                     const_ty
                 } else {
-                    return Ok(
-                        self.abstract_const(ConstExpr::TraitConst { inst, name }, expected_ty)
-                    );
+                    return Ok(self.abstract_const(ConstExpr::TraitConst(assoc), expected_ty));
                 }
             }
         };
@@ -1063,7 +1037,7 @@ impl<'db> CtfeInterpreter<'db> {
             return Err(InvalidCause::ParseError.into());
         };
 
-        let assumptions = PredicateListId::empty_list(self.db);
+        let assumptions = self.typed_body().assumptions();
         let resolved = resolve_path(self.db, *path, body.scope(), assumptions, true)
             .map_err(|_| InvalidCause::ConstEvalUnsupported { body, expr })?;
 
@@ -1289,7 +1263,8 @@ impl<'db> CtfeInterpreter<'db> {
                 return Err(InvalidCause::ConstEvalUnsupported { body, expr }.into());
             }
 
-            let solve_cx = TraitSolveCx::new(self.db, body.scope());
+            let solve_cx = TraitSolveCx::new(self.db, body.scope())
+                .with_assumptions(self.typed_body().assumptions());
             if let Some((impl_func, impl_args)) =
                 resolve_trait_method_instance(self.db, solve_cx, inst, name)
             {
@@ -1501,8 +1476,19 @@ pub(super) fn instantiate_typed_body<'db>(
     typed_body: TypedBody<'db>,
     generic_args: &[TyId<'db>],
 ) -> TypedBody<'db> {
+    instantiate_with_generic_args(db, typed_body, generic_args)
+}
+
+pub(crate) fn instantiate_with_generic_args<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    value: T,
+    generic_args: &[TyId<'db>],
+) -> T
+where
+    T: TyFoldable<'db>,
+{
     let mut subst = GenericSubst { generic_args };
-    typed_body.fold_with(db, &mut subst)
+    value.fold_with(db, &mut subst)
 }
 
 struct GenericSubst<'a, 'db> {

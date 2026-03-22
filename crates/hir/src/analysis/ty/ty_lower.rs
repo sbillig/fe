@@ -8,6 +8,7 @@ use salsa::Update;
 use smallvec::smallvec;
 
 use super::{
+    assoc_const::AssocConstUse,
     collect_layout_hole_tys_in_order,
     const_expr::{ConstExpr, ConstExprId},
     const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
@@ -134,7 +135,15 @@ fn lower_path<'db>(
                             .and_then(|v| v.ty_binder(db))
                             .map(|b| b.instantiate(db, inst.args(db)))
                         {
-                            let expr = ConstExprId::new(db, ConstExpr::TraitConst { inst, name });
+                            let expr = ConstExprId::new(
+                                db,
+                                ConstExpr::TraitConst(AssocConstUse::new(
+                                    scope,
+                                    assumptions,
+                                    inst,
+                                    name,
+                                )),
+                            );
                             let const_ty =
                                 ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty));
                             TyId::const_ty(db, const_ty)
@@ -421,8 +430,15 @@ pub(crate) fn lower_generic_arg_list<'db>(
                                 .and_then(|v| v.ty_binder(db))
                                 .map(|b| b.instantiate(db, inst.args(db)))
                             {
-                                let expr =
-                                    ConstExprId::new(db, ConstExpr::TraitConst { inst, name });
+                                let expr = ConstExprId::new(
+                                    db,
+                                    ConstExpr::TraitConst(AssocConstUse::new(
+                                        scope,
+                                        assumptions,
+                                        inst,
+                                        name,
+                                    )),
+                                );
                                 let const_ty =
                                     ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty));
                                 return TyId::const_ty(db, const_ty);

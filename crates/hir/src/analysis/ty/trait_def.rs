@@ -17,7 +17,7 @@ use salsa::Update;
 
 use super::{
     binder::Binder,
-    canonical::{Canonical, Canonicalized},
+    canonical::Canonical,
     diagnostics::{ImplDiag, TyDiagCollection},
     fold::TyFoldable as _,
     trait_lower::collect_implementor_methods,
@@ -280,8 +280,7 @@ pub(crate) fn impls_for_ty_with_constraints<'db>(
                 }
 
                 for &constraint in impl_constraints.list(db) {
-                    let constraint = Canonicalized::new(db, constraint);
-                    match is_goal_satisfiable(db, solve_cx, constraint.value) {
+                    match is_goal_satisfiable(db, solve_cx, constraint) {
                         GoalSatisfiability::UnSat(_) => {
                             table.rollback_to(snapshot);
                             return false;
@@ -643,9 +642,9 @@ pub(crate) fn does_impl_trait_conflict<'db>(
         .with_assumptions(PredicateListId::empty_list(db));
 
     for &constraint in merged_constraints.list(db) {
-        let constraint = Canonicalized::new(db, constraint.fold_with(db, &mut table));
+        let constraint = constraint.fold_with(db, &mut table);
 
-        match is_goal_satisfiable(db, solve_cx, constraint.value) {
+        match is_goal_satisfiable(db, solve_cx, constraint) {
             GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid => {
                 return false;
             }

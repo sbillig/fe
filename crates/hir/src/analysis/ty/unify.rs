@@ -214,20 +214,11 @@ where
         }
 
         match (expr1.data(self.db), expr2.data(self.db)) {
-            (
-                TraitConst {
-                    inst: inst1,
-                    name: name1,
-                },
-                TraitConst {
-                    inst: inst2,
-                    name: name2,
-                },
-            ) => {
-                if name1 != name2 {
+            (TraitConst(assoc1), TraitConst(assoc2)) => {
+                if assoc1.name() != assoc2.name() {
                     return Err(UnificationError::TypeMismatch);
                 }
-                self.unify(*inst1, *inst2)
+                self.unify(assoc1.inst(), assoc2.inst())
             }
             (
                 ArithBinOp {

@@ -8,8 +8,8 @@ use super::{
 };
 use crate::{
     hir_def::{
-        AssocConstDef, AttrListId, Body, BodyKind, Expr, FieldDef, FieldDefListId, FieldIndex,
-        FuncModifiers, FuncParam, FuncParamMode, FuncParamName, GenericArgListId,
+        ArithBinOp, AssocConstDef, AttrListId, BinOp, Body, BodyKind, Expr, FieldDef,
+        FieldDefListId, FieldIndex, FuncModifiers, FuncParam, FuncParamMode, FuncParamName,
         GenericParamListId, IdentId, IntegerId, LitKind, Partial, Pat, PathId, Stmt, Struct,
         TrackedItemVariant, TraitRefId, TupleTypeId, TypeId, TypeKind, TypeMode, Visibility,
     },
@@ -551,20 +551,13 @@ fn lower_emit_method<'db>(
                         .collect();
                     TypeId::new(db, TypeKind::Tuple(TupleTypeId::new(db, tuple_elems)))
                 };
-                let encoded_size_call = {
-                    let args = GenericArgListId::given1_type(db, size_ty);
-                    let path = PathId::from_ident(db, roots.std)
-                        .push_str(db, "abi")
-                        .push_str_args(db, "encoded_size", args);
-                    let callee = body.path_expr(path);
-                    body.call_expr(callee, vec![])
-                };
+                let encoded_size_expr = build_encoded_size_expr(body, size_ty);
 
                 let data_len_pat = body.push_pat(Pat::Path(
                     Partial::Present(PathId::from_ident(db, data_len_ident)),
                     false,
                 ));
-                body.emit_stmt(Stmt::Let(data_len_pat, None, Some(encoded_size_call)));
+                body.emit_stmt(Stmt::Let(data_len_pat, None, Some(encoded_size_expr)));
 
                 let enc_expr = body.ident_expr(enc_ident);
                 let data_len_expr = body.ident_expr(data_len_ident);
@@ -644,4 +637,34 @@ fn int_lit<'db>(
 ) -> crate::hir_def::ExprId {
     let db = body.db();
     body.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, v))))
+}
+
+fn build_encoded_size_expr<'db>(
+    body: &mut super::hir_builder::BodyBuilder<'_, 'db, EventDesugared>,
+    ty: TypeId<'db>,
+) -> crate::hir_def::ExprId {
+    let db = body.db();
+
+    match ty.data(db) {
+        TypeKind::Path(path) => path
+            .to_opt()
+            .map(|path| body.path_expr(path.push_str(db, "ENCODED_SIZE")))
+            .unwrap_or_else(|| int_lit(body, 0)),
+        TypeKind::Tuple(tuple) => {
+            let mut expr = int_lit(body, 0);
+            for elem_ty in tuple.data(db).iter().copied() {
+                let elem_expr = elem_ty
+                    .to_opt()
+                    .map(|elem_ty| build_encoded_size_expr(body, elem_ty))
+                    .unwrap_or_else(|| int_lit(body, 0));
+                expr = body.push_expr(Expr::Bin(expr, elem_expr, BinOp::Arith(ArithBinOp::Add)));
+            }
+            expr
+        }
+        TypeKind::Mode(_, inner) => inner
+            .to_opt()
+            .map(|inner| build_encoded_size_expr(body, inner))
+            .unwrap_or_else(|| int_lit(body, 0)),
+        TypeKind::Ptr(_) | TypeKind::Array(_, _) | TypeKind::Never => int_lit(body, 0),
+    }
 }

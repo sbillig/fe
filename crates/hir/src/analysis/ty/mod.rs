@@ -1,4 +1,3 @@
-use crate::analysis::ty::canonical::Canonicalized;
 use crate::analysis::ty::diagnostics::BodyDiag;
 use crate::analysis::ty::effects::resolve_normalized_type_effect_key;
 use crate::analysis::ty::trait_resolution::{
@@ -26,6 +25,7 @@ use crate::analysis::{
 use crate::semantic::diagnostics::Diagnosable;
 
 pub mod adt_def;
+pub mod assoc_const;
 pub mod binder;
 pub mod canonical;
 pub(crate) mod const_check;
@@ -101,10 +101,9 @@ pub fn ty_is_copy<'db>(
     {
         return true;
     }
-    let canonical_inst = Canonicalized::new(db, inst);
     let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
     matches!(
-        is_goal_satisfiable(db, solve_cx, canonical_inst.value),
+        is_goal_satisfiable(db, solve_cx, inst),
         GoalSatisfiability::Satisfied(_)
     )
 }
@@ -420,13 +419,12 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                         };
 
                         let trait_req = instantiate_trait_self(db, trait_inst, root_effect_ty);
-                        let goal = Canonicalized::new(db, trait_req).value;
                         if matches!(
                             is_goal_satisfiable(
                                 db,
                                 TraitSolveCx::new(db, contract.scope())
                                     .with_assumptions(assumptions),
-                                goal
+                                trait_req
                             ),
                             GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
                         ) {

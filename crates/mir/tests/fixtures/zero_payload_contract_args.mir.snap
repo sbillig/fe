@@ -2,6 +2,11 @@
 source: crates/mir/tests/lowering_snapshots.rs
 expression: mir_output
 ---
+fn ping_he30fba0d8e5abf73_encode_hf98aaef2e32b4927_encode_to_ptr(v0: Ping, v1: u256) -> ():
+  ; runtime_abi values=[] effects=[]
+  bb0:
+    ret
+
 fn __ZeroPayloadContractArgs_recv_0_0() -> u256:
   bb0:
     ret 7
@@ -13,8 +18,8 @@ fn __ZeroPayloadContractArgs_init() -> ():
   bb1:
     terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
   bb2:
-    v1: u256 = code_region_offset(func_item(__ZeroPayloadContractArgs_runtime))
-    v2: u256 = code_region_len(func_item(__ZeroPayloadContractArgs_runtime))
+    v1: u256 = code_region_offset(code_region(__ZeroPayloadContractArgs_runtime))
+    v2: u256 = code_region_len(code_region(__ZeroPayloadContractArgs_runtime))
     eval codecopy(0, v1, v2)
     terminate return_data(0, v2)
 
@@ -31,7 +36,7 @@ fn __ZeroPayloadContractArgs_runtime() -> ():
     terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
   bb4:
     v2: u256 = __ZeroPayloadContractArgs_recv_0_0()
-    terminate return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v2)
+    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63(v2)
 
 fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(v0: Evm) -> !:
   ; runtime_abi values=[] effects=[]
@@ -52,16 +57,32 @@ fn runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805
     v5: u32 = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v4)
     ret v5
 
-fn return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v0: mut Evm, v1: u256) -> !:
+fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63(v0: mut Evm, v1: u256) -> !:
   ; runtime_abi values=[v1: u256] effects=[]
   bb0:
-    v2: SolEncoder = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new()
-    v3: u256 = solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v2, 32)
-    eval u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383(v1, &mem[v2])
-    v4: (u256, u256) = solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v2)
-    v5: u256 = load mem[v4].0
-    v6: u256 = load mem[v4].1
-    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v5, v6)
+    br true bb1 bb3
+  bb1:
+    v2: bool = u256_h3271ca15373d4483_ord_h264f6d6d75097a_le(32, 64)
+    br v2 bb4 bb6
+  bb2:
+    unreachable
+  bb3:
+    v4: SolEncoder = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new()
+    v5: u256 = solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v4, 32)
+    eval u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383(v1, &mem[v4])
+    v6: (u256, u256) = solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v4)
+    v7: u256 = load mem[v6].0
+    v8: u256 = load mem[v6].1
+    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v7, v8)
+  bb4:
+    eval u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95(v1, 0)
+    terminate return_data(0, 32)
+  bb5:
+    unreachable
+  bb6:
+    v3: u256 = alloc(32)
+    eval u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95(v1, v3)
+    terminate return_data(v3, 32)
 
 fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(v0: Evm) -> CallData:
   ; runtime_abi values=[] effects=[]
@@ -89,6 +110,11 @@ fn sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v0: u256) ->
   bb0:
     v1: u32 = s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35((v0 >> 224))
     ret v1
+
+fn u256_h3271ca15373d4483_ord_h264f6d6d75097a_le(v0: u256, v1: u256) -> bool:
+  bb0:
+    v2: bool = __le_u256(v0, v1)
+    ret v2
 
 fn sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new() -> SolEncoder:
   bb0:
@@ -129,6 +155,11 @@ fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v0: Evm, v1
   bb0:
     terminate return_data(v1, v2)
 
+fn u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95(v0: u256, v1: u256) -> ():
+  bb0:
+    eval sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_store_word(v1, v0)
+    ret
+
 fn s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35(v0: u256) -> u32:
   bb0:
     v1: u256 = u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v0)
@@ -152,6 +183,11 @@ fn solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word(v0: mut 
     v2: u256 = v3
     eval mstore(v2, v1)
     store mem[v0].*.1 = (v2 + 32)
+    ret
+
+fn sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_store_word(v0: u256, v1: u256) -> ():
+  bb0:
+    eval mstore(v0, v1)
     ret
 
 fn u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v0: u256) -> u256:

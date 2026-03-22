@@ -337,7 +337,7 @@ fn collect_code_region_roots(functions: &[MirFunction<'_>]) -> Vec<String> {
                 let Some(arg) = args.first().copied() else {
                     continue;
                 };
-                let mir::ValueOrigin::FuncItem(target) = &func.body.value(arg).origin else {
+                let mir::ValueOrigin::CodeRegionRef(target) = &func.body.value(arg).origin else {
                     continue;
                 };
                 let Some(symbol) = &target.symbol else {
@@ -377,7 +377,7 @@ fn collect_code_region_deps(
                 let Some(arg) = args.first().copied() else {
                     continue;
                 };
-                let mir::ValueOrigin::FuncItem(target) = &func.body.value(arg).origin else {
+                let mir::ValueOrigin::CodeRegionRef(target) = &func.body.value(arg).origin else {
                     continue;
                 };
                 let Some(target_symbol) = &target.symbol else {
