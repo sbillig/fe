@@ -13,10 +13,15 @@ fn __ZeroPayloadContractArgs_recv_0_0() -> u256:
 
 fn __ZeroPayloadContractArgs_init() -> ():
   bb0:
-    v0: u256 = code_region_offset(code_region(__ZeroPayloadContractArgs_runtime))
-    v1: u256 = code_region_len(code_region(__ZeroPayloadContractArgs_runtime))
-    eval codecopy(0, v0, v1)
-    terminate return_data(0, v1)
+    v0: u256 = callvalue()
+    br (v0 != 0) bb1 bb2
+  bb1:
+    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+  bb2:
+    v1: u256 = code_region_offset(code_region(__ZeroPayloadContractArgs_runtime))
+    v2: u256 = code_region_len(code_region(__ZeroPayloadContractArgs_runtime))
+    eval codecopy(0, v1, v2)
+    terminate return_data(0, v2)
 
 fn __ZeroPayloadContractArgs_runtime() -> ():
   bb0:
@@ -25,8 +30,18 @@ fn __ZeroPayloadContractArgs_runtime() -> ():
   bb1:
     terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
   bb2:
-    v1: u256 = __ZeroPayloadContractArgs_recv_0_0()
-    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63(v1)
+    v1: u256 = callvalue()
+    br (v1 != 0) bb3 bb4
+  bb3:
+    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+  bb4:
+    v2: u256 = __ZeroPayloadContractArgs_recv_0_0()
+    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63(v2)
+
+fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(v0: Evm) -> !:
+  ; runtime_abi values=[] effects=[]
+  bb0:
+    terminate revert(0, 0)
 
 fn runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(v0: Evm) -> u32:
   ; runtime_abi values=[] effects=[]
@@ -41,11 +56,6 @@ fn runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805
     v4: u256 = calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v1, 0)
     v5: u32 = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v4)
     ret v5
-
-fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(v0: Evm) -> !:
-  ; runtime_abi values=[] effects=[]
-  bb0:
-    terminate revert(0, 0)
 
 fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63(v0: mut Evm, v1: u256) -> !:
   ; runtime_abi values=[v1: u256] effects=[]

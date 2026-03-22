@@ -130,6 +130,7 @@ pub struct RuntimeCallPlan<'db> {
 pub struct InitEntrypointPlan<'db> {
     pub id: SyntheticId<'db>,
     pub field_mode: FieldBindingMode,
+    pub is_payable: bool,
     pub init_call: Option<InitCallPlan<'db>>,
     pub finish: InitFinishPlan<'db>,
 }
@@ -140,6 +141,7 @@ pub struct RuntimeDispatchArmPlan<'db> {
     pub recv_idx: u32,
     #[allow(dead_code)]
     pub arm_idx: u32,
+    pub is_payable: bool,
     pub selector: u32,
     pub call: RuntimeCallPlan<'db>,
     pub ret: RuntimeReturnPlan<'db>,
@@ -253,6 +255,7 @@ impl<'db> ContractPlan<'db> {
         functions.push(SyntheticFnPlan::InitEntrypoint(InitEntrypointPlan {
             id: SyntheticId::ContractInitEntrypoint(contract),
             field_mode: FieldBindingMode::Init,
+            is_payable: contract.init(db).is_some_and(|init| init.is_payable(db)),
             init_call: contract.init_effect_env(db).map(|env| InitCallPlan {
                 callee: SyntheticId::ContractInitHandler(contract),
                 args: if abi_payload_is_empty(db, contract.init_args_ty(db)) {
@@ -280,6 +283,7 @@ impl<'db> ContractPlan<'db> {
                 arms.push(RuntimeDispatchArmPlan {
                     recv_idx: recv.index(db),
                     arm_idx: arm.index(db),
+                    is_payable: arm.arm(db).is_some_and(|a| a.is_payable(db)),
                     selector: abi_info.selector_value,
                     call: RuntimeCallPlan {
                         callee: SyntheticId::ContractRecvArmHandler {

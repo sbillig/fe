@@ -38,10 +38,20 @@ func private %__NewtypeStorageFieldMutMethodCall_recv_0_0(v0.i256) -> i256 {
 
 func private %__NewtypeStorageFieldMutMethodCall_init() {
     block0:
-        v0.i256 = sym_addr &__NewtypeStorageFieldMutMethodCall_runtime;
-        v1.i256 = sym_size &__NewtypeStorageFieldMutMethodCall_runtime;
-        evm_code_copy 0.i256 v0 v1;
-        evm_return 0.i256 v1;
+        v0.i256 = evm_call_value;
+        v2.i1 = eq v0 0.i256;
+        v3.i1 = is_zero v2;
+        br v3 block1 block2;
+
+    block1:
+        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort;
+        evm_invalid;
+
+    block2:
+        v4.i256 = sym_addr &__NewtypeStorageFieldMutMethodCall_runtime;
+        v5.i256 = sym_size &__NewtypeStorageFieldMutMethodCall_runtime;
+        evm_code_copy 0.i256 v4 v5;
+        evm_return 0.i256 v5;
 }
 
 func private %__NewtypeStorageFieldMutMethodCall_runtime() {
@@ -56,8 +66,18 @@ func private %__NewtypeStorageFieldMutMethodCall_runtime() {
         evm_invalid;
 
     block2:
-        v7.i256 = call %__NewtypeStorageFieldMutMethodCall_recv_0_0 v3;
-        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63 v7;
+        v6.i256 = evm_call_value;
+        v7.i1 = eq v6 0.i256;
+        v8.i1 = is_zero v7;
+        br v8 block3 block4;
+
+    block3:
+        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort;
+        evm_invalid;
+
+    block4:
+        v10.i256 = call %__NewtypeStorageFieldMutMethodCall_recv_0_0 v3;
+        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63 v10;
         evm_invalid;
 }
 
@@ -73,6 +93,11 @@ func private %wrap_haf9e70905fcbd513_bump_stor_arg0_root_stor(v0.i256) {
     block2:
         evm_sstore v0 v3;
         return;
+}
+
+func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
+    block0:
+        evm_revert 0.i256 0.i256;
 }
 
 func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__u256__3271ca15373d4483(v0.i256) -> i256 {
@@ -102,11 +127,6 @@ func private %runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e
         v7.i256 = call %calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at v1 0.i256;
         v8.i32 = call %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix v7;
         return v8;
-}
-
-func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
-    block0:
-        evm_revert 0.i256 0.i256;
 }
 
 func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63(v0.i256) {

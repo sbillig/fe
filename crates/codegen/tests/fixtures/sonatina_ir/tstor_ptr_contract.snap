@@ -41,13 +41,23 @@ func private %__GuardContract_recv_0_0(v0.i256, v1.i256) -> i1 {
 
 func private %__GuardContract_init() {
     block0:
-        v0.i256 = sym_addr &__GuardContract_runtime;
-        v1.i256 = sym_size &__GuardContract_runtime;
-        v3.i256 = call %init_field__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9 0.i256;
-        v4.i256 = call %tstorptr_t__hb73db5b342ccdc03_effecthandle_hfc52f915596f993a_from_raw__bool__947c0c03c59c6f07 0.i256;
-        call %__GuardContract_init_contract v4;
-        evm_code_copy 0.i256 v0 v1;
-        evm_return 0.i256 v1;
+        v0.i256 = evm_call_value;
+        v2.i1 = eq v0 0.i256;
+        v3.i1 = is_zero v2;
+        br v3 block1 block2;
+
+    block1:
+        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort;
+        evm_invalid;
+
+    block2:
+        v4.i256 = sym_addr &__GuardContract_runtime;
+        v5.i256 = sym_size &__GuardContract_runtime;
+        v6.i256 = call %init_field__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9 0.i256;
+        v7.i256 = call %tstorptr_t__hb73db5b342ccdc03_effecthandle_hfc52f915596f993a_from_raw__bool__947c0c03c59c6f07 0.i256;
+        call %__GuardContract_init_contract v7;
+        evm_code_copy 0.i256 v4 v5;
+        evm_return 0.i256 v5;
 }
 
 func private %__GuardContract_runtime() {
@@ -62,9 +72,24 @@ func private %__GuardContract_runtime() {
         evm_invalid;
 
     block2:
-        v7.i1 = call %__GuardContract_recv_0_0 v2 v1;
-        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_bool__37232ead2a7830cb v7;
+        v5.i256 = evm_call_value;
+        v6.i1 = eq v5 0.i256;
+        v7.i1 = is_zero v6;
+        br v7 block3 block4;
+
+    block3:
+        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort;
         evm_invalid;
+
+    block4:
+        v10.i1 = call %__GuardContract_recv_0_0 v2 v1;
+        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_bool__37232ead2a7830cb v10;
+        evm_invalid;
+}
+
+func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
+    block0:
+        evm_revert 0.i256 0.i256;
 }
 
 func private %init_field__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9(v0.i256) -> i256 {
@@ -99,11 +124,6 @@ func private %runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e
         v7.i256 = call %calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at v1 0.i256;
         v8.i32 = call %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix v7;
         return v8;
-}
-
-func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
-    block0:
-        evm_revert 0.i256 0.i256;
 }
 
 func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_bool__37232ead2a7830cb(v0.i1) {

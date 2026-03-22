@@ -2,11 +2,8 @@
 
 use super::*;
 use hir::{
-    analysis::ty::{
-        const_eval::{ConstValue, try_eval_const_body},
-        simplified_pattern::ConstructorKind,
-    },
-    hir_def::{EnumVariant, Expr, LitKind, Partial},
+    analysis::ty::const_eval::{ConstValue, try_eval_const_body},
+    hir_def::{Expr, LitKind, Partial},
     projection::{IndexSource, Projection},
 };
 use num_bigint::BigUint;

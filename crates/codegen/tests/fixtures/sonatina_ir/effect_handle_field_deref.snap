@@ -115,10 +115,20 @@ func private %__EffectHandleFieldDeref_recv_0_2(v0.i256, v1.i256) -> i256 {
 
 func private %__EffectHandleFieldDeref_init() {
     block0:
-        v0.i256 = sym_addr &__EffectHandleFieldDeref_runtime;
-        v1.i256 = sym_size &__EffectHandleFieldDeref_runtime;
-        evm_code_copy 0.i256 v0 v1;
-        evm_return 0.i256 v1;
+        v0.i256 = evm_call_value;
+        v2.i1 = eq v0 0.i256;
+        v3.i1 = is_zero v2;
+        br v3 block1 block2;
+
+    block1:
+        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort;
+        evm_invalid;
+
+    block2:
+        v4.i256 = sym_addr &__EffectHandleFieldDeref_runtime;
+        v5.i256 = sym_size &__EffectHandleFieldDeref_runtime;
+        evm_code_copy 0.i256 v4 v5;
+        evm_return 0.i256 v5;
 }
 
 func private %__EffectHandleFieldDeref_runtime() {
@@ -126,28 +136,58 @@ func private %__EffectHandleFieldDeref_runtime() {
         v1.i256 = call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Cell_hc7450704dd4a03d6__5989b97f954838c8 0.i256;
         v2.i32 = call %runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2;
         v3.objref<@__fe_obj_SolDecoder_3> = call %runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2;
-        br_table v2 block1 (1.i32 block2) (2.i32 block3) (3.i32 block4);
+        br_table v2 block1 (1.i32 block2) (2.i32 block5) (3.i32 block8);
 
     block1:
         call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort;
         evm_invalid;
 
     block2:
-        v8.objref<@__fe_obj_SeedSlot_1> = call %seedslot_h54140d6d3003b4fb_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966 v3;
-        v9.i256 = call %__EffectHandleFieldDeref_recv_0_0 v8;
-        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63 v9;
-        evm_invalid;
+        v7.i256 = evm_call_value;
+        v8.i1 = eq v7 0.i256;
+        v9.i1 = is_zero v8;
+        br v9 block3 block4;
 
     block3:
-        v11.i256 = call %readviaholder_h9a52c49def8cf7ae_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966 v3;
-        v12.i256 = call %__EffectHandleFieldDeref_recv_0_1 v11;
-        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63 v12;
+        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort;
         evm_invalid;
 
     block4:
-        v14.i256 = call %bumpmover_hdc9ecd58bf94824a_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966 v3;
-        v16.i256 = call %__EffectHandleFieldDeref_recv_0_2 v14 v1;
-        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63 v16;
+        v11.objref<@__fe_obj_SeedSlot_1> = call %seedslot_h54140d6d3003b4fb_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966 v3;
+        v12.i256 = call %__EffectHandleFieldDeref_recv_0_0 v11;
+        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63 v12;
+        evm_invalid;
+
+    block5:
+        v13.i256 = evm_call_value;
+        v14.i1 = eq v13 0.i256;
+        v15.i1 = is_zero v14;
+        br v15 block6 block7;
+
+    block6:
+        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort;
+        evm_invalid;
+
+    block7:
+        v17.i256 = call %readviaholder_h9a52c49def8cf7ae_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966 v3;
+        v18.i256 = call %__EffectHandleFieldDeref_recv_0_1 v17;
+        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63 v18;
+        evm_invalid;
+
+    block8:
+        v19.i256 = evm_call_value;
+        v20.i1 = eq v19 0.i256;
+        v21.i1 = is_zero v20;
+        br v21 block9 block10;
+
+    block9:
+        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort;
+        evm_invalid;
+
+    block10:
+        v23.i256 = call %bumpmover_hdc9ecd58bf94824a_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966 v3;
+        v25.i256 = call %__EffectHandleFieldDeref_recv_0_2 v23 v1;
+        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63 v25;
         evm_invalid;
 }
 
@@ -185,6 +225,11 @@ func private %cellmover_h6dc2778b4a1f6bf1_bump_stor_arg0_root_stor(v0.i256, v1.i
         return v7;
 }
 
+func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
+    block0:
+        evm_revert 0.i256 0.i256;
+}
+
 func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Cell_hc7450704dd4a03d6__5989b97f954838c8(v0.i256) -> i256 {
     block0:
         v2.i256 = call %stor_ptr__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a v0;
@@ -213,11 +258,6 @@ func private %runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3
         v1.i256 = call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input;
         v3.objref<@__fe_obj_SolDecoder_3> = call %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v1 4.i256;
         return v3;
-}
-
-func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
-    block0:
-        evm_revert 0.i256 0.i256;
 }
 
 func private %seedslot_h54140d6d3003b4fb_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v0.objref<@__fe_obj_SolDecoder_3>) -> objref<@__fe_obj_SeedSlot_1> {

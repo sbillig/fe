@@ -39,62 +39,82 @@ fn __EchoContract_recv_0_2(v0: u256) -> u256:
 
 fn __EchoContract_init() -> ():
   bb0:
-    v0: u256 = code_region_offset(code_region(__EchoContract_runtime))
-    v1: u256 = code_region_len(code_region(__EchoContract_runtime))
-    v2: u256 = init_field__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d(0)
-    v3: u256 = current_code_region_len()
-    v4: u256 = codesize()
-    br (v4 < v3) bb1 bb2
+    v0: u256 = callvalue()
+    br (v0 != 0) bb1 bb2
   bb1:
     terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
   bb2:
-    bind (v4 - v3)
-    v5: u256 = alloc((v4 - v3))
-    eval codecopy(v5, v3, (v4 - v3))
-    v6: MemoryBytes = alloc mem
-    store mem[v6].0 = v5
-    store mem[v6].1 = (v4 - v3)
-    v7: SolDecoder<MemoryBytes> = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v6)
-    v8: u256 = u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6(v7)
-    v9: u256 = u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6(v7)
-    eval __EchoContract_init_contract(v8, v9, v2)
-    eval codecopy(0, v0, v1)
-    terminate return_data(0, v1)
+    v1: u256 = code_region_offset(code_region(__EchoContract_runtime))
+    v2: u256 = code_region_len(code_region(__EchoContract_runtime))
+    v3: u256 = init_field__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d(0)
+    v4: u256 = current_code_region_len()
+    v5: u256 = codesize()
+    br (v5 < v4) bb3 bb4
+  bb3:
+    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+  bb4:
+    bind (v5 - v4)
+    v6: u256 = alloc((v5 - v4))
+    eval codecopy(v6, v4, (v5 - v4))
+    v7: MemoryBytes = alloc mem
+    store mem[v7].0 = v6
+    store mem[v7].1 = (v5 - v4)
+    v8: SolDecoder<MemoryBytes> = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v7)
+    v9: u256 = u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6(v8)
+    v10: u256 = u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6(v8)
+    eval __EchoContract_init_contract(v9, v10, v3)
+    eval codecopy(0, v1, v2)
+    terminate return_data(0, v2)
 
 fn __EchoContract_runtime() -> ():
   bb0:
     v0: u256 = evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Foo_h6dbce71a6ea992b8__21493237fe9c2c26(0)
     v1: u32 = runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
     v2: SolDecoder<CallData> = runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
-    switch v1 [1 => bb2, 2 => bb3, 3 => bb4] else bb1
+    switch v1 [1 => bb2, 2 => bb5, 3 => bb8] else bb1
   bb1:
     terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
   bb2:
-    v3: u256 = __EchoContract_recv_0_0()
-    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63(v3)
+    v3: u256 = callvalue()
+    br (v3 != 0) bb3 bb4
   bb3:
-    v4: Echo = echo_h9f932a87feb06bd2_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v2)
-    v5: u256 = __EchoContract_recv_0_1(v4)
-    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63(v5)
+    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
   bb4:
-    v6: u256 = __EchoContract_recv_0_2(v0)
-    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63(v6)
+    v4: u256 = __EchoContract_recv_0_0()
+    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63(v4)
+  bb5:
+    v5: u256 = callvalue()
+    br (v5 != 0) bb6 bb7
+  bb6:
+    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+  bb7:
+    v6: Echo = echo_h9f932a87feb06bd2_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v2)
+    v7: u256 = __EchoContract_recv_0_1(v6)
+    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63(v7)
+  bb8:
+    v8: u256 = callvalue()
+    br (v8 != 0) bb9 bb10
+  bb9:
+    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+  bb10:
+    v9: u256 = __EchoContract_recv_0_2(v0)
+    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63(v9)
 
 fn u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95(v0: u256, v1: u256) -> ():
   bb0:
     eval sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_store_word(v1, v0)
     ret
 
+fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(v0: Evm) -> !:
+  ; runtime_abi values=[] effects=[]
+  bb0:
+    terminate revert(0, 0)
+
 fn init_field__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d(v0: mut Evm, v1: u256) -> StorPtr<Foo>:
   ; runtime_abi values=[v1: u256] effects=[]
   bb0:
     v2: StorPtr<Foo> = evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Foo_h6dbce71a6ea992b8__21493237fe9c2c26(v1)
     ret v2
-
-fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(v0: Evm) -> !:
-  ; runtime_abi values=[] effects=[]
-  bb0:
-    terminate revert(0, 0)
 
 fn sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0: MemoryBytes) -> SolDecoder<MemoryBytes>:
   bb0:

@@ -4,7 +4,10 @@ use hir::{
         diagnostics::SpannedHirAnalysisDb,
         ty::{trait_def::TraitInstId, ty_def::TyId},
     },
-    hir_def::CallableDef,
+    hir_def::{
+        CallableDef,
+        expr::{BinOp, CompBinOp},
+    },
     semantic::EffectSource,
 };
 use num_bigint::BigUint;
@@ -121,6 +124,11 @@ impl<'db, 'a> ContractEmitter<'db, 'a> {
         let root = emitter.root_effect();
         let zero = emitter.zero_u256();
         let InitFinishPlan::ReturnCodeRegion { target } = entry.finish;
+
+        if !entry.is_payable {
+            emitter.emit_callvalue_guard("callvalue_init", zero, root);
+        }
+
         let runtime_offset = emitter.code_region_offset(target, "runtime_offset");
         let runtime_len = emitter.code_region_len(target, "runtime_len");
 
@@ -189,6 +197,13 @@ impl<'db, 'a> ContractEmitter<'db, 'a> {
             });
 
             emitter.body.move_to_block(block);
+            if !arm.is_payable {
+                emitter.emit_callvalue_guard(
+                    format!("callvalue_{}_{}", arm.recv_idx, arm.arm_idx),
+                    zero,
+                    root,
+                );
+            }
             let args = match arm.call.args {
                 RuntimeArgsPlan::Empty => Vec::new(),
                 RuntimeArgsPlan::DecodeRuntimeInput { ty } => {
@@ -608,6 +623,37 @@ impl<'db, 'a> SyntheticFnEmitter<'db, 'a> {
         )
     }
 
+    fn emit_callvalue_guard(&mut self, label: impl Into<String>, zero: ValueId, root: ValueId) {
+        let callvalue = self.assign_runtime_local(
+            label,
+            TyId::u256(self.db),
+            false,
+            AddressSpaceKind::Memory,
+            Rvalue::Intrinsic {
+                op: IntrinsicOp::Callvalue,
+                args: Vec::new(),
+            },
+        );
+        let is_nonzero = self.body.alloc_value(
+            TyId::bool(self.db),
+            ValueOrigin::Binary {
+                op: BinOp::Comp(CompBinOp::NotEq),
+                lhs: callvalue,
+                rhs: zero,
+            },
+            ValueRepr::Word,
+        );
+        let abort_block = self.body.make_block();
+        let cont_block = self.body.make_block();
+        self.body.branch(is_nonzero, abort_block, cont_block);
+        self.body.move_to_block(abort_block);
+        self.body.terminate_current(Terminator::TerminatingCall {
+            source: SourceInfoId::SYNTHETIC,
+            call: TerminatingCall::Call(self.host_abort(root)),
+        });
+        self.body.move_to_block(cont_block);
+    }
+
     fn host_return_unit(&self, root: ValueId) -> CallOrigin<'db> {
         self.call_hir(
             CallableDef::Func(self.host.return_unit_fn),
@@ -784,6 +830,7 @@ impl<'db, 'a> SyntheticFnEmitter<'db, 'a> {
             runtime_abi: meta.runtime_abi,
             runtime_return_shape: meta.runtime_return_shape,
             contract_function: meta.contract_function,
+            inline_hint: None,
             symbol_name: meta.symbol_name,
             receiver_space: None,
             defer_root: false,

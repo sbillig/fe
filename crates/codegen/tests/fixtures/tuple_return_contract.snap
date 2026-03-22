@@ -6,10 +6,18 @@ input_file: tests/fixtures/tuple_return_contract.fe
 object "TupleReturnContract" {
   code {
     function $__TupleReturnContract_init() {
-      let v0 := dataoffset("TupleReturnContract_deployed")
-      let v1 := datasize("TupleReturnContract_deployed")
-      codecopy(0, v0, v1)
-      return(0, v1)
+      let v0 := callvalue()
+      let v1 := iszero(eq(v0, 0))
+      if v1 {
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+      }
+      let v2 := dataoffset("TupleReturnContract_deployed")
+      let v3 := datasize("TupleReturnContract_deployed")
+      codecopy(0, v2, v3)
+      return(0, v3)
+    }
+    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
+      revert(0, 0)
     }
     $__TupleReturnContract_init()
   }
@@ -32,8 +40,13 @@ object "TupleReturnContract" {
         let v0 := $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
         switch v0
           case 1 {
-            let v1 := $__TupleReturnContract_recv_0_0()
-            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f__u256__Address___a09fb12f297c5a61(v1)
+            let v1 := callvalue()
+            let v2 := iszero(eq(v1, 0))
+            if v2 {
+              $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+            }
+            let v3 := $__TupleReturnContract_recv_0_0()
+            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f__u256__Address___a09fb12f297c5a61(v3)
           }
           default {
             $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()

@@ -13,7 +13,6 @@ use hir::analysis::{
     diagnostics::SpannedHirAnalysisDb,
     diagnostics::format_diags,
     ty::{
-        canonical::{Canonical, Canonicalized},
         const_ty::ConstTyData,
         effects::EffectKeyKind,
         fold::{TyFoldable, TyFolder},
@@ -652,7 +651,7 @@ impl<'db> Monomorphizer<'db> {
                 } = inst
                     && call.builtin_terminator
                         == Some(crate::ir::BuiltinTerminatorKind::AbortWithValue)
-                    && let Some(hir_target) = &call.hir_target
+                    && let Some(crate::ir::CallTargetRef::Hir(hir_target)) = call.target.as_ref()
                     && let Some(&concrete_t) = hir_target.generic_args.first()
                 {
                     sites.push(AbortWithValueSite::Inst {
@@ -669,7 +668,7 @@ impl<'db> Monomorphizer<'db> {
                 ..
             } = &block.terminator
                 && call.builtin_terminator == Some(crate::ir::BuiltinTerminatorKind::AbortWithValue)
-                && let Some(hir_target) = &call.hir_target
+                && let Some(crate::ir::CallTargetRef::Hir(hir_target)) = call.target.as_ref()
                 && let Some(&concrete_t) = hir_target.generic_args.first()
             {
                 sites.push(AbortWithValueSite::Term { bb_idx, concrete_t });
@@ -715,15 +714,13 @@ impl<'db> Monomorphizer<'db> {
                     vec![concrete_t, sol_ty],
                     IndexMap::new(),
                 );
-                let encode_goal = Canonical::new(self.db, encode_inst);
-                if !is_goal_satisfiable(self.db, solve_cx, encode_goal).is_satisfied() {
+                if !is_goal_satisfiable(self.db, solve_cx, encode_inst).is_satisfied() {
                     return None;
                 }
 
                 let abi_size_inst =
                     TraitInstId::new(self.db, abi_size_trait, vec![concrete_t], IndexMap::new());
-                let abi_size_goal = Canonical::new(self.db, abi_size_inst);
-                if !is_goal_satisfiable(self.db, solve_cx, abi_size_goal).is_satisfied() {
+                if !is_goal_satisfiable(self.db, solve_cx, abi_size_inst).is_satisfied() {
                     return None;
                 }
 

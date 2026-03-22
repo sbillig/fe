@@ -227,6 +227,7 @@ fn finish_handler<'db>(
         runtime_abi,
         runtime_return_shape: spec.runtime_return_shape,
         contract_function: None,
+        inline_hint: None,
         symbol_name: spec.symbol_name,
         receiver_space: None,
         defer_root: false,
