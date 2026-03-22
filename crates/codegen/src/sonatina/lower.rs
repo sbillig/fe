@@ -4481,7 +4481,7 @@ fn try_lower_generic_saturating_intrinsic<'db, C: sonatina_ir::func_cursor::Func
     ctx: &mut LowerCtx<'_, 'db, C>,
     call: &mir::CallOrigin<'db>,
 ) -> Result<Option<ValueId>, LowerError> {
-    let Some(target) = call.hir_target.as_ref() else {
+    let Some(mir::ir::CallTargetRef::Hir(target)) = call.target.as_ref() else {
         return Ok(None);
     };
     match target.callable_def.ingot(ctx.db).kind(ctx.db) {

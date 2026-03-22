@@ -559,7 +559,7 @@ fn link_yul_numeric_intrinsic_helpers<'db>(
         db: &'db DriverDataBase,
         call: &mir::CallOrigin<'db>,
     ) -> Result<Option<String>, EmitModuleError> {
-        let Some(target) = call.hir_target.as_ref() else {
+        let Some(mir::ir::CallTargetRef::Hir(target)) = call.target.as_ref() else {
             return Ok(None);
         };
         match target.callable_def.ingot(db).kind(db) {
