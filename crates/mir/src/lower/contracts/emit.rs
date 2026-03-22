@@ -17,8 +17,8 @@ use crate::{
     ir::{
         AddressSpaceKind, BodyBuilder, CallOrigin, CallTargetRef, CodeRegionRef, ContractFunction,
         ContractFunctionKind, HirCallTarget, IntrinsicOp, MirFunction, MirFunctionOrigin,
-        RuntimeAbi, RuntimeShape, Rvalue, SourceInfoId, SwitchTarget, SwitchValue, SyntheticId,
-        TerminatingCall, Terminator, ValueId, ValueOrigin, ValueRepr,
+        RuntimeAbi, RuntimeShape, Rvalue, SourceInfoId, SwitchTarget, SwitchValue, SymbolSource,
+        SyntheticId, TerminatingCall, Terminator, ValueId, ValueOrigin, ValueRepr,
     },
     layout, repr,
 };
@@ -832,6 +832,7 @@ impl<'db, 'a> SyntheticFnEmitter<'db, 'a> {
             contract_function: meta.contract_function,
             inline_hint: None,
             symbol_name: meta.symbol_name,
+            symbol_source: SymbolSource::Internal,
             receiver_space: None,
             defer_root: false,
         }

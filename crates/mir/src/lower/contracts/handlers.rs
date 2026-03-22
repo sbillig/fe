@@ -16,8 +16,8 @@ use crate::{
     core_lib::CoreLib,
     ir::{
         AddressSpaceKind, LocalId, MirBody, MirFunction, MirFunctionOrigin, MirInst,
-        MirProjectionPath, Place, RuntimeAbi, RuntimeShape, Rvalue, SourceInfoId, SyntheticId,
-        SyntheticValue, Terminator, ValueId, ValueOrigin,
+        MirProjectionPath, Place, RuntimeAbi, RuntimeShape, Rvalue, SourceInfoId, SymbolSource,
+        SyntheticId, SyntheticValue, Terminator, ValueId, ValueOrigin,
     },
     layout, repr,
 };
@@ -229,6 +229,7 @@ fn finish_handler<'db>(
         contract_function: None,
         inline_hint: None,
         symbol_name: spec.symbol_name,
+        symbol_source: SymbolSource::Internal,
         receiver_space: None,
         defer_root: false,
     })

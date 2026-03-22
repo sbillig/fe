@@ -2,6 +2,7 @@
 //!
 //! Contains all `lower_*` free functions that operate on `LowerCtx`.
 
+use common::ingot::IngotKind;
 use driver::DriverDataBase;
 use hir::analysis::ty::adt_def::AdtRef;
 use hir::analysis::ty::normalize::normalize_ty;
@@ -298,6 +299,9 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     )));
                 }
                 let result = lower_checked_intrinsic(ctx, checked, &call.args)?;
+                return Ok(Some(result));
+            }
+            if let Some(result) = try_lower_generic_saturating_intrinsic(ctx, call)? {
                 return Ok(Some(result));
             }
 
@@ -4471,6 +4475,84 @@ fn emit_overflow_revert<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         .insert_inst_no_result(Br::new(ctx.is, overflow_flag, revert_block, continue_block));
     ctx.fb.switch_to_block(continue_block);
     Ok(())
+}
+
+fn try_lower_generic_saturating_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    call: &mir::CallOrigin<'db>,
+) -> Result<Option<ValueId>, LowerError> {
+    let Some(mir::ir::CallTargetRef::Hir(target)) = call.target.as_ref() else {
+        return Ok(None);
+    };
+    match target.callable_def.ingot(ctx.db).kind(ctx.db) {
+        IngotKind::Core | IngotKind::Std => {}
+        _ => return Ok(None),
+    }
+
+    let hir::hir_def::CallableDef::Func(func) = target.callable_def else {
+        return Ok(None);
+    };
+    if func.body(ctx.db).is_some() {
+        return Ok(None);
+    }
+
+    let Some(name) = target.callable_def.name(ctx.db) else {
+        return Ok(None);
+    };
+    let name = name.data(ctx.db).as_str();
+    if !matches!(
+        name,
+        "__saturating_add" | "__saturating_sub" | "__saturating_mul"
+    ) {
+        return Ok(None);
+    }
+    if !call.effect_args.is_empty() {
+        return Err(LowerError::Internal(format!(
+            "saturating intrinsic call unexpectedly has effect args: {name}"
+        )));
+    }
+
+    let [ty] = target.generic_args.as_slice() else {
+        return Err(LowerError::Internal(format!(
+            "saturating intrinsic `{name}` must have exactly one type argument"
+        )));
+    };
+    let base_ty = ty.base_ty(ctx.db);
+    let TyData::TyBase(TyBase::Prim(prim)) = base_ty.data(ctx.db) else {
+        return Err(LowerError::Internal(format!(
+            "saturating intrinsic `{name}` type must be primitive integral, got `{}`",
+            ty.pretty_print(ctx.db)
+        )));
+    };
+    if !prim.is_integral() {
+        return Err(LowerError::Internal(format!(
+            "saturating intrinsic `{name}` type must be integral, got `{}`",
+            ty.pretty_print(ctx.db)
+        )));
+    }
+
+    let op_ty = checked_intrinsic_value_type(*prim)?;
+    let signed = prim_is_signed(*prim);
+    let [a, b] = call.args.as_slice() else {
+        return Err(LowerError::Internal(format!(
+            "saturating intrinsic `{name}` expects 2 arguments, got {}",
+            call.args.len()
+        )));
+    };
+    let lhs_word = lower_value(ctx, *a)?;
+    let rhs_word = lower_value(ctx, *b)?;
+    let lhs = lower_checked_operand(ctx.fb, ctx.is, lhs_word, op_ty, signed);
+    let rhs = lower_checked_operand(ctx.fb, ctx.is, rhs_word, op_ty, signed);
+    let result = match (name, signed) {
+        ("__saturating_add", true) => ctx.fb.insert_saddsat(lhs, rhs),
+        ("__saturating_add", false) => ctx.fb.insert_uaddsat(lhs, rhs),
+        ("__saturating_sub", true) => ctx.fb.insert_ssubsat(lhs, rhs),
+        ("__saturating_sub", false) => ctx.fb.insert_usubsat(lhs, rhs),
+        ("__saturating_mul", true) => ctx.fb.insert_smulsat(lhs, rhs),
+        ("__saturating_mul", false) => ctx.fb.insert_umulsat(lhs, rhs),
+        _ => unreachable!(),
+    };
+    Ok(Some(result))
 }
 
 fn checked_intrinsic_prim<'db>(

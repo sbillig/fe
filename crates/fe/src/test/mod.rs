@@ -2100,7 +2100,7 @@ fn prepare_tests_single_file(
         };
     }
 
-    maybe_write_suite_ir(db, top_mod, backend, report);
+    maybe_write_suite_ir(db, top_mod, backend, opt_level, report);
     prepare_discovered_tests(
         db,
         top_mod,
@@ -2209,7 +2209,7 @@ fn prepare_tests_ingot(
         };
     }
 
-    maybe_write_suite_ir(db, root_mod, backend, report);
+    maybe_write_suite_ir(db, root_mod, backend, opt_level, report);
     prepare_discovered_tests(
         db,
         root_mod,
@@ -2499,6 +2499,7 @@ fn maybe_write_suite_ir(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
     backend: &str,
+    opt_level: OptLevel,
     report: Option<&ReportContext>,
 ) {
     let Some(report) = report else {
@@ -2527,6 +2528,17 @@ fn maybe_write_suite_ir(
             }
             Err(err) => {
                 let path = artifacts_dir.join("sonatina_ir_error.txt");
+                let _ = std::fs::write(&path, format!("{err}"));
+            }
+        }
+
+        match codegen::emit_module_sonatina_ir_optimized(db, top_mod, opt_level, None) {
+            Ok(ir) => {
+                let path = artifacts_dir.join("sonatina_ir_optimized.txt");
+                let _ = std::fs::write(&path, ir);
+            }
+            Err(err) => {
+                let path = artifacts_dir.join("sonatina_ir_optimized_error.txt");
                 let _ = std::fs::write(&path, format!("{err}"));
             }
         }
@@ -3011,6 +3023,7 @@ fn write_report_manifest(
     out.push_str(&format!("filter: {}\n", filter.unwrap_or("<none>")));
     out.push_str(&format!("fe_version: {}\n", env!("CARGO_PKG_VERSION")));
     out.push_str("details: see `meta/args.txt` and `meta/git.txt` for exact repro context\n");
+    out.push_str("sonatina_ir: Sonatina reports include pre-opt IR at `artifacts/sonatina_ir.txt` and post-selected-opt-level IR at `artifacts/sonatina_ir_optimized.txt` (with `opt_level: 0`, both represent the same unoptimized module)\n");
     out.push_str("gas_comparison: see `artifacts/gas_comparison.md`, `artifacts/gas_comparison.csv`, `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_breakdown_comparison.csv`, `artifacts/gas_breakdown_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_deployment_attribution.csv`, and `artifacts/gas_comparison_settings.txt` when available\n");
     out.push_str("gas_comparison_yul_artifacts: in Sonatina comparison runs, Yul baselines are stored under `artifacts/tests/<test>/yul/{source.yul,bytecode.opt.hex,bytecode.opt.evm.txt,runtime.opt.hex,runtime.opt.evm.txt}`\n");
     out.push_str("sonatina_observability: when available, Sonatina test artifacts include `artifacts/tests/<test>/sonatina/{observability.txt,observability.json}`\n");
