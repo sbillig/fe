@@ -30,6 +30,12 @@ enum TupleVariantResolution<'db> {
     UnresolvedPath,
 }
 
+struct UnpackedRestPat<'db> {
+    elem_tys: Vec<TyId<'db>>,
+    rest_range: Range<usize>,
+    is_valid: bool,
+}
+
 pub(super) struct PatCheckResult<'db> {
     pub(super) ty: TyId<'db>,
     pub(super) analysis: PatternAnalysisStatus,
@@ -253,8 +259,12 @@ impl<'db> TyChecker<'db> {
             (base, args) if base.is_tuple(self.db) => Some(args.len()),
             _ => None,
         };
-        let (actual, rest_range) = self.unpack_rest_pat(pat_tup, expected_len);
-        let actual = TyId::tuple_with_elems(self.db, &actual);
+        let UnpackedRestPat {
+            elem_tys,
+            rest_range,
+            is_valid,
+        } = self.unpack_rest_pat(pat_tup, expected_len);
+        let actual = TyId::tuple_with_elems(self.db, &elem_tys);
 
         let unified = self.equate_ty(actual, expected, pat.span(self.body()).into());
         if unified.has_invalid(self.db) {
@@ -265,7 +275,11 @@ impl<'db> TyChecker<'db> {
         let elem_tys = unified.decompose_ty_app(self.db).1.to_vec();
         let fields = self.check_tuple_like_pattern_elems(pat_tup, &elem_tys, rest_range, None);
         let ctor = self.type_constructor_kind(unified, expected);
-        let analysis = self.ready_constructor(expected, ctor, fields);
+        let analysis = if is_valid {
+            self.ready_constructor(expected, ctor, fields)
+        } else {
+            PatternAnalysisStatus::Invalid
+        };
         self.finish_pat_check(pat, expected, unified, analysis)
     }
 
@@ -323,6 +337,7 @@ impl<'db> TyChecker<'db> {
             )
         {
             let binding = LocalBinding::local(pat, *is_mut);
+            let mut is_valid = true;
             if let Some(LocalBinding::Local {
                 pat: conflict_with, ..
             }) = self.env.register_pending_binding(name, binding)
@@ -333,9 +348,14 @@ impl<'db> TyChecker<'db> {
                     name,
                 };
                 self.push_diag(diag);
+                is_valid = false;
             }
             let actual = self.fresh_ty();
-            let analysis = self.ready_wildcard(expected, Some(self.binding_ref(pat, name)));
+            let analysis = if is_valid {
+                self.ready_wildcard(expected, Some(self.binding_ref(pat, name)))
+            } else {
+                PatternAnalysisStatus::Invalid
+            };
             return self.finish_pat_check(pat, expected, actual, analysis);
         }
 
@@ -527,7 +547,11 @@ impl<'db> TyChecker<'db> {
             semantic_ty
         };
         let expected_len = expected_elems.len(self.db);
-        let (actual_elems, rest_range) = self.unpack_rest_pat(elems, Some(expected_len));
+        let UnpackedRestPat {
+            elem_tys: actual_elems,
+            rest_range,
+            is_valid,
+        } = self.unpack_rest_pat(elems, Some(expected_len));
         let elem_tys = self.instantiate_tuple_variant_elem_tys(variant, variant_ty, expected_elems);
         let fields = self.check_tuple_like_pattern_elems(
             elems,
@@ -551,7 +575,7 @@ impl<'db> TyChecker<'db> {
             );
         }
 
-        let analysis = if semantic_ty.has_invalid(self.db) {
+        let analysis = if semantic_ty.has_invalid(self.db) || !is_valid {
             PatternAnalysisStatus::Invalid
         } else {
             self.ready_constructor(
@@ -653,7 +677,8 @@ impl<'db> TyChecker<'db> {
         let mut analyses = Vec::with_capacity(elem_tys.len());
         let mut pat_idx = 0;
         for (i, &elem_ty) in elem_tys.iter().enumerate() {
-            while pat_idx < source_pats.len() && source_pats[pat_idx].is_rest(self.db, self.body()) {
+            while pat_idx < source_pats.len() && source_pats[pat_idx].is_rest(self.db, self.body())
+            {
                 let rest_ty =
                     rest_expected.unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other));
                 self.consume_rest_pat(source_pats[pat_idx], rest_ty);
@@ -982,16 +1007,17 @@ impl<'db> TyChecker<'db> {
         &mut self,
         pat_tup: &[PatId],
         expected_len: Option<usize>,
-    ) -> (Vec<TyId<'db>>, std::ops::Range<usize>) {
+    ) -> UnpackedRestPat<'db> {
         let mut rest_start = None;
         for (i, &pat) in pat_tup.iter().enumerate() {
             if pat.is_rest(self.db, self.body()) && rest_start.replace(i).is_some() {
                 let span = pat.span(self.body());
                 self.push_diag(BodyDiag::DuplicatedRestPat(span.into()));
-                return (
-                    self.fresh_tys_n(expected_len.unwrap_or(0)),
-                    Range::default(),
-                );
+                return UnpackedRestPat {
+                    elem_tys: self.fresh_tys_n(expected_len.unwrap_or(0)),
+                    rest_range: Range::default(),
+                    is_valid: false,
+                };
             }
         }
 
@@ -1003,13 +1029,25 @@ impl<'db> TyChecker<'db> {
                 if minimum_len <= expected_len {
                     let diff = expected_len - minimum_len;
                     let range = rest_start..rest_start + diff;
-                    (self.fresh_tys_n(expected_len), range)
+                    UnpackedRestPat {
+                        elem_tys: self.fresh_tys_n(expected_len),
+                        rest_range: range,
+                        is_valid: true,
+                    }
                 } else {
-                    (self.fresh_tys_n(minimum_len), Range::default())
+                    UnpackedRestPat {
+                        elem_tys: self.fresh_tys_n(minimum_len),
+                        rest_range: Range::default(),
+                        is_valid: true,
+                    }
                 }
             }
 
-            None => (self.fresh_tys_n(pat_tup.len()), Range::default()),
+            None => UnpackedRestPat {
+                elem_tys: self.fresh_tys_n(pat_tup.len()),
+                rest_range: Range::default(),
+                is_valid: true,
+            },
         }
     }
 }

@@ -56,3 +56,60 @@ fn bar_test() {
     );
     assert!(output.diagnostics.is_empty());
 }
+
+#[test]
+fn lower_module_rejects_unsupported_const_path_match_patterns() {
+    let mut db = DriverDataBase::default();
+    let url = Url::parse("file:///unsupported_const_path_pattern.fe").unwrap();
+    let src = r#"
+const FOO: String<3> = "foo"
+
+pub fn test(x: String<3>) -> u8 {
+    match x {
+        FOO => 0
+        _ => 1
+    }
+}
+"#;
+
+    let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+    let top_mod = db.top_mod(file);
+
+    let err = lower_module(&db, top_mod).expect_err("unsupported const-path pattern should fail");
+
+    let MirLowerError::Unsupported { message, .. } = err else {
+        panic!("expected Unsupported, got {err:?}");
+    };
+    assert!(
+        message.contains("pattern"),
+        "expected unsupported-pattern error, got `{message}`",
+    );
+}
+
+#[test]
+fn lower_module_rejects_unsupported_string_literal_match_patterns() {
+    let mut db = DriverDataBase::default();
+    let url = Url::parse("file:///unsupported_string_literal_pattern.fe").unwrap();
+    let src = r#"
+pub fn test(x: String<3>) -> u8 {
+    match x {
+        "foo" => 0
+        _ => 1
+    }
+}
+"#;
+
+    let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+    let top_mod = db.top_mod(file);
+
+    let err =
+        lower_module(&db, top_mod).expect_err("unsupported string literal pattern should fail");
+
+    let MirLowerError::Unsupported { message, .. } = err else {
+        panic!("expected Unsupported, got {err:?}");
+    };
+    assert!(
+        message.contains("pattern"),
+        "expected unsupported-pattern error, got `{message}`",
+    );
+}

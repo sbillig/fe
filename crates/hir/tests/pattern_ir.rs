@@ -37,6 +37,17 @@ fn body_has_diag(diags: &[FuncBodyDiag<'_>], pred: impl Fn(&BodyDiag<'_>) -> boo
         .any(|diag| matches!(diag, FuncBodyDiag::Body(body) if pred(body)))
 }
 
+fn first_tuple_pat<'db>(
+    db: &'db HirAnalysisTestDb,
+    typed_body: &fe_hir::analysis::ty::ty_check::TypedBody<'db>,
+) -> fe_hir::hir_def::PatId {
+    let body = typed_body.body().unwrap();
+    body.pats(db)
+        .keys()
+        .find(|pat| matches!(pat.data(db, body), Partial::Present(Pat::Tuple(..))))
+        .unwrap()
+}
+
 #[test]
 fn invalid_match_arm_suppresses_unreachable_diagnostics() {
     with_func_body(
@@ -104,6 +115,148 @@ fn test(tag: Tag) -> u8 {
                     BodyDiag::NonExhaustiveMatch { .. }
                 )),
                 "unexpected non-exhaustive-match diagnostic: {diags:?}",
+            );
+        },
+    );
+}
+
+#[test]
+fn duplicate_binding_pattern_has_no_semantic_root_and_suppresses_unreachable_diagnostics() {
+    with_func_body(
+        r#"
+fn test(x: (u8, u8)) -> u8 {
+    match x {
+        (a, a) => 0
+        _ => 1
+    }
+}
+"#,
+        "test",
+        |db, diags, typed_body| {
+            assert!(
+                body_has_diag(&diags, |diag| matches!(
+                    diag,
+                    BodyDiag::DuplicatedBinding { .. }
+                )),
+                "expected duplicate-binding diagnostic, got {diags:?}",
+            );
+            assert!(
+                !body_has_diag(&diags, |diag| matches!(
+                    diag,
+                    BodyDiag::UnreachablePattern { .. }
+                )),
+                "unexpected unreachable-pattern diagnostic: {diags:?}",
+            );
+            assert!(
+                typed_body
+                    .pattern_root(first_tuple_pat(db, &typed_body))
+                    .is_none()
+            );
+        },
+    );
+}
+
+#[test]
+fn duplicate_binding_pattern_suppresses_non_exhaustive_diagnostics() {
+    with_func_body(
+        r#"
+fn test(x: (u8, u8)) -> u8 {
+    match x {
+        (a, a) => 0
+    }
+}
+"#,
+        "test",
+        |db, diags, typed_body| {
+            assert!(
+                body_has_diag(&diags, |diag| matches!(
+                    diag,
+                    BodyDiag::DuplicatedBinding { .. }
+                )),
+                "expected duplicate-binding diagnostic, got {diags:?}",
+            );
+            assert!(
+                !body_has_diag(&diags, |diag| matches!(
+                    diag,
+                    BodyDiag::NonExhaustiveMatch { .. }
+                )),
+                "unexpected non-exhaustive-match diagnostic: {diags:?}",
+            );
+            assert!(
+                typed_body
+                    .pattern_root(first_tuple_pat(db, &typed_body))
+                    .is_none()
+            );
+        },
+    );
+}
+
+#[test]
+fn duplicate_rest_pattern_has_no_semantic_root_and_suppresses_unreachable_diagnostics() {
+    with_func_body(
+        r#"
+fn test(x: (u8, u8)) -> u8 {
+    match x {
+        (.., ..) => 0
+        _ => 1
+    }
+}
+"#,
+        "test",
+        |db, diags, typed_body| {
+            assert!(
+                body_has_diag(&diags, |diag| matches!(
+                    diag,
+                    BodyDiag::DuplicatedRestPat(..)
+                )),
+                "expected duplicate-rest diagnostic, got {diags:?}",
+            );
+            assert!(
+                !body_has_diag(&diags, |diag| matches!(
+                    diag,
+                    BodyDiag::UnreachablePattern { .. }
+                )),
+                "unexpected unreachable-pattern diagnostic: {diags:?}",
+            );
+            assert!(
+                typed_body
+                    .pattern_root(first_tuple_pat(db, &typed_body))
+                    .is_none()
+            );
+        },
+    );
+}
+
+#[test]
+fn duplicate_rest_pattern_suppresses_non_exhaustive_diagnostics() {
+    with_func_body(
+        r#"
+fn test(x: (u8, u8)) -> u8 {
+    match x {
+        (.., ..) => 0
+    }
+}
+"#,
+        "test",
+        |db, diags, typed_body| {
+            assert!(
+                body_has_diag(&diags, |diag| matches!(
+                    diag,
+                    BodyDiag::DuplicatedRestPat(..)
+                )),
+                "expected duplicate-rest diagnostic, got {diags:?}",
+            );
+            assert!(
+                !body_has_diag(&diags, |diag| matches!(
+                    diag,
+                    BodyDiag::NonExhaustiveMatch { .. }
+                )),
+                "unexpected non-exhaustive-match diagnostic: {diags:?}",
+            );
+            assert!(
+                typed_body
+                    .pattern_root(first_tuple_pat(db, &typed_body))
+                    .is_none()
             );
         },
     );

@@ -6,7 +6,7 @@ use hir::analysis::ty::{
         Case, DecisionTree, LeafNode, Projection, ProjectionPath, SwitchNode, build_decision_tree,
     },
     pattern_analysis::PatternMatrix,
-    pattern_ir::{BindingRef, ConstructorKind},
+    pattern_ir::{BindingRef, ConstructorKind, PatternAnalysisStatus, ValidatedPatId},
     ty_def::InvalidCause,
 };
 
@@ -23,9 +23,44 @@ struct MatchLoweringCtx<'db> {
     wildcard_arm_block: Option<BasicBlockId>,
 }
 
+enum MirPatternRoot {
+    Ready(ValidatedPatId),
+    Invalid,
+    Unsupported(&'static str),
+}
+
 impl<'db, 'a> MirBuilder<'db, 'a> {
+    fn mir_pattern_root(&self, pat: PatId) -> MirPatternRoot {
+        match self.typed_body.pattern_status(pat) {
+            PatternAnalysisStatus::Ready(root) => {
+                match self.typed_body.pattern_store().mir_unsupported_reason(root) {
+                    Some(reason) => MirPatternRoot::Unsupported(reason),
+                    None => MirPatternRoot::Ready(root),
+                }
+            }
+            PatternAnalysisStatus::Invalid => MirPatternRoot::Invalid,
+            PatternAnalysisStatus::Unsupported => MirPatternRoot::Unsupported(
+                "pattern semantics are valid but unsupported for MIR lowering",
+            ),
+        }
+    }
+
+    fn defer_unsupported_pattern(&mut self, pat: PatId, context: &'static str, reason: &str) {
+        if self.deferred_error.is_some() {
+            return;
+        }
+        let func_name = self
+            .hir_func
+            .map(|func| func.pretty_print_signature(self.db))
+            .unwrap_or_else(|| "<body owner>".to_owned());
+        self.deferred_error = Some(MirLowerError::Unsupported {
+            func_name,
+            message: format!("unsupported {context} pattern `{pat:?}`: {reason}"),
+        });
+    }
+
     fn pattern_is_irrefutable(&self, pat: PatId) -> bool {
-        let Some(root) = self.typed_body.pattern_root(pat) else {
+        let MirPatternRoot::Ready(root) = self.mir_pattern_root(pat) else {
             return false;
         };
         self.typed_body
@@ -99,10 +134,19 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 (scrutinee_value, scrutinee_expr_ty)
             };
 
-        let Some(root) = self.typed_body.pattern_root(pat) else {
-            self.move_to_block(scrut_block);
-            self.goto(false_block);
-            return;
+        let root = match self.mir_pattern_root(pat) {
+            MirPatternRoot::Ready(root) => root,
+            MirPatternRoot::Invalid => {
+                self.move_to_block(scrut_block);
+                self.goto(false_block);
+                return;
+            }
+            MirPatternRoot::Unsupported(reason) => {
+                self.defer_unsupported_pattern(pat, "let-condition", reason);
+                self.move_to_block(scrut_block);
+                self.goto(false_block);
+                return;
+            }
         };
 
         let mut matrix = PatternMatrix::from_roots(self.typed_body.pattern_store(), &[root]);
@@ -273,26 +317,28 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             });
             return value;
         };
-        let Some(roots) = arms
-            .iter()
-            .map(|arm| self.typed_body.pattern_root(arm.pat))
-            .collect::<Option<Vec<_>>>()
-        else {
-            // Some patterns couldn't be resolved. This indicates:
-            // 1. Malformed AST from parsing errors, or
-            // 2. Upstream type/name resolution errors that should have emitted diagnostics
-            //
-            // For valid programs, all patterns will be Present. Absent patterns mean the
-            // HIR layer already reported errors, so we produce Unreachable MIR rather than
-            // attempting to lower patterns we can't understand. This prevents cascading
-            // errors from incomplete pattern information.
-            debug_assert!(false, "MIR lowering: match arm pattern IR is unavailable");
-            self.move_to_block(scrut_block);
-            self.set_current_terminator(Terminator::Unreachable {
-                source: crate::ir::SourceInfoId::SYNTHETIC,
-            });
-            return value;
-        };
+        let mut roots = Vec::with_capacity(arms.len());
+        for arm in arms {
+            match self.mir_pattern_root(arm.pat) {
+                MirPatternRoot::Ready(root) => roots.push(root),
+                MirPatternRoot::Invalid => {
+                    debug_assert!(false, "MIR lowering: match arm pattern IR is unavailable");
+                    self.move_to_block(scrut_block);
+                    self.set_current_terminator(Terminator::Unreachable {
+                        source: crate::ir::SourceInfoId::SYNTHETIC,
+                    });
+                    return value;
+                }
+                MirPatternRoot::Unsupported(reason) => {
+                    self.defer_unsupported_pattern(arm.pat, "match arm", reason);
+                    self.move_to_block(scrut_block);
+                    self.set_current_terminator(Terminator::Unreachable {
+                        source: crate::ir::SourceInfoId::SYNTHETIC,
+                    });
+                    return value;
+                }
+            }
+        }
 
         let matrix = PatternMatrix::from_roots(self.typed_body.pattern_store(), &roots);
 

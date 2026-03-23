@@ -106,6 +106,26 @@ impl<'db> PatternStore<'db> {
             ValidatedPatKind::Or(pats) => pats.iter().any(|pat| self.is_irrefutable(db, *pat)),
         }
     }
+
+    pub fn mir_unsupported_reason(&self, id: ValidatedPatId) -> Option<&'static str> {
+        match &self.node(id).kind {
+            ValidatedPatKind::Wildcard { .. } => None,
+            ValidatedPatKind::Constructor { ctor, fields } => match ctor {
+                ConstructorKind::Variant(..) | ConstructorKind::Type(_) => fields
+                    .iter()
+                    .find_map(|field| self.mir_unsupported_reason(*field)),
+                ConstructorKind::Literal(LitKind::Int(_) | LitKind::Bool(_), _) => fields
+                    .iter()
+                    .find_map(|field| self.mir_unsupported_reason(*field)),
+                ConstructorKind::Literal(LitKind::String(_), _) => {
+                    Some("string literal patterns are not supported in MIR lowering")
+                }
+            },
+            ValidatedPatKind::Or(pats) => pats
+                .iter()
+                .find_map(|pat| self.mir_unsupported_reason(*pat)),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
