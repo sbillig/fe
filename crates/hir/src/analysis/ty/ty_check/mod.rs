@@ -62,6 +62,7 @@ use crate::analysis::ty::{
     ctfe::{CtfeConfig, CtfeInterpreter},
     fold::AssocTySubst,
     normalize::normalize_ty,
+    pattern_ir::{PatternAnalysisStatus, PatternStore, ValidatedPatId},
     ty_error::collect_ty_lower_errors,
 };
 use crate::analysis::{
@@ -1561,6 +1562,8 @@ pub struct TypedBody<'db> {
     pat_bindings: FxHashMap<PatId, LocalBinding<'db>>,
     /// Binding capture mode for local variables (keyed by the pattern that introduces them)
     pat_binding_modes: FxHashMap<PatId, PatBindingMode>,
+    pattern_store: PatternStore<'db>,
+    pattern_status: FxHashMap<PatId, PatternAnalysisStatus>,
     /// Resolved Seq trait methods for for-loops
     for_loop_seq: FxHashMap<StmtId, ForLoopSeq<'db>>,
 }
@@ -1583,6 +1586,7 @@ impl<'db> TyVisitable<'db> for TypedBody<'db> {
         for callable in self.callables.values() {
             callable.visit_with(visitor);
         }
+        self.pattern_store.visit_with(visitor);
         for seq in self.for_loop_seq.values() {
             seq.visit_with(visitor);
         }
@@ -1637,6 +1641,7 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             .into_iter()
             .map(|(pat, binding)| (pat, binding.fold_with(db, folder)))
             .collect();
+        let pattern_store = self.pattern_store.fold_with(db, folder);
         let for_loop_seq = self
             .for_loop_seq
             .into_iter()
@@ -1656,6 +1661,8 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             param_bindings,
             pat_bindings,
             for_loop_seq,
+            pattern_store,
+            pattern_status: self.pattern_status,
         }
     }
 }
@@ -1716,6 +1723,21 @@ impl<'db> TypedBody<'db> {
     /// Get how this local binding is captured by its source pattern destructuring.
     pub fn pat_binding_mode(&self, pat: PatId) -> Option<PatBindingMode> {
         self.pat_binding_modes.get(&pat).copied()
+    }
+
+    pub fn pattern_store(&self) -> &PatternStore<'db> {
+        &self.pattern_store
+    }
+
+    pub fn pattern_status(&self, pat: PatId) -> PatternAnalysisStatus {
+        self.pattern_status
+            .get(&pat)
+            .copied()
+            .unwrap_or(PatternAnalysisStatus::Invalid)
+    }
+
+    pub fn pattern_root(&self, pat: PatId) -> Option<ValidatedPatId> {
+        self.pattern_status(pat).ready_root()
     }
 
     /// Get the resolved Seq methods for a for-loop statement.
@@ -1813,6 +1835,8 @@ impl<'db> TypedBody<'db> {
             param_bindings: Vec::new(),
             pat_bindings: FxHashMap::default(),
             pat_binding_modes: FxHashMap::default(),
+            pattern_store: PatternStore::default(),
+            pattern_status: FxHashMap::default(),
             for_loop_seq: FxHashMap::default(),
         }
     }

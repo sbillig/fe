@@ -44,7 +44,7 @@ pub(crate) mod method_cmp;
 pub mod method_table;
 pub mod normalize;
 pub mod pattern_analysis;
-pub mod simplified_pattern;
+pub mod pattern_ir;
 pub mod trait_def;
 pub mod trait_lower;
 pub mod trait_resolution; // This line was previously 'pub mod name_resolution;'

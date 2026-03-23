@@ -5,7 +5,7 @@ use smallvec1::SmallVec;
 
 use crate::core::hir_def::{
     ArithBinOp, BinOp, CallableDef, Cond, CondId, Expr, ExprId, FieldIndex, IdentId, IntegerId,
-    LitKind, LogicalBinOp, Partial, Pat, PatId, PathId, UnOp, VariantKind, WithBinding,
+    LitKind, LogicalBinOp, Partial, PatId, PathId, UnOp, VariantKind, WithBinding,
 };
 use crate::span::DynLazySpan;
 
@@ -2489,23 +2489,14 @@ impl<'db> TyChecker<'db> {
         };
 
         let mut match_ty = expected;
-        // Store cloned HirPat data and the original PatId for diagnostics.
-        let mut hir_pats_with_ids: Vec<(&Pat<'db>, PatId)> = Vec::with_capacity(arms.len());
+        let mut arm_statuses = Vec::with_capacity(arms.len());
 
-        // First loop: Type check patterns, collect HIR patterns for analysis, and type check arm bodies.
         for arm in arms.iter() {
-            self.check_pat(arm.pat, scrutinee_pat_ty);
+            let pat_result = self.check_pat(arm.pat, scrutinee_pat_ty);
             if let super::DestructureSourceMode::Borrow(kind) = mode {
                 self.retype_pattern_bindings_for_borrow(arm.pat, kind);
             }
-
-            let pat_data_partial = arm.pat.data(self.db, self.body());
-            if let Partial::Present(actual_pat_data) = pat_data_partial {
-                // Clone the Pat data for ownership in the vector.
-                hir_pats_with_ids.push((actual_pat_data, arm.pat));
-            }
-            // If pat_data is Partial::Absent, check_pat should have already emitted an error.
-            // We only include valid patterns in the exhaustiveness/reachability analysis.
+            arm_statuses.push(pat_result.analysis);
 
             self.env.enter_scope(arm.body);
             self.env.flush_pending_bindings();
@@ -2513,45 +2504,51 @@ impl<'db> TyChecker<'db> {
             self.env.leave_scope();
         }
 
-        // Collect owned HirPat data for analysis.
-        let collected_hir_pats: Vec<Pat<'db>> = hir_pats_with_ids
-            .iter()
-            .map(|(p, _id)| (*p).clone())
-            .collect();
+        if !scrutinee_pat_ty.has_invalid(self.db)
+            && arm_statuses.iter().all(|status| status.is_ready())
+        {
+            let mut prober = super::env::Prober::new(&mut self.table);
+            let pattern_store = self
+                .env
+                .pattern_store()
+                .clone()
+                .fold_with(self.db, &mut prober);
+            let scrutinee_pat_ty = scrutinee_pat_ty.fold_with(self.db, &mut prober);
+            let roots: Vec<_> = arm_statuses
+                .iter()
+                .filter_map(|status| status.ready_root())
+                .collect();
+            let reachability = crate::analysis::ty::pattern_analysis::check_reachability(
+                self.db,
+                &pattern_store,
+                &roots,
+            );
 
-        // Perform reachability analysis.
-        let reachability = crate::analysis::ty::pattern_analysis::check_reachability(
-            self.db,
-            &collected_hir_pats,
-            self.body(),
-            self.env.scope(),
-            scrutinee_pat_ty,
-        );
-
-        for (i, is_reachable) in reachability.iter().enumerate() {
-            if !is_reachable {
-                let (_current_hir_pat, current_pat_id) = &hir_pats_with_ids[i];
+            for (i, is_reachable) in reachability.iter().enumerate() {
+                if *is_reachable {
+                    continue;
+                }
                 let diag = BodyDiag::UnreachablePattern {
-                    primary: current_pat_id.span(self.body()).into(),
+                    primary: arms[i].pat.span(self.body()).into(),
                 };
                 self.push_diag(diag);
             }
-        }
 
-        // Perform exhaustiveness analysis.
-        if let Err(missing_patterns) = crate::analysis::ty::pattern_analysis::check_exhaustiveness(
-            self.db,
-            &collected_hir_pats,
-            self.body(),
-            self.env.scope(),
-            scrutinee_pat_ty,
-        ) {
-            let diag = BodyDiag::NonExhaustiveMatch {
-                primary: expr.span(self.body()).into(),
-                scrutinee_ty: scrutinee_pat_ty,
-                missing_patterns,
-            };
-            self.push_diag(diag);
+            if let Err(missing_patterns) =
+                crate::analysis::ty::pattern_analysis::check_exhaustiveness(
+                    self.db,
+                    &pattern_store,
+                    &roots,
+                    scrutinee_pat_ty,
+                )
+            {
+                let diag = BodyDiag::NonExhaustiveMatch {
+                    primary: expr.span(self.body()).into(),
+                    scrutinee_ty: scrutinee_pat_ty,
+                    missing_patterns,
+                };
+                self.push_diag(diag);
+            }
         }
 
         ExprProp::new(match_ty, true)

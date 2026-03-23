@@ -1,5 +1,5 @@
 use hir::analysis::HirAnalysisDb;
-use hir::analysis::ty::simplified_pattern::ConstructorKind;
+use hir::analysis::ty::pattern_ir::ConstructorKind;
 use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData, TyId};
 use hir::hir_def::EnumVariant;
 use hir::projection::{IndexSource, Projection};

@@ -2151,6 +2151,18 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::UnexpectedRestPat(span) => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "unexpected `..` in pattern".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "`..` is only allowed inside tuple and record patterns".to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
             Self::InvalidPathDomainInPat { primary, resolved } => {
                 let mut labels = vec![SubDiagnostic {
                     style: LabelStyle::Primary,

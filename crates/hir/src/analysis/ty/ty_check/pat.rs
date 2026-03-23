@@ -1,15 +1,23 @@
 use std::ops::Range;
 
-use crate::core::hir_def::{Partial, Pat, PatId, PathId, TupleTypeId, VariantKind};
+use crate::core::hir_def::{
+    IdentId, LitKind, Partial, Pat, PatId, PathId, TupleTypeId, VariantKind,
+};
 use either::Either;
 
-use super::{RecordLike, TyChecker, env::LocalBinding, path::RecordInitChecker};
+use super::{ConstRef, RecordLike, TyChecker, env::LocalBinding, path::RecordInitChecker};
 use crate::analysis::{
     name_resolution::{PathRes, ResolvedVariant},
     ty::adt_def::AdtRef,
     ty::{
+        assoc_const::AssocConstUse,
         binder::Binder,
+        const_eval::{ConstValue, try_eval_const_ref},
         diagnostics::BodyDiag,
+        fold::TyFoldable,
+        pattern_ir::{
+            BindingRef, ConstructorKind, PatternAnalysisStatus, ValidatedPat, ValidatedPatKind,
+        },
         trait_def::TraitInstId,
         ty_def::{InvalidCause, Kind, TyId, TyVarSort},
         ty_lower::lower_hir_ty,
@@ -22,43 +30,212 @@ enum TupleVariantResolution<'db> {
     UnresolvedPath,
 }
 
+pub(super) struct PatCheckResult<'db> {
+    pub(super) ty: TyId<'db>,
+    pub(super) analysis: PatternAnalysisStatus,
+}
+
 impl<'db> TyChecker<'db> {
-    pub(super) fn check_pat(&mut self, pat: PatId, expected: TyId<'db>) -> TyId<'db> {
+    pub(super) fn check_pat(&mut self, pat: PatId, expected: TyId<'db>) -> PatCheckResult<'db> {
         let Partial::Present(pat_data) = pat.data(self.db, self.body()) else {
-            let actual = TyId::invalid(self.db, InvalidCause::ParseError);
-            return self.unify_ty(pat, actual, expected);
+            return self.finish_pat_check(
+                pat,
+                expected,
+                TyId::invalid(self.db, InvalidCause::ParseError),
+                PatternAnalysisStatus::Invalid,
+            );
         };
 
-        let ty = match pat_data {
+        match pat_data {
             Pat::WildCard => {
                 let ty_var = self.table.new_var(TyVarSort::General, &Kind::Star);
-                self.unify_ty(pat, ty_var, expected)
+                let analysis = self.ready_wildcard(expected, None);
+                self.finish_pat_check(pat, expected, ty_var, analysis)
             }
 
-            Pat::Rest => expected, // rest pattern type checking?
-            Pat::Lit(..) => self.check_lit_pat(pat, pat_data),
+            Pat::Rest => {
+                self.push_diag(BodyDiag::UnexpectedRestPat(pat.span(self.body()).into()));
+                self.finish_pat_check(
+                    pat,
+                    expected,
+                    TyId::invalid(self.db, InvalidCause::Other),
+                    PatternAnalysisStatus::Invalid,
+                )
+            }
+            Pat::Lit(..) => self.check_lit_pat(pat, pat_data, expected),
             Pat::Tuple(..) => self.check_tuple_pat(pat, pat_data, expected),
             Pat::Path(..) => self.check_path_pat(pat, pat_data, expected),
-            Pat::PathTuple(..) => self.check_path_tuple_pat(pat, pat_data),
+            Pat::PathTuple(..) => self.check_path_tuple_pat(pat, pat_data, expected),
             Pat::Record(..) => self.check_record_pat(pat, pat_data, expected),
 
             Pat::Or(lhs, rhs) => {
-                self.check_pat(*lhs, expected);
-                self.check_pat(*rhs, expected)
+                let lhs = self.check_pat(*lhs, expected);
+                let rhs = self.check_pat(*rhs, expected);
+                let analysis = self.ready_or(expected, [lhs.analysis, rhs.analysis]);
+                self.finish_pat_check(pat, expected, rhs.ty, analysis)
             }
-        };
-
-        self.unify_ty(pat, ty, expected)
+        }
     }
 
-    fn check_lit_pat(&mut self, _pat: PatId, pat_data: &Pat<'db>) -> TyId<'db> {
+    fn finish_pat_check(
+        &mut self,
+        pat: PatId,
+        expected: TyId<'db>,
+        actual: TyId<'db>,
+        analysis: PatternAnalysisStatus,
+    ) -> PatCheckResult<'db> {
+        let ty = self.unify_ty(pat, actual, expected);
+        let analysis = if ty.has_invalid(self.db) {
+            PatternAnalysisStatus::Invalid
+        } else {
+            analysis
+        };
+        self.env.set_pattern_status(pat, analysis);
+        PatCheckResult { ty, analysis }
+    }
+
+    fn ready_wildcard(
+        &mut self,
+        ty: TyId<'db>,
+        binding: Option<BindingRef<'db>>,
+    ) -> PatternAnalysisStatus {
+        PatternAnalysisStatus::Ready(self.env.alloc_validated_pat(ValidatedPat {
+            ty,
+            kind: ValidatedPatKind::Wildcard { binding },
+        }))
+    }
+
+    fn ready_constructor(
+        &mut self,
+        ty: TyId<'db>,
+        ctor: ConstructorKind<'db>,
+        fields: Vec<PatternAnalysisStatus>,
+    ) -> PatternAnalysisStatus {
+        let fields = match self.collect_ready_roots(fields) {
+            Ok(fields) => fields,
+            Err(status) => return status,
+        };
+        PatternAnalysisStatus::Ready(self.env.alloc_validated_pat(ValidatedPat {
+            ty,
+            kind: ValidatedPatKind::Constructor { ctor, fields },
+        }))
+    }
+
+    fn ready_or(
+        &mut self,
+        ty: TyId<'db>,
+        pats: [PatternAnalysisStatus; 2],
+    ) -> PatternAnalysisStatus {
+        let pats = match self.collect_ready_roots(pats) {
+            Ok(pats) => pats,
+            Err(status) => return status,
+        };
+        PatternAnalysisStatus::Ready(self.env.alloc_validated_pat(ValidatedPat {
+            ty,
+            kind: ValidatedPatKind::Or(pats),
+        }))
+    }
+
+    fn collect_ready_roots(
+        &self,
+        statuses: impl IntoIterator<Item = PatternAnalysisStatus>,
+    ) -> Result<Vec<crate::analysis::ty::pattern_ir::ValidatedPatId>, PatternAnalysisStatus> {
+        let mut roots = Vec::new();
+        let mut unsupported = false;
+        for status in statuses {
+            match status {
+                PatternAnalysisStatus::Ready(root) => roots.push(root),
+                PatternAnalysisStatus::Invalid => return Err(PatternAnalysisStatus::Invalid),
+                PatternAnalysisStatus::Unsupported => unsupported = true,
+            }
+        }
+        if unsupported {
+            Err(PatternAnalysisStatus::Unsupported)
+        } else {
+            Ok(roots)
+        }
+    }
+
+    fn binding_ref(&self, pat: PatId, name: IdentId<'db>) -> BindingRef<'db> {
+        BindingRef {
+            name,
+            representative_pat: pat,
+        }
+    }
+
+    fn canonical_pattern_ty(&mut self, resolved_ty: TyId<'db>, expected: TyId<'db>) -> TyId<'db> {
+        let resolved_ty = resolved_ty.fold_with(self.db, &mut self.table);
+        let resolved_ty = self.normalize_ty(resolved_ty);
+        let expected = expected.fold_with(self.db, &mut self.table);
+        let expected = self.normalize_ty(expected);
+        if !expected.has_invalid(self.db) {
+            let (expected_base, _) = expected.decompose_ty_app(self.db);
+            let (resolved_base, _) = resolved_ty.decompose_ty_app(self.db);
+            if expected_base == resolved_base {
+                return expected;
+            }
+        }
+        resolved_ty
+    }
+
+    fn type_constructor_kind(
+        &mut self,
+        resolved_ty: TyId<'db>,
+        expected: TyId<'db>,
+    ) -> ConstructorKind<'db> {
+        ConstructorKind::Type(self.canonical_pattern_ty(resolved_ty, expected))
+    }
+
+    fn literal_constructor_status(
+        &mut self,
+        ty: TyId<'db>,
+        lit: LitKind<'db>,
+    ) -> PatternAnalysisStatus {
+        self.ready_constructor(ty, ConstructorKind::Literal(lit, ty), Vec::new())
+    }
+
+    fn eval_const_pattern_literal(
+        &self,
+        cref: ConstRef<'db>,
+        expected: TyId<'db>,
+    ) -> Option<LitKind<'db>> {
+        match try_eval_const_ref(self.db, cref, expected)? {
+            ConstValue::Int(int) => {
+                Some(LitKind::Int(crate::hir_def::IntegerId::new(self.db, int)))
+            }
+            ConstValue::Bool(flag) => Some(LitKind::Bool(flag)),
+            ConstValue::Bytes(_) | ConstValue::EnumVariant(_) | ConstValue::ConstArray(_) => None,
+        }
+    }
+
+    fn consume_rest_pat(&mut self, pat: PatId, ty: TyId<'db>) {
+        self.env.type_pat(pat, ty);
+        self.env
+            .set_pattern_status(pat, PatternAnalysisStatus::Invalid);
+    }
+
+    fn check_lit_pat(
+        &mut self,
+        pat: PatId,
+        pat_data: &Pat<'db>,
+        expected: TyId<'db>,
+    ) -> PatCheckResult<'db> {
         let Pat::Lit(lit) = pat_data else {
             unreachable!()
         };
 
         match lit {
-            Partial::Present(lit) => self.lit_ty(lit),
-            Partial::Absent => TyId::invalid(self.db, InvalidCause::ParseError),
+            Partial::Present(lit) => {
+                let lit_ty = self.lit_ty(lit);
+                let analysis = self.literal_constructor_status(expected, *lit);
+                self.finish_pat_check(pat, expected, lit_ty, analysis)
+            }
+            Partial::Absent => self.finish_pat_check(
+                pat,
+                expected,
+                TyId::invalid(self.db, InvalidCause::ParseError),
+                PatternAnalysisStatus::Invalid,
+            ),
         }
     }
 
@@ -67,7 +244,7 @@ impl<'db> TyChecker<'db> {
         pat: PatId,
         pat_data: &Pat<'db>,
         expected: TyId<'db>,
-    ) -> TyId<'db> {
+    ) -> PatCheckResult<'db> {
         let Pat::Tuple(pat_tup) = pat_data else {
             unreachable!()
         };
@@ -79,20 +256,17 @@ impl<'db> TyChecker<'db> {
         let (actual, rest_range) = self.unpack_rest_pat(pat_tup, expected_len);
         let actual = TyId::tuple_with_elems(self.db, &actual);
 
-        let unified = self.unify_ty(pat, actual, expected);
+        let unified = self.equate_ty(actual, expected, pat.span(self.body()).into());
         if unified.has_invalid(self.db) {
-            // Even when unification fails, we need to check patterns to ensure
-            // variable binding works correctly
-            pat_tup.iter().for_each(|&pat| {
-                self.check_pat(pat, TyId::invalid(self.db, InvalidCause::Other));
-            });
-            return unified;
+            self.check_tuple_like_pattern_elems(pat_tup, &[], Range::default(), None);
+            return self.finish_pat_check(pat, expected, unified, PatternAnalysisStatus::Invalid);
         }
 
         let elem_tys = unified.decompose_ty_app(self.db).1.to_vec();
-        self.check_tuple_like_pattern_elems(pat_tup, &elem_tys, rest_range, None);
-
-        unified
+        let fields = self.check_tuple_like_pattern_elems(pat_tup, &elem_tys, rest_range, None);
+        let ctor = self.type_constructor_kind(unified, expected);
+        let analysis = self.ready_constructor(expected, ctor, fields);
+        self.finish_pat_check(pat, expected, unified, analysis)
     }
 
     fn check_path_pat(
@@ -100,21 +274,34 @@ impl<'db> TyChecker<'db> {
         pat: PatId,
         pat_data: &Pat<'db>,
         expected: TyId<'db>,
-    ) -> TyId<'db> {
+    ) -> PatCheckResult<'db> {
         let Pat::Path(path, is_mut) = pat_data else {
             unreachable!()
         };
 
         let Partial::Present(path) = path else {
-            return TyId::invalid(self.db, InvalidCause::ParseError);
+            return self.finish_pat_check(
+                pat,
+                expected,
+                TyId::invalid(self.db, InvalidCause::ParseError),
+                PatternAnalysisStatus::Invalid,
+            );
         };
 
         if let Some(expected) = self.expected_msg_variant_for_named_recv_pat(pat, *path, expected) {
             if !expected.field_types(self.db).is_empty() {
                 let record_like = RecordLike::from_ty(expected);
-                return self.emit_unit_variant_expected(pat, record_like);
+                let actual = self.emit_unit_variant_expected(pat, record_like);
+                return self.finish_pat_check(
+                    pat,
+                    expected,
+                    actual,
+                    PatternAnalysisStatus::Invalid,
+                );
             }
-            return expected;
+            let analysis =
+                self.ready_constructor(expected, ConstructorKind::Type(expected), Vec::new());
+            return self.finish_pat_check(pat, expected, expected, analysis);
         }
 
         let span = pat.span(self.body()).into_path_pat();
@@ -124,9 +311,15 @@ impl<'db> TyChecker<'db> {
         // unless the expected type is a msg type, in which case we try to resolve
         // the identifier as a msg variant first.
         if let Some(name) = path.as_ident(self.db)
-            && !matches!(
+            && matches!(
                 res,
-                Ok(PathRes::Ty(..) | PathRes::TyAlias(..) | PathRes::EnumVariant(..))
+                Err(_)
+                    | Ok(PathRes::Trait(_)
+                        | PathRes::Mod(_)
+                        | PathRes::Func(_)
+                        | PathRes::TraitMethod(..)
+                        | PathRes::Method(..)
+                        | PathRes::FuncParam(..))
             )
         {
             let binding = LocalBinding::local(pat, *is_mut);
@@ -141,23 +334,33 @@ impl<'db> TyChecker<'db> {
                 };
                 self.push_diag(diag);
             }
-            return self.fresh_ty();
+            let actual = self.fresh_ty();
+            let analysis = self.ready_wildcard(expected, Some(self.binding_ref(pat, name)));
+            return self.finish_pat_check(pat, expected, actual, analysis);
         }
 
-        match res {
-            Ok(
-                PathRes::Ty(ty)
-                | PathRes::TyAlias(_, ty)
-                | PathRes::Func(ty)
-                | PathRes::Const(_, ty),
-            ) => {
+        let (actual, analysis) = match res {
+            Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty) | PathRes::Func(ty)) => {
                 let record_like = RecordLike::from_ty(ty);
                 if record_like.is_record(self.db) {
-                    self.emit_unit_variant_expected(pat, record_like)
+                    (
+                        self.emit_unit_variant_expected(pat, record_like),
+                        PatternAnalysisStatus::Invalid,
+                    )
                 } else {
-                    ty
+                    {
+                        let ctor = self.type_constructor_kind(ty, expected);
+                        (ty, self.ready_constructor(expected, ctor, Vec::new()))
+                    }
                 }
             }
+
+            Ok(PathRes::Const(const_def, ty)) => (
+                ty,
+                self.eval_const_pattern_literal(ConstRef::Const(const_def), expected)
+                    .map(|lit| self.literal_constructor_status(expected, lit))
+                    .unwrap_or(PatternAnalysisStatus::Unsupported),
+            ),
 
             Ok(PathRes::TraitConst(recv_ty, inst, name)) => {
                 let mut args = inst.args(self.db).clone();
@@ -176,9 +379,24 @@ impl<'db> TyChecker<'db> {
                     && let Some(ty_binder) = const_view.ty_binder(self.db)
                 {
                     let instantiated = ty_binder.instantiate(self.db, inst.args(self.db));
-                    self.table.instantiate_to_term(instantiated)
+                    let ty = self.table.instantiate_to_term(instantiated);
+                    let cref = ConstRef::TraitConst(AssocConstUse::new(
+                        self.env.scope(),
+                        self.env.assumptions(),
+                        inst,
+                        name,
+                    ));
+                    (
+                        ty,
+                        self.eval_const_pattern_literal(cref, expected)
+                            .map(|lit| self.literal_constructor_status(expected, lit))
+                            .unwrap_or(PatternAnalysisStatus::Unsupported),
+                    )
                 } else {
-                    TyId::invalid(self.db, InvalidCause::Other)
+                    (
+                        TyId::invalid(self.db, InvalidCause::Other),
+                        PatternAnalysisStatus::Invalid,
+                    )
                 }
             }
 
@@ -188,14 +406,38 @@ impl<'db> TyChecker<'db> {
                     given: Either::Left(trait_.def(self.db).into()),
                 };
                 self.push_diag(diag);
-                TyId::invalid(self.db, InvalidCause::Other)
+                (
+                    TyId::invalid(self.db, InvalidCause::Other),
+                    PatternAnalysisStatus::Invalid,
+                )
             }
 
             Ok(PathRes::EnumVariant(variant)) => {
                 if matches!(variant.kind(self.db), VariantKind::Unit) {
-                    self.table.instantiate_to_term(variant.ty)
+                    let ty = self.table.instantiate_to_term(variant.ty);
+                    let semantic_ty = self.equate_ty(ty, expected, pat.span(self.body()).into());
+                    let semantic_ty = if semantic_ty.has_invalid(self.db) {
+                        semantic_ty
+                    } else {
+                        self.canonical_pattern_ty(semantic_ty, expected)
+                    };
+                    (
+                        semantic_ty,
+                        if semantic_ty.has_invalid(self.db) {
+                            PatternAnalysisStatus::Invalid
+                        } else {
+                            self.ready_constructor(
+                                semantic_ty,
+                                ConstructorKind::Variant(variant.variant, semantic_ty),
+                                Vec::new(),
+                            )
+                        },
+                    )
                 } else {
-                    self.emit_unit_variant_expected(pat, RecordLike::from_variant(variant))
+                    (
+                        self.emit_unit_variant_expected(pat, RecordLike::from_variant(variant)),
+                        PatternAnalysisStatus::Invalid,
+                    )
                 }
             }
 
@@ -205,15 +447,24 @@ impl<'db> TyChecker<'db> {
                     given: Either::Left(scope_id.item()),
                 };
                 self.push_diag(diag);
-                TyId::invalid(self.db, InvalidCause::Other)
+                (
+                    TyId::invalid(self.db, InvalidCause::Other),
+                    PatternAnalysisStatus::Invalid,
+                )
             }
 
-            Ok(PathRes::TraitMethod(..) | PathRes::Method(..) | PathRes::FuncParam(..)) => {
-                TyId::invalid(self.db, InvalidCause::Other)
-            }
+            Ok(PathRes::TraitMethod(..) | PathRes::Method(..) | PathRes::FuncParam(..)) => (
+                TyId::invalid(self.db, InvalidCause::Other),
+                PatternAnalysisStatus::Invalid,
+            ),
 
-            Err(_) => TyId::invalid(self.db, InvalidCause::Other),
-        }
+            Err(_) => (
+                TyId::invalid(self.db, InvalidCause::Other),
+                PatternAnalysisStatus::Invalid,
+            ),
+        };
+
+        self.finish_pat_check(pat, expected, actual, analysis)
     }
 
     fn emit_unit_variant_expected(
@@ -227,24 +478,63 @@ impl<'db> TyChecker<'db> {
         TyId::invalid(self.db, InvalidCause::Other)
     }
 
-    fn check_path_tuple_pat(&mut self, pat: PatId, pat_data: &Pat<'db>) -> TyId<'db> {
+    fn check_path_tuple_pat(
+        &mut self,
+        pat: PatId,
+        pat_data: &Pat<'db>,
+        expected: TyId<'db>,
+    ) -> PatCheckResult<'db> {
         let Pat::PathTuple(Partial::Present(path), elems) = pat_data else {
-            return TyId::invalid(self.db, InvalidCause::ParseError);
+            return self.finish_pat_check(
+                pat,
+                expected,
+                TyId::invalid(self.db, InvalidCause::ParseError),
+                PatternAnalysisStatus::Invalid,
+            );
         };
 
         let (variant, expected_elems) = match self.resolve_tuple_variant_pat(pat, *path) {
             TupleVariantResolution::Resolved(variant, expected_elems) => (variant, expected_elems),
-            TupleVariantResolution::Invalid => return TyId::invalid(self.db, InvalidCause::Other),
+            TupleVariantResolution::Invalid => {
+                self.check_tuple_like_pattern_elems(elems, &[], Range::default(), None);
+                return self.finish_pat_check(
+                    pat,
+                    TyId::invalid(self.db, InvalidCause::Other),
+                    TyId::invalid(self.db, InvalidCause::Other),
+                    PatternAnalysisStatus::Invalid,
+                );
+            }
             TupleVariantResolution::UnresolvedPath => {
-                for &elem_pat in elems {
-                    self.check_pat(elem_pat, TyId::invalid(self.db, InvalidCause::Other));
-                }
-                return TyId::invalid(self.db, InvalidCause::Other);
+                self.check_tuple_like_pattern_elems(elems, &[], Range::default(), None);
+                return self.finish_pat_check(
+                    pat,
+                    TyId::invalid(self.db, InvalidCause::Other),
+                    TyId::invalid(self.db, InvalidCause::Other),
+                    PatternAnalysisStatus::Invalid,
+                );
             }
         };
 
+        let semantic_ty = self.equate_ty(variant.ty, expected, pat.span(self.body()).into());
+        let semantic_ty = if semantic_ty.has_invalid(self.db) {
+            semantic_ty
+        } else {
+            self.canonical_pattern_ty(semantic_ty, expected)
+        };
+        let variant_ty = if semantic_ty.has_invalid(self.db) {
+            self.canonical_pattern_ty(variant.ty, expected)
+        } else {
+            semantic_ty
+        };
         let expected_len = expected_elems.len(self.db);
         let (actual_elems, rest_range) = self.unpack_rest_pat(elems, Some(expected_len));
+        let elem_tys = self.instantiate_tuple_variant_elem_tys(variant, variant_ty, expected_elems);
+        let fields = self.check_tuple_like_pattern_elems(
+            elems,
+            &elem_tys,
+            rest_range.clone(),
+            Some(variant_ty),
+        );
         if actual_elems.len() != expected_len {
             let diag = BodyDiag::MismatchedFieldCount {
                 primary: pat.span(self.body()).into(),
@@ -253,13 +543,24 @@ impl<'db> TyChecker<'db> {
             };
 
             self.push_diag(diag);
-            return variant.ty;
+            return self.finish_pat_check(
+                pat,
+                expected,
+                semantic_ty,
+                PatternAnalysisStatus::Invalid,
+            );
+        }
+
+        let analysis = if semantic_ty.has_invalid(self.db) {
+            PatternAnalysisStatus::Invalid
+        } else {
+            self.ready_constructor(
+                semantic_ty,
+                ConstructorKind::Variant(variant.variant, semantic_ty),
+                fields,
+            )
         };
-
-        let elem_tys = self.instantiate_tuple_variant_elem_tys(variant, expected_elems);
-        self.check_tuple_like_pattern_elems(elems, &elem_tys, rest_range, Some(variant.ty));
-
-        variant.ty
+        self.finish_pat_check(pat, expected, semantic_ty, analysis)
     }
 
     fn resolve_tuple_variant_pat(
@@ -319,6 +620,7 @@ impl<'db> TyChecker<'db> {
     fn instantiate_tuple_variant_elem_tys(
         &mut self,
         variant: ResolvedVariant<'db>,
+        variant_ty: TyId<'db>,
         elems: TupleTypeId<'db>,
     ) -> Vec<TyId<'db>> {
         elems
@@ -333,7 +635,7 @@ impl<'db> TyChecker<'db> {
                         self.env.assumptions(),
                     );
                     let instantiated =
-                        Binder::bind(ty).instantiate(self.db, variant.ty.generic_args(self.db));
+                        Binder::bind(ty).instantiate(self.db, variant_ty.generic_args(self.db));
                     self.normalize_ty(instantiated)
                 }
                 None => TyId::invalid(self.db, InvalidCause::ParseError),
@@ -347,31 +649,48 @@ impl<'db> TyChecker<'db> {
         elem_tys: &[TyId<'db>],
         rest_range: Range<usize>,
         rest_expected: Option<TyId<'db>>,
-    ) {
+    ) -> Vec<PatternAnalysisStatus> {
+        let mut analyses = Vec::with_capacity(elem_tys.len());
         let mut pat_idx = 0;
         for (i, &elem_ty) in elem_tys.iter().enumerate() {
-            if pat_idx >= source_pats.len() {
-                break;
-            }
-            let pat = source_pats[pat_idx];
-            if pat.is_rest(self.db, self.body()) {
-                if let Some(rest_expected) = rest_expected {
-                    self.check_pat(pat, rest_expected);
-                }
+            while pat_idx < source_pats.len() && source_pats[pat_idx].is_rest(self.db, self.body()) {
+                let rest_ty =
+                    rest_expected.unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other));
+                self.consume_rest_pat(source_pats[pat_idx], rest_ty);
                 pat_idx += 1;
-                continue;
             }
             if rest_range.contains(&i) {
+                analyses.push(self.ready_wildcard(elem_ty, None));
+                continue;
+            }
+            if pat_idx >= source_pats.len() {
+                analyses.push(self.ready_wildcard(elem_ty, None));
                 continue;
             }
 
+            let pat = source_pats[pat_idx];
             let (pat_expected, mode) = self.destructure_source_mode(elem_ty);
-            self.check_pat(pat, pat_expected);
+            let result = self.check_pat(pat, pat_expected);
             if let super::DestructureSourceMode::Borrow(kind) = mode {
                 self.retype_pattern_bindings_for_borrow(pat, kind);
             }
+            analyses.push(result.analysis);
             pat_idx += 1;
         }
+
+        while pat_idx < source_pats.len() {
+            let pat = source_pats[pat_idx];
+            if pat.is_rest(self.db, self.body()) {
+                let rest_ty =
+                    rest_expected.unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other));
+                self.consume_rest_pat(pat, rest_ty);
+            } else {
+                self.check_pat(pat, TyId::invalid(self.db, InvalidCause::Other));
+            }
+            pat_idx += 1;
+        }
+
+        analyses
     }
 
     fn check_record_pat(
@@ -379,9 +698,14 @@ impl<'db> TyChecker<'db> {
         pat: PatId,
         pat_data: &Pat<'db>,
         expected: TyId<'db>,
-    ) -> TyId<'db> {
+    ) -> PatCheckResult<'db> {
         let Pat::Record(Partial::Present(path), _) = pat_data else {
-            return TyId::invalid(self.db, InvalidCause::ParseError);
+            return self.finish_pat_check(
+                pat,
+                expected,
+                TyId::invalid(self.db, InvalidCause::ParseError),
+                PatternAnalysisStatus::Invalid,
+            );
         };
 
         let span = pat.span(self.body()).into_record_pat();
@@ -389,23 +713,41 @@ impl<'db> TyChecker<'db> {
         if let Some(expected) = self.expected_msg_variant_for_named_recv_pat(pat, *path, expected) {
             let record_like = RecordLike::from_ty(expected);
             if record_like.is_record(self.db) {
-                self.check_record_pat_fields(record_like, pat);
-                return expected;
+                let analysis = self.check_record_pat_fields(record_like, pat, expected);
+                return self.finish_pat_check(pat, expected, expected, analysis);
             }
 
             let diag =
                 BodyDiag::record_expected(self.db, pat.span(self.body()).into(), Some(record_like));
             self.push_diag(diag);
-            return TyId::invalid(self.db, InvalidCause::Other);
+            return self.finish_pat_check(
+                pat,
+                expected,
+                TyId::invalid(self.db, InvalidCause::Other),
+                PatternAnalysisStatus::Invalid,
+            );
         }
 
-        match self.resolve_path(*path, true, span.clone().path()) {
+        let (actual, analysis) = match self.resolve_path(*path, true, span.clone().path()) {
             Ok(reso) => match reso {
                 PathRes::Ty(ty) | PathRes::TyAlias(_, ty)
                     if RecordLike::from_ty(ty).is_record(self.db) =>
                 {
-                    self.check_record_pat_fields(RecordLike::from_ty(ty), pat);
-                    ty
+                    let semantic_ty = self.equate_ty(ty, expected, pat.span(self.body()).into());
+                    let semantic_ty = if semantic_ty.has_invalid(self.db) {
+                        semantic_ty
+                    } else {
+                        self.canonical_pattern_ty(semantic_ty, expected)
+                    };
+                    let record_like = if semantic_ty.has_invalid(self.db) {
+                        RecordLike::Type(ty)
+                    } else {
+                        RecordLike::Type(semantic_ty)
+                    };
+                    (
+                        semantic_ty,
+                        self.check_record_pat_fields(record_like, pat, semantic_ty),
+                    )
                 }
 
                 PathRes::Ty(ty)
@@ -419,7 +761,10 @@ impl<'db> TyChecker<'db> {
                         Some(RecordLike::Type(ty)),
                     );
                     self.push_diag(diag);
-                    TyId::invalid(self.db, InvalidCause::Other)
+                    (
+                        TyId::invalid(self.db, InvalidCause::Other),
+                        PatternAnalysisStatus::Invalid,
+                    )
                 }
 
                 PathRes::Trait(trait_) => {
@@ -428,16 +773,47 @@ impl<'db> TyChecker<'db> {
                         given: Either::Left(trait_.def(self.db).into()),
                     };
                     self.push_diag(diag);
-                    TyId::invalid(self.db, InvalidCause::Other)
+                    (
+                        TyId::invalid(self.db, InvalidCause::Other),
+                        PatternAnalysisStatus::Invalid,
+                    )
                 }
 
                 PathRes::EnumVariant(variant) => {
                     let ty = variant.ty;
                     let record_like = RecordLike::from_variant(variant);
                     if record_like.is_record(self.db) {
-                        self.check_record_pat_fields(record_like, pat);
+                        let semantic_ty =
+                            self.equate_ty(ty, expected, pat.span(self.body()).into());
+                        let semantic_ty = if semantic_ty.has_invalid(self.db) {
+                            semantic_ty
+                        } else {
+                            self.canonical_pattern_ty(semantic_ty, expected)
+                        };
+                        let record_like = if semantic_ty.has_invalid(self.db) {
+                            record_like
+                        } else {
+                            RecordLike::EnumVariant(ResolvedVariant {
+                                ty: semantic_ty,
+                                ..variant
+                            })
+                        };
+                        (
+                            semantic_ty,
+                            self.check_record_pat_fields(record_like, pat, semantic_ty),
+                        )
+                    } else {
+                        let diag = BodyDiag::record_expected(
+                            self.db,
+                            pat.span(self.body()).into(),
+                            Some(record_like),
+                        );
+                        self.push_diag(diag);
+                        (
+                            TyId::invalid(self.db, InvalidCause::Other),
+                            PatternAnalysisStatus::Invalid,
+                        )
                     }
-                    ty
                 }
                 PathRes::Mod(scope) => {
                     let diag = BodyDiag::NotValue {
@@ -445,14 +821,20 @@ impl<'db> TyChecker<'db> {
                         given: Either::Left(scope.item()),
                     };
                     self.push_diag(diag);
-                    TyId::invalid(self.db, InvalidCause::Other)
+                    (
+                        TyId::invalid(self.db, InvalidCause::Other),
+                        PatternAnalysisStatus::Invalid,
+                    )
                 }
 
                 PathRes::TraitMethod(..) | PathRes::Method(..) | PathRes::FuncParam(..) => {
                     let diag =
                         BodyDiag::record_expected(self.db, pat.span(self.body()).into(), None);
                     self.push_diag(diag);
-                    TyId::invalid(self.db, InvalidCause::Other)
+                    (
+                        TyId::invalid(self.db, InvalidCause::Other),
+                        PatternAnalysisStatus::Invalid,
+                    )
                 }
             },
             Err(_) => {
@@ -468,15 +850,20 @@ impl<'db> TyChecker<'db> {
                         // The pattern matches the expected struct type
                         let record_like = RecordLike::from_ty(expected);
                         if record_like.is_record(self.db) {
-                            self.check_record_pat_fields(record_like, pat);
+                            let analysis = self.check_record_pat_fields(record_like, pat, expected);
+                            return self.finish_pat_check(pat, expected, expected, analysis);
                         }
-                        return expected;
                     }
                 }
 
-                TyId::invalid(self.db, InvalidCause::Other)
+                (
+                    TyId::invalid(self.db, InvalidCause::Other),
+                    PatternAnalysisStatus::Invalid,
+                )
             }
-        }
+        };
+
+        self.finish_pat_check(pat, expected, actual, analysis)
     }
 
     fn expected_msg_variant_for_named_recv_pat(
@@ -498,24 +885,36 @@ impl<'db> TyChecker<'db> {
         (path_ident == struct_name).then_some(expected)
     }
 
-    fn check_record_pat_fields(&mut self, record_like: RecordLike<'db>, pat: PatId) {
+    fn check_record_pat_fields(
+        &mut self,
+        record_like: RecordLike<'db>,
+        pat: PatId,
+        semantic_ty: TyId<'db>,
+    ) -> PatternAnalysisStatus {
         let Partial::Present(Pat::Record(_, fields)) = pat.data(self.db, self.body()) else {
             unreachable!()
         };
 
         let hir_db = self.db;
         let mut contains_rest = false;
+        let mut invalid = false;
+        let mut field_status_by_idx = rustc_hash::FxHashMap::default();
 
         let pat_span = pat.span(self.body()).into_record_pat();
         let mut rec_checker = RecordInitChecker::new(self, &record_like);
 
         for (i, field_pat) in fields.iter().enumerate() {
             if field_pat.pat.is_rest(hir_db, rec_checker.tc.body()) {
+                rec_checker.tc.consume_rest_pat(
+                    field_pat.pat,
+                    TyId::invalid(rec_checker.tc.db, InvalidCause::Other),
+                );
                 if contains_rest {
                     let diag = BodyDiag::DuplicatedRestPat(
                         field_pat.pat.span(rec_checker.tc.body()).into(),
                     );
                     rec_checker.tc.push_diag(diag);
+                    invalid = true;
                     continue;
                 }
 
@@ -529,21 +928,53 @@ impl<'db> TyChecker<'db> {
                     Ok(ty) => ty,
                     Err(diag) => {
                         rec_checker.tc.push_diag(diag);
+                        invalid = true;
                         TyId::invalid(rec_checker.tc.db, InvalidCause::Other)
                     }
                 };
 
             let (pat_expected, mode) = rec_checker.tc.destructure_source_mode(expected);
-            rec_checker.tc.check_pat(field_pat.pat, pat_expected);
+            let result = rec_checker.tc.check_pat(field_pat.pat, pat_expected);
             if let super::DestructureSourceMode::Borrow(kind) = mode {
                 rec_checker
                     .tc
                     .retype_pattern_bindings_for_borrow(field_pat.pat, kind);
             }
+            if let Some(label) = label
+                && let Some(field_idx) = record_like.record_field_idx(hir_db, label)
+            {
+                field_status_by_idx.insert(field_idx, result.analysis);
+            }
         }
 
         if let Err(diag) = rec_checker.finalize(pat_span.fields().into(), contains_rest) {
             self.push_diag(diag);
+            invalid = true;
+        }
+
+        let ctor = match record_like {
+            RecordLike::Type(ty) => self.type_constructor_kind(ty, semantic_ty),
+            RecordLike::EnumVariant(variant) => {
+                ConstructorKind::Variant(variant.variant, variant.ty)
+            }
+        };
+        let field_tys = ctor.field_types(self.db);
+        let mut canonical_fields = Vec::with_capacity(field_tys.len());
+        for (field_idx, field_ty) in field_tys.into_iter().enumerate() {
+            match field_status_by_idx.remove(&field_idx) {
+                Some(status) => canonical_fields.push(status),
+                None if contains_rest => canonical_fields.push(self.ready_wildcard(field_ty, None)),
+                None => {
+                    invalid = true;
+                    canonical_fields.push(self.ready_wildcard(field_ty, None));
+                }
+            }
+        }
+
+        if invalid {
+            PatternAnalysisStatus::Invalid
+        } else {
+            self.ready_constructor(semantic_ty, ctor, canonical_fields)
         }
     }
 
