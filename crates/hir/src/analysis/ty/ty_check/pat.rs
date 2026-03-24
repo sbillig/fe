@@ -74,10 +74,18 @@ impl<'db> TyChecker<'db> {
             Pat::PathTuple(..) => self.check_path_tuple_pat(pat, pat_data, expected),
             Pat::Record(..) => self.check_record_pat(pat, pat_data, expected),
 
-            Pat::Or(lhs, rhs) => {
-                let lhs = self.check_pat(*lhs, expected);
-                let rhs = self.check_pat(*rhs, expected);
-                let analysis = self.ready_or(expected, [lhs.analysis, rhs.analysis]);
+            Pat::Or(lhs_pat, rhs_pat) => {
+                let lhs = self.check_pat(*lhs_pat, expected);
+                let rhs = self.check_pat(*rhs_pat, expected);
+                let analysis =
+                    if self.pattern_binds_any(*lhs_pat) || self.pattern_binds_any(*rhs_pat) {
+                        self.push_diag(BodyDiag::BindingsInOrPat(pat.span(self.body()).into()));
+                        self.discard_local_bindings_in_pat(*lhs_pat);
+                        self.discard_local_bindings_in_pat(*rhs_pat);
+                        PatternAnalysisStatus::Invalid
+                    } else {
+                        self.ready_or(expected, [lhs.analysis, rhs.analysis])
+                    };
                 self.finish_pat_check(pat, expected, rhs.ty, analysis)
             }
         }
@@ -218,6 +226,31 @@ impl<'db> TyChecker<'db> {
         self.env.type_pat(pat, ty);
         self.env
             .set_pattern_status(pat, PatternAnalysisStatus::Invalid);
+    }
+
+    fn discard_local_bindings_in_pat(&mut self, pat: PatId) {
+        let Partial::Present(pat_data) = pat.data(self.db, self.body()) else {
+            return;
+        };
+
+        match pat_data {
+            Pat::Path(..) => self.env.discard_pat_binding(pat),
+            Pat::Tuple(pats) | Pat::PathTuple(_, pats) => {
+                for pat in pats {
+                    self.discard_local_bindings_in_pat(*pat);
+                }
+            }
+            Pat::Record(_, fields) => {
+                for field in fields {
+                    self.discard_local_bindings_in_pat(field.pat);
+                }
+            }
+            Pat::Or(lhs, rhs) => {
+                self.discard_local_bindings_in_pat(*lhs);
+                self.discard_local_bindings_in_pat(*rhs);
+            }
+            Pat::WildCard | Pat::Rest | Pat::Lit(..) => {}
+        }
     }
 
     fn check_lit_pat(

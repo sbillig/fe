@@ -113,3 +113,34 @@ pub fn test(x: String<3>) -> u8 {
         "expected unsupported-pattern error, got `{message}`",
     );
 }
+
+#[test]
+fn lower_module_reports_or_pattern_binding_errors_as_analysis_diagnostics() {
+    let mut db = DriverDataBase::default();
+    let url = Url::parse("file:///or_pattern_binding_error.fe").unwrap();
+    let src = r#"
+enum E {
+    A(u8),
+    B,
+}
+
+pub fn test(e: E) -> u8 {
+    match e {
+        E::A(x) | E::B => x
+    }
+}
+"#;
+
+    let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+    let top_mod = db.top_mod(file);
+
+    let err = lower_module(&db, top_mod).expect_err("binding or-pattern should fail analysis");
+
+    let MirLowerError::AnalysisDiagnostics { diagnostics, .. } = err else {
+        panic!("expected AnalysisDiagnostics, got {err:?}");
+    };
+    assert!(
+        diagnostics.contains("bindings in `|` patterns are not supported"),
+        "expected binding-or-pattern diagnostic, got `{diagnostics}`",
+    );
+}

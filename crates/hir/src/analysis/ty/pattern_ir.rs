@@ -103,7 +103,16 @@ impl<'db> PatternStore<'db> {
                 }
                 ConstructorKind::Variant(..) | ConstructorKind::Literal(..) => false,
             },
-            ValidatedPatKind::Or(pats) => pats.iter().any(|pat| self.is_irrefutable(db, *pat)),
+            ValidatedPatKind::Or(pats) => {
+                pats.iter().any(|pat| self.is_irrefutable(db, *pat))
+                    || crate::analysis::ty::pattern_analysis::check_exhaustiveness(
+                        db,
+                        self,
+                        pats,
+                        self.node(id).ty,
+                    )
+                    .is_ok()
+            }
         }
     }
 

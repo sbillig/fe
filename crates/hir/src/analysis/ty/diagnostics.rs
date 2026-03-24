@@ -218,6 +218,7 @@ pub enum BodyDiag<'db> {
         conflicat_with: DynLazySpan<'db>,
         name: IdentId<'db>,
     },
+    BindingsInOrPat(DynLazySpan<'db>),
     DuplicatedRestPat(DynLazySpan<'db>),
     UnexpectedRestPat(DynLazySpan<'db>),
 
@@ -685,6 +686,7 @@ impl<'db> BodyDiag<'db> {
             Self::InfiniteOccurrence(..) => 1,
             Self::DuplicatedRestPat(..) => 2,
             Self::UnexpectedRestPat(..) => 75,
+            Self::BindingsInOrPat(..) => 76,
             Self::InvalidPathDomainInPat { .. } => 3,
             Self::UnitVariantExpected { .. } => 4,
             Self::TupleVariantExpected { .. } => 5,

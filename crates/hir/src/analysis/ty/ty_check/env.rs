@@ -744,6 +744,14 @@ impl<'db> TyCheckEnv<'db> {
         }
     }
 
+    pub(super) fn discard_pat_binding(&mut self, pat: PatId) {
+        let Some(binding) = self.pat_bindings.remove(&pat) else {
+            return;
+        };
+        self.pat_binding_modes.remove(&pat);
+        self.pending_vars.retain(|_, pending| *pending != binding);
+    }
+
     pub(super) fn push_effect_frame(&mut self) {
         self.effect_env.push_frame();
     }

@@ -1284,6 +1284,9 @@ impl<'db> TyChecker<'db> {
                 let Partial::Present(path) = path else {
                     return;
                 };
+                let Some(LocalBinding::Local { .. }) = self.env.pat_binding(pat) else {
+                    return;
+                };
                 if let Some(ident) = path.as_ident(self.db) {
                     let current = self.env.current_block_idx();
                     if self.env.get_block(current).lookup_var(ident).is_none() {

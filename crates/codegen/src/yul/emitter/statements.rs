@@ -452,7 +452,8 @@ impl<'db> FunctionEmitter<'db> {
         let variants = adt_def.fields(self.db);
         for (idx, _) in variants.iter().enumerate() {
             let enum_variant = hir::hir_def::EnumVariant::new(enm, idx);
-            let ctor = hir::analysis::ty::pattern_ir::ConstructorKind::Variant(enum_variant, enum_ty);
+            let ctor =
+                hir::analysis::ty::pattern_ir::ConstructorKind::Variant(enum_variant, enum_ty);
             let field_tys = ctor.field_types(self.db);
             let mut case_docs = Vec::new();
             for (field_idx, field_ty) in field_tys.iter().enumerate() {

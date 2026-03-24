@@ -2139,6 +2139,18 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::BindingsInOrPat(span) => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "bindings in `|` patterns are not supported".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "split this into separate arms or remove the binding".to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
             Self::DuplicatedRestPat(span) => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "duplicate `..` in pattern".to_string(),

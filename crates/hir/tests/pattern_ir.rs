@@ -48,6 +48,17 @@ fn first_tuple_pat<'db>(
         .unwrap()
 }
 
+fn first_or_pat<'db>(
+    db: &'db HirAnalysisTestDb,
+    typed_body: &fe_hir::analysis::ty::ty_check::TypedBody<'db>,
+) -> fe_hir::hir_def::PatId {
+    let body = typed_body.body().unwrap();
+    body.pats(db)
+        .keys()
+        .find(|pat| matches!(pat.data(db, body), Partial::Present(Pat::Or(..))))
+        .unwrap()
+}
+
 #[test]
 fn invalid_match_arm_suppresses_unreachable_diagnostics() {
     with_func_body(
@@ -258,6 +269,80 @@ fn test(x: (u8, u8)) -> u8 {
                     .pattern_root(first_tuple_pat(db, &typed_body))
                     .is_none()
             );
+        },
+    );
+}
+
+#[test]
+fn or_pattern_bindings_are_rejected_and_not_seeded_into_scope() {
+    with_func_body(
+        r#"
+enum E {
+    A(u8),
+    B,
+}
+
+fn test(e: E) -> u8 {
+    match e {
+        E::A(x) | E::B => x
+    }
+}
+"#,
+        "test",
+        |db, diags, typed_body| {
+            assert!(
+                body_has_diag(&diags, |diag| matches!(diag, BodyDiag::BindingsInOrPat(..))),
+                "expected or-pattern binding diagnostic, got {diags:?}",
+            );
+            assert!(
+                body_has_diag(&diags, |diag| matches!(
+                    diag,
+                    BodyDiag::UndefinedVariable(_, ident) if ident.data(db) == "x"
+                )),
+                "expected undefined-variable diagnostic, got {diags:?}",
+            );
+
+            let body = typed_body.body().unwrap();
+            let binding_pat = body
+                .pats(db)
+                .keys()
+                .find(|pat| {
+                    let Partial::Present(Pat::Path(Partial::Present(path), _)) = pat.data(db, body)
+                    else {
+                        return false;
+                    };
+                    path.as_ident(db).is_some_and(|ident| ident.data(db) == "x")
+                })
+                .unwrap();
+
+            assert!(
+                typed_body
+                    .pattern_root(first_or_pat(db, &typed_body))
+                    .is_none()
+            );
+            assert!(typed_body.pat_binding(binding_pat).is_none());
+        },
+    );
+}
+
+#[test]
+fn exhaustive_or_patterns_are_irrefutable() {
+    with_func_body(
+        r#"
+fn test(flag: bool) -> u8 {
+    match flag {
+        true | false => 0
+    }
+}
+"#,
+        "test",
+        |db, diags, typed_body| {
+            assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+
+            let root = typed_body
+                .pattern_root(first_or_pat(db, &typed_body))
+                .unwrap();
+            assert!(typed_body.pattern_store().is_irrefutable(db, root));
         },
     );
 }
