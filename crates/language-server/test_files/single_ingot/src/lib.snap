@@ -1,14 +1,9 @@
 ---
 source: crates/language-server/src/functionality/goto.rs
+assertion_line: 451
 expression: snapshot
 input_file: test_files/single_ingot/src/lib.fe
 ---
-note: 
-  ┌─ lib.fe:5:13
-  │
-5 │   pub mod what {
-  │             ^^^ -> lib::who::what
-
 note: 
    ┌─ lib.fe:10:12
    │
