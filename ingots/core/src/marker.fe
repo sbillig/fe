@@ -27,3 +27,7 @@ impl Copy for i64 {}
 impl Copy for i128 {}
 impl Copy for i256 {}
 impl Copy for isize {}
+
+impl<T, const N: usize> Copy for [T; N]
+where T: Copy
+{}

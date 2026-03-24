@@ -1515,6 +1515,7 @@ impl<'db> Monomorphizer<'db> {
                 AddressSpaceKind::Calldata => "calldata",
                 AddressSpaceKind::Storage => "stor",
                 AddressSpaceKind::TransientStorage => "tstor",
+                AddressSpaceKind::Code => "code",
             };
             base = format!("{base}_{suffix}");
         }
@@ -2038,6 +2039,7 @@ fn effect_param_space_suffix(spaces: &[Option<AddressSpaceKind>]) -> String {
                 AddressSpaceKind::Calldata => "calldata",
                 AddressSpaceKind::Storage => "stor",
                 AddressSpaceKind::TransientStorage => "tstor",
+                AddressSpaceKind::Code => "code",
             };
             format!("eff{idx}_{suffix}")
         })
@@ -2079,6 +2081,7 @@ fn param_capability_space_suffix(
                     AddressSpaceKind::Calldata => "calldata",
                     AddressSpaceKind::Storage => "stor",
                     AddressSpaceKind::TransientStorage => "tstor",
+                    AddressSpaceKind::Code => "code",
                 };
                 let path_suffix = projection_path_suffix(path);
                 format!("arg{param_idx}_{path_suffix}_{space_suffix}")

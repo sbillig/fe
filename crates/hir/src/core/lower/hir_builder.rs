@@ -9,8 +9,9 @@ use crate::{
         FieldDefListId, FieldIndex, Func, FuncModifiers, FuncParam, FuncParamListId, FuncParamMode,
         FuncParamName, GenericArgListId, GenericParam, GenericParamListId, IdentId, ImplTrait,
         IntegerId, ItemKind, LitKind, Mod, Partial, Pat, PatId, PathId, Stmt, StmtId, Struct,
-        TopLevelMod, TrackedItemId, TrackedItemVariant, TraitRefId, TypeBound, TypeGenericParam,
-        TypeId, TypeKind, TypeMode, UnOp, Visibility, WhereClauseId, expr::CallArg,
+        TopLevelMod, TrackedItemId, TrackedItemVariant, TraitRefId, TypeAlias, TypeBound,
+        TypeGenericParam, TypeId, TypeKind, TypeMode, UnOp, Visibility, WhereClauseId,
+        expr::CallArg,
     },
     span::{DesugaredOrigin, HirOrigin},
 };
@@ -325,6 +326,26 @@ where
         fields: FieldDefListId<'db>,
     ) -> Struct<'db> {
         self.struct_simple(name, attributes, Visibility::Public, fields)
+    }
+
+    pub(super) fn type_alias_simple(
+        &mut self,
+        name: Partial<IdentId<'db>>,
+        ty: Partial<TypeId<'db>>,
+    ) -> TypeAlias<'db> {
+        self.with_item_scope(TrackedItemVariant::TypeAlias(name), |this, id| {
+            TypeAlias::new(
+                this.db(),
+                id,
+                name,
+                this.empty_attrs(),
+                Visibility::Private,
+                this.empty_generic_params(),
+                ty,
+                this.top_mod(),
+                this.origin(),
+            )
+        })
     }
 
     pub(super) fn new_impl_trait(

@@ -636,7 +636,8 @@ fn value_depends_on_local<'db>(
         | ValueOrigin::ControlFlowResult { .. }
         | ValueOrigin::Unit
         | ValueOrigin::Synthetic(_)
-        | ValueOrigin::CodeRegionRef(_) => false,
+        | ValueOrigin::CodeRegionRef(_)
+        | ValueOrigin::ConstRegion(_) => false,
     };
     value_visiting[value.index()] = false;
     depends
@@ -962,6 +963,7 @@ fn value_must_alias_local_alloc<'db>(
         | ValueOrigin::Unary { .. }
         | ValueOrigin::Binary { .. }
         | ValueOrigin::Synthetic(_)
+        | ValueOrigin::ConstRegion(_)
         | ValueOrigin::CodeRegionRef(_) => None,
     };
 
@@ -994,6 +996,7 @@ fn value_origin_local<'db>(
         | ValueOrigin::Unary { .. }
         | ValueOrigin::Binary { .. }
         | ValueOrigin::Synthetic(_)
+        | ValueOrigin::ConstRegion(_)
         | ValueOrigin::CodeRegionRef(_) => None,
     };
 

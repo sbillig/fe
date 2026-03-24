@@ -7,7 +7,8 @@ use parser::ast::{self, PatKind, prelude::AstNode};
 use parser::syntax_kind::SyntaxKind;
 
 use super::types::{
-    Doc, ToDoc, TokenPiece, block_list_auto, block_list_spaced_auto, has_comment_tokens, token_doc,
+    Doc, ToDoc, TokenPiece, block_list_auto, block_list_spaced_auto, has_comment_tokens,
+    singleton_tuple, token_doc,
 };
 
 impl ToDoc for ast::Pat {
@@ -56,6 +57,18 @@ impl ToDoc for ast::TuplePat {
 
 impl ToDoc for ast::TuplePatElemList {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        if !has_comment_tokens(self.syntax()) {
+            let mut items: Vec<_> = self
+                .syntax()
+                .children()
+                .filter_map(ast::Pat::cast)
+                .map(|pat| pat.to_doc(ctx))
+                .collect();
+            if items.len() == 1 {
+                return singleton_tuple(ctx, "(", ")", items.pop().unwrap());
+            }
+        }
+
         let indent = ctx.config.indent_width as isize;
         block_list_auto(ctx, self.syntax(), "(", ")", ast::Pat::cast, indent, true)
     }

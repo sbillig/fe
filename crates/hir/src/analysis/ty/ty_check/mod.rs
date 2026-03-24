@@ -43,7 +43,7 @@ use crate::analysis::place::Place;
 
 use super::{
     assoc_const::AssocConstUse,
-    canonical::Canonical,
+    canonical::{Canonical, Canonicalized},
     diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
     effects::{EffectKeyKind, resolve_normalized_type_effect_key},
     trait_def::TraitInstId,
@@ -433,13 +433,55 @@ impl<'db> TyChecker<'db> {
         let scope = self.env.scope();
         let assumptions = self.env.assumptions();
 
-        let is_viable = |this: &mut Self,
-                         pending: &env::PendingMethod<'db>,
-                         expr_ty: TyId<'db>,
-                         receiver: ExprId,
-                         generic_args: crate::hir_def::GenericArgListId<'db>,
-                         call_args: &[crate::hir_def::CallArg<'db>],
-                         inst: TraitInstId<'db>| {
+        #[derive(Clone, Copy)]
+        enum MethodCandidateViability<'db> {
+            Satisfied(TraitInstId<'db>),
+            Tentative(TraitInstId<'db>),
+        }
+
+        impl<'db> MethodCandidateViability<'db> {
+            fn inst(self) -> TraitInstId<'db> {
+                match self {
+                    Self::Satisfied(inst) | Self::Tentative(inst) => inst,
+                }
+            }
+
+            fn is_satisfied(self) -> bool {
+                matches!(self, Self::Satisfied(_))
+            }
+        }
+
+        let dedup_equivalent_insts = |insts: Vec<TraitInstId<'db>>| -> Vec<TraitInstId<'db>> {
+            let mut unique: Vec<TraitInstId<'db>> = Vec::new();
+            'outer: for inst in insts {
+                for &seen in &unique {
+                    if inst.def(db) != seen.def(db) {
+                        continue;
+                    }
+
+                    let mut table = UnificationTable::new(db);
+                    let lhs = table.instantiate_with_fresh_vars(
+                        crate::analysis::ty::binder::Binder::bind(inst),
+                    );
+                    let rhs = table.instantiate_with_fresh_vars(
+                        crate::analysis::ty::binder::Binder::bind(seen),
+                    );
+                    if table.unify(lhs, rhs).is_ok() {
+                        continue 'outer;
+                    }
+                }
+                unique.push(inst);
+            }
+            unique
+        };
+
+        let analyze_candidate = |this: &mut Self,
+                                 pending: &env::PendingMethod<'db>,
+                                 expr_ty: TyId<'db>,
+                                 receiver: ExprId,
+                                 generic_args: crate::hir_def::GenericArgListId<'db>,
+                                 call_args: &[crate::hir_def::CallArg<'db>],
+                                 inst: TraitInstId<'db>| {
             let snap = this.table.snapshot();
 
             let result = (|| {
@@ -523,36 +565,46 @@ impl<'db> TyChecker<'db> {
                 );
                 this.table.unify(expr_ty, ret_ty).ok()?;
 
-                Some(())
-            })()
-            .is_some();
+                let inst = inst
+                    .fold_with(db, &mut this.table)
+                    .normalize(db, scope, assumptions);
+                let canonical_inst = Canonicalized::new(db, inst);
+
+                match is_goal_satisfiable(
+                    db,
+                    TraitSolveCx::new(db, scope).with_assumptions(assumptions),
+                    canonical_inst.value.value,
+                ) {
+                    GoalSatisfiability::Satisfied(solution) => {
+                        Some(MethodCandidateViability::Satisfied(
+                            canonical_inst
+                                .extract_solution(&mut this.table, solution)
+                                .inst,
+                        ))
+                    }
+                    GoalSatisfiability::NeedsConfirmation(ambiguous) => {
+                        let cands = dedup_equivalent_insts(
+                            ambiguous
+                                .iter()
+                                .copied()
+                                .map(|s| canonical_inst.extract_solution(&mut this.table, s).inst)
+                                .collect(),
+                        );
+                        if let [solution] = cands.as_slice() {
+                            Some(MethodCandidateViability::Satisfied(*solution))
+                        } else {
+                            Some(MethodCandidateViability::Tentative(inst))
+                        }
+                    }
+                    GoalSatisfiability::ContainsInvalid => {
+                        Some(MethodCandidateViability::Tentative(inst))
+                    }
+                    GoalSatisfiability::UnSat(_) => None,
+                }
+            })();
 
             this.table.rollback_to(snap);
             result
-        };
-
-        let dedup_equivalent_insts = |insts: Vec<TraitInstId<'db>>| -> Vec<TraitInstId<'db>> {
-            let mut unique: Vec<TraitInstId<'db>> = Vec::new();
-            'outer: for inst in insts {
-                for &seen in &unique {
-                    if inst.def(db) != seen.def(db) {
-                        continue;
-                    }
-
-                    let mut table = UnificationTable::new(db);
-                    let lhs = table.instantiate_with_fresh_vars(
-                        crate::analysis::ty::binder::Binder::bind(inst),
-                    );
-                    let rhs = table.instantiate_with_fresh_vars(
-                        crate::analysis::ty::binder::Binder::bind(seen),
-                    );
-                    if table.unify(lhs, rhs).is_ok() {
-                        continue 'outer;
-                    }
-                }
-                unique.push(inst);
-            }
-            unique
         };
 
         // Fixed-point pass over deferred tasks.
@@ -624,8 +676,8 @@ impl<'db> TyChecker<'db> {
                             .candidates
                             .iter()
                             .copied()
-                            .filter(|&inst| {
-                                is_viable(
+                            .filter_map(|inst| {
+                                analyze_candidate(
                                     self,
                                     &pending,
                                     expr_ty,
@@ -636,9 +688,30 @@ impl<'db> TyChecker<'db> {
                                 )
                             })
                             .collect();
-                        let viable = dedup_equivalent_insts(viable);
+                        let satisfied = dedup_equivalent_insts(
+                            viable
+                                .iter()
+                                .copied()
+                                .filter(|cand| cand.is_satisfied())
+                                .map(MethodCandidateViability::inst)
+                                .collect(),
+                        );
+                        let viable = dedup_equivalent_insts(
+                            viable
+                                .into_iter()
+                                .map(MethodCandidateViability::inst)
+                                .collect(),
+                        );
+                        let selected = match satisfied.as_slice() {
+                            [inst] => Some(*inst),
+                            _ if satisfied.is_empty() => match viable.as_slice() {
+                                [inst] => Some(*inst),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
 
-                        if let [inst] = viable.as_slice() {
+                        if let Some(inst) = selected {
                             if self.env.callable_expr(pending.expr).is_none() {
                                 let call_span = pending.expr.span(body).into_method_call_expr();
 
@@ -659,14 +732,14 @@ impl<'db> TyChecker<'db> {
                                 let func_ty = self.instantiate_trait_method_to_term(
                                     trait_method,
                                     recv_ty,
-                                    *inst,
+                                    inst,
                                 );
 
                                 let mut callable = match Callable::new(
                                     db,
                                     func_ty,
                                     receiver.span(body).into(),
-                                    Some(*inst),
+                                    Some(inst),
                                 ) {
                                     Ok(callable) => callable,
                                     Err(diag) => {
@@ -787,8 +860,8 @@ impl<'db> TyChecker<'db> {
                         .candidates
                         .iter()
                         .copied()
-                        .filter(|&inst| {
-                            is_viable(
+                        .filter_map(|inst| {
+                            analyze_candidate(
                                 self,
                                 &pending,
                                 expr_ty,
@@ -799,12 +872,30 @@ impl<'db> TyChecker<'db> {
                             )
                         })
                         .collect();
-                    let viable = dedup_equivalent_insts(viable);
-                    if viable.len() > 1 {
+                    let satisfied = dedup_equivalent_insts(
+                        viable
+                            .iter()
+                            .copied()
+                            .filter(|cand| cand.is_satisfied())
+                            .map(MethodCandidateViability::inst)
+                            .collect(),
+                    );
+                    let viable = dedup_equivalent_insts(
+                        viable
+                            .into_iter()
+                            .map(MethodCandidateViability::inst)
+                            .collect(),
+                    );
+                    let ambiguous = if satisfied.len() > 1 {
+                        satisfied
+                    } else {
+                        viable
+                    };
+                    if ambiguous.len() > 1 {
                         self.push_diag(BodyDiag::AmbiguousTrait {
                             primary: pending.span.clone(),
                             method_name: pending.method_name,
-                            traits: viable.into_iter().collect(),
+                            traits: ambiguous.into_iter().collect(),
                         });
                     }
                 }

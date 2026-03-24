@@ -2412,6 +2412,7 @@ impl<'db> TyChecker<'db> {
                 && !matches!(
                     const_ty.data(self.db),
                     ConstTyData::Evaluated(EvaluatedConstTy::LitInt(_), _)
+                        | ConstTyData::TyParam(..)
                 )
             {
                 self.push_diag(BodyDiag::ConstValueMustBeKnown(len_body.span().into()));

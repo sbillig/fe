@@ -1877,11 +1877,10 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         match rvalue {
             Rvalue::Value(value) => self.local_loans_in_value(state, *value),
             Rvalue::Load { place } => self.local_loans_from_load_place(state, place),
-            Rvalue::ZeroInit
-            | Rvalue::Call(_)
-            | Rvalue::Intrinsic { .. }
-            | Rvalue::Alloc { .. }
-            | Rvalue::ConstAggregate { .. } => LocalLoanState::default(),
+            Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::ConstAggregate { .. } => {
+                LocalLoanState::default()
+            }
+            Rvalue::Call(_) | Rvalue::Intrinsic { .. } => LocalLoanState::default(),
         }
     }
 

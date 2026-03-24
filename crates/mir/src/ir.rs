@@ -250,6 +250,8 @@ pub struct MirBody<'db> {
     pub effect_param_locals: Vec<LocalId>,
     /// Mapping from an address-taken word/ptr/ZST local to its spill slot local.
     pub spill_slots: FxHashMap<LocalId, LocalId>,
+    pub const_regions: Vec<ConstRegion<'db>>,
+    const_region_index: FxHashMap<ConstRegionKey<'db>, ConstRegionId>,
     pub expr_values: FxHashMap<ExprId, ValueId>,
     pub pat_address_space: FxHashMap<PatId, AddressSpaceKind>,
     pub loop_headers: FxHashMap<BasicBlockId, LoopInfo>,
@@ -267,6 +269,8 @@ impl<'db> MirBody<'db> {
             param_locals: Vec::new(),
             effect_param_locals: Vec::new(),
             spill_slots: FxHashMap::default(),
+            const_regions: Vec::new(),
+            const_region_index: FxHashMap::default(),
             expr_values: FxHashMap::default(),
             pat_address_space: FxHashMap::default(),
             loop_headers: FxHashMap::default(),
@@ -318,6 +322,25 @@ impl<'db> MirBody<'db> {
         let id = LocalId(self.locals.len() as u32);
         self.locals.push(data);
         id
+    }
+
+    pub fn intern_const_region(&mut self, ty: TyId<'db>, bytes: Vec<u8>) -> ConstRegionId {
+        let key = ConstRegionKey {
+            ty,
+            bytes: bytes.clone(),
+        };
+        if let Some(&existing) = self.const_region_index.get(&key) {
+            return existing;
+        }
+
+        let id = ConstRegionId(self.const_regions.len() as u32);
+        self.const_regions.push(ConstRegion { ty, bytes });
+        self.const_region_index.insert(key, id);
+        id
+    }
+
+    pub fn const_region(&self, id: ConstRegionId) -> &ConstRegion<'db> {
+        &self.const_regions[id.index()]
     }
 
     pub fn value(&self, id: ValueId) -> &ValueData<'db> {
@@ -646,6 +669,15 @@ impl LocalId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ConstRegionId(pub u32);
+
+impl ConstRegionId {
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
 /// Stable index into [`MirBody::source_infos`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SourceInfoId(pub u32);
@@ -791,10 +823,10 @@ pub enum Rvalue<'db> {
     Alloc { address_space: AddressSpaceKind },
     /// Backend-neutral constant aggregate data.
     ///
-    /// Pre-computed constant bytes (e.g., constant array literals) that backends
+    /// Pre-computed constant bytes (e.g. constant array literals) that backends
     /// materialize however they choose:
     /// - Yul: emit as data sections + datacopy
-    /// - Sonatina: inline mstore sequence or memcpy
+    /// - Sonatina: register a constant region and materialize it via codecopy
     ConstAggregate {
         /// Raw constant bytes in big-endian EVM word format.
         data: Vec<u8>,
@@ -973,6 +1005,8 @@ pub enum ValueOrigin<'db> {
     FieldPtr(FieldPtrOrigin),
     /// Reference to a place (for aggregates - pointer arithmetic only, no load).
     PlaceRef(Place<'db>),
+    /// Reference to a statically initialized constant region.
+    ConstRegion(ConstRegionId),
     /// Marker for ownership moves from places (runtime no-op, analysis hook).
     MoveOut {
         place: Place<'db>,
@@ -993,11 +1027,24 @@ pub enum SyntheticValue {
     Int(BigUint),
     /// Boolean literal stored as `0` or `1`.
     Bool(bool),
-    /// Byte string literal encoded as a `0x...` word.
+    /// Inline byte-backed scalar value emitted as a `0x...` word.
     ///
-    /// This is a stopgap representation: the literal is emitted inline as a numeric constant.
-    /// Only suitable for data that fits in a single EVM word (≤32 bytes).
+    /// This is only valid for payloads that fit in a single EVM word (≤32 bytes). Larger
+    /// byte-backed values must either lower through by-reference const regions or be rejected
+    /// during MIR lowering.
     Bytes(Vec<u8>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConstRegion<'db> {
+    pub ty: TyId<'db>,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ConstRegionKey<'db> {
+    ty: TyId<'db>,
+    bytes: Vec<u8>,
 }
 
 /// Address space where a value lives.
@@ -1007,6 +1054,7 @@ pub enum AddressSpaceKind {
     Calldata,
     Storage,
     TransientStorage,
+    Code,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
