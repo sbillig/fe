@@ -5,23 +5,17 @@ input_file: crates/codegen/tests/fixtures/cast_u8_usize_cmp.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %cast_u8_usize_cmp(v0.*[i8; 8], v1.i256, v2.i256) -> i8 {
+func private %cast_u8_usize_cmp(v0.objref<[i8; 8]>, v1.i256, v2.i256) -> i8 {
     block0:
-        v3.i256 = ptr_to_int v0 i256;
-        v4.i256 = add v3 v1;
-        v5.*i8 = int_to_ptr v4 *i8;
-        v6.i256 = mload v5 i256;
-        v8.i256 = evm_byte 0.i256 v6;
-        v9.i8 = trunc v8 i8;
-        v10.i256 = zext v9 i256;
-        v11.i1 = call %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt v2 v10;
-        br v11 block1 block2;
+        v4.i1 = lt v1 8.i256;
+        v5.i1 = is_zero v4;
+        br v5 block7 block8;
 
     block1:
         return 1.i8;
 
     block2:
-        v15.i256 = zext v9 i256;
+        v15.i256 = zext v8 i256;
         v16.i1 = call %usize_ha12462c6d36e68b0_eq_he50383edd273619f_eq v2 v15;
         br v16 block3 block4;
 
@@ -29,7 +23,7 @@ func private %cast_u8_usize_cmp(v0.*[i8; 8], v1.i256, v2.i256) -> i8 {
         return 2.i8;
 
     block4:
-        v20.i256 = zext v9 i256;
+        v20.i256 = zext v8 i256;
         v21.i1 = call %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_gt v2 v20;
         br v21 block5 block6;
 
@@ -38,6 +32,16 @@ func private %cast_u8_usize_cmp(v0.*[i8; 8], v1.i256, v2.i256) -> i8 {
 
     block6:
         return 0.i8;
+
+    block7:
+        evm_revert 0.i256 0.i256;
+
+    block8:
+        v7.objref<i8> = obj.index v0 v1;
+        v8.i8 = obj.load v7;
+        v10.i256 = zext v8 i256;
+        v11.i1 = call %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt v2 v10;
+        br v11 block1 block2;
 }
 
 func private %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt(v0.i256, v1.i256) -> i1 {
@@ -60,8 +64,7 @@ func private %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_gt(v0.i256, v1.i256) -
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.*[i8; 8] = int_to_ptr 0.i256 *[i8; 8];
-        v2.i8 = call %cast_u8_usize_cmp v1 0.i256 0.i256;
+        v2.i8 = call %cast_u8_usize_cmp undef.objref<[i8; 8]> 0.i256 0.i256;
         evm_stop;
 }
 

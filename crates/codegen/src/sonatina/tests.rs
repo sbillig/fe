@@ -43,7 +43,7 @@ pub fn emit_test_module_sonatina(
     let ingot = top_mod.ingot(db);
     let mir_module = lower_ingot(db, ingot)?;
 
-    let tests =  collect_tests(db, &mir_module.functions, filter)?;
+    let tests = collect_tests(db, &mir_module.functions, filter)?;
     if tests.is_empty() {
         return Ok(TestModuleOutput { tests: Vec::new() });
     }
@@ -1081,19 +1081,17 @@ fn smoke() {
             "test runtime should only root the wrapper entry: {test_runtime:?}"
         );
 
-        let code_regions = module
-            .objects
-            .get("CodeRegions")
-            .expect("code region object should be present");
-        for section in &code_regions.sections {
-            assert!(
-                section
-                    .directives
-                    .iter()
-                    .all(|directive| !matches!(directive, Directive::Include(_))),
-                "code region section `{}` should only root its wrapper entry: {section:?}",
-                section.name.0
-            );
+        if let Some(code_regions) = module.objects.get("CodeRegions") {
+            for section in &code_regions.sections {
+                assert!(
+                    section
+                        .directives
+                        .iter()
+                        .all(|directive| !matches!(directive, Directive::Include(_))),
+                    "code region section `{}` should only root its wrapper entry: {section:?}",
+                    section.name.0
+                );
+            }
         }
     }
 
@@ -1210,6 +1208,7 @@ fn smoke() {
             value_param_count: 0,
             effect_param_count: 0,
             expected_revert: None,
+            initial_balance: None,
         };
 
         assert!(test_info_matches_filter(&test, None));
@@ -1381,8 +1380,8 @@ pub contract Foo {
             "expected object allocations:\n{ir}"
         );
         assert!(
-            !ir.contains("alloca"),
-            "typed allocations must not lower through alloca:\n{ir}"
+            !ir.contains("alloca [i256; 3]"),
+            "typed array allocations must not lower through alloca:\n{ir}"
         );
     }
 

@@ -43,7 +43,7 @@ use crate::analysis::place::Place;
 
 use super::{
     assoc_const::AssocConstUse,
-    canonical::Canonical,
+    canonical::{Canonical, Canonicalized},
     diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
     effects::{EffectKeyKind, resolve_normalized_type_effect_key},
     trait_def::TraitInstId,
@@ -573,12 +573,12 @@ impl<'db> TyChecker<'db> {
                 match is_goal_satisfiable(
                     db,
                     TraitSolveCx::new(db, scope).with_assumptions(assumptions),
-                    canonical_inst.value,
+                    canonical_inst.value.value,
                 ) {
                     GoalSatisfiability::Satisfied(solution) => {
                         Some(MethodCandidateViability::Satisfied(
                             canonical_inst
-                                .extract_solution(&mut this.table, *solution)
+                                .extract_solution(&mut this.table, solution)
                                 .inst,
                         ))
                     }
@@ -586,7 +586,8 @@ impl<'db> TyChecker<'db> {
                         let cands = dedup_equivalent_insts(
                             ambiguous
                                 .iter()
-                                .map(|s| canonical_inst.extract_solution(&mut this.table, *s).inst)
+                                .copied()
+                                .map(|s| canonical_inst.extract_solution(&mut this.table, s).inst)
                                 .collect(),
                         );
                         if let [solution] = cands.as_slice() {

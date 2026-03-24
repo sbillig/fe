@@ -2170,9 +2170,7 @@ fn compute_value_use_counts<'db>(body: &MirBody<'db>) -> Vec<usize> {
                         bump(place.base);
                         bump_place_path(&mut bump, &place.projection);
                     }
-                    Rvalue::Alloc { .. }
-                    | Rvalue::ZeroInit
-                    | Rvalue::ConstAggregate { .. } => {}
+                    Rvalue::Alloc { .. } | Rvalue::ZeroInit | Rvalue::ConstAggregate { .. } => {}
                 },
                 MirInst::Store { place, value, .. } => {
                     bump(place.base);

@@ -341,7 +341,7 @@ pub fn emit_test_module_yul_with_layout(
     let code_regions = Arc::new(code_regions);
 
     let call_graph = build_call_graph(&module.functions);
-    let tests =  collect_test_infos(db, &module.functions, filter)?;
+    let tests = collect_test_infos(db, &module.functions, filter)?;
     if tests.is_empty() {
         return Ok(TestModuleOutput { tests: Vec::new() });
     }
@@ -1721,6 +1721,7 @@ mod tests {
             value_param_count: 0,
             effect_param_count: 0,
             expected_revert: None,
+            initial_balance: None,
         };
 
         assert!(test_info_matches_filter(&test, None));

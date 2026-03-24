@@ -120,12 +120,12 @@ fn lower_msg_variant_encode_decode_impls<'db>(
 
 fn lower_msg_variant_abi_size_impl<'db>(
     builder: &mut HirBuilder<'_, 'db, MsgDesugared>,
-    variant: &ast::MsgVariant,
+    _variant: &ast::MsgVariant,
     struct_: Struct<'db>,
 ) -> ImplTrait<'db> {
     let db = builder.db();
     let roots = builder.roots();
-    let field_specs = lower_msg_variant_field_specs(builder.ctxt(), variant);
+    let field_specs = lower_msg_variant_field_specs(db, struct_);
     let trait_path = PathId::from_ident(db, roots.core)
         .push_str(db, "abi")
         .push_str(db, "AbiSize");
@@ -140,10 +140,10 @@ fn lower_msg_variant_abi_size_impl<'db>(
 
 fn lower_msg_variant_encode_impl<'db>(
     builder: &mut HirBuilder<'_, 'db, MsgDesugared>,
-    variant: &ast::MsgVariant,
+    _variant: &ast::MsgVariant,
     struct_: Struct<'db>,
 ) -> ImplTrait<'db> {
-    let field_specs = lower_msg_variant_field_specs(builder.ctxt(), variant);
+    let field_specs = lower_msg_variant_field_specs(builder.db(), struct_);
     let field_names = field_specs
         .iter()
         .map(|(name, _)| *name)
@@ -514,7 +514,7 @@ fn lower_msg_variant_fields<'db>(
                 .into_iter()
                 .map(|field| {
                     super::payable::report_payable_attr_on_unsupported_item(
-                        ctxt,
+                        builder.ctxt(),
                         field.attr_list(),
                         "field",
                     );

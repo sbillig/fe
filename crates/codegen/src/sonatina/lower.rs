@@ -3176,7 +3176,14 @@ fn lower_place_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 let base_terminal =
                     lower_place_state_terminal(ctx, place, segment.before, root_runtime)?;
                 let runtime_ty = deref_boundary_runtime_ty(ctx, place, segment.before)?;
-                load_from_terminal(ctx, base_terminal, place, segment.before.ty, runtime_ty, false)?
+                load_from_terminal(
+                    ctx,
+                    base_terminal,
+                    place,
+                    segment.before.ty,
+                    runtime_ty,
+                    false,
+                )?
             }
             (false, Some(mir::repr::DerefStepKind::ReuseLocation), Some(terminal)) => {
                 terminal_runtime_value(terminal)
@@ -4044,6 +4051,7 @@ fn deep_copy_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             && src_space == AddressSpaceKind::Code
             && src_place.projection.is_empty()
         {
+            let dst_lowered = lower_place_terminal(ctx, dst_place)?;
             let copy_size = if let Some(mir::ValueData {
                 origin: mir::ValueOrigin::ConstRegion(region_id),
                 ..
@@ -4055,14 +4063,15 @@ fn deep_copy_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             };
             if let Some(size) = copy_size
                 && size > 0
+                && dst_lowered.object_ref().is_none()
             {
-                let dst_addr = lower_place_address(ctx, dst_place)?;
+                let dst_addr = dst_lowered.word_addr(ctx);
                 let src_addr = lower_place_address(ctx, src_place)?;
                 let size_val = ctx.fb.make_imm_value(I256::from(size as u64));
                 ctx.fb
                     .insert_inst_no_result(EvmCodeCopy::new(ctx.is, dst_addr, src_addr, size_val));
+                return Ok(());
             }
-            return Ok(());
         }
 
         let Some(len) = layout::array_len(ctx.db, value_ty) else {
