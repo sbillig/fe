@@ -10,8 +10,10 @@ use std::{backtrace::Backtrace, sync::Arc};
 pub fn setup_default_subscriber(client: ClientSocket) -> Option<tracing::subscriber::DefaultGuard> {
     let client_socket_writer = ClientSocketWriterMaker::new(client);
 
-    // Filter out verbose Salsa query logs while keeping our INFO logs
-    let filter = EnvFilter::new("info").add_directive("salsa=warn".parse().unwrap());
+    // Filter out chatty dependency logs while keeping actionable server INFO logs.
+    let filter = EnvFilter::new("info")
+        .add_directive("salsa=warn".parse().unwrap())
+        .add_directive("act_locally=warn".parse().unwrap());
 
     // Use fmt layer which properly calls make_writer_for() for correct LSP log levels
     let fmt_layer = tracing_subscriber::fmt::layer()
