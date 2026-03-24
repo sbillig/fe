@@ -18,6 +18,9 @@ use thin_vec::ThinVec;
 
 use super::owner::BodyOwner;
 use super::{Callable, ConstRef, TypedBody, stmt::ForLoopSeq};
+use crate::analysis::ty::pattern_ir::{
+    PatternAnalysisStatus, PatternStore, ValidatedPat, ValidatedPatId,
+};
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{PathRes, resolve_path},
@@ -65,6 +68,8 @@ pub(super) struct TyCheckEnv<'db> {
     pat_bindings: FxHashMap<PatId, LocalBinding<'db>>,
     /// Binding capture mode for local variables (keyed by the pattern that introduces them)
     pat_binding_modes: FxHashMap<PatId, PatBindingMode>,
+    pattern_store: PatternStore<'db>,
+    pattern_status: FxHashMap<PatId, PatternAnalysisStatus>,
 
     /// Resolved effect arguments at call sites, keyed by the call expression.
     call_effect_args: FxHashMap<ExprId, Vec<super::ResolvedEffectArg<'db>>>,
@@ -186,6 +191,8 @@ impl<'db> TyCheckEnv<'db> {
             param_bindings: Vec::new(),
             pat_bindings: FxHashMap::default(),
             pat_binding_modes: FxHashMap::default(),
+            pattern_store: PatternStore::default(),
+            pattern_status: FxHashMap::default(),
             call_effect_args: FxHashMap::default(),
             for_loop_seq: FxHashMap::default(),
         };
@@ -635,6 +642,10 @@ impl<'db> TyCheckEnv<'db> {
         self.callables.get(&expr)
     }
 
+    pub(super) fn pattern_store(&self) -> &PatternStore<'db> {
+        &self.pattern_store
+    }
+
     /// Returns a callable if the body owner is a function.
     pub(super) fn func(&self) -> Option<CallableDef<'db>> {
         match self.owner {
@@ -731,6 +742,14 @@ impl<'db> TyCheckEnv<'db> {
         if self.pat_bindings.contains_key(&pat) {
             self.pat_binding_modes.insert(pat, mode);
         }
+    }
+
+    pub(super) fn discard_pat_binding(&mut self, pat: PatId) {
+        let Some(binding) = self.pat_bindings.remove(&pat) else {
+            return;
+        };
+        self.pat_binding_modes.remove(&pat);
+        self.pending_vars.retain(|_, pending| *pending != binding);
     }
 
     pub(super) fn push_effect_frame(&mut self) {
@@ -896,6 +915,20 @@ impl<'db> TyCheckEnv<'db> {
         self.pat_ty.insert(pat, ty);
     }
 
+    pub(super) fn alloc_validated_pat(&mut self, pat: ValidatedPat<'db>) -> ValidatedPatId {
+        self.pattern_store.alloc(pat)
+    }
+
+    pub(super) fn set_pattern_status(&mut self, pat: PatId, status: PatternAnalysisStatus) {
+        match status {
+            PatternAnalysisStatus::Ready(root) => self.pattern_store.set_root(pat, root),
+            PatternAnalysisStatus::Invalid | PatternAnalysisStatus::Unsupported => {
+                self.pattern_store.clear_root(pat)
+            }
+        }
+        self.pattern_status.insert(pat, status);
+    }
+
     /// Registers a new pending binding.
     ///
     /// This function adds a binding to the list of pending variables. If a
@@ -1001,6 +1034,7 @@ impl<'db> TyCheckEnv<'db> {
             }
         });
         let assumptions = self.assumptions.fold_with(self.db, &mut prober);
+        let pattern_store = self.pattern_store.fold_with(self.db, &mut prober);
 
         let callables = self
             .callables
@@ -1026,6 +1060,8 @@ impl<'db> TyCheckEnv<'db> {
             param_bindings: self.param_bindings,
             pat_bindings: self.pat_bindings,
             pat_binding_modes: self.pat_binding_modes,
+            pattern_store,
+            pattern_status: self.pattern_status,
             for_loop_seq,
         }
     }

@@ -6,7 +6,7 @@ use common::ingot::IngotKind;
 use driver::DriverDataBase;
 use hir::analysis::ty::adt_def::AdtRef;
 use hir::analysis::ty::normalize::normalize_ty;
-use hir::analysis::ty::simplified_pattern::ConstructorKind;
+use hir::analysis::ty::pattern_ir::ConstructorKind;
 use hir::analysis::ty::trait_resolution::PredicateListId;
 use hir::analysis::ty::ty_def::{CapabilityKind, PrimTy, TyBase, TyData, TyId};
 use hir::hir_def::expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp};
@@ -4078,8 +4078,7 @@ fn deep_copy_enum_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             let discr_value = ctx.fb.make_imm_value(I256::from(idx as u64));
             store_word_to_place(ctx, &dst_discr_place, discr_value)?;
         }
-        let ctor =
-            hir::analysis::ty::simplified_pattern::ConstructorKind::Variant(enum_variant, enum_ty);
+        let ctor = ConstructorKind::Variant(enum_variant, enum_ty);
         for (field_idx, field_ty) in ctor.field_types(ctx.db).iter().copied().enumerate() {
             let proj = Projection::VariantField {
                 variant: enum_variant,

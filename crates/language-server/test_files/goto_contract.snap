@@ -1,6 +1,6 @@
 ---
 source: crates/language-server/src/functionality/goto.rs
-assertion_line: 448
+assertion_line: 456
 expression: snapshot
 input_file: test_files/goto_contract.fe
 ---
@@ -290,7 +290,7 @@ note:
     ┌─ goto_contract.fe:100:9
     │
 100 │         GetSupply -> u256 uses store {
-    │         ^^^^^^^^^ -> local: GetSupply
+    │         ^^^^^^^^^ -> goto_contract::TokenMsg::GetSupply
 
 note: 
     ┌─ goto_contract.fe:100:32
@@ -362,7 +362,7 @@ note:
     ┌─ goto_contract.fe:112:9
     │
 112 │         GetOwner -> u256 uses auth {
-    │         ^^^^^^^^ -> local: GetOwner
+    │         ^^^^^^^^ -> goto_contract::AdminMsg::GetOwner
 
 note: 
     ┌─ goto_contract.fe:112:31

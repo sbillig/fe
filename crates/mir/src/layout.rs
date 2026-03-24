@@ -27,7 +27,7 @@ use hir::{
             adt_def::AdtRef,
             const_ty::{ConstTyData, EvaluatedConstTy},
             normalize::normalize_ty,
-            simplified_pattern::ConstructorKind,
+            pattern_ir::ConstructorKind,
             trait_resolution::PredicateListId,
             ty_def::{PrimTy, TyBase, TyData, TyId, prim_int_bits},
             visitor::{TyVisitable, TyVisitor, walk_ty},

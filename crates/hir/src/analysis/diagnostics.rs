@@ -1015,6 +1015,18 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 }
             }
 
+            Self::InfiniteBoundRecursion(span, msg) => CompleteDiagnostic {
+                severity,
+                message: "infinite trait bound recursion".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: msg.to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
             Self::InvalidPathSegment {
                 span: prim_span,
                 segment,
@@ -2127,12 +2139,36 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::BindingsInOrPat(span) => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "bindings in `|` patterns are not supported".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "split this into separate arms or remove the binding".to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
             Self::DuplicatedRestPat(span) => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "duplicate `..` in pattern".to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
                     message: "`..` can be used only once".to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::UnexpectedRestPat(span) => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "unexpected `..` in pattern".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "`..` is only allowed inside tuple and record patterns".to_string(),
                     span: span.resolve(db),
                 }],
                 notes: vec![],
@@ -3962,6 +3998,18 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
                     error_code,
                 }
             }
+
+            Self::CyclicTraitRef(impl_trait) => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "cyclic trait reference prevented lowering this impl".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "trait lowering entered a dependency cycle here".to_string(),
+                    span: impl_trait.span().trait_ref().resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
         }
     }
 }

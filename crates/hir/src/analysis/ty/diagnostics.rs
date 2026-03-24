@@ -218,7 +218,9 @@ pub enum BodyDiag<'db> {
         conflicat_with: DynLazySpan<'db>,
         name: IdentId<'db>,
     },
+    BindingsInOrPat(DynLazySpan<'db>),
     DuplicatedRestPat(DynLazySpan<'db>),
+    UnexpectedRestPat(DynLazySpan<'db>),
 
     InvalidPathDomainInPat {
         primary: DynLazySpan<'db>,
@@ -683,6 +685,8 @@ impl<'db> BodyDiag<'db> {
             Self::TypeMismatch { .. } => 0,
             Self::InfiniteOccurrence(..) => 1,
             Self::DuplicatedRestPat(..) => 2,
+            Self::UnexpectedRestPat(..) => 75,
+            Self::BindingsInOrPat(..) => 76,
             Self::InvalidPathDomainInPat { .. } => 3,
             Self::UnitVariantExpected { .. } => 4,
             Self::TupleVariantExpected { .. } => 5,
@@ -766,6 +770,7 @@ pub enum TraitLowerDiag<'db> {
         conflict_with: ImplTrait<'db>,
     },
     ExternalTraitForExternalType(ImplTrait<'db>),
+    CyclicTraitRef(ImplTrait<'db>),
     CyclicSuperTraits(Vec<Trait<'db>>),
 }
 
@@ -775,6 +780,7 @@ impl TraitLowerDiag<'_> {
             Self::ExternalTraitForExternalType(_) => 0,
             Self::ConflictTraitImpl { .. } => 1,
             Self::CyclicSuperTraits { .. } => 2,
+            Self::CyclicTraitRef(_) => 3,
         }
     }
 }

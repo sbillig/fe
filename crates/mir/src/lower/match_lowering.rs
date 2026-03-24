@@ -6,7 +6,7 @@ use hir::analysis::ty::{
         Case, DecisionTree, LeafNode, Projection, ProjectionPath, SwitchNode, build_decision_tree,
     },
     pattern_analysis::PatternMatrix,
-    simplified_pattern::ConstructorKind,
+    pattern_ir::{BindingRef, ConstructorKind, PatternAnalysisStatus, ValidatedPatId},
     ty_def::InvalidCause,
 };
 
@@ -23,19 +23,49 @@ struct MatchLoweringCtx<'db> {
     wildcard_arm_block: Option<BasicBlockId>,
 }
 
+enum MirPatternRoot {
+    Ready(ValidatedPatId),
+    Invalid,
+    Unsupported(&'static str),
+}
+
 impl<'db, 'a> MirBuilder<'db, 'a> {
-    /// Returns `true` if the pattern is a wildcard (`_`).
-    ///
-    /// # Parameters
-    /// - `pat`: Pattern id to inspect.
-    ///
-    /// # Returns
-    /// `true` when the pattern is a wildcard.
-    pub(super) fn is_wildcard_pat(&self, pat: PatId) -> bool {
-        matches!(
-            pat.data(self.db, self.body),
-            Partial::Present(Pat::WildCard)
-        )
+    fn mir_pattern_root(&self, pat: PatId) -> MirPatternRoot {
+        match self.typed_body.pattern_status(pat) {
+            PatternAnalysisStatus::Ready(root) => {
+                match self.typed_body.pattern_store().mir_unsupported_reason(root) {
+                    Some(reason) => MirPatternRoot::Unsupported(reason),
+                    None => MirPatternRoot::Ready(root),
+                }
+            }
+            PatternAnalysisStatus::Invalid => MirPatternRoot::Invalid,
+            PatternAnalysisStatus::Unsupported => MirPatternRoot::Unsupported(
+                "pattern semantics are valid but unsupported for MIR lowering",
+            ),
+        }
+    }
+
+    fn defer_unsupported_pattern(&mut self, pat: PatId, context: &'static str, reason: &str) {
+        if self.deferred_error.is_some() {
+            return;
+        }
+        let func_name = self
+            .hir_func
+            .map(|func| func.pretty_print_signature(self.db))
+            .unwrap_or_else(|| "<body owner>".to_owned());
+        self.deferred_error = Some(MirLowerError::Unsupported {
+            func_name,
+            message: format!("unsupported {context} pattern `{pat:?}`: {reason}"),
+        });
+    }
+
+    fn pattern_is_irrefutable(&self, pat: PatId) -> bool {
+        let MirPatternRoot::Ready(root) = self.mir_pattern_root(pat) else {
+            return false;
+        };
+        self.typed_body
+            .pattern_store()
+            .is_irrefutable(self.db, root)
     }
 
     /// Lowers a `let` condition (`let pat = scrutinee`) into decision-tree
@@ -104,22 +134,23 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 (scrutinee_value, scrutinee_expr_ty)
             };
 
-        let Some(body) = self.typed_body.body() else {
-            self.move_to_block(scrut_block);
-            self.goto(false_block);
-            return;
+        let root = match self.mir_pattern_root(pat) {
+            MirPatternRoot::Ready(root) => root,
+            MirPatternRoot::Invalid => {
+                self.move_to_block(scrut_block);
+                self.goto(false_block);
+                return;
+            }
+            MirPatternRoot::Unsupported(reason) => {
+                self.defer_unsupported_pattern(pat, "let-condition", reason);
+                self.move_to_block(scrut_block);
+                self.goto(false_block);
+                return;
+            }
         };
-        let scope = body.scope();
 
-        let Partial::Present(pat_data) = pat.data(self.db, self.body) else {
-            self.move_to_block(scrut_block);
-            self.goto(false_block);
-            return;
-        };
-
-        let patterns = vec![pat_data.clone(), Pat::WildCard];
-        let matrix =
-            PatternMatrix::from_hir_patterns(self.db, &patterns, self.body, scope, scrutinee_ty);
+        let mut matrix = PatternMatrix::from_roots(self.typed_body.pattern_store(), &[root]);
+        matrix.push_wildcard_row(scrutinee_ty);
         let tree = build_decision_tree(self.db, &matrix);
         let leaf_bindings = self.collect_leaf_bindings(&tree);
         let consume_place = if scrutinee_expr_ty.as_capability(self.db).is_none()
@@ -139,10 +170,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         if let Some(bindings) = leaf_bindings.get(&0) {
             self.move_to_block(true_block);
-            for (name, path) in bindings {
-                let Some(binding_pat) = self.pat_id_for_binding_name(pat, name) else {
-                    continue;
-                };
+            for (binding_ref, path) in bindings {
+                let binding_pat = binding_ref.representative_pat;
                 let binding =
                     self.typed_body
                         .pat_binding(binding_pat)
@@ -204,28 +233,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         self.move_to_block(scrut_block);
         self.goto(tree_entry);
-    }
-
-    fn pat_id_for_binding_name(&self, pat: PatId, name: &str) -> Option<PatId> {
-        let Partial::Present(pat_data) = pat.data(self.db, self.body) else {
-            return None;
-        };
-        match pat_data {
-            Pat::Path(path, _) => {
-                let ident = path.to_opt()?.as_ident(self.db)?;
-                (ident.data(self.db) == name).then_some(pat)
-            }
-            Pat::Tuple(pats) | Pat::PathTuple(_, pats) => pats
-                .iter()
-                .find_map(|inner| self.pat_id_for_binding_name(*inner, name)),
-            Pat::Record(_, fields) => fields
-                .iter()
-                .find_map(|field| self.pat_id_for_binding_name(field.pat, name)),
-            Pat::Or(lhs, rhs) => self
-                .pat_id_for_binding_name(*lhs, name)
-                .or_else(|| self.pat_id_for_binding_name(*rhs, name)),
-            Pat::WildCard | Pat::Rest | Pat::Lit(_) => None,
-        }
     }
 
     /// Lowers a match expression using decision trees for optimized codegen.
@@ -302,7 +309,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             } else {
                 (scrutinee_value, scrutinee_expr_ty)
             };
-        let Some(body) = self.typed_body.body() else {
+        let Some(_body) = self.typed_body.body() else {
             // No body available - this shouldn't happen for valid code.
             self.move_to_block(scrut_block);
             self.set_current_terminator(Terminator::Unreachable {
@@ -310,44 +317,30 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             });
             return value;
         };
-        let scope = body.scope();
-
-        let patterns: Vec<Pat> = arms
-            .iter()
-            .filter_map(|arm| {
-                if let Partial::Present(pat) = arm.pat.data(self.db, self.body) {
-                    Some(pat.clone())
-                } else {
-                    None
+        let mut roots = Vec::with_capacity(arms.len());
+        for arm in arms {
+            match self.mir_pattern_root(arm.pat) {
+                MirPatternRoot::Ready(root) => roots.push(root),
+                MirPatternRoot::Invalid => {
+                    debug_assert!(false, "MIR lowering: match arm pattern IR is unavailable");
+                    self.move_to_block(scrut_block);
+                    self.set_current_terminator(Terminator::Unreachable {
+                        source: crate::ir::SourceInfoId::SYNTHETIC,
+                    });
+                    return value;
                 }
-            })
-            .collect();
-
-        if patterns.len() != arms.len() {
-            // Some patterns couldn't be resolved. This indicates:
-            // 1. Malformed AST from parsing errors, or
-            // 2. Upstream type/name resolution errors that should have emitted diagnostics
-            //
-            // For valid programs, all patterns will be Present. Absent patterns mean the
-            // HIR layer already reported errors, so we produce Unreachable MIR rather than
-            // attempting to lower patterns we can't understand. This prevents cascading
-            // errors from incomplete pattern information.
-            debug_assert!(
-                false,
-                "MIR lowering: {} of {} match arm patterns are Absent - \
-                 upstream errors should have been reported",
-                arms.len() - patterns.len(),
-                arms.len()
-            );
-            self.move_to_block(scrut_block);
-            self.set_current_terminator(Terminator::Unreachable {
-                source: crate::ir::SourceInfoId::SYNTHETIC,
-            });
-            return value;
+                MirPatternRoot::Unsupported(reason) => {
+                    self.defer_unsupported_pattern(arm.pat, "match arm", reason);
+                    self.move_to_block(scrut_block);
+                    self.set_current_terminator(Terminator::Unreachable {
+                        source: crate::ir::SourceInfoId::SYNTHETIC,
+                    });
+                    return value;
+                }
+            }
         }
 
-        let matrix =
-            PatternMatrix::from_hir_patterns(self.db, &patterns, self.body, scope, scrutinee_ty);
+        let matrix = PatternMatrix::from_roots(self.typed_body.pattern_store(), &roots);
 
         // Build decision tree from pattern matrix
         let tree = build_decision_tree(self.db, &matrix);
@@ -373,16 +366,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             let arm_entry = self.alloc_block();
             self.move_to_block(arm_entry);
 
-            if wildcard_arm_block.is_none() && self.is_wildcard_pat(arm.pat) {
+            if wildcard_arm_block.is_none() && self.pattern_is_irrefutable(arm.pat) {
                 wildcard_arm_block = Some(arm_entry);
             }
 
             let arm_idx = arm_blocks.len();
             if let Some(bindings) = leaf_bindings.get(&arm_idx) {
-                for (name, path) in bindings {
-                    let Some(binding_pat) = self.pat_id_for_binding_name(arm.pat, name) else {
-                        continue;
-                    };
+                for (binding_ref, path) in bindings {
+                    let binding_pat = binding_ref.representative_pat;
                     let binding =
                         self.typed_body
                             .pat_binding(binding_pat)
@@ -972,8 +963,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     fn collect_leaf_bindings(
         &self,
         tree: &DecisionTree<'db>,
-    ) -> FxHashMap<usize, Vec<(String, ProjectionPath<'db>)>> {
-        let mut bindings_by_arm: FxHashMap<usize, Vec<(String, ProjectionPath<'db>)>> =
+    ) -> FxHashMap<usize, Vec<(BindingRef<'db>, ProjectionPath<'db>)>> {
+        let mut bindings_by_arm: FxHashMap<usize, Vec<(BindingRef<'db>, ProjectionPath<'db>)>> =
             FxHashMap::default();
         self.collect_leaf_bindings_recursive(tree, &mut bindings_by_arm);
         bindings_by_arm
@@ -982,20 +973,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     fn collect_leaf_bindings_recursive(
         &self,
         tree: &DecisionTree<'db>,
-        bindings_by_arm: &mut FxHashMap<usize, Vec<(String, ProjectionPath<'db>)>>,
+        bindings_by_arm: &mut FxHashMap<usize, Vec<(BindingRef<'db>, ProjectionPath<'db>)>>,
     ) {
         match tree {
             DecisionTree::Leaf(leaf) => {
                 let arm_bindings = bindings_by_arm.entry(leaf.arm_index).or_default();
-                for ((ident_id, _binding_idx), path) in &leaf.bindings {
-                    let name = ident_id.data(self.db).to_string();
-                    // Deduplicate by name. The binding_idx in the key distinguishes
-                    // different binding sites in the decision tree, but within a single
-                    // arm all occurrences of a variable name should resolve to the same
-                    // binding. Taking the first occurrence is correct because all paths
-                    // to this leaf will produce the same binding for that name.
-                    if !arm_bindings.iter().any(|(n, _)| n == &name) {
-                        arm_bindings.push((name, path.clone()));
+                for (binding_ref, path) in &leaf.bindings {
+                    if !arm_bindings.iter().any(|(existing, _)| {
+                        existing.representative_pat == binding_ref.representative_pat
+                    }) {
+                        arm_bindings.push((*binding_ref, path.clone()));
                     }
                 }
             }

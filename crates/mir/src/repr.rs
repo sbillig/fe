@@ -18,7 +18,7 @@ use hir::analysis::ty::normalize::normalize_ty;
 use hir::analysis::ty::ty_def::{TyBase, TyData, TyId};
 use hir::analysis::ty::{
     corelib::resolve_core_trait,
-    simplified_pattern::ConstructorKind,
+    pattern_ir::ConstructorKind,
     trait_def::TraitInstId,
     trait_resolution::{GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable},
     ty_def::CapabilityKind,
@@ -541,8 +541,7 @@ fn projection_result_ty<'db, Idx>(
             enum_ty,
             field_idx,
         } => {
-            let ctor =
-                hir::analysis::ty::simplified_pattern::ConstructorKind::Variant(*variant, *enum_ty);
+            let ctor = ConstructorKind::Variant(*variant, *enum_ty);
             ctor.field_types(db).get(*field_idx).copied()
         }
         Projection::Discriminant => Some(TyId::new(
