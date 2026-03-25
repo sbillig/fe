@@ -43,14 +43,14 @@ use crate::analysis::place::Place;
 
 use super::{
     canonical::{Canonical, Canonicalized},
-    context::{AnalysisCx, ImplOverlay, LoweringMode, ProofCx},
+    context::LoweringMode,
     diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
     effects::{EffectKeyKind, resolve_normalized_type_effect_key},
     trait_def::{ImplementorId, TraitInstId},
     trait_resolution::{GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable},
     ty_contains_const_hole,
     ty_def::{BorrowKind, CapabilityKind, InvalidCause, Kind, TyId, TyVarSort},
-    ty_lower::{contextual_path_resolution_in_mode, lower_hir_ty, lower_hir_ty_in_mode},
+    ty_lower::{contextual_path_resolution_in_cx, lower_hir_ty, lower_hir_ty_in_cx},
     unify::{InferenceKey, UnificationError, UnificationTable},
 };
 use crate::analysis::ty::ty_def::{TyBase, TyData};
@@ -59,7 +59,7 @@ use crate::analysis::ty::{
     ctfe::{CtfeConfig, CtfeInterpreter},
     fold::AssocTySubst,
     normalize::normalize_ty,
-    ty_error::collect_ty_lower_errors_in_mode,
+    ty_error::collect_ty_lower_errors_in_cx,
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -1207,24 +1207,13 @@ impl<'db> TyChecker<'db> {
         span: LazyTySpan<'db>,
         star_kind_required: bool,
     ) -> TyId<'db> {
-        let ty = lower_hir_ty_in_mode(
-            self.db,
-            hir_ty,
-            self.env.scope(),
-            self.env.assumptions(),
-            self.env.lowering_mode(),
-        );
+        let cx = self.env.analysis_cx();
+        let ty = lower_hir_ty_in_cx(self.db, hir_ty, self.env.scope(), &cx);
 
         // If lowering failed, try to produce precise diagnostics (e.g., path resolution errors)
         if ty.has_invalid(self.db) {
-            let diags = collect_ty_lower_errors_in_mode(
-                self.db,
-                self.env.scope(),
-                hir_ty,
-                span.clone(),
-                self.env.assumptions(),
-                self.env.lowering_mode(),
-            );
+            let diags =
+                collect_ty_lower_errors_in_cx(self.db, self.env.scope(), hir_ty, span.clone(), &cx);
             if !diags.is_empty() {
                 for d in diags {
                     self.push_diag(d);
@@ -1471,13 +1460,13 @@ impl<'db> TyChecker<'db> {
         resolve_tail_as_value: bool,
         span: LazyPathSpan<'db>,
     ) -> Result<PathRes<'db>, PathResError<'db>> {
-        if let Some(res) = contextual_path_resolution_in_mode(
+        let cx = self.env.analysis_cx();
+        if let Some(res) = contextual_path_resolution_in_cx(
             self.db,
             self.env.scope(),
             path,
-            self.env.assumptions(),
             resolve_tail_as_value,
-            self.env.lowering_mode(),
+            &cx,
         ) {
             return Ok(res.map_over_ty(|ty| self.instantiate_to_term(ty)));
         }
@@ -1547,15 +1536,7 @@ impl<'db> TyChecker<'db> {
         inst: TraitInstId<'db>,
         name: IdentId<'db>,
     ) -> TyId<'db> {
-        let cx = AnalysisCx::new(ProofCx::from_solve_cx(self.env.trait_solve_cx()))
-            .with_overlay(
-                self.env
-                    .lowering_mode()
-                    .current_impl()
-                    .map(ImplOverlay::with_current_impl)
-                    .unwrap_or_default(),
-            )
-            .with_mode(self.env.lowering_mode());
+        let cx = self.env.analysis_cx();
         let Some(ty) = super::assoc_items::assoc_const_declared_ty(self.db, &cx, inst, name) else {
             return TyId::invalid(self.db, InvalidCause::Other);
         };
@@ -1591,15 +1572,9 @@ impl<'db> TyChecker<'db> {
     /// Resolve associated type to concrete type if possible
     fn normalize_ty(&mut self, ty: TyId<'db>) -> TyId<'db> {
         let ty = ty.fold_with(self.db, &mut self.table);
-        let mode = self.env.lowering_mode();
+        let cx = self.env.analysis_cx();
+        let mode = cx.mode;
         if let Some(trait_inst) = mode.trait_inst() {
-            let cx = AnalysisCx::new(ProofCx::from_solve_cx(self.env.trait_solve_cx()))
-                .with_overlay(
-                    mode.current_impl()
-                        .map(ImplOverlay::with_current_impl)
-                        .unwrap_or_default(),
-                )
-                .with_mode(mode);
             return super::assoc_items::normalize_ty_for_trait_inst(self.db, &cx, ty, trait_inst);
         }
 

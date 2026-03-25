@@ -8,6 +8,7 @@ use crate::{
     hir_def::Func,
 };
 use common::{indexmap::IndexMap, ingot::Ingot};
+use rustc_hash::FxHashMap;
 use salsa::Update;
 
 use super::{
@@ -16,7 +17,7 @@ use super::{
     context::{AnalysisCx, ProofCx},
     fold::{TyFoldable, TyFolder},
     trait_def::{ImplementorId, TraitInstId},
-    trait_resolution::PredicateListId,
+    trait_resolution::{LocalImplementorSet, PredicateListId},
     ty_def::{InvalidCause, TyId},
     ty_lower::lower_hir_ty,
 };
@@ -99,6 +100,27 @@ pub(crate) fn collect_trait_impls<'db>(
     ingot: Ingot<'db>,
 ) -> TraitImplTable<'db> {
     admission_summary(db, ingot).admitted.clone()
+}
+
+pub(crate) fn final_local_implementors<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Ingot<'db>,
+) -> LocalImplementorSet<'db> {
+    let implementors_by_impl: FxHashMap<_, _> = admission_summary(db, ingot)
+        .admitted
+        .values()
+        .flat_map(|implementors| {
+            implementors
+                .iter()
+                .map(|implementor| (implementor.skip_binder().hir_impl_trait(db), *implementor))
+        })
+        .collect();
+    let implementors: Vec<_> = ingot
+        .all_impl_traits(db)
+        .iter()
+        .filter_map(|impl_trait| implementors_by_impl.get(impl_trait).copied())
+        .collect();
+    LocalImplementorSet::new(db, implementors)
 }
 
 #[salsa::tracked(

@@ -78,6 +78,8 @@ pub fn collect_hir_ty_diags_in_mode<'db>(
     assumptions: PredicateListId<'db>,
     mode: LoweringMode<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
+    // Compatibility wrapper for non-contextual callers. Contextual lowering
+    // should prefer `collect_hir_ty_diags_in_cx(...)`.
     let cx = analysis_cx_for_mode(db, scope, assumptions, mode);
     collect_hir_ty_diags_in_cx(db, scope, hir_ty, span, &cx)
 }
@@ -117,6 +119,8 @@ pub fn collect_ty_lower_errors_in_mode<'db>(
     assumptions: PredicateListId<'db>,
     mode: LoweringMode<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
+    // Compatibility wrapper for non-contextual callers. Contextual lowering
+    // should prefer `collect_ty_lower_errors_in_cx(...)`.
     let cx = analysis_cx_for_mode(db, scope, assumptions, mode);
     collect_ty_lower_errors_in_cx(db, scope, hir_ty, span, &cx)
 }

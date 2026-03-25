@@ -23,10 +23,11 @@ use crate::analysis::{
     name_resolution::{PathRes, resolve_path},
     ty::{
         const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
-        context::LoweringMode,
+        context::{AnalysisCx, ImplOverlay, LoweringMode},
         effects::{EffectKeyKind, effect_key_kind, place_effect_provider_param_index_map},
         fold::{TyFoldable, TyFolder},
         trait_def::TraitInstId,
+        trait_lower::final_local_implementors,
         trait_resolution::{
             PredicateListId, TraitSolveCx,
             constraint::{collect_constraints, collect_func_def_constraints},
@@ -638,12 +639,21 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     pub(super) fn trait_solve_cx(&self) -> TraitSolveCx<'db> {
-        match self.owner {
+        let mut solve_cx = match self.owner {
             BodyOwner::AnonConstBodyInMode { solve_cx, .. } => {
                 solve_cx.with_assumptions(self.assumptions())
             }
             _ => TraitSolveCx::new(self.db, self.scope()).with_assumptions(self.assumptions()),
+        };
+        if let BodyOwner::Func(func) = self.owner
+            && func.containing_impl_trait(self.db).is_some()
+        {
+            solve_cx = solve_cx.with_local_implementors(final_local_implementors(
+                self.db,
+                func.top_mod(self.db).ingot(self.db),
+            ));
         }
+        solve_cx
     }
 
     pub(super) fn lowering_mode(&self) -> LoweringMode<'db> {
@@ -652,6 +662,17 @@ impl<'db> TyCheckEnv<'db> {
             BodyOwner::AnonConstBodyInMode { mode, .. } => mode,
             _ => LoweringMode::Normal,
         }
+    }
+
+    pub(super) fn analysis_cx(&self) -> AnalysisCx<'db> {
+        let mode = self.lowering_mode();
+        AnalysisCx::from_solve_cx(self.trait_solve_cx())
+            .with_overlay(
+                mode.current_impl()
+                    .map(ImplOverlay::with_current_impl)
+                    .unwrap_or_default(),
+            )
+            .with_mode(mode)
     }
 
     pub(super) fn body(&self) -> Body<'db> {
