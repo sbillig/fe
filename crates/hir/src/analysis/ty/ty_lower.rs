@@ -8,7 +8,7 @@ use salsa::Update;
 use smallvec::smallvec;
 
 use super::{
-    assoc_items::resolve_assoc_const_selection,
+    assoc_items::{TraitConstUseResolution, resolve_trait_const_use},
     collect_layout_hole_tys_in_order,
     const_expr::{ConstExpr, ConstExprId},
     const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy, const_ty_from_selected_assoc_const},
@@ -16,9 +16,8 @@ use super::{
     effects::{EffectKeyKind, effect_key_kind, resolve_normalized_type_effect_key},
     fold::{TyFoldable, TyFolder},
     trait_lower::lower_trait_ref,
-    trait_resolution::{PredicateListId, TraitSolveCx, constraint::collect_constraints},
-    ty_def::{InvalidCause, Kind, TyData, TyFlags, TyId, TyParam},
-    visitor::collect_flags,
+    trait_resolution::{PredicateListId, constraint::collect_constraints},
+    ty_def::{InvalidCause, Kind, TyData, TyId, TyParam},
 };
 use crate::analysis::name_resolution::{PathRes, PathResErrorKind, resolve_path};
 use crate::analysis::{HirAnalysisDb, ty::binder::Binder};
@@ -34,22 +33,36 @@ pub fn lower_hir_ty<'db>(
     lower_hir_ty_in_mode(db, ty, scope, assumptions, LoweringMode::Normal)
 }
 
-pub fn lower_hir_ty_in_mode<'db>(
+fn analysis_cx_for_mode<'db>(
     db: &'db dyn HirAnalysisDb,
-    ty: HirTyId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     mode: LoweringMode<'db>,
+) -> AnalysisCx<'db> {
+    AnalysisCx::new(ProofCx::new(db, scope).with_assumptions(assumptions))
+        .with_overlay(
+            mode.current_impl()
+                .map(ImplOverlay::with_current_impl)
+                .unwrap_or_default(),
+        )
+        .with_mode(mode)
+}
+
+pub fn lower_hir_ty_in_cx<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: HirTyId<'db>,
+    scope: ScopeId<'db>,
+    cx: &AnalysisCx<'db>,
 ) -> TyId<'db> {
     match ty.data(db) {
         HirTyKind::Ptr(pointee) => {
-            let pointee = lower_opt_hir_ty_in_mode(db, *pointee, scope, assumptions, mode);
+            let pointee = lower_opt_hir_ty_in_cx(db, *pointee, scope, cx);
             let ptr = TyId::ptr(db);
             TyId::app(db, ptr, pointee)
         }
 
         HirTyKind::Mode(type_mode, inner) => {
-            let inner = lower_opt_hir_ty_in_mode(db, *inner, scope, assumptions, mode);
+            let inner = lower_opt_hir_ty_in_cx(db, *inner, scope, cx);
             match type_mode {
                 TypeMode::Mut => TyId::borrow_mut_of(db, inner),
                 TypeMode::Ref => TyId::borrow_ref_of(db, inner),
@@ -57,14 +70,14 @@ pub fn lower_hir_ty_in_mode<'db>(
             }
         }
 
-        HirTyKind::Path(path) => lower_path_in_mode(db, scope, *path, assumptions, mode),
+        HirTyKind::Path(path) => lower_path_in_cx(db, scope, *path, cx),
 
         HirTyKind::Tuple(tuple_id) => {
             let elems = tuple_id.data(db);
             let len = elems.len();
             let tuple = TyId::tuple(db, len);
             elems.iter().fold(tuple, |acc, &elem| {
-                let elem_ty = lower_opt_hir_ty_in_mode(db, elem, scope, assumptions, mode);
+                let elem_ty = lower_opt_hir_ty_in_cx(db, elem, scope, cx);
                 if !elem_ty.has_star_kind(db) {
                     return TyId::invalid(db, InvalidCause::NotFullyApplied);
                 }
@@ -74,8 +87,8 @@ pub fn lower_hir_ty_in_mode<'db>(
         }
 
         HirTyKind::Array(hir_elem_ty, len) => {
-            let elem_ty = lower_opt_hir_ty_in_mode(db, *hir_elem_ty, scope, assumptions, mode);
-            let len_ty = ConstTyId::from_opt_body_in_mode(db, *len, mode);
+            let elem_ty = lower_opt_hir_ty_in_cx(db, *hir_elem_ty, scope, cx);
+            let len_ty = ConstTyId::from_opt_body_in_mode(db, *len, cx.mode);
             let len_ty = TyId::const_ty(db, len_ty);
             let array = TyId::array(db, elem_ty);
             TyId::app(db, array, len_ty)
@@ -83,6 +96,17 @@ pub fn lower_hir_ty_in_mode<'db>(
 
         HirTyKind::Never => TyId::never(db),
     }
+}
+
+pub fn lower_hir_ty_in_mode<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: HirTyId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    mode: LoweringMode<'db>,
+) -> TyId<'db> {
+    let cx = analysis_cx_for_mode(db, scope, assumptions, mode);
+    lower_hir_ty_in_cx(db, ty, scope, &cx)
 }
 
 pub fn lower_opt_hir_ty<'db>(
@@ -94,6 +118,17 @@ pub fn lower_opt_hir_ty<'db>(
     lower_opt_hir_ty_in_mode(db, ty, scope, assumptions, LoweringMode::Normal)
 }
 
+pub fn lower_opt_hir_ty_in_cx<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: Partial<HirTyId<'db>>,
+    scope: ScopeId<'db>,
+    cx: &AnalysisCx<'db>,
+) -> TyId<'db> {
+    ty.to_opt()
+        .map(|hir_ty| lower_hir_ty_in_cx(db, hir_ty, scope, cx))
+        .unwrap_or_else(|| TyId::invalid(db, InvalidCause::ParseError))
+}
+
 pub fn lower_opt_hir_ty_in_mode<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: Partial<HirTyId<'db>>,
@@ -101,9 +136,8 @@ pub fn lower_opt_hir_ty_in_mode<'db>(
     assumptions: PredicateListId<'db>,
     mode: LoweringMode<'db>,
 ) -> TyId<'db> {
-    ty.to_opt()
-        .map(|hir_ty| lower_hir_ty_in_mode(db, hir_ty, scope, assumptions, mode))
-        .unwrap_or_else(|| TyId::invalid(db, InvalidCause::ParseError))
+    let cx = analysis_cx_for_mode(db, scope, assumptions, mode);
+    lower_opt_hir_ty_in_cx(db, ty, scope, &cx)
 }
 
 fn mode_receiver_matches_selected_self<'db>(
@@ -120,31 +154,31 @@ fn mode_receiver_matches_selected_self<'db>(
         || mode.self_ty().is_some_and(|self_ty| self_ty == receiver_ty)
 }
 
-pub(crate) fn contextual_path_resolution_in_mode<'db>(
+pub(crate) fn contextual_path_resolution_in_cx<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     path: PathId<'db>,
-    assumptions: PredicateListId<'db>,
     resolve_tail_as_value: bool,
-    mode: LoweringMode<'db>,
+    cx: &AnalysisCx<'db>,
 ) -> Option<PathRes<'db>> {
-    let mode_trait_inst = mode.trait_inst()?;
+    let mode_trait_inst = cx.mode.trait_inst()?;
     let receiver = path.parent(db)?;
     let receiver_ty = if receiver.is_self_ty(db)
         || matches!(
             receiver.kind(db),
             PathKind::QualifiedType { type_, .. } if type_.is_self_ty(db)
         ) {
-        mode.self_ty()
+        cx.mode
+            .self_ty()
             .unwrap_or_else(|| mode_trait_inst.self_ty(db))
     } else {
-        match resolve_path(db, receiver, scope, assumptions, false).ok()? {
+        match resolve_path(db, receiver, scope, cx.proof.assumptions(), false).ok()? {
             PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => ty,
             _ => return None,
         }
     };
 
-    if !mode_receiver_matches_selected_self(db, receiver, receiver_ty, mode) {
+    if !mode_receiver_matches_selected_self(db, receiver, receiver_ty, cx.mode) {
         return None;
     }
 
@@ -152,7 +186,7 @@ pub(crate) fn contextual_path_resolution_in_mode<'db>(
     let trait_inst = if resolve_tail_as_value
         && let PathKind::QualifiedType { trait_, .. } = receiver.kind(db)
     {
-        lower_trait_ref(db, receiver_ty, trait_, scope, assumptions, None).ok()?
+        lower_trait_ref(db, receiver_ty, trait_, scope, cx.proof.assumptions(), None).ok()?
     } else {
         super::trait_def::specialize_trait_const_inst_to_receiver(db, receiver_ty, mode_trait_inst)
     };
@@ -160,8 +194,7 @@ pub(crate) fn contextual_path_resolution_in_mode<'db>(
         return Some(PathRes::TraitConst(receiver_ty, trait_inst, name));
     }
     let assoc_ty = trait_inst.assoc_ty(db, name)?;
-    let seg_args =
-        lower_generic_arg_list_in_mode(db, path.generic_args(db), scope, assumptions, mode);
+    let seg_args = lower_generic_arg_list_in_cx(db, path.generic_args(db), scope, cx);
     let assoc_ty = if seg_args.is_empty() {
         assoc_ty
     } else {
@@ -170,90 +203,90 @@ pub(crate) fn contextual_path_resolution_in_mode<'db>(
     Some(PathRes::Ty(assoc_ty))
 }
 
-fn lower_trait_const_path_in_mode<'db>(
+pub(crate) fn contextual_path_resolution_in_mode<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
+    path: PathId<'db>,
     assumptions: PredicateListId<'db>,
+    resolve_tail_as_value: bool,
     mode: LoweringMode<'db>,
+) -> Option<PathRes<'db>> {
+    let cx = analysis_cx_for_mode(db, scope, assumptions, mode);
+    contextual_path_resolution_in_cx(db, scope, path, resolve_tail_as_value, &cx)
+}
+
+fn lower_trait_const_path_in_cx<'db>(
+    db: &'db dyn HirAnalysisDb,
+    cx: &AnalysisCx<'db>,
     recv_ty: TyId<'db>,
     inst: crate::analysis::ty::trait_def::TraitInstId<'db>,
     name: IdentId<'db>,
 ) -> Option<TyId<'db>> {
     let inst = super::trait_def::specialize_trait_const_inst_to_receiver(db, recv_ty, inst);
-    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
-    let cx = AnalysisCx::new(ProofCx::from_solve_cx(solve_cx))
-        .with_overlay(
-            mode.current_impl()
-                .map(ImplOverlay::with_current_impl)
-                .unwrap_or_default(),
-        )
-        .with_mode(mode);
-    let selection = resolve_assoc_const_selection(db, &cx, inst, name)?;
-
-    if let Some(const_ty) = const_ty_from_selected_assoc_const(db, &selection) {
-        return Some(TyId::const_ty(db, const_ty));
-    }
-
-    let flags = collect_flags(db, selection.trait_inst);
-    if !flags.intersects(TyFlags::HAS_PARAM | TyFlags::HAS_VAR | TyFlags::HAS_INVALID) {
-        return Some(TyId::const_ty(
+    let resolution = resolve_trait_const_use(db, cx, inst, name)?;
+    let ty = match resolution {
+        TraitConstUseResolution::Concrete(selection) => {
+            TyId::const_ty(db, const_ty_from_selected_assoc_const(db, &selection)?)
+        }
+        TraitConstUseResolution::Abstract {
+            trait_inst,
+            name,
+            declared_ty,
+        } => {
+            let expr = ConstExprId::new(
+                db,
+                ConstExpr::TraitConst {
+                    inst: trait_inst,
+                    name,
+                },
+            );
+            TyId::const_ty(
+                db,
+                ConstTyId::new(db, ConstTyData::Abstract(expr, declared_ty)),
+            )
+        }
+        TraitConstUseResolution::MissingConcreteImpl {
+            trait_inst, name, ..
+        } => TyId::const_ty(
             db,
             ConstTyId::invalid(
                 db,
                 InvalidCause::TraitConstNotImplemented {
-                    inst: selection.trait_inst,
+                    inst: trait_inst,
                     name,
                 },
             ),
-        ));
-    }
-
-    let expr = ConstExprId::new(
-        db,
-        ConstExpr::TraitConst {
-            inst: selection.trait_inst,
-            name,
-        },
-    );
-    Some(TyId::const_ty(
-        db,
-        ConstTyId::new(db, ConstTyData::Abstract(expr, selection.declared_ty)),
-    ))
+        ),
+    };
+    Some(ty)
 }
 
-fn lower_path_in_mode<'db>(
+fn lower_path_in_cx<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     path: Partial<PathId<'db>>,
-    assumptions: PredicateListId<'db>,
-    mode: LoweringMode<'db>,
+    cx: &AnalysisCx<'db>,
 ) -> TyId<'db> {
     let Some(path) = path.to_opt() else {
         return TyId::invalid(db, InvalidCause::ParseError);
     };
     let use_mode_for_generic_args =
-        !matches!(mode, LoweringMode::Normal) && !path.generic_args(db).is_empty(db);
+        !matches!(cx.mode, LoweringMode::Normal) && !path.generic_args(db).is_empty(db);
     let resolve_path_id = if use_mode_for_generic_args {
         path.strip_generic_args(db)
     } else {
         path
     };
 
-    let contextual = contextual_path_resolution_in_mode(db, scope, path, assumptions, false, mode);
+    let contextual = contextual_path_resolution_in_cx(db, scope, path, false, cx);
     let used_contextual = contextual.is_some();
     match contextual
         .map(Ok)
-        .unwrap_or_else(|| resolve_path(db, resolve_path_id, scope, assumptions, false))
+        .unwrap_or_else(|| resolve_path(db, resolve_path_id, scope, cx.proof.assumptions(), false))
     {
         Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty) | PathRes::Func(ty)) => {
             if use_mode_for_generic_args && !used_contextual {
-                let seg_args = lower_generic_arg_list_in_mode(
-                    db,
-                    path.generic_args(db),
-                    scope,
-                    assumptions,
-                    mode,
-                );
+                let seg_args = lower_generic_arg_list_in_cx(db, path.generic_args(db), scope, cx);
                 TyId::foldl(db, ty, &seg_args)
             } else {
                 ty
@@ -263,12 +296,11 @@ fn lower_path_in_mode<'db>(
         Err(err) => {
             // Try to resolve as a value, to find a matching `const` definition
             if matches!(err.kind, PathResErrorKind::NotFound { .. })
-                && let Ok(resolved) =
-                    contextual_path_resolution_in_mode(db, scope, path, assumptions, true, mode)
-                        .map(Ok)
-                        .unwrap_or_else(|| {
-                            resolve_path(db, resolve_path_id, scope, assumptions, true)
-                        })
+                && let Ok(resolved) = contextual_path_resolution_in_cx(db, scope, path, true, cx)
+                    .map(Ok)
+                    .unwrap_or_else(|| {
+                        resolve_path(db, resolve_path_id, scope, cx.proof.assumptions(), true)
+                    })
             {
                 return match resolved {
                     PathRes::Const(const_def, ty) => {
@@ -280,16 +312,10 @@ fn lower_path_in_mode<'db>(
                             TyId::invalid(db, InvalidCause::ParseError)
                         }
                     }
-                    PathRes::TraitConst(recv_ty, inst, name) => lower_trait_const_path_in_mode(
-                        db,
-                        scope,
-                        assumptions,
-                        mode,
-                        recv_ty,
-                        inst,
-                        name,
-                    )
-                    .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other)),
+                    PathRes::TraitConst(recv_ty, inst, name) => {
+                        lower_trait_const_path_in_cx(db, cx, recv_ty, inst, name)
+                            .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
+                    }
                     other => TyId::invalid(db, InvalidCause::NotAType(other)),
                 };
             }
@@ -297,6 +323,17 @@ fn lower_path_in_mode<'db>(
             TyId::invalid(db, InvalidCause::PathResolutionFailed { path })
         }
     }
+}
+
+fn lower_path_in_mode<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    path: Partial<PathId<'db>>,
+    assumptions: PredicateListId<'db>,
+    mode: LoweringMode<'db>,
+) -> TyId<'db> {
+    let cx = analysis_cx_for_mode(db, scope, assumptions, mode);
+    lower_path_in_cx(db, scope, path, &cx)
 }
 
 fn lower_hir_ty_cycle_initial<'db>(
@@ -525,13 +562,13 @@ pub(crate) fn lower_generic_arg_list<'db>(
     lower_generic_arg_list_in_mode(db, args, scope, assumptions, LoweringMode::Normal)
 }
 
-pub(crate) fn lower_generic_arg_list_in_mode<'db>(
+pub(crate) fn lower_generic_arg_list_in_cx<'db>(
     db: &'db dyn HirAnalysisDb,
     args: GenericArgListId<'db>,
     scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-    mode: LoweringMode<'db>,
+    cx: &AnalysisCx<'db>,
 ) -> Vec<TyId<'db>> {
+    let assumptions = cx.proof.assumptions();
     args.data(db)
         .iter()
         .map(|arg| match arg {
@@ -544,7 +581,7 @@ pub(crate) fn lower_generic_arg_list_in_mode<'db>(
                     && let HirTyKind::Path(path) = hir_ty.data(db)
                     && let Some(path) = path.to_opt()
                     && let Ok(resolved) =
-                        contextual_path_resolution_in_mode(db, scope, path, assumptions, true, mode)
+                        contextual_path_resolution_in_cx(db, scope, path, true, cx)
                             .map(Ok)
                             .unwrap_or_else(|| resolve_path(db, path, scope, assumptions, true))
                 {
@@ -558,15 +595,9 @@ pub(crate) fn lower_generic_arg_list_in_mode<'db>(
                             return TyId::invalid(db, InvalidCause::ParseError);
                         }
                         PathRes::TraitConst(recv_ty, inst, name) => {
-                            if let Some(ty) = lower_trait_const_path_in_mode(
-                                db,
-                                scope,
-                                assumptions,
-                                mode,
-                                recv_ty,
-                                inst,
-                                name,
-                            ) {
+                            if let Some(ty) =
+                                lower_trait_const_path_in_cx(db, cx, recv_ty, inst, name)
+                            {
                                 return ty;
                             }
                         }
@@ -586,11 +617,11 @@ pub(crate) fn lower_generic_arg_list_in_mode<'db>(
                         _ => {}
                     }
                 }
-                lower_opt_hir_ty_in_mode(db, ty_arg.ty, scope, assumptions, mode)
+                lower_opt_hir_ty_in_cx(db, ty_arg.ty, scope, cx)
             }
             GenericArg::Const(const_arg) => match const_arg.value {
                 ConstGenericArgValue::Expr(body) => {
-                    let const_ty = ConstTyId::from_opt_body_in_mode(db, body, mode);
+                    let const_ty = ConstTyId::from_opt_body_in_mode(db, body, cx.mode);
                     TyId::const_ty(db, const_ty)
                 }
                 ConstGenericArgValue::Hole => TyId::const_ty(db, ConstTyId::hole(db)),
@@ -602,6 +633,17 @@ pub(crate) fn lower_generic_arg_list_in_mode<'db>(
             }
         })
         .collect()
+}
+
+pub(crate) fn lower_generic_arg_list_in_mode<'db>(
+    db: &'db dyn HirAnalysisDb,
+    args: GenericArgListId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    mode: LoweringMode<'db>,
+) -> Vec<TyId<'db>> {
+    let cx = analysis_cx_for_mode(db, scope, assumptions, mode);
+    lower_generic_arg_list_in_cx(db, args, scope, &cx)
 }
 
 #[salsa::interned]

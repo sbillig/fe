@@ -7,8 +7,10 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{PathRes, resolve_path},
     ty::{
+        assoc_items::{TraitConstUseResolution, resolve_trait_const_use},
         const_expr::{ConstExpr, ConstExprId},
-        const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
+        const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy, const_ty_from_selected_assoc_const},
+        context::{AnalysisCx, ImplOverlay},
         fold::{AssocTySubst, TyFoldable, TyFolder},
         trait_def::{ImplementorId, TraitInstId, resolve_trait_method_instance},
         trait_resolution::{PredicateListId, TraitSolveCx},
@@ -768,19 +770,43 @@ impl<'db> CtfeInterpreter<'db> {
                     inst
                 };
 
-                if let Some(const_ty) = crate::analysis::ty::const_ty::const_ty_from_trait_const(
-                    self.db,
-                    self.solve_cx
-                        .unwrap_or_else(|| TraitSolveCx::new(self.db, self.body().scope())),
-                    inst,
-                    name,
-                    self.current_implementor,
-                ) {
-                    const_ty
-                } else {
-                    return Ok(
-                        self.abstract_const(ConstExpr::TraitConst { inst, name }, expected_ty)
-                    );
+                let solve_cx = self
+                    .solve_cx
+                    .unwrap_or_else(|| TraitSolveCx::new(self.db, self.body().scope()));
+                let cx = AnalysisCx::from_solve_cx(solve_cx).with_overlay(
+                    self.current_implementor
+                        .map(ImplOverlay::with_current_impl)
+                        .unwrap_or_default(),
+                );
+                match resolve_trait_const_use(self.db, &cx, inst, name) {
+                    Some(TraitConstUseResolution::Concrete(selection)) => {
+                        const_ty_from_selected_assoc_const(self.db, &selection)
+                            .expect("concrete trait-const selection must have a body")
+                    }
+                    Some(TraitConstUseResolution::Abstract {
+                        trait_inst, name, ..
+                    }) => {
+                        return Ok(self.abstract_const(
+                            ConstExpr::TraitConst {
+                                inst: trait_inst,
+                                name,
+                            },
+                            expected_ty,
+                        ));
+                    }
+                    Some(TraitConstUseResolution::MissingConcreteImpl {
+                        trait_inst, name, ..
+                    }) => {
+                        return Err(InvalidCause::TraitConstNotImplemented {
+                            inst: trait_inst,
+                            name,
+                        });
+                    }
+                    None => {
+                        return Ok(
+                            self.abstract_const(ConstExpr::TraitConst { inst, name }, expected_ty)
+                        );
+                    }
                 }
             }
         };

@@ -3,6 +3,7 @@ use thin_vec::ThinVec;
 
 use crate::analysis::{
     HirAnalysisDb,
+    name_resolution::{ExpectedPathKind, diagnostics::PathResDiag},
     ty::{
         self,
         assoc_items::{analysis_cx_for_selected_assoc_const_body, resolve_assoc_const_selection},
@@ -10,7 +11,8 @@ use crate::analysis::{
         canonical::Canonicalized,
         context::{AnalysisCx, ImplOverlay, LoweringMode, ProofCx},
         diagnostics::{
-            BodyDiag, FuncBodyDiag, ImplDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
+            BodyDiag, FuncBodyDiag, ImplDiag, TraitConstraintDiag, TraitLowerDiag,
+            TyDiagCollection, TyLowerDiag,
         },
         fold::TyFoldable as _,
         trait_def::{ImplementorId, TraitInstId},
@@ -364,7 +366,6 @@ impl<'db> AdmissionEngine<'db> {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) enum ImplHeaderIssue<'db> {
     InvalidTraitRef(TraitRefLowerError<'db>),
@@ -899,7 +900,7 @@ fn impl_interface_issues_with_assoc_type_bound_solve_cx<'db>(
             }
 
             if header_valid {
-                let Some(actual_ty) = impl_const.ty_in_mode(db, cx.mode) else {
+                let Some(actual_ty) = impl_const.ty_in_cx(db, &cx) else {
                     continue;
                 };
                 let actual_ty = ty::trait_def::normalize_ty_for_trait_inst(
@@ -1123,6 +1124,81 @@ impl<'db> ImplInterfaceIssue<'db> {
                 }
                 diags
             }
+        }
+    }
+}
+
+impl<'db> ImplHeaderIssue<'db> {
+    pub fn to_diags(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        impl_trait: ImplTrait<'db>,
+    ) -> Vec<TyDiagCollection<'db>> {
+        match self {
+            Self::InvalidTraitRef(err) => match err {
+                TraitRefLowerError::PathResError(err) => impl_trait
+                    .hir_trait_ref(db)
+                    .to_opt()
+                    .and_then(|trait_ref| {
+                        err.clone().into_diag(
+                            db,
+                            trait_ref.path(db).unwrap(),
+                            impl_trait.span().trait_ref().path(),
+                            ExpectedPathKind::Trait,
+                        )
+                    })
+                    .map(Into::into)
+                    .into_iter()
+                    .collect(),
+                TraitRefLowerError::InvalidDomain(res) => impl_trait
+                    .hir_trait_ref(db)
+                    .to_opt()
+                    .map(|trait_ref| {
+                        PathResDiag::ExpectedTrait(
+                            impl_trait.span().trait_ref().path().into(),
+                            trait_ref.path(db).unwrap().ident(db).unwrap(),
+                            res.kind_name(),
+                        )
+                        .into()
+                    })
+                    .into_iter()
+                    .collect(),
+                TraitRefLowerError::Ignored => {
+                    vec![TraitLowerDiag::ExternalTraitForExternalType(impl_trait).into()]
+                }
+            },
+            Self::ImplementorIllFormed { goal, subgoal } => vec![
+                TraitConstraintDiag::TraitBoundNotSat {
+                    span: impl_trait.span().ty().into(),
+                    primary_goal: *goal,
+                    unsat_subgoal: *subgoal,
+                }
+                .into(),
+            ],
+            Self::TraitInstIllFormed { goal, subgoal } => vec![
+                TraitConstraintDiag::TraitBoundNotSat {
+                    span: impl_trait.span().trait_ref().into(),
+                    primary_goal: *goal,
+                    unsat_subgoal: *subgoal,
+                }
+                .into(),
+            ],
+            Self::SelfKindMismatch { expected, actual } => vec![
+                TraitConstraintDiag::TraitArgKindMismatch {
+                    span: impl_trait.span().trait_ref(),
+                    expected: expected.clone(),
+                    actual: *actual,
+                }
+                .into(),
+            ],
+            Self::SupertraitUnmet { goal } => vec![
+                TraitConstraintDiag::TraitBoundNotSat {
+                    span: impl_trait.span().ty().into(),
+                    primary_goal: *goal,
+                    unsat_subgoal: None,
+                }
+                .into(),
+            ],
         }
     }
 }

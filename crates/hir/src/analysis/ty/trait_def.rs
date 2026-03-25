@@ -6,7 +6,7 @@ use crate::{
         trait_lower::collect_trait_impls,
         trait_resolution::{GoalSatisfiability, PredicateListId, Selection},
     },
-    hir_def::{Body, Contract, Func, HirIngot, IdentId, ImplTrait, Trait},
+    hir_def::{Contract, Func, HirIngot, IdentId, ImplTrait, Trait},
 };
 use common::{
     indexmap::{IndexMap, IndexSet},
@@ -17,10 +17,7 @@ use salsa::Update;
 
 pub use super::assoc_items::AssocConstBodyOrigin;
 use super::{
-    assoc_items::{
-        normalize_ty_for_trait_inst as normalize_assoc_ty_for_trait_inst,
-        resolve_assoc_const_selection,
-    },
+    assoc_items::normalize_ty_for_trait_inst as normalize_assoc_ty_for_trait_inst,
     binder::Binder,
     canonical::{Canonical, Canonicalized},
     context::{AnalysisCx, ImplOverlay, ProofCx},
@@ -437,17 +434,6 @@ pub(crate) fn impls_for_ty<'db>(
         .collect()
 }
 
-/// Looks up the HIR body for an associated const defined in the selected trait impl, if unique.
-pub fn assoc_const_body_for_trait_inst<'db>(
-    db: &'db dyn HirAnalysisDb,
-    solve_cx: TraitSolveCx<'db>,
-    inst: TraitInstId<'db>,
-    const_name: IdentId<'db>,
-) -> Option<Body<'db>> {
-    assoc_const_body_and_impl_args_for_trait_inst(db, solve_cx, inst, const_name)
-        .map(|(body, _)| body)
-}
-
 pub(crate) fn normalize_ty_for_trait_inst<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
@@ -473,23 +459,6 @@ pub(crate) fn specialize_trait_const_inst_to_receiver<'db>(
     }
 
     specialized.fold_with(db, &mut table)
-}
-
-/// Looks up the HIR body for an associated const defined in the selected trait impl, if unique,
-/// returning both the body and the impl's instantiated generic arguments.
-///
-/// The returned generic args correspond to the impl's own generic parameters (not the trait's),
-/// and are suitable for CTFE/type checking of the impl const body.
-pub(super) fn assoc_const_body_and_impl_args_for_trait_inst<'db>(
-    db: &'db dyn HirAnalysisDb,
-    solve_cx: TraitSolveCx<'db>,
-    inst: TraitInstId<'db>,
-    const_name: IdentId<'db>,
-) -> Option<(Body<'db>, Vec<TyId<'db>>)> {
-    let selection =
-        resolve_assoc_const_selection(db, &AnalysisCx::from_solve_cx(solve_cx), inst, const_name)?;
-    let body = selection.body?;
-    Some((body.body, body.impl_args))
 }
 
 /// Represents the trait environment of an ingot, which maintain all trait

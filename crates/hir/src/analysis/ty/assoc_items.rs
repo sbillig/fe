@@ -4,7 +4,7 @@ use crate::analysis::{
         binder::Binder,
         canonical::Canonical,
         const_expr::ConstExpr,
-        const_ty::{ConstTyData, const_ty_from_trait_const},
+        const_ty::{ConstTyData, const_body_simple_path, const_ty_from_trait_const},
         context::{AnalysisCx, ImplOverlay, LoweringMode, ProofCx},
         fold::{AssocTySubst, TyFoldable as _},
         normalize::normalize_ty_with_solve_cx,
@@ -12,11 +12,12 @@ use crate::analysis::{
             ImplementorId, ImplementorOrigin, TraitInstId, impls_for_ty_with_constraints_in_cx,
         },
         trait_resolution::Selection,
-        ty_def::{InvalidCause, TyData, TyId},
+        ty_def::{InvalidCause, TyData, TyFlags, TyId},
         unify::UnificationTable,
+        visitor::collect_flags,
     },
 };
-use crate::hir_def::{Body, Expr, IdentId, Partial, PathKind};
+use crate::hir_def::{Body, IdentId, PathKind};
 use common::indexmap::IndexSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -27,6 +28,7 @@ pub enum AssocConstBodyOrigin {
 
 #[derive(Debug, Clone)]
 pub struct SelectedAssocConstBody<'db> {
+    pub selected_trait_inst: TraitInstId<'db>,
     pub implementor: ImplementorId<'db>,
     pub body: Body<'db>,
     pub impl_args: Vec<TyId<'db>>,
@@ -41,12 +43,27 @@ pub struct AssocConstSelection<'db> {
     pub body: Option<SelectedAssocConstBody<'db>>,
 }
 
+#[derive(Debug, Clone)]
+pub enum TraitConstUseResolution<'db> {
+    Concrete(AssocConstSelection<'db>),
+    Abstract {
+        trait_inst: TraitInstId<'db>,
+        name: IdentId<'db>,
+        declared_ty: TyId<'db>,
+    },
+    MissingConcreteImpl {
+        trait_inst: TraitInstId<'db>,
+        name: IdentId<'db>,
+        declared_ty: TyId<'db>,
+    },
+}
+
 fn selected_assoc_const_body_analysis_cx<'db>(
     db: &'db dyn HirAnalysisDb,
     proof: ProofCx<'db>,
-    trait_inst: TraitInstId<'db>,
     body: &SelectedAssocConstBody<'db>,
 ) -> AnalysisCx<'db> {
+    let trait_inst = body.selected_trait_inst;
     let implementor = body.implementor;
     let mode = match body.origin {
         AssocConstBodyOrigin::ImplOverride => LoweringMode::ImplTraitSignature {
@@ -141,14 +158,7 @@ pub(crate) fn normalize_const_tys_for_trait_inst<'db>(
                     let Some(expected_ty) = *expected_ty else {
                         return ty.super_fold_with(db, self);
                     };
-                    let expr = body.expr(db);
-                    let Partial::Present(expr) = expr.data(db, *body) else {
-                        return ty.super_fold_with(db, self);
-                    };
-                    let Expr::Path(path) = expr else {
-                        return ty.super_fold_with(db, self);
-                    };
-                    let Some(path) = path.to_opt() else {
+                    let Some(path) = const_body_simple_path(db, *body) else {
                         return ty.super_fold_with(db, self);
                     };
 
@@ -246,6 +256,7 @@ fn selected_assoc_const_body_for_implementor<'db>(
     let mut table = UnificationTable::new(db);
     let instantiated = table.instantiate_with_fresh_vars(Binder::bind(implementor));
     table.unify(instantiated.trait_inst(db), inst).ok()?;
+    let selected_trait_inst = instantiated.trait_inst(db).fold_with(db, &mut table);
     let generic_args = instantiated
         .params(db)
         .iter()
@@ -257,6 +268,7 @@ fn selected_assoc_const_body_for_implementor<'db>(
         && let Some(body) = assoc_const.value_body(db)
     {
         return Some(SelectedAssocConstBody {
+            selected_trait_inst,
             implementor,
             body,
             impl_args: generic_args,
@@ -265,6 +277,7 @@ fn selected_assoc_const_body_for_implementor<'db>(
     }
 
     Some(SelectedAssocConstBody {
+        selected_trait_inst,
         implementor,
         body: implementor
             .trait_inst(db)
@@ -325,10 +338,10 @@ pub fn resolve_assoc_const_selection<'db>(
     });
     let trait_inst = body
         .as_ref()
-        .map(|body| body.implementor.trait_inst(db))
+        .map(|body| body.selected_trait_inst)
         .unwrap_or(trait_inst);
     let declared_ty = if let Some(body) = body.as_ref() {
-        let cx = selected_assoc_const_body_analysis_cx(db, cx.proof, trait_inst, body);
+        let cx = selected_assoc_const_body_analysis_cx(db, cx.proof, body);
         assoc_const_declared_ty(db, &cx, trait_inst, name)?
     } else {
         assoc_const_declared_ty(db, cx, trait_inst, name)?
@@ -348,12 +361,38 @@ pub(crate) fn analysis_cx_for_selected_assoc_const_body<'db>(
     selection: &AssocConstSelection<'db>,
 ) -> Option<AnalysisCx<'db>> {
     let body = selection.body.as_ref()?;
-    Some(selected_assoc_const_body_analysis_cx(
-        db,
-        proof,
-        selection.trait_inst,
-        body,
-    ))
+    Some(selected_assoc_const_body_analysis_cx(db, proof, body))
+}
+
+pub fn resolve_trait_const_use<'db>(
+    db: &'db dyn HirAnalysisDb,
+    cx: &AnalysisCx<'db>,
+    trait_inst: TraitInstId<'db>,
+    name: IdentId<'db>,
+) -> Option<TraitConstUseResolution<'db>> {
+    let selection = resolve_assoc_const_selection(db, cx, trait_inst, name)?;
+    if selection.body.is_some() {
+        return Some(TraitConstUseResolution::Concrete(selection));
+    }
+
+    let flags = collect_flags(db, selection.trait_inst);
+    let can_stay_abstract = !flags.contains(TyFlags::HAS_INVALID)
+        && (flags.intersects(TyFlags::HAS_PARAM | TyFlags::HAS_VAR)
+            || selection.trait_inst.self_ty(db).is_trait_self(db));
+    let resolution = if can_stay_abstract {
+        TraitConstUseResolution::Abstract {
+            trait_inst: selection.trait_inst,
+            name: selection.name,
+            declared_ty: selection.declared_ty,
+        }
+    } else {
+        TraitConstUseResolution::MissingConcreteImpl {
+            trait_inst: selection.trait_inst,
+            name: selection.name,
+            declared_ty: selection.declared_ty,
+        }
+    };
+    Some(resolution)
 }
 
 pub fn resolve_assoc_type_in_mode<'db>(

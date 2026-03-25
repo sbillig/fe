@@ -92,10 +92,12 @@ use crate::analysis::ty::{
         InvalidCause, PrimTy, TyId, inference_keys, instantiate_adt_field_ty,
         substitute_layout_holes,
     },
-    ty_error::{collect_ty_lower_errors, collect_ty_lower_errors_in_mode},
+    ty_error::{
+        collect_ty_lower_errors, collect_ty_lower_errors_in_cx, collect_ty_lower_errors_in_mode,
+    },
     ty_lower::{
-        TyAlias, lower_hir_ty, lower_hir_ty_in_mode, lower_opt_hir_ty, lower_type_alias,
-        lower_type_alias_from_hir, method_receiver_layout_hole_tys,
+        TyAlias, lower_hir_ty, lower_hir_ty_in_cx, lower_hir_ty_in_mode, lower_opt_hir_ty,
+        lower_type_alias, lower_type_alias_from_hir, method_receiver_layout_hole_tys,
     },
     unify::UnificationTable,
 };
@@ -3162,7 +3164,6 @@ impl<'db> ImplTrait<'db> {
     ) -> IndexMap<IdentId<'db>, TyId<'db>> {
         let mut types = IndexMap::new();
         let trait_def = trait_inst.def(db);
-        let assumptions = self.elaborated_assumptions(db);
         for view in trait_def.assoc_types(db) {
             let Some(name) = view.name(db) else {
                 continue;
@@ -3181,7 +3182,7 @@ impl<'db> ImplTrait<'db> {
                     partial_trait_inst,
                     types.clone(),
                 );
-                let ty = lower_hir_ty_in_mode(db, hir, self.scope(), assumptions, cx.mode);
+                let ty = lower_hir_ty_in_cx(db, hir, self.scope(), &cx);
                 let ty = normalize_assoc_ty_for_trait_inst(db, &cx, ty, partial_trait_inst);
                 types.insert(name, ty);
                 continue;
@@ -3387,6 +3388,15 @@ impl<'db> ImplAssocTypeView<'db> {
         ))
     }
 
+    pub(crate) fn ty_in_cx(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        cx: &AnalysisCx<'db>,
+    ) -> Option<TyId<'db>> {
+        let hir = self.owner.types(db)[self.idx].type_ref.to_opt()?;
+        Some(lower_hir_ty_in_cx(db, hir, self.owner.scope(), cx))
+    }
+
     /// Semantic type of this associated type implementation.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
         self.ty_in_mode(
@@ -3421,17 +3431,9 @@ impl<'db> ImplAssocTypeView<'db> {
         };
 
         let ty_span = self.span().ty();
-        let assumptions = self.owner.elaborated_assumptions(db);
-        let errs = collect_ty_lower_errors_in_mode(
-            db,
-            self.owner.scope(),
-            hir,
-            ty_span.clone(),
-            assumptions,
-            cx.mode,
-        );
+        let errs = collect_ty_lower_errors_in_cx(db, self.owner.scope(), hir, ty_span.clone(), cx);
 
-        let ty = match self.ty_in_mode(db, cx.mode) {
+        let ty = match self.ty_in_cx(db, cx) {
             Some(ty) => ty,
             None => return Vec::new(),
         };
@@ -3825,6 +3827,15 @@ impl<'db> ImplAssocConstView<'db> {
         ))
     }
 
+    pub(crate) fn ty_in_cx(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        cx: &AnalysisCx<'db>,
+    ) -> Option<TyId<'db>> {
+        let hir = self.def(db).ty.to_opt()?;
+        Some(lower_hir_ty_in_cx(db, hir, self.owner.scope(), cx))
+    }
+
     /// Semantic type of this associated const implementation.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
         self.ty_in_mode(
@@ -3859,16 +3870,8 @@ impl<'db> ImplAssocConstView<'db> {
         };
 
         let ty_span = self.span().ty();
-        let assumptions = self.owner.elaborated_assumptions(db);
-        let errs = collect_ty_lower_errors_in_mode(
-            db,
-            self.owner.scope(),
-            hir,
-            ty_span.clone(),
-            assumptions,
-            cx.mode,
-        );
-        let ty = match self.ty_in_mode(db, cx.mode) {
+        let errs = collect_ty_lower_errors_in_cx(db, self.owner.scope(), hir, ty_span.clone(), cx);
+        let ty = match self.ty_in_cx(db, cx) {
             Some(ty) => ty,
             None => return Vec::new(),
         };

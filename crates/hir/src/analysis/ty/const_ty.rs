@@ -6,7 +6,7 @@ use num_traits::{One, Zero};
 
 use super::const_expr::{ConstExpr, ConstExprId};
 use super::{
-    assoc_items::{AssocConstSelection, resolve_assoc_const_selection},
+    assoc_items::{AssocConstSelection, TraitConstUseResolution, resolve_trait_const_use},
     context::{AnalysisCx, ImplOverlay, LoweringMode},
     ctfe::{
         CtfeConfig, CtfeInterpreter, instantiate_typed_body, instantiate_typed_body_for_trait_inst,
@@ -19,7 +19,7 @@ use super::{
     },
     ty_check::{check_anon_const_body, check_anon_const_body_in_mode, check_const_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
-    ty_lower::contextual_path_resolution_in_mode,
+    ty_lower::contextual_path_resolution_in_cx,
     unify::UnificationTable,
 };
 use crate::analysis::{
@@ -28,7 +28,7 @@ use crate::analysis::{
     ty::trait_resolution::PredicateListId,
     ty::ty_def::{Kind, PrimTy, TyBase, TyData, TyVarSort},
 };
-use crate::hir_def::{ItemKind, PathId, PathKind};
+use crate::hir_def::{ItemKind, PathId};
 use common::indexmap::IndexMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -71,6 +71,86 @@ impl ConstBodyModeKind {
             },
         }
     }
+}
+
+fn analysis_cx_for_const_use<'db>(
+    solve_cx: TraitSolveCx<'db>,
+    mode: LoweringMode<'db>,
+    current_implementor: Option<ImplementorId<'db>>,
+) -> AnalysisCx<'db> {
+    AnalysisCx::from_solve_cx(solve_cx)
+        .with_overlay(
+            current_implementor
+                .map(ImplOverlay::with_current_impl)
+                .unwrap_or_default(),
+        )
+        .with_mode(mode)
+}
+
+fn abstract_trait_const_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_inst: TraitInstId<'db>,
+    name: IdentId<'db>,
+    expected_ty: TyId<'db>,
+) -> ConstTyId<'db> {
+    let expr = ConstExprId::new(
+        db,
+        ConstExpr::TraitConst {
+            inst: trait_inst,
+            name,
+        },
+    );
+    ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty))
+}
+
+fn invalid_trait_const_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_inst: TraitInstId<'db>,
+    name: IdentId<'db>,
+) -> ConstTyId<'db> {
+    ConstTyId::invalid(
+        db,
+        InvalidCause::TraitConstNotImplemented {
+            inst: trait_inst,
+            name,
+        },
+    )
+}
+
+pub(crate) fn const_body_simple_path<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+) -> Option<PathId<'db>> {
+    fn expr_simple_path<'db>(
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        expr: &Expr<'db>,
+    ) -> Option<PathId<'db>> {
+        match expr {
+            Expr::Path(path) => path.to_opt(),
+            Expr::Block(stmts) => {
+                let [stmt] = stmts.as_slice() else {
+                    return None;
+                };
+                let Partial::Present(stmt) = stmt.data(db, body) else {
+                    return None;
+                };
+                let Stmt::Expr(expr_id) = stmt else {
+                    return None;
+                };
+                let Partial::Present(expr) = expr_id.data(db, body) else {
+                    return None;
+                };
+                expr_simple_path(db, body, expr)
+            }
+            _ => None,
+        }
+    }
+
+    let Partial::Present(expr) = body.expr(db).data(db, body) else {
+        return None;
+    };
+    expr_simple_path(db, body, expr)
 }
 
 #[salsa::interned]
@@ -128,27 +208,28 @@ fn evaluate_const_ty_impl<'db>(
 
     if let ConstTyData::Abstract(expr, ty) = const_ty.data(db)
         && let ConstExpr::TraitConst { inst, name } = expr.data(db)
-        && let Some(resolved) = const_ty_from_trait_const(
-            db,
-            solve_cx.unwrap_or_else(|| TraitSolveCx::new(db, inst.def(db).top_mod(db).scope())),
-            *inst,
-            *name,
-            None,
-        )
     {
-        let evaluated = if let Some(solve_cx) = solve_cx {
-            resolved.evaluate_with_solve_cx(db, expected_ty.or(Some(*ty)), solve_cx)
-        } else {
-            resolved.evaluate(db, expected_ty.or(Some(*ty)))
-        };
-        if matches!(
-            evaluated.ty(db).invalid_cause(db),
-            Some(InvalidCause::ConstEvalUnsupported { .. })
-        ) && expected_ty.is_some()
-        {
-            return const_ty;
+        let solve_cx =
+            solve_cx.unwrap_or_else(|| TraitSolveCx::new(db, inst.def(db).top_mod(db).scope()));
+        let cx = AnalysisCx::from_solve_cx(solve_cx);
+        match resolve_trait_const_use(db, &cx, *inst, *name) {
+            Some(TraitConstUseResolution::Concrete(selection)) => {
+                let resolved = const_ty_from_selected_assoc_const(db, &selection)
+                    .expect("concrete trait-const selection must have a body");
+                let evaluated =
+                    resolved.evaluate_with_solve_cx(db, expected_ty.or(Some(*ty)), solve_cx);
+                if matches!(
+                    evaluated.ty(db).invalid_cause(db),
+                    Some(InvalidCause::ConstEvalUnsupported { .. })
+                ) && expected_ty.is_some()
+                {
+                    return const_ty;
+                }
+                return evaluated;
+            }
+            Some(TraitConstUseResolution::MissingConcreteImpl { .. }) => return const_ty,
+            Some(TraitConstUseResolution::Abstract { .. }) | None => {}
         }
-        return evaluated;
     }
 
     let (
@@ -215,6 +296,7 @@ fn evaluate_const_ty_impl<'db>(
     let path_solve_cx = solve_cx
         .unwrap_or_else(|| TraitSolveCx::new(db, body.scope()))
         .with_assumptions(assumptions);
+    let analysis_cx = analysis_cx_for_const_use(path_solve_cx, lowering_mode, current_implementor);
 
     #[derive(Clone, Copy, Debug)]
     struct CheckedIntTy {
@@ -522,17 +604,18 @@ fn evaluate_const_ty_impl<'db>(
                 let Some(path) = path.to_opt() else {
                     return Err(ConstIntError::NotIntExpr);
                 };
-                let resolved = contextual_path_resolution_in_mode(
-                    db,
-                    body.scope(),
-                    path,
-                    cx.assumptions,
-                    true,
+                let analysis_cx = analysis_cx_for_const_use(
+                    cx.solve_cx,
                     cx.lowering_mode,
-                )
-                .map(Ok)
-                .unwrap_or_else(|| resolve_path(db, path, body.scope(), cx.assumptions, true))
-                .map_err(|_| ConstIntError::NotIntExpr)?;
+                    cx.current_implementor,
+                );
+                let resolved =
+                    contextual_path_resolution_in_cx(db, body.scope(), path, true, &analysis_cx)
+                        .map(Ok)
+                        .unwrap_or_else(|| {
+                            resolve_path(db, path, body.scope(), cx.assumptions, true)
+                        })
+                        .map_err(|_| ConstIntError::NotIntExpr)?;
 
                 let const_ty = match resolved {
                     PathRes::Const(const_def, declared_ty) => {
@@ -542,14 +625,21 @@ fn evaluate_const_ty_impl<'db>(
                             .ok_or(ConstIntError::NotIntExpr)?;
                         ConstTyId::from_body(db, body, Some(declared_ty), Some(const_def))
                     }
-                    PathRes::TraitConst(_recv_ty, inst, name) => const_ty_from_trait_const(
-                        db,
-                        cx.solve_cx,
-                        inst,
-                        name,
-                        cx.current_implementor,
-                    )
-                    .ok_or(ConstIntError::NotIntExpr)?,
+                    PathRes::TraitConst(recv_ty, inst, name) => {
+                        let inst =
+                            crate::analysis::ty::trait_def::specialize_trait_const_inst_to_receiver(
+                                db, recv_ty, inst,
+                            );
+                        match resolve_trait_const_use(db, &analysis_cx, inst, name) {
+                            Some(TraitConstUseResolution::Concrete(selection)) => {
+                                const_ty_from_selected_assoc_const(db, &selection)
+                                    .ok_or(ConstIntError::NotIntExpr)?
+                            }
+                            Some(TraitConstUseResolution::Abstract { .. })
+                            | Some(TraitConstUseResolution::MissingConcreteImpl { .. })
+                            | None => return Err(ConstIntError::NotIntExpr),
+                        }
+                    }
                     _ => return Err(ConstIntError::NotIntExpr),
                 };
 
@@ -571,32 +661,11 @@ fn evaluate_const_ty_impl<'db>(
         }
     }
 
-    if let Expr::Path(path) = &expr {
-        let Some(path) = path.to_opt() else {
-            return ConstTyId::new(
-                db,
-                ConstTyData::Evaluated(
-                    EvaluatedConstTy::Invalid,
-                    TyId::invalid(db, InvalidCause::ParseError),
-                ),
-            );
-        };
-
-        let resolved_path = if matches!(mode_kind, ConstBodyModeKind::SelectedTraitBody)
-            && let Some(trait_inst) = trait_inst
-            && let Some(parent) = path.parent(db)
-            && parent.is_self_ty(db)
-            && let Some(name) = path.ident(db).to_opt()
-            && trait_inst.def(db).const_(db, name).is_some()
-        {
-            Ok(PathRes::TraitConst(
-                trait_inst.self_ty(db),
-                trait_inst,
-                name,
-            ))
-        } else {
-            resolve_path(db, path, body.scope(), assumptions, true)
-        };
+    if let Some(path) = const_body_simple_path(db, body) {
+        let resolved_path =
+            contextual_path_resolution_in_cx(db, body.scope(), path, true, &analysis_cx)
+                .map(Ok)
+                .unwrap_or_else(|| resolve_path(db, path, body.scope(), assumptions, true));
         if let Ok(resolved_path) = resolved_path {
             match resolved_path {
                 PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
@@ -612,46 +681,42 @@ fn evaluate_const_ty_impl<'db>(
                     }
                 }
                 PathRes::TraitConst(recv_ty, inst, name) => {
-                    let inst = if matches!(mode_kind, ConstBodyModeKind::SelectedTraitBody)
-                        && let Some(trait_inst) = trait_inst
-                        && selected_trait_body_receiver_is_self(db, path)
-                    {
-                        crate::analysis::ty::trait_def::specialize_trait_const_inst_to_receiver(
-                            db,
-                            trait_inst.self_ty(db),
-                            inst,
-                        )
-                    } else {
+                    let inst =
                         crate::analysis::ty::trait_def::specialize_trait_const_inst_to_receiver(
                             db, recv_ty, inst,
-                        )
-                    };
-
-                    let mk_abstract = |expected_ty: TyId<'db>| {
-                        let expr = ConstExprId::new(db, ConstExpr::TraitConst { inst, name });
-                        ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty))
-                    };
-
-                    if let Some(const_ty) = const_ty_from_trait_const(
-                        db,
-                        path_solve_cx,
-                        inst,
-                        name,
-                        current_implementor,
-                    ) {
-                        let evaluated = const_ty.evaluate(db, expected_ty);
-                        if matches!(
-                            evaluated.ty(db).invalid_cause(db),
-                            Some(InvalidCause::ConstEvalUnsupported { .. })
-                        ) && let Some(expected_ty) = expected_ty
-                        {
-                            return mk_abstract(expected_ty);
+                        );
+                    match resolve_trait_const_use(db, &analysis_cx, inst, name) {
+                        Some(TraitConstUseResolution::Concrete(selection)) => {
+                            let const_ty = const_ty_from_selected_assoc_const(db, &selection)
+                                .expect("concrete trait-const selection must have a body");
+                            let evaluated = const_ty.evaluate(db, expected_ty);
+                            if matches!(
+                                evaluated.ty(db).invalid_cause(db),
+                                Some(InvalidCause::ConstEvalUnsupported { .. })
+                            ) && let Some(expected_ty) = expected_ty
+                            {
+                                return abstract_trait_const_ty(
+                                    db,
+                                    selection.trait_inst,
+                                    selection.name,
+                                    expected_ty,
+                                );
+                            }
+                            return evaluated;
                         }
-                        return evaluated;
-                    }
-
-                    if let Some(expected_ty) = expected_ty {
-                        return mk_abstract(expected_ty);
+                        Some(TraitConstUseResolution::Abstract {
+                            trait_inst, name, ..
+                        }) => {
+                            if let Some(expected_ty) = expected_ty {
+                                return abstract_trait_const_ty(db, trait_inst, name, expected_ty);
+                            }
+                        }
+                        Some(TraitConstUseResolution::MissingConcreteImpl {
+                            trait_inst,
+                            name,
+                            ..
+                        }) => return invalid_trait_const_ty(db, trait_inst, name),
+                        None => {}
                     }
                 }
                 PathRes::EnumVariant(variant) if variant.ty.is_unit_variant_only_enum(db) => {
@@ -892,19 +957,6 @@ fn const_body_assumptions<'db>(
     }
 }
 
-fn selected_trait_body_receiver_is_self<'db>(
-    db: &'db dyn HirAnalysisDb,
-    path: PathId<'db>,
-) -> bool {
-    path.parent(db).is_some_and(|parent| {
-        parent.is_self_ty(db)
-            || matches!(
-                parent.kind(db),
-                PathKind::QualifiedType { type_, .. } if type_.is_self_ty(db)
-            )
-    })
-}
-
 fn check_anon_const_body_in_context<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
@@ -969,11 +1021,12 @@ pub(super) fn const_ty_from_trait_const<'db>(
     name: IdentId<'db>,
     current_implementor: Option<ImplementorId<'db>>,
 ) -> Option<ConstTyId<'db>> {
-    let overlay = current_implementor
-        .map(ImplOverlay::with_current_impl)
-        .unwrap_or_default();
-    let cx = AnalysisCx::from_solve_cx(solve_cx).with_overlay(overlay);
-    let selection = resolve_assoc_const_selection(db, &cx, inst, name)?;
+    let cx = analysis_cx_for_const_use(solve_cx, LoweringMode::Normal, current_implementor);
+    let TraitConstUseResolution::Concrete(selection) =
+        resolve_trait_const_use(db, &cx, inst, name)?
+    else {
+        return None;
+    };
     const_ty_from_selected_assoc_const(db, &selection)
 }
 

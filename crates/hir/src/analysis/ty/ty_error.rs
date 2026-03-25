@@ -14,11 +14,11 @@ use crate::analysis::{
 };
 
 use super::{
-    context::LoweringMode,
+    context::{AnalysisCx, ImplOverlay, LoweringMode, ProofCx},
     diagnostics::{TyDiagCollection, TyLowerDiag},
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, TyData, TyId},
-    ty_lower::{contextual_path_resolution_in_mode, lower_hir_ty_in_mode},
+    ty_lower::{contextual_path_resolution_in_cx, lower_hir_ty_in_cx},
 };
 use crate::visitor::prelude::LazyTraitRefSpan;
 
@@ -37,6 +37,39 @@ pub fn collect_hir_ty_diags<'db>(
     collect_hir_ty_diags_in_mode(db, scope, hir_ty, span, assumptions, LoweringMode::Normal)
 }
 
+fn analysis_cx_for_mode<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    mode: LoweringMode<'db>,
+) -> AnalysisCx<'db> {
+    AnalysisCx::new(ProofCx::new(db, scope).with_assumptions(assumptions))
+        .with_overlay(
+            mode.current_impl()
+                .map(ImplOverlay::with_current_impl)
+                .unwrap_or_default(),
+        )
+        .with_mode(mode)
+}
+
+pub fn collect_hir_ty_diags_in_cx<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    hir_ty: TypeId<'db>,
+    span: LazyTySpan<'db>,
+    cx: &AnalysisCx<'db>,
+) -> Vec<TyDiagCollection<'db>> {
+    let diags = collect_ty_lower_errors_in_cx(db, scope, hir_ty, span.clone(), cx);
+    if !diags.is_empty() {
+        return diags;
+    }
+
+    let ty = lower_hir_ty_in_cx(db, hir_ty, scope, cx);
+    emit_invalid_ty_error(db, ty, span.into())
+        .into_iter()
+        .collect()
+}
+
 pub fn collect_hir_ty_diags_in_mode<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -45,17 +78,8 @@ pub fn collect_hir_ty_diags_in_mode<'db>(
     assumptions: PredicateListId<'db>,
     mode: LoweringMode<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    // Try precise HIR-based errors first
-    let diags = collect_ty_lower_errors_in_mode(db, scope, hir_ty, span.clone(), assumptions, mode);
-    if !diags.is_empty() {
-        return diags;
-    }
-
-    // Fall back to semantic errors
-    let ty = lower_hir_ty_in_mode(db, hir_ty, scope, assumptions, mode);
-    emit_invalid_ty_error(db, ty, span.into())
-        .into_iter()
-        .collect()
+    let cx = analysis_cx_for_mode(db, scope, assumptions, mode);
+    collect_hir_ty_diags_in_cx(db, scope, hir_ty, span, &cx)
 }
 
 pub fn collect_ty_lower_errors<'db>(
@@ -68,6 +92,23 @@ pub fn collect_ty_lower_errors<'db>(
     collect_ty_lower_errors_in_mode(db, scope, hir_ty, span, assumptions, LoweringMode::Normal)
 }
 
+pub fn collect_ty_lower_errors_in_cx<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    hir_ty: TypeId<'db>,
+    span: LazyTySpan<'db>,
+    cx: &AnalysisCx<'db>,
+) -> Vec<TyDiagCollection<'db>> {
+    let mut vis = HirTyErrVisitor {
+        db,
+        diags: Vec::new(),
+        cx: *cx,
+    };
+    let mut ctxt = VisitorCtxt::new(db, scope, span);
+    vis.visit_ty(&mut ctxt, hir_ty);
+    vis.diags
+}
+
 pub fn collect_ty_lower_errors_in_mode<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -76,22 +117,14 @@ pub fn collect_ty_lower_errors_in_mode<'db>(
     assumptions: PredicateListId<'db>,
     mode: LoweringMode<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    let mut vis = HirTyErrVisitor {
-        db,
-        assumptions,
-        diags: Vec::new(),
-        mode,
-    };
-    let mut ctxt = VisitorCtxt::new(db, scope, span);
-    vis.visit_ty(&mut ctxt, hir_ty);
-    vis.diags
+    let cx = analysis_cx_for_mode(db, scope, assumptions, mode);
+    collect_ty_lower_errors_in_cx(db, scope, hir_ty, span, &cx)
 }
 
 struct HirTyErrVisitor<'db> {
     db: &'db dyn HirAnalysisDb,
     diags: Vec<TyDiagCollection<'db>>,
-    assumptions: PredicateListId<'db>,
-    mode: LoweringMode<'db>,
+    cx: AnalysisCx<'db>,
 }
 
 impl<'db> HirTyErrVisitor<'db> {
@@ -107,14 +140,7 @@ impl<'db> HirTyErrVisitor<'db> {
         path: PathId<'db>,
         resolve_tail_as_value: bool,
     ) -> Option<PathRes<'db>> {
-        contextual_path_resolution_in_mode(
-            self.db,
-            scope,
-            path,
-            self.assumptions,
-            resolve_tail_as_value,
-            self.mode,
-        )
+        contextual_path_resolution_in_cx(self.db, scope, path, resolve_tail_as_value, &self.cx)
     }
 }
 
@@ -133,7 +159,16 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
             && let Some(path) = path_partial.to_opt()
             && let Some(resolved) = self
                 .contextual_path_resolution(ctxt.scope(), path, true)
-                .or_else(|| resolve_path(self.db, path, ctxt.scope(), self.assumptions, true).ok())
+                .or_else(|| {
+                    resolve_path(
+                        self.db,
+                        path,
+                        ctxt.scope(),
+                        self.cx.proof.assumptions(),
+                        true,
+                    )
+                    .ok()
+                })
         {
             let is_const_like = match resolved {
                 PathRes::Const(..) | PathRes::TraitConst(..) => true,
@@ -170,7 +205,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                             self.db,
                             path,
                             scope,
-                            self.assumptions,
+                            self.cx.proof.assumptions(),
                             true,
                             &mut check_visibility,
                         ) {
@@ -224,7 +259,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
     }
 
     fn visit_ty(&mut self, ctxt: &mut VisitorCtxt<'db, LazyTySpan<'db>>, hir_ty: TypeId<'db>) {
-        let ty = lower_hir_ty_in_mode(self.db, hir_ty, ctxt.scope(), self.assumptions, self.mode);
+        let ty = lower_hir_ty_in_cx(self.db, hir_ty, ctxt.scope(), &self.cx);
 
         // This will report errors with nested types that are fundamental to the nested type,
         // but will not catch cases where the nested type is fine on its own, but incompatible
@@ -287,7 +322,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                 self.db,
                 path,
                 scope,
-                self.assumptions,
+                self.cx.proof.assumptions(),
                 false,
                 &mut check_visibility,
             ) {
@@ -350,7 +385,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
             self.db,
             path,
             scope,
-            self.assumptions,
+            self.cx.proof.assumptions(),
             false,
             &mut check_visibility,
         ) {
