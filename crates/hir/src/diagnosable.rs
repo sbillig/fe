@@ -301,36 +301,17 @@ impl<'db> Func<'db> {
         .collect()
     }
 
-    /// Diagnostics related to the explicit return type (kind/const checks).
+    /// Diagnostics related to the explicit return type.
     pub fn diags_return(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        let mut diags = Vec::new();
-        if self.has_explicit_return_ty(db) {
-            // First, surface name-resolution/path-domain errors on the return type itself
-            let errs = self.ret_ty_errors(db);
-            if !errs.is_empty() {
-                return errs;
-            }
-
-            // Then run kind/const checks on the lowered semantic type
-            let ret = self.return_ty(db);
-            let span = self.span().ret_ty().into();
-            if !ret.has_star_kind(db) {
-                diags.push(TyLowerDiag::ExpectedStarKind(span).into());
-            } else if ret.is_const_ty(db) {
-                diags.push(TyLowerDiag::NormalTypeExpected { span, given: ret }.into());
-            } else if ty::ty_contains_const_hole(db, ret) {
-                diags.push(TyLowerDiag::ConstHoleInValuePosition { span }.into());
-            }
-        }
-        diags
+        self.return_ty_diags_in_cx(db, &self.signature_analysis_cx(db))
     }
 
-    /// Diagnostics for function parameter types:
-    /// - For all params: star kind required and reject const types
-    /// - For self param: enforce exact `Self` type shape
-    ///   Note: WF/invalid errors are still surfaced via the general type walker.
+    /// Diagnostics for function parameter types.
     pub fn diags_param_types(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        self.params(db).flat_map(|v| v.diags(db)).collect()
+        let cx = self.signature_analysis_cx(db);
+        self.params(db)
+            .flat_map(|param| param.ty_diags_in_cx(db, &cx))
+            .collect()
     }
 }
 
@@ -535,7 +516,12 @@ impl<'db> ImplTrait<'db> {
     }
 
     pub(crate) fn interface_diags(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        self.interface_issue_diags(db, |_| true)
+        self.interface_issue_diags(db, |issue| {
+            !matches!(
+                issue,
+                ty::admission::ImplInterfaceIssue::MethodSignatureInvalid(..)
+            )
+        })
     }
 
     /// Lower the implementor view and report validity diagnostics (WF, conflicts, kind mismatch).

@@ -59,7 +59,7 @@ use crate::analysis::ty::{
     ctfe::{CtfeConfig, CtfeInterpreter},
     fold::AssocTySubst,
     normalize::normalize_ty,
-    ty_error::collect_ty_lower_errors_in_cx,
+    ty_error::{collect_ty_lower_errors_in_cx, explicit_value_ty_wf_diag},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -1224,7 +1224,8 @@ impl<'db> TyChecker<'db> {
         }
 
         if let Some(diag) = ty.emit_diag(self.db, span.clone().into()) {
-            self.push_diag(diag)
+            self.push_diag(diag);
+            return TyId::invalid(self.db, InvalidCause::Other);
         }
 
         if ty_contains_const_hole(self.db, ty) {
@@ -1236,13 +1237,20 @@ impl<'db> TyChecker<'db> {
             return TyId::invalid(self.db, InvalidCause::Other);
         }
 
-        if star_kind_required && ty.is_star_kind(self.db) {
-            ty
-        } else {
+        if star_kind_required && !ty.is_star_kind(self.db) {
             let diag: TyDiagCollection = TyLowerDiag::ExpectedStarKind(span.into()).into();
             self.push_diag(diag);
-            TyId::invalid(self.db, InvalidCause::Other)
+            return TyId::invalid(self.db, InvalidCause::Other);
         }
+
+        if let Some(diag) =
+            explicit_value_ty_wf_diag(self.db, self.env.trait_solve_cx(), ty, span.clone().into())
+        {
+            self.push_diag(diag);
+            return TyId::invalid(self.db, InvalidCause::Other);
+        }
+
+        ty
     }
 
     /// Returns the fresh type variable for pattern and expr type checking. The

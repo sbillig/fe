@@ -15,8 +15,8 @@ use crate::analysis::{
 
 use super::{
     context::{AnalysisCx, ImplOverlay, LoweringMode, ProofCx},
-    diagnostics::{TyDiagCollection, TyLowerDiag},
-    trait_resolution::PredicateListId,
+    diagnostics::{TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
+    trait_resolution::{PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf},
     ty_def::{InvalidCause, TyData, TyId},
     ty_lower::{contextual_path_resolution_in_cx, lower_hir_ty_in_cx},
 };
@@ -123,6 +123,26 @@ pub fn collect_ty_lower_errors_in_mode<'db>(
     // should prefer `collect_ty_lower_errors_in_cx(...)`.
     let cx = analysis_cx_for_mode(db, scope, assumptions, mode);
     collect_ty_lower_errors_in_cx(db, scope, hir_ty, span, &cx)
+}
+
+pub(crate) fn explicit_value_ty_wf_diag<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    ty: TyId<'db>,
+    span: DynLazySpan<'db>,
+) -> Option<TyDiagCollection<'db>> {
+    if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(db, solve_cx, ty) {
+        Some(
+            TraitConstraintDiag::TraitBoundNotSat {
+                span,
+                primary_goal: goal,
+                unsat_subgoal: subgoal,
+            }
+            .into(),
+        )
+    } else {
+        None
+    }
 }
 
 struct HirTyErrVisitor<'db> {

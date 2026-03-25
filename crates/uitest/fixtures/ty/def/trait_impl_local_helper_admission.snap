@@ -46,6 +46,18 @@ error[6-0003]: trait bound is not satisfied
    │     ^^^^^^^^^^^^^^^^^ `BadConst` doesn't implement `ChildConst`
 
 error[6-0003]: trait bound is not satisfied
+    ┌─ trait_impl_local_helper_admission.fe:199:22
+    │
+199 │     fn make(self) -> <Self as AssocMethodHelper>::X
+    │                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Self` doesn't implement `AssocMethodHelper`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_impl_local_helper_admission.fe:225:21
+    │
+225 │     fn buf(self) -> [u8; <Self as LenMethodHelper>::N]
+    │                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Self` doesn't implement `LenMethodHelper`
+
+error[6-0003]: trait bound is not satisfied
     ┌─ trait_impl_local_helper_admission.fe:377:14
     │
 377 │     type X = SelfWrapCycle<SelfCycle>

@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/return_projection_missing_bound.fe
+---
+error[6-0003]: trait bound is not satisfied
+  ┌─ return_projection_missing_bound.fe:9:23
+  │
+9 │ fn bad_return<T>() -> <T as Bound>::Item {
+  │                       ^^^^^^^^^^^^^^^^^^ `T` doesn't implement `Bound`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ return_projection_missing_bound.fe:10:5
+   │
+10 │     todo()
+   │     ^^^^^^ `T` doesn't implement `Bound`

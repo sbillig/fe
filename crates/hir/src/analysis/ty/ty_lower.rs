@@ -1,6 +1,6 @@
 use crate::core::hir_def::{
     ConstGenericArgValue, GenericArg, GenericArgListId, GenericParam, GenericParamOwner,
-    GenericParamView, IdentId, KindBound as HirKindBound, Partial, PathId, PathKind, TraitRefId,
+    GenericParamView, IdentId, KindBound as HirKindBound, Partial, PathId, PathKind,
     TypeAlias as HirTypeAlias, TypeBound, TypeId as HirTyId, TypeKind as HirTyKind, TypeMode,
     scope_graph::ScopeId,
 };
@@ -19,7 +19,10 @@ use super::{
     trait_resolution::{PredicateListId, constraint::collect_constraints},
     ty_def::{InvalidCause, Kind, TyData, TyId, TyParam},
 };
-use crate::analysis::name_resolution::{PathRes, PathResErrorKind, resolve_path};
+use crate::analysis::name_resolution::{
+    PathRes, PathResErrorKind, ReceiverPathResolutionCx, resolve_path,
+    resolve_path_from_receiver_ty,
+};
 use crate::analysis::{HirAnalysisDb, ty::binder::Binder};
 
 /// Lowers the given HirTy to `TyId`.
@@ -143,54 +146,6 @@ pub fn lower_opt_hir_ty_in_mode<'db>(
     lower_opt_hir_ty_in_cx(db, ty, scope, &cx)
 }
 
-enum ContextualReceiver<'db> {
-    UnqualifiedCurrentSelf {
-        receiver_ty: TyId<'db>,
-    },
-    QualifiedCurrentSelf {
-        receiver_ty: TyId<'db>,
-        trait_ref: TraitRefId<'db>,
-    },
-}
-
-fn contextual_receiver_in_cx<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    receiver: PathId<'db>,
-    cx: &AnalysisCx<'db>,
-) -> Option<ContextualReceiver<'db>> {
-    let mode_trait_inst = cx.mode.trait_inst()?;
-    let current_self_ty = cx
-        .mode
-        .self_ty()
-        .unwrap_or_else(|| mode_trait_inst.self_ty(db));
-    match receiver.kind(db) {
-        PathKind::QualifiedType { type_, trait_ } => {
-            let receiver_ty = if type_.is_self_ty(db) {
-                current_self_ty
-            } else {
-                lower_hir_ty_in_cx(db, type_, scope, cx)
-            };
-            (receiver_ty == current_self_ty).then_some(ContextualReceiver::QualifiedCurrentSelf {
-                receiver_ty,
-                trait_ref: trait_,
-            })
-        }
-        PathKind::Ident { .. } => {
-            let receiver_ty = if receiver.is_self_ty(db) {
-                current_self_ty
-            } else {
-                match resolve_path(db, receiver, scope, cx.proof.assumptions(), false).ok()? {
-                    PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => ty,
-                    _ => return None,
-                }
-            };
-            (receiver_ty == current_self_ty)
-                .then_some(ContextualReceiver::UnqualifiedCurrentSelf { receiver_ty })
-        }
-    }
-}
-
 pub(crate) fn contextual_path_resolution_in_cx<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -199,36 +154,64 @@ pub(crate) fn contextual_path_resolution_in_cx<'db>(
     cx: &AnalysisCx<'db>,
 ) -> Option<PathRes<'db>> {
     let mode_trait_inst = cx.mode.trait_inst()?;
+    let current_self_ty = cx
+        .mode
+        .self_ty()
+        .unwrap_or_else(|| mode_trait_inst.self_ty(db));
+    if path.is_self_ty(db) && path.generic_args(db).is_empty(db) {
+        return Some(PathRes::Ty(current_self_ty));
+    }
+    if let PathKind::QualifiedType { type_, trait_ } = path.kind(db) {
+        let receiver_ty = if type_.is_self_ty(db) {
+            current_self_ty
+        } else {
+            lower_hir_ty_in_cx(db, type_, scope, cx)
+        };
+        let trait_inst = lower_trait_ref_in_cx(db, receiver_ty, trait_, scope, *cx, None).ok()?;
+        return Some(PathRes::Ty(TyId::qualified_ty(db, trait_inst)));
+    }
+
     let receiver = path.parent(db)?;
     let name = path.ident(db).to_opt()?;
-    let (receiver_ty, trait_inst) = match contextual_receiver_in_cx(db, scope, receiver, cx)? {
-        ContextualReceiver::UnqualifiedCurrentSelf { receiver_ty } => (
-            receiver_ty,
-            super::trait_def::specialize_trait_const_inst_to_receiver(
-                db,
-                receiver_ty,
-                mode_trait_inst,
-            ),
-        ),
-        ContextualReceiver::QualifiedCurrentSelf {
-            receiver_ty,
-            trait_ref,
-        } => (
-            receiver_ty,
-            lower_trait_ref_in_cx(db, receiver_ty, trait_ref, scope, *cx, None).ok()?,
-        ),
+    let receiver_res = contextual_path_resolution_in_cx(db, scope, receiver, false, cx)
+        .or_else(|| resolve_path(db, receiver, scope, cx.proof.assumptions(), false).ok())?;
+    let receiver_ty = match receiver_res {
+        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => ty,
+        _ => return None,
     };
-    if resolve_tail_as_value && trait_inst.def(db).const_(db, name).is_some() {
-        return Some(PathRes::TraitConst(receiver_ty, trait_inst, name));
+
+    if receiver_ty == current_self_ty {
+        let trait_inst = super::trait_def::specialize_trait_const_inst_to_receiver(
+            db,
+            receiver_ty,
+            mode_trait_inst,
+        );
+        if resolve_tail_as_value && trait_inst.def(db).const_(db, name).is_some() {
+            return Some(PathRes::TraitConst(receiver_ty, trait_inst, name));
+        }
+        let assoc_ty = trait_inst.assoc_ty(db, name)?;
+        let seg_args = lower_generic_arg_list_in_cx(db, path.generic_args(db), scope, cx);
+        let assoc_ty = if seg_args.is_empty() {
+            assoc_ty
+        } else {
+            TyId::foldl(db, assoc_ty, &seg_args)
+        };
+        return Some(PathRes::Ty(assoc_ty));
     }
-    let assoc_ty = trait_inst.assoc_ty(db, name)?;
-    let seg_args = lower_generic_arg_list_in_cx(db, path.generic_args(db), scope, cx);
-    let assoc_ty = if seg_args.is_empty() {
-        assoc_ty
-    } else {
-        TyId::foldl(db, assoc_ty, &seg_args)
-    };
-    Some(PathRes::Ty(assoc_ty))
+
+    resolve_path_from_receiver_ty(
+        db,
+        receiver_ty,
+        ReceiverPathResolutionCx {
+            parent_res: Some(receiver_res),
+            path,
+            scope,
+            assumptions: cx.proof.assumptions(),
+            resolve_tail_as_value,
+            is_tail: true,
+        },
+    )
+    .ok()
 }
 
 fn lower_trait_const_path_in_cx<'db>(

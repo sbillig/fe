@@ -800,171 +800,22 @@ where
         .and_then(|r| r.as_scope(db))
         .unwrap_or(scope);
 
-    match parent_res {
+    match parent_res.clone() {
         Some(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => {
-            // Fast paths for qualified types `<A as Trait>::...`.
-            //
-            // NOTE: This must run before generic associated-const probing, otherwise
-            // `<A as Trait>::CONST` can be mis-resolved with `recv_ty` set to the
-            // *qualified type* instead of `A`, which then breaks downstream trait-const
-            // evaluation/CTFE.
-            if let TyData::QualifiedTy(trait_inst) = ty.data(db) {
-                // Associated type projection
-                if let Some(assoc_ty) = trait_inst.assoc_ty(db, ident) {
-                    let r = PathRes::Ty(assoc_ty);
-                    observer(path, &r);
-                    return Ok(r);
-                }
-
-                // Associated function on a specific trait instance
-                if is_tail
-                    && resolve_tail_as_value
-                    && let Some(&method) = trait_inst.def(db).method_defs(db).get(&ident)
-                {
-                    let r = PathRes::TraitMethod(*trait_inst, method);
-                    observer(path, &r);
-                    return Ok(r);
-                }
-
-                // Associated const on a specific trait instance
-                if resolve_tail_as_value && trait_inst.def(db).const_(db, ident).is_some() {
-                    let r = PathRes::TraitConst(trait_inst.self_ty(db), *trait_inst, ident);
-                    observer(path, &r);
-                    return Ok(r);
-                }
-            }
-
-            // Try to resolve as an associated const on the receiver type
-            if is_tail && resolve_tail_as_value {
-                // Probe impls across both the call-site scope and the receiver type's ingot so
-                // `OtherIngotType::CONST` and `ExternalType::LOCAL_TRAIT_CONST` both resolve.
-                match select_assoc_const_candidate(db, ty, ident, scope, assumptions) {
-                    AssocConstSelection::Found(inst) => {
-                        let r = PathRes::TraitConst(ty, inst, ident);
-                        observer(path, &r);
-                        return Ok(r);
-                    }
-                    AssocConstSelection::Ambiguous(traits) => {
-                        return Err(PathResError::new(
-                            PathResErrorKind::AmbiguousAssociatedConst {
-                                name: ident,
-                                trait_insts: traits,
-                            },
-                            path,
-                        ));
-                    }
-                    AssocConstSelection::NotFound => {}
-                }
-            }
-
-            // Try to resolve as an enum variant
-            if let Some(enum_) = ty.as_enum(db) {
-                // We need to use the concrete enum scope instead of
-                // parent_scope to resolve the variants in all cases,
-                // eg when parent is `Self`
-                let directive = QueryDirective::for_scope(db, enum_.scope());
-                let query = make_query(db, path, enum_.scope(), directive);
-                let bucket = resolve_query(db, query);
-
-                if let Ok(res) = bucket.pick(NameDomain::VALUE)
-                    && let Some(var) = res.enum_variant()
-                {
-                    let reso = PathRes::EnumVariant(ResolvedVariant {
-                        ty,
-                        variant: var,
-                        path,
-                    });
-                    observer(path, &reso);
-                    return Ok(reso);
-                }
-            }
-
-            if is_tail && resolve_tail_as_value {
-                let receiver_ty = Canonicalized::new(db, ty);
-                match select_method_candidate(
-                    db,
-                    receiver_ty.value,
-                    ident,
-                    parent_scope,
-                    assumptions,
-                    None,
-                ) {
-                    Ok(cand) => {
-                        let r = PathRes::Method(ty, cand);
-                        observer(path, &r);
-                        return Ok(r);
-                    }
-                    Err(MethodSelectionError::NotFound) => {}
-                    Err(err) => {
-                        return Err(PathResError::method_selection(err, path));
-                    }
-                }
-            }
-
-            // Find raw associated types, then dedup by normalized result here.
-            let assoc_tys =
-                find_associated_type(db, scope, Canonical::new(db, ty), ident, assumptions);
-
-            if assoc_tys.is_empty() {
-                return Err(PathResError::new(
-                    PathResErrorKind::NotFound {
-                        parent: parent_res,
-                        bucket: NameResBucket::default(),
-                    },
+            let r = resolve_path_from_receiver_ty(
+                db,
+                ty,
+                ReceiverPathResolutionCx {
+                    parent_res: parent_res.clone(),
                     path,
-                ));
-            }
-
-            // Deduplicate by normalized type, but preserve and return the original
-            // (unnormalized) candidate to avoid prematurely collapsing projections
-            // like `T::IntoIter::Item` into `T::Item`.
-            let seg_args = lower_generic_arg_list(db, path.generic_args(db), scope, assumptions);
-            let mut dedup: IndexMap<TyId<'db>, (TraitInstId<'db>, TyId<'db>)> = IndexMap::new();
-            for (inst, ty_candidate) in assoc_tys.iter().copied() {
-                let applied = if seg_args.is_empty() {
-                    ty_candidate
-                } else {
-                    TyId::foldl(db, ty_candidate, &seg_args)
-                };
-                if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) =
-                    applied.data(db)
-                {
-                    return Err(PathResError::new(
-                        PathResErrorKind::ArgNumMismatch {
-                            expected: *expected,
-                            given: *given,
-                        },
-                        path,
-                    ));
-                }
-
-                let norm = normalize_ty(db, applied, scope, assumptions);
-                dedup.entry(norm).or_insert((inst, applied));
-            }
-
-            match dedup.len() {
-                0 => unreachable!(),
-                1 => {
-                    let (_, (_, original_ty)) = dedup.first().unwrap();
-                    let r = PathRes::Ty(*original_ty);
-                    observer(path, &r);
-                    return Ok(r);
-                }
-                _ => {
-                    // Build candidate list from deduped set for diagnostics
-                    let candidates = dedup
-                        .into_iter()
-                        .map(|(_norm, (inst, original_ty))| (inst, original_ty))
-                        .collect();
-                    return Err(PathResError::new(
-                        PathResErrorKind::AmbiguousAssociatedType {
-                            name: ident,
-                            candidates,
-                        },
-                        path,
-                    ));
-                }
-            }
+                    scope,
+                    assumptions,
+                    resolve_tail_as_value,
+                    is_tail,
+                },
+            )?;
+            observer(path, &r);
+            return Ok(r);
         }
 
         Some(
@@ -1018,6 +869,16 @@ enum AssocConstSelection<'db> {
     Found(TraitInstId<'db>),
     Ambiguous(ThinVec<TraitInstId<'db>>),
     NotFound,
+}
+
+#[derive(Clone)]
+pub(crate) struct ReceiverPathResolutionCx<'db> {
+    pub parent_res: Option<PathRes<'db>>,
+    pub path: PathId<'db>,
+    pub scope: ScopeId<'db>,
+    pub assumptions: PredicateListId<'db>,
+    pub resolve_tail_as_value: bool,
+    pub is_tail: bool,
 }
 
 fn select_assoc_const_candidate<'db>(
@@ -1133,6 +994,155 @@ fn select_assoc_const_candidate<'db>(
         0 => AssocConstSelection::NotFound,
         1 => AssocConstSelection::Found(*matches.iter().next().unwrap()),
         _ => AssocConstSelection::Ambiguous(matches.into_iter().collect()),
+    }
+}
+
+pub(crate) fn resolve_path_from_receiver_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    receiver_ty: TyId<'db>,
+    cx: ReceiverPathResolutionCx<'db>,
+) -> PathResolutionResult<'db, PathRes<'db>> {
+    let ReceiverPathResolutionCx {
+        parent_res,
+        path,
+        scope,
+        assumptions,
+        resolve_tail_as_value,
+        is_tail,
+    } = cx;
+    let Some(ident) = path.ident(db).to_opt() else {
+        return Err(PathResError::parse_err(path));
+    };
+    let parent_scope = parent_res
+        .as_ref()
+        .and_then(|r| r.as_scope(db))
+        .unwrap_or(scope);
+
+    // Fast paths for qualified types `<A as Trait>::...`.
+    //
+    // NOTE: This must run before generic associated-const probing, otherwise
+    // `<A as Trait>::CONST` can be mis-resolved with `recv_ty` set to the
+    // *qualified type* instead of `A`, which then breaks downstream trait-const
+    // evaluation/CTFE.
+    if let TyData::QualifiedTy(trait_inst) = receiver_ty.data(db) {
+        if let Some(assoc_ty) = trait_inst.assoc_ty(db, ident) {
+            return Ok(PathRes::Ty(assoc_ty));
+        }
+
+        if is_tail
+            && resolve_tail_as_value
+            && let Some(&method) = trait_inst.def(db).method_defs(db).get(&ident)
+        {
+            return Ok(PathRes::TraitMethod(*trait_inst, method));
+        }
+
+        if resolve_tail_as_value && trait_inst.def(db).const_(db, ident).is_some() {
+            return Ok(PathRes::TraitConst(
+                trait_inst.self_ty(db),
+                *trait_inst,
+                ident,
+            ));
+        }
+    }
+
+    if is_tail && resolve_tail_as_value {
+        match select_assoc_const_candidate(db, receiver_ty, ident, scope, assumptions) {
+            AssocConstSelection::Found(inst) => {
+                return Ok(PathRes::TraitConst(receiver_ty, inst, ident));
+            }
+            AssocConstSelection::Ambiguous(traits) => {
+                return Err(PathResError::new(
+                    PathResErrorKind::AmbiguousAssociatedConst {
+                        name: ident,
+                        trait_insts: traits,
+                    },
+                    path,
+                ));
+            }
+            AssocConstSelection::NotFound => {}
+        }
+    }
+
+    if let Some(enum_) = receiver_ty.as_enum(db) {
+        let directive = QueryDirective::for_scope(db, enum_.scope());
+        let query = make_query(db, path, enum_.scope(), directive);
+        let bucket = resolve_query(db, query);
+
+        if let Ok(res) = bucket.pick(NameDomain::VALUE)
+            && let Some(var) = res.enum_variant()
+        {
+            return Ok(PathRes::EnumVariant(ResolvedVariant {
+                ty: receiver_ty,
+                variant: var,
+                path,
+            }));
+        }
+    }
+
+    if is_tail && resolve_tail_as_value {
+        let receiver = Canonicalized::new(db, receiver_ty);
+        match select_method_candidate(db, receiver.value, ident, parent_scope, assumptions, None) {
+            Ok(cand) => return Ok(PathRes::Method(receiver_ty, cand)),
+            Err(MethodSelectionError::NotFound) => {}
+            Err(err) => return Err(PathResError::method_selection(err, path)),
+        }
+    }
+
+    let assoc_tys = find_associated_type(
+        db,
+        scope,
+        Canonical::new(db, receiver_ty),
+        ident,
+        assumptions,
+    );
+
+    if assoc_tys.is_empty() {
+        return Err(PathResError::new(
+            PathResErrorKind::NotFound {
+                parent: parent_res,
+                bucket: NameResBucket::default(),
+            },
+            path,
+        ));
+    }
+
+    let seg_args = lower_generic_arg_list(db, path.generic_args(db), scope, assumptions);
+    let mut dedup: IndexMap<TyId<'db>, (TraitInstId<'db>, TyId<'db>)> = IndexMap::new();
+    for (inst, ty_candidate) in assoc_tys.iter().copied() {
+        let applied = if seg_args.is_empty() {
+            ty_candidate
+        } else {
+            TyId::foldl(db, ty_candidate, &seg_args)
+        };
+        if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) =
+            applied.data(db)
+        {
+            return Err(PathResError::new(
+                PathResErrorKind::ArgNumMismatch {
+                    expected: *expected,
+                    given: *given,
+                },
+                path,
+            ));
+        }
+
+        let norm = normalize_ty(db, applied, scope, assumptions);
+        dedup.entry(norm).or_insert((inst, applied));
+    }
+
+    match dedup.len() {
+        0 => unreachable!(),
+        1 => {
+            let (_, (_, original_ty)) = dedup.first().unwrap();
+            Ok(PathRes::Ty(*original_ty))
+        }
+        _ => Err(PathResError::new(
+            PathResErrorKind::AmbiguousAssociatedType {
+                name: ident,
+                candidates: dedup.into_iter().map(|(_, candidate)| candidate).collect(),
+            },
+            path,
+        )),
     }
 }
 

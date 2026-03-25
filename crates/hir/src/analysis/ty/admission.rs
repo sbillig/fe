@@ -15,7 +15,8 @@ use crate::analysis::{
             TyDiagCollection, TyLowerDiag,
         },
         fold::TyFoldable as _,
-        trait_def::{ImplementorId, TraitInstId},
+        method_cmp::compare_impl_method,
+        trait_def::{ImplementorId, ImplementorOrigin, TraitInstId},
         trait_lower::TraitRefLowerError,
         trait_resolution::{
             GoalSatisfiability, LocalImplementorSet, WellFormedness, check_trait_inst_wf,
@@ -28,6 +29,7 @@ use crate::analysis::{
 };
 use crate::hir_def::{IdentId, ImplTrait};
 use crate::span::DynLazySpan;
+use common::indexmap::IndexSet;
 use common::ingot::IngotKind;
 
 pub(crate) type TraitImplTable<'db> =
@@ -450,6 +452,7 @@ pub enum ImplInterfaceIssue<'db> {
         primary: DynLazySpan<'db>,
         not_implemented: ThinVec<IdentId<'db>>,
     },
+    MethodSignatureInvalid(TyDiagCollection<'db>),
     MethodSignatureMismatch(ImplDiag<'db>),
     ExtraAssocType {
         primary: DynLazySpan<'db>,
@@ -749,33 +752,104 @@ pub(crate) fn impl_header_issues<'db>(
 fn method_conformance_issues<'db>(
     db: &'db dyn HirAnalysisDb,
     implementor: ImplementorId<'db>,
-    solve_cx: ty::trait_resolution::TraitSolveCx<'db>,
+    cx: &AnalysisCx<'db>,
 ) -> Vec<ImplInterfaceIssue<'db>> {
+    if !matches!(implementor.origin(db), ImplementorOrigin::Hir(_)) {
+        return Vec::new();
+    }
+
     let mut issues = Vec::new();
-    for diag in implementor.diags_method_conformance(db, solve_cx) {
-        let TyDiagCollection::Impl(diag) = diag else {
+    let impl_methods = implementor.methods(db);
+    let hir_trait = implementor.trait_def(db);
+    let trait_methods = hir_trait.method_defs(db);
+    let base_trait_inst = implementor.trait_(db);
+    let mut method_cmp_assoc_type_bindings = base_trait_inst.assoc_type_bindings(db).clone();
+    method_cmp_assoc_type_bindings
+        .extend(implementor.types(db).iter().map(|(&name, &ty)| (name, ty)));
+    let method_cmp_trait_inst = TraitInstId::new(
+        db,
+        base_trait_inst.def(db),
+        base_trait_inst.args(db).to_vec(),
+        method_cmp_assoc_type_bindings,
+    );
+    let mut required_methods: IndexSet<_> = trait_methods
+        .iter()
+        .filter_map(|(name, &trait_method)| trait_method.body(db).is_none().then_some(*name))
+        .collect();
+
+    for (name, impl_m) in impl_methods {
+        let Some(trait_m) = trait_methods.get(name).copied() else {
+            issues.extend(
+                impl_m
+                    .signature_ty_diags_in_cx(db, cx)
+                    .into_iter()
+                    .map(ImplInterfaceIssue::MethodSignatureInvalid),
+            );
+            issues.push(ImplInterfaceIssue::ExtraMethod {
+                primary: implementor.hir_impl_trait(db).span().trait_ref().into(),
+                trait_: hir_trait,
+                method_name: *name,
+            });
             continue;
         };
-        match diag {
-            ImplDiag::MethodNotDefinedInTrait {
-                primary,
-                trait_,
-                method_name,
-            } => issues.push(ImplInterfaceIssue::ExtraMethod {
-                primary,
-                trait_,
-                method_name,
-            }),
-            ImplDiag::NotAllTraitItemsImplemented {
-                primary,
-                not_implemented,
-            } => issues.push(ImplInterfaceIssue::MissingMethod {
-                primary,
-                not_implemented,
-            }),
-            diag => issues.push(ImplInterfaceIssue::MethodSignatureMismatch(diag)),
+        required_methods.remove(name);
+
+        let sig_diags = impl_m.signature_ty_diags_in_cx(db, cx);
+        if !sig_diags.is_empty() {
+            issues.extend(
+                sig_diags
+                    .into_iter()
+                    .map(ImplInterfaceIssue::MethodSignatureInvalid),
+            );
+            continue;
+        }
+
+        let mut diags = Vec::new();
+        compare_impl_method(
+            db,
+            impl_m
+                .as_callable(db)
+                .expect("impl methods should be callable"),
+            trait_m
+                .as_callable(db)
+                .expect("trait methods should be callable"),
+            method_cmp_trait_inst,
+            cx,
+            &mut diags,
+        );
+        for diag in diags {
+            let TyDiagCollection::Impl(diag) = diag else {
+                continue;
+            };
+            match diag {
+                ImplDiag::MethodNotDefinedInTrait {
+                    primary,
+                    trait_,
+                    method_name,
+                } => issues.push(ImplInterfaceIssue::ExtraMethod {
+                    primary,
+                    trait_,
+                    method_name,
+                }),
+                ImplDiag::NotAllTraitItemsImplemented {
+                    primary,
+                    not_implemented,
+                } => issues.push(ImplInterfaceIssue::MissingMethod {
+                    primary,
+                    not_implemented,
+                }),
+                diag => issues.push(ImplInterfaceIssue::MethodSignatureMismatch(diag)),
+            }
         }
     }
+
+    if !required_methods.is_empty() {
+        issues.push(ImplInterfaceIssue::MissingMethod {
+            primary: implementor.hir_impl_trait(db).span().ty().into(),
+            not_implemented: required_methods.into_iter().collect(),
+        });
+    }
+
     issues
 }
 
@@ -802,7 +876,7 @@ fn impl_interface_issues_with_assoc_type_bound_solve_cx<'db>(
             self_ty: current_impl.self_ty(db),
             current_impl: Some(current_impl),
         });
-    let mut issues = method_conformance_issues(db, current_impl, cx.proof.solve_cx());
+    let mut issues = method_conformance_issues(db, current_impl, &cx);
     issues.extend(
         impl_trait
             .assoc_types(db)
@@ -1075,6 +1149,7 @@ impl<'db> ImplInterfaceIssue<'db> {
                 }
                 .into(),
             ],
+            Self::MethodSignatureInvalid(diag) => vec![diag.clone()],
             Self::MethodSignatureMismatch(diag) => vec![diag.clone().into()],
             Self::ExtraAssocType {
                 primary,

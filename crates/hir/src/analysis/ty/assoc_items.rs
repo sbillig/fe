@@ -417,14 +417,8 @@ pub fn resolve_trait_const_use<'db>(
             .iter()
             .copied()
             .any(|assumption| {
-                if assumption.def(db) != selection.trait_inst.def(db) {
-                    return false;
-                }
-
                 let mut table = UnificationTable::new(db);
-                table
-                    .unify(assumption.self_ty(db), selection.trait_inst.self_ty(db))
-                    .is_ok()
+                table.unify(assumption, selection.trait_inst).is_ok()
             });
     let can_stay_abstract = !flags.contains(TyFlags::HAS_INVALID)
         && (flags.intersects(TyFlags::HAS_PARAM | TyFlags::HAS_VAR)

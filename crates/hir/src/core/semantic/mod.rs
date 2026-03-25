@@ -95,10 +95,11 @@ use crate::analysis::ty::{
     },
     ty_error::{
         collect_hir_ty_diags_in_cx, collect_ty_lower_errors, collect_ty_lower_errors_in_cx,
+        explicit_value_ty_wf_diag,
     },
     ty_lower::{
-        TyAlias, lower_hir_ty, lower_hir_ty_in_cx, lower_hir_ty_in_mode, lower_opt_hir_ty,
-        lower_type_alias, lower_type_alias_from_hir, method_receiver_layout_hole_tys,
+        TyAlias, lower_hir_ty, lower_hir_ty_in_cx, lower_opt_hir_ty, lower_type_alias,
+        lower_type_alias_from_hir, method_receiver_layout_hole_tys,
     },
     unify::UnificationTable,
 };
@@ -240,6 +241,24 @@ impl<'db> Func<'db> {
             .with_mode(mode)
     }
 
+    fn signature_analysis_cx_in_caller_cx(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        cx: &AnalysisCx<'db>,
+    ) -> AnalysisCx<'db> {
+        let signature_cx = self.signature_analysis_cx(db);
+        if *cx == signature_cx {
+            return *cx;
+        }
+
+        let mut assumptions = cx.proof.assumptions().list(db).to_vec();
+        assumptions.extend(self.elaborated_assumptions(db).list(db));
+        let assumptions = PredicateListId::new(db, assumptions).extend_all_bounds(db);
+        AnalysisCx::new(cx.proof.with_assumptions(assumptions))
+            .with_overlay(cx.overlay)
+            .with_mode(cx.mode)
+    }
+
     /// Returns true if this function declares an explicit return type.
     pub fn has_explicit_return_ty(self, db: &'db dyn HirDb) -> bool {
         self.ret_type_ref(db).is_some()
@@ -334,6 +353,71 @@ impl<'db> Func<'db> {
         };
         let cx = self.signature_analysis_cx(db);
         collect_ty_lower_errors_in_cx(db, self.scope(), hir_ty, self.span().sig().ret_ty(), &cx)
+    }
+
+    /// Explicit user-written value-position types in signatures are validated
+    /// under the caller's `AnalysisCx` so lowering, overlay state, and WF
+    /// obligations stay aligned.
+    pub(crate) fn return_ty_diags_in_cx(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        cx: &AnalysisCx<'db>,
+    ) -> Vec<TyDiagCollection<'db>> {
+        let cx = self.signature_analysis_cx_in_caller_cx(db, cx);
+        let Some(hir_ty) = self.ret_type_ref(db) else {
+            return Vec::new();
+        };
+
+        let ty_span: crate::span::DynLazySpan<'db> = self.span().ret_ty().into();
+        let errs =
+            collect_hir_ty_diags_in_cx(db, self.scope(), hir_ty, self.span().sig().ret_ty(), &cx);
+        if !errs.is_empty() {
+            return errs;
+        }
+
+        let ty = lower_hir_ty_in_cx(db, hir_ty, self.scope(), &cx);
+        let mut out = Vec::new();
+        if !ty.has_star_kind(db) {
+            out.push(TyLowerDiag::ExpectedStarKind(ty_span.clone()).into());
+            return out;
+        }
+        if ty.is_const_ty(db) {
+            out.push(
+                TyLowerDiag::NormalTypeExpected {
+                    span: ty_span.clone(),
+                    given: ty,
+                }
+                .into(),
+            );
+            return out;
+        }
+        if ty_contains_const_hole(db, ty) {
+            out.push(
+                TyLowerDiag::ConstHoleInValuePosition {
+                    span: ty_span.clone(),
+                }
+                .into(),
+            );
+            return out;
+        }
+        if let Some(diag) = explicit_value_ty_wf_diag(db, cx.proof.solve_cx(), ty, ty_span) {
+            out.push(diag);
+        }
+
+        out
+    }
+
+    pub(crate) fn signature_ty_diags_in_cx(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        cx: &AnalysisCx<'db>,
+    ) -> Vec<TyDiagCollection<'db>> {
+        let mut out = self
+            .params(db)
+            .flat_map(|param| param.ty_diags_in_cx(db, cx))
+            .collect::<Vec<_>>();
+        out.extend(self.return_ty_diags_in_cx(db, cx));
+        out
     }
 
     /// Returns the containing `impl Trait` block if this function is a method
@@ -714,7 +798,16 @@ impl<'db> FuncParamView<'db> {
     pub fn ty_diags(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         let func = self.func;
         let cx = func.signature_analysis_cx(db);
+        self.ty_diags_in_cx(db, &cx)
+    }
 
+    pub(crate) fn ty_diags_in_cx(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        cx: &AnalysisCx<'db>,
+    ) -> Vec<TyDiagCollection<'db>> {
+        let func = self.func;
+        let cx = func.signature_analysis_cx_in_caller_cx(db, cx);
         let Some(param) = self
             .func
             .params_list(db)
@@ -816,17 +909,10 @@ impl<'db> FuncParamView<'db> {
 
         // Well-formedness / trait-bound satisfaction for parameter type
         if !suppress_self_wf_diag
-            && let WellFormedness::IllFormed { goal, subgoal } =
-                check_ty_wf(db, cx.proof.solve_cx(), ty)
+            && let Some(diag) =
+                explicit_value_ty_wf_diag(db, cx.proof.solve_cx(), ty, ty_span.clone())
         {
-            out.push(
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span: ty_span.clone(),
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                }
-                .into(),
-            );
+            out.push(diag);
         }
 
         // Self-parameter type shape check
@@ -3416,25 +3502,6 @@ impl<'db> ImplAssocTypeView<'db> {
         self.owner
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn ty_in_mode(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        mode: LoweringMode<'db>,
-    ) -> Option<TyId<'db>> {
-        // Compatibility wrapper. Semantic callers should prefer `ty_in_cx(...)`
-        // so helper-frontier and overlay state stay intact.
-        let hir = self.owner.types(db)[self.idx].type_ref.to_opt()?;
-        let assumptions = self.owner.elaborated_assumptions(db);
-        Some(lower_hir_ty_in_mode(
-            db,
-            hir,
-            self.owner.scope(),
-            assumptions,
-            mode,
-        ))
-    }
-
     pub(crate) fn ty_in_cx(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -3894,25 +3961,6 @@ impl<'db> ImplAssocConstView<'db> {
 
     pub fn value_body(self, db: &'db dyn HirDb) -> Option<crate::core::hir_def::Body<'db>> {
         self.def(db).value.to_opt()
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn ty_in_mode(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        mode: LoweringMode<'db>,
-    ) -> Option<TyId<'db>> {
-        // Compatibility wrapper. Semantic callers should prefer `ty_in_cx(...)`
-        // so helper-frontier and overlay state stay intact.
-        let hir = self.def(db).ty.to_opt()?;
-        let assumptions = self.owner.elaborated_assumptions(db);
-        Some(lower_hir_ty_in_mode(
-            db,
-            hir,
-            self.owner.scope(),
-            assumptions,
-            mode,
-        ))
     }
 
     pub(crate) fn ty_in_cx(

@@ -2,7 +2,6 @@
 
 use crate::{
     analysis::ty::{
-        method_cmp::compare_impl_method,
         trait_lower::{collect_trait_impls, collect_trait_impls_frontier},
         trait_resolution::{GoalSatisfiability, PredicateListId, Selection},
     },
@@ -20,8 +19,7 @@ use super::{
     assoc_items::normalize_ty_for_trait_inst as normalize_assoc_ty_for_trait_inst,
     binder::Binder,
     canonical::{Canonical, Canonicalized},
-    context::{AnalysisCx, ImplOverlay, ProofCx},
-    diagnostics::{ImplDiag, TyDiagCollection},
+    context::AnalysisCx,
     fold::TyFoldable as _,
     trait_lower::collect_implementor_methods,
     trait_resolution::{TraitSolveCx, constraint::collect_constraints, is_goal_satisfiable},
@@ -637,70 +635,6 @@ impl<'db> ImplementorId<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> &'db IndexMap<IdentId<'db>, Func<'db>> {
         collect_implementor_methods(db, self)
-    }
-
-    /// Compare impl methods vs. trait methods and report missing/mismatched ones.
-    pub(crate) fn diags_method_conformance(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        solve_cx: TraitSolveCx<'db>,
-    ) -> Vec<TyDiagCollection<'db>> {
-        if !matches!(self.origin(db), ImplementorOrigin::Hir(_)) {
-            return Vec::new();
-        }
-        let mut diags = vec![];
-        let impl_methods = self.methods(db);
-        let hir_trait = self.trait_def(db);
-        let trait_methods = self.trait_def(db).method_defs(db);
-        let base_trait_inst = self.trait_(db);
-        let mut method_cmp_assoc_type_bindings = base_trait_inst.assoc_type_bindings(db).clone();
-        method_cmp_assoc_type_bindings.extend(self.types(db).iter().map(|(&name, &ty)| (name, ty)));
-        let method_cmp_trait_inst = TraitInstId::new(
-            db,
-            base_trait_inst.def(db),
-            base_trait_inst.args(db).to_vec(),
-            method_cmp_assoc_type_bindings,
-        );
-        let mut required_methods: IndexSet<_> = trait_methods
-            .iter()
-            .filter_map(|(name, &trait_method)| trait_method.body(db).is_none().then_some(*name))
-            .collect();
-
-        for (name, impl_m) in impl_methods {
-            let Some(trait_m) = trait_methods.get(name) else {
-                diags.push(
-                    ImplDiag::MethodNotDefinedInTrait {
-                        primary: self.hir_impl_trait(db).span().trait_ref().into(),
-                        method_name: *name,
-                        trait_: hir_trait,
-                    }
-                    .into(),
-                );
-                continue;
-            };
-            compare_impl_method(
-                db,
-                impl_m.as_callable(db).unwrap(),
-                trait_m.as_callable(db).unwrap(),
-                method_cmp_trait_inst,
-                &AnalysisCx::new(ProofCx::from_solve_cx(solve_cx))
-                    .with_overlay(ImplOverlay::with_current_impl(self)),
-                &mut diags,
-            );
-            required_methods.remove(name);
-        }
-
-        if !required_methods.is_empty() {
-            diags.push(
-                ImplDiag::NotAllTraitItemsImplemented {
-                    primary: self.hir_impl_trait(db).span().ty().into(),
-                    not_implemented: required_methods.into_iter().collect(),
-                }
-                .into(),
-            );
-        }
-
-        diags
     }
 }
 
