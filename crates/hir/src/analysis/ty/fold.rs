@@ -50,8 +50,7 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
             TyApp(abs, arg) => {
                 let abs = folder.fold_ty(db, *abs);
                 let arg = folder.fold_ty(db, *arg);
-
-                TyId::app(db, abs, arg)
+                TyId::app_without_const_eval(db, abs, arg)
             }
 
             ConstTy(cty) => {

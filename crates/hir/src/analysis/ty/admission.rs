@@ -33,6 +33,13 @@ use common::ingot::IngotKind;
 pub(crate) type TraitImplTable<'db> =
     FxHashMap<crate::hir_def::Trait<'db>, Vec<Binder<ImplementorId<'db>>>>;
 
+#[derive(Debug, Clone, PartialEq, Eq, Default, salsa::Update)]
+pub(crate) struct AdmissionSummary<'db> {
+    pub admitted: TraitImplTable<'db>,
+    pub header_issues: FxHashMap<ImplTrait<'db>, Vec<ImplHeaderIssue<'db>>>,
+    pub interface_issues: FxHashMap<ImplTrait<'db>, Vec<ImplInterfaceIssue<'db>>>,
+}
+
 #[derive(Default)]
 struct AdmissionCaches<'db> {
     header_issues: FxHashMap<ImplTrait<'db>, Vec<ImplHeaderIssue<'db>>>,
@@ -124,6 +131,68 @@ impl<'db> AdmissionEngine<'db> {
         }
 
         self.admitted
+    }
+
+    pub(crate) fn summarize(mut self, impl_traits: &[ImplTrait<'db>]) -> AdmissionSummary<'db> {
+        let candidates = impl_traits
+            .iter()
+            .filter_map(|&impl_trait| {
+                Some(Candidate {
+                    impl_trait,
+                    implementor: self.lowered_implementor(impl_trait)?,
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut remaining = candidates.clone();
+        self.admitted = TraitImplTable::default();
+
+        loop {
+            self.clear_round_caches();
+            let mut round_admissible = Vec::new();
+            for candidate in remaining.iter().copied() {
+                if self.is_round_admissible(candidate) {
+                    round_admissible.push(candidate);
+                }
+            }
+            let round_survivors = self.filter_round_conflicts(&round_admissible);
+
+            if round_survivors.is_empty() {
+                break;
+            }
+
+            self.add_to_admitted(&round_survivors);
+            self.remove_from_remaining(&mut remaining, &round_survivors);
+        }
+
+        // Recompute every candidate's issues once the helper frontier is final so diagnostics
+        // render the same semantic truth the admitted trait env uses.
+        self.clear_round_caches();
+        let header_issues = candidates
+            .iter()
+            .copied()
+            .map(|candidate| {
+                (
+                    candidate.impl_trait,
+                    self.header_issues_for_candidate(candidate).clone(),
+                )
+            })
+            .collect();
+        let interface_issues = candidates
+            .iter()
+            .copied()
+            .map(|candidate| {
+                (
+                    candidate.impl_trait,
+                    self.interface_issues_for_candidate(candidate).clone(),
+                )
+            })
+            .collect();
+
+        AdmissionSummary {
+            admitted: self.admitted,
+            header_issues,
+            interface_issues,
+        }
     }
 
     fn is_round_admissible(&mut self, candidate: Candidate<'db>) -> bool {
@@ -227,26 +296,10 @@ impl<'db> AdmissionEngine<'db> {
         &self,
         impl_trait: ImplTrait<'db>,
     ) -> Option<Binder<ImplementorId<'db>>> {
-        let mut last = None;
-        for _ in 0..3 {
-            let implementor = impl_trait.lowered_implementor_preconditions(self.db).ok()?;
-            let current_impl = implementor.instantiate_identity();
-            if current_impl
-                .types(self.db)
-                .values()
-                .all(|ty| !ty.has_invalid(self.db))
-            {
-                return Some(implementor);
-            }
-            last = Some(implementor);
-        }
-        last.filter(|implementor| {
-            implementor
-                .instantiate_identity()
-                .types(self.db)
-                .values()
-                .all(|ty| !ty.has_invalid(self.db))
-        })
+        let cx = self.analysis_cx(impl_trait);
+        impl_trait
+            .lowered_implementor_preconditions_in_cx(self.db, &cx)
+            .ok()
     }
 
     fn add_to_admitted(&mut self, candidates: &[Candidate<'db>]) {
@@ -366,7 +419,7 @@ impl<'db> AdmissionEngine<'db> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
 pub(crate) enum ImplHeaderIssue<'db> {
     InvalidTraitRef(TraitRefLowerError<'db>),
     ImplementorIllFormed {
@@ -386,7 +439,7 @@ pub(crate) enum ImplHeaderIssue<'db> {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
 pub enum ImplInterfaceIssue<'db> {
     ExtraMethod {
         primary: DynLazySpan<'db>,
@@ -635,9 +688,9 @@ pub(crate) fn check_impl_ty_wf_in_cx<'db>(
 pub(crate) fn check_impl_trait_implementor_wf_in_cx<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
-    solve_cx: ty::trait_resolution::TraitSolveCx<'db>,
+    cx: &AnalysisCx<'db>,
 ) -> WellFormedness<'db> {
-    check_impl_ty_wf_in_cx(db, solve_cx, impl_trait.ty(db))
+    check_impl_ty_wf_in_cx(db, cx.proof.solve_cx(), impl_trait.ty_in_cx(db, cx))
 }
 
 pub(crate) fn impl_header_issues<'db>(
@@ -646,14 +699,15 @@ pub(crate) fn impl_header_issues<'db>(
     impl_trait: ImplTrait<'db>,
 ) -> Vec<ImplHeaderIssue<'db>> {
     let mut issues = Vec::new();
-    match check_impl_trait_implementor_wf_in_cx(db, impl_trait, cx.proof.solve_cx()) {
+    let self_ty = impl_trait.ty_in_cx(db, cx);
+    match check_impl_trait_implementor_wf_in_cx(db, impl_trait, cx) {
         WellFormedness::WellFormed => {}
         WellFormedness::IllFormed { goal, subgoal } => {
             issues.push(ImplHeaderIssue::ImplementorIllFormed { goal, subgoal });
         }
     }
 
-    let trait_inst = match impl_trait.trait_inst_result(db) {
+    let trait_inst = match impl_trait.trait_inst_result_in_cx(db, cx) {
         Ok(trait_inst) => trait_inst,
         Err(err) => {
             issues.push(ImplHeaderIssue::InvalidTraitRef(err));
@@ -662,10 +716,10 @@ pub(crate) fn impl_header_issues<'db>(
     };
 
     let expected_kind = trait_inst.def(db).self_param(db).kind(db);
-    if impl_trait.ty(db).kind(db) != expected_kind {
+    if self_ty.kind(db) != expected_kind {
         issues.push(ImplHeaderIssue::SelfKindMismatch {
             expected: expected_kind.clone(),
-            actual: impl_trait.ty(db),
+            actual: self_ty,
         });
     }
 

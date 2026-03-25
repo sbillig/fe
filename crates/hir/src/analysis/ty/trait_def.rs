@@ -3,7 +3,7 @@
 use crate::{
     analysis::ty::{
         method_cmp::compare_impl_method,
-        trait_lower::collect_trait_impls,
+        trait_lower::{collect_trait_impls, collect_trait_impls_frontier},
         trait_resolution::{GoalSatisfiability, PredicateListId, Selection},
     },
     hir_def::{Contract, Func, HirIngot, IdentId, ImplTrait, Trait},
@@ -194,7 +194,7 @@ fn ingot_trait_env_cycle_initial<'db>(
     ingot: Ingot<'db>,
 ) -> TraitEnv<'db> {
     // When local impl admission recursively re-enters trait-env lookup, use the
-    // current fixed-point frontier from `collect_trait_impls` alongside the
+    // current fixed-point frontier from `collect_trait_impls_frontier` alongside the
     // stable external env so projection/method/const checks can see already
     // admitted local helpers during the next iteration.
     TraitEnv::from_impl_maps(
@@ -204,7 +204,7 @@ fn ingot_trait_env_cycle_initial<'db>(
             .resolved_external_ingots(db)
             .iter()
             .map(|(_, external)| collect_trait_impls(db, *external))
-            .chain(std::iter::once(collect_trait_impls(db, ingot))),
+            .chain(std::iter::once(collect_trait_impls_frontier(db, ingot))),
     )
 }
 

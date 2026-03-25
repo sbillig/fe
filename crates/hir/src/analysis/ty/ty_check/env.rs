@@ -85,17 +85,8 @@ impl<'db> TyCheckEnv<'db> {
         // Compute base assumptions (without effect-derived bounds) up-front
         let (base_preds, base_assumptions) = match owner {
             BodyOwner::Func(func) => {
-                let mut preds =
+                let preds =
                     collect_func_def_constraints(db, func.into(), true).instantiate_identity();
-                // Methods inside a trait implicitly assume `Self: Trait` in their bodies so
-                // default method calls resolve against the trait being implemented.
-                if let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) {
-                    let self_pred =
-                        TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
-                    let mut merged = preds.list(db).to_vec();
-                    merged.push(self_pred);
-                    preds = PredicateListId::new(db, merged);
-                }
                 let assumptions = preds.extend_all_bounds(db);
                 (preds, assumptions)
             }
@@ -106,19 +97,8 @@ impl<'db> TyCheckEnv<'db> {
                     _ => None,
                 };
                 if let Some(func) = containing_func {
-                    let mut preds =
+                    let preds =
                         collect_func_def_constraints(db, func.into(), true).instantiate_identity();
-                    if let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) {
-                        let self_pred = TraitInstId::new(
-                            db,
-                            trait_,
-                            trait_.params(db).to_vec(),
-                            IndexMap::new(),
-                        );
-                        let mut merged = preds.list(db).to_vec();
-                        merged.push(self_pred);
-                        preds = PredicateListId::new(db, merged);
-                    }
                     let assumptions = preds.extend_all_bounds(db);
                     (preds, assumptions)
                 } else {
@@ -973,7 +953,10 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     pub(super) fn register_confirmation(&mut self, inst: TraitInstId<'db>, span: DynLazySpan<'db>) {
-        self.deferred.push(DeferredTask::Confirm { inst, span })
+        let task = DeferredTask::Confirm { inst, span };
+        if !self.deferred.contains(&task) {
+            self.deferred.push(task);
+        }
     }
 
     pub(super) fn register_pending_method(&mut self, pending: PendingMethod<'db>) {
@@ -1457,7 +1440,7 @@ impl<'db> TyFolder<'db> for Prober<'db, '_> {
         }
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PendingMethod<'db> {
     pub expr: crate::core::hir_def::ExprId,
     pub recv_ty: TyId<'db>,
@@ -1466,7 +1449,7 @@ pub(super) struct PendingMethod<'db> {
     pub span: DynLazySpan<'db>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum PendingPrimitiveOp {
     Unary {
         expr: ExprId,
@@ -1489,7 +1472,7 @@ impl PendingPrimitiveOp {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum DeferredTask<'db> {
     Confirm {
         inst: TraitInstId<'db>,

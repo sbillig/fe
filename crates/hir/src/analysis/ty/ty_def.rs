@@ -603,20 +603,10 @@ impl<'db> TyId<'db> {
 
     /// Perform type level application.
     pub fn app(db: &'db dyn HirAnalysisDb, lhs: Self, rhs: Self) -> TyId<'db> {
-        let Some(applicable_ty) = lhs.applicable_ty(db) else {
-            return Self::invalid(
-                db,
-                InvalidCause::KindMismatch {
-                    expected: None,
-                    given: rhs,
-                },
-            );
+        let (applicable_ty, rhs) = match Self::prepare_app(db, lhs, rhs, true) {
+            Ok(app) => app,
+            Err(ty) => return ty,
         };
-
-        let rhs = rhs
-            .evaluate_const_ty(db, applicable_ty.const_ty)
-            .unwrap_or_else(|cause| Self::invalid(db, cause));
-
         let applicable_kind = applicable_ty.kind;
         if !applicable_kind.does_match(rhs.kind(db)) {
             return Self::invalid(
@@ -626,9 +616,56 @@ impl<'db> TyId<'db> {
                     given: rhs,
                 },
             );
+        }
+        Self::new(db, TyData::TyApp(lhs, rhs))
+    }
+
+    pub(crate) fn app_without_const_eval(
+        db: &'db dyn HirAnalysisDb,
+        lhs: Self,
+        rhs: Self,
+    ) -> TyId<'db> {
+        let (applicable_ty, rhs) = match Self::prepare_app(db, lhs, rhs, false) {
+            Ok(app) => app,
+            Err(ty) => return ty,
+        };
+        let applicable_kind = applicable_ty.kind;
+        if !applicable_kind.does_match(rhs.kind(db)) {
+            return Self::invalid(
+                db,
+                InvalidCause::KindMismatch {
+                    expected: Some(applicable_kind),
+                    given: rhs,
+                },
+            );
+        }
+        Self::new(db, TyData::TyApp(lhs, rhs))
+    }
+
+    fn prepare_app(
+        db: &'db dyn HirAnalysisDb,
+        lhs: Self,
+        rhs: Self,
+        evaluate_const: bool,
+    ) -> Result<(ApplicableTyProp<'db>, Self), Self> {
+        let Some(applicable_ty) = lhs.applicable_ty(db) else {
+            return Err(Self::invalid(
+                db,
+                InvalidCause::KindMismatch {
+                    expected: None,
+                    given: rhs,
+                },
+            ));
         };
 
-        Self::new(db, TyData::TyApp(lhs, rhs))
+        let rhs = if evaluate_const {
+            rhs.evaluate_const_ty(db, applicable_ty.const_ty)
+                .unwrap_or_else(|cause| Self::invalid(db, cause))
+        } else {
+            rhs
+        };
+
+        Ok((applicable_ty, rhs))
     }
 
     /// Check if this type contains an associated type of a type parameter

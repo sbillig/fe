@@ -72,7 +72,9 @@ use crate::analysis::ty::fold::{TyFoldable, TyFolder};
 use crate::analysis::ty::trait_def::{
     ImplementorId, ImplementorOrigin, TraitInstId, does_impl_trait_conflict,
 };
-use crate::analysis::ty::trait_lower::{TraitRefLowerError, lower_trait_ref};
+use crate::analysis::ty::trait_lower::{
+    TraitRefLowerError, lower_trait_ref, lower_trait_ref_in_cx,
+};
 use crate::analysis::ty::trait_resolution::constraint::{
     collect_adt_constraints, collect_constraints, collect_func_def_constraints,
 };
@@ -2942,22 +2944,21 @@ impl<'db> ImplTrait<'db> {
         })
     }
 
-    fn signature_analysis_cx_for_trait_inst(
+    fn signature_analysis_cx_for_trait_inst_in_cx(
         self,
         db: &'db dyn HirAnalysisDb,
+        cx: &AnalysisCx<'db>,
         trait_inst: TraitInstId<'db>,
         types: IndexMap<IdentId<'db>, TyId<'db>>,
     ) -> AnalysisCx<'db> {
         let current_impl = self.partial_current_impl(db, trait_inst, types);
-        AnalysisCx::new(ProofCx::from_solve_cx(
-            TraitSolveCx::new(db, self.scope()).with_assumptions(self.elaborated_assumptions(db)),
-        ))
-        .with_overlay(ImplOverlay::with_current_impl(current_impl))
-        .with_mode(LoweringMode::ImplTraitSignature {
-            self_ty: trait_inst.self_ty(db),
-            trait_inst,
-            current_impl: Some(current_impl),
-        })
+        AnalysisCx::new(cx.proof)
+            .with_overlay(ImplOverlay::with_current_impl(current_impl))
+            .with_mode(LoweringMode::ImplTraitSignature {
+                self_ty: trait_inst.self_ty(db),
+                trait_inst,
+                current_impl: Some(current_impl),
+            })
     }
 
     /// Semantic predicate list (assumptions) for this impl-trait item.
@@ -2971,28 +2972,45 @@ impl<'db> ImplTrait<'db> {
         self.assumptions(db).extend_all_bounds(db)
     }
 
-    /// Semantic self type of this impl-trait block.
-    pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
-        let assumptions = self.elaborated_assumptions(db);
+    pub(crate) fn ty_in_cx(self, db: &'db dyn HirAnalysisDb, cx: &AnalysisCx<'db>) -> TyId<'db> {
         self.type_ref(db)
             .to_opt()
-            .map(|hir_ty| lower_hir_ty(db, hir_ty, self.scope(), assumptions))
+            .map(|hir_ty| lower_hir_ty_in_cx(db, hir_ty, self.scope(), cx))
             .unwrap_or_else(|| TyId::invalid(db, InvalidCause::ParseError))
+    }
+
+    /// Semantic self type of this impl-trait block.
+    pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
+        let cx = AnalysisCx::new(
+            ProofCx::new(db, self.scope()).with_assumptions(self.elaborated_assumptions(db)),
+        );
+        self.ty_in_cx(db, &cx)
     }
 
     fn lowered_implementor_header(
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> Result<Binder<ImplementorId<'db>>, ImplTraitLowerError<'db>> {
+        let cx = AnalysisCx::new(
+            ProofCx::new(db, self.scope()).with_assumptions(self.elaborated_assumptions(db)),
+        );
+        self.lowered_implementor_header_in_cx(db, &cx)
+    }
+
+    fn lowered_implementor_header_in_cx(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        cx: &AnalysisCx<'db>,
+    ) -> Result<Binder<ImplementorId<'db>>, ImplTraitLowerError<'db>> {
         // Early return if the implementor type is syntactically missing or invalid.
         if matches!(
-            self.ty(db).data(db),
+            self.ty_in_cx(db, cx).data(db),
             TyData::Invalid(InvalidCause::ParseError)
         ) {
             return Err(ImplTraitLowerError::ParseError);
         }
 
-        let trait_inst = match self.trait_inst_result(db) {
+        let trait_inst = match self.trait_inst_result_in_cx(db, cx) {
             Ok(inst) => inst,
             Err(err) => return Err(ImplTraitLowerError::TraitRef(err)),
         };
@@ -3010,14 +3028,27 @@ impl<'db> ImplTrait<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> Result<Binder<ImplementorId<'db>>, ImplTraitLowerError<'db>> {
+        let cx = AnalysisCx::new(
+            ProofCx::new(db, self.scope()).with_assumptions(self.elaborated_assumptions(db)),
+        );
+        self.lowered_implementor_preconditions_in_cx(db, &cx)
+    }
+
+    pub(crate) fn lowered_implementor_preconditions_in_cx(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        cx: &AnalysisCx<'db>,
+    ) -> Result<Binder<ImplementorId<'db>>, ImplTraitLowerError<'db>> {
         // Note: we do NOT check ty.has_invalid(db) here universally, because
         // we want to proceed with lowering (and potentially report unrelated
         // errors) unless it's a hard parse error. Diagnostics code will check
         // validity separately.
-        let header = self.lowered_implementor_header(db)?.instantiate_identity();
+        let header = self
+            .lowered_implementor_header_in_cx(db, cx)?
+            .instantiate_identity();
         let trait_inst = header.trait_(db);
         let params = header.params(db).to_vec();
-        let types = self.assoc_type_bindings_for_trait_inst(db, trait_inst);
+        let types = self.assoc_type_bindings_for_trait_inst_in_cx(db, trait_inst, cx);
         Ok(Binder::bind(ImplementorId::new(
             db,
             trait_inst,
@@ -3036,7 +3067,7 @@ impl<'db> ImplTrait<'db> {
 
         // Kind check
         let expected_kind = implementor_identity.trait_def(db).self_param(db).kind(db);
-        if self.ty(db).kind(db) != expected_kind {
+        if implementor_identity.self_ty(db).kind(db) != expected_kind {
             return Err(ImplTraitLowerError::KindMismatch {
                 expected: expected_kind.clone(),
                 actual: implementor_identity.self_ty(db),
@@ -3102,7 +3133,18 @@ impl<'db> ImplTrait<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> Result<TraitInstId<'db>, TraitRefLowerError<'db>> {
-        let ty = self.ty(db);
+        let cx = AnalysisCx::new(
+            ProofCx::new(db, self.scope()).with_assumptions(self.elaborated_assumptions(db)),
+        );
+        self.trait_inst_result_in_cx(db, &cx)
+    }
+
+    pub(crate) fn trait_inst_result_in_cx(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        cx: &AnalysisCx<'db>,
+    ) -> Result<TraitInstId<'db>, TraitRefLowerError<'db>> {
+        let ty = self.ty_in_cx(db, cx);
 
         // Preserve the existing "parse error / invalid type -> early return
         // with no diags from this helper" behavior.
@@ -3118,11 +3160,7 @@ impl<'db> ImplTrait<'db> {
             return Err(TraitRefLowerError::Ignored);
         };
 
-        // Assumptions derived from this impl-trait item, shared with other
-        // semantic helpers.
-        let assumptions = self.elaborated_assumptions(db);
-
-        let trait_inst = lower_trait_ref(db, ty, trait_ref, self.scope(), assumptions, None)?;
+        let trait_inst = lower_trait_ref_in_cx(db, ty, trait_ref, self.scope(), *cx, None)?;
 
         // Preserve ingot check used when lowering impl traits: an impl is
         // only valid if it lives in the same ingot as either its
@@ -3157,10 +3195,11 @@ impl<'db> ImplTrait<'db> {
     ///
     /// Invalid extra impl-side associated types are diagnosed separately and are
     /// intentionally excluded from the semantic trait instance.
-    pub(crate) fn assoc_type_bindings_for_trait_inst(
+    pub(crate) fn assoc_type_bindings_for_trait_inst_in_cx(
         self,
         db: &'db dyn HirAnalysisDb,
         trait_inst: TraitInstId<'db>,
+        cx: &AnalysisCx<'db>,
     ) -> IndexMap<IdentId<'db>, TyId<'db>> {
         let mut types = IndexMap::new();
         let trait_def = trait_inst.def(db);
@@ -3177,8 +3216,9 @@ impl<'db> ImplTrait<'db> {
             if let Some(impl_assoc) = self.assoc_type(db, name)
                 && let Some(hir) = self.types(db)[impl_assoc.idx].type_ref.to_opt()
             {
-                let cx = self.signature_analysis_cx_for_trait_inst(
+                let cx = self.signature_analysis_cx_for_trait_inst_in_cx(
                     db,
+                    cx,
                     partial_trait_inst,
                     types.clone(),
                 );
@@ -3190,8 +3230,12 @@ impl<'db> ImplTrait<'db> {
             let Some(default) = view.default_ty(db) else {
                 continue;
             };
-            let cx =
-                self.signature_analysis_cx_for_trait_inst(db, partial_trait_inst, types.clone());
+            let cx = self.signature_analysis_cx_for_trait_inst_in_cx(
+                db,
+                cx,
+                partial_trait_inst,
+                types.clone(),
+            );
             let default = Binder::bind(default).instantiate(db, trait_inst.args(db));
             let default = normalize_assoc_ty_for_trait_inst(db, &cx, default, partial_trait_inst);
             types.insert(name, default);
@@ -3410,14 +3454,19 @@ impl<'db> ImplAssocTypeView<'db> {
     /// All type-related diagnostics for this associated type.
     pub fn ty_diags(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         let assumptions = self.owner.elaborated_assumptions(db);
+        let mode = self
+            .owner
+            .signature_lowering_mode(db)
+            .unwrap_or(LoweringMode::Normal);
         let cx = AnalysisCx::new(crate::analysis::ty::context::ProofCx::from_solve_cx(
             TraitSolveCx::new(db, self.owner.scope()).with_assumptions(assumptions),
         ))
-        .with_mode(
-            self.owner
-                .signature_lowering_mode(db)
-                .unwrap_or(LoweringMode::Normal),
-        );
+        .with_overlay(
+            mode.current_impl()
+                .map(ImplOverlay::with_current_impl)
+                .unwrap_or_default(),
+        )
+        .with_mode(mode);
         self.ty_diags_in_cx(db, &cx)
     }
 
@@ -3669,6 +3718,15 @@ impl<'db> AssocTypeBoundView<'db> {
         scope: ScopeId<'db>,
         assumptions: PredicateListId<'db>,
     ) -> Option<TraitInstId<'db>> {
+        let scope = if let Some(path) = self.trait_ref(db).path(db).to_opt()
+            && path.parent(db).is_none()
+            && path.ident(db).to_opt() == self.owner.name(db)
+        {
+            scope.parent(db).unwrap_or(scope)
+        } else {
+            scope
+        };
+
         lower_trait_ref(
             db,
             subject,
@@ -3768,18 +3826,60 @@ impl<'db> TraitAssocConstView<'db> {
         self.decl(db).default.and_then(|body| body.to_opt())
     }
 
+    fn declaration_cx(self, db: &'db dyn HirAnalysisDb, cx: &AnalysisCx<'db>) -> AnalysisCx<'db> {
+        let mut assumptions = constraints_for(db, self.owner.into()).list(db).to_vec();
+        assumptions.extend(cx.proof.assumptions().list(db).iter().copied());
+        let assumptions = PredicateListId::new(db, assumptions).extend_all_bounds(db);
+        let trait_inst = TraitInstId::new(
+            db,
+            self.owner,
+            self.owner.params(db).to_vec(),
+            IndexMap::new(),
+        );
+        AnalysisCx {
+            proof: cx.proof.with_assumptions(assumptions),
+            // Declaration lowering must stay in the owning trait's binder space.
+            // Concrete impl/body selection happens later during normalization.
+            overlay: ImplOverlay::default(),
+            mode: LoweringMode::SelectedTraitBody {
+                trait_inst,
+                self_ty: trait_inst.self_ty(db),
+                current_impl: None,
+            },
+        }
+    }
+
+    pub(crate) fn ty_in_cx(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        cx: &AnalysisCx<'db>,
+    ) -> Option<TyId<'db>> {
+        let hir = self.decl(db).ty.to_opt()?;
+        let cx = self.declaration_cx(db, cx);
+        Some(lower_hir_ty_in_cx(db, hir, self.owner.scope(), &cx))
+    }
+
     /// Semantic type of this associated const, lowered in the trait's scope.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
-        let hir = self.decl(db).ty.to_opt()?;
         let trait_ = self.owner;
-        let assumptions = constraints_for(db, trait_.into());
-        Some(lower_hir_ty(db, hir, trait_.scope(), assumptions))
+        let cx = AnalysisCx::new(ProofCx::new(db, trait_.scope()));
+        self.ty_in_cx(db, &cx)
     }
 
     /// Semantic type of this associated const as a Binder, suitable for
     /// instantiation with trait args.
     pub fn ty_binder(self, db: &'db dyn HirAnalysisDb) -> Option<Binder<TyId<'db>>> {
-        self.ty(db).map(Binder::bind)
+        let trait_ = self.owner;
+        let cx = AnalysisCx::new(ProofCx::new(db, trait_.scope()));
+        self.ty_binder_in_cx(db, &cx)
+    }
+
+    pub(crate) fn ty_binder_in_cx(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        cx: &AnalysisCx<'db>,
+    ) -> Option<Binder<TyId<'db>>> {
+        self.ty_in_cx(db, cx).map(Binder::bind)
     }
 }
 
@@ -3849,14 +3949,19 @@ impl<'db> ImplAssocConstView<'db> {
     /// All type-related diagnostics for this associated const header.
     pub fn ty_diags(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         let assumptions = self.owner.elaborated_assumptions(db);
+        let mode = self
+            .owner
+            .signature_lowering_mode(db)
+            .unwrap_or(LoweringMode::Normal);
         let cx = AnalysisCx::new(crate::analysis::ty::context::ProofCx::from_solve_cx(
             TraitSolveCx::new(db, self.owner.scope()).with_assumptions(assumptions),
         ))
-        .with_mode(
-            self.owner
-                .signature_lowering_mode(db)
-                .unwrap_or(LoweringMode::Normal),
-        );
+        .with_overlay(
+            mode.current_impl()
+                .map(ImplOverlay::with_current_impl)
+                .unwrap_or_default(),
+        )
+        .with_mode(mode);
         self.ty_diags_in_cx(db, &cx)
     }
 

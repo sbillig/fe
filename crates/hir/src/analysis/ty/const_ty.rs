@@ -227,7 +227,11 @@ fn evaluate_const_ty_impl<'db>(
                 }
                 return evaluated;
             }
-            Some(TraitConstUseResolution::MissingConcreteImpl { .. }) => return const_ty,
+            Some(TraitConstUseResolution::MissingConcreteImpl {
+                trait_inst, name, ..
+            }) => {
+                return invalid_trait_const_ty(db, trait_inst, name);
+            }
             Some(TraitConstUseResolution::Abstract { .. }) | None => {}
         }
     }
@@ -923,15 +927,9 @@ fn const_body_assumptions<'db>(
         _ => None,
     };
     if let Some(func) = containing_func {
-        let mut preds = collect_func_def_constraints(db, func.into(), true).instantiate_identity();
-        if let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) {
-            let self_pred =
-                TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
-            let mut merged = preds.list(db).to_vec();
-            merged.push(self_pred);
-            preds = PredicateListId::new(db, merged);
-        }
-        return preds.extend_all_bounds(db);
+        return collect_func_def_constraints(db, func.into(), true)
+            .instantiate_identity()
+            .extend_all_bounds(db);
     }
 
     let mut enclosing = body.scope();

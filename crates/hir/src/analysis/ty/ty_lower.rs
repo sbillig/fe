@@ -15,7 +15,7 @@ use super::{
     context::{AnalysisCx, ImplOverlay, LoweringMode, ProofCx},
     effects::{EffectKeyKind, effect_key_kind, resolve_normalized_type_effect_key},
     fold::{TyFoldable, TyFolder},
-    trait_lower::lower_trait_ref,
+    trait_lower::lower_trait_ref_in_cx,
     trait_resolution::{PredicateListId, constraint::collect_constraints},
     ty_def::{InvalidCause, Kind, TyData, TyId, TyParam},
 };
@@ -186,7 +186,7 @@ pub(crate) fn contextual_path_resolution_in_cx<'db>(
     let trait_inst = if resolve_tail_as_value
         && let PathKind::QualifiedType { trait_, .. } = receiver.kind(db)
     {
-        lower_trait_ref(db, receiver_ty, trait_, scope, cx.proof.assumptions(), None).ok()?
+        lower_trait_ref_in_cx(db, receiver_ty, trait_, scope, *cx, None).ok()?
     } else {
         super::trait_def::specialize_trait_const_inst_to_receiver(db, receiver_ty, mode_trait_inst)
     };

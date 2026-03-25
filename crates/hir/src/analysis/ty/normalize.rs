@@ -16,7 +16,7 @@ use super::{
     fold::{TyFoldable, TyFolder},
     trait_def::{impls_for_ty_with_constraints, impls_for_ty_with_constraints_in_cx},
     trait_resolution::{PredicateListId, TraitSolveCx},
-    ty_def::{AssocTy, TyData, TyId, TyParam},
+    ty_def::{AssocTy, InvalidCause, TyData, TyId, TyParam},
     unify::UnificationTable,
     visitor::{TyVisitable, TyVisitor},
 };
@@ -45,7 +45,28 @@ pub fn normalize_ty_with_solve_cx<'db>(
     assumptions: PredicateListId<'db>,
     solve_cx: Option<TraitSolveCx<'db>>,
 ) -> TyId<'db> {
-    let mut normalizer = TypeNormalizer::new(db, scope, assumptions, solve_cx);
+    normalize_ty_impl(db, ty, scope, assumptions, solve_cx, true)
+}
+
+pub(crate) fn normalize_ty_without_consts_with_solve_cx<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    solve_cx: Option<TraitSolveCx<'db>>,
+) -> TyId<'db> {
+    normalize_ty_impl(db, ty, scope, assumptions, solve_cx, false)
+}
+
+fn normalize_ty_impl<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    solve_cx: Option<TraitSolveCx<'db>>,
+    normalize_const_tys: bool,
+) -> TyId<'db> {
+    let mut normalizer = TypeNormalizer::new(db, scope, assumptions, solve_cx, normalize_const_tys);
     ty.fold_with(db, &mut normalizer)
 }
 
@@ -54,6 +75,7 @@ pub struct TypeNormalizer<'db> {
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     solve_cx: Option<TraitSolveCx<'db>>,
+    normalize_const_tys: bool,
     // Projection cache: None = in progress (cycle guard), Some(ty) = normalized result
     cache: FxHashMap<AssocTy<'db>, Option<TyId<'db>>>,
 }
@@ -95,14 +117,37 @@ impl<'db> TypeNormalizer<'db> {
         scope: ScopeId<'db>,
         assumptions: PredicateListId<'db>,
         solve_cx: Option<TraitSolveCx<'db>>,
+        normalize_const_tys: bool,
     ) -> Self {
         Self {
             db,
             scope,
             assumptions,
             solve_cx,
+            normalize_const_tys,
             cache: FxHashMap::default(),
         }
+    }
+
+    fn solve_cx(&self) -> TraitSolveCx<'db> {
+        self.solve_cx.unwrap_or_else(|| {
+            TraitSolveCx::new(self.db, self.scope).with_assumptions(self.assumptions)
+        })
+    }
+
+    fn normalize_const_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+        let folded = ty.super_fold_with(db, self);
+        let TyData::ConstTy(const_ty) = folded.data(db) else {
+            return folded;
+        };
+        let evaluated = const_ty.evaluate_with_solve_cx(db, Some(const_ty.ty(db)), self.solve_cx());
+        if matches!(
+            evaluated.ty(db).invalid_cause(db),
+            Some(InvalidCause::ConstEvalUnsupported { .. })
+        ) {
+            return folded;
+        }
+        TyId::const_ty(db, evaluated)
     }
 }
 
@@ -139,6 +184,7 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
                 self.cache.insert(*assoc_ty, Some(folded));
                 folded
             }
+            TyData::ConstTy(_) if self.normalize_const_tys => self.normalize_const_ty(db, ty),
             _ => ty.super_fold_with(db, self),
         }
     }
@@ -237,9 +283,7 @@ impl<'db> TypeNormalizer<'db> {
 
         let mut dedup: IndexMap<TyId<'db>, ()> = IndexMap::new();
 
-        let solve_cx = self.solve_cx.unwrap_or_else(|| {
-            TraitSolveCx::new(self.db, self.scope).with_assumptions(self.assumptions)
-        });
+        let solve_cx = self.solve_cx();
         let (primary, secondary) = solve_cx.search_ingots_for_trait_inst(self.db, trait_inst);
         let search_ingots = if primary.is_none() && secondary.is_none() {
             vec![None]

@@ -1,0 +1,6 @@
+---
+source: crates/uitest/tests/ty.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty/def/projection_obligations_positive.fe
+---

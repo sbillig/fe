@@ -11,8 +11,9 @@ use common::{indexmap::IndexMap, ingot::Ingot};
 use salsa::Update;
 
 use super::{
-    admission::{AdmissionEngine, TraitImplTable},
+    admission::{AdmissionEngine, AdmissionSummary, TraitImplTable},
     const_ty::ConstTyId,
+    context::{AnalysisCx, ProofCx},
     fold::{TyFoldable, TyFolder},
     trait_def::{ImplementorId, TraitInstId},
     trait_resolution::PredicateListId,
@@ -44,6 +45,45 @@ fn collect_trait_impls_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
+/// Internal fixed-point frontier used during recursive trait-env admission.
+///
+/// Callers that need the stable final admitted impl set should use
+/// [`collect_trait_impls`] instead.
+#[salsa::tracked(
+    return_ref,
+    cycle_fn=collect_trait_impls_cycle_recover,
+    cycle_initial=collect_trait_impls_cycle_initial
+)]
+pub(crate) fn collect_trait_impls_frontier<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Ingot<'db>,
+) -> TraitImplTable<'db> {
+    let const_impls = ingot
+        .resolved_external_ingots(db)
+        .iter()
+        .map(|(_, external)| collect_trait_impls(db, *external))
+        .collect();
+
+    let impl_traits = ingot.all_impl_traits(db);
+    AdmissionEngine::new(db, const_impls).collect(impl_traits)
+}
+
+fn admission_summary_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _ingot: Ingot<'db>,
+) -> AdmissionSummary<'db> {
+    AdmissionSummary::default()
+}
+
+fn admission_summary_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &AdmissionSummary<'db>,
+    _count: u32,
+    _ingot: Ingot<'db>,
+) -> salsa::CycleRecoveryAction<AdmissionSummary<'db>> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
 /// Collect all trait implementors in the ingot.
 /// The returned table doesn't contain the const(external) ingot
 /// implementors. If you need to obtain the environment that contains all
@@ -58,14 +98,26 @@ pub(crate) fn collect_trait_impls<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
 ) -> TraitImplTable<'db> {
+    admission_summary(db, ingot).admitted.clone()
+}
+
+#[salsa::tracked(
+    return_ref,
+    cycle_fn=admission_summary_cycle_recover,
+    cycle_initial=admission_summary_cycle_initial
+)]
+pub(crate) fn admission_summary<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Ingot<'db>,
+) -> AdmissionSummary<'db> {
     let const_impls = ingot
         .resolved_external_ingots(db)
         .iter()
-        .map(|(_, external)| collect_trait_impls(db, *external))
+        .map(|(_, external)| &admission_summary(db, *external).admitted)
         .collect();
 
     let impl_traits = ingot.all_impl_traits(db);
-    AdmissionEngine::new(db, const_impls).collect(impl_traits)
+    AdmissionEngine::new(db, const_impls).summarize(impl_traits)
 }
 
 /// Lower a trait reference to a trait instance.
@@ -75,12 +127,12 @@ pub(crate) fn collect_trait_impls<'db>(
 /// This is needed for associated type bounds like `type Assoc: Encode<Self>` where `Self`
 /// refers to the owner trait's Self, not the associated type.
 #[salsa::tracked]
-pub(crate) fn lower_trait_ref<'db>(
+pub(crate) fn lower_trait_ref_in_cx<'db>(
     db: &'db dyn HirAnalysisDb,
     self_ty: TyId<'db>,
     trait_ref: TraitRefId<'db>,
     scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
+    cx: AnalysisCx<'db>,
     owner_self: Option<TyId<'db>>,
 ) -> Result<TraitInstId<'db>, TraitRefLowerError<'db>> {
     let Partial::Present(path) = trait_ref.path(db) else {
@@ -89,17 +141,15 @@ pub(crate) fn lower_trait_ref<'db>(
 
     let self_subst = owner_self.unwrap_or(self_ty);
 
-    match resolve_path(db, path, scope, assumptions, false) {
+    match resolve_path(db, path, scope, cx.proof.assumptions(), false) {
         Ok(PathRes::Trait(t)) => {
             let mut args = t.args(db).clone();
 
-            // Substitute all occurrences of `Self` with `self_subst`
-            // TODO: this shouldn't be necessary; Self should resolve to self_ty in a later stage,
-            //  but something seems to be broken.
             struct SelfSubst<'db> {
                 db: &'db dyn HirAnalysisDb,
                 self_subst: TyId<'db>,
             }
+
             impl<'db> TyFolder<'db> for SelfSubst<'db> {
                 fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
                     match ty.data(self.db) {
@@ -113,7 +163,7 @@ pub(crate) fn lower_trait_ref<'db>(
             args[0] = self_ty;
             args.iter_mut()
                 .skip(1)
-                .for_each(|a| *a = a.fold_with(db, &mut folder));
+                .for_each(|arg| *arg = arg.fold_with(db, &mut folder));
 
             let mut assoc_bindings = t.assoc_type_bindings(db).clone();
             assoc_bindings
@@ -123,8 +173,21 @@ pub(crate) fn lower_trait_ref<'db>(
             Ok(TraitInstId::new(db, t.key(db), args, assoc_bindings))
         }
         Ok(res) => Err(TraitRefLowerError::InvalidDomain(res)),
-        Err(e) => Err(TraitRefLowerError::PathResError(e)),
+        Err(err) => Err(TraitRefLowerError::PathResError(err)),
     }
+}
+
+#[salsa::tracked]
+pub(crate) fn lower_trait_ref<'db>(
+    db: &'db dyn HirAnalysisDb,
+    self_ty: TyId<'db>,
+    trait_ref: TraitRefId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    owner_self: Option<TyId<'db>>,
+) -> Result<TraitInstId<'db>, TraitRefLowerError<'db>> {
+    let cx = AnalysisCx::new(ProofCx::new(db, scope).with_assumptions(assumptions));
+    lower_trait_ref_in_cx(db, self_ty, trait_ref, scope, cx, owner_self)
 }
 
 pub(crate) enum TraitArgError<'db> {

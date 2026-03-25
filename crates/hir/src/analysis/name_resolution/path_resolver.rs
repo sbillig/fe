@@ -3,7 +3,7 @@ use crate::hir_def::{CallableDef, Func};
 use crate::{
     core::hir_def::{
         Const, Enum, EnumVariant, GenericParamOwner, IdentId, ImplTrait, ItemKind, PathId,
-        PathKind, Trait, TypeBound, TypeKind, VariantKind, scope_graph::ScopeId,
+        PathKind, Trait, TypeKind, VariantKind, scope_graph::ScopeId,
     },
     span::{DynLazySpan, path::LazyPathSpan},
 };
@@ -1247,22 +1247,14 @@ pub fn find_associated_type<'db>(
         // path resolution works correctly.
         let trait_ = assoc_ty.trait_.def(db);
         let assoc_name = assoc_ty.name;
-        if let Some(decl) = trait_.assoc_ty(db, assoc_name) {
+        if let Some(decl) = trait_
+            .assoc_types(db)
+            .find(|decl| decl.name(db) == Some(assoc_name))
+        {
             let subject = ty_with_subst.fold_with(db, &mut table);
-            // owner_self is used to substitute `Self` in bounds like `type Assoc: Encode<Self>`
             let owner_self = assoc_ty.trait_.self_ty(db);
-            for bound in &decl.bounds {
-                if let TypeBound::Trait(trait_ref) = *bound
-                    && let Ok(inst) = crate::analysis::ty::trait_lower::lower_trait_ref(
-                        db,
-                        subject,
-                        trait_ref,
-                        scope,
-                        assumptions,
-                        Some(owner_self),
-                    )
-                    && inst.def(db).assoc_ty(db, name).is_some()
-                {
+            for inst in decl.bounds_on_subject_with_owner(db, subject, owner_self) {
+                if inst.def(db).assoc_ty(db, name).is_some() {
                     let assoc_ty = TyId::assoc_ty(db, inst, name);
                     let folded = assoc_ty.fold_with(db, &mut table);
                     candidates.push((inst, folded));

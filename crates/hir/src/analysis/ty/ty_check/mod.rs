@@ -2034,8 +2034,10 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
         {
             let callable_ty = callable.ty(self.db);
             let span = ctxt.span().unwrap().into_method_call_expr().method_name();
+            // The call path already validates callable constraints at the call site.
+            // Re-checking callable WF here would re-emit the selected method's
+            // parent trait/impl obligations at the method-name span.
             self.check_unknown(callable_ty, span.clone().into());
-            self.check_wf(callable_ty, span.into())
         }
 
         walk_expr(self, ctxt, expr);

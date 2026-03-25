@@ -6,7 +6,7 @@ use super::{
     context::AnalysisCx,
     diagnostics::{ImplDiag, TyDiagCollection},
     fold::TyFoldable,
-    normalize::normalize_ty_with_solve_cx,
+    normalize::normalize_ty_without_consts_with_solve_cx,
     trait_def::TraitInstId,
     trait_resolution::{
         GoalSatisfiability, TraitSolveCx, constraint::collect_func_def_constraints,
@@ -166,7 +166,7 @@ fn normalize_method_cmp_ty<'db>(
     trait_inst: TraitInstId<'db>,
 ) -> TyId<'db> {
     let scope = cx.proof.normalization_scope_for_trait_inst(db, trait_inst);
-    let ty = normalize_ty_with_solve_cx(
+    let ty = normalize_ty_without_consts_with_solve_cx(
         db,
         ty,
         scope,

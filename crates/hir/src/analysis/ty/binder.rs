@@ -114,6 +114,11 @@ struct InstantiateFolder<'db, 'a> {
 impl<'db> TyFolder<'db> for InstantiateFolder<'db, '_> {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         match ty.data(db) {
+            TyData::TyApp(abs, arg) => {
+                let abs = self.fold_ty(db, *abs);
+                let arg = self.fold_ty(db, *arg);
+                return TyId::app_without_const_eval(db, abs, arg);
+            }
             TyData::TyParam(param) if !param.is_effect() => {
                 return self.args[param.idx];
             }
@@ -207,6 +212,11 @@ where
 {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         match ty.data(db) {
+            TyData::TyApp(abs, arg) => {
+                let abs = self.fold_ty(db, *abs);
+                let arg = self.fold_ty(db, *arg);
+                return TyId::app_without_const_eval(db, abs, arg);
+            }
             TyData::TyParam(param) if !param.is_effect() => {
                 match self.params.entry(param.idx) {
                     Entry::Occupied(entry) => return *entry.get(),

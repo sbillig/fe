@@ -513,8 +513,24 @@ impl<'db> Callable<'db> {
     pub(super) fn check_constraints(&self, tc: &mut TyChecker<'db>, span: DynLazySpan<'db>) {
         let db = tc.db;
 
-        // Get the function's constraints
-        let constraints = collect_func_def_constraints(db, self.callable_def, true);
+        // Once a trait method has been selected, its parent trait/impl obligations
+        // are already discharged by confirming the selected trait instance.
+        // Re-registering those here only duplicates the same call-site failure.
+        let constraints =
+            collect_func_def_constraints(db, self.callable_def, self.trait_inst.is_none());
+        let selected_inst = self.trait_inst.map(|inst| {
+            let normalized_args: Vec<_> = inst
+                .args(db)
+                .iter()
+                .map(|&arg| tc.normalize_ty(arg))
+                .collect();
+            TraitInstId::new(
+                db,
+                inst.def(db),
+                normalized_args,
+                inst.assoc_type_bindings(db).clone(),
+            )
+        });
 
         // Instantiate constraints with the actual type arguments
         let instantiated = constraints.instantiate(db, &self.generic_args);
@@ -534,6 +550,9 @@ impl<'db> Callable<'db> {
                 normalized_args,
                 constraint.assoc_type_bindings(db).clone(),
             );
+            if selected_inst == Some(normalized_constraint) {
+                continue;
+            }
 
             // Register the normalized constraint for confirmation
             tc.env

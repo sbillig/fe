@@ -12,6 +12,8 @@ use crate::analysis::{
     ty::{
         adt_def::AdtDef,
         binder::Binder,
+        const_expr::ConstExpr,
+        const_ty::ConstTyData,
         corelib::resolve_core_trait,
         effects::{EffectKeyKind, effect_key_kind, place_effect_provider_param_index_map},
         trait_def::TraitInstId,
@@ -22,6 +24,22 @@ use crate::analysis::{
         unify::InferenceKey,
     },
 };
+
+fn owner_self_ty_for_constraints<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: GenericParamOwner<'db>,
+) -> Option<TyId<'db>> {
+    match owner {
+        GenericParamOwner::Func(func) => match func.scope().parent_item(db)? {
+            // Method-level bounds inside a trait need the enclosing trait's `Self`
+            // when lowering trait-ref arguments like `Fn<T, Self<U>>`.
+            ItemKind::Trait(trait_) => Some(trait_.self_param(db)),
+            _ => None,
+        },
+        GenericParamOwner::Trait(trait_) => Some(trait_.self_param(db)),
+        _ => None,
+    }
+}
 
 fn collect_effect_constraints_for_func<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -124,6 +142,23 @@ pub(crate) fn ty_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
 ) -> PredicateListId<'db> {
+    let projection_constraints = match ty.data(db) {
+        // Projection-like nodes contribute their trait obligation directly to type WF.
+        TyData::AssocTy(assoc_ty) => Some(vec![assoc_ty.trait_]),
+        TyData::QualifiedTy(trait_inst) => Some(vec![*trait_inst]),
+        TyData::ConstTy(const_ty) => match const_ty.data(db) {
+            ConstTyData::Abstract(expr, _) => match expr.data(db) {
+                ConstExpr::TraitConst { inst, .. } => Some(vec![*inst]),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(constraints) = projection_constraints {
+        return PredicateListId::new(db, constraints);
+    }
+
     let (base, args) = ty.decompose_ty_app(db);
     let (params, base_constraints) = match base.data(db) {
         TyData::TyBase(TyBase::Adt(adt)) => (adt.params(db), collect_adt_constraints(db, *adt)),
@@ -193,6 +228,20 @@ pub(crate) fn collect_adt_constraints<'db>(
     collect_constraints(db, owner)
 }
 
+fn trait_self_assumptions<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_: Trait<'db>,
+) -> PredicateListId<'db> {
+    let mut preds = collect_constraints(db, trait_.into()).instantiate_identity();
+    let self_pred = TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
+    if !preds.list(db).contains(&self_pred) {
+        let mut merged = preds.list(db).to_vec();
+        merged.push(self_pred);
+        preds = PredicateListId::new(db, merged);
+    }
+    preds
+}
+
 #[salsa::tracked(
     cycle_fn=collect_func_def_constraints_cycle_recover,
     cycle_initial=collect_func_def_constraints_cycle_initial
@@ -220,7 +269,7 @@ pub(crate) fn collect_func_def_constraints<'db>(
     }
 
     let parent_constraints = match hir_func.scope().parent_item(db) {
-        Some(ItemKind::Trait(trait_)) => collect_constraints(db, trait_.into()),
+        Some(ItemKind::Trait(trait_)) => Binder::bind(trait_self_assumptions(db, trait_)),
 
         Some(ItemKind::Impl(impl_)) => collect_constraints(db, impl_.into()),
 
@@ -270,6 +319,7 @@ pub fn collect_constraints<'db>(
 ) -> Binder<PredicateListId<'db>> {
     let mut deferred: Vec<Deferred<'db>> = Vec::new();
     let owner_scope = owner.scope();
+    let owner_self = owner_self_ty_for_constraints(db, owner);
 
     // Generic parameter bounds
     let param_set = collect_generic_params(db, owner);
@@ -285,6 +335,7 @@ pub fn collect_constraints<'db>(
                     bound_ty: Either::Right(ty),
                     trait_ref: *trait_ref,
                     scope: owner_scope,
+                    owner_self,
                 });
             }
         }
@@ -316,6 +367,7 @@ pub fn collect_constraints<'db>(
                         bound_ty: Either::Left(hir_ty),
                         trait_ref,
                         scope: owner_scope,
+                        owner_self,
                     });
                 }
             }
@@ -361,6 +413,7 @@ struct Deferred<'db> {
     bound_ty: Either<HirTypeId<'db>, TyId<'db>>,
     trait_ref: TraitRefId<'db>,
     scope: ScopeId<'db>,
+    owner_self: Option<TyId<'db>>,
 }
 
 fn try_resolve_type_bound<'db>(
@@ -385,7 +438,7 @@ fn try_resolve_type_bound<'db>(
         deferred.trait_ref,
         deferred.scope,
         assumptions,
-        None,
+        deferred.owner_self,
     )
     .ok()
 }
