@@ -12,6 +12,7 @@ use crate::analysis::{
             TraitLowerDiag, TyDiagCollection, TyLowerDiag,
         },
         trait_def::TraitInstId,
+        trait_resolution::first_invalid_trait_const_goal,
         ty_check::{EffectParamOwner, RecordLike},
         ty_def::{TyData, TyId, TyVarSort},
     },
@@ -3894,18 +3895,27 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                 primary_goal,
                 unsat_subgoal,
             } => {
+                let rendered_goal = if first_invalid_trait_const_goal(db, primary_goal).is_some() {
+                    (*unsat_subgoal).unwrap_or(*primary_goal)
+                } else {
+                    *primary_goal
+                };
                 let msg = format!(
                     "`{}` doesn't implement `{}`",
-                    primary_goal.self_ty(db).pretty_print(db),
-                    primary_goal.pretty_print(db, false)
+                    rendered_goal.self_ty(db).pretty_print(db),
+                    rendered_goal.pretty_print(db, false)
                 );
 
-                let unsat_subgoal = unsat_subgoal.map(|unsat| {
-                    format!(
-                        "trait bound `{}` is not satisfied",
-                        unsat.pretty_print(db, true)
-                    )
-                });
+                let unsat_subgoal = if rendered_goal == *primary_goal {
+                    (*unsat_subgoal).map(|unsat| {
+                        format!(
+                            "trait bound `{}` is not satisfied",
+                            unsat.pretty_print(db, true)
+                        )
+                    })
+                } else {
+                    None
+                };
 
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,

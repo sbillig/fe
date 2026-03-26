@@ -1,9 +1,17 @@
 ---
 source: crates/uitest/tests/ty.rs
-assertion_line: 27
 expression: diags
 input_file: fixtures/ty/def/trait_impl_cyclic_local_dependency.fe
 ---
+error[6-0003]: trait bound is not satisfied
+  ┌─ trait_impl_cyclic_local_dependency.fe:9:6
+  │
+9 │ impl Foo for Wrap<Seed> {}
+  │      ^^^
+  │      │
+  │      `Seed` doesn't implement `Foo`
+  │      trait bound `Wrap<Seed>: Foo` is not satisfied
+
 error[6-0003]: trait bound is not satisfied
   ┌─ trait_impl_cyclic_local_dependency.fe:9:14
   │
@@ -19,7 +27,7 @@ error[6-0003]: trait bound is not satisfied
 18 │ fn use_wrap(value: Wrap<Seed>) {
    │                    ^^^^^^^^^^
    │                    │
-   │                    `Seed` doesn't implement `Foo`
+   │                    `_` doesn't implement `Foo`
    │                    trait bound `Wrap<Seed>: Foo` is not satisfied
 
 error[6-0003]: trait bound is not satisfied

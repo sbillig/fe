@@ -1,16 +1,21 @@
 use super::{
+    assoc_items::{TraitConstUseResolution, resolve_trait_const_use},
     binder::Binder,
     canonical::{Canonical, Canonicalized, Solution},
+    const_expr::ConstExpr,
+    const_ty::{ConstTyData, ConstTyId, resolve_const_body_simple_path},
+    context::AnalysisCx,
     fold::{TyFoldable, TyFolder},
     trait_def::{ImplementorId, TraitInstId},
-    ty_def::{TyData, TyFlags, TyId},
+    ty_def::{InvalidCause, TyData, TyFlags, TyId, TyParam},
 };
 use crate::analysis::{
     HirAnalysisDb,
+    name_resolution::PathRes,
     ty::{
         trait_resolution::{constraint::ty_constraints, proof_forest::ProofForest},
         unify::UnificationTable,
-        visitor::collect_flags,
+        visitor::{TyVisitable, TyVisitor, collect_flags, walk_const_ty, walk_ty},
     },
 };
 use crate::{
@@ -201,12 +206,232 @@ pub fn is_goal_satisfiable<'db>(
     solve_cx: TraitSolveCx<'db>,
     goal: Canonical<TraitInstId<'db>>,
 ) -> GoalSatisfiability<'db> {
+    if let Some(subgoal) = first_invalid_trait_const_goal(db, &goal.value) {
+        let mut table = UnificationTable::new(db);
+        goal.extract_identity(&mut table);
+        return GoalSatisfiability::UnSat(Some(
+            goal.canonicalize_solution(db, &mut table, subgoal),
+        ));
+    }
     let flags = collect_flags(db, goal.value);
     if flags.contains(TyFlags::HAS_INVALID) {
         return GoalSatisfiability::ContainsInvalid;
     };
 
     ProofForest::new(db, solve_cx, goal).solve()
+}
+
+fn first_ill_formed_nested_ty<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    value: &T,
+    skip_root: Option<TyId<'db>>,
+) -> Option<WellFormedness<'db>>
+where
+    T: TyVisitable<'db>,
+{
+    struct NestedTyCollector<'db> {
+        db: &'db dyn HirAnalysisDb,
+        skip_root: Option<TyId<'db>>,
+        tys: IndexSet<TyId<'db>>,
+    }
+
+    impl<'db> TyVisitor<'db> for NestedTyCollector<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            let should_walk = if Some(ty) == self.skip_root {
+                true
+            } else {
+                self.tys.insert(ty)
+            };
+            if should_walk {
+                walk_ty(self, ty);
+            }
+        }
+
+        fn visit_const_param(&mut self, _param: &TyParam<'db>, const_ty_ty: TyId<'db>) {
+            self.visit_ty(const_ty_ty);
+        }
+    }
+
+    let mut collector = NestedTyCollector {
+        db,
+        skip_root,
+        tys: IndexSet::new(),
+    };
+    value.visit_with(&mut collector);
+    collector.tys.into_iter().find_map(|ty| {
+        if let Some(wf) = ill_formed_from_invalid_ty(db, solve_cx, ty) {
+            return Some(wf);
+        }
+        let flags = collect_flags(db, ty);
+        if flags.intersects(TyFlags::HAS_PARAM | TyFlags::HAS_VAR) {
+            return None;
+        }
+        let wf = check_ty_wf(db, solve_cx, ty);
+        (!wf.is_wf()).then_some(wf)
+    })
+}
+
+pub(crate) fn first_invalid_trait_const_goal<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    value: &T,
+) -> Option<TraitInstId<'db>>
+where
+    T: TyVisitable<'db>,
+{
+    struct InvalidTraitConstGoalFinder<'db> {
+        db: &'db dyn HirAnalysisDb,
+        goal: Option<TraitInstId<'db>>,
+    }
+
+    impl<'db> TyVisitor<'db> for InvalidTraitConstGoalFinder<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            if self.goal.is_some() {
+                return;
+            }
+            if let Some(inst) = trait_const_not_implemented_goal_from_invalid_ty(self.db, ty) {
+                self.goal = Some(inst);
+                return;
+            }
+            walk_ty(self, ty);
+        }
+    }
+
+    let mut finder = InvalidTraitConstGoalFinder { db, goal: None };
+    value.visit_with(&mut finder);
+    finder.goal
+}
+
+fn ill_formed_from_invalid_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    ty: TyId<'db>,
+) -> Option<WellFormedness<'db>> {
+    let inst = trait_const_not_implemented_goal_from_invalid_ty(db, ty)?;
+    let scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
+    let goal = inst.normalize_with_solve_cx(db, solve_cx, scope, solve_cx.assumptions());
+    Some(WellFormedness::IllFormed {
+        goal,
+        subgoal: None,
+    })
+}
+
+fn trait_const_not_implemented_goal_from_invalid_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> Option<TraitInstId<'db>> {
+    let Some(InvalidCause::TraitConstNotImplemented { inst, .. }) = ty.invalid_cause(db) else {
+        return None;
+    };
+    Some(inst)
+}
+
+fn first_ill_formed_nested_trait_const<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    value: &T,
+) -> Option<WellFormedness<'db>>
+where
+    T: TyVisitable<'db>,
+{
+    struct NestedTraitConstCollector<'db> {
+        db: &'db dyn HirAnalysisDb,
+        const_tys: IndexSet<ConstTyId<'db>>,
+        insts: IndexSet<TraitInstId<'db>>,
+    }
+
+    impl<'db> TyVisitor<'db> for NestedTraitConstCollector<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_const_ty(&mut self, const_ty: &ConstTyId<'db>) {
+            self.const_tys.insert(*const_ty);
+            match const_ty.data(self.db) {
+                ConstTyData::Abstract(expr, _) => {
+                    if let ConstExpr::TraitConst { inst, .. } = expr.data(self.db) {
+                        self.insts.insert(*inst);
+                    }
+                }
+                ConstTyData::UnEvaluated { body, .. } => {
+                    let _ = body;
+                }
+                _ => {}
+            }
+            walk_const_ty(self, const_ty);
+        }
+    }
+
+    let mut collector = NestedTraitConstCollector {
+        db,
+        const_tys: IndexSet::new(),
+        insts: IndexSet::new(),
+    };
+    value.visit_with(&mut collector);
+
+    if let Some(wf) = collector.insts.into_iter().find_map(|inst| {
+        let scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
+        let assumptions = solve_cx.assumptions();
+        let goal = inst.normalize_with_solve_cx(db, solve_cx, scope, assumptions);
+        let mut table = UnificationTable::new(db);
+        let canonical_goal = Canonicalized::new(db, goal);
+        match is_goal_satisfiable(db, solve_cx, canonical_goal.value) {
+            GoalSatisfiability::UnSat(subgoal) => {
+                let subgoal =
+                    subgoal.map(|subgoal| canonical_goal.extract_solution(&mut table, subgoal));
+                Some(WellFormedness::IllFormed { goal, subgoal })
+            }
+            GoalSatisfiability::ContainsInvalid => Some(WellFormedness::IllFormed {
+                goal,
+                subgoal: None,
+            }),
+            GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation(_) => None,
+        }
+    }) {
+        return Some(wf);
+    }
+
+    collector.const_tys.into_iter().find_map(|const_ty| {
+        let evaluated = const_ty.evaluate_with_solve_cx(db, Some(const_ty.ty(db)), solve_cx);
+        let Some(InvalidCause::TraitConstNotImplemented { inst, .. }) =
+            evaluated.ty(db).invalid_cause(db)
+        else {
+            let cx = AnalysisCx::from_solve_cx(solve_cx);
+            let ConstTyData::UnEvaluated { body, .. } = const_ty.data(db) else {
+                return None;
+            };
+            let Some(PathRes::TraitConst(_, inst, name)) =
+                resolve_const_body_simple_path(db, *body, solve_cx.assumptions(), &cx)
+            else {
+                return None;
+            };
+            let resolution = resolve_trait_const_use(db, &cx, inst, name)?;
+            let goal = match resolution {
+                TraitConstUseResolution::MissingConcreteImpl { trait_inst, .. }
+                | TraitConstUseResolution::Abstract { trait_inst, .. } => trait_inst,
+                TraitConstUseResolution::Concrete(_) => return None,
+            };
+            return Some(WellFormedness::IllFormed {
+                goal,
+                subgoal: None,
+            });
+        };
+        let scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
+        let assumptions = solve_cx.assumptions();
+        let goal = inst.normalize_with_solve_cx(db, solve_cx, scope, assumptions);
+        Some(WellFormedness::IllFormed {
+            goal,
+            subgoal: None,
+        })
+    })
 }
 
 fn check_ty_wf_cycle_initial<'db>(
@@ -227,6 +452,27 @@ fn check_ty_wf_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
+pub(crate) fn check_ty_wf_nested<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    ty: TyId<'db>,
+) -> WellFormedness<'db> {
+    let flags = collect_flags(db, ty);
+    if !flags.intersects(TyFlags::HAS_PARAM | TyFlags::HAS_VAR)
+        && let Some(wf) = first_ill_formed_nested_ty(db, solve_cx, &ty, Some(ty))
+        && !wf.is_wf()
+    {
+        return wf;
+    }
+    if let Some(wf) = first_ill_formed_nested_trait_const(db, solve_cx, &ty)
+        && !wf.is_wf()
+    {
+        return wf;
+    }
+
+    check_ty_wf(db, solve_cx, ty)
+}
+
 /// Checks if the given type is well-formed, i.e., the arguments of the given
 /// type applications satisfies the constraints under the given assumptions.
 #[salsa::tracked(
@@ -238,8 +484,10 @@ pub(crate) fn check_ty_wf<'db>(
     solve_cx: TraitSolveCx<'db>,
     ty: TyId<'db>,
 ) -> WellFormedness<'db> {
+    if let Some(wf) = ill_formed_from_invalid_ty(db, solve_cx, ty) {
+        return wf;
+    }
     let (_, args) = ty.decompose_ty_app(db);
-
     for &arg in args {
         let wf = check_ty_wf(db, solve_cx, arg);
         if !wf.is_wf() {
@@ -310,8 +558,9 @@ fn check_trait_inst_wf_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
-/// Checks if the given trait instance are well-formed, i.e., the arguments of
-/// the trait satisfies all constraints under the given assumptions.
+/// Checks if the given trait instance is well-formed by recursively
+/// WF-checking every nested child type, then checking the trait's own declared
+/// obligations.
 #[salsa::tracked(
     cycle_fn=check_trait_inst_wf_cycle_recover,
     cycle_initial=check_trait_inst_wf_cycle_initial
@@ -321,6 +570,17 @@ pub(crate) fn check_trait_inst_wf<'db>(
     solve_cx: TraitSolveCx<'db>,
     trait_inst: TraitInstId<'db>,
 ) -> WellFormedness<'db> {
+    if let Some(wf) = first_ill_formed_nested_ty(db, solve_cx, &trait_inst, None)
+        && !wf.is_wf()
+    {
+        return wf;
+    }
+    if let Some(wf) = first_ill_formed_nested_trait_const(db, solve_cx, &trait_inst)
+        && !wf.is_wf()
+    {
+        return wf;
+    }
+
     let constraints =
         collect_constraints(db, trait_inst.def(db).into()).instantiate(db, trait_inst.args(db));
     let assumptions = solve_cx.assumptions();

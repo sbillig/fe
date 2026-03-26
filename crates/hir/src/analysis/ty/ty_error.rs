@@ -16,7 +16,7 @@ use crate::analysis::{
 use super::{
     context::{AnalysisCx, ImplOverlay, LoweringMode, ProofCx},
     diagnostics::{TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
-    trait_resolution::{PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf},
+    trait_resolution::{PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf_nested},
     ty_def::{InvalidCause, TyData, TyId},
     ty_lower::{contextual_path_resolution_in_cx, lower_hir_ty_in_cx},
 };
@@ -131,7 +131,7 @@ pub(crate) fn explicit_value_ty_wf_diag<'db>(
     ty: TyId<'db>,
     span: DynLazySpan<'db>,
 ) -> Option<TyDiagCollection<'db>> {
-    if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(db, solve_cx, ty) {
+    if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf_nested(db, solve_cx, ty) {
         Some(
             TraitConstraintDiag::TraitBoundNotSat {
                 span,

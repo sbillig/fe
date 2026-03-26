@@ -153,6 +153,19 @@ pub(crate) fn const_body_simple_path<'db>(
     expr_simple_path(db, body, expr)
 }
 
+pub(crate) fn resolve_const_body_simple_path<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    assumptions: PredicateListId<'db>,
+    cx: &AnalysisCx<'db>,
+) -> Option<PathRes<'db>> {
+    let path = const_body_simple_path(db, body)?;
+    contextual_path_resolution_in_cx(db, body.scope(), path, true, cx)
+        .map(Ok)
+        .unwrap_or_else(|| resolve_path(db, path, body.scope(), assumptions, true))
+        .ok()
+}
+
 #[salsa::interned]
 #[derive(Debug)]
 pub struct ConstTyId<'db> {
@@ -665,79 +678,75 @@ fn evaluate_const_ty_impl<'db>(
         }
     }
 
-    if let Some(path) = const_body_simple_path(db, body) {
-        let resolved_path =
-            contextual_path_resolution_in_cx(db, body.scope(), path, true, &analysis_cx)
-                .map(Ok)
-                .unwrap_or_else(|| resolve_path(db, path, body.scope(), assumptions, true));
-        if let Ok(resolved_path) = resolved_path {
-            match resolved_path {
-                PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
-                    if let TyData::ConstTy(const_ty) = ty.data(db) {
-                        return const_ty.evaluate(db, expected_ty);
-                    }
-                }
-                PathRes::Const(const_def, ty) => {
-                    if let Some(body) = const_def.body(db).to_opt() {
-                        let const_ty = ConstTyId::from_body(db, body, Some(ty), Some(const_def));
-                        let expected = expected_ty.or(Some(ty));
-                        return const_ty.evaluate(db, expected);
-                    }
-                }
-                PathRes::TraitConst(recv_ty, inst, name) => {
-                    let inst =
-                        crate::analysis::ty::trait_def::specialize_trait_const_inst_to_receiver(
-                            db, recv_ty, inst,
-                        );
-                    match resolve_trait_const_use(db, &analysis_cx, inst, name) {
-                        Some(TraitConstUseResolution::Concrete(selection)) => {
-                            let const_ty = const_ty_from_selected_assoc_const(db, &selection)
-                                .expect("concrete trait-const selection must have a body");
-                            let evaluated = const_ty.evaluate(db, expected_ty);
-                            if matches!(
-                                evaluated.ty(db).invalid_cause(db),
-                                Some(InvalidCause::ConstEvalUnsupported { .. })
-                            ) && let Some(expected_ty) = expected_ty
-                            {
-                                return abstract_trait_const_ty(
-                                    db,
-                                    selection.trait_inst,
-                                    selection.name,
-                                    expected_ty,
-                                );
-                            }
-                            return evaluated;
-                        }
-                        Some(TraitConstUseResolution::Abstract {
-                            trait_inst, name, ..
-                        }) => {
-                            if let Some(expected_ty) = expected_ty {
-                                return abstract_trait_const_ty(db, trait_inst, name, expected_ty);
-                            }
-                        }
-                        Some(TraitConstUseResolution::MissingConcreteImpl {
-                            trait_inst,
-                            name,
-                            ..
-                        }) => return invalid_trait_const_ty(db, trait_inst, name),
-                        None => {}
-                    }
-                }
-                PathRes::EnumVariant(variant) if variant.ty.is_unit_variant_only_enum(db) => {
-                    let evaluated = EvaluatedConstTy::EnumVariant(variant.variant);
-                    let const_ty =
-                        ConstTyId::new(db, ConstTyData::Evaluated(evaluated, variant.ty));
+    let simple_path = const_body_simple_path(db, body);
+    if simple_path.is_some()
+        && let Some(resolved_path) =
+            resolve_const_body_simple_path(db, body, assumptions, &analysis_cx)
+    {
+        match resolved_path {
+            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
+                if let TyData::ConstTy(const_ty) = ty.data(db) {
                     return const_ty.evaluate(db, expected_ty);
                 }
-                _ => {}
             }
+            PathRes::Const(const_def, ty) => {
+                if let Some(body) = const_def.body(db).to_opt() {
+                    let const_ty = ConstTyId::from_body(db, body, Some(ty), Some(const_def));
+                    let expected = expected_ty.or(Some(ty));
+                    return const_ty.evaluate(db, expected);
+                }
+            }
+            PathRes::TraitConst(recv_ty, inst, name) => {
+                let inst = crate::analysis::ty::trait_def::specialize_trait_const_inst_to_receiver(
+                    db, recv_ty, inst,
+                );
+                match resolve_trait_const_use(db, &analysis_cx, inst, name) {
+                    Some(TraitConstUseResolution::Concrete(selection)) => {
+                        let const_ty = const_ty_from_selected_assoc_const(db, &selection)
+                            .expect("concrete trait-const selection must have a body");
+                        let evaluated = const_ty.evaluate(db, expected_ty);
+                        if matches!(
+                            evaluated.ty(db).invalid_cause(db),
+                            Some(InvalidCause::ConstEvalUnsupported { .. })
+                        ) && let Some(expected_ty) = expected_ty
+                        {
+                            return abstract_trait_const_ty(
+                                db,
+                                selection.trait_inst,
+                                selection.name,
+                                expected_ty,
+                            );
+                        }
+                        return evaluated;
+                    }
+                    Some(TraitConstUseResolution::Abstract {
+                        trait_inst, name, ..
+                    }) => {
+                        if let Some(expected_ty) = expected_ty {
+                            return abstract_trait_const_ty(db, trait_inst, name, expected_ty);
+                        }
+                    }
+                    Some(TraitConstUseResolution::MissingConcreteImpl {
+                        trait_inst, name, ..
+                    }) => return invalid_trait_const_ty(db, trait_inst, name),
+                    None => {}
+                }
+            }
+            PathRes::EnumVariant(variant) if variant.ty.is_unit_variant_only_enum(db) => {
+                let evaluated = EvaluatedConstTy::EnumVariant(variant.variant);
+                let const_ty = ConstTyId::new(db, ConstTyData::Evaluated(evaluated, variant.ty));
+                return const_ty.evaluate(db, expected_ty);
+            }
+            _ => {}
         }
 
         // If the path failed to resolve but looks like a path to a value
         // (e.g., a trait associated const like `Type::CONST`), keep it
         // unevaluated and assume the expected type if available, avoiding
         // spurious diagnostics here. Downstream checks will validate usage.
-        if path.parent(db).is_some() {
+        if let Some(path) = simple_path
+            && path.parent(db).is_some()
+        {
             return ConstTyId::from_body_with_generic_args(
                 db,
                 body,
