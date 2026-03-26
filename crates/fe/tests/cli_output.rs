@@ -488,6 +488,91 @@ fn test_cli_build_emit_abi_writes_json_artifact() {
 }
 
 #[test]
+fn test_cli_build_emit_abi_includes_constructor_and_mutability_metadata() {
+    let temp = tempdir().expect("tempdir");
+    let src_dir = temp.path().join("src");
+    fs::create_dir_all(&src_dir).expect("create src dir");
+    fs::write(
+        temp.path().join("fe.toml"),
+        "[ingot]\nname = \"emit_abi_mutability\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write fe.toml");
+    fs::write(
+        src_dir.join("lib.fe"),
+        r#"
+use std::abi::sol
+
+msg WalletMsg {
+    #[selector = sol("fund()")]
+    Fund,
+
+    #[selector = sol("peek()")]
+    Peek -> u256,
+}
+
+pub contract Wallet {
+    #[payable]
+    init(seed: u256, values: [u256; 2]) {}
+
+    recv WalletMsg {
+        #[payable]
+        Fund {} {}
+
+        Peek -> u256 {
+            7
+        }
+    }
+}
+"#,
+    )
+    .expect("write lib.fe");
+
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let project_path = temp.path().to_str().expect("project path utf8");
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "abi",
+        "--contract",
+        "Wallet",
+        "--out-dir",
+        out_dir_str.as_str(),
+        project_path,
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    let abi_path = out_dir.join("Wallet.abi.json");
+    assert!(abi_path.is_file(), "missing ABI artifact:\n{output}");
+
+    let abi: Value = serde_json::from_str(&fs::read_to_string(&abi_path).expect("read ABI"))
+        .expect("parse ABI JSON");
+    let entries = abi.as_array().expect("abi array");
+    let constructor = entries
+        .iter()
+        .find(|entry| entry["type"] == "constructor")
+        .expect("constructor entry");
+    let fund = entries
+        .iter()
+        .find(|entry| entry["type"] == "function" && entry["name"] == "fund")
+        .expect("fund entry");
+    let peek = entries
+        .iter()
+        .find(|entry| entry["type"] == "function" && entry["name"] == "peek")
+        .expect("peek entry");
+
+    assert_eq!(constructor["stateMutability"], "payable");
+    assert_eq!(constructor["inputs"][0]["name"], "seed");
+    assert_eq!(constructor["inputs"][0]["type"], "uint256");
+    assert_eq!(constructor["inputs"][1]["name"], "values");
+    assert_eq!(constructor["inputs"][1]["type"], "uint256[2]");
+    assert_eq!(fund["stateMutability"], "payable");
+    assert_eq!(peek["stateMutability"], "pure");
+    assert_eq!(peek["outputs"][0]["type"], "uint256");
+}
+
+#[test]
 fn test_cli_build_emit_abi_includes_imported_events() {
     let temp = tempdir().expect("tempdir");
     let src_dir = temp.path().join("src");

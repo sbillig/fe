@@ -1413,12 +1413,28 @@ fn overlay_occurrences(
 /// Convert a byte offset within a signature text to (line, col) relative to the
 /// signature start.  Line 0 is the first line; col is byte offset from last newline.
 fn byte_offset_to_sig_line_col(sig_text: &str, byte_offset: usize) -> (i32, i32) {
-    let clamped = sig_text.floor_char_boundary(byte_offset.min(sig_text.len()));
+    let clamped = floor_char_boundary(sig_text, byte_offset.min(sig_text.len()));
     let prefix = &sig_text[..clamped];
     let line = prefix.bytes().filter(|&b| b == b'\n').count() as i32;
     let last_newline = prefix.rfind('\n').map(|p| p + 1).unwrap_or(0);
     let col = (clamped - last_newline) as i32;
     (line, col)
+}
+
+fn floor_char_boundary(s: &str, idx: usize) -> usize {
+    let idx = idx.min(s.len());
+    if s.is_char_boundary(idx) {
+        return idx;
+    }
+
+    let mut boundary = 0;
+    for (offset, _) in s.char_indices() {
+        if offset > idx {
+            break;
+        }
+        boundary = offset;
+    }
+    boundary
 }
 
 /// Build SCIP occurrences for a virtual signature document.

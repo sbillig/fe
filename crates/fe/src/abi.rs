@@ -1594,6 +1594,59 @@ pub contract Bar {
     }
 
     #[test]
+    fn payable_constructor_and_recv_arms_preserve_abi_mutability_and_array_inputs() {
+        let code = r#"
+use std::abi::sol
+
+msg WalletMsg {
+    #[selector = sol("fund()")]
+    Fund,
+
+    #[selector = sol("peek()")]
+    Peek -> u256,
+}
+
+pub contract Wallet {
+    #[payable]
+    init(seed: u256, values: [u256; 2]) {}
+
+    recv WalletMsg {
+        #[payable]
+        Fund {} {}
+
+        Peek -> u256 {
+            7
+        }
+    }
+}
+"#;
+
+        let entries = abi_entries(code, "Wallet");
+        let constructor = entries
+            .iter()
+            .find(|entry| entry["type"] == "constructor")
+            .expect("constructor entry");
+        let fund = entries
+            .iter()
+            .find(|entry| entry["type"] == "function" && entry["name"] == "fund")
+            .expect("fund entry");
+        let peek = entries
+            .iter()
+            .find(|entry| entry["type"] == "function" && entry["name"] == "peek")
+            .expect("peek entry");
+
+        assert_eq!(constructor["stateMutability"], "payable");
+        assert_eq!(constructor["inputs"][0]["name"], "seed");
+        assert_eq!(constructor["inputs"][0]["type"], "uint256");
+        assert_eq!(constructor["inputs"][1]["name"], "values");
+        assert_eq!(constructor["inputs"][1]["type"], "uint256[2]");
+
+        assert_eq!(fund["stateMutability"], "payable");
+        assert_eq!(peek["stateMutability"], "pure");
+        assert_eq!(peek["outputs"][0]["type"], "uint256");
+    }
+
+    #[test]
     fn generic_event_helpers_preserve_concrete_event_types() {
         let code = r#"
 use std::abi::sol

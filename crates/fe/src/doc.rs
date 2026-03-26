@@ -723,7 +723,7 @@ fn print_doc_summary(index: &DocIndex) {
                 .map(|d| {
                     let summary = &d.summary;
                     if summary.len() > 60 {
-                        let trunc = &summary[..summary.floor_char_boundary(60)];
+                        let trunc = &summary[..floor_char_boundary(summary, 60)];
                         format!("{trunc}...")
                     } else {
                         summary.clone()
@@ -742,4 +742,20 @@ fn print_doc_summary(index: &DocIndex) {
         }
         println!();
     }
+}
+
+fn floor_char_boundary(s: &str, idx: usize) -> usize {
+    let idx = idx.min(s.len());
+    if s.is_char_boundary(idx) {
+        return idx;
+    }
+
+    let mut boundary = 0;
+    for (offset, _) in s.char_indices() {
+        if offset > idx {
+            break;
+        }
+        boundary = offset;
+    }
+    boundary
 }
