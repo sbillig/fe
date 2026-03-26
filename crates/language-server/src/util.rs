@@ -21,12 +21,13 @@ pub fn calculate_line_offsets(text: &str) -> Vec<usize> {
 
 pub fn to_offset_from_position(position: Position, text: &str) -> parser::TextSize {
     let line_offsets: Vec<usize> = calculate_line_offsets(text);
+    let line_index = position.line as usize;
     let line_start = line_offsets
-        .get(position.line as usize)
+        .get(line_index)
         .copied()
         .unwrap_or_else(|| line_offsets.last().copied().unwrap_or(0));
     let line_end = line_offsets
-        .get(position.line as usize + 1)
+        .get(line_index.saturating_add(1))
         .map(|offset| offset.saturating_sub(1))
         .unwrap_or(text.len());
     let line_text = &text[line_start..line_end];
@@ -281,5 +282,13 @@ mod tests {
 
         assert_eq!(usize::from(offset), "let x = ".len());
         assert_eq!(&text[..usize::from(offset)], "let x = ");
+    }
+
+    #[test]
+    fn to_offset_from_position_handles_max_line_without_overflow() {
+        let text = "let x = 1\n";
+        let offset = to_offset_from_position(Position::new(u32::MAX, 0), text);
+
+        assert_eq!(usize::from(offset), text.len());
     }
 }
