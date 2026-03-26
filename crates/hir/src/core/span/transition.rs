@@ -133,8 +133,14 @@ impl ResolvedOrigin {
     {
         let root = top_mod_ast(db, top_mod).syntax().clone();
         let kind = match origin {
-            HirOrigin::Raw(ptr) => ResolvedOriginKind::Node(ptr.syntax_node_ptr().to_node(&root)),
-            HirOrigin::Expanded(ptr) => ResolvedOriginKind::Expanded(ptr.to_node(&root)),
+            HirOrigin::Raw(ptr) => match ptr.syntax_node_ptr().try_to_node(&root) {
+                Some(node) => ResolvedOriginKind::Node(node),
+                None => ResolvedOriginKind::None,
+            },
+            HirOrigin::Expanded(ptr) => match ptr.try_to_node(&root) {
+                Some(node) => ResolvedOriginKind::Expanded(node),
+                None => ResolvedOriginKind::None,
+            },
             HirOrigin::Desugared(desugared) => {
                 ResolvedOriginKind::Desugared(root, desugared.clone())
             }

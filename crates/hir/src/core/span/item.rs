@@ -858,4 +858,71 @@ mod tests {
         assert_eq!("as Alias", db.text_at(top_mod, &use_.span().alias()));
         assert_eq!("Alias", db.text_at(top_mod, &use_.span().alias().name()));
     }
+
+    /// Regression test for #1357: the LS panicked on `SyntaxNodePtr::to_node`
+    /// when resolving spans for error-recovery AST nodes in incomplete recv
+    /// arms. `ResolvedOrigin::resolve` now uses `try_to_node` so that
+    /// unresolvable pointers yield `None` instead of panicking.
+    ///
+    /// This test exercises the error-recovery code path by parsing several
+    /// variations of incomplete/malformed recv blocks and resolving every
+    /// reference span. While it may not reproduce the exact zero-length
+    /// PathPat from the original report (which depends on mid-edit parser
+    /// state), it guards against regressions if `try_to_node` is accidentally
+    /// reverted back to `to_node`.
+    #[test]
+    fn incomplete_recv_arm_span_resolve_does_not_panic() {
+        use crate::{
+            lower::{map_file_to_mod, scope_graph},
+            semantic::reference::HasReferences,
+            span::LazySpan,
+        };
+
+        let mut db = TestDb::default();
+
+        let cases = &[
+            // Incomplete recv arm with arrow but no body
+            "pub contract C { recv { Get -> u256 } }",
+            // Recv arm with unknown variant (no msg type)
+            "pub contract C { recv { GetGlobal -> } }",
+            // Completely empty recv
+            "pub contract C { recv { } }",
+            // Recv arm missing everything after variant name
+            "pub contract C { recv { Get } }",
+            // Truncated mid-arrow
+            "pub contract C { recv { Get -> } }",
+            // Simulates the fe-new template mid-edit state
+            r#"
+use std::abi::sol
+msg CounterMsg {
+    #[selector = sol("increment()")]
+    Increment,
+    #[selector = sol("get()")]
+    Get -> u256,
+}
+struct CounterStore { value: u256 }
+pub contract Counter {
+    mut store: CounterStore
+    recv CounterMsg {
+        Increment uses (mut store) { store.value = store.value + 1 }
+        GetGlobal -> u256
+        Get -> u256 uses (store) { store.value }
+    }
+}
+            "#,
+        ];
+
+        for (i, text) in cases.iter().enumerate() {
+            let file = db.standalone_file(text);
+            let top_mod = map_file_to_mod(&db, file);
+            let sg = scope_graph(&db, top_mod);
+            for item in sg.items_dfs(&db) {
+                for reference in item.references(&db) {
+                    // Must not panic — should return Some(span) or None
+                    let _ = reference.span().resolve(&db);
+                }
+            }
+            eprintln!("case {i} ok");
+        }
+    }
 }
