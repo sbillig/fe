@@ -134,7 +134,9 @@ fn detect_completion_context(file_text: &str, cursor: parser::TextSize) -> Compl
     let cursor_pos = usize::from(cursor);
 
     // Look backwards from cursor to find context clues
-    let before = &file_text[..cursor_pos];
+    let before = file_text
+        .get(..cursor_pos)
+        .unwrap_or_else(|| &file_text[..floor_char_boundary(file_text, cursor_pos)]);
 
     // Skip whitespace to find the last significant character
     let trimmed = before.trim_end();
@@ -192,6 +194,18 @@ fn detect_completion_context(file_text: &str, cursor: parser::TextSize) -> Compl
 
     // Default to mixed for safety
     CompletionContext::Mixed
+}
+
+fn floor_char_boundary(text: &str, index: usize) -> usize {
+    if index >= text.len() {
+        return text.len();
+    }
+
+    let mut boundary = index;
+    while boundary > 0 && !text.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    boundary
 }
 
 /// Find the most specific scope containing the cursor position.
@@ -1720,5 +1734,16 @@ mod tests {
 
         let snapshot = make_completion_snapshot(&db, &cleaned_source, &positions, top_mod);
         snap_test!(snapshot, fixture.path());
+    }
+
+    #[test]
+    fn detect_completion_context_handles_cursor_inside_unicode_char() {
+        let source = "let x = ∫";
+        let cursor = parser::TextSize::from(("let x = ".len() + 1) as u32);
+
+        assert_eq!(
+            detect_completion_context(source, cursor),
+            CompletionContext::Expression
+        );
     }
 }
