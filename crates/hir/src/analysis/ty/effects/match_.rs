@@ -16,7 +16,7 @@ use crate::analysis::{
         unify::UnificationTable,
     },
 };
-use crate::hir_def::CallableDef;
+use crate::hir_def::{CallableDef, IdentId, Trait};
 use common::indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
@@ -289,24 +289,18 @@ fn query_matches_stored_type<'db>(
     RigidStoredTypeMatcher::new(db, &mut table).matches_type(query, witness.carrier, true)
 }
 
-fn query_trait_matches_stored<'db>(
-    db: &'db dyn HirAnalysisDb,
-    table: &mut UnificationTable<'db>,
-    query: TraitPatternKey<'db>,
-    witness: StoredTraitKey<'db>,
-) -> bool {
-    let instantiated = instantiate_trait_pattern_in(db, table, query);
-    let instantiated = instantiate_pattern_existentials_in(db, table, instantiated, true);
-    query_instantiated_trait_matches_stored(db, table, instantiated, witness)
-}
-
 fn query_instantiated_trait_matches_stored<'db>(
     db: &'db dyn HirAnalysisDb,
     table: &mut UnificationTable<'db>,
     query: TraitInstId<'db>,
     witness: StoredTraitKey<'db>,
 ) -> bool {
-    let witness = stored_trait_inst(db, witness);
+    let witness = trait_inst_from_parts(
+        db,
+        witness.def,
+        witness.args_no_self,
+        witness.assoc_bindings,
+    );
     let mut matcher = RigidStoredTypeMatcher::new(db, table);
     trait_effect_key_matches_with(db, query, witness, |lhs, rhs| {
         matcher.matches_type(lhs, rhs, true)
@@ -319,40 +313,32 @@ fn query_instantiated_trait_matches_forwarded<'db>(
     query: TraitInstId<'db>,
     forwarder: ForwardedTraitKey<'db>,
 ) -> bool {
-    let forwarder = forwarded_trait_inst(db, forwarder);
+    let forwarder = trait_inst_from_parts(
+        db,
+        forwarder.def,
+        forwarder.args_no_self,
+        forwarder.assoc_bindings,
+    );
     trait_effect_key_matches_with(db, query, forwarder, |lhs, rhs| {
         table.unify(lhs, rhs).is_ok()
     })
 }
 
-fn stored_trait_inst<'db>(
+fn trait_inst_from_parts<'db>(
     db: &'db dyn HirAnalysisDb,
-    witness: StoredTraitKey<'db>,
+    def: Trait<'db>,
+    args_no_self: impl IntoIterator<Item = TyId<'db>>,
+    assoc_bindings: impl IntoIterator<Item = (IdentId<'db>, TyId<'db>)>,
 ) -> TraitInstId<'db> {
     let self_ty = TyId::invalid(db, InvalidCause::Other);
-    let args = std::iter::once(self_ty)
-        .chain(witness.args_no_self)
-        .collect::<Vec<_>>();
-    let assoc = witness
-        .assoc_bindings
-        .into_iter()
-        .collect::<IndexMap<_, _>>();
-    TraitInstId::new(db, witness.def, args, assoc)
-}
-
-fn forwarded_trait_inst<'db>(
-    db: &'db dyn HirAnalysisDb,
-    forwarder: ForwardedTraitKey<'db>,
-) -> TraitInstId<'db> {
-    let self_ty = TyId::invalid(db, InvalidCause::Other);
-    let args = std::iter::once(self_ty)
-        .chain(forwarder.args_no_self)
-        .collect::<Vec<_>>();
-    let assoc = forwarder
-        .assoc_bindings
-        .into_iter()
-        .collect::<IndexMap<_, _>>();
-    TraitInstId::new(db, forwarder.def, args, assoc)
+    TraitInstId::new(
+        db,
+        def,
+        std::iter::once(self_ty)
+            .chain(args_no_self)
+            .collect::<Vec<_>>(),
+        assoc_bindings.into_iter().collect::<IndexMap<_, _>>(),
+    )
 }
 
 fn query_matches_stored_trait<'db>(
@@ -361,7 +347,9 @@ fn query_matches_stored_trait<'db>(
     witness: StoredTraitKey<'db>,
 ) -> bool {
     let mut table = UnificationTable::new(db);
-    query_trait_matches_stored(db, &mut table, query, witness)
+    let instantiated = instantiate_trait_pattern_in(db, &mut table, query);
+    let instantiated = instantiate_pattern_existentials_in(db, &mut table, instantiated, true);
+    query_instantiated_trait_matches_stored(db, &mut table, instantiated, witness)
 }
 
 // Witness-only matcher: rigid stored keys may reuse hidden provider placeholders across matches,

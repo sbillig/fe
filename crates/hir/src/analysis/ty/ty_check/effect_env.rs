@@ -84,6 +84,24 @@ impl<'db> EffectEnv<'db> {
         }
     }
 
+    fn current_frame_mut(&mut self) -> &mut EffectFrame<'db> {
+        self.frames
+            .last_mut()
+            .expect("effect env must have at least one frame")
+    }
+
+    fn insert_keyed_entry(
+        &mut self,
+        family: EffectFamily<'db>,
+        entry: KeyedEffectEntry<'db, ProvidedEffect<'db>>,
+    ) {
+        self.current_frame_mut()
+            .keyed_by_family
+            .entry(family)
+            .or_default()
+            .push(entry);
+    }
+
     pub fn insert_witness(
         &mut self,
         db: &'db dyn HirAnalysisDb,
@@ -95,13 +113,10 @@ impl<'db> EffectEnv<'db> {
                 debug_assert!(stored_trait_key_is_rigid(db, key.clone()))
             }
         }
-        self.frames
-            .last_mut()
-            .expect("effect env must have at least one frame")
-            .keyed_by_family
-            .entry(witness.key.clone().family())
-            .or_default()
-            .push(KeyedEffectEntry::Witness(witness));
+        self.insert_keyed_entry(
+            witness.key.clone().family(),
+            KeyedEffectEntry::Witness(witness),
+        );
     }
 
     pub fn insert_forwarder(
@@ -117,13 +132,10 @@ impl<'db> EffectEnv<'db> {
                 debug_assert!(forwarded_trait_key_is_well_formed(db, key.clone()))
             }
         }
-        self.frames
-            .last_mut()
-            .expect("effect env must have at least one frame")
-            .keyed_by_family
-            .entry(forwarder.key.clone().family())
-            .or_default()
-            .push(KeyedEffectEntry::Forwarder(forwarder));
+        self.insert_keyed_entry(
+            forwarder.key.clone().family(),
+            KeyedEffectEntry::Forwarder(forwarder),
+        );
     }
 
     pub fn insert_barrier(
@@ -131,21 +143,11 @@ impl<'db> EffectEnv<'db> {
         family: EffectFamily<'db>,
         barrier: crate::analysis::ty::effects::EffectBarrier<'db>,
     ) {
-        self.frames
-            .last_mut()
-            .expect("effect env must have at least one frame")
-            .keyed_by_family
-            .entry(family)
-            .or_default()
-            .push(KeyedEffectEntry::Barrier(barrier));
+        self.insert_keyed_entry(family, KeyedEffectEntry::Barrier(barrier));
     }
 
     pub fn insert_unkeyed(&mut self, binding: ProvidedEffect<'db>) {
-        self.frames
-            .last_mut()
-            .expect("effect env must have at least one frame")
-            .unkeyed
-            .push(binding);
+        self.current_frame_mut().unkeyed.push(binding);
     }
 
     pub fn lookup_by_binding(
@@ -153,29 +155,33 @@ impl<'db> EffectEnv<'db> {
         binding: super::env::LocalBinding<'db>,
     ) -> Option<ProvidedEffect<'db>> {
         for frame in self.frames.iter().rev() {
-            for provided in frame.unkeyed.iter().copied() {
-                if provided.binding == Some(binding) {
-                    return Some(provided);
-                }
+            if let Some(provided) = frame
+                .unkeyed
+                .iter()
+                .copied()
+                .find(|provided| provided.binding == Some(binding))
+            {
+                return Some(provided);
             }
-            for entry in frame
+            if let Some(provided) = frame
                 .keyed_by_family
                 .values()
                 .flat_map(|entries| entries.iter())
-            {
-                match entry {
+                .find_map(|entry| match entry {
                     KeyedEffectEntry::Witness(witness)
                         if witness.provider.binding == Some(binding) =>
                     {
-                        return Some(witness.provider);
+                        Some(witness.provider)
                     }
                     KeyedEffectEntry::Forwarder(forwarder)
                         if forwarder.provider.binding == Some(binding) =>
                     {
-                        return Some(forwarder.provider);
+                        Some(forwarder.provider)
                     }
-                    _ => {}
-                }
+                    _ => None,
+                })
+            {
+                return Some(provided);
             }
         }
         None

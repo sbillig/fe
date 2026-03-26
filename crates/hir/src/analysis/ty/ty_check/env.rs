@@ -1022,34 +1022,16 @@ impl<'db> TyChecker<'db> {
         assumptions: PredicateListId<'db>,
     ) -> bool {
         let snapshot = self.snapshot_state();
-        let Some(witness) = self.build_seeded_witness_from_requirement_and_provider(
-            req,
-            provider,
-            scope,
-            assumptions,
-        ) else {
+        let pattern = build_pattern_from_requirement_decl(self.db, req, scope, assumptions);
+        let Some(key_path) = req.key_path else {
             self.rollback_state(snapshot);
             return false;
         };
-        self.commit_state(snapshot);
-        self.env.insert_effect_witness(witness);
-        true
-    }
-
-    fn build_seeded_witness_from_requirement_and_provider(
-        &mut self,
-        req: &EffectRequirementDecl<'db>,
-        provider: ProvidedEffect<'db>,
-        scope: ScopeId<'db>,
-        assumptions: PredicateListId<'db>,
-    ) -> Option<EffectWitness<'db, ProvidedEffect<'db>>> {
-        let pattern = build_pattern_from_requirement_decl(self.db, req, scope, assumptions);
-        let key_path = req.key_path?;
         let span = match provider.origin {
             EffectOrigin::Param { site, index, .. } => effect_param_span(site, index),
             EffectOrigin::With { value_expr } => value_expr.span(self.body()).into(),
         };
-        let (witness, commit) = self
+        let Some((witness, commit)) = self
             .build_keyed_witness_from_pattern_in_scope(
                 pattern,
                 key_path,
@@ -1061,8 +1043,18 @@ impl<'db> TyChecker<'db> {
                     mode: super::expr::WitnessBuildMode::SeededRequirement,
                 },
             )
-            .ok()?;
-        self.apply_effect_commit_plan(commit).then_some(witness)
+            .ok()
+        else {
+            self.rollback_state(snapshot);
+            return false;
+        };
+        if !self.apply_effect_commit_plan(commit) {
+            self.rollback_state(snapshot);
+            return false;
+        }
+        self.commit_state(snapshot);
+        self.env.insert_effect_witness(witness);
+        true
     }
 }
 

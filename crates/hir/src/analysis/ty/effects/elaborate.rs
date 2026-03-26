@@ -73,15 +73,7 @@ pub fn build_effect_query_for_call<'db>(
                 tc.env.assumptions(),
                 callable.trait_inst(),
             );
-            EffectPatternKey::Type(TypePatternKey {
-                carrier,
-                family: effect_family_for_type(tc.db, carrier),
-                slots: PatternSlots::from_value(
-                    tc.db,
-                    carrier,
-                    LayoutPlaceholderPolicy::HolesAndImplicitParams,
-                ),
-            })
+            EffectPatternKey::Type(type_pattern_key_from_carrier(tc.db, carrier, []))
         }
         EffectRequirementKey::Trait(schema) => {
             let key = instantiate_trait_effect_key(
@@ -99,17 +91,7 @@ pub fn build_effect_query_for_call<'db>(
                 tc.env.assumptions(),
                 callable.trait_inst(),
             );
-            EffectPatternKey::Trait(TraitPatternKey {
-                def: key.def(tc.db),
-                args_no_self: key.args(tc.db)[1..].iter().copied().collect(),
-                assoc_bindings: key.assoc_ty_bindings(tc.db).into_iter().collect(),
-                family: effect_family_for_trait(key.def(tc.db)),
-                slots: PatternSlots::from_value(
-                    tc.db,
-                    key,
-                    LayoutPlaceholderPolicy::HolesAndImplicitParams,
-                ),
-            })
+            EffectPatternKey::Trait(trait_pattern_key_from_inst(tc.db, key, []))
         }
     };
 
@@ -131,15 +113,7 @@ pub fn build_pattern_from_requirement_decl<'db>(
         EffectRequirementKey::Type(schema) => {
             let carrier =
                 normalize_effect_identity_ty(db, schema.carrier, scope, assumptions, None);
-            EffectPatternKey::Type(TypePatternKey {
-                carrier,
-                family: effect_family_for_type(db, carrier),
-                slots: PatternSlots::from_value(
-                    db,
-                    carrier,
-                    LayoutPlaceholderPolicy::HolesAndImplicitParams,
-                ),
-            })
+            EffectPatternKey::Type(type_pattern_key_from_carrier(db, carrier, []))
         }
         EffectRequirementKey::Trait(schema) => {
             let key = normalize_effect_identity_trait(
@@ -149,17 +123,7 @@ pub fn build_pattern_from_requirement_decl<'db>(
                 assumptions,
                 None,
             );
-            EffectPatternKey::Trait(TraitPatternKey {
-                def: key.def(db),
-                args_no_self: key.args(db)[1..].iter().copied().collect(),
-                assoc_bindings: key.assoc_ty_bindings(db).into_iter().collect(),
-                family: effect_family_for_trait(key.def(db)),
-                slots: PatternSlots::from_value(
-                    db,
-                    key,
-                    LayoutPlaceholderPolicy::HolesAndImplicitParams,
-                ),
-            })
+            EffectPatternKey::Trait(trait_pattern_key_from_inst(db, key, []))
         }
     }
 }
@@ -221,17 +185,11 @@ fn build_conservative_invalid_type_key_barrier_pattern_in_scope<'db>(
         wildcard_args_and_slots_for_conservative_type_barrier(db, scope, spec);
     let carrier = TyId::foldl(db, base, &wildcard_args);
     let carrier = normalize_effect_identity_ty(db, carrier, scope, assumptions, None);
-    let family = effect_family_for_type(db, carrier);
-    Some(EffectPatternKey::Type(TypePatternKey {
+    Some(EffectPatternKey::Type(type_pattern_key_from_carrier(
+        db,
         carrier,
-        family,
-        slots: PatternSlots::from_value_with_extra(
-            db,
-            carrier,
-            LayoutPlaceholderPolicy::HolesAndImplicitParams,
-            wildcard_slots,
-        ),
-    }))
+        wildcard_slots,
+    )))
 }
 
 enum ConservativeTypeBarrierSpec<'db> {
@@ -250,12 +208,12 @@ fn wildcard_args_and_slots_for_conservative_type_barrier<'db>(
             .iter()
             .copied()
             .enumerate()
-            .map(|(idx, param)| wildcard_pattern_slot_for_param(db, scope, idx, param))
+            .map(|(idx, param)| wildcard_pattern_slot_for_source(db, scope, idx, param))
             .unzip(),
         ConservativeTypeBarrierSpec::FromExistingArgs(args) => args
             .into_iter()
             .enumerate()
-            .map(|(idx, arg)| wildcard_pattern_slot_for_arg(db, scope, idx, arg))
+            .map(|(idx, arg)| wildcard_pattern_slot_for_source(db, scope, idx, arg))
             .unzip(),
     }
 }
@@ -287,28 +245,20 @@ fn build_conservative_invalid_trait_key_barrier_pattern_in_scope<'db>(
         .copied()
         .skip(1)
         .enumerate()
-        .map(|(idx, param)| wildcard_pattern_slot_for_param(db, scope, idx, param))
+        .map(|(idx, param)| wildcard_pattern_slot_for_source(db, scope, idx, param))
         .unzip::<_, _, SmallVec<[TyId<'db>; 2]>, SmallVec<[crate::analysis::ty::effects::PatternSlot<'db>; 2]>>();
-    let trait_inst = TraitInstId::new(
+    Some(EffectPatternKey::Trait(trait_pattern_key_from_inst(
         db,
-        trait_,
-        std::iter::once(TyId::invalid(db, InvalidCause::Other))
-            .chain(args_no_self.iter().copied())
-            .collect::<Vec<_>>(),
-        IndexMap::new(),
-    );
-    Some(EffectPatternKey::Trait(TraitPatternKey {
-        def: trait_,
-        args_no_self,
-        assoc_bindings: SmallVec::new(),
-        family: effect_family_for_trait(trait_),
-        slots: PatternSlots::from_value_with_extra(
+        TraitInstId::new(
             db,
-            trait_inst,
-            LayoutPlaceholderPolicy::HolesAndImplicitParams,
-            slots,
+            trait_,
+            std::iter::once(TyId::invalid(db, InvalidCause::Other))
+                .chain(args_no_self.iter().copied())
+                .collect::<Vec<_>>(),
+            IndexMap::new(),
         ),
-    }))
+        slots,
+    )))
 }
 
 fn wildcard_const_fallback_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<TyId<'db>> {
@@ -332,24 +282,6 @@ fn wildcard_const_fallback_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) ->
             _ => None,
         }),
     }
-}
-
-fn wildcard_pattern_slot_for_arg<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    idx: usize,
-    arg: TyId<'db>,
-) -> (TyId<'db>, PatternSlot<'db>) {
-    wildcard_pattern_slot_for_source(db, scope, idx, arg)
-}
-
-fn wildcard_pattern_slot_for_param<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    idx: usize,
-    param: TyId<'db>,
-) -> (TyId<'db>, PatternSlot<'db>) {
-    wildcard_pattern_slot_for_source(db, scope, idx, param)
 }
 
 fn wildcard_pattern_slot_for_source<'db>(
@@ -434,16 +366,7 @@ fn build_type_barrier_pattern_key<'db>(
 ) -> TypePatternKey<'db> {
     let (carrier, omitted_slots) = rewrite_omitted_type_args_for_pattern_key(db, scope, ty);
     let carrier = normalize_effect_identity_ty(db, carrier, scope, assumptions, None);
-    TypePatternKey {
-        carrier,
-        family: effect_family_for_type(db, carrier),
-        slots: PatternSlots::from_value_with_extra(
-            db,
-            carrier,
-            LayoutPlaceholderPolicy::HolesAndImplicitParams,
-            omitted_slots,
-        ),
-    }
+    type_pattern_key_from_carrier(db, carrier, omitted_slots)
 }
 
 fn build_trait_barrier_pattern_key<'db>(
@@ -454,6 +377,31 @@ fn build_trait_barrier_pattern_key<'db>(
 ) -> TraitPatternKey<'db> {
     let (key, omitted_slots) = rewrite_omitted_type_args_for_pattern_key(db, scope, trait_inst);
     let key = normalize_effect_identity_trait(db, key, scope, assumptions, None);
+    trait_pattern_key_from_inst(db, key, omitted_slots)
+}
+
+fn type_pattern_key_from_carrier<'db>(
+    db: &'db dyn HirAnalysisDb,
+    carrier: TyId<'db>,
+    extra_slots: impl IntoIterator<Item = PatternSlot<'db>>,
+) -> TypePatternKey<'db> {
+    TypePatternKey {
+        carrier,
+        family: effect_family_for_type(db, carrier),
+        slots: PatternSlots::from_value_with_extra(
+            db,
+            carrier,
+            LayoutPlaceholderPolicy::HolesAndImplicitParams,
+            extra_slots,
+        ),
+    }
+}
+
+fn trait_pattern_key_from_inst<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: TraitInstId<'db>,
+    extra_slots: impl IntoIterator<Item = PatternSlot<'db>>,
+) -> TraitPatternKey<'db> {
     TraitPatternKey {
         def: key.def(db),
         args_no_self: key.args(db)[1..].iter().copied().collect(),
@@ -463,7 +411,7 @@ fn build_trait_barrier_pattern_key<'db>(
             db,
             key,
             LayoutPlaceholderPolicy::HolesAndImplicitParams,
-            omitted_slots,
+            extra_slots,
         ),
     }
 }

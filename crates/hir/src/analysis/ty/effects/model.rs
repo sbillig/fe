@@ -249,17 +249,6 @@ impl<'db> PatternSlots<'db> {
         }
     }
 
-    pub(crate) fn from_value<T>(
-        db: &'db dyn HirAnalysisDb,
-        value: T,
-        policy: LayoutPlaceholderPolicy,
-    ) -> Self
-    where
-        T: TyVisitable<'db>,
-    {
-        Self::from_value_with_extra(db, value, policy, [])
-    }
-
     pub(crate) fn from_value_with_extra<T>(
         db: &'db dyn HirAnalysisDb,
         value: T,
