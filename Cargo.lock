@@ -5283,7 +5283,7 @@ dependencies = [
 [[package]]
 name = "sonatina-codegen"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=35d8d74#35d8d747bbadfae015b51f55f4c54f517d4053cf"
+source = "git+https://github.com/fe-lang/sonatina?rev=79c6019#79c6019a29ac37f2c7abe6fb304babcf756e448f"
 dependencies = [
  "bit-set",
  "cranelift-entity 0.126.2",
@@ -5303,7 +5303,7 @@ dependencies = [
 [[package]]
 name = "sonatina-ir"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=35d8d74#35d8d747bbadfae015b51f55f4c54f517d4053cf"
+source = "git+https://github.com/fe-lang/sonatina?rev=79c6019#79c6019a29ac37f2c7abe6fb304babcf756e448f"
 dependencies = [
  "bit-set",
  "bitflags 2.11.0",
@@ -5325,7 +5325,7 @@ dependencies = [
 [[package]]
 name = "sonatina-macros"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=35d8d74#35d8d747bbadfae015b51f55f4c54f517d4053cf"
+source = "git+https://github.com/fe-lang/sonatina?rev=79c6019#79c6019a29ac37f2c7abe6fb304babcf756e448f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5335,7 +5335,7 @@ dependencies = [
 [[package]]
 name = "sonatina-parser"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=35d8d74#35d8d747bbadfae015b51f55f4c54f517d4053cf"
+source = "git+https://github.com/fe-lang/sonatina?rev=79c6019#79c6019a29ac37f2c7abe6fb304babcf756e448f"
 dependencies = [
  "annotate-snippets",
  "bimap",
@@ -5356,7 +5356,7 @@ dependencies = [
 [[package]]
 name = "sonatina-triple"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=35d8d74#35d8d747bbadfae015b51f55f4c54f517d4053cf"
+source = "git+https://github.com/fe-lang/sonatina?rev=79c6019#79c6019a29ac37f2c7abe6fb304babcf756e448f"
 dependencies = [
  "thiserror 2.0.18",
 ]
@@ -5364,7 +5364,7 @@ dependencies = [
 [[package]]
 name = "sonatina-verifier"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=35d8d74#35d8d747bbadfae015b51f55f4c54f517d4053cf"
+source = "git+https://github.com/fe-lang/sonatina?rev=79c6019#79c6019a29ac37f2c7abe6fb304babcf756e448f"
 dependencies = [
  "cranelift-entity 0.126.2",
  "rayon",
