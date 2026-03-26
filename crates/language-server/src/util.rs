@@ -21,13 +21,38 @@ pub fn calculate_line_offsets(text: &str) -> Vec<usize> {
 
 pub fn to_offset_from_position(position: Position, text: &str) -> parser::TextSize {
     let line_offsets: Vec<usize> = calculate_line_offsets(text);
-    let line_offset = line_offsets
-        .get(position.line as usize)
+    let line_index = position.line as usize;
+    let line_start = line_offsets
+        .get(line_index)
         .copied()
         .unwrap_or_else(|| line_offsets.last().copied().unwrap_or(0));
-    let character_offset = position.character as usize;
+    let line_end = line_offsets
+        .get(line_index.saturating_add(1))
+        .map(|offset| offset.saturating_sub(1))
+        .unwrap_or(text.len());
+    let line_text = &text[line_start..line_end];
+    let character_offset = utf16_column_to_byte_offset(line_text, position.character as usize);
 
-    parser::TextSize::from((line_offset + character_offset).min(text.len()) as u32)
+    parser::TextSize::from((line_start + character_offset).min(text.len()) as u32)
+}
+
+fn utf16_column_to_byte_offset(text: &str, utf16_column: usize) -> usize {
+    let mut utf16_units = 0;
+
+    for (byte_offset, ch) in text.char_indices() {
+        if utf16_units >= utf16_column {
+            return byte_offset;
+        }
+
+        let next_utf16_units = utf16_units + ch.len_utf16();
+        if next_utf16_units > utf16_column {
+            return byte_offset;
+        }
+
+        utf16_units = next_utf16_units;
+    }
+
+    text.len()
 }
 
 pub fn to_lsp_range_from_span(
@@ -233,5 +258,37 @@ impl DummyFilePathConversion for async_lsp::lsp_types::Url {
     fn from_file_path<P: AsRef<Path>>(_path: P) -> Result<Url, ()> {
         // for now we don't support file paths on wasm
         Err(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::to_offset_from_position;
+    use async_lsp::lsp_types::Position;
+
+    #[test]
+    fn to_offset_from_position_respects_utf16_columns() {
+        let text = "let x = ∫ + 1\n";
+        let offset = to_offset_from_position(Position::new(0, 9), text);
+
+        assert_eq!(usize::from(offset), "let x = ".len() + "∫".len());
+        assert_eq!(&text[..usize::from(offset)], "let x = ∫");
+    }
+
+    #[test]
+    fn to_offset_from_position_clamps_inside_multibyte_char_to_char_start() {
+        let text = "let x = ∫ + 1\n";
+        let offset = to_offset_from_position(Position::new(0, 8), text);
+
+        assert_eq!(usize::from(offset), "let x = ".len());
+        assert_eq!(&text[..usize::from(offset)], "let x = ");
+    }
+
+    #[test]
+    fn to_offset_from_position_handles_max_line_without_overflow() {
+        let text = "let x = 1\n";
+        let offset = to_offset_from_position(Position::new(u32::MAX, 0), text);
+
+        assert_eq!(usize::from(offset), text.len());
     }
 }
