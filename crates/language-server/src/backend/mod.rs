@@ -98,9 +98,13 @@ impl Backend {
 
     pub fn map_client_uri_to_internal(&self, uri: Url) -> Url {
         if let Some(vfs) = self.virtual_files.as_ref() {
-            return vfs.map_client_to_internal(uri);
+            let mapped = vfs.map_client_to_internal(uri);
+            if mapped.scheme() != "file" {
+                return mapped;
+            }
+            return normalize_file_uri(mapped);
         }
-        uri
+        normalize_file_uri(uri)
     }
 
     pub fn is_virtual_uri(&self, uri: &Url) -> bool {
@@ -135,5 +139,38 @@ impl Backend {
             let _ = tx.send(result);
         });
         rx
+    }
+}
+
+fn normalize_file_uri(uri: Url) -> Url {
+    if uri.scheme() != "file" {
+        return uri;
+    }
+
+    let Ok(path) = uri.to_file_path() else {
+        return uri;
+    };
+
+    Url::from_file_path(&path).unwrap_or(uri)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_file_uri;
+    use url::Url;
+
+    #[test]
+    fn normalize_file_uri_leaves_non_file_urls_unchanged() {
+        let uri = Url::parse("fe-builtin://core/src/lib.fe").unwrap();
+        assert_eq!(normalize_file_uri(uri.clone()), uri);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn normalize_file_uri_canonicalizes_percent_encoded_drive_paths() {
+        let client_uri = Url::parse("file:///c%3A/Users/sean/Downloads/erc20/src/lib.fe").unwrap();
+        let expected = Url::from_file_path(r"C:\Users\sean\Downloads\erc20\src\lib.fe").unwrap();
+
+        assert_eq!(normalize_file_uri(client_uri), expected);
     }
 }

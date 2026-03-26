@@ -14,7 +14,7 @@ use hir::{
     lower::map_file_to_mod,
     span::LazySpan,
 };
-use tracing::info;
+use tracing::debug;
 
 use super::{
     goto::Cursor,
@@ -229,7 +229,7 @@ pub fn hover_helper(
     file: File,
     params: async_lsp::lsp_types::HoverParams,
 ) -> Result<(Option<Hover>, Option<String>), Error> {
-    info!("handling hover");
+    debug!("handling hover");
     let file_text = file.text(db);
 
     let cursor: Cursor = to_offset_from_position(

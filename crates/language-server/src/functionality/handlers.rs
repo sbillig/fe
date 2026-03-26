@@ -21,7 +21,7 @@ use url::Url;
 
 use super::{capabilities::server_capabilities, hover::hover_helper};
 
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 #[derive(Debug)]
 pub struct FilesNeedDiagnostics(pub Vec<NeedsDiagnostics>);
@@ -291,7 +291,7 @@ pub async fn handle_did_open_text_document(
     backend: &Backend,
     message: async_lsp::lsp_types::DidOpenTextDocumentParams,
 ) -> Result<(), ResponseError> {
-    info!("file opened: {:?}", message.text_document.uri);
+    debug!("file opened: {:?}", message.text_document.uri);
     let _ = backend.client.clone().emit(FileChange {
         uri: message.text_document.uri,
         kind: ChangeKind::Open(message.text_document.text),
@@ -303,7 +303,7 @@ pub async fn handle_did_change_text_document(
     backend: &Backend,
     message: async_lsp::lsp_types::DidChangeTextDocumentParams,
 ) -> Result<(), ResponseError> {
-    info!("file changed: {:?}", message.text_document.uri);
+    debug!("file changed: {:?}", message.text_document.uri);
     if message.content_changes.is_empty() {
         warn!(
             "didChange with no content changes for {:?}",
@@ -329,7 +329,7 @@ pub async fn handle_did_save_text_document(
     backend: &Backend,
     message: async_lsp::lsp_types::DidSaveTextDocumentParams,
 ) -> Result<(), ResponseError> {
-    info!("file saved: {:?}", message.text_document.uri);
+    debug!("file saved: {:?}", message.text_document.uri);
     // Request doc reload on save (debounced by the stream in setup_streams)
     if backend.doc_regenerate_fn.is_some() {
         let _ = backend.client.clone().emit(DocReloadRequest);
@@ -385,7 +385,7 @@ pub async fn handle_file_change(
 
     match message.kind {
         ChangeKind::Open(contents) => {
-            info!("file opened: {:?}", &path_str);
+            debug!("file opened: {:?}", &path_str);
             if let Ok(url) = url::Url::from_file_path(&path) {
                 backend
                     .db
@@ -394,7 +394,7 @@ pub async fn handle_file_change(
             }
         }
         ChangeKind::Create => {
-            info!("file created: {:?}", &path_str);
+            debug!("file created: {:?}", &path_str);
             let Some(contents) = read_file_text_optional(&path) else {
                 error!("Failed to read file {}", path_str);
                 return Ok(());
@@ -412,7 +412,7 @@ pub async fn handle_file_change(
             }
         }
         ChangeKind::Edit(contents) => {
-            info!("file edited: {:?}", &path_str);
+            debug!("file edited: {:?}", &path_str);
             let contents = if let Some(text) = contents {
                 text
             } else {
@@ -435,7 +435,7 @@ pub async fn handle_file_change(
             }
         }
         ChangeKind::Delete => {
-            info!("file deleted: {:?}", path_str);
+            debug!("file deleted: {:?}", path_str);
             if let Ok(url) = url::Url::from_file_path(&path) {
                 backend.db.workspace().remove(&mut backend.db, &url);
             }
@@ -496,7 +496,7 @@ fn load_ingot_files(
     backend: &mut Backend,
     ingot_dir: &std::path::Path,
 ) -> Result<(), ResponseError> {
-    info!("Loading ingot files from: {:?}", ingot_dir);
+    debug!("Loading ingot files from: {:?}", ingot_dir);
 
     let ingot_url = Url::from_directory_path(ingot_dir).map_err(|_| {
         ResponseError::new(
@@ -645,7 +645,7 @@ pub async fn handle_files_need_diagnostics(
             diagnostics: Vec::new(),
             version: None,
         };
-        info!("Clearing stale diagnostics for {:?}", uri);
+        debug!("Clearing stale diagnostics for {:?}", uri);
         if let Err(e) = client.publish_diagnostics(diagnostics_params) {
             error!("Failed to clear diagnostics for {}: {:?}", uri, e);
         }
@@ -677,7 +677,7 @@ pub async fn handle_doc_reload(
         return Ok(());
     };
 
-    info!("regenerating doc data for live reload");
+    debug!("regenerating doc data for live reload");
     let t_start = std::time::Instant::now();
 
     // Bump generation so concurrent/stale regens get discarded
@@ -703,7 +703,7 @@ pub async fn handle_doc_reload(
                 );
                 backend.notify_doc_reload(doc_json, scip_json);
             } else {
-                info!("doc reload: discarding stale result");
+                debug!("doc reload: discarding stale result");
             }
         }
         Err(_) => {
@@ -729,7 +729,7 @@ pub async fn handle_hover_request(
         return Ok(None);
     };
 
-    info!("handling hover request in file: {:?}", file);
+    debug!("handling hover request in file: {:?}", file);
     let (response, doc_path) = hover_helper(&backend.db, file, message).unwrap_or_else(|e| {
         error!("Error handling hover: {:?}", e);
         (None, None)
@@ -738,7 +738,7 @@ pub async fn handle_hover_request(
     if let Some(path) = doc_path {
         backend.notify_doc_navigate(path);
     }
-    info!("sending hover response: {:?}", response);
+    debug!("sending hover response: {:?}", response);
     Ok(response)
 }
 
