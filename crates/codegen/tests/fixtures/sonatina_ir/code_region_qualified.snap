@@ -5,15 +5,15 @@ input_file: crates/codegen/tests/fixtures/code_region_qualified.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %init__StorPtr_Evm___207f35a85ac4062e() {
+func private %init__Evm_hef0af3106e109414__3af54274b2985741() {
     block0:
-        v1.i256 = sym_size &runtime__StorPtr_Evm___207f35a85ac4062e;
-        v2.i256 = sym_addr &runtime__StorPtr_Evm___207f35a85ac4062e;
+        v1.i256 = sym_size &runtime__Evm_hef0af3106e109414__3af54274b2985741;
+        v2.i256 = sym_addr &runtime__Evm_hef0af3106e109414__3af54274b2985741;
         evm_code_copy 0.i256 v2 v1;
         evm_return 0.i256 v1;
 }
 
-func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
+func private %runtime__Evm_hef0af3106e109414__3af54274b2985741() {
     block0:
         evm_return 0.i256 0.i256;
 }
@@ -21,10 +21,10 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
 
 object @Foo {
     section init {
-        entry %init__StorPtr_Evm___207f35a85ac4062e;
-        embed .runtime as &runtime__StorPtr_Evm___207f35a85ac4062e;
+        entry %init__Evm_hef0af3106e109414__3af54274b2985741;
+        embed .runtime as &runtime__Evm_hef0af3106e109414__3af54274b2985741;
     }
     section runtime {
-        entry %runtime__StorPtr_Evm___207f35a85ac4062e;
+        entry %runtime__Evm_hef0af3106e109414__3af54274b2985741;
     }
 }

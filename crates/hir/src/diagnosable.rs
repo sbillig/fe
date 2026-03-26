@@ -147,6 +147,7 @@ impl<'db> SuperTraitRefView<'db> {
                     span: span.into(),
                     primary_goal: goal,
                     unsat_subgoal: subgoal,
+                    required_by: None,
                 }
                 .into(),
             ),
@@ -275,6 +276,7 @@ impl<'db> WherePredicateBoundView<'db> {
                                     span: span.into(),
                                     primary_goal: goal,
                                     unsat_subgoal: None,
+                                    required_by: None,
                                 }
                                 .into(),
                             );
@@ -354,7 +356,7 @@ impl<'db> Func<'db> {
             } else if ret.is_const_ty(db) {
                 diags.push(TyLowerDiag::NormalTypeExpected { span, given: ret }.into());
             } else if ty::ty_contains_const_hole(db, ret) {
-                diags.push(TyLowerDiag::ConstHoleInValuePosition { span }.into());
+                diags.push(TyLowerDiag::ConstHoleInValuePosition { span, ty: ret }.into());
             }
         }
         diags
@@ -411,6 +413,7 @@ impl<'db> Trait<'db> {
                                 span: self.span().into(),
                                 primary_goal: trait_inst,
                                 unsat_subgoal: None,
+                                required_by: None,
                             }
                             .into(),
                         );
@@ -462,6 +465,7 @@ impl<'db> Trait<'db> {
                                 span: view.span().into(),
                                 primary_goal: goal,
                                 unsat_subgoal: None,
+                                required_by: None,
                             }
                             .into(),
                         );
@@ -522,6 +526,7 @@ impl<'db> Impl<'db> {
                                 span: self.span().target_ty().into(),
                                 primary_goal: goal,
                                 unsat_subgoal: None,
+                                required_by: None,
                             }
                             .into(),
                         );
@@ -535,6 +540,7 @@ impl<'db> Impl<'db> {
                         span: self.span().target_ty().into(),
                         primary_goal: goal,
                         unsat_subgoal: subgoal,
+                        required_by: None,
                     }
                     .into(),
                 );
@@ -766,6 +772,7 @@ impl<'db> ImplTrait<'db> {
                             span: assoc_ty_span,
                             primary_goal: bound_inst,
                             unsat_subgoal: None,
+                            required_by: None,
                         }
                         .into(),
                     );
@@ -805,6 +812,7 @@ impl<'db> ImplTrait<'db> {
                             span,
                             primary_goal: goal,
                             unsat_subgoal: None,
+                            required_by: None,
                         }
                         .into(),
                     );
@@ -953,6 +961,7 @@ impl<'db> VariantView<'db> {
                             span: span.clone().into(),
                             primary_goal: goal,
                             unsat_subgoal: subgoal,
+                            required_by: None,
                         }
                         .into(),
                     );
@@ -1297,6 +1306,7 @@ impl<'db> GenericParamOwner<'db> {
                                     span: span.into(),
                                     primary_goal: goal,
                                     unsat_subgoal: None,
+                                    required_by: None,
                                 }
                                 .into(),
                             ),

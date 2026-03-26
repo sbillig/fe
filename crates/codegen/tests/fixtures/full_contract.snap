@@ -5,13 +5,13 @@ input_file: tests/fixtures/full_contract.fe
 ---
 object "ShapeDispatcher" {
   code {
-    function $init__StorPtr_Evm___207f35a85ac4062e() {
+    function $init__Evm_hef0af3106e109414__3af54274b2985741() {
       let v0 := datasize("ShapeDispatcher_deployed")
       let v1 := dataoffset("ShapeDispatcher_deployed")
       codecopy(0, v1, v0)
       return(0, v0)
     }
-    $init__StorPtr_Evm___207f35a85ac4062e()
+    $init__Evm_hef0af3106e109414__3af54274b2985741()
   }
 
   object "ShapeDispatcher_deployed" {
@@ -71,7 +71,7 @@ object "ShapeDispatcher" {
           leave
         }
       }
-      function $dispatch__StorPtr_Evm___207f35a85ac4062e() {
+      function $dispatch__Evm_hef0af3106e109414__3af54274b2985741() {
         let v0 := calldataload(0)
         let v1 := shr(224, v0)
         let v2 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v1, 151146943)
@@ -159,7 +159,7 @@ object "ShapeDispatcher" {
         ret := v0
         leave
       }
-      $dispatch__StorPtr_Evm___207f35a85ac4062e()
+      $dispatch__Evm_hef0af3106e109414__3af54274b2985741()
       return(0, 0)
     }
   }

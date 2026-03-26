@@ -139,7 +139,7 @@ impl<'db> TraitSolveCx<'db> {
         inst: TraitInstId<'db>,
     ) -> Selection<ImplementorId<'db>> {
         let scope = self.normalization_scope_for_trait_inst(db, inst);
-        let inst = inst.normalize(db, scope, self.assumptions);
+        let inst = normalize_trait_inst_preserving_validity(db, inst, scope, self.assumptions);
         match is_goal_satisfiable(db, self, inst) {
             GoalSatisfiability::Satisfied(solution) => {
                 Selection::Unique(solution.value.implementor)
@@ -210,6 +210,36 @@ impl<'db> TraitSolveCx<'db> {
 
     pub(crate) fn origin_scope(self, db: &'db dyn HirAnalysisDb) -> ScopeId<'db> {
         self.origin_ingot.root_mod(db).scope()
+    }
+}
+
+pub(crate) fn normalize_trait_inst_preserving_validity<'db>(
+    db: &'db dyn HirAnalysisDb,
+    inst: TraitInstId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> TraitInstId<'db> {
+    let normalized = inst.normalize(db, scope, assumptions);
+    let original_has_invalid = inst.args(db).iter().copied().any(|ty| ty.has_invalid(db))
+        || inst
+            .assoc_type_bindings(db)
+            .values()
+            .copied()
+            .any(|ty| ty.has_invalid(db));
+    let normalized_has_invalid = normalized
+        .args(db)
+        .iter()
+        .copied()
+        .any(|ty| ty.has_invalid(db))
+        || normalized
+            .assoc_type_bindings(db)
+            .values()
+            .copied()
+            .any(|ty| ty.has_invalid(db));
+    if !original_has_invalid && normalized_has_invalid {
+        inst
+    } else {
+        normalized
     }
 }
 

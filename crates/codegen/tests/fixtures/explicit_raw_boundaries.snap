@@ -26,7 +26,7 @@ function $explicit_raw_boundaries__Evm_hef0af3106e109414__3af54274b2985741() {
   }
   mstore(0x40, add(v3, 32))
   mstore(v3, v2)
-  $raw_store__MemPtr_Data__Evm_hef0af3106e109414__239cf9c159fd8b13(v3)
+  $raw_store__Data_h4653c22144245a74_Evm_hef0af3106e109414__3d49cea043578a0f(v3)
   v2 := mload(v3)
   leave
 }
@@ -41,8 +41,8 @@ function $bump__MemPtr_u256___25949c86160e9382($value) {
   mstore($value, v1)
   leave
 }
-function $raw_store__MemPtr_Data__Evm_hef0af3106e109414__239cf9c159fd8b13($data) {
-  let v0 := mload($data)
+function $raw_store__Data_h4653c22144245a74_Evm_hef0af3106e109414__3d49cea043578a0f($data) {
+  let v0 := sload($data)
   let v1 := v0
   mstore(v1, 8)
   leave

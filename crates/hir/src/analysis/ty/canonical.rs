@@ -221,6 +221,9 @@ impl<'db> TyFolder<'db> for Canonicalizer<'db> {
         if let Some(&canonical) = self.subst.get(&ty) {
             return canonical;
         }
+        if !ty.has_var(db) {
+            return ty;
+        }
 
         match ty.data(db) {
             TyData::TyVar(var) => {

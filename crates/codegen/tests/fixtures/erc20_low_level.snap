@@ -30,7 +30,7 @@ object "Erc20Contract" {
       sstore(add($self, 1), $owner)
       leave
     }
-    function $init__StorPtr_Evm___207f35a85ac4062e() {
+    function $init__Evm_hef0af3106e109414__3af54274b2985741() {
       let v0 := $stor_ptr_stor__Evm_hef0af3106e109414_Erc20_0__1___536307fd4fe270cd(0)
       let v1 := v0
       $do_init__0_1_StorPtr_Erc20_0__1___Evm_hef0af3106e109414_Evm_hef0af3106e109414__d36080519ce8fddb(v1)
@@ -58,7 +58,7 @@ object "Erc20Contract" {
       ret := v0
       leave
     }
-    $init__StorPtr_Evm___207f35a85ac4062e()
+    $init__Evm_hef0af3106e109414__3af54274b2985741()
   }
 
   object "Erc20Contract_deployed" {
@@ -238,7 +238,7 @@ object "Erc20Contract" {
         ret := iszero(v0)
         leave
       }
-      function $runtime__StorPtr_Evm___207f35a85ac4062e() {
+      function $runtime__Evm_hef0af3106e109414__3af54274b2985741() {
         let v0 := $stor_ptr_stor__Evm_hef0af3106e109414_Erc20_0__1___536307fd4fe270cd(0)
         let v1 := calldataload(0)
         let v2 := shr(224, v1)
@@ -435,7 +435,7 @@ object "Erc20Contract" {
         ret := v0
         leave
       }
-      $runtime__StorPtr_Evm___207f35a85ac4062e()
+      $runtime__Evm_hef0af3106e109414__3af54274b2985741()
       return(0, 0)
     }
   }

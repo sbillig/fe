@@ -322,6 +322,10 @@ impl<'db> Monomorphizer<'db> {
             let mut args = Vec::with_capacity(provider_param_count);
             let assumptions = PredicateListId::empty_list(self.db);
             let root_effect_ty = resolve_default_root_effect_ty(self.db, func.scope(), assumptions);
+            let effect_ref_trait =
+                resolve_core_trait(self.db, func.scope(), &["effect_ref", "EffectRef"]);
+            let effect_ref_mut_trait =
+                resolve_core_trait(self.db, func.scope(), &["effect_ref", "EffectRefMut"]);
             let mut can_seed = true;
             for binding in func.effect_bindings(self.db) {
                 match binding.key_kind {
@@ -332,7 +336,53 @@ impl<'db> Monomorphizer<'db> {
                         if !ty.is_star_kind(self.db) {
                             continue;
                         }
-                        args.push(TyId::app(self.db, stor_ptr_ctor, ty));
+                        let root_provider_ty = root_effect_ty.filter(|root_effect_ty| {
+                            let Some(effect_ref_trait) = effect_ref_trait else {
+                                return false;
+                            };
+                            let goal = TraitInstId::new(
+                                self.db,
+                                effect_ref_trait,
+                                vec![*root_effect_ty, ty],
+                                IndexMap::new(),
+                            );
+                            if !matches!(
+                                is_goal_satisfiable(
+                                    self.db,
+                                    TraitSolveCx::new(self.db, func.scope())
+                                        .with_assumptions(assumptions),
+                                    goal,
+                                ),
+                                GoalSatisfiability::Satisfied(_)
+                            ) {
+                                return false;
+                            }
+                            if !binding.is_mut {
+                                return true;
+                            }
+                            let Some(effect_ref_mut_trait) = effect_ref_mut_trait else {
+                                return false;
+                            };
+                            let goal = TraitInstId::new(
+                                self.db,
+                                effect_ref_mut_trait,
+                                vec![*root_effect_ty, ty],
+                                IndexMap::new(),
+                            );
+                            matches!(
+                                is_goal_satisfiable(
+                                    self.db,
+                                    TraitSolveCx::new(self.db, func.scope())
+                                        .with_assumptions(assumptions),
+                                    goal,
+                                ),
+                                GoalSatisfiability::Satisfied(_)
+                            )
+                        });
+                        args.push(
+                            root_provider_ty
+                                .unwrap_or_else(|| TyId::app(self.db, stor_ptr_ctor, ty)),
+                        );
                     }
                     EffectKeyKind::Trait => {
                         let Some(root_effect_ty) = root_effect_ty else {
@@ -992,7 +1042,6 @@ impl<'db> Monomorphizer<'db> {
             &normalized_effect_param_space_overrides,
             &normalized_param_capability_space_overrides,
         );
-
         let mut instance = if args.is_empty()
             && normalized_effect_param_space_overrides.is_empty()
             && normalized_param_capability_space_overrides.is_empty()
@@ -1077,7 +1126,14 @@ impl<'db> Monomorphizer<'db> {
         let normalized_args: Vec<_> = args
             .iter()
             .copied()
-            .map(|ty| normalize_ty(self.db, ty, norm_scope, assumptions))
+            .map(|ty| {
+                let normalized = normalize_ty(self.db, ty, norm_scope, assumptions);
+                if !ty.has_invalid(self.db) && normalized.has_invalid(self.db) {
+                    ty
+                } else {
+                    normalized
+                }
+            })
             .collect();
         let normalized_effect_param_space_overrides =
             self.normalize_effect_param_space_overrides(func, effect_param_space_overrides);
@@ -1985,7 +2041,12 @@ struct NormalizeFolder<'db> {
 
 impl<'db> TyFolder<'db> for NormalizeFolder<'db> {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-        normalize_ty(db, ty, self.scope, self.assumptions)
+        let normalized = normalize_ty(db, ty, self.scope, self.assumptions);
+        if !ty.has_invalid(db) && normalized.has_invalid(db) {
+            ty
+        } else {
+            normalized
+        }
     }
 }
 

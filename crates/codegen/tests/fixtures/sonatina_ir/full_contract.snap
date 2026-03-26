@@ -13,15 +13,15 @@ func private %abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v0.i256) {
         evm_return 0.i256 32.i256;
 }
 
-func private %init__StorPtr_Evm___207f35a85ac4062e() {
+func private %init__Evm_hef0af3106e109414__3af54274b2985741() {
     block0:
-        v1.i256 = sym_size &dispatch__StorPtr_Evm___207f35a85ac4062e;
-        v2.i256 = sym_addr &dispatch__StorPtr_Evm___207f35a85ac4062e;
+        v1.i256 = sym_size &dispatch__Evm_hef0af3106e109414__3af54274b2985741;
+        v2.i256 = sym_addr &dispatch__Evm_hef0af3106e109414__3af54274b2985741;
         evm_code_copy 0.i256 v2 v1;
         evm_return 0.i256 v1;
 }
 
-func private %dispatch__StorPtr_Evm___207f35a85ac4062e() {
+func private %dispatch__Evm_hef0af3106e109414__3af54274b2985741() {
     block0:
         v2.i256 = evm_calldata_load 0.i256;
         v4.i256 = shr 224.i256 v2;
@@ -114,10 +114,10 @@ func private %u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0.i256, v1.i256) -
 
 object @ShapeDispatcher {
     section init {
-        entry %init__StorPtr_Evm___207f35a85ac4062e;
-        embed .runtime as &dispatch__StorPtr_Evm___207f35a85ac4062e;
+        entry %init__Evm_hef0af3106e109414__3af54274b2985741;
+        embed .runtime as &dispatch__Evm_hef0af3106e109414__3af54274b2985741;
     }
     section runtime {
-        entry %dispatch__StorPtr_Evm___207f35a85ac4062e;
+        entry %dispatch__Evm_hef0af3106e109414__3af54274b2985741;
     }
 }

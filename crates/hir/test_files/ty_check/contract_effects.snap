@@ -192,7 +192,7 @@ note:
    ┌─ contract_effects.fe:58:8
    │
 58 │     if ctx.caller() == owner && amount >= balance {
-   │        ^^^ __effprov0
+   │        ^^^ ctx
 
 note: 
    ┌─ contract_effects.fe:58:8

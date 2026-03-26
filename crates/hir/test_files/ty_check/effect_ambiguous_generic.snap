@@ -1,6 +1,6 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
+assertion_line: 41
 expression: res
 input_file: test_files/ty_check/effect_ambiguous_generic.fe
 ---
@@ -63,25 +63,25 @@ note:
 note: 
    ┌─ effect_ambiguous_generic.fe:17:5
    │  
-17 │ ╭     with (Storage = st1) {
-18 │ │         with (Storage = st2) {
+17 │ ╭     with (Storage<u8> = st1) {
+18 │ │         with (Storage<u8> = st2) {
 19 │ │             process()  // should use st2
 20 │ │         }
 21 │ │     }
    │ ╰─────^ ()
 
 note: 
-   ┌─ effect_ambiguous_generic.fe:17:21
+   ┌─ effect_ambiguous_generic.fe:17:25
    │
-17 │     with (Storage = st1) {
-   │                     ^^^ Storage<u8>
+17 │     with (Storage<u8> = st1) {
+   │                         ^^^ Storage<u8>
 
 note: 
-   ┌─ effect_ambiguous_generic.fe:17:26
+   ┌─ effect_ambiguous_generic.fe:17:30
    │  
-17 │       with (Storage = st1) {
-   │ ╭──────────────────────────^
-18 │ │         with (Storage = st2) {
+17 │       with (Storage<u8> = st1) {
+   │ ╭──────────────────────────────^
+18 │ │         with (Storage<u8> = st2) {
 19 │ │             process()  // should use st2
 20 │ │         }
 21 │ │     }
@@ -90,22 +90,22 @@ note:
 note: 
    ┌─ effect_ambiguous_generic.fe:18:9
    │  
-18 │ ╭         with (Storage = st2) {
+18 │ ╭         with (Storage<u8> = st2) {
 19 │ │             process()  // should use st2
 20 │ │         }
    │ ╰─────────^ ()
 
 note: 
-   ┌─ effect_ambiguous_generic.fe:18:25
+   ┌─ effect_ambiguous_generic.fe:18:29
    │
-18 │         with (Storage = st2) {
-   │                         ^^^ Storage<u8>
+18 │         with (Storage<u8> = st2) {
+   │                             ^^^ Storage<u8>
 
 note: 
-   ┌─ effect_ambiguous_generic.fe:18:30
+   ┌─ effect_ambiguous_generic.fe:18:34
    │  
-18 │           with (Storage = st2) {
-   │ ╭──────────────────────────────^
+18 │           with (Storage<u8> = st2) {
+   │ ╭──────────────────────────────────^
 19 │ │             process()  // should use st2
 20 │ │         }
    │ ╰─────────^ ()

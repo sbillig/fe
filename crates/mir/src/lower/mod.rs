@@ -1129,13 +1129,25 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             .get(effect_idx)
             .copied()
             .flatten()
-            && let Some(provider_ty) = self.generic_args.get(provider_arg_idx).copied()
-            && let Some(inferred) = self.infer_effect_provider_from_provider_ty(
-                provider_ty,
-                EffectProviderInferenceRationale::ConcreteProviderTy,
-            )
         {
-            return inferred;
+            let provider_ty = self
+                .generic_args
+                .get(provider_arg_idx)
+                .copied()
+                .or_else(|| {
+                    CallableDef::Func(func)
+                        .params(self.db)
+                        .get(provider_arg_idx)
+                        .copied()
+                });
+            if let Some(provider_ty) = provider_ty
+                && let Some(inferred) = self.infer_effect_provider_from_provider_ty(
+                    provider_ty,
+                    EffectProviderInferenceRationale::ConcreteProviderTy,
+                )
+            {
+                return inferred;
+            }
         }
 
         if let Some(effect) = func.effect_params(self.db).nth(effect_idx)
