@@ -26,7 +26,7 @@ use crate::analysis::{
     ty::{
         const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
         effects::{
-            EffectForwarder, EffectKeyKind, EffectWitness,
+            EffectKeyKind,
             elaborate::{build_pattern_from_requirement_decl, seed_forwarder_from_requirement},
             model::EffectRequirementDecl,
             place_effect_provider_param_index_map,
@@ -592,42 +592,12 @@ impl<'db> TyCheckEnv<'db> {
         self.pending_vars.retain(|_, pending| *pending != binding);
     }
 
-    pub(super) fn push_effect_frame(&mut self) {
-        self.effect_env.push_frame();
+    pub(super) fn effect_env_mut(&mut self) -> &mut keyed_effect_env::EffectEnv<'db> {
+        &mut self.effect_env
     }
 
-    pub(super) fn pop_effect_frame(&mut self) {
-        self.effect_env.pop_frame();
-    }
-
-    pub(super) fn insert_unkeyed_effect_binding(&mut self, binding: ProvidedEffect<'db>) {
-        self.effect_env.insert_unkeyed(binding);
-    }
-
-    pub(super) fn insert_effect_witness(
-        &mut self,
-        witness: EffectWitness<'db, ProvidedEffect<'db>>,
-    ) {
-        self.effect_env.insert_witness(self.db, witness);
-    }
-
-    pub(super) fn insert_effect_forwarder(
-        &mut self,
-        forwarder: EffectForwarder<'db, ProvidedEffect<'db>>,
-    ) {
-        self.effect_env.insert_forwarder(self.db, forwarder);
-    }
-
-    pub(super) fn insert_effect_barrier(
-        &mut self,
-        family: crate::analysis::ty::effects::EffectFamily<'db>,
-        barrier: crate::analysis::ty::effects::EffectBarrier<'db>,
-    ) {
-        self.effect_env.insert_barrier(family, barrier);
-    }
-
-    pub(crate) fn cloned_effect_env(&self) -> keyed_effect_env::EffectEnv<'db> {
-        self.effect_env.clone()
+    pub(crate) fn effect_env(&self) -> &keyed_effect_env::EffectEnv<'db> {
+        &self.effect_env
     }
 
     pub(super) fn push_call_effect_arg(
@@ -935,7 +905,9 @@ impl<'db> TyChecker<'db> {
                 && let Some(forwarder) =
                     seed_forwarder_from_requirement(self, &req, provided, func.scope(), assumptions)
             {
-                self.env.insert_effect_forwarder(forwarder);
+                self.env
+                    .effect_env_mut()
+                    .insert_forwarder(self.db, forwarder);
             }
         }
     }
@@ -1053,7 +1025,7 @@ impl<'db> TyChecker<'db> {
             return false;
         }
         self.commit_state(snapshot);
-        self.env.insert_effect_witness(witness);
+        self.env.effect_env_mut().insert_witness(self.db, witness);
         true
     }
 }

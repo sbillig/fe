@@ -1039,7 +1039,7 @@ impl<'db> TyChecker<'db> {
         body_expr: ExprId,
         expected: TyId<'db>,
     ) -> ExprProp<'db> {
-        self.env.push_effect_frame();
+        self.env.effect_env_mut().push_frame();
 
         for binding in bindings {
             let value_prop = self.check_expr_unknown(binding.value);
@@ -1089,7 +1089,7 @@ impl<'db> TyChecker<'db> {
                                     self.insert_effect_barrier(barrier);
                                     continue;
                                 }
-                                self.env.insert_effect_witness(witness);
+                                self.env.effect_env_mut().insert_witness(self.db, witness);
                             }
                             Err(barrier) => {
                                 self.insert_effect_barrier(*barrier);
@@ -1098,13 +1098,13 @@ impl<'db> TyChecker<'db> {
                     }
                 }
                 None => {
-                    self.env.insert_unkeyed_effect_binding(provided);
+                    self.env.effect_env_mut().insert_unkeyed(provided);
                 }
             }
         }
 
         let result = self.check_expr(body_expr, expected);
-        self.env.pop_effect_frame();
+        self.env.effect_env_mut().pop_frame();
         result
     }
 
@@ -1425,7 +1425,7 @@ impl<'db> TyChecker<'db> {
         call_span: DynLazySpan<'db>,
     ) -> EffectResolution<'db> {
         let mut viable: SmallVec<[EffectEvidence<'db>; 2]> = SmallVec::new();
-        let effect_env = self.env.cloned_effect_env();
+        let effect_env = self.env.effect_env().clone();
         for frame in effect_env.lookup_effect_frames(&query, self) {
             match frame {
                 FrameLookupResult::KeyedMatched {
@@ -2585,7 +2585,8 @@ impl<'db> TyChecker<'db> {
             return;
         };
         self.env
-            .insert_effect_barrier(barrier.pattern.clone().family(), barrier);
+            .effect_env_mut()
+            .insert_barrier(barrier.pattern.clone().family(), barrier);
     }
 
     fn refine_effect_barrier(&self, barrier: EffectBarrier<'db>) -> Option<EffectBarrier<'db>> {

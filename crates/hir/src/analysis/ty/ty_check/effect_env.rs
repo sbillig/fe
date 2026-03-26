@@ -7,9 +7,7 @@ use crate::analysis::ty::effects::{
     ForwardedEffectKey, KeyedEffectEntry, StoredEffectKey,
     elaborate::{contains_projection_or_invalid_query_state, query_contains_unresolved_inference},
     forwarded_trait_key_is_well_formed, forwarded_type_key_is_well_formed,
-    match_::{
-        KeyMatchCommit, query_matches_forwarder, query_matches_witness, query_overlaps_barrier,
-    },
+    match_::{KeyMatchCommit, patterns_overlap, query_matches_forwarder, query_matches_witness},
     stored_trait_key_is_rigid, stored_type_key_is_rigid,
 };
 
@@ -237,7 +235,7 @@ impl<'db> EffectEnv<'db> {
                             }
                         }
                         KeyedEffectEntry::Barrier(barrier) => {
-                            if query_overlaps_barrier(tc, &query.key, &barrier.pattern) {
+                            if patterns_overlap(tc.db, &query.key, &barrier.pattern) {
                                 blocked_by_barrier = true;
                                 barrier_reason = Some(barrier.reason.clone());
                             }

@@ -3,9 +3,9 @@ use crate::analysis::{
     ty::{
         const_ty::ConstTyData,
         effects::{
-            EffectFamily, EffectPatternKey, ForwardedEffectKey, ForwardedTraitKey,
-            ForwardedTypeKey, PatternSlot, StoredEffectKey, StoredTraitKey, StoredTypeKey,
-            TraitPatternKey, TypePatternKey, stored_trait_key_is_rigid, stored_type_key_is_rigid,
+            EffectPatternKey, ForwardedEffectKey, ForwardedTraitKey, ForwardedTypeKey, PatternSlot,
+            StoredEffectKey, StoredTraitKey, StoredTypeKey, TraitPatternKey, TypePatternKey,
+            stored_trait_key_is_rigid, stored_type_key_is_rigid,
         },
         fold::{TyFoldable, TyFolder},
         layout_holes::layout_hole_fallback_ty,
@@ -98,14 +98,6 @@ pub fn query_matches_forwarder<'db>(
     ok.then_some(commit)
 }
 
-pub fn query_overlaps_barrier<'db>(
-    tc: &mut crate::analysis::ty::ty_check::TyChecker<'db>,
-    query: &EffectPatternKey<'db>,
-    barrier: &EffectPatternKey<'db>,
-) -> bool {
-    patterns_overlap(tc.db, query, barrier)
-}
-
 pub fn patterns_overlap<'db>(
     db: &'db dyn HirAnalysisDb,
     lhs: &EffectPatternKey<'db>,
@@ -122,10 +114,6 @@ pub fn patterns_overlap<'db>(
         }
         _ => false,
     }
-}
-
-pub fn same_effect_family<'db>(query: &EffectPatternKey<'db>, family: EffectFamily<'db>) -> bool {
-    query.clone().family() == family
 }
 
 pub fn apply_key_match_commit<'db>(
