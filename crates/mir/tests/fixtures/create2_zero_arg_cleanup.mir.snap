@@ -2,7 +2,7 @@
 source: crates/mir/tests/lowering_snapshots.rs
 expression: mir_output
 ---
-fn create2_zero_arg_cleanup__StorPtr_Evm___207f35a85ac4062e(v0: u256) -> ():
+fn create2_zero_arg_cleanup__Evm_hef0af3106e109414__3af54274b2985741(v0: u256) -> ():
   ; runtime_abi values=[] effects=[]
   bb0:
     v1: Address = create2_stor_arg0_root_stor__Evm_hef0af3106e109414_Counter_h872958864d1ad471__aedc4c977fa26d57(0, 0)

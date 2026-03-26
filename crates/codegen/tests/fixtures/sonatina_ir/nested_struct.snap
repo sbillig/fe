@@ -28,15 +28,15 @@ func private %mem_read(v0.i256) -> i256 {
         return v0;
 }
 
-func private %init__StorPtr_Evm___207f35a85ac4062e() {
+func private %init__Evm_hef0af3106e109414__3af54274b2985741() {
     block0:
-        v1.i256 = sym_size &runtime__StorPtr_Evm___207f35a85ac4062e;
-        v2.i256 = sym_addr &runtime__StorPtr_Evm___207f35a85ac4062e;
+        v1.i256 = sym_size &runtime__Evm_hef0af3106e109414__3af54274b2985741;
+        v2.i256 = sym_addr &runtime__Evm_hef0af3106e109414__3af54274b2985741;
         evm_code_copy 0.i256 v2 v1;
         evm_return 0.i256 v1;
 }
 
-func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
+func private %runtime__Evm_hef0af3106e109414__3af54274b2985741() {
     block0:
         v2.i256 = call %stor_ptr_stor__Evm_hef0af3106e109414_Outer_hccd04e332bd35653__177c3c9a6f7ae368 0.i256;
         v3.i256 = evm_calldata_load 0.i256;
@@ -81,10 +81,10 @@ func private %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_r
 
 object @NestedStruct {
     section init {
-        entry %init__StorPtr_Evm___207f35a85ac4062e;
-        embed .runtime as &runtime__StorPtr_Evm___207f35a85ac4062e;
+        entry %init__Evm_hef0af3106e109414__3af54274b2985741;
+        embed .runtime as &runtime__Evm_hef0af3106e109414__3af54274b2985741;
     }
     section runtime {
-        entry %runtime__StorPtr_Evm___207f35a85ac4062e;
+        entry %runtime__Evm_hef0af3106e109414__3af54274b2985741;
     }
 }

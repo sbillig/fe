@@ -9,6 +9,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{
     CanonicalGoalQuery, GoalSatisfiability, TraitGoalSolution, TraitSolveCx, TraitSolverQuery,
+    normalize_trait_inst_preserving_validity,
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -363,10 +364,12 @@ impl GeneratorNode {
             pf.origin_ingot,
             extracted_goal,
         );
-        let normalized_goal = g_node
-            .extracted_query
-            .goal
-            .normalize(db, scope, assumptions);
+        let normalized_goal = normalize_trait_inst_preserving_validity(
+            db,
+            g_node.extracted_query.goal,
+            scope,
+            assumptions,
+        );
         let goal_needs_assumptions = normalized_goal.args(db).iter().copied().any(|ty| {
             ty.has_param(db)
                 || ty.has_var(db)
@@ -382,9 +385,13 @@ impl GeneratorNode {
 
             // TODO: require candidates to be pre-normalized
             // Normalize trait instance arguments before unification
-            let normalized_gen_cand = { gen_cand.trait_inst(db).normalize(db, scope, assumptions) };
-
-            if table.unify(normalized_gen_cand, normalized_goal).is_err() {
+            let normalized_gen_cand = normalize_trait_inst_preserving_validity(
+                db,
+                gen_cand.trait_inst(db),
+                scope,
+                assumptions,
+            );
+            if let Err(_err) = table.unify(normalized_gen_cand, normalized_goal) {
                 continue;
             }
 
@@ -510,9 +517,12 @@ impl ConsumerNode {
                 pending_inst,
             );
             let assumptions = pending_query.assumptions();
-            pending_inst
-                .fold_with(db, &mut table)
-                .normalize(db, scope, assumptions)
+            normalize_trait_inst_preserving_validity(
+                db,
+                pending_inst.fold_with(db, &mut table),
+                scope,
+                assumptions,
+            )
         };
 
         let normalized_solution = {
@@ -522,9 +532,12 @@ impl ConsumerNode {
                 solution,
             );
             let assumptions = pending_query.assumptions();
-            solution
-                .fold_with(db, &mut table)
-                .normalize(db, scope, assumptions)
+            normalize_trait_inst_preserving_validity(
+                db,
+                solution.fold_with(db, &mut table),
+                scope,
+                assumptions,
+            )
         };
 
         // Try to unifies pending inst and solution.

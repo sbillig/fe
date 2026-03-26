@@ -1,6 +1,7 @@
 mod callable;
 mod contract;
-mod env;
+mod effect_env;
+pub(crate) mod env;
 mod expr;
 mod owner;
 mod pat;
@@ -20,8 +21,9 @@ use crate::analysis::ty::visitor::TyVisitable;
 use crate::hir_def::CallableDef;
 use crate::{
     hir_def::{
-        Body, Const, Contract, ContractRecvArm, Expr, ExprId, Func, LitKind, Partial, Pat, PatId,
-        PathId, StmtId, TypeId as HirTyId,
+        Body, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParam,
+        GenericParamOwner, ItemKind, LitKind, Partial, Pat, PatId, PathId, StmtId, TypeBound,
+        TypeId as HirTyId, WhereClauseOwner,
     },
     span::{
         DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan,
@@ -29,6 +31,9 @@ use crate::{
     visitor::{Visitor, VisitorCtxt, walk_expr, walk_pat},
 };
 pub use callable::Callable;
+use callable::{CallGenericArgUnifyError, unify_explicit_call_generic_args};
+use common::indexmap::IndexMap;
+use ena::unify::InPlace;
 use env::TyCheckEnv;
 pub use env::{EffectParamSite, ExprProp, LocalBinding, ParamSite, PatBindingMode};
 pub(super) use expr::TraitOps;
@@ -43,8 +48,11 @@ use crate::analysis::place::Place;
 
 use super::{
     assoc_const::AssocConstUse,
-    canonical::{Canonical, Canonicalized},
-    diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
+    canonical::Canonical,
+    diagnostics::{
+        BodyDiag, CallConstraintDiagInfo, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection,
+        TyLowerDiag,
+    },
     effects::{EffectKeyKind, resolve_normalized_type_effect_key},
     trait_def::TraitInstId,
     trait_resolution::{
@@ -54,7 +62,7 @@ use super::{
     ty_contains_const_hole,
     ty_def::{BorrowKind, CapabilityKind, InvalidCause, Kind, TyId, TyVarSort},
     ty_lower::lower_hir_ty,
-    unify::{InferenceKey, UnificationError, UnificationTable},
+    unify::{InferenceKey, Snapshot, UnificationError, UnificationTable},
 };
 use crate::analysis::ty::ty_def::{TyBase, TyData};
 use crate::analysis::ty::{
@@ -70,7 +78,10 @@ use crate::analysis::{
     name_resolution::{
         PathRes, PathResError, diagnostics::PathResDiag, resolve_path_with_observer,
     },
-    ty::ty_def::{TyFlags, inference_keys},
+    ty::{
+        ty_def::{TyFlags, inference_keys},
+        visitor::collect_flags,
+    },
 };
 
 #[salsa::tracked(return_ref)]
@@ -144,12 +155,17 @@ pub(super) fn check_body<'db>(
 }
 
 pub struct TyChecker<'db> {
-    db: &'db dyn HirAnalysisDb,
-    env: TyCheckEnv<'db>,
-    table: UnificationTable<'db>,
+    pub(crate) db: &'db dyn HirAnalysisDb,
+    pub(crate) env: TyCheckEnv<'db>,
+    pub(crate) table: UnificationTable<'db>,
     expected: TyId<'db>,
     effect_provider_keys: FxHashSet<InferenceKey<'db>>,
     diags: Vec<FuncBodyDiag<'db>>,
+}
+
+pub(crate) struct TyCheckerSnapshot<'db> {
+    table: Snapshot<InPlace<InferenceKey<'db>>>,
+    deferred_len: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,12 +174,24 @@ enum DestructureSourceMode {
     Borrow(BorrowKind),
 }
 
+enum TraitObligationOutcome<'db> {
+    Discharged,
+    Progressed,
+    Requeue(env::TraitObligation<'db>),
+}
+
+enum CallConstraintBoundOwner<'db> {
+    GenericParam(GenericParamOwner<'db>, usize, usize),
+    WherePredicate(WhereClauseOwner<'db>, usize, usize),
+}
+
 impl<'db> TyChecker<'db> {
     fn new(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -> Result<Self, ()> {
         let env = TyCheckEnv::new(db, owner)?;
         let expected = env.compute_expected_return();
-
-        Ok(Self::new_internal(db, env, expected))
+        let mut checker = Self::new_internal(db, env, expected);
+        checker.seed_effect_witnesses();
+        Ok(checker)
     }
 
     fn run(&mut self) {
@@ -218,6 +246,7 @@ impl<'db> TyChecker<'db> {
                         self.push_diag(TyDiagCollection::from(
                             TyLowerDiag::ConstHoleInValuePosition {
                                 span: contract.span().init_block().params().param(idx).ty().into(),
+                                ty,
                             },
                         ));
                         continue;
@@ -243,15 +272,7 @@ impl<'db> TyChecker<'db> {
 
     fn check_effect_param_keys_resolve(&mut self) {
         match self.env.owner() {
-            owner @ BodyOwner::Func(func) => {
-                if let Some(crate::hir_def::ItemKind::Contract(contract)) =
-                    func.scope().parent_item(self.db)
-                {
-                    self.check_contract_scoped_effect_list(owner, contract, func.effects(self.db));
-                } else {
-                    self.check_free_func_effect_list(func, func.effects(self.db));
-                }
-            }
+            BodyOwner::Func(func) => self.check_free_func_effect_list(func, func.effects(self.db)),
             BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => {}
             owner @ BodyOwner::ContractInit { contract } => {
                 self.check_contract_scoped_effect_list(owner, contract, owner.effects(self.db));
@@ -427,62 +448,444 @@ impl<'db> TyChecker<'db> {
         TyCheckerFinalizer::new(self).finish()
     }
 
+    pub(crate) fn snapshot_state(&mut self) -> TyCheckerSnapshot<'db> {
+        TyCheckerSnapshot {
+            table: self.table.snapshot(),
+            deferred_len: self.env.deferred_len(),
+        }
+    }
+
+    pub(crate) fn rollback_state(&mut self, snapshot: TyCheckerSnapshot<'db>) {
+        self.table.rollback_to(snapshot.table);
+        self.env.truncate_deferred_tasks(snapshot.deferred_len);
+    }
+
+    fn commit_state(&mut self, snapshot: TyCheckerSnapshot<'db>) {
+        self.table.commit(snapshot.table);
+    }
+
+    fn has_dead_inference_keys<T>(&self, value: &T) -> bool
+    where
+        T: TyVisitable<'db>,
+    {
+        inference_keys(self.db, value)
+            .into_iter()
+            .any(|key| key.0 as usize >= self.table.len())
+    }
+
+    pub(super) fn normalize_trait_goal(&mut self, goal: TraitInstId<'db>) -> TraitInstId<'db> {
+        let db = self.db;
+        let scope = self.env.scope();
+        let assumptions = self.env.assumptions();
+        let goal = goal.fold_with(db, &mut self.table);
+        let args: Vec<_> = goal
+            .args(db)
+            .iter()
+            .copied()
+            .map(|ty| normalize_ty(db, ty, scope, assumptions))
+            .collect();
+        let assoc_type_bindings: IndexMap<_, _> = goal
+            .assoc_type_bindings(db)
+            .iter()
+            .map(|(&name, &ty)| (name, normalize_ty(db, ty, scope, assumptions)))
+            .collect();
+        TraitInstId::new(db, goal.def(db), args, assoc_type_bindings)
+    }
+
+    fn trait_goal_is_concrete_for_diagnostics(&self, goal: TraitInstId<'db>) -> bool {
+        !collect_flags(self.db, goal).intersects(TyFlags::HAS_VAR | TyFlags::HAS_INVALID)
+    }
+
+    fn dedup_equivalent_trait_insts(&self, insts: Vec<TraitInstId<'db>>) -> Vec<TraitInstId<'db>> {
+        let db = self.db;
+        let mut seen = FxHashSet::default();
+        let mut unique = Vec::new();
+        for inst in insts {
+            if seen.insert(Canonical::new(db, inst)) {
+                unique.push(inst);
+            }
+        }
+        unique
+    }
+
+    fn call_constraint_diag_info(
+        &self,
+        callable_def: CallableDef<'db>,
+        constraint_idx: usize,
+    ) -> Option<CallConstraintDiagInfo<'db>> {
+        Some(CallConstraintDiagInfo {
+            callable_def,
+            bound_span: self.call_constraint_bound_span(callable_def, constraint_idx)?,
+        })
+    }
+
+    fn call_constraint_bound_span(
+        &self,
+        callable_def: CallableDef<'db>,
+        constraint_idx: usize,
+    ) -> Option<DynLazySpan<'db>> {
+        let db = self.db;
+        match callable_def {
+            CallableDef::Func(func) => {
+                let owner = GenericParamOwner::Func(func);
+                let func_constraint_count = self.call_constraint_source_count(owner);
+                if let Some(bound) = self.call_constraint_bound_in_owner(owner, constraint_idx) {
+                    return Some(self.call_constraint_owner_bound_span(bound));
+                }
+
+                let parent_owner = match func.scope().parent_item(db) {
+                    Some(ItemKind::Trait(trait_)) => Some(GenericParamOwner::Trait(trait_)),
+                    Some(ItemKind::Impl(impl_)) => Some(GenericParamOwner::Impl(impl_)),
+                    Some(ItemKind::ImplTrait(impl_trait)) => {
+                        Some(GenericParamOwner::ImplTrait(impl_trait))
+                    }
+                    _ => None,
+                }?;
+                let parent_idx = constraint_idx.checked_sub(func_constraint_count)?;
+                self.call_constraint_bound_in_owner(parent_owner, parent_idx)
+                    .map(|bound| self.call_constraint_owner_bound_span(bound))
+            }
+            CallableDef::VariantCtor(variant) => self
+                .call_constraint_bound_in_owner(
+                    GenericParamOwner::Enum(variant.enum_),
+                    constraint_idx,
+                )
+                .map(|bound| self.call_constraint_owner_bound_span(bound)),
+        }
+    }
+
+    fn call_constraint_source_count(&self, owner: GenericParamOwner<'db>) -> usize {
+        let db = self.db;
+        let param_bounds = owner
+            .params(db)
+            .filter_map(|view| match view.param {
+                GenericParam::Type(param) => Some(
+                    param
+                        .bounds
+                        .iter()
+                        .filter(|bound| matches!(bound, TypeBound::Trait(_)))
+                        .count(),
+                ),
+                GenericParam::Const(_) => None,
+            })
+            .sum::<usize>();
+
+        let where_bounds = owner
+            .where_clause_owner()
+            .map(|where_owner| {
+                where_owner
+                    .where_clause(db)
+                    .data(db)
+                    .iter()
+                    .filter(|pred| {
+                        pred.ty.to_opt().is_some()
+                            && !(pred.ty.to_opt().is_some_and(|ty| ty.is_self_ty(db))
+                                && matches!(owner, GenericParamOwner::Trait(_)))
+                    })
+                    .map(|pred| {
+                        pred.bounds
+                            .iter()
+                            .filter(|bound| matches!(bound, TypeBound::Trait(_)))
+                            .count()
+                    })
+                    .sum::<usize>()
+            })
+            .unwrap_or(0);
+
+        param_bounds + where_bounds
+    }
+
+    fn call_constraint_bound_in_owner(
+        &self,
+        owner: GenericParamOwner<'db>,
+        mut constraint_idx: usize,
+    ) -> Option<CallConstraintBoundOwner<'db>> {
+        let db = self.db;
+        for (param_idx, view) in owner.params(db).enumerate() {
+            let GenericParam::Type(param) = view.param else {
+                continue;
+            };
+            for (bound_idx, bound) in param.bounds.iter().enumerate() {
+                if matches!(bound, TypeBound::Trait(_)) {
+                    if constraint_idx == 0 {
+                        return Some(CallConstraintBoundOwner::GenericParam(
+                            owner, param_idx, bound_idx,
+                        ));
+                    }
+                    constraint_idx -= 1;
+                }
+            }
+        }
+
+        let where_owner = owner.where_clause_owner()?;
+        for (pred_idx, pred) in where_owner.where_clause(db).data(db).iter().enumerate() {
+            if pred.ty.to_opt().is_none()
+                || pred.ty.to_opt().is_some_and(|ty| ty.is_self_ty(db))
+                    && matches!(owner, GenericParamOwner::Trait(_))
+            {
+                continue;
+            }
+
+            for (bound_idx, bound) in pred.bounds.iter().enumerate() {
+                if matches!(bound, TypeBound::Trait(_)) {
+                    if constraint_idx == 0 {
+                        return Some(CallConstraintBoundOwner::WherePredicate(
+                            where_owner,
+                            pred_idx,
+                            bound_idx,
+                        ));
+                    }
+                    constraint_idx -= 1;
+                }
+            }
+        }
+
+        None
+    }
+
+    fn call_constraint_owner_bound_span(
+        &self,
+        bound: CallConstraintBoundOwner<'db>,
+    ) -> DynLazySpan<'db> {
+        match bound {
+            CallConstraintBoundOwner::GenericParam(owner, param_idx, bound_idx) => match owner {
+                GenericParamOwner::Func(func) => func
+                    .span()
+                    .generic_params()
+                    .param(param_idx)
+                    .into_type_param()
+                    .bounds()
+                    .bound(bound_idx)
+                    .trait_bound()
+                    .into(),
+                GenericParamOwner::Struct(struct_) => struct_
+                    .span()
+                    .generic_params()
+                    .param(param_idx)
+                    .into_type_param()
+                    .bounds()
+                    .bound(bound_idx)
+                    .trait_bound()
+                    .into(),
+                GenericParamOwner::Enum(enum_) => enum_
+                    .span()
+                    .generic_params()
+                    .param(param_idx)
+                    .into_type_param()
+                    .bounds()
+                    .bound(bound_idx)
+                    .trait_bound()
+                    .into(),
+                GenericParamOwner::TypeAlias(type_alias) => type_alias
+                    .span()
+                    .generic_params()
+                    .param(param_idx)
+                    .into_type_param()
+                    .bounds()
+                    .bound(bound_idx)
+                    .trait_bound()
+                    .into(),
+                GenericParamOwner::Impl(impl_) => impl_
+                    .span()
+                    .generic_params()
+                    .param(param_idx)
+                    .into_type_param()
+                    .bounds()
+                    .bound(bound_idx)
+                    .trait_bound()
+                    .into(),
+                GenericParamOwner::Trait(trait_) => trait_
+                    .span()
+                    .generic_params()
+                    .param(param_idx)
+                    .into_type_param()
+                    .bounds()
+                    .bound(bound_idx)
+                    .trait_bound()
+                    .into(),
+                GenericParamOwner::ImplTrait(impl_trait) => impl_trait
+                    .span()
+                    .generic_params()
+                    .param(param_idx)
+                    .into_type_param()
+                    .bounds()
+                    .bound(bound_idx)
+                    .trait_bound()
+                    .into(),
+            },
+            CallConstraintBoundOwner::WherePredicate(owner, pred_idx, bound_idx) => match owner {
+                WhereClauseOwner::Func(func) => func
+                    .span()
+                    .where_clause()
+                    .predicate(pred_idx)
+                    .bounds()
+                    .bound(bound_idx)
+                    .trait_bound()
+                    .into(),
+                WhereClauseOwner::Struct(struct_) => struct_
+                    .span()
+                    .where_clause()
+                    .predicate(pred_idx)
+                    .bounds()
+                    .bound(bound_idx)
+                    .trait_bound()
+                    .into(),
+                WhereClauseOwner::Enum(enum_) => enum_
+                    .span()
+                    .where_clause()
+                    .predicate(pred_idx)
+                    .bounds()
+                    .bound(bound_idx)
+                    .trait_bound()
+                    .into(),
+                WhereClauseOwner::Impl(impl_) => impl_
+                    .span()
+                    .where_clause()
+                    .predicate(pred_idx)
+                    .bounds()
+                    .bound(bound_idx)
+                    .trait_bound()
+                    .into(),
+                WhereClauseOwner::Trait(trait_) => trait_
+                    .span()
+                    .where_clause()
+                    .predicate(pred_idx)
+                    .bounds()
+                    .bound(bound_idx)
+                    .trait_bound()
+                    .into(),
+                WhereClauseOwner::ImplTrait(impl_trait) => impl_trait
+                    .span()
+                    .where_clause()
+                    .predicate(pred_idx)
+                    .bounds()
+                    .bound(bound_idx)
+                    .trait_bound()
+                    .into(),
+            },
+        }
+    }
+
+    fn process_trait_obligation(
+        &mut self,
+        mut obligation: env::TraitObligation<'db>,
+        final_pass: bool,
+    ) -> TraitObligationOutcome<'db> {
+        let db = self.db;
+        let scope = self.env.scope();
+        let assumptions = self.env.assumptions();
+
+        if self.has_dead_inference_keys(&obligation.goal) {
+            return TraitObligationOutcome::Discharged;
+        }
+
+        obligation.goal = self.normalize_trait_goal(obligation.goal);
+        let goal = obligation.goal;
+        let flags = collect_flags(db, goal);
+        if flags.contains(TyFlags::HAS_INVALID) || self.has_dead_inference_keys(&goal) {
+            return TraitObligationOutcome::Discharged;
+        }
+
+        let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+        let query = CanonicalGoalQuery::new(db, goal, assumptions);
+        match is_goal_query_satisfiable(db, solve_cx, &query) {
+            GoalSatisfiability::Satisfied(solution) => {
+                let solved = query.extract_solution(&mut self.table, solution).inst;
+                if self.has_dead_inference_keys(&solved) {
+                    return TraitObligationOutcome::Discharged;
+                }
+                self.table.unify(goal, solved).unwrap();
+                if self.normalize_trait_goal(goal) != goal {
+                    TraitObligationOutcome::Progressed
+                } else {
+                    TraitObligationOutcome::Discharged
+                }
+            }
+            GoalSatisfiability::NeedsConfirmation(ambiguous) => {
+                let mut candidates: Vec<_> = ambiguous
+                    .iter()
+                    .map(|solution| query.extract_solution(&mut self.table, *solution).inst)
+                    .collect();
+                candidates.retain(|candidate| !self.has_dead_inference_keys(candidate));
+                let candidates = self.dedup_equivalent_trait_insts(candidates);
+
+                if let [solution] = candidates.as_slice() {
+                    if self.table.unify(goal, *solution).is_ok()
+                        && self.normalize_trait_goal(goal) != goal
+                    {
+                        TraitObligationOutcome::Progressed
+                    } else {
+                        TraitObligationOutcome::Discharged
+                    }
+                } else {
+                    if final_pass && self.trait_goal_is_concrete_for_diagnostics(goal) {
+                        let required_by = match obligation.origin {
+                            env::TraitObligationOrigin::CallConstraint {
+                                callable_def,
+                                constraint_idx,
+                                ..
+                            } => self.call_constraint_diag_info(callable_def, constraint_idx),
+                            env::TraitObligationOrigin::GenericConfirmation => None,
+                        };
+                        self.push_diag(BodyDiag::AmbiguousTraitInst {
+                            primary: obligation.span.clone(),
+                            cands: candidates.into_iter().collect(),
+                            required_by,
+                        });
+                        return TraitObligationOutcome::Discharged;
+                    }
+
+                    if final_pass {
+                        TraitObligationOutcome::Discharged
+                    } else {
+                        TraitObligationOutcome::Requeue(obligation)
+                    }
+                }
+            }
+            GoalSatisfiability::UnSat(subgoal) => {
+                if final_pass && self.trait_goal_is_concrete_for_diagnostics(goal) {
+                    let required_by = match obligation.origin {
+                        env::TraitObligationOrigin::CallConstraint {
+                            callable_def,
+                            constraint_idx,
+                            ..
+                        } => self.call_constraint_diag_info(callable_def, constraint_idx),
+                        env::TraitObligationOrigin::GenericConfirmation => None,
+                    };
+                    let unsat = subgoal.map(|goal| query.extract_subgoal(&mut self.table, goal));
+                    self.push_diag(TyDiagCollection::from(
+                        TraitConstraintDiag::TraitBoundNotSat {
+                            span: obligation.span.clone(),
+                            primary_goal: goal,
+                            unsat_subgoal: unsat,
+                            required_by,
+                        },
+                    ));
+                    TraitObligationOutcome::Discharged
+                } else if final_pass {
+                    TraitObligationOutcome::Discharged
+                } else {
+                    TraitObligationOutcome::Requeue(obligation)
+                }
+            }
+            GoalSatisfiability::ContainsInvalid => TraitObligationOutcome::Discharged,
+        }
+    }
+
     fn resolve_deferred(&mut self) {
         let db = self.db;
         let body = self.env.body();
         let scope = self.env.scope();
         let assumptions = self.env.assumptions();
 
-        #[derive(Clone, Copy)]
-        enum MethodCandidateViability<'db> {
-            Satisfied(TraitInstId<'db>),
-            Tentative(TraitInstId<'db>),
-        }
-
-        impl<'db> MethodCandidateViability<'db> {
-            fn inst(self) -> TraitInstId<'db> {
-                match self {
-                    Self::Satisfied(inst) | Self::Tentative(inst) => inst,
-                }
-            }
-
-            fn is_satisfied(self) -> bool {
-                matches!(self, Self::Satisfied(_))
-            }
-        }
-
-        let dedup_equivalent_insts = |insts: Vec<TraitInstId<'db>>| -> Vec<TraitInstId<'db>> {
-            let mut unique: Vec<TraitInstId<'db>> = Vec::new();
-            'outer: for inst in insts {
-                for &seen in &unique {
-                    if inst.def(db) != seen.def(db) {
-                        continue;
-                    }
-
-                    let mut table = UnificationTable::new(db);
-                    let lhs = table.instantiate_with_fresh_vars(
-                        crate::analysis::ty::binder::Binder::bind(inst),
-                    );
-                    let rhs = table.instantiate_with_fresh_vars(
-                        crate::analysis::ty::binder::Binder::bind(seen),
-                    );
-                    if table.unify(lhs, rhs).is_ok() {
-                        continue 'outer;
-                    }
-                }
-                unique.push(inst);
-            }
-            unique
-        };
-
-        let analyze_candidate = |this: &mut Self,
-                                 pending: &env::PendingMethod<'db>,
-                                 expr_ty: TyId<'db>,
-                                 receiver: ExprId,
-                                 generic_args: crate::hir_def::GenericArgListId<'db>,
-                                 call_args: &[crate::hir_def::CallArg<'db>],
-                                 inst: TraitInstId<'db>| {
-            let snap = this.table.snapshot();
+        let is_viable = |this: &mut Self,
+                         pending: &env::PendingMethod<'db>,
+                         expr_ty: TyId<'db>,
+                         receiver: ExprId,
+                         generic_args: crate::hir_def::GenericArgListId<'db>,
+                         call_args: &[crate::hir_def::CallArg<'db>],
+                         inst: TraitInstId<'db>| {
+            let snap = this.snapshot_state();
 
             let result = (|| {
                 let recv_ty = {
@@ -500,7 +903,7 @@ impl<'db> TyChecker<'db> {
                 let func_ty =
                     instantiate_trait_method(db, trait_method, &mut this.table, recv_ty, inst);
                 let func_ty = this.table.instantiate_to_term(func_ty);
-                let callable =
+                let mut callable =
                     Callable::new(db, func_ty, receiver.span(body).into(), Some(inst)).ok()?;
 
                 let expected_arity = callable.callable_def.arg_tys(db).len();
@@ -509,21 +912,15 @@ impl<'db> TyChecker<'db> {
                     return None;
                 }
 
-                if generic_args.is_given(db) {
-                    let given_args = crate::analysis::ty::ty_lower::lower_generic_arg_list(
-                        db,
-                        generic_args,
-                        scope,
-                        assumptions,
-                    );
-                    let offset = callable.callable_def.offset_to_explicit_params_position(db);
-                    let current_args = &callable.generic_args()[offset..];
-                    if current_args.len() != given_args.len() {
-                        return None;
-                    }
-                    for (&given, &current) in given_args.iter().zip(current_args.iter()) {
-                        this.table.unify(given, current).ok()?;
-                    }
+                match unify_explicit_call_generic_args(
+                    &mut callable,
+                    this,
+                    generic_args,
+                    |this, _, given, current| this.table.unify(given, *current).is_ok(),
+                ) {
+                    Ok(()) => {}
+                    Err(CallGenericArgUnifyError::ArityMismatch { .. })
+                    | Err(CallGenericArgUnifyError::UnificationFailed) => return None,
                 }
 
                 let receiver_prop = this.env.typed_expr(receiver)?;
@@ -565,45 +962,10 @@ impl<'db> TyChecker<'db> {
                 );
                 this.table.unify(expr_ty, ret_ty).ok()?;
 
-                let inst = inst
-                    .fold_with(db, &mut this.table)
-                    .normalize(db, scope, assumptions);
-                let canonical_inst = Canonicalized::new(db, inst);
-
-                match is_goal_satisfiable(
-                    db,
-                    TraitSolveCx::new(db, scope).with_assumptions(assumptions),
-                    canonical_inst.value.value,
-                ) {
-                    GoalSatisfiability::Satisfied(solution) => {
-                        Some(MethodCandidateViability::Satisfied(
-                            canonical_inst
-                                .extract_solution(&mut this.table, solution)
-                                .inst,
-                        ))
-                    }
-                    GoalSatisfiability::NeedsConfirmation(ambiguous) => {
-                        let cands = dedup_equivalent_insts(
-                            ambiguous
-                                .iter()
-                                .copied()
-                                .map(|s| canonical_inst.extract_solution(&mut this.table, s).inst)
-                                .collect(),
-                        );
-                        if let [solution] = cands.as_slice() {
-                            Some(MethodCandidateViability::Satisfied(*solution))
-                        } else {
-                            Some(MethodCandidateViability::Tentative(inst))
-                        }
-                    }
-                    GoalSatisfiability::ContainsInvalid => {
-                        Some(MethodCandidateViability::Tentative(inst))
-                    }
-                    GoalSatisfiability::UnSat(_) => None,
-                }
-            })();
-
-            this.table.rollback_to(snap);
+                Some(())
+            })()
+            .is_some();
+            this.rollback_state(snap);
             result
         };
 
@@ -614,41 +976,13 @@ impl<'db> TyChecker<'db> {
             let tasks = self.env.take_deferred_tasks();
             for task in tasks {
                 match task {
-                    env::DeferredTask::Confirm { inst, span } => {
-                        let inst = {
-                            let mut prober = env::Prober::new(&mut self.table);
-                            inst.fold_with(db, &mut prober)
-                        };
-                        let inst = inst.normalize(db, scope, assumptions);
-                        let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
-                        let query = CanonicalGoalQuery::new(db, inst, assumptions);
-                        match is_goal_query_satisfiable(db, solve_cx, &query) {
-                            GoalSatisfiability::Satisfied(solution) => {
-                                let solution =
-                                    query.extract_solution(&mut self.table, solution).inst;
-                                self.table.unify(inst, solution).unwrap();
-                                let new_can =
-                                    Canonical::new(db, inst.fold_with(db, &mut self.table));
-                                if new_can.value != query.canonical().value.goal {
-                                    progressed = true;
-                                }
+                    env::DeferredTask::Obligation(obligation) => {
+                        match self.process_trait_obligation(obligation, false) {
+                            TraitObligationOutcome::Discharged => {}
+                            TraitObligationOutcome::Progressed => progressed = true,
+                            TraitObligationOutcome::Requeue(obligation) => {
+                                self.env.register_trait_obligation(obligation);
                             }
-                            GoalSatisfiability::NeedsConfirmation(ambiguous) => {
-                                let cands = dedup_equivalent_insts(
-                                    ambiguous
-                                        .iter()
-                                        .map(|s| query.extract_solution(&mut self.table, *s).inst)
-                                        .collect(),
-                                );
-                                if let [solution] = cands.as_slice() {
-                                    if self.table.unify(inst, *solution).is_ok() {
-                                        progressed = true;
-                                    }
-                                } else {
-                                    self.env.register_confirmation(inst, span);
-                                }
-                            }
-                            _ => self.env.register_confirmation(inst, span),
                         }
                     }
                     env::DeferredTask::Method(pending) => {
@@ -676,8 +1010,8 @@ impl<'db> TyChecker<'db> {
                             .candidates
                             .iter()
                             .copied()
-                            .filter_map(|inst| {
-                                analyze_candidate(
+                            .filter(|&inst| {
+                                is_viable(
                                     self,
                                     &pending,
                                     expr_ty,
@@ -688,30 +1022,9 @@ impl<'db> TyChecker<'db> {
                                 )
                             })
                             .collect();
-                        let satisfied = dedup_equivalent_insts(
-                            viable
-                                .iter()
-                                .copied()
-                                .filter(|cand| cand.is_satisfied())
-                                .map(MethodCandidateViability::inst)
-                                .collect(),
-                        );
-                        let viable = dedup_equivalent_insts(
-                            viable
-                                .into_iter()
-                                .map(MethodCandidateViability::inst)
-                                .collect(),
-                        );
-                        let selected = match satisfied.as_slice() {
-                            [inst] => Some(*inst),
-                            _ if satisfied.is_empty() => match viable.as_slice() {
-                                [inst] => Some(*inst),
-                                _ => None,
-                            },
-                            _ => None,
-                        };
+                        let viable = self.dedup_equivalent_trait_insts(viable);
 
-                        if let Some(inst) = selected {
+                        if let [inst] = viable.as_slice() {
                             if self.env.callable_expr(pending.expr).is_none() {
                                 let call_span = pending.expr.span(body).into_method_call_expr();
 
@@ -732,14 +1045,14 @@ impl<'db> TyChecker<'db> {
                                 let func_ty = self.instantiate_trait_method_to_term(
                                     trait_method,
                                     recv_ty,
-                                    inst,
+                                    *inst,
                                 );
 
                                 let mut callable = match Callable::new(
                                     db,
                                     func_ty,
                                     receiver.span(body).into(),
-                                    Some(inst),
+                                    Some(*inst),
                                 ) {
                                     Ok(callable) => callable,
                                     Err(diag) => {
@@ -766,12 +1079,16 @@ impl<'db> TyChecker<'db> {
                                     true,
                                 );
 
-                                self.check_callable_effects(pending.expr, &callable);
-                                callable.check_constraints(self, call_span.method_name().into());
+                                self.check_callable_effects(pending.expr, &mut callable);
 
                                 let ret_ty = self.normalize_ty(callable.ret_ty(db));
                                 self.table.unify(expr_prop.ty, ret_ty).unwrap();
 
+                                callable.enqueue_constraints(
+                                    self,
+                                    pending.expr,
+                                    call_span.method_name().into(),
+                                );
                                 self.env.register_callable(pending.expr, callable);
                             }
 
@@ -798,44 +1115,8 @@ impl<'db> TyChecker<'db> {
         // Emit diagnostics for remaining tasks.
         for task in self.env.take_deferred_tasks() {
             match task {
-                env::DeferredTask::Confirm { inst, span } => {
-                    let inst = {
-                        let mut prober = env::Prober::new(&mut self.table);
-                        inst.fold_with(db, &mut prober)
-                    };
-                    let inst = inst.normalize(db, scope, assumptions);
-                    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
-                    let query = CanonicalGoalQuery::new(db, inst, assumptions);
-                    match is_goal_query_satisfiable(db, solve_cx, &query) {
-                        GoalSatisfiability::NeedsConfirmation(ambiguous) => {
-                            let cands = dedup_equivalent_insts(
-                                ambiguous
-                                    .iter()
-                                    .map(|s| query.extract_solution(&mut self.table, *s).inst)
-                                    .collect(),
-                            );
-                            if cands.len() > 1 && !inst.self_ty(db).has_var(db) {
-                                self.push_diag(BodyDiag::AmbiguousTraitInst {
-                                    primary: span.clone(),
-                                    cands: cands.into_iter().collect(),
-                                });
-                            }
-                        }
-                        GoalSatisfiability::UnSat(subgoal) => {
-                            if !inst.self_ty(db).has_var(db) {
-                                let unsat =
-                                    subgoal.map(|s| query.extract_subgoal(&mut self.table, s));
-                                self.push_diag(TyDiagCollection::from(
-                                    TraitConstraintDiag::TraitBoundNotSat {
-                                        span: span.clone(),
-                                        primary_goal: inst,
-                                        unsat_subgoal: unsat,
-                                    },
-                                ));
-                            }
-                        }
-                        _ => {}
-                    }
+                env::DeferredTask::Obligation(obligation) => {
+                    let _ = self.process_trait_obligation(obligation, true);
                 }
                 env::DeferredTask::Method(pending) => {
                     let Some(expr_prop) = self.env.typed_expr(pending.expr) else {
@@ -860,8 +1141,8 @@ impl<'db> TyChecker<'db> {
                         .candidates
                         .iter()
                         .copied()
-                        .filter_map(|inst| {
-                            analyze_candidate(
+                        .filter(|&inst| {
+                            is_viable(
                                 self,
                                 &pending,
                                 expr_ty,
@@ -872,30 +1153,12 @@ impl<'db> TyChecker<'db> {
                             )
                         })
                         .collect();
-                    let satisfied = dedup_equivalent_insts(
-                        viable
-                            .iter()
-                            .copied()
-                            .filter(|cand| cand.is_satisfied())
-                            .map(MethodCandidateViability::inst)
-                            .collect(),
-                    );
-                    let viable = dedup_equivalent_insts(
-                        viable
-                            .into_iter()
-                            .map(MethodCandidateViability::inst)
-                            .collect(),
-                    );
-                    let ambiguous = if satisfied.len() > 1 {
-                        satisfied
-                    } else {
-                        viable
-                    };
-                    if ambiguous.len() > 1 {
+                    let viable = self.dedup_equivalent_trait_insts(viable);
+                    if viable.len() > 1 {
                         self.push_diag(BodyDiag::AmbiguousTrait {
                             primary: pending.span.clone(),
                             method_name: pending.method_name,
-                            traits: ambiguous.into_iter().collect(),
+                            traits: viable.into_iter().collect(),
                         });
                     }
                 }
@@ -1018,9 +1281,9 @@ impl<'db> TyChecker<'db> {
     }
 
     fn ty_unifies(&mut self, lhs: TyId<'db>, rhs: TyId<'db>) -> bool {
-        let snapshot = self.table.snapshot();
+        let snapshot = self.snapshot_state();
         let unifies = self.table.unify(lhs, rhs).is_ok();
-        self.table.rollback_to(snapshot);
+        self.rollback_state(snapshot);
         unifies
     }
 
@@ -1252,6 +1515,7 @@ impl<'db> TyChecker<'db> {
             self.push_diag(TyDiagCollection::from(
                 TyLowerDiag::ConstHoleInValuePosition {
                     span: span.clone().into(),
+                    ty,
                 },
             ));
             return TyId::invalid(self.db, InvalidCause::Other);
@@ -1544,6 +1808,21 @@ impl<'db> TyChecker<'db> {
         self.instantiate_to_term(ty)
     }
 
+    fn instantiate_inherent_method_to_term(
+        &mut self,
+        method: CallableDef<'db>,
+        receiver_ty: TyId<'db>,
+    ) -> TyId<'db> {
+        let mut ty = TyId::func(self.db, method);
+        for &arg in receiver_ty.generic_args(self.db) {
+            if ty.applicable_ty(self.db).is_none() {
+                break;
+            }
+            ty = TyId::app(self.db, ty, arg);
+        }
+        self.instantiate_to_term(ty)
+    }
+
     fn instantiate_callable_to_term(
         &mut self,
         mut ty: TyId<'db>,
@@ -1559,7 +1838,15 @@ impl<'db> TyChecker<'db> {
             let param_ty = callable.params(self.db).get(param_index).copied();
             let arg = self.table.new_var_for(prop);
             if let Some(param_ty) = param_ty
-                && matches!(param_ty.data(self.db), TyData::TyParam(p) if p.is_effect_provider())
+                && (matches!(param_ty.data(self.db), TyData::TyParam(p) if p.is_effect_provider())
+                    || matches!(
+                        param_ty.data(self.db),
+                        TyData::ConstTy(const_ty)
+                            if matches!(
+                                const_ty.data(self.db),
+                                ConstTyData::TyParam(param, _) if param.is_implicit()
+                            )
+                    ))
             {
                 self.effect_provider_keys
                     .extend(inference_keys(self.db, &arg));
@@ -1993,6 +2280,7 @@ struct TyCheckerFinalizer<'db> {
     assumptions: PredicateListId<'db>,
     ty_vars: FxHashSet<InferenceKey<'db>>,
     effect_provider_keys: FxHashSet<InferenceKey<'db>>,
+    direct_call_callees: FxHashSet<ExprId>,
     diags: Vec<FuncBodyDiag<'db>>,
 }
 
@@ -2021,7 +2309,9 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
             let prop = self.body.expr_prop(self.db, expr);
             let span = ctxt.span().unwrap();
             self.check_unknown(prop.ty, span.clone().into());
-            if prop.binding.is_none() {
+            let is_direct_call_callee =
+                matches!(expr_data, Expr::Path(..)) && self.direct_call_callees.contains(&expr);
+            if prop.binding.is_none() && !is_direct_call_callee {
                 self.check_wf(prop.ty, span.into());
             }
         }
@@ -2053,6 +2343,16 @@ impl<'db> TyCheckerFinalizer<'db> {
         let assumptions = checker.env.assumptions();
         checker.resolve_deferred();
         let body = checker.env.finish(&mut checker.table);
+        let direct_call_callees = body.body.map_or_else(FxHashSet::default, |body_id| {
+            body_id
+                .exprs(checker.db)
+                .iter()
+                .filter_map(|(_expr, expr_data)| match expr_data {
+                    Partial::Present(Expr::Call(callee, ..)) => Some(*callee),
+                    _ => None,
+                })
+                .collect()
+        });
 
         Self {
             db: checker.db,
@@ -2060,6 +2360,7 @@ impl<'db> TyCheckerFinalizer<'db> {
             assumptions,
             ty_vars: FxHashSet::default(),
             effect_provider_keys: checker.effect_provider_keys,
+            direct_call_callees,
             diags: checker.diags,
         }
     }

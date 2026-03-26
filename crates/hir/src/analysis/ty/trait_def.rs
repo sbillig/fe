@@ -21,7 +21,10 @@ use super::{
     diagnostics::{ImplDiag, TyDiagCollection},
     fold::TyFoldable as _,
     trait_lower::collect_implementor_methods,
-    trait_resolution::{TraitSolveCx, constraint::collect_constraints, is_goal_satisfiable},
+    trait_resolution::{
+        TraitSolveCx, constraint::collect_constraints, is_goal_satisfiable,
+        normalize_trait_inst_preserving_validity,
+    },
     ty_def::TyId,
     unify::UnificationTable,
 };
@@ -196,18 +199,9 @@ pub fn resolve_trait_method_instance<'db>(
     inst: TraitInstId<'db>,
     method: IdentId<'db>,
 ) -> Option<(Func<'db>, Vec<TyId<'db>>)> {
-    // Normalize the trait instance arguments before searching for implementors.
-    //
-    // This is important for cases where the `Self` type is an associated type
-    // projection (e.g. `<Sol as Abi>::Decoder<I>`). Without normalization, the
-    // projection has no declaring ingot, which prevents us from searching the
-    // ingot that contains the actual implementor type (e.g. `SolDecoder<I>`).
-    //
-    // Monomorphization happens with concrete substitutions, so we can safely
-    // normalize using a scope derived from the instantiated arguments.
     let assumptions = solve_cx.assumptions();
     let norm_scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
-    let inst = inst.normalize(db, norm_scope, assumptions);
+    let inst = normalize_trait_inst_preserving_validity(db, inst, norm_scope, assumptions);
 
     let implementor = match solve_cx.select_impl(db, inst) {
         Selection::Unique(implementor) => implementor,
@@ -371,7 +365,7 @@ pub(super) fn assoc_const_body_and_impl_args_for_trait_inst<'db>(
 ) -> Option<(crate::hir_def::Body<'db>, Vec<TyId<'db>>)> {
     let assumptions = solve_cx.assumptions();
     let norm_scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
-    let inst = inst.normalize(db, norm_scope, assumptions);
+    let inst = normalize_trait_inst_preserving_validity(db, inst, norm_scope, assumptions);
 
     let implementor = match solve_cx.select_impl(db, inst) {
         Selection::Unique(implementor) => implementor,

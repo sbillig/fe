@@ -1,6 +1,7 @@
 use either::Either;
 use num_bigint::BigUint;
 use num_traits::ToPrimitive;
+use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 
 use crate::core::hir_def::{
@@ -11,27 +12,48 @@ use crate::span::DynLazySpan;
 
 use super::{
     ConstRef, RecordLike, Typeable,
-    env::{EffectOrigin, ExprProp, LocalBinding, PendingPrimitiveOp, ProvidedEffect, TyCheckEnv},
+    effect_env::{
+        FamilyKeyedEntry, FrameLookupResult, MatchedForwarder, MatchedKeyedEntry, MatchedWitness,
+    },
+    env::{
+        EffectOrigin, EffectParamSite, ExprProp, LocalBinding, ParamSite, PendingPrimitiveOp,
+        ProvidedEffect, TraitObligation, TraitObligationOrigin, TyCheckEnv,
+    },
     path::ResolvedPathInBody,
 };
 use crate::analysis::place::{Place, PlaceBase};
 use crate::analysis::ty::{
     adt_def::AdtRef,
     assoc_const::AssocConstUse,
-    binder::Binder,
-    canonical::Canonicalized,
+    canonical::{Canonicalized, Solution},
     corelib::{resolve_core_range_types, resolve_core_trait, resolve_lib_type_path},
     diagnostics::{BodyDiag, FuncBodyDiag},
-    effects::EffectKeyKind,
-    effects::place_effect_provider_param_index_map,
+    effects::{
+        BarrierReason, EffectBarrier, EffectKeyKind, EffectPatternKey, EffectQuery,
+        EffectRequirementDecl, EffectRequirementKey, EffectWitness, ForwardedEffectKey,
+        PatternSlotKind, StoredEffectKey, StoredTraitKey, StoredTypeKey, TraitPatternKey,
+        TypePatternKey, WitnessTransport,
+        elaborate::{
+            build_barrier_pattern_for_with_key,
+            build_conservative_same_family_barrier_pattern_in_scope, build_effect_query_for_call,
+            contains_projection_or_invalid_query_state, effect_requirement_decls_for_callable,
+            erase_unresolved_trailing_layout_hole_default_args, finalize_stored_effect_key,
+            query_contains_unresolved_inference,
+        },
+        match_::{
+            KeyMatchCommit, apply_key_match_commit, instantiate_trait_pattern_in,
+            instantiate_trait_pattern_in_with_bindings, query_matches_forwarder,
+            query_matches_witness,
+        },
+        place_effect_provider_param_index_map, stored_value_contains_implicit_layout_params,
+        stored_value_contains_out_of_scope_params,
+    },
     fold::{AssocTySubst, TyFoldable as _, TyFolder},
     trait_def::TraitInstId,
-    trait_resolution::{
-        GoalSatisfiability, PredicateListId, TraitSolveCx,
-        constraint::collect_func_def_constraints, is_goal_satisfiable,
-    },
+    trait_resolution::{GoalSatisfiability, PredicateListId, TraitGoalSolution, TraitSolveCx},
     ty_check::callable::Callable,
     ty_def::{CapabilityKind, PrimTy, TyBase, TyData, prim_int_bits},
+    unify::UnificationTable,
 };
 use crate::analysis::{
     HirAnalysisDb, Spanned,
@@ -45,25 +67,116 @@ use crate::analysis::{
     },
     ty::{
         const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
+        layout_holes::callable_input_layout_bindings_by_origin,
         normalize::normalize_ty,
         ty_check::{TyChecker, path::RecordInitChecker},
         ty_def::{InvalidCause, TyId},
+        ty_lower::resolve_callable_input_effect_key,
     },
 };
 use crate::hir_def::{Attr, FieldParent, ItemKind, scope_graph::ScopeId};
 use common::indexmap::IndexMap;
 
 #[derive(Debug, Clone, Copy)]
-enum EffectRequirement<'db> {
-    Type(TyId<'db>),
-    Trait(TraitInstId<'db>),
+pub(super) enum TypeEffectBindingMatch<'db> {
+    Direct {
+        given: TyId<'db>,
+    },
+    Provider {
+        resolution: ProviderTargetResolution<'db>,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
-enum EffectSatisfaction<'db> {
-    Direct,
-    Provider { target_ty: TyId<'db> },
-    TraitByValue,
+pub(super) struct ProviderTargetResolution<'db> {
+    target_ty: TyId<'db>,
+    target_seed_ty: TyId<'db>,
+    handle_proof: Option<(TraitInstId<'db>, Solution<TraitGoalSolution<'db>>)>,
+    effect_ref_proof: Option<(TraitInstId<'db>, Solution<TraitGoalSolution<'db>>)>,
+    effect_ref_mut_proof: Option<(TraitInstId<'db>, Solution<TraitGoalSolution<'db>>)>,
+}
+
+impl<'db> ProviderTargetResolution<'db> {
+    fn direct(target_ty: TyId<'db>) -> Self {
+        Self {
+            target_ty,
+            target_seed_ty: target_ty,
+            handle_proof: None,
+            effect_ref_proof: None,
+            effect_ref_mut_proof: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct KeyedWitnessBuildScope<'db> {
+    pub(super) scope: ScopeId<'db>,
+    pub(super) assumptions: PredicateListId<'db>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct KeyedWitnessBuildOptions<'db> {
+    pub(super) scope: KeyedWitnessBuildScope<'db>,
+    pub(super) emit_diag: bool,
+    pub(super) mode: WitnessBuildMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum WitnessBuildMode {
+    ExplicitKeyedWith,
+    SeededRequirement,
+}
+
+#[derive(Debug, Clone)]
+enum EffectEvidence<'db> {
+    Keyed {
+        provider: ProvidedEffect<'db>,
+        key_kind: EffectKeyKind,
+        target_ty: Option<TyId<'db>>,
+        commit: EffectCommitPlan<'db>,
+        arg_style: EffectArgStyle,
+    },
+    UnkeyedType {
+        provider: ProvidedEffect<'db>,
+        commit: EffectCommitPlan<'db>,
+        arg_style: EffectArgStyle,
+    },
+    UnkeyedTrait {
+        provider: ProvidedEffect<'db>,
+        commit: EffectCommitPlan<'db>,
+        arg_style: EffectArgStyle,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EffectArgStyle {
+    Place,
+    TempPlace,
+    Value,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(super) struct EffectCommitPlan<'db> {
+    key_match: Option<KeyMatchCommit<'db>>,
+    trait_solutions: SmallVec<[(TraitInstId<'db>, Solution<TraitGoalSolution<'db>>); 2]>,
+    provider_resolution: Option<ProviderTargetResolution<'db>>,
+    extra_unifications: SmallVec<[(TyId<'db>, TyId<'db>); 4]>,
+}
+
+#[derive(Debug, Clone)]
+enum EffectResolution<'db> {
+    Chosen(Box<EffectEvidence<'db>>),
+    BlockedByBarrier,
+    Missing,
+    Ambiguous,
+}
+
+fn evidence_provider<'db>(evidence: &EffectEvidence<'db>) -> ProvidedEffect<'db> {
+    match evidence {
+        EffectEvidence::Keyed { provider, .. }
+        | EffectEvidence::UnkeyedType { provider, .. }
+        | EffectEvidence::UnkeyedTrait { provider, .. } => *provider,
+    }
 }
 
 pub(super) enum PendingPrimitiveOpResolution {
@@ -207,6 +320,25 @@ impl<'db> TyChecker<'db> {
         }
         let typeable = Typeable::Expr(expr, actual.clone());
         actual.ty = self.unify_ty(typeable, actual.ty, expected);
+        match expr_data {
+            Expr::Call(..) => {
+                if let Some(callable) = self.env.callable_expr(expr).cloned() {
+                    let span = expr.span(self.body()).into_call_expr().callee().into();
+                    callable.enqueue_constraints(self, expr, span);
+                }
+            }
+            Expr::MethodCall(..) => {
+                if let Some(callable) = self.env.callable_expr(expr).cloned() {
+                    let span = expr
+                        .span(self.body())
+                        .into_method_call_expr()
+                        .method_name()
+                        .into();
+                    callable.enqueue_constraints(self, expr, span);
+                }
+            }
+            _ => {}
+        }
         actual
     }
 
@@ -921,7 +1053,7 @@ impl<'db> TyChecker<'db> {
                 origin: EffectOrigin::With {
                     value_expr: binding.value,
                 },
-                ty: value_prop.ty,
+                ty: self.table.fold_ty(self.db, value_prop.ty),
                 is_mut,
                 binding: value_prop.binding,
             };
@@ -929,7 +1061,40 @@ impl<'db> TyChecker<'db> {
             match binding.key_path {
                 Some(key_path) => {
                     if let Some(key_path) = key_path.to_opt() {
-                        self.env.insert_effect_binding(key_path, provided);
+                        let folded_provider_ty = self.table.fold_ty(self.db, provided.ty);
+                        match self.validate_keyed_with(
+                            key_path,
+                            ProvidedEffect {
+                                ty: folded_provider_ty,
+                                ..provided
+                            },
+                            binding.value.span(self.body()).into(),
+                        ) {
+                            Ok((witness, commit)) => {
+                                let committed = self.apply_effect_commit_plan(commit);
+                                debug_assert!(
+                                    committed,
+                                    "validated keyed `with` binding commit failed"
+                                );
+                                if !committed {
+                                    let barrier = EffectBarrier {
+                                        pattern: build_barrier_pattern_for_with_key(self, key_path)
+                                            .expect("validated keyed binding should have a barrier pattern"),
+                                        reason: self.barrier_reason_for_pattern(
+                                            key_path,
+                                            witness.key.clone(),
+                                            binding.value.span(self.body()).into(),
+                                        ),
+                                    };
+                                    self.insert_effect_barrier(barrier);
+                                    continue;
+                                }
+                                self.env.insert_effect_witness(witness);
+                            }
+                            Err(barrier) => {
+                                self.insert_effect_barrier(*barrier);
+                            }
+                        }
                     }
                 }
                 None => {
@@ -952,7 +1117,7 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        let callable = if matches!(
+        let mut callable = if matches!(
             callee.data(self.db, self.body()),
             Partial::Present(Expr::Path(..))
         ) && let Some(existing) = self.env.callable_expr(*callee)
@@ -975,9 +1140,9 @@ impl<'db> TyChecker<'db> {
 
         let call_span = expr.span(self.body()).into_call_expr();
 
-        callable.check_args(self, args, call_span.args(), None, false);
+        callable.check_args(self, args, call_span.clone().args(), None, false);
 
-        self.check_callable_effects(expr, &callable);
+        self.check_callable_effects(expr, &mut callable);
 
         let ret_ty = callable.ret_ty(self.db);
         // Normalize the return type to resolve any associated types
@@ -986,7 +1151,7 @@ impl<'db> TyChecker<'db> {
         ExprProp::new(normalized_ret_ty, true)
     }
 
-    pub(super) fn check_callable_effects(&mut self, expr: ExprId, callable: &Callable<'db>) {
+    pub(super) fn check_callable_effects(&mut self, expr: ExprId, callable: &mut Callable<'db>) {
         let body = self.body();
         let call_span: DynLazySpan<'db> = expr.span(body).into();
         let args = self.resolve_callable_effects(call_span.clone(), callable);
@@ -998,7 +1163,7 @@ impl<'db> TyChecker<'db> {
     pub(super) fn resolve_callable_effects(
         &mut self,
         call_span: DynLazySpan<'db>,
-        callable: &Callable<'db>,
+        callable: &mut Callable<'db>,
     ) -> Vec<super::ResolvedEffectArg<'db>> {
         let CallableDef::Func(func) = callable.callable_def else {
             return Vec::new();
@@ -1011,417 +1176,118 @@ impl<'db> TyChecker<'db> {
         let mut resolved_args: Vec<super::ResolvedEffectArg<'db>> = Vec::new();
 
         let body = self.body();
-        let callee_assumptions = collect_func_def_constraints(self.db, func.into(), true)
-            .instantiate_identity()
-            .extend_all_bounds(self.db);
-
-        let effect_ref_trait =
-            resolve_core_trait(self.db, self.env.scope(), &["effect_ref", "EffectRef"])
-                .expect("missing required core trait `core::effect_ref::EffectRef`");
-        let effect_ref_mut_trait =
-            resolve_core_trait(self.db, self.env.scope(), &["effect_ref", "EffectRefMut"])
-                .expect("missing required core trait `core::effect_ref::EffectRefMut`");
-        let effect_handle_trait =
-            resolve_core_trait(self.db, self.env.scope(), &["effect_ref", "EffectHandle"])
-                .expect("missing required core trait `core::effect_ref::EffectHandle`");
-        let target_ident = IdentId::new(self.db, "Target".to_string());
-
         let callee_provider_arg_idx_by_effect =
             place_effect_provider_param_index_map(self.db, func);
-        let mut callee_effect_key_tys = vec![None; func.effects(self.db).data(self.db).len()];
-        for binding in func.effect_bindings(self.db) {
-            callee_effect_key_tys[binding.binding_idx as usize] = binding.key_ty;
-        }
 
         let provided_span = |provided: ProvidedEffect<'db>| match provided.origin {
             EffectOrigin::With { value_expr } => Some(value_expr.span(body).into()),
             EffectOrigin::Param { .. } => None,
         };
-
-        let can_unify = |this: &mut Self, expected: TyId<'db>, given: TyId<'db>| {
-            let snapshot = this.table.snapshot();
-            let ok = this.table.unify(expected, given).is_ok();
-            this.table.rollback_to(snapshot);
-            ok
-        };
-
-        let place_for = |this: &mut Self, provided: ProvidedEffect<'db>| match provided.origin {
-            EffectOrigin::With { value_expr } => this.env.expr_place(value_expr),
-            EffectOrigin::Param { .. } => provided
-                .binding
-                .map(|binding| Place::new(PlaceBase::Binding(binding))),
-        };
-
-        let direct_pass_mode_for =
-            |provided: ProvidedEffect<'db>, place: Option<&Place<'db>>| match (
-                place,
-                provided.origin,
-            ) {
-                (Some(_), _) => super::EffectPassMode::ByPlace,
-                (None, EffectOrigin::With { .. }) => super::EffectPassMode::ByTempPlace,
-                _ => super::EffectPassMode::Unknown,
-            };
-
-        let provider_target_ty = |this: &mut Self,
-                                  provided_ty: TyId<'db>,
-                                  required_mut: bool|
-         -> Option<TyId<'db>> {
-            if let Some((kind, inner_ty)) = provided_ty.as_capability(this.db) {
-                if required_mut && !matches!(kind, CapabilityKind::Mut) {
-                    return None;
-                }
-                return Some(inner_ty);
-            }
-
-            let solve_cx = TraitSolveCx::new(this.db, this.env.scope())
-                .with_assumptions(this.env.assumptions());
-            let effect_handle_inst = TraitInstId::new(
-                this.db,
-                effect_handle_trait,
-                vec![provided_ty],
-                IndexMap::new(),
-            );
-            let handle_sat = is_goal_satisfiable(this.db, solve_cx, effect_handle_inst);
-
-            let target_ty = match handle_sat {
-                GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid => provided_ty,
-                _ => {
-                    let target_assoc = effect_handle_inst.assoc_ty(this.db, target_ident)?;
-                    normalize_ty(
-                        this.db,
-                        target_assoc,
-                        this.env.scope(),
-                        this.env.assumptions(),
-                    )
-                    .fold_with(this.db, &mut this.table)
-                }
-            };
-
-            let effect_ref_inst = TraitInstId::new(
-                this.db,
-                effect_ref_trait,
-                vec![provided_ty, target_ty],
-                IndexMap::new(),
-            );
-            let ref_sat = is_goal_satisfiable(this.db, solve_cx, effect_ref_inst);
-            if matches!(
-                ref_sat,
-                GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
-            ) {
-                return None;
-            }
-
-            if required_mut {
-                let effect_ref_mut_inst = TraitInstId::new(
-                    this.db,
-                    effect_ref_mut_trait,
-                    vec![provided_ty, target_ty],
-                    IndexMap::new(),
-                );
-                let mut_sat = is_goal_satisfiable(this.db, solve_cx, effect_ref_mut_inst);
-                if matches!(
-                    mut_sat,
-                    GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
-                ) {
-                    return None;
-                }
-            }
-
-            Some(target_ty)
-        };
-
-        for (param_idx, effect) in func.effect_params(self.db).enumerate() {
-            let Some(key_path) = effect.key_path(self.db) else {
+        let reqs = effect_requirement_decls_for_callable(self.db, callable.callable_def);
+        for (param_idx, req) in reqs.iter().enumerate() {
+            let Some(key_path) = req.key_path else {
                 continue;
             };
-
-            // If the callee's effect key doesn't resolve, avoid cascading into
-            // confusing "missing effect" diagnostics at call sites.
-            let Ok(path_res) =
-                resolve_path(self.db, key_path, func.scope(), callee_assumptions, false)
-            else {
+            let Some(query) = build_effect_query_for_call(self, callable, req) else {
                 continue;
             };
-            if !matches!(
-                path_res,
-                PathRes::Ty(_) | PathRes::TyAlias(_, _) | PathRes::Trait(_)
-            ) {
-                continue;
-            }
-
             let provider_arg_idx_for_param = callee_provider_arg_idx_by_effect
-                .get(effect.index())
+                .get(req.binding_idx as usize)
                 .copied()
                 .flatten();
 
-            let candidate_frames = self.env.effect_candidate_frames_in_scope(
-                key_path,
-                func.scope(),
-                callee_assumptions,
-            );
-            if candidate_frames.is_empty() {
-                let diag = BodyDiag::MissingEffect {
-                    primary: call_span.clone(),
-                    func,
-                    key: key_path,
-                };
-                self.push_diag(diag);
-                continue;
-            }
-
-            let required_mut = effect.is_mut(self.db);
-
-            let mut compute_viable = |cands: &[ProvidedEffect<'db>]| {
-                let mut viable: SmallVec<
-                    [(
-                        ProvidedEffect<'db>,
-                        EffectRequirement<'db>,
-                        EffectSatisfaction<'db>,
-                    ); 2],
-                > = SmallVec::new();
-
-                for provided in cands.iter().copied() {
-                    let Some(requirement) = self.resolve_effect_requirement(
-                        &path_res,
-                        callable,
-                        callee_effect_key_tys.get(effect.index()).copied().flatten(),
-                        provided.ty,
-                    ) else {
-                        continue;
-                    };
-
-                    match requirement {
-                        EffectRequirement::Type(expected) => {
-                            let place = place_for(self, provided);
-                            let direct_pass_mode = direct_pass_mode_for(provided, place.as_ref());
-                            let direct_mut_ok = !required_mut
-                                || direct_pass_mode == super::EffectPassMode::ByTempPlace
-                                || (direct_pass_mode == super::EffectPassMode::ByPlace
-                                    && provided.is_mut);
-                            let direct_ty =
-                                if let Some((kind, inner)) = provided.ty.as_capability(self.db) {
-                                    if required_mut && !matches!(kind, CapabilityKind::Mut) {
-                                        None
-                                    } else {
-                                        Some(inner)
-                                    }
-                                } else {
-                                    Some(provided.ty)
-                                };
-
-                            if direct_pass_mode != super::EffectPassMode::Unknown
-                                && direct_mut_ok
-                                && direct_ty.is_some_and(|ty| can_unify(self, expected, ty))
-                            {
-                                viable.push((
-                                    provided,
-                                    EffectRequirement::Type(expected),
-                                    EffectSatisfaction::Direct,
-                                ));
-                                continue;
-                            }
-
-                            if let Some(target_ty) =
-                                provider_target_ty(self, provided.ty, required_mut)
-                                && can_unify(self, expected, target_ty)
-                            {
-                                if required_mut
-                                    && self.table.fold_ty(self.db, target_ty)
-                                        == self.table.fold_ty(self.db, provided.ty)
-                                    && !provided.is_mut
-                                {
-                                    continue;
-                                }
-                                viable.push((
-                                    provided,
-                                    EffectRequirement::Type(expected),
-                                    EffectSatisfaction::Provider { target_ty },
-                                ));
-                            }
-                        }
-                        EffectRequirement::Trait(trait_req) => {
-                            if !matches!(
-                                is_goal_satisfiable(
-                                    self.db,
-                                    TraitSolveCx::new(self.db, self.env.scope())
-                                        .with_assumptions(self.env.assumptions()),
-                                    trait_req
-                                ),
-                                GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
-                            ) {
-                                viable.push((
-                                    provided,
-                                    EffectRequirement::Trait(trait_req),
-                                    EffectSatisfaction::TraitByValue,
-                                ))
-                            }
-                        }
-                    }
-                }
-
-                viable
-            };
-
-            let mut viable: SmallVec<
-                [(
-                    ProvidedEffect<'db>,
-                    EffectRequirement<'db>,
-                    EffectSatisfaction<'db>,
-                ); 2],
-            > = SmallVec::new();
-
-            for frame_cands in &candidate_frames {
-                viable = compute_viable(frame_cands);
-                if !viable.is_empty() {
-                    break;
-                }
-            }
-
-            if viable.is_empty() {
-                let all_candidates: SmallVec<[ProvidedEffect<'db>; 2]> =
-                    candidate_frames.iter().flatten().copied().collect();
-
-                if let [provided] = all_candidates.as_slice()
-                    && let Some(requirement) = self.resolve_effect_requirement(
-                        &path_res,
-                        callable,
-                        callee_effect_key_tys.get(effect.index()).copied().flatten(),
-                        provided.ty,
-                    )
-                {
-                    match requirement {
-                        EffectRequirement::Type(expected) => {
-                            let place = place_for(self, *provided);
-                            let direct_pass_mode = direct_pass_mode_for(*provided, place.as_ref());
-                            let provider_target_nonmut =
-                                provider_target_ty(self, provided.ty, false);
-                            let provider_target_required = if required_mut {
-                                provider_target_ty(self, provided.ty, true)
-                            } else {
-                                None
-                            };
-                            let mutability_blocked = required_mut
-                                && provider_target_nonmut
-                                    .is_some_and(|target| can_unify(self, expected, target))
-                                && provider_target_required.is_none();
-
-                            if can_unify(self, expected, provided.ty) {
-                                if required_mut
-                                    && direct_pass_mode == super::EffectPassMode::ByPlace
-                                    && !provided.is_mut
-                                {
-                                    let diag = BodyDiag::EffectMutabilityMismatch {
-                                        primary: call_span.clone(),
-                                        func,
-                                        key: key_path,
-                                        provided_span: provided_span(*provided),
-                                    };
-                                    self.push_diag(diag);
-                                } else {
-                                    let diag = BodyDiag::MissingEffect {
-                                        primary: call_span.clone(),
-                                        func,
-                                        key: key_path,
-                                    };
-                                    self.push_diag(diag);
-                                }
-                            } else if mutability_blocked {
-                                let diag = BodyDiag::EffectMutabilityMismatch {
-                                    primary: call_span.clone(),
-                                    func,
-                                    key: key_path,
-                                    provided_span: provided_span(*provided),
-                                };
-                                self.push_diag(diag);
-                            } else {
-                                let diag = BodyDiag::EffectTypeMismatch {
-                                    primary: call_span.clone(),
-                                    func,
-                                    key: key_path,
-                                    expected,
-                                    given: provided.ty,
-                                    provided_span: provided_span(*provided),
-                                };
-                                self.push_diag(diag);
-                            }
-                        }
-                        EffectRequirement::Trait(trait_req) => {
-                            let sat = is_goal_satisfiable(
-                                self.db,
-                                TraitSolveCx::new(self.db, self.env.scope())
-                                    .with_assumptions(self.env.assumptions()),
-                                trait_req,
-                            );
-
-                            if matches!(
-                                sat,
-                                GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
-                            ) {
-                                let diag = BodyDiag::EffectTraitUnsatisfied {
-                                    primary: call_span.clone(),
-                                    func,
-                                    key: key_path,
-                                    trait_req,
-                                    given: provided.ty,
-                                    provided_span: provided_span(*provided),
-                                };
-                                self.push_diag(diag);
-                            } else {
+            match self.resolve_effect_query(func, req.clone(), query.clone(), call_span.clone()) {
+                EffectResolution::Chosen(evidence) => {
+                    let (provider, arg_style, key_kind, instantiated_target_ty) = match *evidence {
+                        EffectEvidence::Keyed {
+                            provider,
+                            key_kind,
+                            target_ty,
+                            commit,
+                            arg_style,
+                        } => {
+                            let committed = self.apply_effect_commit_plan(commit);
+                            debug_assert!(committed, "chosen keyed effect evidence commit failed");
+                            if !committed {
                                 let diag = BodyDiag::MissingEffect {
                                     primary: call_span.clone(),
                                     func,
                                     key: key_path,
                                 };
                                 self.push_diag(diag);
+                                continue;
                             }
+                            (provider, arg_style, key_kind, target_ty)
                         }
-                    }
-                    continue;
-                }
-
-                let diag = BodyDiag::MissingEffect {
-                    primary: call_span.clone(),
-                    func,
-                    key: key_path,
-                };
-                self.push_diag(diag);
-                continue;
-            }
-
-            let (provided, requirement, satisfaction) = match viable.as_slice() {
-                [(provided, requirement, satisfaction)] => (*provided, *requirement, *satisfaction),
-                _ => {
-                    let Some(required_name) = effect.name(self.db) else {
-                        let diag = BodyDiag::AmbiguousEffect {
-                            primary: call_span.clone(),
-                            func,
-                            key: key_path,
-                        };
-                        self.push_diag(diag);
-                        continue;
-                    };
-
-                    let mut name_matches = viable.iter().copied().filter(|(provided, ..)| {
-                        match (provided.origin, provided.binding) {
-                            (
-                                EffectOrigin::Param {
-                                    name: Some(name), ..
+                        EffectEvidence::UnkeyedType {
+                            provider,
+                            commit,
+                            arg_style,
+                        } => {
+                            let target_ty = match commit.key_match.clone() {
+                                Some(KeyMatchCommit::QueryToType { actual, .. }) => {
+                                    Some(self.table.fold_ty(self.db, actual))
+                                }
+                                _ => match req.key.clone() {
+                                    EffectRequirementKey::Type(_) => self
+                                        .query_type_key(&query.key)
+                                        .map(|ty| self.table.fold_ty(self.db, ty)),
+                                    EffectRequirementKey::Trait(_) => None,
                                 },
-                                _,
-                            ) => name == required_name,
-                            (EffectOrigin::With { .. }, Some(binding)) => {
-                                binding.binding_name(&self.env) == required_name
+                            };
+                            let committed = self.apply_effect_commit_plan(commit);
+                            debug_assert!(
+                                committed,
+                                "chosen unkeyed type effect evidence commit failed"
+                            );
+                            if !committed {
+                                let diag = BodyDiag::MissingEffect {
+                                    primary: call_span.clone(),
+                                    func,
+                                    key: key_path,
+                                };
+                                self.push_diag(diag);
+                                continue;
                             }
-                            _ => false,
+                            (provider, arg_style, EffectKeyKind::Type, target_ty)
                         }
-                    });
+                        EffectEvidence::UnkeyedTrait {
+                            provider,
+                            commit,
+                            arg_style,
+                        } => {
+                            let committed = self.apply_effect_commit_plan(commit);
+                            debug_assert!(
+                                committed,
+                                "chosen unkeyed trait effect evidence commit failed"
+                            );
+                            if !committed {
+                                let diag = BodyDiag::MissingEffect {
+                                    primary: call_span.clone(),
+                                    func,
+                                    key: key_path,
+                                };
+                                self.push_diag(diag);
+                                continue;
+                            }
+                            (provider, arg_style, EffectKeyKind::Trait, None)
+                        }
+                    };
 
-                    if let Some(best) = name_matches.next()
-                        && name_matches.next().is_none()
-                    {
-                        best
-                    } else {
-                        let diag = BodyDiag::AmbiguousEffect {
+                    let (arg, pass_mode) =
+                        self.effect_arg_for_provider(provider, arg_style, req.required_mut);
+                    if req.required_mut && matches!(pass_mode, super::EffectPassMode::Unknown) {
+                        let diag = BodyDiag::EffectMutabilityMismatch {
+                            primary: call_span.clone(),
+                            func,
+                            key: key_path,
+                            provided_span: provided_span(provider),
+                        };
+                        self.push_diag(diag);
+                        continue;
+                    }
+                    if !self.effect_arg_is_valid(&arg, pass_mode) {
+                        let diag = BodyDiag::MissingEffect {
                             primary: call_span.clone(),
                             func,
                             key: key_path,
@@ -1429,151 +1295,61 @@ impl<'db> TyChecker<'db> {
                         self.push_diag(diag);
                         continue;
                     }
-                }
-            };
-
-            let (arg, pass_mode) = match satisfaction {
-                EffectSatisfaction::Direct => {
-                    let place = match provided.origin {
-                        EffectOrigin::With { value_expr } => self.env.expr_place(value_expr),
-                        EffectOrigin::Param { .. } => provided
-                            .binding
-                            .map(|binding| Place::new(PlaceBase::Binding(binding))),
-                    };
-
-                    let arg = if let Some(place) = place {
-                        super::EffectArg::Place(place)
-                    } else {
-                        match provided.origin {
-                            EffectOrigin::With { value_expr } => {
-                                super::EffectArg::Value(value_expr)
-                            }
-                            EffectOrigin::Param { .. } => super::EffectArg::Unknown,
+                    if let Some(provider_arg_idx) = provider_arg_idx_for_param
+                        && let Some(provider_var) =
+                            callable.generic_args().get(provider_arg_idx).copied()
+                        && let Some(given) = self.inferred_provider_ty_for_effect_arg(
+                            provider,
+                            &arg,
+                            pass_mode,
+                            instantiated_target_ty,
+                        )
+                    {
+                        let existing_provider = self.table.fold_ty(self.db, provider_var);
+                        let snapshot = self.table.snapshot();
+                        if self.table.unify(provider_var, given).is_err() {
+                            self.table.rollback_to(snapshot);
+                            self.push_diag(BodyDiag::EffectProviderMismatch {
+                                primary: call_span.clone(),
+                                func,
+                                key: key_path,
+                                expected: existing_provider,
+                                given,
+                                provided_span: provided_span(provider),
+                            });
                         }
-                    };
-
-                    let pass_mode = if matches!(arg, super::EffectArg::Place(..)) {
-                        super::EffectPassMode::ByPlace
-                    } else if matches!(provided.origin, EffectOrigin::With { .. }) {
-                        super::EffectPassMode::ByTempPlace
-                    } else {
-                        super::EffectPassMode::Unknown
-                    };
-
-                    (arg, pass_mode)
+                    }
+                    if let Some(target_ty) = instantiated_target_ty {
+                        self.instantiate_callable_effect_layout_args(
+                            callable,
+                            func,
+                            req.binding_idx as usize,
+                            target_ty,
+                        );
+                    }
+                    resolved_args.push(super::ResolvedEffectArg {
+                        param_idx,
+                        key: key_path,
+                        arg,
+                        pass_mode,
+                        key_kind,
+                        instantiated_target_ty,
+                    });
                 }
-                EffectSatisfaction::Provider { .. } | EffectSatisfaction::TraitByValue => {
-                    let arg = match provided.origin {
-                        EffectOrigin::With { value_expr } => super::EffectArg::Value(value_expr),
-                        EffectOrigin::Param { .. } => provided
-                            .binding
-                            .map(super::EffectArg::Binding)
-                            .unwrap_or(super::EffectArg::Unknown),
-                    };
-                    (arg, super::EffectPassMode::ByValue)
-                }
-            };
-
-            if required_mut && matches!(pass_mode, super::EffectPassMode::Unknown) {
-                let diag = BodyDiag::EffectMutabilityMismatch {
-                    primary: call_span.clone(),
-                    func,
-                    key: key_path,
-                    provided_span: provided_span(provided),
-                };
-                self.push_diag(diag);
-                continue;
-            }
-
-            let invalid_effect_arg = match pass_mode {
-                super::EffectPassMode::ByPlace => !matches!(arg, super::EffectArg::Place(_)),
-                super::EffectPassMode::ByTempPlace => !matches!(arg, super::EffectArg::Value(_)),
-                super::EffectPassMode::ByValue => {
-                    matches!(arg, super::EffectArg::Unknown | super::EffectArg::Place(_))
-                }
-                super::EffectPassMode::Unknown => true,
-            };
-            if invalid_effect_arg {
-                let diag = BodyDiag::MissingEffect {
-                    primary: call_span.clone(),
-                    func,
-                    key: key_path,
-                };
-                self.push_diag(diag);
-                continue;
-            }
-
-            // If the caller supplies a concrete provider value, unify it with the callee's hidden
-            // provider generic argument now so later stages don't have to re-infer it from
-            // expression types.
-            if let Some(provider_arg_idx) = provider_arg_idx_for_param
-                && matches!(
-                    satisfaction,
-                    EffectSatisfaction::Provider { .. } | EffectSatisfaction::TraitByValue
-                )
-                && let Some(provider_var) = callable.generic_args().get(provider_arg_idx).copied()
-            {
-                let existing_provider = self.table.fold_ty(self.db, provider_var);
-                let snapshot = self.table.snapshot();
-                if self.table.unify(provider_var, provided.ty).is_err() {
-                    self.table.rollback_to(snapshot);
-                    let diag = BodyDiag::EffectProviderMismatch {
+                EffectResolution::BlockedByBarrier => {}
+                EffectResolution::Missing => {
+                    self.push_diag(BodyDiag::MissingEffect {
                         primary: call_span.clone(),
                         func,
                         key: key_path,
-                        expected: existing_provider,
-                        given: provided.ty,
-                        provided_span: provided_span(provided),
-                    };
-                    self.push_diag(diag);
+                    });
                 }
-            }
-
-            let (key_kind, instantiated_target_ty) = match requirement {
-                EffectRequirement::Type(expected) => (
-                    EffectKeyKind::Type,
-                    Some(normalize_ty(
-                        self.db,
-                        expected.fold_with(self.db, &mut self.table),
-                        func.scope(),
-                        callee_assumptions,
-                    )),
-                ),
-                EffectRequirement::Trait(_) => (EffectKeyKind::Trait, None),
-            };
-
-            // Provider generic argument selection for direct place-effects is deferred to MIR
-            // lowering (Option B). The type checker records the effect argument form, pass mode,
-            // and (for type effects) the instantiated target type.
-            resolved_args.push(super::ResolvedEffectArg {
-                param_idx,
-                key: key_path,
-                arg,
-                pass_mode,
-                key_kind,
-                instantiated_target_ty,
-            });
-
-            if let EffectRequirement::Type(expected) = requirement {
-                let given = match satisfaction {
-                    EffectSatisfaction::Provider { target_ty } => target_ty,
-                    EffectSatisfaction::Direct => provided
-                        .ty
-                        .as_capability(self.db)
-                        .map(|(_, inner)| inner)
-                        .unwrap_or(provided.ty),
-                    EffectSatisfaction::TraitByValue => provided.ty,
-                };
-                if self.table.unify(expected, given).is_err() {
-                    let diag = BodyDiag::EffectTypeMismatch {
+                EffectResolution::Ambiguous => {
+                    self.push_diag(BodyDiag::AmbiguousEffect {
                         primary: call_span.clone(),
                         func,
                         key: key_path,
-                        expected,
-                        given: provided.ty,
-                        provided_span: provided_span(provided),
-                    };
-                    self.push_diag(diag);
+                    });
                 }
             }
         }
@@ -1581,35 +1357,1310 @@ impl<'db> TyChecker<'db> {
         resolved_args
     }
 
-    fn resolve_effect_requirement(
+    fn instantiate_callable_effect_layout_args(
         &mut self,
-        path_res: &PathRes<'db>,
-        callable: &Callable<'db>,
-        expected_type_key: Option<TyId<'db>>,
-        provided_ty: TyId<'db>,
-    ) -> Option<EffectRequirement<'db>> {
-        match path_res {
-            PathRes::Ty(_) | PathRes::TyAlias(_, _) => {
-                let mut expected =
-                    Binder::bind(expected_type_key?).instantiate(self.db, callable.generic_args());
-                if let Some(inst) = callable.trait_inst() {
-                    let mut subst = AssocTySubst::new(inst);
-                    expected = expected.fold_with(self.db, &mut subst);
-                }
-                Some(EffectRequirement::Type(expected))
-            }
-            PathRes::Trait(trait_inst) => {
-                let trait_req = crate::analysis::ty::effects::instantiate_trait_effect_requirement(
-                    self.db,
-                    *trait_inst,
-                    callable.generic_args(),
-                    provided_ty,
-                    callable.trait_inst(),
-                );
-                Some(EffectRequirement::Trait(trait_req))
-            }
-            _ => None,
+        callable: &mut Callable<'db>,
+        callee: crate::hir_def::Func<'db>,
+        effect_idx: usize,
+        actual_key_ty: TyId<'db>,
+    ) {
+        let assumptions =
+            crate::analysis::ty::trait_resolution::constraint::collect_func_decl_constraints(
+                self.db,
+                callee.into(),
+                true,
+            )
+            .instantiate_identity();
+        let Some(key_path) = callee
+            .effect_params(self.db)
+            .nth(effect_idx)
+            .and_then(|effect| effect.key_path(self.db))
+        else {
+            return;
+        };
+        let crate::analysis::ty::effects::ResolvedEffectKey::Type(expected_key_ty) =
+            resolve_callable_input_effect_key(self.db, callee, effect_idx, key_path, assumptions)
+        else {
+            return;
+        };
+        let bindings = callable_input_layout_bindings_by_origin(self.db, CallableDef::Func(callee));
+        let Some(bindings) = bindings
+            .get(&crate::analysis::ty::const_ty::CallableInputLayoutHoleOrigin::Effect(effect_idx))
+        else {
+            return;
+        };
+        let mut actual_layout_args = Vec::with_capacity(bindings.len());
+        if !collect_layout_args_in_order(
+            self.db,
+            expected_key_ty,
+            self.table.fold_ty(self.db, actual_key_ty),
+            &mut actual_layout_args,
+        ) || actual_layout_args.len() != bindings.len()
+        {
+            return;
         }
+
+        for ((_, implicit_arg), actual_arg) in bindings.iter().zip(actual_layout_args) {
+            let implicit_idx = match implicit_arg.data(self.db) {
+                TyData::TyParam(param) => Some(param.idx),
+                TyData::ConstTy(const_ty) => match const_ty.data(self.db) {
+                    ConstTyData::TyParam(param, _) => Some(param.idx),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(implicit_idx) = implicit_idx
+                && let Some(slot) = callable.generic_args_mut().get_mut(implicit_idx)
+            {
+                *slot = actual_arg;
+            }
+        }
+    }
+
+    fn resolve_effect_query(
+        &mut self,
+        func: crate::hir_def::Func<'db>,
+        req: EffectRequirementDecl<'db>,
+        query: EffectQuery<'db>,
+        call_span: DynLazySpan<'db>,
+    ) -> EffectResolution<'db> {
+        let mut viable: SmallVec<[EffectEvidence<'db>; 2]> = SmallVec::new();
+        let effect_env = self.env.cloned_effect_env();
+        for frame in effect_env.lookup_effect_frames(&query, self) {
+            match frame {
+                FrameLookupResult::KeyedMatched {
+                    entries,
+                    blocked_by_barrier,
+                    barrier_reason,
+                } => {
+                    for matched in entries.iter().cloned() {
+                        if let Some(evidence) =
+                            self.evaluate_keyed_entry(query.required_mut, matched)
+                        {
+                            viable.push(evidence);
+                        }
+                    }
+                    if viable.is_empty() {
+                        return if blocked_by_barrier {
+                            let _ = barrier_reason;
+                            EffectResolution::BlockedByBarrier
+                        } else {
+                            EffectResolution::Missing
+                        };
+                    }
+                    return self.choose_effect_evidence(req.name, viable);
+                }
+                FrameLookupResult::KeyedFamily { entries, providers } => {
+                    let mut family_viable = SmallVec::new();
+                    for entry in entries.iter().cloned() {
+                        let Some(matched) = self.match_family_keyed_entry(&query.key, entry) else {
+                            continue;
+                        };
+                        if let Some(evidence) =
+                            self.evaluate_keyed_entry(query.required_mut, matched)
+                        {
+                            family_viable.push(evidence);
+                        }
+                    }
+                    for provider in providers.iter().copied() {
+                        let evidence = match query.key.clone() {
+                            EffectPatternKey::Type(type_query) => self
+                                .evaluate_unkeyed_type_provider(
+                                    type_query,
+                                    provider,
+                                    query.required_mut,
+                                ),
+                            EffectPatternKey::Trait(trait_query) => {
+                                self.evaluate_unkeyed_trait_provider(trait_query, provider)
+                            }
+                        };
+                        if let Some(evidence) = evidence {
+                            family_viable.push(evidence);
+                        }
+                    }
+                    if !family_viable.is_empty() {
+                        return self.choose_effect_evidence(req.name, family_viable);
+                    }
+                }
+                FrameLookupResult::Unkeyed { providers } => {
+                    for provider in providers {
+                        let evidence = match query.key.clone() {
+                            EffectPatternKey::Type(type_query) => self
+                                .evaluate_unkeyed_type_provider(
+                                    type_query,
+                                    provider,
+                                    query.required_mut,
+                                ),
+                            EffectPatternKey::Trait(trait_query) => {
+                                self.evaluate_unkeyed_trait_provider(trait_query, provider)
+                            }
+                        };
+                        if let Some(evidence) = evidence {
+                            viable.push(evidence);
+                        }
+                    }
+                    if !viable.is_empty() {
+                        return self.choose_effect_evidence(req.name, viable);
+                    }
+                }
+            }
+        }
+        let _ = (func, call_span);
+        EffectResolution::Missing
+    }
+
+    fn match_family_keyed_entry(
+        &mut self,
+        query: &EffectPatternKey<'db>,
+        entry: FamilyKeyedEntry<'db>,
+    ) -> Option<MatchedKeyedEntry<'db>> {
+        match entry {
+            FamilyKeyedEntry::Witness(witness) => {
+                let key_commit = query_matches_witness(self, query, &witness.key)?;
+                Some(MatchedKeyedEntry::Witness(MatchedWitness {
+                    witness,
+                    key_commit,
+                }))
+            }
+            FamilyKeyedEntry::Forwarder(forwarder) => {
+                let key_commit = query_matches_forwarder(self, query, &forwarder.key)?;
+                Some(MatchedKeyedEntry::Forwarder(MatchedForwarder {
+                    forwarder,
+                    key_commit,
+                }))
+            }
+        }
+    }
+
+    fn choose_effect_evidence(
+        &self,
+        required_name: Option<IdentId<'db>>,
+        viable: SmallVec<[EffectEvidence<'db>; 2]>,
+    ) -> EffectResolution<'db> {
+        match viable.as_slice() {
+            [only] => EffectResolution::Chosen(Box::new(only.clone())),
+            _ => {
+                let Some(required_name) = required_name else {
+                    return EffectResolution::Ambiguous;
+                };
+                let mut name_matches = viable.into_iter().filter(|evidence| {
+                    let provider = evidence_provider(evidence);
+                    match (provider.origin, provider.binding) {
+                        (
+                            EffectOrigin::Param {
+                                name: Some(name), ..
+                            },
+                            _,
+                        ) => name == required_name,
+                        (EffectOrigin::With { .. }, Some(binding)) => {
+                            binding.binding_name(&self.env) == required_name
+                        }
+                        _ => false,
+                    }
+                });
+                if let Some(best) = name_matches.next()
+                    && name_matches.next().is_none()
+                {
+                    EffectResolution::Chosen(Box::new(best))
+                } else {
+                    EffectResolution::Ambiguous
+                }
+            }
+        }
+    }
+
+    fn evaluate_keyed_entry(
+        &mut self,
+        required_mut: bool,
+        matched: MatchedKeyedEntry<'db>,
+    ) -> Option<EffectEvidence<'db>> {
+        let (provider, transport, key_kind, target_ty, key_commit) = match matched {
+            MatchedKeyedEntry::Witness(matched) => {
+                let (key_kind, target_ty) = match matched.witness.key {
+                    StoredEffectKey::Type(stored) => (EffectKeyKind::Type, Some(stored.carrier)),
+                    StoredEffectKey::Trait(_) => (EffectKeyKind::Trait, None),
+                };
+                (
+                    matched.witness.provider,
+                    matched.witness.transport,
+                    key_kind,
+                    target_ty,
+                    matched.key_commit,
+                )
+            }
+            MatchedKeyedEntry::Forwarder(matched) => {
+                let (key_kind, target_ty) = match matched.forwarder.key {
+                    ForwardedEffectKey::Type(forwarded) => {
+                        (EffectKeyKind::Type, Some(forwarded.carrier))
+                    }
+                    ForwardedEffectKey::Trait(_) => (EffectKeyKind::Trait, None),
+                };
+                (
+                    matched.forwarder.provider,
+                    matched.forwarder.transport,
+                    key_kind,
+                    target_ty,
+                    matched.key_commit,
+                )
+            }
+        };
+        let arg_style = match (transport, target_ty) {
+            (WitnessTransport::Direct, Some(target_ty)) => self
+                .direct_arg_style_for_provider(provider, target_ty, required_mut)
+                .unwrap_or(EffectArgStyle::Value),
+            _ => EffectArgStyle::Value,
+        };
+        Some(EffectEvidence::Keyed {
+            provider,
+            key_kind,
+            target_ty,
+            commit: EffectCommitPlan {
+                key_match: Some(key_commit),
+                trait_solutions: SmallVec::new(),
+                provider_resolution: None,
+                extra_unifications: SmallVec::new(),
+            },
+            arg_style,
+        })
+    }
+
+    fn evaluate_unkeyed_type_provider(
+        &mut self,
+        query: TypePatternKey<'db>,
+        provider: ProvidedEffect<'db>,
+        required_mut: bool,
+    ) -> Option<EffectEvidence<'db>> {
+        let direct_style =
+            self.direct_arg_style_for_provider(provider, query.carrier, required_mut);
+        if let Some(arg_style) = direct_style {
+            let snapshot = self.snapshot_state();
+            let ok = apply_key_match_commit(
+                self,
+                KeyMatchCommit::QueryToType {
+                    query: query.clone(),
+                    actual: provider
+                        .ty
+                        .as_capability(self.db)
+                        .map(|(_, inner)| inner)
+                        .unwrap_or(provider.ty),
+                },
+            );
+            self.rollback_state(snapshot);
+            if ok {
+                return Some(EffectEvidence::UnkeyedType {
+                    provider,
+                    commit: EffectCommitPlan {
+                        key_match: Some(KeyMatchCommit::QueryToType {
+                            query: query.clone(),
+                            actual: provider
+                                .ty
+                                .as_capability(self.db)
+                                .map(|(_, inner)| inner)
+                                .unwrap_or(provider.ty),
+                        }),
+                        trait_solutions: SmallVec::new(),
+                        provider_resolution: None,
+                        extra_unifications: SmallVec::new(),
+                    },
+                    arg_style,
+                });
+            }
+        }
+
+        let resolution = self.effect_provider_target_resolution(provider.ty, required_mut)?;
+        let snapshot = self.snapshot_state();
+        let ok = apply_key_match_commit(
+            self,
+            KeyMatchCommit::QueryToType {
+                query: query.clone(),
+                actual: resolution.target_ty,
+            },
+        );
+        self.rollback_state(snapshot);
+        ok.then_some(EffectEvidence::UnkeyedType {
+            provider,
+            commit: EffectCommitPlan {
+                key_match: Some(KeyMatchCommit::QueryToType {
+                    query,
+                    actual: resolution.target_ty,
+                }),
+                trait_solutions: SmallVec::new(),
+                provider_resolution: Some(resolution),
+                extra_unifications: SmallVec::new(),
+            },
+            arg_style: EffectArgStyle::Value,
+        })
+    }
+
+    fn evaluate_unkeyed_trait_provider(
+        &mut self,
+        query: TraitPatternKey<'db>,
+        provider: ProvidedEffect<'db>,
+    ) -> Option<EffectEvidence<'db>> {
+        let provider_ty = self.table.fold_ty(self.db, provider.ty);
+        if provider_ty.has_var(self.db) {
+            return None;
+        }
+        let instantiated = instantiate_trait_pattern_in(self.db, &mut self.table, query);
+        let args = std::iter::once(provider_ty)
+            .chain(instantiated.args(self.db).iter().skip(1).copied())
+            .collect::<Vec<_>>();
+        let trait_goal = TraitInstId::new(
+            self.db,
+            instantiated.def(self.db),
+            args,
+            instantiated.assoc_type_bindings(self.db).clone(),
+        );
+        let GoalSatisfiability::Satisfied(solution) =
+            self.trait_effect_goal_satisfiability(trait_goal)
+        else {
+            return None;
+        };
+        Some(EffectEvidence::UnkeyedTrait {
+            provider,
+            commit: EffectCommitPlan {
+                key_match: None,
+                trait_solutions: SmallVec::from_iter([(trait_goal, solution)]),
+                provider_resolution: None,
+                extra_unifications: SmallVec::new(),
+            },
+            arg_style: EffectArgStyle::Value,
+        })
+    }
+
+    fn direct_arg_style_for_provider(
+        &self,
+        provider: ProvidedEffect<'db>,
+        _: TyId<'db>,
+        _: bool,
+    ) -> Option<EffectArgStyle> {
+        let place = match provider.origin {
+            EffectOrigin::With { value_expr } => self.env.expr_place(value_expr),
+            EffectOrigin::Param { .. } => provider
+                .binding
+                .map(|binding| Place::new(PlaceBase::Binding(binding))),
+        };
+        Some(match place {
+            Some(_) => EffectArgStyle::Place,
+            None if matches!(provider.origin, EffectOrigin::With { .. }) => {
+                EffectArgStyle::TempPlace
+            }
+            None => return None,
+        })
+    }
+
+    fn effect_arg_for_provider(
+        &mut self,
+        provider: ProvidedEffect<'db>,
+        arg_style: EffectArgStyle,
+        required_mut: bool,
+    ) -> (super::EffectArg<'db>, super::EffectPassMode) {
+        if required_mut && !self.provider_supports_mut(provider) {
+            return (super::EffectArg::Unknown, super::EffectPassMode::Unknown);
+        }
+
+        match arg_style {
+            EffectArgStyle::Place => {
+                let place = match provider.origin {
+                    EffectOrigin::With { value_expr } => self.env.expr_place(value_expr),
+                    EffectOrigin::Param { .. } => provider
+                        .binding
+                        .map(|binding| Place::new(PlaceBase::Binding(binding))),
+                };
+                (
+                    place
+                        .map(super::EffectArg::Place)
+                        .unwrap_or(super::EffectArg::Unknown),
+                    super::EffectPassMode::ByPlace,
+                )
+            }
+            EffectArgStyle::TempPlace => match provider.origin {
+                EffectOrigin::With { value_expr } => (
+                    super::EffectArg::Value(value_expr),
+                    super::EffectPassMode::ByTempPlace,
+                ),
+                EffectOrigin::Param { .. } => {
+                    (super::EffectArg::Unknown, super::EffectPassMode::Unknown)
+                }
+            },
+            EffectArgStyle::Value => (
+                match provider.origin {
+                    EffectOrigin::With { value_expr } => super::EffectArg::Value(value_expr),
+                    EffectOrigin::Param { .. } => provider
+                        .binding
+                        .map(super::EffectArg::Binding)
+                        .unwrap_or(super::EffectArg::Unknown),
+                },
+                super::EffectPassMode::ByValue,
+            ),
+        }
+    }
+
+    fn provider_supports_mut(&mut self, provider: ProvidedEffect<'db>) -> bool {
+        if let Some((kind, _)) = provider.ty.as_capability(self.db) {
+            return matches!(kind, CapabilityKind::Mut)
+                || self
+                    .effect_provider_target_resolution(provider.ty, true)
+                    .is_some();
+        }
+
+        provider.is_mut
+            || self
+                .effect_provider_target_resolution(provider.ty, true)
+                .is_some()
+    }
+
+    fn inferred_provider_ty_for_effect_arg(
+        &mut self,
+        provider: ProvidedEffect<'db>,
+        arg: &super::EffectArg<'db>,
+        pass_mode: super::EffectPassMode,
+        instantiated_target_ty: Option<TyId<'db>>,
+    ) -> Option<TyId<'db>> {
+        match pass_mode {
+            super::EffectPassMode::ByValue => Some(self.table.fold_ty(self.db, provider.ty)),
+            super::EffectPassMode::ByTempPlace => {
+                let target_ty = self.table.fold_ty(self.db, instantiated_target_ty?);
+                let mem_ptr_ctor =
+                    resolve_lib_type_path(self.db, self.env.scope(), "core::effect_ref::MemPtr")?;
+                Some(TyId::app(self.db, mem_ptr_ctor, target_ty))
+            }
+            super::EffectPassMode::ByPlace => {
+                let binding = match arg {
+                    super::EffectArg::Place(place) => {
+                        let PlaceBase::Binding(binding) = place.base;
+                        Some(binding)
+                    }
+                    super::EffectArg::Binding(binding) => Some(*binding),
+                    super::EffectArg::Value(_) | super::EffectArg::Unknown => provider.binding,
+                }?;
+
+                let inferred = match binding {
+                    LocalBinding::EffectParam {
+                        site: EffectParamSite::Func(binding_func),
+                        idx,
+                        ..
+                    } => {
+                        let super::BodyOwner::Func(current_func) = self.env.owner() else {
+                            return Some(self.table.fold_ty(self.db, provider.ty));
+                        };
+                        if binding_func != current_func {
+                            return Some(self.table.fold_ty(self.db, provider.ty));
+                        }
+                        let provider_idx =
+                            place_effect_provider_param_index_map(self.db, current_func)
+                                .get(idx)
+                                .copied()
+                                .flatten()?;
+                        CallableDef::Func(current_func)
+                            .params(self.db)
+                            .get(provider_idx)
+                            .copied()?
+                    }
+                    LocalBinding::EffectParam { .. } => provider.ty,
+                    LocalBinding::Param {
+                        site: ParamSite::EffectField(effect_site),
+                        ..
+                    } => {
+                        let contract = match effect_site {
+                            EffectParamSite::Contract(contract)
+                            | EffectParamSite::ContractInit { contract }
+                            | EffectParamSite::ContractRecvArm { contract, .. } => contract,
+                            EffectParamSite::Func(_) => {
+                                unreachable!(
+                                    "effect field bindings cannot originate from function sites"
+                                )
+                            }
+                        };
+                        let ident = binding.binding_name(&self.env);
+                        contract
+                            .fields(self.db)
+                            .get(&ident)
+                            .map(|field| field.declared_ty)?
+                    }
+                    LocalBinding::Local { .. } | LocalBinding::Param { .. } => provider.ty,
+                };
+
+                Some(self.table.fold_ty(self.db, inferred))
+            }
+            super::EffectPassMode::Unknown => None,
+        }
+    }
+
+    fn effect_arg_is_valid(
+        &self,
+        arg: &super::EffectArg<'db>,
+        pass_mode: super::EffectPassMode,
+    ) -> bool {
+        match pass_mode {
+            super::EffectPassMode::ByPlace => matches!(arg, &super::EffectArg::Place(_)),
+            super::EffectPassMode::ByTempPlace => matches!(arg, &super::EffectArg::Value(_)),
+            super::EffectPassMode::ByValue => !matches!(
+                arg,
+                &super::EffectArg::Unknown | &super::EffectArg::Place(_)
+            ),
+            super::EffectPassMode::Unknown => false,
+        }
+    }
+
+    fn query_type_key(&self, key: &EffectPatternKey<'db>) -> Option<TyId<'db>> {
+        match key {
+            EffectPatternKey::Type(key) => Some(key.carrier),
+            EffectPatternKey::Trait(_) => None,
+        }
+    }
+
+    fn trait_effect_goal_satisfiability(
+        &self,
+        trait_goal: TraitInstId<'db>,
+    ) -> GoalSatisfiability<'db> {
+        self.trait_effect_goal_satisfiability_in_scope(
+            self.env.scope(),
+            self.env.assumptions(),
+            trait_goal,
+        )
+    }
+
+    pub(super) fn trait_effect_goal_satisfiability_in_scope(
+        &self,
+        scope: crate::hir_def::scope_graph::ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+        trait_goal: TraitInstId<'db>,
+    ) -> GoalSatisfiability<'db> {
+        let solve_cx = TraitSolveCx::new(self.db, scope).with_assumptions(assumptions);
+        let query = crate::analysis::ty::trait_resolution::CanonicalGoalQuery::new(
+            self.db,
+            trait_goal,
+            assumptions,
+        );
+        crate::analysis::ty::trait_resolution::is_goal_query_satisfiable(self.db, solve_cx, &query)
+            .clone()
+    }
+
+    pub(super) fn commit_trait_goal_solution(
+        &mut self,
+        trait_goal: TraitInstId<'db>,
+        solution: Solution<TraitGoalSolution<'db>>,
+    ) -> TraitGoalSolution<'db> {
+        let canonical_goal = Canonicalized::new(self.db, trait_goal);
+        let solved = canonical_goal.extract_solution(&mut self.table, solution);
+        self.table.unify(trait_goal, solved.inst).unwrap();
+        solved
+    }
+
+    fn commit_provider_target_resolution(
+        &mut self,
+        resolution: ProviderTargetResolution<'db>,
+    ) -> TyId<'db> {
+        self.commit_provider_target_resolution_in_scope(
+            resolution,
+            self.env.scope(),
+            self.env.assumptions(),
+        )
+    }
+
+    pub(super) fn commit_provider_target_resolution_in_scope(
+        &mut self,
+        resolution: ProviderTargetResolution<'db>,
+        scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+    ) -> TyId<'db> {
+        let mut target_ty = self.renormalize_effect_provider_target_ty_in_scope(
+            resolution.target_seed_ty,
+            scope,
+            assumptions,
+        );
+        if let Some((handle_goal, handle_solution)) = resolution.handle_proof {
+            self.commit_trait_goal_solution(handle_goal, handle_solution);
+            target_ty =
+                self.renormalize_effect_provider_target_ty_in_scope(target_ty, scope, assumptions);
+        }
+        if let Some((effect_ref_goal, effect_ref_solution)) = resolution.effect_ref_proof {
+            self.commit_trait_goal_solution(effect_ref_goal, effect_ref_solution);
+            target_ty =
+                self.renormalize_effect_provider_target_ty_in_scope(target_ty, scope, assumptions);
+        }
+        if let Some((effect_ref_mut_goal, effect_ref_mut_solution)) =
+            resolution.effect_ref_mut_proof
+        {
+            self.commit_trait_goal_solution(effect_ref_mut_goal, effect_ref_mut_solution);
+            target_ty =
+                self.renormalize_effect_provider_target_ty_in_scope(target_ty, scope, assumptions);
+        }
+        target_ty
+    }
+
+    fn renormalize_effect_provider_target_ty_in_scope(
+        &mut self,
+        target_ty: TyId<'db>,
+        scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+    ) -> TyId<'db> {
+        normalize_ty(
+            self.db,
+            self.table.fold_ty(self.db, target_ty),
+            scope,
+            assumptions,
+        )
+        .fold_with(self.db, &mut self.table)
+    }
+
+    fn select_type_effect_binding_match(
+        &mut self,
+        pattern: TypePatternKey<'db>,
+        provided: ProvidedEffect<'db>,
+    ) -> Option<TypeEffectBindingMatch<'db>> {
+        self.select_type_effect_binding_match_in_scope(
+            pattern,
+            provided,
+            self.env.scope(),
+            self.env.assumptions(),
+        )
+    }
+
+    pub(super) fn select_type_effect_binding_match_in_scope(
+        &mut self,
+        pattern: TypePatternKey<'db>,
+        provided: ProvidedEffect<'db>,
+        scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+    ) -> Option<TypeEffectBindingMatch<'db>> {
+        let can_commit_key_relation = |this: &mut Self, given: TyId<'db>| {
+            let snapshot = this.snapshot_state();
+            let ok = apply_key_match_commit(
+                this,
+                KeyMatchCommit::QueryToType {
+                    query: pattern.clone(),
+                    actual: given,
+                },
+            );
+            this.rollback_state(snapshot);
+            ok
+        };
+
+        let matches_key = |this: &mut Self, actual_ty: TyId<'db>| {
+            if can_commit_key_relation(this, actual_ty) {
+                return true;
+            }
+
+            let erased_actual =
+                erase_unresolved_trailing_layout_hole_default_args(this.db, actual_ty);
+            erased_actual != actual_ty && can_commit_key_relation(this, erased_actual)
+        };
+        let direct_ty = if let Some((_, inner)) = provided.ty.as_capability(self.db) {
+            inner
+        } else {
+            provided.ty
+        };
+
+        if matches_key(self, direct_ty) {
+            return Some(TypeEffectBindingMatch::Direct { given: direct_ty });
+        }
+
+        self.effect_provider_target_resolution_in_scope(provided.ty, false, scope, assumptions)
+            .and_then(|resolution| {
+                matches_key(self, resolution.target_ty)
+                    .then_some(TypeEffectBindingMatch::Provider { resolution })
+            })
+    }
+
+    fn effect_provider_target_resolution(
+        &mut self,
+        provided_ty: TyId<'db>,
+        required_mut: bool,
+    ) -> Option<ProviderTargetResolution<'db>> {
+        self.effect_provider_target_resolution_in_scope(
+            provided_ty,
+            required_mut,
+            self.env.scope(),
+            self.env.assumptions(),
+        )
+    }
+
+    fn effect_provider_target_resolution_in_scope(
+        &mut self,
+        provided_ty: TyId<'db>,
+        required_mut: bool,
+        scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+    ) -> Option<ProviderTargetResolution<'db>> {
+        if let Some((kind, inner_ty)) = provided_ty.as_capability(self.db) {
+            if required_mut && !matches!(kind, CapabilityKind::Mut) {
+                return None;
+            }
+            return Some(ProviderTargetResolution::direct(inner_ty));
+        }
+
+        let effect_ref_trait = resolve_core_trait(self.db, scope, &["effect_ref", "EffectRef"])
+            .expect("missing required core trait `core::effect_ref::EffectRef`");
+        let effect_ref_mut_trait =
+            resolve_core_trait(self.db, scope, &["effect_ref", "EffectRefMut"])
+                .expect("missing required core trait `core::effect_ref::EffectRefMut`");
+        let effect_handle_trait =
+            resolve_core_trait(self.db, scope, &["effect_ref", "EffectHandle"])
+                .expect("missing required core trait `core::effect_ref::EffectHandle`");
+        let target_ident = IdentId::new(self.db, "Target".to_string());
+        let effect_handle_inst = TraitInstId::new(
+            self.db,
+            effect_handle_trait,
+            vec![provided_ty],
+            IndexMap::new(),
+        );
+        let GoalSatisfiability::Satisfied(handle_solution) =
+            self.trait_effect_goal_satisfiability_in_scope(scope, assumptions, effect_handle_inst)
+        else {
+            return None;
+        };
+
+        let snapshot = self.snapshot_state();
+        let resolution = (|| {
+            self.commit_trait_goal_solution(effect_handle_inst, handle_solution);
+
+            let target_assoc = effect_handle_inst.assoc_ty(self.db, target_ident)?;
+            let mut target_ty = normalize_ty(self.db, target_assoc, scope, assumptions)
+                .fold_with(self.db, &mut self.table);
+            let mut provided_ty = self.table.fold_ty(self.db, provided_ty);
+
+            let effect_ref_inst = TraitInstId::new(
+                self.db,
+                effect_ref_trait,
+                vec![provided_ty, target_ty],
+                IndexMap::new(),
+            );
+            let GoalSatisfiability::Satisfied(effect_ref_solution) =
+                self.trait_effect_goal_satisfiability_in_scope(scope, assumptions, effect_ref_inst)
+            else {
+                return None;
+            };
+            self.commit_trait_goal_solution(effect_ref_inst, effect_ref_solution);
+            provided_ty = self.table.fold_ty(self.db, provided_ty);
+            target_ty =
+                self.renormalize_effect_provider_target_ty_in_scope(target_ty, scope, assumptions);
+
+            let effect_ref_mut_proof = if required_mut {
+                let effect_ref_mut_inst = TraitInstId::new(
+                    self.db,
+                    effect_ref_mut_trait,
+                    vec![provided_ty, target_ty],
+                    IndexMap::new(),
+                );
+                let GoalSatisfiability::Satisfied(effect_ref_mut_solution) = self
+                    .trait_effect_goal_satisfiability_in_scope(
+                        scope,
+                        assumptions,
+                        effect_ref_mut_inst,
+                    )
+                else {
+                    return None;
+                };
+                self.commit_trait_goal_solution(effect_ref_mut_inst, effect_ref_mut_solution);
+                target_ty = self.renormalize_effect_provider_target_ty_in_scope(
+                    target_ty,
+                    scope,
+                    assumptions,
+                );
+                Some((effect_ref_mut_inst, effect_ref_mut_solution))
+            } else {
+                None
+            };
+
+            Some(ProviderTargetResolution {
+                target_ty: Canonicalized::new(self.db, target_ty).value.value,
+                target_seed_ty: target_assoc,
+                handle_proof: Some((effect_handle_inst, handle_solution)),
+                effect_ref_proof: Some((effect_ref_inst, effect_ref_solution)),
+                effect_ref_mut_proof,
+            })
+        })();
+        self.rollback_state(snapshot);
+        resolution
+    }
+
+    pub(super) fn apply_effect_commit_plan(&mut self, commit: EffectCommitPlan<'db>) -> bool {
+        let snapshot = self.snapshot_state();
+        let ok = self.apply_effect_commit_plan_inner(commit);
+        if ok {
+            self.commit_state(snapshot);
+        } else {
+            self.rollback_state(snapshot);
+        }
+        ok
+    }
+
+    fn apply_effect_commit_plan_inner(&mut self, commit: EffectCommitPlan<'db>) -> bool {
+        for (goal, solution) in commit.trait_solutions {
+            self.commit_trait_goal_solution(goal, solution);
+        }
+        if let Some(resolution) = commit.provider_resolution {
+            self.commit_provider_target_resolution(resolution);
+        }
+        if let Some(key_match) = commit.key_match
+            && !apply_key_match_commit(self, key_match)
+        {
+            return false;
+        }
+        commit
+            .extra_unifications
+            .into_iter()
+            .all(|(expected, given)| self.table.unify(expected, given).is_ok())
+    }
+
+    fn validate_keyed_with(
+        &mut self,
+        key_path: PathId<'db>,
+        provider: ProvidedEffect<'db>,
+        span: DynLazySpan<'db>,
+    ) -> Result<
+        (
+            EffectWitness<'db, ProvidedEffect<'db>>,
+            EffectCommitPlan<'db>,
+        ),
+        Box<EffectBarrier<'db>>,
+    > {
+        let Some(pattern) = build_barrier_pattern_for_with_key(self, key_path) else {
+            let fallback = build_conservative_same_family_barrier_pattern_in_scope(
+                self.db,
+                self.env.scope(),
+                self.env.assumptions(),
+                key_path,
+            );
+            if let Some(EffectPatternKey::Trait(pattern)) = fallback.clone() {
+                self.push_diag(BodyDiag::WithEffectTraitUnsatisfied {
+                    primary: span.clone(),
+                    key: key_path,
+                    trait_req: TraitInstId::new(
+                        self.db,
+                        pattern.def,
+                        std::iter::once(provider.ty)
+                            .chain(pattern.args_no_self.iter().copied())
+                            .collect::<Vec<_>>(),
+                        pattern
+                            .assoc_bindings
+                            .iter()
+                            .copied()
+                            .collect::<IndexMap<_, _>>(),
+                    ),
+                    given: provider.ty,
+                });
+                return Err(Box::new(EffectBarrier {
+                    pattern: EffectPatternKey::Trait(pattern),
+                    reason: BarrierReason::InvalidExplicitTraitKey { span, key_path },
+                }));
+            }
+            let expected = TyId::invalid(self.db, InvalidCause::Other);
+            self.push_diag(BodyDiag::WithEffectTypeUnsatisfied {
+                primary: span.clone(),
+                key: key_path,
+                expected,
+                given: provider.ty,
+            });
+            return Err(Box::new(EffectBarrier {
+                pattern: fallback.unwrap_or(EffectPatternKey::Type(TypePatternKey {
+                    carrier: expected,
+                    family: crate::analysis::ty::effects::effect_family_for_type(self.db, expected),
+                    slots: crate::analysis::ty::effects::PatternSlots::empty(),
+                })),
+                reason: BarrierReason::InvalidExplicitTypeKey { span, key_path },
+            }));
+        };
+
+        self.build_keyed_witness_from_pattern_in_scope(
+            pattern,
+            key_path,
+            provider,
+            span,
+            KeyedWitnessBuildOptions {
+                scope: KeyedWitnessBuildScope {
+                    scope: self.env.scope(),
+                    assumptions: self.env.base_assumptions(),
+                },
+                emit_diag: true,
+                mode: WitnessBuildMode::ExplicitKeyedWith,
+            },
+        )
+    }
+
+    pub(super) fn build_keyed_witness_from_pattern_in_scope(
+        &mut self,
+        pattern: EffectPatternKey<'db>,
+        key_path: PathId<'db>,
+        provider: ProvidedEffect<'db>,
+        span: DynLazySpan<'db>,
+        options: KeyedWitnessBuildOptions<'db>,
+    ) -> Result<
+        (
+            EffectWitness<'db, ProvidedEffect<'db>>,
+            EffectCommitPlan<'db>,
+        ),
+        Box<EffectBarrier<'db>>,
+    > {
+        let KeyedWitnessBuildOptions {
+            scope: KeyedWitnessBuildScope { scope, assumptions },
+            emit_diag,
+            mode,
+        } = options;
+        match pattern {
+            EffectPatternKey::Type(pattern) => {
+                if matches!(mode, WitnessBuildMode::ExplicitKeyedWith)
+                    && pattern
+                        .slots
+                        .entries
+                        .iter()
+                        .any(|slot| slot.kind == PatternSlotKind::OmittedExplicitArg)
+                {
+                    if emit_diag {
+                        self.push_diag(BodyDiag::WithEffectTypeUnsatisfied {
+                            primary: span.clone(),
+                            key: key_path,
+                            expected: pattern.carrier,
+                            given: provider.ty,
+                        });
+                    }
+                    return Err(Box::new(EffectBarrier {
+                        pattern: EffectPatternKey::Type(pattern),
+                        reason: BarrierReason::InvalidExplicitTypeKey {
+                            span: span.clone(),
+                            key_path,
+                        },
+                    }));
+                }
+                let Some(binding_match) =
+                    self.select_type_effect_binding_match(pattern.clone(), provider)
+                else {
+                    if emit_diag {
+                        self.push_diag(BodyDiag::WithEffectTypeUnsatisfied {
+                            primary: span.clone(),
+                            key: key_path,
+                            expected: pattern.carrier,
+                            given: provider.ty,
+                        });
+                    }
+                    return Err(Box::new(EffectBarrier {
+                        pattern: EffectPatternKey::Type(pattern),
+                        reason: BarrierReason::InvalidExplicitTypeKey {
+                            span: span.clone(),
+                            key_path,
+                        },
+                    }));
+                };
+                let (actual, provider_resolution, transport) = match binding_match {
+                    TypeEffectBindingMatch::Direct { given } => {
+                        (given, None, WitnessTransport::Direct)
+                    }
+                    TypeEffectBindingMatch::Provider { resolution } => (
+                        resolution.target_ty,
+                        Some(resolution),
+                        WitnessTransport::ByValue,
+                    ),
+                };
+                let snapshot = self.snapshot_state();
+                let specialized = self
+                    .specialize_type_pattern_key(pattern.clone(), actual)
+                    .map(|carrier| StoredTypeKey {
+                        carrier,
+                        family: pattern.family,
+                    })
+                    .and_then(|stored| {
+                        finalize_stored_effect_key(
+                            self.db,
+                            StoredEffectKey::Type(stored),
+                            scope,
+                            assumptions,
+                        )
+                    });
+                self.rollback_state(snapshot);
+                let Some(key) = specialized.filter(|key| {
+                    !matches!(
+                        (mode, key),
+                        (WitnessBuildMode::ExplicitKeyedWith, StoredEffectKey::Type(stored))
+                            if stored_value_contains_implicit_layout_params(
+                                self.db,
+                                stored.carrier,
+                            ) || stored_value_contains_out_of_scope_params(
+                                self.db,
+                                scope,
+                                stored.carrier,
+                            )
+                    )
+                }) else {
+                    if emit_diag {
+                        self.push_diag(BodyDiag::WithEffectTypeUnsatisfied {
+                            primary: span.clone(),
+                            key: key_path,
+                            expected: pattern.carrier,
+                            given: provider.ty,
+                        });
+                    }
+                    return Err(Box::new(EffectBarrier {
+                        pattern: EffectPatternKey::Type(pattern),
+                        reason: BarrierReason::InvalidExplicitTypeKey {
+                            span: span.clone(),
+                            key_path,
+                        },
+                    }));
+                };
+                Ok((
+                    EffectWitness {
+                        key,
+                        provider,
+                        transport,
+                    },
+                    EffectCommitPlan {
+                        key_match: Some(KeyMatchCommit::QueryToType {
+                            query: pattern,
+                            actual,
+                        }),
+                        trait_solutions: SmallVec::new(),
+                        provider_resolution,
+                        extra_unifications: SmallVec::new(),
+                    },
+                ))
+            }
+            EffectPatternKey::Trait(pattern) => {
+                if matches!(mode, WitnessBuildMode::ExplicitKeyedWith)
+                    && pattern
+                        .slots
+                        .entries
+                        .iter()
+                        .any(|slot| slot.kind == PatternSlotKind::OmittedExplicitArg)
+                {
+                    let trait_req = TraitInstId::new(
+                        self.db,
+                        pattern.def,
+                        std::iter::once(provider.ty)
+                            .chain(pattern.args_no_self.iter().copied())
+                            .collect::<Vec<_>>(),
+                        pattern
+                            .assoc_bindings
+                            .iter()
+                            .copied()
+                            .collect::<IndexMap<_, _>>(),
+                    );
+                    if emit_diag {
+                        self.push_diag(BodyDiag::WithEffectTraitUnsatisfied {
+                            primary: span.clone(),
+                            key: key_path,
+                            trait_req,
+                            given: provider.ty,
+                        });
+                    }
+                    return Err(Box::new(EffectBarrier {
+                        pattern: EffectPatternKey::Trait(pattern),
+                        reason: BarrierReason::InvalidExplicitTraitKey {
+                            span: span.clone(),
+                            key_path,
+                        },
+                    }));
+                }
+                if provider.ty.has_var(self.db) {
+                    if emit_diag {
+                        self.push_diag(BodyDiag::TypeAnnotationNeeded {
+                            span: span.clone(),
+                            ty: provider.ty,
+                        });
+                    }
+                    return Err(Box::new(EffectBarrier {
+                        pattern: EffectPatternKey::Trait(pattern),
+                        reason: BarrierReason::UnstableExplicitKeyedProvider {
+                            span: span.clone(),
+                            key_path,
+                        },
+                    }));
+                }
+                let mut table = UnificationTable::new(self.db);
+                let (instantiated, slot_bindings) = instantiate_trait_pattern_in_with_bindings(
+                    self.db,
+                    &mut table,
+                    pattern.clone(),
+                );
+                let args = std::iter::once(provider.ty)
+                    .chain(instantiated.args(self.db).iter().skip(1).copied())
+                    .collect::<Vec<_>>();
+                let trait_goal = TraitInstId::new(
+                    self.db,
+                    instantiated.def(self.db),
+                    args,
+                    instantiated.assoc_type_bindings(self.db).clone(),
+                );
+                let GoalSatisfiability::Satisfied(solution) =
+                    self.trait_effect_goal_satisfiability_in_scope(scope, assumptions, trait_goal)
+                else {
+                    if emit_diag {
+                        self.push_diag(BodyDiag::WithEffectTraitUnsatisfied {
+                            primary: span.clone(),
+                            key: key_path,
+                            trait_req: trait_goal,
+                            given: provider.ty,
+                        });
+                    }
+                    return Err(Box::new(EffectBarrier {
+                        pattern: EffectPatternKey::Trait(pattern),
+                        reason: BarrierReason::InvalidExplicitTraitKey {
+                            span: span.clone(),
+                            key_path,
+                        },
+                    }));
+                };
+                let canonical_goal = Canonicalized::new(self.db, trait_goal);
+                let solved = canonical_goal.extract_solution(&mut table, solution);
+                let solved_inst = solved
+                    .implementor
+                    .trait_inst(self.db)
+                    .fold_with(self.db, &mut table);
+                let instantiated = reify_unresolved_pattern_slots(
+                    self.db,
+                    instantiated.fold_with(self.db, &mut table),
+                    &slot_bindings,
+                );
+                let specialized = if matches!(mode, WitnessBuildMode::SeededRequirement)
+                    && (stored_value_contains_implicit_layout_params(self.db, solved_inst)
+                        || stored_value_contains_out_of_scope_params(self.db, scope, solved_inst))
+                {
+                    instantiated
+                } else {
+                    solved_inst
+                };
+                let Some(key) = finalize_stored_effect_key(
+                    self.db,
+                    StoredEffectKey::Trait(StoredTraitKey {
+                        def: specialized.def(self.db),
+                        args_no_self: specialized.args(self.db)[1..].iter().copied().collect(),
+                        assoc_bindings: specialized
+                            .assoc_ty_bindings(self.db)
+                            .into_iter()
+                            .collect(),
+                        family: pattern.family,
+                    }),
+                    scope,
+                    assumptions,
+                ) else {
+                    return Err(Box::new(EffectBarrier {
+                        pattern: EffectPatternKey::Trait(pattern),
+                        reason: BarrierReason::InvalidExplicitTraitKey { span, key_path },
+                    }));
+                };
+                Ok((
+                    EffectWitness {
+                        key,
+                        provider,
+                        transport: WitnessTransport::ByValue,
+                    },
+                    EffectCommitPlan {
+                        key_match: None,
+                        trait_solutions: SmallVec::new(),
+                        provider_resolution: None,
+                        extra_unifications: SmallVec::new(),
+                    },
+                ))
+            }
+        }
+    }
+
+    fn specialize_type_pattern_key(
+        &mut self,
+        pattern: TypePatternKey<'db>,
+        actual: TyId<'db>,
+    ) -> Option<TyId<'db>> {
+        let key_match = KeyMatchCommit::QueryToType {
+            query: pattern,
+            actual,
+        };
+        apply_key_match_commit(self, key_match).then(|| self.table.fold_ty(self.db, actual))
+    }
+
+    fn barrier_reason_for_pattern(
+        &self,
+        key_path: PathId<'db>,
+        key: StoredEffectKey<'db>,
+        span: DynLazySpan<'db>,
+    ) -> BarrierReason<'db> {
+        match key {
+            StoredEffectKey::Type(_) => BarrierReason::InvalidExplicitTypeKey { span, key_path },
+            StoredEffectKey::Trait(_) => BarrierReason::InvalidExplicitTraitKey { span, key_path },
+        }
+    }
+
+    fn insert_effect_barrier(&mut self, barrier: EffectBarrier<'db>) {
+        let Some(barrier) = self.refine_effect_barrier(barrier) else {
+            return;
+        };
+        self.env
+            .insert_effect_barrier(barrier.pattern.clone().family(), barrier);
+    }
+
+    fn refine_effect_barrier(&self, barrier: EffectBarrier<'db>) -> Option<EffectBarrier<'db>> {
+        if self.barrier_pattern_is_precise(&barrier.pattern) {
+            return Some(barrier);
+        }
+
+        // Exact invalid keyed barriers participate only when precise; otherwise we downgrade to
+        // a same-family conservative barrier so invalid explicit keyed bindings still shadow outer
+        // providers conservatively.
+        let key_path = match &barrier.reason {
+            BarrierReason::InvalidExplicitTypeKey { key_path, .. }
+            | BarrierReason::InvalidExplicitTraitKey { key_path, .. }
+            | BarrierReason::UnstableExplicitKeyedProvider { key_path, .. } => *key_path,
+        };
+        let pattern = build_conservative_same_family_barrier_pattern_in_scope(
+            self.db,
+            self.env.scope(),
+            self.env.assumptions(),
+            key_path,
+        )?;
+        Some(EffectBarrier {
+            pattern,
+            reason: barrier.reason,
+        })
+    }
+
+    fn barrier_pattern_is_precise(&self, pattern: &EffectPatternKey<'db>) -> bool {
+        !query_contains_unresolved_inference(self.db, pattern)
+            && !contains_projection_or_invalid_query_state(self.db, pattern)
+    }
+
+    fn specialize_same_trait_method_inst(
+        &self,
+        method_name: IdentId<'db>,
+        inst: TraitInstId<'db>,
+    ) -> TraitInstId<'db> {
+        let Some(CallableDef::Func(current_func)) = self.env.func() else {
+            return inst;
+        };
+        if current_func.name(self.db).to_opt() != Some(method_name) {
+            return inst;
+        }
+
+        let Some(enclosing_inst) = (match current_func.scope().parent_item(self.db) {
+            Some(ItemKind::ImplTrait(impl_trait)) => impl_trait.trait_inst(self.db),
+            Some(ItemKind::Trait(trait_)) => Some(TraitInstId::new(
+                self.db,
+                trait_,
+                trait_.params(self.db).to_vec(),
+                IndexMap::new(),
+            )),
+            _ => None,
+        }) else {
+            return inst;
+        };
+
+        if enclosing_inst.def(self.db) != inst.def(self.db) {
+            return inst;
+        }
+
+        let enclosing_args = enclosing_inst.args(self.db);
+        let inst_args = inst.args(self.db);
+        if inst_args.len() != enclosing_args.len() || inst_args.is_empty() {
+            return inst;
+        }
+
+        let mut args = inst_args.to_vec();
+        args[1..].clone_from_slice(&enclosing_args[1..]);
+        TraitInstId::new(
+            self.db,
+            inst.def(self.db),
+            args,
+            enclosing_inst.assoc_type_bindings(self.db).clone(),
+        )
     }
 
     fn check_method_call(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
@@ -1627,6 +2678,7 @@ impl<'db> TyChecker<'db> {
         }
 
         let receiver_tys = self.capability_fallback_candidates(receiver_prop.ty);
+        let method_assumptions = self.env.assumptions();
 
         let mut canonical_r_ty = Canonicalized::new(self.db, receiver_tys[0]);
         let mut candidate = select_method_candidate(
@@ -1634,7 +2686,7 @@ impl<'db> TyChecker<'db> {
             canonical_r_ty.value,
             method_name,
             self.env.scope(),
-            self.env.assumptions(),
+            method_assumptions,
             None,
         );
         if matches!(candidate, Err(MethodSelectionError::NotFound)) {
@@ -1645,7 +2697,7 @@ impl<'db> TyChecker<'db> {
                     fallback_canonical.value,
                     method_name,
                     self.env.scope(),
-                    self.env.assumptions(),
+                    method_assumptions,
                     None,
                 );
 
@@ -1710,13 +2762,14 @@ impl<'db> TyChecker<'db> {
         };
 
         let (func_ty, trait_inst) = match candidate {
-            MethodCandidate::InherentMethod(func_def) => {
-                let func_ty = TyId::func(self.db, func_def);
-                (self.instantiate_to_term(func_ty), None)
-            }
+            MethodCandidate::InherentMethod(func_def) => (
+                self.instantiate_inherent_method_to_term(func_def, selected_receiver_ty),
+                None,
+            ),
 
             MethodCandidate::TraitMethod(cand) => {
                 let inst = canonical_r_ty.extract_solution(&mut self.table, cand.inst);
+                let inst = self.specialize_same_trait_method_inst(method_name, inst);
                 let func_ty =
                     self.instantiate_trait_method_to_term(cand.method, selected_receiver_ty, inst);
                 (func_ty, Some(inst))
@@ -1724,8 +2777,12 @@ impl<'db> TyChecker<'db> {
 
             MethodCandidate::NeedsConfirmation(cand) => {
                 let inst = canonical_r_ty.extract_solution(&mut self.table, cand.inst);
-                self.env
-                    .register_confirmation(inst, call_span.clone().into());
+                let inst = self.specialize_same_trait_method_inst(method_name, inst);
+                self.env.register_trait_obligation(TraitObligation {
+                    goal: inst,
+                    origin: TraitObligationOrigin::GenericConfirmation,
+                    span: call_span.clone().into(),
+                });
                 let func_ty =
                     self.instantiate_trait_method_to_term(cand.method, selected_receiver_ty, inst);
                 (func_ty, Some(inst))
@@ -1769,10 +2826,7 @@ impl<'db> TyChecker<'db> {
         );
 
         // Check required effects for the method call
-        self.check_callable_effects(expr, &callable);
-
-        // Check function constraints after instantiation
-        callable.check_constraints(self, call_span.method_name().into());
+        self.check_callable_effects(expr, &mut callable);
 
         let ret_ty = callable.ret_ty(self.db);
 
@@ -1834,7 +2888,11 @@ impl<'db> TyChecker<'db> {
 
         match res {
             ResolvedPathInBody::Binding(binding) => {
-                let ty = self.env.lookup_binding_ty(&binding);
+                let ty = self
+                    .env
+                    .lookup_binding_ty(&binding)
+                    .fold_with(self.db, &mut self.table);
+                let ty = self.normalize_ty(ty);
                 let mut is_mut = binding.is_mut();
                 if let Some((cap, _)) = ty.as_capability(self.db) {
                     is_mut = match cap {
@@ -1931,28 +2989,37 @@ impl<'db> TyChecker<'db> {
                 PathRes::Method(receiver_ty, candidate) => {
                     let canonical_r_ty = Canonicalized::new(self.db, receiver_ty);
                     let (method_ty, trait_inst) = match candidate {
-                        MethodCandidate::InherentMethod(func_def) => {
-                            // TODO: move this to path resolver
-                            let mut method_ty = TyId::func(self.db, func_def);
-                            for &arg in receiver_ty.generic_args(self.db) {
-                                // If the method is defined in "specialized" impl block
-                                // of a generic type (eg `impl Option<i32>`), then
-                                // calling `TyId::app(db, method_ty, ..)` will result in
-                                // `TyId::invalid`.
-                                if method_ty.applicable_ty(self.db).is_some() {
-                                    method_ty = TyId::app(self.db, method_ty, arg);
-                                } else {
-                                    break;
-                                }
-                            }
-                            (self.instantiate_to_term(method_ty), None)
-                        }
+                        MethodCandidate::InherentMethod(func_def) => (
+                            self.instantiate_inherent_method_to_term(func_def, receiver_ty),
+                            None,
+                        ),
                         MethodCandidate::TraitMethod(cand)
                         | MethodCandidate::NeedsConfirmation(cand) => {
                             let inst = canonical_r_ty.extract_solution(&mut self.table, cand.inst);
+                            let inst = if inst
+                                .self_ty(self.db)
+                                .kind(self.db)
+                                .does_match(receiver_ty.kind(self.db))
+                            {
+                                let mut args = inst.args(self.db).to_vec();
+                                if let Some(self_arg) = args.first_mut() {
+                                    *self_arg = receiver_ty;
+                                }
+                                TraitInstId::new(
+                                    self.db,
+                                    inst.def(self.db),
+                                    args,
+                                    inst.assoc_type_bindings(self.db).clone(),
+                                )
+                            } else {
+                                inst
+                            };
                             if matches!(candidate, MethodCandidate::NeedsConfirmation(_)) {
-                                self.env
-                                    .register_confirmation(inst, path_expr_span.clone().into());
+                                self.env.register_trait_obligation(TraitObligation {
+                                    goal: inst,
+                                    origin: TraitObligationOrigin::GenericConfirmation,
+                                    span: path_expr_span.clone().into(),
+                                });
                             }
                             let method_ty = if cand.method.is_method(self.db) {
                                 self.instantiate_trait_method_to_term(
@@ -2043,8 +3110,11 @@ impl<'db> TyChecker<'db> {
                         trait_inst
                     };
 
-                    self.env
-                        .register_confirmation(inst, path_expr_span.clone().into());
+                    self.env.register_trait_obligation(TraitObligation {
+                        goal: inst,
+                        origin: TraitObligationOrigin::GenericConfirmation,
+                        span: path_expr_span.clone().into(),
+                    });
 
                     let func_ty = self.instantiate_trait_assoc_fn_to_term(
                         method.as_callable(self.db).unwrap(),
@@ -2139,11 +3209,11 @@ impl<'db> TyChecker<'db> {
                 // Use the expected type to constrain the record's generic args
                 // before checking fields. This is important when record fields
                 // depend on generic parameters (e.g. via associated types).
-                let snapshot = self.table.snapshot();
+                let snapshot = self.snapshot_state();
                 if self.table.unify(ty, expected).is_ok() {
-                    self.table.commit(snapshot);
+                    self.commit_state(snapshot);
                 } else {
-                    self.table.rollback_to(snapshot);
+                    self.rollback_state(snapshot);
                 }
                 let ty = ty.fold_with(self.db, &mut self.table);
 
@@ -2176,11 +3246,11 @@ impl<'db> TyChecker<'db> {
                 // Constrain the variant type with the expected type before
                 // checking fields (same rationale as record inits).
                 let ty = variant.ty;
-                let snapshot = self.table.snapshot();
+                let snapshot = self.snapshot_state();
                 if self.table.unify(ty, expected).is_ok() {
-                    self.table.commit(snapshot);
+                    self.commit_state(snapshot);
                 } else {
-                    self.table.rollback_to(snapshot);
+                    self.rollback_state(snapshot);
                 }
                 let ty = ty.fold_with(self.db, &mut self.table);
 
@@ -2631,6 +3701,7 @@ impl<'db> TyChecker<'db> {
         };
 
         let lhs_candidates = self.capability_fallback_candidates(lhs_ty);
+        let method_assumptions = self.env.assumptions();
 
         let mut selected_lhs_ty = lhs_candidates[0];
         let mut c_lhs_ty = Canonicalized::new(self.db, selected_lhs_ty);
@@ -2639,7 +3710,7 @@ impl<'db> TyChecker<'db> {
             c_lhs_ty.value,
             op.trait_method(self.db),
             self.env.scope(),
-            self.env.assumptions(),
+            method_assumptions,
             Some(trait_def),
         );
         if matches!(method_candidate, Err(MethodSelectionError::NotFound)) {
@@ -2650,7 +3721,7 @@ impl<'db> TyChecker<'db> {
                     c_candidate_ty.value,
                     op.trait_method(self.db),
                     self.env.scope(),
-                    self.env.assumptions(),
+                    method_assumptions,
                     Some(trait_def),
                 );
                 if fallback.is_ok() || !matches!(fallback, Err(MethodSelectionError::NotFound)) {
@@ -2670,8 +3741,11 @@ impl<'db> TyChecker<'db> {
             ) => {
                 let inst = c_lhs_ty.extract_solution(&mut self.table, cand.inst);
                 if matches!(res, MethodCandidate::NeedsConfirmation(_)) {
-                    self.env
-                        .register_confirmation(inst, expr.span(self.body()).into());
+                    self.env.register_trait_obligation(TraitObligation {
+                        goal: inst,
+                        origin: TraitObligationOrigin::GenericConfirmation,
+                        span: expr.span(self.body()).into(),
+                    });
                 }
 
                 let func_ty =
@@ -2707,7 +3781,7 @@ impl<'db> TyChecker<'db> {
 
                 let mut viable: Vec<(TyId<'db>, TraitInstId<'db>, TyId<'db>)> = Vec::new();
                 for inst in insts.iter().copied() {
-                    let snapshot = self.table.snapshot();
+                    let snapshot = self.snapshot_state();
                     let candidate_func_ty = super::instantiate_trait_method(
                         self.db,
                         trait_method,
@@ -2729,7 +3803,7 @@ impl<'db> TyChecker<'db> {
                         .try_coerce_capability_for_expr_to_expected(rhs_expr, rhs.ty, expected_rhs)
                         .unwrap_or(rhs.ty);
                     let unifies = self.table.unify(rhs_ty, expected_rhs).is_ok();
-                    self.table.rollback_to(snapshot);
+                    self.rollback_state(snapshot);
                     if unifies {
                         viable.push((candidate_func_ty, inst, expected_rhs));
                     }
@@ -2748,8 +3822,11 @@ impl<'db> TyChecker<'db> {
                     }
                     1 => {
                         let (func_ty, inst, expected_rhs) = viable.pop().unwrap();
-                        self.env
-                            .register_confirmation(inst, expr.span(self.body()).into());
+                        self.env.register_trait_obligation(TraitObligation {
+                            goal: inst,
+                            origin: TraitObligationOrigin::GenericConfirmation,
+                            span: expr.span(self.body()).into(),
+                        });
                         let rhs_ty = self
                             .try_coerce_capability_for_expr_to_expected(
                                 rhs_expr,
@@ -2764,6 +3841,7 @@ impl<'db> TyChecker<'db> {
                         self.push_diag(BodyDiag::AmbiguousTraitInst {
                             primary: expr.span(self.body()).into(),
                             cands: viable.into_iter().map(|(_, inst, _)| inst).collect(),
+                            required_by: None,
                         });
                         return ExprProp::invalid(self.db);
                     }
@@ -2879,6 +3957,64 @@ impl<'db> TyChecker<'db> {
             _ => false,
         }
     }
+}
+
+fn reify_unresolved_pattern_slots<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    value: T,
+    slot_bindings: &FxHashMap<TyId<'db>, TyId<'db>>,
+) -> T
+where
+    T: crate::analysis::ty::fold::TyFoldable<'db>,
+{
+    struct SlotReifier<'a, 'db> {
+        slot_bindings: &'a FxHashMap<TyId<'db>, TyId<'db>>,
+    }
+
+    impl<'db> crate::analysis::ty::fold::TyFolder<'db> for SlotReifier<'_, 'db> {
+        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            self.slot_bindings
+                .get(&ty)
+                .copied()
+                .unwrap_or_else(|| ty.super_fold_with(db, self))
+        }
+    }
+
+    value.fold_with(db, &mut SlotReifier { slot_bindings })
+}
+
+fn collect_layout_args_in_order<'db>(
+    db: &'db dyn HirAnalysisDb,
+    expected: TyId<'db>,
+    actual: TyId<'db>,
+    out: &mut Vec<TyId<'db>>,
+) -> bool {
+    if matches!(
+        expected.data(db),
+        TyData::ConstTy(const_ty) if matches!(const_ty.data(db), ConstTyData::Hole(..))
+    ) {
+        out.push(actual);
+        return true;
+    }
+
+    let (expected_base, expected_args) = expected.decompose_ty_app(db);
+    let (actual_base, actual_args) = actual.decompose_ty_app(db);
+    if expected_args.len() != actual_args.len() {
+        return false;
+    }
+    if expected_args.is_empty() {
+        return expected == actual;
+    }
+    if expected_base != actual_base {
+        return false;
+    }
+
+    expected_args
+        .iter()
+        .zip(actual_args.iter())
+        .all(|(expected_arg, actual_arg)| {
+            collect_layout_args_in_order(db, *expected_arg, *actual_arg, out)
+        })
 }
 
 fn body_diag_from_method_selection_err<'db>(

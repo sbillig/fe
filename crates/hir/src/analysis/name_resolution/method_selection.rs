@@ -1,5 +1,5 @@
 use crate::core::hir_def::{IdentId, Trait, scope_graph::ScopeId};
-use common::indexmap::IndexSet;
+use common::indexmap::{IndexMap, IndexSet};
 use rustc_hash::FxHashSet;
 use thin_vec::ThinVec;
 
@@ -8,7 +8,7 @@ use crate::analysis::{
     name_resolution::{available_traits_in_scope, is_scope_visible_from},
     ty::{
         binder::Binder,
-        canonical::{Canonical, Solution},
+        canonical::{Canonical, Canonicalized, Solution},
         method_table::probe_method,
         trait_def::{TraitInstId, impls_for_ty},
         trait_resolution::{
@@ -316,21 +316,83 @@ impl<'db> MethodSelector<'db> {
 
             _ => {
                 // Some candidates are equivalent after trait solving (e.g., an explicit
-                // bound and an implied/blanket-derived bound for the same method).
-                // Collapse by the selected method candidate before reporting ambiguity.
-                let mut selected = IndexSet::default();
+                // bound and an implied/blanket-derived bound for the same method), but we
+                // must still treat distinct methods as ambiguous so later return-type
+                // constraints can disambiguate them.
+                let mut selected = IndexMap::default();
                 for (inst, method) in visible_traits.iter().copied() {
-                    selected.insert(self.check_inst(inst, method));
+                    match self.check_inst(inst, method) {
+                        MethodCandidate::TraitMethod(cand) => {
+                            selected.insert(cand, true);
+                        }
+                        MethodCandidate::NeedsConfirmation(cand) => {
+                            selected.entry(cand).or_insert(false);
+                        }
+                        MethodCandidate::InherentMethod(_) => unreachable!(),
+                    }
                 }
 
                 if selected.len() == 1 {
-                    return Ok(*selected.iter().next().unwrap());
+                    let (cand, confirmed) = selected.into_iter().next().unwrap();
+                    return Ok(if confirmed {
+                        MethodCandidate::TraitMethod(cand)
+                    } else {
+                        MethodCandidate::NeedsConfirmation(cand)
+                    });
+                }
+
+                let confirmed: Vec<_> = selected
+                    .iter()
+                    .filter_map(|(&cand, &is_confirmed)| is_confirmed.then_some(cand))
+                    .collect();
+                if confirmed.len() == 1
+                    && (self.receiver.value.has_var(self.db)
+                        || selected
+                            .iter()
+                            .filter_map(|(&cand, &is_confirmed)| (!is_confirmed).then_some(cand))
+                            .all(|cand| self.candidate_specializes_to(cand, confirmed[0])))
+                {
+                    return Ok(MethodCandidate::TraitMethod(confirmed[0]));
                 }
 
                 Err(MethodSelectionError::AmbiguousTraitMethod(
                     visible_traits.into_iter().map(|cand| cand.0).collect(),
                 ))
             }
+        }
+    }
+
+    fn candidate_specializes_to(
+        &self,
+        candidate: TraitMethodCand<'db>,
+        confirmed: TraitMethodCand<'db>,
+    ) -> bool {
+        let canonical_receiver = Canonicalized::new(self.db, self.receiver.value);
+        let mut table = UnificationTable::new(self.db);
+        let candidate_inst = canonical_receiver.extract_solution(&mut table, candidate.inst);
+        let confirmed_inst = canonical_receiver.extract_solution(&mut table, confirmed.inst);
+        if candidate_inst.def(self.db) != confirmed_inst.def(self.db)
+            || candidate.method.name(self.db) != confirmed.method.name(self.db)
+        {
+            return false;
+        }
+
+        let solve_cx = TraitSolveCx::new(self.db, self.scope).with_assumptions(self.assumptions);
+        let query = CanonicalGoalQuery::new(self.db, candidate_inst, self.assumptions);
+        let confirmed = Canonical::new(self.db, confirmed_inst);
+        let mut table = UnificationTable::new(self.db);
+        match is_goal_query_satisfiable(self.db, solve_cx, &query) {
+            GoalSatisfiability::Satisfied(solution) => {
+                Canonical::new(self.db, query.extract_solution(&mut table, solution).inst)
+                    == confirmed
+            }
+            GoalSatisfiability::NeedsConfirmation(solutions) => {
+                solutions.into_iter().any(|solution| {
+                    Canonical::new(self.db, query.extract_solution(&mut table, solution).inst)
+                        == confirmed
+                })
+            }
+            GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => false,
         }
     }
 

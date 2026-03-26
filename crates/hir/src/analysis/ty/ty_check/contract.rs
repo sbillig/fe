@@ -124,6 +124,7 @@ fn check_ty_decodable<'db>(
                 span,
                 primary_goal: inst,
                 unsat_subgoal: None,
+                required_by: None,
             })
             .into(),
         );

@@ -8,8 +8,8 @@ use crate::analysis::{
     name_resolution::diagnostics::{ImportDiag, PathResDiag},
     ty::{
         diagnostics::{
-            BodyDiag, DefConflictError, FuncBodyDiag, ImplDiag, TraitConstraintDiag,
-            TraitLowerDiag, TyDiagCollection, TyLowerDiag,
+            BodyDiag, CallConstraintDiagInfo, DefConflictError, FuncBodyDiag, ImplDiag,
+            TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
         },
         trait_def::TraitInstId,
         ty_check::{EffectParamOwner, RecordLike},
@@ -214,6 +214,18 @@ fn format_method_param_ty<'db>(
     }
     rendered.push_str(&ty);
     rendered
+}
+
+fn format_call_constraint_source<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    required_by: &CallConstraintDiagInfo<'db>,
+) -> String {
+    let callable_name = required_by
+        .callable_def
+        .name(db)
+        .map(|name| name.data(db).to_string())
+        .unwrap_or_else(|| "callable".to_string());
+    format!("required by this bound on `{callable_name}`")
 }
 
 /// All diagnostics accumulated in salsa-db should implement
@@ -1886,19 +1898,31 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             },
 
-            Self::ConstHoleInValuePosition { span } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "layout hole `_` is not allowed in value position".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
+            Self::ConstHoleInValuePosition { span, ty } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message: "this type contains `_`, which is only allowed in contract fields and `uses (...)` parameter types".to_string(),
+                    message: "this type contains an inferred const (`_`)".to_string(),
                     span: span.resolve(db),
-                }],
-                notes: vec![
-                    "replace `_` with an explicit const argument in value positions".to_string(),
-                ],
-                error_code,
-            },
+                }];
+                if let Some(name_span) = ty.name_span(db) {
+                    let type_name = ty.base_ty(db).pretty_print(db);
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{type_name}` is defined here"),
+                        span: name_span.resolve(db),
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "type with inferred const generic parameter `_` can not be used here".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "specify an explicit const generic argument".to_string(),
+                    ],
+                    error_code,
+                }
+            }
 
             Self::OwnParamCannotBeBorrow { span, ty } => CompleteDiagnostic {
                 severity: Severity::Error,
@@ -2749,6 +2773,62 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::WithEffectTraitUnsatisfied {
+                primary,
+                key,
+                trait_req,
+                given,
+            } => {
+                let key_str = key.pretty_print(db);
+                let trait_str = trait_req.pretty_print(db, false);
+                let given_ty = given.pretty_print(db).to_string();
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!(
+                        "keyed effect binding `{}` requires `{}` to implement `{}`",
+                        key_str, given_ty, trait_str
+                    ),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "`{}` does not implement `{}` for effect `{}`",
+                            given_ty, trait_str, key_str
+                        ),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![],
+                    error_code,
+                }
+            }
+
+            Self::WithEffectTypeUnsatisfied {
+                primary,
+                key,
+                expected,
+                given,
+            } => {
+                let key_str = key.pretty_print(db);
+                let expected_ty = pretty_print_ty_for_mismatch(db, *expected);
+                let given_ty = pretty_print_ty_for_mismatch(db, *given);
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!(
+                        "keyed effect binding `{key_str}` requires a provider compatible with `{expected_ty}`, but `{given_ty}` is given",
+                    ),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "`{given_ty}` is not compatible with keyed effect `{key_str}`",
+                        ),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![],
+                    error_code,
+                }
+            }
+
             Self::ReturnedTypeMismatch {
                 primary,
                 actual,
@@ -3461,12 +3541,24 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
-            Self::AmbiguousTraitInst { primary, cands } => {
+            Self::AmbiguousTraitInst {
+                primary,
+                cands,
+                required_by,
+            } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
                     message: "multiple implementations are found".to_string(),
                     span: primary.resolve(db),
                 }];
+
+                if let Some(required_by) = required_by {
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format_call_constraint_source(db, required_by),
+                        span: required_by.bound_span.resolve(db),
+                    });
+                }
 
                 let mut sorted: Vec<_> = cands.iter().copied().collect();
                 sorted.sort_by_key(|a| a.pretty_print(db, false));
@@ -4081,6 +4173,7 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                 span,
                 primary_goal,
                 unsat_subgoal,
+                required_by,
             } => {
                 let msg = format!(
                     "`{}` doesn't implement `{}`",
@@ -4106,6 +4199,14 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                         style: LabelStyle::Secondary,
                         message: subgoal.to_string(),
                         span: span.resolve(db),
+                    });
+                }
+
+                if let Some(required_by) = required_by {
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format_call_constraint_source(db, required_by),
+                        span: required_by.bound_span.resolve(db),
                     });
                 }
 

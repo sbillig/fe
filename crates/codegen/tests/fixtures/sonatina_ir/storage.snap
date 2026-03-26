@@ -235,15 +235,15 @@ func private %transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.i256, v
         return 0.i256;
 }
 
-func private %init__StorPtr_Evm___207f35a85ac4062e() {
+func private %init__Evm_hef0af3106e109414__3af54274b2985741() {
     block0:
-        v1.i256 = sym_size &runtime__StorPtr_Evm___207f35a85ac4062e;
-        v2.i256 = sym_addr &runtime__StorPtr_Evm___207f35a85ac4062e;
+        v1.i256 = sym_size &runtime__Evm_hef0af3106e109414__3af54274b2985741;
+        v2.i256 = sym_addr &runtime__Evm_hef0af3106e109414__3af54274b2985741;
         evm_code_copy 0.i256 v2 v1;
         evm_return 0.i256 v1;
 }
 
-func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
+func private %runtime__Evm_hef0af3106e109414__3af54274b2985741() {
     block0:
         v2.i256 = call %stor_ptr_stor__Evm_hef0af3106e109414_CoinStore_hd26a92ca525e0e79__b6feb5585dda62f1 0.i256;
         v4.i256 = call %stor_ptr_stor__Evm_hef0af3106e109414_TotalSupply_hddb16bb19b5b088e__f5679b0709de743a 2.i256;
@@ -343,10 +343,10 @@ func private %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_r
 
 object @Coin {
     section init {
-        entry %init__StorPtr_Evm___207f35a85ac4062e;
-        embed .runtime as &runtime__StorPtr_Evm___207f35a85ac4062e;
+        entry %init__Evm_hef0af3106e109414__3af54274b2985741;
+        embed .runtime as &runtime__Evm_hef0af3106e109414__3af54274b2985741;
     }
     section runtime {
-        entry %runtime__StorPtr_Evm___207f35a85ac4062e;
+        entry %runtime__Evm_hef0af3106e109414__3af54274b2985741;
     }
 }

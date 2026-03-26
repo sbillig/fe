@@ -235,10 +235,10 @@ impl<'db> TyChecker<'db> {
 
             for ingot in search_ingots.into_iter().flatten() {
                 for impl_ in impls_for_ty(self.db, ingot, canonical_ty) {
-                    let snapshot = self.table.snapshot();
+                    let snapshot = self.snapshot_state();
                     let impl_id = impl_.skip_binder();
                     if impl_id.trait_def(self.db) != seq_trait {
-                        self.table.commit(snapshot);
+                        self.commit_state(snapshot);
                         continue;
                     }
 
@@ -252,7 +252,7 @@ impl<'db> TyChecker<'db> {
                     // Unify the trait's Self type with the iterable type
                     let self_ty = trait_inst.self_ty(self.db);
                     if self.table.unify(self_ty, iterable_lookup_ty).is_err() {
-                        self.table.rollback_to(snapshot);
+                        self.rollback_state(snapshot);
                         continue;
                     }
 
@@ -264,7 +264,7 @@ impl<'db> TyChecker<'db> {
                     let item_ident = IdentId::new(self.db, "Item".to_string());
                     let Some(&elem_ty) = trait_inst.assoc_type_bindings(self.db).get(&item_ident)
                     else {
-                        self.table.rollback_to(snapshot);
+                        self.rollback_state(snapshot);
                         continue;
                     };
                     let elem_ty = elem_ty.fold_with(self.db, &mut self.table);
@@ -275,11 +275,11 @@ impl<'db> TyChecker<'db> {
 
                     let method_defs = seq_trait.method_defs(self.db);
                     let Some(&len_method) = method_defs.get(&len_ident) else {
-                        self.table.rollback_to(snapshot);
+                        self.rollback_state(snapshot);
                         continue;
                     };
                     let Some(&get_method) = method_defs.get(&get_ident) else {
-                        self.table.rollback_to(snapshot);
+                        self.rollback_state(snapshot);
                         continue;
                     };
 
@@ -296,7 +296,7 @@ impl<'db> TyChecker<'db> {
                     let Ok(len_callable) =
                         Callable::new(self.db, len_func_ty, span.clone(), Some(trait_inst))
                     else {
-                        self.table.rollback_to(snapshot);
+                        self.rollback_state(snapshot);
                         continue;
                     };
 
@@ -307,17 +307,19 @@ impl<'db> TyChecker<'db> {
                         iterable_lookup_ty,
                         trait_inst,
                     );
-                    let Ok(get_callable) =
+                    let Ok(mut get_callable) =
                         Callable::new(self.db, get_func_ty, span, Some(trait_inst))
                     else {
-                        self.table.rollback_to(snapshot);
+                        self.rollback_state(snapshot);
                         continue;
                     };
+                    let mut len_callable = len_callable;
 
                     let call_span: crate::span::DynLazySpan<'db> = expr.span(self.body()).into();
                     let len_effect_args =
-                        self.resolve_callable_effects(call_span.clone(), &len_callable);
-                    let get_effect_args = self.resolve_callable_effects(call_span, &get_callable);
+                        self.resolve_callable_effects(call_span.clone(), &mut len_callable);
+                    let get_effect_args =
+                        self.resolve_callable_effects(call_span, &mut get_callable);
 
                     let for_loop_seq = ForLoopSeq {
                         iterable_ty,
@@ -329,7 +331,7 @@ impl<'db> TyChecker<'db> {
                         get_effect_args,
                     };
 
-                    self.table.commit(snapshot);
+                    self.commit_state(snapshot);
                     return (elem_ty, Some(for_loop_seq));
                 }
             }
