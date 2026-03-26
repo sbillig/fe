@@ -169,8 +169,7 @@ mod tests {
     #[test]
     fn normalize_file_uri_canonicalizes_percent_encoded_drive_paths() {
         let client_uri = Url::parse("file:///c%3A/Users/sean/Downloads/erc20/src/lib.fe").unwrap();
-        let expected =
-            Url::from_file_path(r"C:\Users\sean\Downloads\erc20\src\lib.fe").unwrap();
+        let expected = Url::from_file_path(r"C:\Users\sean\Downloads\erc20\src\lib.fe").unwrap();
 
         assert_eq!(normalize_file_uri(client_uri), expected);
     }

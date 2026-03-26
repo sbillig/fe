@@ -203,7 +203,7 @@ mod tests {
         visitor::{Visitor, VisitorCtxt, prelude::LazyPathSpan},
     };
     use std::collections::BTreeMap;
-    use test_utils::snap_test;
+    use test_utils::{normalize::normalize_newlines, snap_test};
     use url::Url;
 
     use super::*;
@@ -363,7 +363,8 @@ mod tests {
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| fixture.path().to_string());
-        let file_id = files.add(filename, fixture.content().to_string());
+        let normalized_fixture = normalize_newlines(fixture.content()).into_owned();
+        let file_id = files.add(filename, normalized_fixture);
 
         // Create diagnostics for each annotation.
         // Primary label: ident span (= what Zed caches as origin_selection_range).
@@ -408,6 +409,7 @@ mod tests {
         let cargo_manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
         let ingot_base_dir =
             std::path::Path::new(&cargo_manifest_dir).join("test_files/single_ingot");
+        let content = normalize_newlines(fixture.content()).into_owned();
 
         let mut db = DriverDataBase::default();
 
@@ -426,6 +428,7 @@ mod tests {
         {
             // Get the file directly from the file index
             let file_url = Url::from_file_path(fe_source_path).unwrap();
+            db.workspace().update(&mut db, file_url.clone(), content);
             let file = db.workspace().get(&db, &file_url).unwrap();
             let top_mod = map_file_to_mod(&db, file);
 
@@ -445,10 +448,11 @@ mod tests {
     )]
     fn test_goto_cursor_target(fixture: Fixture<&str>) {
         let mut db = DriverDataBase::default(); // Changed to mut
+        let content = normalize_newlines(fixture.content()).into_owned();
         let file = db.workspace().touch(
             &mut db,
             Url::from_file_path(fixture.path()).unwrap(),
-            Some(fixture.content().to_string()),
+            Some(content),
         );
         let top_mod = map_file_to_mod(&db, file);
 
@@ -462,11 +466,12 @@ mod tests {
     )]
     fn test_find_path_surrounding_cursor(fixture: Fixture<&str>) {
         let mut db = DriverDataBase::default(); // Changed to mut
+        let content = normalize_newlines(fixture.content()).into_owned();
 
         let file = db.workspace().touch(
             &mut db,
             Url::from_file_path(fixture.path()).unwrap(),
-            Some(fixture.content().to_string()),
+            Some(content.clone()),
         );
         let top_mod = map_file_to_mod(&db, file);
 
@@ -502,7 +507,7 @@ mod tests {
 
         let result = format!(
             "{}\n---\n{}",
-            fixture.content(),
+            content,
             cursor_paths
                 .iter()
                 .map(|(cursor, path)| { format!("cursor position: {cursor:?}, path: {path}") })
