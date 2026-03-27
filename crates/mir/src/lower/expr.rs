@@ -13,7 +13,7 @@ use hir::{
 use hir::analysis::ty::effects::EffectKeyKind;
 
 use crate::{
-    ir::{Place, Rvalue, SourceInfoId, try_value_address_space_in},
+    ir::{Place, Rvalue, SourceInfoId},
     layout,
 };
 
@@ -311,7 +311,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let dest = self.alloc_temp_local(ty, false, temp_name);
-        let load_space = self.load_result_address_space(expr, ty, addr_space);
+        let load_space = self.load_result_address_space(expr, ty, &place, addr_space);
         self.set_local_address_space(dest, load_space);
         self.assign(None, Some(dest), Rvalue::Load { place });
         self.alloc_value(
@@ -343,7 +343,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             source_ty.pretty_print(self.db),
             target_ty.pretty_print(self.db),
         );
-        if matches!(kind, CapabilityKind::View) {
+        if matches!(kind, CapabilityKind::View) || target_repr.address_space().is_some() {
             return self.alloc_value(
                 target_ty,
                 ValueOrigin::TransparentCast {
@@ -356,7 +356,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if let Some(place) = self.place_from_derefable_value(source_value, source_ty) {
             let place_space = self.place_address_space(&place);
             let dest = self.alloc_temp_local(target_ty, false, "coerce");
-            let load_space = self.load_result_address_space(expr, target_ty, place_space);
+            let load_space = self.load_result_address_space(expr, target_ty, &place, place_space);
             self.set_local_address_space(dest, load_space);
             self.assign(None, Some(dest), Rvalue::Load { place });
             return self.alloc_value(
@@ -1041,6 +1041,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     fn ty_is_scalar_ref_capability(&self, ty: TyId<'db>) -> bool {
         ty.as_capability(self.db).is_some_and(|(kind, inner)| {
             matches!(kind, CapabilityKind::Ref)
+                && !matches!(
+                    crate::repr::runtime_shape_for_ty(
+                        self.db,
+                        &self.core,
+                        inner,
+                        AddressSpaceKind::Code,
+                    ),
+                    crate::ir::RuntimeShape::ConstRef { .. }
+                )
                 && matches!(
                     crate::repr::repr_kind_for_ty(self.db, &self.core, inner),
                     crate::repr::ReprKind::Word
@@ -1167,14 +1176,29 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         self.place_for_capability_inner_load(arg_expr, arg_value, actual_ty)
                     {
                         let place_space = self.place_address_space(&place);
-                        let expected_repr = self.value_repr_for_ty(expected_ty, place_space);
+                        let loaded_space = crate::repr::runtime_shape_for_loaded_place(
+                            self.db,
+                            &self.core,
+                            &self.builder.body.values,
+                            &self.builder.body.locals,
+                            &place,
+                        )
+                        .and_then(|shape| match shape {
+                            crate::ir::RuntimeShape::ConstRef { .. } => {
+                                Some(AddressSpaceKind::Code)
+                            }
+                            crate::ir::RuntimeShape::AddressWord(info) => Some(info.address_space),
+                            _ => None,
+                        })
+                        .unwrap_or(place_space);
+                        let expected_repr = self.value_repr_for_ty(expected_ty, loaded_space);
                         let loaded = self.alloc_temp_local(required_inner, false, "viewword");
-                        self.set_local_address_space(loaded, place_space);
+                        self.set_local_address_space(loaded, loaded_space);
                         self.assign(None, Some(loaded), Rvalue::Load { place });
                         let loaded_value = self.alloc_value(
                             required_inner,
                             ValueOrigin::Local(loaded),
-                            self.value_repr_for_ty(required_inner, place_space),
+                            self.value_repr_for_ty(required_inner, loaded_space),
                         );
                         return self.alloc_value(
                             expected_ty,
@@ -1266,7 +1290,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             && expected_ty == inner_ty
         {
             let expected_repr = self.value_repr_for_ty(expected_ty, arg_space);
-            if matches!(kind, CapabilityKind::View) {
+            if matches!(kind, CapabilityKind::View) || expected_repr.address_space().is_some() {
                 return self.alloc_value(
                     expected_ty,
                     ValueOrigin::TransparentCast { value: arg_value },
@@ -1379,6 +1403,46 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         visit(self, return_ty, &mut seen)
     }
 
+    fn call_arg_is_semantically_mutable(&self, callable: &Callable<'db>, idx: usize) -> bool {
+        let hir::hir_def::CallableDef::Func(func) = callable.callable_def else {
+            return false;
+        };
+        func.params(self.db).nth(idx).is_some_and(|param| {
+            param.is_mut(self.db) || crate::repr::ty_has_mut_capability(self.db, param.ty(self.db))
+        })
+    }
+
+    fn materialize_call_arg_in_temp_memory_slot(
+        &mut self,
+        ty: TyId<'db>,
+        value: ValueId,
+        hint: &str,
+    ) -> ValueId {
+        let temp = self.alloc_temp_local(ty, true, hint);
+        self.set_local_address_space(temp, AddressSpaceKind::Memory);
+        self.assign(
+            None,
+            Some(temp),
+            Rvalue::Alloc {
+                address_space: AddressSpaceKind::Memory,
+            },
+        );
+        self.builder.body.locals[temp.index()].place_root_layout =
+            crate::ir::LocalPlaceRootLayout::MemorySlot;
+        let temp_value = self.alloc_value(
+            ty,
+            ValueOrigin::Local(temp),
+            ValueRepr::Ref(AddressSpaceKind::Memory),
+        );
+        let place = Place::new(temp_value, MirProjectionPath::new());
+        self.push_inst_here(MirInst::Store {
+            source: SourceInfoId::SYNTHETIC,
+            place,
+            value,
+        });
+        temp_value
+    }
+
     fn coerce_call_args_to_expected(
         &mut self,
         callable: &Callable<'db>,
@@ -1407,6 +1471,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             };
             let coerced = self.coerce_call_arg_value(arg_expr, *arg, expected_ty);
             let mut coerced = self.materialize_capability_call_arg(arg_expr, coerced, expected_ty);
+            if self.is_by_ref_ty(expected_ty)
+                && self.call_arg_is_semantically_mutable(callable, idx)
+                && self.value_is_const_backed(coerced)
+            {
+                coerced =
+                    self.materialize_call_arg_in_temp_memory_slot(expected_ty, coerced, "callarg");
+            }
             if idx == 0
                 && let Some(receiver_ty) = expected_receiver_ty
             {
@@ -1877,7 +1948,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             };
             let PlaceBase::Binding(binding) = place.base;
 
-            let addr_space = self.address_space_for_binding(&binding);
+            let addr_space = self.bound_local_root_address_space(&binding);
             let is_non_memory = !matches!(addr_space, AddressSpaceKind::Memory);
 
             // EffectParam: just get the binding value
@@ -1899,10 +1970,29 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             };
 
             let value_repr = self.value_repr_for_ty(binding_ty, addr_space);
+            let inferred_provider = self.infer_effect_provider_for_resolved_arg(resolved_arg, None);
+            let inferred_provider_ty = inferred_provider.and_then(|inferred| inferred.provider_ty);
+            let provider_space = inferred_provider
+                .map(|inferred| inferred.address_space)
+                .unwrap_or(addr_space);
+            let binding_is_provider = self.raw_effect_space_for_provider_ty(binding_ty).is_some()
+                || self
+                    .effect_provider_space_for_provider_ty(binding_ty)
+                    .is_some();
 
             // Storage providers are addressable as handles even when their logical type is
             // word-represented (e.g. transparent newtypes around `u256`).
             if value_repr.address_space().is_some() || is_non_memory {
+                if !binding_is_provider && let Some(provider_ty) = inferred_provider_ty {
+                    let base = self.alloc_value(
+                        binding_ty,
+                        ValueOrigin::PlaceRoot(local),
+                        ValueRepr::Word,
+                    );
+                    let place = Place::new(base, crate::ir::MirProjectionPath::new());
+                    let provider_repr = self.value_repr_for_ty(provider_ty, provider_space);
+                    return self.alloc_place_ref_value(provider_ty, place, provider_repr);
+                }
                 let value = self.alloc_value(binding_ty, ValueOrigin::Local(local), value_repr);
                 return value;
             }
@@ -2358,8 +2448,29 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         &self,
         expr: ExprId,
         ty: TyId<'db>,
+        place: &Place<'db>,
         source_space: AddressSpaceKind,
     ) -> AddressSpaceKind {
+        let fallback = |place: &Place<'db>| self.place_address_space(place);
+        if let Some(space) = crate::repr::try_pointer_leaf_infos_for_place_with_fallback(
+            self.db,
+            &self.core,
+            &self.builder.body.values,
+            &self.builder.body.locals,
+            place,
+            ty,
+            &fallback,
+        )
+        .ok()
+        .and_then(|infos| {
+            infos
+                .into_iter()
+                .find(|(path, _)| path.is_empty())
+                .map(|(_, info)| info.address_space)
+        }) {
+            return space;
+        }
+
         crate::repr::pointer_info_for_ty(self.db, &self.core, ty, source_space)
             .map(|info| info.address_space)
             .unwrap_or_else(|| self.expr_address_space(expr))
@@ -2458,6 +2569,39 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.place_for_borrow_expr_from_lowered(expr)
     }
 
+    fn transparent_field0_place_from_location(
+        &mut self,
+        lhs_place: Option<Place<'db>>,
+        lhs_value: ValueId,
+        lhs_ty: TyId<'db>,
+        field_ty: TyId<'db>,
+    ) -> Place<'db> {
+        let (location_value, space) = if let Some(place) = lhs_place {
+            let space = self.place_address_space(&place);
+            let location_value = if place.projection.is_empty() {
+                lhs_value
+            } else {
+                self.alloc_value(
+                    lhs_ty,
+                    ValueOrigin::PlaceRef(place),
+                    self.value_repr_for_ty(lhs_ty, space),
+                )
+            };
+            (location_value, space)
+        } else {
+            let space = self.value_address_space_or_memory(lhs_value);
+            (lhs_value, space)
+        };
+        let cast_value = self.alloc_value(
+            field_ty,
+            ValueOrigin::TransparentCast {
+                value: location_value,
+            },
+            self.value_repr_for_ty(field_ty, space),
+        );
+        Place::new(cast_value, MirProjectionPath::new())
+    }
+
     fn place_for_borrow_expr_from_lowered(&mut self, expr: ExprId) -> Option<Place<'db>> {
         match expr.data(self.db, self.body) {
             Partial::Present(Expr::Path(_)) => {
@@ -2475,7 +2619,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     .direct_deref_target_ty(local_ty)
                     .is_some_and(|target_ty| !self.is_by_ref_ty(target_ty))
                 {
-                    let addr_space = self.address_space_for_binding(&binding);
+                    let addr_space = self.bound_local_root_address_space(&binding);
                     let base_value = self.alloc_value(
                         local_ty,
                         ValueOrigin::Local(local),
@@ -2495,7 +2639,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     || matches!(binding, LocalBinding::EffectParam { .. })
                         && self.effect_param_key_is_type(binding);
                 let base_value = if is_runtime_place {
-                    let addr_space = self.address_space_for_binding(&binding);
+                    let addr_space = self.bound_local_root_address_space(&binding);
                     self.alloc_value(ty, ValueOrigin::Local(local), ValueRepr::Ref(addr_space))
                 } else {
                     self.alloc_value(ty, ValueOrigin::PlaceRoot(local), ValueRepr::Word)
@@ -2519,12 +2663,35 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     }
 
                     if let Some(place) = self.place_for_borrow_expr_from_lowered(*lhs) {
-                        return Some(place);
+                        let lhs_value = if place.projection.is_empty() {
+                            place.base
+                        } else {
+                            self.lowered_expr_value(*lhs)?
+                        };
+                        return Some(self.transparent_field0_place_from_location(
+                            Some(place),
+                            lhs_value,
+                            lhs_ty,
+                            info.field_ty,
+                        ));
                     }
 
                     let base_value = self.lowered_expr_value(*lhs)?;
-                    if self.builder.body.value(base_value).repr.is_ref() {
-                        return Some(Place::new(base_value, MirProjectionPath::new()));
+                    if self.builder.body.value(base_value).repr.is_ref()
+                        && crate::repr::value_resolves_to_location(
+                            self.db,
+                            &self.core,
+                            &self.builder.body.values,
+                            &self.builder.body.locals,
+                            base_value,
+                        )
+                    {
+                        return Some(self.transparent_field0_place_from_location(
+                            None,
+                            base_value,
+                            lhs_ty,
+                            info.field_ty,
+                        ));
                     }
                     return None;
                 }
@@ -2614,7 +2781,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 }
 
                 let local = self.local_for_binding(binding)?;
-                let addr_space = self.address_space_for_binding(&binding);
+                let addr_space = self.bound_local_root_address_space(&binding);
                 let base_value =
                     self.alloc_value(ty, ValueOrigin::Local(local), ValueRepr::Ref(addr_space));
                 Some(Place::new(base_value, MirProjectionPath::new()))
@@ -2638,11 +2805,34 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     }
 
                     if let Some(place) = self.place_for_expr_from_lowered(*lhs) {
-                        return Some(place);
+                        let lhs_value = if place.projection.is_empty() {
+                            place.base
+                        } else {
+                            self.lowered_expr_value(*lhs)?
+                        };
+                        return Some(self.transparent_field0_place_from_location(
+                            Some(place),
+                            lhs_value,
+                            lhs_ty,
+                            info.field_ty,
+                        ));
                     }
                     let base_value = self.lowered_expr_value(*lhs)?;
-                    if self.builder.body.value(base_value).repr.is_ref() {
-                        return Some(Place::new(base_value, MirProjectionPath::new()));
+                    if self.builder.body.value(base_value).repr.is_ref()
+                        && crate::repr::value_resolves_to_location(
+                            self.db,
+                            &self.core,
+                            &self.builder.body.values,
+                            &self.builder.body.locals,
+                            base_value,
+                        )
+                    {
+                        return Some(self.transparent_field0_place_from_location(
+                            None,
+                            base_value,
+                            lhs_ty,
+                            info.field_ty,
+                        ));
                     }
                     return None;
                 }
@@ -3140,14 +3330,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                                 || pat_ty.as_capability(self.db).is_some();
                             let _ = value_id;
                             if carries_space {
-                                let space = crate::ir::lookup_local_pointer_leaf_info(
-                                    &self.builder.body.locals,
-                                    local,
-                                    &MirProjectionPath::new(),
-                                )
-                                .map(|info| info.address_space)
-                                .unwrap_or(self.builder.body.local(local).address_space);
-                                self.set_pat_address_space(*pat, space);
+                                self.set_pat_address_space(
+                                    *pat,
+                                    self.builder.body.local(local).address_space,
+                                );
                             }
                         } else {
                             self.assign(Some(stmt_id), Some(local), Rvalue::ZeroInit);
@@ -3982,17 +4168,18 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         .address_space()
                         .is_some()
                         || pat_ty.as_capability(self.db).is_some();
-                    if carries_space
-                        && let Some(space) = try_value_address_space_in(
-                            &self.builder.body.values,
-                            &self.builder.body.locals,
-                            value_id,
-                        )
+                    self.lower_assign_to_lvalue(stmt_id, *target, value_id);
+                    if self.current_block().is_some()
+                        && carries_space
+                        && let Some(local) = self.binding_locals.get(&binding).copied()
                     {
-                        self.set_pat_address_space(pat, space);
+                        self.set_pat_address_space(
+                            pat,
+                            self.builder.body.local(local).address_space,
+                        );
                     }
+                    return;
                 }
-
                 self.lower_assign_to_lvalue(stmt_id, *target, value_id);
             }
             Expr::AugAssign(target, value, op) => {
@@ -4008,17 +4195,22 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         .address_space()
                         .is_some()
                         || pat_ty.as_capability(self.db).is_some();
-                    if carries_space
-                        && let Some(space) = try_value_address_space_in(
-                            &self.builder.body.values,
-                            &self.builder.body.locals,
-                            value_id,
-                        )
-                    {
-                        self.set_pat_address_space(pat, space);
+                    if !self.lower_arith_aug_assign_via_trait_call(
+                        stmt_id, expr, *target, *value, value_id, *op,
+                    ) {
+                        self.lower_aug_assign_to_lvalue(stmt_id, *target, value_id, *op);
                     }
+                    if self.current_block().is_some()
+                        && carries_space
+                        && let Some(local) = self.binding_locals.get(&binding).copied()
+                    {
+                        self.set_pat_address_space(
+                            pat,
+                            self.builder.body.local(local).address_space,
+                        );
+                    }
+                    return;
                 }
-
                 if !self.lower_arith_aug_assign_via_trait_call(
                     stmt_id, expr, *target, *value, value_id, *op,
                 ) {
@@ -4051,9 +4243,10 @@ mod tests {
     use crate::lower::lower_function;
 
     #[test]
-    fn storage_field_borrow_keeps_storage_pointer_info() {
+    fn memory_effect_field_borrow_keeps_memory_pointer_info() {
         let mut db = DriverDataBase::default();
-        let url = Url::parse("file:///storage_field_borrow_keeps_storage_pointer_info.fe").unwrap();
+        let url =
+            Url::parse("file:///memory_effect_field_borrow_keeps_memory_pointer_info.fe").unwrap();
         let src = r#"
 struct CoinStore {
     alice: u256,
@@ -4134,8 +4327,8 @@ fn borrow_storage_field_handle() -> u256
             .expect("expected local `p`");
         assert_eq!(
             func.body.local(p_local).address_space,
-            AddressSpaceKind::Storage,
-            "borrowed storage field local should keep storage address space",
+            AddressSpaceKind::Memory,
+            "borrowed memory effect field local should keep memory address space",
         );
         assert_eq!(
             crate::ir::lookup_local_pointer_leaf_info(
@@ -4143,9 +4336,9 @@ fn borrow_storage_field_handle() -> u256
                 p_local,
                 &MirProjectionPath::new(),
             )
-            .expect("borrowed storage field local should carry root pointer info")
+            .expect("borrowed memory effect field local should carry root pointer info")
             .address_space,
-            AddressSpaceKind::Storage,
+            AddressSpaceKind::Memory,
         );
         let p_value = func
             .body
@@ -4160,23 +4353,23 @@ fn borrow_storage_field_handle() -> u256
         assert_eq!(
             func.body
                 .value_pointer_info(p_value)
-                .expect("borrowed storage field value should carry pointer info")
+                .expect("borrowed memory effect field value should carry pointer info")
                 .address_space,
-            AddressSpaceKind::Storage,
+            AddressSpaceKind::Memory,
         );
         for value in &func.body.values {
             if matches!(
                 value.origin,
                 ValueOrigin::PlaceRef(_) | ValueOrigin::MoveOut { .. }
-            ) && value.repr.address_space() == Some(AddressSpaceKind::Storage)
+            ) && value.repr.address_space() == Some(AddressSpaceKind::Memory)
             {
                 assert_eq!(
                     value
                         .pointer_info
-                        .expect("storage place values should carry pointer info")
+                        .expect("memory place values should carry pointer info")
                         .address_space,
-                    AddressSpaceKind::Storage,
-                    "storage place values must not retain memory pointer metadata",
+                    AddressSpaceKind::Memory,
+                    "memory place values must not retain non-memory pointer metadata",
                 );
             }
         }
@@ -4234,6 +4427,78 @@ fn test() uses (mem: mut RawMem) {
             .expect("mem ptr local should carry root pointer info")
             .address_space,
             AddressSpaceKind::Memory,
+        );
+    }
+
+    #[test]
+    fn by_place_local_aggregates_bind_memory_effects_without_explicit_call_args() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse(
+            "file:///by_place_local_aggregates_bind_memory_effects_without_explicit_call_args.fe",
+        )
+        .unwrap();
+        let src = r#"
+struct Foo {
+    a: u256,
+}
+
+fn bump() uses (foo: mut Foo) {}
+
+fn test() {
+    let mut foo = Foo { a: 1 }
+    with (foo) {
+        bump()
+    }
+}
+"#;
+
+        let file = db.workspace().touch(&mut db, url, Some(src.to_owned()));
+        let top_mod = db.top_mod(file);
+        let module = crate::lower_module(&db, top_mod).expect("module should lower");
+        let func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "test")
+            .expect("expected `test`");
+        let bump_call = func
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                MirInst::Assign {
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } if call
+                    .resolved_name
+                    .as_deref()
+                    .is_some_and(|name| name.contains("bump_eff0_mem__Foo")) =>
+                {
+                    Some(call)
+                }
+                _ => None,
+            })
+            .expect("expected memory-specialized bump call");
+        assert!(
+            bump_call.effect_args.is_empty(),
+            "memory effect specialization should not emit explicit effect args once the callee symbol is specialized: {:?}",
+            bump_call.effect_args,
+        );
+
+        let foo_ref_value = func
+            .body
+            .values
+            .iter()
+            .find(|value| {
+                matches!(value.origin, ValueOrigin::Local(_))
+                    && matches!(value.repr, ValueRepr::Ref(AddressSpaceKind::Memory))
+                    && value.ty.pretty_print(&db) == "Foo"
+            })
+            .expect("expected a by-ref memory value for local `foo`");
+        assert!(
+            matches!(foo_ref_value.origin, ValueOrigin::Local(_)),
+            "expected memory effect binding to reuse the local aggregate by reference, got {:?}",
+            foo_ref_value.origin,
         );
     }
 
@@ -5174,14 +5439,35 @@ fn newtype_u8_roundtrip(x: u8) -> u8 {
         let top_mod = db.top_mod(file);
         let module = crate::lower_module(&db, top_mod).expect("module should lower");
 
+        let matching_take_funcs = module
+            .functions
+            .iter()
+            .filter(|func| {
+                func.symbol_name.contains("take_i__t__")
+                    && func.symbol_name.contains("get__u256_Reverse")
+            })
+            .map(|func| func.symbol_name.clone())
+            .collect::<Vec<_>>();
         let func = module
             .functions
             .iter()
             .find(|func| {
                 func.symbol_name.contains("take_i__t__")
                     && func.symbol_name.contains("get__u256_Reverse")
+                    && func.symbol_name.contains("arg0_f1_code")
             })
-            .expect("expected Take<Reverse>::get specialization");
+            .or_else(|| {
+                module.functions.iter().find(|func| {
+                    func.symbol_name.contains("take_i__t__")
+                        && func.symbol_name.contains("get__u256_Reverse")
+                })
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected Take<Reverse>::get specialization, saw {:?}",
+                    matching_take_funcs
+                )
+            });
 
         let block = &func.body.blocks[0];
         let ref_reverse_local = block
@@ -5190,16 +5476,171 @@ fn newtype_u8_roundtrip(x: u8) -> u8 {
             .find_map(|inst| match inst {
                 crate::ir::MirInst::Assign {
                     dest: Some(local),
-                    rvalue: Rvalue::Load { .. },
+                    rvalue: Rvalue::Load { place },
                     ..
                 } if func.body.local(*local).ty.pretty_print(&db)
                     == "ref Reverse<u256, [u256; 8]>" =>
                 {
+                    assert_eq!(
+                        crate::repr::pointer_leaf_infos_for_place(
+                            &db,
+                            &crate::core_lib::CoreLib::new(&db, top_mod.scope()),
+                            &func.body.values,
+                            &func.body.locals,
+                            place,
+                            func.body.local(*local).ty,
+                        )
+                        .into_iter()
+                        .find(|(path, _)| path.is_empty())
+                        .map(|(_, info)| info.address_space),
+                        Some(AddressSpaceKind::Code),
+                        "loading self.base should resolve to a code-backed `ref Reverse`; place={:?}; self_param={:?}",
+                        place,
+                        func.body.local(func.body.param_locals[0]),
+                    );
                     Some(*local)
                 }
                 _ => None,
             })
             .expect("expected loaded `ref Reverse` local");
+        let matching_sum_last4 = module
+            .functions
+            .iter()
+            .filter(|func| func.symbol_name.contains("sum_last4"))
+            .map(|func| func.symbol_name.clone())
+            .collect::<Vec<_>>();
+        let caller = module
+            .functions
+            .iter()
+            .find(|func| {
+                func.symbol_name.contains("sum_last4")
+                    && func.symbol_name.contains("arg0_root_code")
+            })
+            .or_else(|| {
+                module
+                    .functions
+                    .iter()
+                    .find(|func| func.symbol_name.contains("sum_last4"))
+            })
+            .unwrap_or_else(|| panic!("expected sum_last4, saw {:?}", matching_sum_last4));
+        assert_eq!(
+            crate::ir::lookup_local_pointer_leaf_info(
+                &caller.body.locals,
+                caller.body.param_locals[0],
+                &MirProjectionPath::new(),
+            )
+            .map(|info| info.address_space),
+            Some(AddressSpaceKind::Code),
+            "sum_last4 code-specialized param should be code-backed; symbol={}; param={:?}",
+            caller.symbol_name,
+            caller.body.local(caller.body.param_locals[0]),
+        );
+        let rev_local = caller
+            .body
+            .blocks[0]
+            .insts
+            .iter()
+            .find_map(|inst| match inst {
+                crate::ir::MirInst::Assign {
+                    dest: Some(local),
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } if call
+                    .resolved_name
+                    .as_deref()
+                    .is_some_and(|name| name.contains("reverse_u256")) =>
+                {
+                    assert!(
+                        matches!(call.target, Some(crate::ir::CallTargetRef::Hir(_))),
+                        "reverse_u256 call target should remain HIR: {:?}",
+                        call.target
+                    );
+                    let arg_value = call.args[0];
+                    assert_eq!(
+                        crate::ir::resolve_local_projection_root(&caller.body.values, arg_value)
+                            .and_then(|(local, path)| {
+                                crate::ir::lookup_local_pointer_leaf_info(
+                                    &caller.body.locals,
+                                    local,
+                                    &path,
+                                )
+                            })
+                            .map(|info| info.address_space),
+                        Some(AddressSpaceKind::Code),
+                        "reverse_u256 arg should resolve to code-backed arr; arg={:?}; value={:?}",
+                        caller.body.value(arg_value).origin,
+                        caller.body.value(arg_value),
+                    );
+                    assert_eq!(
+                        crate::lower::call_return_pointer_leaf_infos(
+                            &db,
+                            &crate::core_lib::CoreLib::new(&db, top_mod.scope()),
+                            &caller.body.values,
+                            &caller.body.locals,
+                            call,
+                            caller.body.local(*local).ty,
+                        )
+                        .into_iter()
+                        .find(|(path, _)| path.is_empty())
+                        .map(|(_, info)| info.address_space),
+                        Some(AddressSpaceKind::Code),
+                        "reverse_u256 call should forward code-backed root leaf; symbol={}; call={:?}",
+                        caller.symbol_name,
+                        call,
+                    );
+                    Some(*local)
+                }
+                _ => None,
+            })
+            .expect("expected reverse_u256 local");
+        assert_eq!(
+            crate::ir::lookup_local_pointer_leaf_info(
+                &caller.body.locals,
+                rev_local,
+                &MirProjectionPath::new(),
+            )
+            .map(|info| info.address_space),
+            Some(AddressSpaceKind::Code),
+            "reverse_u256 result should preserve code-backed root leaf; rev_local={:?}",
+            caller.body.local(rev_local),
+        );
+        let tail_local = caller.body.blocks[0]
+            .insts
+            .iter()
+            .find_map(|inst| match inst {
+                crate::ir::MirInst::Assign {
+                    dest: Some(local),
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } if call
+                    .resolved_name
+                    .as_deref()
+                    .is_some_and(|name| name.contains("take_u256__Reverse")) =>
+                {
+                    Some(*local)
+                }
+                _ => None,
+            })
+            .expect("expected take_u256 local");
+        assert_eq!(
+            crate::ir::lookup_local_pointer_leaf_info(
+                &caller.body.locals,
+                tail_local,
+                &MirProjectionPath::from_projection(MirProjection::Field(1)),
+            )
+            .map(|info| info.address_space),
+            Some(AddressSpaceKind::Code),
+            "take_u256 result should preserve code-backed base leaf; tail_local={:?}",
+            caller.body.local(tail_local),
+        );
+
+        assert_eq!(
+            func.body.local(ref_reverse_local).address_space,
+            AddressSpaceKind::Code,
+            "loaded `ref Reverse` locals should preserve code-space backing; local={:?}; self_param={:?}",
+            func.body.local(ref_reverse_local),
+            func.body.local(func.body.param_locals[0]),
+        );
 
         let reverse_call_receiver = block
             .insts
@@ -5401,15 +5842,16 @@ fn newtype_u8_roundtrip(x: u8) -> u8 {
             "[u256; 8]",
             "`ref arr` should resolve to the array value location",
         );
+        let expected_space = func.body.local(local).address_space;
         assert_eq!(
             resolved.final_state().location_address_space(),
-            Some(AddressSpaceKind::Memory),
-            "`ref arr` should resolve as a memory location",
+            Some(expected_space),
+            "`ref arr` should resolve in the same address space as the borrowed array location",
         );
-        assert_eq!(
+        assert!(
+            matches!(func.body.value(place.base).repr, ValueRepr::Ref(_)),
+            "the borrowed array root should stay by-reference, got {:?}",
             func.body.value(place.base).repr,
-            ValueRepr::Ref(AddressSpaceKind::Memory),
-            "the borrowed array root should stay by-reference",
         );
         assert_eq!(
             func.body
@@ -5499,6 +5941,52 @@ fn newtype_u8_roundtrip(x: u8) -> u8 {
             place.projection.is_empty(),
             "`ref rev` should not dereference `rev`"
         );
+    }
+
+    #[test]
+    fn aug_assign_transparent_scalars_do_not_create_non_location_places() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse(
+            "file:///aug_assign_transparent_scalars_do_not_create_non_location_places.fe",
+        )
+        .unwrap();
+        let file = db.workspace().touch(
+            &mut db,
+            url,
+            Some(
+                include_str!("../../../fe/tests/fixtures/fe_test/aug_assign_traits.fe").to_owned(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let module = crate::lower_module(&db, top_mod).expect("module should lower");
+        let core = crate::CoreLib::new(&db, top_mod.scope());
+
+        for func in &module.functions {
+            for (idx, value) in func.body.values.iter().enumerate() {
+                let place = match &value.origin {
+                    ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => place,
+                    _ => continue,
+                };
+                assert!(
+                    crate::repr::place_resolves_to_location(
+                        &db,
+                        &core,
+                        &func.body.values,
+                        &func.body.locals,
+                        place,
+                    ) || !place.projection.is_empty(),
+                    "non-location empty place leaked into MIR: func={} v{} ty={} repr={:?} origin={:?} base_ty={} base_repr={:?} base_origin={:?}",
+                    func.symbol_name,
+                    idx,
+                    value.ty.pretty_print(&db),
+                    value.repr,
+                    value.origin,
+                    func.body.value(place.base).ty.pretty_print(&db),
+                    func.body.value(place.base).repr,
+                    func.body.value(place.base).origin,
+                );
+            }
+        }
     }
 
     #[test]

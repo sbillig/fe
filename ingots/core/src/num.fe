@@ -410,6 +410,20 @@ pub trait IntWord {
     fn from_word(_: u256) -> Self
 }
 
+pub trait WordValue {
+    fn to_word(self) -> u256
+}
+
+impl<T> WordValue for T
+    where T: IntWord
+{
+    fn to_word(self) -> u256 { IntWord::to_word(self) }
+}
+
+impl<const LEN: usize> WordValue for String<LEN> {
+    fn to_word(self) -> u256 { __bitcast(self) }
+}
+
 impl IntWord for u8 {
     const MASK: u256 = U8_MASK
     const SIGN_BIT: u256 = 0

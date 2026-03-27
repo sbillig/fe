@@ -1656,6 +1656,24 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 }
             }
 
+            Self::StringTooLarge { span, max, given } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "string type exceeds inline capacity".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "`String<{given}>` exceeds the current inline limit of `String<{max}>`"
+                    ),
+                    span: span.resolve(db),
+                }],
+                notes: vec![
+                    format!(
+                        "strings currently use one word of storage: 1 length byte and {max} payload bytes"
+                    ),
+                ],
+                error_code,
+            },
+
             Self::InconsistentKindBound { span, ty, bound } => {
                 let msg = format!(
                     "`{}` is already declared with `{}` kind, but found `{}` kind here",
@@ -2983,6 +3001,27 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     span: primary.resolve(db),
                 }],
                 notes: vec![],
+                error_code,
+            },
+            Self::StringLiteralTooLarge {
+                primary,
+                max,
+                given,
+            } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "string literal exceeds inline capacity".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "this string literal is {given} bytes long, but the current limit is {max} bytes"
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    format!(
+                        "strings currently use one word of storage: 1 length byte and {max} payload bytes"
+                    ),
+                ],
                 error_code,
             },
             Self::AccessedFieldNotFound {

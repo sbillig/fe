@@ -1,0 +1,16 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/array_literal_u256.fe
+---
+object "main" {
+  code {
+    function $fixed_u256_array_literal() -> ret {
+      let v0 := dataoffset("data_fixed_u256_array_literal_0")
+      let v1 := v0
+      ret := v1
+      leave
+    }
+  }
+  data "data_fixed_u256_array_literal_0" hex"0000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000030000000000000000000000000000000000000000000000000000000000000004"
+}

@@ -2,7 +2,7 @@
 use codegen::{Backend, SonatinaBackend, emit_module_yul};
 use common::InputDb;
 use driver::DriverDataBase;
-use ethers_core::abi::{AbiParser, ParseError as AbiParseError, Token};
+use ethers_core::abi::{AbiParser, ParamType, ParseError as AbiParseError, Token, decode};
 use hex::FromHex;
 use mir::layout;
 pub use revm::primitives::U256;
@@ -1348,6 +1348,17 @@ pub fn bytes_to_u256(bytes: &[u8]) -> Result<U256, HarnessError> {
     let mut buf = [0u8; 32];
     buf.copy_from_slice(bytes);
     Ok(U256::from_be_bytes(buf))
+}
+
+/// Decodes ABI-encoded string return data.
+pub fn bytes_to_string(bytes: &[u8]) -> Result<String, HarnessError> {
+    let mut tokens = decode(&[ParamType::String], bytes)?;
+    match tokens.pop() {
+        Some(Token::String(value)) => Ok(value),
+        _ => Err(HarnessError::Execution(
+            "expected ABI string return data".to_string(),
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -2750,17 +2761,21 @@ object "Counter" {
         let name_res = instance
             .call_raw(&name_call, owner_opts)
             .expect("name() should succeed");
-        let decoded_name = decode(&[ParamType::String], &name_res.return_data)
-            .expect("name() should return ABI-encoded string");
-        assert_eq!(decoded_name, vec![Token::String("CoolCoin".to_string())]);
+        assert_eq!(
+            bytes_to_string(&name_res.return_data).unwrap(),
+            "CoolCoin",
+            "name() should return CoolCoin"
+        );
 
         let symbol_call = encode_function_call("symbol()", &[]).unwrap();
         let symbol_res = instance
             .call_raw(&symbol_call, owner_opts)
             .expect("symbol() should succeed");
-        let decoded_symbol = decode(&[ParamType::String], &symbol_res.return_data)
-            .expect("symbol() should return ABI-encoded string");
-        assert_eq!(decoded_symbol, vec![Token::String("COOL".to_string())]);
+        assert_eq!(
+            bytes_to_string(&symbol_res.return_data).unwrap(),
+            "COOL",
+            "symbol() should return COOL"
+        );
 
         let decimals_call = encode_function_call("decimals()", &[]).unwrap();
         let decimals_res = instance

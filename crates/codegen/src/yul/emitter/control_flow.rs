@@ -136,7 +136,7 @@ impl<'db> FunctionEmitter<'db> {
                             }
                         }
                     }
-                    let call_expr = self.lower_call_value(call, ctx.state)?;
+                    let call_expr = self.lower_call_value(ctx.docs, call, ctx.state)?;
                     ctx.docs.push(YulDoc::line(call_expr));
                     Ok(())
                 }

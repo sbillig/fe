@@ -100,7 +100,7 @@ pub(super) fn emit_init_handler<'db>(
         .retain(|local| !zero_sized_param_locals.contains(local));
     function.runtime_abi = RuntimeAbi::source_shaped(
         function.body.param_locals.len(),
-        vec![None; function.body.effect_param_locals.len()],
+        function.runtime_abi.effect_param_provider_tys.clone(),
     );
     Ok(init_handler_has_observable_effects(&function.body).then_some(function))
 }
@@ -201,16 +201,15 @@ fn finish_handler<'db>(
     }
 
     let deferred_error = builder.deferred_error.take();
+    let effect_param_provider_tys = builder.effect_param_provider_tys.clone();
     let mir_body = builder.finish();
     if let Some(err) = deferred_error {
         return Err(err);
     }
     super::super::validate_lowered_mir_body(db, &spec.symbol_name, spec.body, &mir_body)?;
 
-    let runtime_abi = RuntimeAbi::source_shaped(
-        mir_body.param_locals.len(),
-        vec![None; mir_body.effect_param_locals.len()],
-    );
+    let runtime_abi =
+        RuntimeAbi::source_shaped(mir_body.param_locals.len(), effect_param_provider_tys);
 
     Ok(MirFunction {
         origin: MirFunctionOrigin::Synthetic(spec.id),
@@ -283,7 +282,14 @@ fn seed_effect_param_locals<'db>(
                 _ => AddressSpaceKind::Storage,
             },
         };
-        builder.seed_synthetic_effect_param_local(name, binding, address_space);
+        let provider_ty = match effect.source {
+            EffectSource::Root => None,
+            EffectSource::Field(_) => builder.contract_field_provider_ty_for_effect_site(
+                effect.binding_site,
+                effect.binding_idx as usize,
+            ),
+        };
+        builder.seed_synthetic_effect_param_local(name, binding, address_space, provider_ty);
     }
 }
 

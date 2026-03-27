@@ -31,29 +31,30 @@ use sonatina_ir::{
         cmp::{Eq, Gt, IsZero, Lt, Ne, Slt},
         control_flow::{Br, BrTable, Call, Jump, Return},
         data::{
-            Alloca, EnumAssertVariantRef, EnumGetTag, EnumProj, EnumSetTag, Gep, Mload, Mstore,
-            ObjAlloc, ObjIndex, ObjLoad, ObjMaterializeStack, ObjProj, ObjStore, SymAddr, SymSize,
-            SymbolRef,
+            Alloca, ConstIndex, ConstLoad, ConstProj, ConstRef, EnumAssertVariantRef, EnumGetTag,
+            EnumProj, EnumSetTag, Gep, Mload, Mstore, ObjAlloc, ObjIndex, ObjInitConst, ObjLoad,
+            ObjMaterializeStack, ObjProj, ObjStore, SymAddr, SymSize, SymbolRef,
         },
         evm::{
             EvmAddMod, EvmAddress, EvmBaseFee, EvmBlockHash, EvmByte, EvmCall, EvmCallValue,
             EvmCalldataCopy, EvmCalldataLoad, EvmCalldataSize, EvmCaller, EvmChainId, EvmCodeCopy,
             EvmCodeSize, EvmCoinBase, EvmCreate, EvmCreate2, EvmDelegateCall, EvmExp, EvmGas,
             EvmGasLimit, EvmInvalid, EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3, EvmLog4,
-            EvmMalloc, EvmMsize, EvmMstore8, EvmMulMod, EvmNumber, EvmOrigin, EvmPrevRandao,
-            EvmReturn, EvmReturnDataCopy, EvmReturnDataSize, EvmRevert, EvmSelfBalance,
-            EvmSelfDestruct, EvmSload, EvmSstore, EvmStaticCall, EvmStop, EvmTimestamp, EvmTload,
-            EvmTstore, EvmUdiv, EvmUmod,
+            EvmMalloc, EvmMcopy, EvmMsize, EvmMstore8, EvmMulMod, EvmNumber, EvmOrigin,
+            EvmPrevRandao, EvmReturn, EvmReturnDataCopy, EvmReturnDataSize, EvmRevert,
+            EvmSelfBalance, EvmSelfDestruct, EvmSload, EvmSstore, EvmStaticCall, EvmStop,
+            EvmTimestamp, EvmTload, EvmTstore, EvmUdiv, EvmUmod,
         },
         logic::{And, Not, Or, Xor},
     },
+    ir_writer::IrWrite,
     module::FuncRef,
     object::EmbedSymbol,
     types::{EnumReprHint, EnumVariantRef, VariantData},
 };
 
 use super::{
-    LowerCtx, LowerError, MaterializedLocalPlaceRoot, is_erased_runtime_ty, types,
+    ConstGlobalKey, LowerCtx, LowerError, MaterializedLocalPlaceRoot, is_erased_runtime_ty, types,
     zero_value_for_type,
 };
 
@@ -87,6 +88,10 @@ impl<'a, 'db> TypeLowerer<'a, 'db> {
 
     pub(super) fn is_obj_ref(&self, ty: Type) -> bool {
         ty.is_obj_ref(&self.builder.ctx)
+    }
+
+    pub(super) fn is_const_ref(&self, ty: Type) -> bool {
+        ty.is_const_ref(&self.builder.ctx)
     }
 }
 
@@ -167,7 +172,9 @@ fn materialized_local_place_root<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &LowerCtx<'_, 'db, C>,
     local: mir::LocalId,
 ) -> Option<MaterializedLocalPlaceRoot> {
-    local_place_root_layout(ctx, local)
+    let local_data = ctx.body.locals.get(local.index())?;
+    matches!(local_data.address_space, AddressSpaceKind::Memory)
+        .then(|| local_data.place_root_layout)
         .filter(|layout| layout.is_materialized())
         .and_then(|_| ctx.materialized_local_place_roots.get(&local).copied())
 }
@@ -198,22 +205,129 @@ fn store_runtime_value_to_local_place_root<'db, C: sonatina_ir::func_cursor::Fun
     }
 }
 
+fn local_has_reference_root<C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &LowerCtx<'_, '_, C>,
+    local: mir::LocalId,
+) -> bool {
+    let local_ty = ctx.local_runtime_types[local.index()];
+    local_ty.is_obj_ref(&ctx.fb.module_builder.ctx)
+        || local_ty.is_const_ref(&ctx.fb.module_builder.ctx)
+}
+
+fn local_memory_slot_may_escape<C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &LowerCtx<'_, '_, C>,
+    local: mir::LocalId,
+) -> bool {
+    let Some(summary) = ctx.current_ptr_escape_summary else {
+        return false;
+    };
+    if let Some(arg_idx) = ctx
+        .body
+        .param_locals
+        .iter()
+        .chain(ctx.body.effect_param_locals.iter())
+        .position(|candidate| *candidate == local)
+    {
+        return summary
+            .arg_value_may_escape
+            .get(arg_idx)
+            .copied()
+            .unwrap_or(false)
+            || summary
+                .arg_may_be_returned
+                .get(arg_idx)
+                .copied()
+                .unwrap_or(false)
+            || summary
+                .arg_may_escape
+                .get(arg_idx)
+                .copied()
+                .unwrap_or(false);
+    }
+    summary
+        .local_alloc_may_escape
+        .get(local.index())
+        .copied()
+        .unwrap_or(false)
+}
+
 fn write_local_result<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
     dest_local: mir::LocalId,
     value: ValueId,
 ) -> Result<(), LowerError> {
-    let dest_ty = ctx
-        .body
-        .locals
-        .get(dest_local.index())
-        .ok_or_else(|| LowerError::Internal(format!("missing local type for {dest_local:?}")))?
-        .ty;
+    let local_data =
+        ctx.body.locals.get(dest_local.index()).ok_or_else(|| {
+            LowerError::Internal(format!("missing local type for {dest_local:?}"))
+        })?;
+    let dest_ty = local_data.ty;
     let dest_var = ctx.local_vars.get(&dest_local).copied().ok_or_else(|| {
         LowerError::Internal(format!("missing SSA variable for local {dest_local:?}"))
     })?;
     let expected_runtime_ty = ctx.local_runtime_types[dest_local.index()];
     let value = coerce_value_to_runtime_ty(ctx, value, dest_ty, expected_runtime_ty);
+    let actual_runtime_ty = ctx.fb.type_of(value);
+    if actual_runtime_ty != expected_runtime_ty
+        && (actual_runtime_ty.is_obj_ref(&ctx.fb.module_builder.ctx)
+            || expected_runtime_ty.is_obj_ref(&ctx.fb.module_builder.ctx)
+            || actual_runtime_ty.is_const_ref(&ctx.fb.module_builder.ctx)
+            || expected_runtime_ty.is_const_ref(&ctx.fb.module_builder.ctx))
+    {
+        let format_ty = |ty: Type| {
+            let mut buf = Vec::new();
+            ty.write(&mut buf, &ctx.fb.module_builder.ctx)
+                .expect("type write should succeed");
+            String::from_utf8(buf).expect("type string should be utf8")
+        };
+        let describe_ty = |ty: Type| {
+            let mut desc = format_ty(ty);
+            if let Some(sonatina_ir::types::CompoundType::ObjRef(inner)) =
+                ty.resolve_compound(&ctx.fb.module_builder.ctx)
+            {
+                desc.push_str(" => ");
+                desc.push_str(&format_ty(inner));
+                if let Some(sonatina_ir::types::CompoundType::Struct(data)) =
+                    inner.resolve_compound(&ctx.fb.module_builder.ctx)
+                {
+                    let fields = data
+                        .fields
+                        .iter()
+                        .copied()
+                        .map(format_ty)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    desc.push_str(&format!(" fields=[{fields}]"));
+                }
+            }
+            desc
+        };
+        let actual_cmpd = actual_runtime_ty.resolve_compound(&ctx.fb.module_builder.ctx);
+        let expected_cmpd = expected_runtime_ty.resolve_compound(&ctx.fb.module_builder.ctx);
+        let pretty_leaf_infos: Vec<_> = local_data
+            .pointer_leaf_infos
+            .iter()
+            .map(|(path, info)| {
+                (
+                    format!("{path:?}"),
+                    info.address_space,
+                    info.target_ty.map(|ty| ty.pretty_print(ctx.db)),
+                )
+            })
+            .collect();
+        panic!(
+            "local v{} `{}` ({}) write expects {expected_runtime_ty:?} `{}` {expected_cmpd:?} but got {actual_runtime_ty:?} `{}` {actual_cmpd:?} from value {:?}; expected_desc=`{}`; actual_desc=`{}`; shape={:?}; leaf_infos={:?}; pretty_leaf_infos={pretty_leaf_infos:?}",
+            dest_local.index(),
+            local_data.name,
+            dest_ty.pretty_print(ctx.db),
+            format_ty(expected_runtime_ty),
+            format_ty(actual_runtime_ty),
+            ctx.fb.func.dfg.value(value),
+            describe_ty(expected_runtime_ty),
+            describe_ty(actual_runtime_ty),
+            local_data.runtime_shape,
+            local_data.pointer_leaf_infos,
+        );
+    }
     ctx.fb.def_var(dest_var, value);
     ctx.initialized_locals.insert(dest_local);
     if let Some(place_root) = materialized_local_place_root(ctx, dest_local) {
@@ -237,18 +351,25 @@ fn allocate_local_place_root_slot<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
     local: mir::LocalId,
 ) -> Result<ValueId, LowerError> {
-    if local_place_root_layout(ctx, local).is_some_and(|layout| layout.is_object_root()) {
-        return Err(LowerError::Internal(format!(
-            "object-backed local {local:?} must not use a synthetic place-root slot"
-        )));
-    }
-
-    let local_ty = ctx
+    let local_data = ctx
         .body
         .locals
         .get(local.index())
-        .ok_or_else(|| LowerError::Internal(format!("unknown local: {local:?}")))?
-        .ty;
+        .ok_or_else(|| LowerError::Internal(format!("unknown local: {local:?}")))?;
+    if local_place_root_layout(ctx, local).is_some_and(|layout| layout.is_object_root())
+        || local_has_reference_root(ctx, local)
+    {
+        return Err(LowerError::Internal(format!(
+            "reference-backed local {local:?} `{}` must not use a synthetic place-root slot: ty=`{}` runtime_shape={:?} place_root_layout={:?} runtime_ty={:?}",
+            local_data.name,
+            local_data.ty.pretty_print(ctx.db),
+            local_data.runtime_shape,
+            local_data.place_root_layout,
+            ctx.local_runtime_types[local.index()],
+        )));
+    }
+
+    let local_ty = local_data.ty;
     let Some(size_bytes) = layout::ty_memory_size_or_word_in(ctx.db, ctx.target_layout, local_ty)
     else {
         return Err(LowerError::Unsupported(format!(
@@ -263,6 +384,11 @@ fn allocate_local_place_root_slot<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             .fb
             .insert_inst(IntToPtr::new(ctx.is, zero, opaque_ptr_ty), opaque_ptr_ty));
     }
+    if local_memory_slot_may_escape(ctx, local) {
+        let size = ctx.fb.make_imm_value(I256::from(size_bytes as u64));
+        let ptr = emit_evm_malloc_ptr(ctx.fb, size, ctx.is);
+        return Ok(bitcast_ptr(ctx, ptr, opaque_ptr_ty));
+    }
     let alloca_ty = ctx.fb.declare_array_type(Type::I8, size_bytes);
     Ok(emit_alloca_ptr(ctx.fb, alloca_ty, ctx.is))
 }
@@ -273,18 +399,40 @@ fn store_runtime_value_to_local_slot_ptr<'db, C: sonatina_ir::func_cursor::FuncC
     slot_ptr: ValueId,
     value: ValueId,
 ) -> Result<(), LowerError> {
-    let local_ty = ctx
+    let local_data = ctx
         .body
         .locals
         .get(local.index())
-        .ok_or_else(|| LowerError::Internal(format!("unknown local: {local:?}")))?
-        .ty;
+        .ok_or_else(|| LowerError::Internal(format!("unknown local: {local:?}")))?;
+    let local_ty = local_data.ty;
     if is_erased_runtime_ty(ctx.db, ctx.target_layout, local_ty) {
         return Ok(());
     }
     let ptr_ty = ctx.fb.ptr_type(Type::I8);
     let slot_ptr = bitcast_ptr(ctx, slot_ptr, ptr_ty);
     let value_ty = ctx.fb.type_of(value);
+    if matches!(
+        local_data.runtime_shape,
+        mir::ir::RuntimeShape::MemoryPtr { .. }
+    ) && value_ty.is_pointer(&ctx.fb.module_builder.ctx)
+    {
+        let Some(size_bytes) =
+            layout::ty_memory_size_or_word_in(ctx.db, ctx.target_layout, local_ty)
+        else {
+            return Err(LowerError::Unsupported(format!(
+                "cannot determine addressable slot size for `{}`",
+                local_ty.pretty_print(ctx.db),
+            )));
+        };
+        if size_bytes == 0 {
+            return Ok(());
+        }
+        let src_ptr = bitcast_ptr(ctx, value, ptr_ty);
+        let copy_len = ctx.fb.make_imm_value(I256::from(size_bytes as u64));
+        ctx.fb
+            .insert_inst_no_result(EvmMcopy::new(ctx.is, slot_ptr, src_ptr, copy_len));
+        return Ok(());
+    }
     if value_ty.is_pointer(&ctx.fb.module_builder.ctx) {
         ctx.fb
             .insert_inst_no_result(Mstore::new(ctx.is, slot_ptr, value, value_ty));
@@ -357,6 +505,16 @@ fn ensure_local_place_root_object<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     } else {
         None
     };
+    if let Some(current) = current
+        && ctx
+            .fb
+            .type_of(current)
+            .is_obj_ref(&ctx.fb.module_builder.ctx)
+    {
+        ctx.materialized_local_place_roots
+            .insert(local, MaterializedLocalPlaceRoot::ObjectRoot(current));
+        return Ok(current);
+    }
     let size_bytes = layout::ty_memory_size_or_word_in(ctx.db, ctx.target_layout, target_ty)
         .ok_or_else(|| {
             LowerError::Unsupported(format!(
@@ -388,12 +546,18 @@ fn load_runtime_value_from_local_slot<'db, C: sonatina_ir::func_cursor::FuncCurs
     expected_runtime_ty: Type,
 ) -> Result<ValueId, LowerError> {
     let slot_ptr = ensure_local_place_root_slot(ctx, local)?;
-    let local_ty = ctx
+    let local_data = ctx
         .body
         .locals
         .get(local.index())
-        .ok_or_else(|| LowerError::Internal(format!("unknown local: {local:?}")))?
-        .ty;
+        .ok_or_else(|| LowerError::Internal(format!("unknown local: {local:?}")))?;
+    let local_ty = local_data.ty;
+    if matches!(
+        local_data.runtime_shape,
+        mir::ir::RuntimeShape::MemoryPtr { .. }
+    ) {
+        return Ok(coerce_value_to_type(ctx, slot_ptr, expected_runtime_ty));
+    }
     if expected_runtime_ty.is_pointer(&ctx.fb.module_builder.ctx) {
         return Ok(ctx.fb.insert_inst(
             Mload::new(ctx.is, slot_ptr, expected_runtime_ty),
@@ -418,13 +582,22 @@ fn load_runtime_value_from_local_place_root<'db, C: sonatina_ir::func_cursor::Fu
             load_runtime_value_from_local_slot(ctx, local, expected_runtime_ty)
         }
         MaterializedLocalPlaceRoot::ObjectRoot(object_ref) => {
+            let object_elem_ty = object_ref_elem_ty(ctx, ctx.fb.type_of(object_ref))?;
+            if expected_runtime_ty.is_obj_ref(&ctx.fb.module_builder.ctx) {
+                if object_elem_ty.is_obj_ref(&ctx.fb.module_builder.ctx) {
+                    let loaded = ctx
+                        .fb
+                        .insert_inst(ObjLoad::new(ctx.is, object_ref), object_elem_ty);
+                    return Ok(coerce_value_to_type(ctx, loaded, expected_runtime_ty));
+                }
+                return Ok(coerce_value_to_type(ctx, object_ref, expected_runtime_ty));
+            }
             let local_ty = ctx
                 .body
                 .locals
                 .get(local.index())
                 .ok_or_else(|| LowerError::Internal(format!("unknown local: {local:?}")))?
                 .ty;
-            let object_elem_ty = object_ref_elem_ty(ctx, ctx.fb.type_of(object_ref))?;
             let loaded = ctx
                 .fb
                 .insert_inst(ObjLoad::new(ctx.is, object_ref), object_elem_ty);
@@ -925,28 +1098,97 @@ fn lower_call_args<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 .get(arg.index())
                 .ok_or_else(|| LowerError::Internal("unknown call argument".to_string()))?
                 .ty;
+            if expected_ty.is_obj_ref(&ctx.fb.module_builder.ctx) {
+                let mut buf = Vec::new();
+                expected_ty
+                    .write(&mut buf, &ctx.fb.module_builder.ctx)
+                    .expect("type write should succeed");
+                let expected_desc = String::from_utf8(buf).expect("type string should be utf8");
+                return Err(LowerError::Internal(format!(
+                    "{context} to `{callee_name}` expects object-ref arg type `{expected_desc}` for argument {arg:?} (`{}`) repr={:?} shape={:?}",
+                    arg_ty.pretty_print(ctx.db),
+                    mir::repr::repr_kind_for_ty(ctx.db, ctx.core, arg_ty),
+                    ctx.body.value(arg).runtime_shape,
+                )));
+            }
             let lowered = lower_value(ctx, arg)?;
             let lowered_ty = ctx.fb.type_of(lowered);
+            if lowered_ty.is_pointer(&ctx.fb.module_builder.ctx)
+                && expected_ty.is_obj_ref(&ctx.fb.module_builder.ctx)
+            {
+                let format_ty = |ty: Type| {
+                    let mut buf = Vec::new();
+                    ty.write(&mut buf, &ctx.fb.module_builder.ctx)
+                        .expect("type write should succeed");
+                    String::from_utf8(buf).expect("type string should be utf8")
+                };
+                return Err(LowerError::Internal(format!(
+                    "{context} to `{callee_name}` lowered arg {arg:?} (`{}`) to pointer type `{}` before coercion, expected object-ref type `{}`",
+                    arg_ty.pretty_print(ctx.db),
+                    format_ty(lowered_ty),
+                    format_ty(expected_ty),
+                )));
+            }
+            let lowered = coerce_value_to_runtime_ty(ctx, lowered, arg_ty, expected_ty);
+            let lowered_ty = ctx.fb.type_of(lowered);
             if (lowered_ty.is_obj_ref(&ctx.fb.module_builder.ctx)
-                || expected_ty.is_obj_ref(&ctx.fb.module_builder.ctx))
+                || expected_ty.is_obj_ref(&ctx.fb.module_builder.ctx)
+                || lowered_ty.is_const_ref(&ctx.fb.module_builder.ctx)
+                || expected_ty.is_const_ref(&ctx.fb.module_builder.ctx))
                 && lowered_ty != expected_ty
             {
+                let format_ty = |ty: Type| {
+                    let mut buf = Vec::new();
+                    ty.write(&mut buf, &ctx.fb.module_builder.ctx)
+                        .expect("type write should succeed");
+                    String::from_utf8(buf).expect("type string should be utf8")
+                };
+                let describe_ty = |ty: Type| {
+                    let mut desc = format_ty(ty);
+                    if let Some(sonatina_ir::types::CompoundType::ObjRef(inner)) =
+                        ty.resolve_compound(&ctx.fb.module_builder.ctx)
+                    {
+                        desc.push_str(" => ");
+                        desc.push_str(&format_ty(inner));
+                        if let Some(sonatina_ir::types::CompoundType::Struct(data)) =
+                            inner.resolve_compound(&ctx.fb.module_builder.ctx)
+                        {
+                            let fields = data
+                                .fields
+                                .iter()
+                                .copied()
+                                .map(format_ty)
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            desc.push_str(&format!(" fields=[{fields}]"));
+                        }
+                    }
+                    if let Some(sonatina_ir::types::CompoundType::ConstRef(inner)) =
+                        ty.resolve_compound(&ctx.fb.module_builder.ctx)
+                    {
+                        desc.push_str(" => ");
+                        desc.push_str(&format_ty(inner));
+                    }
+                    desc
+                };
                 let lowered_dbg = lowered_ty.resolve_compound(&ctx.fb.module_builder.ctx);
                 let expected_dbg = expected_ty.resolve_compound(&ctx.fb.module_builder.ctx);
                 return Err(LowerError::Internal(format!(
-                    "{context} to `{callee_name}` lowered arg {arg:?} (`{}``) to object ref type {lowered_ty:?} {lowered_dbg:?}, expected {expected_ty:?} {expected_dbg:?}",
+                    "{context} to `{callee_name}` lowered arg {arg:?} (`{}``) to object ref type {lowered_ty:?} `{}` {lowered_dbg:?}, expected {expected_ty:?} `{}` {expected_dbg:?}; actual_desc=`{}`; expected_desc=`{}`",
                     arg_ty.pretty_print(ctx.db),
+                    format_ty(lowered_ty),
+                    format_ty(expected_ty),
+                    describe_ty(lowered_ty),
+                    describe_ty(expected_ty),
                 )));
             }
-            args.push(coerce_value_to_runtime_ty(
-                ctx,
-                lowered,
-                arg_ty,
-                expected_ty,
-            ));
+            args.push(lowered);
             arg_tys.push(arg_ty);
         }
     } else {
+        return Err(LowerError::Internal(format!(
+            "{context} to `{callee_name}` missing runtime metadata"
+        )));
         // Fallback for callees without a declared signature/mask (e.g. externs).
         for &arg in regular_args {
             let arg_ty = ctx
@@ -993,6 +1235,21 @@ fn lower_call_args<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         .zip(arg_tys.iter().copied())
         .zip(expected_arg_tys.iter().copied())
     {
+        if expected_ty.is_obj_ref(&ctx.fb.module_builder.ctx)
+            && matches!(mir::repr::repr_kind_for_ty(ctx.db, ctx.core, arg_ty), mir::repr::ReprKind::Word)
+            && arg_ty.as_capability(ctx.db).is_none()
+            && mir::repr::effect_provider_space_for_ty(ctx.db, ctx.core, arg_ty).is_none()
+        {
+            let mut buf = Vec::new();
+            expected_ty
+                .write(&mut buf, &ctx.fb.module_builder.ctx)
+                .expect("type write should succeed");
+            let expected_desc = String::from_utf8(buf).expect("type string should be utf8");
+            return Err(LowerError::Internal(format!(
+                "{context} to `{callee_name}` fallback signature expects object-ref arg type `{expected_desc}` for plain word argument `{}`",
+                arg_ty.pretty_print(ctx.db),
+            )));
+        }
         *arg = coerce_runtime_value(ctx.fb, ctx.db, *arg, arg_ty, expected_ty, ctx.is);
     }
     for ty in expected_arg_tys.into_iter().skip(args.len()) {
@@ -1053,6 +1310,21 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         }
         _ => ctx.runtime_type_for_value(value_id),
     };
+    if result_ty.is_obj_ref(&ctx.fb.module_builder.ctx)
+        && matches!(mir::repr::repr_kind_for_ty(ctx.db, ctx.core, value_data.ty), mir::repr::ReprKind::Word)
+        && value_data.ty.as_capability(ctx.db).is_none()
+        && mir::repr::effect_provider_space_for_ty(ctx.db, ctx.core, value_data.ty).is_none()
+    {
+        return Err(LowerError::Internal(format!(
+            "plain word value v{} in `{}` lowered to object-ref type: origin={:?}, ty={}, repr={:?}, runtime_shape={:?}",
+            value_id.index(),
+            ctx.current_function_name,
+            value_data.origin,
+            value_data.ty.pretty_print(ctx.db),
+            value_data.repr,
+            value_data.runtime_shape,
+        )));
+    }
 
     match origin {
         ValueOrigin::Synthetic(syn) => match syn {
@@ -1094,26 +1366,48 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             Ok(ctx.fb.use_var(var))
         }
         ValueOrigin::PlaceRoot(local_id) => {
-            match local_place_root_layout(ctx, *local_id).ok_or_else(|| {
+            let local = ctx.body.locals.get(local_id.index()).ok_or_else(|| {
                 LowerError::Internal(format!(
                     "missing local metadata for place root {local_id:?}"
                 ))
-            })? {
-                mir::ir::LocalPlaceRootLayout::ObjectRootValue { .. } => {
+            })?;
+            if matches!(local.address_space, AddressSpaceKind::Code) {
+                let value = current_local_runtime_value(ctx, *local_id)?;
+                return Ok(coerce_value_to_type(ctx, value, result_ty));
+            }
+
+            match local.place_root_layout {
+                // Code-backed locals keep their runtime carrier in SSA even if the declared
+                // place-root layout is object-capable. Only memory-backed locals should materialize
+                // a place-root carrier here.
+                mir::ir::LocalPlaceRootLayout::ObjectRootValue { .. }
+                    if matches!(local.address_space, AddressSpaceKind::Code) =>
+                {
                     let value = current_local_runtime_value(ctx, *local_id)?;
                     Ok(coerce_value_to_type(ctx, value, result_ty))
                 }
-                mir::ir::LocalPlaceRootLayout::ObjectRootStorage { .. } => {
-                    let object_ref = ensure_local_place_root_object(ctx, *local_id)?;
-                    Ok(coerce_value_to_type(ctx, object_ref, result_ty))
-                }
-                mir::ir::LocalPlaceRootLayout::MemorySlot => {
-                    let slot_ptr = ensure_local_place_root_slot(ctx, *local_id)?;
-                    Ok(coerce_value_to_type(ctx, slot_ptr, result_ty))
-                }
-                mir::ir::LocalPlaceRootLayout::Direct => Err(LowerError::Internal(format!(
-                    "direct local {local_id:?} reached Sonatina place-root lowering without explicit runtime owner layout"
-                ))),
+                _ => match local_place_root_layout(ctx, *local_id).ok_or_else(|| {
+                    LowerError::Internal(format!(
+                        "missing local metadata for place root {local_id:?}"
+                    ))
+                })? {
+                    mir::ir::LocalPlaceRootLayout::ObjectRootValue { .. } => {
+                        let value = current_local_runtime_value(ctx, *local_id)?;
+                        Ok(coerce_value_to_type(ctx, value, result_ty))
+                    }
+                    mir::ir::LocalPlaceRootLayout::ObjectRootStorage { .. } => {
+                        let object_ref = ensure_local_place_root_object(ctx, *local_id)?;
+                        Ok(coerce_value_to_type(ctx, object_ref, result_ty))
+                    }
+                    mir::ir::LocalPlaceRootLayout::MemorySlot => {
+                        let slot_ptr = ensure_local_place_root_slot(ctx, *local_id)?;
+                        Ok(coerce_value_to_type(ctx, slot_ptr, result_ty))
+                    }
+                    mir::ir::LocalPlaceRootLayout::Direct => {
+                        let value = current_local_runtime_value(ctx, *local_id)?;
+                        Ok(coerce_value_to_type(ctx, value, result_ty))
+                    }
+                },
             }
         }
         ValueOrigin::Unit => Ok(types::zero_value(ctx.fb, result_ty)),
@@ -1144,8 +1438,8 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     LowerError::Internal(format!("unknown MIR value id {}", value.index()))
                 })?
                 .ty;
-            Ok(coerce_runtime_value(
-                ctx.fb, ctx.db, inner_val, inner_ty, result_ty, ctx.is,
+            Ok(coerce_value_to_runtime_ty(
+                ctx, inner_val, inner_ty, result_ty,
             ))
         }
         ValueOrigin::ControlFlowResult { expr } => {
@@ -1156,6 +1450,21 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             )))
         }
         ValueOrigin::PlaceRef(place) => {
+            if !mir::repr::place_resolves_to_location(
+                ctx.db,
+                ctx.core,
+                &ctx.body.values,
+                &ctx.body.locals,
+                place,
+            ) {
+                let base = lower_value(ctx, place.base)?;
+                return Ok(coerce_value_to_runtime_ty(
+                    ctx,
+                    base,
+                    ctx.body.value(place.base).ty,
+                    result_ty,
+                ));
+            }
             if !value_data.repr.is_ref() {
                 let loaded_ty = value_data
                     .ty
@@ -1175,9 +1484,54 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             if value_data.repr.address_space() == Some(AddressSpaceKind::Memory) {
                 return lower_place_runtime_location_value(ctx, place, result_ty);
             }
-            lower_place_address(ctx, place)
+            if value_data.repr.address_space() == Some(AddressSpaceKind::Code) {
+                let terminal = lower_place_terminal(ctx, place)?;
+                if terminal.const_ref().is_some() {
+                    let runtime_ty = ctx.runtime_type_for_ty_and_shape(
+                        value_data.ty,
+                        mir::repr::runtime_shape_for_ty(
+                            ctx.db,
+                            ctx.core,
+                            value_data.ty,
+                            AddressSpaceKind::Code,
+                        ),
+                        &[],
+                    );
+                    let packed = layout::is_packed_scalar_array_access(
+                        ctx.db,
+                        ctx.body,
+                        place,
+                        terminal.state.ty,
+                    )
+                    .map_err(LowerError::Unsupported)?;
+                    return load_from_terminal(
+                        ctx,
+                        terminal,
+                        place,
+                        terminal.state.ty,
+                        runtime_ty,
+                        packed,
+                    );
+                }
+            }
+            lower_place_word_addr_or_reference_backed_value(ctx, place, result_ty)
         }
         ValueOrigin::MoveOut { place } => {
+            if !mir::repr::place_resolves_to_location(
+                ctx.db,
+                ctx.core,
+                &ctx.body.values,
+                &ctx.body.locals,
+                place,
+            ) {
+                let base = lower_value(ctx, place.base)?;
+                return Ok(coerce_value_to_runtime_ty(
+                    ctx,
+                    base,
+                    ctx.body.value(place.base).ty,
+                    result_ty,
+                ));
+            }
             if place.projection.is_empty()
                 && move_out_uses_root_local_alias(&ctx.body.values, place.base)
                 && place_yields_location_value(
@@ -1194,6 +1548,38 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 && value_data.repr.address_space() == Some(AddressSpaceKind::Memory)
             {
                 lower_place_runtime_location_value(ctx, place, result_ty)
+            } else if value_data.repr.is_ref()
+                && value_data.repr.address_space() == Some(AddressSpaceKind::Code)
+            {
+                let terminal = lower_place_terminal(ctx, place)?;
+                if terminal.const_ref().is_some() {
+                    let runtime_ty = ctx.runtime_type_for_ty_and_shape(
+                        value_data.ty,
+                        mir::repr::runtime_shape_for_ty(
+                            ctx.db,
+                            ctx.core,
+                            value_data.ty,
+                            AddressSpaceKind::Code,
+                        ),
+                        &[],
+                    );
+                    let packed = layout::is_packed_scalar_array_access(
+                        ctx.db,
+                        ctx.body,
+                        place,
+                        terminal.state.ty,
+                    )
+                    .map_err(LowerError::Unsupported)?;
+                    return load_from_terminal(
+                        ctx,
+                        terminal,
+                        place,
+                        terminal.state.ty,
+                        runtime_ty,
+                        packed,
+                    );
+                }
+                lower_place_word_addr_or_reference_backed_value(ctx, place, result_ty)
             } else if matches!(value_data.repr, mir::ValueRepr::Ptr(_)) {
                 if place_yields_location_value(
                     ctx,
@@ -1205,7 +1591,7 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 }
                 load_place_runtime(ctx, place, value_data.ty, result_ty)
             } else if value_data.repr.address_space().is_some() {
-                lower_place_address(ctx, place)
+                lower_place_word_addr_or_reference_backed_value(ctx, place, result_ty)
             } else {
                 load_place_runtime(
                     ctx,
@@ -1217,7 +1603,22 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         }
         ValueOrigin::ConstRegion(region_id) => {
             let region = ctx.body.const_region(*region_id);
-            let gv_ref = ensure_const_data_global(ctx, &region.bytes);
+            if region.ty.is_array(ctx.db) {
+                return const_data_ref(ctx, region.ty, &region.data);
+            }
+            let bytes = mir::serialize_const_data_to_bytes(
+                ctx.db,
+                ctx.target_layout,
+                region.ty,
+                &region.data,
+            )
+            .ok_or_else(|| {
+                LowerError::Unsupported(format!(
+                    "cannot serialize const region `{}` for Sonatina",
+                    region.ty.pretty_print(ctx.db)
+                ))
+            })?;
+            let gv_ref = ensure_raw_const_data_global(ctx, &bytes);
             Ok(ctx
                 .fb
                 .insert_inst(SymAddr::new(ctx.is, SymbolRef::Global(gv_ref)), Type::I256))
@@ -1571,14 +1972,6 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     }
 
     match op {
-        IntrinsicOp::AddrOf => {
-            let Some(&arg) = lowered_args.first() else {
-                return Err(LowerError::Internal(
-                    "addr_of requires 1 argument".to_string(),
-                ));
-            };
-            Ok(Some(coerce_value_to_word(ctx, arg)))
-        }
         IntrinsicOp::Alloc => {
             let [size] = lowered_args.as_slice() else {
                 return Err(LowerError::Internal(
@@ -2119,6 +2512,30 @@ fn sonatina_scalar_cache_key<'db>(
     format!("{:?}", types::value_type(db, ty))
 }
 
+fn non_memory_ref_cache_key<'db>(
+    db: &'db DriverDataBase,
+    core: &mir::CoreLib<'db>,
+    target_layout: &TargetDataLayout,
+    ty: hir::analysis::ty::ty_def::TyId<'db>,
+    pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
+    address_space: AddressSpaceKind,
+) -> String {
+    match mir::repr::runtime_shape_for_ty(db, core, ty, address_space) {
+        mir::ir::RuntimeShape::ConstRef { target_ty } => format!(
+            "constref<{}>",
+            fe_ty_to_sonatina_effective_cache_key(
+                db,
+                core,
+                target_layout,
+                target_ty,
+                pointer_leaf_infos,
+                false,
+            )
+        ),
+        _ => format!("{:?}", Type::I256),
+    }
+}
+
 fn fe_ty_to_sonatina_effective_cache_key<'db>(
     db: &'db DriverDataBase,
     core: &mir::CoreLib<'db>,
@@ -2127,10 +2544,7 @@ fn fe_ty_to_sonatina_effective_cache_key<'db>(
     pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
     object_layout: bool,
 ) -> String {
-    let mut ty = normalize_sonatina_type_input(db, core, ty);
-    if object_layout {
-        ty = mir::repr::object_layout_ty(db, core, ty);
-    }
+    let ty = normalize_sonatina_type_input(db, core, ty);
 
     if is_erased_runtime_ty(db, target_layout, ty) {
         return "unit".to_string();
@@ -2151,7 +2565,14 @@ fn fe_ty_to_sonatina_effective_cache_key<'db>(
                 if root_pointer_info
                     .is_some_and(|info| info.address_space != AddressSpaceKind::Memory) =>
             {
-                format!("{:?}", Type::I256)
+                non_memory_ref_cache_key(
+                    db,
+                    core,
+                    target_layout,
+                    ty,
+                    pointer_leaf_infos,
+                    root_pointer_info.expect("checked is_some").address_space,
+                )
             }
             CapabilityKind::Mut | CapabilityKind::Ref
                 if root_pointer_info
@@ -2377,6 +2798,20 @@ fn lowers_by_ref_layout<'db>(
     }
 }
 
+fn non_memory_runtime_ref_ty<'db>(
+    lowerer: &mut TypeLowerer<'_, 'db>,
+    ty: TyId<'db>,
+    pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
+    address_space: AddressSpaceKind,
+) -> Type {
+    match mir::repr::runtime_shape_for_ty(lowerer.db, lowerer.core, ty, address_space) {
+        mir::ir::RuntimeShape::ConstRef { target_ty } => {
+            lowerer.runtime_const_ref_type_from_target(ty, target_ty, pointer_leaf_infos)
+        }
+        _ => Type::I256,
+    }
+}
+
 fn scalar_handle_object_ref_target_ty<'db>(
     db: &'db DriverDataBase,
     core: &mir::CoreLib<'db>,
@@ -2407,52 +2842,6 @@ fn object_field_uses_object_ref<'db>(
             mir::repr::repr_kind_for_ty(db, core, object_ty),
             mir::repr::ReprKind::Ref
         )
-}
-
-fn const_aggregate_object_copy_compatible<'db>(
-    db: &'db DriverDataBase,
-    core: &mir::CoreLib<'db>,
-    ty: hir::analysis::ty::ty_def::TyId<'db>,
-) -> bool {
-    let ty = mir::repr::object_layout_ty(db, core, ty);
-
-    if layout::is_zero_sized_ty(db, ty) {
-        return true;
-    }
-
-    if let Some((CapabilityKind::View, inner)) = ty.as_capability(db) {
-        return const_aggregate_object_copy_compatible(db, core, inner);
-    }
-
-    if let Some(inner) = mir::repr::transparent_newtype_field_ty(db, ty) {
-        return const_aggregate_object_copy_compatible(db, core, inner);
-    }
-
-    match mir::repr::repr_kind_for_ty(db, core, ty) {
-        mir::repr::ReprKind::Zst | mir::repr::ReprKind::Word => true,
-        mir::repr::ReprKind::Ptr(_) => false,
-        mir::repr::ReprKind::Ref => {
-            if ty.is_array(db) {
-                return layout::array_elem_ty(db, ty).is_some_and(|elem_ty| {
-                    const_aggregate_object_copy_compatible(db, core, elem_ty)
-                });
-            }
-
-            if ty.is_tuple(db)
-                || ty
-                    .adt_ref(db)
-                    .is_some_and(|adt| matches!(adt, AdtRef::Struct(_)))
-            {
-                return ty
-                    .field_types(db)
-                    .iter()
-                    .copied()
-                    .all(|field_ty| const_aggregate_object_copy_compatible(db, core, field_ty));
-            }
-
-            false
-        }
-    }
 }
 
 impl<'db> TypeLowerer<'_, 'db> {
@@ -2519,6 +2908,9 @@ impl<'db> TypeLowerer<'_, 'db> {
             mir::ir::RuntimeShape::ObjectRef { target_ty } => {
                 self.runtime_object_ref_type_from_target(ty, target_ty, pointer_leaf_infos)
             }
+            mir::ir::RuntimeShape::ConstRef { target_ty } => {
+                self.runtime_const_ref_type_from_target(ty, target_ty, pointer_leaf_infos)
+            }
             mir::ir::RuntimeShape::Word(kind) => types::runtime_word_type(kind),
             mir::ir::RuntimeShape::MemoryPtr { target_ty } => target_ty
                 .map(|target_ty| {
@@ -2552,6 +2944,16 @@ impl<'db> TypeLowerer<'_, 'db> {
                 Some(self.builder.declare_array_type(Type::I8, size))
             })?;
         Some(self.builder.objref_type(target_ty))
+    }
+
+    fn object_ref_target_sonatina_ty(&mut self, ty: TyId<'db>) -> Option<Type> {
+        let target_ty = mir::repr::object_layout_ty(self.db, self.core, ty);
+        self.fe_object_ty_to_sonatina_with_pointer_leaf_infos(target_ty, &[])
+            .or_else(|| {
+                let size =
+                    layout::ty_memory_size_or_word_in(self.db, self.target_layout, target_ty)?;
+                Some(self.builder.declare_array_type(Type::I8, size))
+            })
     }
 
     fn runtime_target_pointer_leaf_infos(
@@ -2615,8 +3017,18 @@ impl<'db> TypeLowerer<'_, 'db> {
     ) -> Type {
         let object_pointer_leaf_infos =
             self.runtime_target_pointer_leaf_infos(owner_ty, target_ty, pointer_leaf_infos);
+        let structural_target_ty = if owner_ty.as_capability(self.db).is_none()
+            && mir::repr::object_layout_ty(self.db, self.core, owner_ty) == target_ty
+        {
+            owner_ty
+        } else {
+            target_ty
+        };
         let object_ty = self
-            .fe_object_ty_to_sonatina_with_pointer_leaf_infos(target_ty, &object_pointer_leaf_infos)
+            .fe_object_ty_to_sonatina_with_pointer_leaf_infos(
+                structural_target_ty,
+                &object_pointer_leaf_infos,
+            )
             .unwrap_or_else(|| {
                 let size =
                     layout::ty_memory_size_or_word_in(self.db, self.target_layout, target_ty)
@@ -2624,6 +3036,20 @@ impl<'db> TypeLowerer<'_, 'db> {
                 self.builder.declare_array_type(Type::I8, size)
             });
         self.builder.objref_type(object_ty)
+    }
+
+    fn runtime_const_ref_type_from_target(
+        &mut self,
+        owner_ty: TyId<'db>,
+        target_ty: TyId<'db>,
+        pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
+    ) -> Type {
+        let const_pointer_leaf_infos =
+            self.runtime_target_pointer_leaf_infos(owner_ty, target_ty, pointer_leaf_infos);
+        let const_ty = self
+            .fe_ty_to_sonatina_with_pointer_leaf_infos(target_ty, &const_pointer_leaf_infos)
+            .expect("const-backed runtime types must lower to a Sonatina type");
+        self.builder.constref_type(const_ty)
     }
 
     fn runtime_enum_tag_type_from_target(
@@ -2723,7 +3149,12 @@ impl<'db> TypeLowerer<'_, 'db> {
                     if root_pointer_info
                         .is_some_and(|info| info.address_space != AddressSpaceKind::Memory) =>
                 {
-                    Some(Type::I256)
+                    Some(non_memory_runtime_ref_ty(
+                        self,
+                        ty,
+                        pointer_leaf_infos,
+                        root_pointer_info.expect("checked is_some").address_space,
+                    ))
                 }
                 CapabilityKind::Mut | CapabilityKind::Ref
                     if root_pointer_info
@@ -2833,11 +3264,7 @@ impl<'db> TypeLowerer<'_, 'db> {
         ty: TyId<'db>,
         pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
     ) -> Option<Type> {
-        let ty = normalize_sonatina_type_input(
-            self.db,
-            self.core,
-            mir::repr::object_layout_ty(self.db, self.core, ty),
-        );
+        let ty = normalize_sonatina_type_input(self.db, self.core, ty);
         if is_erased_runtime_ty(self.db, self.target_layout, ty) {
             return Some(Type::Unit);
         }
@@ -2852,7 +3279,12 @@ impl<'db> TypeLowerer<'_, 'db> {
                     if root_pointer_info
                         .is_some_and(|info| info.address_space != AddressSpaceKind::Memory) =>
                 {
-                    Some(Type::I256)
+                    Some(non_memory_runtime_ref_ty(
+                        self,
+                        ty,
+                        pointer_leaf_infos,
+                        root_pointer_info.expect("checked is_some").address_space,
+                    ))
                 }
                 CapabilityKind::Mut | CapabilityKind::Ref
                     if root_pointer_info
@@ -2865,16 +3297,7 @@ impl<'db> TypeLowerer<'_, 'db> {
                 CapabilityKind::Mut | CapabilityKind::Ref
                     if object_field_uses_object_ref(self.db, self.core, inner) =>
                 {
-                    let target_ty = self
-                        .fe_object_ty_to_sonatina_with_pointer_leaf_infos(inner, &[])
-                        .or_else(|| {
-                            let size = layout::ty_memory_size_or_word_in(
-                                self.db,
-                                self.target_layout,
-                                inner,
-                            )?;
-                            Some(self.builder.declare_array_type(Type::I8, size))
-                        })?;
+                    let target_ty = self.object_ref_target_sonatina_ty(inner)?;
                     Some(self.builder.objref_type(target_ty))
                 }
                 CapabilityKind::Mut => Some(self.pointer_like_sonatina_ty(inner, &[])),
@@ -3032,6 +3455,7 @@ enum LoweredPlaceAddr {
     Word(ValueId),
     MemoryPtr(ValueId),
     ObjectRef(ValueId),
+    ConstRef(ValueId),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -3048,8 +3472,8 @@ impl<'db> LoweredPlaceTerminal<'db> {
         match self.addr {
             LoweredPlaceAddr::Word(addr) => addr,
             LoweredPlaceAddr::MemoryPtr(ptr) => coerce_value_to_word(ctx, ptr),
-            LoweredPlaceAddr::ObjectRef(_) => unreachable!(
-                "object-backed place must not be coerced to a raw word address without an explicit load"
+            LoweredPlaceAddr::ObjectRef(_) | LoweredPlaceAddr::ConstRef(_) => unreachable!(
+                "reference-backed place must not be coerced to a raw word address without an explicit load"
             ),
         }
     }
@@ -3061,7 +3485,9 @@ impl<'db> LoweredPlaceTerminal<'db> {
     ) -> Option<ValueId> {
         match self.addr {
             LoweredPlaceAddr::MemoryPtr(ptr) => Some(coerce_value_to_type(ctx, ptr, expected_ty)),
-            LoweredPlaceAddr::Word(_) | LoweredPlaceAddr::ObjectRef(_) => None,
+            LoweredPlaceAddr::Word(_)
+            | LoweredPlaceAddr::ObjectRef(_)
+            | LoweredPlaceAddr::ConstRef(_) => None,
         }
     }
 
@@ -3069,21 +3495,35 @@ impl<'db> LoweredPlaceTerminal<'db> {
         match self.addr {
             LoweredPlaceAddr::Word(addr)
             | LoweredPlaceAddr::MemoryPtr(addr)
-            | LoweredPlaceAddr::ObjectRef(addr) => addr,
+            | LoweredPlaceAddr::ObjectRef(addr)
+            | LoweredPlaceAddr::ConstRef(addr) => addr,
         }
     }
 
     fn native_memory_ptr(self) -> Option<ValueId> {
         match self.addr {
             LoweredPlaceAddr::MemoryPtr(ptr) => Some(ptr),
-            LoweredPlaceAddr::Word(_) | LoweredPlaceAddr::ObjectRef(_) => None,
+            LoweredPlaceAddr::Word(_)
+            | LoweredPlaceAddr::ObjectRef(_)
+            | LoweredPlaceAddr::ConstRef(_) => None,
         }
     }
 
     fn object_ref(self) -> Option<ValueId> {
         match self.addr {
             LoweredPlaceAddr::ObjectRef(object_ref) => Some(object_ref),
-            LoweredPlaceAddr::Word(_) | LoweredPlaceAddr::MemoryPtr(_) => None,
+            LoweredPlaceAddr::Word(_)
+            | LoweredPlaceAddr::MemoryPtr(_)
+            | LoweredPlaceAddr::ConstRef(_) => None,
+        }
+    }
+
+    fn const_ref(self) -> Option<ValueId> {
+        match self.addr {
+            LoweredPlaceAddr::ConstRef(const_ref) => Some(const_ref),
+            LoweredPlaceAddr::Word(_)
+            | LoweredPlaceAddr::MemoryPtr(_)
+            | LoweredPlaceAddr::ObjectRef(_) => None,
         }
     }
 }
@@ -3097,29 +3537,20 @@ fn lower_place_state_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     let address_space = state.location_address_space().ok_or_else(|| {
         LowerError::Internal(format!("non-location segment base for {debug_place:?}"))
     })?;
+    let runtime_ty = ctx.fb.type_of(runtime);
     Ok(LoweredPlaceTerminal {
         state,
-        addr: if matches!(address_space, AddressSpaceKind::Memory) {
-            if ctx
-                .fb
-                .type_of(runtime)
-                .is_obj_ref(&ctx.fb.module_builder.ctx)
-            {
-                LoweredPlaceAddr::ObjectRef(runtime)
+        addr: if runtime_ty.is_const_ref(&ctx.fb.module_builder.ctx) {
+            LoweredPlaceAddr::ConstRef(runtime)
+        } else if runtime_ty.is_obj_ref(&ctx.fb.module_builder.ctx) {
+            LoweredPlaceAddr::ObjectRef(runtime)
+        } else if matches!(address_space, AddressSpaceKind::Memory) {
+            LoweredPlaceAddr::MemoryPtr(if runtime_ty.is_pointer(&ctx.fb.module_builder.ctx) {
+                runtime
             } else {
-                LoweredPlaceAddr::MemoryPtr(
-                    if ctx
-                        .fb
-                        .type_of(runtime)
-                        .is_pointer(&ctx.fb.module_builder.ctx)
-                    {
-                        runtime
-                    } else {
-                        let opaque_ptr_ty = ctx.fb.ptr_type(Type::I8);
-                        coerce_word_addr_to_ptr(ctx, runtime, opaque_ptr_ty)
-                    },
-                )
-            }
+                let opaque_ptr_ty = ctx.fb.ptr_type(Type::I8);
+                coerce_word_addr_to_ptr(ctx, runtime, opaque_ptr_ty)
+            })
         } else {
             LoweredPlaceAddr::Word(coerce_value_to_word(ctx, runtime))
         },
@@ -3166,21 +3597,61 @@ fn lower_place_runtime_location_value<'db, C: sonatina_ir::func_cursor::FuncCurs
     expected_runtime_ty: Type,
 ) -> Result<ValueId, LowerError> {
     let terminal = lower_place_terminal(ctx, place)?;
-    if let Some(value) = lower_object_ref_terminal_value(ctx, terminal, expected_runtime_ty)? {
-        return Ok(value);
+    if let Some(object_ref) = terminal.object_ref()
+        && expected_runtime_ty.is_pointer(&ctx.fb.module_builder.ctx)
+    {
+        let object_elem_ty = object_ref_elem_ty(ctx, ctx.fb.type_of(object_ref))?;
+        let materialized_object = if object_elem_ty.is_obj_ref(&ctx.fb.module_builder.ctx) {
+            ctx.fb
+                .insert_inst(ObjLoad::new(ctx.is, object_ref), object_elem_ty)
+        } else {
+            object_ref
+        };
+        if ctx
+            .fb
+            .type_of(materialized_object)
+            .is_obj_ref(&ctx.fb.module_builder.ctx)
+        {
+            let stack_ptr_ty = ctx.fb.ptr_type(object_elem_ty);
+            let ptr = ctx.fb.insert_inst(
+                ObjMaterializeStack::new(ctx.is, materialized_object),
+                stack_ptr_ty,
+            );
+            return Ok(coerce_value_to_type(ctx, ptr, expected_runtime_ty));
+        }
+    }
+    if terminal.object_ref().is_some() || terminal.const_ref().is_some() {
+        let packed =
+            layout::is_packed_scalar_array_access(ctx.db, ctx.body, place, terminal.state.ty)
+                .map_err(LowerError::Unsupported)?;
+        return load_from_terminal(
+            ctx,
+            terminal,
+            place,
+            terminal.state.ty,
+            expected_runtime_ty,
+            packed,
+        );
     }
     if expected_runtime_ty.is_pointer(&ctx.fb.module_builder.ctx)
         && let Some(memory_ptr) = terminal.memory_ptr(ctx, expected_runtime_ty)
     {
         return Ok(coerce_value_to_type(ctx, memory_ptr, expected_runtime_ty));
     }
-    if terminal.object_ref().is_some() {
-        return Err(LowerError::Internal(format!(
-            "object-backed place location value requires object-ref runtime type for {place:?} (expected {expected_runtime_ty:?})"
-        )));
-    }
     let word_addr = terminal.word_addr(ctx);
     Ok(coerce_value_to_type(ctx, word_addr, expected_runtime_ty))
+}
+
+fn lower_place_word_addr_or_reference_backed_value<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    place: &Place<'db>,
+    expected_runtime_ty: Type,
+) -> Result<ValueId, LowerError> {
+    let terminal = lower_place_terminal(ctx, place)?;
+    if terminal.object_ref().is_some() || terminal.const_ref().is_some() {
+        return lower_place_runtime_location_value(ctx, place, expected_runtime_ty);
+    }
+    Ok(terminal.word_addr(ctx))
 }
 
 fn lower_object_ref_terminal_value<'db, C: sonatina_ir::func_cursor::FuncCursor>(
@@ -3281,29 +3752,50 @@ fn load_from_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     expected_runtime_ty: Type,
     packed: bool,
 ) -> Result<ValueId, LowerError> {
-    match terminal_address_space(&terminal, place)? {
-        AddressSpaceKind::Memory => {
-            if let Some(object_ref) = terminal.object_ref() {
-                let object_elem_ty = object_ref_elem_ty(ctx, ctx.fb.type_of(object_ref))?;
-                if expected_runtime_ty.is_obj_ref(&ctx.fb.module_builder.ctx) {
-                    if object_elem_ty.is_obj_ref(&ctx.fb.module_builder.ctx) {
-                        let loaded = ctx
-                            .fb
-                            .insert_inst(ObjLoad::new(ctx.is, object_ref), object_elem_ty);
-                        return Ok(coerce_value_to_type(ctx, loaded, expected_runtime_ty));
-                    }
-                    return Ok(coerce_value_to_type(ctx, object_ref, expected_runtime_ty));
-                }
+    if let Some(const_ref) = terminal.const_ref() {
+        if expected_runtime_ty.is_const_ref(&ctx.fb.module_builder.ctx)
+            || expected_runtime_ty.is_obj_ref(&ctx.fb.module_builder.ctx)
+        {
+            return Ok(coerce_value_to_type(ctx, const_ref, expected_runtime_ty));
+        }
+        let const_elem_ty = const_ref_elem_ty(ctx, ctx.fb.type_of(const_ref))?;
+        if !const_elem_ty.is_integral() {
+            return Err(LowerError::Unsupported(format!(
+                "const-backed load currently requires an integral leaf type for `{}` (place={place:?}, state={:?}, const_ref_ty={:?}, expected_runtime_ty={expected_runtime_ty:?})",
+                loaded_ty.pretty_print(ctx.db),
+                terminal.state,
+                ctx.fb.type_of(const_ref),
+            )));
+        }
+        let loaded = ctx
+            .fb
+            .insert_inst(ConstLoad::new(ctx.is, const_ref), const_elem_ty);
+        return Ok(coerce_value_to_type(ctx, loaded, expected_runtime_ty));
+    }
+    if let Some(object_ref) = terminal.object_ref() {
+        let object_elem_ty = object_ref_elem_ty(ctx, ctx.fb.type_of(object_ref))?;
+        if expected_runtime_ty.is_obj_ref(&ctx.fb.module_builder.ctx) {
+            if object_elem_ty.is_obj_ref(&ctx.fb.module_builder.ctx) {
                 let loaded = ctx
                     .fb
                     .insert_inst(ObjLoad::new(ctx.is, object_ref), object_elem_ty);
-                return Ok(coerce_value_to_runtime_ty(
-                    ctx,
-                    loaded,
-                    loaded_ty,
-                    expected_runtime_ty,
-                ));
+                return Ok(coerce_value_to_type(ctx, loaded, expected_runtime_ty));
             }
+            return Ok(coerce_value_to_type(ctx, object_ref, expected_runtime_ty));
+        }
+        let loaded = ctx
+            .fb
+            .insert_inst(ObjLoad::new(ctx.is, object_ref), object_elem_ty);
+        return Ok(coerce_value_to_runtime_ty(
+            ctx,
+            loaded,
+            loaded_ty,
+            expected_runtime_ty,
+        ));
+    }
+
+    match terminal_address_space(&terminal, place)? {
+        AddressSpaceKind::Memory => {
             let ptr_addr = terminal_native_memory_ptr(&terminal, place)?;
             if expected_runtime_ty.is_pointer(&ctx.fb.module_builder.ctx) && !packed {
                 return Ok(ctx.fb.insert_inst(
@@ -3581,6 +4073,60 @@ fn lower_object_place_segment<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     })
 }
 
+fn lower_const_place_segment<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    segment_base: ValueId,
+    segment: &ResolvedPlaceSegment<'db>,
+) -> Result<LoweredPlaceTerminal<'db>, LowerError> {
+    let mut const_ref = segment_base;
+    let mut const_elem_ty = const_ref_elem_ty(ctx, ctx.fb.type_of(const_ref))?;
+
+    for step in &segment.projections {
+        match &step.projection {
+            Projection::Field(field_idx) => {
+                if mir::repr::transparent_field0_inner_ty(ctx.db, step.owner.ty, *field_idx)
+                    == Some(step.result.ty)
+                {
+                    continue;
+                }
+
+                let idx = ctx.fb.make_imm_value(I256::from(*field_idx as u64));
+                const_elem_ty = sonatina_struct_field_ty(
+                    ctx,
+                    const_elem_ty,
+                    *field_idx,
+                    step.owner.ty,
+                    step.result.ty,
+                )?;
+                let result_ty = ctx.fb.module_builder.constref_type(const_elem_ty);
+                const_ref = ctx.fb.insert_inst(
+                    ConstProj::new(ctx.is, smallvec1::smallvec![const_ref, idx]),
+                    result_ty,
+                );
+            }
+            Projection::Index(idx_source) => {
+                let idx = lower_array_index_with_bounds_check(ctx, step.owner.ty, idx_source)?;
+                const_elem_ty = sonatina_array_elem_ty(ctx, const_elem_ty)?;
+                let result_ty = ctx.fb.module_builder.constref_type(const_elem_ty);
+                const_ref = ctx
+                    .fb
+                    .insert_inst(ConstIndex::new(ctx.is, const_ref, idx), result_ty);
+            }
+            Projection::VariantField { .. } | Projection::Discriminant | Projection::Deref => {
+                return Err(LowerError::Unsupported(format!(
+                    "const-backed projection `{:?}` is not implemented",
+                    step.projection
+                )));
+            }
+        }
+    }
+
+    Ok(LoweredPlaceTerminal {
+        state: segment.terminal_state(),
+        addr: LoweredPlaceAddr::ConstRef(const_ref),
+    })
+}
+
 fn lower_place_segment_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
     debug_place: &Place<'db>,
@@ -3598,11 +4144,12 @@ fn lower_place_segment_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             segment_base,
         );
     }
+    let segment_base_ty = ctx.fb.type_of(segment_base);
+    if segment_base_ty.is_const_ref(&ctx.fb.module_builder.ctx) {
+        return lower_const_place_segment(ctx, segment_base, segment);
+    }
     if matches!(address_space, AddressSpaceKind::Memory)
-        && ctx
-            .fb
-            .type_of(segment_base)
-            .is_obj_ref(&ctx.fb.module_builder.ctx)
+        && segment_base_ty.is_obj_ref(&ctx.fb.module_builder.ctx)
     {
         return lower_object_place_segment(ctx, segment_base, segment);
     }
@@ -3630,13 +4177,14 @@ fn lower_place_segment_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         });
     }
 
-    if ctx
-        .fb
-        .type_of(segment_base)
-        .is_obj_ref(&ctx.fb.module_builder.ctx)
-    {
+    if segment_base_ty.is_obj_ref(&ctx.fb.module_builder.ctx) {
         return Err(LowerError::Internal(format!(
             "object-backed place segment did not lower through the object path for {debug_place:?}",
+        )));
+    }
+    if segment_base_ty.is_const_ref(&ctx.fb.module_builder.ctx) {
+        return Err(LowerError::Internal(format!(
+            "const-backed place segment did not lower through the const path for {debug_place:?}",
         )));
     }
     let base_word = coerce_value_to_word(ctx, segment_base);
@@ -3681,22 +4229,40 @@ fn lower_place_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     place: &Place<'db>,
 ) -> Result<LoweredPlaceTerminal<'db>, LowerError> {
     let resolved = resolve_place(ctx, place)?;
-    let root_runtime = match ctx.body.value(place.base).origin {
-        mir::ValueOrigin::Local(local) => {
+    let local_place_root_runtime =
+        |ctx: &mut LowerCtx<'_, 'db, C>, local: mir::LocalId| -> Result<ValueId, LowerError> {
             if let Some(place_root) = materialized_local_place_root(ctx, local) {
-                match place_root {
+                return Ok(match place_root {
                     MaterializedLocalPlaceRoot::MemorySlot(slot_ptr) => slot_ptr,
                     MaterializedLocalPlaceRoot::ObjectRoot(object_ref) => object_ref,
-                }
-            } else {
-                let root_local = ctx.body.spill_slots.get(&local).copied().unwrap_or(local);
-                let var = ctx.local_vars.get(&root_local).copied().ok_or_else(|| {
-                    LowerError::Internal(format!(
-                        "SSA variable not found for place root {root_local:?}"
-                    ))
-                })?;
-                ctx.fb.use_var(var)
+                });
             }
+
+            match local_place_root_layout(ctx, local) {
+                Some(mir::ir::LocalPlaceRootLayout::MemorySlot) => {
+                    ensure_local_place_root_slot(ctx, local)
+                }
+                Some(mir::ir::LocalPlaceRootLayout::ObjectRootStorage { .. }) => {
+                    ensure_local_place_root_object(ctx, local)
+                }
+                Some(
+                    mir::ir::LocalPlaceRootLayout::Direct
+                    | mir::ir::LocalPlaceRootLayout::ObjectRootValue { .. },
+                )
+                | None => {
+                    let root_local = ctx.body.spill_slots.get(&local).copied().unwrap_or(local);
+                    let var = ctx.local_vars.get(&root_local).copied().ok_or_else(|| {
+                        LowerError::Internal(format!(
+                            "SSA variable not found for place root {root_local:?}"
+                        ))
+                    })?;
+                    Ok(ctx.fb.use_var(var))
+                }
+            }
+        };
+    let root_runtime = match ctx.body.value(place.base).origin {
+        mir::ValueOrigin::Local(local) | mir::ValueOrigin::PlaceRoot(local) => {
+            local_place_root_runtime(ctx, local)?
         }
         _ => lower_value(ctx, place.base)?,
     };
@@ -3760,23 +4326,6 @@ fn deref_boundary_runtime_ty<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     loaded_ty: TyId<'db>,
 ) -> Result<Type, LowerError> {
     ctx.runtime_type_for_loaded_place(place, loaded_ty)
-}
-
-/// Computes the address for a place by walking the projection path.
-///
-/// For memory, computes byte offsets. For storage, computes slot offsets.
-/// Returns a Sonatina ValueId representing the final address.
-fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
-    ctx: &mut LowerCtx<'_, 'db, C>,
-    place: &Place<'db>,
-) -> Result<ValueId, LowerError> {
-    let lowered = lower_place_terminal(ctx, place)?;
-    if lowered.object_ref().is_some() {
-        return Err(LowerError::Unsupported(format!(
-            "raw address materialization is not supported for object-backed place {place:?}"
-        )));
-    }
-    Ok(lowered.word_addr(ctx))
 }
 
 /// GEP-based place address computation for memory-addressed struct/array paths.
@@ -3932,6 +4481,23 @@ fn object_ref_elem_ty<C: sonatina_ir::func_cursor::FuncCursor>(
     let sonatina_ir::types::CompoundType::ObjRef(elem_ty) = cmpd else {
         return Err(LowerError::Internal(format!(
             "expected object reference type, found {object_ref_ty:?}"
+        )));
+    };
+    Ok(elem_ty)
+}
+
+fn const_ref_elem_ty<C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, '_, C>,
+    const_ref_ty: Type,
+) -> Result<Type, LowerError> {
+    let Some(cmpd) = const_ref_ty.resolve_compound(&ctx.fb.module_builder.ctx) else {
+        return Err(LowerError::Internal(format!(
+            "expected const reference type, found {const_ref_ty:?}"
+        )));
+    };
+    let sonatina_ir::types::CompoundType::ConstRef(elem_ty) = cmpd else {
+        return Err(LowerError::Internal(format!(
+            "expected const reference type, found {const_ref_ty:?}"
         )));
     };
     Ok(elem_ty)
@@ -4348,7 +4914,21 @@ fn lower_alloc<C: sonatina_ir::func_cursor::FuncCursor>(
         ));
     }
     if !ctx.local_runtime_types[dest.index()].is_obj_ref(&ctx.fb.module_builder.ctx) {
+        let alloc_escapes = ctx
+            .current_ptr_escape_summary
+            .and_then(|summary| summary.local_alloc_may_escape.get(dest.index()))
+            .copied()
+            .unwrap_or(false);
         if !mir::repr::supports_object_ref_runtime_ty(ctx.db, ctx.core, alloc_ty) {
+            let size = ctx.fb.make_imm_value(I256::from(size_bytes as u64));
+            let ptr = emit_evm_malloc_ptr(ctx.fb, size, ctx.is);
+            return Ok(coerce_value_to_type(
+                ctx,
+                ptr,
+                ctx.local_runtime_types[dest.index()],
+            ));
+        }
+        if alloc_escapes {
             let size = ctx.fb.make_imm_value(I256::from(size_bytes as u64));
             let ptr = emit_evm_malloc_ptr(ctx.fb, size, ctx.is);
             return Ok(coerce_value_to_type(
@@ -4396,7 +4976,15 @@ fn lower_store_inst<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         return Ok(());
     }
 
-    if value_data.repr.is_ref() {
+    if value_data.repr.is_ref()
+        && mir::repr::value_resolves_to_location(
+            ctx.db,
+            ctx.core,
+            &ctx.body.values,
+            &ctx.body.locals,
+            value,
+        )
+    {
         let src_place = mir::ir::Place::new(value, mir::ir::MirProjectionPath::new());
         deep_copy_from_places(ctx, place, &src_place, value_ty)?;
         return Ok(());
@@ -4492,6 +5080,31 @@ fn load_place_runtime<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     if let Some(discriminant) = lower_enum_discriminant_load(ctx, place, expected_runtime_ty)? {
         return Ok(discriminant);
     }
+    if place.projection.is_empty()
+        && resolve_place(ctx, place)?
+            .final_state()
+            .location_address_space()
+            .is_none()
+    {
+        let base_runtime_ty = ctx.runtime_type_for_value(place.base);
+        if base_runtime_ty.is_obj_ref(&ctx.fb.module_builder.ctx)
+            || base_runtime_ty.is_const_ref(&ctx.fb.module_builder.ctx)
+        {
+            let lowered = lower_place_terminal(ctx, place)?;
+            if let Some(value) = lower_object_ref_terminal_value(ctx, lowered, expected_runtime_ty)?
+            {
+                return Ok(value);
+            }
+            return load_from_terminal(ctx, lowered, place, loaded_ty, expected_runtime_ty, false);
+        }
+        let base = lower_value(ctx, place.base)?;
+        return Ok(coerce_value_to_runtime_ty(
+            ctx,
+            base,
+            ctx.body.value(place.base).ty,
+            expected_runtime_ty,
+        ));
+    }
 
     if is_transparent_field0_place(ctx, place) {
         let base = lower_value(ctx, place.base)?;
@@ -4559,37 +5172,18 @@ fn deep_copy_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         return store_runtime_value_to_place(ctx, dst_place, value_ty, loaded);
     }
 
-    let dst_space = ctx.body.place_address_space(dst_place);
-    let src_space = ctx.body.place_address_space(src_place);
-
     if value_ty.is_array(ctx.db) {
+        let dst_space = ctx.body.place_address_space(dst_place);
+        let dst_lowered = lower_place_terminal(ctx, dst_place)?;
+        let src_lowered = lower_place_terminal(ctx, src_place)?;
         if dst_space == AddressSpaceKind::Memory
-            && src_space == AddressSpaceKind::Code
-            && src_place.projection.is_empty()
+            && let Some(const_ref) = src_lowered.const_ref()
+            && let Some(object_ref) = dst_lowered.object_ref()
         {
-            let dst_lowered = lower_place_terminal(ctx, dst_place)?;
-            let copy_size = if let Some(mir::ValueData {
-                origin: mir::ValueOrigin::ConstRegion(region_id),
-                ..
-            }) = ctx.body.values.get(src_place.base.index())
-            {
-                Some(ctx.body.const_region(*region_id).bytes.len())
-            } else {
-                layout::ty_memory_size_in(ctx.db, ctx.target_layout, value_ty)
-            };
-            if let Some(size) = copy_size
-                && size > 0
-                && dst_lowered.object_ref().is_none()
-            {
-                let dst_addr = dst_lowered.word_addr(ctx);
-                let src_addr = lower_place_address(ctx, src_place)?;
-                let size_val = ctx.fb.make_imm_value(I256::from(size as u64));
-                ctx.fb
-                    .insert_inst_no_result(EvmCodeCopy::new(ctx.is, dst_addr, src_addr, size_val));
-                return Ok(());
-            }
+            ctx.fb
+                .insert_inst_no_result(ObjInitConst::new(ctx.is, object_ref, const_ref));
+            return Ok(());
         }
-
         let Some(len) = layout::array_len(ctx.db, value_ty) else {
             return Err(LowerError::Unsupported(
                 "array store requires a constant length".into(),
@@ -4782,11 +5376,11 @@ fn emit_obj_alloc_ref<C: sonatina_ir::func_cursor::FuncCursor>(
     fb.insert_inst(ObjAlloc::new(is, object_ty), object_ref_ty)
 }
 
-fn ensure_const_data_global<C: sonatina_ir::func_cursor::FuncCursor>(
+fn ensure_raw_const_data_global<C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, '_, C>,
     data: &[u8],
 ) -> GlobalVariableRef {
-    if let Some(&existing) = ctx.const_data_globals.get(data) {
+    if let Some(&existing) = ctx.raw_data_globals.get(data) {
         return existing;
     }
 
@@ -4803,150 +5397,221 @@ fn ensure_const_data_global<C: sonatina_ir::func_cursor::FuncCursor>(
         .declare_array_type(Type::I8, data.len());
     let gv_data = GlobalVariableData::constant(label, array_ty, Linkage::Private, array_init);
     let gv_ref = ctx.fb.module_builder.declare_gv(gv_data);
-    ctx.const_data_globals.insert(data.to_vec(), gv_ref);
+    ctx.raw_data_globals.insert(data.to_vec(), gv_ref);
     ctx.data_globals.push(gv_ref);
     gv_ref
 }
 
-/// Lower a `ConstAggregate` by registering a global data section and using CODECOPY.
-///
-/// Registers the constant bytes as a Sonatina global variable (data section),
-/// then emits: malloc -> symaddr -> symsize -> codecopy. This is the Sonatina
-/// equivalent of Yul's datacopy/dataoffset/datasize pattern.
+fn ensure_const_data_global<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    ty: TyId<'db>,
+    data: &mir::ConstData,
+) -> Result<GlobalVariableRef, LowerError> {
+    let key = ConstGlobalKey {
+        ty,
+        data: data.clone(),
+    };
+    if let Some(&existing) = ctx.const_data_globals.get(&key) {
+        return Ok(existing);
+    }
+
+    let gv_ty = ctx.type_lowerer().fe_ty_to_sonatina(ty).ok_or_else(|| {
+        LowerError::Unsupported(format!(
+            "cannot lower const global type `{}` to Sonatina",
+            ty.pretty_print(ctx.db)
+        ))
+    })?;
+    let initializer = const_data_to_gv_initializer(ctx, ty, gv_ty, data)?;
+    let label = format!("__fe_const_data_{}", *ctx.data_global_counter);
+    *ctx.data_global_counter += 1;
+    let gv_data = GlobalVariableData::constant(label, gv_ty, Linkage::Private, initializer);
+    let gv_ref = ctx.fb.module_builder.declare_gv(gv_data);
+    ctx.const_data_globals.insert(key, gv_ref);
+    ctx.data_globals.push(gv_ref);
+    Ok(gv_ref)
+}
+
+fn const_data_to_gv_initializer<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    fe_ty: TyId<'db>,
+    sonatina_ty: Type,
+    data: &mir::ConstData,
+) -> Result<GvInitializer, LowerError> {
+    if sonatina_ty.is_integral() {
+        let imm = match data {
+            mir::ConstData::Int(value) => Immediate::from_i256(biguint_to_i256(value), sonatina_ty),
+            mir::ConstData::Bool(value) => {
+                if sonatina_ty == Type::I1 {
+                    Immediate::from(*value)
+                } else {
+                    Immediate::from_i256(
+                        if *value { I256::one() } else { I256::zero() },
+                        sonatina_ty,
+                    )
+                }
+            }
+            mir::ConstData::Bytes(bytes) => Immediate::from_i256(bytes_to_i256(bytes), sonatina_ty),
+            mir::ConstData::EnumVariant(value) => {
+                Immediate::from_i256(I256::from(*value as u64), sonatina_ty)
+            }
+            mir::ConstData::Array(_) => {
+                return Err(LowerError::Internal(format!(
+                    "scalar Sonatina const type `{sonatina_ty:?}` received aggregate Fe const data for `{}`",
+                    fe_ty.pretty_print(ctx.db)
+                )));
+            }
+        };
+        return Ok(GvInitializer::make_imm(imm));
+    }
+
+    let Some(compound) = sonatina_ty.resolve_compound(&ctx.fb.module_builder.ctx) else {
+        return Err(LowerError::Unsupported(format!(
+            "unsupported Sonatina const global type `{sonatina_ty:?}` for `{}`",
+            fe_ty.pretty_print(ctx.db)
+        )));
+    };
+
+    match compound {
+        sonatina_ir::types::CompoundType::Array { elem, len } => {
+            let elem_ty = layout::array_elem_ty(ctx.db, fe_ty).ok_or_else(|| {
+                LowerError::Internal(format!(
+                    "missing array element type for const `{}`",
+                    fe_ty.pretty_print(ctx.db)
+                ))
+            })?;
+            match data {
+                mir::ConstData::Array(items) => {
+                    if items.len() != len {
+                        return Err(LowerError::Internal(format!(
+                            "const array length mismatch for `{}`: expected {len}, got {}",
+                            fe_ty.pretty_print(ctx.db),
+                            items.len()
+                        )));
+                    }
+                    let mut elems = Vec::with_capacity(items.len());
+                    for item in items {
+                        elems.push(const_data_to_gv_initializer(ctx, elem_ty, elem, item)?);
+                    }
+                    Ok(GvInitializer::make_array(elems))
+                }
+                mir::ConstData::Bytes(bytes) => {
+                    if bytes.len() != len {
+                        return Err(LowerError::Internal(format!(
+                            "const byte-array length mismatch for `{}`: expected {len}, got {}",
+                            fe_ty.pretty_print(ctx.db),
+                            bytes.len()
+                        )));
+                    }
+                    let mut elems = Vec::with_capacity(bytes.len());
+                    for &byte in bytes {
+                        elems.push(const_data_to_gv_initializer(
+                            ctx,
+                            elem_ty,
+                            elem,
+                            &mir::ConstData::Int(BigUint::from(byte)),
+                        )?);
+                    }
+                    Ok(GvInitializer::make_array(elems))
+                }
+                _ => Err(LowerError::Internal(format!(
+                    "array const `{}` requires aggregate data",
+                    fe_ty.pretty_print(ctx.db)
+                ))),
+            }
+        }
+        sonatina_ir::types::CompoundType::Struct(struct_data) => {
+            let mir::ConstData::Array(fields) = data else {
+                return Err(LowerError::Internal(format!(
+                    "struct const `{}` requires aggregate data",
+                    fe_ty.pretty_print(ctx.db)
+                )));
+            };
+            let field_tys = fe_ty.field_types(ctx.db);
+            if fields.len() != field_tys.len() || fields.len() != struct_data.fields.len() {
+                return Err(LowerError::Internal(format!(
+                    "struct const field count mismatch for `{}`",
+                    fe_ty.pretty_print(ctx.db)
+                )));
+            }
+            let mut out = Vec::with_capacity(fields.len());
+            for ((field_ty, field_sonatina_ty), field_data) in field_tys
+                .into_iter()
+                .zip(struct_data.fields.into_iter())
+                .zip(fields.iter())
+            {
+                out.push(const_data_to_gv_initializer(
+                    ctx,
+                    field_ty,
+                    field_sonatina_ty,
+                    field_data,
+                )?);
+            }
+            Ok(GvInitializer::make_struct(out))
+        }
+        other => Err(LowerError::Unsupported(format!(
+            "unsupported Sonatina const global compound type `{other:?}` for `{}`",
+            fe_ty.pretty_print(ctx.db)
+        ))),
+    }
+}
+
+fn const_data_ref<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    ty: TyId<'db>,
+    data: &mir::ConstData,
+) -> Result<ValueId, LowerError> {
+    let gv_ref = ensure_const_data_global(ctx, ty, data)?;
+    let const_ty = gv_ref.ty(&ctx.fb.module_builder.ctx);
+    let const_ref_ty = ctx.fb.module_builder.constref_type(const_ty);
+    Ok(ctx
+        .fb
+        .insert_inst(ConstRef::new(ctx.is, gv_ref.into()), const_ref_ty))
+}
+
+/// Lower a `ConstAggregate` by creating a typed Sonatina const global and
+/// delegating runtime initialization to `obj.init.const`.
 fn lower_const_aggregate<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
     dest: mir::LocalId,
     ty: TyId<'db>,
-    data: &[u8],
+    data: &mir::ConstData,
 ) -> Result<ValueId, LowerError> {
-    if ctx.local_runtime_types[dest.index()].is_obj_ref(&ctx.fb.module_builder.ctx) {
-        let size_bytes = layout::ty_memory_size_or_word_in(ctx.db, ctx.target_layout, ty)
-            .ok_or_else(|| {
-                LowerError::Unsupported(format!(
-                    "cannot determine allocation size for `{}`",
-                    ty.pretty_print(ctx.db)
-                ))
-            })?;
-        if size_bytes == 0 {
-            return Ok(zero_value_for_type(
-                ctx.fb,
-                ctx.local_runtime_types[dest.index()],
-                ctx.is,
-            ));
-        }
-        let pointer_leaf_infos = ctx.body.local(dest).pointer_leaf_infos.clone();
-        let object_ty = ctx
-            .type_lowerer()
-            .fe_object_ty_to_sonatina_with_pointer_leaf_infos(ty, &pointer_leaf_infos)
-            .unwrap_or_else(|| ctx.fb.declare_array_type(Type::I8, size_bytes));
-        if const_aggregate_object_copy_compatible(ctx.db, ctx.core, ty) {
-            let gv_ref = ensure_const_data_global(ctx, data);
-            let object_ref = emit_obj_alloc_ref(ctx.fb, object_ty, ctx.is);
-            let object_ptr_ty = ctx.fb.ptr_type(object_ty);
-            let object_ptr = ctx
-                .fb
-                .insert_inst(ObjMaterializeStack::new(ctx.is, object_ref), object_ptr_ty);
-            let sym = SymbolRef::Global(gv_ref);
-            let code_offset = ctx
-                .fb
-                .insert_inst(SymAddr::new(ctx.is, sym.clone()), Type::I256);
-            let code_size = ctx.fb.insert_inst(SymSize::new(ctx.is, sym), Type::I256);
-            let dst = coerce_value_to_word(ctx, object_ptr);
-            ctx.fb
-                .insert_inst_no_result(EvmCodeCopy::new(ctx.is, dst, code_offset, code_size));
-            return Ok(object_ref);
-        }
-
-        let object_ref = emit_obj_alloc_ref(ctx.fb, object_ty, ctx.is);
-        init_const_array_object(ctx, object_ref, ty, data)?;
-        return Ok(object_ref);
+    if ctx.local_runtime_types[dest.index()].is_const_ref(&ctx.fb.module_builder.ctx) {
+        return const_data_ref(ctx, ty, data);
     }
 
-    let gv_ref = ensure_const_data_global(ctx, data);
-    let size_val = ctx.fb.make_imm_value(I256::from(data.len() as u64));
-    let ptr = emit_evm_malloc_ptr(ctx.fb, size_val, ctx.is);
-    let sym = SymbolRef::Global(gv_ref);
-    let code_offset = ctx
-        .fb
-        .insert_inst(SymAddr::new(ctx.is, sym.clone()), Type::I256);
-    let code_size = ctx.fb.insert_inst(SymSize::new(ctx.is, sym), Type::I256);
-    let dst = coerce_value_to_word(ctx, ptr);
+    if !ctx.local_runtime_types[dest.index()].is_obj_ref(&ctx.fb.module_builder.ctx) {
+        return Err(LowerError::Unsupported(format!(
+            "ConstAggregate requires a const-ref or object-backed destination local for `{}`",
+            ty.pretty_print(ctx.db)
+        )));
+    }
+
+    let size_bytes =
+        layout::ty_memory_size_or_word_in(ctx.db, ctx.target_layout, ty).ok_or_else(|| {
+            LowerError::Unsupported(format!(
+                "cannot determine allocation size for `{}`",
+                ty.pretty_print(ctx.db)
+            ))
+        })?;
+    if size_bytes == 0 {
+        return Ok(zero_value_for_type(
+            ctx.fb,
+            ctx.local_runtime_types[dest.index()],
+            ctx.is,
+        ));
+    }
+
+    let pointer_leaf_infos = ctx.body.local(dest).pointer_leaf_infos.clone();
+    let object_ty = ctx
+        .type_lowerer()
+        .fe_object_ty_to_sonatina_with_pointer_leaf_infos(ty, &pointer_leaf_infos)
+        .unwrap_or_else(|| ctx.fb.declare_array_type(Type::I8, size_bytes));
+    let object_ref = emit_obj_alloc_ref(ctx.fb, object_ty, ctx.is);
+    let const_ref = const_data_ref(ctx, ty, data)?;
     ctx.fb
-        .insert_inst_no_result(EvmCodeCopy::new(ctx.is, dst, code_offset, code_size));
-
-    Ok(ptr)
-}
-
-fn init_const_array_object<'db, C: sonatina_ir::func_cursor::FuncCursor>(
-    ctx: &mut LowerCtx<'_, 'db, C>,
-    object_ref: ValueId,
-    array_ty: TyId<'db>,
-    data: &[u8],
-) -> Result<(), LowerError> {
-    let Some(len) = layout::array_len(ctx.db, array_ty) else {
-        return Err(LowerError::Unsupported(
-            "ConstAggregate object lowering requires a fixed-size array".to_string(),
-        ));
-    };
-    let elem_ty = layout::array_elem_ty(ctx.db, array_ty).ok_or_else(|| {
-        LowerError::Unsupported(
-            "ConstAggregate object lowering requires an array element type".to_string(),
-        )
-    })?;
-    let stride = layout::array_elem_stride_memory_in(ctx.db, ctx.target_layout, array_ty)
-        .ok_or_else(|| {
-            LowerError::Unsupported(
-                "ConstAggregate object lowering requires a constant memory stride".to_string(),
-            )
-        })?;
-
-    for idx in 0..len {
-        let start = idx * stride;
-        let end = start + stride;
-        let elem_data = data.get(start..end).ok_or_else(|| {
-            LowerError::Internal("ConstAggregate payload does not match array layout".to_string())
-        })?;
-        let idx_val = ctx.fb.make_imm_value(I256::from(idx as u64));
-        let array_object_ty = object_ref_elem_ty(ctx, ctx.fb.type_of(object_ref))?;
-        let elem_object_ty = if let Ok(ty) = sonatina_array_elem_ty(ctx, array_object_ty) {
-            ty
-        } else if matches!(
-            mir::repr::repr_kind_for_ty(ctx.db, ctx.core, elem_ty),
-            mir::repr::ReprKind::Ref
-        ) {
-            let size = layout::ty_memory_size_or_word_in(ctx.db, ctx.target_layout, elem_ty)
-                .ok_or_else(|| {
-                    LowerError::Unsupported(format!(
-                        "cannot determine allocation size for `{}`",
-                        elem_ty.pretty_print(ctx.db)
-                    ))
-                })?;
-            ctx.fb.declare_array_type(Type::I8, size)
-        } else {
-            types::value_type(ctx.db, elem_ty)
-        };
-        let elem_ref_ty = ctx.fb.module_builder.objref_type(elem_object_ty);
-        let elem_ref = ctx
-            .fb
-            .insert_inst(ObjIndex::new(ctx.is, object_ref, idx_val), elem_ref_ty);
-        if matches!(
-            mir::repr::repr_kind_for_ty(ctx.db, ctx.core, elem_ty),
-            mir::repr::ReprKind::Ref
-        ) {
-            init_const_array_object(ctx, elem_ref, elem_ty, elem_data)?;
-            continue;
-        }
-
-        let elem_value_ty = object_ref_elem_ty(ctx, ctx.fb.type_of(elem_ref))?;
-        let elem_value = ctx.fb.make_imm_value(Immediate::from_i256(
-            bytes_to_i256(elem_data),
-            elem_value_ty,
-        ));
-        ctx.fb
-            .insert_inst_no_result(ObjStore::new(ctx.is, elem_ref, elem_value));
-    }
-
-    Ok(())
+        .insert_inst_no_result(ObjInitConst::new(ctx.is, object_ref, const_ref));
+    Ok(object_ref)
 }
 
 fn emit_alloca_ptr<C: sonatina_ir::func_cursor::FuncCursor>(
@@ -4958,12 +5623,31 @@ fn emit_alloca_ptr<C: sonatina_ir::func_cursor::FuncCursor>(
     fb.insert_inst(Alloca::new(is, alloca_ty), ptr_ty)
 }
 
+fn materialize_const_ref_to_object<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    const_ref: ValueId,
+    expected_objref_ty: Type,
+) -> ValueId {
+    let object_ty = object_ref_elem_ty(ctx, expected_objref_ty).unwrap_or_else(|err| {
+        panic!("cannot materialize const ref into non-object type {expected_objref_ty:?}: {err}")
+    });
+    let object_ref = emit_obj_alloc_ref(ctx.fb, object_ty, ctx.is);
+    ctx.fb
+        .insert_inst_no_result(ObjInitConst::new(ctx.is, object_ref, const_ref));
+    object_ref
+}
+
 fn coerce_value_to_word<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
     value: ValueId,
 ) -> ValueId {
-    if ctx.fb.type_of(value).is_obj_ref(&ctx.fb.module_builder.ctx) {
-        panic!("cannot coerce object refs to raw words");
+    if ctx.fb.type_of(value).is_obj_ref(&ctx.fb.module_builder.ctx)
+        || ctx
+            .fb
+            .type_of(value)
+            .is_const_ref(&ctx.fb.module_builder.ctx)
+    {
+        panic!("cannot coerce reference values to raw words");
     }
     if ctx.fb.type_of(value).is_pointer(&ctx.fb.module_builder.ctx) {
         return ctx
@@ -4983,14 +5667,62 @@ fn coerce_value_to_type<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     if actual_ty == expected_ty {
         return value;
     }
+    if actual_ty.is_const_ref(&ctx.fb.module_builder.ctx)
+        && expected_ty.is_obj_ref(&ctx.fb.module_builder.ctx)
+    {
+        return materialize_const_ref_to_object(ctx, value, expected_ty);
+    }
     if actual_ty.is_obj_ref(&ctx.fb.module_builder.ctx)
         || expected_ty.is_obj_ref(&ctx.fb.module_builder.ctx)
+        || actual_ty.is_const_ref(&ctx.fb.module_builder.ctx)
+        || expected_ty.is_const_ref(&ctx.fb.module_builder.ctx)
     {
+        let format_ty = |ty: Type| {
+            let mut buf = Vec::new();
+            ty.write(&mut buf, &ctx.fb.module_builder.ctx)
+                .expect("type write should succeed");
+            String::from_utf8(buf).expect("type string should be utf8")
+        };
+        let describe_ty = |ty: Type| {
+            let mut desc = format_ty(ty);
+            if let Some(sonatina_ir::types::CompoundType::ObjRef(inner)) =
+                ty.resolve_compound(&ctx.fb.module_builder.ctx)
+            {
+                desc.push_str(" => ");
+                desc.push_str(&format_ty(inner));
+                if let Some(sonatina_ir::types::CompoundType::Struct(data)) =
+                    inner.resolve_compound(&ctx.fb.module_builder.ctx)
+                {
+                    let fields = data
+                        .fields
+                        .iter()
+                        .copied()
+                        .map(format_ty)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    desc.push_str(&format!(" fields=[{fields}]"));
+                }
+            }
+            if let Some(sonatina_ir::types::CompoundType::ConstRef(inner)) =
+                ty.resolve_compound(&ctx.fb.module_builder.ctx)
+            {
+                desc.push_str(" => ");
+                desc.push_str(&format_ty(inner));
+            }
+            desc
+        };
         let actual_cmpd = actual_ty.resolve_compound(&ctx.fb.module_builder.ctx);
         let expected_cmpd = expected_ty.resolve_compound(&ctx.fb.module_builder.ctx);
+        let value_dbg = ctx.fb.func.dfg.value(value);
         assert_eq!(
-            actual_ty, expected_ty,
-            "cannot coerce object reference value from {actual_ty:?} {actual_cmpd:?} to {expected_ty:?} {expected_cmpd:?}"
+            actual_ty,
+            expected_ty,
+            "cannot coerce reference value {value_dbg:?} in `{}` from {actual_ty:?} `{}` {actual_cmpd:?} to {expected_ty:?} `{}` {expected_cmpd:?}; actual_desc=`{}`; expected_desc=`{}`",
+            ctx.current_function_name,
+            format_ty(actual_ty),
+            format_ty(expected_ty),
+            describe_ty(actual_ty),
+            describe_ty(expected_ty),
         );
         return value;
     }
@@ -5016,6 +5748,8 @@ fn coerce_value_to_runtime_ty<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     let actual_ty = ctx.fb.type_of(value);
     if actual_ty.is_obj_ref(&ctx.fb.module_builder.ctx)
         || expected_ty.is_obj_ref(&ctx.fb.module_builder.ctx)
+        || actual_ty.is_const_ref(&ctx.fb.module_builder.ctx)
+        || expected_ty.is_const_ref(&ctx.fb.module_builder.ctx)
     {
         return coerce_value_to_type(ctx, value, expected_ty);
     }

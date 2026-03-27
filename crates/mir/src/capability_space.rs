@@ -16,7 +16,8 @@ pub(crate) struct PointerInfoConflict<'db> {
     pub incoming: PointerInfo<'db>,
 }
 
-pub(crate) fn normalize_pointer_leaf_info_entries<'db>(
+fn normalize_pointer_leaf_info_entries_impl<'db>(
+    db: Option<&'db dyn HirAnalysisDb>,
     entries: impl IntoIterator<Item = (crate::MirProjectionPath<'db>, PointerInfo<'db>)>,
 ) -> Result<Vec<(crate::MirProjectionPath<'db>, PointerInfo<'db>)>, PointerInfoConflict<'db>> {
     let mut merged: FxHashMap<crate::MirProjectionPath<'db>, PointerInfo<'db>> =
@@ -43,6 +44,11 @@ pub(crate) fn normalize_pointer_leaf_info_entries<'db>(
         };
         let merged_target_ty = match (existing.target_ty, info.target_ty) {
             (lhs, rhs) if lhs == rhs => lhs,
+            (Some(lhs), Some(rhs))
+                if db.is_some_and(|db| crate::repr::runtime_ty_matches(db, lhs, rhs)) =>
+            {
+                Some(lhs)
+            }
             (Some(lhs), None) => Some(lhs),
             (None, Some(rhs)) => Some(rhs),
             _ => {
@@ -62,8 +68,21 @@ pub(crate) fn normalize_pointer_leaf_info_entries<'db>(
         );
     }
     let mut out: Vec<_> = merged.into_iter().collect();
-    out.sort_by_cached_key(|(path, _)| format!("{path:?}"));
+    out.sort_by_cached_key(|(path, _)| (!path.is_empty(), format!("{path:?}")));
     Ok(out)
+}
+
+pub(crate) fn normalize_pointer_leaf_info_entries<'db>(
+    entries: impl IntoIterator<Item = (crate::MirProjectionPath<'db>, PointerInfo<'db>)>,
+) -> Result<Vec<(crate::MirProjectionPath<'db>, PointerInfo<'db>)>, PointerInfoConflict<'db>> {
+    normalize_pointer_leaf_info_entries_impl(None, entries)
+}
+
+pub(crate) fn normalize_pointer_leaf_info_entries_in_context<'db>(
+    db: &'db dyn HirAnalysisDb,
+    entries: impl IntoIterator<Item = (crate::MirProjectionPath<'db>, PointerInfo<'db>)>,
+) -> Result<Vec<(crate::MirProjectionPath<'db>, PointerInfo<'db>)>, PointerInfoConflict<'db>> {
+    normalize_pointer_leaf_info_entries_impl(Some(db), entries)
 }
 
 struct PointerLeafInfoCollector<'a, 'db> {
@@ -144,6 +163,21 @@ pub(crate) fn pointer_leaf_paths_for_ty<'db>(
         .into_iter()
         .map(|(path, _)| path)
         .collect()
+}
+
+pub(crate) fn capability_root_tracks_aggregate_storage<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    ty: TyId<'db>,
+) -> bool {
+    ty.as_capability(db).is_some_and(|(_, inner)| {
+        matches!(
+            crate::repr::repr_kind_for_ty(db, core, inner),
+            crate::repr::ReprKind::Ref
+        ) && !pointer_leaf_paths_for_ty(db, core, ty)
+            .iter()
+            .any(crate::MirProjectionPath::is_empty)
+    })
 }
 
 pub(crate) fn pointer_leaf_infos_for_ty_with_default<'db>(
@@ -434,5 +468,60 @@ fn use_mover(m: mut CellMover) {}
                 .pretty_print(&db),
             "Cell"
         );
+    }
+
+    #[test]
+    fn runtime_equivalent_target_tys_do_not_conflict() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///runtime_equivalent_target_tys_do_not_conflict.fe").unwrap();
+        let src = r#"
+struct ReverseArr {
+    base: ref [u256; 8],
+}
+
+fn use_reverse_arr(x: ref ReverseArr) {}
+"#;
+        let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+        let top_mod = db.top_mod(file);
+        let wrapper_ref_ty = top_mod
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "use_reverse_arr")
+            })
+            .and_then(|func| func.params(&db).next())
+            .map(|param| param.ty(&db))
+            .expect("use_reverse_arr parameter should exist");
+        let wrapper_ty = wrapper_ref_ty
+            .as_capability(&db)
+            .map(|(_, inner)| inner)
+            .expect("use_reverse_arr should take a ref capability");
+        let inner_ty = crate::repr::transparent_newtype_field_ty(&db, wrapper_ty)
+            .expect("ReverseArr should peel to its inner array");
+        let normalized = normalize_pointer_leaf_info_entries_in_context(
+            &db,
+            vec![
+                (
+                    MirProjectionPath::new(),
+                    PointerInfo {
+                        address_space: AddressSpaceKind::Memory,
+                        target_ty: Some(wrapper_ty),
+                    },
+                ),
+                (
+                    MirProjectionPath::new(),
+                    PointerInfo {
+                        address_space: AddressSpaceKind::Memory,
+                        target_ty: Some(inner_ty),
+                    },
+                ),
+            ],
+        )
+        .expect("runtime-equivalent pointer targets should normalize");
+
+        assert_eq!(normalized.len(), 1);
     }
 }

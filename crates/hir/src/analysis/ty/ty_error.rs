@@ -402,6 +402,10 @@ fn diag_from_invalid_cause<'db>(
         }
         .into(),
 
+        InvalidCause::StringTooLarge { max, given } => {
+            TyLowerDiag::StringTooLarge { span, max, given }.into()
+        }
+
         InvalidCause::InvalidConstParamTy => TyLowerDiag::InvalidConstParamTy(span).into(),
 
         InvalidCause::RecursiveConstParamTy => TyLowerDiag::RecursiveConstParamTy(span).into(),

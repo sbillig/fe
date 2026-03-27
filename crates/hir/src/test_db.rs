@@ -22,9 +22,9 @@ use crate::analysis::{
     },
 };
 use crate::{
-    SpannedHirDb,
+    Ingot, SpannedHirDb,
     hir_def::{ItemKind, TopLevelMod, scope_graph::ScopeGraph},
-    lower::{self, map_file_to_mod, scope_graph},
+    lower::{self, map_file_to_mod, module_tree, scope_graph},
     span::{DynLazySpan, LazySpan},
 };
 use camino::{Utf8Path, Utf8PathBuf};
@@ -167,6 +167,53 @@ impl<'db> cs_files::Files<'db> for CsDbWrapper<'db> {
 
 // --- End codespan helpers ---
 
+pub fn emit_diagnostics<'db, DB>(db: &'db DB, diags: &[Box<dyn DiagnosticVoucher + 'db>])
+where
+    DB: SpannedHirAnalysisDb + InputDb,
+{
+    let writer = BufferWriter::stderr(ColorChoice::Auto);
+    let mut buffer = writer.buffer();
+    let config = term::Config::default();
+
+    for diag in finalized_diags(db, diags) {
+        term::emit(&mut buffer, &config, &CsDbWrapper(db), &diag.to_cs(db)).unwrap();
+    }
+
+    writer
+        .print(&buffer)
+        .expect("Failed to write diagnostics to stderr");
+}
+
+pub fn format_diagnostics<'db, DB>(
+    db: &'db DB,
+    diags: &[Box<dyn DiagnosticVoucher + 'db>],
+) -> String
+where
+    DB: SpannedHirAnalysisDb + InputDb,
+{
+    let writer = BufferWriter::stderr(ColorChoice::Never);
+    let mut buffer = writer.buffer();
+    let config = term::Config::default();
+
+    for diag in finalized_diags(db, diags) {
+        term::emit(&mut buffer, &config, &CsDbWrapper(db), &diag.to_cs(db)).unwrap();
+    }
+
+    std::str::from_utf8(buffer.as_slice()).unwrap().to_string()
+}
+
+fn finalized_diags<'db, DB>(
+    db: &'db DB,
+    diags: &[Box<dyn DiagnosticVoucher + 'db>],
+) -> Vec<common::diagnostics::CompleteDiagnostic>
+where
+    DB: SpannedHirAnalysisDb + InputDb,
+{
+    let mut complete_diags: Vec<_> = diags.iter().map(|diag| diag.to_complete(db)).collect();
+    complete_diags.sort_by(cmp_complete_diagnostics);
+    complete_diags
+}
+
 define_input_db!(HirAnalysisTestDb);
 
 // https://github.com/rust-lang/rust/issues/46379
@@ -196,22 +243,27 @@ impl HirAnalysisTestDb {
         let diags = manager.run_on_module(self, top_mod);
 
         if !diags.is_empty() {
-            let writer = BufferWriter::stderr(ColorChoice::Auto);
-            let mut buffer = writer.buffer();
-            let config = term::Config::default();
-
-            let mut diags: Vec<_> = diags.iter().map(|d| d.to_complete(self)).collect();
-            diags.sort_by(cmp_complete_diagnostics);
-
-            for diag in diags {
-                let cs_diag = &diag.to_cs(self);
-                term::emit(&mut buffer, &config, &CsDbWrapper(self), cs_diag).unwrap();
-            }
-
-            eprintln!("{}", std::str::from_utf8(buffer.as_slice()).unwrap());
+            eprintln!("{}", format_diagnostics(self, &diags));
 
             panic!("this module contains errors");
         }
+    }
+
+    pub fn run_on_top_mod<'db>(
+        &'db self,
+        top_mod: TopLevelMod<'db>,
+    ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
+        let mut manager = initialize_analysis_pass();
+        manager.run_on_module(self, top_mod)
+    }
+
+    pub fn run_on_ingot<'db>(
+        &'db self,
+        ingot: Ingot<'db>,
+    ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
+        let mut manager = initialize_analysis_pass();
+        let tree = module_tree(self, ingot);
+        manager.run_on_module_tree(self, tree)
     }
 
     fn register_file<'db>(

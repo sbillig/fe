@@ -7,7 +7,7 @@ target = "evm-ethereum-osaka"
 
 func private %string_literal() -> i256 {
     block0:
-        return 448378203247.i256;
+        return 2446016337127940063024752106452865988248421195047584704994838213399005888512.i256;
 }
 
 func private %__fe_sonatina_entry() {

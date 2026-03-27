@@ -1,7 +1,7 @@
 use ingot::Copy
 use ingot::EffectHandle
 use ingot::MemPtr
-use ingot::num::IntDowncast
+use ingot::num::{IntDowncast, WordValue}
 
 /// Errors returned by ABI decoding/encoding helpers.
 pub enum AbiError {
@@ -1005,20 +1005,22 @@ impl<A: Abi, const N: usize> Decode<A> for String<N> {
 impl<A: Abi, const N: usize> Encode<A> for String<N> {
     const DIRECT_ENCODE: bool = false
 
+    #[arithmetic(unchecked)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
-        let packed: u256 = self as u256
-        let data_len = packed_string_len(packed)
+        let head = e.pos()
+        let word = self.to_word()
+        let len = word >> 248
+        let padded_len = ((len + 31) / 32) * 32
+        let tail = e.append_tail(32 + padded_len)
+        e.write_word_at(head, tail - e.base())
 
-        let tail_size = 32 + round_up_words(data_len)
-        let tail_at = e.append_tail(tail_size)
-        let offset = tail_at - e.base()
-
-        e.write_word(offset)
-        e.write_word_at(at: tail_at, value: data_len)
-
-        if data_len != 0 {
-            e.write_word_at(at: tail_at + 32, value: packed << ((32 - data_len) * 8))
+        e.set_pos(tail)
+        e.write_word(len)
+        if padded_len != 0 {
+            e.write_word(word << 8)
         }
+
+        e.set_pos(head + 32)
     }
 
     fn encode_to_ptr(own self, _: u256) {

@@ -28,7 +28,7 @@ use crate::yul::errors::YulError;
 
 use super::{
     EmitModuleError,
-    function::{FunctionEmitter, YulDataRegion},
+    function::{CallAbi, CallArgAbi, FunctionEmitter, YulDataRegion},
     util::{function_name, prefix_yul_name},
 };
 
@@ -138,13 +138,51 @@ fn emit_lowered_module_yul_with_layout(
             .or_insert_with(|| format!("code_region_{}", sanitize_symbol(root)));
     }
     let code_regions = Arc::new(code_regions);
+    let call_abis: Arc<FxHashMap<String, CallAbi>> = Arc::new(
+        module
+            .functions
+            .iter()
+            .map(|func| {
+                let value_params = func
+                    .runtime_param_locals()
+                    .into_iter()
+                    .map(|local| {
+                        let local = func.body.local(local);
+                        CallArgAbi {
+                            address_space: local.address_space,
+                            const_backing: local.const_backing,
+                        }
+                    })
+                    .collect();
+                let effect_params = func
+                    .runtime_effect_param_locals()
+                    .into_iter()
+                    .map(|local| {
+                        let local = func.body.local(local);
+                        CallArgAbi {
+                            address_space: local.address_space,
+                            const_backing: local.const_backing,
+                        }
+                    })
+                    .collect();
+                (
+                    func.symbol_name.clone(),
+                    CallAbi {
+                        value_params,
+                        effect_params,
+                    },
+                )
+            })
+            .collect(),
+    );
 
     // Emit Yul docs for each function
     let mut function_docs: Vec<(Vec<YulDoc>, Vec<YulDataRegion>)> =
         Vec::with_capacity(module.functions.len());
     for func in module.functions.iter() {
         let emitter =
-            FunctionEmitter::new(db, func, &code_regions, layout).map_err(EmitModuleError::Yul)?;
+            FunctionEmitter::new(db, func, code_regions.clone(), call_abis.clone(), layout)
+                .map_err(EmitModuleError::Yul)?;
         let is_test = match func.origin {
             MirFunctionOrigin::Hir(hir_func) => ItemKind::from(hir_func)
                 .attrs(db)
@@ -339,6 +377,43 @@ pub fn emit_test_module_yul_with_layout(
             .or_insert_with(|| format!("code_region_{}", sanitize_symbol(root)));
     }
     let code_regions = Arc::new(code_regions);
+    let call_abis: Arc<FxHashMap<String, CallAbi>> = Arc::new(
+        module
+            .functions
+            .iter()
+            .map(|func| {
+                let value_params = func
+                    .runtime_param_locals()
+                    .into_iter()
+                    .map(|local| {
+                        let local = func.body.local(local);
+                        CallArgAbi {
+                            address_space: local.address_space,
+                            const_backing: local.const_backing,
+                        }
+                    })
+                    .collect();
+                let effect_params = func
+                    .runtime_effect_param_locals()
+                    .into_iter()
+                    .map(|local| {
+                        let local = func.body.local(local);
+                        CallArgAbi {
+                            address_space: local.address_space,
+                            const_backing: local.const_backing,
+                        }
+                    })
+                    .collect();
+                (
+                    func.symbol_name.clone(),
+                    CallAbi {
+                        value_params,
+                        effect_params,
+                    },
+                )
+            })
+            .collect(),
+    );
 
     let call_graph = build_call_graph(&module.functions);
     let tests = collect_test_infos(db, &module.functions, filter)?;
@@ -379,7 +454,8 @@ pub fn emit_test_module_yul_with_layout(
         .filter(|func| needed_symbols.contains(&func.symbol_name))
     {
         let emitter =
-            FunctionEmitter::new(db, func, &code_regions, layout).map_err(EmitModuleError::Yul)?;
+            FunctionEmitter::new(db, func, code_regions.clone(), call_abis.clone(), layout)
+                .map_err(EmitModuleError::Yul)?;
         if test_symbols.contains(&func.symbol_name) {
             validate_test_function(db, func, emitter.returns_value())?;
         }

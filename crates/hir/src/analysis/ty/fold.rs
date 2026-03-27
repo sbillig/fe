@@ -441,6 +441,7 @@ impl<'db> TyFoldable<'db> for ResolvedEffectArg<'db> {
             instantiated_target_ty: self
                 .instantiated_target_ty
                 .map(|ty| ty.fold_with(db, folder)),
+            provider: self.provider,
         }
     }
 }

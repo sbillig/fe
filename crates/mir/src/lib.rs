@@ -1,5 +1,6 @@
 pub mod analysis;
 mod capability_space;
+pub mod const_data;
 mod core_lib;
 mod dedup;
 pub mod fmt;
@@ -12,6 +13,10 @@ pub mod repr;
 mod transform;
 mod ty;
 
+pub use const_data::{
+    ConstData, pack_inline_string_word, serialize_const_data_to_bytes,
+    serialize_const_u8_array_bytes,
+};
 pub use core_lib::CoreLib;
 pub use ir::{
     BasicBlockId, CallOrigin, CallTargetRef, CodeRegionRef, ConstRegion, ConstRegionId, LocalData,

@@ -1,12 +1,13 @@
 ---
 source: crates/uitest/tests/mir_check.rs
+assertion_line: 32
 expression: res
 input_file: fixtures/mir_check/noesc_storage_escape_field.fe
 ---
 error[11-0001]: cannot store `Wrapper` in `Storage`
-   ┌─ noesc_storage_escape_field.fe:15:5
+   ┌─ noesc_storage_escape_field.fe:18:9
    │
-15 │     slot.e = e
-   │     ^^^^^^^^^^ this value cannot be written to `Storage`
+18 │         slot.e = e
+   │         ^^^^^^^^^^ this value cannot be written to `Storage`
    │
    = note: this value contains a borrow handle (`mut`/`ref`)

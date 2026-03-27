@@ -833,6 +833,7 @@ impl<'db> TyCheckEnv<'db> {
             const_refs: self.const_refs,
             callables,
             call_effect_args: self.call_effect_args,
+            return_borrow_provider: None,
             param_bindings: self.param_bindings,
             pat_bindings: self.pat_bindings,
             pat_binding_modes: self.pat_binding_modes,

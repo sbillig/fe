@@ -8,13 +8,13 @@ use common::diagnostics::{
 };
 use hir::analysis::{
     HirAnalysisDb,
-    ty::{ty_is_borrow, ty_is_noesc},
+    ty::{binder::Binder, ty_is_borrow, ty_is_noesc},
 };
 
 use crate::{
-    CallOrigin, MirFunction, MirInst, ValueId,
+    CallOrigin, CallTargetRef, CoreLib, MirFunction, MirInst, ValueId,
     ir::SourceInfoId,
-    ir::{AddressSpaceKind, Place, Rvalue, TerminatingCall, Terminator, ValueOrigin},
+    ir::{AddressSpaceKind, Place, RuntimeShape, Rvalue, TerminatingCall, Terminator, ValueOrigin},
 };
 
 pub fn check_noesc_escapes<'db>(
@@ -161,7 +161,15 @@ fn check_call_args<'db>(
         .enumerate()
         .skip(receiver_arg_count)
     {
-        if let Some(err) = check_call_arg(db, func, source, arg_idx + 1 - receiver_arg_count, arg) {
+        if let Some(err) = check_call_arg(
+            db,
+            func,
+            source,
+            call,
+            arg_idx,
+            arg_idx + 1 - receiver_arg_count,
+            arg,
+        ) {
             return Some(err);
         }
     }
@@ -172,12 +180,17 @@ fn check_call_arg<'db>(
     db: &'db dyn HirAnalysisDb,
     func: &MirFunction<'db>,
     source: SourceInfoId,
+    call: &CallOrigin<'db>,
+    raw_arg_idx: usize,
     arg_idx: usize,
     arg: ValueId,
 ) -> Option<CompleteDiagnostic> {
     let ty = func.body.value(arg).ty;
     ty.as_borrow(db)?;
     let space = non_memory_borrow_origin_space(func, arg)?;
+    if call_allows_non_memory_borrow_arg(db, call, raw_arg_idx, space) {
+        return None;
+    }
 
     let span = diagnostic_span(func, source);
     Some(CompleteDiagnostic::new(
@@ -192,11 +205,59 @@ fn check_call_arg<'db>(
             Some(span),
         )],
         vec![
-            "note: non-memory borrow handles (`mut`/`ref`) cannot be passed as regular function arguments"
+            "note: non-memory borrow handles (`mut`/`ref`) may only be passed when the resolved callee preserves that non-memory carrier"
                 .to_string(),
         ],
         GlobalErrorCode::new(DiagnosticPass::Mir, 1),
     ))
+}
+
+fn call_allows_non_memory_borrow_arg<'db>(
+    db: &'db dyn HirAnalysisDb,
+    call: &CallOrigin<'db>,
+    raw_arg_idx: usize,
+    arg_space: AddressSpaceKind,
+) -> bool {
+    let Some(CallTargetRef::Hir(target)) = call.target.as_ref() else {
+        return false;
+    };
+    if !target.callable_def.has_body(db) {
+        return false;
+    }
+
+    concrete_hir_call_param_ty(db, call, raw_arg_idx).is_some_and(|param_ty| {
+        param_ty.as_borrow(db).is_some() && {
+            let core = CoreLib::new(db, target.callable_def.scope());
+            match crate::repr::runtime_shape_for_ty(db, &core, param_ty, arg_space) {
+                RuntimeShape::ConstRef { .. } => matches!(arg_space, AddressSpaceKind::Code),
+                RuntimeShape::AddressWord(info) => info.address_space == arg_space,
+                _ => false,
+            }
+        }
+    })
+}
+
+fn concrete_hir_call_param_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    call: &CallOrigin<'db>,
+    raw_arg_idx: usize,
+) -> Option<hir::analysis::ty::ty_def::TyId<'db>> {
+    let CallTargetRef::Hir(target) = call.target.as_ref()? else {
+        return None;
+    };
+    concrete_hir_call_param_binder(db, target.callable_def, raw_arg_idx).map(
+        |binder: Binder<hir::analysis::ty::ty_def::TyId<'db>>| {
+            binder.instantiate(db, &target.generic_args)
+        },
+    )
+}
+
+fn concrete_hir_call_param_binder<'db>(
+    db: &'db dyn HirAnalysisDb,
+    callable_def: hir::hir_def::item::CallableDef<'db>,
+    raw_arg_idx: usize,
+) -> Option<Binder<hir::analysis::ty::ty_def::TyId<'db>>> {
+    callable_def.arg_tys(db).into_iter().nth(raw_arg_idx)
 }
 
 fn non_memory_borrow_origin_space<'db>(
@@ -256,6 +317,7 @@ mod tests {
             address_space: AddressSpaceKind::Calldata,
             pointer_leaf_infos: Vec::new(),
             place_root_layout: crate::ir::LocalPlaceRootLayout::Direct,
+            const_backing: crate::ir::LocalConstBacking::Unknown,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let base_value = func.body.alloc_value(ValueData {
@@ -291,5 +353,25 @@ mod tests {
             diag.is_some(),
             "store to calldata should be rejected before codegen"
         );
+    }
+
+    #[test]
+    fn known_ref_params_accept_code_backed_borrow_args() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///known_ref_params_accept_code_backed_borrow_args.fe").unwrap();
+        let file = db.workspace().touch(
+            &mut db,
+            url,
+            Some(
+                include_str!(
+                    "../../../fe/tests/fixtures/fe_test/view_param_local_ref_take_reverse.fe"
+                )
+                .to_string(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+
+        crate::lower_module(&db, top_mod)
+            .expect("known `ref` params should accept code-backed borrow arguments");
     }
 }

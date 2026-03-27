@@ -5,7 +5,9 @@
 
 use hir::projection::Projection;
 use mir::ir::{IntrinsicOp, IntrinsicValue};
-use mir::{self, LocalId, MirProjectionPath, ValueId, layout};
+use mir::{
+    self, ConstData, LocalId, MirProjectionPath, ValueId, layout, serialize_const_data_to_bytes,
+};
 
 use crate::yul::{doc::YulDoc, state::BlockState};
 
@@ -86,6 +88,40 @@ impl<'db> FunctionEmitter<'db> {
             }
             mir::ir::Rvalue::Value(value_id) => {
                 if let Some(dest) = dest {
+                    let dest_local = self.mir_func.body.local(dest);
+                    let value_data = self.mir_func.body.value(*value_id);
+                    if !dest_local.const_backing.is_const()
+                        && matches!(dest_local.address_space, mir::ir::AddressSpaceKind::Memory)
+                        && value_data.repr.is_ref()
+                        && matches!(
+                            value_data.repr.address_space(),
+                            Some(mir::ir::AddressSpaceKind::Code)
+                        )
+                    {
+                        let Some(size_bytes) =
+                            layout::ty_memory_size_or_word_in(self.db, &self.layout, dest_local.ty)
+                        else {
+                            return Err(YulError::Unsupported(format!(
+                                "cannot determine materialization size for `{}`",
+                                dest_local.ty.pretty_print(self.db)
+                            )));
+                        };
+                        let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
+                        if size_bytes == 0 {
+                            if declared {
+                                docs.push(YulDoc::line(format!("let {yul_name} := 0")));
+                            } else {
+                                docs.push(YulDoc::line(format!("{yul_name} := 0")));
+                            }
+                        } else {
+                            self.emit_alloc_value(docs, &yul_name, size_bytes, declared);
+                            let src_addr = self.lower_value(*value_id, state)?;
+                            docs.push(YulDoc::line(format!(
+                                "datacopy({yul_name}, {src_addr}, {size_bytes})"
+                            )));
+                        }
+                        return Ok(());
+                    }
                     let rhs = self.lower_value(*value_id, state)?;
                     let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
                     if declared {
@@ -113,13 +149,13 @@ impl<'db> FunctionEmitter<'db> {
                 };
                 self.emit_alloc_inst(docs, dest, *address_space, state)?
             }
-            mir::ir::Rvalue::ConstAggregate { data, .. } => {
+            mir::ir::Rvalue::ConstAggregate { data, ty } => {
                 let Some(dest) = dest else {
                     return Err(YulError::Unsupported(
                         "const_aggregate without destination".into(),
                     ));
                 };
-                self.emit_const_aggregate_inst(docs, dest, data, state)?
+                self.emit_const_aggregate_inst(docs, dest, *ty, data, state)?
             }
         }
         Ok(())
@@ -185,7 +221,7 @@ impl<'db> FunctionEmitter<'db> {
             }
         }
 
-        let call_expr = self.lower_call_value(call, state)?;
+        let call_expr = self.lower_call_value(docs, call, state)?;
         if let Some(dest) = dest {
             let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
             if declared {
@@ -216,7 +252,7 @@ impl<'db> FunctionEmitter<'db> {
         Ok(())
     }
 
-    fn emit_alloc_value(
+    pub(super) fn emit_alloc_value(
         &self,
         docs: &mut Vec<YulDoc>,
         name: &str,
@@ -276,12 +312,33 @@ impl<'db> FunctionEmitter<'db> {
         &mut self,
         docs: &mut Vec<YulDoc>,
         dest: LocalId,
-        data: &[u8],
+        ty: hir::analysis::ty::ty_def::TyId<'db>,
+        data: &ConstData,
         state: &mut BlockState,
     ) -> Result<(), YulError> {
-        let label = self.register_data_region(data);
-        let size = data.len();
+        let bytes =
+            serialize_const_data_to_bytes(self.db, &self.layout, ty, data).ok_or_else(|| {
+                YulError::Unsupported(format!(
+                    "cannot serialize const aggregate `{}` for Yul",
+                    ty.pretty_print(self.db)
+                ))
+            })?;
+        let label = self.register_data_region(&bytes);
         let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
+        let local = self.mir_func.body.local(dest);
+        if local.const_backing.is_const()
+            && matches!(local.address_space, mir::ir::AddressSpaceKind::Code)
+        {
+            let expr = format!("dataoffset(\"{label}\")");
+            if declared {
+                docs.push(YulDoc::line(format!("let {yul_name} := {expr}")));
+            } else {
+                docs.push(YulDoc::line(format!("{yul_name} := {expr}")));
+            }
+            return Ok(());
+        }
+
+        let size = bytes.len();
         self.emit_alloc_value(docs, &yul_name, size, declared);
         docs.push(YulDoc::line(format!(
             "datacopy({yul_name}, dataoffset(\"{label}\"), datasize(\"{label}\"))"
@@ -296,18 +353,30 @@ impl<'db> FunctionEmitter<'db> {
         place: &mir::ir::Place<'db>,
         state: &mut BlockState,
     ) -> Result<(), YulError> {
-        let ty = self.mir_func.body.local(dest).ty;
-        let space = self.mir_func.body.place_address_space(place);
+        let dest_local = self.mir_func.body.local(dest);
+        let ty = dest_local.ty;
+        let space = self.lower_place_space(place)?;
         let rhs = if space == mir::ir::AddressSpaceKind::Code {
             let addr = self.lower_place_address(place, state)?;
-            let packed = self.is_packed_scalar_array_access(place, ty)?;
-            let scratch = self.emit_code_load_scratch(docs, state);
-            if packed {
-                docs.push(YulDoc::line(format!("datacopy({scratch}, {addr}, 1)")));
-                self.apply_from_word_conversion(&format!("byte(0, mload({scratch}))"), ty)
+            let pointer_info = mir::repr::runtime_value_pointer_info_for_ty(
+                self.db,
+                &self.core_lib(),
+                ty,
+                dest_local.address_space,
+            )
+            .or_else(|| self.mir_func.body.place_pointer_info(place));
+            if self.place_yields_location_value(place, ty, pointer_info)? {
+                addr
             } else {
-                docs.push(YulDoc::line(format!("datacopy({scratch}, {addr}, 32)")));
-                self.apply_from_word_conversion(&format!("mload({scratch})"), ty)
+                let packed = self.is_packed_scalar_array_access(place, ty)?;
+                let scratch = self.emit_code_load_scratch(docs, state);
+                if packed {
+                    docs.push(YulDoc::line(format!("datacopy({scratch}, {addr}, 1)")));
+                    self.apply_from_word_conversion(&format!("byte(0, mload({scratch}))"), ty)
+                } else {
+                    docs.push(YulDoc::line(format!("datacopy({scratch}, {addr}, 32)")));
+                    self.apply_from_word_conversion(&format!("mload({scratch})"), ty)
+                }
             }
         } else {
             self.lower_place_load(place, ty, state)?
@@ -333,7 +402,15 @@ impl<'db> FunctionEmitter<'db> {
         if layout::ty_size_bytes_in(self.db, &self.layout, value_ty).is_some_and(|size| size == 0) {
             return Ok(());
         }
-        if value_data.repr.is_ref() {
+        if value_data.repr.is_ref()
+            && mir::repr::value_resolves_to_location(
+                self.db,
+                &self.core_lib(),
+                &self.mir_func.body.values,
+                &self.mir_func.body.locals,
+                value,
+            )
+        {
             if state.value_temp(value.index()).is_none() {
                 let rhs = self.lower_value(value, state)?;
                 let temp = state.alloc_local();
@@ -402,8 +479,8 @@ impl<'db> FunctionEmitter<'db> {
             return Ok(());
         }
         if value_ty.is_array(self.db) {
-            let dst_space = self.mir_func.body.place_address_space(dst_place);
-            let src_space = self.mir_func.body.place_address_space(src_place);
+            let dst_space = self.lower_place_space(dst_place)?;
+            let src_space = self.lower_place_space(src_place)?;
             if dst_space == mir::ir::AddressSpaceKind::Memory
                 && src_space == mir::ir::AddressSpaceKind::Code
                 && src_place.projection.is_empty()
@@ -411,7 +488,9 @@ impl<'db> FunctionEmitter<'db> {
                 let copy_size = if let mir::ValueOrigin::ConstRegion(region_id) =
                     &self.mir_func.body.value(src_place.base).origin
                 {
-                    Some(self.mir_func.body.const_region(*region_id).bytes.len())
+                    let region = self.mir_func.body.const_region(*region_id);
+                    serialize_const_data_to_bytes(self.db, &self.layout, region.ty, &region.data)
+                        .map(|bytes| bytes.len())
                 } else {
                     layout::ty_memory_size_in(self.db, &self.layout, value_ty)
                 };
@@ -466,7 +545,7 @@ impl<'db> FunctionEmitter<'db> {
         }
 
         let addr = self.lower_place_ref(dst_place, state)?;
-        let src_space = self.mir_func.body.place_address_space(src_place);
+        let src_space = self.lower_place_space(src_place)?;
         let packed_src = self.is_packed_scalar_array_access(src_place, value_ty)?;
         let rhs = if src_space == mir::ir::AddressSpaceKind::Code {
             let src_addr = self.lower_place_address(src_place, state)?;
@@ -714,11 +793,6 @@ impl<'db> FunctionEmitter<'db> {
                 "alloc intrinsic must be emitted as a statement".into(),
             ));
         }
-        if matches!(intr.op, IntrinsicOp::AddrOf) {
-            let args = self.lower_intrinsic_args(intr, state)?;
-            debug_assert_eq!(args.len(), 1, "addr_of expects 1 argument");
-            return Ok(args.into_iter().next().expect("addr_of expects 1 argument"));
-        }
         if matches!(
             intr.op,
             IntrinsicOp::CodeRegionOffset | IntrinsicOp::CodeRegionLen
@@ -863,7 +937,6 @@ impl<'db> FunctionEmitter<'db> {
             IntrinsicOp::Calldatasize => "calldatasize",
             IntrinsicOp::Returndatacopy => "returndatacopy",
             IntrinsicOp::Returndatasize => "returndatasize",
-            IntrinsicOp::AddrOf => "addr_of",
             IntrinsicOp::Mstore => "mstore",
             IntrinsicOp::Mstore8 => "mstore8",
             IntrinsicOp::Sload => "sload",

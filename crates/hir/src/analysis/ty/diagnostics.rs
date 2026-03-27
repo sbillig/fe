@@ -72,6 +72,12 @@ pub enum TyLowerDiag<'db> {
         given: usize,
     },
 
+    StringTooLarge {
+        span: DynLazySpan<'db>,
+        max: usize,
+        given: usize,
+    },
+
     RecursiveType(Vec<AdtCycleMember<'db>>),
 
     UnboundTypeAliasParam {
@@ -196,6 +202,7 @@ impl TyLowerDiag<'_> {
             Self::MixedOwnSelfPrefixWithExplicitType { .. } => 29,
             Self::InvalidMutSelfPrefixWithExplicitType { .. } => 30,
             Self::TooManyGenericArgs { .. } => 16,
+            Self::StringTooLarge { .. } => 33,
             Self::DuplicateFieldName(..) => 17,
             Self::DuplicateVariantName(..) => 18,
             Self::DuplicateGenericParamName(..) => 19,
@@ -404,6 +411,12 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         literal: String,
         ty: TyId<'db>,
+    },
+
+    StringLiteralTooLarge {
+        primary: DynLazySpan<'db>,
+        max: usize,
+        given: usize,
     },
 
     BorrowFromNonPlace {
@@ -762,6 +775,7 @@ impl<'db> BodyDiag<'db> {
             Self::OpsTraitNotImplemented { .. } => 16,
             Self::UnsupportedUnaryPlus(..) => 52,
             Self::IntLiteralOutOfRange { .. } => 74,
+            Self::StringLiteralTooLarge { .. } => 78,
             Self::BorrowFromNonPlace { .. } => 65,
             Self::CannotBorrowMut { .. } => 66,
             Self::BorrowArgMustBePlace { .. } => 68,

@@ -9,7 +9,8 @@ use hir::projection::{IndexSource, Projection};
 
 use crate::ir::{AddressSpaceKind, IntrinsicOp, Place, Rvalue, TerminatingCall};
 use crate::{
-    CallOrigin, LocalId, MirBody, MirFunction, MirInst, MirModule, Terminator, ValueId, ValueOrigin,
+    CallOrigin, ConstData, LocalId, MirBody, MirFunction, MirInst, MirModule, Terminator, ValueId,
+    ValueOrigin,
 };
 
 /// Format an entire MIR module as a human-readable string.
@@ -243,7 +244,19 @@ fn format_rvalue(db: &dyn HirAnalysisDb, body: &MirBody<'_>, rvalue: &Rvalue<'_>
             };
             format!("alloc {space}")
         }
-        Rvalue::ConstAggregate { data, .. } => format!("const_aggregate ({} bytes)", data.len()),
+        Rvalue::ConstAggregate { data, .. } => {
+            format!("const_aggregate {}", format_const_data_summary(data))
+        }
+    }
+}
+
+fn format_const_data_summary(data: &ConstData) -> String {
+    match data {
+        ConstData::Int(value) => value.to_string(),
+        ConstData::Bool(value) => value.to_string(),
+        ConstData::Bytes(bytes) => format!("[{} bytes]", bytes.len()),
+        ConstData::EnumVariant(value) => format!("variant({value})"),
+        ConstData::Array(items) => format!("[{} items]", items.len()),
     }
 }
 
@@ -454,7 +467,6 @@ fn format_intrinsic(op: IntrinsicOp) -> &'static str {
         IntrinsicOp::Calldatasize => "calldatasize",
         IntrinsicOp::Returndatacopy => "returndatacopy",
         IntrinsicOp::Returndatasize => "returndatasize",
-        IntrinsicOp::AddrOf => "addr_of",
         IntrinsicOp::Mstore => "mstore",
         IntrinsicOp::Mstore8 => "mstore8",
         IntrinsicOp::Alloc => "alloc",

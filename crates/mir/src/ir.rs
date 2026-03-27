@@ -14,6 +14,8 @@ use hir::projection::{Projection, ProjectionPath};
 use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 
+use crate::ConstData;
+
 /// MIR for an entire top-level module.
 #[derive(Debug, Clone)]
 pub struct MirModule<'db> {
@@ -100,6 +102,7 @@ pub enum RuntimeShape<'db> {
     Word(RuntimeWordKind),
     EnumTag { enum_ty: TyId<'db> },
     ObjectRef { target_ty: TyId<'db> },
+    ConstRef { target_ty: TyId<'db> },
     MemoryPtr { target_ty: Option<TyId<'db>> },
     AddressWord(PointerInfo<'db>),
 }
@@ -115,7 +118,7 @@ impl<'db> RuntimeShape<'db> {
 
     pub fn pointer_info(self) -> Option<PointerInfo<'db>> {
         match self {
-            Self::EnumTag { .. } | Self::ObjectRef { .. } => None,
+            Self::EnumTag { .. } | Self::ObjectRef { .. } | Self::ConstRef { .. } => None,
             Self::MemoryPtr { target_ty } => Some(PointerInfo {
                 address_space: AddressSpaceKind::Memory,
                 target_ty,
@@ -332,17 +335,17 @@ impl<'db> MirBody<'db> {
         id
     }
 
-    pub fn intern_const_region(&mut self, ty: TyId<'db>, bytes: Vec<u8>) -> ConstRegionId {
+    pub fn intern_const_region(&mut self, ty: TyId<'db>, data: ConstData) -> ConstRegionId {
         let key = ConstRegionKey {
             ty,
-            bytes: bytes.clone(),
+            data: data.clone(),
         };
         if let Some(&existing) = self.const_region_index.get(&key) {
             return existing;
         }
 
         let id = ConstRegionId(self.const_regions.len() as u32);
-        self.const_regions.push(ConstRegion { ty, bytes });
+        self.const_regions.push(ConstRegion { ty, data });
         self.const_region_index.insert(key, id);
         id
     }
@@ -406,7 +409,7 @@ impl<'db> MirBody<'db> {
     }
 }
 
-pub(crate) fn try_value_address_space_in<'db>(
+pub fn try_value_address_space_in<'db>(
     values: &[ValueData<'db>],
     locals: &[LocalData<'db>],
     value: ValueId,
@@ -418,18 +421,82 @@ pub(crate) fn try_value_address_space_in<'db>(
     let value_data = values.get(value.index())?;
     match &value_data.origin {
         ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) => {
-            locals.get(local.index()).map(|local| local.address_space)
+            local_root_pointer_info(locals, *local)
+                .map(|info| info.address_space)
+                .or_else(|| locals.get(local.index()).map(|local| local.address_space))
         }
         ValueOrigin::TransparentCast { value } => {
             try_value_address_space_in(values, locals, *value)
+                .or_else(|| value_data.pointer_info.map(|info| info.address_space))
         }
         ValueOrigin::FieldPtr(field_ptr) => Some(field_ptr.addr_space),
-        ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => value_data
-            .pointer_info
-            .map(|info| info.address_space)
-            .or_else(|| try_place_address_space_in(values, locals, place)),
+        ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
+            try_place_address_space_in(values, locals, place)
+                .or_else(|| value_data.pointer_info.map(|info| info.address_space))
+        }
         _ => None,
     }
+}
+
+fn runtime_shape_pointer_info<'db>(shape: RuntimeShape<'db>) -> Option<PointerInfo<'db>> {
+    match shape {
+        RuntimeShape::ObjectRef { target_ty } => Some(PointerInfo {
+            address_space: AddressSpaceKind::Memory,
+            target_ty: Some(target_ty),
+        }),
+        RuntimeShape::ConstRef { target_ty } => Some(PointerInfo {
+            address_space: AddressSpaceKind::Code,
+            target_ty: Some(target_ty),
+        }),
+        RuntimeShape::MemoryPtr { target_ty } => Some(PointerInfo {
+            address_space: AddressSpaceKind::Memory,
+            target_ty,
+        }),
+        RuntimeShape::AddressWord(info) => Some(info),
+        RuntimeShape::Unresolved
+        | RuntimeShape::Erased
+        | RuntimeShape::Word(_)
+        | RuntimeShape::EnumTag { .. } => None,
+    }
+}
+
+fn merge_pointer_info<'db>(
+    authoritative: Option<PointerInfo<'db>>,
+    fallback: Option<PointerInfo<'db>>,
+) -> Option<PointerInfo<'db>> {
+    match (authoritative, fallback) {
+        (Some(authoritative), Some(fallback)) => Some(PointerInfo {
+            address_space: authoritative.address_space,
+            target_ty: authoritative.target_ty.or(fallback.target_ty),
+        }),
+        (Some(authoritative), None) => Some(authoritative),
+        (None, Some(fallback)) => Some(fallback),
+        (None, None) => None,
+    }
+}
+
+pub(crate) fn local_root_pointer_info<'db>(
+    locals: &[LocalData<'db>],
+    local: LocalId,
+) -> Option<PointerInfo<'db>> {
+    merge_pointer_info(
+        lookup_local_pointer_leaf_info(locals, local, &MirProjectionPath::new()),
+        locals
+            .get(local.index())
+            .and_then(|local| runtime_shape_pointer_info(local.runtime_shape)),
+    )
+}
+
+fn local_root_reuses_object_location_deref<'db>(
+    locals: &[LocalData<'db>],
+    local_root: Option<&(LocalId, MirProjectionPath<'db>)>,
+) -> bool {
+    local_root.is_some_and(|(local, path)| {
+        path.is_empty()
+            && locals
+                .get(local.index())
+                .is_some_and(|local| local.place_root_layout.is_object_root())
+    })
 }
 
 pub(crate) fn try_place_address_space_in<'db>(
@@ -445,7 +512,11 @@ pub(crate) fn try_place_address_space_in<'db>(
             local_root
                 .as_ref()
                 .filter(|(_, path)| path.is_empty())
-                .and_then(|(local, _)| locals.get(local.index()).map(|local| local.address_space))
+                .and_then(|(local, _)| {
+                    local_root_pointer_info(locals, *local)
+                        .map(|info| info.address_space)
+                        .or_else(|| locals.get(local.index()).map(|local| local.address_space))
+                })
         })
         .or_else(|| match values.get(place.base.index())? {
             value
@@ -465,13 +536,24 @@ pub(crate) fn try_place_address_space_in<'db>(
     for proj in place.projection.iter() {
         match proj {
             Projection::Deref => {
+                if local_root_reuses_object_location_deref(locals, local_root.as_ref()) {
+                    continue;
+                }
                 let deref_space = if let Some((local, path)) = &local_root {
                     lookup_local_pointer_leaf_info(locals, *local, path)
                         .map(|info| info.address_space)
                         .or(current_pointer_info.map(|info| info.address_space))
                         .or_else(|| {
                             path.is_empty()
-                                .then(|| locals.get(local.index()).map(|local| local.address_space))
+                                .then(|| {
+                                    local_root_pointer_info(locals, *local)
+                                        .map(|info| info.address_space)
+                                        .or_else(|| {
+                                            locals
+                                                .get(local.index())
+                                                .map(|local| local.address_space)
+                                        })
+                                })
                                 .flatten()
                         })
                 } else {
@@ -506,53 +588,51 @@ pub(crate) fn try_value_pointer_info_in<'db>(
     value: ValueId,
 ) -> Option<PointerInfo<'db>> {
     let value_data = values.get(value.index())?;
+    let repr_fallback = value_data
+        .repr
+        .address_space()
+        .map(|address_space| PointerInfo {
+            address_space,
+            target_ty: matches!(value_data.repr, ValueRepr::Ref(_)).then_some(value_data.ty),
+        });
+    let runtime_shape_fallback =
+        merge_pointer_info(runtime_shape_pointer_info(value_data.runtime_shape), repr_fallback);
     match &value_data.origin {
-        ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) => {
-            lookup_local_pointer_leaf_info(locals, *local, &MirProjectionPath::new()).or(value_data
-                .repr
-                .address_space()
-                .map(|address_space| PointerInfo {
+        ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) => merge_pointer_info(
+            value_data.pointer_info,
+            merge_pointer_info(local_root_pointer_info(locals, *local), runtime_shape_fallback),
+        ),
+        ValueOrigin::TransparentCast { value } => merge_pointer_info(
+            value_data.pointer_info,
+            merge_pointer_info(
+                try_value_pointer_info_in(values, locals, *value),
+                runtime_shape_fallback,
+            ),
+        ),
+        ValueOrigin::FieldPtr(field_ptr) => merge_pointer_info(
+            value_data.pointer_info,
+            merge_pointer_info(
+                Some(PointerInfo {
+                    address_space: field_ptr.addr_space,
+                    target_ty: None,
+                }),
+                runtime_shape_fallback,
+            ),
+        ),
+        ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
+            let place_fallback = try_place_pointer_info_in(values, locals, place).or_else(|| {
+                try_place_address_space_in(values, locals, place).map(|address_space| PointerInfo {
                     address_space,
                     target_ty: matches!(value_data.repr, ValueRepr::Ref(_))
                         .then_some(value_data.ty),
-                }))
+                })
+            });
+            merge_pointer_info(
+                value_data.pointer_info,
+                merge_pointer_info(place_fallback, runtime_shape_fallback),
+            )
         }
-        ValueOrigin::TransparentCast { value } => value_data
-            .pointer_info
-            .or_else(|| try_value_pointer_info_in(values, locals, *value))
-            .or(value_data
-                .repr
-                .address_space()
-                .map(|address_space| PointerInfo {
-                    address_space,
-                    target_ty: matches!(value_data.repr, ValueRepr::Ref(_))
-                        .then_some(value_data.ty),
-                })),
-        ValueOrigin::FieldPtr(field_ptr) => value_data.pointer_info.or(Some(PointerInfo {
-            address_space: field_ptr.addr_space,
-            target_ty: None,
-        })),
-        ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => value_data
-            .pointer_info
-            .or_else(|| try_place_pointer_info_in(values, locals, place))
-            .or(value_data
-                .repr
-                .address_space()
-                .map(|address_space| PointerInfo {
-                    address_space,
-                    target_ty: matches!(value_data.repr, ValueRepr::Ref(_))
-                        .then_some(value_data.ty),
-                })),
-        _ => value_data
-            .pointer_info
-            .or(value_data
-                .repr
-                .address_space()
-                .map(|address_space| PointerInfo {
-                    address_space,
-                    target_ty: matches!(value_data.repr, ValueRepr::Ref(_))
-                        .then_some(value_data.ty),
-                })),
+        _ => merge_pointer_info(value_data.pointer_info, runtime_shape_fallback),
     }
 }
 
@@ -567,6 +647,9 @@ pub(crate) fn try_place_pointer_info_in<'db>(
     for proj in place.projection.iter() {
         match proj {
             Projection::Deref => {
+                if local_root_reuses_object_location_deref(locals, local_root.as_ref()) {
+                    continue;
+                }
                 let info = if let Some((local, path)) = &local_root {
                     lookup_local_pointer_leaf_info(locals, *local, path).or(current)
                 } else {
@@ -722,6 +805,8 @@ pub struct LocalData<'db> {
     pub pointer_leaf_infos: Vec<(MirProjectionPath<'db>, PointerInfo<'db>)>,
     /// Explicit runtime-owner layout for place roots materialized from this local.
     pub place_root_layout: LocalPlaceRootLayout<'db>,
+    /// Whether every assignment seen so far keeps this local backed by readonly const data.
+    pub const_backing: LocalConstBacking,
     /// Backend-neutral runtime shape for this local after MIR normalization.
     pub runtime_shape: RuntimeShape<'db>,
 }
@@ -767,6 +852,19 @@ impl<'db> LocalPlaceRootLayout<'db> {
 
     pub fn is_materialized(self) -> bool {
         matches!(self, Self::MemorySlot | Self::ObjectRootStorage { .. })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LocalConstBacking {
+    Unknown,
+    Const,
+    Runtime,
+}
+
+impl LocalConstBacking {
+    pub fn is_const(self) -> bool {
+        matches!(self, Self::Const)
     }
 }
 
@@ -875,15 +973,15 @@ pub enum Rvalue<'db> {
     /// - this does not choose stack vs heap placement
     /// - this is distinct from dynamic raw-memory allocation (`IntrinsicOp::Alloc`)
     Alloc { address_space: AddressSpaceKind },
-    /// Backend-neutral constant aggregate data.
+    /// Backend-neutral typed constant aggregate data.
     ///
-    /// Pre-computed constant bytes (e.g. constant array literals) that backends
+    /// Pre-computed constant data (e.g. constant array literals) that backends
     /// materialize however they choose:
-    /// - Yul: emit as data sections + datacopy
-    /// - Sonatina: register a constant region and materialize it via codecopy
+    /// - Yul: serialize to data sections + datacopy
+    /// - Sonatina: lower to typed const globals and late materialization
     ConstAggregate {
-        /// Raw constant bytes in big-endian EVM word format.
-        data: Vec<u8>,
+        /// Typed constant aggregate payload.
+        data: ConstData,
         /// The aggregate type being initialized.
         ty: TyId<'db>,
     },
@@ -1092,13 +1190,13 @@ pub enum SyntheticValue {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ConstRegion<'db> {
     pub ty: TyId<'db>,
-    pub bytes: Vec<u8>,
+    pub data: ConstData,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ConstRegionKey<'db> {
     ty: TyId<'db>,
-    bytes: Vec<u8>,
+    data: ConstData,
 }
 
 /// Address space where a value lives.
@@ -1281,8 +1379,6 @@ pub enum IntrinsicOp {
     Returndatacopy,
     /// `returndatasize()`
     Returndatasize,
-    /// `addr_of(ptr)` - returns the address of a pointer value as `u256`.
-    AddrOf,
     /// `mstore(address, value)`
     Mstore,
     /// `mstore8(address, byte)`
@@ -1330,7 +1426,6 @@ impl IntrinsicOp {
                 | IntrinsicOp::Calldataload
                 | IntrinsicOp::Calldatasize
                 | IntrinsicOp::Returndatasize
-                | IntrinsicOp::AddrOf
                 | IntrinsicOp::Codesize
                 | IntrinsicOp::CodeRegionOffset
                 | IntrinsicOp::CodeRegionLen
@@ -1376,6 +1471,7 @@ mod tests {
                 },
             )],
             place_root_layout: LocalPlaceRootLayout::Direct,
+            const_backing: LocalConstBacking::Unknown,
             runtime_shape: RuntimeShape::Unresolved,
         }];
 
@@ -1412,6 +1508,7 @@ mod tests {
                 },
             )],
             place_root_layout: LocalPlaceRootLayout::Direct,
+            const_backing: LocalConstBacking::Unknown,
             runtime_shape: RuntimeShape::Unresolved,
         }];
 
@@ -1440,6 +1537,7 @@ mod tests {
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos: Vec::new(),
             place_root_layout: LocalPlaceRootLayout::Direct,
+            const_backing: LocalConstBacking::Unknown,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         }];
         let values = vec![ValueData {
@@ -1458,6 +1556,66 @@ mod tests {
         assert_eq!(
             try_value_address_space_in(&values, &locals, ValueId(0)),
             Some(AddressSpaceKind::Memory)
+        );
+    }
+
+    #[test]
+    fn object_root_deref_preserves_local_leaf_pointer_info() {
+        let db = TestDb::default();
+        let ty = u256_ty(&db);
+        let field = MirProjectionPath::from_projection(Projection::Field(1));
+        let locals = vec![LocalData {
+            name: "v0".to_string(),
+            ty,
+            is_mut: false,
+            source: SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Memory,
+            pointer_leaf_infos: vec![
+                (
+                    MirProjectionPath::new(),
+                    PointerInfo {
+                        address_space: AddressSpaceKind::Memory,
+                        target_ty: Some(ty),
+                    },
+                ),
+                (
+                    field.clone(),
+                    PointerInfo {
+                        address_space: AddressSpaceKind::Code,
+                        target_ty: Some(ty),
+                    },
+                ),
+            ],
+            place_root_layout: LocalPlaceRootLayout::ObjectRootValue {
+                target_ty: ty,
+                source: ObjectRootSource::DeclaredByRefAggregate,
+            },
+            const_backing: LocalConstBacking::Unknown,
+            runtime_shape: RuntimeShape::ObjectRef { target_ty: ty },
+        }];
+        let values = vec![ValueData {
+            ty,
+            origin: ValueOrigin::Local(LocalId(0)),
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Ref(AddressSpaceKind::Memory),
+            pointer_info: None,
+            runtime_shape: RuntimeShape::ObjectRef { target_ty: ty },
+        }];
+        let place = Place::new(
+            ValueId(0),
+            MirProjectionPath::from_projection(Projection::Deref).concat(&field),
+        );
+
+        assert_eq!(
+            try_place_pointer_info_in(&values, &locals, &place),
+            Some(PointerInfo {
+                address_space: AddressSpaceKind::Code,
+                target_ty: Some(ty),
+            }),
+        );
+        assert_eq!(
+            try_place_address_space_in(&values, &locals, &place),
+            Some(AddressSpaceKind::Memory),
         );
     }
 }

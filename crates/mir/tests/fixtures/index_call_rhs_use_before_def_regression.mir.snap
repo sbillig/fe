@@ -1,6 +1,5 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
-assertion_line: 26
 expression: mir_output
 ---
 fn slot(v0: usize, v1: usize) -> usize:
@@ -20,8 +19,7 @@ fn repro(v0: [u256; 16], v1: [u8; 32]) -> u256:
   bb2:
     v6: u8 = load mem[v1][v3]
     v5: usize = v6
-    v8: [u256; 4] = alloc mem
-    init mem[v8] { [0] = 0, [1] = 0, [2] = 0, [3] = 0 }
+    v8: [u256; 4] = const_aggregate [4 items]
     v7: [u256; 4] = v8
     v9: usize = 0
     jmp bb4

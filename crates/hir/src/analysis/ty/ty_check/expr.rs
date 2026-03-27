@@ -291,6 +291,10 @@ impl<'db> TyChecker<'db> {
 
         self.env.enter_expr(expr);
         let mut actual = match expr_data {
+            Expr::Lit(LitKind::String(string_id)) => ExprProp::new(
+                self.string_literal_ty(*string_id, expected, expr.span(self.body()).into()),
+                true,
+            ),
             Expr::Lit(lit) => ExprProp::new(self.lit_ty_for_expected(lit, expected), true),
             Expr::Block(..) => self.check_block(expr, expr_data, expected),
             Expr::Un(..) => self.check_unary(expr, expr_data),
@@ -1370,6 +1374,17 @@ impl<'db> TyChecker<'db> {
                             target_ty,
                         );
                     }
+                    let provider_space = self.effect_arg_provider_space(&arg, pass_mode);
+                    if matches!(
+                        pass_mode,
+                        super::EffectPassMode::ByPlace | super::EffectPassMode::ByTempPlace
+                    ) && provider_space.is_none()
+                        && !self.effect_arg_provider_space_can_remain_unresolved(&arg)
+                    {
+                        panic!(
+                            "effect arg provider space must be explicit for {pass_mode:?} at {key_path:?}"
+                        );
+                    }
                     resolved_args.push(super::ResolvedEffectArg {
                         param_idx,
                         key: key_path,
@@ -1377,6 +1392,7 @@ impl<'db> TyChecker<'db> {
                         pass_mode,
                         key_kind,
                         instantiated_target_ty,
+                        provider: provider_space,
                     });
                 }
                 EffectResolution::BlockedByBarrier => {}
@@ -1944,6 +1960,55 @@ impl<'db> TyChecker<'db> {
             ),
             super::EffectPassMode::Unknown => false,
         }
+    }
+
+    fn effect_arg_provider_space(
+        &self,
+        arg: &super::EffectArg<'db>,
+        pass_mode: super::EffectPassMode,
+    ) -> Option<super::ConcreteBorrowProvider> {
+        match pass_mode {
+            super::EffectPassMode::ByTempPlace => match arg {
+                super::EffectArg::Value(expr) => self.env.typed_expr(*expr).and_then(|prop| {
+                    prop.borrow_provider
+                        .or_else(|| self.concrete_borrow_provider_for_effect_handle_ty(prop.ty))
+                }),
+                super::EffectArg::Place(place) => self.concrete_borrow_provider_for_place(place),
+                super::EffectArg::Binding(binding) => {
+                    self.concrete_borrow_provider_for_binding(*binding)
+                }
+                super::EffectArg::Unknown => None,
+            },
+            super::EffectPassMode::ByPlace => match arg {
+                super::EffectArg::Place(place) => self.concrete_borrow_provider_for_place(place),
+                super::EffectArg::Binding(binding) => {
+                    self.concrete_borrow_provider_for_binding(*binding)
+                }
+                super::EffectArg::Value(_) | super::EffectArg::Unknown => None,
+            },
+            super::EffectPassMode::ByValue => match arg {
+                super::EffectArg::Place(place) => self.concrete_borrow_provider_for_place(place),
+                super::EffectArg::Value(expr) => self.env.typed_expr(*expr)?.borrow_provider,
+                super::EffectArg::Binding(binding) => {
+                    self.concrete_borrow_provider_for_binding(*binding)
+                }
+                super::EffectArg::Unknown => None,
+            },
+            super::EffectPassMode::Unknown => None,
+        }
+    }
+
+    fn effect_arg_provider_space_can_remain_unresolved(&self, arg: &super::EffectArg<'db>) -> bool {
+        let binding = match arg {
+            super::EffectArg::Place(place) => {
+                let PlaceBase::Binding(binding) = place.base;
+                Some(binding)
+            }
+            super::EffectArg::Binding(binding) => Some(*binding),
+            super::EffectArg::Value(_) | super::EffectArg::Unknown => None,
+        };
+
+        matches!(binding, Some(LocalBinding::EffectParam { .. }))
     }
 
     fn query_type_key(&self, key: &EffectPatternKey<'db>) -> Option<TyId<'db>> {

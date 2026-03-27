@@ -12,7 +12,7 @@ fn __Guard_init_contract(v0: u256) -> ():
 #[inline(never)]
 fn __Guard_recv_0_0(v0: u256) -> ():
   bb0:
-    eval bump_lock__TStorPtr_u256___e67d09080c0f1393(v0)
+    eval bump_lock__TStorPtr_u256___e67d09080c0f1393(&tstor[place_root(v0)])
     ret
 
 fn __Guard_init() -> ():

@@ -8,7 +8,6 @@ use super::{
         CallableInputLayoutHoleOrigin, ConstTyData, const_ty_from_assoc_const_use,
         normalize_const_tys_for_comparison,
     },
-    ctfe::instantiate_typed_body,
     diagnostics::{ImplDiag, TyDiagCollection},
     effects::{
         EffectKeyKind, normalize_effect_identity_trait, normalize_effect_identity_ty,
@@ -27,7 +26,7 @@ use super::{
     ty_check::{ConstRef, check_anon_const_body},
     ty_def::{InvalidCause, TyData, TyId},
 };
-use crate::analysis::HirAnalysisDb;
+use crate::analysis::{HirAnalysisDb, semantic::instantiate_with_generic_args};
 use crate::hir_def::{CallableDef, Expr, Partial, PathId, PathKind, scope_graph::ScopeId};
 use rustc_hash::FxHashMap;
 
@@ -730,7 +729,7 @@ fn normalize_compare_assoc_consts<'db>(
             let typed_body = if generic_args.is_empty() {
                 typed_body.clone()
             } else {
-                instantiate_typed_body(db, typed_body.clone(), generic_args)
+                instantiate_with_generic_args(db, typed_body.clone(), generic_args)
             };
             let ConstRef::TraitConst(assoc) = typed_body.expr_const_ref(body.expr(db))? else {
                 return None;

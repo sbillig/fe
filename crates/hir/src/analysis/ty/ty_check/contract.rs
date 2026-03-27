@@ -12,12 +12,11 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         name_resolution::{ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path},
+        semantic::{SemConstScalar, SemConstValue, eval_body_owner_const},
         ty::{
             adt_def::AdtRef,
             canonical::Canonical,
-            const_ty::{ConstTyData, EvaluatedConstTy},
             corelib::resolve_core_trait,
-            ctfe::{CtfeConfig, CtfeInterpreter},
             diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection},
             trait_def::TraitInstId,
             trait_def::impls_for_ty,
@@ -739,21 +738,25 @@ pub(crate) fn eval_msg_variant_selector<'db>(
         return None;
     }
 
-    let mut interp = CtfeInterpreter::new(db, CtfeConfig::default());
-    let const_ty = match interp.eval_const_body(body, result.1.clone()) {
-        Ok(const_ty) => const_ty,
-        Err(cause) => {
-            let ty = TyId::invalid(db, cause);
-            if let Some(diag) = ty.emit_diag(db, body.span().into()) {
-                diags.push(diag.into());
+    match eval_body_owner_const(
+        db,
+        BodyOwner::AnonConstBody {
+            body,
+            expected: expected_ty,
+        },
+        Vec::new(),
+    ) {
+        Ok(value) => match value.value(db) {
+            SemConstValue::Scalar {
+                value: SemConstScalar::Int { value },
+                ..
+            } => value.to_u32(),
+            _ => {
+                diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
+                None
             }
-            return None;
-        }
-    };
-
-    match const_ty.data(db) {
-        ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) => int_id.data(db).to_u32(),
-        _ => {
+        },
+        Err(_) => {
             diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
             None
         }

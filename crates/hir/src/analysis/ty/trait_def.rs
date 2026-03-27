@@ -358,7 +358,7 @@ pub fn assoc_const_body_for_trait_inst<'db>(
 ///
 /// The returned generic args correspond to the impl's own generic parameters (not the trait's),
 /// and are suitable for CTFE/type checking of the impl const body.
-pub(super) fn assoc_const_body_and_impl_args_for_trait_inst<'db>(
+pub fn assoc_const_body_and_impl_args_for_trait_inst<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     inst: TraitInstId<'db>,
@@ -420,8 +420,8 @@ impl<'db> TraitEnv<'db> {
             .map(|(_, external)| collect_trait_impls(db, *external))
             .chain(std::iter::once(collect_trait_impls(db, ingot)))
         {
-            // `collect_trait_impls` ensures that there are no conflicting impls, so we can
-            // just extend the map.
+            // Raw impl collection only lowers visible implementors. Any overlap diagnostics run
+            // separately on top of this assembled environment.
             for (trait_def, implementors) in impl_map.iter() {
                 impls
                     .entry(*trait_def)
@@ -797,3 +797,45 @@ impl<'db> TraitInstId<'db> {
 // (TraitDef struct and impl removed)
 
 // (TraitMethod struct and impl removed)
+
+#[cfg(test)]
+mod tests {
+    use camino::Utf8PathBuf;
+
+    use super::impls_for_trait_def;
+    use crate::hir_def::ItemKind;
+    use crate::test_db::HirAnalysisTestDb;
+
+    #[test]
+    fn trait_env_collects_overlapping_constrained_impls_without_cycle() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("trait_env_collects_overlapping_constrained_impls_without_cycle.fe"),
+            r#"
+trait Marker {}
+trait Foo {}
+
+impl<T> Foo for T where T: Marker {}
+impl<T> Foo for T where T: Marker {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let trait_ = top_mod
+            .children_non_nested(&db)
+            .find_map(|item| match item {
+                ItemKind::Trait(trait_)
+                    if trait_
+                        .name(&db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(&db) == "Foo") =>
+                {
+                    Some(trait_)
+                }
+                _ => None,
+            })
+            .expect("missing `Foo` trait");
+
+        let impls = impls_for_trait_def(&db, top_mod.ingot(&db), trait_);
+        assert_eq!(impls.len(), 2);
+    }
+}

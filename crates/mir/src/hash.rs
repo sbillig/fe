@@ -10,8 +10,8 @@ use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 
 use crate::{
-    CallOrigin, MirFunction, MirInst, MirProjection, Rvalue, SwitchValue, TerminatingCall,
-    Terminator, ValueId, ValueOrigin,
+    CallOrigin, ConstData, MirFunction, MirInst, MirProjection, Rvalue, SwitchValue,
+    TerminatingCall, Terminator, ValueId, ValueOrigin,
     ir::{AddressSpaceKind, Place, SyntheticValue, ValueRepr},
 };
 
@@ -102,8 +102,7 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
         self.write_usize(func.body.const_regions.len());
         for region in &func.body.const_regions {
             self.write_str(region.ty.pretty_print(self.db));
-            self.write_usize(region.bytes.len());
-            self.hasher.write(&region.bytes);
+            self.hash_const_data(&region.data);
         }
 
         self.write_usize(func.body.blocks.len());
@@ -313,6 +312,37 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
         }
     }
 
+    fn hash_const_data(&mut self, data: &ConstData) {
+        match data {
+            ConstData::Int(value) => {
+                self.write_u8(0x00);
+                let bytes = value.to_bytes_be();
+                self.write_usize(bytes.len());
+                self.hasher.write(&bytes);
+            }
+            ConstData::Bool(value) => {
+                self.write_u8(0x01);
+                self.write_u8(u8::from(*value));
+            }
+            ConstData::Bytes(bytes) => {
+                self.write_u8(0x02);
+                self.write_usize(bytes.len());
+                self.hasher.write(bytes);
+            }
+            ConstData::EnumVariant(value) => {
+                self.write_u8(0x03);
+                self.write_u32(u32::from(*value));
+            }
+            ConstData::Array(items) => {
+                self.write_u8(0x04);
+                self.write_usize(items.len());
+                for item in items {
+                    self.hash_const_data(item);
+                }
+            }
+        }
+    }
+
     /// Hashes call metadata, normalising callee symbols via `canonical_symbols`.
     fn hash_call_origin(&mut self, call: &CallOrigin<'db>) {
         self.write_usize(call.args.len());
@@ -414,8 +444,7 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                     }
                     Rvalue::ConstAggregate { data, .. } => {
                         self.write_u8(6);
-                        self.write_usize(data.len());
-                        self.hasher.write(data);
+                        self.hash_const_data(data);
                     }
                 }
             }

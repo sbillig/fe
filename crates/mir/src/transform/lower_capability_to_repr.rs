@@ -1439,6 +1439,7 @@ pub(crate) fn prepare_body_for_evm_yul_codegen<'db>(
                     address_space: AddressSpaceKind::Memory,
                     pointer_leaf_infos: owner_data.pointer_leaf_infos.clone(),
                     place_root_layout: spill_place_root_layout(db, core, owner_data, owner),
+                    const_backing: crate::ir::LocalConstBacking::Unknown,
                     runtime_shape: crate::ir::RuntimeShape::Unresolved,
                 },
             );
@@ -1654,6 +1655,7 @@ mod tests {
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos: Vec::new(),
             place_root_layout: crate::ir::LocalPlaceRootLayout::Direct,
+            const_backing: crate::ir::LocalConstBacking::Unknown,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let base = body.alloc_value(ValueData {
@@ -1714,6 +1716,7 @@ mod tests {
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos: Vec::new(),
             place_root_layout: crate::ir::LocalPlaceRootLayout::Direct,
+            const_backing: crate::ir::LocalConstBacking::Unknown,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let root = body.alloc_value(ValueData {
@@ -1847,6 +1850,7 @@ pub fn field_ptr_origin_preserves_address_space(x: mut u256) {}
             address_space: AddressSpaceKind::Storage,
             pointer_leaf_infos: Vec::new(),
             place_root_layout: crate::ir::LocalPlaceRootLayout::Direct,
+            const_backing: crate::ir::LocalConstBacking::Unknown,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let base = body.alloc_value(ValueData {
@@ -2191,6 +2195,7 @@ pub fn transparent_cast_over_raw_pointer_handle_does_not_spill(x: mut Pair) {}
                 },
             )],
             place_root_layout: crate::ir::LocalPlaceRootLayout::Direct,
+            const_backing: crate::ir::LocalConstBacking::Unknown,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         body.effect_param_locals.push(raw_local);
@@ -2299,6 +2304,7 @@ pub fn transparent_cast_over_raw_pointer_handle_does_not_spill(x: mut Pair) {}
                 },
             )],
             place_root_layout: crate::ir::LocalPlaceRootLayout::Direct,
+            const_backing: crate::ir::LocalConstBacking::Unknown,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let base = body.alloc_value(ValueData {
@@ -2369,6 +2375,7 @@ pub fn lower_capability_to_repr_recomputes_pointer_info_after_origin_rewrite(x: 
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos: Vec::new(),
             place_root_layout: crate::ir::LocalPlaceRootLayout::Direct,
+            const_backing: crate::ir::LocalConstBacking::Unknown,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let root = body.alloc_value(ValueData {

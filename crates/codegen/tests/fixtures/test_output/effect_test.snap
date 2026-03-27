@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/test_yul_tests.rs
+assertion_line: 38
 expression: "output.tests[0].yul"
 input_file: tests/fixtures/test_output/effect_test.fe
 ---
@@ -28,10 +29,10 @@ object "test_test_effect" {
         ret := v0
         leave
       }
-      function $test_effect__StorPtr_u256___64779554cfbf0358($x) {
-        let v0 := sload($x)
+      function $test_effect__MemPtr_u256___25949c86160e9382($x) {
+        let v0 := mload($x)
         let v1 := $checked_add_u256(v0, 1)
-        sstore($x, v1)
+        mstore($x, v1)
         leave
       }
       function $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($self) -> ret {
@@ -48,7 +49,7 @@ object "test_test_effect" {
         ret := v0
         leave
       }
-      $test_effect__StorPtr_u256___64779554cfbf0358(0)
+      $test_effect__MemPtr_u256___25949c86160e9382(0)
       return(0, 0)
     }
   }

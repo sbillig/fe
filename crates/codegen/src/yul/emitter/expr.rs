@@ -16,11 +16,11 @@ use mir::{
 };
 use num_bigint::BigUint;
 
-use crate::yul::state::BlockState;
+use crate::yul::{doc::YulDoc, state::BlockState};
 
 use super::{
     YulError,
-    function::FunctionEmitter,
+    function::{CallArgAbi, FunctionEmitter},
     util::{function_name, is_std_evm_ops, prefix_yul_name},
 };
 
@@ -697,6 +697,15 @@ impl<'db> FunctionEmitter<'db> {
             ValueOrigin::Synthetic(synth) => self.lower_synthetic_value(synth, value.ty),
             ValueOrigin::FieldPtr(field_ptr) => self.lower_field_ptr(field_ptr, state),
             ValueOrigin::PlaceRef(place) => {
+                if !mir::repr::place_resolves_to_location(
+                    self.db,
+                    &self.core_lib(),
+                    &self.mir_func.body.values,
+                    &self.mir_func.body.locals,
+                    place,
+                ) {
+                    return self.lower_value(place.base, state);
+                }
                 if !value.repr.is_ref() {
                     if self.place_yields_location_value(
                         place,
@@ -719,6 +728,15 @@ impl<'db> FunctionEmitter<'db> {
                 self.lower_place_ref(place, state)
             }
             ValueOrigin::MoveOut { place } => {
+                if !mir::repr::place_resolves_to_location(
+                    self.db,
+                    &self.core_lib(),
+                    &self.mir_func.body.values,
+                    &self.mir_func.body.locals,
+                    place,
+                ) {
+                    return self.lower_value(place.base, state);
+                }
                 if value.repr.is_ref() {
                     self.lower_place_ref(place, state)
                 } else {
@@ -756,9 +774,10 @@ impl<'db> FunctionEmitter<'db> {
     ///
     /// Returns the Yul invocation string for the call.
     pub(super) fn lower_call_value(
-        &self,
+        &mut self,
+        docs: &mut Vec<YulDoc>,
         call: &CallOrigin<'_>,
-        state: &BlockState,
+        state: &mut BlockState,
     ) -> Result<String, YulError> {
         if let Some(mir::CallTargetRef::Hir(target)) = call.target.as_ref()
             && matches!(
@@ -823,17 +842,154 @@ impl<'db> FunctionEmitter<'db> {
         } else {
             prefix_yul_name(&callee)
         };
+        let call_abi = call
+            .resolved_name
+            .as_ref()
+            .and_then(|name| self.call_abis.get(name))
+            .or_else(|| {
+                let mir::CallTargetRef::Hir(target) = call.target.as_ref()? else {
+                    return None;
+                };
+                let CallableDef::Func(func) = target.callable_def else {
+                    return None;
+                };
+                self.call_abis.get(&function_name(self.db, func))
+            })
+            .cloned();
         let mut lowered_args = Vec::with_capacity(call.args.len());
-        for &arg in &call.args {
-            lowered_args.push(self.lower_value(arg, state)?);
+        for (idx, &arg) in call.args.iter().enumerate() {
+            let expected = call_abi
+                .as_ref()
+                .and_then(|abi| abi.value_params.get(idx).copied())
+                .or_else(|| {
+                    (idx == 0).then(|| {
+                        call.receiver_space.map(|address_space| CallArgAbi {
+                            address_space,
+                            const_backing: if matches!(
+                                address_space,
+                                mir::ir::AddressSpaceKind::Code
+                            ) {
+                                mir::ir::LocalConstBacking::Const
+                            } else {
+                                mir::ir::LocalConstBacking::Runtime
+                            },
+                        })
+                    })?
+                });
+            lowered_args.push(self.lower_call_arg_value(docs, arg, state, expected)?);
         }
-        for &arg in &call.effect_args {
-            lowered_args.push(self.lower_value(arg, state)?);
+        for (idx, &arg) in call.effect_args.iter().enumerate() {
+            let expected = call_abi
+                .as_ref()
+                .and_then(|abi| abi.effect_params.get(idx).copied());
+            lowered_args.push(self.lower_call_arg_value(docs, arg, state, expected)?);
         }
         if lowered_args.is_empty() {
             Ok(format!("{callee}()"))
         } else {
             Ok(format!("{callee}({})", lowered_args.join(", ")))
+        }
+    }
+
+    fn lower_call_arg_value(
+        &mut self,
+        docs: &mut Vec<YulDoc>,
+        value_id: ValueId,
+        state: &mut BlockState,
+        expected: Option<CallArgAbi>,
+    ) -> Result<String, YulError> {
+        let value = self.mir_func.body.value(value_id);
+        let code_backed = self.lower_call_arg_value_originates_from_code(value_id);
+        if code_backed {
+            if expected.is_some_and(|expected| {
+                !matches!(expected.address_space, mir::ir::AddressSpaceKind::Memory)
+                    || matches!(expected.const_backing, mir::ir::LocalConstBacking::Const)
+            }) {
+                return self.lower_value(value_id, state);
+            }
+
+            let materialized_ty = match &value.origin {
+                ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) => {
+                    self.mir_func.body.local(*local).ty
+                }
+                ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
+                    self.resolve_place(place)?.final_state().ty
+                }
+                ValueOrigin::TransparentCast { value } => self.mir_func.body.value(*value).ty,
+                _ => self
+                    .mir_func
+                    .body
+                    .value_pointer_info(value_id)
+                    .and_then(|info| info.target_ty)
+                    .unwrap_or(value.ty),
+            };
+            let Some(size_bytes) =
+                layout::ty_memory_size_in(self.db, &self.layout, materialized_ty).or_else(|| {
+                    layout::ty_memory_size_or_word_in(self.db, &self.layout, materialized_ty)
+                })
+            else {
+                return Err(YulError::Unsupported(format!(
+                    "cannot determine materialization size for call arg `{}`",
+                    materialized_ty.pretty_print(self.db)
+                )));
+            };
+            if size_bytes == 0 {
+                return Ok("0".into());
+            }
+
+            let temp = state.alloc_local();
+            self.emit_alloc_value(docs, &temp, size_bytes, true);
+            let src_addr = self.lower_value(value_id, state)?;
+            docs.push(YulDoc::line(format!(
+                "datacopy({temp}, {src_addr}, {size_bytes})"
+            )));
+            return Ok(temp);
+        }
+
+        self.lower_value(value_id, state)
+    }
+
+    fn lower_call_arg_value_originates_from_code(&self, value_id: ValueId) -> bool {
+        let value = self.mir_func.body.value(value_id);
+        if value.repr.is_ref()
+            && self
+                .mir_func
+                .body
+                .value_pointer_info(value_id)
+                .is_some_and(|info| matches!(info.address_space, mir::ir::AddressSpaceKind::Code))
+        {
+            return true;
+        }
+        match &value.origin {
+            ValueOrigin::ConstRegion(_) => true,
+            ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) => {
+                let local = self.mir_func.body.local(*local);
+                local.const_backing.is_const()
+                    && matches!(local.address_space, mir::ir::AddressSpaceKind::Code)
+            }
+            ValueOrigin::TransparentCast { value } => {
+                self.lower_call_arg_value_originates_from_code(*value)
+            }
+            ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
+                if let Some((local, _)) =
+                    mir::ir::resolve_local_projection_root(&self.mir_func.body.values, place.base)
+                {
+                    let local = self.mir_func.body.local(local);
+                    if local.const_backing.is_const()
+                        && matches!(local.address_space, mir::ir::AddressSpaceKind::Code)
+                    {
+                        return true;
+                    }
+                }
+                self.resolve_place(place)
+                    .ok()
+                    .and_then(|resolved| resolved.final_state().location_address_space())
+                    .is_some_and(|space| matches!(space, mir::ir::AddressSpaceKind::Code))
+            }
+            _ => matches!(
+                value.repr.address_space(),
+                Some(mir::ir::AddressSpaceKind::Code)
+            ),
         }
     }
 
@@ -936,10 +1092,10 @@ impl<'db> FunctionEmitter<'db> {
 
         let packed = self.is_packed_scalar_array_access(place, loaded_ty)?;
         let (addr, place_state) = self.lower_place_terminal(place, state)?;
-        let raw_load = match place_state
-            .location_address_space()
-            .ok_or_else(|| YulError::Unsupported(format!("place is not a location: {place:?}")))?
-        {
+        let Some(address_space) = place_state.location_address_space() else {
+            return Ok(self.apply_from_word_conversion(&addr, loaded_ty));
+        };
+        let raw_load = match address_space {
             mir::ir::AddressSpaceKind::Memory => {
                 if packed {
                     format!("byte(0, mload({addr}))")
@@ -1117,7 +1273,7 @@ impl<'db> FunctionEmitter<'db> {
         })
     }
 
-    fn place_yields_location_value(
+    pub(super) fn place_yields_location_value(
         &self,
         place: &Place<'db>,
         value_ty: TyId<'db>,
@@ -1141,13 +1297,13 @@ impl<'db> FunctionEmitter<'db> {
         segment: &ResolvedPlaceSegment<'db>,
         state: &BlockState,
     ) -> Result<(String, PlaceState<'db>), YulError> {
+        if segment.projections.is_empty() {
+            return Ok((segment_base_expr, segment.terminal_state()));
+        }
         let address_space = segment
             .base
             .location_address_space()
             .ok_or_else(|| YulError::Unsupported("place segment is not a location".to_string()))?;
-        if segment.projections.is_empty() {
-            return Ok((segment_base_expr, segment.terminal_state()));
-        }
 
         let mut base_expr = segment_base_expr;
         let mut total_offset: usize = 0;
@@ -1309,8 +1465,14 @@ impl<'db> FunctionEmitter<'db> {
                     )));
                 }
             };
-            current_terminal =
-                Some(self.lower_place_segment_terminal(segment_base_expr, segment, state)?);
+            current_terminal = Some(
+                self.lower_place_segment_terminal(segment_base_expr, segment, state)
+                    .map_err(|err| {
+                        YulError::Unsupported(format!(
+                            "{err}; place={place:?}, segment_index={idx}, segment={segment:?}"
+                        ))
+                    })?,
+            );
         }
 
         current_terminal.ok_or_else(|| {

@@ -1,11 +1,12 @@
 use common::InputDb;
 use common::stdlib::{HasBuiltinCore, HasBuiltinStd};
-use driver::{DriverDataBase, db::DiagnosticsCollection};
+use fe_hir::analysis::ty::ty_check::{ReturnProvenance, check_func_body};
 use fe_hir::analysis::ty::{
     trait_resolution::{GoalSatisfiability, TraitSolveCx, is_goal_satisfiable},
     ty_check::check_func_body,
 };
 use fe_hir::hir_def::{Expr, LitKind, Partial};
+use fe_hir::test_db::{HirAnalysisTestDb, emit_diagnostics, format_diagnostics};
 use url::Url;
 
 #[cfg(target_arch = "wasm32")]
@@ -13,31 +14,35 @@ use test_utils::url_utils::UrlExt;
 
 #[test]
 fn analyze_corelib() {
-    let db = DriverDataBase::default();
+    let db = HirAnalysisTestDb::default();
     let core = db.builtin_core();
 
     let core_diags = db.run_on_ingot(core);
-    assert_builtin_clean(&db, core_diags, "core");
+    assert_builtin_clean(&db, &core_diags, "core");
 }
 
 #[test]
 fn analyze_stdlib() {
-    let db = DriverDataBase::default();
+    let db = HirAnalysisTestDb::default();
     let std_ingot = db.builtin_std();
 
     let std_diags = db.run_on_ingot(std_ingot);
-    assert_builtin_clean(&db, std_diags, "std");
+    assert_builtin_clean(&db, &std_diags, "std");
 }
 
-fn assert_builtin_clean(db: &DriverDataBase, diags: DiagnosticsCollection<'_>, name: &str) {
+fn assert_builtin_clean(
+    db: &HirAnalysisTestDb,
+    diags: &[Box<dyn fe_hir::analysis::diagnostics::DiagnosticVoucher + '_>],
+    name: &str,
+) {
     if diags.is_empty() {
         return;
     }
 
-    diags.emit(db);
+    emit_diagnostics(db, diags);
     panic!(
         "expected no diagnostics for builtin {name}, but got:\n{}",
-        diags.format_diags(db)
+        format_diagnostics(db, diags)
     );
 }
 
@@ -193,4 +198,40 @@ pub fn root() -> u32 {
         "unexpected diagnostics: {}",
         diags.format_diags(&db)
     );
+}
+
+#[test]
+fn long_sol_signature_literals_remain_compile_time_only() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "long_sol_signature_literals_remain_compile_time_only.fe".into(),
+        r#"use std::abi::sol
+
+const SELECTOR: u32 = sol("transferFrom(address,address,uint256)")
+
+pub fn selector() -> u32 {
+    SELECTOR
+}"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn implicit_ref_load_returns_are_not_treated_as_forwarded_params() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "implicit_ref_load_returns_are_not_treated_as_forwarded_params.fe".into(),
+        r#"fn read_balance(x: ref u256) -> u256 {
+    x
+}"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let funcs = top_mod.all_funcs(&db);
+    let [func] = funcs.as_slice() else {
+        panic!("expected exactly one function");
+    };
+
+    let typed_body = check_func_body(&db, *func).1.clone();
+    assert_eq!(typed_body.return_provenance(&db), ReturnProvenance::Fresh);
 }

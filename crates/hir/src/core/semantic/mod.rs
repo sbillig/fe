@@ -2244,9 +2244,9 @@ fn get_variant_selector_info<'db>(
     variant_ty: TyId<'db>,
     scope: ScopeId<'db>,
 ) -> VariantSelectorInfo {
+    use crate::analysis::semantic::{SemConstScalar, SemConstValue, eval_body_owner_const};
     use crate::analysis::ty::{
         canonical::Canonical,
-        const_eval::{ConstValue, try_eval_const_body},
         corelib::resolve_core_trait,
         trait_def::impls_for_ty,
         ty_def::{PrimTy, TyBase, TyData},
@@ -2300,15 +2300,22 @@ fn get_variant_selector_info<'db>(
     };
     let signature = selector_signature_from_body(db, body, hir_impl.scope());
     let expected_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U32)));
-    let value = match try_eval_const_body(db, body, expected_ty) {
-        Some(ConstValue::Int(value)) => value.to_u32(),
-        Some(
-            ConstValue::Bool(_)
-            | ConstValue::Bytes(_)
-            | ConstValue::EnumVariant(_)
-            | ConstValue::ConstArray(_),
-        )
-        | None => None,
+    let value = match eval_body_owner_const(
+        db,
+        crate::analysis::ty::ty_check::BodyOwner::AnonConstBody {
+            body,
+            expected: expected_ty,
+        },
+        Vec::new(),
+    ) {
+        Ok(value) => match value.value(db) {
+            SemConstValue::Scalar {
+                value: SemConstScalar::Int { value },
+                ..
+            } => value.to_u32(),
+            _ => None,
+        },
+        Err(_) => None,
     };
 
     VariantSelectorInfo { value, signature }
@@ -3655,13 +3662,21 @@ impl<'db> ImplTrait<'db> {
                         }
                     },
                     ImplTraitLowerError::Conflict { primary, conflict } => {
-                        diags.push(
-                            TraitLowerDiag::ConflictTraitImpl {
-                                primary,
-                                conflict_with: conflict,
-                            }
-                            .into(),
-                        );
+                        let local_impls = self.top_mod(db).ingot(db).all_impl_traits(db);
+                        let primary_idx = local_impls.iter().position(|&item| item == primary);
+                        let conflict_idx = local_impls.iter().position(|&item| item == conflict);
+                        if !matches!(
+                            (primary_idx, conflict_idx),
+                            (Some(primary_idx), Some(conflict_idx)) if primary_idx > conflict_idx
+                        ) {
+                            diags.push(
+                                TraitLowerDiag::ConflictTraitImpl {
+                                    primary,
+                                    conflict_with: conflict,
+                                }
+                                .into(),
+                            );
+                        }
                     }
                     ImplTraitLowerError::KindMismatch { expected, actual } => {
                         diags.push(

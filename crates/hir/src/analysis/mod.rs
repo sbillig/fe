@@ -3,6 +3,7 @@ pub mod analysis_pass;
 pub mod core_requirements;
 pub mod diagnostics;
 pub mod place;
+pub mod semantic;
 
 use self::analysis_pass::{
     AnalysisPassManager, ArithmeticAttrPass, EventLowerPass, InlineAttrPass, LoopUnrollAttrPass,

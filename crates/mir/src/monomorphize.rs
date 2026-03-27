@@ -32,7 +32,7 @@ use crate::{
     capability_space::{pointer_leaf_infos_for_ty_with_default, pointer_leaf_paths_for_ty},
     core_lib::CoreLib,
     dedup::deduplicate_mir,
-    ir::AddressSpaceKind,
+    ir::{AddressSpaceKind, RuntimeShape, ValueId},
     lower::{MirLowerError, MirLowerResult, lower_function},
 };
 
@@ -320,9 +320,9 @@ impl<'db> Monomorphizer<'db> {
                 continue;
             }
 
-            let stor_ptr_ctor =
-                resolve_lib_type_path(self.db, func.scope(), "core::effect_ref::StorPtr")
-                    .unwrap_or_else(|| panic!("missing core type `core::effect_ref::StorPtr`"));
+            let mem_ptr_ctor =
+                resolve_lib_type_path(self.db, func.scope(), "core::effect_ref::MemPtr")
+                    .unwrap_or_else(|| panic!("missing core type `core::effect_ref::MemPtr`"));
             let assumptions = PredicateListId::empty_list(self.db);
             let root_effect_ty = resolve_default_root_effect_ty(self.db, func.scope(), assumptions);
             let effect_ref_trait =
@@ -390,7 +390,7 @@ impl<'db> Monomorphizer<'db> {
                         });
                         args.push(
                             root_provider_ty
-                                .unwrap_or_else(|| TyId::app(self.db, stor_ptr_ctor, ty)),
+                                .unwrap_or_else(|| TyId::app(self.db, mem_ptr_ctor, ty)),
                         );
                     }
                     hir::analysis::ty::effects::EffectKeyKind::Trait => {
@@ -1170,26 +1170,17 @@ impl<'db> Monomorphizer<'db> {
                 break;
             };
             let local = &mut instance.body.locals[param_local.index()];
-            let mut pointer_leaf_infos = pointer_leaf_infos_for_ty_with_default(
+            local.pointer_leaf_infos = pointer_leaf_infos_for_ty_with_default(
                 self.db,
                 &core,
                 local.ty,
                 local.address_space,
             );
             for (path, space) in entries {
-                if let Some((_, info)) = pointer_leaf_infos
-                    .iter_mut()
-                    .find(|(existing, _)| existing == path)
-                {
-                    info.address_space = *space;
-                }
-                if path.is_empty()
-                    && !capability_root_tracks_aggregate_storage(self.db, &core, local.ty)
-                {
-                    crate::repr::set_declared_local_address_space(self.db, &core, local, *space);
-                }
+                crate::repr::apply_param_capability_space_override(
+                    self.db, &core, local, path, *space,
+                );
             }
-            local.pointer_leaf_infos = pointer_leaf_infos;
         }
     }
 
@@ -1755,6 +1746,7 @@ impl<'db> Monomorphizer<'db> {
         let mut overrides: Vec<Vec<(crate::MirProjectionPath<'db>, AddressSpaceKind)>> =
             vec![Vec::new(); param_count];
         let core = CoreLib::new(self.db, func.scope());
+        let caller_core = self.core_for_origin(caller.origin);
 
         for (param_idx, param) in func.params(self.db).enumerate() {
             let Some(&arg_value) = call.args.get(param_idx) else {
@@ -1763,10 +1755,21 @@ impl<'db> Monomorphizer<'db> {
 
             let mut folder = ParamSubstFolder { args };
             let param_ty = param.ty(self.db).fold_with(self.db, &mut folder);
-            let paths = pointer_leaf_paths_for_ty(self.db, &core, param_ty);
+            let preserve_root = self.should_preserve_root_param_override(
+                caller,
+                &caller_core,
+                arg_value,
+                &core,
+                param_ty,
+            );
+            let mut paths = self.param_capability_space_paths_for_ty(&core, param_ty);
+            if preserve_root && !paths.iter().any(crate::MirProjectionPath::is_empty) {
+                paths.insert(0, crate::MirProjectionPath::new());
+            }
             for path in paths {
                 if let Some(space) = self.arg_capability_space_at_path(caller, arg_value, &path)
-                    && !matches!(space, AddressSpaceKind::Memory)
+                    && (!matches!(space, AddressSpaceKind::Memory)
+                        || (path.is_empty() && preserve_root))
                 {
                     overrides[param_idx].push((path, space));
                 }
@@ -1800,39 +1803,12 @@ impl<'db> Monomorphizer<'db> {
             return Vec::new();
         }
 
-        let effect_count = func.effect_params(self.db).count();
+        let default_spaces =
+            self.default_effect_param_spaces_for_call(target, func, args, receiver_space);
+        let effect_count = default_spaces.len();
         let mut overrides = vec![None; effect_count];
 
-        let core = crate::core_lib::CoreLib::new(self.db, func.scope());
-        let provider_arg_idx_by_effect =
-            hir::analysis::ty::effects::place_effect_provider_param_index_map(self.db, func);
-
-        for (param_ord, effect) in func.effect_params(self.db).enumerate() {
-            let effect_idx = effect.index();
-            let Some(provider_arg_idx) = provider_arg_idx_by_effect
-                .get(effect_idx)
-                .copied()
-                .flatten()
-            else {
-                continue;
-            };
-            let Some(provider_ty) = args.get(provider_arg_idx).copied() else {
-                continue;
-            };
-
-            if !matches!(
-                crate::repr::repr_kind_for_ty(self.db, &core, provider_ty),
-                crate::repr::ReprKind::Ref
-            ) {
-                continue;
-            }
-
-            // Effect pointer providers (e.g. `MemPtr`/`StorPtr`/`EffectHandle`) already encode
-            // their address space in the type.
-            if crate::repr::effect_provider_space_for_ty(self.db, &core, provider_ty).is_some() {
-                continue;
-            }
-
+        for (param_ord, override_space) in overrides.iter_mut().enumerate() {
             let Some(&effect_arg_value) = call.effect_args.get(param_ord) else {
                 continue;
             };
@@ -1844,13 +1820,168 @@ impl<'db> Monomorphizer<'db> {
                 continue;
             };
 
-            // Only specialize when the provider is not memory-backed.
-            if !matches!(space, AddressSpaceKind::Memory) {
-                overrides[effect_idx] = Some(space);
+            if default_spaces.get(param_ord).copied() != Some(space) {
+                *override_space = Some(space);
             }
         }
 
         overrides
+    }
+
+    fn default_effect_param_spaces_for_call(
+        &self,
+        target: CallTarget<'db>,
+        func: Func<'db>,
+        args: &[TyId<'db>],
+        receiver_space: Option<AddressSpaceKind>,
+    ) -> Vec<AddressSpaceKind> {
+        match target {
+            CallTarget::Template(_) | CallTarget::Decl(_) => {
+                self.default_effect_param_spaces_for_hir_func(func, args)
+            }
+            CallTarget::Synthetic(origin) => self
+                .func_index
+                .get(&TemplateKey {
+                    origin,
+                    receiver_space,
+                })
+                .and_then(|idx| self.templates.get(*idx))
+                .map(|template| {
+                    template
+                        .body
+                        .effect_param_locals
+                        .iter()
+                        .map(|local| template.body.local(*local).address_space)
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    fn default_effect_param_spaces_for_hir_func(
+        &self,
+        func: Func<'db>,
+        args: &[TyId<'db>],
+    ) -> Vec<AddressSpaceKind> {
+        let core = CoreLib::new(self.db, func.scope());
+        let assumptions = PredicateListId::empty_list(self.db);
+        let provider_arg_idx_by_effect =
+            hir::analysis::ty::effects::place_effect_provider_param_index_map(self.db, func);
+        let mut spaces = vec![AddressSpaceKind::Storage; func.effect_params(self.db).count()];
+
+        for effect in func.effect_params(self.db) {
+            let idx = effect.index();
+            let provider_ty = provider_arg_idx_by_effect
+                .get(idx)
+                .copied()
+                .flatten()
+                .and_then(|provider_idx| {
+                    args.get(provider_idx).copied().or_else(|| {
+                        CallableDef::Func(func)
+                            .params(self.db)
+                            .get(provider_idx)
+                            .copied()
+                    })
+                });
+            if let Some(provider_ty) = provider_ty
+                && let Some(space) =
+                    self.default_effect_space_for_provider_ty(func, &core, provider_ty, None)
+            {
+                spaces[idx] = space;
+                continue;
+            }
+
+            if let Some(key_path) = effect.key_path(self.db)
+                && let Some(provider_ty) =
+                    hir::analysis::ty::effects::resolve_normalized_type_effect_key(
+                        self.db,
+                        key_path,
+                        func.scope(),
+                        assumptions,
+                    )
+                && let Some(space) =
+                    self.default_effect_space_for_provider_ty(func, &core, provider_ty, None)
+            {
+                spaces[idx] = space;
+                continue;
+            }
+
+            if let Some(provider_ty) = effect.key_path(self.db).and_then(|key_path| {
+                match hir::analysis::name_resolution::path_resolver::resolve_path(
+                    self.db,
+                    key_path,
+                    func.scope(),
+                    assumptions,
+                    false,
+                )
+                .ok()?
+                {
+                    hir::analysis::name_resolution::path_resolver::PathRes::Ty(ty)
+                    | hir::analysis::name_resolution::path_resolver::PathRes::TyAlias(_, ty) => {
+                        Some(ty)
+                    }
+                    _ => None,
+                }
+            }) && let Some(space) =
+                self.default_effect_space_for_provider_ty(func, &core, provider_ty, None)
+            {
+                spaces[idx] = space;
+                continue;
+            }
+
+            if let Some(provider_ty) = self.contract_field_provider_ty_for_effect(func, idx)
+                && let Some(space) = self.default_effect_space_for_provider_ty(
+                    func,
+                    &core,
+                    provider_ty,
+                    Some(AddressSpaceKind::Storage),
+                )
+            {
+                spaces[idx] = space;
+            }
+        }
+
+        spaces
+    }
+
+    fn default_effect_space_for_provider_ty(
+        &self,
+        func: Func<'db>,
+        core: &CoreLib<'db>,
+        provider_ty: TyId<'db>,
+        by_ref_space: Option<AddressSpaceKind>,
+    ) -> Option<AddressSpaceKind> {
+        if let Some(space) = raw_effect_space_for_provider_ty(self.db, func.scope(), provider_ty) {
+            return Some(space);
+        }
+        if let Some(space) = crate::repr::effect_provider_space_for_ty(self.db, core, provider_ty) {
+            return Some(space);
+        }
+        matches!(
+            crate::repr::repr_kind_for_ty(self.db, core, provider_ty),
+            crate::repr::ReprKind::Ref
+        )
+        .then_some(by_ref_space.unwrap_or(AddressSpaceKind::Memory))
+    }
+
+    fn contract_field_provider_ty_for_effect(
+        &self,
+        func: Func<'db>,
+        idx: usize,
+    ) -> Option<TyId<'db>> {
+        let ItemKind::Contract(contract) = func.scope().parent_item(self.db)? else {
+            return None;
+        };
+        let key_path = func
+            .effect_params(self.db)
+            .nth(idx)
+            .and_then(|effect| effect.key_path(self.db))?;
+        if key_path.len(self.db) != 1 {
+            return None;
+        }
+        let field_name = key_path.ident(self.db).to_opt()?;
+        let field = contract.fields(self.db).get(&field_name)?;
+        field.is_provider.then_some(field.declared_ty)
     }
 
     fn call_synthetic_param_capability_space_overrides(
@@ -1874,15 +2005,28 @@ impl<'db> Monomorphizer<'db> {
         let mut overrides: Vec<Vec<(crate::MirProjectionPath<'db>, AddressSpaceKind)>> =
             vec![Vec::new(); param_count];
         let core = self.core_for_origin(template.origin);
+        let caller_core = self.core_for_origin(caller.origin);
 
         for (param_idx, param_local) in template.body.param_locals.iter().enumerate() {
             let Some(&arg_value) = call.args.get(param_idx) else {
                 continue;
             };
             let param_ty = template.body.local(*param_local).ty;
-            for path in pointer_leaf_paths_for_ty(self.db, &core, param_ty) {
+            let preserve_root = self.should_preserve_root_param_override(
+                caller,
+                &caller_core,
+                arg_value,
+                &core,
+                param_ty,
+            );
+            let mut paths = self.param_capability_space_paths_for_ty(&core, param_ty);
+            if preserve_root && !paths.iter().any(crate::MirProjectionPath::is_empty) {
+                paths.insert(0, crate::MirProjectionPath::new());
+            }
+            for path in paths {
                 if let Some(space) = self.arg_capability_space_at_path(caller, arg_value, &path)
-                    && !matches!(space, AddressSpaceKind::Memory)
+                    && (!matches!(space, AddressSpaceKind::Memory)
+                        || (path.is_empty() && preserve_root))
                 {
                     overrides[param_idx].push((path, space));
                 }
@@ -1915,6 +2059,12 @@ impl<'db> Monomorphizer<'db> {
         }
 
         let mut overrides = vec![None; effect_count];
+        let template_effect_spaces: Vec<_> = template
+            .body
+            .effect_param_locals
+            .iter()
+            .map(|local| template.body.local(*local).address_space)
+            .collect();
         for (idx, &effect_arg_value) in call.effect_args.iter().take(effect_count).enumerate() {
             let Some(space) = crate::ir::try_value_address_space_in(
                 &caller.body.values,
@@ -1923,7 +2073,12 @@ impl<'db> Monomorphizer<'db> {
             ) else {
                 continue;
             };
-            if !matches!(space, AddressSpaceKind::Memory) {
+            if template_effect_spaces
+                .get(idx)
+                .copied()
+                .unwrap_or(AddressSpaceKind::Memory)
+                != space
+            {
                 overrides[idx] = Some(space);
             }
         }
@@ -1985,17 +2140,23 @@ impl<'db> Monomorphizer<'db> {
                 FxHashMap::default();
             let mut conflict = None;
             for (path, space) in entries.iter().filter_map(|(path, space)| {
-                (!matches!(space, AddressSpaceKind::Memory)).then_some((path.clone(), *space))
+                (!matches!(space, AddressSpaceKind::Memory) || path.is_empty())
+                    .then_some((path.clone(), *space))
             }) {
                 let Some(existing) = merged.get(&path).copied() else {
                     merged.insert(path, space);
                     continue;
                 };
-                if existing == space {
-                    continue;
-                }
-                conflict = Some((path, existing, space));
-                break;
+                let Some(merged_space) = (match (existing, space) {
+                    (lhs, rhs) if lhs == rhs => Some(lhs),
+                    (AddressSpaceKind::Memory, rhs) => Some(rhs),
+                    (lhs, AddressSpaceKind::Memory) => Some(lhs),
+                    _ => None,
+                }) else {
+                    conflict = Some((path, existing, space));
+                    break;
+                };
+                merged.insert(path, merged_space);
             }
             normalized[idx] = if let Some((path, existing, incoming)) = conflict {
                 let current = self
@@ -2005,7 +2166,7 @@ impl<'db> Monomorphizer<'db> {
                 self.defer_error(MirLowerError::Unsupported {
                     func_name: current.to_owned(),
                     message: format!(
-                        "conflicting non-memory capability-space override for param {idx} path `{:?}`: `{:?}` vs `{:?}`",
+                        "conflicting capability-space override for param {idx} path `{:?}`: `{:?}` vs `{:?}`",
                         path, existing, incoming
                     ),
                 });
@@ -2022,6 +2183,58 @@ impl<'db> Monomorphizer<'db> {
         } else {
             normalized
         }
+    }
+
+    fn should_preserve_root_param_override(
+        &self,
+        caller: &MirFunction<'db>,
+        caller_core: &CoreLib<'db>,
+        arg_value: ValueId,
+        callee_core: &CoreLib<'db>,
+        param_ty: TyId<'db>,
+    ) -> bool {
+        let arg_shape = crate::repr::runtime_shape_for_value(
+            self.db,
+            caller_core,
+            &caller.body.values,
+            &caller.body.locals,
+            arg_value,
+        );
+        if matches!(arg_shape, Some(RuntimeShape::MemoryPtr { .. })) {
+            return true;
+        }
+
+        let Some(arg_space) = crate::ir::try_value_address_space_in(
+            &caller.body.values,
+            &caller.body.locals,
+            arg_value,
+        ) else {
+            return false;
+        };
+        if matches!(arg_space, AddressSpaceKind::Memory) {
+            return false;
+        }
+
+        let default_shape = crate::repr::runtime_shape_for_ty(
+            self.db,
+            callee_core,
+            param_ty,
+            AddressSpaceKind::Memory,
+        );
+        let specialized_shape =
+            crate::repr::runtime_shape_for_ty(self.db, callee_core, param_ty, arg_space);
+        !matches!(
+            specialized_shape,
+            RuntimeShape::Erased | RuntimeShape::Word(_)
+        ) && specialized_shape != default_shape
+    }
+
+    fn param_capability_space_paths_for_ty(
+        &self,
+        core: &CoreLib<'db>,
+        param_ty: TyId<'db>,
+    ) -> Vec<crate::MirProjectionPath<'db>> {
+        pointer_leaf_paths_for_ty(self.db, core, param_ty)
     }
 }
 
@@ -2086,19 +2299,18 @@ fn canonicalize_receiver_space(
     }
 }
 
-fn capability_root_tracks_aggregate_storage<'db>(
-    db: &'db dyn HirAnalysisDb,
-    core: &CoreLib<'db>,
-    ty: TyId<'db>,
-) -> bool {
-    ty.as_capability(db).is_some_and(|(_, inner)| {
-        matches!(
-            crate::repr::repr_kind_for_ty(db, core, inner),
-            crate::repr::ReprKind::Ref
-        ) && !pointer_leaf_paths_for_ty(db, core, ty)
-            .iter()
-            .any(crate::MirProjectionPath::is_empty)
-    })
+fn raw_effect_space_for_provider_ty(
+    db: &dyn HirAnalysisDb,
+    scope: ScopeId<'_>,
+    provider_ty: TyId<'_>,
+) -> Option<AddressSpaceKind> {
+    let raw_mem = resolve_lib_type_path(db, scope, "std::evm::RawMem")?;
+    if provider_ty == raw_mem {
+        return Some(AddressSpaceKind::Memory);
+    }
+
+    let raw_storage = resolve_lib_type_path(db, scope, "std::evm::RawStorage")?;
+    (provider_ty == raw_storage).then_some(AddressSpaceKind::Storage)
 }
 
 fn effect_param_space_suffix(spaces: &[Option<AddressSpaceKind>]) -> String {
@@ -2197,7 +2409,21 @@ mod tests {
             panic!("unexpected error kind");
         };
         assert_eq!(func_name, "test_symbol");
-        assert!(message.contains("conflicting non-memory capability-space override"));
+        assert!(message.contains("conflicting capability-space override"));
+    }
+
+    #[test]
+    fn root_memory_param_overrides_are_preserved() {
+        let db = DriverDataBase::default();
+        let monomorphizer = Monomorphizer::new(&db, Vec::new());
+
+        let root = crate::MirProjectionPath::new();
+        let overrides = vec![vec![(root.clone(), AddressSpaceKind::Memory)]];
+
+        assert_eq!(
+            monomorphizer.normalize_param_capability_space_overrides_for_len(1, &overrides),
+            overrides
+        );
     }
 
     #[test]
@@ -2286,6 +2512,7 @@ pub contract C {
                 pair_ty,
                 AddressSpaceKind::Memory,
             ),
+            const_backing: crate::ir::LocalConstBacking::Unknown,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         assert!(matches!(
@@ -2328,6 +2555,124 @@ pub contract C {
         assert_eq!(
             local.place_root_layout,
             crate::ir::LocalPlaceRootLayout::Direct
+        );
+    }
+
+    #[test]
+    fn synthetic_memory_root_overrides_preserve_aggregate_memory_ptr_runtime_shape() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///synthetic_memory_root_override.fe").unwrap();
+        let src = r#"
+struct Pair {
+    left: u256,
+    right: u256,
+}
+
+fn takes_pair(pair: own Pair) -> u256 {
+    pair.left
+}
+
+pub contract C {
+    init() {}
+}
+"#;
+
+        let file = db.workspace().touch(&mut db, url, Some(src.to_owned()));
+        let top_mod = db.top_mod(file);
+        let module = crate::lower::lower_module(&db, top_mod).expect("lowered MIR");
+        let pair_func = module
+            .functions
+            .iter()
+            .find(|func| {
+                matches!(func.origin, crate::ir::MirFunctionOrigin::Hir(_))
+                    && func.symbol_name.starts_with("takes_pair")
+            })
+            .expect("takes_pair function");
+        let pair_ty = pair_func.body.locals[pair_func.body.param_locals[0].index()].ty;
+        let synthetic_origin = module
+            .functions
+            .iter()
+            .find_map(|func| match func.origin {
+                crate::ir::MirFunctionOrigin::Synthetic(id) => {
+                    Some(crate::ir::MirFunctionOrigin::Synthetic(id))
+                }
+                crate::ir::MirFunctionOrigin::Hir(_) => None,
+            })
+            .expect("synthetic function origin");
+
+        let monomorphizer = Monomorphizer::new(&db, Vec::new());
+        let core = monomorphizer.core_for_origin(synthetic_origin);
+        let mut body = crate::ir::MirBody::new();
+        let local = body.alloc_local(crate::ir::LocalData {
+            name: "pair".to_owned(),
+            ty: pair_ty,
+            is_mut: false,
+            source: crate::ir::SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Memory,
+            pointer_leaf_infos: pointer_leaf_infos_for_ty_with_default(
+                &db,
+                &core,
+                pair_ty,
+                AddressSpaceKind::Memory,
+            ),
+            place_root_layout: crate::repr::declared_local_place_root_layout(
+                &db,
+                &core,
+                pair_ty,
+                AddressSpaceKind::Memory,
+            ),
+            const_backing: crate::ir::LocalConstBacking::Unknown,
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
+        });
+        body.param_locals.push(local);
+        let mut instance = MirFunction {
+            origin: synthetic_origin,
+            body,
+            typed_body: None,
+            generic_args: Vec::new(),
+            ret_ty: pair_ty,
+            returns_value: true,
+            runtime_abi: crate::ir::RuntimeAbi {
+                value_params: vec![true],
+                effect_params: Vec::new(),
+                effect_param_provider_tys: Vec::new(),
+            },
+            runtime_return_shape: crate::ir::RuntimeShape::Unresolved,
+            runtime_return_pointer_leaf_infos: Vec::new(),
+            contract_function: None,
+            inline_hint: None,
+            symbol_name: "synthetic_memory_root_override_test".to_owned(),
+            symbol_source: crate::ir::SymbolSource::Internal,
+            receiver_space: None,
+            defer_root: false,
+        };
+
+        monomorphizer.apply_synthetic_param_capability_space_overrides(
+            &mut instance,
+            &[vec![(
+                crate::MirProjectionPath::new(),
+                AddressSpaceKind::Memory,
+            )]],
+        );
+
+        let local = &instance.body.locals[local.index()];
+        assert_eq!(
+            local.place_root_layout,
+            crate::ir::LocalPlaceRootLayout::MemorySlot
+        );
+        assert!(
+            local
+                .pointer_leaf_infos
+                .iter()
+                .any(|(path, info)| path.is_empty()
+                    && info.address_space == AddressSpaceKind::Memory
+                    && info.target_ty == Some(pair_ty))
+        );
+        assert_eq!(
+            crate::repr::runtime_shape_for_local(&db, &core, local),
+            crate::ir::RuntimeShape::MemoryPtr {
+                target_ty: Some(pair_ty),
+            }
         );
     }
 
@@ -2538,6 +2883,206 @@ fn smoke() uses (evm: mut Evm) {
     }
 
     #[test]
+    fn test_entrypoints_with_type_key_effects_default_to_memory_providers() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///test_root_seed_type_key_effects.fe").unwrap();
+        let src = r#"
+type Words = [u256; 4]
+
+fn write_effect(idx: usize, value: u256) uses (words: mut Words) {
+    words[idx] = value
+}
+
+#[test]
+fn smoke() uses (words: mut Words) {
+    write_effect(0, 7)
+}
+"#;
+
+        let file = db.workspace().touch(&mut db, url, Some(src.to_owned()));
+        let top_mod = db.top_mod(file);
+        let module = crate::lower::lower_module(&db, top_mod).expect("lowered MIR");
+
+        let symbols = module
+            .functions
+            .iter()
+            .map(|func| func.symbol_name.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            symbols
+                .iter()
+                .any(|name| name.starts_with("smoke__MemPtr__u256__4__")),
+            "expected #[test] type-key effect entrypoint to root-seed a memory provider: {symbols:?}",
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|name| name.starts_with("write_effect__MemPtr__u256__4__")),
+            "expected helper to specialize to a memory provider: {symbols:?}",
+        );
+        assert!(
+            !symbols.iter().any(|name| name.contains("StorPtr__u256__4")),
+            "type-key free-function effects must not default to storage providers: {symbols:?}",
+        );
+    }
+
+    #[test]
+    fn explicit_mem_ptr_effect_args_keep_memory_specializations() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///explicit_raw_boundaries_effect_override.fe").unwrap();
+        let file = db.workspace().touch(
+            &mut db,
+            url,
+            Some(include_str!("../../codegen/tests/fixtures/explicit_raw_boundaries.fe").into()),
+        );
+        let top_mod = db.top_mod(file);
+        let module = crate::lower::lower_module(&db, top_mod).expect("lowered MIR");
+
+        let raw_store_symbols = module
+            .functions
+            .iter()
+            .map(|func| func.symbol_name.as_str())
+            .filter(|name| name.starts_with("raw_store"))
+            .collect::<Vec<_>>();
+
+        assert!(
+            raw_store_symbols
+                .iter()
+                .any(|name| name.contains("MemPtr_Data__Evm")),
+            "expected a MemPtr-specialized raw_store instance, got {raw_store_symbols:?}",
+        );
+        assert!(
+            !raw_store_symbols
+                .iter()
+                .any(|name| name.starts_with("raw_store__StorPtr_Data__Evm")),
+            "legacy storage-specialized raw_store instance should be gone: {raw_store_symbols:?}",
+        );
+    }
+
+    #[test]
+    fn by_ref_storage_effect_providers_keep_storage_specializations() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///by_ref_trait_provider_storage_bug.fe").unwrap();
+        let file = db.workspace().touch(
+            &mut db,
+            url,
+            Some(
+                include_str!("../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe")
+                    .into(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let module = crate::lower::lower_module(&db, top_mod).expect("lowered MIR");
+
+        let symbols = module
+            .functions
+            .iter()
+            .map(|func| func.symbol_name.as_str())
+            .collect::<Vec<_>>();
+
+        let recv = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "__ByRefTraitProviderStorageBug_recv_0_0")
+            .expect("expected monomorphized recv instance");
+        let use_ctx_call = recv
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                crate::MirInst::Assign {
+                    rvalue: crate::Rvalue::Call(call),
+                    ..
+                } if call
+                    .resolved_name
+                    .as_deref()
+                    .is_some_and(|name| name.starts_with("use_ctx")) =>
+                {
+                    Some(call)
+                }
+                _ => None,
+            })
+            .expect("expected recv to call use_ctx");
+        let effect_arg_spaces = use_ctx_call
+            .effect_args
+            .iter()
+            .map(|value| {
+                crate::ir::try_value_address_space_in(&recv.body.values, &recv.body.locals, *value)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            effect_arg_spaces,
+            vec![Some(AddressSpaceKind::Storage)],
+            "expected recv to forward ctx as a storage effect arg, got {effect_arg_spaces:?}",
+        );
+
+        let use_ctx = module
+            .functions
+            .iter()
+            .find(|func| {
+                func.symbol_name.starts_with("use_ctx")
+                    && func.symbol_name.contains("Pair_h956dff41e88ee341")
+            })
+            .expect("expected instantiated use_ctx");
+        let effect_local = use_ctx.body.effect_param_locals[0];
+        assert_eq!(
+            use_ctx.body.local(effect_local).address_space,
+            AddressSpaceKind::Storage,
+            "expected use_ctx effect local to stay storage-backed",
+        );
+        let pair_sum_call = use_ctx
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                crate::MirInst::Assign {
+                    rvalue: crate::Rvalue::Call(call),
+                    ..
+                } if call
+                    .resolved_name
+                    .as_deref()
+                    .is_some_and(|name| name.starts_with("pair_h956dff41e88ee341")) =>
+                {
+                    Some(call)
+                }
+                _ => None,
+            })
+            .expect("expected use_ctx to call pair::sum");
+        let arg_spaces = pair_sum_call
+            .args
+            .iter()
+            .map(|value| {
+                crate::ir::try_value_address_space_in(
+                    &use_ctx.body.values,
+                    &use_ctx.body.locals,
+                    *value,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            arg_spaces,
+            vec![Some(AddressSpaceKind::Storage)],
+            "expected use_ctx to pass a storage-backed receiver, got {arg_spaces:?}",
+        );
+        assert!(
+            use_ctx.symbol_name.contains("eff0_stor"),
+            "expected storage-specialized use_ctx symbol, got `{}`",
+            use_ctx.symbol_name,
+        );
+        assert!(
+            pair_sum_call
+                .resolved_name
+                .as_deref()
+                .is_some_and(|name| name.ends_with("_stor")),
+            "expected storage-specialized impl call target, got {symbols:?}",
+        );
+    }
+
+    #[test]
     fn deferred_dependency_create2_reaches_synthetic_contract_edges() {
         let mut db = DriverDataBase::default();
         let nonce = SystemTime::now()
@@ -2620,12 +3165,233 @@ pub contract Greeter {
 
         assert!(
             symbols.contains(&"__provider__Greeter_init")
-                && symbols.contains(&"__provider__Greeter_init_contract")
                 && symbols.contains(&"__provider__Greeter_runtime")
-                && symbols.contains(&"__provider__Greeter_recv_0_0")
                 && symbols.contains(&"__provider__Greeter_init_code_offset")
-                && symbols.contains(&"__provider__Greeter_init_code_len"),
+                && symbols.contains(&"__provider__Greeter_init_code_len")
+                && symbols
+                    .iter()
+                    .any(|name| name.starts_with("__provider__Greeter_init_contract"))
+                && symbols
+                    .iter()
+                    .any(|name| name.starts_with("__provider__Greeter_recv_0_0")),
             "expected typed synthetic call/code-region edges to instantiate dependency contract templates, got: {symbols:?}",
+        );
+    }
+
+    #[test]
+    fn monomorphized_code_backed_take_wrappers_keep_nested_base_leaf_metadata() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse(
+            "file:///monomorphized_code_backed_take_wrappers_keep_nested_base_leaf_metadata.fe",
+        )
+        .unwrap();
+        let file = db.workspace().touch(
+            &mut db,
+            url,
+            Some(
+                include_str!(
+                    "../../fe/tests/fixtures/fe_test/view_param_local_ref_take_reverse.fe"
+                )
+                .to_owned(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let mut templates = Vec::new();
+        for func in top_mod.all_funcs(&db).iter().copied() {
+            if func.body(&db).is_none() {
+                continue;
+            }
+            let (diags, typed_body) = check_func_body(&db, func);
+            assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+            templates.push(
+                crate::lower::lower_function(
+                    &db,
+                    func,
+                    typed_body.clone(),
+                    None,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .expect("function should lower"),
+            );
+        }
+
+        let functions =
+            monomorphize_functions(&db, templates).expect("functions should monomorphize");
+        let sum_first4 = functions
+            .iter()
+            .find(|func| func.symbol_name == "sum_first4_arg0_root_code")
+            .expect("expected code-specialized sum_first4 helper");
+        let (head_local, take_call) = sum_first4
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                crate::MirInst::Assign {
+                    dest: Some(local),
+                    rvalue: crate::Rvalue::Call(call),
+                    ..
+                } if call
+                    .resolved_name
+                    .as_deref()
+                    .is_some_and(|name| name.contains("take_u256_arg1_root_code___u256__8")) =>
+                {
+                    Some((*local, call))
+                }
+                _ => None,
+            })
+            .expect("expected take_u256 call result local");
+        let core = CoreLib::new(&db, top_mod.scope());
+        let source_infos = crate::repr::pointer_leaf_infos_for_value(
+            &db,
+            &core,
+            &sum_first4.body.values,
+            &sum_first4.body.locals,
+            take_call.args[1],
+        );
+        let forwarded_infos = crate::lower::call_return_pointer_leaf_infos(
+            &db,
+            &core,
+            &sum_first4.body.values,
+            &sum_first4.body.locals,
+            take_call,
+            sum_first4.body.local(head_local).ty,
+        );
+
+        assert_eq!(
+            sum_first4
+                .body
+                .local(head_local)
+                .pointer_leaf_infos
+                .iter()
+                .find_map(|(path, info)| {
+                    (path
+                        == &crate::MirProjectionPath::from_projection(crate::MirProjection::Field(
+                            1,
+                        )))
+                        .then_some(info.address_space)
+                }),
+            Some(AddressSpaceKind::Code),
+            "monomorphized take wrapper results should already preserve the code-backed base field leaf; head_local={:?}; arg_value={:?}; arg_origin={:?}; arg_ptr={:?}; param_local={:?}; source_infos={source_infos:?}; forwarded_infos={forwarded_infos:?}; take_call={take_call:?}",
+            sum_first4.body.local(head_local),
+            take_call.args[1],
+            sum_first4.body.value(take_call.args[1]).origin,
+            sum_first4.body.value_pointer_info(take_call.args[1]),
+            sum_first4.body.local(sum_first4.body.param_locals[0]),
+        );
+    }
+
+    #[test]
+    fn code_backed_take_array_calls_compute_nested_base_param_overrides() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse(
+            "file:///code_backed_take_array_calls_compute_nested_base_param_overrides.fe",
+        )
+        .unwrap();
+        let file = db.workspace().touch(
+            &mut db,
+            url,
+            Some(
+                include_str!(
+                    "../../fe/tests/fixtures/fe_test/view_param_local_ref_take_reverse.fe"
+                )
+                .to_owned(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let mut templates = Vec::new();
+        for func in top_mod.all_funcs(&db).iter().copied() {
+            if func.body(&db).is_none() {
+                continue;
+            }
+            let (diags, typed_body) = check_func_body(&db, func);
+            assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+            templates.push(
+                crate::lower::lower_function(
+                    &db,
+                    func,
+                    typed_body.clone(),
+                    None,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .expect("function should lower"),
+            );
+        }
+
+        let mut monomorphizer = Monomorphizer::new(&db, templates);
+        monomorphizer.seed_roots();
+        monomorphizer
+            .process_worklist()
+            .expect("monomorphization should succeed");
+        let sum_first4 = monomorphizer
+            .instances
+            .iter()
+            .find(|func| func.symbol_name == "sum_first4_arg0_root_code")
+            .expect("expected code-specialized sum_first4 helper");
+        let take_get_call = sum_first4
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                crate::MirInst::Assign {
+                    rvalue: crate::Rvalue::Call(call),
+                    ..
+                } if call
+                    .resolved_name
+                    .as_deref()
+                    .is_some_and(|name| name.contains("take_i__t__") && name.contains("get")) =>
+                {
+                    Some(call)
+                }
+                _ => None,
+            })
+            .expect("expected Take::get call in sum_first4");
+
+        let solve_cx = TraitSolveCx::new(&db, top_mod.scope());
+        let (target, args) = monomorphizer
+            .resolve_call_target(solve_cx, take_get_call)
+            .expect("take get call should resolve");
+        let overrides = monomorphizer.call_param_capability_space_overrides(
+            sum_first4,
+            take_get_call,
+            target,
+            &args,
+            canonicalize_receiver_space(take_get_call.receiver_space),
+        );
+
+        assert_eq!(
+            overrides.first(),
+            Some(&vec![(
+                crate::MirProjectionPath::from_projection(crate::MirProjection::Field(1)),
+                AddressSpaceKind::Code,
+            )]),
+            "code-backed Take<[u256; 8]> calls should preserve `.base` code-space param overrides; caller_arg={:?}; arg_local={:?}; arg_infos={:?}; call={take_get_call:?}; overrides={overrides:?}",
+            take_get_call
+                .args
+                .first()
+                .map(|arg| sum_first4.body.value(*arg)),
+            take_get_call
+                .args
+                .first()
+                .and_then(|arg| match sum_first4.body.value(*arg).origin {
+                    crate::ValueOrigin::Local(local) => Some(sum_first4.body.local(local)),
+                    _ => None,
+                }),
+            take_get_call
+                .args
+                .first()
+                .map(|arg| crate::repr::pointer_leaf_infos_for_value(
+                    &db,
+                    &CoreLib::new(&db, top_mod.scope()),
+                    &sum_first4.body.values,
+                    &sum_first4.body.locals,
+                    *arg,
+                )),
         );
     }
 }

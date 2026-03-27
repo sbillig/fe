@@ -45,6 +45,8 @@ use crate::analysis::{
 };
 use crate::hir_def::CallableDef;
 
+pub const MAX_INLINE_STRING_BYTES: usize = 31;
+
 #[salsa::interned]
 #[derive(Debug)]
 pub struct TyId<'db> {
@@ -343,7 +345,7 @@ impl<'db> TyId<'db> {
         Self::new(db, TyData::Never)
     }
 
-    pub(super) fn const_ty(db: &'db dyn HirAnalysisDb, const_ty: ConstTyId<'db>) -> Self {
+    pub(crate) fn const_ty(db: &'db dyn HirAnalysisDb, const_ty: ConstTyId<'db>) -> Self {
         Self::new(db, TyData::ConstTy(const_ty))
     }
 
@@ -692,6 +694,19 @@ impl<'db> TyId<'db> {
                 },
             );
         };
+
+        if lhs.base_ty(db).is_string(db)
+            && let Some(given) = string_capacity_from_const_ty(db, rhs)
+            && given > MAX_INLINE_STRING_BYTES
+        {
+            return Self::invalid(
+                db,
+                InvalidCause::StringTooLarge {
+                    max: MAX_INLINE_STRING_BYTES,
+                    given,
+                },
+            );
+        }
 
         Self::new(db, TyData::TyApp(lhs, rhs))
     }
@@ -1075,6 +1090,11 @@ pub enum InvalidCause<'db> {
         given: usize,
     },
 
+    StringTooLarge {
+        max: usize,
+        given: usize,
+    },
+
     InvalidConstParamTy,
 
     RecursiveConstParamTy,
@@ -1165,6 +1185,9 @@ impl InvalidCause<'_> {
                 expected.pretty_print(db),
                 given.pretty_print(db)
             ),
+            InvalidCause::StringTooLarge { max, given } => {
+                format!("StringTooLarge {{ max: {max}, given: {given} }}")
+            }
             InvalidCause::ConstTyExpected { expected } => {
                 format!("ConstTyExpected({})", expected.pretty_print(db))
             }
@@ -1206,6 +1229,16 @@ impl InvalidCause<'_> {
             }
         }
     }
+}
+
+fn string_capacity_from_const_ty(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
+    let TyData::ConstTy(const_ty) = ty.data(db) else {
+        return None;
+    };
+    let ConstTyData::Evaluated(EvaluatedConstTy::LitInt(value), _) = const_ty.data(db) else {
+        return None;
+    };
+    value.data(db).try_into().ok()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

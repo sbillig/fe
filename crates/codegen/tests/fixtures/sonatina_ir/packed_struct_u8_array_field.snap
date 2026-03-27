@@ -11,42 +11,15 @@ global private const [i8; 2] $__fe_const_data_0 = [1, 2];
 
 func private %packed_field_offset() -> i256 {
     block0:
-        v0.objref<[i8; 2]> = obj.alloc [i8; 2];
-        v1.i256 = sym_addr $__fe_const_data_0;
-        v3.*i256 = alloca i256;
-        v4.i256 = ptr_to_int v3 i256;
-        evm_code_copy v4 v1 1.i256;
-        v5.i256 = mload v4 i256;
-        v7.i256 = evm_byte 0.i256 v5;
-        v8.i8 = trunc v7 i8;
-        v9.objref<i8> = obj.index v0 0.i256;
-        obj.store v9 v8;
-        v10.i256 = sym_addr $__fe_const_data_0;
-        v11.i256 = add v10 1.i256;
-        v12.*i256 = alloca i256;
-        v13.i256 = ptr_to_int v12 i256;
-        evm_code_copy v13 v11 1.i256;
-        v14.i256 = mload v13 i256;
-        v15.i256 = evm_byte 0.i256 v14;
-        v16.i8 = trunc v15 i8;
-        v17.objref<i8> = obj.index v0 1.i256;
-        obj.store v17 v16;
-        v18.objref<@__fe_obj_Pair_0> = obj.alloc @__fe_obj_Pair_0;
-        v19.objref<i8> = obj.index v0 0.i256;
-        v20.i8 = obj.load v19;
-        v21.objref<[i8; 2]> = obj.proj v18 0.i256;
-        v22.objref<i8> = obj.index v21 0.i256;
-        obj.store v22 v20;
-        v23.objref<i8> = obj.index v0 1.i256;
-        v24.i8 = obj.load v23;
-        v25.objref<[i8; 2]> = obj.proj v18 0.i256;
-        v26.objref<i8> = obj.index v25 1.i256;
-        obj.store v26 v24;
-        v28.objref<i256> = obj.proj v18 1.i256;
-        obj.store v28 42.i256;
-        v29.objref<i256> = obj.proj v18 1.i256;
-        v30.i256 = obj.load v29;
-        return v30;
+        v0.constref<[i8; 2]> = const.ref $__fe_const_data_0;
+        v1.objref<@__fe_obj_Pair_0> = obj.alloc @__fe_obj_Pair_0;
+        v3.objref<[i8; 2]> = obj.proj v1 0.i256;
+        obj.init.const v3 v0;
+        v6.objref<i256> = obj.proj v1 1.i256;
+        obj.store v6 42.i256;
+        v7.objref<i256> = obj.proj v1 1.i256;
+        v8.i256 = obj.load v7;
+        return v8;
 }
 
 func private %__fe_sonatina_entry() {

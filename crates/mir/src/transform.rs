@@ -1,15 +1,17 @@
 use hir::analysis::HirAnalysisDb;
 use hir::analysis::ty::pattern_ir::ConstructorKind;
+use hir::analysis::ty::ty_check::{ReturnProvenance, check_func_body};
 use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData, TyId};
-use hir::hir_def::EnumVariant;
+use hir::hir_def::{CallableDef, EnumVariant};
 use hir::projection::{IndexSource, Projection};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::CoreLib;
 use crate::ir::{
-    AddressSpaceKind, CallOrigin, LocalData, LocalId, MirBody, MirFunction, MirInst, MirModule,
-    MirProjectionPath, Place, PointerInfo, RuntimeAbi, RuntimeShape, Rvalue, SourceInfoId,
-    TerminatingCall, Terminator, ValueData, ValueId, ValueOrigin, ValueRepr,
+    AddressSpaceKind, CallOrigin, CallTargetRef, LocalData, LocalId, LocalPlaceRootLayout, MirBody,
+    MirFunction, MirInst, MirModule, MirProjectionPath, Place, PointerInfo, RuntimeAbi,
+    RuntimeShape, Rvalue, SourceInfoId, TerminatingCall, Terminator, ValueData, ValueId,
+    ValueOrigin, ValueRepr,
 };
 use crate::layout;
 
@@ -1100,6 +1102,25 @@ fn function_core_lib<'db>(db: &'db dyn HirAnalysisDb, func: &MirFunction<'db>) -
     CoreLib::new(db, scope)
 }
 
+fn runtime_return_shape_seed_for_func<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: &MirFunction<'db>,
+    core: &CoreLib<'db>,
+) -> RuntimeShape<'db> {
+    if let crate::ir::MirFunctionOrigin::Hir(hir_func) = func.origin
+        && let (diags, typed_body) = check_func_body(db, hir_func)
+        && diags.is_empty()
+        && matches!(
+            typed_body.return_provenance(db),
+            ReturnProvenance::ForwardedParams(ref indices) if !indices.is_empty()
+        )
+    {
+        return RuntimeShape::Unresolved;
+    }
+
+    crate::repr::runtime_return_shape_seed_for_ty(db, core, func.ret_ty)
+}
+
 fn merge_runtime_shapes<'db>(
     existing: RuntimeShape<'db>,
     next: RuntimeShape<'db>,
@@ -1134,6 +1155,16 @@ fn merge_runtime_shapes<'db>(
             target_ty: lhs_target,
         }),
         (
+            RuntimeShape::ConstRef {
+                target_ty: lhs_target,
+            },
+            RuntimeShape::ConstRef {
+                target_ty: rhs_target,
+            },
+        ) if lhs_target == rhs_target => Some(RuntimeShape::ConstRef {
+            target_ty: lhs_target,
+        }),
+        (
             RuntimeShape::MemoryPtr {
                 target_ty: lhs_target,
             },
@@ -1163,6 +1194,21 @@ fn merge_runtime_shapes<'db>(
         | (RuntimeShape::AddressWord(info), RuntimeShape::Word(crate::ir::RuntimeWordKind::I256)) => {
             Some(RuntimeShape::AddressWord(info))
         }
+        (RuntimeShape::MemoryPtr { target_ty }, RuntimeShape::AddressWord(info))
+        | (RuntimeShape::AddressWord(info), RuntimeShape::MemoryPtr { target_ty })
+            if info.address_space != AddressSpaceKind::Memory
+                && match (target_ty, info.target_ty) {
+                    (Some(memory_target_ty), Some(address_target_ty)) => {
+                        memory_target_ty == address_target_ty
+                    }
+                    _ => true,
+                } =>
+        {
+            Some(RuntimeShape::AddressWord(crate::ir::PointerInfo {
+                address_space: info.address_space,
+                target_ty: info.target_ty.or(target_ty),
+            }))
+        }
         _ => None,
     }
 }
@@ -1174,6 +1220,22 @@ fn merge_runtime_shapes_in_context<'db>(
     next: RuntimeShape<'db>,
 ) -> Option<RuntimeShape<'db>> {
     merge_runtime_shapes(existing, next).or_else(|| match (existing, next) {
+        (
+            RuntimeShape::ConstRef { target_ty },
+            RuntimeShape::ObjectRef {
+                target_ty: object_target_ty,
+            },
+        )
+        | (
+            RuntimeShape::ObjectRef {
+                target_ty: object_target_ty,
+            },
+            RuntimeShape::ConstRef { target_ty },
+        ) => (crate::repr::object_layout_ty(db, core, target_ty) == object_target_ty).then_some(
+            RuntimeShape::ObjectRef {
+                target_ty: object_target_ty,
+            },
+        ),
         (
             RuntimeShape::ObjectRef {
                 target_ty: lhs_target,
@@ -1205,9 +1267,70 @@ fn merge_runtime_shapes_in_context<'db>(
                     object_target_ty,
                 )
             })
-            .map(|_| RuntimeShape::ObjectRef {
-                target_ty: object_target_ty,
+            .map(|target_ty| RuntimeShape::MemoryPtr {
+                target_ty: Some(target_ty),
             }),
+        (
+            RuntimeShape::MemoryPtr {
+                target_ty: Some(memory_target_ty),
+            },
+            RuntimeShape::ConstRef {
+                target_ty: const_target_ty,
+            },
+        )
+        | (
+            RuntimeShape::ConstRef {
+                target_ty: const_target_ty,
+            },
+            RuntimeShape::MemoryPtr {
+                target_ty: Some(memory_target_ty),
+            },
+        ) => match crate::repr::runtime_shape_for_ty(
+            db,
+            core,
+            memory_target_ty,
+            AddressSpaceKind::Code,
+        ) {
+            RuntimeShape::ConstRef {
+                target_ty: memory_const_target_ty,
+            } if crate::repr::runtime_ty_matches(db, memory_const_target_ty, const_target_ty) => {
+                Some(RuntimeShape::ConstRef {
+                    target_ty: memory_const_target_ty,
+                })
+            }
+            _ => None,
+        },
+        (
+            RuntimeShape::MemoryPtr {
+                target_ty: Some(memory_target_ty),
+            },
+            RuntimeShape::AddressWord(info),
+        )
+        | (
+            RuntimeShape::AddressWord(info),
+            RuntimeShape::MemoryPtr {
+                target_ty: Some(memory_target_ty),
+            },
+        ) if info.address_space != AddressSpaceKind::Memory => {
+            let expected_info = crate::repr::runtime_pointer_info_for_ty(
+                db,
+                core,
+                memory_target_ty,
+                info.address_space,
+            );
+            let expected_target_ty = expected_info.and_then(|info| info.target_ty);
+            let targets_match = match (expected_target_ty, info.target_ty) {
+                (Some(expected_target_ty), Some(actual_target_ty)) => {
+                    crate::repr::runtime_ty_matches(db, expected_target_ty, actual_target_ty)
+                }
+                (None, None) => true,
+                _ => false,
+            };
+            targets_match.then_some(RuntimeShape::AddressWord(crate::ir::PointerInfo {
+                address_space: info.address_space,
+                target_ty: expected_target_ty.or(info.target_ty),
+            }))
+        }
         _ => None,
     })
 }
@@ -1300,25 +1423,207 @@ impl<'db> LocalRuntimeLayoutState<'db> {
     }
 }
 
+fn sync_local_snapshot<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    current_locals: &mut [LocalData<'db>],
+    local_layouts: &LocalRuntimeLayoutState<'db>,
+    local: LocalId,
+) {
+    current_locals[local.index()].runtime_shape = local_layouts.shape(local);
+    current_locals[local.index()].pointer_leaf_infos =
+        local_layouts.pointer_leaf_infos(local).to_vec();
+    sync_local_runtime_root_metadata(db, core, &mut current_locals[local.index()]);
+}
+
+fn locals_snapshot_from_layouts<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    func: &MirFunction<'db>,
+    local_layouts: &LocalRuntimeLayoutState<'db>,
+) -> Vec<LocalData<'db>> {
+    let mut locals = func.body.locals.clone();
+    for local_idx in 0..locals.len() {
+        sync_local_snapshot(
+            db,
+            core,
+            &mut locals,
+            local_layouts,
+            LocalId(local_idx as u32),
+        );
+    }
+    locals
+}
+
 fn merge_pointer_leaf_infos<'db>(
+    db: &'db dyn HirAnalysisDb,
     existing: &PointerLeafInfoSet<'db>,
     next: &PointerLeafInfoSet<'db>,
 ) -> Option<PointerLeafInfoSet<'db>> {
-    crate::capability_space::normalize_pointer_leaf_info_entries(
+    crate::capability_space::normalize_pointer_leaf_info_entries_in_context(
+        db,
         existing.iter().cloned().chain(next.iter().cloned()),
     )
     .ok()
 }
 
+fn replace_pointer_leaf_infos<'db>(
+    db: &'db dyn HirAnalysisDb,
+    existing: &PointerLeafInfoSet<'db>,
+    next: &PointerLeafInfoSet<'db>,
+) -> Option<PointerLeafInfoSet<'db>> {
+    let next_paths: FxHashSet<_> = next.iter().map(|(path, _)| path.clone()).collect();
+    merge_pointer_leaf_infos(
+        db,
+        &existing
+            .iter()
+            .filter(|(path, _)| !next_paths.contains(path))
+            .cloned()
+            .collect(),
+        next,
+    )
+}
+
+fn retag_pointer_leaf_infos_for_local<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    local: &LocalData<'db>,
+    infos: &PointerLeafInfoSet<'db>,
+) -> PointerLeafInfoSet<'db> {
+    if !matches!(local.place_root_layout, LocalPlaceRootLayout::Direct) {
+        return infos.to_vec();
+    }
+    infos
+        .iter()
+        .filter_map(|(path, info)| {
+            if !path.is_empty() {
+                return Some((path.clone(), *info));
+            }
+            crate::capability_space::pointer_leaf_infos_for_ty_with_default(
+                db,
+                core,
+                local.ty,
+                info.address_space,
+            )
+            .iter()
+            .find_map(|(typed_path, typed_info)| (typed_path == path).then_some(*typed_info))
+            .or(Some(*info))
+            .map(|typed_info| (path.clone(), typed_info))
+        })
+        .collect()
+}
+
+fn direct_local_root_pointer_shape<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    local: &LocalData<'db>,
+    infos: &PointerLeafInfoSet<'db>,
+) -> Option<RuntimeShape<'db>> {
+    if !matches!(local.place_root_layout, LocalPlaceRootLayout::Direct) {
+        return None;
+    }
+
+    let root_info = infos
+        .iter()
+        .find_map(|(path, info)| path.is_empty().then_some(*info))?;
+    if !local.runtime_shape.is_unresolved() {
+        match local.runtime_shape {
+            RuntimeShape::ObjectRef { target_ty }
+                if root_info.address_space == AddressSpaceKind::Memory
+                    && root_info.target_ty.is_none_or(|root_target_ty| {
+                        crate::repr::runtime_ty_matches(
+                            db,
+                            crate::repr::object_layout_ty(db, core, root_target_ty),
+                            target_ty,
+                        )
+                    }) =>
+            {
+                return Some(RuntimeShape::ObjectRef { target_ty });
+            }
+            RuntimeShape::ObjectRef { .. } => {}
+            RuntimeShape::ConstRef { target_ty }
+                if root_info.address_space == AddressSpaceKind::Code
+                    && root_info.target_ty.is_none_or(|root_target_ty| {
+                        crate::repr::runtime_ty_matches(db, root_target_ty, target_ty)
+                    }) =>
+            {
+                return Some(RuntimeShape::ConstRef { target_ty });
+            }
+            RuntimeShape::ConstRef { .. } => {}
+            RuntimeShape::MemoryPtr { .. } | RuntimeShape::AddressWord(_) => {
+                return Some(crate::repr::runtime_shape_for_pointer_info(root_info));
+            }
+            RuntimeShape::Unresolved
+            | RuntimeShape::Erased
+            | RuntimeShape::Word(_)
+            | RuntimeShape::EnumTag { .. } => {}
+        }
+    }
+
+    if root_info.address_space == AddressSpaceKind::Memory {
+        return Some(crate::repr::runtime_shape_for_pointer_info(root_info));
+    }
+
+    if root_info.address_space == AddressSpaceKind::Code
+        && let RuntimeShape::ConstRef { target_ty } =
+            crate::repr::runtime_shape_for_ty(db, core, local.ty, AddressSpaceKind::Code)
+        && root_info.target_ty.is_none_or(|root_target_ty| {
+            crate::repr::runtime_ty_matches(db, root_target_ty, target_ty)
+        })
+    {
+        return Some(RuntimeShape::ConstRef { target_ty });
+    }
+
+    Some(crate::repr::runtime_shape_for_pointer_info(root_info))
+}
+
+fn normalize_local_layout_pointer_infos<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    func: &MirFunction<'db>,
+    local_layouts: &mut LocalRuntimeLayoutState<'db>,
+    local: LocalId,
+) {
+    let normalized = pointer_leaf_infos_with_runtime_root(
+        db,
+        core,
+        func.body.local(local).ty,
+        local_layouts.pointer_leaf_infos(local),
+        local_layouts.shape(local),
+    );
+    if local_layouts.pointer_leaf_infos(local).as_slice() != normalized.as_slice() {
+        local_layouts.set_pointer_leaf_infos(local, normalized);
+    }
+}
+
+fn clamp_plain_word_local_layouts<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    func: &MirFunction<'db>,
+    local_layouts: &mut LocalRuntimeLayoutState<'db>,
+) {
+    for local_idx in 0..func.body.locals.len() {
+        let local = LocalId(local_idx as u32);
+        let clamped = normalize_plain_word_local_runtime_shape(
+            db,
+            core,
+            func.body.local(local),
+            local_layouts.shape(local),
+        );
+        if clamped != local_layouts.shape(local) {
+            local_layouts.set_shape(local, clamped);
+        }
+        normalize_local_layout_pointer_infos(db, core, func, local_layouts, local);
+    }
+}
+
 fn place_store_updates_local_pointer_leaf_infos<'db>(
+    db: &'db dyn HirAnalysisDb,
     func: &MirFunction<'db>,
     local_layouts: &mut LocalRuntimeLayoutState<'db>,
     place: &Place<'db>,
     value_pointer_infos: &PointerLeafInfoSet<'db>,
 ) {
-    if value_pointer_infos.is_empty() {
-        return;
-    }
     let Some((local, base_projection)) =
         crate::ir::resolve_local_projection_root(&func.body.values, place.base)
     else {
@@ -1332,128 +1637,271 @@ fn place_store_updates_local_pointer_leaf_infos<'db>(
         return;
     }
 
+    let preserved_infos = prune_overlapping_non_root_pointer_leaf_infos(
+        local_layouts.pointer_leaf_infos(local),
+        &full_projection,
+    );
     let mut updated_infos = Vec::with_capacity(value_pointer_infos.len());
     for (path, info) in value_pointer_infos {
         updated_infos.push((full_projection.concat(path), *info));
     }
-    let updated_paths: FxHashSet<_> = updated_infos.iter().map(|(path, _)| path.clone()).collect();
-    let merged = merge_pointer_leaf_infos(
-        &local_layouts
-            .pointer_leaf_infos(local)
-            .iter()
-            .filter(|(path, _)| !updated_paths.contains(path))
-            .cloned()
-            .collect(),
-        &updated_infos,
-    )
-    .unwrap_or_else(|| {
+    if full_projection.is_empty()
+        && !matches!(
+            func.body.local(local).address_space,
+            AddressSpaceKind::Memory
+        )
+    {
+        updated_infos.retain(|(path, _)| !path.is_empty());
+    }
+    let merged = merge_pointer_leaf_infos(db, &preserved_infos, &updated_infos).unwrap_or_else(|| {
         panic!(
             "incompatible pointer leaf infos for local v{} `{}` in `{}` after store to {:?}: {:?} vs {:?}",
             local.index(),
             func.body.local(local).name,
             func.symbol_name,
             place,
-            local_layouts.pointer_leaf_infos(local),
+            preserved_infos,
             updated_infos,
         )
     });
     local_layouts.set_pointer_leaf_infos(local, merged);
 }
 
-fn assigned_rvalue_runtime_shape<'db>(
+fn prune_overlapping_non_root_pointer_leaf_infos<'db>(
+    infos: &PointerLeafInfoSet<'db>,
+    projection: &MirProjectionPath<'db>,
+) -> PointerLeafInfoSet<'db> {
+    infos
+        .iter()
+        .filter(|(path, _)| {
+            path.is_empty() || !(path.is_prefix_of(projection) || projection.is_prefix_of(path))
+        })
+        .cloned()
+        .collect()
+}
+
+fn invalidate_mutating_call_arg_local_layout<'db>(
     db: &'db dyn HirAnalysisDb,
     core: &CoreLib<'db>,
     func: &MirFunction<'db>,
-    dest: LocalId,
-    rvalue: &Rvalue<'db>,
-    return_layouts: &[ReturnRuntimeLayoutState<'db>],
-    func_indices: &FxHashMap<String, usize>,
-) -> Option<RuntimeShape<'db>> {
-    match rvalue {
-        Rvalue::Value(value) => func
-            .body
-            .values
-            .get(value.index())
-            .map(|value| value.runtime_shape),
-        Rvalue::Call(call) => call
-            .resolved_name
-            .as_deref()
-            .and_then(|name| func_indices.get(name).copied())
-            .map(|callee_idx| return_layouts[callee_idx].shape)
+    local_layouts: &mut LocalRuntimeLayoutState<'db>,
+    current_locals: &mut [LocalData<'db>],
+    arg: ValueId,
+) {
+    let Some((local, projection)) =
+        crate::ir::resolve_local_projection_root(&func.body.values, arg)
+    else {
+        return;
+    };
+    if projection
+        .iter()
+        .any(|projection| matches!(projection, Projection::Deref))
+    {
+        return;
+    }
+
+    let preserved_infos = prune_overlapping_non_root_pointer_leaf_infos(
+        local_layouts.pointer_leaf_infos(local),
+        &projection,
+    );
+    let (shape, normalized_infos) = normalize_mutable_local_runtime_shape(
+        db,
+        core,
+        func.body.local(local),
+        &preserved_infos,
+        local_layouts.shape(local),
+    );
+    local_layouts.set_shape(local, shape);
+    local_layouts.set_pointer_leaf_infos(local, normalized_infos);
+    sync_local_snapshot(db, core, current_locals, local_layouts, local);
+}
+
+#[derive(Clone, Copy)]
+struct AssignedRvalueResolver<'a, 'db> {
+    db: &'db dyn HirAnalysisDb,
+    core: &'a CoreLib<'db>,
+    func: &'a MirFunction<'db>,
+    locals: &'a [LocalData<'db>],
+    return_layouts: &'a [ReturnRuntimeLayoutState<'db>],
+    func_indices: &'a FxHashMap<String, usize>,
+}
+
+impl<'a, 'db> AssignedRvalueResolver<'a, 'db> {
+    fn forwarded_const_call_result_shape(
+        &self,
+        dest: LocalId,
+        call: &CallOrigin<'db>,
+    ) -> Option<RuntimeShape<'db>> {
+        let CallTargetRef::Hir(hir_target) = call.target.as_ref()? else {
+            return None;
+        };
+        let CallableDef::Func(hir_func) = hir_target.callable_def else {
+            return None;
+        };
+        let (diags, typed_body) = check_func_body(self.db, hir_func);
+        if !diags.is_empty() {
+            return None;
+        }
+        let ReturnProvenance::ForwardedParams(indices) = typed_body.return_provenance(self.db)
+        else {
+            return None;
+        };
+        if indices.iter().copied().any(|idx| {
+            hir_func.params(self.db).nth(idx).is_some_and(|param| {
+                param.is_mut(self.db)
+                    || crate::repr::ty_has_mut_capability(self.db, param.ty(self.db))
+            })
+        }) {
+            return None;
+        }
+
+        let mut arg_target_ty = None;
+        for idx in indices {
+            let arg = *call.args.get(idx)?;
+            let RuntimeShape::ConstRef { target_ty } = crate::repr::runtime_shape_for_value(
+                self.db,
+                self.core,
+                &self.func.body.values,
+                self.locals,
+                arg,
+            )?
+            else {
+                return None;
+            };
+            if let Some(existing) = arg_target_ty {
+                if !crate::repr::runtime_ty_matches(self.db, existing, target_ty) {
+                    return None;
+                }
+            } else {
+                arg_target_ty = Some(target_ty);
+            }
+        }
+        let arg_target_ty = arg_target_ty?;
+
+        match crate::repr::runtime_shape_for_ty(
+            self.db,
+            self.core,
+            self.func.body.local(dest).ty,
+            AddressSpaceKind::Code,
+        ) {
+            RuntimeShape::ConstRef { target_ty }
+                if crate::repr::runtime_ty_matches(self.db, target_ty, arg_target_ty) =>
+            {
+                Some(RuntimeShape::ConstRef { target_ty })
+            }
+            _ => Some(RuntimeShape::ConstRef {
+                target_ty: arg_target_ty,
+            }),
+        }
+    }
+
+    fn runtime_shape(&self, dest: LocalId, rvalue: &Rvalue<'db>) -> Option<RuntimeShape<'db>> {
+        match rvalue {
+            Rvalue::Value(value) => crate::repr::runtime_shape_for_value(
+                self.db,
+                self.core,
+                &self.func.body.values,
+                self.locals,
+                *value,
+            ),
+            Rvalue::Call(call) => self
+                .forwarded_const_call_result_shape(dest, call)
+                .or_else(|| {
+                    call.resolved_name.as_deref().and_then(|name| {
+                        self.func_indices
+                            .get(name)
+                            .copied()
+                            .map(|callee_idx| self.return_layouts[callee_idx].shape)
+                    })
+                })
+                .or_else(|| {
+                    self.locals
+                        .get(dest.index())
+                        .map(|local| local.runtime_shape)
+                }),
+            Rvalue::Alloc {
+                address_space: AddressSpaceKind::Memory,
+            } => self.locals.get(dest.index()).map(|local| {
+                crate::repr::place_root_runtime_shape_for_local(local).unwrap_or_else(|| {
+                    crate::repr::runtime_shape_for_local(self.db, self.core, local)
+                })
+            }),
+            Rvalue::ZeroInit
+            | Rvalue::Intrinsic { .. }
+            | Rvalue::Alloc { .. }
+            | Rvalue::ConstAggregate { .. } => self
+                .locals
+                .get(dest.index())
+                .map(|local| local.runtime_shape),
+            Rvalue::Load { place } => crate::repr::runtime_shape_for_loaded_place(
+                self.db,
+                self.core,
+                &self.func.body.values,
+                self.locals,
+                place,
+            )
             .or_else(|| {
-                func.body
-                    .locals
+                self.locals
                     .get(dest.index())
                     .map(|local| local.runtime_shape)
             }),
-        Rvalue::Alloc {
-            address_space: AddressSpaceKind::Memory,
-        } => func.body.locals.get(dest.index()).and_then(|local| {
-            (!layout::is_zero_sized_ty(db, local.ty)
-                && crate::repr::supports_object_ref_runtime_ty(db, core, local.ty))
-            .then(|| RuntimeShape::ObjectRef {
-                target_ty: crate::repr::object_layout_ty(db, core, local.ty),
-            })
-        }),
-        Rvalue::ZeroInit
-        | Rvalue::Intrinsic { .. }
-        | Rvalue::Alloc { .. }
-        | Rvalue::ConstAggregate { .. } => func
-            .body
-            .locals
-            .get(dest.index())
-            .map(|local| local.runtime_shape),
-        Rvalue::Load { place } => crate::repr::runtime_shape_for_loaded_place(
-            db,
-            core,
-            &func.body.values,
-            &func.body.locals,
-            place,
-        )
-        .or_else(|| {
-            func.body
-                .locals
-                .get(dest.index())
-                .map(|local| local.runtime_shape)
-        }),
+        }
     }
-}
 
-fn assigned_rvalue_pointer_leaf_infos<'db>(
-    db: &'db dyn HirAnalysisDb,
-    core: &CoreLib<'db>,
-    func: &MirFunction<'db>,
-    dest: LocalId,
-    rvalue: &Rvalue<'db>,
-    return_layouts: &[ReturnRuntimeLayoutState<'db>],
-    func_indices: &FxHashMap<String, usize>,
-) -> PointerLeafInfoSet<'db> {
-    match rvalue {
-        Rvalue::Value(value) => crate::repr::pointer_leaf_infos_for_value(
-            db,
-            core,
-            &func.body.values,
-            &func.body.locals,
-            *value,
-        ),
-        Rvalue::Load { place } => crate::repr::pointer_leaf_infos_for_place(
-            db,
-            core,
-            &func.body.values,
-            &func.body.locals,
-            place,
-            func.body.local(dest).ty,
-        ),
-        Rvalue::Call(call) => call
-            .resolved_name
-            .as_deref()
-            .and_then(|name| func_indices.get(name).copied())
-            .map(|callee_idx| return_layouts[callee_idx].pointer_leaf_infos.clone())
-            .unwrap_or_default(),
-        Rvalue::Intrinsic { .. }
-        | Rvalue::Alloc { .. }
-        | Rvalue::ZeroInit
-        | Rvalue::ConstAggregate { .. } => Vec::new(),
+    fn pointer_leaf_infos(&self, dest: LocalId, rvalue: &Rvalue<'db>) -> PointerLeafInfoSet<'db> {
+        match rvalue {
+            Rvalue::Value(value) => crate::repr::pointer_leaf_infos_for_value(
+                self.db,
+                self.core,
+                &self.func.body.values,
+                self.locals,
+                *value,
+            ),
+            Rvalue::Load { place } => crate::repr::pointer_leaf_infos_for_place(
+                self.db,
+                self.core,
+                &self.func.body.values,
+                self.locals,
+                place,
+                self.func.body.local(dest).ty,
+            ),
+            Rvalue::Call(call) => {
+                let inherited_infos = call
+                    .resolved_name
+                    .as_deref()
+                    .and_then(|name| self.func_indices.get(name).copied())
+                    .map(|callee_idx| self.return_layouts[callee_idx].pointer_leaf_infos.clone())
+                    .unwrap_or_default();
+                let forwarded_infos = crate::lower::call_return_pointer_leaf_infos(
+                    self.db,
+                    self.core,
+                    &self.func.body.values,
+                    self.locals,
+                    call,
+                    self.func.body.local(dest).ty,
+                );
+                if forwarded_infos.is_empty() {
+                    inherited_infos
+                } else {
+                    replace_pointer_leaf_infos(self.db, &inherited_infos, &forwarded_infos)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "incompatible call result pointer leaf infos for local v{} `{}` in `{}` from rvalue {:?}: {:?} vs {:?}",
+                                dest.index(),
+                                self.func.body.local(dest).name,
+                                self.func.symbol_name,
+                                rvalue,
+                                inherited_infos,
+                                forwarded_infos,
+                            )
+                        })
+                }
+            }
+            Rvalue::Intrinsic { .. }
+            | Rvalue::Alloc { .. }
+            | Rvalue::ZeroInit
+            | Rvalue::ConstAggregate { .. } => Vec::new(),
+        }
     }
 }
 
@@ -1472,8 +1920,11 @@ fn refine_call_param_local_shapes<'db>(
         return;
     };
     let caller = &module.functions[caller_idx];
+    let caller_core = function_core_lib(db, caller);
     let callee = &module.functions[callee_idx];
     let core = function_core_lib(db, callee);
+    let caller_locals =
+        locals_snapshot_from_layouts(db, &caller_core, caller, &next_local_layouts[caller_idx]);
 
     let runtime_value_params = callee.runtime_param_locals();
     assert_eq!(
@@ -1484,19 +1935,64 @@ fn refine_call_param_local_shapes<'db>(
         call.args.len(),
     );
     for (local, arg) in runtime_value_params.into_iter().zip(&call.args) {
-        if !matches!(
-            callee.body.local(local).address_space,
-            AddressSpaceKind::Memory
-        ) {
-            continue;
-        }
-        let arg_shape = caller.body.value(*arg).runtime_shape;
+        let arg_shape = crate::repr::runtime_shape_for_value(
+            db,
+            &caller_core,
+            &caller.body.values,
+            &caller_locals,
+            *arg,
+        )
+        .unwrap_or(RuntimeShape::Unresolved);
         let local_shape = next_local_layouts[callee_idx].shape(local);
-        let Some(merged) = merge_runtime_shapes_in_context(db, &core, local_shape, arg_shape)
-        else {
+        let Some(merged) = specialize_call_param_runtime_shape(
+            db,
+            &core,
+            callee.body.local(local),
+            local_shape,
+            arg_shape,
+        ) else {
             continue;
         };
+        let (merged, normalized_infos) = normalize_mutable_local_runtime_shape(
+            db,
+            &core,
+            callee.body.local(local),
+            next_local_layouts[callee_idx].pointer_leaf_infos(local),
+            merged,
+        );
+        let merged =
+            normalize_plain_word_local_runtime_shape(db, &core, callee.body.local(local), merged);
         next_local_layouts[callee_idx].set_shape(local, merged);
+        next_local_layouts[callee_idx].set_pointer_leaf_infos(local, normalized_infos);
+        let arg_pointer_infos = crate::repr::pointer_leaf_infos_for_value(
+            db,
+            &caller_core,
+            &caller.body.values,
+            &caller_locals,
+            *arg,
+        );
+        if !arg_pointer_infos.is_empty() {
+            next_local_layouts[callee_idx].set_pointer_leaf_infos(
+                local,
+                replace_pointer_leaf_infos(
+                    db,
+                    next_local_layouts[callee_idx].pointer_leaf_infos(local),
+                    &arg_pointer_infos,
+                )
+                .unwrap_or_else(|| {
+                    panic!(
+                        "incompatible pointer leaf infos for call param local v{} `{}` in `{}` from caller `{}` arg v{}: {:?} vs {:?}",
+                        local.index(),
+                        callee.body.local(local).name,
+                        callee.symbol_name,
+                        caller.symbol_name,
+                        arg.index(),
+                        next_local_layouts[callee_idx].pointer_leaf_infos(local),
+                        arg_pointer_infos,
+                    )
+                }),
+            );
+        }
     }
 
     let runtime_effect_params = callee.runtime_effect_param_locals();
@@ -1508,25 +2004,253 @@ fn refine_call_param_local_shapes<'db>(
         call.effect_args.len(),
     );
     for (local, arg) in runtime_effect_params.into_iter().zip(&call.effect_args) {
-        if !matches!(
-            callee.body.local(local).address_space,
-            AddressSpaceKind::Memory
-        ) {
-            continue;
-        }
-        let arg_shape = caller.body.value(*arg).runtime_shape;
+        let arg_pointer_infos = retag_pointer_leaf_infos_for_local(
+            db,
+            &core,
+            callee.body.local(local),
+            &crate::repr::pointer_leaf_infos_for_value(
+                db,
+                &caller_core,
+                &caller.body.values,
+                &caller_locals,
+                *arg,
+            ),
+        );
+        let arg_shape = direct_local_root_pointer_shape(
+            db,
+            &core,
+            callee.body.local(local),
+            &arg_pointer_infos,
+        )
+        .or_else(|| {
+            crate::repr::runtime_shape_for_value(
+                db,
+                &caller_core,
+                &caller.body.values,
+                &caller_locals,
+                *arg,
+            )
+        })
+        .unwrap_or(RuntimeShape::Unresolved);
         let local_shape = next_local_layouts[callee_idx].shape(local);
-        let Some(merged) = merge_runtime_shapes_in_context(db, &core, local_shape, arg_shape)
-        else {
+        let Some(merged) = specialize_call_param_runtime_shape(
+            db,
+            &core,
+            callee.body.local(local),
+            local_shape,
+            arg_shape,
+        ) else {
             continue;
         };
+        let (merged, normalized_infos) = normalize_mutable_local_runtime_shape(
+            db,
+            &core,
+            callee.body.local(local),
+            next_local_layouts[callee_idx].pointer_leaf_infos(local),
+            merged,
+        );
+        let merged =
+            normalize_plain_word_local_runtime_shape(db, &core, callee.body.local(local), merged);
         next_local_layouts[callee_idx].set_shape(local, merged);
+        next_local_layouts[callee_idx].set_pointer_leaf_infos(local, normalized_infos);
+        if !arg_pointer_infos.is_empty() {
+            next_local_layouts[callee_idx].set_pointer_leaf_infos(
+                local,
+                replace_pointer_leaf_infos(
+                    db,
+                    next_local_layouts[callee_idx].pointer_leaf_infos(local),
+                    &arg_pointer_infos,
+                )
+                .unwrap_or_else(|| {
+                    panic!(
+                        "incompatible pointer leaf infos for effect param local v{} `{}` in `{}` from caller `{}` arg v{}: {:?} vs {:?}",
+                        local.index(),
+                        callee.body.local(local).name,
+                        callee.symbol_name,
+                        caller.symbol_name,
+                        arg.index(),
+                        next_local_layouts[callee_idx].pointer_leaf_infos(local),
+                        arg_pointer_infos,
+                    )
+                }),
+            );
+        }
     }
+}
+
+fn specialize_call_param_runtime_shape<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    local: &LocalData<'db>,
+    local_shape: RuntimeShape<'db>,
+    arg_shape: RuntimeShape<'db>,
+) -> Option<RuntimeShape<'db>> {
+    let local_ty = local.ty;
+    let local_memory_shape =
+        crate::repr::runtime_shape_for_ty(db, core, local_ty, AddressSpaceKind::Memory);
+    let local_code_shape =
+        crate::repr::runtime_shape_for_ty(db, core, local_ty, AddressSpaceKind::Code);
+    let local_const_target_ty = match local_code_shape {
+        RuntimeShape::ConstRef { target_ty } => Some(target_ty),
+        _ => None,
+    };
+    let local_shape = match (local_shape, local_memory_shape, local_const_target_ty) {
+        (
+            RuntimeShape::ObjectRef {
+                target_ty: shape_target_ty,
+            },
+            RuntimeShape::MemoryPtr {
+                target_ty: memory_target_ty,
+            },
+            Some(const_target_ty),
+        ) if memory_target_ty.is_some()
+            && crate::repr::runtime_ty_matches(db, const_target_ty, shape_target_ty) =>
+        {
+            RuntimeShape::MemoryPtr {
+                target_ty: memory_target_ty,
+            }
+        }
+        (local_shape, _, _) => local_shape,
+    };
+
+    if let RuntimeShape::ObjectRef { target_ty } = arg_shape
+        && matches!(local.address_space, AddressSpaceKind::Memory)
+        && crate::repr::effect_provider_space_for_ty(db, core, local_ty).is_none()
+        && !matches!(local_shape, RuntimeShape::AddressWord(info) if info.address_space != AddressSpaceKind::Memory)
+    {
+        return Some(RuntimeShape::ObjectRef { target_ty });
+    }
+
+    if let RuntimeShape::MemoryPtr {
+        target_ty: arg_target_ty,
+    } = arg_shape
+        && matches!(local.address_space, AddressSpaceKind::Memory)
+        && !matches!(local_shape, RuntimeShape::Erased)
+    {
+        let target_ty =
+            crate::repr::runtime_pointer_info_for_ty(db, core, local_ty, AddressSpaceKind::Memory)
+                .and_then(|info| info.target_ty)
+                .or(arg_target_ty);
+        if arg_target_ty.is_none_or(|arg_target_ty| {
+            target_ty.is_none_or(|target_ty| {
+                crate::repr::runtime_ty_matches(db, target_ty, arg_target_ty)
+            })
+        }) {
+            return Some(RuntimeShape::MemoryPtr { target_ty });
+        }
+    }
+
+    if let RuntimeShape::ConstRef {
+        target_ty: arg_target_ty,
+    } = arg_shape
+        && let Some(local_target_ty) = local_const_target_ty
+        && crate::repr::runtime_ty_matches(db, local_target_ty, arg_target_ty)
+    {
+        return Some(RuntimeShape::ConstRef {
+            target_ty: local_target_ty,
+        });
+    }
+
+    if let RuntimeShape::ConstRef {
+        target_ty: arg_target_ty,
+    } = arg_shape
+        && (crate::repr::runtime_pointer_info_for_ty(db, core, local_ty, AddressSpaceKind::Code)
+            .and_then(|info| info.target_ty)
+            .is_some_and(|local_target_ty| {
+                crate::repr::runtime_ty_matches(db, local_target_ty, arg_target_ty)
+            })
+            || crate::repr::runtime_ty_matches(
+                db,
+                crate::repr::object_layout_ty(db, core, local_ty),
+                arg_target_ty,
+            ))
+    {
+        return Some(RuntimeShape::ConstRef {
+            target_ty: arg_target_ty,
+        });
+    }
+
+    if let RuntimeShape::ObjectRef {
+        target_ty: arg_target_ty,
+    } = arg_shape
+        && let RuntimeShape::ObjectRef {
+            target_ty: local_target_ty,
+        } = local_memory_shape
+        && crate::repr::runtime_ty_matches(db, local_target_ty, arg_target_ty)
+    {
+        return merge_runtime_shapes_in_context(
+            db,
+            core,
+            local_shape,
+            RuntimeShape::ObjectRef {
+                target_ty: local_target_ty,
+            },
+        );
+    }
+
+    if let RuntimeShape::ObjectRef {
+        target_ty: arg_target_ty,
+    } = arg_shape
+        && let RuntimeShape::MemoryPtr { target_ty } = local_memory_shape
+        && let Some(local_target_ty) = local_const_target_ty
+        && target_ty.is_some()
+        && crate::repr::runtime_ty_matches(db, local_target_ty, arg_target_ty)
+    {
+        return merge_runtime_shapes_in_context(
+            db,
+            core,
+            local_shape,
+            RuntimeShape::MemoryPtr { target_ty },
+        );
+    }
+
+    if let RuntimeShape::MemoryPtr {
+        target_ty: arg_target_ty,
+    } = arg_shape
+        && !matches!(local_shape, RuntimeShape::MemoryPtr { .. })
+        && let RuntimeShape::ObjectRef {
+            target_ty: local_target_ty,
+        } = local_memory_shape
+        && arg_target_ty.is_none_or(|arg_target_ty| {
+            crate::repr::runtime_ty_matches(
+                db,
+                local_target_ty,
+                crate::repr::object_layout_ty(db, core, arg_target_ty),
+            )
+        })
+    {
+        return merge_runtime_shapes_in_context(
+            db,
+            core,
+            local_shape,
+            RuntimeShape::ObjectRef {
+                target_ty: local_target_ty,
+            },
+        );
+    }
+
+    if let RuntimeShape::MemoryPtr {
+        target_ty: arg_target_ty,
+    } = arg_shape
+        && let RuntimeShape::MemoryPtr { target_ty } = local_memory_shape
+        && let Some(local_target_ty) = local_const_target_ty
+        && arg_target_ty.is_none_or(|arg_target_ty| {
+            crate::repr::runtime_ty_matches(db, local_target_ty, arg_target_ty)
+        })
+    {
+        return merge_runtime_shapes_in_context(
+            db,
+            core,
+            local_shape,
+            RuntimeShape::MemoryPtr { target_ty },
+        );
+    }
+
+    merge_runtime_shapes_in_context(db, core, local_shape, arg_shape)
 }
 
 fn assert_normalized_runtime_shapes<'db>(db: &'db dyn HirAnalysisDb, func: &MirFunction<'db>) {
     let live_values = compute_live_values(&func.body);
-    let core = function_core_lib(db, func);
 
     for (idx, local) in func.body.locals.iter().enumerate() {
         if local.runtime_shape.is_unresolved() {
@@ -1574,11 +2298,9 @@ fn assert_normalized_runtime_shapes<'db>(db: &'db dyn HirAnalysisDb, func: &MirF
         }) else {
             continue;
         };
-        if merge_runtime_shapes_in_context(db, &core, expected_root_shape, value.runtime_shape)
-            .is_none()
-        {
+        if expected_root_shape != value.runtime_shape {
             panic!(
-                "incompatible root local runtime shapes after MIR normalization in `{}` for v{idx}: local v{} `{}` has {:?}, value has {:?}, origin={:?}, ty={}, repr={:?}",
+                "mismatched root local runtime shapes after MIR normalization in `{}` for v{idx}: local v{} `{}` has {:?}, value has {:?}, origin={:?}, ty={}, repr={:?}",
                 func.symbol_name,
                 local.index(),
                 func.body.local(local).name,
@@ -1595,10 +2317,11 @@ fn assert_normalized_runtime_shapes<'db>(db: &'db dyn HirAnalysisDb, func: &MirF
 fn seed_function_local_runtime_shapes<'db>(
     db: &'db dyn HirAnalysisDb,
     func: &mut MirFunction<'db>,
-) {
+) -> Vec<Option<RuntimeShape<'db>>> {
     let core = function_core_lib(db, func);
     let live_values = compute_live_values(&func.body);
     let spill_locals: FxHashSet<_> = func.body.spill_slots.values().copied().collect();
+    let mut local_fallbacks = vec![None; func.body.locals.len()];
 
     for (idx, local) in func.body.locals.iter_mut().enumerate() {
         local.runtime_shape = crate::repr::runtime_shape_for_local(db, &core, local);
@@ -1607,6 +2330,18 @@ fn seed_function_local_runtime_shapes<'db>(
         {
             local.runtime_shape = place_root_shape;
         }
+    }
+
+    for (local_id, local_fallback) in local_fallbacks.iter_mut().enumerate() {
+        let Some(fallback) = crate::repr::deferred_const_ref_runtime_shape_fallback(
+            db,
+            &core,
+            &func.body.locals[local_id],
+        ) else {
+            continue;
+        };
+        *local_fallback = Some(fallback);
+        func.body.locals[local_id].runtime_shape = RuntimeShape::Unresolved;
     }
 
     for (idx, local_id) in func.body.param_locals.iter().copied().enumerate() {
@@ -1636,6 +2371,276 @@ fn seed_function_local_runtime_shapes<'db>(
             func.body.locals[local_id.index()].runtime_shape = RuntimeShape::Erased;
         }
     }
+
+    local_fallbacks
+}
+
+fn deferred_runtime_return_shape_fallback<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    ret_ty: TyId<'db>,
+) -> Option<RuntimeShape<'db>> {
+    let concrete_shape = crate::repr::runtime_return_shape_seed_for_ty(db, core, ret_ty);
+    (matches!(concrete_shape, RuntimeShape::ObjectRef { .. })
+        && crate::repr::supports_const_ref_runtime_ty(db, core, ret_ty))
+    .then_some(concrete_shape)
+}
+
+fn materialize_local_runtime_layout<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    local: &mut LocalData<'db>,
+) {
+    local.const_backing = crate::ir::LocalConstBacking::Runtime;
+    if local.address_space != AddressSpaceKind::Memory {
+        crate::repr::set_declared_local_address_space(db, core, local, AddressSpaceKind::Memory);
+    }
+    local.pointer_leaf_infos = crate::capability_space::pointer_leaf_infos_for_ty_with_default(
+        db,
+        core,
+        local.ty,
+        AddressSpaceKind::Memory,
+    );
+    local.runtime_shape = crate::repr::runtime_shape_for_local(db, core, local);
+}
+
+fn set_local_root_pointer_info<'db>(
+    local: &mut LocalData<'db>,
+    root_info: Option<crate::ir::PointerInfo<'db>>,
+) {
+    local
+        .pointer_leaf_infos
+        .retain(|(path, _)| !path.is_empty());
+    if let Some(root_info) = root_info {
+        local
+            .pointer_leaf_infos
+            .insert(0, (crate::MirProjectionPath::new(), root_info));
+    }
+}
+
+fn pointer_leaf_infos_without_root<'db>(
+    infos: &PointerLeafInfoSet<'db>,
+) -> PointerLeafInfoSet<'db> {
+    infos
+        .iter()
+        .filter(|(path, _)| !path.is_empty())
+        .cloned()
+        .collect()
+}
+
+fn sync_local_runtime_root_metadata<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    local: &mut LocalData<'db>,
+) {
+    match local.runtime_shape {
+        RuntimeShape::ConstRef { target_ty } => {
+            local.const_backing = crate::ir::LocalConstBacking::Const;
+            if local.address_space != AddressSpaceKind::Code {
+                crate::repr::set_declared_local_address_space(
+                    db,
+                    core,
+                    local,
+                    AddressSpaceKind::Code,
+                );
+            }
+            local.pointer_leaf_infos = pointer_leaf_infos_with_runtime_root(
+                db,
+                core,
+                local.ty,
+                &local.pointer_leaf_infos,
+                local.runtime_shape,
+            );
+            set_local_root_pointer_info(
+                local,
+                Some(crate::ir::PointerInfo {
+                    address_space: AddressSpaceKind::Code,
+                    target_ty: Some(target_ty),
+                }),
+            );
+        }
+        RuntimeShape::ObjectRef { target_ty } => {
+            local.const_backing = crate::ir::LocalConstBacking::Runtime;
+            if local.address_space != AddressSpaceKind::Memory {
+                crate::repr::set_declared_local_address_space(
+                    db,
+                    core,
+                    local,
+                    AddressSpaceKind::Memory,
+                );
+            }
+            if !local.place_root_layout.is_object_root() {
+                local.place_root_layout =
+                    crate::repr::object_ref_place_root_layout_for_ty(db, core, local.ty, target_ty);
+            }
+            local.pointer_leaf_infos = pointer_leaf_infos_with_runtime_root(
+                db,
+                core,
+                local.ty,
+                &local.pointer_leaf_infos,
+                local.runtime_shape,
+            );
+            set_local_root_pointer_info(
+                local,
+                Some(crate::ir::PointerInfo {
+                    address_space: AddressSpaceKind::Memory,
+                    target_ty: Some(target_ty),
+                }),
+            );
+        }
+        RuntimeShape::MemoryPtr { target_ty } => {
+            local.const_backing = crate::ir::LocalConstBacking::Runtime;
+            if local.address_space != AddressSpaceKind::Memory {
+                crate::repr::set_declared_local_address_space(
+                    db,
+                    core,
+                    local,
+                    AddressSpaceKind::Memory,
+                );
+            }
+            if local.place_root_layout.is_object_root() {
+                local.place_root_layout = LocalPlaceRootLayout::MemorySlot;
+            }
+            local.pointer_leaf_infos = pointer_leaf_infos_with_runtime_root(
+                db,
+                core,
+                local.ty,
+                &local.pointer_leaf_infos,
+                local.runtime_shape,
+            );
+            set_local_root_pointer_info(
+                local,
+                Some(crate::ir::PointerInfo {
+                    address_space: AddressSpaceKind::Memory,
+                    target_ty,
+                }),
+            );
+        }
+        RuntimeShape::AddressWord(info) => {
+            local.const_backing = crate::ir::LocalConstBacking::Runtime;
+            if local.address_space != info.address_space {
+                crate::repr::set_declared_local_address_space(db, core, local, info.address_space);
+            }
+            local.pointer_leaf_infos = pointer_leaf_infos_with_runtime_root(
+                db,
+                core,
+                local.ty,
+                &local.pointer_leaf_infos,
+                local.runtime_shape,
+            );
+            set_local_root_pointer_info(local, Some(info));
+        }
+        RuntimeShape::Word(_) | RuntimeShape::EnumTag { .. } | RuntimeShape::Erased => {
+            set_local_root_pointer_info(local, None);
+        }
+        RuntimeShape::Unresolved => {}
+    }
+}
+
+fn normalize_mutable_local_runtime_shape<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    local: &LocalData<'db>,
+    current_pointer_leaf_infos: &PointerLeafInfoSet<'db>,
+    proposed_shape: RuntimeShape<'db>,
+) -> (RuntimeShape<'db>, PointerLeafInfoSet<'db>) {
+    if !crate::repr::local_is_semantically_mutable(db, local)
+        || !matches!(proposed_shape, RuntimeShape::ConstRef { .. })
+    {
+        return (proposed_shape, current_pointer_leaf_infos.to_vec());
+    }
+
+    let mut materialized = local.clone();
+    materialized.pointer_leaf_infos = current_pointer_leaf_infos.to_vec();
+    materialized.runtime_shape = proposed_shape;
+    materialize_local_runtime_layout(db, core, &mut materialized);
+    (materialized.runtime_shape, materialized.pointer_leaf_infos)
+}
+
+fn normalize_plain_word_local_runtime_shape<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    local: &LocalData<'db>,
+    proposed_shape: RuntimeShape<'db>,
+) -> RuntimeShape<'db> {
+    crate::repr::normalize_plain_word_runtime_shape_for_ty(db, core, local.ty, proposed_shape)
+}
+
+fn pointer_leaf_infos_with_runtime_root<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    owner_ty: TyId<'db>,
+    infos: &PointerLeafInfoSet<'db>,
+    runtime_shape: RuntimeShape<'db>,
+) -> PointerLeafInfoSet<'db> {
+    let (root_info, rebase_code_leaves_to_memory) = match runtime_shape {
+        RuntimeShape::ConstRef { target_ty } => (
+            Some(PointerInfo {
+                address_space: AddressSpaceKind::Code,
+                target_ty: Some(target_ty),
+            }),
+            false,
+        ),
+        RuntimeShape::ObjectRef { target_ty } => (
+            Some(PointerInfo {
+                address_space: AddressSpaceKind::Memory,
+                target_ty: Some(target_ty),
+            }),
+            true,
+        ),
+        RuntimeShape::MemoryPtr { target_ty } => (
+            Some(PointerInfo {
+                address_space: AddressSpaceKind::Memory,
+                target_ty,
+            }),
+            true,
+        ),
+        RuntimeShape::AddressWord(info) => (Some(info), false),
+        RuntimeShape::Word(_) | RuntimeShape::EnumTag { .. } | RuntimeShape::Erased => {
+            return infos
+                .iter()
+                .filter(|(path, _)| !path.is_empty())
+                .cloned()
+                .collect();
+        }
+        RuntimeShape::Unresolved => return infos.to_vec(),
+    };
+
+    let code_default_infos = crate::capability_space::pointer_leaf_infos_for_ty_with_default(
+        db,
+        core,
+        owner_ty,
+        AddressSpaceKind::Code,
+    );
+
+    let mut normalized_infos = infos
+        .iter()
+        .filter(|(path, _)| !path.is_empty())
+        .map(|(path, info)| {
+            let keeps_non_memory_leaf = code_default_infos
+                .iter()
+                .find_map(|(default_path, default_info)| {
+                    (default_path == path).then_some(default_info.address_space)
+                })
+                .is_some_and(|space| space != AddressSpaceKind::Memory);
+            let info = if rebase_code_leaves_to_memory
+                && matches!(info.address_space, AddressSpaceKind::Code)
+                && !keeps_non_memory_leaf
+            {
+                PointerInfo {
+                    address_space: AddressSpaceKind::Memory,
+                    target_ty: info.target_ty,
+                }
+            } else {
+                *info
+            };
+            (path.clone(), info)
+        })
+        .collect::<Vec<_>>();
+    if let Some(root_info) = root_info {
+        normalized_infos.insert(0, (crate::MirProjectionPath::new(), root_info));
+    }
+    crate::repr::normalize_pointer_leaf_infos(normalized_infos)
 }
 
 struct RuntimeLayoutFixpoint<'db, 'm> {
@@ -1643,6 +2648,8 @@ struct RuntimeLayoutFixpoint<'db, 'm> {
     module: &'m mut MirModule<'db>,
     func_indices: FxHashMap<String, usize>,
     return_layout_seeds: Vec<ReturnRuntimeLayoutState<'db>>,
+    deferred_return_shape_fallbacks: Vec<Option<RuntimeShape<'db>>>,
+    deferred_local_fallbacks: Vec<Vec<Option<RuntimeShape<'db>>>>,
 }
 
 impl<'db, 'm> RuntimeLayoutFixpoint<'db, 'm> {
@@ -1653,13 +2660,22 @@ impl<'db, 'm> RuntimeLayoutFixpoint<'db, 'm> {
             .enumerate()
             .map(|(idx, func)| (func.symbol_name.clone(), idx))
             .collect();
+        let mut deferred_return_shape_fallbacks = Vec::with_capacity(module.functions.len());
         let return_layout_seeds = module
             .functions
             .iter()
             .map(|func| {
                 let core = function_core_lib(db, func);
+                let fallback = deferred_runtime_return_shape_fallback(db, &core, func.ret_ty);
+                let shape_seed = runtime_return_shape_seed_for_func(db, func, &core);
+                deferred_return_shape_fallbacks.push(fallback);
                 ReturnRuntimeLayoutState {
-                    shape: crate::repr::runtime_return_shape_seed_for_ty(db, &core, func.ret_ty),
+                    shape: if fallback.is_some() && !matches!(shape_seed, RuntimeShape::Unresolved)
+                    {
+                        RuntimeShape::Unresolved
+                    } else {
+                        shape_seed
+                    },
                     pointer_leaf_infos:
                         crate::capability_space::pointer_leaf_infos_for_ty_with_default(
                             db,
@@ -1676,15 +2692,35 @@ impl<'db, 'm> RuntimeLayoutFixpoint<'db, 'm> {
             module,
             func_indices,
             return_layout_seeds,
+            deferred_return_shape_fallbacks,
+            deferred_local_fallbacks: Vec::new(),
         }
     }
 
     fn run(&mut self) {
+        self.deferred_local_fallbacks.clear();
         for func in &mut self.module.functions {
-            seed_function_local_runtime_shapes(self.db, func);
+            self.deferred_local_fallbacks
+                .push(seed_function_local_runtime_shapes(self.db, func));
         }
 
         while self.iterate() {}
+
+        for func in &mut self.module.functions {
+            let core = function_core_lib(self.db, func);
+            for local in &mut func.body.locals {
+                if crate::repr::local_is_semantically_mutable(self.db, local)
+                    && matches!(local.runtime_shape, RuntimeShape::ConstRef { .. })
+                {
+                    materialize_local_runtime_layout(self.db, &core, local);
+                    continue;
+                }
+                sync_local_runtime_root_metadata(self.db, &core, local);
+            }
+        }
+
+        self.refresh_value_pointer_infos();
+        self.recompute_value_runtime_shapes();
 
         for func in &self.module.functions {
             assert_normalized_runtime_shapes(self.db, func);
@@ -1692,20 +2728,41 @@ impl<'db, 'm> RuntimeLayoutFixpoint<'db, 'm> {
     }
 
     fn iterate(&mut self) -> bool {
+        self.refresh_value_pointer_infos();
         self.recompute_value_runtime_shapes();
         let return_layouts = self.current_return_layouts();
-        let next_return_layouts = self.recompute_return_layouts();
         let next_local_layouts = self.recompute_local_layouts(&return_layouts);
 
-        self.apply_return_layouts(next_return_layouts)
-            | self.apply_local_layouts(next_local_layouts)
+        let mut changed = self.apply_local_layouts(next_local_layouts)
+            | self.apply_deferred_const_ref_fallbacks();
+
+        if changed {
+            self.refresh_value_pointer_infos();
+            self.recompute_value_runtime_shapes();
+        }
+
+        changed |= self.apply_return_layouts(self.recompute_return_layouts());
+        changed
     }
 
     fn current_return_layouts(&self) -> Vec<ReturnRuntimeLayoutState<'db>> {
         self.module
             .functions
             .iter()
-            .map(ReturnRuntimeLayoutState::from_function)
+            .enumerate()
+            .map(|(func_idx, func)| {
+                let fallback = self.deferred_return_shape_fallbacks[func_idx];
+                if fallback.is_some_and(|fallback| func.runtime_return_shape == fallback) {
+                    ReturnRuntimeLayoutState {
+                        shape: RuntimeShape::Unresolved,
+                        pointer_leaf_infos: pointer_leaf_infos_without_root(
+                            &func.runtime_return_pointer_leaf_infos,
+                        ),
+                    }
+                } else {
+                    ReturnRuntimeLayoutState::from_function(func)
+                }
+            })
             .collect()
     }
 
@@ -1716,20 +2773,50 @@ impl<'db, 'm> RuntimeLayoutFixpoint<'db, 'm> {
                 let func = &self.module.functions[func_idx];
                 (0..func.body.values.len())
                     .map(|idx| {
-                        crate::repr::runtime_shape_for_value(
+                        let shape = crate::repr::inferred_runtime_shape_for_value(
                             self.db,
                             &core,
                             &func.body.values,
                             &func.body.locals,
                             ValueId(idx as u32),
                         )
-                        .unwrap_or(RuntimeShape::Unresolved)
+                        .unwrap_or(RuntimeShape::Unresolved);
+                        crate::repr::normalize_plain_word_runtime_shape_for_ty(
+                            self.db,
+                            &core,
+                            func.body.values[idx].ty,
+                            shape,
+                        )
                     })
                     .collect()
             };
 
             for (idx, shape) in value_shapes.into_iter().enumerate() {
                 self.module.functions[func_idx].body.values[idx].runtime_shape = shape;
+            }
+        }
+    }
+
+    fn refresh_value_pointer_infos(&mut self) {
+        for func_idx in 0..self.module.functions.len() {
+            let core = function_core_lib(self.db, &self.module.functions[func_idx]);
+            let pointer_infos: Vec<_> = {
+                let func = &self.module.functions[func_idx];
+                (0..func.body.values.len())
+                    .map(|idx| {
+                        crate::repr::infer_value_pointer_info(
+                            self.db,
+                            &core,
+                            &func.body.values,
+                            &func.body.locals,
+                            ValueId(idx as u32),
+                        )
+                    })
+                    .collect()
+            };
+
+            for (idx, pointer_info) in pointer_infos.into_iter().enumerate() {
+                self.module.functions[func_idx].body.values[idx].pointer_info = pointer_info;
             }
         }
     }
@@ -1763,9 +2850,26 @@ impl<'db, 'm> RuntimeLayoutFixpoint<'db, 'm> {
                         returned,
                     )
                     .unwrap_or_else(|| {
+                        let returned_value = func
+                            .body
+                            .values
+                            .get(value.index())
+                            .expect("checked above");
+                        let returned_local = match returned_value.origin {
+                            ValueOrigin::Local(local) => func.body.locals.get(local.index()),
+                            _ => None,
+                        };
                         panic!(
-                            "incompatible runtime return shapes in `{}`: {:?} vs {:?}",
-                            func.symbol_name, return_layout.shape, returned
+                            "incompatible runtime return shapes in `{}`: {:?} vs {:?}; return_value=v{} origin={:?} ty={} repr={:?} pointer_info={:?} returned_local={:?}",
+                            func.symbol_name,
+                            return_layout.shape,
+                            returned,
+                            value.index(),
+                            returned_value.origin,
+                            returned_value.ty.pretty_print(self.db),
+                            returned_value.repr,
+                            returned_value.pointer_info,
+                            returned_local,
                         )
                     });
                     let returned_pointer_infos = crate::repr::pointer_leaf_infos_for_value(
@@ -1775,7 +2879,8 @@ impl<'db, 'm> RuntimeLayoutFixpoint<'db, 'm> {
                         &func.body.locals,
                         *value,
                     );
-                    return_layout.pointer_leaf_infos = merge_pointer_leaf_infos(
+                    return_layout.pointer_leaf_infos = replace_pointer_leaf_infos(
+                        self.db,
                         &return_layout.pointer_leaf_infos,
                         &returned_pointer_infos,
                     )
@@ -1787,6 +2892,12 @@ impl<'db, 'm> RuntimeLayoutFixpoint<'db, 'm> {
                             returned_pointer_infos
                         )
                     });
+                }
+
+                if return_layout.shape.is_unresolved()
+                    && let Some(fallback) = self.deferred_return_shape_fallbacks[func_idx]
+                {
+                    return_layout.shape = fallback;
                 }
 
                 if return_layout.shape.is_unresolved() {
@@ -1813,11 +2924,78 @@ impl<'db, 'm> RuntimeLayoutFixpoint<'db, 'm> {
             .map(LocalRuntimeLayoutState::from_function)
             .collect::<Vec<_>>();
 
+        self.reset_deferred_local_fallbacks(&mut next_local_layouts);
         for (func_idx, local_layouts) in next_local_layouts.iter_mut().enumerate() {
             self.propagate_local_layouts_from_body(func_idx, local_layouts, return_layouts);
         }
         self.propagate_callsite_param_runtime_shapes(&mut next_local_layouts);
+        self.restore_unresolved_deferred_local_fallbacks(&mut next_local_layouts);
+        for (func_idx, local_layouts) in next_local_layouts.iter_mut().enumerate() {
+            let func = &self.module.functions[func_idx];
+            let core = function_core_lib(self.db, func);
+            clamp_plain_word_local_layouts(self.db, &core, func, local_layouts);
+        }
         next_local_layouts
+    }
+
+    fn reset_deferred_local_fallbacks(
+        &self,
+        next_local_layouts: &mut [LocalRuntimeLayoutState<'db>],
+    ) {
+        for (func_idx, local_layouts) in next_local_layouts
+            .iter_mut()
+            .enumerate()
+            .take(self.deferred_local_fallbacks.len())
+        {
+            let local_fallbacks = &self.deferred_local_fallbacks[func_idx];
+            for (local_idx, fallback) in local_fallbacks.iter().copied().enumerate() {
+                let Some(fallback) = fallback else {
+                    continue;
+                };
+                let local = LocalId(local_idx as u32);
+                if local_layouts.shape(local) != fallback {
+                    continue;
+                }
+                local_layouts.set_shape(local, RuntimeShape::Unresolved);
+                local_layouts.set_pointer_leaf_infos(
+                    local,
+                    pointer_leaf_infos_without_root(local_layouts.pointer_leaf_infos(local)),
+                );
+            }
+        }
+    }
+
+    fn restore_unresolved_deferred_local_fallbacks(
+        &self,
+        next_local_layouts: &mut [LocalRuntimeLayoutState<'db>],
+    ) {
+        for (func_idx, local_layouts) in next_local_layouts
+            .iter_mut()
+            .enumerate()
+            .take(self.deferred_local_fallbacks.len())
+        {
+            let local_fallbacks = &self.deferred_local_fallbacks[func_idx];
+            for (local_idx, fallback) in local_fallbacks.iter().copied().enumerate() {
+                let Some(fallback) = fallback else {
+                    continue;
+                };
+                let local = LocalId(local_idx as u32);
+                if !local_layouts.shape(local).is_unresolved() {
+                    continue;
+                }
+                local_layouts.set_shape(local, fallback);
+                local_layouts.set_pointer_leaf_infos(
+                    local,
+                    pointer_leaf_infos_with_runtime_root(
+                        self.db,
+                        &function_core_lib(self.db, &self.module.functions[func_idx]),
+                        self.module.functions[func_idx].body.local(local).ty,
+                        local_layouts.pointer_leaf_infos(local),
+                        fallback,
+                    ),
+                );
+            }
+        }
     }
 
     fn propagate_local_layouts_from_body(
@@ -1828,6 +3006,7 @@ impl<'db, 'm> RuntimeLayoutFixpoint<'db, 'm> {
     ) {
         let func = &self.module.functions[func_idx];
         let core = function_core_lib(self.db, func);
+        let mut current_locals = func.body.locals.clone();
 
         for block in &func.body.blocks {
             for inst in &block.insts {
@@ -1837,46 +3016,93 @@ impl<'db, 'm> RuntimeLayoutFixpoint<'db, 'm> {
                         rvalue,
                         ..
                     } => {
-                        let Some(shape) = assigned_rvalue_runtime_shape(
-                            self.db,
-                            &core,
-                            func,
-                            *dest,
-                            rvalue,
-                            return_layouts,
-                            &self.func_indices,
-                        ) else {
+                        let Some((shape, raw_assigned_pointer_infos)) = ({
+                            let resolver = AssignedRvalueResolver {
+                                db: self.db,
+                                core: &core,
+                                func,
+                                locals: &current_locals,
+                                return_layouts,
+                                func_indices: &self.func_indices,
+                            };
+                            resolver
+                                .runtime_shape(*dest, rvalue)
+                                .map(|shape| (shape, resolver.pointer_leaf_infos(*dest, rvalue)))
+                        }) else {
                             continue;
                         };
-                        if !matches!(
+                        let assigned_pointer_infos = retag_pointer_leaf_infos_for_local(
+                            self.db,
+                            &core,
+                            func.body.local(*dest),
+                            &raw_assigned_pointer_infos,
+                        );
+                        let shape = if matches!(
+                            shape,
+                            RuntimeShape::ConstRef { .. } | RuntimeShape::ObjectRef { .. }
+                        ) {
+                            shape
+                        } else {
+                            direct_local_root_pointer_shape(
+                                self.db,
+                                &core,
+                                func.body.local(*dest),
+                                &assigned_pointer_infos,
+                            )
+                            .unwrap_or(shape)
+                        };
+                        if matches!(
                             func.body.local(*dest).address_space,
-                            AddressSpaceKind::Memory
+                            AddressSpaceKind::Storage
+                                | AddressSpaceKind::TransientStorage
+                                | AddressSpaceKind::Calldata
                         ) {
                             continue;
                         }
-                        let Some(merged) = merge_runtime_shapes_in_context(
+                        let Some(merged) = specialize_call_param_runtime_shape(
                             self.db,
                             &core,
+                            func.body.local(*dest),
                             local_layouts.shape(*dest),
                             shape,
                         ) else {
                             continue;
                         };
+                        let (merged, normalized_infos) = normalize_mutable_local_runtime_shape(
+                            self.db,
+                            &core,
+                            func.body.local(*dest),
+                            local_layouts.pointer_leaf_infos(*dest),
+                            merged,
+                        );
+                        let merged = normalize_plain_word_local_runtime_shape(
+                            self.db,
+                            &core,
+                            func.body.local(*dest),
+                            merged,
+                        );
                         local_layouts.set_shape(*dest, merged);
-
-                        let assigned_pointer_infos = assigned_rvalue_pointer_leaf_infos(
+                        local_layouts.set_pointer_leaf_infos(*dest, normalized_infos);
+                        normalize_local_layout_pointer_infos(
                             self.db,
                             &core,
                             func,
+                            local_layouts,
                             *dest,
-                            rvalue,
-                            return_layouts,
-                            &self.func_indices,
                         );
+                        sync_local_snapshot(
+                            self.db,
+                            &core,
+                            &mut current_locals,
+                            local_layouts,
+                            *dest,
+                        );
+
                         if !assigned_pointer_infos.is_empty() {
                             local_layouts.set_pointer_leaf_infos(
                                 *dest,
-                                merge_pointer_leaf_infos(
+                                replace_pointer_leaf_infos(
+                                    self.db,
                                     local_layouts.pointer_leaf_infos(*dest),
                                     &assigned_pointer_infos,
                                 )
@@ -1891,6 +3117,20 @@ impl<'db, 'm> RuntimeLayoutFixpoint<'db, 'm> {
                                         assigned_pointer_infos
                                     )
                                 }),
+                            );
+                            normalize_local_layout_pointer_infos(
+                                self.db,
+                                &core,
+                                func,
+                                local_layouts,
+                                *dest,
+                            );
+                            sync_local_snapshot(
+                                self.db,
+                                &core,
+                                &mut current_locals,
+                                local_layouts,
+                                *dest,
                             );
                         }
 
@@ -1911,6 +3151,7 @@ impl<'db, 'm> RuntimeLayoutFixpoint<'db, 'm> {
                             local_layouts.set_pointer_leaf_infos(
                                 source_local,
                                 merge_pointer_leaf_infos(
+                                    self.db,
                                     local_layouts.pointer_leaf_infos(source_local),
                                     local_layouts.pointer_leaf_infos(*dest),
                                 )
@@ -1927,6 +3168,76 @@ impl<'db, 'm> RuntimeLayoutFixpoint<'db, 'm> {
                                     )
                                 }),
                             );
+                            normalize_local_layout_pointer_infos(
+                                self.db,
+                                &core,
+                                func,
+                                local_layouts,
+                                source_local,
+                            );
+                            sync_local_snapshot(
+                                self.db,
+                                &core,
+                                &mut current_locals,
+                                local_layouts,
+                                source_local,
+                            );
+                        }
+                    }
+                    MirInst::Assign {
+                        rvalue: Rvalue::Call(call),
+                        ..
+                    } => {
+                        let mut invalidated = false;
+                        if let Some(CallTargetRef::Hir(target)) = call.target.as_ref()
+                            && let CallableDef::Func(hir_func) = target.callable_def
+                        {
+                            for (idx, param) in hir_func.params(self.db).enumerate() {
+                                if !param.is_mut(self.db)
+                                    && !crate::repr::ty_has_mut_capability(
+                                        self.db,
+                                        param.ty(self.db),
+                                    )
+                                {
+                                    continue;
+                                }
+                                let Some(arg) = call.args.get(idx).copied() else {
+                                    break;
+                                };
+                                invalidate_mutating_call_arg_local_layout(
+                                    self.db,
+                                    &core,
+                                    func,
+                                    local_layouts,
+                                    &mut current_locals,
+                                    arg,
+                                );
+                                invalidated = true;
+                            }
+                        }
+                        if !invalidated
+                            && let Some(callee_name) = call.resolved_name.as_deref()
+                            && let Some(&callee_idx) = self.func_indices.get(callee_name)
+                        {
+                            let callee = &self.module.functions[callee_idx];
+                            for (param_local, arg) in
+                                callee.runtime_param_locals().into_iter().zip(&call.args)
+                            {
+                                if !crate::repr::local_is_semantically_mutable(
+                                    self.db,
+                                    callee.body.local(param_local),
+                                ) {
+                                    continue;
+                                }
+                                invalidate_mutating_call_arg_local_layout(
+                                    self.db,
+                                    &core,
+                                    func,
+                                    local_layouts,
+                                    &mut current_locals,
+                                    *arg,
+                                );
+                            }
                         }
                     }
                     MirInst::Store { place, value, .. } => {
@@ -1934,15 +3245,34 @@ impl<'db, 'm> RuntimeLayoutFixpoint<'db, 'm> {
                             self.db,
                             &core,
                             &func.body.values,
-                            &func.body.locals,
+                            &current_locals,
                             *value,
                         );
                         place_store_updates_local_pointer_leaf_infos(
+                            self.db,
                             func,
                             local_layouts,
                             place,
                             &value_pointer_infos,
                         );
+                        if let Some((local, _)) =
+                            crate::ir::resolve_local_projection_root(&func.body.values, place.base)
+                        {
+                            normalize_local_layout_pointer_infos(
+                                self.db,
+                                &core,
+                                func,
+                                local_layouts,
+                                local,
+                            );
+                            sync_local_snapshot(
+                                self.db,
+                                &core,
+                                &mut current_locals,
+                                local_layouts,
+                                local,
+                            );
+                        }
                     }
                     MirInst::InitAggregate { place, inits, .. } => {
                         for (path, value) in inits {
@@ -1950,15 +3280,35 @@ impl<'db, 'm> RuntimeLayoutFixpoint<'db, 'm> {
                                 self.db,
                                 &core,
                                 &func.body.values,
-                                &func.body.locals,
+                                &current_locals,
                                 *value,
                             );
                             place_store_updates_local_pointer_leaf_infos(
+                                self.db,
                                 func,
                                 local_layouts,
                                 &Place::new(place.base, place.projection.concat(path)),
                                 &value_pointer_infos,
                             );
+                            if let Some((local, _)) = crate::ir::resolve_local_projection_root(
+                                &func.body.values,
+                                place.base,
+                            ) {
+                                normalize_local_layout_pointer_infos(
+                                    self.db,
+                                    &core,
+                                    func,
+                                    local_layouts,
+                                    local,
+                                );
+                                sync_local_snapshot(
+                                    self.db,
+                                    &core,
+                                    &mut current_locals,
+                                    local_layouts,
+                                    local,
+                                );
+                            }
                         }
                     }
                     MirInst::Assign { dest: None, .. }
@@ -2030,6 +3380,38 @@ impl<'db, 'm> RuntimeLayoutFixpoint<'db, 'm> {
         for (func_idx, next_layouts) in next_local_layouts.into_iter().enumerate() {
             changed |= next_layouts.apply(&mut self.module.functions[func_idx]);
         }
+        changed
+    }
+
+    fn apply_deferred_const_ref_fallbacks(&mut self) -> bool {
+        let mut changed = false;
+
+        for (func_idx, local_fallbacks) in self.deferred_local_fallbacks.iter().enumerate() {
+            for (local_idx, fallback) in local_fallbacks.iter().enumerate() {
+                let Some(fallback) = *fallback else {
+                    continue;
+                };
+                let local = &mut self.module.functions[func_idx].body.locals[local_idx];
+                if !local.runtime_shape.is_unresolved() {
+                    continue;
+                }
+                local.runtime_shape = fallback;
+                changed = true;
+            }
+        }
+
+        for (func_idx, fallback) in self.deferred_return_shape_fallbacks.iter().enumerate() {
+            let Some(fallback) = *fallback else {
+                continue;
+            };
+            let runtime_return_shape = &mut self.module.functions[func_idx].runtime_return_shape;
+            if !runtime_return_shape.is_unresolved() {
+                continue;
+            }
+            *runtime_return_shape = fallback;
+            changed = true;
+        }
+
         changed
     }
 }
@@ -2716,6 +4098,7 @@ pub fn transparent_newtype_projection_keeps_non_memory_space(w: mut Wrap) {}
             address_space: AddressSpaceKind::Storage,
             pointer_leaf_infos: Vec::new(),
             place_root_layout: crate::ir::LocalPlaceRootLayout::Direct,
+            const_backing: crate::ir::LocalConstBacking::Unknown,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let base = body.alloc_value(ValueData {
@@ -2779,6 +4162,7 @@ pub fn transparent_newtype_projection_keeps_non_memory_space(w: mut Wrap) {}
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos: Vec::new(),
             place_root_layout: crate::ir::LocalPlaceRootLayout::Direct,
+            const_backing: crate::ir::LocalConstBacking::Unknown,
             runtime_shape: RuntimeShape::Unresolved,
         });
         let root = body.alloc_value(ValueData {
@@ -2846,6 +4230,7 @@ pub fn transparent_newtype_projection_keeps_non_memory_space(w: mut Wrap) {}
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos: Vec::new(),
             place_root_layout: crate::ir::LocalPlaceRootLayout::Direct,
+            const_backing: crate::ir::LocalConstBacking::Unknown,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let root = body.alloc_value(ValueData {
@@ -3049,6 +4434,110 @@ contract C {
     }
 
     #[test]
+    fn contract_init_entry_keeps_storage_field_effect_calls_storage_specialized() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///contract_init_entry_keeps_storage_field_effect_calls_storage_specialized.fe",
+            include_str!("../../codegen/tests/fixtures/high_level_contract.fe"),
+        );
+
+        let init_entry = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "__EchoContract_init")
+            .expect("expected contract init entrypoint");
+        let init_call = init_entry
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                MirInst::Assign {
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } if call
+                    .resolved_name
+                    .as_deref()
+                    .is_some_and(|name| name.starts_with("__EchoContract_init_contract")) =>
+                {
+                    Some(call)
+                }
+                _ => None,
+            })
+            .expect("expected init handler call");
+        assert_eq!(
+            init_call.resolved_name.as_deref(),
+            Some("__EchoContract_init_contract"),
+            "storage-backed contract field effects must keep the storage-specialized init handler",
+        );
+    }
+
+    #[test]
+    fn contract_init_handler_keeps_storage_field_effect_places_storage_backed() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///by_ref_trait_provider_storage_bug.fe",
+            include_str!("../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe"),
+        );
+
+        let init_handler = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "__ByRefTraitProviderStorageBug_init_contract")
+            .expect("expected contract init handler");
+        assert!(
+            init_handler
+                .runtime_abi
+                .effect_param_provider_tys
+                .first()
+                .is_some_and(Option::is_some),
+            "synthetic init handlers should preserve effect provider metadata for field effects",
+        );
+        let effect_local = init_handler.body.effect_param_locals[0];
+        assert_eq!(
+            init_handler.body.local(effect_local).address_space,
+            AddressSpaceKind::Storage,
+            "field-backed init effect locals must stay storage-backed",
+        );
+        let store = init_handler
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                MirInst::Store { place, .. } => Some(place),
+                _ => None,
+            })
+            .expect("expected init handler store");
+        assert!(
+            init_handler
+                .body
+                .local(effect_local)
+                .pointer_leaf_infos
+                .iter()
+                .any(|(path, info)| {
+                    path.is_empty() && info.address_space == AddressSpaceKind::Storage
+                }),
+            "field-backed init effect locals must carry a storage root pointer leaf; local infos={:?}, store base origin={:?}, store base repr={:?}, place space={:?}",
+            init_handler.body.local(effect_local).pointer_leaf_infos,
+            init_handler.body.value(store.base).origin,
+            init_handler.body.value(store.base).repr,
+            crate::ir::try_place_address_space_in(
+                &init_handler.body.values,
+                &init_handler.body.locals,
+                store,
+            ),
+        );
+        assert_eq!(
+            init_handler.body.place_address_space(store),
+            AddressSpaceKind::Storage,
+            "init handler stores through field-backed effect locals must target storage",
+        );
+    }
+
+    #[test]
     fn runtime_shapes_preserve_pointer_effect_params() {
         let mut db = DriverDataBase::default();
         let module = lower_inline_module(
@@ -3074,6 +4563,486 @@ contract C {
                         })
             }),
             "expected at least one memory-specialized bump helper with a typed memory-pointer runtime param",
+        );
+    }
+
+    #[test]
+    fn free_type_key_effect_params_stay_memory_backed() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///mutable_array_args_and_effects.fe",
+            include_str!("../../fe/tests/fixtures/fe_test/mutable_array_args_and_effects.fe"),
+        );
+
+        for func_name in [
+            "write_effect__MemPtr__u256__4__",
+            "effect_sum__MemPtr__u256__4__",
+            "test_mut_array_effect_param__MemPtr__u256__4__",
+        ] {
+            let func = module
+                .functions
+                .iter()
+                .find(|func| func.symbol_name.contains(func_name))
+                .unwrap_or_else(|| {
+                    panic!("expected memory-specialized function matching `{func_name}`")
+                });
+            let effect_local = func.body.local(func.body.effect_param_locals[0]);
+            assert_eq!(
+                effect_local.address_space,
+                AddressSpaceKind::Memory,
+                "free-function type-key effect params must stay memory-backed in `{}`",
+                func.symbol_name,
+            );
+            assert!(
+                matches!(
+                    effect_local.runtime_shape,
+                    RuntimeShape::MemoryPtr { target_ty: Some(_) } | RuntimeShape::ObjectRef { .. }
+                ),
+                "free-function type-key effect params must not default to storage in `{}`; got {:?}",
+                func.symbol_name,
+                effect_local.runtime_shape,
+            );
+            assert!(
+                effect_local.pointer_leaf_infos.iter().any(|(path, info)| {
+                    path.is_empty() && info.address_space == AddressSpaceKind::Memory
+                }),
+                "free-function type-key effect params must carry a memory root pointer leaf in `{}`; got {:?}",
+                func.symbol_name,
+                effect_local.pointer_leaf_infos,
+            );
+        }
+    }
+
+    #[test]
+    fn seq_helpers_from_memory_effect_array_keep_memory_ptr_receivers() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///mutable_array_args_and_effects.fe",
+            include_str!("../../fe/tests/fixtures/fe_test/mutable_array_args_and_effects.fe"),
+        );
+
+        let seq_funcs = module
+            .functions
+            .iter()
+            .filter(|func| func.symbol_name.contains("get") || func.symbol_name.contains("len"))
+            .collect::<Vec<_>>();
+
+        assert!(
+            !seq_funcs.is_empty(),
+            "expected monomorphized `len`/`get` helpers in fixture"
+        );
+
+        assert!(
+            seq_funcs.iter().all(|func| {
+                matches!(
+                    func.body.local(func.body.param_locals[0]).runtime_shape,
+                    RuntimeShape::MemoryPtr { target_ty: Some(_) } | RuntimeShape::Erased
+                )
+            }),
+            "expected memory-pointer-specialized `len`/`get` helpers, got: {:?}",
+            seq_funcs
+                .iter()
+                .map(|func| (
+                    func.symbol_name.as_str(),
+                    func.body.local(func.body.param_locals[0]).runtime_shape,
+                    func.body.local(func.body.param_locals[0]).place_root_layout,
+                    func.body
+                        .local(func.body.param_locals[0])
+                        .pointer_leaf_infos
+                        .clone(),
+                ))
+                .collect::<Vec<_>>(),
+        );
+        assert!(
+            seq_funcs.iter().all(|func| {
+                func.body.values.iter().all(|value| {
+                    let root_param = func.body.param_locals[0];
+                    match value.origin {
+                        ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local)
+                            if local == root_param =>
+                        {
+                            matches!(
+                                value.runtime_shape,
+                                RuntimeShape::MemoryPtr { target_ty: Some(_) }
+                            )
+                        }
+                        _ => true,
+                    }
+                })
+            }),
+            "expected root receiver values in memory-specialized `len`/`get` helpers to stay MemoryPtr, got: {:?}",
+            seq_funcs
+                .iter()
+                .map(|func| (
+                    func.symbol_name.as_str(),
+                    func.body
+                        .values
+                        .iter()
+                        .filter_map(|value| match value.origin {
+                            ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local)
+                                if local == func.body.param_locals[0] =>
+                            {
+                                Some((value.origin.clone(), value.runtime_shape))
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>(),
+                ))
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn memory_effect_array_place_refs_do_not_repromote_to_object_refs() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///mutable_array_args_and_effects.fe",
+            include_str!("../../fe/tests/fixtures/fe_test/mutable_array_args_and_effects.fe"),
+        );
+
+        let get_helper = module
+            .functions
+            .iter()
+            .find(|func| {
+                func.symbol_name.contains("seq") && func.symbol_name.contains("get_arg0_root_mem")
+            })
+            .expect("expected memory-specialized seq::get helper");
+        let param_local = get_helper.body.param_locals[0];
+
+        let mismatches = get_helper
+            .body
+            .values
+            .iter()
+            .filter_map(|value| match &value.origin {
+                ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place }
+                    if matches!(
+                        get_helper.body.value(place.base).origin,
+                        ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) if local == param_local
+                    ) =>
+                {
+                    Some((value.origin.clone(), value.runtime_shape, value.pointer_info))
+                }
+                _ => None,
+            })
+            .filter(|(_, shape, _)| {
+                !matches!(shape, RuntimeShape::MemoryPtr { target_ty: Some(_) })
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            mismatches.is_empty(),
+            "memory-specialized seq::get helper place refs should stay memory-backed, got {mismatches:?}",
+        );
+
+        let root_related_values = get_helper
+            .body
+            .values
+            .iter()
+            .filter_map(|value| match &value.origin {
+                ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) if *local == param_local => {
+                    Some((value.origin.clone(), value.repr, value.runtime_shape, value.pointer_info))
+                }
+                ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place }
+                    if matches!(
+                        get_helper.body.value(place.base).origin,
+                        ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) if local == param_local
+                    ) =>
+                {
+                    Some((value.origin.clone(), value.repr, value.runtime_shape, value.pointer_info))
+                }
+                ValueOrigin::TransparentCast { value: inner }
+                    if matches!(
+                        get_helper.body.value(*inner).origin,
+                        ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) if local == param_local
+                    ) =>
+                {
+                    Some((value.origin.clone(), value.repr, value.runtime_shape, value.pointer_info))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            root_related_values.iter().all(|(_, _, shape, _)| {
+                matches!(shape, RuntimeShape::MemoryPtr { target_ty: Some(_) })
+            }),
+            "all root-related seq::get helper values should stay memory-backed, got {root_related_values:?}",
+        );
+    }
+
+    #[test]
+    fn mut_array_forwarded_return_keeps_memory_ptr_runtime_shape() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///mutable_array_args_and_effects.fe",
+            include_str!("../../fe/tests/fixtures/fe_test/mutable_array_args_and_effects.fe"),
+        );
+
+        let rewrite = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "rewrite")
+            .expect("expected `rewrite` function in fixture");
+
+        assert!(
+            matches!(
+                rewrite
+                    .body
+                    .local(rewrite.body.param_locals[0])
+                    .runtime_shape,
+                RuntimeShape::MemoryPtr { target_ty: Some(_) }
+            ),
+            "expected forwarded mut-array param to stay memory-backed, got {:?}",
+            rewrite
+                .body
+                .local(rewrite.body.param_locals[0])
+                .runtime_shape,
+        );
+        assert!(
+            matches!(
+                rewrite.runtime_return_shape,
+                RuntimeShape::MemoryPtr { target_ty: Some(_) }
+            ),
+            "expected forwarded mut-array return to stay memory-backed, got {:?}",
+            rewrite.runtime_return_shape,
+        );
+
+        let specialized_rewrite = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "rewrite_arg0_root_mem")
+            .expect("expected memory-specialized rewrite helper");
+        let specialized_param = specialized_rewrite
+            .body
+            .local(specialized_rewrite.body.param_locals[0]);
+        assert!(
+            matches!(
+                specialized_param.place_root_layout,
+                LocalPlaceRootLayout::MemorySlot
+            ),
+            "expected memory-specialized rewrite param to use a memory slot root, got layout={:?}, address_space={:?}, runtime_shape={:?}, pointer_leaf_infos={:?}",
+            specialized_param.place_root_layout,
+            specialized_param.address_space,
+            specialized_param.runtime_shape,
+            specialized_param.pointer_leaf_infos,
+        );
+        assert!(
+            matches!(
+                specialized_param.runtime_shape,
+                RuntimeShape::MemoryPtr { target_ty: Some(_) }
+            ),
+            "expected memory-specialized rewrite param to stay memory-backed, got {:?}",
+            specialized_param.runtime_shape,
+        );
+    }
+
+    #[test]
+    fn mutating_array_call_results_do_not_stay_const_backed() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///mutable_array_args_and_effects.fe",
+            include_str!("../../fe/tests/fixtures/fe_test/mutable_array_args_and_effects.fe"),
+        );
+
+        let test_fn = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "test_mut_array_fn_argument")
+            .expect("expected mut-array argument test helper");
+        let rewrite_call = test_fn
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                MirInst::Assign {
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } => Some(call),
+                _ => None,
+            })
+            .expect("expected rewrite call in mut-array argument test");
+        let updated = test_fn
+            .body
+            .locals
+            .iter()
+            .find(|local| local.name == "updated")
+            .expect("expected updated local");
+
+        assert!(
+            !rewrite_call
+                .resolved_name
+                .as_deref()
+                .is_some_and(|name| name.contains("root_code")),
+            "mutating helper calls must not specialize through code-backed return forwarding, got {:?}",
+            rewrite_call.resolved_name,
+        );
+        assert!(
+            !matches!(updated.runtime_shape, RuntimeShape::ConstRef { .. }),
+            "mutating helper results must not stay const-backed, got {:?}",
+            updated.runtime_shape,
+        );
+        assert!(
+            matches!(
+                updated.runtime_shape,
+                RuntimeShape::MemoryPtr { target_ty: Some(_) }
+            ),
+            "mutating helper results should preserve memory-backed carriers, got runtime_shape={:?}, address_space={:?}, place_root_layout={:?}, pointer_leaf_infos={:?}, const_backing={:?}",
+            updated.runtime_shape,
+            updated.address_space,
+            updated.place_root_layout,
+            updated.pointer_leaf_infos,
+            updated.const_backing,
+        );
+        assert!(
+            !matches!(updated.const_backing, crate::ir::LocalConstBacking::Const),
+            "mutating helper results must not keep const backing, got {:?}",
+            updated.const_backing,
+        );
+    }
+
+    #[test]
+    fn provider_backed_scalar_handle_locals_stay_memory_ptrs() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///borrow_storage_field_handle.fe",
+            include_str!("../../codegen/tests/fixtures/borrow_storage_field_handle.fe"),
+        );
+
+        let func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name.contains("borrow_storage_field_handle"))
+            .expect("expected borrow_storage_field_handle helper");
+        let p_local = func
+            .body
+            .locals
+            .iter()
+            .find(|local| local.name == "p")
+            .expect("expected borrowed field-handle local `p`");
+
+        assert!(
+            matches!(
+                p_local.runtime_shape,
+                RuntimeShape::MemoryPtr { target_ty: Some(_) }
+            ),
+            "provider-backed scalar handle local should stay memory-pointer-backed, got {:?}",
+            p_local.runtime_shape,
+        );
+        assert!(
+            matches!(
+                p_local.pointer_leaf_infos.as_slice(),
+                [(
+                    path,
+                    PointerInfo {
+                        address_space: AddressSpaceKind::Memory,
+                        target_ty: Some(_),
+                    },
+                )] if path.is_empty()
+            ),
+            "provider-backed scalar handle local should keep a rooted memory pointer leaf, got {:?}",
+            p_local.pointer_leaf_infos,
+        );
+    }
+
+    #[test]
+    fn nested_const_struct_field_reads_lower_without_projection_index_panics() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///quinary_nested_field_read.fe",
+            include_str!("../../fe/tests/fixtures/fe_test/quinary_nested_field_read.fe"),
+        );
+
+        let test_fn = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "test_read_nested_field_directly")
+            .expect("expected quinary nested-field read test helper");
+        let load_place = test_fn
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                MirInst::Assign {
+                    rvalue: Rvalue::Load { place },
+                    ..
+                } => Some(place),
+                _ => None,
+            })
+            .expect("expected scalar load from nested const struct field");
+
+        assert_eq!(
+            test_fn.body.place_address_space(load_place),
+            AddressSpaceKind::Code,
+            "nested reads from immutable const-backed struct fields should stay code-backed",
+        );
+    }
+
+    #[test]
+    fn contract_field_type_key_effect_params_stay_storage_backed() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///contract_field_array_effect.fe",
+            r#"
+msg Msg {
+    #[selector = 1]
+    Sum -> u256,
+}
+
+pub contract C {
+    mut words: [u256; 4],
+
+    init() uses (mut words) {
+        words[0] = 1
+        words[1] = 2
+        words[2] = 3
+        words[3] = 4
+    }
+
+    recv Msg {
+        Sum -> u256 uses (words) {
+            words[0] + words[1] + words[2] + words[3]
+        }
+    }
+}
+"#,
+        );
+        let func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name.starts_with("__C_recv_"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected contract handler, got {:?}",
+                    module
+                        .functions
+                        .iter()
+                        .map(|func| func.symbol_name.as_str())
+                        .collect::<Vec<_>>()
+                )
+            });
+        let effect_local = func.body.local(func.body.effect_param_locals[0]);
+        assert_eq!(
+            effect_local.address_space,
+            AddressSpaceKind::Storage,
+            "contract-field type-key effects must stay storage-backed in `{}`",
+            func.symbol_name,
+        );
+        assert!(
+            effect_local.pointer_leaf_infos.iter().any(|(path, info)| {
+                path.is_empty() && info.address_space == AddressSpaceKind::Storage
+            }),
+            "contract-field type-key effects must carry a storage root pointer leaf in `{}`; got {:?}",
+            func.symbol_name,
+            effect_local.pointer_leaf_infos,
         );
     }
 
@@ -3211,11 +5180,11 @@ contract C {
     }
 
     #[test]
-    fn runtime_shapes_refine_object_backed_scalar_handle_params() {
+    fn runtime_shapes_refine_object_backed_scalar_handles_to_object_refs() {
         let mut db = DriverDataBase::default();
         let module = lower_inline_module(
             &mut db,
-            "file:///runtime_shapes_refine_object_backed_scalar_handle_params.fe",
+            "file:///runtime_shapes_refine_object_backed_scalar_handles_to_object_refs.fe",
             include_str!("../../fe/tests/fixtures/fe_test/borrow_handle_forwarding.fe"),
         );
 
@@ -3243,10 +5212,38 @@ contract C {
             .expect("expected b_ref local index");
         assert!(
             matches!(balance_ref.runtime_shape, RuntimeShape::ObjectRef { .. }),
-            "b_ref local v{balance_ref_idx} should refine to an object ref first, got {:?}",
+            "b_ref local v{balance_ref_idx} should normalize to an object-backed scalar handle, got {:?}",
             balance_ref.runtime_shape,
         );
-        let call_arg = test_func
+        let balance_ref_source = test_func
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                MirInst::Assign {
+                    dest,
+                    rvalue: Rvalue::Value(value),
+                    ..
+                } if *dest == Some(LocalId(balance_ref_idx as u32)) => Some(*value),
+                _ => None,
+            })
+            .expect("expected b_ref assignment source");
+        let balance_ref_source_data = test_func.body.value(balance_ref_source);
+        assert!(
+            matches!(balance_ref_source_data.origin, ValueOrigin::PlaceRef(_)),
+            "b_ref should come from an explicit borrow, got {:?}",
+            balance_ref_source_data.origin,
+        );
+        assert!(
+            matches!(
+                balance_ref_source_data.runtime_shape,
+                RuntimeShape::ObjectRef { .. }
+            ),
+            "explicit scalar borrows from object-backed aggregates should normalize to object refs, got {:?}",
+            balance_ref_source_data.runtime_shape,
+        );
+        let (read_balance_name, call_arg) = test_func
             .body
             .blocks
             .iter()
@@ -3255,11 +5252,16 @@ contract C {
                 MirInst::Assign {
                     rvalue: Rvalue::Call(call),
                     ..
-                } if call.resolved_name.as_deref() == Some("read_balance") => {
-                    call.args.first().copied()
+                } if call
+                    .resolved_name
+                    .as_deref()
+                    .is_some_and(|name| name.contains("read_balance")) =>
+                {
+                    call.args.first().copied().zip(call.resolved_name.clone())
                 }
                 _ => None,
             })
+            .map(|(arg, name)| (name, arg))
             .expect("expected read_balance call arg");
         let call_arg_origin = &test_func.body.value(call_arg).origin;
         if let ValueOrigin::Local(local) = call_arg_origin {
@@ -3272,25 +5274,49 @@ contract C {
         let call_arg_shape = test_func.body.value(call_arg).runtime_shape;
         assert!(
             matches!(call_arg_shape, RuntimeShape::ObjectRef { .. }),
-            "read_balance call arg should already be an object ref, got {:?} from {:?}",
+            "read_balance call arg should stay object-backed, got {:?} from {:?}",
             call_arg_shape,
             call_arg_origin,
         );
 
+        let read_balance = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == read_balance_name)
+            .unwrap_or(read_balance);
         let read_balance_param = read_balance.body.local(read_balance.body.param_locals[0]);
         assert!(
             matches!(
                 read_balance_param.runtime_shape,
                 RuntimeShape::ObjectRef { .. }
             ),
-            "object-backed scalar refs should refine helper params to object refs, got {:?}",
+            "object-backed scalar refs should stay object-backed in helpers, got {:?}",
             read_balance_param.runtime_shape,
         );
 
+        let bump_nonce_name = test_func
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                MirInst::Assign {
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } if call
+                    .resolved_name
+                    .as_deref()
+                    .is_some_and(|name| name.contains("bump_nonce")) =>
+                {
+                    call.resolved_name.clone()
+                }
+                _ => None,
+            })
+            .expect("expected bump_nonce call");
         let bump_nonce = module
             .functions
             .iter()
-            .find(|func| func.symbol_name == "bump_nonce")
+            .find(|func| func.symbol_name == bump_nonce_name)
             .expect("expected bump_nonce helper");
         let bump_nonce_param = bump_nonce.body.local(bump_nonce.body.param_locals[0]);
         assert!(
@@ -3298,8 +5324,1257 @@ contract C {
                 bump_nonce_param.runtime_shape,
                 RuntimeShape::ObjectRef { .. }
             ),
-            "object-backed scalar mut handles should refine helper params to object refs, got {:?}",
+            "object-backed scalar mut handles should stay object-backed in helpers, got {:?}",
             bump_nonce_param.runtime_shape,
+        );
+    }
+
+    #[test]
+    fn runtime_shapes_keep_readonly_array_params_const_backed_across_private_calls() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///runtime_shapes_keep_readonly_array_params_const_backed_across_private_calls.fe",
+            r#"
+fn head(values: [u256; 4], i: usize) -> u256 {
+    return values[i]
+}
+
+fn read(i: usize) -> u256 {
+    let x: [u256; 4] = [1, 2, 3, 4]
+    return head(x, i)
+}
+"#,
+        );
+
+        let head = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "head")
+            .expect("expected head helper");
+        let values_param = head.body.local(head.body.param_locals[0]);
+        assert!(
+            matches!(values_param.runtime_shape, RuntimeShape::ConstRef { .. }),
+            "readonly aggregate helper params should stay const-backed across private calls, got {:?}",
+            values_param.runtime_shape,
+        );
+        assert!(
+            matches!(
+                values_param.const_backing,
+                crate::ir::LocalConstBacking::Const
+            ),
+            "readonly aggregate helper params should keep const backing, got {:?}",
+            values_param.const_backing,
+        );
+        assert_eq!(
+            values_param.address_space,
+            AddressSpaceKind::Code,
+            "readonly aggregate helper params should stay in code space",
+        );
+    }
+
+    #[test]
+    fn runtime_shapes_keep_readonly_array_returns_const_backed_across_private_calls() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///runtime_shapes_keep_readonly_array_returns_const_backed_across_private_calls.fe",
+            r#"
+fn id(values: [u256; 4]) -> [u256; 4] {
+    return values
+}
+
+fn read() -> u256 {
+    let x: [u256; 4] = [1, 2, 3, 4]
+    let y: [u256; 4] = id(x)
+    let z: [u256; 4] = y
+    return z[0]
+}
+"#,
+        );
+
+        let id = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "id")
+            .expect("expected id helper");
+        assert!(
+            matches!(id.runtime_return_shape, RuntimeShape::ConstRef { .. }),
+            "readonly aggregate helper returns should stay const-backed across private calls, got {:?}",
+            id.runtime_return_shape,
+        );
+
+        let read = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "read")
+            .expect("expected read helper");
+        let y_local = read
+            .body
+            .locals
+            .iter()
+            .find(|local| local.name == "y")
+            .expect("expected y local");
+        assert!(
+            matches!(y_local.runtime_shape, RuntimeShape::ConstRef { .. }),
+            "readonly aggregate locals receiving readonly call results should stay const-backed, got {:?}",
+            y_local.runtime_shape,
+        );
+        assert!(
+            matches!(y_local.const_backing, crate::ir::LocalConstBacking::Const),
+            "readonly aggregate locals receiving readonly call results should keep const backing, got {:?}",
+            y_local.const_backing,
+        );
+        assert_eq!(
+            y_local.address_space,
+            AddressSpaceKind::Code,
+            "readonly aggregate locals receiving readonly call results should stay in code space",
+        );
+
+        let z_local = read
+            .body
+            .locals
+            .iter()
+            .find(|local| local.name == "z")
+            .expect("expected z local");
+        assert!(
+            matches!(z_local.runtime_shape, RuntimeShape::ConstRef { .. }),
+            "readonly aggregate copy locals should stay const-backed, got {:?}",
+            z_local.runtime_shape,
+        );
+        assert!(
+            matches!(z_local.const_backing, crate::ir::LocalConstBacking::Const),
+            "readonly aggregate copy locals should inherit const backing, got {:?}",
+            z_local.const_backing,
+        );
+        assert_eq!(
+            z_local.address_space,
+            AddressSpaceKind::Code,
+            "readonly aggregate copy locals should stay in code space",
+        );
+    }
+
+    #[test]
+    fn runtime_shapes_materialize_mutable_const_array_locals() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///runtime_shapes_materialize_mutable_const_array_locals.fe",
+            r#"
+fn read() -> u256 {
+    let mut x: [u256; 4] = [1, 2, 3, 4]
+    x[1] = 9
+    return x[1]
+}
+"#,
+        );
+
+        let read = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "read")
+            .expect("expected read helper");
+        let x_local = read
+            .body
+            .locals
+            .iter()
+            .find(|local| local.name == "x")
+            .expect("expected x local");
+
+        assert!(x_local.is_mut, "expected mutable local");
+        assert_eq!(
+            x_local.address_space,
+            AddressSpaceKind::Memory,
+            "mutable aggregate locals must materialize into memory-backed runtime carriers",
+        );
+        assert!(
+            matches!(x_local.runtime_shape, RuntimeShape::ObjectRef { .. }),
+            "mutable aggregate locals must not remain const-backed, got {:?}",
+            x_local.runtime_shape,
+        );
+        assert!(
+            matches!(x_local.const_backing, crate::ir::LocalConstBacking::Runtime),
+            "mutable aggregate locals must clear const backing after materialization, got {:?}",
+            x_local.const_backing,
+        );
+    }
+
+    #[test]
+    fn runtime_shapes_materialize_mutable_const_struct_wrapper_locals() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///runtime_shapes_materialize_mutable_const_struct_wrapper_locals.fe",
+            r#"
+const ROW5: [u256; 5] = [0, 0, 0, 0, 0]
+const GRID5: [[u256; 5]; 3] = [ROW5, ROW5, ROW5]
+
+pub struct Data {
+    pub values: [[u256; 5]; 3],
+}
+
+fn read() -> u256 {
+    let mut data = Data { values: GRID5 }
+    data.values[1][2] = 7
+    data.values[1][2]
+}
+"#,
+        );
+
+        let read = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "read")
+            .expect("expected read helper");
+        let data_local = read
+            .body
+            .locals
+            .iter()
+            .find(|local| local.name == "data")
+            .expect("expected data local");
+
+        assert!(data_local.is_mut, "expected mutable local");
+        assert_eq!(
+            data_local.address_space,
+            AddressSpaceKind::Memory,
+            "mutable transparent struct-wrapper locals must materialize into memory-backed runtime carriers; shape={:?} const_backing={:?} place_root_layout={:?}",
+            data_local.runtime_shape,
+            data_local.const_backing,
+            data_local.place_root_layout,
+        );
+        assert!(
+            matches!(data_local.runtime_shape, RuntimeShape::ObjectRef { .. }),
+            "mutable transparent struct-wrapper locals must not remain const-backed, got {:?}",
+            data_local.runtime_shape,
+        );
+        assert!(
+            matches!(
+                data_local.const_backing,
+                crate::ir::LocalConstBacking::Runtime
+            ),
+            "mutable transparent struct-wrapper locals must clear const backing after materialization, got {:?}",
+            data_local.const_backing,
+        );
+    }
+
+    #[test]
+    fn nested_mutation_stores_do_not_keep_code_backed_row_metadata() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///nested_mutation_stores_do_not_keep_code_backed_row_metadata.fe",
+            r#"
+const ROW5: [u256; 5] = [0, 0, 0, 0, 0]
+const GRID5: [[u256; 5]; 3] = [ROW5, ROW5, ROW5]
+
+pub struct Data {
+    pub values: [[u256; 5]; 3],
+}
+
+#[test]
+fn test_mutate_field_then_pass_nested_field() {
+    let mut data = Data { values: GRID5 }
+    data.values[1][2] = 7
+    assert(data.values[1][2] == 7)
+}
+"#,
+        );
+
+        let test_fn = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "test_mutate_field_then_pass_nested_field")
+            .expect("expected nested-field mutation test helper");
+        let store = test_fn
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                MirInst::Store { place, .. } => Some(place),
+                _ => None,
+            })
+            .expect("expected nested-field store");
+
+        assert_eq!(
+            test_fn.body.place_address_space(store),
+            AddressSpaceKind::Memory,
+            "nested scalar stores into runtime-backed transparent wrappers must not retain stale code-backed row metadata; store={store:?}, locals={:?}",
+            test_fn.body.locals,
+        );
+    }
+
+    #[test]
+    fn nested_mutation_call_params_do_not_specialize_back_to_code() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///nested_mutation_call_params_do_not_specialize_back_to_code.fe",
+            r#"
+const ROW5: [u256; 5] = [0, 0, 0, 0, 0]
+const GRID5: [[u256; 5]; 3] = [ROW5, ROW5, ROW5]
+
+pub struct Data {
+    pub values: [[u256; 5]; 3],
+}
+
+impl Data {
+    pub fn empty() -> Self {
+        Data { values: GRID5 }
+    }
+
+    pub fn set(mut self, row: usize, col: usize, value: u256) {
+        self.values[row][col] = value
+    }
+}
+
+fn first(values: [[u256; 5]; 3]) -> u256 {
+    values[1][2]
+}
+
+#[test]
+fn test_mutate_then_pass_nested_field() {
+    let mut data = Data::empty()
+    data.set(1, 2, 7)
+    assert(first(data.values) == 7)
+}
+"#,
+        );
+
+        let caller = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "test_mutate_then_pass_nested_field")
+            .expect("expected mutation caller")
+            .clone();
+        let caller_body = caller.body.clone();
+        let (call_arg, callee_name) = caller_body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                MirInst::Assign {
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } if call
+                    .resolved_name
+                    .as_deref()
+                    .is_some_and(|name| name.starts_with("first")) =>
+                {
+                    call.args.first().copied().zip(call.resolved_name.clone())
+                }
+                _ => None,
+            })
+            .expect("expected first call arg");
+        let call_arg_shape = caller_body.value(call_arg).runtime_shape;
+        assert!(
+            matches!(
+                caller_body.value(call_arg).origin,
+                ValueOrigin::TransparentCast { .. }
+            ),
+            "mutated nested-array helper calls should lower transparent wrapper field access through a TransparentCast, got {:?}",
+            caller_body.value(call_arg).origin,
+        );
+        assert!(
+            matches!(call_arg_shape, RuntimeShape::ObjectRef { .. }),
+            "mutated nested-array helper calls must pass runtime-backed array objects, got {:?}; origin={:?}; ptr={:?}",
+            call_arg_shape,
+            caller_body.value(call_arg).origin,
+            caller_body.value_pointer_info(call_arg),
+        );
+        let first_body = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == callee_name)
+            .expect("expected specialized first helper")
+            .body
+            .clone();
+        let param_base = first_body
+            .values
+            .iter()
+            .enumerate()
+            .find_map(|(idx, value)| match value.origin {
+                ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local)
+                    if local == first_body.param_locals[0] =>
+                {
+                    Some(ValueId(idx as u32))
+                }
+                _ => None,
+            })
+            .expect("expected value rooted at first's param");
+        let row_path = MirProjectionPath::from_projection(Projection::Index(
+            hir::projection::IndexSource::Constant(1),
+        ));
+        let elem_path = row_path.concat(&MirProjectionPath::from_projection(Projection::Index(
+            hir::projection::IndexSource::Constant(2),
+        )));
+
+        assert_eq!(
+            first_body.place_address_space(&Place::new(param_base, row_path.clone())),
+            AddressSpaceKind::Memory,
+            "mutated nested-array rows passed through helpers must stay memory-backed; param={:?}",
+            first_body.local(first_body.param_locals[0]),
+        );
+        assert_eq!(
+            first_body.place_address_space(&Place::new(param_base, elem_path)),
+            AddressSpaceKind::Memory,
+            "mutated nested-array element loads in helpers must not resolve through code; param={:?}",
+            first_body.local(first_body.param_locals[0]),
+        );
+    }
+
+    #[test]
+    fn direct_nested_mutation_call_params_do_not_specialize_back_to_code() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///direct_nested_mutation_call_params_do_not_specialize_back_to_code.fe",
+            r#"
+const ROW5: [u256; 5] = [0, 0, 0, 0, 0]
+const GRID5: [[u256; 5]; 3] = [ROW5, ROW5, ROW5]
+
+pub struct Data {
+    pub values: [[u256; 5]; 3],
+}
+
+fn first(values: [[u256; 5]; 3]) -> u256 {
+    values[1][2]
+}
+
+#[test]
+fn test_mutate_field_then_pass_nested_field() {
+    let mut data = Data { values: GRID5 }
+    data.values[1][2] = 7
+    assert(first(data.values) == 7)
+}
+"#,
+        );
+
+        let caller = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "test_mutate_field_then_pass_nested_field")
+            .expect("expected direct mutation caller")
+            .clone();
+        let caller_body = caller.body.clone();
+        let (call_arg, callee_name) = caller_body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                MirInst::Assign {
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } if call
+                    .resolved_name
+                    .as_deref()
+                    .is_some_and(|name| name.starts_with("first")) =>
+                {
+                    call.args.first().copied().zip(call.resolved_name.clone())
+                }
+                _ => None,
+            })
+            .expect("expected first call arg");
+        let call_arg_shape = caller_body.value(call_arg).runtime_shape;
+        assert!(
+            matches!(
+                caller_body.value(call_arg).origin,
+                ValueOrigin::TransparentCast { .. }
+            ),
+            "direct nested-array helper calls should lower transparent wrapper field access through a TransparentCast, got {:?}",
+            caller_body.value(call_arg).origin,
+        );
+        assert!(
+            matches!(call_arg_shape, RuntimeShape::ObjectRef { .. }),
+            "direct nested-array helper calls must pass runtime-backed array objects, got {:?}; origin={:?}; ptr={:?}",
+            call_arg_shape,
+            caller_body.value(call_arg).origin,
+            caller_body.value_pointer_info(call_arg),
+        );
+        let ValueOrigin::TransparentCast { value: inner } = caller_body.value(call_arg).origin
+        else {
+            unreachable!("checked above");
+        };
+        assert!(
+            matches!(
+                caller_body.value(inner).runtime_shape,
+                RuntimeShape::ObjectRef { .. }
+            ),
+            "direct nested-array helper inner value must also stay object-backed, got {:?}; origin={:?}; ptr={:?}",
+            caller_body.value(inner).runtime_shape,
+            caller_body.value(inner).origin,
+            caller_body.value_pointer_info(inner),
+        );
+
+        let first_body = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == callee_name)
+            .expect("expected specialized first helper")
+            .body
+            .clone();
+        let param_base = first_body
+            .values
+            .iter()
+            .enumerate()
+            .find_map(|(idx, value)| match value.origin {
+                ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local)
+                    if local == first_body.param_locals[0] =>
+                {
+                    Some(ValueId(idx as u32))
+                }
+                _ => None,
+            })
+            .expect("expected value rooted at first's param");
+        let row_path = MirProjectionPath::from_projection(Projection::Index(
+            hir::projection::IndexSource::Constant(1),
+        ));
+        let elem_path = row_path.concat(&MirProjectionPath::from_projection(Projection::Index(
+            hir::projection::IndexSource::Constant(2),
+        )));
+
+        assert_eq!(
+            first_body.place_address_space(&Place::new(param_base, row_path.clone())),
+            AddressSpaceKind::Memory,
+            "direct nested-array rows passed through helpers must stay memory-backed; param={:?}",
+            first_body.local(first_body.param_locals[0]),
+        );
+        assert_eq!(
+            first_body.place_address_space(&Place::new(param_base, elem_path)),
+            AddressSpaceKind::Memory,
+            "direct nested-array element loads in helpers must not resolve through code; param={:?}",
+            first_body.local(first_body.param_locals[0]),
+        );
+    }
+
+    #[test]
+    fn runtime_shapes_choose_object_refs_for_mixed_readonly_and_runtime_callers() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///runtime_shapes_choose_object_refs_for_mixed_readonly_and_runtime_callers.fe",
+            r#"
+fn helper(values: [u256; 4]) -> [u256; 4] {
+    let mut out: [u256; 4] = [0, 0, 0, 0]
+    for i in 0..4 {
+        out[i] = values[i]
+    }
+    return out
+}
+
+fn readonly_caller() -> u256 {
+    let values: [u256; 4] = [1, 2, 3, 4]
+    let out: [u256; 4] = helper(values)
+    return out[0]
+}
+
+fn runtime_caller() -> u256 {
+    let mut values: [u256; 4] = [1, 2, 3, 4]
+    values[0] = 9
+    let out: [u256; 4] = helper(values)
+    return out[0]
+}
+"#,
+        );
+
+        let helper = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "helper")
+            .expect("expected helper function");
+        let values_param = helper.body.local(helper.body.param_locals[0]);
+        assert!(
+            matches!(values_param.runtime_shape, RuntimeShape::ObjectRef { .. }),
+            "helpers with mixed readonly/runtime aggregate callers must converge to object refs, got {:?}",
+            values_param.runtime_shape,
+        );
+        assert_eq!(
+            values_param.address_space,
+            AddressSpaceKind::Memory,
+            "mixed readonly/runtime aggregate helper params must not stay code-backed",
+        );
+        let param_base = helper
+            .body
+            .values
+            .iter()
+            .enumerate()
+            .find_map(|(idx, value)| match value.origin {
+                ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local)
+                    if local == helper.body.param_locals[0] =>
+                {
+                    Some(ValueId(idx as u32))
+                }
+                _ => None,
+            })
+            .expect("expected value rooted at the mixed-shape param");
+        let param_loads = [Place::new(
+            param_base,
+            MirProjectionPath::from_projection(Projection::Index(
+                hir::projection::IndexSource::Constant(0),
+            )),
+        )];
+        assert!(
+            param_loads
+                .iter()
+                .all(|place| helper.body.place_address_space(place) == AddressSpaceKind::Memory),
+            "mixed readonly/runtime aggregate helper param loads must resolve through memory, got {:?}",
+            param_loads
+                .iter()
+                .map(|place| helper.body.place_address_space(place))
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn yul_prep_keeps_msg_nested_array_encode_helpers_memory_backed() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///msg_nested_array_arg.fe").expect("valid test url");
+        let file = db.workspace().touch(
+            &mut db,
+            url,
+            Some(
+                include_str!("../../fe/tests/fixtures/fe_test/msg_nested_array_arg.fe").to_owned(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let mut module = lower_module(&db, top_mod).expect("module should lower");
+        super::prepare_module_for_evm_yul_codegen(&db, &mut module);
+        let verify_helper = module
+            .functions
+            .iter()
+            .find(|func| {
+                func.symbol_name.contains("verify_") && func.symbol_name.contains("encode_to_ptr")
+            })
+            .expect("expected Verify encode_to_ptr helper");
+        let verify_core = super::function_core_lib(&db, verify_helper);
+        let verify_param = verify_helper.body.local(verify_helper.body.param_locals[0]);
+        assert!(
+            !matches!(verify_param.runtime_shape, RuntimeShape::ConstRef { .. }),
+            "Verify encode helper param should already be runtime-backed, got space {:?} const {:?} shape {:?}",
+            verify_param.address_space,
+            verify_param.const_backing,
+            verify_param.runtime_shape,
+        );
+        let verify_caller = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name.contains("encode_calldata__Verify"))
+            .expect("expected encode_calldata__Verify helper");
+        let verify_caller_core = super::function_core_lib(&db, verify_caller);
+        let verify_arg = verify_caller
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                MirInst::Assign {
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } if call.resolved_name.as_deref() == Some(verify_helper.symbol_name.as_str()) => {
+                    call.args.first().copied()
+                }
+                _ => None,
+            })
+            .expect("expected caller arg for Verify encode helper");
+        let verify_arg_shape = crate::repr::runtime_shape_for_value(
+            &db,
+            &verify_caller_core,
+            &verify_caller.body.values,
+            &verify_caller.body.locals,
+            verify_arg,
+        )
+        .expect("Verify caller arg shape should resolve");
+        assert!(
+            !matches!(verify_arg_shape, RuntimeShape::ConstRef { .. }),
+            "caller arg for Verify encode helper should already be runtime-backed, got {:?}",
+            verify_arg_shape,
+        );
+
+        for expected_ty in ["[u256; 2]", "[u256; 38]"] {
+            let helper = module
+                .functions
+                .iter()
+                .find(|func| {
+                    func.symbol_name.contains("encode_to_ptr")
+                        && func.body.param_locals.first().is_some_and(|local| {
+                            func.body.local(*local).ty.pretty_print(&db) == expected_ty
+                        })
+                })
+                .unwrap_or_else(|| panic!("expected encode_to_ptr helper for {expected_ty}"));
+
+            if expected_ty == "[u256; 2]" {
+                let arg = verify_helper
+                    .body
+                    .blocks
+                    .iter()
+                    .flat_map(|block| block.insts.iter())
+                    .find_map(|inst| match inst {
+                        MirInst::Assign {
+                            rvalue: Rvalue::Call(call),
+                            ..
+                        } if call.resolved_name.as_deref() == Some(helper.symbol_name.as_str()) => {
+                            call.args.first().copied()
+                        }
+                        _ => None,
+                    })
+                    .expect("expected caller arg for nested [u256; 2] encode helper");
+                let arg_shape = crate::repr::runtime_shape_for_value(
+                    &db,
+                    &verify_core,
+                    &verify_helper.body.values,
+                    &verify_helper.body.locals,
+                    arg,
+                )
+                .expect("caller arg shape should resolve");
+                let arg_data = verify_helper.body.value(arg);
+                let arg_debug = match &arg_data.origin {
+                    ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
+                        let base = verify_helper.body.value(place.base);
+                        format!(
+                            "origin={:?} place={:?} base_origin={:?} base_shape={:?} base_ptr={:?}",
+                            arg_data.origin,
+                            place,
+                            base.origin,
+                            crate::repr::runtime_shape_for_value(
+                                &db,
+                                &verify_core,
+                                &verify_helper.body.values,
+                                &verify_helper.body.locals,
+                                place.base,
+                            ),
+                            base.pointer_info,
+                        )
+                    }
+                    _ => format!(
+                        "origin={:?} repr={:?} ptr={:?}",
+                        arg_data.origin, arg_data.repr, arg_data.pointer_info
+                    ),
+                };
+                assert!(
+                    !matches!(arg_shape, RuntimeShape::ConstRef { .. }),
+                    "caller arg for `{}` should already be runtime-backed, got {:?}; {}; local_pointer_leaf_infos={:?}",
+                    helper.symbol_name,
+                    arg_shape,
+                    arg_debug,
+                    verify_helper
+                        .body
+                        .local(verify_helper.body.param_locals[0])
+                        .pointer_leaf_infos,
+                );
+            }
+
+            let param_local = helper.body.param_locals[0];
+            let param_data = helper.body.local(param_local);
+            assert_eq!(
+                param_data.address_space,
+                AddressSpaceKind::Memory,
+                "Yul-prepared helper `{}` param `{expected_ty}` should stay memory-backed, got space {:?} const {:?} shape {:?}",
+                helper.symbol_name,
+                param_data.address_space,
+                param_data.const_backing,
+                param_data.runtime_shape,
+            );
+            assert!(
+                !param_data.const_backing.is_const(),
+                "Yul-prepared helper `{}` param `{expected_ty}` should not stay const-backed: space {:?} const {:?} shape {:?}",
+                helper.symbol_name,
+                param_data.address_space,
+                param_data.const_backing,
+                param_data.runtime_shape,
+            );
+
+            let param_base = helper
+                .body
+                .values
+                .iter()
+                .enumerate()
+                .find_map(|(idx, value)| match value.origin {
+                    ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local)
+                        if local == param_local =>
+                    {
+                        Some(ValueId(idx as u32))
+                    }
+                    _ => None,
+                })
+                .expect("expected value rooted at the helper param");
+            let indexed_place = Place::new(
+                param_base,
+                MirProjectionPath::from_projection(Projection::Index(
+                    hir::projection::IndexSource::Constant(0),
+                )),
+            );
+            assert_eq!(
+                helper.body.place_address_space(&indexed_place),
+                AddressSpaceKind::Memory,
+                "Yul-prepared helper `{}` indexed param loads should stay in memory",
+                helper.symbol_name,
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_shapes_preserve_nested_pointer_leaf_spaces_across_forwarded_returns() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///runtime_shapes_preserve_nested_pointer_leaf_spaces_across_forwarded_returns.fe",
+            include_str!("../../fe/tests/fixtures/fe_test/view_param_local_ref_take_reverse.fe"),
+        );
+
+        let sum_first4 = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "sum_first4")
+            .expect("expected sum_first4 helper");
+        let arr_param = sum_first4.body.local(sum_first4.body.param_locals[0]);
+        let take_local = sum_first4
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                MirInst::Assign {
+                    dest: Some(local),
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } if call
+                    .resolved_name
+                    .as_deref()
+                    .is_some_and(|name| name.contains("take_u256___u256__8")) =>
+                {
+                    Some((*local, *call.args.get(1).expect("expected take seq arg")))
+                }
+                _ => None,
+            })
+            .expect("expected take_u256 call result local");
+
+        assert!(
+            sum_first4
+                .body
+                .value_pointer_info(take_local.1)
+                .is_some_and(|info| info.address_space == AddressSpaceKind::Code),
+            "forwarded aggregate returns should preserve code-backed call args, got sum_first4 param space {:?} const {:?} shape {:?} infos {:?}, take arg origin {:?} base {:?} repr {:?} ptr {:?}",
+            arr_param.address_space,
+            arr_param.const_backing,
+            arr_param.runtime_shape,
+            arr_param.pointer_leaf_infos,
+            sum_first4.body.value(take_local.1).origin,
+            match &sum_first4.body.value(take_local.1).origin {
+                ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
+                    Some(sum_first4.body.value(place.base).origin.clone())
+                }
+                _ => None,
+            },
+            sum_first4.body.value(take_local.1).repr,
+            sum_first4.body.value_pointer_info(take_local.1),
+        );
+    }
+
+    #[test]
+    fn code_backed_take_wrapper_results_preserve_nested_base_leaf_metadata() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///code_backed_take_wrapper_results_preserve_nested_base_leaf_metadata.fe",
+            include_str!("../../fe/tests/fixtures/fe_test/view_param_local_ref_take_reverse.fe"),
+        );
+
+        let sum_first4 = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "sum_first4_arg0_root_code")
+            .expect("expected code-specialized sum_first4 helper");
+        let head_local = sum_first4
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                MirInst::Assign {
+                    dest: Some(local),
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } if call
+                    .resolved_name
+                    .as_deref()
+                    .is_some_and(|name| name.contains("take_u256_arg1_root_code___u256__8")) =>
+                {
+                    Some(*local)
+                }
+                _ => None,
+            })
+            .expect("expected take_u256 call result local");
+
+        assert_eq!(
+            sum_first4
+                .body
+                .local(head_local)
+                .pointer_leaf_infos
+                .iter()
+                .find_map(|(path, info)| {
+                    (path == &MirProjectionPath::from_projection(Projection::Field(1)))
+                        .then_some(info.address_space)
+                }),
+            Some(AddressSpaceKind::Code),
+            "code-backed take wrapper results should preserve the base field leaf metadata; head_local={:?}",
+            sum_first4.body.local(head_local),
+        );
+    }
+
+    #[test]
+    fn runtime_shapes_keep_pointer_like_wrapper_returns_const_backed() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///runtime_shapes_keep_pointer_like_wrapper_returns_const_backed.fe",
+            include_str!("../../fe/tests/fixtures/fe_test/view_param_local_ref_take_reverse.fe"),
+        );
+
+        let reverse_u256 = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name.contains("reverse_u256___u256__8"))
+            .expect("expected reverse_u256 helper");
+        let _reverse_generic = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name.starts_with("reverse__u256__u256__8"))
+            .expect("expected reverse generic helper");
+        let sum_last4 = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "sum_last4")
+            .expect("expected sum_last4 helper");
+        assert!(
+            matches!(
+                reverse_u256.runtime_return_shape,
+                RuntimeShape::ConstRef { .. }
+            ),
+            "pointer-like wrapper helper returns should stay const-backed, got {:?}",
+            reverse_u256.runtime_return_shape,
+        );
+        let seq_param = reverse_u256.body.local(reverse_u256.body.param_locals[0]);
+        assert!(
+            matches!(seq_param.runtime_shape, RuntimeShape::ConstRef { .. }),
+            "pointer-like wrapper helper params should stay const-backed, got {:?}",
+            seq_param.runtime_shape,
+        );
+        assert!(
+            matches!(seq_param.const_backing, crate::ir::LocalConstBacking::Const),
+            "pointer-like wrapper helper params should keep const backing, got {:?}",
+            seq_param.const_backing,
+        );
+        assert_eq!(
+            seq_param.address_space,
+            AddressSpaceKind::Code,
+            "pointer-like wrapper helper params should stay in code space",
+        );
+
+        let rev_local = sum_last4
+            .body
+            .locals
+            .iter()
+            .find(|local| local.name == "rev")
+            .expect("expected rev local");
+        assert!(
+            matches!(rev_local.runtime_shape, RuntimeShape::ConstRef { .. }),
+            "pointer-like wrapper locals receiving readonly call results should stay const-backed, got {:?}",
+            rev_local.runtime_shape,
+        );
+        assert!(
+            matches!(rev_local.const_backing, crate::ir::LocalConstBacking::Const),
+            "pointer-like wrapper locals receiving readonly call results should keep const backing, got {:?}",
+            rev_local.const_backing,
+        );
+        assert_eq!(
+            rev_local.address_space,
+            AddressSpaceKind::Code,
+            "pointer-like wrapper locals receiving readonly call results should stay in code space",
+        );
+
+        let take_reverse = module
+            .functions
+            .iter()
+            .find(|func| {
+                func.symbol_name
+                    .contains("take_u256__Reverse_u256___u256__8__")
+            })
+            .expect("expected take_u256<Reverse> helper");
+        let seq_param = take_reverse.body.local(take_reverse.body.param_locals[1]);
+        assert!(
+            matches!(seq_param.runtime_shape, RuntimeShape::ConstRef { .. }),
+            "pointer-like wrapper ref params should specialize to const-backed runtime shape, got {:?}",
+            seq_param.runtime_shape,
+        );
+        assert!(
+            matches!(seq_param.const_backing, crate::ir::LocalConstBacking::Const),
+            "pointer-like wrapper ref params should keep const backing, got {:?}",
+            seq_param.const_backing,
+        );
+        assert_eq!(
+            seq_param.address_space,
+            AddressSpaceKind::Code,
+            "pointer-like wrapper ref params should specialize to code space",
+        );
+
+        let tail_local = sum_last4
+            .body
+            .locals
+            .iter()
+            .find(|local| local.name == "tail")
+            .expect("expected tail local");
+        assert!(
+            matches!(tail_local.runtime_shape, RuntimeShape::ObjectRef { .. }),
+            "readonly wrapper locals returned through runtime-backed helpers should stay object-backed until projected loads, got {:?}",
+            tail_local.runtime_shape,
+        );
+        assert_eq!(
+            tail_local
+                .pointer_leaf_infos
+                .iter()
+                .find_map(|(path, info)| {
+                    (path == &MirProjectionPath::from_projection(Projection::Field(1)))
+                        .then_some(info.address_space)
+                }),
+            Some(AddressSpaceKind::Code),
+            "readonly wrapper locals should preserve code-space leaf metadata for forwarded ref fields",
+        );
+
+        for func in module.functions.iter().filter(|func| {
+            func.symbol_name.contains("take_i__t__")
+                && (func.symbol_name.contains("len__u256_Reverse")
+                    || func.symbol_name.contains("get__u256_Reverse"))
+        }) {
+            for call in func.body.blocks.iter().flat_map(|block| {
+                block.insts.iter().filter_map(|inst| match inst {
+                    MirInst::Assign {
+                        rvalue: Rvalue::Call(call),
+                        ..
+                    } if call
+                        .resolved_name
+                        .as_deref()
+                        .is_some_and(|name| name.contains("reverse_i__t__")) =>
+                    {
+                        Some(call)
+                    }
+                    _ => None,
+                })
+            }) {
+                let Some(&receiver) = call.args.first() else {
+                    continue;
+                };
+                assert!(
+                    matches!(
+                        func.body.value(receiver).runtime_shape,
+                        RuntimeShape::ConstRef { .. }
+                    ),
+                    "take<Reverse> should call Reverse helpers with a const-backed receiver, got {:?} origin {:?} ptr {:?} inner_origin {:?} inner_shape {:?} inner_ptr {:?} inner_local {:?} in `{}`",
+                    func.body.value(receiver).runtime_shape,
+                    func.body.value(receiver).origin,
+                    func.body.value_pointer_info(receiver),
+                    match func.body.value(receiver).origin {
+                        ValueOrigin::TransparentCast { value } =>
+                            Some(func.body.value(value).origin.clone()),
+                        _ => None,
+                    },
+                    match func.body.value(receiver).origin {
+                        ValueOrigin::TransparentCast { value } =>
+                            Some(func.body.value(value).runtime_shape),
+                        _ => None,
+                    },
+                    match func.body.value(receiver).origin {
+                        ValueOrigin::TransparentCast { value } =>
+                            func.body.value_pointer_info(value),
+                        _ => None,
+                    },
+                    match func.body.value(receiver).origin {
+                        ValueOrigin::TransparentCast { value } =>
+                            match func.body.value(value).origin {
+                                ValueOrigin::Local(local) => Some(func.body.local(local)),
+                                _ => None,
+                            },
+                        _ => None,
+                    },
+                    func.symbol_name,
+                );
+                assert_eq!(
+                    func.body
+                        .value_pointer_info(receiver)
+                        .map(|info| info.address_space),
+                    Some(AddressSpaceKind::Code),
+                    "take<Reverse> should preserve code-space pointer info on Reverse helper receivers in `{}`",
+                    func.symbol_name,
+                );
+            }
+        }
+
+        let reverse_get = module
+            .functions
+            .iter()
+            .find(|func| {
+                func.symbol_name.contains("reverse_i__t__")
+                    && func.symbol_name.contains("get__u256__u256__8__")
+            })
+            .expect("expected Reverse::get helper");
+        let self_param = reverse_get.body.local(reverse_get.body.param_locals[0]);
+        assert!(
+            matches!(self_param.runtime_shape, RuntimeShape::ConstRef { .. }),
+            "pointer-like wrapper method receivers should specialize to const-backed runtime shape, got {:?}",
+            self_param.runtime_shape,
+        );
+        assert!(
+            matches!(
+                self_param.const_backing,
+                crate::ir::LocalConstBacking::Const
+            ),
+            "pointer-like wrapper method receivers should keep const backing, got {:?}",
+            self_param.const_backing,
+        );
+        assert_eq!(
+            self_param.address_space,
+            AddressSpaceKind::Code,
+            "pointer-like wrapper method receivers should specialize to code space",
+        );
+
+        let take_get = module
+            .functions
+            .iter()
+            .find(|func| {
+                func.symbol_name.contains("take_i__t__")
+                    && func.symbol_name.contains("get__u256_Reverse")
+            })
+            .expect("expected Take<Reverse>::get helper");
+        let take_get_self = take_get.body.local(take_get.body.param_locals[0]);
+        assert!(
+            matches!(take_get_self.runtime_shape, RuntimeShape::ObjectRef { .. }),
+            "wrapper helpers should keep runtime-backed outer receivers when only nested ref fields are readonly, got {:?}",
+            take_get_self.runtime_shape,
+        );
+        assert_eq!(
+            take_get_self
+                .pointer_leaf_infos
+                .iter()
+                .find_map(|(path, info)| {
+                    (path == &MirProjectionPath::from_projection(Projection::Field(1)))
+                        .then_some(info.address_space)
+                }),
+            Some(AddressSpaceKind::Code),
+            "wrapper helper receivers should preserve code-space leaf metadata for readonly ref fields",
+        );
+    }
+
+    #[test]
+    fn discriminant_loads_from_object_backed_enums_keep_enum_tag_runtime_shape() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///discriminant_loads_from_object_backed_enums_keep_enum_tag_runtime_shape.fe",
+            include_str!("../../fe/tests/fixtures/fe_test/option_mut_scalar_match_regression.fe"),
+        );
+
+        let recv = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "__C_recv_0_0")
+            .expect("expected __C_recv_0_0");
+        let (dest_local, discr_place) = recv
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                MirInst::Assign {
+                    dest: Some(local),
+                    rvalue: Rvalue::Load { place },
+                    ..
+                } if matches!(
+                    place.projection.iter().last(),
+                    Some(Projection::Discriminant)
+                ) =>
+                {
+                    Some((*local, place.clone()))
+                }
+                _ => None,
+            })
+            .expect("expected discriminant load");
+        let locals = recv.body.locals.clone();
+        assert!(
+            matches!(
+                locals[dest_local.index()].runtime_shape,
+                RuntimeShape::EnumTag { .. }
+            ),
+            "discriminant load destinations must keep enum-tag runtime shape, got {:?}",
+            locals[dest_local.index()].runtime_shape,
+        );
+        assert!(
+            matches!(
+                discr_place.projection.iter().last(),
+                Some(Projection::Discriminant)
+            ),
+            "expected discriminant load place, got {:?}",
+            discr_place,
+        );
+    }
+
+    #[test]
+    fn runtime_shapes_keep_receiver_field_returns_storage_backed_with_same_typed_args() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///runtime_shapes_keep_receiver_field_returns_storage_backed_with_same_typed_args.fe",
+            include_str!(
+                "../../fe/tests/fixtures/fe_test/receiver_returns_non_mem_with_same_typed_memory_arg.fe"
+            ),
+        );
+
+        let recv = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "__C_recv_0_0")
+            .expect("expected recv helper");
+        let target_local_idx = recv
+            .body
+            .locals
+            .iter()
+            .position(|local| local.name == "target")
+            .expect("expected target local");
+        let call_dest = recv
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                MirInst::Assign {
+                    dest: Some(dest),
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } if call
+                    .resolved_name
+                    .as_deref()
+                    .is_some_and(|name| name.contains("choose_self_stor_arg0_root_stor")) =>
+                {
+                    Some(*dest)
+                }
+                _ => None,
+            })
+            .expect("expected choose_self call");
+
+        assert_eq!(
+            call_dest.index(),
+            target_local_idx,
+            "choose_self call should assign directly into the `target` local",
+        );
+
+        let target = recv.body.local(call_dest);
+        assert_eq!(
+            target.address_space,
+            AddressSpaceKind::Storage,
+            "receiver-field returns should keep storage address space even when another arg matches the return type",
+        );
+        assert!(
+            matches!(target.runtime_shape, RuntimeShape::AddressWord(info) if info.address_space == AddressSpaceKind::Storage),
+            "receiver-field returns should stay storage-backed handles, got {:?}",
+            target.runtime_shape,
         );
     }
 
@@ -3477,6 +6752,7 @@ fn marker() {
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos: Vec::new(),
             place_root_layout: LocalPlaceRootLayout::MemorySlot,
+            const_backing: crate::ir::LocalConstBacking::Unknown,
             runtime_shape: RuntimeShape::Unresolved,
         }];
         let values = vec![ValueData {
@@ -3627,6 +6903,7 @@ fn smoke() {}
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos: Vec::new(),
             place_root_layout: LocalPlaceRootLayout::Direct,
+            const_backing: crate::ir::LocalConstBacking::Unknown,
             runtime_shape: RuntimeShape::Unresolved,
         });
         let spill_local = body.alloc_local(LocalData {
@@ -3640,6 +6917,7 @@ fn smoke() {}
                 target_ty: spill_target_ty,
                 source: ObjectRootSource::SpillOf(owner_local),
             },
+            const_backing: crate::ir::LocalConstBacking::Unknown,
             runtime_shape: RuntimeShape::Unresolved,
         });
         body.spill_slots.insert(owner_local, spill_local);
@@ -3759,6 +7037,7 @@ fn smoke() {}
                 .then(memory_root_infos)
                 .unwrap_or_default(),
             place_root_layout: LocalPlaceRootLayout::Direct,
+            const_backing: crate::ir::LocalConstBacking::Unknown,
             runtime_shape: RuntimeShape::Unresolved,
         });
         let dest_local = body.alloc_local(LocalData {
@@ -3771,6 +7050,7 @@ fn smoke() {}
                 .then(memory_root_infos)
                 .unwrap_or_default(),
             place_root_layout: LocalPlaceRootLayout::Direct,
+            const_backing: crate::ir::LocalConstBacking::Unknown,
             runtime_shape: RuntimeShape::Unresolved,
         });
         let other_local = body.alloc_local(LocalData {
@@ -3781,6 +7061,7 @@ fn smoke() {}
             address_space: AddressSpaceKind::Storage,
             pointer_leaf_infos: vec![(root, storage_info)],
             place_root_layout: LocalPlaceRootLayout::Direct,
+            const_backing: crate::ir::LocalConstBacking::Unknown,
             runtime_shape: RuntimeShape::Unresolved,
         });
 
@@ -3941,7 +7222,7 @@ fn smoke() {}
             dest.pointer_leaf_infos,
         );
         assert!(
-            matches!(dest.runtime_shape, RuntimeShape::MemoryPtr { .. }),
+            matches!(dest.runtime_shape, RuntimeShape::ObjectRef { .. }),
             "incompatible whole-local rebinds should not partially rewrite the assignee runtime shape, got {:?}",
             dest.runtime_shape,
         );
@@ -4006,6 +7287,53 @@ fn smoke() {}
     }
 
     #[test]
+    fn poseidon_helpers_specialize_array_params_by_root_carrier_space() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///poseidon_mock.fe",
+            include_str!("../../fe/tests/fixtures/fe_test/poseidon_mock.fe"),
+        );
+
+        let ark_memory = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "ark")
+            .expect("expected default memory-backed ark instance");
+        let ark_code = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name.starts_with("ark_arg0_root_code"))
+            .expect("expected code-specialized ark instance");
+
+        let memory_param = ark_memory.body.local(ark_memory.body.param_locals[0]);
+        assert_eq!(
+            memory_param.address_space,
+            AddressSpaceKind::Memory,
+            "default ark param should stay memory-backed, got {:?}",
+            memory_param,
+        );
+        assert!(
+            matches!(memory_param.runtime_shape, RuntimeShape::ObjectRef { .. }),
+            "default ark param should stay object-backed, got {:?}",
+            memory_param.runtime_shape,
+        );
+
+        let code_param = ark_code.body.local(ark_code.body.param_locals[0]);
+        assert_eq!(
+            code_param.address_space,
+            AddressSpaceKind::Code,
+            "code-specialized ark param should stay code-backed, got {:?}",
+            code_param,
+        );
+        assert!(
+            matches!(code_param.runtime_shape, RuntimeShape::ConstRef { .. }),
+            "code-specialized ark param should stay const-backed, got {:?}",
+            code_param.runtime_shape,
+        );
+    }
+
+    #[test]
     fn runtime_shapes_refine_loaded_object_backed_scalar_handles() {
         let mut db = DriverDataBase::default();
         let module = lower_inline_module(
@@ -4019,6 +7347,57 @@ fn smoke() {}
             .iter()
             .find(|func| func.symbol_name == "test_ref_is_not_a_copy")
             .expect("expected ref_is_not_a_copy test");
+        let live_view = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "live_view")
+            .expect("expected live_view helper");
+        assert!(
+            matches!(
+                live_view.runtime_return_shape,
+                RuntimeShape::ObjectRef { .. }
+            ),
+            "live_view should return an object-backed live view, got {:?}",
+            live_view.runtime_return_shape,
+        );
+        assert_eq!(
+            live_view.runtime_return_pointer_leaf_infos.len(),
+            2,
+            "live_view should preserve field-level return pointer metadata",
+        );
+        let live_view_ty = test_func
+            .body
+            .locals
+            .iter()
+            .find(|local| local.name == "live")
+            .expect("expected live local")
+            .ty;
+        let mut saw_live_view_local = false;
+        for func in &module.functions {
+            for local in func
+                .body
+                .locals
+                .iter()
+                .filter(|local| local.ty == live_view_ty)
+            {
+                saw_live_view_local = true;
+                assert!(
+                    matches!(local.runtime_shape, RuntimeShape::ObjectRef { .. }),
+                    "{}::{} should stay object-backed, got {:?}",
+                    func.symbol_name,
+                    local.name,
+                    local.runtime_shape,
+                );
+                assert_eq!(
+                    local.pointer_leaf_infos.len(),
+                    3,
+                    "{}::{} should preserve root and field pointer metadata",
+                    func.symbol_name,
+                    local.name,
+                );
+            }
+        }
+        assert!(saw_live_view_local, "expected at least one LiveView local");
         for local_name in ["live_x", "live_y"] {
             let local = test_func
                 .body
@@ -4032,6 +7411,84 @@ fn smoke() {}
                 local.runtime_shape,
             );
         }
+    }
+
+    #[test]
+    fn runtime_shapes_trace_free_function_local_alias_returns_to_const_sources() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///runtime_shapes_trace_free_function_local_alias_returns_to_const_sources.fe",
+            r#"
+fn choose_alias(values: [u256; 4], fallback: [u256; 4]) -> [u256; 4] {
+    let alias = values
+    alias
+}
+
+fn read() -> u256 {
+    let values: [u256; 4] = [1, 2, 3, 4]
+    let mut fallback: [u256; 4] = [5, 6, 7, 8]
+    fallback[0] = 9
+    let chosen = choose_alias(values, fallback)
+    chosen[0]
+}
+"#,
+        );
+
+        let read = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "read")
+            .expect("expected read helper");
+        let chosen_local_idx = read
+            .body
+            .locals
+            .iter()
+            .position(|local| local.name == "chosen")
+            .expect("expected chosen local");
+        let call_dest = read
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                MirInst::Assign {
+                    dest: Some(dest),
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } if call
+                    .resolved_name
+                    .as_deref()
+                    .is_some_and(|name| name.contains("choose_alias")) =>
+                {
+                    Some(*dest)
+                }
+                _ => None,
+            })
+            .expect("expected choose_alias call");
+
+        assert_eq!(
+            call_dest.index(),
+            chosen_local_idx,
+            "choose_alias call should assign directly into the `chosen` local",
+        );
+
+        let chosen = read.body.local(call_dest);
+        assert_eq!(
+            chosen.address_space,
+            AddressSpaceKind::Code,
+            "local aliases of proven const-backed args should stay code-backed even with same-typed memory fallbacks",
+        );
+        assert!(
+            matches!(chosen.runtime_shape, RuntimeShape::ConstRef { .. }),
+            "free-function local alias returns should stay const-backed, got {:?}",
+            chosen.runtime_shape,
+        );
+        assert!(
+            matches!(chosen.const_backing, crate::ir::LocalConstBacking::Const),
+            "free-function local alias returns should keep const backing, got {:?}",
+            chosen.const_backing,
+        );
     }
 
     #[test]
@@ -4113,6 +7570,79 @@ fn smoke() {}
                 RuntimeShape::Word(RuntimeWordKind::I8),
                 "scalar param runtime shape regressed after the full MIR pipeline",
             )
+        }
+    }
+
+    #[test]
+    fn checked_add_u8_helpers_keep_scalar_runtime_shapes() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///position_lifecycle.fe").expect("valid test url");
+        let file = db.workspace().touch(
+            &mut db,
+            url,
+            Some(include_str!("../../fe/tests/fixtures/fe_test/position_lifecycle.fe").to_owned()),
+        );
+        let top_mod = db.top_mod(file);
+        let ingot = top_mod.ingot(&db);
+        let mut module = crate::lower_ingot(&db, ingot).expect("ingot should lower");
+        let prep = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::prepare_module_for_evm_yul_codegen(&db, &mut module);
+        }));
+
+        for func in module
+            .functions
+            .iter()
+            .filter(|func| {
+                func.symbol_name.contains("u8")
+                    && (func.symbol_name.contains("checked_add")
+                        || func.symbol_name.contains("saturating_add")
+                        || func.symbol_name.contains("wrappingadd"))
+            })
+        {
+            eprintln!(
+                "helper {} ret={:?} locals={:?}",
+                func.symbol_name,
+                func.runtime_return_shape,
+                func.body
+                    .locals
+                    .iter()
+                    .map(|local| (&local.name, local.ty.pretty_print(&db), local.runtime_shape))
+                    .collect::<Vec<_>>()
+            );
+            eprintln!("body {:#?}", func.body.blocks);
+        }
+
+        let checked_add = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name.contains("checked_add_unsigned_impl__u8"))
+            .expect("expected checked_add<u8> helper");
+        assert!(
+            prep.is_ok(),
+            "yul prep should not panic before checked_add<u8> inspection"
+        );
+        assert_eq!(
+            checked_add.runtime_return_shape,
+            RuntimeShape::Word(RuntimeWordKind::I8),
+            "checked_add<u8> return shape must stay scalar, got {:?}",
+            checked_add.runtime_return_shape,
+        );
+        for &param_local in &checked_add.body.param_locals {
+            let param = checked_add.body.local(param_local);
+            assert_eq!(
+                param.runtime_shape,
+                RuntimeShape::Word(RuntimeWordKind::I8),
+                "checked_add<u8> params must stay scalar, got {:?}",
+                param.runtime_shape,
+            );
+        }
+        if let Some(result_local) = checked_add.body.locals.iter().find(|local| local.name == "result") {
+            assert_eq!(
+                result_local.runtime_shape,
+                RuntimeShape::Word(RuntimeWordKind::I8),
+                "checked_add<u8>::result must stay scalar, got {:?}",
+                result_local.runtime_shape,
+            );
         }
     }
 
@@ -4268,6 +7798,47 @@ fn smoke() {}
                 }
             }
         }
+    }
+
+    #[test]
+    fn runtime_shapes_keep_projected_scalar_handle_match_bindings_object_backed() {
+        let src = include_str!("../../fe/tests/fixtures/fe_test/if_let_while_let.fe");
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(&mut db, "file:///if_let_while_let.fe", src);
+
+        let func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "sum_if_let")
+            .expect("expected sum_if_let");
+        let x_local = func
+            .body
+            .locals
+            .iter()
+            .enumerate()
+            .find(|(_, local)| local.name == "x")
+            .expect("expected match binding local `x`");
+        assert!(
+            matches!(x_local.1.runtime_shape, RuntimeShape::ObjectRef { .. }),
+            "match binding local `x` should stay object-backed, got {:?}",
+            x_local.1.runtime_shape,
+        );
+        let value = func
+            .body
+            .values
+            .get(3)
+            .expect("expected field projection value for match binding");
+        assert!(
+            matches!(value.runtime_shape, RuntimeShape::ObjectRef { .. }),
+            "projected scalar-handle match binding should normalize to ObjectRef, got {:?} for {:?}",
+            value.runtime_shape,
+            value.origin,
+        );
+        assert!(
+            matches!(value.origin, ValueOrigin::PlaceRef(_)),
+            "expected projected binding value to be a PlaceRef, got {:?}",
+            value.origin,
+        );
     }
 
     #[test]

@@ -16,8 +16,10 @@ use crate::analysis::{
     HirAnalysisDb,
     ty::{
         const_ty::LayoutHoleArgSite,
+        corelib::resolve_lib_func_path,
         diagnostics::{BodyDiag, FuncBodyDiag},
         fold::{AssocTySubst, TyFoldable, TyFolder},
+        normalize::normalize_ty,
         trait_def::TraitInstId,
         trait_resolution::constraint::collect_func_decl_constraints,
         ty_def::{BorrowKind, CapabilityKind},
@@ -112,6 +114,10 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
 }
 
 impl<'db> Callable<'db> {
+    pub fn callable_def(&self) -> CallableDef<'db> {
+        self.callable_def
+    }
+
     pub fn new(
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
@@ -228,6 +234,22 @@ impl<'db> Callable<'db> {
             return;
         }
 
+        let expected_arg_tys = self.callable_def.arg_tys(db);
+        let func_params: Option<Vec<_>> = match self.callable_def {
+            CallableDef::Func(func) => {
+                let params: Vec<_> = func.params(db).collect();
+                if params.len() != expected_arg_tys.len() {
+                    panic!(
+                        "callable param length mismatch: expected {} param tys but have {} params",
+                        expected_arg_tys.len(),
+                        params.len()
+                    );
+                }
+                Some(params)
+            }
+            CallableDef::VariantCtor(_) => None,
+        };
+
         let mut args = if let Some((receiver_expr, receiver_prop)) = receiver {
             let mut args = Vec::with_capacity(call_args.len() + 1);
             let arg = CallArg::new(
@@ -244,29 +266,17 @@ impl<'db> Callable<'db> {
         };
 
         for (i, hir_arg) in call_args.iter().enumerate() {
+            let arg_idx = if has_receiver { i + 1 } else { i };
+            let expected_hint =
+                self.compile_time_string_literal_arg_expected(tc, hir_arg.expr, arg_idx);
             args.push(CallArg::from_hir_arg(
                 tc,
                 hir_arg,
                 span.clone().arg(i),
                 already_typed,
+                expected_hint,
             ));
         }
-
-        let expected_arg_tys = self.callable_def.arg_tys(db);
-        let func_params: Option<Vec<_>> = match self.callable_def {
-            CallableDef::Func(func) => {
-                let params: Vec<_> = func.params(db).collect();
-                if params.len() != expected_arg_tys.len() {
-                    panic!(
-                        "callable param length mismatch: expected {} param tys but have {} params",
-                        expected_arg_tys.len(),
-                        params.len()
-                    );
-                }
-                Some(params)
-            }
-            CallableDef::VariantCtor(_) => None,
-        };
 
         let body = tc.body();
         let is_unary = |expr: ExprId, op: UnOp| {
@@ -463,6 +473,55 @@ impl<'db> Callable<'db> {
             }
         }
     }
+
+    fn compile_time_string_literal_arg_expected(
+        &self,
+        tc: &TyChecker<'db>,
+        expr: ExprId,
+        arg_idx: usize,
+    ) -> Option<TyId<'db>> {
+        let Partial::Present(Expr::Lit(LitKind::String(string_id))) = expr.data(tc.db, tc.body())
+        else {
+            return None;
+        };
+
+        let mut expected = self
+            .callable_def
+            .arg_tys(tc.db)
+            .get(arg_idx)?
+            .instantiate(tc.db, &self.generic_args);
+        if let Some(inst) = self.trait_inst {
+            let mut subst = AssocTySubst::new(inst);
+            expected = expected.fold_with(tc.db, &mut subst);
+        }
+        let expected = normalize_ty(tc.db, expected, tc.env.scope(), tc.env.assumptions());
+        if tc.string_literal_should_use_byte_array(expected)
+            || self
+                .callable_def
+                .accepts_compile_time_string_literal_bytes(tc.db, tc.env.scope())
+        {
+            return Some(tc.string_literal_byte_array_ty(string_id.len_bytes(tc.db)));
+        }
+
+        None
+    }
+}
+
+impl<'db> CallableDef<'db> {
+    fn accepts_compile_time_string_literal_bytes(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        scope: crate::hir_def::scope_graph::ScopeId<'db>,
+    ) -> bool {
+        let Self::Func(func) = self else {
+            return false;
+        };
+
+        resolve_lib_func_path(db, scope, "core::keccak")
+            .is_some_and(|core_keccak| func == core_keccak)
+            || resolve_lib_func_path(db, scope, "std::abi::sol")
+                .is_some_and(|std_sol| func == std_sol)
+    }
 }
 
 fn place_borrow_suggestion<'db>(
@@ -528,14 +587,15 @@ impl<'db> CallArg<'db> {
         arg: &HirCallArg<'db>,
         span: LazyCallArgSpan<'db>,
         already_typed: bool,
+        expected_hint: Option<TyId<'db>>,
     ) -> Self {
-        let expr_prop = if already_typed {
+        let expr_prop = if already_typed && expected_hint.is_none() {
             let db = tc.db;
             tc.env
                 .typed_expr(arg.expr)
                 .unwrap_or_else(|| ExprProp::invalid(db))
         } else {
-            let ty = tc.fresh_ty();
+            let ty = expected_hint.unwrap_or_else(|| tc.fresh_ty());
             tc.check_expr(arg.expr, ty)
         };
         let label = arg.label_eagerly(tc.db, tc.body());

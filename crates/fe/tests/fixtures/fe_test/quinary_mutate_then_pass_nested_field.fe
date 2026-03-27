@@ -1,0 +1,27 @@
+const ROW5: [u256; 5] = [0, 0, 0, 0, 0]
+const GRID5: [[u256; 5]; 3] = [ROW5, ROW5, ROW5]
+
+pub struct Data {
+    pub values: [[u256; 5]; 3],
+}
+
+impl Data {
+    pub fn empty() -> Self {
+        Data { values: GRID5 }
+    }
+
+    pub fn set(mut self, row: usize, col: usize, value: u256) {
+        self.values[row][col] = value
+    }
+}
+
+fn first(values: [[u256; 5]; 3]) -> u256 {
+    values[1][2]
+}
+
+#[test]
+fn test_mutate_then_pass_nested_field() {
+    let mut data = Data::empty()
+    data.set(1, 2, 7)
+    assert(first(data.values) == 7)
+}

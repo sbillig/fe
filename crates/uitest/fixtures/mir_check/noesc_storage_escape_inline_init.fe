@@ -5,7 +5,11 @@ struct Esc {
     tag: u256,
 }
 
-pub fn noesc_storage_escape_inline_init() uses (slot: mut Esc) {
-    let mut x: u256 = 0
-    slot = Esc { h: mut x, tag: 0 }
+pub contract C {
+    mut slot: Esc,
+
+    init() uses (mut slot) {
+        let mut x: u256 = 0
+        slot = Esc { h: mut x, tag: 0 }
+    }
 }

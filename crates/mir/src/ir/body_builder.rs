@@ -4,10 +4,10 @@ use hir::projection::Projection;
 use num_bigint::BigUint;
 
 use super::{
-    AddressSpaceKind, BasicBlock, BasicBlockId, CodeRegionRef, LocalData, LocalId,
-    LocalPlaceRootLayout, MirBody, MirInst, MirProjectionPath, Place, RuntimeShape, Rvalue,
-    SourceInfoId, SwitchTarget, SyntheticValue, Terminator, ValueData, ValueId, ValueOrigin,
-    ValueRepr,
+    AddressSpaceKind, BasicBlock, BasicBlockId, CodeRegionRef, LocalConstBacking, LocalData,
+    LocalId, LocalPlaceRootLayout, MirBody, MirInst, MirProjectionPath, Place, RuntimeShape,
+    Rvalue, SourceInfoId, SwitchTarget, SyntheticValue, Terminator, ValueData, ValueId,
+    ValueOrigin, ValueRepr,
 };
 
 /// Convenience result for `BodyBuilder` helpers that materialize a value in a fresh local.
@@ -91,6 +91,7 @@ impl<'db> BodyBuilder<'db> {
             address_space,
             pointer_leaf_infos: Vec::new(),
             place_root_layout: LocalPlaceRootLayout::Direct,
+            const_backing: LocalConstBacking::Unknown,
             runtime_shape: RuntimeShape::Unresolved,
         })
     }

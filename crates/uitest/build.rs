@@ -1,4 +1,3 @@
 fn main() {
-    #[cfg(test)]
-    println!("cargo:rerun-if-changed=./fixtures");
+    println!("cargo:rerun-if-changed=fixtures");
 }

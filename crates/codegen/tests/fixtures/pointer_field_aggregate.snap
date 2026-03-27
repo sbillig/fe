@@ -1,12 +1,13 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/pointer_field_aggregate.fe
 ---
-function $bump__StorPtr_u256___64779554cfbf0358($value) {
-  let v0 := sload($value)
+function $bump__MemPtr_u256___25949c86160e9382($value) {
+  let v0 := mload($value)
   let v1 := $checked_add_u256(v0, 1)
-  sstore($value, v1)
+  mstore($value, v1)
   leave
 }
 function $pointer_field_aggregate__Evm_hef0af3106e109414__3af54274b2985741() {
@@ -32,12 +33,6 @@ function $pointer_field_aggregate__Evm_hef0af3106e109414__3af54274b2985741() {
 function $mem_ptr_stor__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9($addr) -> ret {
   let v0 := $memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483($addr)
   ret := v0
-  leave
-}
-function $bump__MemPtr_u256___25949c86160e9382($value) {
-  let v0 := mload($value)
-  let v1 := $checked_add_u256(v0, 1)
-  mstore($value, v1)
   leave
 }
 function $memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483($raw) -> ret {

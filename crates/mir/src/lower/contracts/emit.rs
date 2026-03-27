@@ -504,11 +504,21 @@ impl<'db, 'a> SyntheticFnEmitter<'db, 'a> {
                     field.declared_ty,
                     field.is_provider,
                 );
+                let address_space = if field.is_provider {
+                    crate::repr::effect_provider_space_for_ty(
+                        self.db,
+                        &self.core,
+                        field.declared_ty,
+                    )
+                    .unwrap_or(AddressSpaceKind::Storage)
+                } else {
+                    AddressSpaceKind::Storage
+                };
                 self.assign_runtime_local(
                     format!("field{}", field.index),
                     u256_ty,
                     true,
-                    AddressSpaceKind::Memory,
+                    address_space,
                     Rvalue::Call(call),
                 )
             })

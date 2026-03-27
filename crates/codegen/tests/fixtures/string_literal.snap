@@ -4,6 +4,6 @@ expression: output
 input_file: tests/fixtures/string_literal.fe
 ---
 function $string_literal() -> ret {
-  ret := 0x68656c6c6f
+  ret := 0x0568656c6c6f0000000000000000000000000000000000000000000000000000
   leave
 }

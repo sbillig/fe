@@ -1,7 +1,11 @@
 use driver::DriverDataBase;
-use mir::layout::TargetDataLayout;
-use mir::{BasicBlockId, MirBackend, MirFunction, MirStage, Terminator, ir::MirFunctionOrigin};
+use mir::{
+    BasicBlockId, MirBackend, MirFunction, MirStage, Terminator,
+    ir::{AddressSpaceKind, LocalConstBacking, MirFunctionOrigin},
+};
+use mir::{layout::TargetDataLayout, serialize_const_data_to_bytes};
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::sync::Arc;
 
 use crate::yul::{doc::YulDoc, errors::YulError, state::BlockState};
 
@@ -14,12 +18,25 @@ pub(super) struct YulDataRegion {
     pub bytes: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) struct CallArgAbi {
+    pub address_space: AddressSpaceKind,
+    pub const_backing: LocalConstBacking,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct CallAbi {
+    pub value_params: Vec<CallArgAbi>,
+    pub effect_params: Vec<CallArgAbi>,
+}
+
 /// Emits Yul for a single MIR function.
 pub(super) struct FunctionEmitter<'db> {
     pub(super) db: &'db DriverDataBase,
     pub(super) mir_func: &'db MirFunction<'db>,
     /// Mapping from monomorphized function symbols to code region labels.
-    pub(super) code_regions: &'db FxHashMap<String, String>,
+    pub(super) code_regions: Arc<FxHashMap<String, String>>,
+    pub(super) call_abis: Arc<FxHashMap<String, CallAbi>>,
     pub(super) layout: TargetDataLayout,
     ipdom: Vec<Option<BasicBlockId>>,
     /// Data regions collected during emission.
@@ -41,7 +58,8 @@ impl<'db> FunctionEmitter<'db> {
     pub(super) fn new(
         db: &'db DriverDataBase,
         mir_func: &'db MirFunction<'db>,
-        code_regions: &'db FxHashMap<String, String>,
+        code_regions: Arc<FxHashMap<String, String>>,
+        call_abis: Arc<FxHashMap<String, CallAbi>>,
         layout: TargetDataLayout,
     ) -> Result<Self, YulError> {
         mir_func
@@ -57,6 +75,7 @@ impl<'db> FunctionEmitter<'db> {
             db,
             mir_func,
             code_regions,
+            call_abis,
             layout,
             ipdom,
             data_region_counter: 0,
@@ -68,7 +87,14 @@ impl<'db> FunctionEmitter<'db> {
         // Pre-register all const regions so expressions can load them without mutating self.
         for (idx, region) in mir_func.body.const_regions.iter().enumerate() {
             let id = mir::ir::ConstRegionId(idx as u32);
-            let label = emitter.register_data_region(&region.bytes);
+            let bytes = serialize_const_data_to_bytes(db, &layout, region.ty, &region.data)
+                .ok_or_else(|| {
+                    YulError::Unsupported(format!(
+                        "cannot serialize const region `{}` for Yul",
+                        region.ty.pretty_print(db)
+                    ))
+                })?;
+            let label = emitter.register_data_region(&bytes);
             emitter.const_region_labels.insert(id, label);
         }
 

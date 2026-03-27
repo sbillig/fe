@@ -15,8 +15,9 @@ use hir::analysis::{
         adt_def::AdtRef,
         effects::EffectKeyKind,
         ty_check::{
-            EffectArg, EffectParamSite, EffectPassMode, LocalBinding, ParamSite, PatBindingMode,
-            RecordLike, ResolvedEffectArg, TypedBody, check_func_body,
+            BindingSource, EffectArg, EffectParamSite, EffectPassMode, LocalBinding, ParamSite,
+            PatBindingMode, RecordLike, ResolvedEffectArg, ReturnProvenance, TypedBody,
+            check_func_body,
         },
         ty_def::{PrimTy, TyBase, TyData, TyId},
     },
@@ -24,13 +25,12 @@ use hir::analysis::{
 use hir::hir_def::{
     ArithmeticMode, Attr, AttrArg, AttrArgValue, Body, CallableDef, Cond, CondId, Const, Expr,
     ExprId, Field, FieldIndex, Func, HirIngot, IdentId, InlineAttrErrorKind, ItemKind, LitKind,
-    MatchArm, Partial, Pat, PatId, Stmt, StmtId, TopLevelMod, VariantKind,
+    MatchArm, Partial, Pat, PatId, Stmt, StmtId, TopLevelMod, UnOp, VariantKind,
 };
 
 use crate::{
     capability_space::{
-        PointerInfoConflict, normalize_pointer_leaf_info_entries,
-        pointer_leaf_infos_for_ty_with_default,
+        PointerInfoConflict, pointer_leaf_infos_for_ty_with_default, pointer_leaf_paths_for_ty,
     },
     core_lib::CoreLib,
     ir::{
@@ -280,6 +280,382 @@ fn invalid_inline_attr_error<'db>(
     Some(MirLowerError::AnalysisDiagnostics {
         func_name,
         diagnostics,
+    })
+}
+
+fn runtime_field_projection_prefix<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner_ty: TyId<'db>,
+    field_idx: usize,
+) -> MirProjectionPath<'db> {
+    if crate::repr::transparent_field0_inner_ty(db, owner_ty, field_idx).is_some() {
+        MirProjectionPath::new()
+    } else {
+        MirProjectionPath::from_projection(MirProjection::Field(field_idx))
+    }
+}
+
+fn binding_source_projection<'db>(
+    db: &'db dyn HirAnalysisDb,
+    typed_body: &TypedBody<'db>,
+    source: &BindingSource,
+) -> MirProjectionPath<'db> {
+    let mut path = MirProjectionPath::new();
+    let mut owner_ty = typed_body.expr_ty(db, source.init_expr);
+    for field_idx in source.field_path.iter().copied() {
+        path = path.concat(&runtime_field_projection_prefix(db, owner_ty, field_idx));
+        let Some(next_ty) = owner_ty.field_types(db).get(field_idx).copied() else {
+            break;
+        };
+        owner_ty = next_ty;
+    }
+    path
+}
+
+fn field_access_idx<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner_ty: TyId<'db>,
+    field_index: FieldIndex<'db>,
+) -> Option<usize> {
+    let record_like = RecordLike::from_ty(owner_ty);
+    match field_index {
+        FieldIndex::Ident(label) => record_like.record_field_idx(db, label),
+        FieldIndex::Index(integer) => integer.data(db).to_usize(),
+    }
+}
+
+fn forwarded_return_leaf_source_from_expr<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    typed_body: &TypedBody<'db>,
+    expr: ExprId,
+    target_path: &MirProjectionPath<'db>,
+    seen: &mut FxHashSet<Func<'db>>,
+    visited_locals: &mut FxHashSet<PatId>,
+) -> Option<(usize, MirProjectionPath<'db>)> {
+    let Partial::Present(expr_data) = expr.data(db, body) else {
+        return None;
+    };
+
+    match expr_data {
+        Expr::Block(stmts) => {
+            let tail = stmts.last()?;
+            match tail.data(db, body) {
+                Partial::Present(Stmt::Expr(tail_expr)) => forwarded_return_leaf_source_from_expr(
+                    db,
+                    body,
+                    typed_body,
+                    *tail_expr,
+                    target_path,
+                    seen,
+                    visited_locals,
+                ),
+                Partial::Present(Stmt::Return(Some(return_expr))) => {
+                    forwarded_return_leaf_source_from_expr(
+                        db,
+                        body,
+                        typed_body,
+                        *return_expr,
+                        target_path,
+                        seen,
+                        visited_locals,
+                    )
+                }
+                _ => None,
+            }
+        }
+        Expr::If(_, then_expr, else_expr) => {
+            let then_source = forwarded_return_leaf_source_from_expr(
+                db,
+                body,
+                typed_body,
+                *then_expr,
+                target_path,
+                seen,
+                visited_locals,
+            )?;
+            let else_source = forwarded_return_leaf_source_from_expr(
+                db,
+                body,
+                typed_body,
+                *else_expr.as_ref()?,
+                target_path,
+                seen,
+                visited_locals,
+            )?;
+            (then_source == else_source).then_some(then_source)
+        }
+        Expr::Match(_, arms) => {
+            let Partial::Present(arms) = arms else {
+                return None;
+            };
+            let mut sources = arms.iter().filter_map(|arm| {
+                forwarded_return_leaf_source_from_expr(
+                    db,
+                    body,
+                    typed_body,
+                    arm.body,
+                    target_path,
+                    seen,
+                    visited_locals,
+                )
+            });
+            let first = sources.next()?;
+            sources.all(|source| source == first).then_some(first)
+        }
+        Expr::With(_, with_body) => forwarded_return_leaf_source_from_expr(
+            db,
+            body,
+            typed_body,
+            *with_body,
+            target_path,
+            seen,
+            visited_locals,
+        ),
+        Expr::Un(inner, UnOp::Mut | UnOp::Ref) => forwarded_return_leaf_source_from_expr(
+            db,
+            body,
+            typed_body,
+            *inner,
+            target_path,
+            seen,
+            visited_locals,
+        ),
+        Expr::Path(_) => match typed_body.expr_binding(expr)? {
+            binding @ LocalBinding::Param { idx, .. } => typed_body
+                .path_expr_preserves_binding_ty(db, expr, binding)
+                .then_some((idx, target_path.clone())),
+            binding @ LocalBinding::Local { pat, .. } => {
+                if !visited_locals.insert(pat) {
+                    return None;
+                }
+                if !typed_body.path_expr_preserves_binding_ty(db, expr, binding) {
+                    visited_locals.remove(&pat);
+                    return None;
+                }
+                let source = typed_body.binding_source(db, binding).and_then(|source| {
+                    let source_path =
+                        binding_source_projection(db, typed_body, &source).concat(target_path);
+                    forwarded_return_leaf_source_from_expr(
+                        db,
+                        body,
+                        typed_body,
+                        source.init_expr,
+                        &source_path,
+                        seen,
+                        visited_locals,
+                    )
+                });
+                visited_locals.remove(&pat);
+                source
+            }
+            LocalBinding::EffectParam { .. } => None,
+        },
+        Expr::Field(owner, field) => {
+            let owner_ty = typed_body.expr_ty(db, *owner);
+            let field_idx = field_access_idx(db, owner_ty, field.to_opt()?)?;
+            let prefixed_target =
+                runtime_field_projection_prefix(db, owner_ty, field_idx).concat(target_path);
+            forwarded_return_leaf_source_from_expr(
+                db,
+                body,
+                typed_body,
+                *owner,
+                &prefixed_target,
+                seen,
+                visited_locals,
+            )
+        }
+        Expr::Call(_, args) => {
+            let callable = typed_body.callable_expr(expr)?;
+            let CallableDef::Func(func) = callable.callable_def else {
+                return None;
+            };
+            let (arg_idx, arg_path) = forwarded_return_leaf_sources_from_callable(
+                db,
+                func,
+                typed_body.expr_ty(db, expr),
+                seen,
+            )?
+            .into_iter()
+            .find_map(|(leaf_path, arg_idx, arg_path)| {
+                (leaf_path == *target_path).then_some((arg_idx, arg_path))
+            })?;
+            let arg_expr = args.get(arg_idx)?.expr;
+            forwarded_return_leaf_source_from_expr(
+                db,
+                body,
+                typed_body,
+                arg_expr,
+                &arg_path,
+                seen,
+                visited_locals,
+            )
+        }
+        Expr::MethodCall(receiver, _, _, args) => {
+            let callable = typed_body.callable_expr(expr)?;
+            let CallableDef::Func(func) = callable.callable_def else {
+                return None;
+            };
+            let (arg_idx, arg_path) = forwarded_return_leaf_sources_from_callable(
+                db,
+                func,
+                typed_body.expr_ty(db, expr),
+                seen,
+            )?
+            .into_iter()
+            .find_map(|(leaf_path, arg_idx, arg_path)| {
+                (leaf_path == *target_path).then_some((arg_idx, arg_path))
+            })?;
+            let arg_expr = if arg_idx == 0 {
+                *receiver
+            } else {
+                args.get(arg_idx - 1)?.expr
+            };
+            forwarded_return_leaf_source_from_expr(
+                db,
+                body,
+                typed_body,
+                arg_expr,
+                &arg_path,
+                seen,
+                visited_locals,
+            )
+        }
+        Expr::RecordInit(_, fields) => {
+            let owner_ty = typed_body.expr_ty(db, expr);
+            fields.iter().find_map(|field| {
+                let label = field.label_eagerly(db, body)?;
+                let field_idx = field_access_idx(db, owner_ty, FieldIndex::Ident(label))?;
+                let field_prefix = runtime_field_projection_prefix(db, owner_ty, field_idx);
+                let suffix = crate::ir::projection_strip_prefix(target_path, &field_prefix)?;
+                forwarded_return_leaf_source_from_expr(
+                    db,
+                    body,
+                    typed_body,
+                    field.expr,
+                    &suffix,
+                    seen,
+                    visited_locals,
+                )
+            })
+        }
+        Expr::Tuple(items) => {
+            let owner_ty = typed_body.expr_ty(db, expr);
+            items.iter().enumerate().find_map(|(field_idx, item_expr)| {
+                let field_prefix = runtime_field_projection_prefix(db, owner_ty, field_idx);
+                let suffix = crate::ir::projection_strip_prefix(target_path, &field_prefix)?;
+                forwarded_return_leaf_source_from_expr(
+                    db,
+                    body,
+                    typed_body,
+                    *item_expr,
+                    &suffix,
+                    seen,
+                    visited_locals,
+                )
+            })
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn forwarded_return_leaf_sources_from_callable<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+    dest_ty: TyId<'db>,
+    seen: &mut FxHashSet<Func<'db>>,
+) -> Option<Vec<(MirProjectionPath<'db>, usize, MirProjectionPath<'db>)>> {
+    if !seen.insert(func) {
+        return None;
+    }
+
+    let (diags, typed_body) = check_func_body(db, func);
+    if !diags.is_empty() {
+        seen.remove(&func);
+        return None;
+    }
+    let body = typed_body.body()?;
+    let root_expr = func.body(db)?.expr(db);
+    let core = CoreLib::new(db, func.scope());
+    let mut out = Vec::new();
+    let mut visited_locals = FxHashSet::default();
+    for leaf_path in pointer_leaf_paths_for_ty(db, &core, dest_ty) {
+        if let Some((arg_idx, arg_path)) = forwarded_return_leaf_source_from_expr(
+            db,
+            body,
+            typed_body,
+            root_expr,
+            &leaf_path,
+            seen,
+            &mut visited_locals,
+        ) {
+            out.push((leaf_path, arg_idx, arg_path));
+        }
+    }
+    seen.remove(&func);
+    (!out.is_empty()).then_some(out)
+}
+
+pub(crate) fn call_return_pointer_leaf_infos<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    values: &[ValueData<'db>],
+    locals: &[LocalData<'db>],
+    call: &CallOrigin<'db>,
+    dest_ty: TyId<'db>,
+) -> Vec<(MirProjectionPath<'db>, PointerInfo<'db>)> {
+    let Some(CallTargetRef::Hir(hir_target)) = call.target.as_ref() else {
+        return Vec::new();
+    };
+    let CallableDef::Func(func) = hir_target.callable_def else {
+        return Vec::new();
+    };
+    let mut seen = FxHashSet::default();
+    let Some(leaf_sources) =
+        forwarded_return_leaf_sources_from_callable(db, func, dest_ty, &mut seen)
+    else {
+        return Vec::new();
+    };
+
+    let mut infos = Vec::new();
+    for (dest_path, arg_idx, arg_path) in &leaf_sources {
+        let Some(arg_value) = call.args.get(*arg_idx).copied() else {
+            continue;
+        };
+        let source_infos =
+            crate::repr::pointer_leaf_infos_for_value(db, core, values, locals, arg_value);
+        let retag_info = |info: PointerInfo<'db>| {
+            pointer_leaf_infos_for_ty_with_default(db, core, dest_ty, info.address_space)
+                .into_iter()
+                .find_map(|(path, typed_info)| (path == *dest_path).then_some(typed_info))
+                .unwrap_or(info)
+        };
+        let mut matched = false;
+        for (source_path, info) in source_infos {
+            if source_path == *arg_path {
+                infos.push((dest_path.clone(), retag_info(info)));
+                matched = true;
+            }
+        }
+        if !matched
+            && arg_path.is_empty()
+            && let Some(info) = crate::ir::try_value_pointer_info_in(values, locals, arg_value)
+        {
+            infos.push((dest_path.clone(), retag_info(info)));
+        }
+    }
+
+    infos
+}
+
+fn callable_forwarded_param_is_immutable<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: hir::hir_def::Func<'db>,
+    idx: usize,
+) -> bool {
+    func.params(db).nth(idx).is_some_and(|param| {
+        !param.is_mut(db) && !crate::repr::ty_has_mut_capability(db, param.ty(db))
     })
 }
 
@@ -1006,18 +1382,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         is_mut: bool,
         binding: Option<LocalBinding<'db>>,
     ) -> LocalId {
-        let pointer_leaf_infos = pointer_leaf_infos_for_ty_with_default(
-            self.db,
-            &self.core,
-            ty,
-            AddressSpaceKind::Memory,
-        );
+        let address_space = AddressSpaceKind::Memory;
+        let pointer_leaf_infos =
+            pointer_leaf_infos_for_ty_with_default(self.db, &self.core, ty, address_space);
         let local = self.builder.body.alloc_local(LocalData {
             name,
             ty,
             is_mut,
             source: crate::ir::SourceInfoId::SYNTHETIC,
-            address_space: AddressSpaceKind::Memory,
+            address_space,
             pointer_leaf_infos,
             place_root_layout: crate::repr::declared_local_place_root_layout(
                 self.db,
@@ -1025,6 +1398,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 ty,
                 AddressSpaceKind::Memory,
             ),
+            const_backing: self.param_const_backing(ty, is_mut, address_space),
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         self.builder.body.param_locals.push(local);
@@ -1039,27 +1413,55 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         name: String,
         binding: LocalBinding<'db>,
         address_space: AddressSpaceKind,
+        provider_ty: Option<TyId<'db>>,
     ) -> LocalId {
         let ty = self.u256_ty();
+        let pointer_leaf_infos = provider_ty
+            .and_then(|provider_ty| {
+                crate::repr::runtime_pointer_info_for_ty(
+                    self.db,
+                    &self.core,
+                    provider_ty,
+                    address_space,
+                )
+            })
+            .map(|info| vec![(MirProjectionPath::new(), info)])
+            .unwrap_or_default();
         let local = self.builder.body.alloc_local(LocalData {
             name,
             ty,
             is_mut: binding.is_mut(),
             source: crate::ir::SourceInfoId::SYNTHETIC,
             address_space,
-            pointer_leaf_infos: Vec::new(),
+            pointer_leaf_infos,
             place_root_layout: crate::repr::declared_local_place_root_layout(
                 self.db,
                 &self.core,
                 ty,
                 address_space,
             ),
+            const_backing: crate::ir::LocalConstBacking::Runtime,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         self.builder.body.effect_param_locals.push(local);
         self.binding_locals.insert(binding, local);
         self.effect_binding_spaces.insert(binding, address_space);
+        self.effect_param_provider_tys.push(provider_ty);
         local
+    }
+
+    fn param_const_backing(
+        &self,
+        ty: TyId<'db>,
+        is_mut: bool,
+        address_space: AddressSpaceKind,
+    ) -> crate::ir::LocalConstBacking {
+        if !is_mut && address_space == AddressSpaceKind::Code && self.ty_uses_const_ref_runtime(ty)
+        {
+            crate::ir::LocalConstBacking::Const
+        } else {
+            crate::ir::LocalConstBacking::Runtime
+        }
     }
 
     fn compute_effect_param_spaces(&self) -> Vec<AddressSpaceKind> {
@@ -1088,6 +1490,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         provider_ty: TyId<'db>,
         concrete_rationale: EffectProviderInferenceRationale,
     ) -> Option<InferredEffectProvider<'db>> {
+        self.infer_effect_provider_from_provider_ty_in_space(provider_ty, concrete_rationale, None)
+    }
+
+    fn infer_effect_provider_from_provider_ty_in_space(
+        &self,
+        provider_ty: TyId<'db>,
+        concrete_rationale: EffectProviderInferenceRationale,
+        by_ref_space: Option<AddressSpaceKind>,
+    ) -> Option<InferredEffectProvider<'db>> {
         if let Some(space) = self.raw_effect_space_for_provider_ty(provider_ty) {
             return Some(InferredEffectProvider {
                 provider_ty: Some(provider_ty),
@@ -1112,8 +1523,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         ) {
             return Some(InferredEffectProvider {
                 provider_ty: Some(provider_ty),
-                address_space: AddressSpaceKind::Memory,
-                rationale: EffectProviderInferenceRationale::ByRefProviderDefaultsToMemory,
+                address_space: by_ref_space.unwrap_or(AddressSpaceKind::Memory),
+                rationale: by_ref_space
+                    .map(|_| concrete_rationale)
+                    .unwrap_or(EffectProviderInferenceRationale::ByRefProviderDefaultsToMemory),
             });
         }
 
@@ -1237,9 +1650,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         if let Some(provider_ty) =
             self.contract_field_provider_ty_for_effect_site(EffectParamSite::Func(func), effect_idx)
-            && let Some(inferred) = self.infer_effect_provider_from_provider_ty(
+            && let Some(inferred) = self.infer_effect_provider_from_provider_ty_in_space(
                 provider_ty,
                 EffectProviderInferenceRationale::ContractFieldProviderTy,
+                Some(AddressSpaceKind::Storage),
             )
         {
             return inferred;
@@ -1327,12 +1741,18 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                             binding,
                             caller_provider_arg_idx_by_effect,
                         ) {
-                            return Some(self.infer_effect_provider_or_fallback(
-                                provider_ty,
-                                EffectProviderInferenceRationale::ForwardedEffectParamProviderTy,
-                                AddressSpaceKind::Storage,
-                                EffectProviderInferenceRationale::StorageDefault,
-                            ));
+                            return Some(
+                                self.infer_effect_provider_from_provider_ty_in_space(
+                                    provider_ty,
+                                    EffectProviderInferenceRationale::ForwardedEffectParamProviderTy,
+                                    Some(self.bound_local_root_address_space(&binding)),
+                                )
+                                .unwrap_or(InferredEffectProvider {
+                                    provider_ty: Some(provider_ty),
+                                    address_space: AddressSpaceKind::Storage,
+                                    rationale: EffectProviderInferenceRationale::StorageDefault,
+                                }),
+                            );
                         }
 
                         let provider_ty = TyId::app(self.db, self.core.mem_ptr_ctor, target_ty);
@@ -1351,12 +1771,20 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         if let Some(provider_ty) =
                             self.contract_field_provider_ty_for_effect_site(effect_site, idx)
                         {
-                            return Some(self.infer_effect_provider_or_fallback(
-                                provider_ty,
-                                EffectProviderInferenceRationale::ContractFieldProviderTy,
-                                AddressSpaceKind::Storage,
-                                EffectProviderInferenceRationale::StorageDefault,
-                            ));
+                            return Some(
+                                self.infer_effect_provider_from_provider_ty_in_space(
+                                    provider_ty,
+                                    EffectProviderInferenceRationale::ContractFieldProviderTy,
+                                    Some(self.bound_local_root_address_space(&binding)),
+                                )
+                                .unwrap_or(
+                                    InferredEffectProvider {
+                                        provider_ty: Some(provider_ty),
+                                        address_space: AddressSpaceKind::Storage,
+                                        rationale: EffectProviderInferenceRationale::StorageDefault,
+                                    },
+                                ),
+                            );
                         }
 
                         let provider_ty = TyId::app(self.db, self.core.stor_ptr_ctor, target_ty);
@@ -1382,7 +1810,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
     }
 
-    fn contract_field_provider_ty_for_effect_site(
+    pub(super) fn contract_field_provider_ty_for_effect_site(
         &self,
         site: EffectParamSite<'db>,
         idx: usize,
@@ -1433,7 +1861,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
         let field_name = key_path.ident(self.db).to_opt()?;
         let field = contract.fields(self.db).get(&field_name)?;
-        field.is_provider.then_some(field.declared_ty)
+        Some(if field.is_provider {
+            field.declared_ty
+        } else {
+            TyId::app(self.db, self.core.stor_ptr_ctor, field.target_ty)
+        })
     }
 
     /// Consumes the builder and returns the accumulated MIR body.
@@ -1524,6 +1956,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 ty,
                 AddressSpaceKind::Memory,
             ),
+            const_backing: crate::ir::LocalConstBacking::Unknown,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         })
     }
@@ -1547,7 +1980,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         &mut self,
         infos: Vec<(MirProjectionPath<'db>, PointerInfo<'db>)>,
     ) -> Vec<(MirProjectionPath<'db>, PointerInfo<'db>)> {
-        match normalize_pointer_leaf_info_entries(infos) {
+        match crate::capability_space::normalize_pointer_leaf_info_entries_in_context(
+            self.db, infos,
+        ) {
             Ok(normalized) => normalized,
             Err(conflict) => {
                 self.defer_pointer_info_conflict(conflict);
@@ -1631,391 +2066,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.value_address_space_or_memory_fallback(value)
     }
 
-    fn collect_explicit_return_param_sources_in_stmt(
-        &self,
-        body: Body<'db>,
-        typed_body: &TypedBody<'db>,
-        stmt: StmtId,
-        out: &mut FxHashSet<usize>,
-        saw_non_param: &mut bool,
-    ) {
-        let Partial::Present(stmt_data) = stmt.data(self.db, body) else {
-            return;
-        };
-
-        match stmt_data {
-            Stmt::Let(_, _, Some(init)) => self.collect_explicit_return_param_sources_in_expr(
-                body,
-                typed_body,
-                *init,
-                out,
-                saw_non_param,
-            ),
-            Stmt::For(_, iter, loop_body, _) => {
-                self.collect_explicit_return_param_sources_in_expr(
-                    body,
-                    typed_body,
-                    *iter,
-                    out,
-                    saw_non_param,
-                );
-                self.collect_explicit_return_param_sources_in_expr(
-                    body,
-                    typed_body,
-                    *loop_body,
-                    out,
-                    saw_non_param,
-                );
-            }
-            Stmt::While(cond, loop_body) => {
-                self.collect_explicit_return_param_sources_in_cond(
-                    body,
-                    typed_body,
-                    *cond,
-                    out,
-                    saw_non_param,
-                );
-                self.collect_explicit_return_param_sources_in_expr(
-                    body,
-                    typed_body,
-                    *loop_body,
-                    out,
-                    saw_non_param,
-                );
-            }
-            Stmt::Return(Some(expr)) => {
-                self.collect_explicit_return_param_sources_in_expr(
-                    body,
-                    typed_body,
-                    *expr,
-                    out,
-                    saw_non_param,
-                );
-                self.collect_implicit_return_param_sources_from_expr(
-                    body,
-                    typed_body,
-                    *expr,
-                    out,
-                    saw_non_param,
-                );
-            }
-            Stmt::Expr(expr) => self.collect_explicit_return_param_sources_in_expr(
-                body,
-                typed_body,
-                *expr,
-                out,
-                saw_non_param,
-            ),
-            Stmt::Let(_, _, None) | Stmt::Return(None) | Stmt::Continue | Stmt::Break => {}
-        }
-    }
-
-    fn collect_explicit_return_param_sources_in_expr(
-        &self,
-        body: Body<'db>,
-        typed_body: &TypedBody<'db>,
-        expr: ExprId,
-        out: &mut FxHashSet<usize>,
-        saw_non_param: &mut bool,
-    ) {
-        let Partial::Present(expr_data) = expr.data(self.db, body) else {
-            return;
-        };
-
-        match expr_data {
-            Expr::Block(stmts) => {
-                for stmt in stmts {
-                    self.collect_explicit_return_param_sources_in_stmt(
-                        body,
-                        typed_body,
-                        *stmt,
-                        out,
-                        saw_non_param,
-                    );
-                }
-            }
-            Expr::Bin(lhs, rhs, _) | Expr::Assign(lhs, rhs) | Expr::AugAssign(lhs, rhs, _) => {
-                self.collect_explicit_return_param_sources_in_expr(
-                    body,
-                    typed_body,
-                    *lhs,
-                    out,
-                    saw_non_param,
-                );
-                self.collect_explicit_return_param_sources_in_expr(
-                    body,
-                    typed_body,
-                    *rhs,
-                    out,
-                    saw_non_param,
-                );
-            }
-            Expr::Un(inner, _) | Expr::Cast(inner, _) | Expr::Field(inner, _) => {
-                self.collect_explicit_return_param_sources_in_expr(
-                    body,
-                    typed_body,
-                    *inner,
-                    out,
-                    saw_non_param,
-                );
-            }
-            Expr::Call(callee, args) => {
-                self.collect_explicit_return_param_sources_in_expr(
-                    body,
-                    typed_body,
-                    *callee,
-                    out,
-                    saw_non_param,
-                );
-                for arg in args {
-                    self.collect_explicit_return_param_sources_in_expr(
-                        body,
-                        typed_body,
-                        arg.expr,
-                        out,
-                        saw_non_param,
-                    );
-                }
-            }
-            Expr::MethodCall(receiver, _, _, args) => {
-                self.collect_explicit_return_param_sources_in_expr(
-                    body,
-                    typed_body,
-                    *receiver,
-                    out,
-                    saw_non_param,
-                );
-                for arg in args {
-                    self.collect_explicit_return_param_sources_in_expr(
-                        body,
-                        typed_body,
-                        arg.expr,
-                        out,
-                        saw_non_param,
-                    );
-                }
-            }
-            Expr::RecordInit(_, fields) => {
-                for field in fields {
-                    self.collect_explicit_return_param_sources_in_expr(
-                        body,
-                        typed_body,
-                        field.expr,
-                        out,
-                        saw_non_param,
-                    );
-                }
-            }
-            Expr::Tuple(items) | Expr::Array(items) => {
-                for item in items {
-                    self.collect_explicit_return_param_sources_in_expr(
-                        body,
-                        typed_body,
-                        *item,
-                        out,
-                        saw_non_param,
-                    );
-                }
-            }
-            Expr::ArrayRep(value, _) => self.collect_explicit_return_param_sources_in_expr(
-                body,
-                typed_body,
-                *value,
-                out,
-                saw_non_param,
-            ),
-            Expr::If(cond, then_expr, else_expr) => {
-                self.collect_explicit_return_param_sources_in_cond(
-                    body,
-                    typed_body,
-                    *cond,
-                    out,
-                    saw_non_param,
-                );
-                self.collect_explicit_return_param_sources_in_expr(
-                    body,
-                    typed_body,
-                    *then_expr,
-                    out,
-                    saw_non_param,
-                );
-                if let Some(else_expr) = else_expr {
-                    self.collect_explicit_return_param_sources_in_expr(
-                        body,
-                        typed_body,
-                        *else_expr,
-                        out,
-                        saw_non_param,
-                    );
-                }
-            }
-            Expr::Match(scrutinee, arms) => {
-                self.collect_explicit_return_param_sources_in_expr(
-                    body,
-                    typed_body,
-                    *scrutinee,
-                    out,
-                    saw_non_param,
-                );
-                if let Partial::Present(arms) = arms {
-                    for arm in arms {
-                        self.collect_explicit_return_param_sources_in_expr(
-                            body,
-                            typed_body,
-                            arm.body,
-                            out,
-                            saw_non_param,
-                        );
-                    }
-                }
-            }
-            Expr::With(bindings, with_body) => {
-                for binding in bindings {
-                    self.collect_explicit_return_param_sources_in_expr(
-                        body,
-                        typed_body,
-                        binding.value,
-                        out,
-                        saw_non_param,
-                    );
-                }
-                self.collect_explicit_return_param_sources_in_expr(
-                    body,
-                    typed_body,
-                    *with_body,
-                    out,
-                    saw_non_param,
-                );
-            }
-            Expr::Lit(_) | Expr::Path(_) => {}
-        }
-    }
-
-    fn collect_implicit_return_param_sources_from_expr(
-        &self,
-        body: Body<'db>,
-        typed_body: &TypedBody<'db>,
-        expr: ExprId,
-        out: &mut FxHashSet<usize>,
-        saw_non_param: &mut bool,
-    ) {
-        let Partial::Present(expr_data) = expr.data(self.db, body) else {
-            return;
-        };
-
-        match expr_data {
-            Expr::Block(stmts) => {
-                if let Some(last_stmt) = stmts.last()
-                    && let Partial::Present(Stmt::Expr(tail_expr)) = last_stmt.data(self.db, body)
-                {
-                    self.collect_implicit_return_param_sources_from_expr(
-                        body,
-                        typed_body,
-                        *tail_expr,
-                        out,
-                        saw_non_param,
-                    );
-                }
-            }
-            Expr::If(_, then_expr, else_expr) => {
-                self.collect_implicit_return_param_sources_from_expr(
-                    body,
-                    typed_body,
-                    *then_expr,
-                    out,
-                    saw_non_param,
-                );
-                if let Some(else_expr) = else_expr {
-                    self.collect_implicit_return_param_sources_from_expr(
-                        body,
-                        typed_body,
-                        *else_expr,
-                        out,
-                        saw_non_param,
-                    );
-                }
-            }
-            Expr::Match(_, arms) => {
-                if let Partial::Present(arms) = arms {
-                    for arm in arms {
-                        self.collect_implicit_return_param_sources_from_expr(
-                            body,
-                            typed_body,
-                            arm.body,
-                            out,
-                            saw_non_param,
-                        );
-                    }
-                }
-            }
-            Expr::With(_, with_body) => self.collect_implicit_return_param_sources_from_expr(
-                body,
-                typed_body,
-                *with_body,
-                out,
-                saw_non_param,
-            ),
-            _ => {
-                let Some(place) = typed_body.expr_place(self.db, expr) else {
-                    *saw_non_param = true;
-                    return;
-                };
-                match place.base {
-                    PlaceBase::Binding(LocalBinding::Param { idx, .. }) => {
-                        out.insert(idx);
-                    }
-                    PlaceBase::Binding(_) => *saw_non_param = true,
-                }
-            }
-        }
-    }
-
-    fn collect_explicit_return_param_sources_in_cond(
-        &self,
-        body: Body<'db>,
-        typed_body: &TypedBody<'db>,
-        cond: CondId,
-        out: &mut FxHashSet<usize>,
-        saw_non_param: &mut bool,
-    ) {
-        let Partial::Present(cond_data) = cond.data(self.db, body) else {
-            return;
-        };
-
-        match cond_data {
-            Cond::Expr(expr) => self.collect_explicit_return_param_sources_in_expr(
-                body,
-                typed_body,
-                *expr,
-                out,
-                saw_non_param,
-            ),
-            Cond::Let(_, value) => self.collect_explicit_return_param_sources_in_expr(
-                body,
-                typed_body,
-                *value,
-                out,
-                saw_non_param,
-            ),
-            Cond::Bin(lhs, rhs, _) => {
-                self.collect_explicit_return_param_sources_in_cond(
-                    body,
-                    typed_body,
-                    *lhs,
-                    out,
-                    saw_non_param,
-                );
-                self.collect_explicit_return_param_sources_in_cond(
-                    body,
-                    typed_body,
-                    *rhs,
-                    out,
-                    saw_non_param,
-                );
-            }
-        }
-    }
-
     fn call_return_param_sources(&self, call: &CallOrigin<'db>) -> Option<Vec<usize>> {
         let CallTargetRef::Hir(hir_target) = call.target.as_ref()? else {
             return None;
@@ -2027,32 +2077,29 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if !diags.is_empty() {
             return None;
         }
-        let body = typed_body.body()?;
-        let func_body = func.body(self.db)?;
-        let mut out = FxHashSet::default();
-        let mut saw_non_param = false;
-        let root_expr = func_body.expr(self.db);
-        self.collect_explicit_return_param_sources_in_expr(
-            body,
-            typed_body,
-            root_expr,
-            &mut out,
-            &mut saw_non_param,
-        );
-        self.collect_implicit_return_param_sources_from_expr(
-            body,
-            typed_body,
-            root_expr,
-            &mut out,
-            &mut saw_non_param,
-        );
-        if saw_non_param || out.is_empty() {
-            return None;
+        let provenance = typed_body.return_provenance(self.db);
+        match provenance {
+            ReturnProvenance::ForwardedParams(mut indices) => {
+                indices.sort_unstable();
+                (!indices.is_empty()).then_some(indices)
+            }
+            ReturnProvenance::Fresh | ReturnProvenance::Unknown => None,
         }
+    }
 
-        let mut indices = out.into_iter().collect::<Vec<_>>();
-        indices.sort_unstable();
-        Some(indices)
+    fn immutable_call_return_param_sources(&self, call: &CallOrigin<'db>) -> Option<Vec<usize>> {
+        let Some(CallTargetRef::Hir(hir_target)) = call.target.as_ref() else {
+            return None;
+        };
+        let CallableDef::Func(func) = hir_target.callable_def else {
+            return None;
+        };
+        let indices = self.call_return_param_sources(call)?;
+        indices
+            .iter()
+            .copied()
+            .all(|idx| callable_forwarded_param_is_immutable(self.db, func, idx))
+            .then_some(indices)
     }
 
     fn defer_call_return_space_conflict(
@@ -2092,29 +2139,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     fn call_return_space_hint_from_args(
         &mut self,
         call: &CallOrigin<'db>,
-        dest_ty: TyId<'db>,
     ) -> Option<AddressSpaceKind> {
-        let has_receiver = call
-            .target
-            .as_ref()
-            .and_then(|target| match target {
-                CallTargetRef::Hir(target) => target.callable_def.receiver_ty(self.db),
-                CallTargetRef::Synthetic(_) => None,
-            })
-            .is_some();
-
         if let Some(return_param_indices) = self.call_return_param_sources(call) {
             let mut space_hint = None;
             for idx in return_param_indices {
                 let Some(arg_value) = call.args.get(idx).copied() else {
                     continue;
                 };
-                let space = if has_receiver && idx == 0 {
-                    call.receiver_space
-                        .unwrap_or_else(|| self.value_root_capability_space_hint(arg_value))
-                } else {
-                    self.value_root_capability_space_hint(arg_value)
-                };
+                let space = self.value_root_capability_space_hint(arg_value);
                 match space_hint {
                     None => space_hint = Some(space),
                     Some(prev) if prev == space => {}
@@ -2129,37 +2161,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
         }
 
-        let CallTargetRef::Hir(hir_target) = call.target.as_ref()? else {
-            return None;
-        };
-        let expected_arg_tys = hir_target
-            .callable_def
-            .arg_tys(self.db)
-            .into_iter()
-            .map(|ty| ty.instantiate(self.db, &hir_target.generic_args))
-            .collect::<Vec<_>>();
-
-        let mut space_hint = None;
-        for (idx, arg_value) in call.args.iter().copied().enumerate() {
-            if has_receiver && idx == 0 {
-                continue;
-            }
-            let Some(expected_ty) = expected_arg_tys.get(idx).copied() else {
-                continue;
-            };
-            if expected_ty != dest_ty {
-                continue;
-            }
-
-            let space = self.value_root_capability_space_hint(arg_value);
-            match space_hint {
-                None => space_hint = Some(space),
-                Some(prev) if prev == space => {}
-                Some(_) => return Some(AddressSpaceKind::Memory),
-            }
-        }
-
-        space_hint
+        None
     }
 
     fn pointer_leaf_infos_for_rvalue(
@@ -2181,6 +2183,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     dest_ty,
                     AddressSpaceKind::Memory,
                 );
+                infos.extend(call_return_pointer_leaf_infos(
+                    self.db,
+                    &self.core,
+                    &self.builder.body.values,
+                    &self.builder.body.locals,
+                    call,
+                    dest_ty,
+                ));
                 let declared_provider_space = self.effect_provider_space_for_provider_ty(dest_ty);
                 if infos.is_empty()
                     && hir::analysis::ty::ty_is_noesc(self.db, dest_ty)
@@ -2193,12 +2203,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 {
                     infos.push((MirProjectionPath::new(), info));
                 }
-                let call_space_hint = self
-                    .call_return_space_hint_from_args(call, dest_ty)
-                    .or_else(|| {
-                        call.receiver_space
-                            .filter(|space| !matches!(space, AddressSpaceKind::Memory))
-                    });
+                let call_space_hint = self.call_return_space_hint_from_args(call).or_else(|| {
+                    call.receiver_space
+                        .filter(|space| !matches!(space, AddressSpaceKind::Memory))
+                });
                 if declared_provider_space.is_none()
                     && let Some(space) = call_space_hint
                     && !matches!(space, AddressSpaceKind::Memory)
@@ -2274,7 +2282,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             ),
             Rvalue::Load { place } => Some(self.place_address_space(place)),
             Rvalue::Call(call) => self
-                .call_return_space_hint_from_args(call, dest_ty)
+                .call_return_space_hint_from_args(call)
                 .or(call.receiver_space)
                 .or(self.effect_provider_space_for_provider_ty(dest_ty)),
             Rvalue::Intrinsic { .. } => crate::repr::runtime_pointer_info_for_ty(
@@ -2289,15 +2297,171 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
     }
 
-    fn assign(&mut self, stmt: Option<StmtId>, dest: Option<LocalId>, rvalue: Rvalue<'db>) {
+    fn ty_uses_const_ref_runtime(&self, ty: TyId<'db>) -> bool {
+        matches!(
+            crate::repr::runtime_shape_for_ty(self.db, &self.core, ty, AddressSpaceKind::Code),
+            crate::ir::RuntimeShape::ConstRef { .. }
+        )
+    }
+
+    fn local_can_be_const_backed(&self, dest: LocalId) -> bool {
+        let local = self.builder.body.local(dest);
+        !crate::repr::local_is_semantically_mutable(self.db, local)
+            && self.ty_uses_const_ref_runtime(local.ty)
+    }
+
+    fn value_is_const_backed(&self, value: ValueId) -> bool {
+        let value_data = self.builder.body.value(value);
+        match &value_data.origin {
+            ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) => self
+                .builder
+                .body
+                .locals
+                .get(local.index())
+                .is_some_and(|local| local.const_backing.is_const()),
+            ValueOrigin::TransparentCast { value } => self.value_is_const_backed(*value),
+            ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
+                self.ty_uses_const_ref_runtime(value_data.ty)
+                    && (self.value_is_const_backed(place.base)
+                        || crate::ir::try_place_pointer_info_in(
+                            &self.builder.body.values,
+                            &self.builder.body.locals,
+                            place,
+                        )
+                        .map(|info| info.address_space)
+                        .or_else(|| {
+                            crate::ir::try_place_address_space_in(
+                                &self.builder.body.values,
+                                &self.builder.body.locals,
+                                place,
+                            )
+                        }) == Some(AddressSpaceKind::Code))
+            }
+            ValueOrigin::ConstRegion(region) => self
+                .builder
+                .body
+                .const_regions
+                .get(region.index())
+                .is_some_and(|region| self.ty_uses_const_ref_runtime(region.ty)),
+            _ => false,
+        }
+    }
+
+    fn place_load_is_const_backed(&self, place: &Place<'db>, loaded_ty: TyId<'db>) -> bool {
+        if !self.ty_uses_const_ref_runtime(loaded_ty) {
+            return false;
+        }
+
+        let fallback = |place: &Place<'db>| self.place_address_space(place);
+        let loaded_root_space = crate::repr::try_pointer_leaf_infos_for_place_with_fallback(
+            self.db,
+            &self.core,
+            &self.builder.body.values,
+            &self.builder.body.locals,
+            place,
+            loaded_ty,
+            &fallback,
+        )
+        .ok()
+        .and_then(|infos| {
+            infos
+                .into_iter()
+                .find(|(path, _)| path.is_empty())
+                .map(|(_, info)| info.address_space)
+        });
+
+        self.value_is_const_backed(place.base)
+            || loaded_root_space == Some(AddressSpaceKind::Code)
+            || crate::ir::try_place_pointer_info_in(
+                &self.builder.body.values,
+                &self.builder.body.locals,
+                place,
+            )
+            .map(|info| info.address_space)
+            .or_else(|| {
+                crate::ir::try_place_address_space_in(
+                    &self.builder.body.values,
+                    &self.builder.body.locals,
+                    place,
+                )
+            }) == Some(AddressSpaceKind::Code)
+    }
+
+    fn call_result_is_const_backed(&self, call: &CallOrigin<'db>) -> bool {
+        let Some(CallTargetRef::Hir(hir_target)) = call.target.as_ref() else {
+            return false;
+        };
+        let CallableDef::Func(_) = hir_target.callable_def else {
+            return false;
+        };
+
+        self.immutable_call_return_param_sources(call)
+            .is_some_and(|indices| {
+                indices.iter().copied().all(|idx| {
+                    call.args
+                        .get(idx)
+                        .is_some_and(|arg| self.value_is_const_backed(*arg))
+                })
+            })
+    }
+
+    fn rvalue_is_const_backed(&self, dest: LocalId, rvalue: &Rvalue<'db>) -> bool {
+        match rvalue {
+            Rvalue::ConstAggregate { ty, .. } => self.ty_uses_const_ref_runtime(*ty),
+            Rvalue::Value(value) => self.value_is_const_backed(*value),
+            Rvalue::Load { place } => {
+                self.place_load_is_const_backed(place, self.builder.body.local(dest).ty)
+            }
+            Rvalue::Call(call) => self.call_result_is_const_backed(call),
+            Rvalue::ZeroInit | Rvalue::Intrinsic { .. } | Rvalue::Alloc { .. } => false,
+        }
+    }
+
+    fn assign_with_source(
+        &mut self,
+        source: crate::ir::SourceInfoId,
+        dest: Option<LocalId>,
+        rvalue: Rvalue<'db>,
+    ) {
         if let Some(dest) = dest {
             let infos = self.pointer_leaf_infos_for_rvalue(dest, &rvalue);
             let infos = self.normalize_pointer_leaf_infos(infos);
             let address_space = self.local_address_space_for_rvalue(dest, &rvalue, &infos);
-            self.builder.body.locals[dest.index()].pointer_leaf_infos = infos;
+            let const_backed =
+                self.local_can_be_const_backed(dest) && self.rvalue_is_const_backed(dest, &rvalue);
             if let Some(address_space) = address_space {
                 self.set_local_address_space(dest, address_space);
             }
+
+            {
+                let local = &mut self.builder.body.locals[dest.index()];
+                local.pointer_leaf_infos = infos;
+                if const_backed {
+                    if !matches!(local.const_backing, crate::ir::LocalConstBacking::Runtime) {
+                        local.const_backing = crate::ir::LocalConstBacking::Const;
+                    }
+                } else {
+                    local.const_backing = crate::ir::LocalConstBacking::Runtime;
+                }
+            }
+
+            if const_backed {
+                if !matches!(
+                    self.builder.body.locals[dest.index()].const_backing,
+                    crate::ir::LocalConstBacking::Runtime
+                ) {
+                    self.set_local_address_space(dest, AddressSpaceKind::Code);
+                }
+            } else {
+                let local = &self.builder.body.locals[dest.index()];
+                let local_ty = local.ty;
+                if local.address_space == AddressSpaceKind::Code
+                    && self.ty_uses_const_ref_runtime(local_ty)
+                {
+                    self.set_local_address_space(dest, AddressSpaceKind::Memory);
+                }
+            }
+
             if let Rvalue::Alloc { address_space } = rvalue {
                 let ty = self.builder.body.local(dest).ty;
                 self.builder.body.locals[dest.index()].place_root_layout =
@@ -2310,14 +2474,18 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
         }
 
-        let source = stmt
-            .map(|stmt| self.source_for_stmt(stmt))
-            .unwrap_or(crate::ir::SourceInfoId::SYNTHETIC);
         self.push_inst_here(MirInst::Assign {
             source,
             dest,
             rvalue,
         });
+    }
+
+    fn assign(&mut self, stmt: Option<StmtId>, dest: Option<LocalId>, rvalue: Rvalue<'db>) {
+        let source = stmt
+            .map(|stmt| self.source_for_stmt(stmt))
+            .unwrap_or(crate::ir::SourceInfoId::SYNTHETIC);
+        self.assign_with_source(source, dest, rvalue);
     }
 
     pub(super) fn refresh_value_pointer_info(&mut self, value: ValueId) {
@@ -2345,18 +2513,25 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let place_pointer_info = match &origin {
-            ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => self
-                .builder
-                .body
-                .place_pointer_info(place)
-                .and_then(|info| {
-                    crate::repr::runtime_value_pointer_info_for_ty(
-                        self.db,
-                        &self.core,
-                        ty,
-                        info.address_space,
-                    )
-                }),
+            ValueOrigin::PlaceRef(place) => crate::repr::runtime_value_pointer_info_for_ty(
+                self.db,
+                &self.core,
+                ty,
+                self.place_address_space(place),
+            ),
+            ValueOrigin::MoveOut { place } => {
+                self.builder
+                    .body
+                    .place_pointer_info(place)
+                    .and_then(|info| {
+                        crate::repr::runtime_value_pointer_info_for_ty(
+                            self.db,
+                            &self.core,
+                            ty,
+                            info.address_space,
+                        )
+                    })
+            }
             _ => None,
         };
         let default_space = repr
@@ -2380,9 +2555,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     &self.builder.body.locals,
                     *value,
                 ),
-                ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
-                    Some(self.place_address_space(place))
-                }
+                ValueOrigin::PlaceRef(_) => place_pointer_info.map(|info| info.address_space),
+                ValueOrigin::MoveOut { place } => Some(self.place_address_space(place)),
                 ValueOrigin::FieldPtr(field_ptr) => Some(field_ptr.addr_space),
                 _ => None,
             })
@@ -2411,6 +2585,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         &self,
         binding: &LocalBinding<'db>,
     ) -> AddressSpaceKind {
+        if let Some(&local) = self.binding_locals.get(binding) {
+            return self.builder.body.local(local).address_space;
+        }
+
         match binding {
             LocalBinding::EffectParam { site, idx, .. } => {
                 if let Some(space) = self.effect_binding_spaces.get(binding).copied() {
@@ -2460,6 +2638,30 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
     }
 
+    pub(super) fn bound_local_root_address_space(
+        &self,
+        binding: &LocalBinding<'db>,
+    ) -> AddressSpaceKind {
+        self.binding_locals
+            .get(binding)
+            .and_then(|local| {
+                crate::ir::lookup_local_pointer_leaf_info(
+                    &self.builder.body.locals,
+                    *local,
+                    &MirProjectionPath::new(),
+                )
+                .map(|info| info.address_space)
+                .or_else(|| {
+                    self.builder
+                        .body
+                        .locals
+                        .get(local.index())
+                        .map(|local| local.address_space)
+                })
+            })
+            .unwrap_or_else(|| self.address_space_for_binding(binding))
+    }
+
     /// Computes the address space for an expression, defaulting to memory.
     ///
     /// # Parameters
@@ -2470,7 +2672,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     pub(super) fn expr_address_space(&self, expr: ExprId) -> AddressSpaceKind {
         let prop = self.typed_body.expr_prop(self.db, expr);
         if let Some(binding) = prop.binding {
-            self.address_space_for_binding(&binding)
+            self.bound_local_root_address_space(&binding)
         } else {
             AddressSpaceKind::Memory
         }
@@ -2647,14 +2849,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     .is_some()
                     || pat_ty.as_capability(self.db).is_some();
                 if carries_space {
-                    let space = crate::ir::lookup_local_pointer_leaf_info(
-                        &self.builder.body.locals,
-                        local,
-                        &MirProjectionPath::new(),
-                    )
-                    .map(|info| info.address_space)
-                    .unwrap_or(self.builder.body.local(local).address_space);
-                    self.set_pat_address_space(pat, space);
+                    self.set_pat_address_space(pat, self.builder.body.local(local).address_space);
                 }
             }
             Pat::Tuple(pats) | Pat::PathTuple(_, pats) => {
@@ -2772,23 +2967,41 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 LocalBinding::Param { ty, .. } => ty,
                 _ => param.ty(self.db),
             };
-            let address_space = self.address_space_for_binding(&binding);
+            let mut address_space = self.address_space_for_binding(&binding);
+            let mut place_root_layout = crate::repr::declared_local_place_root_layout(
+                self.db,
+                &self.core,
+                ty,
+                address_space,
+            );
+            if address_space == AddressSpaceKind::Memory
+                && place_root_layout.is_object_root()
+                && (binding.is_mut() || crate::repr::ty_has_mut_capability(self.db, ty))
+            {
+                place_root_layout = crate::ir::LocalPlaceRootLayout::MemorySlot;
+            }
             let mut pointer_leaf_infos =
                 pointer_leaf_infos_for_ty_with_default(self.db, &self.core, ty, address_space);
             if let Some(overrides) = self.param_capability_space_overrides.get(idx) {
+                let mut local = LocalData {
+                    name: String::new(),
+                    ty,
+                    is_mut: binding.is_mut(),
+                    source,
+                    address_space,
+                    pointer_leaf_infos,
+                    place_root_layout,
+                    const_backing: self.param_const_backing(ty, binding.is_mut(), address_space),
+                    runtime_shape: crate::ir::RuntimeShape::Unresolved,
+                };
                 for (path, space) in overrides {
-                    if let Some((_, info)) = pointer_leaf_infos
-                        .iter_mut()
-                        .find(|(existing, _)| existing == path)
-                    {
-                        info.address_space = *space;
-                    } else if let Some(info) =
-                        crate::repr::runtime_pointer_info_for_ty(self.db, &self.core, ty, *space)
-                    {
-                        pointer_leaf_infos.push((path.clone(), info));
-                    }
+                    crate::repr::apply_param_capability_space_override(
+                        self.db, &self.core, &mut local, path, *space,
+                    );
                 }
-                pointer_leaf_infos = self.normalize_pointer_leaf_infos(pointer_leaf_infos);
+                address_space = local.address_space;
+                place_root_layout = local.place_root_layout;
+                pointer_leaf_infos = self.normalize_pointer_leaf_infos(local.pointer_leaf_infos);
             }
             let local = self.builder.body.alloc_local(LocalData {
                 name,
@@ -2797,12 +3010,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 source,
                 address_space,
                 pointer_leaf_infos,
-                place_root_layout: crate::repr::declared_local_place_root_layout(
-                    self.db,
-                    &self.core,
-                    ty,
-                    address_space,
-                ),
+                place_root_layout,
+                const_backing: self.param_const_backing(ty, binding.is_mut(), address_space),
                 runtime_shape: crate::ir::RuntimeShape::Unresolved,
             });
             self.builder.body.param_locals.push(local);
@@ -2860,6 +3069,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     self.u256_ty(),
                     address_space,
                 ),
+                const_backing: crate::ir::LocalConstBacking::Runtime,
                 runtime_shape: crate::ir::RuntimeShape::Unresolved,
             });
             self.builder.body.effect_param_locals.push(local);
@@ -2928,6 +3138,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 ty,
                 address_space,
             ),
+            const_backing: if matches!(binding, LocalBinding::Param { .. }) {
+                self.param_const_backing(ty, is_mut, address_space)
+            } else {
+                crate::ir::LocalConstBacking::Unknown
+            },
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         if needs_effect_param_local {
@@ -3071,7 +3286,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             &self.builder.body.locals,
             place,
         )
-        .and_then(|resolved| resolved.final_state().location_address_space())
+        .and_then(|resolved| {
+            resolved
+                .final_state()
+                .pointer_info
+                .map(|info| info.address_space)
+                .or(resolved.final_state().location_address_space())
+        })
         .unwrap_or_else(|| self.builder.body.place_address_space(place))
     }
 

@@ -10,7 +10,6 @@ use salsa::Update;
 use super::const_expr::{ConstExpr, ConstExprId, pretty_print_un_op};
 use super::{
     assoc_const::AssocConstUse,
-    ctfe::{CtfeConfig, CtfeInterpreter, instantiate_typed_body},
     diagnostics::{BodyDiag, FuncBodyDiag},
     fold::{TyFoldable, TyFolder},
     trait_def::TraitInstId,
@@ -18,13 +17,17 @@ use super::{
         TraitSolveCx,
         constraint::{collect_constraints, collect_func_decl_constraints},
     },
-    ty_check::{TypedBody, check_anon_const_body, check_const_body},
+    ty_check::{check_anon_const_body, check_const_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
     unify::UnificationTable,
 };
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{PathRes, resolve_path},
+    semantic::{
+        CtfeError, SemConstId, SemConstValue, VariantIndex, eval_body_owner_const, int_ty_shape,
+        normalize_int_to_shape,
+    },
     ty::trait_resolution::PredicateListId,
     ty::ty_def::{Kind, PrimTy, TyBase, TyData, TyVarSort},
 };
@@ -430,7 +433,6 @@ pub(crate) fn normalize_const_tys_for_comparison<'db>(
 pub(crate) struct ValidatedUnEvaluatedConst<'db> {
     pub const_ty: ConstTyId<'db>,
     pub expected_ty: TyId<'db>,
-    pub typed_body: TypedBody<'db>,
 }
 
 pub(crate) fn retype_hole_const_ty<'db>(
@@ -467,14 +469,14 @@ pub(crate) fn validate_unevaluated_const_ty<'db>(
     };
     let const_ty = const_ty.with_ty(db, expected_ty);
 
-    let (diags, typed_body) = match const_def {
+    let diags = match const_def {
         Some(const_def) => {
             let result = check_const_body(db, *const_def);
-            (result.0.clone(), result.1.clone())
+            result.0.clone()
         }
         None => {
             let result = check_anon_const_body(db, *body, check_ty);
-            (result.0.clone(), result.1.clone())
+            result.0.clone()
         }
     };
 
@@ -503,7 +505,6 @@ pub(crate) fn validate_unevaluated_const_ty<'db>(
     Ok(ValidatedUnEvaluatedConst {
         const_ty,
         expected_ty,
-        typed_body,
     })
 }
 
@@ -1087,15 +1088,28 @@ pub(crate) fn evaluate_const_ty<'db>(
         Err(cause) => return ConstTyId::invalid(db, cause),
     };
 
-    let mut interp = CtfeInterpreter::new(db, CtfeConfig::default());
-    let typed_body = if generic_args.is_empty() {
-        validated.typed_body
-    } else {
-        instantiate_typed_body(db, validated.typed_body.clone(), &generic_args)
+    let evaluated = match eval_body_owner_const(
+        db,
+        super::ty_check::BodyOwner::AnonConstBody {
+            body,
+            expected: validated.expected_ty,
+        },
+        generic_args,
+    )
+    .map(|value| const_ty_from_sem_const(db, value))
+    {
+        Ok(value) => value,
+        Err(CtfeError::NotConstEvaluable { .. }) => validated.const_ty,
+        Err(_) => {
+            return ConstTyId::invalid(
+                db,
+                InvalidCause::ConstEvalUnsupported {
+                    body,
+                    expr: body.expr(db),
+                },
+            );
+        }
     };
-    let evaluated = interp
-        .eval_expr_in_body(body, typed_body, generic_args, body.expr(db))
-        .unwrap_or_else(|cause| ConstTyId::invalid(db, cause));
 
     let mut table = UnificationTable::new(db);
     match check_const_ty(
@@ -1107,6 +1121,81 @@ pub(crate) fn evaluate_const_ty<'db>(
         Ok(ty) => evaluated.swap_ty(db, ty),
         Err(cause) => evaluated.swap_ty(db, TyId::invalid(db, cause)),
     }
+}
+
+pub(crate) fn const_ty_from_sem_const<'db>(
+    db: &'db dyn HirAnalysisDb,
+    value: SemConstId<'db>,
+) -> ConstTyId<'db> {
+    let ty = crate::analysis::semantic::sem_const_ty(db, value);
+    let evaluated = match value.value(db) {
+        SemConstValue::Unit => EvaluatedConstTy::Unit,
+        SemConstValue::Scalar { value, .. } => match value {
+            crate::analysis::semantic::SemConstScalar::Bool(flag) => {
+                EvaluatedConstTy::LitBool(flag)
+            }
+            crate::analysis::semantic::SemConstScalar::Int { value } => {
+                let int = int_ty_shape(db, ty).map_or(value.clone(), |(bits, _)| {
+                    normalize_int_to_shape(value.clone(), bits, false)
+                });
+                let (_, bytes) = int.to_bytes_be();
+                EvaluatedConstTy::LitInt(IntegerId::new(db, BigUint::from_bytes_be(&bytes)))
+            }
+            crate::analysis::semantic::SemConstScalar::Bytes(bytes) => {
+                EvaluatedConstTy::Bytes(bytes)
+            }
+        },
+        SemConstValue::Tuple { elems, .. } => EvaluatedConstTy::Tuple(
+            elems
+                .iter()
+                .copied()
+                .map(|elem| TyId::const_ty(db, const_ty_from_sem_const(db, elem)))
+                .collect(),
+        ),
+        SemConstValue::Struct { fields, .. } => EvaluatedConstTy::Record(
+            fields
+                .iter()
+                .copied()
+                .map(|field| TyId::const_ty(db, const_ty_from_sem_const(db, field)))
+                .collect(),
+        ),
+        SemConstValue::Array { elems, .. } => EvaluatedConstTy::Array(
+            elems
+                .iter()
+                .copied()
+                .map(|elem| TyId::const_ty(db, const_ty_from_sem_const(db, elem)))
+                .collect(),
+        ),
+        SemConstValue::TypeLevel { const_ty, .. } => {
+            let TyData::ConstTy(const_ty) = const_ty.data(db) else {
+                return ConstTyId::invalid(db, InvalidCause::Other);
+            };
+            return *const_ty;
+        }
+        SemConstValue::Enum {
+            variant, fields, ..
+        } => enum_const_ty_from_sem_const(db, ty, variant, fields.as_ref()),
+    };
+    ConstTyId::new(db, ConstTyData::Evaluated(evaluated, ty))
+}
+
+fn enum_const_ty_from_sem_const<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    variant: VariantIndex,
+    fields: &[SemConstId<'db>],
+) -> EvaluatedConstTy<'db> {
+    if !fields.is_empty() {
+        return EvaluatedConstTy::Invalid;
+    }
+
+    let Some(enum_) = ty.as_enum(db) else {
+        return EvaluatedConstTy::Invalid;
+    };
+    let Some(variant) = enum_.variants(db).nth(variant.0 as usize) else {
+        return EvaluatedConstTy::Invalid;
+    };
+    EvaluatedConstTy::EnumVariant(crate::hir_def::EnumVariant::new(variant.owner, variant.idx))
 }
 
 pub(crate) fn assumptions_for_body<'db>(
@@ -1176,6 +1265,34 @@ pub(crate) fn const_ty_from_assoc_const_use<'db>(
     assoc: AssocConstUse<'db>,
 ) -> Option<ConstTyId<'db>> {
     const_ty_from_trait_const(db, assoc.solve_cx(db), assoc.inst(), assoc.name())
+}
+
+pub(crate) fn const_ty_or_abstract_from_assoc_const_use<'db>(
+    db: &'db dyn HirAnalysisDb,
+    assoc: AssocConstUse<'db>,
+    expected_ty: TyId<'db>,
+) -> Option<ConstTyId<'db>> {
+    let make_abstract = || {
+        ConstTyId::new(
+            db,
+            ConstTyData::Abstract(
+                ConstExprId::new(db, ConstExpr::TraitConst(assoc)),
+                expected_ty,
+            ),
+        )
+    };
+
+    let Some(evaluated) = const_ty_from_assoc_const_use(db, assoc) else {
+        return Some(make_abstract());
+    };
+    let evaluated = evaluated.evaluate(db, Some(expected_ty));
+    if matches!(
+        evaluated.ty(db).invalid_cause(db),
+        Some(InvalidCause::ConstEvalUnsupported { .. })
+    ) {
+        return Some(make_abstract());
+    }
+    Some(evaluated)
 }
 
 pub(super) fn const_ty_from_trait_const<'db>(
@@ -1297,7 +1414,7 @@ impl<'db> ConstTyId<'db> {
         }
     }
 
-    pub(super) fn evaluate(
+    pub(crate) fn evaluate(
         self,
         db: &'db dyn HirAnalysisDb,
         expected_ty: Option<TyId<'db>>,

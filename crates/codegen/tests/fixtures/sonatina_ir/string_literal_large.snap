@@ -5,12 +5,9 @@ input_file: crates/codegen/tests/fixtures/string_literal_large.fe
 ---
 target = "evm-ethereum-osaka"
 
-global private const [i8; 63] $__fe_const_data_0 = [84, 104, 105, 115, 32, 105, 115, 32, 97, 32, 108, 111, 110, 103, 32, 115, 116, 114, 105, 110, 103, 32, 116, 104, 97, 116, 32, 101, 120, 99, 101, 101, 100, 115, 32, 116, 104, 105, 114, 116, 121, 45, 116, 119, 111, 32, 98, 121, 116, 101, 115, 32, 105, 110, 32, 108, 101, 110, 103, 116, 104, 33, 33];
-
 func private %large_string() -> i256 {
     block0:
-        v0.i256 = sym_addr $__fe_const_data_0;
-        return v0;
+        return 14193761522114409556417378784065189563003639806809333727936228505845386929253.i256;
 }
 
 func private %__fe_sonatina_entry() {
@@ -23,6 +20,5 @@ func private %__fe_sonatina_entry() {
 object @Contract {
     section runtime {
         entry %__fe_sonatina_entry;
-        data $__fe_const_data_0;
     }
 }

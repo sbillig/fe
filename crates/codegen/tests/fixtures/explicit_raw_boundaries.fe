@@ -1,3 +1,4 @@
+use core::EffectHandle
 use std::evm::{MemPtr, RawMem}
 
 struct Data {
@@ -8,8 +9,8 @@ fn bump() uses (value: mut u256) {
     value += 1
 }
 
-fn raw_store() uses (data: mut Data, mem: mut RawMem) {
-    mem.mstore(addr: core::addr_of(data), value: 8)
+fn raw_store() uses (data: mut MemPtr<Data>, mem: mut RawMem) {
+    mem.mstore(data.raw(), 8)
 }
 
 pub fn explicit_raw_boundaries() uses (mem: mut RawMem) {
@@ -18,7 +19,7 @@ pub fn explicit_raw_boundaries() uses (mem: mut RawMem) {
         bump()
     }
 
-    let mut data = Data { value: 7 }
+    let data: MemPtr<Data> = mem.mem_ptr(0x120)
     with (data, mem) {
         raw_store()
     }

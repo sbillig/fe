@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/nested_struct.fe
 ---
@@ -11,15 +12,14 @@ func private %abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v0.i256) {
         evm_return 0.i256 32.i256;
 }
 
-func private %read_inner__StorPtr_Outer___dab28b9da6c3e28(v0.i256) -> i256 {
+func private %read_inner__MemPtr_Outer___f2e15ef56643839a(v0.*i256) -> i256 {
     block0:
-        v1.i256 = evm_sload v0;
+        v1.i256 = mload v0 i256;
         return v1;
 }
 
-func private %write_inner__StorPtr_Outer___dab28b9da6c3e28(v0.i256, v1.i256) {
+func private %write_inner__MemPtr_Outer___f2e15ef56643839a(v0.i256, v1.*i256) {
     block0:
-        evm_sstore v1 v0;
         return;
 }
 
@@ -71,6 +71,18 @@ func private %stor_ptr_stor__Evm_hef0af3106e109414_Outer_hccd04e332bd35653__177c
     block0:
         v2.i256 = call %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Outer_hccd04e332bd35653__f44d0100de7cf929 v0;
         return v2;
+}
+
+func private %write_inner__StorPtr_Outer___dab28b9da6c3e28(v0.i256, v1.i256) {
+    block0:
+        evm_sstore v1 v0;
+        return;
+}
+
+func private %read_inner__StorPtr_Outer___dab28b9da6c3e28(v0.i256) -> i256 {
+    block0:
+        v1.i256 = evm_sload v0;
+        return v1;
 }
 
 func private %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Outer_hccd04e332bd35653__f44d0100de7cf929(v0.i256) -> i256 {

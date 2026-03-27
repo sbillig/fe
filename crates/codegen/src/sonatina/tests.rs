@@ -14,7 +14,7 @@ use sonatina_codegen::{
     object::{CompileOptions, ObjectArtifact, compile_all_objects},
 };
 use sonatina_ir::{
-    Module, Signature,
+    GlobalVariableRef, Module, Signature,
     builder::ModuleBuilder,
     func_cursor::InstInserter,
     inst::{control_flow::Call, evm::EvmStop},
@@ -96,6 +96,7 @@ pub fn emit_test_module_sonatina(
         &call_graph,
         &funcs_by_symbol,
         &code_region_sections,
+        &region_reachable,
         &region_deps,
     )?;
     super::ensure_module_sonatina_ir_valid(&module)?;
@@ -530,6 +531,7 @@ fn compile_test_objects(
     call_graph: &CallGraph,
     funcs_by_symbol: &FxHashMap<&str, &MirFunction<'_>>,
     code_region_sections: &FxHashMap<String, SectionName>,
+    region_reachable: &FxHashMap<String, FxHashSet<String>>,
     region_deps: &FxHashMap<String, FxHashSet<String>>,
 ) -> Result<Module, LowerError> {
     let isa = super::create_evm_isa();
@@ -545,6 +547,7 @@ fn compile_test_objects(
         ContractObjectSelection::All,
     );
     lowerer.declare_functions_for_tests(needed_symbols)?;
+    lowerer.lower_functions()?;
 
     if !needed_code_regions.is_empty() {
         let code_regions_object = create_code_regions_object(
@@ -552,6 +555,7 @@ fn compile_test_objects(
             funcs_by_symbol,
             needed_code_regions,
             code_region_sections,
+            region_reachable,
             region_deps,
         )?;
         lowerer
@@ -577,8 +581,6 @@ fn compile_test_objects(
             ))
         })?;
     }
-
-    lowerer.lower_functions()?;
     Ok(lowerer.finish())
 }
 
@@ -587,6 +589,7 @@ fn create_code_regions_object(
     funcs_by_symbol: &FxHashMap<&str, &MirFunction<'_>>,
     code_region_roots: &[String],
     code_region_sections: &FxHashMap<String, SectionName>,
+    region_reachable: &FxHashMap<String, FxHashSet<String>>,
     region_deps: &FxHashMap<String, FxHashSet<String>>,
 ) -> Result<Object, LowerError> {
     let object_name = ObjectName::from("CodeRegions");
@@ -620,6 +623,12 @@ fn create_code_regions_object(
             .ok_or_else(|| LowerError::Internal(format!("missing section name for `{root}`")))?;
 
         let mut directives = vec![Directive::Entry(wrapper_ref)];
+        let reachable = region_reachable.get(root).ok_or_else(|| {
+            LowerError::Internal(format!("missing region reachability for `{root}`"))
+        })?;
+        for gv in collect_data_globals_for_symbols(lowerer, reachable) {
+            directives.push(Directive::Data(gv));
+        }
 
         let deps = region_deps.get(root).cloned().unwrap_or_default();
         let mut deps: Vec<String> = deps.into_iter().collect();
@@ -688,6 +697,9 @@ fn create_test_object(
     let deps = collect_code_region_deps(&reachable, funcs_by_symbol);
 
     let mut directives = vec![Directive::Entry(wrapper_ref)];
+    for gv in collect_data_globals_for_symbols(lowerer, &reachable) {
+        directives.push(Directive::Data(gv));
+    }
 
     let code_regions_obj = ObjectName::from("CodeRegions");
     let mut deps: Vec<String> = deps.into_iter().collect();
@@ -715,6 +727,27 @@ fn create_test_object(
             directives,
         }],
     })
+}
+
+fn collect_data_globals_for_symbols(
+    lowerer: &ModuleLowerer<'_, '_>,
+    reachable_symbols: &FxHashSet<String>,
+) -> Vec<GlobalVariableRef> {
+    let mut symbols: Vec<_> = reachable_symbols.iter().cloned().collect();
+    symbols.sort();
+
+    let mut globals = Vec::new();
+    let mut seen = FxHashSet::default();
+    for symbol in symbols {
+        if let Some(symbol_globals) = lowerer.data_globals_by_symbol.get(&symbol) {
+            for &gv in symbol_globals {
+                if seen.insert(gv) {
+                    globals.push(gv);
+                }
+            }
+        }
+    }
+    globals
 }
 
 impl<'db, 'a> ModuleLowerer<'db, 'a> {
@@ -1161,6 +1194,7 @@ fn smoke() {
             &call_graph,
             &funcs_by_symbol,
             &code_region_sections,
+            &region_reachable,
             &region_deps,
         )
         .expect("test object compilation should succeed");
@@ -1195,6 +1229,102 @@ fn smoke() {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_objects_include_reachable_const_data_directives() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_test_object_const_data_test.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+use std::evm::effects::assert
+
+const C: [u256; 3] = [1, 2, 3]
+
+fn helper() -> u256 {
+    C[1]
+}
+
+#[test]
+fn smoke() {
+    assert(helper() == 2)
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let ingot = top_mod.ingot(&db);
+        let mir_module = lower_ingot(&db, ingot).expect("module should lower to MIR");
+        let tests = collect_tests(&db, &mir_module.functions, None)
+            .expect("test metadata collection should succeed");
+        let call_graph = build_call_graph(&mir_module.functions);
+        let funcs_by_symbol = build_funcs_by_symbol(&mir_module.functions);
+        let code_region_roots = collect_code_region_roots(&mir_module.functions);
+        let code_region_sections = code_region_roots
+            .iter()
+            .map(|sym| (sym.clone(), code_region_section_name(sym)))
+            .collect::<FxHashMap<_, _>>();
+        let mut region_reachable = FxHashMap::default();
+        let mut region_deps = FxHashMap::default();
+        for root in &code_region_roots {
+            let reachable = reachable_functions(&call_graph, root);
+            let deps = collect_code_region_deps(&reachable, &funcs_by_symbol);
+            region_reachable.insert(root.clone(), reachable);
+            region_deps.insert(root.clone(), deps);
+        }
+
+        let (needed_symbols, needed_code_regions) = collect_needed_symbols_for_tests(
+            &tests,
+            &call_graph,
+            &funcs_by_symbol,
+            &region_reachable,
+            &region_deps,
+        )
+        .expect("test requirements should be collected");
+        detect_code_region_cycles(&filter_code_region_graph(
+            &needed_code_regions,
+            &region_deps,
+        ))
+        .expect("region cycle detection should succeed");
+        let module = compile_test_objects(
+            &db,
+            &mir_module,
+            &tests,
+            &needed_symbols,
+            &needed_code_regions,
+            &call_graph,
+            &funcs_by_symbol,
+            &code_region_sections,
+            &region_reachable,
+            &region_deps,
+        )
+        .expect("test object compilation should succeed");
+
+        let test_object = module
+            .objects
+            .values()
+            .find(|object| object.name.0.as_str().starts_with("test_smoke"))
+            .expect("test object should be present");
+        let test_runtime = test_object
+            .sections
+            .iter()
+            .find(|section| section.name.0.as_str() == "runtime")
+            .expect("test runtime section should be present");
+        assert!(
+            test_runtime
+                .directives
+                .iter()
+                .any(|directive| matches!(directive, Directive::Data(_))),
+            "test runtime should include reachable const-data directives: {test_runtime:?}"
+        );
     }
 
     #[test]
@@ -1652,6 +1782,329 @@ fn allocates_dynamic_init_args() uses (evm: mut Evm) {
     }
 
     #[test]
+    fn immutable_const_array_local_stays_const_backed_for_index_reads() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_const_backed_local_index_reads.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+const A: [u256; 4] = [1, 2, 3, 4]
+
+fn read(i: usize) -> u256 {
+    let x: [u256; 4] = A
+    return x[i]
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let ir = crate::emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O0, None)
+            .expect("module should lower to Sonatina IR");
+
+        assert!(
+            ir.contains("const.ref"),
+            "expected const global references for immutable const-backed locals:\n{ir}"
+        );
+        assert!(
+            ir.contains("const.index"),
+            "expected indexed reads to stay on the readonly const path:\n{ir}"
+        );
+        assert!(
+            ir.contains("const.load"),
+            "expected scalar reads from immutable const-backed locals:\n{ir}"
+        );
+        assert!(
+            !ir.contains("obj.init.const"),
+            "pure index reads from immutable const-backed locals must not eagerly materialize:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn const_backed_local_stays_const_backed_across_readonly_private_calls() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_const_backed_local_private_call.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+fn head(values: [u256; 4], i: usize) -> u256 {
+    return values[i]
+}
+
+fn read(i: usize) -> u256 {
+    let x: [u256; 4] = [1, 2, 3, 4]
+    return head(x, i)
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let ir = crate::emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O0, None)
+            .expect("module should lower to Sonatina IR");
+
+        assert!(
+            ir.contains("constref<[i256; 4]>"),
+            "readonly aggregate helper params should keep a constref ABI across private calls:\n{ir}"
+        );
+        assert!(
+            ir.contains("const.index"),
+            "readonly aggregate helper calls should stay on the const indexing path:\n{ir}"
+        );
+        assert!(
+            !ir.contains("obj.init.const"),
+            "readonly aggregate helper calls must not eagerly materialize const-backed locals:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn mutable_const_backed_local_materializes_for_runtime_updates() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_mutable_const_backed_local_materializes.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+fn read() -> u256 {
+    let mut x: [u256; 4] = [1, 2, 3, 4]
+    x[1] = 9
+    return x[1]
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let ir = crate::emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O0, None)
+            .expect("module should lower to Sonatina IR");
+
+        assert!(
+            ir.contains("obj.init.const"),
+            "mutable aggregate locals should still materialize when runtime mutation is required:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn mutable_array_args_and_effect_helpers_keep_pointer_runtime_params() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_mutable_array_args_and_effects.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                include_str!(
+                    "../../../fe/tests/fixtures/fe_test/mutable_array_args_and_effects.fe"
+                )
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let ingot = top_mod.ingot(&db);
+        let mir_module = lower_ingot(&db, ingot).expect("lowering should succeed");
+        let ir = crate::emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O0, None)
+            .expect("module should lower to Sonatina IR");
+        assert!(
+            ir.contains("evm_mcopy"),
+            "memory-backed aggregate locals should copy payloads through evm_mcopy:\n{ir}"
+        );
+        assert!(
+            ir.contains("evm_malloc"),
+            "escaping pointer-backed aggregate locals should use evm_malloc instead of alloca:\n{ir}"
+        );
+        let isa = crate::sonatina::create_evm_isa();
+        let ctx = ModuleCtx::new(&isa);
+        let builder = ModuleBuilder::new(ctx);
+        let mut lowerer = ModuleLowerer::new(
+            &db,
+            builder,
+            &mir_module,
+            &isa,
+            layout::EVM_LAYOUT,
+            ContractObjectSelection::All,
+        );
+
+        let expected_pointer_symbols = [
+            ("rewrite_arg0_root_mem", 0usize),
+            (
+                "_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get_arg0_root_mem__u256_4__8f9b5dbb4a2f92d2",
+                0usize,
+            ),
+            ("write_effect__MemPtr__u256__4____10cf3a66235b8953", 2usize),
+            ("effect_sum__MemPtr__u256__4____10cf3a66235b8953", 0usize),
+            (
+                "test_mut_array_effect_param__MemPtr__u256__4____10cf3a66235b8953",
+                0usize,
+            ),
+        ];
+        for (symbol, param_idx) in expected_pointer_symbols {
+            let func = mir_module
+                .functions
+                .iter()
+                .find(|func| func.symbol_name == symbol)
+                .unwrap_or_else(|| panic!("expected function `{symbol}`"));
+            let (_sig, metadata) = lowerer
+                .lower_signature_and_metadata(func)
+                .unwrap_or_else(|err| panic!("failed to lower metadata for `{symbol}`: {err}"));
+            assert!(
+                metadata
+                    .params
+                    .get(param_idx)
+                    .is_some_and(|ty| ty.is_pointer(&lowerer.builder.ctx)),
+                "expected `{symbol}` runtime param {param_idx} to lower as a pointer, got {:?}",
+                metadata.params,
+            );
+        }
+    }
+
+    #[test]
+    fn position_lifecycle_scalar_handle_helpers_lower_without_objref_scalar_mismatches() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_position_lifecycle.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                include_str!("../../../fe/tests/fixtures/fe_test/position_lifecycle.fe")
+                    .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let ir = crate::emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O0, None)
+            .expect("module should lower to Sonatina IR");
+
+        assert!(
+            ir.contains("func private %increment_version_arg0_root_mem"),
+            "mutable scalar-handle helper should stay memory-specialized without backend carrier mismatches:\n{ir}"
+        );
+        assert!(
+            ir.contains("func private %position_hbf6187351dab3155_bump_version"),
+            "fixture should lower the position bump helper end to end:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn readonly_call_results_stay_const_backed_in_immutable_locals() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_const_backed_call_result_local.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+fn id(values: [u256; 4]) -> [u256; 4] {
+    return values
+}
+
+fn read() -> u256 {
+    let x: [u256; 4] = [1, 2, 3, 4]
+    let y: [u256; 4] = id(x)
+    let z: [u256; 4] = y
+    return z[0]
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let ir = crate::emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O0, None)
+            .expect("module should lower to Sonatina IR");
+
+        assert!(
+            ir.contains("-> constref<[i256; 4]>"),
+            "readonly aggregate helpers should keep constref returns:\n{ir}"
+        );
+        assert!(
+            ir.contains("const.index"),
+            "immutable locals fed by readonly call results should stay on the const indexing path:\n{ir}"
+        );
+        assert!(
+            !ir.contains("obj.init.const"),
+            "readonly call results must not eagerly materialize immutable aggregate locals:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn scalar_returns_from_ref_params_do_not_poison_eq_helper_signatures() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_scalar_ref_return_eq_helper.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+struct Wallet {
+    balance: u256,
+    nonce: u8,
+}
+
+fn read_balance(x: ref u256) -> u256 {
+    x
+}
+
+fn check() -> bool {
+    let w = Wallet {
+        balance: 100,
+        nonce: 1,
+    }
+    let b: ref u256 = ref w.balance
+    return read_balance(b) == 100
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let ir = crate::emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O0, None)
+            .expect("module should lower to Sonatina IR");
+
+        assert!(
+            ir.contains(
+                "func private %u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0.i256, v1.i256) -> i1"
+            ),
+            "scalar equality helper params must stay word-shaped after ref-backed scalar returns:\n{ir}"
+        );
+        assert!(
+            !ir.contains(
+                "func private %u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0.*i256, v1.i256) -> i1"
+            ),
+            "scalar equality helper must not be specialized to a pointer carrier:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_module_prunes_unreachable_functions_and_omits_empty_code_regions_object() {
         let mut db = DriverDataBase::default();
         let file_url = temp_fixture_url("sonatina_test_module_prunes_reachability.fe");
@@ -1727,6 +2180,7 @@ fn smoke() {
             &call_graph,
             &funcs_by_symbol,
             &code_region_sections,
+            &region_reachable,
             &region_deps,
         )
         .expect("test object lowering should succeed");

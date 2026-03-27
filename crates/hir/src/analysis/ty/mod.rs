@@ -29,11 +29,9 @@ pub mod assoc_const;
 pub mod binder;
 pub mod canonical;
 pub(crate) mod const_check;
-pub mod const_eval;
 pub mod const_expr;
 pub mod const_ty;
 pub mod corelib;
-pub(crate) mod ctfe;
 pub mod effects;
 pub mod msg_selector;
 
@@ -46,6 +44,7 @@ pub mod method_table;
 pub mod normalize;
 pub mod pattern_analysis;
 pub mod pattern_ir;
+pub mod provider;
 pub(crate) mod scratch;
 pub mod trait_def;
 pub mod trait_lower;
@@ -439,7 +438,7 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
     }
 }
 
-fn resolve_default_root_effect_ty<'db>(
+pub(crate) fn resolve_default_root_effect_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,

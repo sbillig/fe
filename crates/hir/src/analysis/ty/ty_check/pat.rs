@@ -8,11 +8,14 @@ use either::Either;
 use super::{ConstRef, RecordLike, TyChecker, env::LocalBinding, path::RecordInitChecker};
 use crate::analysis::{
     name_resolution::{PathRes, ResolvedVariant},
+    semantic::{
+        SemConstScalar, SemConstValue, SemOrigin, eval_const_ref,
+        instance::resolve_semantic_const_ref,
+    },
     ty::adt_def::AdtRef,
     ty::{
         assoc_const::AssocConstUse,
         binder::Binder,
-        const_eval::{ConstValue, try_eval_const_ref},
         diagnostics::BodyDiag,
         fold::TyFoldable,
         pattern_ir::{
@@ -213,12 +216,35 @@ impl<'db> TyChecker<'db> {
         cref: ConstRef<'db>,
         expected: TyId<'db>,
     ) -> Option<LitKind<'db>> {
-        match try_eval_const_ref(self.db, cref, expected)? {
-            ConstValue::Int(int) => {
-                Some(LitKind::Int(crate::hir_def::IntegerId::new(self.db, int)))
+        let expected = expected
+            .as_capability(self.db)
+            .map_or(expected, |(_, inner)| inner);
+        let cref = resolve_semantic_const_ref(self.db, cref, expected, SemOrigin::Synthetic)?;
+        match eval_const_ref(self.db, cref).ok()?.value(self.db) {
+            SemConstValue::Scalar {
+                value: SemConstScalar::Int { value },
+                ..
+            } => {
+                let (_, bytes) = value.to_bytes_be();
+                Some(LitKind::Int(crate::hir_def::IntegerId::new(
+                    self.db,
+                    num_bigint::BigUint::from_bytes_be(&bytes),
+                )))
             }
-            ConstValue::Bool(flag) => Some(LitKind::Bool(flag)),
-            ConstValue::Bytes(_) | ConstValue::EnumVariant(_) | ConstValue::ConstArray(_) => None,
+            SemConstValue::Scalar {
+                value: SemConstScalar::Bool(flag),
+                ..
+            } => Some(LitKind::Bool(flag)),
+            SemConstValue::Unit
+            | SemConstValue::TypeLevel { .. }
+            | SemConstValue::Tuple { .. }
+            | SemConstValue::Struct { .. }
+            | SemConstValue::Array { .. }
+            | SemConstValue::Enum { .. }
+            | SemConstValue::Scalar {
+                value: SemConstScalar::Bytes(_),
+                ..
+            } => None,
         }
     }
 

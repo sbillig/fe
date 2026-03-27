@@ -1,5 +1,6 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
+assertion_line: 26
 expression: mir_output
 ---
 fn read_ref(v0: ref u256) -> u256:
@@ -13,5 +14,10 @@ fn scalar_ref_transparent_wrapper() -> u256:
     init mem[v1] { .0 = 7, .1 = 1 }
     v0: Pair = v1
     v2: RefWrap = &mem[v0].0
-    v3: u256 = read_ref(v2)
+    v3: u256 = read_ref_arg0_root_mem(v2)
     ret v3
+
+fn read_ref_arg0_root_mem(v0: ref u256) -> u256:
+  bb0:
+    v1: u256 = load mem[v0].*
+    ret v1

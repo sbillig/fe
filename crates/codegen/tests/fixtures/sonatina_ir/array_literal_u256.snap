@@ -1,0 +1,28 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/array_literal_u256.fe
+---
+target = "evm-ethereum-osaka"
+
+global private const [i256; 4] $__fe_const_data_0 = [1, 2, 3, 4];
+
+func private %fixed_u256_array_literal() -> constref<[i256; 4]> {
+    block0:
+        v0.constref<[i256; 4]> = const.ref $__fe_const_data_0;
+        return v0;
+}
+
+func private %__fe_sonatina_entry() {
+    block0:
+        v0.constref<[i256; 4]> = call %fixed_u256_array_literal;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        data $__fe_const_data_0;
+    }
+}

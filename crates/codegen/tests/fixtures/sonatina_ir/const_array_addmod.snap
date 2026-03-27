@@ -1,35 +1,19 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/const_array_addmod.fe
 ---
 target = "evm-ethereum-osaka"
 
-global private const [i8; 96] $__fe_const_data_0 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 30];
+global private const [i256; 3] $__fe_const_data_0 = [10, 20, 30];
 
 func private %get_sum() -> i256 {
     block0:
-        v0.i256 = sym_addr $__fe_const_data_0;
-        v1.*[i256; 3] = int_to_ptr v0 *[i256; 3];
-        v3.*i256 = gep v1 0.i256 0.i256;
-        v4.i256 = ptr_to_int v3 i256;
-        v6.*i256 = alloca i256;
-        v7.i256 = ptr_to_int v6 i256;
-        evm_code_copy v7 v4 32.i256;
-        v8.i256 = mload v7 i256;
-        (v10.i256, v11.i1) = uaddo 1.i256 v8;
-        br v11 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        (v13.i256, v14.i1) = evm_umodo v10 100.i256;
-        br v14 block1 block3;
-
-    block3:
-        return v13;
+        v0.constref<[i256; 3]> = const.ref $__fe_const_data_0;
+        v2.constref<i256> = const.index v0 0.i256;
+        v3.i256 = const.load v2;
+        v6.i256 = evm_add_mod 1.i256 v3 100.i256;
+        return v6;
 }
 
 func private %__fe_sonatina_entry() {

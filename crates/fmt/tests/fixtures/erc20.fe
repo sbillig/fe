@@ -50,7 +50,7 @@ pub contract CoolCoin uses (ctx: mut Ctx, log: mut Log) {
             store.total_supply
         }
 
-        Name {} -> String<32> { "CoolCoin" }
+        Name {} -> String<31> { "CoolCoin" }
         Symbol {} -> String<8> { "COOL" }
         Decimals {} -> u8 { 18 }
     }
@@ -195,7 +195,7 @@ impl AccessControl {
 // ERC20 standard message types
 msg Erc20 {
     #[selector = 0x06fdde03]
-    Name -> String<32>,
+    Name -> String<31>,
 
     #[selector = 0x95d89b41]
     Symbol -> String<8>,
@@ -259,7 +259,7 @@ struct ApprovalEvent {
 
 // stubs for missing std lib stuff
 extern {
-    fn assert(_: bool, _: String<64>)
+    fn assert(_: bool, _: String<31>)
 }
 
 pub struct Map<K, V> {}

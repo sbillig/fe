@@ -1,8 +1,5 @@
 /// Backend-agnostic compiler intrinsics.
 extern {
-    /// Return the address of a pointer-like value as `u256`.
-    pub fn addr_of<T>(_: T) -> u256
-
     /// Return the byte size of a type at compile time.
     pub const fn size_of<T>() -> u256
 

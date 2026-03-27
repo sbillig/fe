@@ -1,0 +1,42 @@
+type Words = [u256; 4]
+
+fn rewrite(mut arr: own Words, idx: usize, value: u256) -> Words {
+    arr[idx] = value
+    arr[3] = arr[0] + arr[1] + arr[2]
+    arr
+}
+
+fn write_effect(idx: usize, value: u256) uses (words: mut Words) {
+    words[idx] = value
+    words[3] = words[0] + words[1] + words[2]
+}
+
+fn effect_sum() -> u256 uses (words: Words) {
+    let mut total: u256 = 0
+    for value in words {
+        total += value
+    }
+    total
+}
+
+#[test]
+fn test_mut_array_fn_argument() {
+    let start: Words = [2, 7, 1, 0]
+    let updated: Words = rewrite(start, 2, 8)
+    assert(updated[0] == 2)
+    assert(updated[1] == 7)
+    assert(updated[2] == 8)
+    assert(updated[3] == 17)
+}
+
+#[test]
+fn test_mut_array_effect_param() uses (words: mut Words) {
+    write_effect(0, 10)
+    write_effect(1, 20)
+    write_effect(2, 30)
+    assert(words[0] == 10)
+    assert(words[1] == 20)
+    assert(words[2] == 30)
+    assert(words[3] == 60)
+    assert(effect_sum() == 120)
+}

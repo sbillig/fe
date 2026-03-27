@@ -1,8 +1,9 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
+assertion_line: 26
 expression: mir_output
 ---
-fn needs__StorPtr_Storage_u8____e37e0e92de47c723(v0: u256) -> ():
+fn needs__MemPtr_Storage_u8____6bb17057355b71ce(v0: u256) -> ():
   ; runtime_abi values=[] effects=[]
   bb0:
     ret

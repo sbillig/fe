@@ -16,7 +16,7 @@ use super::{
     const_ty::{AppFrameId, ConstTyId},
     fold::{TyFoldable, TyFolder},
     layout_holes::rebase_structural_holes_under_app,
-    trait_def::{ImplementorId, ImplementorOrigin, TraitInstId, does_impl_trait_conflict},
+    trait_def::{ImplementorId, ImplementorOrigin, TraitInstId},
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, TyId},
     ty_lower::{ConstDefaultCompletion, lower_hir_ty, lower_opt_hir_ty},
@@ -29,44 +29,33 @@ use crate::analysis::{
 
 type TraitImplTable<'db> = FxHashMap<Trait<'db>, Vec<Binder<ImplementorId<'db>>>>;
 
-/// Collect all trait implementors in the ingot.
-/// The returned table doesn't contain the const(external) ingot
-/// implementors. If you need to obtain the environment that contains all
-/// available implementors in the ingot, please use
-/// [`TraitEnv`](super::trait_def::TraitEnv).
-#[salsa::tracked(
-    return_ref,
-    cycle_fn=collect_trait_impls_cycle_recover,
-    cycle_initial=collect_trait_impls_cycle_initial
-)]
+/// Collect all local trait implementors in the ingot.
+///
+/// This query is intentionally a raw lowering pass:
+/// - it only lowers impls defined in `ingot`
+/// - it does not pull in external ingot impls
+/// - it does not perform overlap/conflict checking
+///
+/// Keeping impl collection free of trait solving avoids a query cycle between
+/// trait-environment construction and overlap checking. Visible trait
+/// environments are assembled later by [`TraitEnv`](super::trait_def::TraitEnv).
+#[salsa::tracked(return_ref)]
 pub(crate) fn collect_trait_impls<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
 ) -> TraitImplTable<'db> {
-    let const_impls = ingot
-        .resolved_external_ingots(db)
-        .iter()
-        .map(|(_, external)| collect_trait_impls(db, *external))
-        .collect();
+    let mut impl_table = TraitImplTable::default();
+    for &impl_ in ingot.all_impl_traits(db).iter() {
+        let Some(implementor) = lower_impl_trait(db, impl_) else {
+            continue;
+        };
+        impl_table
+            .entry(implementor.instantiate_identity().trait_def(db))
+            .or_default()
+            .push(implementor);
+    }
 
-    let impl_traits = ingot.all_impl_traits(db);
-    ImplementorCollector::new(db, const_impls).collect(impl_traits)
-}
-
-fn collect_trait_impls_cycle_initial<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _ingot: Ingot<'db>,
-) -> TraitImplTable<'db> {
-    FxHashMap::default()
-}
-
-fn collect_trait_impls_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &TraitImplTable<'db>,
-    _count: u32,
-    _ingot: Ingot<'db>,
-) -> salsa::CycleRecoveryAction<TraitImplTable<'db>> {
-    salsa::CycleRecoveryAction::Iterate
+    impl_table
 }
 
 /// Returns the corresponding implementors for the given [`ImplTrait`].
@@ -439,61 +428,6 @@ pub(crate) enum TraitRefLowerError<'db> {
     Cycle,
     /// Error is expected to be reported elsewhere.
     Ignored,
-}
-
-/// Collect all implementors in an ingot.
-struct ImplementorCollector<'db> {
-    db: &'db dyn HirAnalysisDb,
-    impl_table: TraitImplTable<'db>,
-    const_impl_maps: Vec<&'db TraitImplTable<'db>>,
-}
-
-impl<'db> ImplementorCollector<'db> {
-    fn new(db: &'db dyn HirAnalysisDb, const_impl_maps: Vec<&'db TraitImplTable>) -> Self {
-        Self {
-            db,
-            impl_table: TraitImplTable::default(),
-            const_impl_maps,
-        }
-    }
-
-    fn collect(mut self, impl_traits: &[ImplTrait<'db>]) -> TraitImplTable<'db> {
-        for &impl_ in impl_traits {
-            let Some(implementor) = lower_impl_trait(self.db, impl_) else {
-                continue;
-            };
-
-            if !self.does_conflict(implementor) {
-                self.impl_table
-                    .entry(implementor.instantiate_identity().trait_def(self.db))
-                    .or_default()
-                    .push(implementor);
-            }
-        }
-
-        self.impl_table
-    }
-
-    /// Returns `true` if `implementor` conflicts with any existing implementor.
-    fn does_conflict(&mut self, implementor: Binder<ImplementorId>) -> bool {
-        let def = implementor.instantiate_identity().trait_def(self.db);
-        for impl_map in self
-            .const_impl_maps
-            .iter()
-            .chain(std::iter::once(&&self.impl_table))
-        {
-            let Some(impls) = impl_map.get(&def) else {
-                continue;
-            };
-            for &already_implemented in impls {
-                if does_impl_trait_conflict(self.db, already_implemented, implementor) {
-                    return true;
-                }
-            }
-        }
-
-        false
-    }
 }
 
 #[cfg(test)]

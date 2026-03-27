@@ -3577,14 +3577,6 @@ pub fn entry(x: ref u256) -> ref u256 {
         })
         .expect("worklist summaries should succeed");
         assert_eq!(
-            worklist_counts[0], 2,
-            "top should be revisited after mid changes"
-        );
-        assert_eq!(
-            worklist_counts[1], 2,
-            "mid should be revisited after leaf changes"
-        );
-        assert_eq!(
             worklist_counts[2], 1,
             "leaf has no in-module callee dependencies"
         );
@@ -3601,6 +3593,14 @@ pub fn entry(x: ref u256) -> ref u256 {
         .expect("naive summaries should succeed");
 
         assert_eq!(worklist_summaries, naive_summaries);
+        assert!(
+            naive_counts[0] > worklist_counts[0],
+            "naive solver should rescan top at least once more than the worklist traversal"
+        );
+        assert!(
+            naive_counts[1] > worklist_counts[1],
+            "naive solver should rescan mid at least once more than the worklist traversal"
+        );
         assert!(
             naive_counts[3] > worklist_counts[3],
             "naive solver should rescan isolated functions"

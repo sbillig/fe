@@ -16,14 +16,15 @@ pub use self::contract::{
 };
 pub use self::path::RecordLike;
 use crate::analysis::name_resolution::resolve_path;
+use crate::analysis::ty::corelib::{resolve_core_trait, resolve_lib_type_path};
 use crate::analysis::ty::fold::TyFoldable;
 use crate::analysis::ty::visitor::TyVisitable;
 use crate::hir_def::CallableDef;
 use crate::{
     hir_def::{
         Body, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParam,
-        GenericParamOwner, ItemKind, LitKind, Partial, Pat, PatId, PathId, StmtId, TypeBound,
-        TypeId as HirTyId, WhereClauseOwner,
+        GenericParamOwner, IdentId, ItemKind, LitKind, Partial, Pat, PatId, PathId, StmtId,
+        StringId, TypeBound, TypeId as HirTyId, WhereClauseOwner,
     },
     span::{
         DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan,
@@ -62,14 +63,16 @@ use super::{
         is_goal_query_satisfiable, is_goal_satisfiable,
     },
     ty_contains_const_hole,
-    ty_def::{BorrowKind, CapabilityKind, InvalidCause, Kind, StringFallback, TyId, TyVarSort},
+    ty_def::{
+        BorrowKind, CapabilityKind, InvalidCause, Kind, MAX_INLINE_STRING_BYTES, StringFallback,
+        TyId, TyVarSort,
+    },
     ty_lower::lower_hir_ty,
     unify::{InferenceKey, Snapshot, UnificationError, UnificationTable},
 };
 use crate::analysis::ty::ty_def::{TyBase, TyData};
 use crate::analysis::ty::{
     const_ty::ConstTyData,
-    corelib::resolve_lib_type_path,
     ctfe::{CtfeConfig, CtfeInterpreter},
     fold::AssocTySubst,
     normalize::normalize_ty,
@@ -496,6 +499,58 @@ impl<'db> TyChecker<'db> {
         }
     }
 
+    fn concrete_borrow_provider_for_effect_handle_ty(
+        &self,
+        ty: TyId<'db>,
+    ) -> Option<ConcreteBorrowProvider> {
+        let scope = self.env.scope();
+        let assumptions = self.env.assumptions();
+        let effect_handle = resolve_core_trait(self.db, scope, &["effect_ref", "EffectHandle"])
+            .expect("missing required core trait `core::effect_ref::EffectHandle`");
+        let address_space_ident = IdentId::new(self.db, "AddressSpace".to_string());
+        let inst = TraitInstId::new(self.db, effect_handle, vec![ty], IndexMap::new());
+
+        match self.trait_effect_goal_satisfiability_in_scope(scope, assumptions, inst) {
+            GoalSatisfiability::Satisfied(_) => {}
+            GoalSatisfiability::NeedsConfirmation(_)
+            | GoalSatisfiability::ContainsInvalid
+            | GoalSatisfiability::UnSat(_) => return None,
+        }
+
+        for (space_ty, provider) in [
+            (
+                resolve_lib_type_path(self.db, scope, "core::effect_ref::Memory")?,
+                ConcreteBorrowProvider::Memory,
+            ),
+            (
+                resolve_lib_type_path(self.db, scope, "core::effect_ref::Storage")?,
+                ConcreteBorrowProvider::Storage,
+            ),
+            (
+                resolve_lib_type_path(self.db, scope, "core::effect_ref::TransientStorage")?,
+                ConcreteBorrowProvider::TransientStorage,
+            ),
+            (
+                resolve_lib_type_path(self.db, scope, "core::effect_ref::Calldata")?,
+                ConcreteBorrowProvider::Calldata,
+            ),
+        ] {
+            let mut assoc = IndexMap::new();
+            assoc.insert(address_space_ident, space_ty);
+            let inst = TraitInstId::new(self.db, effect_handle, vec![ty], assoc);
+            match self.trait_effect_goal_satisfiability_in_scope(scope, assumptions, inst) {
+                GoalSatisfiability::Satisfied(_) => return Some(provider),
+                GoalSatisfiability::NeedsConfirmation(_) => return None,
+                GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => {}
+            }
+        }
+
+        panic!(
+            "`{}` implements `EffectHandle` but `AddressSpace` is not one of: core::effect_ref::Memory | Storage | TransientStorage | Calldata",
+            ty.pretty_print(self.db)
+        )
+    }
+
     fn concrete_borrow_provider_for_effect_field(
         &self,
         site: EffectParamSite<'db>,
@@ -509,7 +564,8 @@ impl<'db> TyChecker<'db> {
         };
         let name = self.env.semantic_effect_binding(site, idx)?.binding_name;
         let field = contract.field_layout(self.db).get(&name)?;
-        self.concrete_borrow_provider_from_address_space(field.address_space)
+        self.concrete_borrow_provider_for_effect_handle_ty(field.address_space)
+            .or_else(|| self.concrete_borrow_provider_from_address_space(field.address_space))
     }
 
     fn concrete_borrow_provider_for_contract_name(
@@ -524,20 +580,31 @@ impl<'db> TyChecker<'db> {
             | EffectParamSite::ContractRecvArm { contract, .. } => contract,
         };
         if let Some(field) = contract.field_layout(self.db).get(&name) {
-            return self.concrete_borrow_provider_from_address_space(field.address_space);
+            return self
+                .concrete_borrow_provider_for_effect_handle_ty(field.address_space)
+                .or_else(|| self.concrete_borrow_provider_from_address_space(field.address_space));
         }
         let root_effect_ty = super::resolve_default_root_effect_ty(
             self.db,
             contract.scope(),
             self.env.base_assumptions(),
         )?;
-        self.concrete_borrow_provider_from_address_space(root_effect_ty)
+        self.concrete_borrow_provider_for_effect_handle_ty(root_effect_ty)
+            .or_else(|| self.concrete_borrow_provider_from_address_space(root_effect_ty))
     }
 
     fn concrete_borrow_provider_for_binding(
         &self,
         binding: LocalBinding<'db>,
     ) -> Option<ConcreteBorrowProvider> {
+        let binding_ty = self.env.lookup_binding_ty(&binding);
+        if binding_ty.as_capability(self.db).is_some() {
+            return Some(ConcreteBorrowProvider::Memory);
+        }
+        if let Some(provider) = self.concrete_borrow_provider_for_effect_handle_ty(binding_ty) {
+            return Some(provider);
+        }
+
         match binding {
             LocalBinding::Local { pat, .. } => self.env.local_borrow_provider(pat),
             LocalBinding::EffectParam { site, .. } => self
@@ -1623,6 +1690,15 @@ impl<'db> TyChecker<'db> {
             LitKind::Int(_) => self.table.new_var(TyVarSort::Integral, &Kind::Star),
             LitKind::String(s) => {
                 let len_bytes = s.len_bytes(self.db);
+                if len_bytes > MAX_INLINE_STRING_BYTES {
+                    return TyId::invalid(
+                        self.db,
+                        InvalidCause::StringTooLarge {
+                            max: MAX_INLINE_STRING_BYTES,
+                            given: len_bytes,
+                        },
+                    );
+                }
                 self.table.new_var(
                     TyVarSort::String {
                         min_len: len_bytes,
@@ -1632,6 +1708,62 @@ impl<'db> TyChecker<'db> {
                 )
             }
         }
+    }
+
+    pub(crate) fn string_literal_ty(
+        &mut self,
+        string_id: StringId<'db>,
+        expected: TyId<'db>,
+        primary: DynLazySpan<'db>,
+    ) -> TyId<'db> {
+        if self.string_literal_should_use_byte_array(expected) {
+            return self.string_literal_byte_array_ty(string_id.len_bytes(self.db));
+        }
+
+        let len_bytes = string_id.len_bytes(self.db);
+        if len_bytes > MAX_INLINE_STRING_BYTES {
+            self.push_diag(BodyDiag::StringLiteralTooLarge {
+                primary,
+                max: MAX_INLINE_STRING_BYTES,
+                given: len_bytes,
+            });
+            return TyId::invalid(
+                self.db,
+                InvalidCause::StringTooLarge {
+                    max: MAX_INLINE_STRING_BYTES,
+                    given: len_bytes,
+                },
+            );
+        }
+
+        self.table.new_var(
+            TyVarSort::String {
+                min_len: len_bytes,
+                fallback: self.string_literal_fallback(),
+            },
+            &Kind::Star,
+        )
+    }
+
+    pub(crate) fn string_literal_byte_array_ty(&self, len_bytes: usize) -> TyId<'db> {
+        let u8_ty = TyId::new(
+            self.db,
+            TyData::TyBase(TyBase::Prim(crate::analysis::ty::ty_def::PrimTy::U8)),
+        );
+        TyId::array_with_len(self.db, u8_ty, len_bytes)
+    }
+
+    pub(crate) fn string_literal_should_use_byte_array(&self, expected: TyId<'db>) -> bool {
+        let expected = normalize_ty(self.db, expected, self.env.scope(), self.env.assumptions());
+        let (base, args) = expected.decompose_ty_app(self.db);
+        matches!(
+            base.data(self.db),
+            TyData::TyBase(TyBase::Prim(crate::analysis::ty::ty_def::PrimTy::Array))
+        ) && args.len() == 2
+            && matches!(
+                args[0].data(self.db),
+                TyData::TyBase(TyBase::Prim(crate::analysis::ty::ty_def::PrimTy::U8))
+            )
     }
 
     fn lower_ty(
@@ -2059,6 +2191,7 @@ pub struct ResolvedEffectArg<'db> {
     pub pass_mode: EffectPassMode,
     pub key_kind: EffectKeyKind,
     pub instantiated_target_ty: Option<TyId<'db>>,
+    pub provider: Option<ConcreteBorrowProvider>,
 }
 
 /// Resolved reference for a `const`-valued path expression.
@@ -2102,6 +2235,7 @@ pub struct TypedBody<'db> {
     const_refs: FxHashMap<ExprId, ConstRef<'db>>,
     callables: FxHashMap<ExprId, Callable<'db>>,
     call_effect_args: FxHashMap<ExprId, Vec<ResolvedEffectArg<'db>>>,
+    return_borrow_provider: Option<ConcreteBorrowProvider>,
     /// Bindings for function parameters (indexed by param position)
     param_bindings: Vec<LocalBinding<'db>>,
     /// Bindings for local variables (keyed by the pattern that introduces them)
@@ -2112,6 +2246,19 @@ pub struct TypedBody<'db> {
     pattern_status: FxHashMap<PatId, PatternAnalysisStatus>,
     /// Resolved Seq trait methods for for-loops
     for_loop_seq: FxHashMap<StmtId, ForLoopSeq<'db>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BindingSource {
+    pub init_expr: ExprId,
+    pub field_path: Vec<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReturnProvenance {
+    Fresh,
+    ForwardedParams(Vec<usize>),
+    Unknown,
 }
 
 impl<'db> TyVisitable<'db> for TypedBody<'db> {
@@ -2204,6 +2351,7 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             callables,
             pat_binding_modes: self.pat_binding_modes,
             call_effect_args,
+            return_borrow_provider: self.return_borrow_provider,
             param_bindings,
             pat_bindings,
             for_loop_seq,
@@ -2256,6 +2404,10 @@ impl<'db> TypedBody<'db> {
         self.call_effect_args.get(&call_expr).map(|v| v.as_slice())
     }
 
+    pub fn return_borrow_provider(&self) -> Option<ConcreteBorrowProvider> {
+        self.return_borrow_provider
+    }
+
     /// Get the binding for a function parameter by index.
     pub fn param_binding(&self, idx: usize) -> Option<LocalBinding<'db>> {
         self.param_bindings.get(idx).copied()
@@ -2269,6 +2421,48 @@ impl<'db> TypedBody<'db> {
     /// Get how this local binding is captured by its source pattern destructuring.
     pub fn pat_binding_mode(&self, pat: PatId) -> Option<PatBindingMode> {
         self.pat_binding_modes.get(&pat).copied()
+    }
+
+    pub fn binding_ty(&self, db: &'db dyn HirAnalysisDb, binding: LocalBinding<'db>) -> TyId<'db> {
+        match binding {
+            LocalBinding::Local { pat, .. } => self.pat_ty(db, pat),
+            LocalBinding::Param { ty, .. } => ty,
+            LocalBinding::EffectParam { site, idx, .. } => {
+                crate::core::semantic::EffectEnvView::new(site)
+                    .bindings(db)
+                    .iter()
+                    .find(|effect| effect.binding_idx as usize == idx)
+                    .and_then(|effect| match effect.source {
+                        crate::core::semantic::EffectSource::Root => match effect.key_kind {
+                            crate::analysis::ty::effects::EffectKeyKind::Trait => {
+                                let scope = match site {
+                                    EffectParamSite::Func(func) => func.scope(),
+                                    EffectParamSite::Contract(contract)
+                                    | EffectParamSite::ContractInit { contract }
+                                    | EffectParamSite::ContractRecvArm { contract, .. } => {
+                                        contract.scope()
+                                    }
+                                };
+                                super::resolve_default_root_effect_ty(db, scope, self.assumptions)
+                            }
+                            crate::analysis::ty::effects::EffectKeyKind::Type => effect.key_ty,
+                            crate::analysis::ty::effects::EffectKeyKind::Other => None,
+                        },
+                        crate::core::semantic::EffectSource::Field(_) => effect.key_ty,
+                    })
+                    .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
+            }
+        }
+    }
+
+    pub fn path_expr_preserves_binding_ty(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        expr: ExprId,
+        binding: LocalBinding<'db>,
+    ) -> bool {
+        !matches!(binding, LocalBinding::EffectParam { .. })
+            && self.expr_ty(db, expr) == self.binding_ty(db, binding)
     }
 
     pub fn pattern_store(&self) -> &PatternStore<'db> {
@@ -2289,6 +2483,791 @@ impl<'db> TypedBody<'db> {
     /// Get the resolved Seq methods for a for-loop statement.
     pub fn for_loop_seq(&self, stmt: StmtId) -> Option<&ForLoopSeq<'db>> {
         self.for_loop_seq.get(&stmt)
+    }
+
+    pub fn binding_source(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        binding: LocalBinding<'db>,
+    ) -> Option<BindingSource> {
+        let LocalBinding::Local { pat, .. } = binding else {
+            return None;
+        };
+        let body = self.body()?;
+
+        for (_, stmt) in body.stmts(db).iter() {
+            if let Partial::Present(crate::hir_def::Stmt::Let(stmt_pat, _, Some(init_expr))) = stmt
+                && let Some(field_path) = self.binding_field_path_in_pat(db, body, *stmt_pat, pat)
+            {
+                return Some(BindingSource {
+                    init_expr: *init_expr,
+                    field_path,
+                });
+            }
+        }
+
+        None
+    }
+
+    fn binding_field_path_in_pat(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        pat: PatId,
+        binding_pat: PatId,
+    ) -> Option<Vec<usize>> {
+        if pat == binding_pat {
+            return Some(Vec::new());
+        }
+
+        match pat.data(db, body) {
+            Partial::Present(Pat::Tuple(pats)) | Partial::Present(Pat::PathTuple(_, pats)) => {
+                pats.iter().enumerate().find_map(|(field_idx, pat)| {
+                    self.binding_field_path_in_pat(db, body, *pat, binding_pat)
+                        .map(|suffix| {
+                            let mut path = Vec::with_capacity(suffix.len() + 1);
+                            path.push(field_idx);
+                            path.extend(suffix);
+                            path
+                        })
+                })
+            }
+            Partial::Present(Pat::Record(_, fields)) => {
+                let owner_ty = self.pat_ty(db, pat);
+                fields.iter().find_map(|field| {
+                    let label = field.label(db, body)?;
+                    let field_idx = RecordLike::Type(owner_ty).record_field_idx(db, label)?;
+                    self.binding_field_path_in_pat(db, body, field.pat, binding_pat)
+                        .map(|suffix| {
+                            let mut path = Vec::with_capacity(suffix.len() + 1);
+                            path.push(field_idx);
+                            path.extend(suffix);
+                            path
+                        })
+                })
+            }
+            Partial::Present(Pat::Or(lhs, rhs)) => {
+                let lhs = self.binding_field_path_in_pat(db, body, *lhs, binding_pat);
+                let rhs = self.binding_field_path_in_pat(db, body, *rhs, binding_pat);
+                match (lhs, rhs) {
+                    (Some(lhs), Some(rhs)) if lhs == rhs => Some(lhs),
+                    (Some(path), None) | (None, Some(path)) => Some(path),
+                    _ => None,
+                }
+            }
+            Partial::Present(Pat::WildCard | Pat::Rest | Pat::Lit(_) | Pat::Path(_, _))
+            | Partial::Absent => None,
+        }
+    }
+
+    pub fn return_provenance(&self, db: &'db dyn HirAnalysisDb) -> ReturnProvenance {
+        let Some(body) = self.body() else {
+            return ReturnProvenance::Unknown;
+        };
+        let Some(func) = body.containing_func(db) else {
+            return ReturnProvenance::Unknown;
+        };
+        let mut seen = FxHashSet::default();
+        self.return_provenance_for_func(db, func, &mut seen)
+    }
+
+    fn return_provenance_for_func(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        func: Func<'db>,
+        seen: &mut FxHashSet<Func<'db>>,
+    ) -> ReturnProvenance {
+        if !seen.insert(func) {
+            return ReturnProvenance::Unknown;
+        }
+
+        let (diags, typed_body) = check_func_body(db, func);
+        if !diags.is_empty() {
+            seen.remove(&func);
+            return ReturnProvenance::Unknown;
+        }
+        let Some(body) = typed_body.body() else {
+            seen.remove(&func);
+            return ReturnProvenance::Unknown;
+        };
+        let Some(func_body) = func.body(db) else {
+            seen.remove(&func);
+            return ReturnProvenance::Unknown;
+        };
+        let root_expr = func_body.expr(db);
+        let mut out = FxHashSet::default();
+        let mut saw_non_param = false;
+        typed_body.collect_explicit_return_param_sources_in_expr(
+            db,
+            body,
+            root_expr,
+            &mut out,
+            &mut saw_non_param,
+            seen,
+        );
+        typed_body.collect_implicit_return_param_sources_from_expr(
+            db,
+            body,
+            root_expr,
+            &mut out,
+            &mut saw_non_param,
+            seen,
+        );
+        if !saw_non_param && !out.is_empty() {
+            let mut indices = out.into_iter().collect::<Vec<_>>();
+            indices.sort_unstable();
+            if !indices.is_empty() {
+                seen.remove(&func);
+                return ReturnProvenance::ForwardedParams(indices);
+            }
+        }
+
+        seen.remove(&func);
+        ReturnProvenance::Fresh
+    }
+
+    fn forwarded_return_param_sources_from_expr(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        expr: ExprId,
+        seen: &mut FxHashSet<Func<'db>>,
+        visited_locals: &mut FxHashSet<PatId>,
+    ) -> Option<Vec<usize>> {
+        let Partial::Present(expr_data) = expr.data(db, body) else {
+            return None;
+        };
+
+        match expr_data {
+            Expr::Block(stmts) => {
+                let tail = stmts.last()?;
+                match tail.data(db, body) {
+                    Partial::Present(crate::hir_def::Stmt::Expr(tail_expr)) => self
+                        .forwarded_return_param_sources_from_expr(
+                            db,
+                            body,
+                            *tail_expr,
+                            seen,
+                            visited_locals,
+                        ),
+                    Partial::Present(crate::hir_def::Stmt::Return(Some(return_expr))) => self
+                        .forwarded_return_param_sources_from_expr(
+                            db,
+                            body,
+                            *return_expr,
+                            seen,
+                            visited_locals,
+                        ),
+                    _ => None,
+                }
+            }
+            Expr::If(_, then_expr, else_expr) => merge_forwarded_param_sets(
+                self.forwarded_return_param_sources_from_expr(
+                    db,
+                    body,
+                    *then_expr,
+                    seen,
+                    visited_locals,
+                ),
+                else_expr.and_then(|else_expr| {
+                    self.forwarded_return_param_sources_from_expr(
+                        db,
+                        body,
+                        else_expr,
+                        seen,
+                        visited_locals,
+                    )
+                }),
+            ),
+            Expr::Match(_, arms) => {
+                let Partial::Present(arms) = arms else {
+                    return None;
+                };
+                let mut merged = FxHashSet::default();
+                for arm in arms {
+                    for idx in self.forwarded_return_param_sources_from_expr(
+                        db,
+                        body,
+                        arm.body,
+                        seen,
+                        visited_locals,
+                    )? {
+                        merged.insert(idx);
+                    }
+                }
+                let mut out = merged.into_iter().collect::<Vec<_>>();
+                out.sort_unstable();
+                Some(out)
+            }
+            Expr::With(_, with_body) => self.forwarded_return_param_sources_from_expr(
+                db,
+                body,
+                *with_body,
+                seen,
+                visited_locals,
+            ),
+            Expr::RecordInit(_, fields)
+                if self.expr_ty(db, expr).field_types(db).len() == 1 && fields.len() == 1 =>
+            {
+                self.forwarded_return_param_sources_from_expr(
+                    db,
+                    body,
+                    fields[0].expr,
+                    seen,
+                    visited_locals,
+                )
+            }
+            Expr::Tuple(items)
+                if self.expr_ty(db, expr).field_types(db).len() == 1 && items.len() == 1 =>
+            {
+                self.forwarded_return_param_sources_from_expr(
+                    db,
+                    body,
+                    items[0],
+                    seen,
+                    visited_locals,
+                )
+            }
+            Expr::Path(_) => match self.expr_binding(expr)? {
+                binding @ LocalBinding::Param { idx, .. } => self
+                    .path_expr_preserves_binding_ty(db, expr, binding)
+                    .then_some(vec![idx]),
+                binding @ LocalBinding::Local { pat, .. } => {
+                    if !visited_locals.insert(pat) {
+                        return None;
+                    }
+                    if !self.path_expr_preserves_binding_ty(db, expr, binding) {
+                        visited_locals.remove(&pat);
+                        return None;
+                    }
+                    let sources = self
+                        .binding_source(db, binding)
+                        .and_then(|source| source.field_path.is_empty().then_some(source.init_expr))
+                        .and_then(|init_expr| {
+                            self.forwarded_return_param_sources_from_expr(
+                                db,
+                                body,
+                                init_expr,
+                                seen,
+                                visited_locals,
+                            )
+                        });
+                    visited_locals.remove(&pat);
+                    sources
+                }
+                LocalBinding::EffectParam { .. } => None,
+            },
+            Expr::Call(_, args) => {
+                let callable = self.callable_expr(expr)?;
+                let CallableDef::Func(func) = callable.callable_def else {
+                    return None;
+                };
+                let callee_sources =
+                    self.forwarded_return_param_sources_from_callable(db, func, seen)?;
+                let mut merged = FxHashSet::default();
+                for idx in callee_sources {
+                    let arg = args.get(idx)?;
+                    for source in self.forwarded_return_param_sources_from_expr(
+                        db,
+                        body,
+                        arg.expr,
+                        seen,
+                        visited_locals,
+                    )? {
+                        merged.insert(source);
+                    }
+                }
+                let mut out = merged.into_iter().collect::<Vec<_>>();
+                out.sort_unstable();
+                Some(out)
+            }
+            Expr::MethodCall(receiver, _, _, args) => {
+                let callable = self.callable_expr(expr)?;
+                let CallableDef::Func(func) = callable.callable_def else {
+                    return None;
+                };
+                let callee_sources =
+                    self.forwarded_return_param_sources_from_callable(db, func, seen)?;
+                let mut call_args = Vec::with_capacity(args.len() + 1);
+                call_args.push(*receiver);
+                call_args.extend(args.iter().map(|arg| arg.expr));
+                let mut merged = FxHashSet::default();
+                for idx in callee_sources {
+                    let arg_expr = *call_args.get(idx)?;
+                    for source in self.forwarded_return_param_sources_from_expr(
+                        db,
+                        body,
+                        arg_expr,
+                        seen,
+                        visited_locals,
+                    )? {
+                        merged.insert(source);
+                    }
+                }
+                let mut out = merged.into_iter().collect::<Vec<_>>();
+                out.sort_unstable();
+                Some(out)
+            }
+            _ => None,
+        }
+    }
+
+    fn forwarded_return_param_sources_from_callable(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        func: Func<'db>,
+        seen: &mut FxHashSet<Func<'db>>,
+    ) -> Option<Vec<usize>> {
+        if !seen.insert(func) {
+            return None;
+        }
+
+        let (diags, typed_body) = check_func_body(db, func);
+        if !diags.is_empty() {
+            seen.remove(&func);
+            return None;
+        }
+        let body = typed_body.body()?;
+        let root_expr = func.body(db)?.expr(db);
+        let sources = typed_body.forwarded_return_param_sources_from_expr(
+            db,
+            body,
+            root_expr,
+            seen,
+            &mut FxHashSet::default(),
+        );
+        seen.remove(&func);
+        sources
+    }
+
+    fn collect_explicit_return_param_sources_in_stmt(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        stmt: StmtId,
+        out: &mut FxHashSet<usize>,
+        saw_non_param: &mut bool,
+        seen: &mut FxHashSet<Func<'db>>,
+    ) {
+        let Partial::Present(stmt_data) = stmt.data(db, body) else {
+            return;
+        };
+
+        match stmt_data {
+            crate::hir_def::Stmt::Let(_, _, Some(init)) => {
+                self.collect_explicit_return_param_sources_in_expr(
+                    db,
+                    body,
+                    *init,
+                    out,
+                    saw_non_param,
+                    seen,
+                );
+            }
+            crate::hir_def::Stmt::For(_, iter, loop_body, _) => {
+                self.collect_explicit_return_param_sources_in_expr(
+                    db,
+                    body,
+                    *iter,
+                    out,
+                    saw_non_param,
+                    seen,
+                );
+                self.collect_explicit_return_param_sources_in_expr(
+                    db,
+                    body,
+                    *loop_body,
+                    out,
+                    saw_non_param,
+                    seen,
+                );
+            }
+            crate::hir_def::Stmt::While(cond, loop_body) => {
+                self.collect_explicit_return_param_sources_in_cond(
+                    db,
+                    body,
+                    *cond,
+                    out,
+                    saw_non_param,
+                    seen,
+                );
+                self.collect_explicit_return_param_sources_in_expr(
+                    db,
+                    body,
+                    *loop_body,
+                    out,
+                    saw_non_param,
+                    seen,
+                );
+            }
+            crate::hir_def::Stmt::Return(Some(expr)) => {
+                let mut visited_locals = FxHashSet::default();
+                if let Some(indices) = self.forwarded_return_param_sources_from_expr(
+                    db,
+                    body,
+                    *expr,
+                    seen,
+                    &mut visited_locals,
+                ) {
+                    out.extend(indices);
+                } else {
+                    *saw_non_param = true;
+                }
+            }
+            crate::hir_def::Stmt::Expr(expr) => self.collect_explicit_return_param_sources_in_expr(
+                db,
+                body,
+                *expr,
+                out,
+                saw_non_param,
+                seen,
+            ),
+            crate::hir_def::Stmt::Let(_, _, None)
+            | crate::hir_def::Stmt::Return(None)
+            | crate::hir_def::Stmt::Continue
+            | crate::hir_def::Stmt::Break => {}
+        }
+    }
+
+    fn collect_explicit_return_param_sources_in_expr(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        expr: ExprId,
+        out: &mut FxHashSet<usize>,
+        saw_non_param: &mut bool,
+        seen: &mut FxHashSet<Func<'db>>,
+    ) {
+        let Partial::Present(expr_data) = expr.data(db, body) else {
+            return;
+        };
+
+        match expr_data {
+            Expr::Block(stmts) => {
+                for stmt in stmts {
+                    self.collect_explicit_return_param_sources_in_stmt(
+                        db,
+                        body,
+                        *stmt,
+                        out,
+                        saw_non_param,
+                        seen,
+                    );
+                }
+            }
+            Expr::Bin(lhs, rhs, _) | Expr::Assign(lhs, rhs) | Expr::AugAssign(lhs, rhs, _) => {
+                self.collect_explicit_return_param_sources_in_expr(
+                    db,
+                    body,
+                    *lhs,
+                    out,
+                    saw_non_param,
+                    seen,
+                );
+                self.collect_explicit_return_param_sources_in_expr(
+                    db,
+                    body,
+                    *rhs,
+                    out,
+                    saw_non_param,
+                    seen,
+                );
+            }
+            Expr::Un(inner, _) | Expr::Cast(inner, _) | Expr::Field(inner, _) => {
+                self.collect_explicit_return_param_sources_in_expr(
+                    db,
+                    body,
+                    *inner,
+                    out,
+                    saw_non_param,
+                    seen,
+                );
+            }
+            Expr::Call(callee, args) => {
+                self.collect_explicit_return_param_sources_in_expr(
+                    db,
+                    body,
+                    *callee,
+                    out,
+                    saw_non_param,
+                    seen,
+                );
+                for arg in args {
+                    self.collect_explicit_return_param_sources_in_expr(
+                        db,
+                        body,
+                        arg.expr,
+                        out,
+                        saw_non_param,
+                        seen,
+                    );
+                }
+            }
+            Expr::MethodCall(receiver, _, _, args) => {
+                self.collect_explicit_return_param_sources_in_expr(
+                    db,
+                    body,
+                    *receiver,
+                    out,
+                    saw_non_param,
+                    seen,
+                );
+                for arg in args {
+                    self.collect_explicit_return_param_sources_in_expr(
+                        db,
+                        body,
+                        arg.expr,
+                        out,
+                        saw_non_param,
+                        seen,
+                    );
+                }
+            }
+            Expr::RecordInit(_, fields) => {
+                for field in fields {
+                    self.collect_explicit_return_param_sources_in_expr(
+                        db,
+                        body,
+                        field.expr,
+                        out,
+                        saw_non_param,
+                        seen,
+                    );
+                }
+            }
+            Expr::Tuple(items) | Expr::Array(items) => {
+                for item in items {
+                    self.collect_explicit_return_param_sources_in_expr(
+                        db,
+                        body,
+                        *item,
+                        out,
+                        saw_non_param,
+                        seen,
+                    );
+                }
+            }
+            Expr::ArrayRep(value, _) => self.collect_explicit_return_param_sources_in_expr(
+                db,
+                body,
+                *value,
+                out,
+                saw_non_param,
+                seen,
+            ),
+            Expr::If(cond, then_expr, else_expr) => {
+                self.collect_explicit_return_param_sources_in_cond(
+                    db,
+                    body,
+                    *cond,
+                    out,
+                    saw_non_param,
+                    seen,
+                );
+                self.collect_explicit_return_param_sources_in_expr(
+                    db,
+                    body,
+                    *then_expr,
+                    out,
+                    saw_non_param,
+                    seen,
+                );
+                if let Some(else_expr) = else_expr {
+                    self.collect_explicit_return_param_sources_in_expr(
+                        db,
+                        body,
+                        *else_expr,
+                        out,
+                        saw_non_param,
+                        seen,
+                    );
+                }
+            }
+            Expr::Match(scrutinee, arms) => {
+                self.collect_explicit_return_param_sources_in_expr(
+                    db,
+                    body,
+                    *scrutinee,
+                    out,
+                    saw_non_param,
+                    seen,
+                );
+                if let Partial::Present(arms) = arms {
+                    for arm in arms {
+                        self.collect_explicit_return_param_sources_in_expr(
+                            db,
+                            body,
+                            arm.body,
+                            out,
+                            saw_non_param,
+                            seen,
+                        );
+                    }
+                }
+            }
+            Expr::With(bindings, with_body) => {
+                for binding in bindings {
+                    self.collect_explicit_return_param_sources_in_expr(
+                        db,
+                        body,
+                        binding.value,
+                        out,
+                        saw_non_param,
+                        seen,
+                    );
+                }
+                self.collect_explicit_return_param_sources_in_expr(
+                    db,
+                    body,
+                    *with_body,
+                    out,
+                    saw_non_param,
+                    seen,
+                );
+            }
+            Expr::Lit(_) | Expr::Path(_) => {}
+        }
+    }
+
+    fn collect_implicit_return_param_sources_from_expr(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        expr: ExprId,
+        out: &mut FxHashSet<usize>,
+        saw_non_param: &mut bool,
+        seen: &mut FxHashSet<Func<'db>>,
+    ) {
+        let Partial::Present(expr_data) = expr.data(db, body) else {
+            return;
+        };
+
+        match expr_data {
+            Expr::Block(stmts) => {
+                if let Some(last_stmt) = stmts.last()
+                    && let Partial::Present(crate::hir_def::Stmt::Expr(tail_expr)) =
+                        last_stmt.data(db, body)
+                {
+                    self.collect_implicit_return_param_sources_from_expr(
+                        db,
+                        body,
+                        *tail_expr,
+                        out,
+                        saw_non_param,
+                        seen,
+                    );
+                }
+            }
+            Expr::If(_, then_expr, else_expr) => {
+                self.collect_implicit_return_param_sources_from_expr(
+                    db,
+                    body,
+                    *then_expr,
+                    out,
+                    saw_non_param,
+                    seen,
+                );
+                if let Some(else_expr) = else_expr {
+                    self.collect_implicit_return_param_sources_from_expr(
+                        db,
+                        body,
+                        *else_expr,
+                        out,
+                        saw_non_param,
+                        seen,
+                    );
+                }
+            }
+            Expr::Match(_, arms) => {
+                if let Partial::Present(arms) = arms {
+                    for arm in arms {
+                        self.collect_implicit_return_param_sources_from_expr(
+                            db,
+                            body,
+                            arm.body,
+                            out,
+                            saw_non_param,
+                            seen,
+                        );
+                    }
+                }
+            }
+            Expr::With(_, with_body) => self.collect_implicit_return_param_sources_from_expr(
+                db,
+                body,
+                *with_body,
+                out,
+                saw_non_param,
+                seen,
+            ),
+            _ => {
+                let mut visited_locals = FxHashSet::default();
+                let Some(indices) = self.forwarded_return_param_sources_from_expr(
+                    db,
+                    body,
+                    expr,
+                    seen,
+                    &mut visited_locals,
+                ) else {
+                    *saw_non_param = true;
+                    return;
+                };
+                out.extend(indices);
+            }
+        }
+    }
+
+    fn collect_explicit_return_param_sources_in_cond(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        cond: crate::hir_def::CondId,
+        out: &mut FxHashSet<usize>,
+        saw_non_param: &mut bool,
+        seen: &mut FxHashSet<Func<'db>>,
+    ) {
+        let Partial::Present(cond_data) = cond.data(db, body) else {
+            return;
+        };
+
+        match cond_data {
+            crate::hir_def::Cond::Expr(expr) => self.collect_explicit_return_param_sources_in_expr(
+                db,
+                body,
+                *expr,
+                out,
+                saw_non_param,
+                seen,
+            ),
+            crate::hir_def::Cond::Let(_, value) => {
+                self.collect_explicit_return_param_sources_in_expr(
+                    db,
+                    body,
+                    *value,
+                    out,
+                    saw_non_param,
+                    seen,
+                );
+            }
+            crate::hir_def::Cond::Bin(lhs, rhs, _) => {
+                self.collect_explicit_return_param_sources_in_cond(
+                    db,
+                    body,
+                    *lhs,
+                    out,
+                    saw_non_param,
+                    seen,
+                );
+                self.collect_explicit_return_param_sources_in_cond(
+                    db,
+                    body,
+                    *rhs,
+                    out,
+                    saw_non_param,
+                    seen,
+                );
+            }
+        }
     }
 
     /// Get the definition span for an expression that references a local binding.
@@ -2378,6 +3357,7 @@ impl<'db> TypedBody<'db> {
             const_refs: FxHashMap::default(),
             callables: FxHashMap::default(),
             call_effect_args: FxHashMap::default(),
+            return_borrow_provider: None,
             param_bindings: Vec::new(),
             pat_bindings: FxHashMap::default(),
             pat_binding_modes: FxHashMap::default(),
@@ -2386,6 +3366,19 @@ impl<'db> TypedBody<'db> {
             for_loop_seq: FxHashMap::default(),
         }
     }
+}
+
+fn merge_forwarded_param_sets(
+    lhs: Option<Vec<usize>>,
+    rhs: Option<Vec<usize>>,
+) -> Option<Vec<usize>> {
+    let mut merged = FxHashSet::default();
+    for idx in lhs?.into_iter().chain(rhs?) {
+        merged.insert(idx);
+    }
+    let mut out = merged.into_iter().collect::<Vec<_>>();
+    out.sort_unstable();
+    Some(out)
 }
 
 #[derive(Clone, PartialEq, Eq, derive_more::From)]
@@ -2507,7 +3500,10 @@ impl<'db> TyCheckerFinalizer<'db> {
     fn new(mut checker: TyChecker<'db>) -> Self {
         let assumptions = checker.env.assumptions();
         checker.resolve_deferred();
-        let body = checker.env.finish(&mut checker.table);
+        let mut body = checker.env.finish(&mut checker.table);
+        body.return_borrow_provider = checker
+            .first_return_borrow_provider
+            .map(|(_, provider)| provider);
         let direct_call_callees = body.body.map_or_else(FxHashSet::default, |body_id| {
             body_id
                 .exprs(checker.db)

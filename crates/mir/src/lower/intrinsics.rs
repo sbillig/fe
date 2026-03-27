@@ -95,7 +95,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             "calldatasize" => Some(IntrinsicOp::Calldatasize),
             "returndatacopy" => Some(IntrinsicOp::Returndatacopy),
             "returndatasize" => Some(IntrinsicOp::Returndatasize),
-            "addr_of" => Some(IntrinsicOp::AddrOf),
             "mstore" => Some(IntrinsicOp::Mstore),
             "mstore8" => Some(IntrinsicOp::Mstore8),
             "alloc" => Some(IntrinsicOp::Alloc),

@@ -5,44 +5,34 @@ input_file: crates/codegen/tests/fixtures/const_array.fe
 ---
 target = "evm-ethereum-osaka"
 
-global private const [i8; 96] $__fe_const_data_0 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 30];
+global private const [i256; 3] $__fe_const_data_0 = [10, 20, 30];
 
 func private %sum_two(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = sym_addr $__fe_const_data_0;
-        v3.*[i256; 3] = int_to_ptr v2 *[i256; 3];
-        v6.i1 = lt v0 3.i256;
-        v7.i1 = is_zero v6;
-        br v7 block1 block2;
+        v2.constref<[i256; 3]> = const.ref $__fe_const_data_0;
+        v4.i1 = lt v0 3.i256;
+        v5.i1 = is_zero v4;
+        br v5 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        v8.*i256 = gep v3 0.i256 v0;
-        v9.i256 = ptr_to_int v8 i256;
-        v11.*i256 = alloca i256;
-        v12.i256 = ptr_to_int v11 i256;
-        evm_code_copy v12 v9 32.i256;
-        v13.i256 = mload v12 i256;
-        v14.i256 = sym_addr $__fe_const_data_0;
-        v15.*[i256; 3] = int_to_ptr v14 *[i256; 3];
-        v17.i1 = lt v1 3.i256;
-        v18.i1 = is_zero v17;
-        br v18 block1 block3;
+        v7.constref<i256> = const.index v2 v0;
+        v8.i256 = const.load v7;
+        v9.constref<[i256; 3]> = const.ref $__fe_const_data_0;
+        v11.i1 = lt v1 3.i256;
+        v12.i1 = is_zero v11;
+        br v12 block1 block3;
 
     block3:
-        v19.*i256 = gep v15 0.i256 v1;
-        v20.i256 = ptr_to_int v19 i256;
-        v21.*i256 = alloca i256;
-        v22.i256 = ptr_to_int v21 i256;
-        evm_code_copy v22 v20 32.i256;
-        v23.i256 = mload v22 i256;
-        (v25.i256, v26.i1) = uaddo v13 v23;
-        br v26 block1 block4;
+        v13.constref<i256> = const.index v9 v1;
+        v14.i256 = const.load v13;
+        (v16.i256, v17.i1) = uaddo v8 v14;
+        br v17 block1 block4;
 
     block4:
-        return v25;
+        return v16;
 }
 
 func private %__fe_sonatina_entry() {

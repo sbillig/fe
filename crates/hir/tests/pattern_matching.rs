@@ -1,13 +1,7 @@
 use std::path::Path;
 
-use codespan_reporting::term::{
-    self,
-    termcolor::{BufferWriter, ColorChoice},
-};
-use common::diagnostics::cmp_complete_diagnostics;
 use dir_test::{Fixture, dir_test};
-use driver::diagnostics::{CsDbWrapper, ToCsDiag};
-use fe_hir::test_db::{HirAnalysisTestDb, initialize_analysis_pass};
+use fe_hir::test_db::{HirAnalysisTestDb, format_diagnostics, initialize_analysis_pass};
 use test_utils::snap_test;
 
 #[dir_test(
@@ -27,26 +21,12 @@ fn exhaustive_matches(fixture: Fixture<&str>) {
     let diags = manager.run_on_module(&db, top_mod);
 
     if !diags.is_empty() {
-        // Format diagnostics using codespan with arrow indicators
-        let writer = BufferWriter::stderr(ColorChoice::Never);
-        let mut buffer = writer.buffer();
-        let config = term::Config::default();
-
-        let mut complete_diags: Vec<_> = diags.iter().map(|d| d.to_complete(&db)).collect();
-        complete_diags.sort_by(cmp_complete_diagnostics);
-
         let mut diagnostic_output = format!(
             "Exhaustive test file {} has {} diagnostic(s):\n\n",
             file_name,
             diags.len()
         );
-
-        for diag in complete_diags {
-            let cs_diag = &diag.to_cs(&db);
-            term::emit(&mut buffer, &config, &CsDbWrapper(&db), cs_diag).unwrap();
-        }
-
-        diagnostic_output.push_str(std::str::from_utf8(buffer.as_slice()).unwrap());
+        diagnostic_output.push_str(&format_diagnostics(&db, &diags));
         eprintln!("{diagnostic_output}");
 
         panic!(
@@ -78,26 +58,12 @@ fn non_exhaustive_matches(fixture: Fixture<&str>) {
         "Expected pattern matching errors but found none in file: {file_name}"
     );
 
-    // Format diagnostics using codespan with arrow indicators
-    let writer = BufferWriter::stderr(ColorChoice::Never);
-    let mut buffer = writer.buffer();
-    let config = term::Config::default();
-
-    let mut complete_diags: Vec<_> = diags.iter().map(|d| d.to_complete(&db)).collect();
-    complete_diags.sort_by(cmp_complete_diagnostics);
-
     let mut diagnostic_output = format!(
         "Non-exhaustive test file {} has {} diagnostic(s):\n\n",
         file_name,
         diags.len()
     );
-
-    for diag in complete_diags {
-        let cs_diag = &diag.to_cs(&db);
-        term::emit(&mut buffer, &config, &CsDbWrapper(&db), cs_diag).unwrap();
-    }
-
-    diagnostic_output.push_str(std::str::from_utf8(buffer.as_slice()).unwrap());
+    diagnostic_output.push_str(&format_diagnostics(&db, &diags));
     snap_test!(diagnostic_output, fixture.path());
 }
 
@@ -122,26 +88,12 @@ fn unreachable_patterns(fixture: Fixture<&str>) {
         "Expected unreachable pattern errors but found none in file: {file_name}"
     );
 
-    // Format diagnostics using codespan with arrow indicators
-    let writer = BufferWriter::stderr(ColorChoice::Never);
-    let mut buffer = writer.buffer();
-    let config = term::Config::default();
-
-    let mut complete_diags: Vec<_> = diags.iter().map(|d| d.to_complete(&db)).collect();
-    complete_diags.sort_by(cmp_complete_diagnostics);
-
     let mut diagnostic_output = format!(
         "Unreachable test file {} has {} diagnostic(s):\n\n",
         file_name,
         diags.len()
     );
-
-    for diag in complete_diags {
-        let cs_diag = &diag.to_cs(&db);
-        term::emit(&mut buffer, &config, &CsDbWrapper(&db), cs_diag).unwrap();
-    }
-
-    diagnostic_output.push_str(std::str::from_utf8(buffer.as_slice()).unwrap());
+    diagnostic_output.push_str(&format_diagnostics(&db, &diags));
     snap_test!(diagnostic_output, fixture.path());
 }
 
@@ -161,26 +113,12 @@ fn misc_pattern_tests(fixture: Fixture<&str>) {
     let diags = manager.run_on_module(&db, top_mod);
 
     if !diags.is_empty() {
-        // Format diagnostics using codespan with arrow indicators
-        let writer = BufferWriter::stderr(ColorChoice::Never);
-        let mut buffer = writer.buffer();
-        let config = term::Config::default();
-
-        let mut complete_diags: Vec<_> = diags.iter().map(|d| d.to_complete(&db)).collect();
-        complete_diags.sort_by(cmp_complete_diagnostics);
-
         let mut diagnostic_output = format!(
             "Misc test file {} has {} diagnostic(s):\n\n",
             file_name,
             diags.len()
         );
-
-        for diag in complete_diags {
-            let cs_diag = &diag.to_cs(&db);
-            term::emit(&mut buffer, &config, &CsDbWrapper(&db), cs_diag).unwrap();
-        }
-
-        diagnostic_output.push_str(std::str::from_utf8(buffer.as_slice()).unwrap());
+        diagnostic_output.push_str(&format_diagnostics(&db, &diags));
         snap_test!(diagnostic_output, fixture.path());
     }
 }
@@ -205,26 +143,12 @@ fn stress_pattern_tests(fixture: Fixture<&str>) {
     let diags = manager.run_on_module(&db, top_mod);
 
     if !diags.is_empty() {
-        // Format diagnostics using codespan with arrow indicators
-        let writer = BufferWriter::stderr(ColorChoice::Never);
-        let mut buffer = writer.buffer();
-        let config = term::Config::default();
-
-        let mut complete_diags: Vec<_> = diags.iter().map(|d| d.to_complete(&db)).collect();
-        complete_diags.sort_by(cmp_complete_diagnostics);
-
         let mut diagnostic_output = format!(
             "Stress test file {} has {} diagnostic(s):\n\n",
             file_name,
             diags.len()
         );
-
-        for diag in complete_diags {
-            let cs_diag = &diag.to_cs(&db);
-            term::emit(&mut buffer, &config, &CsDbWrapper(&db), cs_diag).unwrap();
-        }
-
-        diagnostic_output.push_str(std::str::from_utf8(buffer.as_slice()).unwrap());
+        diagnostic_output.push_str(&format_diagnostics(&db, &diags));
         snap_test!(diagnostic_output, fixture.path());
     }
 }

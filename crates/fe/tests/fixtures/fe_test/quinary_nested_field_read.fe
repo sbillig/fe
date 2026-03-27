@@ -1,0 +1,18 @@
+const ROW5: [u256; 5] = [0, 0, 0, 0, 0]
+const GRID5: [[u256; 5]; 3] = [ROW5, ROW5, ROW5]
+
+pub struct Data {
+    pub values: [[u256; 5]; 3],
+}
+
+impl Data {
+    pub fn empty() -> Self {
+        Data { values: GRID5 }
+    }
+}
+
+#[test]
+fn test_read_nested_field_directly() {
+    let data = Data::empty()
+    assert(data.values[0][0] == 0)
+}

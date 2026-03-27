@@ -12,6 +12,9 @@ use common::ingot::Ingot;
 use driver::DriverDataBase;
 use hir::analysis::ty::ty_def::TyId;
 use hir::hir_def::{InlineHint, TopLevelMod};
+use mir::analysis::escape::{
+    MirPtrEscapeSummary, MirPtrEscapeSummaryMap, compute_ptr_escape_summaries,
+};
 use mir::ir::PointerInfo;
 use mir::{CoreLib, MirModule, layout, layout::TargetDataLayout, lower_ingot, lower_module};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -127,7 +130,7 @@ pub(super) fn zero_value_for_type<C: sonatina_ir::func_cursor::FuncCursor>(
     if ty.is_enum_tag() {
         return fb.make_undef_value(ty);
     }
-    if ty.is_obj_ref(&fb.module_builder.ctx) {
+    if ty.is_obj_ref(&fb.module_builder.ctx) || ty.is_const_ref(&fb.module_builder.ctx) {
         return fb.make_undef_value(ty);
     }
     let zero = types::zero_value(fb, Type::I256);
@@ -467,6 +470,7 @@ struct ModuleLowerer<'db, 'a> {
     name_map: FxHashMap<String, FuncRef>,
     /// Runtime Sonatina signature metadata keyed by lowered symbol name.
     runtime_function_metadata: FxHashMap<String, RuntimeFunctionMetadata>,
+    ptr_escape_summaries: MirPtrEscapeSummaryMap,
     /// Indices of functions executed directly by the EVM (empty stack).
     ///
     /// These entry functions emit `evm_stop` instead of internal `Return`.
@@ -504,6 +508,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             func_map: FxHashMap::default(),
             name_map: FxHashMap::default(),
             runtime_function_metadata: FxHashMap::default(),
+            ptr_escape_summaries: compute_ptr_escape_summaries(db, mir),
             entry_func_idxs: FxHashSet::default(),
             gep_type_cache: FxHashMap::default(),
             gep_name_counter: 0,
@@ -594,28 +599,97 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             .chain(func.runtime_effect_param_locals())
             .collect();
 
+        let db = self.db;
         let mut type_lowerer = self.type_lowerer(&core);
         let mut params = Vec::with_capacity(runtime_param_locals.len());
         for local_id in runtime_param_locals {
             let local = func.body.locals.get(local_id.index()).ok_or_else(|| {
                 LowerError::Internal(format!("unknown param local: {local_id:?}"))
             })?;
-            params.push(type_lowerer.runtime_type_for_ty_and_shape(
+            let is_plain_word_param = matches!(
+                mir::repr::repr_kind_for_ty(db, &core, local.ty),
+                mir::repr::ReprKind::Word
+            ) && local.ty.as_capability(db).is_none()
+                && mir::repr::effect_provider_space_for_ty(db, &core, local.ty).is_none();
+            let runtime_shape = mir::repr::normalize_plain_word_runtime_shape_for_ty(
+                db,
+                &core,
                 local.ty,
                 local.runtime_shape,
+            );
+            let runtime_ty = type_lowerer.runtime_type_for_ty_and_shape(
+                local.ty,
+                runtime_shape,
                 &local.pointer_leaf_infos,
-            ));
+            );
+            if is_plain_word_param && type_lowerer.is_obj_ref(runtime_ty) {
+                return Err(LowerError::Internal(format!(
+                    "plain word param local v{} `{}` in `{}` lowered to object-ref signature type: ty={}, runtime_shape={:?}, normalized_shape={:?}, pointer_leaf_infos={:?}",
+                    local_id.index(),
+                    local.name,
+                    func.symbol_name,
+                    local.ty.pretty_print(self.db),
+                    local.runtime_shape,
+                    runtime_shape,
+                    local.pointer_leaf_infos,
+                )));
+            }
+            params.push(runtime_ty);
         }
 
         let ret = (!func.runtime_return_shape.is_erased()).then(|| {
-            type_lowerer.runtime_type_for_ty_and_shape(
+            let runtime_shape = mir::repr::normalize_plain_word_runtime_shape_for_ty(
+                db,
+                &core,
                 func.ret_ty,
                 func.runtime_return_shape,
+            );
+            type_lowerer.runtime_type_for_ty_and_shape(
+                func.ret_ty,
+                runtime_shape,
                 &func.runtime_return_pointer_leaf_infos,
             )
         });
 
         let metadata = RuntimeFunctionMetadata { params, ret };
+        if func.symbol_name == "u256_h3271ca15373d4483_eq_he50383edd273619f_eq" {
+            return Err(LowerError::Internal(format!(
+                "debug helper sig `{}` params={:?} ret={:?} locals={:?}",
+                func.symbol_name,
+                metadata
+                    .params
+                    .iter()
+                    .copied()
+                    .map(|ty| format!("{ty:?}"))
+                    .collect::<Vec<_>>(),
+                metadata.ret.map(|ty| format!("{ty:?}")),
+                func.body
+                    .param_locals
+                    .iter()
+                    .map(|local_id| {
+                        let local = &func.body.locals[local_id.index()];
+                        (
+                            local_id.index(),
+                            local.name.clone(),
+                            local.ty.pretty_print(self.db),
+                            local.ty.as_capability(self.db),
+                            mir::repr::effect_provider_space_for_ty(self.db, &core, local.ty),
+                            mir::repr::repr_kind_for_ty(self.db, &core, local.ty),
+                            local.address_space,
+                            local.place_root_layout,
+                            local.runtime_shape,
+                            mir::repr::normalize_plain_word_runtime_shape_for_ty(
+                                self.db,
+                                &core,
+                                local.ty,
+                                local.runtime_shape,
+                            ),
+                            local.pointer_leaf_infos.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            )));
+        }
         Ok((metadata.signature(name, linkage), metadata))
     }
 
@@ -1126,25 +1200,50 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         let is = self.isa.inst_set();
         let core = function_core_lib(self.db, func);
         let local_runtime_types: Vec<_> = {
+            let db = self.db;
             let mut type_lowerer = self.type_lowerer(&core);
             func.body
                 .locals
                 .iter()
                 .map(|local| {
-                    type_lowerer.runtime_type_for_ty_and_shape(
+                    let runtime_shape = mir::repr::normalize_plain_word_runtime_shape_for_ty(
+                        db,
+                        &core,
                         local.ty,
                         local.runtime_shape,
+                    );
+                    type_lowerer.runtime_type_for_ty_and_shape(
+                        local.ty,
+                        runtime_shape,
                         &local.pointer_leaf_infos,
                     )
                 })
                 .collect()
         };
         for (idx, local) in func.body.locals.iter().enumerate() {
+            let runtime_ty = local_runtime_types[idx];
             if !matches!(local.address_space, mir::ir::AddressSpaceKind::Memory)
-                && local_runtime_types[idx].is_obj_ref(&self.builder.ctx)
+                && runtime_ty.is_obj_ref(&self.builder.ctx)
             {
                 return Err(LowerError::Internal(format!(
                     "non-memory local v{idx} `{}` in `{}` lowered to object ref: address_space={:?}, ty={}, runtime_shape={:?}",
+                    local.name,
+                    func.symbol_name,
+                    local.address_space,
+                    local.ty.pretty_print(self.db),
+                    local.runtime_shape,
+                )));
+            }
+            if runtime_ty.is_const_ref(&self.builder.ctx)
+                && matches!(
+                    local.address_space,
+                    mir::ir::AddressSpaceKind::Storage
+                        | mir::ir::AddressSpaceKind::TransientStorage
+                        | mir::ir::AddressSpaceKind::Calldata
+                )
+            {
+                return Err(LowerError::Internal(format!(
+                    "non-const-backed local v{idx} `{}` in `{}` lowered to const ref: address_space={:?}, ty={}, runtime_shape={:?}",
                     local.name,
                     func.symbol_name,
                     local.address_space,
@@ -1165,17 +1264,45 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 locals,
                 mir::ValueId(idx as u32),
             );
+            let address_space =
+                mir::ir::try_value_address_space_in(values, locals, mir::ValueId(idx as u32));
+            let runtime_shape = mir::repr::runtime_shape_for_value(
+                db,
+                &core,
+                values,
+                locals,
+                mir::ValueId(idx as u32),
+            )
+            .unwrap_or(value.runtime_shape);
             let runtime_ty = type_lowerer.runtime_type_for_ty_and_shape(
                 value.ty,
-                value.runtime_shape,
+                runtime_shape,
                 &pointer_leaf_infos,
             );
             if type_lowerer.is_obj_ref(runtime_ty)
-                && let Some(address_space) = value.repr.address_space()
+                && let Some(address_space) = address_space
                 && !matches!(address_space, mir::ir::AddressSpaceKind::Memory)
             {
                 return Err(LowerError::Internal(format!(
                     "non-memory value v{idx} in `{}` lowered to object ref: origin={:?}, repr_address_space={address_space:?}, ty={}, repr={:?}, runtime_shape={:?}",
+                    func.symbol_name,
+                    value.origin,
+                    value.ty.pretty_print(self.db),
+                    value.repr,
+                    value.runtime_shape,
+                )));
+            }
+            if type_lowerer.is_const_ref(runtime_ty)
+                && let Some(address_space) = address_space
+                && matches!(
+                    address_space,
+                    mir::ir::AddressSpaceKind::Storage
+                        | mir::ir::AddressSpaceKind::TransientStorage
+                        | mir::ir::AddressSpaceKind::Calldata
+                )
+            {
+                return Err(LowerError::Internal(format!(
+                    "non-const-backed value v{idx} in `{}` lowered to const ref: origin={:?}, repr_address_space={address_space:?}, ty={}, repr={:?}, runtime_shape={:?}",
                     func.symbol_name,
                     value.origin,
                     value.ty.pretty_print(self.db),
@@ -1264,18 +1391,21 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
         {
             let mut const_data_globals = FxHashMap::default();
+            let mut raw_data_globals = FxHashMap::default();
             let mut overflow_revert_block = None;
             let mut ctx = LowerCtx {
                 fb: &mut fb,
                 db: self.db,
                 core: &core,
                 target_layout: &self.target_layout,
+                current_function_name: &func.symbol_name,
                 body: &func.body,
                 local_vars: &local_vars,
                 materialized_local_place_roots: &mut materialized_local_place_roots,
                 initialized_locals: &mut initialized_locals,
                 name_map: &self.name_map,
                 runtime_function_metadata: &self.runtime_function_metadata,
+                current_ptr_escape_summary: self.ptr_escape_summaries.get(&func.symbol_name),
                 current_function_metadata: &func_metadata,
                 local_runtime_types: &local_runtime_types,
                 block_map: &block_map,
@@ -1286,6 +1416,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 data_globals: &mut self.data_globals,
                 data_global_counter: &mut self.data_global_counter,
                 const_data_globals: &mut const_data_globals,
+                raw_data_globals: &mut raw_data_globals,
                 overflow_revert_block: &mut overflow_revert_block,
             };
             for (idx, block) in ctx.body.blocks.iter().enumerate() {
@@ -1320,6 +1451,7 @@ pub(super) struct LowerCtx<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> {
     pub(super) db: &'db DriverDataBase,
     pub(super) core: &'a CoreLib<'db>,
     pub(super) target_layout: &'a TargetDataLayout,
+    pub(super) current_function_name: &'a str,
     pub(super) body: &'a mir::MirBody<'db>,
     pub(super) local_vars: &'a FxHashMap<mir::LocalId, Variable>,
     pub(super) materialized_local_place_roots:
@@ -1327,6 +1459,7 @@ pub(super) struct LowerCtx<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> {
     pub(super) initialized_locals: &'a mut FxHashSet<mir::LocalId>,
     pub(super) name_map: &'a FxHashMap<String, FuncRef>,
     pub(super) runtime_function_metadata: &'a FxHashMap<String, RuntimeFunctionMetadata>,
+    pub(super) current_ptr_escape_summary: Option<&'a MirPtrEscapeSummary>,
     pub(super) current_function_metadata: &'a RuntimeFunctionMetadata,
     pub(super) local_runtime_types: &'a [Type],
     pub(super) block_map: &'a FxHashMap<mir::BasicBlockId, BlockId>,
@@ -1340,10 +1473,18 @@ pub(super) struct LowerCtx<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> {
     pub(super) data_globals: &'a mut Vec<GlobalVariableRef>,
     /// Counter for generating unique data global names.
     pub(super) data_global_counter: &'a mut usize,
-    /// Per-function dedupe for constant aggregate payloads.
-    pub(super) const_data_globals: &'a mut FxHashMap<Vec<u8>, GlobalVariableRef>,
+    /// Per-function dedupe for typed constant globals.
+    pub(super) const_data_globals: &'a mut FxHashMap<ConstGlobalKey<'db>, GlobalVariableRef>,
+    /// Per-function dedupe for raw byte globals (for non-aggregate const blobs like strings).
+    pub(super) raw_data_globals: &'a mut FxHashMap<Vec<u8>, GlobalVariableRef>,
     /// Lazily-created shared overflow trap block for checked arithmetic in this function.
     pub(super) overflow_revert_block: &'a mut Option<BlockId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(super) struct ConstGlobalKey<'db> {
+    pub(super) ty: TyId<'db>,
+    pub(super) data: mir::ConstData,
 }
 
 impl<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> LowerCtx<'a, 'db, C> {
@@ -1377,9 +1518,17 @@ impl<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> LowerCtx<'a, 'db, C> {
             &self.body.locals,
             value,
         );
+        let shape = mir::repr::runtime_shape_for_value(
+            self.db,
+            self.core,
+            &self.body.values,
+            &self.body.locals,
+            value,
+        )
+        .unwrap_or(value_data.runtime_shape);
         self.runtime_type_for_ty_and_shape(
             value_data.ty,
-            value_data.runtime_shape,
+            shape,
             &pointer_leaf_infos,
         )
     }

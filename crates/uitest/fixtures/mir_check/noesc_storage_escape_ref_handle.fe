@@ -5,8 +5,12 @@ struct Esc {
     tag: u256,
 }
 
-pub fn noesc_storage_escape_ref_handle() uses (slot: mut Esc) {
-    let mut x: u256 = 0
-    let e: Esc = Esc { h: ref x, tag: 0 }
-    slot = e
+pub contract C {
+    mut slot: Esc,
+
+    init() uses (mut slot) {
+        let mut x: u256 = 0
+        let e: Esc = Esc { h: ref x, tag: 0 }
+        slot = e
+    }
 }
