@@ -4,10 +4,10 @@ expression: res
 input_file: test_files/ty_check/mut_ref_move_full.fe
 ---
 note: 
-  ┌─ mut_ref_move_full.fe:6:22
+  ┌─ mut_ref_move_full.fe:6:24
   │  
-6 │   fn bump(x: mut u256) {
-  │ ╭──────────────────────^
+6 │   fn bump(_ x: mut u256) {
+  │ ╭────────────────────────^
 7 │ │     x += 1
 8 │ │ }
   │ ╰─^ ()
@@ -31,10 +31,10 @@ note:
   │          ^ u256
 
 note: 
-   ┌─ mut_ref_move_full.fe:10:27
+   ┌─ mut_ref_move_full.fe:10:29
    │  
-10 │   fn bump_pair(p: mut Pair) {
-   │ ╭───────────────────────────^
+10 │   fn bump_pair(_ p: mut Pair) {
+   │ ╭─────────────────────────────^
 11 │ │     bump(mut p.a)
 12 │ │     bump(mut p.b)
 13 │ │ }
@@ -101,10 +101,10 @@ note:
    │              ^^^ u256
 
 note: 
-   ┌─ mut_ref_move_full.fe:15:35
+   ┌─ mut_ref_move_full.fe:15:37
    │  
-15 │   fn take_u256(x: own u256) -> u256 {
-   │ ╭───────────────────────────────────^
+15 │   fn take_u256(_ x: own u256) -> u256 {
+   │ ╭─────────────────────────────────────^
 16 │ │     x
 17 │ │ }
    │ ╰─^ u256

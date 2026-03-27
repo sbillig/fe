@@ -7,7 +7,7 @@ struct Reader {
     bias: u256,
 }
 
-fn sum_reader(r: ref Reader) -> u256 {
+fn sum_reader(_ r: ref Reader) -> u256 {
     let mut total = 0
     let mut i: u256 = 0
     while i < 4 {

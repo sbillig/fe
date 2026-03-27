@@ -30,7 +30,7 @@ mod CounterMsg {
     
         fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {}
     
-        fn encode_to_ptr(own self, ptr: u256) {}
+        fn encode_to_ptr(own self, _ ptr: u256) {}
     }
 
     impl core::abi::Decode<std::abi::Sol> for Increment {
@@ -58,7 +58,7 @@ mod CounterMsg {
     
         fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {}
     
-        fn encode_to_ptr(own self, ptr: u256) {}
+        fn encode_to_ptr(own self, _ ptr: u256) {}
     }
 
     impl core::abi::Decode<std::abi::Sol> for Get {
@@ -90,7 +90,7 @@ mod CounterMsg {
             core::abi::encode_field<std::abi::Sol, u64, E>(self.val, e)
         }
     
-        fn encode_to_ptr(own self, ptr: u256) {
+        fn encode_to_ptr(own self, _ ptr: u256) {
             self.val.encode_to_ptr(ptr)
         }
     }

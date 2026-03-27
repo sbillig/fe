@@ -1,5 +1,5 @@
 struct Foo { v: u8 }
-pub fn move_reinit(b: bool) -> Foo {
+pub fn move_reinit(_ b: bool) -> Foo {
     let mut x = Foo { v: 1}
 
     if b {
@@ -9,4 +9,4 @@ pub fn move_reinit(b: bool) -> Foo {
     x
 }
 
-fn consume(f: own Foo) {}
+fn consume(_: own Foo) {}

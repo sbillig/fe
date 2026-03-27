@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 41
 expression: res
 input_file: test_files/ty_check/contract_recv_generic_variant.fe
 ---
@@ -51,10 +50,10 @@ note:
    │                      ^ mut E
 
 note: 
-   ┌─ contract_recv_generic_variant.fe:25:43
+   ┌─ contract_recv_generic_variant.fe:25:45
    │  
-25 │       fn encode_to_ptr(own self, ptr: u256) {
-   │ ╭───────────────────────────────────────────^
+25 │       fn encode_to_ptr(own self, _ ptr: u256) {
+   │ ╭─────────────────────────────────────────────^
 26 │ │         core::panic()
 27 │ │     }
    │ ╰─────^ ()

@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 33
 expression: output
 input_file: tests/fixtures/by_ref_trait_provider_storage_bug.fe
 ---
@@ -286,8 +285,7 @@ object "ByRefTraitProviderStorageBug" {
           v0 := 0x80
         }
         mstore(64, add(v0, $bytes))
-        let v1 := $checked_add_u256(v0, $bytes)
-        mstore(add($self, 96), v1)
+        mstore(add($self, 96), add(v0, $bytes))
         ret := v0
         leave
       }
@@ -329,11 +327,10 @@ object "ByRefTraitProviderStorageBug" {
           mstore($self, v3)
           mstore(add($self, 32), v3)
           mstore(add($self, 64), v3)
-          let v4 := $checked_add_u256(v3, $bytes)
-          mstore(add($self, 96), v4)
+          mstore(add($self, 96), add(v3, $bytes))
         }
-        let v5 := mload(add($self, 32))
-        ret := v5
+        let v4 := mload(add($self, 32))
+        ret := v4
         leave
       }
       function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_base($self, $new_base) {
@@ -348,8 +345,7 @@ object "ByRefTraitProviderStorageBug" {
         let v0 := mload(add($self, 64))
         let v1 := v0
         mstore(v1, $v)
-        let v2 := $checked_add_u256(v1, 32)
-        mstore(add($self, 64), v2)
+        mstore(add($self, 64), add(v1, 32))
         leave
       }
       function $solencoder_h1b9228b90dad6928_new() -> ret {

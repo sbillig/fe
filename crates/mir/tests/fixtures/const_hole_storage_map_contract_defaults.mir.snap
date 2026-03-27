@@ -1,6 +1,5 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
-assertion_line: 26
 expression: mir_output
 ---
 #[inline(never)]
@@ -277,12 +276,11 @@ fn solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v0: mu
     store mem[v0].*.0 = v4
     store mem[v0].*.1 = v4
     store mem[v0].*.2 = v4
-    v5: u256 = checked_add<u256>(v4, v1)
-    store mem[v0].*.3 = v5
+    store mem[v0].*.3 = (v4 + v1)
     jmp bb2
   bb2:
-    v6: u256 = load mem[v0].*.1
-    ret v6
+    v5: u256 = load mem[v0].*.1
+    ret v5
 
 fn encode_root__Sol_hfd482bb803ad8c5f_u256_SolEncoder_h1b9228b90dad6928__636972f1f7e9ec11(v0: u256, v1: mut SolEncoder) -> ():
   bb0:
@@ -491,8 +489,7 @@ fn solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_base(v0: SolEncoder
 fn solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_append_tail(v0: mut SolEncoder, v1: u256) -> u256:
   bb0:
     v2: u256 = alloc(v1)
-    v3: u256 = checked_add<u256>(v2, v1)
-    store mem[v0].*.3 = v3
+    store mem[v0].*.3 = (v2 + v1)
     ret v2
 
 fn solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word(v0: mut SolEncoder, v1: u256) -> ():
@@ -500,8 +497,7 @@ fn solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word(v0: mut 
     v3: u256 = load mem[v0].*.2
     v2: u256 = v3
     eval mstore(v2, v1)
-    v4: u256 = checked_add<u256>(v2, 32)
-    store mem[v0].*.2 = v4
+    store mem[v0].*.2 = (v2 + 32)
     ret
 
 fn solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_pos(v0: SolEncoder) -> u256:

@@ -9,7 +9,7 @@ fn bump() uses (value: mut u256) {
 }
 
 fn raw_store() uses (data: mut Data, mem: mut RawMem) {
-    mem.mstore(core::addr_of(data), 8)
+    mem.mstore(addr: core::addr_of(data), value: 8)
 }
 
 pub fn explicit_raw_boundaries() uses (mem: mut RawMem) {

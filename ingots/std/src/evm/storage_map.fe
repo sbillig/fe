@@ -12,14 +12,14 @@ pub trait StorageKey {
 
 impl StorageKey for u256 {
     fn write_key(ptr: u256, self) -> u256 {
-        mstore(ptr, self)
+        mstore(addr: ptr, value: self)
         32
     }
 }
 
 impl StorageKey for Address {
     fn write_key(ptr: u256, self) -> u256 {
-        u256::write_key(ptr, self.inner)
+        u256::write_key(ptr: ptr, self.inner)
     }
 }
 
@@ -37,9 +37,9 @@ fn storagemap_storage_slot_with_salt<K>(key: K, salt: u256) -> u256
     // Use the current heap pointer as scratch to avoid clobbering live heap data.
     // `mem::alloc(0)` also ensures we stay above any backend-reserved zones.
     let ptr = mem::alloc(0)
-    let key_len = K::write_key(ptr, key)
-    mstore(ptr + key_len, salt)
-    keccak256(ptr, key_len + 32)
+    let key_len = K::write_key(ptr: ptr, key)
+    mstore(addr: ptr + key_len, value: salt)
+    keccak256(offset: ptr, len: key_len + 32)
 }
 
 fn storagemap_get_word_with_salt<K>(key: K, salt: u256) -> u256
@@ -53,7 +53,7 @@ fn storagemap_set_word_with_salt<K>(key: K, salt: u256, word: u256)
     where K: StorageKey
 {
     let storage_slot = storagemap_storage_slot_with_salt(key, salt)
-    sstore(storage_slot, word)
+    sstore(slot: storage_slot, value: word)
 }
 
 impl<K: StorageKey, V: WordRepr, const SALT: u256> StorageMap<K, V, SALT> {
@@ -61,12 +61,12 @@ impl<K: StorageKey, V: WordRepr, const SALT: u256> StorageMap<K, V, SALT> {
         Self {}
     }
 
-    pub fn get(self, key: K) -> V {
-        V::from_word(word: storagemap_get_word_with_salt(key, SALT))
+    pub fn get(self, _ key: K) -> V {
+        V::from_word(storagemap_get_word_with_salt(key, salt: SALT))
     }
 
     pub fn set(self, key: K, value: own V) {
-        storagemap_set_word_with_salt(key, SALT, value.to_word())
+        storagemap_set_word_with_salt(key, salt: SALT, word: value.to_word())
     }
 }
 
@@ -76,8 +76,8 @@ impl<A, B> StorageKey for (A, B)
 where A: StorageKey,
       B: StorageKey {
     fn write_key(ptr: u256, self) -> u256 {
-        let a_len = A::write_key(ptr, self.0)
-        let b_len = B::write_key(ptr + a_len, self.1)
+        let a_len = A::write_key(ptr: ptr, self.0)
+        let b_len = B::write_key(ptr: ptr + a_len, self.1)
         a_len + b_len
     }
 }

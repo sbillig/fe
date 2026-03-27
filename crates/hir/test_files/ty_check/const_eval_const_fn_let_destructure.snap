@@ -5,10 +5,10 @@ expression: res
 input_file: test_files/ty_check/const_eval_const_fn_let_destructure.fe
 ---
 note: 
-  ┌─ const_eval_const_fn_let_destructure.fe:6:51
+  ┌─ const_eval_const_fn_let_destructure.fe:6:53
   │  
-6 │   const fn sum_tuple(pair: (usize, usize)) -> usize {
-  │ ╭───────────────────────────────────────────────────^
+6 │   const fn sum_tuple(_ pair: (usize, usize)) -> usize {
+  │ ╭─────────────────────────────────────────────────────^
 7 │ │     let (a, b) = pair
 8 │ │     a + b
 9 │ │ }
@@ -57,10 +57,10 @@ note:
   │         ^ usize
 
 note: 
-   ┌─ const_eval_const_fn_let_destructure.fe:11:42
+   ┌─ const_eval_const_fn_let_destructure.fe:11:44
    │  
-11 │   const fn sum_record(pair: Pair) -> usize {
-   │ ╭──────────────────────────────────────────^
+11 │   const fn sum_record(_ pair: Pair) -> usize {
+   │ ╭────────────────────────────────────────────^
 12 │ │     let Pair { a, b } = pair
 13 │ │     a + b
 14 │ │ }

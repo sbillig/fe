@@ -120,32 +120,32 @@ note:
 note: 
    ┌─ goto_origin_range.fe:36:5
    │
-36 │     ops::codecopy(init_ptr, init_off, init_len)
+36 │     ops::codecopy(dest: init_ptr, offset: init_off, len: init_len)
    │     ^^^ -> goto_origin_range::ops
 
 note: 
    ┌─ goto_origin_range.fe:36:10
    │
-36 │     ops::codecopy(init_ptr, init_off, init_len)
+36 │     ops::codecopy(dest: init_ptr, offset: init_off, len: init_len)
    │          ^^^^^^^^ -> goto_origin_range::ops::codecopy
 
 note: 
-   ┌─ goto_origin_range.fe:36:19
+   ┌─ goto_origin_range.fe:36:25
    │
-36 │     ops::codecopy(init_ptr, init_off, init_len)
-   │                   ^^^^^^^^ -> local: u256
+36 │     ops::codecopy(dest: init_ptr, offset: init_off, len: init_len)
+   │                         ^^^^^^^^ -> local: u256
 
 note: 
-   ┌─ goto_origin_range.fe:36:29
+   ┌─ goto_origin_range.fe:36:43
    │
-36 │     ops::codecopy(init_ptr, init_off, init_len)
-   │                             ^^^^^^^^ -> local: u256
+36 │     ops::codecopy(dest: init_ptr, offset: init_off, len: init_len)
+   │                                           ^^^^^^^^ -> local: u256
 
 note: 
-   ┌─ goto_origin_range.fe:36:39
+   ┌─ goto_origin_range.fe:36:58
    │
-36 │     ops::codecopy(init_ptr, init_off, init_len)
-   │                                       ^^^^^^^^ -> local: u256
+36 │     ops::codecopy(dest: init_ptr, offset: init_off, len: init_len)
+   │                                                          ^^^^^^^^ -> local: u256
 
 note: 
    ┌─ goto_origin_range.fe:38:9
@@ -192,23 +192,23 @@ note:
 note: 
    ┌─ goto_origin_range.fe:40:5
    │
-40 │     ops::revert(ret_ptr, ret_len)
+40 │     ops::revert(offset: ret_ptr, len: ret_len)
    │     ^^^ -> goto_origin_range::ops
 
 note: 
    ┌─ goto_origin_range.fe:40:10
    │
-40 │     ops::revert(ret_ptr, ret_len)
+40 │     ops::revert(offset: ret_ptr, len: ret_len)
    │          ^^^^^^ -> goto_origin_range::ops::revert
 
 note: 
-   ┌─ goto_origin_range.fe:40:17
+   ┌─ goto_origin_range.fe:40:25
    │
-40 │     ops::revert(ret_ptr, ret_len)
-   │                 ^^^^^^^ -> local: u256
+40 │     ops::revert(offset: ret_ptr, len: ret_len)
+   │                         ^^^^^^^ -> local: u256
 
 note: 
-   ┌─ goto_origin_range.fe:40:26
+   ┌─ goto_origin_range.fe:40:39
    │
-40 │     ops::revert(ret_ptr, ret_len)
-   │                          ^^^^^^^ -> local: u256
+40 │     ops::revert(offset: ret_ptr, len: ret_len)
+   │                                       ^^^^^^^ -> local: u256

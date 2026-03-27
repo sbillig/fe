@@ -33,10 +33,10 @@ struct Encoder {
 mod ops {
     extern {
         pub fn returndatasize() -> u256
-        pub fn returndatacopy(_: u256, _: u256, _: u256)
-        pub fn codecopy(_: u256, _: u256, _: u256)
-        pub fn create(_: u256, _: u256, _: u256) -> u256
-        pub fn revert(_: u256, _: u256)
+        pub fn returndatacopy(dest: u256, offset: u256, len: u256)
+        pub fn codecopy(dest: u256, offset: u256, len: u256)
+        pub fn create(value: u256, offset: u256, len: u256) -> u256
+        pub fn revert(offset: u256, len: u256)
     }
 }
 
@@ -60,5 +60,5 @@ fn create<C: Contract>() {
     // Bug 2: zero-arg extern call — no underline in Zed
     let ret_len = ops::returndatasize()
     let ret_ptr = mem::alloc(ret_len)
-    ops::revert(ret_ptr, ret_len)
+    ops::revert(offset: ret_ptr, len: ret_len)
 }

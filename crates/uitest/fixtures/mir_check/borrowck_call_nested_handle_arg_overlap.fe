@@ -12,5 +12,5 @@ pub fn borrowck_call_nested_handle_arg_overlap() {
     let handle: mut u256 = mut value
     let mut a: HandleBox = HandleBox { h: handle }
     let mut b: HandleBox = HandleBox { h: handle }
-    take2(mut a, mut b)
+    take2(a: mut a, b: mut b)
 }

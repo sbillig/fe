@@ -162,23 +162,23 @@ note:
 note: 
    ┌─ goto_hover_bugs.fe:63:5
    │
-63 │     ops::revert(ret_ptr, ret_len)
+63 │     ops::revert(offset: ret_ptr, len: ret_len)
    │     ^^^ -> goto_hover_bugs::ops
 
 note: 
    ┌─ goto_hover_bugs.fe:63:10
    │
-63 │     ops::revert(ret_ptr, ret_len)
+63 │     ops::revert(offset: ret_ptr, len: ret_len)
    │          ^^^^^^ -> goto_hover_bugs::ops::revert
 
 note: 
-   ┌─ goto_hover_bugs.fe:63:17
+   ┌─ goto_hover_bugs.fe:63:25
    │
-63 │     ops::revert(ret_ptr, ret_len)
-   │                 ^^^^^^^ -> local: u256
+63 │     ops::revert(offset: ret_ptr, len: ret_len)
+   │                         ^^^^^^^ -> local: u256
 
 note: 
-   ┌─ goto_hover_bugs.fe:63:26
+   ┌─ goto_hover_bugs.fe:63:39
    │
-63 │     ops::revert(ret_ptr, ret_len)
-   │                          ^^^^^^^ -> local: u256
+63 │     ops::revert(offset: ret_ptr, len: ret_len)
+   │                                       ^^^^^^^ -> local: u256

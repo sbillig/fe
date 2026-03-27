@@ -6,7 +6,14 @@ use super::mem
 /// SHA256 hash of a memory region (precompile 0x02).
 pub fn sha256(offset: u256, len: u256) -> u256 {
     let out: u256 = mem::alloc(32)
-    let ok: u256 = ops::staticcall(ops::gas(), 2, offset, len, out, 32)
-    if ok == 0 { ops::revert(0, 0) }
+    let ok: u256 = ops::staticcall(
+        gas: ops::gas(),
+        addr: 2,
+        args_offset: offset,
+        args_len: len,
+        ret_offset: out,
+        ret_len: 32,
+    )
+    if ok == 0 { ops::revert(offset: 0, len: 0) }
     ops::mload(out)
 }

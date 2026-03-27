@@ -49,7 +49,7 @@ mod types_b {
     }
 }
 
-fn generic_fn<T>(val: own T) -> T {
+fn generic_fn<T>(_ val: own T) -> T {
     val
 }
 
@@ -152,7 +152,7 @@ fn test_trait_method_collision() -> u32 {
 // alloc_local() generates names v0, v1, v2... starting from 0, regardless of
 // parameter names. If a parameter is named v0, local variables will collide.
 
-fn param_local_collision(v0: u32) -> u32 {
+fn param_local_collision(_ v0: u32) -> u32 {
     // The first local variable allocated will also be named v0,
     // colliding with the parameter
     let x = v0 + 1
@@ -170,7 +170,7 @@ fn test_param_local_collision() -> u32 {
 // try_collapse_cast_shim is purely string-pattern based on `__{src}_as_{dst}`.
 // A user-defined function matching this pattern would be "optimized away".
 
-fn __u32_as_u256(x: u32) -> u256 {
+fn __u32_as_u256(_ x: u32) -> u256 {
     // This function name matches the cast shim pattern and might be
     // incorrectly optimized away or have its call replaced with just
     // returning the argument.
@@ -192,7 +192,7 @@ fn test_cast_shim_collision() -> u256 {
 // uniqued against each other, but not against this implicit return name, so a
 // parameter named `ret` produces invalid Yul.
 
-fn ret_param_collision(ret: u32) -> u32 {
+fn ret_param_collision(_ ret: u32) -> u32 {
     ret + 1
 }
 

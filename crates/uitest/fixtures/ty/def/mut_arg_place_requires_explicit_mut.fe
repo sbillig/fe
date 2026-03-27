@@ -1,4 +1,4 @@
-fn bump(_x: mut u256) {}
+fn bump(_: mut u256) {}
 
 pub fn mut_arg_place_requires_explicit_mut() {
     let mut x: u256 = 0

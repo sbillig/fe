@@ -1,9 +1,9 @@
 use std::evm::{assert, revert}
 
-fn increment(val: u256) -> u256 {
+fn increment(_ val: u256) -> u256 {
     return val + 1
 }
 
 fn f() {
-    assert(increment(val: 0) == 1)
+    assert(increment(0) == 1)
 }

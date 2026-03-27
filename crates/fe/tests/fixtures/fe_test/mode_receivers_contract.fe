@@ -16,7 +16,7 @@ struct Store {
 }
 
 impl Store {
-    fn touch(mut self, by: u256) {
+    fn touch(mut self, _ by: u256) {
         self.value += by
         self.bump()
     }
@@ -31,7 +31,7 @@ impl Store {
     }
 }
 
-fn close_copy(s: own Store) -> (u256, u8) {
+fn close_copy(_ s: own Store) -> (u256, u8) {
     s.close()
 }
 

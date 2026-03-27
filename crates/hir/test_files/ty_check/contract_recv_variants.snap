@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 41
 expression: res
 input_file: test_files/ty_check/contract_recv_variants.fe
 ---
@@ -88,10 +87,10 @@ note:
    │                           ^ mut E
 
 note: 
-   ┌─ contract_recv_variants.fe:40:47
+   ┌─ contract_recv_variants.fe:40:49
    │  
-40 │           fn encode_to_ptr(own self, ptr: u256) {
-   │ ╭───────────────────────────────────────────────^
+40 │           fn encode_to_ptr(own self, _ ptr: u256) {
+   │ ╭─────────────────────────────────────────────────^
 41 │ │             core::panic()
 42 │ │         }
    │ ╰─────────^ ()
@@ -232,10 +231,10 @@ note:
    │                         ^ mut E
 
 note: 
-   ┌─ contract_recv_variants.fe:76:47
+   ┌─ contract_recv_variants.fe:76:49
    │  
-76 │           fn encode_to_ptr(own self, ptr: u256) {
-   │ ╭───────────────────────────────────────────────^
+76 │           fn encode_to_ptr(own self, _ ptr: u256) {
+   │ ╭─────────────────────────────────────────────────^
 77 │ │             core::panic()
 78 │ │         }
    │ ╰─────────^ ()
@@ -345,10 +344,10 @@ note:
     │                    ^ mut E
 
 note: 
-    ┌─ contract_recv_variants.fe:115:43
+    ┌─ contract_recv_variants.fe:115:45
     │  
-115 │       fn encode_to_ptr(own self, ptr: u256) {
-    │ ╭───────────────────────────────────────────^
+115 │       fn encode_to_ptr(own self, _ ptr: u256) {
+    │ ╭─────────────────────────────────────────────^
 116 │ │         core::panic()
 117 │ │     }
     │ ╰─────^ ()

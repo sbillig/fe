@@ -3,8 +3,8 @@ fn bump2(a: mut u256, b: mut u256) {
     b += 1
 }
 
-fn call_same_handle(h: mut u256) {
-    bump2(h, h)
+fn call_same_handle(_ h: mut u256) {
+    bump2(a: h, b: h)
 }
 
 pub fn borrowck_call_same_handle_overlap() -> u256 {

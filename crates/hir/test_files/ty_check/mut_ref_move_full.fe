@@ -3,16 +3,16 @@ struct Pair {
     b: u256,
 }
 
-fn bump(x: mut u256) {
+fn bump(_ x: mut u256) {
     x += 1
 }
 
-fn bump_pair(p: mut Pair) {
+fn bump_pair(_ p: mut Pair) {
     bump(mut p.a)
     bump(mut p.b)
 }
 
-fn take_u256(x: own u256) -> u256 {
+fn take_u256(_ x: own u256) -> u256 {
     x
 }
 

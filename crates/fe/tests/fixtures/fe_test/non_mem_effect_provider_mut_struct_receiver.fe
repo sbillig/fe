@@ -21,7 +21,7 @@ struct PointMover {
 }
 
 impl PointMover {
-    fn move_right(mut self, x: u256) {
+    fn move_right(mut self, _ x: u256) {
         self.p.x += x
     }
 }

@@ -9,12 +9,12 @@ type OrArr = [u8; 4 | 2]
 type XorArr = [u8; 5 ^ 1]
 type NotByte = Byte<NOT>
 
-fn takes_shl(_x: ShlArr) {}
-fn takes_shr(_x: ShrArr) {}
-fn takes_and(_x: AndArr) {}
-fn takes_or(_x: OrArr) {}
-fn takes_xor(_x: XorArr) {}
-fn takes_not(_x: NotByte) {}
+fn takes_shl(_: ShlArr) {}
+fn takes_shr(_: ShrArr) {}
+fn takes_and(_: AndArr) {}
+fn takes_or(_: OrArr) {}
+fn takes_xor(_: XorArr) {}
+fn takes_not(_: NotByte) {}
 
 fn ok(a: ShlArr, b: ShrArr, c: AndArr, d: OrArr, e: XorArr, f: NotByte) {
     takes_shl(a)

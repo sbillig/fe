@@ -4,12 +4,12 @@ use std::evm::{Evm, RawMem}
 pub fn child_init() uses (evm: mut Evm) {
     let len = evm.code_region_len(child_runtime)
     let offset = evm.code_region_offset(child_runtime)
-    evm.codecopy(dest: 0, offset, len)
-    evm.return_data(0, len)
+    evm.codecopy(dest: 0, offset: offset, len: len)
+    evm.return_data(offset: 0, len: len)
 }
 
 #[contract_runtime(Child)]
 pub fn child_runtime() uses (evm: mut Evm) {
-    evm.mstore(0, 0xbeef)
-    evm.return_data(0, 32)
+    evm.mstore(addr: 0, value: 0xbeef)
+    evm.return_data(offset: 0, len: 32)
 }

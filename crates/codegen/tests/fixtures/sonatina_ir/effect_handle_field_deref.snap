@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/effect_handle_field_deref.fe
 ---
@@ -389,21 +388,15 @@ func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_
         obj.store v12 v8;
         v14.objref<i256> = obj.proj v0 2.i256;
         obj.store v14 v8;
-        (v15.i256, v16.i1) = uaddo v8 v1;
-        br v16 block3 block4;
+        v15.i256 = add v8 v1;
+        v17.objref<i256> = obj.proj v0 3.i256;
+        obj.store v17 v15;
+        jump block2;
 
     block2:
-        v21.objref<i256> = obj.proj v0 1.i256;
-        v22.i256 = obj.load v21;
-        return v22;
-
-    block3:
-        evm_revert 0.i256 0.i256;
-
-    block4:
-        v19.objref<i256> = obj.proj v0 3.i256;
-        obj.store v19 v15;
-        jump block2;
+        v19.objref<i256> = obj.proj v0 1.i256;
+        v20.i256 = obj.load v19;
+        return v20;
 }
 
 func private %encode_root__Sol_hfd482bb803ad8c5f_u256_SolEncoder_h1b9228b90dad6928__636972f1f7e9ec11(v0.i256, v1.objref<@__fe_obj_SolEncoder_4>) {
@@ -706,15 +699,9 @@ func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_append_t
     block0:
         v2.*i8 = evm_malloc v1;
         v3.i256 = ptr_to_int v2 i256;
-        (v4.i256, v5.i1) = uaddo v3 v1;
-        br v5 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        v9.objref<i256> = obj.proj v0 3.i256;
-        obj.store v9 v4;
+        v4.i256 = add v3 v1;
+        v6.objref<i256> = obj.proj v0 3.i256;
+        obj.store v6 v4;
         return v3;
 }
 
@@ -723,15 +710,9 @@ func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_wo
         v3.objref<i256> = obj.proj v0 2.i256;
         v4.i256 = obj.load v3;
         mstore v4 v1 i256;
-        (v6.i256, v7.i1) = uaddo v4 32.i256;
-        br v7 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        v10.objref<i256> = obj.proj v0 2.i256;
-        obj.store v10 v6;
+        v6.i256 = add v4 32.i256;
+        v7.objref<i256> = obj.proj v0 2.i256;
+        obj.store v7 v6;
         return;
 }
 

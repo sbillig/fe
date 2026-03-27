@@ -4,7 +4,7 @@
 pub trait Seq {
     type Item
     fn len(self) -> usize
-    fn get(ref self, i: usize) -> ref Self::Item
+    fn get(ref self, _: usize) -> ref Self::Item
 }
 
 // This works because the impl scope is entered before lowering the target type,
@@ -14,7 +14,7 @@ impl<T, const N: usize> Seq for [T; N] {
     fn len(self) -> usize {
         N
     }
-    fn get(ref self, i: usize) -> ref T {
+    fn get(ref self, _ i: usize) -> ref T {
         ref self[i]
     }
 }

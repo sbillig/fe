@@ -5,7 +5,7 @@ use super::ops
 use super::storage_map::{StorageKey, StorageMap}
 
 /// Round `len` up to the number of whole EVM words required to store it.
-pub fn ceil_words(len: u256) -> u256 {
+pub fn ceil_words(_ len: u256) -> u256 {
     if len == 0 {
         return 0
     }
@@ -31,10 +31,10 @@ pub fn zero_pad_memory_bytes(ptr: u256, len: u256) {
 
     let tail_ptr = ptr + (len / 32) * 32
     let word = ops::mload(tail_ptr)
-    ops::mstore(tail_ptr, word & mask_for_bytes(rem))
+    ops::mstore(addr: tail_ptr, value: word & mask_for_bytes(rem))
 }
 
-fn copy_view_words_to_memory<I>(view: BytesView<I>, dest: u256)
+fn copy_view_words_to_memory<I>(_ view: BytesView<I>, _ dest: u256)
     where I: ByteInput
 {
     let word_count = ceil_words(view.len())
@@ -47,7 +47,7 @@ fn copy_view_words_to_memory<I>(view: BytesView<I>, dest: u256)
                 word = word & mask_for_bytes(rem)
             }
         }
-        ops::mstore(dest + i * 32, word)
+        ops::mstore(addr: dest + i * 32, value: word)
         i += 1
     }
 }
@@ -56,21 +56,21 @@ fn copy_view_words_to_memory<I>(view: BytesView<I>, dest: u256)
 ///
 /// `data_ptr` is a raw calldata byte offset.
 pub fn encode_bytes_return_from_calldata(data_ptr: u256, len: u256) -> ! {
-    ops::mstore(0, 32)
-    ops::mstore(32, len)
-    ops::calldatacopy(64, data_ptr, len)
-    zero_pad_memory_bytes(64, len)
-    ops::return_data(0, 64 + ceil_words(len) * 32)
+    ops::mstore(addr: 0, value: 32)
+    ops::mstore(addr: 32, value: len)
+    ops::calldatacopy(dest: 64, offset: data_ptr, len: len)
+    zero_pad_memory_bytes(ptr: 64, len: len)
+    ops::return_data(offset: 0, len: 64 + ceil_words(len) * 32)
 }
 
 /// Return ABI-encoded `bytes` copied from an arbitrary byte view.
 pub fn encode_bytes_return_view<I>(view: BytesView<I>) -> !
     where I: ByteInput
 {
-    ops::mstore(0, 32)
-    ops::mstore(32, view.len())
+    ops::mstore(addr: 0, value: 32)
+    ops::mstore(addr: 32, value: view.len())
     copy_view_words_to_memory(view, 64)
-    ops::return_data(0, 64 + ceil_words(view.len()) * 32)
+    ops::return_data(offset: 0, len: 64 + ceil_words(view.len()) * 32)
 }
 
 /// Emit a Solidity-compatible event with a single dynamic `bytes` payload.
@@ -79,11 +79,11 @@ pub fn encode_bytes_return_view<I>(view: BytesView<I>) -> !
 pub fn emit_bytes_event(topic0: u256, data_ptr: u256, data_len: u256) {
     let total_len = 64 + ceil_words(data_len) * 32
     let ptr = mem::alloc(total_len)
-    ops::mstore(ptr, 32)
-    ops::mstore(ptr + 32, data_len)
-    ops::calldatacopy(ptr + 64, data_ptr, data_len)
-    zero_pad_memory_bytes(ptr + 64, data_len)
-    ops::log1(ptr, total_len, topic0)
+    ops::mstore(addr: ptr, value: 32)
+    ops::mstore(addr: ptr + 32, value: data_len)
+    ops::calldatacopy(dest: ptr + 64, offset: data_ptr, len: data_len)
+    zero_pad_memory_bytes(ptr: ptr + 64, len: data_len)
+    ops::log1(offset: ptr, len: total_len, topic0: topic0)
 }
 
 /// Emit a Solidity-compatible event with a single dynamic `bytes` payload.
@@ -92,10 +92,10 @@ pub fn emit_bytes_event_view<I>(topic0: u256, view: BytesView<I>)
 {
     let total_len = 64 + ceil_words(view.len()) * 32
     let ptr = mem::alloc(total_len)
-    ops::mstore(ptr, 32)
-    ops::mstore(ptr + 32, view.len())
+    ops::mstore(addr: ptr, value: 32)
+    ops::mstore(addr: ptr + 32, value: view.len())
     copy_view_words_to_memory(view, ptr + 64)
-    ops::log1(ptr, total_len, topic0)
+    ops::log1(offset: ptr, len: total_len, topic0: topic0)
 }
 
 /// Storage-backed dynamic bytes keyed by `K`.
@@ -125,10 +125,10 @@ impl<K: StorageKey + Copy, const LEN_SALT: u256, const WORD_SALT: u256>
         let word_count = ceil_words(len)
         let mut i: u256 = 0
         while i < word_count {
-            words.set((key, i), 0)
+            words.set(key: (key, i), value: 0)
             i += 1
         }
-        lengths.set(key, 0)
+        lengths.set(key: key, value: 0)
     }
 
     /// Store bytes copied directly from calldata.
@@ -140,7 +140,7 @@ impl<K: StorageKey + Copy, const LEN_SALT: u256, const WORD_SALT: u256>
         let lengths: StorageMap<K, u256, LEN_SALT> = StorageMap::new()
         let words: StorageMap<(K, u256), u256, WORD_SALT> = StorageMap::new()
 
-        lengths.set(key, len)
+        lengths.set(key: key, value: len)
         let word_count = ceil_words(len)
         let mut i: u256 = 0
         while i < word_count {
@@ -151,7 +151,7 @@ impl<K: StorageKey + Copy, const LEN_SALT: u256, const WORD_SALT: u256>
                     word = word & mask_for_bytes(rem)
                 }
             }
-            words.set((key, i), word)
+            words.set(key: (key, i), value: word)
             i += 1
         }
     }
@@ -165,7 +165,7 @@ impl<K: StorageKey + Copy, const LEN_SALT: u256, const WORD_SALT: u256>
         let lengths: StorageMap<K, u256, LEN_SALT> = StorageMap::new()
         let words: StorageMap<(K, u256), u256, WORD_SALT> = StorageMap::new()
 
-        lengths.set(key, view.len())
+        lengths.set(key: key, value: view.len())
         let word_count = ceil_words(view.len())
         let mut i: u256 = 0
         while i < word_count {
@@ -176,7 +176,7 @@ impl<K: StorageKey + Copy, const LEN_SALT: u256, const WORD_SALT: u256>
                     word = word & mask_for_bytes(rem)
                 }
             }
-            words.set((key, i), word)
+            words.set(key: (key, i), value: word)
             i += 1
         }
     }
@@ -187,16 +187,16 @@ impl<K: StorageKey + Copy, const LEN_SALT: u256, const WORD_SALT: u256>
         let words: StorageMap<(K, u256), u256, WORD_SALT> = StorageMap::new()
 
         let len = lengths.get(key)
-        ops::mstore(0, 32)
-        ops::mstore(32, len)
+        ops::mstore(addr: 0, value: 32)
+        ops::mstore(addr: 32, value: len)
 
         let word_count = ceil_words(len)
         let mut i: u256 = 0
         while i < word_count {
-            ops::mstore(64 + i * 32, words.get((key, i)))
+            ops::mstore(addr: 64 + i * 32, value: words.get((key, i)))
             i += 1
         }
 
-        ops::return_data(0, 64 + word_count * 32)
+        ops::return_data(offset: 0, len: 64 + word_count * 32)
     }
 }

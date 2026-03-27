@@ -14,9 +14,9 @@ trait Contract {
 mod ops {
     extern {
         pub fn returndatasize() -> u256
-        pub fn revert(_: u256, _: u256)
+        pub fn revert(offset: u256, len: u256)
         pub fn alloc(_: u256) -> u256
-        pub fn codecopy(_: u256, _: u256, _: u256)
+        pub fn codecopy(dest: u256, offset: u256, len: u256)
     }
 }
 
@@ -33,9 +33,9 @@ fn create<C: Contract>() {
     let total_len = init_len + init_off
 
     let init_ptr = mem::alloc(total_len)
-    ops::codecopy(init_ptr, init_off, init_len)
+    ops::codecopy(dest: init_ptr, offset: init_off, len: init_len)
 
     let ret_len = ops::returndatasize()
     let ret_ptr = mem::alloc(ret_len)
-    ops::revert(ret_ptr, ret_len)
+    ops::revert(offset: ret_ptr, len: ret_len)
 }

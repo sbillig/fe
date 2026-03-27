@@ -1,4 +1,4 @@
-fn read_value(v: ref u256) -> u256 {
+fn read_value(_ v: ref u256) -> u256 {
     v
 }
 

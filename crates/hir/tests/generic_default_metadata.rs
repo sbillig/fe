@@ -171,7 +171,7 @@ fn typed_body_preserves_metadata_only_const_defaults() {
     let file = db.new_stand_alone(
         Utf8PathBuf::from("typed_body_preserves_metadata_only_const_defaults.fe"),
         r#"
-const fn plus1(x: usize) -> usize {
+const fn plus1(_ x: usize) -> usize {
     x + 1
 }
 
@@ -222,7 +222,7 @@ fn omitted_const_expr_defaults_unify_with_explicit_defaults() {
     let file = db.new_stand_alone(
         Utf8PathBuf::from("omitted_const_expr_defaults_unify_with_explicit_defaults.fe"),
         r#"
-const fn plus1(x: usize) -> usize {
+const fn plus1(_ x: usize) -> usize {
     x + 1
 }
 
@@ -230,7 +230,7 @@ struct Foo<const N: usize, const M: usize = plus1(N)> {}
 
 fn takes(_: Foo<4, 5>) {}
 
-fn f(x: Foo<4>) {
+fn f(_ x: Foo<4>) {
     takes(x)
 }
 "#,
@@ -245,7 +245,7 @@ fn type_alias_omitted_const_expr_defaults_unify_with_explicit_defaults() {
     let file = db.new_stand_alone(
         Utf8PathBuf::from("type_alias_omitted_const_expr_defaults_unify_with_explicit_defaults.fe"),
         r#"
-const fn plus1(x: usize) -> usize {
+const fn plus1(_ x: usize) -> usize {
     x + 1
 }
 
@@ -254,7 +254,7 @@ type Foo<const N: usize, const M: usize = plus1(N)> = Raw<N, M>
 
 fn takes(_: Raw<4, 5>) {}
 
-fn f(x: Foo<4>) {
+fn f(_ x: Foo<4>) {
     takes(x)
 }
 "#,

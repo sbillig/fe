@@ -319,7 +319,7 @@ trait Cap<T> {}
 
 struct Slot<const ROOT: u256 = _> {}
 
-fn needs(x: u256) uses (cap: Cap<Slot>) {}
+fn needs(_: u256) uses (cap: Cap<Slot>) {}
 
 fn caller() uses (cap: Cap<Slot>) {
     let out: () = needs(x: 1)
@@ -351,7 +351,7 @@ trait HasSlot {
 
 struct Slot<T, const ROOT: u256 = _> {}
 
-fn needs<X>(x: u256) uses (cap: Cap<X::Assoc>)
+fn needs<X>(_: u256) uses (cap: Cap<X::Assoc>)
 where
     X: HasSlot<Assoc = Slot<u256>>
 {}
@@ -510,7 +510,7 @@ impl<T> EffectHandle for Ptr<T> {
     type Target = T
     type AddressSpace = core::effect_ref::Memory
 
-    fn from_raw(raw: u256) -> Self { Self { raw } }
+    fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -562,7 +562,7 @@ impl<T> EffectHandle for Ptr<T> {
     type Target = T
     type AddressSpace = core::effect_ref::Memory
 
-    fn from_raw(raw: u256) -> Self { Self { raw } }
+    fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -1590,7 +1590,7 @@ impl<T> EffectHandle for Ptr<T> {
     type Target = T
     type AddressSpace = core::effect_ref::Memory
 
-    fn from_raw(raw: u256) -> Self { Self { raw } }
+    fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -1722,8 +1722,8 @@ struct Storage<T> {
 }
 
 fn make<T>() -> T { todo() }
-fn take(x: ref u8) {}
-fn needs<T>(x: T) uses (store: Storage<T>) {}
+fn take(_: ref u8) {}
+fn needs<T>(_: T) uses (store: Storage<T>) {}
 
 fn caller(good: Storage<u8>, bad: Storage<u32>) {
     let x = make()
@@ -1774,8 +1774,8 @@ struct Bad {}
 impl Cap<Storage<u8>> for Good {}
 
 fn make<T>() -> T { todo() }
-fn take(x: ref u8) {}
-fn needs<T>(x: T) uses (cap: Cap<Storage<T>>) {}
+fn take(_: ref u8) {}
+fn needs<T>(_: T) uses (cap: Cap<Storage<T>>) {}
 
 fn caller(good: own Good, bad: own Bad) {
     let x = make()
@@ -1831,7 +1831,7 @@ impl EffectHandle for Ptr<Storage<u8>> {
     type Target = Storage<u8>
     type AddressSpace = core::effect_ref::Memory
 
-    fn from_raw(raw: u256) -> Self { Self { raw } }
+    fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -1899,7 +1899,7 @@ impl EffectHandle for Ptr<Storage<u8>> {
     type Target = Storage<u8>
     type AddressSpace = core::effect_ref::Memory
 
-    fn from_raw(raw: u256) -> Self { Self { raw } }
+    fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -1961,7 +1961,7 @@ impl EffectHandle for Ptr<Storage<u8>> {
     type Target = Storage<u8>
     type AddressSpace = core::effect_ref::Memory
 
-    fn from_raw(raw: u256) -> Self { Self { raw } }
+    fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -2024,7 +2024,7 @@ where
     type Target = Storage<T::Assoc>
     type AddressSpace = core::effect_ref::Memory
 
-    fn from_raw(raw: u256) -> Self { Self { raw } }
+    fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -2094,7 +2094,7 @@ where
     type Target = Storage<T::Assoc>
     type AddressSpace = core::effect_ref::Memory
 
-    fn from_raw(raw: u256) -> Self { Self { raw } }
+    fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -3475,7 +3475,7 @@ impl EffectHandle for Ptr<Storage<u8>> {
     type Target = Storage<u8>
     type AddressSpace = core::effect_ref::Memory
 
-    fn from_raw(raw: u256) -> Self { Self { raw } }
+    fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -4171,7 +4171,7 @@ fn storage_map_effect_forwarding_keeps_concrete_hidden_layout_args() {
         r#"
 use std::evm::StorageMap
 
-fn needs(addr: u256) -> u256
+fn needs(_ addr: u256) -> u256
     uses (balances: StorageMap<u256, u256>)
 {
     balances.get(key: addr)
