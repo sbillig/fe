@@ -150,27 +150,22 @@ impl<'db> MethodBucket<'db> {
 
 struct MethodCollector<'db> {
     db: &'db dyn HirAnalysisDb,
-    ingot: Ingot<'db>,
     method_table: MethodTable<'db>,
 }
 
 impl<'db> MethodCollector<'db> {
-    fn new(db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>) -> Self {
+    fn new(db: &'db dyn HirAnalysisDb, _ingot: Ingot<'db>) -> Self {
         Self {
             db,
-            ingot,
             method_table: MethodTable::new(),
         }
     }
 
     fn collect_impls(&mut self, impls: &[Impl<'db>]) {
         for &impl_ in impls {
-            // Use the semantic item method to obtain the implementor type.
-            let ty = impl_.ty(self.db);
-
-            if ty.has_invalid(self.db) | !ty.is_inherent_impl_allowed(self.db, self.ingot) {
+            let Some(ty) = impl_.admissible_inherent_impl_ty(self.db) else {
                 continue;
-            }
+            };
 
             for func in impl_.funcs(self.db) {
                 let Some(func) = func.as_callable(self.db) else {
