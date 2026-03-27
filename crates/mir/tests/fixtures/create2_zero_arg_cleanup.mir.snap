@@ -1,9 +1,8 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
-assertion_line: 26
 expression: mir_output
 ---
-fn create2_zero_arg_cleanup__StorPtr_Evm___207f35a85ac4062e(v0: u256) -> ():
+fn create2_zero_arg_cleanup__Evm_hef0af3106e109414__3af54274b2985741(v0: u256) -> ():
   ; runtime_abi values=[] effects=[]
   bb0:
     v1: Address = create2_stor_arg0_root_stor__Evm_hef0af3106e109414_Counter_h872958864d1ad471__aedc4c977fa26d57(0, 0)
@@ -13,10 +12,15 @@ fn create2_zero_arg_cleanup__StorPtr_Evm___207f35a85ac4062e(v0: u256) -> ():
 
 fn __Counter_init() -> ():
   bb0:
-    v0: u256 = code_region_offset(func_item(__Counter_runtime))
-    v1: u256 = code_region_len(func_item(__Counter_runtime))
-    eval codecopy(0, v0, v1)
-    terminate return_data(0, v1)
+    v0: u256 = callvalue()
+    br (v0 != 0) bb1 bb2
+  bb1:
+    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+  bb2:
+    v1: u256 = code_region_offset(code_region(__Counter_runtime))
+    v2: u256 = code_region_len(code_region(__Counter_runtime))
+    eval codecopy(0, v1, v2)
+    terminate return_data(0, v2)
 
 fn __Counter_runtime() -> ():
   bb0:
@@ -63,6 +67,11 @@ fn assert(v0: bool) -> ():
   bb2:
     ret
 
+fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(v0: Evm) -> !:
+  ; runtime_abi values=[] effects=[]
+  bb0:
+    terminate revert(0, 0)
+
 fn runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(v0: Evm) -> u32:
   ; runtime_abi values=[] effects=[]
   bb0:
@@ -77,19 +86,14 @@ fn runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805
     v5: u32 = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v4)
     ret v5
 
-fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(v0: Evm) -> !:
-  ; runtime_abi values=[] effects=[]
-  bb0:
-    terminate revert(0, 0)
-
 fn __Counter_init_code_len() -> u256:
   bb0:
-    v0: u256 = code_region_len(func_item(__Counter_init))
+    v0: u256 = code_region_len(code_region(__Counter_init))
     ret v0
 
 fn __Counter_init_code_offset() -> u256:
   bb0:
-    v0: u256 = code_region_offset(func_item(__Counter_init))
+    v0: u256 = code_region_offset(code_region(__Counter_init))
     ret v0
 
 fn ___h2439715d39cd513_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383(v0: (), v1: mut SolEncoder) -> ():

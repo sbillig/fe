@@ -1,6 +1,5 @@
 ---
 source: crates/language-server/src/functionality/references.rs
-assertion_line: 410
 expression: snapshot
 input_file: test_files/hoverable/src/lib.fe
 ---
@@ -667,7 +666,7 @@ note:
 95 │ │   #[selector = 0x02]
 96 │ │   Burn { amount: i32 } -> bool,
 97 │ │ }
-   │ ╰─^ def: defined here @ 92:0 (5 refs)
+   │ ╰─^ def: defined here @ 92:0 (8 refs)
 
 note: 
    ┌─ lib.fe:94:3

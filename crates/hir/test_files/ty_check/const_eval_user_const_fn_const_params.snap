@@ -1,6 +1,6 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
+assertion_line: 41
 expression: res
 input_file: test_files/ty_check/const_eval_user_const_fn_const_params.fe
 ---
@@ -67,10 +67,10 @@ note:
    ┌─ const_eval_user_const_fn_const_params.fe:14:9
    │
 14 │     let a: Foo<{ N }>
-   │         ^ Foo<const N: usize, plus1(const N: usize)>
+   │         ^ Foo<const N: usize, plus1(N)>
 
 note: 
    ┌─ const_eval_user_const_fn_const_params.fe:15:9
    │
 15 │     let b: Bar<{ N }>
-   │         ^ Bar<const N: usize, (const N: usize + 1)>
+   │         ^ Bar<const N: usize, (N + 1)>

@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty/def/trait_impl_assoc_const_cycle_admissibility.fe
 ---
@@ -24,12 +25,18 @@ error[3-0027]: const evaluation exceeded the recursion limit
 error[6-0003]: trait bound is not satisfied
    ┌─ trait_impl_assoc_const_cycle_admissibility.fe:14:5
    │
+11 │ fn needs_self_const<T: SelfConst>(_value: T) {}
+   │                        --------- required by this bound on `needs_self_const`
+   ·
 14 │     needs_self_const(value)
    │     ^^^^^^^^^^^^^^^^ `RecursiveConst` doesn't implement `SelfConst`
 
 error[6-0003]: trait bound is not satisfied
    ┌─ trait_impl_assoc_const_cycle_admissibility.fe:73:5
    │
+70 │ fn needs_default_cycle<T: DefaultCycle>(_value: T) {}
+   │                           ------------ required by this bound on `needs_default_cycle`
+   ·
 73 │     needs_default_cycle(value)
    │     ^^^^^^^^^^^^^^^^^^^ `DefaultRecursive` doesn't implement `DefaultCycle`
 
@@ -48,11 +55,17 @@ error[6-0003]: trait bound is not satisfied
 error[6-0003]: trait bound is not satisfied
    ┌─ trait_impl_assoc_const_cycle_admissibility.fe:99:5
    │
+94 │ fn needs_left_cycle<T: LeftCycle>(_value: T) {}
+   │                        --------- required by this bound on `needs_left_cycle`
+   ·
 99 │     needs_left_cycle(value)
    │     ^^^^^^^^^^^^^^^^ `CrossRecursive` doesn't implement `LeftCycle`
 
 error[6-0003]: trait bound is not satisfied
     ┌─ trait_impl_assoc_const_cycle_admissibility.fe:100:5
     │
+ 96 │ fn needs_right_cycle<T: RightCycle>(_value: T) {}
+    │                         ---------- required by this bound on `needs_right_cycle`
+    ·
 100 │     needs_right_cycle(value)
     │     ^^^^^^^^^^^^^^^^^ `CrossRecursive` doesn't implement `RightCycle`

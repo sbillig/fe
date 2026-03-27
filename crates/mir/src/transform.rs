@@ -1,5 +1,6 @@
 use hir::analysis::HirAnalysisDb;
-use hir::analysis::ty::simplified_pattern::ConstructorKind;
+use hir::analysis::ty::const_ty::normalize_const_tys_for_comparison;
+use hir::analysis::ty::pattern_ir::ConstructorKind;
 use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData, TyId};
 use hir::hir_def::EnumVariant;
 use hir::projection::{IndexSource, Projection};
@@ -402,8 +403,9 @@ fn add_value_runtime_uses<'db>(
         ValueOrigin::Expr(..)
         | ValueOrigin::ControlFlowResult { .. }
         | ValueOrigin::Unit
+        | ValueOrigin::ConstRegion(_)
         | ValueOrigin::Synthetic(..)
-        | ValueOrigin::FuncItem(..) => {}
+        | ValueOrigin::CodeRegionRef(..) => {}
     }
 }
 
@@ -833,8 +835,9 @@ fn mark_value_runtime_live<'db>(
         ValueOrigin::Expr(..)
         | ValueOrigin::ControlFlowResult { .. }
         | ValueOrigin::Unit
+        | ValueOrigin::ConstRegion(_)
         | ValueOrigin::Synthetic(..)
-        | ValueOrigin::FuncItem(..) => {}
+        | ValueOrigin::CodeRegionRef(..) => {}
     }
     changed
 }
@@ -1099,6 +1102,7 @@ fn function_core_lib<'db>(db: &'db dyn HirAnalysisDb, func: &MirFunction<'db>) -
 }
 
 fn merge_runtime_shapes<'db>(
+    db: &'db dyn HirAnalysisDb,
     existing: RuntimeShape<'db>,
     next: RuntimeShape<'db>,
 ) -> Option<RuntimeShape<'db>> {
@@ -1128,9 +1132,13 @@ fn merge_runtime_shapes<'db>(
             RuntimeShape::ObjectRef {
                 target_ty: rhs_target,
             },
-        ) if lhs_target == rhs_target => Some(RuntimeShape::ObjectRef {
-            target_ty: lhs_target,
-        }),
+        ) if normalize_const_tys_for_comparison(db, lhs_target)
+            == normalize_const_tys_for_comparison(db, rhs_target) =>
+        {
+            Some(RuntimeShape::ObjectRef {
+                target_ty: lhs_target,
+            })
+        }
         (
             RuntimeShape::MemoryPtr {
                 target_ty: lhs_target,
@@ -1171,7 +1179,7 @@ fn merge_runtime_shapes_in_context<'db>(
     existing: RuntimeShape<'db>,
     next: RuntimeShape<'db>,
 ) -> Option<RuntimeShape<'db>> {
-    merge_runtime_shapes(existing, next).or_else(|| match (existing, next) {
+    merge_runtime_shapes(db, existing, next).or_else(|| match (existing, next) {
         (
             RuntimeShape::MemoryPtr { target_ty },
             RuntimeShape::ObjectRef {
@@ -1185,7 +1193,10 @@ fn merge_runtime_shapes_in_context<'db>(
             RuntimeShape::MemoryPtr { target_ty },
         ) => target_ty
             .filter(|target_ty| {
-                crate::repr::object_layout_ty(db, core, *target_ty) == object_target_ty
+                normalize_const_tys_for_comparison(
+                    db,
+                    crate::repr::object_layout_ty(db, core, *target_ty),
+                ) == normalize_const_tys_for_comparison(db, object_target_ty)
             })
             .map(|_| RuntimeShape::ObjectRef {
                 target_ty: object_target_ty,
@@ -2103,7 +2114,7 @@ fn value_should_bind(
                 | ValueOrigin::Synthetic(..)
                 | ValueOrigin::Local(..)
                 | ValueOrigin::PlaceRoot(..)
-                | ValueOrigin::FuncItem(..)
+                | ValueOrigin::CodeRegionRef(..)
         )
 }
 
@@ -2122,13 +2133,14 @@ fn value_deps_in_eval_order(origin: &ValueOrigin<'_>) -> Vec<ValueId> {
             deps
         }
         ValueOrigin::TransparentCast { value } => vec![*value],
+        ValueOrigin::ConstRegion(_) => vec![],
         ValueOrigin::Expr(..)
         | ValueOrigin::ControlFlowResult { .. }
         | ValueOrigin::Unit
         | ValueOrigin::Synthetic(..)
         | ValueOrigin::Local(..)
         | ValueOrigin::PlaceRoot(..)
-        | ValueOrigin::FuncItem(..) => Vec::new(),
+        | ValueOrigin::CodeRegionRef(..) => Vec::new(),
     }
 }
 
@@ -2152,7 +2164,6 @@ fn compute_value_use_counts<'db>(body: &MirBody<'db>) -> Vec<usize> {
             match inst {
                 MirInst::BindValue { value, .. } => bump(*value),
                 MirInst::Assign { rvalue, .. } => match rvalue {
-                    Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::ConstAggregate { .. } => {}
                     Rvalue::Value(value) => bump(*value),
                     Rvalue::Call(call) => {
                         for arg in call.args.iter().chain(call.effect_args.iter()) {
@@ -2168,6 +2179,7 @@ fn compute_value_use_counts<'db>(body: &MirBody<'db>) -> Vec<usize> {
                         bump(place.base);
                         bump_place_path(&mut bump, &place.projection);
                     }
+                    Rvalue::Alloc { .. } | Rvalue::ZeroInit | Rvalue::ConstAggregate { .. } => {}
                 },
                 MirInst::Store { place, value, .. } => {
                     bump(place.base);
@@ -2587,9 +2599,18 @@ fn runtime_abi_cleanup_removes_dead_zero_arg_create2_encoder_materialization() u
             &mut db,
             "file:///runtime_abi_erases_contract_entry_params.fe",
             r#"
-contract C:
-    pub fn ping() -> u256:
-        return 1
+msg Msg {
+    #[selector = 0x01]
+    Ping -> u256,
+}
+
+contract C {
+    recv Msg {
+        Ping -> u256 {
+            return 1
+        }
+    }
+}
 "#,
         );
 
@@ -3026,7 +3047,8 @@ pub contract RedundantZeroInit {
                                 op:
                                     IntrinsicOp::CodeRegionOffset
                                     | IntrinsicOp::CodeRegionLen
-                                    | IntrinsicOp::Codecopy,
+                                    | IntrinsicOp::Codecopy
+                                    | IntrinsicOp::Callvalue,
                                 ..
                             },
                         ..

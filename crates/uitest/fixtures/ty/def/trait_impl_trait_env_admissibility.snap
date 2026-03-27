@@ -36,6 +36,9 @@ error[6-0003]: trait bound is not satisfied
 error[6-0003]: trait bound is not satisfied
    ┌─ trait_impl_trait_env_admissibility.fe:13:5
    │
+10 │ fn needs_hashable_foo<T: Foo<U>>(_value: T) {}
+   │                          ------ required by this bound on `needs_hashable_foo`
+   ·
 13 │     needs_hashable_foo(value)
    │     ^^^^^^^^^^^^^^^^^^ `Bar` doesn't implement `Foo<U>`
 
@@ -48,12 +51,18 @@ error[6-0003]: trait bound is not satisfied
 error[6-0003]: trait bound is not satisfied
    ┌─ trait_impl_trait_env_admissibility.fe:26:5
    │
+23 │ fn needs_child<T: Child>(_value: T) {}
+   │                   ----- required by this bound on `needs_child`
+   ·
 26 │     needs_child(value)
    │     ^^^^^^^^^^^ `Baz` doesn't implement `Child`
 
 error[6-0003]: trait bound is not satisfied
    ┌─ trait_impl_trait_env_admissibility.fe:40:5
    │
+37 │ fn needs_item<T: WithItem>(_value: T) {}
+   │                  -------- required by this bound on `needs_item`
+   ·
 40 │     needs_item(value)
    │     ^^^^^^^^^^ `MissingItem` doesn't implement `WithItem`
 
@@ -66,60 +75,90 @@ error[6-0003]: trait bound is not satisfied
 error[6-0003]: trait bound is not satisfied
    ┌─ trait_impl_trait_env_admissibility.fe:56:5
    │
+53 │ fn needs_hashable_item<T: WithHashableItem>(_value: T) {}
+   │                           ---------------- required by this bound on `needs_hashable_item`
+   ·
 56 │     needs_hashable_item(value)
    │     ^^^^^^^^^^^^^^^^^^^ `BadItem` doesn't implement `WithHashableItem`
 
 error[6-0003]: trait bound is not satisfied
    ┌─ trait_impl_trait_env_admissibility.fe:74:5
    │
+71 │ fn needs_callable<T: Callable>(_value: T) {}
+   │                      -------- required by this bound on `needs_callable`
+   ·
 74 │     needs_callable(value)
    │     ^^^^^^^^^^^^^^ `BadCallable` doesn't implement `Callable`
 
 error[6-0003]: trait bound is not satisfied
    ┌─ trait_impl_trait_env_admissibility.fe:88:5
    │
+85 │ fn needs_const<T: WithConst>(_value: T) {}
+   │                   --------- required by this bound on `needs_const`
+   ·
 88 │     needs_const(value)
    │     ^^^^^^^^^^^ `MissingConst` doesn't implement `WithConst`
 
 error[6-0003]: trait bound is not satisfied
     ┌─ trait_impl_trait_env_admissibility.fe:104:5
     │
+101 │ fn needs_typed_const<T: WithTypedConst>(_value: T) {}
+    │                         -------------- required by this bound on `needs_typed_const`
+    ·
 104 │     needs_typed_const(value)
     │     ^^^^^^^^^^^^^^^^^ `WrongConst` doesn't implement `WithTypedConst`
 
 error[6-0003]: trait bound is not satisfied
     ┌─ trait_impl_trait_env_admissibility.fe:120:5
     │
+117 │ fn needs_header_const<T: WithHeaderConst>(_value: T) {}
+    │                          --------------- required by this bound on `needs_header_const`
+    ·
 120 │     needs_header_const(value)
     │     ^^^^^^^^^^^^^^^^^^ `WrongHeaderConst` doesn't implement `WithHeaderConst`
 
 error[6-0003]: trait bound is not satisfied
     ┌─ trait_impl_trait_env_admissibility.fe:130:5
     │
+117 │ fn needs_header_const<T: WithHeaderConst>(_value: T) {}
+    │                          --------------- required by this bound on `needs_header_const`
+    ·
 130 │     needs_header_const(value)
     │     ^^^^^^^^^^^^^^^^^^ `MissingHeaderTypeConst` doesn't implement `WithHeaderConst`
 
 error[6-0003]: trait bound is not satisfied
     ┌─ trait_impl_trait_env_admissibility.fe:160:5
     │
+157 │ fn needs_body_const<T: WithBodyConst>(_value: T) {}
+    │                        ------------- required by this bound on `needs_body_const`
+    ·
 160 │     needs_body_const(value)
     │     ^^^^^^^^^^^^^^^^ `BadBodyConst` doesn't implement `WithBodyConst`
 
 error[6-0003]: trait bound is not satisfied
     ┌─ trait_impl_trait_env_admissibility.fe:174:5
     │
+171 │ fn needs_marker<T: Marker>(_value: T) {}
+    │                    ------ required by this bound on `needs_marker`
+    ·
 174 │     needs_marker(value)
     │     ^^^^^^^^^^^^ `ExtraConst` doesn't implement `Marker`
 
 error[6-0003]: trait bound is not satisfied
     ┌─ trait_impl_trait_env_admissibility.fe:208:5
     │
+195 │ fn needs_default_item<T: WithDefaultItem>(_value: T) {}
+    │                          --------------- required by this bound on `needs_default_item`
+    ·
 208 │     needs_default_item(value)
     │     ^^^^^^^^^^^^^^^^^^ `ExtraOnlyItem` doesn't implement `WithDefaultItem`
 
 error[6-0003]: trait bound is not satisfied
     ┌─ trait_impl_trait_env_admissibility.fe:219:5
     │
+ 37 │ fn needs_item<T: WithItem>(_value: T) {}
+    │                  -------- required by this bound on `needs_item`
+    ·
 219 │     needs_item(value)
     │     ^^^^^^^^^^ `MixedExtraItem` doesn't implement `WithItem`
 

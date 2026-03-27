@@ -7,7 +7,9 @@ pub use body_builder::{BodyBuilder, LocalValue};
 use common::diagnostics::Span;
 use hir::analysis::ty::trait_def::TraitInstId;
 use hir::analysis::ty::ty_def::TyId;
-use hir::hir_def::{CallableDef, Contract, EnumVariant, ExprId, Func, PatId, TopLevelMod};
+use hir::hir_def::{
+    CallableDef, Contract, EnumVariant, ExprId, Func, InlineHint, PatId, TopLevelMod,
+};
 use hir::projection::{Projection, ProjectionPath};
 use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
@@ -29,6 +31,13 @@ impl<'db> MirModule<'db> {
     }
 }
 
+/// Whether a MIR symbol is user-defined or compiler-internal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SymbolSource {
+    User,
+    Internal,
+}
+
 /// MIR for a single function.
 #[derive(Debug, Clone)]
 pub struct MirFunction<'db> {
@@ -47,8 +56,12 @@ pub struct MirFunction<'db> {
     pub runtime_return_shape: RuntimeShape<'db>,
     /// Optional contract association declared via attributes.
     pub contract_function: Option<ContractFunction>,
+    /// Inline hint declared via `#[inline]`-family source attributes.
+    pub inline_hint: Option<InlineHint>,
     /// Symbol name used for codegen (includes monomorphization suffix when present).
     pub symbol_name: String,
+    /// Whether the symbol is user-defined or compiler-internal.
+    pub symbol_source: SymbolSource,
     /// For methods, the address space variant of the receiver for this instance.
     pub receiver_space: Option<AddressSpaceKind>,
     /// When true, the monomorphizer will NOT automatically seed this template
@@ -237,6 +250,8 @@ pub struct MirBody<'db> {
     pub effect_param_locals: Vec<LocalId>,
     /// Mapping from an address-taken word/ptr/ZST local to its spill slot local.
     pub spill_slots: FxHashMap<LocalId, LocalId>,
+    pub const_regions: Vec<ConstRegion<'db>>,
+    const_region_index: FxHashMap<ConstRegionKey<'db>, ConstRegionId>,
     pub expr_values: FxHashMap<ExprId, ValueId>,
     pub pat_address_space: FxHashMap<PatId, AddressSpaceKind>,
     pub loop_headers: FxHashMap<BasicBlockId, LoopInfo>,
@@ -254,6 +269,8 @@ impl<'db> MirBody<'db> {
             param_locals: Vec::new(),
             effect_param_locals: Vec::new(),
             spill_slots: FxHashMap::default(),
+            const_regions: Vec::new(),
+            const_region_index: FxHashMap::default(),
             expr_values: FxHashMap::default(),
             pat_address_space: FxHashMap::default(),
             loop_headers: FxHashMap::default(),
@@ -305,6 +322,25 @@ impl<'db> MirBody<'db> {
         let id = LocalId(self.locals.len() as u32);
         self.locals.push(data);
         id
+    }
+
+    pub fn intern_const_region(&mut self, ty: TyId<'db>, bytes: Vec<u8>) -> ConstRegionId {
+        let key = ConstRegionKey {
+            ty,
+            bytes: bytes.clone(),
+        };
+        if let Some(&existing) = self.const_region_index.get(&key) {
+            return existing;
+        }
+
+        let id = ConstRegionId(self.const_regions.len() as u32);
+        self.const_regions.push(ConstRegion { ty, bytes });
+        self.const_region_index.insert(key, id);
+        id
+    }
+
+    pub fn const_region(&self, id: ConstRegionId) -> &ConstRegion<'db> {
+        &self.const_regions[id.index()]
     }
 
     pub fn value(&self, id: ValueId) -> &ValueData<'db> {
@@ -633,6 +669,15 @@ impl LocalId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ConstRegionId(pub u32);
+
+impl ConstRegionId {
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
 /// Stable index into [`MirBody::source_infos`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SourceInfoId(pub u32);
@@ -778,10 +823,10 @@ pub enum Rvalue<'db> {
     Alloc { address_space: AddressSpaceKind },
     /// Backend-neutral constant aggregate data.
     ///
-    /// Pre-computed constant bytes (e.g., constant array literals) that backends
+    /// Pre-computed constant bytes (e.g. constant array literals) that backends
     /// materialize however they choose:
     /// - Yul: emit as data sections + datacopy
-    /// - Sonatina: inline mstore sequence or memcpy
+    /// - Sonatina: register a constant region and materialize it via codecopy
     ConstAggregate {
         /// Raw constant bytes in big-endian EVM word format.
         data: Vec<u8>,
@@ -894,7 +939,7 @@ pub struct LoopInfo {
     /// Optional block containing the post-iteration code (e.g., increment for for-loops).
     /// If present, this block's instructions are rendered as the Yul for-loop post section.
     pub post_block: Option<BasicBlockId>,
-    /// Unroll hint from source attributes: `Some(true)` = `#[unroll]`, `Some(false)` = `#[no_unroll]`, `None` = auto.
+    /// Unroll hint from source attributes: `Some(true)` = `#[unroll]`, `Some(false)` = `#[unroll(never)]`, `None` = auto.
     pub unroll_hint: Option<bool>,
     /// Statically-known trip count, if the iterator length is a compile-time constant.
     /// Backends use this together with `unroll_hint` to decide whether to unroll.
@@ -951,15 +996,17 @@ pub enum ValueOrigin<'db> {
     /// This is used by capability-stage MIR to model "place" operations (load/store/projections)
     /// over locals/params without implying the local is backed by a runtime address.
     PlaceRoot(LocalId),
-    /// A first-class reference to a function item (compile-time only).
+    /// A first-class semantic reference to a code region (compile-time only).
     ///
     /// This is not a runtime value, but can be consumed by intrinsics like
     /// `code_region_offset/len` that refer to function code regions.
-    FuncItem(CodeRegionRoot<'db>),
+    CodeRegionRef(CodeRegionRef<'db>),
     /// Pointer arithmetic for accessing a nested struct field (no load, just offset).
     FieldPtr(FieldPtrOrigin),
     /// Reference to a place (for aggregates - pointer arithmetic only, no load).
     PlaceRef(Place<'db>),
+    /// Reference to a statically initialized constant region.
+    ConstRegion(ConstRegionId),
     /// Marker for ownership moves from places (runtime no-op, analysis hook).
     MoveOut {
         place: Place<'db>,
@@ -980,11 +1027,24 @@ pub enum SyntheticValue {
     Int(BigUint),
     /// Boolean literal stored as `0` or `1`.
     Bool(bool),
-    /// Byte string literal encoded as a `0x...` word.
+    /// Inline byte-backed scalar value emitted as a `0x...` word.
     ///
-    /// This is a stopgap representation: the literal is emitted inline as a numeric constant.
-    /// Only suitable for data that fits in a single EVM word (≤32 bytes).
+    /// This is only valid for payloads that fit in a single EVM word (≤32 bytes). Larger
+    /// byte-backed values must either lower through by-reference const regions or be rejected
+    /// during MIR lowering.
     Bytes(Vec<u8>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConstRegion<'db> {
+    pub ty: TyId<'db>,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ConstRegionKey<'db> {
+    ty: TyId<'db>,
+    bytes: Vec<u8>,
 }
 
 /// Address space where a value lives.
@@ -994,6 +1054,7 @@ pub enum AddressSpaceKind {
     Calldata,
     Storage,
     TransientStorage,
+    Code,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1034,7 +1095,7 @@ impl ValueRepr {
 #[derive(Debug, Clone)]
 pub struct CallOrigin<'db> {
     pub expr: Option<ExprId>,
-    pub hir_target: Option<HirCallTarget<'db>>,
+    pub target: Option<CallTargetRef<'db>>,
     /// Runtime-visible regular arguments in callee runtime-param order.
     pub args: Vec<ValueId>,
     /// Runtime-visible explicit effect arguments in callee runtime-effect-param order.
@@ -1086,6 +1147,12 @@ pub struct HirCallTarget<'db> {
     pub trait_inst: Option<TraitInstId<'db>>,
 }
 
+#[derive(Debug, Clone)]
+pub enum CallTargetRef<'db> {
+    Hir(HirCallTarget<'db>),
+    Synthetic(SyntheticId<'db>),
+}
+
 /// Pointer offset for accessing a nested aggregate field (struct within struct).
 /// This represents pure pointer arithmetic with no load/store.
 #[derive(Debug, Clone)]
@@ -1125,7 +1192,7 @@ pub struct IntrinsicValue {
 
 /// Identifies the root function for a code region along with its concrete instantiation.
 #[derive(Debug, Clone)]
-pub struct CodeRegionRoot<'db> {
+pub struct CodeRegionRef<'db> {
     pub origin: MirFunctionOrigin<'db>,
     pub generic_args: Vec<TyId<'db>>,
     pub symbol: Option<String>,
@@ -1192,6 +1259,8 @@ pub enum IntrinsicOp {
     Revert,
     /// `caller()`
     Caller,
+    /// `callvalue()`
+    Callvalue,
     /// `alloc(size)` - allocate `size` bytes of dynamic raw EVM memory and return the base
     /// address.
     Alloc,
@@ -1216,6 +1285,7 @@ impl IntrinsicOp {
                 | IntrinsicOp::Addmod
                 | IntrinsicOp::Mulmod
                 | IntrinsicOp::Caller
+                | IntrinsicOp::Callvalue
                 | IntrinsicOp::Alloc
         )
     }

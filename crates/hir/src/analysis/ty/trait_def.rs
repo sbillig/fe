@@ -2,7 +2,7 @@
 
 use crate::{
     analysis::ty::{
-        trait_lower::{collect_trait_impls, collect_trait_impls_frontier},
+        trait_lower::collect_trait_impls,
         trait_resolution::{GoalSatisfiability, PredicateListId, Selection},
     },
     hir_def::{Contract, Func, HirIngot, IdentId, ImplTrait, Trait},
@@ -14,18 +14,20 @@ use common::{
 use rustc_hash::FxHashMap;
 use salsa::Update;
 
-pub use super::assoc_items::AssocConstBodyOrigin;
 use super::{
     assoc_items::normalize_ty_for_trait_inst as normalize_assoc_ty_for_trait_inst,
     binder::Binder,
-    canonical::{Canonical, Canonicalized},
+    canonical::Canonical,
     context::AnalysisCx,
     fold::TyFoldable as _,
+    layout_holes::alpha_rename_hidden_layout_placeholders,
     trait_lower::collect_implementor_methods,
-    trait_resolution::{TraitSolveCx, constraint::collect_constraints, is_goal_satisfiable},
-    ty_def::TyId,
+    trait_resolution::{
+        TraitSolveCx, constraint::collect_constraints, is_goal_satisfiable,
+        normalize_trait_inst_preserving_validity_with_solve_cx,
+    },
+    ty_def::{TyId, strip_derived_adt_layout_args},
     unify::UnificationTable,
-    visitor::{TyVisitable, TyVisitor},
 };
 use crate::analysis::HirAnalysisDb;
 
@@ -42,6 +44,7 @@ pub(crate) fn ingot_trait_env<'db>(db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>
 /// projections) often only become unifiable after normalization, and unification
 /// rejects unresolved associated types. The solver normalizes before unifying
 /// candidates, so any filtering here must be an over-approximation.
+#[salsa::tracked(return_ref)]
 pub(crate) fn impls_for_trait_def<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
@@ -64,15 +67,22 @@ pub(crate) fn impls_for_trait_def<'db>(
 /// the caller's current module ingot and can miss impls that live in either:
 /// - the trait's ingot, or
 /// - the implementor type's ingot.
+#[salsa::tracked(return_ref)]
 pub(crate) fn impls_for_trait_in_ingots<'db>(
     db: &'db dyn HirAnalysisDb,
-    primary: Option<Ingot<'db>>,
+    primary: Ingot<'db>,
     secondary: Option<Ingot<'db>>,
-    trait_def: Trait<'db>,
+    trait_: Canonical<TraitInstId<'db>>,
 ) -> Vec<Binder<ImplementorId<'db>>> {
+    let trait_def = trait_.value.def(db);
     let mut dedup: IndexSet<Binder<ImplementorId<'db>>> = IndexSet::default();
-    for ingot in [primary, secondary].into_iter().flatten() {
-        dedup.extend(impls_for_trait_def(db, ingot, trait_def).iter().copied());
+    dedup.extend(impls_for_trait_def(db, primary, trait_def).iter().copied());
+    if let Some(secondary) = secondary {
+        dedup.extend(
+            impls_for_trait_def(db, secondary, trait_def)
+                .iter()
+                .copied(),
+        );
     }
     dedup.into_iter().collect()
 }
@@ -153,57 +163,22 @@ fn std_evm_contract_trait_def<'db>(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum ImplementorOrigin<'db> {
+pub(crate) enum ImplementorOrigin<'db> {
     Hir(ImplTrait<'db>),
     VirtualContract(Contract<'db>),
     Assumption,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct ImplementorTyCheckHeader<'db> {
-    self_ty: TyId<'db>,
-    constraints: PredicateListId<'db>,
-}
-
-impl<'db> TyVisitable<'db> for ImplementorTyCheckHeader<'db> {
-    fn visit_with<V>(&self, visitor: &mut V)
-    where
-        V: TyVisitor<'db> + ?Sized,
-    {
-        self.self_ty.visit_with(visitor);
-        self.constraints.visit_with(visitor);
-    }
-}
-
-impl<'db> super::fold::TyFoldable<'db> for ImplementorTyCheckHeader<'db> {
-    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
-    where
-        F: super::fold::TyFolder<'db>,
-    {
-        Self {
-            self_ty: self.self_ty.fold_with(db, folder),
-            constraints: self.constraints.fold_with(db, folder),
-        }
-    }
-}
-
 fn ingot_trait_env_cycle_initial<'db>(
-    db: &'db dyn HirAnalysisDb,
+    _: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
 ) -> TraitEnv<'db> {
-    // When local impl admission recursively re-enters trait-env lookup, use the
-    // current fixed-point frontier from `collect_trait_impls_frontier` alongside the
-    // stable external env so projection/method/const checks can see already
-    // admitted local helpers during the next iteration.
-    TraitEnv::from_impl_maps(
-        db,
+    // Return an empty trait environment when we detect a cycle
+    TraitEnv {
+        impls: FxHashMap::default(),
+        ty_to_implementors: FxHashMap::default(),
         ingot,
-        ingot
-            .resolved_external_ingots(db)
-            .iter()
-            .map(|(_, external)| collect_trait_impls(db, *external))
-            .chain(std::iter::once(collect_trait_impls_frontier(db, ingot))),
-    )
+    }
 }
 
 fn ingot_trait_env_cycle_recover<'db>(
@@ -225,18 +200,7 @@ pub fn resolve_trait_method_instance<'db>(
     inst: TraitInstId<'db>,
     method: IdentId<'db>,
 ) -> Option<(Func<'db>, Vec<TyId<'db>>)> {
-    // Normalize the trait instance arguments before searching for implementors.
-    //
-    // This is important for cases where the `Self` type is an associated type
-    // projection (e.g. `<Sol as Abi>::Decoder<I>`). Without normalization, the
-    // projection has no declaring ingot, which prevents us from searching the
-    // ingot that contains the actual implementor type (e.g. `SolDecoder<I>`).
-    //
-    // Monomorphization happens with concrete substitutions, so we can safely
-    // normalize using a scope derived from the instantiated arguments.
-    let assumptions = solve_cx.assumptions();
-    let norm_scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
-    let inst = inst.normalize_with_solve_cx(db, solve_cx, norm_scope, assumptions);
+    let inst = normalize_trait_inst_preserving_validity_with_solve_cx(db, inst, solve_cx);
 
     let implementor = match solve_cx.select_impl(db, inst) {
         Selection::Unique(implementor) => implementor,
@@ -263,13 +227,112 @@ pub(crate) fn impls_for_ty_with_constraints<'db>(
     ty: Canonical<TyId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> Vec<Binder<ImplementorId<'db>>> {
+    let canonical_ty = ty;
+    let solve_cx = TraitSolveCx::new(db, ingot.root_mod(db).scope()).with_assumptions(assumptions);
+    let raw_impls = base_matching_impls_for_ty(db, ingot, canonical_ty);
+    filter_implementors_for_ty(db, canonical_ty, solve_cx, raw_impls)
+}
+
+pub(crate) fn impls_for_ty_with_constraints_in_cx<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Option<Ingot<'db>>,
+    ty: Canonical<TyId<'db>>,
+    solve_cx: TraitSolveCx<'db>,
+) -> Vec<Binder<ImplementorId<'db>>> {
+    if ty.value.has_invalid(db) {
+        return Vec::new();
+    }
+
+    if let Some(local_implementors) = solve_cx.local_implementors() {
+        return filter_implementors_for_ty(
+            db,
+            ty,
+            solve_cx,
+            local_implementors.implementors(db).to_vec(),
+        );
+    }
+
+    ingot.map_or_else(Vec::new, |ingot| {
+        impls_for_ty_with_constraints(db, ingot, ty, solve_cx.assumptions())
+    })
+}
+
+pub(crate) fn base_matching_impls_for_ty_with_constraints_in_cx<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Option<Ingot<'db>>,
+    ty: Canonical<TyId<'db>>,
+    solve_cx: TraitSolveCx<'db>,
+) -> Vec<Binder<ImplementorId<'db>>> {
+    if ty.value.has_invalid(db) {
+        return Vec::new();
+    }
+
+    if let Some(local_implementors) = solve_cx.local_implementors() {
+        return local_implementors.implementors(db).to_vec();
+    }
+
+    ingot.map_or_else(Vec::new, |ingot| base_matching_impls_for_ty(db, ingot, ty))
+}
+
+fn filter_implementors_for_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: Canonical<TyId<'db>>,
+    solve_cx: TraitSolveCx<'db>,
+    raw_impls: Vec<Binder<ImplementorId<'db>>>,
+) -> Vec<Binder<ImplementorId<'db>>> {
+    let mut table = UnificationTable::new(db);
+    let ty = ty.extract_identity(&mut table);
+    raw_impls
+        .into_iter()
+        .filter(|implementor| {
+            let snapshot = table.snapshot();
+            let instantiated = table.instantiate_with_fresh_vars(*implementor);
+            let ty_term = strip_derived_adt_layout_args(db, ty);
+            let impl_ty = strip_derived_adt_layout_args(db, instantiated.self_ty(db));
+            let impl_ty = alpha_rename_hidden_layout_placeholders(db, impl_ty, ty_term);
+            let unifies = if impl_ty == ty_term {
+                true
+            } else {
+                let impl_ty = table.instantiate_nested_to_term(impl_ty);
+                let ty_term = table.instantiate_nested_to_term(ty_term);
+                table.unify(impl_ty, ty_term).is_ok()
+            };
+
+            if unifies {
+                let impl_constraints = instantiated.constraints(db);
+                if impl_constraints.is_empty(db) {
+                    table.rollback_to(snapshot);
+                    return true;
+                }
+
+                for &constraint in impl_constraints.list(db) {
+                    if matches!(
+                        is_goal_satisfiable(db, solve_cx, constraint),
+                        GoalSatisfiability::UnSat(_)
+                    ) {
+                        table.rollback_to(snapshot);
+                        return false;
+                    }
+                }
+            }
+
+            table.rollback_to(snapshot);
+            unifies
+        })
+        .collect()
+}
+
+pub(crate) fn base_matching_impls_for_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Ingot<'db>,
+    ty: Canonical<TyId<'db>>,
+) -> Vec<Binder<ImplementorId<'db>>> {
     let mut table = UnificationTable::new(db);
     let ty = ty.extract_identity(&mut table);
 
     let env = ingot_trait_env(db, ingot);
-    let solve_cx = TraitSolveCx::new(db, ingot.root_mod(db).scope()).with_assumptions(assumptions);
     if ty.has_invalid(db) {
-        return vec![];
+        return Vec::new();
     }
 
     let mut cands = vec![];
@@ -279,7 +342,6 @@ pub(crate) fn impls_for_ty_with_constraints<'db>(
         if table.unify(key, ty.base_ty(db)).is_ok() {
             cands.push(insts);
         }
-
         table.rollback_to(snapshot);
     }
 
@@ -291,94 +353,6 @@ pub(crate) fn impls_for_ty_with_constraints<'db>(
     }
 
     raw_impls
-        .into_iter()
-        .filter(|impl_| {
-            let snapshot = table.snapshot();
-            let inst = table.instantiate_with_fresh_vars(Binder::bind(ImplementorTyCheckHeader {
-                self_ty: impl_.instantiate_identity().self_ty(db),
-                constraints: impl_.instantiate_identity().constraints(db),
-            }));
-            let impl_ty = table.instantiate_to_term(inst.self_ty);
-            let ty_term = table.instantiate_to_term(ty);
-            let unifies = table.unify(impl_ty, ty_term).is_ok();
-
-            if unifies {
-                // Filter out impls that don't satisfy assumptions
-                if inst.constraints.is_empty(db) {
-                    table.rollback_to(snapshot);
-                    return true;
-                }
-
-                for &constraint in inst.constraints.list(db) {
-                    let constraint = Canonicalized::new(db, constraint);
-                    match is_goal_satisfiable(db, solve_cx, constraint.value) {
-                        GoalSatisfiability::UnSat(_) => {
-                            table.rollback_to(snapshot);
-                            return false;
-                        }
-                        _ => {
-                            // Ignoring the NeedsConfirmation case for now
-                        }
-                    }
-                }
-            }
-
-            table.rollback_to(snapshot);
-            unifies
-        })
-        .collect()
-}
-
-/// Returns all implementors for the given `ty` that satisfy the given solve context,
-/// including admission-local overlay implementors.
-pub(crate) fn impls_for_ty_with_constraints_in_cx<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ingot: Option<Ingot<'db>>,
-    ty: Canonical<TyId<'db>>,
-    solve_cx: TraitSolveCx<'db>,
-) -> Vec<Binder<ImplementorId<'db>>> {
-    let mut dedup: IndexSet<_> = ingot
-        .map(|ingot| impls_for_ty_with_constraints(db, ingot, ty, solve_cx.assumptions()))
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
-
-    let mut table = UnificationTable::new(db);
-    let ty = ty.extract_identity(&mut table);
-    if ty.has_invalid(db) {
-        return dedup.into_iter().collect();
-    }
-
-    for &implementor in solve_cx.local_implementors(db) {
-        let snapshot = table.snapshot();
-        let inst = table.instantiate_with_fresh_vars(Binder::bind(ImplementorTyCheckHeader {
-            self_ty: implementor.instantiate_identity().self_ty(db),
-            constraints: implementor.instantiate_identity().constraints(db),
-        }));
-        let impl_ty = table.instantiate_to_term(inst.self_ty);
-        let ty_term = table.instantiate_to_term(ty);
-        let mut is_ok = table.unify(impl_ty, ty_term).is_ok();
-
-        if is_ok {
-            for &constraint in inst.constraints.list(db) {
-                let constraint = Canonicalized::new(db, constraint);
-                if matches!(
-                    is_goal_satisfiable(db, solve_cx, constraint.value),
-                    GoalSatisfiability::UnSat(_)
-                ) {
-                    is_ok = false;
-                    break;
-                }
-            }
-        }
-
-        table.rollback_to(snapshot);
-        if is_ok {
-            dedup.insert(implementor);
-        }
-    }
-
-    dedup.into_iter().collect()
 }
 
 /// Returns all implementors for the given `ty`.
@@ -390,40 +364,24 @@ pub(crate) fn impls_for_ty<'db>(
 ) -> Vec<Binder<ImplementorId<'db>>> {
     let mut table = UnificationTable::new(db);
     let ty = ty.extract_identity(&mut table);
-
-    let env = ingot_trait_env(db, ingot);
-    if ty.has_invalid(db) {
-        return vec![];
-    }
-
-    let mut cands = vec![];
-    for (key, insts) in env.ty_to_implementors.iter() {
-        let snapshot = table.snapshot();
-        let key = table.instantiate_with_fresh_vars(*key);
-        if table.unify(key, ty.base_ty(db)).is_ok() {
-            cands.push(insts);
-        }
-        table.rollback_to(snapshot);
-    }
-
-    let mut raw_impls: Vec<Binder<ImplementorId<'db>>> =
-        cands.into_iter().flatten().copied().collect();
-
-    if ty.as_contract(db).is_some() {
-        raw_impls.extend(contract_virtual_impls(db, ingot).iter().copied());
-    }
+    let raw_impls = base_matching_impls_for_ty(db, ingot, Canonical::new(db, ty));
 
     raw_impls
         .into_iter()
         .filter(|impl_| {
             let snapshot = table.snapshot();
 
-            let self_ty = table.instantiate_with_fresh_vars(Binder::bind(
-                impl_.instantiate_identity().self_ty(db),
-            ));
-            let impl_ty = table.instantiate_to_term(self_ty);
-            let ty_term = table.instantiate_to_term(ty);
-            let is_ok = table.unify(impl_ty, ty_term).is_ok();
+            let inst = table.instantiate_with_fresh_vars(*impl_);
+            let ty_term = strip_derived_adt_layout_args(db, ty);
+            let impl_ty = strip_derived_adt_layout_args(db, inst.self_ty(db));
+            let impl_ty = alpha_rename_hidden_layout_placeholders(db, impl_ty, ty_term);
+            let is_ok = if impl_ty == ty_term {
+                true
+            } else {
+                let impl_ty = table.instantiate_nested_to_term(impl_ty);
+                let ty_term = table.instantiate_nested_to_term(ty_term);
+                table.unify(impl_ty, ty_term).is_ok()
+            };
 
             table.rollback_to(snapshot);
 
@@ -459,6 +417,56 @@ pub(crate) fn specialize_trait_const_inst_to_receiver<'db>(
     specialized.fold_with(db, &mut table)
 }
 
+/// Looks up the HIR body for an associated const defined in the selected trait impl, if unique.
+pub fn assoc_const_body_for_trait_inst<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    inst: TraitInstId<'db>,
+    const_name: IdentId<'db>,
+) -> Option<crate::hir_def::Body<'db>> {
+    assoc_const_body_and_impl_args_for_trait_inst(db, solve_cx, inst, const_name)
+        .map(|(body, _)| body)
+}
+
+/// Looks up the HIR body for an associated const defined in the selected trait impl, if unique,
+/// returning both the body and the impl's instantiated generic arguments.
+///
+/// The returned generic args correspond to the impl's own generic parameters (not the trait's),
+/// and are suitable for CTFE/type checking of the impl const body.
+pub(super) fn assoc_const_body_and_impl_args_for_trait_inst<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    inst: TraitInstId<'db>,
+    const_name: IdentId<'db>,
+) -> Option<(crate::hir_def::Body<'db>, Vec<TyId<'db>>)> {
+    let inst = normalize_trait_inst_preserving_validity_with_solve_cx(db, inst, solve_cx);
+
+    let implementor = match solve_cx.select_impl(db, inst) {
+        Selection::Unique(implementor) => implementor,
+        Selection::Ambiguous(_ambiguous) => return None,
+        Selection::NotFound => return None,
+    };
+    let hir_impl = match implementor.origin(db) {
+        ImplementorOrigin::Hir(impl_trait) => impl_trait,
+        ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => return None,
+    };
+    let def = hir_impl
+        .hir_consts(db)
+        .iter()
+        .find(|c| c.name.to_opt() == Some(const_name))?;
+    let body = def.value.to_opt()?;
+
+    let mut table = UnificationTable::new(db);
+    let implementor = table.instantiate_with_fresh_vars(Binder::bind(implementor));
+    table.unify(implementor.trait_inst(db), inst).ok()?;
+    let impl_args = implementor
+        .params(db)
+        .iter()
+        .map(|&ty| ty.fold_with(db, &mut table))
+        .collect();
+    Some((body, impl_args))
+}
+
 /// Represents the trait environment of an ingot, which maintain all trait
 /// implementors which can be used in the ingot.
 #[derive(Debug, PartialEq, Eq, Clone, Update)]
@@ -473,20 +481,20 @@ pub(crate) struct TraitEnv<'db> {
 }
 
 impl<'db> TraitEnv<'db> {
-    fn from_impl_maps<'a>(
-        db: &'db dyn HirAnalysisDb,
-        ingot: Ingot<'db>,
-        impl_maps: impl IntoIterator<Item = &'a FxHashMap<Trait<'db>, Vec<Binder<ImplementorId<'db>>>>>,
-    ) -> Self
-    where
-        'db: 'a,
-    {
+    fn collect(db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>) -> Self {
         let mut impls: FxHashMap<Trait<'db>, Vec<Binder<ImplementorId<'db>>>> =
             FxHashMap::default();
         let mut ty_to_implementors: FxHashMap<Binder<TyId>, Vec<Binder<ImplementorId<'db>>>> =
             FxHashMap::default();
 
-        for impl_map in impl_maps {
+        for impl_map in ingot
+            .resolved_external_ingots(db)
+            .iter()
+            .map(|(_, external)| collect_trait_impls(db, *external))
+            .chain(std::iter::once(collect_trait_impls(db, ingot)))
+        {
+            // `collect_trait_impls` ensures that there are no conflicting impls, so we can
+            // just extend the map.
             for (trait_def, implementors) in impl_map.iter() {
                 impls
                     .entry(*trait_def)
@@ -509,25 +517,13 @@ impl<'db> TraitEnv<'db> {
             ingot,
         }
     }
-
-    fn collect(db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>) -> Self {
-        Self::from_impl_maps(
-            db,
-            ingot,
-            ingot
-                .resolved_external_ingots(db)
-                .iter()
-                .map(|(_, external)| collect_trait_impls(db, *external))
-                .chain(std::iter::once(collect_trait_impls(db, ingot))),
-        )
-    }
 }
 
 /// Represents a slim, internal view of a trait impl, derived from an
 /// `ImplTrait` item and its lowered trait instance.
 #[salsa::interned]
 #[derive(Debug)]
-pub struct ImplementorId<'db> {
+pub(crate) struct ImplementorId<'db> {
     /// The trait instance that this impl realizes.
     pub(crate) trait_: TraitInstId<'db>,
 
@@ -575,10 +571,7 @@ impl<'db> ImplementorId<'db> {
         db: &'db dyn HirAnalysisDb,
         name: IdentId<'db>,
     ) -> Option<TyId<'db>> {
-        self.types(db)
-            .get(&name)
-            .copied()
-            .or_else(|| self.trait_(db).assoc_type_bindings(db).get(&name).copied())
+        self.types(db).get(&name).copied()
     }
 
     /// Trait definition implemented by this impl.
@@ -594,18 +587,13 @@ impl<'db> ImplementorId<'db> {
     /// Trait instance realized by this impl, including its associated type definitions.
     pub(crate) fn trait_inst(self, db: &'db dyn HirAnalysisDb) -> TraitInstId<'db> {
         let trait_inst = self.trait_(db);
+        if self.types(db).is_empty() {
+            return trait_inst;
+        }
+
         let mut assoc_type_bindings = trait_inst.assoc_type_bindings(db).clone();
-        match self.origin(db) {
-            ImplementorOrigin::Hir(_)
-            | ImplementorOrigin::VirtualContract(_)
-            | ImplementorOrigin::Assumption => {
-                if self.types(db).is_empty() {
-                    return trait_inst;
-                }
-                for (name, ty) in self.types(db) {
-                    assoc_type_bindings.insert(*name, *ty);
-                }
-            }
+        for (name, ty) in self.types(db) {
+            assoc_type_bindings.insert(*name, *ty);
         }
 
         TraitInstId::new(
@@ -636,53 +624,6 @@ impl<'db> ImplementorId<'db> {
     ) -> &'db IndexMap<IdentId<'db>, Func<'db>> {
         collect_implementor_methods(db, self)
     }
-}
-
-/// Returns `true` if the given two implementors conflict.
-///
-/// This mirrors the legacy `Implementor`-based semantics:
-/// - instantiate both implementors with fresh vars and unify them;
-/// - then check that the merged constraints are satisfiable.
-pub(crate) fn does_impl_trait_conflict<'db>(
-    db: &'db dyn HirAnalysisDb,
-    a: Binder<ImplementorId<'db>>,
-    b: Binder<ImplementorId<'db>>,
-) -> bool {
-    let mut table = UnificationTable::new(db);
-    let a = table.instantiate_with_fresh_vars(a);
-    let b = table.instantiate_with_fresh_vars(b);
-
-    if table.unify(a, b).is_err() {
-        return false;
-    }
-
-    let a_constraints = a.constraints(db);
-    let b_constraints = b.constraints(db);
-
-    if a_constraints.is_empty(db) && b_constraints.is_empty(db) {
-        return true;
-    }
-
-    // Check if all constraints from both implementations would be satisfiable
-    // when the types are unified.
-    let merged_constraints = a_constraints.merge(db, b_constraints);
-    let solve_cx = TraitSolveCx::new(db, a.trait_def(db).scope())
-        .with_assumptions(PredicateListId::empty_list(db));
-
-    for &constraint in merged_constraints.list(db) {
-        let constraint = Canonicalized::new(db, constraint.fold_with(db, &mut table));
-
-        match is_goal_satisfiable(db, solve_cx, constraint.value) {
-            GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid => {
-                return false;
-            }
-            _ => {
-                // Constraint is satisfiable or needs more information, continue checking.
-            }
-        }
-    }
-
-    true
 }
 
 /// Represents an instantiated trait, which can be thought of as a trait
@@ -746,33 +687,10 @@ impl<'db> TraitInstId<'db> {
         scope: crate::core::hir_def::scope_graph::ScopeId<'db>,
         assumptions: PredicateListId<'db>,
     ) -> Self {
-        self.normalize_with_solve_cx(
-            db,
-            TraitSolveCx::new(db, scope).with_assumptions(assumptions),
-            scope,
-            assumptions,
-        )
-    }
-
-    pub(crate) fn normalize_with_solve_cx(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        solve_cx: TraitSolveCx<'db>,
-        scope: crate::core::hir_def::scope_graph::ScopeId<'db>,
-        assumptions: PredicateListId<'db>,
-    ) -> Self {
         let normalized_args: Vec<_> = self
             .args(db)
             .iter()
-            .map(|&arg| {
-                crate::analysis::ty::normalize::normalize_ty_with_solve_cx(
-                    db,
-                    arg,
-                    scope,
-                    assumptions,
-                    Some(solve_cx),
-                )
-            })
+            .map(|&arg| crate::analysis::ty::normalize::normalize_ty(db, arg, scope, assumptions))
             .collect();
         Self::new(
             db,
@@ -842,10 +760,6 @@ impl<'db> TraitInstId<'db> {
 
     pub fn self_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         self.args(db)[0]
-    }
-
-    pub(crate) fn ingot(self, db: &'db dyn HirAnalysisDb) -> Ingot<'db> {
-        self.def(db).ingot(db)
     }
 }
 

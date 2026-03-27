@@ -13,7 +13,6 @@ use hir::analysis::{
     diagnostics::SpannedHirAnalysisDb,
     diagnostics::format_diags,
     ty::{
-        canonical::{Canonical, Canonicalized},
         const_ty::ConstTyData,
         effects::EffectKeyKind,
         fold::{TyFoldable, TyFolder},
@@ -130,7 +129,7 @@ enum AbortWithValueSite<'db> {
     },
 }
 
-fn resolve_default_root_effect_ty<'db>(
+pub(crate) fn resolve_default_root_effect_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
@@ -323,6 +322,10 @@ impl<'db> Monomorphizer<'db> {
             let mut args = Vec::with_capacity(provider_param_count);
             let assumptions = PredicateListId::empty_list(self.db);
             let root_effect_ty = resolve_default_root_effect_ty(self.db, func.scope(), assumptions);
+            let effect_ref_trait =
+                resolve_core_trait(self.db, func.scope(), &["effect_ref", "EffectRef"]);
+            let effect_ref_mut_trait =
+                resolve_core_trait(self.db, func.scope(), &["effect_ref", "EffectRefMut"]);
             let mut can_seed = true;
             for binding in func.effect_bindings(self.db) {
                 match binding.key_kind {
@@ -333,7 +336,53 @@ impl<'db> Monomorphizer<'db> {
                         if !ty.is_star_kind(self.db) {
                             continue;
                         }
-                        args.push(TyId::app(self.db, stor_ptr_ctor, ty));
+                        let root_provider_ty = root_effect_ty.filter(|root_effect_ty| {
+                            let Some(effect_ref_trait) = effect_ref_trait else {
+                                return false;
+                            };
+                            let goal = TraitInstId::new(
+                                self.db,
+                                effect_ref_trait,
+                                vec![*root_effect_ty, ty],
+                                IndexMap::new(),
+                            );
+                            if !matches!(
+                                is_goal_satisfiable(
+                                    self.db,
+                                    TraitSolveCx::new(self.db, func.scope())
+                                        .with_assumptions(assumptions),
+                                    goal,
+                                ),
+                                GoalSatisfiability::Satisfied(_)
+                            ) {
+                                return false;
+                            }
+                            if !binding.is_mut {
+                                return true;
+                            }
+                            let Some(effect_ref_mut_trait) = effect_ref_mut_trait else {
+                                return false;
+                            };
+                            let goal = TraitInstId::new(
+                                self.db,
+                                effect_ref_mut_trait,
+                                vec![*root_effect_ty, ty],
+                                IndexMap::new(),
+                            );
+                            matches!(
+                                is_goal_satisfiable(
+                                    self.db,
+                                    TraitSolveCx::new(self.db, func.scope())
+                                        .with_assumptions(assumptions),
+                                    goal,
+                                ),
+                                GoalSatisfiability::Satisfied(_)
+                            )
+                        });
+                        args.push(
+                            root_provider_ty
+                                .unwrap_or_else(|| TyId::app(self.db, stor_ptr_ctor, ty)),
+                        );
                     }
                     EffectKeyKind::Trait => {
                         let Some(root_effect_ty) = root_effect_ty else {
@@ -350,16 +399,12 @@ impl<'db> Monomorphizer<'db> {
                             break;
                         }
                         trait_args[0] = root_effect_ty;
-                        let goal = Canonicalized::new(
+                        let goal = TraitInstId::new(
                             self.db,
-                            TraitInstId::new(
-                                self.db,
-                                key_trait.def(self.db),
-                                trait_args,
-                                key_trait.assoc_type_bindings(self.db).clone(),
-                            ),
-                        )
-                        .value;
+                            key_trait.def(self.db),
+                            trait_args,
+                            key_trait.assoc_type_bindings(self.db).clone(),
+                        );
                         if !matches!(
                             is_goal_satisfiable(
                                 self.db,
@@ -505,7 +550,7 @@ impl<'db> Monomorphizer<'db> {
                 .iter()
                 .enumerate()
                 .filter_map(|(value_idx, value)| {
-                    if let crate::ValueOrigin::FuncItem(root) = &value.origin {
+                    if let crate::ValueOrigin::CodeRegionRef(root) = &value.origin {
                         Some((value_idx, root.clone()))
                     } else {
                         None
@@ -627,7 +672,7 @@ impl<'db> Monomorphizer<'db> {
                         .1
                 }
             };
-            if let crate::ValueOrigin::FuncItem(target) =
+            if let crate::ValueOrigin::CodeRegionRef(target) =
                 &mut self.instances[func_idx].body.values[value_idx].origin
             {
                 target.symbol = Some(symbol);
@@ -656,7 +701,7 @@ impl<'db> Monomorphizer<'db> {
                 } = inst
                     && call.builtin_terminator
                         == Some(crate::ir::BuiltinTerminatorKind::AbortWithValue)
-                    && let Some(hir_target) = &call.hir_target
+                    && let Some(crate::ir::CallTargetRef::Hir(hir_target)) = call.target.as_ref()
                     && let Some(&concrete_t) = hir_target.generic_args.first()
                 {
                     sites.push(AbortWithValueSite::Inst {
@@ -673,7 +718,7 @@ impl<'db> Monomorphizer<'db> {
                 ..
             } = &block.terminator
                 && call.builtin_terminator == Some(crate::ir::BuiltinTerminatorKind::AbortWithValue)
-                && let Some(hir_target) = &call.hir_target
+                && let Some(crate::ir::CallTargetRef::Hir(hir_target)) = call.target.as_ref()
                 && let Some(&concrete_t) = hir_target.generic_args.first()
             {
                 sites.push(AbortWithValueSite::Term { bb_idx, concrete_t });
@@ -719,15 +764,13 @@ impl<'db> Monomorphizer<'db> {
                     vec![concrete_t, sol_ty],
                     IndexMap::new(),
                 );
-                let encode_goal = Canonical::new(self.db, encode_inst);
-                if !is_goal_satisfiable(self.db, solve_cx, encode_goal).is_satisfied() {
+                if !is_goal_satisfiable(self.db, solve_cx, encode_inst).is_satisfied() {
                     return None;
                 }
 
                 let abi_size_inst =
                     TraitInstId::new(self.db, abi_size_trait, vec![concrete_t], IndexMap::new());
-                let abi_size_goal = Canonical::new(self.db, abi_size_inst);
-                if !is_goal_satisfiable(self.db, solve_cx, abi_size_goal).is_satisfied() {
+                if !is_goal_satisfiable(self.db, solve_cx, abi_size_inst).is_satisfied() {
                     return None;
                 }
 
@@ -951,36 +994,6 @@ impl<'db> Monomorphizer<'db> {
         self.instance_map.insert(key, idx);
         self.worklist.push_back(idx);
 
-        // When a deferred synthetic template is first instantiated, co-instantiate
-        // all other synthetic templates for the same contract.  Contract entrypoints
-        // call init_handler and recv_arm_handlers via pre-resolved symbol names
-        // (`call_symbol` with `hir_target: None`), which the monomorphizer cannot
-        // trace through `resolve_call_target`.  Co-instantiation ensures that every
-        // helper referenced by symbol is present.
-        if self.templates[template_idx].defer_root {
-            let crate::ir::MirFunctionOrigin::Synthetic(syn_id) = origin else {
-                unreachable!();
-            };
-            let contract = syn_id.contract();
-            // Collect sibling template keys first to avoid borrow conflict.
-            let siblings: Vec<_> = self
-                .func_index
-                .iter()
-                .filter_map(|(k, _)| {
-                    if let crate::ir::MirFunctionOrigin::Synthetic(other_syn) = k.origin
-                        && other_syn.contract() == contract
-                        && k.origin != origin
-                    {
-                        return Some((k.origin, k.receiver_space));
-                    }
-                    None
-                })
-                .collect();
-            for (sib_origin, sib_receiver_space) in siblings {
-                let _ = self.ensure_synthetic_instance(sib_origin, sib_receiver_space, &[], &[]);
-            }
-        }
-
         Some((idx, symbol))
     }
 
@@ -1008,7 +1021,7 @@ impl<'db> Monomorphizer<'db> {
             param_capability_space_overrides,
         );
         let norm_scope = crate::ty::normalization_scope_for_args(self.db, func, &normalized_args);
-        let assumptions = PredicateListId::empty_list(self.db);
+        let mut assumptions = PredicateListId::empty_list(self.db);
 
         let key = InstanceKey::new(
             crate::ir::MirFunctionOrigin::Hir(func),
@@ -1029,7 +1042,6 @@ impl<'db> Monomorphizer<'db> {
             &normalized_effect_param_space_overrides,
             &normalized_param_capability_space_overrides,
         );
-
         let mut instance = if args.is_empty()
             && normalized_effect_param_space_overrides.is_empty()
             && normalized_param_capability_space_overrides.is_empty()
@@ -1055,6 +1067,7 @@ impl<'db> Monomorphizer<'db> {
                 args: &normalized_args,
             };
             let typed_body = typed_body.clone().fold_with(self.db, &mut folder);
+            assumptions = typed_body.assumptions();
 
             // After substitution, normalize any remaining associated types.
             let mut normalizer = NormalizeFolder {
@@ -1113,7 +1126,14 @@ impl<'db> Monomorphizer<'db> {
         let normalized_args: Vec<_> = args
             .iter()
             .copied()
-            .map(|ty| normalize_ty(self.db, ty, norm_scope, assumptions))
+            .map(|ty| {
+                let normalized = normalize_ty(self.db, ty, norm_scope, assumptions);
+                if !ty.has_invalid(self.db) && normalized.has_invalid(self.db) {
+                    ty
+                } else {
+                    normalized
+                }
+            })
             .collect();
         let normalized_effect_param_space_overrides =
             self.normalize_effect_param_space_overrides(func, effect_param_space_overrides);
@@ -1185,13 +1205,19 @@ impl<'db> Monomorphizer<'db> {
         solve_cx: TraitSolveCx<'db>,
         call: &CallOrigin<'db>,
     ) -> Option<(CallTarget<'db>, Vec<TyId<'db>>)> {
-        let hir_target = call.hir_target.as_ref()?;
+        let target = call.target.as_ref()?;
+        let crate::ir::CallTargetRef::Hir(hir_target) = target else {
+            let crate::ir::CallTargetRef::Synthetic(id) = target else {
+                unreachable!();
+            };
+            return Some((
+                CallTarget::Synthetic(crate::ir::MirFunctionOrigin::Synthetic(*id)),
+                Vec::new(),
+            ));
+        };
         let base_args = hir_target.generic_args.clone();
         if let Some(inst) = hir_target.trait_inst {
-            let method_name = call
-                .hir_target
-                .as_ref()
-                .expect("trait method call missing hir target")
+            let method_name = hir_target
                 .callable_def
                 .name(self.db)
                 .expect("trait method call missing name");
@@ -1300,7 +1326,7 @@ impl<'db> Monomorphizer<'db> {
 
         for value in &mut function.body.values {
             value.ty = value.ty.fold_with(self.db, &mut folder);
-            if let crate::ValueOrigin::FuncItem(target) = &mut value.origin {
+            if let crate::ValueOrigin::CodeRegionRef(target) = &mut value.origin {
                 target.generic_args = target
                     .generic_args
                     .iter()
@@ -1327,7 +1353,7 @@ impl<'db> Monomorphizer<'db> {
                     rvalue: crate::ir::Rvalue::Call(call),
                     ..
                 } = inst
-                    && let Some(target) = &mut call.hir_target
+                    && let Some(crate::ir::CallTargetRef::Hir(target)) = &mut call.target
                 {
                     target.generic_args = target
                         .generic_args
@@ -1338,9 +1364,9 @@ impl<'db> Monomorphizer<'db> {
                         target.trait_inst = Some(inst.fold_with(self.db, &mut folder));
                     }
                     // Clear resolved_name so it will be re-resolved after
-                    // type substitution. Calls without hir_target keep
-                    // `resolved_name` as-is; typed checked intrinsics are
-                    // tracked via `call.checked_intrinsic`.
+                    // type substitution. Non-HIR calls keep `resolved_name`
+                    // as-is; typed checked intrinsics are tracked via
+                    // `call.checked_intrinsic`.
                     call.resolved_name = None;
                 }
             }
@@ -1349,7 +1375,7 @@ impl<'db> Monomorphizer<'db> {
                 call: crate::ir::TerminatingCall::Call(call),
                 ..
             } = &mut block.terminator
-                && let Some(target) = &mut call.hir_target
+                && let Some(crate::ir::CallTargetRef::Hir(target)) = &mut call.target
             {
                 target.generic_args = target
                     .generic_args
@@ -1545,6 +1571,7 @@ impl<'db> Monomorphizer<'db> {
                 AddressSpaceKind::Calldata => "calldata",
                 AddressSpaceKind::Storage => "stor",
                 AddressSpaceKind::TransientStorage => "tstor",
+                AddressSpaceKind::Code => "code",
             };
             base = format!("{base}_{suffix}");
         }
@@ -2014,7 +2041,12 @@ struct NormalizeFolder<'db> {
 
 impl<'db> TyFolder<'db> for NormalizeFolder<'db> {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-        normalize_ty(db, ty, self.scope, self.assumptions)
+        let normalized = normalize_ty(db, ty, self.scope, self.assumptions);
+        if !ty.has_invalid(db) && normalized.has_invalid(db) {
+            ty
+        } else {
+            normalized
+        }
     }
 }
 
@@ -2068,6 +2100,7 @@ fn effect_param_space_suffix(spaces: &[Option<AddressSpaceKind>]) -> String {
                 AddressSpaceKind::Calldata => "calldata",
                 AddressSpaceKind::Storage => "stor",
                 AddressSpaceKind::TransientStorage => "tstor",
+                AddressSpaceKind::Code => "code",
             };
             format!("eff{idx}_{suffix}")
         })
@@ -2109,6 +2142,7 @@ fn param_capability_space_suffix(
                     AddressSpaceKind::Calldata => "calldata",
                     AddressSpaceKind::Storage => "stor",
                     AddressSpaceKind::TransientStorage => "tstor",
+                    AddressSpaceKind::Code => "code",
                 };
                 let path_suffix = projection_path_suffix(path);
                 format!("arg{param_idx}_{path_suffix}_{space_suffix}")
@@ -2120,8 +2154,14 @@ fn param_capability_space_suffix(
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
     use common::InputDb;
     use driver::DriverDataBase;
+    use url::Url;
 
     use super::*;
 
@@ -2190,7 +2230,7 @@ struct Pair {
     right: Wrapper
 }
 
-fn bump(mut pair: Pair) -> u256 {
+fn bump(mut pair: own Pair) -> u256 {
     pair.left.value += 1
     pair.right.value += 10
     pair.left.value * 100 + pair.right.value
@@ -2233,6 +2273,98 @@ pub contract C {
                 .iter()
                 .any(|name| { name.contains("arg0_f0_stor") && name.contains("arg0_f1_stor") }),
             "expected bump specialization to carry both repeated-field paths, got: {bump_symbols:?}",
+        );
+    }
+
+    #[test]
+    fn deferred_dependency_create2_reaches_synthetic_contract_edges() {
+        let mut db = DriverDataBase::default();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("fe_mir_create2_{nonce}"));
+        fs::create_dir_all(root.join("ingots/consumer/src")).expect("consumer dir");
+        fs::create_dir_all(root.join("ingots/provider/src")).expect("provider dir");
+        fs::write(
+            root.join("fe.toml"),
+            "[workspace]\nname = \"cross_ingot_create2\"\nversion = \"0.1.0\"\nmembers = [\"ingots/*\"]\n",
+        )
+        .expect("workspace config");
+        fs::write(
+            root.join("ingots/consumer/fe.toml"),
+            "[ingot]\nname = \"consumer\"\nversion = \"0.1.0\"\n\n[dependencies]\nprovider = true\n",
+        )
+        .expect("consumer config");
+        fs::write(
+            root.join("ingots/provider/fe.toml"),
+            "[ingot]\nname = \"provider\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("provider config");
+        fs::write(
+            root.join("ingots/consumer/src/lib.fe"),
+            r#"
+use std::evm::Evm
+use provider::Greeter
+
+fn deploy() uses (evm: mut Evm) {
+    let _ = evm.create2<Greeter>(value: 0, args: (42,), salt: 1)
+}
+"#,
+        )
+        .expect("consumer source");
+        fs::write(
+            root.join("ingots/provider/src/lib.fe"),
+            r#"
+use std::abi::sol
+
+pub msg GreetMsg {
+    #[selector = sol("greet()")]
+    Greet -> u256,
+}
+
+pub contract Greeter {
+    mut value: u256,
+
+    init(initial_value: u256) uses (mut value) {
+        value = initial_value
+    }
+
+    recv GreetMsg {
+        Greet -> u256 uses (value) {
+            value
+        }
+    }
+}
+"#,
+        )
+        .expect("provider source");
+
+        let root_url = Url::from_directory_path(&root).expect("root url");
+        let _ = driver::init_ingot(&mut db, &root_url);
+        let consumer_url =
+            Url::from_directory_path(root.join("ingots/consumer")).expect("consumer url");
+        let consumer_ingot = db
+            .workspace()
+            .containing_ingot(&db, consumer_url)
+            .expect("consumer ingot");
+
+        let module = crate::lower::lower_ingot(&db, consumer_ingot).expect("lowered ingot");
+        let symbols = module
+            .functions
+            .iter()
+            .map(|func| func.symbol_name.as_str())
+            .filter(|name| name.contains("provider__Greeter"))
+            .collect::<Vec<_>>();
+
+        assert!(
+            symbols.contains(&"__provider__Greeter_init")
+                && symbols.contains(&"__provider__Greeter_init_contract")
+                && symbols.contains(&"__provider__Greeter_runtime")
+                && symbols.contains(&"__provider__Greeter_recv_0_0")
+                && symbols.contains(&"__provider__Greeter_init_code_offset")
+                && symbols.contains(&"__provider__Greeter_init_code_len"),
+            "expected typed synthetic call/code-region edges to instantiate dependency contract templates, got: {symbols:?}",
         );
     }
 }

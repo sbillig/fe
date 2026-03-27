@@ -18,5 +18,8 @@ error[6-0003]: trait bound is not satisfied
 error[6-0003]: trait bound is not satisfied
    ┌─ trait_impl_nested_projection_arg_missing_bound.fe:15:5
    │
+12 │ fn needs_foo<T: Foo< <Missing as Bound>::Item >>(_value: T) {}
+   │                 ------------------------------- required by this bound on `needs_foo`
+   ·
 15 │     needs_foo(value)
    │     ^^^^^^^^^ `S` doesn't implement `Foo<Missing::Item>`

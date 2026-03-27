@@ -3,8 +3,4 @@ source: crates/uitest/tests/ty.rs
 expression: diags
 input_file: fixtures/ty/def/trait_impl_helper_signature_context.fe
 ---
-error[6-0003]: trait bound is not satisfied
-  ┌─ trait_impl_helper_signature_context.fe:8:22
-  │
-8 │     fn make(self) -> Slot<{ <Self as LenHelper>::N }>
-  │                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Self` doesn't implement `LenHelper`
+

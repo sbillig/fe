@@ -2,11 +2,7 @@
 
 use super::*;
 use hir::{
-    analysis::ty::{
-        const_eval::{ConstValue, try_eval_const_body},
-        simplified_pattern::ConstructorKind,
-    },
-    hir_def::{EnumVariant, Expr, LitKind, Partial},
+    hir_def::{Expr, LitKind, Partial},
     projection::{IndexSource, Projection},
 };
 use num_bigint::BigUint;
@@ -234,26 +230,45 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         // Try to get the element type and determine if elements are compile-time constants
         let elem_ty = crate::layout::array_elem_ty(self.db, array_ty);
-        // Use word-padded memory size so the serialized data matches the runtime
-        // access stride (EVM mload/mstore operate on 32-byte words).
-        let elem_size = elem_ty.and_then(|ty| crate::layout::ty_memory_size(self.db, ty));
+        // Use MIR memory stride so constant data matches runtime indexing rules.
+        let elem_size = crate::layout::array_elem_stride_memory(self.db, array_ty);
 
         // Try to extract constant byte values from all elements
         if let (Some(elem_ty), Some(elem_size)) = (elem_ty, elem_size)
             && let Some(const_bytes) = self.try_extract_const_array_bytes(elems, elem_ty, elem_size)
             && self.current_block().is_some()
         {
-            // Use ConstAggregate for const arrays (backend decides materialization)
+            let region = self.builder.body.intern_const_region(array_ty, const_bytes);
+
+            // Allocate memory and copy the constant array from code space.
             let dest = self.alloc_temp_local(array_ty, false, "array_data");
             self.builder.body.locals[dest.index()].address_space = AddressSpaceKind::Memory;
 
             self.push_inst_here(MirInst::Assign {
                 source: crate::ir::SourceInfoId::SYNTHETIC,
                 dest: Some(dest),
-                rvalue: Rvalue::ConstAggregate {
-                    data: const_bytes,
-                    ty: array_ty,
+                rvalue: Rvalue::Alloc {
+                    address_space: AddressSpaceKind::Memory,
                 },
+            });
+
+            let dest_val = self.alloc_value(
+                array_ty,
+                ValueOrigin::Local(dest),
+                ValueRepr::Ref(AddressSpaceKind::Memory),
+            );
+            let dest_place = Place::new(dest_val, MirProjectionPath::new());
+
+            let region_val = self.alloc_value(
+                array_ty,
+                ValueOrigin::ConstRegion(region),
+                ValueRepr::Ref(AddressSpaceKind::Code),
+            );
+
+            self.push_inst_here(MirInst::Store {
+                source: crate::ir::SourceInfoId::SYNTHETIC,
+                place: dest_place,
+                value: region_val,
             });
 
             self.builder.body.values[fallback.index()].origin = ValueOrigin::Local(dest);
@@ -297,18 +312,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return fallback;
         }
 
-        let Some(len_body) = len.to_opt() else {
-            return fallback;
-        };
-        let expected_len_ty = TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)));
-        let Some(ConstValue::Int(count)) = try_eval_const_body(self.db, len_body, expected_len_ty)
+        let Some(count) =
+            crate::layout::array_len_with_generic_args(self.db, array_ty, self.generic_args)
         else {
+            let _ = len;
             return fallback;
         };
-        let Some(count) = count.to_u32() else {
-            return fallback;
-        };
-        let count = count as usize;
 
         let elem_value = self.lower_expr(elem);
         if self.current_block().is_none() {
@@ -374,47 +383,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return None;
         }
         Some(field_types[idx])
-    }
-
-    /// Returns the ABI-encoded byte width for statically-sized values.
-    ///
-    /// This matches the head size used by the ABI encoder/decoder: primitive values occupy one
-    /// 32-byte word, while tuples/records are the concatenation of their fields.
-    pub(super) fn abi_static_size_bytes(&self, ty: TyId<'db>) -> Option<usize> {
-        if ty.is_tuple(self.db)
-            || ty
-                .adt_ref(self.db)
-                .is_some_and(|adt| matches!(adt, AdtRef::Struct(_)))
-        {
-            let mut size = 0;
-            for field_ty in ty.field_types(self.db) {
-                size += self.abi_static_size_bytes(field_ty)?;
-            }
-            return Some(size);
-        }
-
-        if let TyData::TyBase(TyBase::Prim(_)) = ty.base_ty(self.db).data(self.db) {
-            return Some(32);
-        }
-
-        // Enums: discriminant (one 32-byte word) + max variant payload.
-        if let Some(adt_def) = ty.adt_def(self.db)
-            && let AdtRef::Enum(enm) = adt_def.adt_ref(self.db)
-        {
-            let mut max_payload = 0;
-            for variant in enm.variants(self.db) {
-                let ev = EnumVariant::new(enm, variant.idx);
-                let ctor = ConstructorKind::Variant(ev, ty);
-                let mut payload = 0;
-                for field_ty in ctor.field_types(self.db) {
-                    payload += self.abi_static_size_bytes(field_ty)?;
-                }
-                max_payload = max_payload.max(payload);
-            }
-            return Some(32 + max_payload);
-        }
-
-        None
     }
 
     /// Emits a synthetic `u256` literal value.

@@ -1,13 +1,9 @@
-use crate::analysis::ty::binder::Binder;
-use crate::analysis::ty::canonical::Canonicalized;
 use crate::analysis::ty::diagnostics::BodyDiag;
 use crate::analysis::ty::effects::resolve_normalized_type_effect_key;
-use crate::analysis::ty::trait_def::TraitInstId;
 use crate::analysis::ty::trait_resolution::{
     GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
 };
 use crate::analysis::ty::ty_check::EffectParamOwner;
-use crate::analysis::ty::unify::UnificationTable;
 use crate::core::adt_lower::lower_adt;
 use crate::core::hir_def::{
     IdentId, ItemKind, PathId, TopLevelMod, Trait, TypeAlias,
@@ -30,6 +26,7 @@ use crate::semantic::diagnostics::Diagnosable;
 
 pub mod admission;
 pub mod adt_def;
+pub mod assoc_const;
 pub mod assoc_items;
 pub mod binder;
 pub mod canonical;
@@ -46,11 +43,12 @@ pub mod msg_selector;
 pub mod decision_tree;
 pub mod diagnostics;
 pub mod fold;
+pub(crate) mod layout_holes;
 pub(crate) mod method_cmp;
 pub mod method_table;
 pub mod normalize;
 pub mod pattern_analysis;
-pub mod simplified_pattern;
+pub mod pattern_ir;
 pub mod trait_def;
 pub mod trait_lower;
 pub mod trait_resolution; // This line was previously 'pub mod name_resolution;'
@@ -61,6 +59,7 @@ pub mod ty_lower;
 pub mod unify;
 pub mod visitor;
 
+pub use layout_holes::ty_contains_const_hole;
 pub use msg_selector::MsgSelectorAnalysisPass;
 
 const DEFAULT_TARGET_TY_PATH: &[&str] = &["std", "evm", "EvmTarget"];
@@ -107,10 +106,9 @@ pub fn ty_is_copy<'db>(
     {
         return true;
     }
-    let canonical_inst = Canonicalized::new(db, inst);
     let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
     matches!(
-        is_goal_satisfiable(db, solve_cx, canonical_inst.value),
+        is_goal_satisfiable(db, solve_cx, inst),
         GoalSatisfiability::Satisfied(_)
     )
 }
@@ -177,105 +175,6 @@ pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
         TyData::TyVar(_) | TyData::Invalid(_) => false,
         _ => inner(db, ty, &mut FxHashSet::default()),
     }
-}
-
-pub(crate) fn dedup_equivalent_trait_insts<'db>(
-    db: &'db dyn HirAnalysisDb,
-    insts: Vec<TraitInstId<'db>>,
-) -> Vec<TraitInstId<'db>> {
-    let mut unique: Vec<TraitInstId<'db>> = Vec::new();
-    'outer: for inst in insts {
-        for &seen in &unique {
-            if inst.def(db) != seen.def(db) {
-                continue;
-            }
-
-            let mut table = UnificationTable::new(db);
-            let lhs = table.instantiate_with_fresh_vars(Binder::bind(inst));
-            let rhs = table.instantiate_with_fresh_vars(Binder::bind(seen));
-            if table.unify(lhs, rhs).is_ok() {
-                continue 'outer;
-            }
-        }
-        unique.push(inst);
-    }
-
-    unique
-}
-
-pub fn ty_contains_const_hole<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
-    use crate::analysis::ty::{
-        const_ty::ConstTyData,
-        visitor::{TyVisitable, TyVisitor, walk_ty},
-    };
-
-    struct HoleFinder<'db> {
-        db: &'db dyn HirAnalysisDb,
-        found: bool,
-    }
-
-    impl<'db> TyVisitor<'db> for HoleFinder<'db> {
-        fn db(&self) -> &'db dyn HirAnalysisDb {
-            self.db
-        }
-
-        fn visit_ty(&mut self, ty: TyId<'db>) {
-            if self.found {
-                return;
-            }
-
-            if let TyData::ConstTy(const_ty) = ty.data(self.db)
-                && matches!(const_ty.data(self.db), ConstTyData::Hole(_))
-            {
-                self.found = true;
-                return;
-            }
-
-            walk_ty(self, ty);
-        }
-    }
-
-    let mut finder = HoleFinder { db, found: false };
-    ty.visit_with(&mut finder);
-    finder.found
-}
-
-pub(crate) fn collect_layout_hole_tys_in_order<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: TyId<'db>,
-) -> Vec<TyId<'db>> {
-    use crate::analysis::ty::{
-        const_ty::ConstTyData,
-        visitor::{TyVisitable, TyVisitor, walk_ty},
-    };
-
-    struct HoleCollector<'a, 'db> {
-        db: &'db dyn HirAnalysisDb,
-        out: &'a mut Vec<TyId<'db>>,
-    }
-
-    impl<'a, 'db> TyVisitor<'db> for HoleCollector<'a, 'db> {
-        fn db(&self) -> &'db dyn HirAnalysisDb {
-            self.db
-        }
-
-        fn visit_ty(&mut self, ty: TyId<'db>) {
-            if let TyData::ConstTy(const_ty) = ty.data(self.db)
-                && let ConstTyData::Hole(hole_ty) = const_ty.data(self.db)
-            {
-                self.out.push(if hole_ty.has_invalid(self.db) {
-                    TyId::u256(self.db)
-                } else {
-                    *hole_ty
-                });
-            }
-            walk_ty(self, ty);
-        }
-    }
-
-    let mut out = Vec::new();
-    ty.visit_with(&mut HoleCollector { db, out: &mut out });
-    out
 }
 
 /// An analysis pass for type definitions.
@@ -450,13 +349,12 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                         };
 
                         let trait_req = instantiate_trait_self(db, trait_inst, root_effect_ty);
-                        let goal = Canonicalized::new(db, trait_req).value;
                         if matches!(
                             is_goal_satisfiable(
                                 db,
                                 TraitSolveCx::new(db, contract.scope())
                                     .with_assumptions(assumptions),
-                                goal
+                                trait_req
                             ),
                             GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
                         ) {

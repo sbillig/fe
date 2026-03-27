@@ -15,10 +15,11 @@ use mir::analysis::{
 };
 use mir::{
     MirFunction, MirInst, MirModule, Rvalue, ValueOrigin,
-    ir::{IntrinsicOp, MirFunctionOrigin},
+    ir::{IntrinsicOp, MirFunctionOrigin, SymbolSource},
     layout::{self, TargetDataLayout},
     lower_ingot, lower_module, prepare_module_for_evm_yul_codegen,
 };
+use num_bigint::BigUint;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::{collections::VecDeque, sync::Arc};
 
@@ -43,13 +44,14 @@ pub struct TestMetadata {
     ///
     /// When emitting Yul, this is left empty and the runner compiles `yul` via `solc`.
     pub bytecode: Vec<u8>,
-    /// Optional Sonatina object-level observability text snapshot.
-    pub sonatina_observability_text: Option<String>,
     /// Optional Sonatina object-level observability JSON snapshot.
     pub sonatina_observability_json: Option<String>,
     pub value_param_count: usize,
     pub effect_param_count: usize,
     pub expected_revert: Option<ExpectedRevert>,
+    /// Optional initial ETH balance (in wei) to seed the deployed test contract.
+    /// When `None`, the contract starts with zero balance.
+    pub initial_balance: Option<Vec<u8>>,
 }
 
 /// Describes the expected revert behavior for a test.
@@ -89,7 +91,7 @@ pub fn emit_module_yul_with_layout(
     layout: TargetDataLayout,
 ) -> Result<String, EmitModuleError> {
     let mut module = lower_module(db, top_mod).map_err(EmitModuleError::MirLower)?;
-    link_yul_checked_arithmetic_helpers(db, &mut module)?;
+    link_yul_numeric_intrinsic_helpers(db, &mut module)?;
     prepare_module_for_evm_yul_codegen(db, &mut module);
     emit_lowered_module_yul_with_layout(db, &module, layout)
 }
@@ -105,7 +107,7 @@ pub fn emit_ingot_yul_with_layout(
     layout: TargetDataLayout,
 ) -> Result<String, EmitModuleError> {
     let mut module = lower_ingot(db, ingot).map_err(EmitModuleError::MirLower)?;
-    link_yul_checked_arithmetic_helpers(db, &mut module)?;
+    link_yul_numeric_intrinsic_helpers(db, &mut module)?;
     prepare_module_for_evm_yul_codegen(db, &mut module);
     emit_lowered_module_yul_with_layout(db, &module, layout)
 }
@@ -300,18 +302,20 @@ fn emit_lowered_module_yul_with_layout(
 pub fn emit_test_module_yul(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
+    filter: Option<&str>,
 ) -> Result<TestModuleOutput, EmitModuleError> {
-    emit_test_module_yul_with_layout(db, top_mod, layout::EVM_LAYOUT)
+    emit_test_module_yul_with_layout(db, top_mod, filter, layout::EVM_LAYOUT)
 }
 
 pub fn emit_test_module_yul_with_layout(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
+    filter: Option<&str>,
     layout: TargetDataLayout,
 ) -> Result<TestModuleOutput, EmitModuleError> {
     let ingot = top_mod.ingot(db);
     let mut module = lower_ingot(db, ingot).map_err(EmitModuleError::MirLower)?;
-    link_yul_checked_arithmetic_helpers(db, &mut module)?;
+    link_yul_numeric_intrinsic_helpers(db, &mut module)?;
     prepare_module_for_evm_yul_codegen(db, &mut module);
 
     let contract_graph = build_contract_graph(&module.functions);
@@ -336,59 +340,58 @@ pub fn emit_test_module_yul_with_layout(
     }
     let code_regions = Arc::new(code_regions);
 
-    // Emit Yul docs for each function
-    let mut function_docs: Vec<(Vec<YulDoc>, Vec<YulDataRegion>)> =
-        Vec::with_capacity(module.functions.len());
-    for func in module.functions.iter() {
-        let emitter =
-            FunctionEmitter::new(db, func, &code_regions, layout).map_err(EmitModuleError::Yul)?;
-        let is_test = match func.origin {
-            MirFunctionOrigin::Hir(hir_func) => ItemKind::from(hir_func)
-                .attrs(db)
-                .is_some_and(|attrs| attrs.has_attr(db, "test")),
-            MirFunctionOrigin::Synthetic(_) => false,
-        };
-        if is_test {
-            validate_test_function(db, func, emitter.returns_value())?;
-        }
-        let (docs, data_regions) = emitter.emit_doc().map_err(EmitModuleError::Yul)?;
-        function_docs.push((docs, data_regions));
-    }
-
-    // Index function docs by symbol for region assembly.
-    let mut docs_by_symbol = FxHashMap::default();
-    for (idx, func) in module.functions.iter().enumerate() {
-        let (docs, data_regions) = &function_docs[idx];
-        docs_by_symbol.insert(
-            func.symbol_name.clone(),
-            FunctionDocInfo {
-                docs: docs.clone(),
-                data_regions: data_regions.clone(),
-            },
-        );
-    }
-
     let call_graph = build_call_graph(&module.functions);
-
-    let mut tests = collect_test_infos(db, &module.functions);
+    let tests = collect_test_infos(db, &module.functions, filter)?;
     if tests.is_empty() {
         return Ok(TestModuleOutput { tests: Vec::new() });
     }
-    assign_test_display_names(&mut tests);
-    assign_test_object_names(&mut tests);
-
     let test_symbols: FxHashSet<_> = tests.iter().map(|test| test.symbol_name.clone()).collect();
     let funcs_by_symbol = build_funcs_by_symbol(&module.functions);
+    let test_deps: Vec<_> = tests
+        .iter()
+        .map(|test| {
+            collect_test_dependencies(
+                &funcs_by_symbol,
+                &call_graph,
+                &contract_graph,
+                &test.symbol_name,
+                &test_symbols,
+            )
+        })
+        .collect();
+    let mut needed_symbols = FxHashSet::default();
+    for (test, deps) in tests.iter().zip(test_deps.iter()) {
+        needed_symbols.extend(reachable_functions(&call_graph, &test.symbol_name));
+        for root in &deps.code_region_roots {
+            needed_symbols.extend(reachable_functions(&call_graph, root));
+        }
+        for (region, reachable) in &contract_graph.region_reachable {
+            if deps.contracts.contains(&region.contract_name) {
+                needed_symbols.extend(reachable.iter().cloned());
+            }
+        }
+    }
+
+    let mut docs_by_symbol = FxHashMap::default();
+    for func in module
+        .functions
+        .iter()
+        .filter(|func| needed_symbols.contains(&func.symbol_name))
+    {
+        let emitter =
+            FunctionEmitter::new(db, func, &code_regions, layout).map_err(EmitModuleError::Yul)?;
+        if test_symbols.contains(&func.symbol_name) {
+            validate_test_function(db, func, emitter.returns_value())?;
+        }
+        let (docs, data_regions) = emitter.emit_doc().map_err(EmitModuleError::Yul)?;
+        docs_by_symbol.insert(
+            func.symbol_name.clone(),
+            FunctionDocInfo { docs, data_regions },
+        );
+    }
 
     let mut output_tests = Vec::new();
-    for test in tests {
-        let deps = collect_test_dependencies(
-            &funcs_by_symbol,
-            &call_graph,
-            &contract_graph,
-            &test.symbol_name,
-            &test_symbols,
-        );
+    for (test, deps) in tests.into_iter().zip(test_deps) {
         let contract_docs = emit_contract_docs(&contract_graph, &docs_by_symbol, &deps.contracts)?;
         let code_region_docs = emit_code_region_docs(
             &call_graph,
@@ -412,11 +415,11 @@ pub fn emit_test_module_yul_with_layout(
             object_name: test.object_name,
             yul,
             bytecode: Vec::new(),
-            sonatina_observability_text: None,
             sonatina_observability_json: None,
             value_param_count: test.value_param_count,
             effect_param_count: test.effect_param_count,
             expected_revert: test.expected_revert,
+            initial_balance: test.initial_balance.map(|b| b.to_bytes_be()),
         });
     }
 
@@ -475,7 +478,7 @@ fn collect_code_region_roots(db: &dyn HirDb, functions: &[MirFunction<'_>]) -> V
                     )
                     && args.len() == 1
                     && let Some(arg) = args.first().copied()
-                    && let mir::ValueOrigin::FuncItem(target) = &func.body.value(arg).origin
+                    && let mir::ValueOrigin::CodeRegionRef(target) = &func.body.value(arg).origin
                     && let Some(symbol) = &target.symbol
                 {
                     roots.insert(symbol.clone());
@@ -500,19 +503,20 @@ fn sanitize_symbol(component: &str) -> String {
         .collect()
 }
 
-fn link_yul_checked_arithmetic_helpers<'db>(
+fn link_yul_numeric_intrinsic_helpers<'db>(
     db: &'db DriverDataBase,
     module: &mut mir::MirModule<'db>,
 ) -> Result<(), EmitModuleError> {
-    fn checked_intrinsic_ty_suffix<'db>(
+    fn integral_ty_suffix<'db>(
         db: &'db DriverDataBase,
         ty: hir::analysis::ty::ty_def::TyId<'db>,
+        label: &str,
     ) -> Result<&'static str, EmitModuleError> {
         let base_ty = ty.base_ty(db);
         let TyData::TyBase(TyBase::Prim(prim)) = base_ty.data(db) else {
             return Err(EmitModuleError::Yul(YulError::Unsupported(format!(
-                "checked arithmetic helper type must be primitive integral, got `{}`",
-                ty.pretty_print(db)
+                "{label} type must be primitive integral, got `{}`",
+                ty.pretty_print(db),
             ))));
         };
         match prim {
@@ -531,8 +535,8 @@ fn link_yul_checked_arithmetic_helpers<'db>(
             PrimTy::I256 => Ok("i256"),
             PrimTy::Isize => Ok("isize"),
             _ => Err(EmitModuleError::Yul(YulError::Unsupported(format!(
-                "checked arithmetic helper type must be integral, got `{}`",
-                ty.pretty_print(db)
+                "{label} type must be integral, got `{}`",
+                ty.pretty_print(db),
             )))),
         }
     }
@@ -541,7 +545,7 @@ fn link_yul_checked_arithmetic_helpers<'db>(
         db: &'db DriverDataBase,
         intrinsic: mir::ir::CheckedIntrinsic<'db>,
     ) -> Result<String, EmitModuleError> {
-        let suffix = checked_intrinsic_ty_suffix(db, intrinsic.ty)?;
+        let suffix = integral_ty_suffix(db, intrinsic.ty, "checked arithmetic helper")?;
         Ok(format!(
             "{}_{}",
             intrinsic.op.helper_symbol_prefix(),
@@ -549,7 +553,45 @@ fn link_yul_checked_arithmetic_helpers<'db>(
         ))
     }
 
-    fn rewrite_checked_calls<'db>(
+    fn helper_symbol_from_saturating_intrinsic<'db>(
+        db: &'db DriverDataBase,
+        call: &mir::CallOrigin<'db>,
+    ) -> Result<Option<String>, EmitModuleError> {
+        let Some(mir::ir::CallTargetRef::Hir(target)) = call.target.as_ref() else {
+            return Ok(None);
+        };
+        match target.callable_def.ingot(db).kind(db) {
+            IngotKind::Core | IngotKind::Std => {}
+            _ => return Ok(None),
+        }
+
+        let hir::hir_def::CallableDef::Func(func) = target.callable_def else {
+            return Ok(None);
+        };
+        if func.body(db).is_some() {
+            return Ok(None);
+        }
+
+        let Some(name) = target.callable_def.name(db) else {
+            return Ok(None);
+        };
+        let prefix = match name.data(db).as_str() {
+            "__saturating_add" => "saturating_add",
+            "__saturating_sub" => "saturating_sub",
+            "__saturating_mul" => "saturating_mul",
+            _ => return Ok(None),
+        };
+        let [ty] = target.generic_args.as_slice() else {
+            return Err(EmitModuleError::Yul(YulError::Unsupported(format!(
+                "saturating intrinsic `{}` must have exactly one type argument",
+                name.data(db),
+            ))));
+        };
+        let suffix = integral_ty_suffix(db, *ty, "saturating helper")?;
+        Ok(Some(format!("{prefix}_{suffix}")))
+    }
+
+    fn rewrite_numeric_calls<'db>(
         db: &'db DriverDataBase,
         module: &mut mir::MirModule<'db>,
     ) -> Result<FxHashSet<String>, EmitModuleError> {
@@ -561,11 +603,16 @@ fn link_yul_checked_arithmetic_helpers<'db>(
                         rvalue: Rvalue::Call(call),
                         ..
                     } = inst
-                        && let Some(intrinsic) = call.checked_intrinsic
                     {
-                        let helper = helper_symbol_from_checked_intrinsic(db, intrinsic)?;
-                        required_helpers.insert(helper.clone());
-                        call.resolved_name = Some(helper);
+                        let helper = if let Some(intrinsic) = call.checked_intrinsic {
+                            Some(helper_symbol_from_checked_intrinsic(db, intrinsic)?)
+                        } else {
+                            helper_symbol_from_saturating_intrinsic(db, call)?
+                        };
+                        if let Some(helper) = helper {
+                            required_helpers.insert(helper.clone());
+                            call.resolved_name = Some(helper);
+                        }
                     }
                 }
 
@@ -573,18 +620,111 @@ fn link_yul_checked_arithmetic_helpers<'db>(
                     call: mir::TerminatingCall::Call(call),
                     ..
                 } = &mut block.terminator
-                    && let Some(intrinsic) = call.checked_intrinsic
                 {
-                    let helper = helper_symbol_from_checked_intrinsic(db, intrinsic)?;
-                    required_helpers.insert(helper.clone());
-                    call.resolved_name = Some(helper);
+                    let helper = if let Some(intrinsic) = call.checked_intrinsic {
+                        Some(helper_symbol_from_checked_intrinsic(db, intrinsic)?)
+                    } else {
+                        helper_symbol_from_saturating_intrinsic(db, call)?
+                    };
+                    if let Some(helper) = helper {
+                        required_helpers.insert(helper.clone());
+                        call.resolved_name = Some(helper);
+                    }
                 }
             }
         }
         Ok(required_helpers)
     }
 
-    let required_helpers = rewrite_checked_calls(db, module)?;
+    fn rewrite_numeric_call_aliases<'db>(
+        db: &'db DriverDataBase,
+        module: &mut mir::MirModule<'db>,
+        aliases: &FxHashMap<String, String>,
+    ) -> Result<(), EmitModuleError> {
+        let rewrite_call = |call: &mut mir::CallOrigin<'db>| -> Result<(), EmitModuleError> {
+            let helper = if let Some(intrinsic) = call.checked_intrinsic {
+                Some(helper_symbol_from_checked_intrinsic(db, intrinsic)?)
+            } else {
+                helper_symbol_from_saturating_intrinsic(db, call)?
+            };
+            if let Some(helper) = helper
+                && let Some(alias) = aliases.get(&helper)
+            {
+                call.resolved_name = Some(alias.clone());
+            }
+            Ok(())
+        };
+
+        for func in &mut module.functions {
+            for block in &mut func.body.blocks {
+                for inst in &mut block.insts {
+                    if let MirInst::Assign {
+                        rvalue: Rvalue::Call(call),
+                        ..
+                    } = inst
+                    {
+                        rewrite_call(call)?;
+                    }
+                }
+
+                if let mir::Terminator::TerminatingCall {
+                    call: mir::TerminatingCall::Call(call),
+                    ..
+                } = &mut block.terminator
+                {
+                    rewrite_call(call)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn rewrite_call_targets<'db>(
+        functions: &mut [mir::MirFunction<'db>],
+        aliases: &FxHashMap<String, String>,
+    ) {
+        for func in functions {
+            for block in &mut func.body.blocks {
+                for inst in &mut block.insts {
+                    if let MirInst::Assign {
+                        rvalue: Rvalue::Call(call),
+                        ..
+                    } = inst
+                        && let Some(name) = &call.resolved_name
+                        && let Some(alias) = aliases.get(name)
+                        && alias != name
+                    {
+                        call.resolved_name = Some(alias.clone());
+                    }
+                }
+
+                if let mir::Terminator::TerminatingCall {
+                    call: mir::TerminatingCall::Call(call),
+                    ..
+                } = &mut block.terminator
+                    && let Some(name) = &call.resolved_name
+                    && let Some(alias) = aliases.get(name)
+                    && alias != name
+                {
+                    call.resolved_name = Some(alias.clone());
+                }
+            }
+        }
+    }
+
+    fn fresh_internal_symbol(symbol: &str, known: &mut FxHashSet<String>) -> String {
+        let base = format!("__internal_{symbol}");
+        let mut candidate = base.clone();
+        let mut suffix = 0;
+        while !known.insert(candidate.clone()) {
+            suffix += 1;
+            candidate = format!("{base}_{suffix}");
+        }
+        candidate
+    }
+
+    let required_helpers = rewrite_numeric_calls(db, module)?;
     if required_helpers.is_empty() {
         return Ok(());
     }
@@ -626,7 +766,7 @@ fn link_yul_checked_arithmetic_helpers<'db>(
 
     let mut num_yul_module =
         lower_module(db, num_yul_top_mod).map_err(EmitModuleError::MirLower)?;
-    rewrite_checked_calls(db, &mut num_yul_module)?;
+    rewrite_numeric_calls(db, &mut num_yul_module)?;
     let num_yul_call_graph = build_call_graph(&num_yul_module.functions);
 
     let mut required_symbols = FxHashSet::default();
@@ -641,24 +781,39 @@ fn link_yul_checked_arithmetic_helpers<'db>(
         .collect();
 
     let mut known = FxHashSet::default();
+    let mut known_sources = FxHashMap::default();
     for func in &module.functions {
         known.insert(func.symbol_name.clone());
+        known_sources.insert(func.symbol_name.clone(), func.symbol_source);
     }
 
+    let mut helper_aliases = FxHashMap::default();
+    let mut imported_helpers = Vec::new();
     let mut symbols: Vec<_> = required_symbols.into_iter().collect();
     symbols.sort();
     for symbol in symbols {
-        if known.contains(&symbol) {
+        if known_sources.get(&symbol) == Some(&SymbolSource::Internal) {
+            helper_aliases.insert(symbol.clone(), symbol);
             continue;
         }
-        let Some(func) = by_symbol.remove(&symbol) else {
+        let Some(mut func) = by_symbol.remove(&symbol) else {
             return Err(EmitModuleError::Yul(YulError::Unsupported(format!(
-                "missing required checked arithmetic helper function `{symbol}`"
+                "missing required numeric helper function `{symbol}`"
             ))));
         };
-        known.insert(symbol);
-        module.functions.push(func);
+        let final_symbol = if known.contains(&symbol) {
+            fresh_internal_symbol(&symbol, &mut known)
+        } else {
+            known.insert(symbol.clone());
+            symbol.clone()
+        };
+        helper_aliases.insert(symbol, final_symbol.clone());
+        func.symbol_name = final_symbol;
+        imported_helpers.push(func);
     }
+    rewrite_numeric_call_aliases(db, module, &helper_aliases)?;
+    rewrite_call_targets(&mut imported_helpers, &helper_aliases);
+    module.functions.extend(imported_helpers);
 
     Ok(())
 }
@@ -677,6 +832,7 @@ struct TestInfo {
     value_param_count: usize,
     effect_param_count: usize,
     expected_revert: Option<ExpectedRevert>,
+    initial_balance: Option<BigUint>,
 }
 
 /// Dependency set required to emit a single test object.
@@ -691,8 +847,12 @@ struct TestDependencies {
 /// * `functions` - Monomorphized MIR functions to scan.
 ///
 /// Returns a list of test info entries with placeholder names filled in.
-fn collect_test_infos(db: &dyn HirDb, functions: &[MirFunction<'_>]) -> Vec<TestInfo> {
-    functions
+fn collect_test_infos(
+    db: &dyn HirDb,
+    functions: &[MirFunction<'_>],
+    filter: Option<&str>,
+) -> Result<Vec<TestInfo>, EmitModuleError> {
+    let mut tests = functions
         .iter()
         .filter_map(|mir_func| {
             let MirFunctionOrigin::Hir(hir_func) = mir_func.origin else {
@@ -713,9 +873,14 @@ fn collect_test_infos(db: &dyn HirDb, functions: &[MirFunction<'_>]) -> Vec<Test
                 .to_opt()
                 .map(|n| n.data(db).to_string())
                 .unwrap_or_else(|| "<anonymous>".to_string());
+            // Check for #[test(balance = N)]
+            let initial_balance = match parse_test_balance_arg(db, &hir_name, test_attr) {
+                Ok(balance) => balance,
+                Err(err) => return Some(Err(err)),
+            };
             let value_param_count = mir_func.runtime_param_count();
             let effect_param_count = mir_func.runtime_effect_param_count();
-            Some(TestInfo {
+            Some(Ok(TestInfo {
                 hir_name,
                 display_name: String::new(),
                 symbol_name: mir_func.symbol_name.clone(),
@@ -723,9 +888,56 @@ fn collect_test_infos(db: &dyn HirDb, functions: &[MirFunction<'_>]) -> Vec<Test
                 value_param_count,
                 effect_param_count,
                 expected_revert,
-            })
+                initial_balance,
+            }))
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+
+    assign_test_display_names(&mut tests);
+    assign_test_object_names(&mut tests);
+    tests.retain(|test| test_info_matches_filter(test, filter));
+    Ok(tests)
+}
+
+/// Extracts the `balance` argument from `#[test(balance = N)]`, if present.
+fn parse_test_balance_arg<'db>(
+    db: &'db dyn HirDb,
+    test_name: &str,
+    test_attr: &hir::hir_def::attr::NormalAttr<'db>,
+) -> Result<Option<BigUint>, EmitModuleError> {
+    for arg in &test_attr.args {
+        if arg.key_str(db) != Some("balance") {
+            continue;
+        }
+        let Some(value) = arg.value.as_ref() else {
+            return Err(EmitModuleError::Yul(YulError::Unsupported(format!(
+                "invalid #[test] function `{test_name}`: #[test(balance = ...)] expects an integer literal"
+            ))));
+        };
+        let hir::hir_def::attr::AttrArgValue::Lit(hir::hir_def::LitKind::Int(int_id)) = value
+        else {
+            return Err(EmitModuleError::Yul(YulError::Unsupported(format!(
+                "invalid #[test] function `{test_name}`: #[test(balance = ...)] expects an integer literal"
+            ))));
+        };
+        let balance = int_id.data(db).clone();
+        if balance.to_bytes_be().len() > 32 {
+            return Err(EmitModuleError::Yul(YulError::Unsupported(format!(
+                "invalid #[test] function `{test_name}`: #[test(balance = ...)] must fit in u256"
+            ))));
+        };
+        return Ok(Some(balance));
+    }
+
+    Ok(None)
+}
+fn test_info_matches_filter(test: &TestInfo, filter: Option<&str>) -> bool {
+    let Some(pattern) = filter else {
+        return true;
+    };
+    test.hir_name.contains(pattern)
+        || test.symbol_name.contains(pattern)
+        || test.display_name.contains(pattern)
 }
 
 /// Validates that a `#[test]` function conforms to runner constraints.
@@ -966,7 +1178,7 @@ fn collect_code_region_targets(
             let Some(arg) = args.first().copied() else {
                 continue;
             };
-            let ValueOrigin::FuncItem(target) = &func.body.value(arg).origin else {
+            let ValueOrigin::CodeRegionRef(target) = &func.body.value(arg).origin else {
                 continue;
             };
             let Some(target_symbol) = &target.symbol else {
@@ -1460,7 +1672,7 @@ fn emit_data_sections(data_regions: &[YulDataRegion]) -> Vec<YulDoc> {
 
 #[cfg(test)]
 mod tests {
-    use super::{TestInfo, assign_test_object_names};
+    use super::{TestInfo, assign_test_object_names, test_info_matches_filter};
 
     /// Ensures test object names are disambiguated with numeric suffixes.
     #[test]
@@ -1474,6 +1686,7 @@ mod tests {
                 value_param_count: 0,
                 effect_param_count: 0,
                 expected_revert: None,
+                initial_balance: None,
             },
             TestInfo {
                 hir_name: "foo_bar".to_string(),
@@ -1483,6 +1696,7 @@ mod tests {
                 value_param_count: 0,
                 effect_param_count: 0,
                 expected_revert: None,
+                initial_balance: None,
             },
         ];
 
@@ -1495,5 +1709,24 @@ mod tests {
 
         assert_eq!(by_name.remove("foo bar").as_deref(), Some("test_foo_bar_1"));
         assert_eq!(by_name.remove("foo_bar").as_deref(), Some("test_foo_bar_2"));
+    }
+
+    #[test]
+    fn test_filter_matches_hir_symbol_and_display_names() {
+        let test = TestInfo {
+            hir_name: "alpha".to_string(),
+            display_name: "alpha [module::alpha]".to_string(),
+            symbol_name: "module_h123_alpha".to_string(),
+            object_name: "test_alpha".to_string(),
+            value_param_count: 0,
+            effect_param_count: 0,
+            expected_revert: None,
+            initial_balance: None,
+        };
+
+        assert!(test_info_matches_filter(&test, None));
+        assert!(test_info_matches_filter(&test, Some("alpha")));
+        assert!(test_info_matches_filter(&test, Some("module_h123")));
+        assert!(!test_info_matches_filter(&test, Some("beta")));
     }
 }

@@ -5,21 +5,21 @@ input_file: tests/fixtures/code_region_qualified.fe
 ---
 object "Foo" {
   code {
-    function $init__StorPtr_Evm___207f35a85ac4062e() {
+    function $init__Evm_hef0af3106e109414__3af54274b2985741() {
       let v0 := datasize("Foo_deployed")
       let v1 := dataoffset("Foo_deployed")
       codecopy(0, v1, v0)
       return(0, v0)
     }
-    $init__StorPtr_Evm___207f35a85ac4062e()
+    $init__Evm_hef0af3106e109414__3af54274b2985741()
   }
 
   object "Foo_deployed" {
     code {
-      function $runtime__StorPtr_Evm___207f35a85ac4062e() {
+      function $runtime__Evm_hef0af3106e109414__3af54274b2985741() {
         return(0, 0)
       }
-      $runtime__StorPtr_Evm___207f35a85ac4062e()
+      $runtime__Evm_hef0af3106e109414__3af54274b2985741()
       return(0, 0)
     }
   }

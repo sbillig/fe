@@ -14,8 +14,8 @@ use crate::workspace_ingot::{
 };
 use camino::Utf8PathBuf;
 use codegen::{
-    DebugOutputSink, ExpectedRevert, OptLevel, SonatinaTestDebugConfig, TestMetadata,
-    TestModuleOutput, emit_test_module_sonatina, emit_test_module_yul,
+    ExpectedRevert, OptLevel, SonatinaTestOptions, TestMetadata, TestModuleOutput,
+    emit_test_module_sonatina, emit_test_module_yul,
 };
 use colored::Colorize;
 use common::{
@@ -23,7 +23,7 @@ use common::{
     config::{Config, WorkspaceMemberSelection},
     ingot::Ingot,
 };
-use contract_harness::{CallGasProfile, EvmTraceOptions, ExecutionOptions, RuntimeInstance};
+use contract_harness::{CallGasProfile, EvmTraceOptions, ExecutionOptions, RuntimeInstance, U256};
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod, item::ItemKind};
@@ -198,23 +198,6 @@ pub(super) struct GasHotspotRow {
 pub(super) struct SuiteDeltaTotals {
     pub(super) tests_with_delta: usize,
     pub(super) delta_vs_yul_opt_sum: i128,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct SymtabEntry {
-    pub(super) start: u32,
-    pub(super) end: u32,
-    pub(super) symbol: String,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct TraceSymbolHotspotRow {
-    pub(super) suite: String,
-    pub(super) test: String,
-    pub(super) symbol: String,
-    pub(super) tail_steps_total: usize,
-    pub(super) tail_steps_mapped: usize,
-    pub(super) steps_in_symbol: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -929,9 +912,6 @@ pub struct TestDebugOptions {
     pub trace_evm: bool,
     pub trace_evm_keep: usize,
     pub trace_evm_stack_n: usize,
-    pub sonatina_symtab: bool,
-    pub sonatina_evm_debug: bool,
-    pub sonatina_observability: bool,
     pub dump_yul_on_failure: bool,
     pub dump_yul_for_all: bool,
     pub debug_dir: Option<Utf8PathBuf>,
@@ -944,49 +924,6 @@ impl TestDebugOptions {
         };
         std::fs::create_dir_all(dir)
             .map_err(|err| format!("failed to create debug dir `{dir}`: {err}"))
-    }
-
-    fn sonatina_debug_config(&self) -> Result<SonatinaTestDebugConfig, String> {
-        self.ensure_debug_dir()?;
-        let mut config = SonatinaTestDebugConfig::default();
-
-        if self.sonatina_symtab {
-            let sink = if let Some(dir) = &self.debug_dir {
-                let path = dir.join("sonatina_symtab.txt");
-                truncate_file(&path)?;
-                DebugOutputSink {
-                    path: Some(path.into_std_path_buf()),
-                    write_stderr: false,
-                }
-            } else {
-                DebugOutputSink {
-                    path: None,
-                    write_stderr: true,
-                }
-            };
-            config.symtab_output = Some(sink);
-        }
-
-        if self.sonatina_evm_debug {
-            let sink = if let Some(dir) = &self.debug_dir {
-                let path = dir.join("sonatina_evm_bytecode.txt");
-                truncate_file(&path)?;
-                DebugOutputSink {
-                    path: Some(path.into_std_path_buf()),
-                    write_stderr: false,
-                }
-            } else {
-                DebugOutputSink {
-                    path: None,
-                    write_stderr: true,
-                }
-            };
-            config.evm_debug_output = Some(sink);
-        }
-
-        config.emit_observability = self.sonatina_observability;
-
-        Ok(config)
     }
 
     fn evm_trace_options_for_test(
@@ -1791,26 +1728,23 @@ fn prepare_suite_job(
     let mut suite_debug = shared.debug.clone();
     if report_ctx.is_some() {
         suite_debug.trace_evm = true;
-        suite_debug.sonatina_symtab = true;
-        suite_debug.sonatina_evm_debug = true;
-        suite_debug.sonatina_observability = true;
         suite_debug.debug_dir = report_ctx.as_ref().map(|ctx| ctx.root_dir.join("debug"));
     }
-    let sonatina_debug = match suite_debug.sonatina_debug_config() {
-        Ok(config) => config,
-        Err(err) => {
-            return (
-                PreparedSuite {
-                    plan: plan.clone(),
-                    results: suite_error_result(&plan.suite, "setup", err),
-                    single_jobs: Vec::new(),
-                    gas_comparison_cases: None,
-                    aggregate_suite_staging: None,
-                    build_elapsed: Duration::default(),
-                },
-                output,
-            );
-        }
+    if let Err(err) = suite_debug.ensure_debug_dir() {
+        return (
+            PreparedSuite {
+                plan: plan.clone(),
+                results: suite_error_result(&plan.suite, "setup", err),
+                single_jobs: Vec::new(),
+                gas_comparison_cases: None,
+                aggregate_suite_staging: None,
+                build_elapsed: Duration::default(),
+            },
+            output,
+        );
+    }
+    let sonatina_options = SonatinaTestOptions {
+        emit_observability: report_ctx.is_some(),
     };
 
     let build_started = Instant::now();
@@ -1831,7 +1765,7 @@ fn prepare_suite_job(
             shared.backend.as_str(),
             shared.opt_level,
             &suite_debug,
-            &sonatina_debug,
+            sonatina_options,
             report_ctx.as_ref(),
             &mut output,
         )
@@ -1845,7 +1779,7 @@ fn prepare_suite_job(
             shared.backend.as_str(),
             shared.opt_level,
             &suite_debug,
-            &sonatina_debug,
+            sonatina_options,
             report_ctx.as_ref(),
             &mut output,
         )
@@ -2010,7 +1944,7 @@ fn prepare_tests_single_file(
     backend: &str,
     opt_level: OptLevel,
     debug: &TestDebugOptions,
-    sonatina_debug: &SonatinaTestDebugConfig,
+    sonatina_options: SonatinaTestOptions,
     report: Option<&ReportContext>,
     output: &mut String,
 ) -> SuitePreparation {
@@ -2100,7 +2034,7 @@ fn prepare_tests_single_file(
         };
     }
 
-    maybe_write_suite_ir(db, top_mod, backend, report);
+    maybe_write_suite_ir(db, top_mod, backend, opt_level, report);
     prepare_discovered_tests(
         db,
         top_mod,
@@ -2110,7 +2044,7 @@ fn prepare_tests_single_file(
         backend,
         opt_level,
         debug,
-        sonatina_debug,
+        sonatina_options,
         report,
         output,
     )
@@ -2126,7 +2060,7 @@ fn prepare_tests_ingot(
     backend: &str,
     opt_level: OptLevel,
     debug: &TestDebugOptions,
-    sonatina_debug: &SonatinaTestDebugConfig,
+    sonatina_options: SonatinaTestOptions,
     report: Option<&ReportContext>,
     output: &mut String,
 ) -> SuitePreparation {
@@ -2209,7 +2143,7 @@ fn prepare_tests_ingot(
         };
     }
 
-    maybe_write_suite_ir(db, root_mod, backend, report);
+    maybe_write_suite_ir(db, root_mod, backend, opt_level, report);
     prepare_discovered_tests(
         db,
         root_mod,
@@ -2219,7 +2153,7 @@ fn prepare_tests_ingot(
         backend,
         opt_level,
         debug,
-        sonatina_debug,
+        sonatina_options,
         report,
         output,
     )
@@ -2235,7 +2169,7 @@ fn prepare_discovered_tests(
     backend: &str,
     opt_level: OptLevel,
     debug: &TestDebugOptions,
-    sonatina_debug: &SonatinaTestDebugConfig,
+    sonatina_options: SonatinaTestOptions,
     report: Option<&ReportContext>,
     output: &mut String,
 ) -> SuitePreparation {
@@ -2246,7 +2180,7 @@ fn prepare_discovered_tests(
         filter,
         backend,
         opt_level,
-        sonatina_debug,
+        sonatina_options,
         report,
         output,
     ) {
@@ -2353,21 +2287,21 @@ fn discover_tests(
     filter: Option<&str>,
     backend: &str,
     opt_level: OptLevel,
-    sonatina_debug: &SonatinaTestDebugConfig,
+    sonatina_options: SonatinaTestOptions,
     report: Option<&ReportContext>,
     output: &mut String,
 ) -> Result<DiscoverResult, Vec<TestResult>> {
     let backend = backend.to_lowercase();
     let emit_result = match backend.as_str() {
         "yul" => emit_with_catch_unwind(
-            || emit_test_module_yul(db, top_mod),
+            || emit_test_module_yul(db, top_mod, filter),
             "Yul",
             suite,
             report,
             output,
         ),
         "sonatina" => emit_with_catch_unwind(
-            || emit_test_module_sonatina(db, top_mod, opt_level, sonatina_debug),
+            || emit_test_module_sonatina(db, top_mod, opt_level, sonatina_options, filter),
             "Sonatina",
             suite,
             report,
@@ -2499,6 +2433,7 @@ fn maybe_write_suite_ir(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
     backend: &str,
+    opt_level: OptLevel,
     report: Option<&ReportContext>,
 ) {
     let Some(report) = report else {
@@ -2527,6 +2462,17 @@ fn maybe_write_suite_ir(
             }
             Err(err) => {
                 let path = artifacts_dir.join("sonatina_ir_error.txt");
+                let _ = std::fs::write(&path, format!("{err}"));
+            }
+        }
+
+        match codegen::emit_module_sonatina_ir_optimized(db, top_mod, opt_level, None) {
+            Ok(ir) => {
+                let path = artifacts_dir.join("sonatina_ir_optimized.txt");
+                let _ = std::fs::write(&path, ir);
+            }
+            Err(err) => {
+                let path = artifacts_dir.join("sonatina_ir_optimized_error.txt");
                 let _ = std::fs::write(&path, format!("{err}"));
             }
         }
@@ -2796,6 +2742,21 @@ pub(super) fn compile_and_run_test(
         ));
     }
 
+    let initial_balance = match case
+        .initial_balance
+        .as_deref()
+        .map(be_bytes_to_u256)
+        .transpose()
+    {
+        Ok(balance) => balance,
+        Err(err) => {
+            return failure(format!(
+                "invalid initial balance for test `{}`: {err}",
+                case.display_name
+            ));
+        }
+    };
+
     if backend == "sonatina" {
         if case.bytecode.is_empty() {
             return failure(format!("missing test bytecode for `{}`", case.display_name));
@@ -2816,6 +2777,7 @@ pub(super) fn compile_and_run_test(
             evm_trace,
             call_trace,
             collect_step_count,
+            initial_balance,
         );
         return TestOutcome {
             result,
@@ -2860,6 +2822,7 @@ pub(super) fn compile_and_run_test(
         evm_trace,
         call_trace,
         collect_step_count,
+        initial_balance,
     );
     TestOutcome {
         result,
@@ -2889,9 +2852,6 @@ fn write_sonatina_case_artifacts(report: &ReportContext, case: &TestMetadata) {
         let _ = std::fs::write(dir.join("runtime.hex"), hex::encode(runtime));
     }
 
-    if let Some(text) = &case.sonatina_observability_text {
-        let _ = std::fs::write(dir.join("observability.txt"), text);
-    }
     if let Some(json) = &case.sonatina_observability_json {
         let _ = std::fs::write(dir.join("observability.json"), json);
     }
@@ -2994,14 +2954,14 @@ fn write_report_manifest(
     out.push_str(&format!("filter: {}\n", filter.unwrap_or("<none>")));
     out.push_str(&format!("fe_version: {}\n", env!("CARGO_PKG_VERSION")));
     out.push_str("details: see `meta/args.txt` and `meta/git.txt` for exact repro context\n");
+    out.push_str("sonatina_ir: Sonatina reports include pre-opt IR at `artifacts/sonatina_ir.txt` and post-selected-opt-level IR at `artifacts/sonatina_ir_optimized.txt` (with `opt_level: 0`, both represent the same unoptimized module)\n");
     out.push_str("gas_comparison: see `artifacts/gas_comparison.md`, `artifacts/gas_comparison.csv`, `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_breakdown_comparison.csv`, `artifacts/gas_breakdown_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_deployment_attribution.csv`, and `artifacts/gas_comparison_settings.txt` when available\n");
     out.push_str("gas_comparison_yul_artifacts: in Sonatina comparison runs, Yul baselines are stored under `artifacts/tests/<test>/yul/{source.yul,bytecode.opt.hex,bytecode.opt.evm.txt,runtime.opt.hex,runtime.opt.evm.txt}`\n");
-    out.push_str("sonatina_observability: when available, Sonatina test artifacts include `artifacts/tests/<test>/sonatina/{observability.txt,observability.json}`\n");
-    out.push_str("gas_comparison_aggregate: run-level reports also include `artifacts/gas_comparison_all.csv`, `artifacts/gas_breakdown_comparison_all.csv`, `artifacts/gas_comparison_summary.md`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_breakdown_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_deployment_attribution_all.csv`, `artifacts/gas_hotspots_vs_yul_opt.csv`, `artifacts/gas_suite_delta_summary.csv`, `artifacts/gas_tail_trace_symbol_hotspots.csv`, and `artifacts/gas_tail_trace_observability_hotspots.csv`\n");
+    out.push_str("sonatina_observability: when available, Sonatina test artifacts include `artifacts/tests/<test>/sonatina/observability.json`\n");
+    out.push_str("gas_comparison_aggregate: run-level reports also include `artifacts/gas_comparison_all.csv`, `artifacts/gas_breakdown_comparison_all.csv`, `artifacts/gas_comparison_summary.md`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_breakdown_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_deployment_attribution_all.csv`, `artifacts/gas_hotspots_vs_yul_opt.csv`, `artifacts/gas_suite_delta_summary.csv`, and `artifacts/gas_tail_trace_observability_hotspots.csv`\n");
     out.push_str("sonatina_observability_aggregate: run-level reports also include `artifacts/observability_coverage_all.csv` for per-test coverage totals from observability maps\n");
     out.push_str("gas_opcode_profile: see `artifacts/gas_opcode_comparison.md` and `artifacts/gas_opcode_comparison.csv` for opcode and step-count diagnostics when available\n");
     out.push_str("gas_opcode_profile_aggregate: run-level reports also include `artifacts/gas_opcode_comparison_all.csv`\n");
-    out.push_str("sonatina_evm_debug: when available, see `debug/sonatina_evm_bytecode.txt` for memory-plan details, stackify traces, and lowered EVM vcode output\n");
     out.push_str(&format!("tests: {}\n", results.len()));
     let passed = results.iter().filter(|r| r.passed).count();
     out.push_str(&format!("passed: {passed}\n"));
@@ -3025,6 +2985,18 @@ fn write_report_manifest(
 /// * `show_logs` - Whether to execute with log collection enabled.
 ///
 /// Returns the test result and any emitted logs.
+fn be_bytes_to_u256(bytes: &[u8]) -> Result<U256, &'static str> {
+    if bytes.len() > 32 {
+        return Err("initial balance exceeds u256");
+    }
+    let mut buf = [0u8; 32];
+    // Pad on the left (big-endian): short value goes into the low bytes.
+    let start = 32 - bytes.len();
+    buf[start..].copy_from_slice(bytes);
+    Ok(U256::from_be_bytes(buf))
+}
+
+#[allow(clippy::too_many_arguments)]
 fn execute_test(
     name: &str,
     bytecode_hex: &str,
@@ -3033,6 +3005,7 @@ fn execute_test(
     evm_trace: Option<&EvmTraceOptions>,
     call_trace: bool,
     collect_step_count: bool,
+    initial_balance: Option<U256>,
 ) -> (
     TestResult,
     Vec<String>,
@@ -3061,6 +3034,11 @@ fn execute_test(
             );
         }
     };
+    // Optionally seed the test contract with ETH (opt-in via #[test(balance = N)]).
+    if let Some(balance) = initial_balance {
+        instance.fund_contract(balance);
+    }
+
     instance.set_trace_options(evm_trace.cloned());
 
     // Execute the test (empty calldata since test functions take no args)

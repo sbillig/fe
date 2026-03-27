@@ -55,7 +55,7 @@ fn test_effects_and_aggregates__Evm_hef0af3106e109414_Evm_hef0af3106e109414__7ab
     v5: Foo = alloc mem
     init mem[v5] { .0 = 10, .1 = 20 }
     v4: Foo = v5
-    eval bump__MemPtr_Foo___cdd30998d577b6ea(v4)
+    eval bump__Foo_h6dbce71a6ea992b8__21493237fe9c2c26(v4)
     v6: StorPtr<StorageMap<u256, u256, 0>> = stor_ptr_stor__Evm_hef0af3106e109414_StorageMap_u256__u256__0___25d90c867c72c521(0)
     eval set_balance__0_StorPtr_StorageMap_u256__u256__0____94067de1d730f5c7(1, 7)
     v7: u256 = get_balance__0_StorPtr_StorageMap_u256__u256__0____94067de1d730f5c7(1)
@@ -108,6 +108,16 @@ fn stor_ptr_stor__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d(
   bb0:
     v2: StorPtr<Foo> = storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26(v1)
     ret v2
+
+fn bump__Foo_h6dbce71a6ea992b8__21493237fe9c2c26(v0: u256) -> ():
+  bb0:
+    v1: u256 = load mem[v0].0
+    v2: u256 = checked_add<u256>(v1, 1)
+    store mem[v0].0 = v2
+    v3: u256 = load mem[v0].1
+    v4: u256 = checked_add<u256>(v3, 2)
+    store mem[v0].1 = v4
+    ret
 
 fn stor_ptr_stor__Evm_hef0af3106e109414_StorageMap_u256__u256__0___25d90c867c72c521(v0: Evm, v1: u256) -> StorPtr<StorageMap<u256, u256, 0>>:
   ; runtime_abi values=[v1: u256] effects=[]

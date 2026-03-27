@@ -4,8 +4,9 @@
 
 use std::{error::Error, fmt};
 
-use common::diagnostics::{CompleteDiagnostic, Span};
+use common::diagnostics::{CompleteDiagnostic, Severity, Span, cmp_complete_diagnostics};
 use common::ingot::{Ingot, IngotKind};
+use cranelift_entity::EntityRef;
 use hir::analysis::{
     HirAnalysisDb,
     diagnostics::SpannedHirAnalysisDb,
@@ -20,10 +21,11 @@ use hir::analysis::{
         ty_def::{PrimTy, TyBase, TyData, TyId},
     },
 };
+use hir::core::semantic::{EffectEnvView, EffectSource};
 use hir::hir_def::{
     ArithmeticMode, Attr, AttrArg, AttrArgValue, Body, CallableDef, Cond, CondId, Const, Expr,
-    ExprId, Field, FieldIndex, Func, HirIngot, IdentId, ItemKind, LitKind, MatchArm, Partial, Pat,
-    PatId, Stmt, StmtId, TopLevelMod, VariantKind,
+    ExprId, Field, FieldIndex, Func, HirIngot, IdentId, InlineAttrErrorKind, ItemKind, LitKind,
+    MatchArm, Partial, Pat, PatId, Stmt, StmtId, TopLevelMod, VariantKind,
 };
 
 use crate::{
@@ -33,11 +35,11 @@ use crate::{
     },
     core_lib::CoreLib,
     ir::{
-        AddressSpaceKind, BasicBlockId, BodyBuilder, CallOrigin, CodeRegionRoot, ContractFunction,
-        ContractFunctionKind, IntrinsicOp, LocalData, LocalId, LoopInfo, MirBody, MirFunction,
-        MirInst, MirModule, MirProjection, MirProjectionPath, Place, PointerInfo, Rvalue,
-        SwitchTarget, SwitchValue, SyntheticValue, Terminator, ValueData, ValueId, ValueOrigin,
-        ValueRepr,
+        AddressSpaceKind, BasicBlockId, BodyBuilder, CallOrigin, CallTargetRef, CodeRegionRef,
+        ConstRegionId, ContractFunction, ContractFunctionKind, IntrinsicOp, LocalData, LocalId,
+        LoopInfo, MirBody, MirFunction, MirInst, MirModule, MirProjection, MirProjectionPath,
+        Place, PointerInfo, Rvalue, SwitchTarget, SwitchValue, SymbolSource, SyntheticValue,
+        Terminator, ValueData, ValueId, ValueOrigin, ValueRepr,
     },
     monomorphize::monomorphize_functions,
 };
@@ -129,6 +131,90 @@ pub struct MirDiagnosticsOutput {
     pub internal_errors: Vec<MirLowerError>,
 }
 
+fn sort_and_dedup_complete_diagnostics(diags: &mut Vec<CompleteDiagnostic>) {
+    diags.sort_by(cmp_complete_diagnostics);
+    diags.dedup();
+}
+
+fn collect_hir_error_diagnostics<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    top_mods: impl IntoIterator<Item = TopLevelMod<'db>>,
+) -> Vec<CompleteDiagnostic> {
+    let mut pass_manager = hir::analysis::initialize_analysis_pass();
+    let mut diags = Vec::new();
+    for top_mod in top_mods {
+        diags.extend(pass_manager.run_on_module(db, top_mod));
+    }
+
+    let mut complete_diags: Vec<_> = diags
+        .into_iter()
+        .map(|diag| diag.to_complete(db))
+        .filter(|diag| diag.severity == Severity::Error)
+        .collect();
+    sort_and_dedup_complete_diagnostics(&mut complete_diags);
+    complete_diags
+}
+
+fn collect_hir_error_diagnostics_for_top_mod<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+) -> Vec<CompleteDiagnostic> {
+    collect_hir_error_diagnostics(db, std::iter::once(top_mod))
+}
+
+fn collect_hir_error_diagnostics_for_ingot<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    ingot: Ingot<'db>,
+) -> Vec<CompleteDiagnostic> {
+    let mut top_mods = ingot.all_modules(db).clone();
+    for &(_, dep_ingot) in ingot.resolved_external_ingots(db) {
+        top_mods.extend(dep_ingot.all_modules(db));
+    }
+    collect_hir_error_diagnostics(db, top_mods)
+}
+
+fn analysis_diagnostics_error(
+    db: &dyn SpannedHirAnalysisDb,
+    subject: String,
+    diags: Vec<CompleteDiagnostic>,
+) -> Option<MirLowerError> {
+    (!diags.is_empty()).then(|| MirLowerError::AnalysisDiagnostics {
+        func_name: subject,
+        diagnostics: hir::analysis::diagnostics::format_diags(db, diags.iter()),
+    })
+}
+
+fn invalid_hir_error_for_top_mod<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+) -> Option<MirLowerError> {
+    let subject = top_mod
+        .scope()
+        .pretty_path(db)
+        .unwrap_or_else(|| "<module>".to_string());
+    analysis_diagnostics_error(
+        db,
+        subject,
+        collect_hir_error_diagnostics_for_top_mod(db, top_mod),
+    )
+}
+
+fn invalid_hir_error_for_ingot<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    ingot: Ingot<'db>,
+) -> Option<MirLowerError> {
+    let subject = ingot
+        .module_tree(db)
+        .root_data()
+        .and_then(|root| root.top_mod.scope().pretty_path(db))
+        .unwrap_or_else(|| "<ingot>".to_string());
+    analysis_diagnostics_error(
+        db,
+        subject,
+        collect_hir_error_diagnostics_for_ingot(db, ingot),
+    )
+}
+
 fn collect_funcs_to_lower<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     top_mod: TopLevelMod<'db>,
@@ -167,6 +253,41 @@ fn mir_func_name<'db>(db: &'db dyn SpannedHirAnalysisDb, func: &MirFunction<'db>
     match func.origin {
         crate::ir::MirFunctionOrigin::Hir(hir_func) => hir_func.pretty_print_signature(db),
         crate::ir::MirFunctionOrigin::Synthetic(_) => func.symbol_name.clone(),
+    }
+}
+
+fn invalid_inline_attr_error<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    func: Func<'db>,
+) -> Option<MirLowerError> {
+    let kind = func.inline_attr_error(db)?;
+    let func_name = func
+        .name(db)
+        .to_opt()
+        .map(|ident| ident.data(db).to_string())
+        .unwrap_or_else(|| "<anonymous>".to_string());
+
+    let diagnostics = match kind {
+        InlineAttrErrorKind::Duplicate => {
+            "duplicate `#[inline]` attribute; functions support at most one inline hint"
+                .to_string()
+        }
+        InlineAttrErrorKind::InvalidForm => {
+            "invalid `#[inline]` attribute; expected `#[inline]`, `#[inline(always)]`, or `#[inline(never)]`"
+                .to_string()
+        }
+    };
+
+    Some(MirLowerError::AnalysisDiagnostics {
+        func_name,
+        diagnostics,
+    })
+}
+
+fn symbol_source_for_ingot_kind(kind: IngotKind) -> SymbolSource {
+    match kind {
+        IngotKind::Core | IngotKind::Std => SymbolSource::Internal,
+        IngotKind::StandAlone | IngotKind::Local | IngotKind::External => SymbolSource::User,
     }
 }
 
@@ -220,10 +341,17 @@ pub fn collect_mir_diagnostics<'db>(
     mode: MirDiagnosticsMode,
 ) -> MirDiagnosticsOutput {
     let mut output = MirDiagnosticsOutput::default();
+    if !collect_hir_error_diagnostics_for_top_mod(db, top_mod).is_empty() {
+        return output;
+    }
     let mut templates = Vec::new();
 
     for func in collect_funcs_to_lower(db, top_mod) {
         if func.body(db).is_none() {
+            continue;
+        }
+        if let Some(err) = invalid_inline_attr_error(db, func) {
+            output.internal_errors.push(err);
             continue;
         }
         let (diags, typed_body) = check_func_body(db, func);
@@ -296,10 +424,17 @@ pub fn lower_module<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     top_mod: TopLevelMod<'db>,
 ) -> MirLowerResult<MirModule<'db>> {
+    if let Some(err) = invalid_hir_error_for_top_mod(db, top_mod) {
+        return Err(err);
+    }
+
     let mut templates = Vec::new();
     for func in collect_funcs_to_lower(db, top_mod) {
         if func.body(db).is_none() {
             continue;
+        }
+        if let Some(err) = invalid_inline_attr_error(db, func) {
+            return Err(err);
         }
         let (diags, typed_body) = check_func_body(db, func);
         if !diags.is_empty() {
@@ -337,6 +472,7 @@ pub fn lower_module<'db>(
         crate::transform::canonicalize_transparent_newtypes(db, &mut func.body);
         crate::transform::insert_temp_binds(db, &mut func.body);
     }
+    validate_lowered_mir_functions(db, &functions)?;
     for func in &functions {
         if let Some(diag) = crate::analysis::noesc::check_noesc_escapes(db, func) {
             let func_name = match func.origin {
@@ -360,10 +496,12 @@ pub fn lower_module<'db>(
         crate::transform::insert_temp_binds(db, &mut func.body);
         crate::transform::canonicalize_zero_sized(db, &mut func.body);
     }
+    validate_lowered_mir_functions(db, &functions)?;
     let mut module = MirModule { top_mod, functions };
     crate::transform::normalize_runtime_abi(db, &mut module);
     crate::transform::eliminate_dead_erased_arg_materializations(db, &mut module);
     crate::transform::normalize_runtime_shapes(db, &mut module);
+    validate_lowered_mir_functions(db, &module.functions)?;
     Ok(module)
 }
 
@@ -376,6 +514,10 @@ pub fn lower_ingot<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     ingot: Ingot<'db>,
 ) -> MirLowerResult<MirModule<'db>> {
+    if let Some(err) = invalid_hir_error_for_ingot(db, ingot) {
+        return Err(err);
+    }
+
     let mut templates = Vec::new();
     let mut funcs_to_lower = Vec::new();
     let mut seen = FxHashSet::default();
@@ -410,6 +552,9 @@ pub fn lower_ingot<'db>(
     for func in funcs_to_lower {
         if func.body(db).is_none() {
             continue;
+        }
+        if let Some(err) = invalid_inline_attr_error(db, func) {
+            return Err(err);
         }
         let (diags, typed_body) = check_func_body(db, func);
         if !diags.is_empty() {
@@ -464,6 +609,7 @@ pub fn lower_ingot<'db>(
         crate::transform::canonicalize_transparent_newtypes(db, &mut func.body);
         crate::transform::insert_temp_binds(db, &mut func.body);
     }
+    validate_lowered_mir_functions(db, &functions)?;
 
     for func in &functions {
         if let Some(diag) = crate::analysis::noesc::check_noesc_escapes(db, func) {
@@ -485,6 +631,7 @@ pub fn lower_ingot<'db>(
         crate::transform::insert_temp_binds(db, &mut func.body);
         crate::transform::canonicalize_zero_sized(db, &mut func.body);
     }
+    validate_lowered_mir_functions(db, &functions)?;
     let mut module = MirModule {
         top_mod: root_mod,
         functions,
@@ -492,6 +639,7 @@ pub fn lower_ingot<'db>(
     crate::transform::normalize_runtime_abi(db, &mut module);
     crate::transform::eliminate_dead_erased_arg_materializations(db, &mut module);
     crate::transform::normalize_runtime_shapes(db, &mut module);
+    validate_lowered_mir_functions(db, &module.functions)?;
     Ok(module)
 }
 
@@ -518,6 +666,7 @@ pub(crate) fn lower_function<'db>(
         .to_opt()
         .map(|ident| ident.data(db).to_string())
         .unwrap_or_else(|| "<anonymous>".into());
+    let symbol_source = symbol_source_for_ingot_kind(func.top_mod(db).ingot(db).kind(db));
     let contract_function = extract_contract_function(db, func);
 
     let Some(body) = func.body(db) else {
@@ -577,18 +726,12 @@ pub(crate) fn lower_function<'db>(
         return Err(err);
     }
 
-    if let Some(expr) = first_unlowered_expr_used_by_mir(&mir_body) {
-        let expr_context = format_hir_expr_context(db, body, expr);
-        // Generic functions are re-lowered from HIR during monomorphization, so their initial
-        // templates are never codegen'd. Allow construction-time placeholders here.
-        let is_uninstantiated_generic =
-            generic_args.is_empty() && !CallableDef::Func(func).params(db).is_empty();
-        if !is_uninstantiated_generic {
-            return Err(MirLowerError::UnloweredHirExpr {
-                func_name: symbol_name.clone(),
-                expr: expr_context,
-            });
-        }
+    // Generic functions are re-lowered from HIR during monomorphization, so their initial
+    // templates are never codegen'd. Allow construction-time placeholders here.
+    let is_uninstantiated_generic =
+        generic_args.is_empty() && !CallableDef::Func(func).params(db).is_empty();
+    if !is_uninstantiated_generic {
+        validate_lowered_mir_body(db, &symbol_name, body, &mir_body)?;
     }
 
     // Note: `MirFunction` may be used as a generic template during monomorphization.
@@ -609,7 +752,9 @@ pub(crate) fn lower_function<'db>(
         runtime_abi,
         runtime_return_shape,
         contract_function,
+        inline_hint: func.inline_hint(db),
         symbol_name,
+        symbol_source,
         receiver_space,
         defer_root: false,
     })
@@ -628,11 +773,12 @@ pub(super) struct MirBuilder<'db, 'a> {
     pub(super) core: CoreLib<'db>,
     pub(super) loop_stack: Vec<LoopScope>,
     pub(super) const_cache: FxHashMap<Const<'db>, ValueId>,
-    pub(super) const_array_data_cache: FxHashMap<Const<'db>, (TyId<'db>, Vec<u8>)>,
+    pub(super) const_array_region_cache: FxHashMap<Const<'db>, (TyId<'db>, ConstRegionId)>,
     pub(super) source_info_cache: FxHashMap<Span, crate::ir::SourceInfoId>,
     pub(super) pat_address_space: FxHashMap<PatId, AddressSpaceKind>,
     pub(super) binding_locals: FxHashMap<LocalBinding<'db>, LocalId>,
     pub(super) address_taken_locals: FxHashSet<LocalId>,
+    pub(super) expr_lower_states: Vec<ExprLowerState>,
     /// For methods, the address space variant being lowered.
     pub(super) receiver_space: Option<AddressSpaceKind>,
     /// Address space for each effect parameter, indexed by effect param position.
@@ -644,8 +790,15 @@ pub(super) struct MirBuilder<'db, 'a> {
     /// Capability-space overrides for function parameters, indexed by parameter position.
     pub(super) param_capability_space_overrides:
         Vec<Vec<(MirProjectionPath<'db>, AddressSpaceKind)>>,
-    /// Deferred error from intrinsic lowering (e.g. `encoded_size` on a non-static type).
+    /// Deferred error from intrinsic lowering (e.g. `size_of` on an unsupported type).
     pub(super) deferred_error: Option<MirLowerError>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ExprLowerState {
+    NotStarted,
+    InProgress,
+    Done,
 }
 
 /// Loop context capturing break/continue targets.
@@ -722,11 +875,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             core,
             loop_stack: Vec::new(),
             const_cache: FxHashMap::default(),
-            const_array_data_cache: FxHashMap::default(),
+            const_array_region_cache: FxHashMap::default(),
             source_info_cache: FxHashMap::default(),
             pat_address_space: FxHashMap::default(),
             binding_locals: FxHashMap::default(),
             address_taken_locals: FxHashSet::default(),
+            expr_lower_states: vec![ExprLowerState::NotStarted; body.exprs(db).len()],
             receiver_space,
             effect_param_spaces: Vec::new(),
             effect_binding_spaces: FxHashMap::default(),
@@ -758,6 +912,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let id = self.builder.body.alloc_source_info(Some(span.clone()));
         self.source_info_cache.insert(span, id);
         id
+    }
+
+    pub(super) fn expr_lower_state(&self, expr: ExprId) -> ExprLowerState {
+        self.expr_lower_states[expr.index()]
+    }
+
+    pub(super) fn set_expr_lower_state(&mut self, expr: ExprId, state: ExprLowerState) {
+        self.expr_lower_states[expr.index()] = state;
     }
 
     fn source_for_expr(&mut self, expr: ExprId) -> crate::ir::SourceInfoId {
@@ -968,13 +1130,25 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             .get(effect_idx)
             .copied()
             .flatten()
-            && let Some(provider_ty) = self.generic_args.get(provider_arg_idx).copied()
-            && let Some(inferred) = self.infer_effect_provider_from_provider_ty(
-                provider_ty,
-                EffectProviderInferenceRationale::ConcreteProviderTy,
-            )
         {
-            return inferred;
+            let provider_ty = self
+                .generic_args
+                .get(provider_arg_idx)
+                .copied()
+                .or_else(|| {
+                    CallableDef::Func(func)
+                        .params(self.db)
+                        .get(provider_arg_idx)
+                        .copied()
+                });
+            if let Some(provider_ty) = provider_ty
+                && let Some(inferred) = self.infer_effect_provider_from_provider_ty(
+                    provider_ty,
+                    EffectProviderInferenceRationale::ConcreteProviderTy,
+                )
+            {
+                return inferred;
+            }
         }
 
         if let Some(effect) = func.effect_params(self.db).nth(effect_idx)
@@ -1055,33 +1229,70 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             })
     }
 
-    fn caller_effect_param_provider_ty(
+    fn binding_provider_ty(
         &self,
         binding: LocalBinding<'db>,
         caller_provider_arg_idx_by_effect: Option<&[Option<usize>]>,
     ) -> Option<TyId<'db>> {
-        let LocalBinding::EffectParam { site, idx, .. } = binding else {
-            return None;
-        };
-        let current_func = self.hir_func?;
-        let EffectParamSite::Func(binding_func) = site else {
-            return None;
-        };
-        if binding_func != current_func {
-            return None;
-        }
+        match binding {
+            LocalBinding::EffectParam { site, idx, .. } => match site {
+                EffectParamSite::Func(binding_func) => {
+                    let current_func = self.hir_func?;
+                    if binding_func != current_func {
+                        return None;
+                    }
 
-        let provider_idx = caller_provider_arg_idx_by_effect?
-            .get(idx)
-            .copied()
-            .flatten()?;
-        if let Some(concrete) = self.generic_args.get(provider_idx).copied() {
-            return Some(concrete);
+                    let provider_idx = caller_provider_arg_idx_by_effect
+                        .and_then(|map| map.get(idx).copied().flatten())
+                        .or_else(|| {
+                            hir::analysis::ty::effects::place_effect_provider_param_index_map(
+                                self.db,
+                                current_func,
+                            )
+                            .get(idx)
+                            .copied()
+                            .flatten()
+                        })?;
+                    if let Some(concrete) = self.generic_args.get(provider_idx).copied() {
+                        return Some(concrete);
+                    }
+                    CallableDef::Func(current_func)
+                        .params(self.db)
+                        .get(provider_idx)
+                        .copied()
+                }
+                EffectParamSite::Contract(contract)
+                | EffectParamSite::ContractInit { contract }
+                | EffectParamSite::ContractRecvArm { contract, .. } => {
+                    let binding_idx = u32::try_from(idx).ok()?;
+                    let binding = EffectEnvView::new(site)
+                        .bindings(self.db)
+                        .iter()
+                        .find(|binding| binding.binding_idx == binding_idx)?;
+                    match (binding.source, binding.key_kind) {
+                        (EffectSource::Root, EffectKeyKind::Trait) => {
+                            crate::monomorphize::resolve_default_root_effect_ty(
+                                self.db,
+                                contract.scope(),
+                                hir::analysis::ty::trait_resolution::PredicateListId::empty_list(
+                                    self.db,
+                                ),
+                            )
+                        }
+                        (EffectSource::Field(_), _) => {
+                            self.contract_field_provider_ty_for_effect_site(site, idx)
+                        }
+                        _ => None,
+                    }
+                }
+            },
+            LocalBinding::Param {
+                site: ParamSite::EffectField(effect_site),
+                idx,
+                ..
+            } => self.contract_field_provider_ty_for_effect_site(effect_site, idx),
+            LocalBinding::Local { .. } | LocalBinding::Param { .. } => None,
         }
-        CallableDef::Func(current_func)
-            .params(self.db)
-            .get(provider_idx)
-            .copied()
     }
 
     fn infer_effect_provider_for_resolved_arg(
@@ -1111,10 +1322,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 let PlaceBase::Binding(binding) = place.base;
                 match binding {
                     binding @ LocalBinding::EffectParam { .. } => {
-                        if let Some(provider_ty) = self.caller_effect_param_provider_ty(
-                            binding,
-                            caller_provider_arg_idx_by_effect,
-                        ) {
+                        if let Some(provider_ty) =
+                            self.binding_provider_ty(binding, caller_provider_arg_idx_by_effect)
+                        {
                             return Some(self.infer_effect_provider_or_fallback(
                                 provider_ty,
                                 EffectProviderInferenceRationale::ForwardedEffectParamProviderTy,
@@ -1895,7 +2105,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     }
 
     fn call_return_param_sources(&self, call: &CallOrigin<'db>) -> Option<Vec<usize>> {
-        let hir_target = call.hir_target.as_ref()?;
+        let CallTargetRef::Hir(hir_target) = call.target.as_ref()? else {
+            return None;
+        };
         let CallableDef::Func(func) = hir_target.callable_def else {
             return None;
         };
@@ -1945,13 +2157,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             .map(|func| func.pretty_print_signature(self.db))
             .unwrap_or_else(|| "<body owner>".to_owned());
         let callee = call
-            .hir_target
+            .target
             .as_ref()
-            .and_then(|target| {
-                if let CallableDef::Func(func) = target.callable_def {
-                    return Some(func.pretty_print_signature(self.db));
+            .and_then(|target| match target {
+                CallTargetRef::Hir(target) => {
+                    if let CallableDef::Func(func) = target.callable_def {
+                        return Some(func.pretty_print_signature(self.db));
+                    }
+                    None
                 }
-                None
+                CallTargetRef::Synthetic(id) => Some(format!("{id:?}")),
             })
             .unwrap_or_else(|| "<call target>".to_owned());
         self.deferred_error = Some(MirLowerError::Unsupported {
@@ -1968,9 +2183,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         dest_ty: TyId<'db>,
     ) -> Option<AddressSpaceKind> {
         let has_receiver = call
-            .hir_target
+            .target
             .as_ref()
-            .and_then(|target| target.callable_def.receiver_ty(self.db))
+            .and_then(|target| match target {
+                CallTargetRef::Hir(target) => target.callable_def.receiver_ty(self.db),
+                CallTargetRef::Synthetic(_) => None,
+            })
             .is_some();
 
         if let Some(return_param_indices) = self.call_return_param_sources(call) {
@@ -1999,7 +2217,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
         }
 
-        let hir_target = call.hir_target.as_ref()?;
+        let CallTargetRef::Hir(hir_target) = call.target.as_ref()? else {
+            return None;
+        };
         let expected_arg_tys = hir_target
             .callable_def
             .arg_tys(self.db)
@@ -3037,7 +3257,55 @@ fn format_hir_expr_context(db: &dyn SpannedHirAnalysisDb, body: Body<'_>, expr: 
     format!("expr={expr:?} at {span_context}: {expr_data}")
 }
 
-fn first_unlowered_expr_used_by_mir<'db>(body: &MirBody<'db>) -> Option<ExprId> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MirLoweringInvariantViolation {
+    UnloweredExpr(ExprId),
+    ControlFlowResult(ExprId),
+}
+
+impl MirLoweringInvariantViolation {
+    fn expr(self) -> ExprId {
+        match self {
+            Self::UnloweredExpr(expr) | Self::ControlFlowResult(expr) => expr,
+        }
+    }
+}
+
+pub(super) fn validate_lowered_mir_body<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    func_name: &str,
+    body: Body<'db>,
+    mir_body: &MirBody<'db>,
+) -> MirLowerResult<()> {
+    let Some(violation) = first_lowering_invariant_violation_used_by_mir(mir_body) else {
+        return Ok(());
+    };
+    let expr_context = format_hir_expr_context(db, body, violation.expr());
+    Err(MirLowerError::UnloweredHirExpr {
+        func_name: func_name.to_string(),
+        expr: expr_context,
+    })
+}
+
+fn validate_lowered_mir_functions<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    functions: &[MirFunction<'db>],
+) -> MirLowerResult<()> {
+    for func in functions {
+        let Some(typed_body) = &func.typed_body else {
+            continue;
+        };
+        let Some(body) = typed_body.body() else {
+            continue;
+        };
+        validate_lowered_mir_body(db, &mir_func_name(db, func), body, &func.body)?;
+    }
+    Ok(())
+}
+
+fn first_lowering_invariant_violation_used_by_mir<'db>(
+    body: &MirBody<'db>,
+) -> Option<MirLoweringInvariantViolation> {
     let mut used_values: FxHashSet<ValueId> = FxHashSet::default();
 
     for block in &body.blocks {
@@ -3121,7 +3389,12 @@ fn first_unlowered_expr_used_by_mir<'db>(body: &MirBody<'db>) -> Option<ExprId> 
         }
 
         match &body.value(value_id).origin {
-            ValueOrigin::Expr(expr) => return Some(*expr),
+            ValueOrigin::Expr(expr) => {
+                return Some(MirLoweringInvariantViolation::UnloweredExpr(*expr));
+            }
+            ValueOrigin::ControlFlowResult { expr } => {
+                return Some(MirLoweringInvariantViolation::ControlFlowResult(*expr));
+            }
             ValueOrigin::Unary { inner, .. } => worklist.push(*inner),
             ValueOrigin::Binary { lhs, rhs, .. } => {
                 worklist.push(*lhs);
@@ -3144,4 +3417,43 @@ fn dynamic_indices<'db, 'a>(
         }
         _ => None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use cranelift_entity::EntityRef;
+    use driver::DriverDataBase;
+    use hir::analysis::ty::ty_def::TyId;
+
+    use super::*;
+    use crate::ir::{BodyBuilder, Rvalue, ValueOrigin, ValueRepr};
+
+    #[test]
+    fn lowering_invariant_detects_live_control_flow_results() {
+        let db = DriverDataBase::default();
+        let ty = TyId::unit(&db);
+        let expr = ExprId::new(0);
+        let mut builder = BodyBuilder::new();
+        let value =
+            builder.alloc_value(ty, ValueOrigin::ControlFlowResult { expr }, ValueRepr::Word);
+        builder.assign(None, Rvalue::Value(value));
+        let body = builder.build();
+
+        assert_eq!(
+            first_lowering_invariant_violation_used_by_mir(&body),
+            Some(MirLoweringInvariantViolation::ControlFlowResult(expr))
+        );
+    }
+
+    #[test]
+    fn lowering_invariant_ignores_dead_placeholders() {
+        let db = DriverDataBase::default();
+        let ty = TyId::unit(&db);
+        let expr = ExprId::new(0);
+        let mut builder = BodyBuilder::new();
+        let _ = builder.alloc_value(ty, ValueOrigin::Expr(expr), ValueRepr::Word);
+        let body = builder.build();
+
+        assert_eq!(first_lowering_invariant_violation_used_by_mir(&body), None);
+    }
 }

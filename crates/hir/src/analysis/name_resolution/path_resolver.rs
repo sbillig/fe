@@ -3,7 +3,7 @@ use crate::hir_def::{CallableDef, Func};
 use crate::{
     core::hir_def::{
         Const, Enum, EnumVariant, GenericParamOwner, IdentId, ImplTrait, ItemKind, PathId,
-        PathKind, Trait, TypeKind, VariantKind, scope_graph::ScopeId,
+        PathKind, Trait, TypeBound, TypeKind, VariantKind, scope_graph::ScopeId,
     },
     span::{DynLazySpan, path::LazyPathSpan},
 };
@@ -25,24 +25,49 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::QueryDirective,
     ty::{
-        adt_def::{AdtRef, adt_layout_hole_tys},
+        adt_def::{AdtRef, adt_layout_hole_plan, adt_layout_hole_plan_with_explicit_args},
         binder::Binder,
         canonical::{Canonical, Canonicalized},
-        const_ty::ConstTyId,
+        const_ty::{AppFrameId, HoleId, LayoutHoleArgSite, LocalFrameId, StructuralHoleOrigin},
+        context::{AnalysisCx, LoweringMode},
         fold::TyFoldable,
+        layout_holes::layout_hole_with_fallback_ty,
         normalize::normalize_ty,
-        trait_def::{TraitInstId, impls_for_ty_with_constraints},
+        trait_def::{
+            TraitInstId, impls_for_ty_with_constraints, impls_for_ty_with_constraints_in_cx,
+        },
         trait_lower::{TraitArgError, TraitRefLowerError, lower_trait_ref, lower_trait_ref_impl},
-        trait_resolution::PredicateListId,
-        ty_def::{InvalidCause, Kind, TyData, TyId},
+        trait_resolution::{PredicateListId, TraitSolveCx, WellFormedness, check_trait_inst_wf},
+        ty_def::{InvalidCause, Kind, TyData, TyId, inference_keys},
         ty_lower::{
-            TyAlias, collect_generic_params, lower_generic_arg_list, lower_hir_ty, lower_type_alias,
+            ConstDefaultCompletion, TyAlias, collect_generic_params, lower_generic_arg_list,
+            lower_generic_arg_list_in_cx, lower_hir_ty, lower_hir_ty_in_cx, lower_type_alias,
         },
         unify::UnificationTable,
     },
 };
 
 pub type PathResolutionResult<'db, T> = Result<T, PathResError<'db>>;
+
+fn trait_inst_with_identity_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_: Trait<'db>,
+    self_ty: TyId<'db>,
+    explicit_args: &[TyId<'db>],
+) -> TraitInstId<'db> {
+    let mut trait_args = trait_.params(db).to_vec();
+    if let Some(first) = trait_args.first_mut() {
+        *first = self_ty;
+    } else {
+        trait_args.push(self_ty);
+    }
+    for (idx, &arg) in explicit_args.iter().enumerate() {
+        if let Some(slot) = trait_args.get_mut(idx + 1) {
+            *slot = arg;
+        }
+    }
+    TraitInstId::new(db, trait_, trait_args, IndexMap::new())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub struct PathResError<'db> {
@@ -74,6 +99,10 @@ pub enum PathResErrorKind<'db> {
     AmbiguousAssociatedConst {
         name: IdentId<'db>,
         trait_insts: ThinVec<TraitInstId<'db>>,
+    },
+
+    InfiniteBoundRecursion {
+        context: &'static str,
     },
 
     /// The name is found, but it can't be used in the middle of a use path.
@@ -162,6 +191,9 @@ impl<'db> PathResError<'db> {
                     trait_insts.len()
                 )
             }
+            PathResErrorKind::InfiniteBoundRecursion { .. } => {
+                "Infinite trait bound recursion".to_string()
+            }
             PathResErrorKind::InvalidPathSegment(_) => "Invalid path segment".to_string(),
             PathResErrorKind::QualifiedTypeType(res) => match res.as_ref() {
                 Ok(res) => format!(
@@ -201,6 +233,9 @@ impl<'db> PathResError<'db> {
                     format!("Ambiguous method; {} trait candidates.", traits.len())
                 }
                 MethodSelectionError::NotFound => "Method not found".to_string(),
+                MethodSelectionError::UnsatisfiedTraitMethod(_) => {
+                    "Unsatisfied trait method".to_string()
+                }
                 MethodSelectionError::InvisibleInherentMethod(_) => {
                     "Inherent method is not visible".to_string()
                 }
@@ -211,6 +246,17 @@ impl<'db> PathResError<'db> {
                     "Receiver type must be known".to_string()
                 }
             },
+        }
+    }
+
+    fn is_infinite_bound_recursion(&self) -> bool {
+        match &self.kind {
+            PathResErrorKind::InfiniteBoundRecursion { .. } => true,
+            PathResErrorKind::QualifiedTypeType(result)
+            | PathResErrorKind::QualifiedTypeTrait(result) => {
+                matches!(result.as_ref(), Err(inner) if inner.is_infinite_bound_recursion())
+            }
+            _ => false,
         }
     }
 
@@ -322,6 +368,13 @@ impl<'db> PathResError<'db> {
                 }
             }
 
+            PathResErrorKind::InfiniteBoundRecursion { context } => {
+                PathResDiag::InfiniteBoundRecursion(
+                    span,
+                    format!("cyclic trait reference prevented lowering this {context}"),
+                )
+            }
+
             PathResErrorKind::QualifiedTypeType(result) => match *result {
                 Ok(res) => {
                     if let PathKind::QualifiedType { type_, .. } = seg_path.kind(db)
@@ -331,7 +384,8 @@ impl<'db> PathResError<'db> {
                         let ty_span = seg_span.qualified_type().ty().into_path_type().path();
                         PathResDiag::ExpectedType(ty_span.into(), type_ident, res.kind_name())
                     } else {
-                        unreachable!()
+                        let ty_span = seg_span.qualified_type().ty().into_path_type().path();
+                        PathResDiag::ExpectedType(ty_span.into(), ident, res.kind_name())
                     }
                 }
                 Err(inner) => {
@@ -347,7 +401,8 @@ impl<'db> PathResError<'db> {
                         let trait_span = seg_span.qualified_type().trait_qualifier().name().into();
                         PathResDiag::ExpectedTrait(trait_span, trait_ident, res.kind_name())
                     } else {
-                        unreachable!()
+                        let trait_span = seg_span.qualified_type().trait_qualifier().name().into();
+                        PathResDiag::ExpectedTrait(trait_span, ident, res.kind_name())
                     }
                 }
                 Err(inner) => {
@@ -381,6 +436,9 @@ impl<'db> PathResError<'db> {
                         primary: span,
                         traits,
                     }
+                }
+                MethodSelectionError::UnsatisfiedTraitMethod(_) => {
+                    PathResDiag::NotFound(span, ident)
                 }
                 MethodSelectionError::NotFound => PathResDiag::NotFound(span, ident),
             },
@@ -682,6 +740,50 @@ pub fn resolve_path<'db>(
     )
 }
 
+pub(crate) fn resolve_path_in_cx<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+    resolve_tail_as_value: bool,
+    cx: &AnalysisCx<'db>,
+) -> PathResolutionResult<'db, PathRes<'db>> {
+    let directive = QueryDirective::for_scope(db, scope);
+    resolve_path_impl_in_cx(
+        db,
+        path,
+        scope,
+        resolve_tail_as_value,
+        directive,
+        true,
+        cx,
+        &mut |_, _| {},
+    )
+}
+
+pub(crate) fn resolve_path_with_observer_in_cx<'db, F>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+    resolve_tail_as_value: bool,
+    cx: &AnalysisCx<'db>,
+    observer: &mut F,
+) -> PathResolutionResult<'db, PathRes<'db>>
+where
+    F: FnMut(PathId<'db>, &PathRes<'db>),
+{
+    let directive = QueryDirective::for_scope(db, scope);
+    resolve_path_impl_in_cx(
+        db,
+        path,
+        scope,
+        resolve_tail_as_value,
+        directive,
+        true,
+        cx,
+        observer,
+    )
+}
+
 pub fn resolve_path_with_observer<'db, F>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
@@ -766,7 +868,8 @@ where
                 _ => {}
             }
         }
-        let trait_inst = match lower_trait_ref(db, ty, trait_, scope, assumptions, None) {
+        let trait_inst_result = lower_trait_ref(db, ty, trait_, scope, assumptions, None);
+        let trait_inst = match trait_inst_result {
             Ok(inst) => inst,
             Err(err) => {
                 let trait_path = trait_.path(db).to_opt().unwrap_or(path);
@@ -778,6 +881,12 @@ where
                     TraitRefLowerError::InvalidDomain(res) => PathResError::new(
                         PathResErrorKind::QualifiedTypeTrait(Box::new(Ok(res))),
                         trait_path,
+                    ),
+                    TraitRefLowerError::Cycle => PathResError::new(
+                        PathResErrorKind::InfiniteBoundRecursion {
+                            context: "qualified trait reference",
+                        },
+                        path,
                     ),
                     TraitRefLowerError::Ignored => PathResError::parse_err(trait_path),
                 };
@@ -800,22 +909,192 @@ where
         .and_then(|r| r.as_scope(db))
         .unwrap_or(scope);
 
-    match parent_res.clone() {
+    match parent_res {
         Some(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => {
-            let r = resolve_path_from_receiver_ty(
-                db,
-                ty,
-                ReceiverPathResolutionCx {
-                    parent_res: parent_res.clone(),
-                    path,
-                    scope,
+            // Fast paths for qualified types `<A as Trait>::...`.
+            //
+            // NOTE: This must run before generic associated-const probing, otherwise
+            // `<A as Trait>::CONST` can be mis-resolved with `recv_ty` set to the
+            // *qualified type* instead of `A`, which then breaks downstream trait-const
+            // evaluation/CTFE.
+            if let TyData::QualifiedTy(trait_inst) = ty.data(db) {
+                // Associated type projection
+                if let Some(assoc_ty) = trait_inst.assoc_ty(db, ident) {
+                    let r = PathRes::Ty(assoc_ty);
+                    observer(path, &r);
+                    return Ok(r);
+                }
+
+                // Associated function on a specific trait instance
+                if is_tail
+                    && resolve_tail_as_value
+                    && let Some(&method) = trait_inst.def(db).method_defs(db).get(&ident)
+                {
+                    let r = PathRes::TraitMethod(*trait_inst, method);
+                    observer(path, &r);
+                    return Ok(r);
+                }
+
+                // Associated const on a specific trait instance
+                if resolve_tail_as_value && trait_inst.def(db).const_(db, ident).is_some() {
+                    let r = PathRes::TraitConst(trait_inst.self_ty(db), *trait_inst, ident);
+                    observer(path, &r);
+                    return Ok(r);
+                }
+            }
+
+            // Try to resolve as an associated const on the receiver type
+            if is_tail && resolve_tail_as_value {
+                // Probe impls across both the call-site scope and the receiver type's ingot so
+                // `OtherIngotType::CONST` and `ExternalType::LOCAL_TRAIT_CONST` both resolve.
+                match select_assoc_const_candidate(db, ty, ident, scope, assumptions) {
+                    AssocConstSelection::Found(inst) => {
+                        let r = PathRes::TraitConst(ty, inst, ident);
+                        observer(path, &r);
+                        return Ok(r);
+                    }
+                    AssocConstSelection::Ambiguous(traits) => {
+                        return Err(PathResError::new(
+                            PathResErrorKind::AmbiguousAssociatedConst {
+                                name: ident,
+                                trait_insts: traits,
+                            },
+                            path,
+                        ));
+                    }
+                    AssocConstSelection::NotFound => {}
+                }
+            }
+
+            // Try to resolve as an enum variant
+            if let Some(enum_) = ty.as_enum(db) {
+                // We need to use the concrete enum scope instead of
+                // parent_scope to resolve the variants in all cases,
+                // eg when parent is `Self`
+                let directive = QueryDirective::for_scope(db, enum_.scope());
+                let query = make_query(db, path, enum_.scope(), directive);
+                let bucket = resolve_query(db, query);
+
+                if let Ok(res) = bucket.pick(NameDomain::VALUE)
+                    && let Some(var) = res.enum_variant()
+                {
+                    let reso = PathRes::EnumVariant(ResolvedVariant {
+                        ty,
+                        variant: var,
+                        path,
+                    });
+                    observer(path, &reso);
+                    return Ok(reso);
+                }
+            }
+
+            if is_tail && resolve_tail_as_value {
+                let receiver_ty = Canonicalized::new(db, ty);
+                match select_method_candidate(
+                    db,
+                    receiver_ty.value,
+                    ident,
+                    parent_scope,
                     assumptions,
-                    resolve_tail_as_value,
-                    is_tail,
-                },
-            )?;
-            observer(path, &r);
-            return Ok(r);
+                    None,
+                ) {
+                    Ok(cand) => {
+                        let r = PathRes::Method(ty, cand);
+                        observer(path, &r);
+                        return Ok(r);
+                    }
+                    Err(MethodSelectionError::NotFound) => {}
+                    Err(err) => {
+                        return Err(PathResError::method_selection(err, path));
+                    }
+                }
+            }
+
+            // Find raw associated types, then dedup by normalized result here.
+            let assoc_tys = match find_associated_type(
+                db,
+                scope,
+                Canonicalized::new(db, ty),
+                ident,
+                assumptions,
+            ) {
+                Ok(assoc_tys) => assoc_tys,
+                Err(FindAssociatedTypeError::InfiniteBoundRecursion) => {
+                    return Err(PathResError::new(
+                        PathResErrorKind::InfiniteBoundRecursion {
+                            context: "associated type",
+                        },
+                        path,
+                    ));
+                }
+            };
+
+            if assoc_tys.is_empty() {
+                return Err(PathResError::new(
+                    PathResErrorKind::NotFound {
+                        parent: parent_res,
+                        bucket: NameResBucket::default(),
+                    },
+                    path,
+                ));
+            }
+
+            // Deduplicate by normalized type, but preserve and return the original
+            // (unnormalized) candidate to avoid prematurely collapsing projections
+            // like `T::IntoIter::Item` into `T::Item`.
+            let seg_args = lower_generic_arg_list(
+                db,
+                path.generic_args(db),
+                scope,
+                assumptions,
+                LayoutHoleArgSite::Path(path),
+            );
+            let mut dedup: IndexMap<TyId<'db>, (TraitInstId<'db>, TyId<'db>)> = IndexMap::new();
+            for (inst, ty_candidate) in assoc_tys.iter().copied() {
+                let applied = if seg_args.is_empty() {
+                    ty_candidate
+                } else {
+                    TyId::foldl(db, ty_candidate, &seg_args)
+                };
+                if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) =
+                    applied.data(db)
+                {
+                    return Err(PathResError::new(
+                        PathResErrorKind::ArgNumMismatch {
+                            expected: *expected,
+                            given: *given,
+                        },
+                        path,
+                    ));
+                }
+
+                let norm = normalize_ty(db, applied, scope, assumptions);
+                dedup.entry(norm).or_insert((inst, applied));
+            }
+
+            match dedup.len() {
+                0 => unreachable!(),
+                1 => {
+                    let (_, (_, original_ty)) = dedup.first().unwrap();
+                    let r = PathRes::Ty(*original_ty);
+                    observer(path, &r);
+                    return Ok(r);
+                }
+                _ => {
+                    // Build candidate list from deduped set for diagnostics
+                    let candidates = dedup
+                        .into_iter()
+                        .map(|(_norm, (inst, original_ty))| (inst, original_ty))
+                        .collect();
+                    return Err(PathResError::new(
+                        PathResErrorKind::AmbiguousAssociatedType {
+                            name: ident,
+                            candidates,
+                        },
+                        path,
+                    ));
+                }
+            }
         }
 
         Some(
@@ -865,6 +1144,319 @@ where
     Ok(r)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn resolve_path_impl_in_cx<'db, F>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+    resolve_tail_as_value: bool,
+    base_directive: QueryDirective,
+    is_tail: bool,
+    cx: &AnalysisCx<'db>,
+    observer: &mut F,
+) -> PathResolutionResult<'db, PathRes<'db>>
+where
+    F: FnMut(PathId<'db>, &PathRes<'db>),
+{
+    let assumptions = cx.proof.assumptions();
+    let parent_res = path
+        .parent(db)
+        .map(|path| {
+            resolve_path_impl_in_cx(
+                db,
+                path,
+                scope,
+                resolve_tail_as_value,
+                base_directive,
+                false,
+                cx,
+                observer,
+            )
+        })
+        .transpose()?;
+
+    if let PathKind::QualifiedType { type_, trait_ } = path.kind(db) {
+        if path.parent(db).is_some() {
+            return Err(PathResError::new(
+                PathResErrorKind::InvalidPathSegment(PathRes::Ty(TyId::invalid(
+                    db,
+                    InvalidCause::Other,
+                ))),
+                path,
+            ));
+        }
+        let ty = lower_hir_ty_in_cx(db, type_, scope, cx);
+        if let Some(cause) = ty.invalid_cause(db) {
+            match cause {
+                InvalidCause::NotAType(res) => {
+                    return Err(PathResError::new(
+                        PathResErrorKind::QualifiedTypeType(Box::new(Ok(res))),
+                        path,
+                    ));
+                }
+                InvalidCause::PathResolutionFailed { path: ty_path } => {
+                    if let Err(inner) = resolve_path_in_cx(db, ty_path, scope, false, cx) {
+                        return Err(PathResError {
+                            kind: PathResErrorKind::QualifiedTypeType(Box::new(Err(inner))),
+                            failed_at: path,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        let trait_inst_result = lower_trait_ref(db, ty, trait_, scope, assumptions, None);
+        let trait_inst = match trait_inst_result {
+            Ok(inst) => inst,
+            Err(err) => {
+                let trait_path = trait_.path(db).to_opt().unwrap_or(path);
+                let err = match err {
+                    TraitRefLowerError::PathResError(e) => PathResError {
+                        kind: PathResErrorKind::QualifiedTypeTrait(Box::new(Err(e))),
+                        failed_at: path,
+                    },
+                    TraitRefLowerError::InvalidDomain(res) => PathResError::new(
+                        PathResErrorKind::QualifiedTypeTrait(Box::new(Ok(res))),
+                        trait_path,
+                    ),
+                    TraitRefLowerError::Cycle => PathResError::new(
+                        PathResErrorKind::InfiniteBoundRecursion {
+                            context: "qualified trait reference",
+                        },
+                        path,
+                    ),
+                    TraitRefLowerError::Ignored => PathResError::parse_err(trait_path),
+                };
+                return Err(err);
+            }
+        };
+
+        let qualified_ty = TyId::qualified_ty(db, trait_inst);
+        let r = PathRes::Ty(qualified_ty);
+        observer(path, &r);
+        return Ok(r);
+    }
+
+    let Some(ident) = path.ident(db).to_opt() else {
+        return Err(PathResError::parse_err(path));
+    };
+
+    let parent_scope = parent_res
+        .as_ref()
+        .and_then(|r| r.as_scope(db))
+        .unwrap_or(scope);
+
+    match parent_res {
+        Some(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => {
+            if let TyData::QualifiedTy(trait_inst) = ty.data(db) {
+                if let Some(assoc_ty) = trait_inst.assoc_ty(db, ident) {
+                    let r = PathRes::Ty(assoc_ty);
+                    observer(path, &r);
+                    return Ok(r);
+                }
+
+                if is_tail
+                    && resolve_tail_as_value
+                    && let Some(&method) = trait_inst.def(db).method_defs(db).get(&ident)
+                {
+                    let r = PathRes::TraitMethod(*trait_inst, method);
+                    observer(path, &r);
+                    return Ok(r);
+                }
+
+                if resolve_tail_as_value && trait_inst.def(db).const_(db, ident).is_some() {
+                    let r = PathRes::TraitConst(trait_inst.self_ty(db), *trait_inst, ident);
+                    observer(path, &r);
+                    return Ok(r);
+                }
+            }
+
+            if is_tail && resolve_tail_as_value {
+                match select_assoc_const_candidate(db, ty, ident, scope, assumptions) {
+                    AssocConstSelection::Found(inst) => {
+                        let r = PathRes::TraitConst(ty, inst, ident);
+                        observer(path, &r);
+                        return Ok(r);
+                    }
+                    AssocConstSelection::Ambiguous(traits) => {
+                        return Err(PathResError::new(
+                            PathResErrorKind::AmbiguousAssociatedConst {
+                                name: ident,
+                                trait_insts: traits,
+                            },
+                            path,
+                        ));
+                    }
+                    AssocConstSelection::NotFound => {}
+                }
+            }
+
+            if let Some(enum_) = ty.as_enum(db) {
+                let directive = QueryDirective::for_scope(db, enum_.scope());
+                let query = make_query(db, path, enum_.scope(), directive);
+                let bucket = resolve_query(db, query);
+
+                if let Ok(res) = bucket.pick(NameDomain::VALUE)
+                    && let Some(var) = res.enum_variant()
+                {
+                    let reso = PathRes::EnumVariant(ResolvedVariant {
+                        ty,
+                        variant: var,
+                        path,
+                    });
+                    observer(path, &reso);
+                    return Ok(reso);
+                }
+            }
+
+            if is_tail && resolve_tail_as_value {
+                let receiver_ty = Canonicalized::new(db, ty);
+                match select_method_candidate(
+                    db,
+                    receiver_ty.value,
+                    ident,
+                    parent_scope,
+                    assumptions,
+                    None,
+                ) {
+                    Ok(cand) => {
+                        let r = PathRes::Method(ty, cand);
+                        observer(path, &r);
+                        return Ok(r);
+                    }
+                    Err(MethodSelectionError::NotFound) => {}
+                    Err(err) => return Err(PathResError::method_selection(err, path)),
+                }
+            }
+
+            let assoc_tys = match find_associated_type(
+                db,
+                scope,
+                Canonicalized::new(db, ty),
+                ident,
+                assumptions,
+            ) {
+                Ok(assoc_tys) => assoc_tys,
+                Err(FindAssociatedTypeError::InfiniteBoundRecursion) => {
+                    return Err(PathResError::new(
+                        PathResErrorKind::InfiniteBoundRecursion {
+                            context: "associated type",
+                        },
+                        path,
+                    ));
+                }
+            };
+
+            if assoc_tys.is_empty() {
+                return Err(PathResError::new(
+                    PathResErrorKind::NotFound {
+                        parent: parent_res,
+                        bucket: NameResBucket::default(),
+                    },
+                    path,
+                ));
+            }
+
+            let seg_args = lower_generic_arg_list_in_cx(
+                db,
+                path.generic_args(db),
+                scope,
+                LayoutHoleArgSite::Path(path),
+                cx,
+            );
+            let mut dedup: IndexMap<TyId<'db>, (TraitInstId<'db>, TyId<'db>)> = IndexMap::new();
+            for (inst, ty_candidate) in assoc_tys.iter().copied() {
+                let applied = if seg_args.is_empty() {
+                    ty_candidate
+                } else {
+                    TyId::foldl(db, ty_candidate, &seg_args)
+                };
+                if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) =
+                    applied.data(db)
+                {
+                    return Err(PathResError::new(
+                        PathResErrorKind::ArgNumMismatch {
+                            expected: *expected,
+                            given: *given,
+                        },
+                        path,
+                    ));
+                }
+
+                let norm = normalize_ty(db, applied, scope, assumptions);
+                dedup.entry(norm).or_insert((inst, applied));
+            }
+
+            match dedup.len() {
+                0 => unreachable!(),
+                1 => {
+                    let (_, (_, original_ty)) = dedup.first().unwrap();
+                    let r = PathRes::Ty(*original_ty);
+                    observer(path, &r);
+                    return Ok(r);
+                }
+                _ => {
+                    let candidates = dedup
+                        .into_iter()
+                        .map(|(_norm, (inst, original_ty))| (inst, original_ty))
+                        .collect();
+                    return Err(PathResError::new(
+                        PathResErrorKind::AmbiguousAssociatedType {
+                            name: ident,
+                            candidates,
+                        },
+                        path,
+                    ));
+                }
+            }
+        }
+        Some(
+            PathRes::Func(_)
+            | PathRes::EnumVariant(..)
+            | PathRes::TraitConst(..)
+            | PathRes::TraitMethod(..),
+        ) => {
+            return Err(PathResError::new(
+                PathResErrorKind::InvalidPathSegment(parent_res.unwrap()),
+                path,
+            ));
+        }
+        Some(PathRes::FuncParam(..) | PathRes::Method(..)) => unreachable!(),
+        Some(PathRes::Trait(trait_inst)) => {
+            if is_tail
+                && resolve_tail_as_value
+                && let Some(&method) = trait_inst.def(db).method_defs(db).get(&ident)
+            {
+                let r = PathRes::TraitMethod(trait_inst, method);
+                observer(path, &r);
+                return Ok(r);
+            }
+        }
+        Some(PathRes::Const(..) | PathRes::Mod(_)) | None => {}
+    }
+
+    let query = make_query(db, path, parent_scope, base_directive);
+    let bucket = resolve_query(db, query);
+
+    let parent_ty = parent_res.as_ref().and_then(|res| match res {
+        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => Some(*ty),
+        _ => None,
+    });
+
+    let res = if is_tail
+        && resolve_tail_as_value
+        && let Ok(res) = bucket.pick(NameDomain::VALUE)
+    {
+        res.clone()
+    } else {
+        pick_type_domain_from_bucket(parent_res, bucket, path, path.parent(db))?
+    };
+
+    let r = resolve_name_res_in_cx(db, &res, parent_ty, path, scope, cx)?;
+    observer(path, &r);
+    Ok(r)
+}
+
 enum AssocConstSelection<'db> {
     Found(TraitInstId<'db>),
     Ambiguous(ThinVec<TraitInstId<'db>>),
@@ -881,6 +1473,11 @@ pub(crate) struct ReceiverPathResolutionCx<'db> {
     pub is_tail: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FindAssociatedTypeError {
+    InfiniteBoundRecursion,
+}
+
 fn select_assoc_const_candidate<'db>(
     db: &'db dyn HirAnalysisDb,
     receiver_ty: TyId<'db>,
@@ -888,32 +1485,6 @@ fn select_assoc_const_candidate<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> AssocConstSelection<'db> {
-    let mut enclosing_scope = scope;
-    let enclosing_body = scope.body();
-    let mut parent_item = enclosing_scope.parent_item(db);
-    while let Some(ItemKind::Body(parent)) = parent_item {
-        enclosing_scope = parent.scope();
-        parent_item = enclosing_scope.parent_item(db);
-    }
-
-    if let Some(ItemKind::ImplTrait(impl_trait)) = parent_item
-        && enclosing_body.is_some_and(|body| {
-            impl_trait
-                .assoc_consts(db)
-                .any(|assoc| assoc.value_body(db) == Some(body))
-        })
-        && let Some(trait_inst) = impl_trait.trait_inst(db)
-        && trait_inst.self_ty(db) == receiver_ty
-        && trait_inst.def(db).const_(db, name).is_some()
-    {
-        // While checking an impl-associated-const body, keep `SelfTy::CONST`
-        // on the trait currently being implemented instead of probing the
-        // global trait env. That lets same-impl const references participate in
-        // admission-time cycle checks without changing general method/body path
-        // resolution precedence.
-        return AssocConstSelection::Found(trait_inst);
-    }
-
     // Qualified type: `<A as T>::C` must resolve against the explicit trait instance.
     if let TyData::QualifiedTy(trait_inst) = receiver_ty.data(db) {
         return if trait_inst.def(db).const_(db, name).is_some() {
@@ -959,6 +1530,38 @@ fn select_assoc_const_candidate<'db>(
             }
 
             table.rollback_to(snapshot);
+        }
+
+        if let TyData::AssocTy(assoc_ty) = receiver_ty.data(db) {
+            let trait_ = assoc_ty.trait_.def(db);
+            let assoc_name = assoc_ty.name;
+            if let Some(decl) = trait_.assoc_ty(db, assoc_name) {
+                let subject = extracted_receiver_ty.fold_with(db, &mut table);
+                let owner_self = assoc_ty.trait_.self_ty(db);
+                for bound in &decl.bounds {
+                    if let TypeBound::Trait(trait_ref) = *bound
+                        && let Ok(inst) = crate::analysis::ty::trait_lower::lower_trait_ref(
+                            db,
+                            subject,
+                            trait_ref,
+                            scope,
+                            assumptions,
+                            Some(owner_self),
+                        )
+                    {
+                        if inst.def(db).const_(db, name).is_some() {
+                            matches.insert(inst);
+                        }
+
+                        for super_trait in inst.def(db).super_traits(db) {
+                            let super_inst = super_trait.instantiate(db, inst.args(db));
+                            if super_inst.def(db).const_(db, name).is_some() {
+                                matches.insert(super_inst);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         return match matches.len() {
@@ -1018,12 +1621,6 @@ pub(crate) fn resolve_path_from_receiver_ty<'db>(
         .and_then(|r| r.as_scope(db))
         .unwrap_or(scope);
 
-    // Fast paths for qualified types `<A as Trait>::...`.
-    //
-    // NOTE: This must run before generic associated-const probing, otherwise
-    // `<A as Trait>::CONST` can be mis-resolved with `recv_ty` set to the
-    // *qualified type* instead of `A`, which then breaks downstream trait-const
-    // evaluation/CTFE.
     if let TyData::QualifiedTy(trait_inst) = receiver_ty.data(db) {
         if let Some(assoc_ty) = trait_inst.assoc_ty(db, ident) {
             return Ok(PathRes::Ty(assoc_ty));
@@ -1088,13 +1685,23 @@ pub(crate) fn resolve_path_from_receiver_ty<'db>(
         }
     }
 
-    let assoc_tys = find_associated_type(
+    let assoc_tys = match find_associated_type(
         db,
         scope,
-        Canonical::new(db, receiver_ty),
+        Canonicalized::new(db, receiver_ty),
         ident,
         assumptions,
-    );
+    ) {
+        Ok(assoc_tys) => assoc_tys,
+        Err(FindAssociatedTypeError::InfiniteBoundRecursion) => {
+            return Err(PathResError::new(
+                PathResErrorKind::InfiniteBoundRecursion {
+                    context: "associated type",
+                },
+                path,
+            ));
+        }
+    };
 
     if assoc_tys.is_empty() {
         return Err(PathResError::new(
@@ -1106,7 +1713,13 @@ pub(crate) fn resolve_path_from_receiver_ty<'db>(
         ));
     }
 
-    let seg_args = lower_generic_arg_list(db, path.generic_args(db), scope, assumptions);
+    let seg_args = lower_generic_arg_list(
+        db,
+        path.generic_args(db),
+        scope,
+        assumptions,
+        LayoutHoleArgSite::Path(path),
+    );
     let mut dedup: IndexMap<TyId<'db>, (TraitInstId<'db>, TyId<'db>)> = IndexMap::new();
     for (inst, ty_candidate) in assoc_tys.iter().copied() {
         let applied = if seg_args.is_empty() {
@@ -1139,55 +1752,85 @@ pub(crate) fn resolve_path_from_receiver_ty<'db>(
         _ => Err(PathResError::new(
             PathResErrorKind::AmbiguousAssociatedType {
                 name: ident,
-                candidates: dedup.into_iter().map(|(_, candidate)| candidate).collect(),
+                candidates: dedup.values().copied().collect(),
             },
             path,
         )),
     }
 }
 
-pub fn find_associated_type<'db>(
+pub(crate) fn find_associated_type<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
-    ty: Canonical<TyId<'db>>,
+    ty: Canonicalized<'db, TyId<'db>>,
     name: IdentId<'db>,
     assumptions: PredicateListId<'db>,
-) -> SmallVec<(TraitInstId<'db>, TyId<'db>), 4> {
+) -> Result<SmallVec<(TraitInstId<'db>, TyId<'db>), 4>, FindAssociatedTypeError> {
+    find_associated_type_impl(db, scope, ty, name, assumptions, None)
+}
+
+pub(crate) fn find_associated_type_with_solve_cx<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: Canonicalized<'db, TyId<'db>>,
+    name: IdentId<'db>,
+    assumptions: PredicateListId<'db>,
+    solve_cx: TraitSolveCx<'db>,
+) -> Result<SmallVec<(TraitInstId<'db>, TyId<'db>), 4>, FindAssociatedTypeError> {
+    find_associated_type_impl(db, scope, ty, name, assumptions, Some(solve_cx))
+}
+
+fn find_associated_type_impl<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: Canonicalized<'db, TyId<'db>>,
+    name: IdentId<'db>,
+    assumptions: PredicateListId<'db>,
+    solve_cx: Option<TraitSolveCx<'db>>,
+) -> Result<SmallVec<(TraitInstId<'db>, TyId<'db>), 4>, FindAssociatedTypeError> {
+    let canonical_ty = ty.value;
+    let original_ty = ty.decanonicalize(db, canonical_ty.value);
+
     // Qualified type: `<A as T>::B`. Always construct the associated type projection
     // against the qualified trait instance; bindings (if any) will be handled downstream.
-    if let TyData::QualifiedTy(trait_inst) = ty.value.data(db) {
+    if let TyData::QualifiedTy(trait_inst) = canonical_ty.value.data(db) {
         let proj = TyId::assoc_ty(db, *trait_inst, name);
-        return smallvec![(*trait_inst, proj)];
+        let proj = ty.decanonicalize(db, proj);
+        let inst = ty.decanonicalize(db, *trait_inst);
+        return Ok(smallvec![(inst, proj)]);
     }
 
     let scope_ingot = scope.ingot(db);
     // Use a single unification table and snapshots to preserve outer
     // substitutions while isolating per-candidate attempts.
     let mut table = UnificationTable::new(db);
-    let lhs_ty = ty.extract_identity(&mut table);
+    let lhs_ty = canonical_ty.extract_identity(&mut table);
+    let lhs_keys = inference_keys(db, &lhs_ty);
 
-    if let TyData::TyParam(param) = ty.value.data(db) {
+    if let TyData::TyParam(param) = canonical_ty.value.data(db) {
         // Trait self, in trait or impl trait. Associated type must be in this trait.
         if param.is_trait_self() {
             if let Some(trait_) = param.owner.resolve_to::<Trait>(db) {
                 if trait_.assoc_ty(db, name).is_some() {
-                    let trait_inst = TraitInstId::new(db, trait_, vec![ty.value], IndexMap::new());
+                    let trait_inst = trait_inst_with_identity_args(db, trait_, original_ty, &[]);
                     let assoc_ty = TyId::assoc_ty(db, trait_inst, name);
-                    return smallvec![(trait_inst, assoc_ty)];
+                    return Ok(smallvec![(trait_inst, assoc_ty)]);
                 }
             } else if let Some(impl_trait) = param.owner.resolve_to::<ImplTrait>(db)
                 && let Some(trait_inst) = impl_trait.trait_inst(db)
                 && let Some(assoc_ty) = trait_inst.assoc_ty(db, name)
             {
-                return smallvec![(trait_inst, assoc_ty)];
+                return Ok(smallvec![(trait_inst, assoc_ty)]);
             }
         }
     }
 
+    let candidate_solve_cx =
+        solve_cx.unwrap_or(TraitSolveCx::new(db, scope).with_assumptions(assumptions));
     let mut candidates = SmallVec::new();
     // Check explicit bounds in assumptions that match `ty` only when `ty` is a type
     // parameter (to avoid spurious ambiguities for concrete types that already have impls).
-    if let TyData::TyParam(_) = ty.value.data(db) {
+    if let TyData::TyParam(_) = canonical_ty.value.data(db) {
         for &trait_inst in assumptions.list(db) {
             // `trait_inst` is a specific trait bound, e.g., `A: Abi` or `S<A>: SomeTrait`.
             let snapshot = table.snapshot();
@@ -1197,59 +1840,122 @@ pub fn find_associated_type<'db>(
             if table.unify(lhs_ty, pred_self_ty).is_ok()
                 && let Some(assoc_ty) = trait_inst.assoc_ty(db, name)
             {
-                let folded = assoc_ty.fold_with(db, &mut table);
-                candidates.push((trait_inst, folded));
+                let folded_inst = trait_inst.fold_with(db, &mut table);
+                let folded_ty = assoc_ty.fold_with(db, &mut table);
+                let folded_inst_keys = inference_keys(db, &folded_inst);
+                let folded_ty_keys = inference_keys(db, &folded_ty);
+                if folded_inst_keys.is_subset(&lhs_keys) && folded_ty_keys.is_subset(&lhs_keys) {
+                    candidates.push((
+                        ty.decanonicalize(db, folded_inst),
+                        ty.decanonicalize(db, folded_ty),
+                    ));
+                }
             }
             table.rollback_to(snapshot);
         }
-
-        // Generic parameters can only project associated types through their
-        // in-scope bounds. Searching impls here is both semantically wrong and
-        // can recurse through local impl admission while the bounds themselves
-        // are still being lowered.
-        return candidates;
     }
 
-    let search_ingots = [
-        Some(scope_ingot),
-        ty.value.ingot(db).filter(|&ingot| ingot != scope_ingot),
-    ];
-
-    // Check impls for `ty` across both the call-site ingot and `ty`'s defining ingot.
-    for ingot in search_ingots.into_iter().flatten() {
-        for impl_ in impls_for_ty_with_constraints(db, ingot, ty, assumptions) {
+    let mut collect_impl_candidates = |impls: Vec<
+        Binder<crate::analysis::ty::trait_def::ImplementorId<'db>>,
+    >| {
+        for impl_ in impls {
             let snapshot = table.snapshot();
             let impl_ = table.instantiate_with_fresh_vars(impl_);
 
             if table.unify(lhs_ty, impl_.self_ty(db)).is_ok()
-                && let Some(ty) = impl_.assoc_ty(db, name)
+                && let Some(assoc_ty) = impl_.assoc_ty(db, name)
             {
-                let folded = ty.fold_with(db, &mut table);
-                candidates.push((impl_.trait_(db), folded));
+                let folded_inst = impl_.trait_(db).fold_with(db, &mut table);
+                let folded_ty = assoc_ty.fold_with(db, &mut table);
+                let folded_inst_keys = inference_keys(db, &folded_inst);
+                let folded_ty_keys = inference_keys(db, &folded_ty);
+                if folded_inst_keys.is_subset(&lhs_keys) && folded_ty_keys.is_subset(&lhs_keys) {
+                    if !matches!(
+                        check_trait_inst_wf(db, candidate_solve_cx, folded_inst),
+                        WellFormedness::WellFormed
+                    ) {
+                        table.rollback_to(snapshot);
+                        continue;
+                    }
+                    candidates.push((
+                        ty.decanonicalize(db, folded_inst),
+                        ty.decanonicalize(db, folded_ty),
+                    ));
+                }
             }
             table.rollback_to(snapshot);
+        }
+    };
+
+    if let Some(solve_cx) = solve_cx {
+        let search_ingots = if solve_cx.local_implementors().is_some() {
+            vec![None]
+        } else {
+            vec![
+                Some(scope_ingot),
+                original_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
+            ]
+        };
+
+        for ingot in search_ingots {
+            collect_impl_candidates(impls_for_ty_with_constraints_in_cx(
+                db,
+                ingot,
+                canonical_ty,
+                solve_cx,
+            ));
+        }
+    } else {
+        let search_ingots = [
+            Some(scope_ingot),
+            original_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
+        ];
+
+        // Check impls for `ty` across both the call-site ingot and `ty`'s defining ingot.
+        for ingot in search_ingots.into_iter().flatten() {
+            collect_impl_candidates(impls_for_ty_with_constraints(
+                db,
+                ingot,
+                canonical_ty,
+                assumptions,
+            ));
         }
     }
 
     // Case 3: The LHS `ty` is an associated type (e.g., `T::Encoder` in `T::Encoder::Output`).
     // We need to look at the trait bound on the associated type.
-    if let TyData::AssocTy(assoc_ty) = ty.value.data(db) {
+    if let TyData::AssocTy(assoc_ty) = canonical_ty.value.data(db) {
+        let mut assoc_table = UnificationTable::new(db);
+
         // Extract the canonical type's substitutions into the unification table
         // This ensures we maintain any type parameter bindings from the outer context
-        let ty_with_subst = ty.extract_identity(&mut table);
+        let ty_with_subst = canonical_ty.extract_identity(&mut assoc_table);
+        let assoc_lhs_keys = inference_keys(db, &ty_with_subst);
 
         // First, check if there are trait bounds on this associated type in the assumptions
         // (e.g., from where clauses like `T::Assoc: Level1`).
         for &trait_inst in assumptions.list(db) {
-            let snapshot = table.snapshot();
+            let snapshot = assoc_table.snapshot();
             // Allow unification to account for type variables in either side
-            if table.unify(ty_with_subst, trait_inst.self_ty(db)).is_ok()
+            if assoc_table
+                .unify(ty_with_subst, trait_inst.self_ty(db))
+                .is_ok()
                 && let Some(assoc_ty) = trait_inst.assoc_ty(db, name)
             {
-                let folded = assoc_ty.fold_with(db, &mut table);
-                candidates.push((trait_inst, folded));
+                let folded_inst = trait_inst.fold_with(db, &mut assoc_table);
+                let folded_ty = assoc_ty.fold_with(db, &mut assoc_table);
+                let folded_inst_keys = inference_keys(db, &folded_inst);
+                let folded_ty_keys = inference_keys(db, &folded_ty);
+                if folded_inst_keys.is_subset(&assoc_lhs_keys)
+                    && folded_ty_keys.is_subset(&assoc_lhs_keys)
+                {
+                    candidates.push((
+                        ty.decanonicalize(db, folded_inst),
+                        ty.decanonicalize(db, folded_ty),
+                    ));
+                }
             }
-            table.rollback_to(snapshot);
+            assoc_table.rollback_to(snapshot);
         }
 
         // Also check bounds defined on the associated type in the trait definition.
@@ -1257,23 +1963,55 @@ pub fn find_associated_type<'db>(
         // path resolution works correctly.
         let trait_ = assoc_ty.trait_.def(db);
         let assoc_name = assoc_ty.name;
-        if let Some(decl) = trait_
-            .assoc_types(db)
-            .find(|decl| decl.name(db) == Some(assoc_name))
-        {
-            let subject = ty_with_subst.fold_with(db, &mut table);
+        if let Some(decl) = trait_.assoc_ty(db, assoc_name) {
+            let subject = ty_with_subst.fold_with(db, &mut assoc_table);
+            // owner_self is used to substitute `Self` in bounds like `type Assoc: Encode<Self>`
             let owner_self = assoc_ty.trait_.self_ty(db);
-            for inst in decl.bounds_on_subject_with_owner(db, subject, owner_self) {
+            for bound in &decl.bounds {
+                let TypeBound::Trait(trait_ref) = *bound else {
+                    continue;
+                };
+
+                let inst = match crate::analysis::ty::trait_lower::lower_trait_ref(
+                    db,
+                    subject,
+                    trait_ref,
+                    scope,
+                    assumptions,
+                    Some(owner_self),
+                ) {
+                    Ok(inst) => inst,
+                    Err(TraitRefLowerError::Cycle) => {
+                        return Err(FindAssociatedTypeError::InfiniteBoundRecursion);
+                    }
+                    Err(TraitRefLowerError::PathResError(err))
+                        if err.is_infinite_bound_recursion() =>
+                    {
+                        return Err(FindAssociatedTypeError::InfiniteBoundRecursion);
+                    }
+                    Err(_) => continue,
+                };
+
                 if inst.def(db).assoc_ty(db, name).is_some() {
                     let assoc_ty = TyId::assoc_ty(db, inst, name);
-                    let folded = assoc_ty.fold_with(db, &mut table);
-                    candidates.push((inst, folded));
+                    let folded_inst = inst.fold_with(db, &mut assoc_table);
+                    let folded_ty = assoc_ty.fold_with(db, &mut assoc_table);
+                    let folded_inst_keys = inference_keys(db, &folded_inst);
+                    let folded_ty_keys = inference_keys(db, &folded_ty);
+                    if folded_inst_keys.is_subset(&assoc_lhs_keys)
+                        && folded_ty_keys.is_subset(&assoc_lhs_keys)
+                    {
+                        candidates.push((
+                            ty.decanonicalize(db, folded_inst),
+                            ty.decanonicalize(db, folded_ty),
+                        ));
+                    }
                 }
             }
         }
     }
 
-    candidates
+    Ok(candidates)
 }
 
 pub fn resolve_name_res<'db>(
@@ -1284,18 +2022,23 @@ pub fn resolve_name_res<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
-    let args = &lower_generic_arg_list(db, path.generic_args(db), scope, assumptions);
-
+    let args = lower_generic_arg_list(
+        db,
+        path.generic_args(db),
+        scope,
+        assumptions,
+        LayoutHoleArgSite::Path(path),
+    );
     let res = match nameres.kind {
         NameResKind::Prim(prim) => {
             let ty = TyId::from_hir_prim_ty(db, prim);
-            PathRes::Ty(TyId::foldl(db, ty, args))
+            PathRes::Ty(TyId::foldl(db, ty, &args))
         }
         NameResKind::Scope(scope_id) => match scope_id {
             ScopeId::Item(item) => match item {
                 ItemKind::Struct(_) | ItemKind::Enum(_) => {
                     let adt_ref = AdtRef::try_from_item(item).unwrap();
-                    PathRes::Ty(ty_from_adtref(db, path, adt_ref, args, assumptions)?)
+                    PathRes::Ty(ty_from_adtref(db, path, adt_ref, &args, assumptions)?)
                 }
                 ItemKind::Contract(contract) => {
                     // Contracts have no generic parameters
@@ -1350,45 +2093,27 @@ pub fn resolve_name_res<'db>(
                             },
                             path,
                         ));
-                    } else {
-                        let completed = alias.param_set.complete_explicit_args_with_defaults(
-                            db,
-                            None,
-                            args,
-                            assumptions,
-                        );
-                        if completed.len() < expected {
-                            return Ok(PathRes::TyAlias(
-                                alias.clone(),
-                                TyId::invalid(
-                                    db,
-                                    InvalidCause::UnboundTypeAliasParam {
-                                        alias: type_alias,
-                                        n_given_args: args.len(),
-                                    },
-                                ),
-                            ));
-                        }
-
-                        let instantiated = alias.alias_to.instantiate(db, &completed);
-                        PathRes::TyAlias(alias.clone(), instantiated)
                     }
+                    PathRes::TyAlias(
+                        alias.clone(),
+                        alias.instantiate_from_path(db, path, &args, assumptions),
+                    )
                 }
 
                 ItemKind::Impl(impl_) => {
                     let base = impl_.ty(db);
-                    PathRes::Ty(TyId::foldl(db, base, args))
+                    PathRes::Ty(TyId::foldl(db, base, &args))
                 }
                 ItemKind::ImplTrait(impl_) => {
                     let base = impl_.ty(db);
-                    PathRes::Ty(TyId::foldl(db, base, args))
+                    PathRes::Ty(TyId::foldl(db, base, &args))
                 }
 
                 ItemKind::Trait(t) => {
                     if path.is_self_ty(db) {
                         let params = collect_generic_params(db, t.into());
                         let ty = params.trait_self(db).unwrap();
-                        let ty = TyId::foldl(db, ty, args);
+                        let ty = TyId::foldl(db, ty, &args);
                         PathRes::Ty(ty)
                     } else {
                         // Pre-validate type generic arguments of the trait path to surface
@@ -1429,7 +2154,8 @@ pub fn resolve_name_res<'db>(
                                 }
                             }
                         }
-                        match lower_trait_ref_impl(db, path, scope, assumptions, t) {
+                        let lowered = lower_trait_ref_impl(db, path, scope, assumptions, t);
+                        match lowered {
                             Ok(t) => PathRes::Trait(t),
                             Err(err) => {
                                 let kind = match err {
@@ -1464,8 +2190,7 @@ pub fn resolve_name_res<'db>(
                 let ty = param_set
                     .param_by_original_idx(db, idx as usize)
                     .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
-                let ty = TyId::foldl(db, ty, args);
-                PathRes::Ty(ty)
+                PathRes::Ty(TyId::foldl(db, ty, &args))
             }
 
             ScopeId::TraitType(t, idx) => {
@@ -1475,9 +2200,7 @@ pub fn resolve_name_res<'db>(
                 let params = collect_generic_params(db, t.into());
                 let self_ty = params.trait_self(db).unwrap();
 
-                let mut trait_args = vec![self_ty];
-                trait_args.extend_from_slice(args);
-                let trait_inst = TraitInstId::new(db, trait_def, &trait_args, IndexMap::new());
+                let trait_inst = trait_inst_with_identity_args(db, trait_def, self_ty, &args);
 
                 // Create an associated type reference
                 let assoc_ty_name = trait_type.name.unwrap();
@@ -1490,9 +2213,7 @@ pub fn resolve_name_res<'db>(
                 let params = collect_generic_params(db, t.into());
                 let self_ty = params.trait_self(db).unwrap();
 
-                let mut trait_args = vec![self_ty];
-                trait_args.extend_from_slice(args);
-                let trait_inst = TraitInstId::new(db, t, trait_args, IndexMap::new());
+                let trait_inst = trait_inst_with_identity_args(db, t, self_ty, &args);
 
                 let const_name = t.const_by_index(idx as usize).name(db).unwrap();
                 PathRes::TraitConst(self_ty, trait_inst, const_name)
@@ -1532,6 +2253,208 @@ pub fn resolve_name_res<'db>(
     Ok(res)
 }
 
+pub(crate) fn resolve_name_res_in_cx<'db>(
+    db: &'db dyn HirAnalysisDb,
+    nameres: &NameRes<'db>,
+    parent_ty: Option<TyId<'db>>,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+    cx: &AnalysisCx<'db>,
+) -> PathResolutionResult<'db, PathRes<'db>> {
+    let assumptions = cx.proof.assumptions();
+    let args = lower_generic_arg_list_in_cx(
+        db,
+        path.generic_args(db),
+        scope,
+        LayoutHoleArgSite::Path(path),
+        cx,
+    );
+    let res = match nameres.kind {
+        NameResKind::Prim(prim) => {
+            let ty = TyId::from_hir_prim_ty(db, prim);
+            PathRes::Ty(apply_ty_args_with_cx(db, ty, &args, args.len(), cx))
+        }
+        NameResKind::Scope(scope_id) => match scope_id {
+            ScopeId::Item(item) => match item {
+                ItemKind::Struct(_) | ItemKind::Enum(_) => {
+                    let adt_ref = AdtRef::try_from_item(item).unwrap();
+                    PathRes::Ty(ty_from_adtref_in_cx(db, path, adt_ref, &args, cx)?)
+                }
+                ItemKind::Contract(contract) => {
+                    if !args.is_empty() {
+                        return Err(PathResError::new(
+                            PathResErrorKind::ArgNumMismatch {
+                                expected: 0,
+                                given: args.len(),
+                            },
+                            path,
+                        ));
+                    }
+                    PathRes::Ty(TyId::contract(db, contract))
+                }
+                ItemKind::Mod(_) | ItemKind::TopMod(_) => PathRes::Mod(scope_id),
+                ItemKind::Func(func) => {
+                    let func_def = func.as_callable(db).unwrap();
+                    PathRes::Func(TyId::func(db, func_def))
+                }
+                ItemKind::Const(const_) => {
+                    if !args.is_empty() {
+                        return Err(PathResError::new(
+                            PathResErrorKind::ArgNumMismatch {
+                                expected: 0,
+                                given: args.len(),
+                            },
+                            path,
+                        ));
+                    }
+                    PathRes::Const(const_, const_.ty(db))
+                }
+                ItemKind::TypeAlias(type_alias) => {
+                    let alias = lower_type_alias(db, type_alias);
+                    let expected = alias.params(db).len();
+                    if args.len() > expected {
+                        return Err(PathResError::new(
+                            PathResErrorKind::ArgNumMismatch {
+                                expected,
+                                given: args.len(),
+                            },
+                            path,
+                        ));
+                    }
+                    PathRes::TyAlias(
+                        alias.clone(),
+                        alias.instantiate_from_path(db, path, &args, assumptions),
+                    )
+                }
+                ItemKind::Impl(impl_) => {
+                    let base = impl_.ty(db);
+                    PathRes::Ty(apply_ty_args_with_cx(db, base, &args, args.len(), cx))
+                }
+                ItemKind::ImplTrait(impl_) => {
+                    let base = impl_.ty_in_cx(db, cx);
+                    PathRes::Ty(apply_ty_args_with_cx(db, base, &args, args.len(), cx))
+                }
+                ItemKind::Trait(t) => {
+                    if path.is_self_ty(db) {
+                        let params = collect_generic_params(db, t.into());
+                        let ty = params.trait_self(db).unwrap();
+                        PathRes::Ty(apply_ty_args_with_cx(db, ty, &args, args.len(), cx))
+                    } else {
+                        if !path.generic_args(db).is_empty(db) {
+                            let gen_args = path.generic_args(db).data(db);
+                            for (idx, ga) in gen_args.iter().enumerate() {
+                                if let GenericArg::Type(ty_arg) = ga
+                                    && let Some(hir_ty) = ty_arg.ty.to_opt()
+                                    && let TypeKind::Path(p) = hir_ty.data(db)
+                                    && let Some(arg_path) = p.to_opt()
+                                {
+                                    match resolve_path_in_cx(db, arg_path, scope, false, cx) {
+                                        Ok(res)
+                                            if !matches!(
+                                                res,
+                                                PathRes::Ty(_) | PathRes::TyAlias(..)
+                                            ) =>
+                                        {
+                                            let ident = arg_path.ident(db).unwrap();
+                                            let kind = res.kind_name();
+                                            return Err(PathResError::new(
+                                                PathResErrorKind::TraitGenericArgType {
+                                                    arg_idx: idx,
+                                                    ident,
+                                                    given_kind: kind,
+                                                },
+                                                path,
+                                            ));
+                                        }
+                                        Ok(_) => {}
+                                        Err(inner) => return Err(inner),
+                                    }
+                                }
+                            }
+                        }
+                        let lowered = lower_trait_ref_impl(db, path, scope, assumptions, t);
+                        match lowered {
+                            Ok(t) => PathRes::Trait(t),
+                            Err(err) => {
+                                let kind = match err {
+                                    TraitArgError::ArgNumMismatch { expected, given } => {
+                                        PathResErrorKind::ArgNumMismatch { expected, given }
+                                    }
+                                    TraitArgError::ArgKindMisMatch { expected, given } => {
+                                        PathResErrorKind::ArgKindMisMatch { expected, given }
+                                    }
+                                    TraitArgError::ArgTypeMismatch { expected, given } => {
+                                        PathResErrorKind::ArgTypeMismatch { expected, given }
+                                    }
+                                    TraitArgError::ConstHoleNotAllowed { arg_idx } => {
+                                        PathResErrorKind::TraitConstHoleArg { arg_idx }
+                                    }
+                                    TraitArgError::Ignored => PathResErrorKind::ParseError,
+                                };
+                                return Err(PathResError {
+                                    kind,
+                                    failed_at: path,
+                                });
+                            }
+                        }
+                    }
+                }
+                ItemKind::Use(_) | ItemKind::Body(_) => unreachable!(),
+            },
+            ScopeId::GenericParam(parent, idx) => {
+                let owner = GenericParamOwner::from_item_opt(parent).unwrap();
+                let param_set = collect_generic_params(db, owner);
+                let ty = param_set
+                    .param_by_original_idx(db, idx as usize)
+                    .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
+                PathRes::Ty(apply_ty_args_with_cx(db, ty, &args, args.len(), cx))
+            }
+            ScopeId::TraitType(t, idx) => {
+                let trait_type = t.assoc_ty_by_index(db, idx as usize);
+                let params = collect_generic_params(db, t.into());
+                let self_ty = params.trait_self(db).unwrap();
+                let trait_inst = trait_inst_with_identity_args(db, t, self_ty, &args);
+                let assoc_ty_name = trait_type.name.unwrap();
+                PathRes::Ty(TyId::assoc_ty(db, trait_inst, assoc_ty_name))
+            }
+            ScopeId::TraitConst(t, idx) => {
+                let params = collect_generic_params(db, t.into());
+                let self_ty = params.trait_self(db).unwrap();
+                let trait_inst = trait_inst_with_identity_args(db, t, self_ty, &args);
+                let const_name = t.const_by_index(idx as usize).name(db).unwrap();
+                PathRes::TraitConst(self_ty, trait_inst, const_name)
+            }
+            ScopeId::Variant(var) => {
+                let enum_ty = if let Some(ty) = parent_ty {
+                    ty
+                } else {
+                    debug_assert!(path.parent(db).is_none());
+                    ty_from_adtref_in_cx(db, path, var.enum_.into(), &[], cx)?
+                };
+                PathRes::EnumVariant(ResolvedVariant {
+                    ty: enum_ty,
+                    variant: var,
+                    path,
+                })
+            }
+            ScopeId::FuncParam(item, idx) => {
+                if !args.is_empty() {
+                    return Err(PathResError::new(
+                        PathResErrorKind::ArgNumMismatch {
+                            expected: 0,
+                            given: args.len(),
+                        },
+                        path,
+                    ));
+                }
+                PathRes::FuncParam(item, idx)
+            }
+            ScopeId::Field(..) | ScopeId::Block(..) => unreachable!(),
+        },
+    };
+    Ok(res)
+}
+
 fn ty_from_adtref<'db>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
@@ -1547,31 +2470,46 @@ fn ty_from_adtref<'db>(
     let layout_provided = &args[explicit_provided_len..];
 
     // Fill trailing defaults (if any)
-    let mut completed_args = adt.param_set(db).complete_explicit_args_with_defaults(
+    let mut completed_args = adt.param_set(db).complete_explicit_args(
         db,
         None,
         explicit_args,
         assumptions,
+        ConstDefaultCompletion::metadata(Some(path))
+            .with_app_frame(Some(AppFrameId::root_path(db, path))),
     );
+    let layout_plan = if completed_args.len() == explicit_param_len {
+        adt_layout_hole_plan_with_explicit_args(db, adt, &completed_args)
+    } else {
+        adt_layout_hole_plan(db, adt)
+    };
     completed_args.extend(layout_provided.iter().copied());
 
-    let layout_hole_tys = adt_layout_hole_tys(db, adt);
     let provided_layout_len = layout_provided.len();
-    for hole_ty in layout_hole_tys.iter().copied().skip(provided_layout_len) {
-        completed_args.push(TyId::new(
+    for (layout_idx, hole_ty) in layout_plan
+        .hole_tys()
+        .iter()
+        .copied()
+        .enumerate()
+        .skip(provided_layout_len)
+    {
+        completed_args.push(layout_hole_with_fallback_ty(
             db,
-            TyData::ConstTy(ConstTyId::hole_with_ty(
+            hole_ty,
+            HoleId::structural(
                 db,
-                if hole_ty.has_invalid(db) {
-                    TyId::u256(db)
-                } else {
-                    hole_ty
+                hole_ty,
+                StructuralHoleOrigin::ExplicitWildcard {
+                    site: LayoutHoleArgSite::Path(path),
+                    arg_idx: explicit_param_len + layout_idx,
                 },
-            )),
+                LocalFrameId::root_path(db, path),
+            ),
         ));
     }
 
-    let applied = TyId::foldl(db, ty, &completed_args);
+    let applied =
+        apply_ty_args_with_metadata_suffix(db, ty, &completed_args, explicit_provided_len);
     if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) = applied.data(db)
     {
         Err(PathResError::new(
@@ -1584,6 +2522,131 @@ fn ty_from_adtref<'db>(
     } else {
         Ok(applied)
     }
+}
+
+fn ty_from_adtref_in_cx<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    adt_ref: AdtRef<'db>,
+    args: &[TyId<'db>],
+    cx: &AnalysisCx<'db>,
+) -> PathResolutionResult<'db, TyId<'db>> {
+    let assumptions = cx.proof.assumptions();
+    let adt = adt_ref.as_adt(db);
+    let ty = TyId::adt(db, adt);
+    let explicit_param_len = adt.param_set(db).params(db).len();
+    let explicit_provided_len = args.len().min(explicit_param_len);
+    let explicit_args = &args[..explicit_provided_len];
+    let layout_provided = &args[explicit_provided_len..];
+
+    let mut completed_args = adt.param_set(db).complete_explicit_args(
+        db,
+        None,
+        explicit_args,
+        assumptions,
+        ConstDefaultCompletion::metadata(Some(path))
+            .with_app_frame(Some(AppFrameId::root_path(db, path))),
+    );
+    let layout_plan = if completed_args.len() == explicit_param_len {
+        adt_layout_hole_plan_with_explicit_args(db, adt, &completed_args)
+    } else {
+        adt_layout_hole_plan(db, adt)
+    };
+    completed_args.extend(layout_provided.iter().copied());
+
+    let provided_layout_len = layout_provided.len();
+    for (layout_idx, hole_ty) in layout_plan
+        .hole_tys()
+        .iter()
+        .copied()
+        .enumerate()
+        .skip(provided_layout_len)
+    {
+        completed_args.push(layout_hole_with_fallback_ty(
+            db,
+            hole_ty,
+            HoleId::structural(
+                db,
+                hole_ty,
+                StructuralHoleOrigin::ExplicitWildcard {
+                    site: LayoutHoleArgSite::Path(path),
+                    arg_idx: explicit_param_len + layout_idx,
+                },
+                LocalFrameId::root_path(db, path),
+            ),
+        ));
+    }
+
+    let applied = apply_ty_args_with_cx(db, ty, &completed_args, explicit_provided_len, cx);
+    if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) = applied.data(db)
+    {
+        Err(PathResError::new(
+            PathResErrorKind::ArgNumMismatch {
+                expected: *expected,
+                given: *given,
+            },
+            path,
+        ))
+    } else {
+        Ok(applied)
+    }
+}
+
+fn apply_ty_args_with_metadata_suffix<'db>(
+    db: &'db dyn HirAnalysisDb,
+    mut base: TyId<'db>,
+    args: &[TyId<'db>],
+    metadata_start: usize,
+) -> TyId<'db> {
+    for (idx, arg) in args.iter().enumerate() {
+        if base.applicable_ty(db).is_none() {
+            return TyId::invalid(
+                db,
+                InvalidCause::TooManyGenericArgs {
+                    expected: idx,
+                    given: args.len(),
+                },
+            );
+        }
+        base = if idx < metadata_start {
+            TyId::app(db, base, *arg)
+        } else {
+            // Preserve metadata-only defaults/layout holes without forcing full
+            // const evaluation during name resolution.
+            TyId::app_metadata_only(db, base, *arg)
+        };
+    }
+
+    base
+}
+
+fn apply_ty_args_with_cx<'db>(
+    db: &'db dyn HirAnalysisDb,
+    mut base: TyId<'db>,
+    args: &[TyId<'db>],
+    metadata_start: usize,
+    cx: &AnalysisCx<'db>,
+) -> TyId<'db> {
+    for (idx, arg) in args.iter().enumerate() {
+        if base.applicable_ty(db).is_none() {
+            return TyId::invalid(
+                db,
+                InvalidCause::TooManyGenericArgs {
+                    expected: idx,
+                    given: args.len(),
+                },
+            );
+        }
+        let metadata_only =
+            matches!(cx.mode, LoweringMode::ImplTraitSignature { .. }) || idx >= metadata_start;
+        base = if metadata_only {
+            TyId::app_metadata_only(db, base, *arg)
+        } else {
+            TyId::app(db, base, *arg)
+        };
+    }
+
+    base
 }
 
 fn pick_type_domain_from_bucket<'db>(

@@ -122,9 +122,10 @@ pub enum TyLowerDiag<'db> {
         given: TyId<'db>,
     },
 
-    /// Layout holes (`_`) are only allowed in effect positions.
+    /// Layout holes (`_`) are only allowed in callable input types and contract fields.
     ConstHoleInValuePosition {
         span: DynLazySpan<'db>,
+        ty: TyId<'db>,
     },
 
     /// `own` parameters must have owned types. Borrow-handle types (`mut`/`ref`) are not owned.
@@ -205,6 +206,12 @@ impl TyLowerDiag<'_> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct CallConstraintDiagInfo<'db> {
+    pub callable_def: CallableDef<'db>,
+    pub bound_span: DynLazySpan<'db>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub enum BodyDiag<'db> {
     TypeMismatch {
         span: DynLazySpan<'db>,
@@ -218,7 +225,9 @@ pub enum BodyDiag<'db> {
         conflicat_with: DynLazySpan<'db>,
         name: IdentId<'db>,
     },
+    BindingsInOrPat(DynLazySpan<'db>),
     DuplicatedRestPat(DynLazySpan<'db>),
+    UnexpectedRestPat(DynLazySpan<'db>),
 
     InvalidPathDomainInPat {
         primary: DynLazySpan<'db>,
@@ -338,6 +347,20 @@ pub enum BodyDiag<'db> {
         trait_req: TraitInstId<'db>,
         given: TyId<'db>,
         provided_span: Option<DynLazySpan<'db>>,
+    },
+
+    WithEffectTraitUnsatisfied {
+        primary: DynLazySpan<'db>,
+        key: PathId<'db>,
+        trait_req: TraitInstId<'db>,
+        given: TyId<'db>,
+    },
+
+    WithEffectTypeUnsatisfied {
+        primary: DynLazySpan<'db>,
+        key: PathId<'db>,
+        expected: TyId<'db>,
+        given: TyId<'db>,
     },
 
     ReturnedTypeMismatch {
@@ -491,6 +514,7 @@ pub enum BodyDiag<'db> {
     AmbiguousTraitInst {
         primary: DynLazySpan<'db>,
         cands: ThinVec<TraitInstId<'db>>,
+        required_by: Option<CallConstraintDiagInfo<'db>>,
     },
 
     InvisibleAmbiguousTrait {
@@ -683,6 +707,8 @@ impl<'db> BodyDiag<'db> {
             Self::TypeMismatch { .. } => 0,
             Self::InfiniteOccurrence(..) => 1,
             Self::DuplicatedRestPat(..) => 2,
+            Self::UnexpectedRestPat(..) => 75,
+            Self::BindingsInOrPat(..) => 76,
             Self::InvalidPathDomainInPat { .. } => 3,
             Self::UnitVariantExpected { .. } => 4,
             Self::TupleVariantExpected { .. } => 5,
@@ -701,6 +727,8 @@ impl<'db> BodyDiag<'db> {
             Self::EffectTypeMismatch { .. } => 38,
             Self::EffectProviderMismatch { .. } => 52,
             Self::EffectTraitUnsatisfied { .. } => 39,
+            Self::WithEffectTraitUnsatisfied { .. } => 75,
+            Self::WithEffectTypeUnsatisfied { .. } => 76,
             Self::AmbiguousEffect { .. } => 40,
             Self::ReturnedTypeMismatch { .. } => 13,
             Self::TypeMustBeKnown(..) => 14,
@@ -766,6 +794,7 @@ pub enum TraitLowerDiag<'db> {
         conflict_with: ImplTrait<'db>,
     },
     ExternalTraitForExternalType(ImplTrait<'db>),
+    CyclicTraitRef(ImplTrait<'db>),
     CyclicSuperTraits(Vec<Trait<'db>>),
 }
 
@@ -775,6 +804,7 @@ impl TraitLowerDiag<'_> {
             Self::ExternalTraitForExternalType(_) => 0,
             Self::ConflictTraitImpl { .. } => 1,
             Self::CyclicSuperTraits { .. } => 2,
+            Self::CyclicTraitRef(_) => 3,
         }
     }
 }
@@ -802,6 +832,7 @@ pub enum TraitConstraintDiag<'db> {
         span: DynLazySpan<'db>,
         primary_goal: TraitInstId<'db>,
         unsat_subgoal: Option<TraitInstId<'db>>,
+        required_by: Option<CallConstraintDiagInfo<'db>>,
     },
 
     InfiniteBoundRecursion(DynLazySpan<'db>, String),

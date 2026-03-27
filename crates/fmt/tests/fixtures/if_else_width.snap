@@ -1,5 +1,6 @@
 ---
 source: crates/fmt/tests/format_snapshots.rs
+assertion_line: 16
 expression: output
 input_file: tests/fixtures/if_else_width.fe
 ---
@@ -40,5 +41,5 @@ fn nested() {
 }
 
 fn if_let_width(maybe: Option<u64>) -> u64 {
-    if let Some(value) = maybe { value } else { 0 }
+    if let Some(value,) = maybe { value } else { 0 }
 }

@@ -1,8 +1,15 @@
 ---
 source: crates/uitest/tests/ty.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty/def/trait_impl_local_helper_admission.fe
 ---
+error[3-0011]: given type doesn't match the expected const type
+    ┌─ trait_impl_local_helper_admission.fe:225:21
+    │
+225 │     fn buf(self) -> [u8; <Self as LenMethodHelper>::N]
+    │                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `usize` type here, but `u32` is given
+
 error[6-0002]: not all trait methods are implemented
   ┌─ trait_impl_local_helper_admission.fe:9:22
   │
@@ -18,6 +25,9 @@ error[6-0003]: trait bound is not satisfied
 error[6-0003]: trait bound is not satisfied
    ┌─ trait_impl_local_helper_admission.fe:16:5
    │
+13 │ fn needs_child_method<T: ChildMethod>(_value: T) {}
+   │                          ----------- required by this bound on `needs_child_method`
+   ·
 16 │     needs_child_method(value)
    │     ^^^^^^^^^^^^^^^^^^ `BadMethod` doesn't implement `ChildMethod`
 
@@ -30,6 +40,9 @@ error[6-0003]: trait bound is not satisfied
 error[6-0003]: trait bound is not satisfied
    ┌─ trait_impl_local_helper_admission.fe:38:5
    │
+35 │ fn needs_child_sig<T: ChildSig>(_value: T) {}
+   │                       -------- required by this bound on `needs_child_sig`
+   ·
 38 │     needs_child_sig(value)
    │     ^^^^^^^^^^^^^^^ `BadSig` doesn't implement `ChildSig`
 
@@ -42,32 +55,11 @@ error[6-0003]: trait bound is not satisfied
 error[6-0003]: trait bound is not satisfied
    ┌─ trait_impl_local_helper_admission.fe:58:5
    │
+55 │ fn needs_child_const<T: ChildConst>(_value: T) {}
+   │                         ---------- required by this bound on `needs_child_const`
+   ·
 58 │     needs_child_const(value)
    │     ^^^^^^^^^^^^^^^^^ `BadConst` doesn't implement `ChildConst`
-
-error[6-0003]: trait bound is not satisfied
-    ┌─ trait_impl_local_helper_admission.fe:199:22
-    │
-199 │     fn make(self) -> <Self as AssocMethodHelper>::X
-    │                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Self` doesn't implement `AssocMethodHelper`
-
-error[6-0003]: trait bound is not satisfied
-    ┌─ trait_impl_local_helper_admission.fe:225:21
-    │
-225 │     fn buf(self) -> [u8; <Self as LenMethodHelper>::N]
-    │                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Self` doesn't implement `LenMethodHelper`
-
-error[6-0003]: trait bound is not satisfied
-    ┌─ trait_impl_local_helper_admission.fe:377:14
-    │
-377 │     type X = SelfWrapCycle<SelfCycle>
-    │              ^^^^^^^^^^^^^^^^^^^^^^^^ `SelfWrapCycle<SelfCycle>` doesn't implement `SelfHelperCycle`
-
-error[6-0003]: trait bound is not satisfied
-    ┌─ trait_impl_local_helper_admission.fe:383:5
-    │
-383 │     needs_self_foo_cycle(value)
-    │     ^^^^^^^^^^^^^^^^^^^^ `SelfCycle` doesn't implement `SelfFooCycle`
 
 error[6-0008]: method `run` has incompatible return type
    ┌─ trait_impl_local_helper_admission.fe:28:8

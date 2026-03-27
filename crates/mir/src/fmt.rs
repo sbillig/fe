@@ -25,6 +25,10 @@ pub fn format_module(db: &dyn HirAnalysisDb, module: &MirModule<'_>) -> String {
 /// Format a single MIR function.
 pub fn format_function(db: &dyn HirAnalysisDb, func: &MirFunction<'_>) -> String {
     let mut out = String::new();
+    if let Some(hint) = func.inline_hint {
+        out.push_str(hint.pretty_print());
+        out.push('\n');
+    }
 
     // Function signature with parameters
     let params: Vec<String> = func
@@ -201,11 +205,12 @@ fn format_call(db: &dyn HirAnalysisDb, body: &MirBody<'_>, call: &CallOrigin<'_>
     } else {
         call.resolved_name
             .clone()
-            .or_else(|| {
-                call.hir_target
-                    .as_ref()
-                    .and_then(|target| target.callable_def.name(db))
-                    .map(|name| name.data(db).to_string())
+            .or_else(|| match call.target.as_ref()? {
+                crate::ir::CallTargetRef::Hir(target) => target
+                    .callable_def
+                    .name(db)
+                    .map(|name| name.data(db).to_string()),
+                crate::ir::CallTargetRef::Synthetic(id) => Some(format!("{id:?}")),
             })
             .unwrap_or_else(|| "<unresolved>".to_string())
     };
@@ -234,12 +239,11 @@ fn format_rvalue(db: &dyn HirAnalysisDb, body: &MirBody<'_>, rvalue: &Rvalue<'_>
                 AddressSpaceKind::Calldata => "calldata",
                 AddressSpaceKind::Storage => "stor",
                 AddressSpaceKind::TransientStorage => "tstor",
+                AddressSpaceKind::Code => "code",
             };
             format!("alloc {space}")
         }
-        Rvalue::ConstAggregate { data, .. } => {
-            format!("const_aggregate ({} bytes)", data.len())
-        }
+        Rvalue::ConstAggregate { data, .. } => format!("const_aggregate ({} bytes)", data.len()),
     }
 }
 
@@ -302,8 +306,8 @@ fn format_value_inner(
         },
         ValueOrigin::Local(local) => format_local(*local),
         ValueOrigin::PlaceRoot(local) => format!("place_root({})", format_local(*local)),
-        ValueOrigin::FuncItem(root) => format!(
-            "func_item({})",
+        ValueOrigin::CodeRegionRef(root) => format!(
+            "code_region({})",
             root.symbol.as_deref().unwrap_or("<unresolved>")
         ),
         ValueOrigin::FieldPtr(field_ptr) => {
@@ -315,6 +319,7 @@ fn format_value_inner(
             }
         }
         ValueOrigin::PlaceRef(place) => format!("&{}", format_place(body, place)),
+        ValueOrigin::ConstRegion(id) => format!("const_region_{}", id.0),
         ValueOrigin::MoveOut { place } => format!("move_out({})", format_place(body, place)),
         ValueOrigin::TransparentCast { value } => {
             format_value_inner(body, *value, stack, depth + 1)
@@ -335,6 +340,7 @@ fn format_place(body: &MirBody<'_>, place: &Place<'_>) -> String {
         AddressSpaceKind::Calldata => "calldata",
         AddressSpaceKind::Storage => "stor",
         AddressSpaceKind::TransientStorage => "tstor",
+        AddressSpaceKind::Code => "code",
     };
     let base = format_value(body, place.base);
     let proj = format_projection_path(body, place.projection.iter());
@@ -465,5 +471,6 @@ fn format_intrinsic(op: IntrinsicOp) -> &'static str {
         IntrinsicOp::Mulmod => "mulmod",
         IntrinsicOp::Revert => "revert",
         IntrinsicOp::Caller => "caller",
+        IntrinsicOp::Callvalue => "callvalue",
     }
 }

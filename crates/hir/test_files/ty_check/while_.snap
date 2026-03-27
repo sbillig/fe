@@ -1,6 +1,6 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
+assertion_line: 41
 expression: res
 input_file: test_files/ty_check/while_.fe
 ---
@@ -225,7 +225,7 @@ note:
    │ ╭────────────────^
 18 │ │             return res
 19 │ │         }
-   │ ╰─────────^ ()
+   │ ╰─────────^ !
 
 note: 
    ┌─ while_.fe:18:20

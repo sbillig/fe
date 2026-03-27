@@ -7,18 +7,19 @@ use crate::{
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{
-        ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path,
-        resolve_path_with_observer,
+        ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path_in_cx,
+        resolve_path_with_observer, resolve_path_with_observer_in_cx,
     },
     ty::visitor::TyVisitor,
 };
 
 use super::{
-    context::{AnalysisCx, ImplOverlay, LoweringMode, ProofCx},
+    assoc_items::normalize_ty_for_trait_inst,
+    context::{AnalysisCx, LoweringMode},
     diagnostics::{TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
     trait_resolution::{PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf_nested},
     ty_def::{InvalidCause, TyData, TyId},
-    ty_lower::{contextual_path_resolution_in_cx, lower_hir_ty_in_cx},
+    ty_lower::{analysis_cx_for_mode, contextual_path_resolution_in_cx, lower_hir_ty_in_cx},
 };
 use crate::visitor::prelude::LazyTraitRefSpan;
 
@@ -37,22 +38,7 @@ pub fn collect_hir_ty_diags<'db>(
     collect_hir_ty_diags_in_mode(db, scope, hir_ty, span, assumptions, LoweringMode::Normal)
 }
 
-fn analysis_cx_for_mode<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-    mode: LoweringMode<'db>,
-) -> AnalysisCx<'db> {
-    AnalysisCx::new(ProofCx::new(db, scope).with_assumptions(assumptions))
-        .with_overlay(
-            mode.current_impl()
-                .map(ImplOverlay::with_current_impl)
-                .unwrap_or_default(),
-        )
-        .with_mode(mode)
-}
-
-pub fn collect_hir_ty_diags_in_cx<'db>(
+pub(crate) fn collect_hir_ty_diags_in_cx<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     hir_ty: TypeId<'db>,
@@ -65,12 +51,20 @@ pub fn collect_hir_ty_diags_in_cx<'db>(
     }
 
     let ty = lower_hir_ty_in_cx(db, hir_ty, scope, cx);
+    let ty = if matches!(cx.mode, LoweringMode::ImplTraitSignature { .. }) {
+        ty
+    } else {
+        cx.mode
+            .trait_inst()
+            .map(|trait_inst| normalize_ty_for_trait_inst(db, cx, ty, trait_inst))
+            .unwrap_or(ty)
+    };
     emit_invalid_ty_error(db, ty, span.into())
         .into_iter()
         .collect()
 }
 
-pub fn collect_hir_ty_diags_in_mode<'db>(
+pub(crate) fn collect_hir_ty_diags_in_mode<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     hir_ty: TypeId<'db>,
@@ -94,7 +88,7 @@ pub fn collect_ty_lower_errors<'db>(
     collect_ty_lower_errors_in_mode(db, scope, hir_ty, span, assumptions, LoweringMode::Normal)
 }
 
-pub fn collect_ty_lower_errors_in_cx<'db>(
+pub(crate) fn collect_ty_lower_errors_in_cx<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     hir_ty: TypeId<'db>,
@@ -111,7 +105,7 @@ pub fn collect_ty_lower_errors_in_cx<'db>(
     vis.diags
 }
 
-pub fn collect_ty_lower_errors_in_mode<'db>(
+pub(crate) fn collect_ty_lower_errors_in_mode<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     hir_ty: TypeId<'db>,
@@ -137,6 +131,7 @@ pub(crate) fn explicit_value_ty_wf_diag<'db>(
                 span,
                 primary_goal: goal,
                 unsat_subgoal: subgoal,
+                required_by: None,
             }
             .into(),
         )
@@ -183,16 +178,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
             && let Some(path) = path_partial.to_opt()
             && let Some(resolved) = self
                 .contextual_path_resolution(ctxt.scope(), path, true)
-                .or_else(|| {
-                    resolve_path(
-                        self.db,
-                        path,
-                        ctxt.scope(),
-                        self.cx.proof.assumptions(),
-                        true,
-                    )
-                    .ok()
-                })
+                .or_else(|| resolve_path_in_cx(self.db, path, ctxt.scope(), true, &self.cx).ok())
         {
             let is_const_like = match resolved {
                 PathRes::Const(..) | PathRes::TraitConst(..) => true,
@@ -342,12 +328,12 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         let res = if let Some(res) = self.contextual_path_resolution(scope, path, false) {
             res
         } else {
-            match resolve_path_with_observer(
+            match resolve_path_with_observer_in_cx(
                 self.db,
                 path,
                 scope,
-                self.cx.proof.assumptions(),
                 false,
+                &self.cx,
                 &mut check_visibility,
             ) {
                 Ok(res) => res,
@@ -405,12 +391,12 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         // TODO(diags): In the future, refine this to walk only generic args
         // under the trait ref and surface kind/arg mismatches with precise
         // spans when available from semantic lowering.
-        match crate::analysis::name_resolution::resolve_path_with_observer(
+        match resolve_path_with_observer_in_cx(
             self.db,
             path,
             scope,
-            self.cx.proof.assumptions(),
             false,
+            &self.cx,
             &mut check_visibility,
         ) {
             Ok(res) => {
@@ -577,6 +563,7 @@ fn diag_from_invalid_cause<'db>(
                 span,
                 primary_goal: inst,
                 unsat_subgoal: None,
+                required_by: None,
             }
             .into()
         }

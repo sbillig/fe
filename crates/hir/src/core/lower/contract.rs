@@ -43,12 +43,15 @@ impl<'db> ContractRecvArm<'db> {
         let body = body_ctxt.build(body_ast.as_ref(), body_expr, BodyKind::FuncBody);
         let ret_ty = ast.ret_ty().map(|ty| TypeId::lower_ast(ctxt, ty));
         let effects = lower_uses_clause_opt(ctxt, ast.uses_clause());
+        super::payable::report_unknown_attrs_on_contract_entry(ctxt, ast.attr_list(), "recv arm");
+        let attributes = super::payable::lower_contract_entry_attrs_opt(ctxt, ast.attr_list());
 
         ContractRecvArm {
             pat,
             ret_ty,
             effects,
             body,
+            attributes,
         }
     }
 }
@@ -73,6 +76,16 @@ impl<'db> Contract<'db> {
         let recvs = {
             let mut data = Vec::new();
             for (recv_idx, r) in ast.recvs().enumerate() {
+                super::payable::report_payable_attr_on_unsupported_item(
+                    ctxt,
+                    r.attr_list(),
+                    "recv block",
+                );
+                super::payable::report_unknown_attrs_on_contract_entry(
+                    ctxt,
+                    r.attr_list(),
+                    "recv block",
+                );
                 let msg_path = r.path().map(|p| crate::hir_def::PathId::lower_ast(ctxt, p));
                 let arms = r
                     .arms()
@@ -121,6 +134,7 @@ fn lower_contract_field_def<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     ast: ast::RecordFieldDef,
 ) -> FieldDef<'db> {
+    super::payable::report_payable_attr_on_unsupported_item(ctxt, ast.attr_list(), "field");
     let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
     let name = IdentId::lower_token_partial(ctxt, ast.name());
     let type_ref = TypeId::lower_ast_partial(ctxt, ast.ty());
@@ -139,6 +153,12 @@ fn lower_contract_init<'db>(
 ) -> ContractInit<'db> {
     let db = ctxt.db();
 
+    super::payable::report_unknown_attrs_on_contract_entry(
+        ctxt,
+        init_ast.attr_list(),
+        "init block",
+    );
+    let attributes = super::payable::lower_contract_entry_attrs_opt(ctxt, init_ast.attr_list());
     let id = ctxt.joined_id(TrackedItemVariant::ContractInit);
     let params = init_ast
         .params()
@@ -156,5 +176,14 @@ fn lower_contract_init<'db>(
     );
     let origin = HirOrigin::raw(&init_ast);
 
-    ContractInit::new(db, id, params, effects, body, ctxt.top_mod(), origin)
+    ContractInit::new(
+        db,
+        id,
+        attributes,
+        params,
+        effects,
+        body,
+        ctxt.top_mod(),
+        origin,
+    )
 }

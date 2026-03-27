@@ -83,6 +83,13 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
             Some(AddressSpaceKind::Calldata) => self.write_u8(2),
             Some(AddressSpaceKind::Storage) => self.write_u8(3),
             Some(AddressSpaceKind::TransientStorage) => self.write_u8(4),
+            Some(AddressSpaceKind::Code) => self.write_u8(5),
+            None => self.write_u8(0),
+        }
+        match func.inline_hint {
+            Some(hir::hir_def::InlineHint::Hint) => self.write_u8(1),
+            Some(hir::hir_def::InlineHint::Always) => self.write_u8(2),
+            Some(hir::hir_def::InlineHint::Never) => self.write_u8(3),
             None => self.write_u8(0),
         }
 
@@ -90,6 +97,13 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
         self.write_usize(func.body.values.len());
         for value in func.body.values.iter() {
             self.hash_value(value);
+        }
+
+        self.write_usize(func.body.const_regions.len());
+        for region in &func.body.const_regions {
+            self.write_str(region.ty.pretty_print(self.db));
+            self.write_usize(region.bytes.len());
+            self.hasher.write(&region.bytes);
         }
 
         self.write_usize(func.body.blocks.len());
@@ -117,6 +131,8 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
             ValueRepr::Ptr(AddressSpaceKind::Calldata) => self.write_u8(6),
             ValueRepr::Ptr(AddressSpaceKind::Storage) => self.write_u8(7),
             ValueRepr::Ptr(AddressSpaceKind::TransientStorage) => self.write_u8(8),
+            ValueRepr::Ref(AddressSpaceKind::Code) => self.write_u8(9),
+            ValueRepr::Ptr(AddressSpaceKind::Code) => self.write_u8(10),
         }
         self.hash_value_origin(&value.origin);
     }
@@ -194,7 +210,7 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                 self.write_u8(0x18);
                 self.write_u32(local.0);
             }
-            ValueOrigin::FuncItem(root) => {
+            ValueOrigin::CodeRegionRef(root) => {
                 self.write_u8(0x09);
                 let symbol = root
                     .symbol
@@ -226,6 +242,7 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                     AddressSpaceKind::Calldata => 2,
                     AddressSpaceKind::Storage => 3,
                     AddressSpaceKind::TransientStorage => 4,
+                    AddressSpaceKind::Code => 5,
                 });
             }
             ValueOrigin::PlaceRef(place) => {
@@ -240,6 +257,10 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                 self.write_u8(0x10);
                 let slot = self.placeholder_value(*value);
                 self.write_u32(slot);
+            }
+            ValueOrigin::ConstRegion(region) => {
+                self.write_u8(0x13);
+                self.write_usize(region.index());
             }
         }
     }
@@ -304,12 +325,10 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
             let slot = self.placeholder_value(*arg);
             self.write_u32(slot);
         }
-        self.write_usize(
-            call.hir_target
-                .as_ref()
-                .map(|target| target.generic_args.len())
-                .unwrap_or(0),
-        );
+        self.write_usize(match call.target.as_ref() {
+            Some(crate::ir::CallTargetRef::Hir(target)) => target.generic_args.len(),
+            _ => 0,
+        });
         let symbol = if let Some(checked) = call.checked_intrinsic {
             format!(
                 "{}<{}>",
@@ -326,11 +345,12 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                 })
                 .cloned()
                 .or_else(|| call.resolved_name.clone())
-                .or_else(|| {
-                    call.hir_target
-                        .as_ref()
-                        .and_then(|target| target.callable_def.name(self.db))
-                        .map(|n| n.data(self.db).to_string())
+                .or_else(|| match call.target.as_ref()? {
+                    crate::ir::CallTargetRef::Hir(target) => target
+                        .callable_def
+                        .name(self.db)
+                        .map(|n| n.data(self.db).to_string()),
+                    crate::ir::CallTargetRef::Synthetic(id) => Some(format!("{id:?}")),
                 })
                 .or_else(|| {
                     call.builtin_terminator.map(|builtin| match builtin {
@@ -389,6 +409,7 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                             AddressSpaceKind::Calldata => 2,
                             AddressSpaceKind::Storage => 3,
                             AddressSpaceKind::TransientStorage => 4,
+                            AddressSpaceKind::Code => 5,
                         });
                     }
                     Rvalue::ConstAggregate { data, .. } => {

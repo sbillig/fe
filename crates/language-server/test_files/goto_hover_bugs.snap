@@ -4,6 +4,12 @@ expression: snapshot
 input_file: test_files/goto_hover_bugs.fe
 ---
 note: 
+   ┌─ goto_hover_bugs.fe:14:18
+   │
+14 │ trait Encode<A>: AbiSize {}
+   │                  ^^^^^^^ -> goto_hover_bugs::AbiSize
+
+note: 
    ┌─ goto_hover_bugs.fe:50:14
    │
 50 │ fn create<C: Contract>() {
@@ -48,17 +54,26 @@ note:
 note: 
    ┌─ goto_hover_bugs.fe:55:9
    │
-55 │     let args_len = encoded_size<C::InitArgs>()
+55 │     let args_len = C::InitArgs::ENCODED_SIZE
    │         ^^^^^^^^ -> local: u256
 
 note: 
    ┌─ goto_hover_bugs.fe:55:20
    │
-55 │     let args_len = encoded_size<C::InitArgs>()
-   │                    ^^^^^^^^^^^^-------------
-   │                    │
-   │                    full segment (includes generics)
-   │                    -> goto_hover_bugs::encoded_size
+55 │     let args_len = C::InitArgs::ENCODED_SIZE
+   │                    ^ -> goto_hover_bugs::create::C
+
+note: 
+   ┌─ goto_hover_bugs.fe:55:23
+   │
+55 │     let args_len = C::InitArgs::ENCODED_SIZE
+   │                       ^^^^^^^^ -> goto_hover_bugs::Contract::InitArgs
+
+note: 
+   ┌─ goto_hover_bugs.fe:55:33
+   │
+55 │     let args_len = C::InitArgs::ENCODED_SIZE
+   │                                 ^^^^^^^^^^^^ -> goto_hover_bugs::AbiSize::ENCODED_SIZE
 
 note: 
    ┌─ goto_hover_bugs.fe:56:9

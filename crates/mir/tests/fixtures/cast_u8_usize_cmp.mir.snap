@@ -1,5 +1,6 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
+assertion_line: 26
 expression: mir_output
 ---
 fn cast_u8_usize_cmp(v0: [u8; 8], v1: usize, v2: usize) -> u8:

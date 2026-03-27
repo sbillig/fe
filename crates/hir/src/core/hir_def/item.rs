@@ -10,8 +10,8 @@ use parser::ast;
 
 use super::{
     AttrListId, Body, EffectParamListId, FuncParamListId, FuncParamName, GenericParamListId,
-    HirIngot, IdentId, Partial, Pat, PatId, TupleTypeId, TypeBound, TypeId, UseAlias,
-    WhereClauseId,
+    HirIngot, IdentId, InlineAttr, InlineAttrErrorKind, InlineHint, Partial, Pat, PatId,
+    TupleTypeId, TypeBound, TypeId, UseAlias, WhereClauseId,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use crate::{
@@ -672,6 +672,24 @@ impl<'db> Func<'db> {
         self.modifiers(db).is_const
     }
 
+    fn inline_attr(self, db: &'db dyn HirDb) -> Option<InlineAttr> {
+        self.attributes(db).inline_attr(db)
+    }
+
+    pub fn inline_hint(self, db: &'db dyn HirDb) -> Option<InlineHint> {
+        match self.inline_attr(db) {
+            Some(InlineAttr::Hint(hint)) => Some(hint),
+            Some(InlineAttr::Error(_)) | None => None,
+        }
+    }
+
+    pub fn inline_attr_error(self, db: &'db dyn HirDb) -> Option<InlineAttrErrorKind> {
+        match self.inline_attr(db) {
+            Some(InlineAttr::Error(kind)) => Some(kind),
+            Some(InlineAttr::Hint(_)) | None => None,
+        }
+    }
+
     pub fn is_extern(self, db: &dyn HirDb) -> bool {
         self.modifiers(db).is_extern
     }
@@ -827,6 +845,7 @@ pub struct ContractInit<'db> {
     #[id]
     id: TrackedItemId<'db>,
 
+    pub attributes: AttrListId<'db>,
     pub params: FuncParamListId<'db>,
     pub effects: EffectParamListId<'db>,
     pub body: Body<'db>,
@@ -834,6 +853,13 @@ pub struct ContractInit<'db> {
 
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::ContractInit>,
+}
+
+impl<'db> ContractInit<'db> {
+    /// Returns `true` if this init block is marked `#[payable]`.
+    pub fn is_payable(self, db: &'db dyn HirDb) -> bool {
+        self.attributes(db).has_marker_attr(db, "payable")
+    }
 }
 
 #[salsa::interned]
@@ -862,6 +888,7 @@ pub struct ContractRecvArm<'db> {
     pub ret_ty: Option<TypeId<'db>>,
     pub effects: EffectParamListId<'db>,
     pub body: Body<'db>,
+    pub attributes: AttrListId<'db>,
 }
 
 impl<'db> ContractRecvArm<'db> {
@@ -880,6 +907,11 @@ impl<'db> ContractRecvArm<'db> {
             | Pat::Record(Partial::Present(path), ..) => Some(*path),
             _ => None,
         }
+    }
+
+    /// Returns `true` if this recv arm is marked `#[payable]`.
+    pub fn is_payable(&self, db: &'db dyn HirDb) -> bool {
+        self.attributes.has_marker_attr(db, "payable")
     }
 }
 

@@ -362,7 +362,9 @@ async fn mock_lsp_scenarios() {
     scenario_format_concurrent_with_diagnostics(&mut client, &uri).await;
     scenario_format_during_generic_struct_keystroke_sequence(&mut client, &uri).await;
     scenario_diagnostics_published_for_broken_code(&mut client).await;
+    scenario_arithmetic_attr_reports_errors(&mut client, &uri).await;
     scenario_contract_analysis_reports_errors(&mut client, &uri).await;
+    scenario_payable_attr_reports_errors(&mut client, &uri).await;
     scenario_errors_reported_after_panic_recovery(&mut client, &uri).await;
 
     client.shutdown().await;
@@ -578,6 +580,28 @@ async fn scenario_format_during_generic_struct_keystroke_sequence(
     }
 }
 
+/// Regression test: ArithmeticAttrPass was absent from initialize_analysis_pass().
+/// That caused invalid arithmetic attributes to surface in CLI diagnostics while
+/// silently disappearing from the language server.
+async fn scenario_arithmetic_attr_reports_errors(client: &mut MockLspClient, uri: &Url) {
+    client.clear_diagnostics();
+    client.did_change(
+        uri,
+        750,
+        r#"#[arithmetic = checked]
+fn bad() {}"#,
+    );
+
+    let found = client.wait_for_diagnostic_code(uri, "12-0002").await;
+    assert!(
+        found,
+        "expected error 12-0002 (invalid arithmetic attribute form) — \
+         ArithmeticAttrPass must be registered in initialize_analysis_pass(); \
+         got: {:?}",
+        client.diagnostics_for_uri(uri),
+    );
+}
+
 /// Regression test: ContractAnalysisPass was absent from initialize_analysis_pass().
 /// BodyAnalysisPass explicitly skips contract bodies ("contract-specific analysis is
 /// handled separately"), so errors in init/recv blocks were never reported by the LSP.
@@ -604,6 +628,36 @@ pub contract Broken {
         found,
         "expected error 8-0051 (unresolved effect in contract init) — \
          ContractAnalysisPass must be registered in initialize_analysis_pass(); \
+         got: {:?}",
+        client.diagnostics_for_uri(uri),
+    );
+}
+
+/// Regression test: PayableAttrPass was absent from initialize_analysis_pass().
+/// Invalid `#[payable]` usages must be reported by the LSP, not just by `fe check`.
+async fn scenario_payable_attr_reports_errors(client: &mut MockLspClient, uri: &Url) {
+    client.clear_diagnostics();
+    // `#[payable(foo)]` is invalid — the attribute takes no arguments (error 13-0002).
+    client.did_change(
+        uri,
+        850,
+        r#"struct Store { value: u256 }
+
+pub contract BadPayable {
+    mut store: Store
+
+    #[payable(foo)]
+    init() {
+        store.value = 0
+    }
+}"#,
+    );
+
+    let found = client.wait_for_diagnostic_code(uri, "13-0002").await;
+    assert!(
+        found,
+        "expected error 13-0002 (invalid #[payable] form) — \
+         PayableAttrPass must be registered in initialize_analysis_pass(); \
          got: {:?}",
         client.diagnostics_for_uri(uri),
     );

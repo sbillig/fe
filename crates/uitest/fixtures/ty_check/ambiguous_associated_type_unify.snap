@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/ambiguous_associated_type_unify.fe
 ---
@@ -44,3 +45,14 @@ error[2-0009]: ambiguous associated type `Output`
    │                               ^^^^^^ associated type `Output` is ambiguous
    │
    = hint: specify the trait explicitly: `<T as Producer>::Output`
+
+error[8-0000]: type mismatch
+   ┌─ ambiguous_associated_type_unify.fe:51:5
+   │  
+51 │ ╭     if true {
+52 │ │         t.produce()   // Returns Producer::Output (i32 for Dual)
+53 │ │     } else {
+54 │ │         t.transform() // Returns Transformer::Output (bool for Dual)
+55 │ │         // These have different types but same associated type name!
+56 │ │     }
+   │ ╰─────^ expected `<T as Transformer>::Output`, but `<T as Producer>::Output` is given

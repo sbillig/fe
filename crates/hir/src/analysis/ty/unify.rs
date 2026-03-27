@@ -16,7 +16,7 @@ use super::{
 };
 use crate::analysis::{
     HirAnalysisDb,
-    ty::const_ty::{ConstTyData, EvaluatedConstTy},
+    ty::const_ty::{ConstTyData, EvaluatedConstTy, normalize_const_tys_for_comparison},
 };
 
 pub(crate) type UnificationTable<'db> = UnificationTableBase<'db, InPlace<InferenceKey<'db>>>;
@@ -152,6 +152,24 @@ where
             | (_, TyData::Never) => Ok(()),
 
             (TyData::ConstTy(const_ty1), TyData::ConstTy(const_ty2)) => {
+                let const_ty1 = match normalize_const_tys_for_comparison(
+                    self.db,
+                    TyId::const_ty(self.db, *const_ty1),
+                )
+                .data(self.db)
+                {
+                    TyData::ConstTy(const_ty) => *const_ty,
+                    _ => *const_ty1,
+                };
+                let const_ty2 = match normalize_const_tys_for_comparison(
+                    self.db,
+                    TyId::const_ty(self.db, *const_ty2),
+                )
+                .data(self.db)
+                {
+                    TyData::ConstTy(const_ty) => *const_ty,
+                    _ => *const_ty2,
+                };
                 self.unify_ty(const_ty1.ty(self.db), const_ty2.ty(self.db))?;
 
                 match (const_ty1.data(self.db), const_ty2.data(self.db)) {
@@ -163,7 +181,7 @@ where
 
                     (_, ConstTyData::TyVar(var, _)) => self.unify_var_value(var, ty1),
 
-                    (ConstTyData::Hole(_), _) | (_, ConstTyData::Hole(_)) => Ok(()),
+                    (ConstTyData::Hole(..), _) | (_, ConstTyData::Hole(..)) => Ok(()),
 
                     (ConstTyData::TyParam(..), ConstTyData::TyParam(..))
                     | (ConstTyData::Evaluated(..), ConstTyData::Evaluated(..))
@@ -214,20 +232,11 @@ where
         }
 
         match (expr1.data(self.db), expr2.data(self.db)) {
-            (
-                TraitConst {
-                    inst: inst1,
-                    name: name1,
-                },
-                TraitConst {
-                    inst: inst2,
-                    name: name2,
-                },
-            ) => {
-                if name1 != name2 {
+            (TraitConst(assoc1), TraitConst(assoc2)) => {
+                if assoc1.name() != assoc2.name() {
                     return Err(UnificationError::TypeMismatch);
                 }
-                self.unify(*inst1, *inst2)
+                self.unify(assoc1.inst(), assoc2.inst())
             }
             (
                 ArithBinOp {
@@ -367,6 +376,37 @@ where
         }
 
         ty
+    }
+
+    pub fn instantiate_nested_to_term(&mut self, ty: TyId<'db>) -> TyId<'db> {
+        struct TermFolder<'a, 'db, U>
+        where
+            U: UnificationStore<'db>,
+        {
+            table: &'a mut UnificationTableBase<'db, U>,
+        }
+
+        impl<'db, U> TyFolder<'db> for TermFolder<'_, 'db, U>
+        where
+            U: UnificationStore<'db>,
+        {
+            fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+                if matches!(ty.data(db), TyData::TyApp(..)) {
+                    let (base, args) = ty.decompose_ty_app(db);
+                    let base = base.super_fold_with(db, self);
+                    let ty = args
+                        .iter()
+                        .copied()
+                        .fold(base, |acc, arg| TyId::app(db, acc, arg.fold_with(db, self)));
+                    return self.table.instantiate_to_term(ty);
+                }
+
+                let ty = ty.super_fold_with(db, self);
+                self.table.instantiate_to_term(ty)
+            }
+        }
+
+        ty.fold_with(self.db, &mut TermFolder { table: self })
     }
 
     pub fn new_key(&mut self, kind: &Kind, sort: TyVarSort) -> InferenceKey<'db> {
@@ -657,6 +697,14 @@ where
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         let (shallow_resolved, key) = match ty.data(db) {
             TyData::TyVar(var) if !self.var_stack.contains(&var.key) => {
+                if var.key.0 as usize >= self.table.len() {
+                    panic!(
+                        "inference key out of bounds in TyVarResolver: key={:?}, table_len={}, ty={}",
+                        var.key,
+                        self.table.len(),
+                        ty.pretty_print(db)
+                    );
+                }
                 match self.table.probe_impl(var.key) {
                     Either::Left(ty) => (ty, var.key),
                     Either::Right(var) => return TyId::ty_var(db, var.sort, var.kind, var.key),
@@ -665,6 +713,14 @@ where
 
             TyData::ConstTy(cty) => match cty.data(db) {
                 ConstTyData::TyVar(var, ty) if !self.var_stack.contains(&var.key) => {
+                    if var.key.0 as usize >= self.table.len() {
+                        panic!(
+                            "inference key out of bounds in const TyVarResolver: key={:?}, table_len={}, const_ty={}",
+                            var.key,
+                            self.table.len(),
+                            ty.pretty_print(db)
+                        );
+                    }
                     match self.table.probe_impl(var.key) {
                         Either::Left(ty) => (ty, var.key),
                         Either::Right(var) => {

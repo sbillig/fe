@@ -1,11 +1,15 @@
 use parser::ast::{self, prelude::*};
 use salsa::Accumulator as _;
 
-use super::{FileLowerCtxt, hir_builder::HirBuilder};
+use super::{
+    FileLowerCtxt,
+    attr::{has_named_attr, lower_attrs_without_named, named_attr_specs},
+    hir_builder::HirBuilder,
+};
 use crate::{
     hir_def::{
-        AssocConstDef, Attr, AttrListId, Body, BodyKind, Expr, FieldDef, FieldDefListId,
-        FieldIndex, FuncModifiers, FuncParam, FuncParamMode, FuncParamName, GenericArgListId,
+        ArithBinOp, AssocConstDef, AttrListId, BinOp, Body, BodyKind, Expr, FieldDef,
+        FieldDefListId, FieldIndex, FuncModifiers, FuncParam, FuncParamMode, FuncParamName,
         GenericParamListId, IdentId, IntegerId, LitKind, Partial, Pat, PathId, Stmt, Struct,
         TrackedItemVariant, TraitRefId, TupleTypeId, TypeId, TypeKind, TypeMode, Visibility,
     },
@@ -36,8 +40,7 @@ pub enum EventErrorKind {
 }
 
 pub(super) fn is_event_struct(ast: &ast::Struct) -> bool {
-    ast.attr_list()
-        .is_some_and(|attrs| has_named_attr(attrs, "event"))
+    has_named_attr(ast.attr_list(), "event")
 }
 
 pub(super) fn report_event_attr_on_non_struct_item<'db>(
@@ -45,23 +48,14 @@ pub(super) fn report_event_attr_on_non_struct_item<'db>(
     attrs: Option<ast::AttrList>,
     item_kind: &'static str,
 ) {
-    let Some(attrs) = attrs else { return };
     let db = ctxt.db();
     let file = ctxt.top_mod().file(db);
 
-    for attr in attrs {
-        let ast::AttrKind::Normal(normal) = attr.kind() else {
-            continue;
-        };
-        let is_event = normal.path().is_some_and(|p| p.text() == "event");
-        if !is_event {
-            continue;
-        }
-
+    for attr in named_attr_specs(attrs, "event") {
         EventError {
             kind: EventErrorKind::EventAttrOnNonStruct { item_kind },
             file,
-            primary_range: attr.syntax().text_range(),
+            primary_range: attr.range,
             struct_name: None,
             field_name: None,
         }
@@ -79,22 +73,11 @@ pub(super) fn report_indexed_attrs_outside_event_struct<'db>(
 
     let Some(fields) = ast.fields() else { return };
     for field in fields {
-        let Some(attr_list) = field.attr_list() else {
-            continue;
-        };
-        for attr in attr_list {
-            let ast::AttrKind::Normal(normal) = attr.kind() else {
-                continue;
-            };
-            let is_indexed = normal.path().is_some_and(|p| p.text() == "indexed");
-            if !is_indexed {
-                continue;
-            }
-
+        for attr in named_attr_specs(field.attr_list(), "indexed") {
             EventError {
                 kind: EventErrorKind::IndexedAttrOutsideEventStruct,
                 file,
-                primary_range: attr.syntax().text_range(),
+                primary_range: attr.range,
                 struct_name: struct_name.clone(),
                 field_name: field.name().map(|n| n.text().to_string()),
             }
@@ -118,13 +101,17 @@ pub(super) fn lower_event_struct<'db>(
     let struct_name_token = ast.name();
     let struct_name = struct_name_token.as_ref().map(|n| n.text().to_string());
 
-    let (attributes, event_attr_range, event_attr_invalid_form) =
-        lower_attrs_without_named(builder.ctxt(), ast.attr_list(), "event");
-    if event_attr_invalid_form && let Some(range) = event_attr_range {
+    let stripped_event_attr = lower_attrs_without_named(builder.ctxt(), ast.attr_list(), "event");
+    let attributes = stripped_event_attr.retained;
+    if let Some(attr) = stripped_event_attr
+        .removed
+        .iter()
+        .find(|attr| !attr.is_bare())
+    {
         EventError {
             kind: EventErrorKind::InvalidEventAttrForm,
             file,
-            primary_range: range,
+            primary_range: attr.range,
             struct_name: struct_name.clone(),
             field_name: None,
         }
@@ -266,8 +253,9 @@ fn parse_event_fields<'db>(
     };
 
     for field in fields {
-        let (attrs, indexed_range, indexed_invalid_form) =
-            lower_attrs_without_named(ctxt, field.attr_list(), "indexed");
+        let stripped_indexed_attr = lower_attrs_without_named(ctxt, field.attr_list(), "indexed");
+        let attrs = stripped_indexed_attr.retained;
+        let indexed_range = stripped_indexed_attr.removed.first().map(|attr| attr.range);
         let is_indexed = indexed_range.is_some();
         if is_indexed {
             indexed_count += 1;
@@ -275,11 +263,15 @@ fn parse_event_fields<'db>(
                 indexed_ranges.push(r);
             }
         }
-        if indexed_invalid_form && let Some(range) = indexed_range {
+        if let Some(attr) = stripped_indexed_attr
+            .removed
+            .iter()
+            .find(|attr| !attr.is_bare())
+        {
             EventError {
                 kind: EventErrorKind::InvalidIndexedAttrForm,
                 file,
-                primary_range: range,
+                primary_range: attr.range,
                 struct_name: struct_name.map(|s| s.to_string()),
                 field_name: field.name().map(|n| n.text().to_string()),
             }
@@ -559,20 +551,13 @@ fn lower_emit_method<'db>(
                         .collect();
                     TypeId::new(db, TypeKind::Tuple(TupleTypeId::new(db, tuple_elems)))
                 };
-                let encoded_size_call = {
-                    let args = GenericArgListId::given1_type(db, size_ty);
-                    let path = PathId::from_ident(db, roots.std)
-                        .push_str(db, "abi")
-                        .push_str_args(db, "encoded_size", args);
-                    let callee = body.path_expr(path);
-                    body.call_expr(callee, vec![])
-                };
+                let encoded_size_expr = build_encoded_size_expr(body, size_ty);
 
                 let data_len_pat = body.push_pat(Pat::Path(
                     Partial::Present(PathId::from_ident(db, data_len_ident)),
                     false,
                 ));
-                body.emit_stmt(Stmt::Let(data_len_pat, None, Some(encoded_size_call)));
+                body.emit_stmt(Stmt::Let(data_len_pat, None, Some(encoded_size_expr)));
 
                 let enc_expr = body.ident_expr(enc_ident);
                 let data_len_expr = body.ident_expr(data_len_ident);
@@ -654,42 +639,32 @@ fn int_lit<'db>(
     body.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, v))))
 }
 
-fn has_named_attr(attrs: ast::AttrList, name: &str) -> bool {
-    attrs.into_iter().any(|attr| match attr.kind() {
-        ast::AttrKind::Normal(normal) => normal.path().is_some_and(|p| p.text() == name),
-        ast::AttrKind::DocComment(_) => false,
-    })
-}
+fn build_encoded_size_expr<'db>(
+    body: &mut super::hir_builder::BodyBuilder<'_, 'db, EventDesugared>,
+    ty: TypeId<'db>,
+) -> crate::hir_def::ExprId {
+    let db = body.db();
 
-fn lower_attrs_without_named<'db>(
-    ctxt: &mut FileLowerCtxt<'db>,
-    attrs: Option<ast::AttrList>,
-    name: &str,
-) -> (AttrListId<'db>, Option<parser::TextRange>, bool) {
-    let db = ctxt.db();
-
-    let mut attr_range: Option<parser::TextRange> = None;
-    let mut invalid_form = false;
-
-    let out = attrs
-        .into_iter()
-        .flatten()
-        .filter_map(|attr| match attr.kind() {
-            ast::AttrKind::DocComment(_) => Some(Attr::lower_ast(ctxt, attr)),
-            ast::AttrKind::Normal(normal) => {
-                let is_named = normal.path().is_some_and(|p| p.text() == name);
-                if !is_named {
-                    return Some(Attr::lower_ast(ctxt, attr));
-                }
-
-                attr_range.get_or_insert(attr.syntax().text_range());
-                if normal.args().is_some() || normal.value().is_some() {
-                    invalid_form = true;
-                }
-                None
+    match ty.data(db) {
+        TypeKind::Path(path) => path
+            .to_opt()
+            .map(|path| body.path_expr(path.push_str(db, "ENCODED_SIZE")))
+            .unwrap_or_else(|| int_lit(body, 0)),
+        TypeKind::Tuple(tuple) => {
+            let mut expr = int_lit(body, 0);
+            for elem_ty in tuple.data(db).iter().copied() {
+                let elem_expr = elem_ty
+                    .to_opt()
+                    .map(|elem_ty| build_encoded_size_expr(body, elem_ty))
+                    .unwrap_or_else(|| int_lit(body, 0));
+                expr = body.push_expr(Expr::Bin(expr, elem_expr, BinOp::Arith(ArithBinOp::Add)));
             }
-        })
-        .collect::<Vec<_>>();
-
-    (AttrListId::new(db, out), attr_range, invalid_form)
+            expr
+        }
+        TypeKind::Mode(_, inner) => inner
+            .to_opt()
+            .map(|inner| build_encoded_size_expr(body, inner))
+            .unwrap_or_else(|| int_lit(body, 0)),
+        TypeKind::Ptr(_) | TypeKind::Array(_, _) | TypeKind::Never => int_lit(body, 0),
+    }
 }

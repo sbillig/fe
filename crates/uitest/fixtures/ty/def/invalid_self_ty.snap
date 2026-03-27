@@ -16,6 +16,12 @@ error[6-0010]: invalid type for `self` parameter
   │                  ^^^ type of `self` must start with `Self` or `Option<T>`, but the given type is `i32`
 
 error[6-0010]: invalid type for `self` parameter
+  ┌─ invalid_self_ty.fe:6:18
+  │
+6 │     fn foo(self: i32) {}
+  │                  ^^^ type of `self` must start with `Self` or `Option<T>`, but the given type is `i32`
+
+error[6-0010]: invalid type for `self` parameter
    ┌─ invalid_self_ty.fe:16:22
    │
 16 │     fn method1(self: i32) {}

@@ -31,6 +31,11 @@ use url::Url;
 
 /// Default in-memory file path used when compiling inline Fe sources.
 const MEMORY_SOURCE_URL: &str = "file:///contract.fe";
+/// Tests may emit oversized helper contracts that would never be deployed on-chain.
+const TEST_CONTRACT_CODE_SIZE_LIMIT: usize = 1024 * 1024;
+const TEST_CONTRACT_INITCODE_SIZE_LIMIT: usize = 2 * TEST_CONTRACT_CODE_SIZE_LIMIT;
+/// Test-only execution budget for deploying and calling generated helper contracts.
+const TEST_GAS_LIMIT: u64 = 1_000_000_000;
 
 /// Error type returned by the harness.
 #[derive(Error)]
@@ -141,7 +146,7 @@ impl Default for ExecutionOptions {
     fn default() -> Self {
         Self {
             caller: Address::ZERO,
-            gas_limit: 10_000_000,
+            gas_limit: TEST_GAS_LIMIT,
             gas_price: 0,
             value: U256::ZERO,
             nonce: None,
@@ -650,7 +655,10 @@ impl RuntimeInstance {
             address,
             AccountInfo::new(U256::ZERO, 0, code_hash, bytecode),
         );
-        let ctx = Context::mainnet().with_db(db);
+        let ctx = Context::mainnet().with_db(db).modify_cfg_chained(|cfg| {
+            cfg.limit_contract_code_size = Some(TEST_CONTRACT_CODE_SIZE_LIMIT);
+            cfg.limit_contract_initcode_size = Some(TEST_CONTRACT_INITCODE_SIZE_LIMIT);
+        });
         let evm = ctx.build_mainnet();
         Ok(Self {
             evm,
@@ -701,13 +709,16 @@ impl RuntimeInstance {
             ),
         );
 
-        let ctx = Context::mainnet().with_db(db);
+        let ctx = Context::mainnet().with_db(db).modify_cfg_chained(|cfg| {
+            cfg.limit_contract_code_size = Some(TEST_CONTRACT_CODE_SIZE_LIMIT);
+            cfg.limit_contract_initcode_size = Some(TEST_CONTRACT_INITCODE_SIZE_LIMIT);
+        });
         let mut evm = ctx.build_mainnet();
 
         // Create deployment transaction (TxKind::Create means contract creation)
         let tx = TxEnv::builder()
             .caller(caller)
-            .gas_limit(10_000_000)
+            .gas_limit(TEST_GAS_LIMIT)
             .gas_price(0)
             .kind(TxKind::Create)
             .data(EvmBytes::from(init_code))
@@ -747,6 +758,33 @@ impl RuntimeInstance {
             ExecutionResult::Halt { reason, gas_used } => {
                 Err(HarnessError::Halted { reason, gas_used })
             }
+        }
+    }
+
+    /// Gives the deployed contract the specified balance (in wei).
+    ///
+    /// This is useful for tests that need the contract to send ETH
+    /// via internal calls (e.g. `evm.call(value: 1, ...)`).
+    pub fn fund_contract(&mut self, amount: U256) {
+        let address = self.address;
+        let js = &mut self.evm.ctx.journaled_state;
+
+        // Update the underlying DB cache so future loads see the balance.
+        let mut info = js
+            .database
+            .cache
+            .accounts
+            .get(&address)
+            .map(|a| a.info.clone())
+            .unwrap_or_default();
+        info.balance = info.balance.saturating_add(amount);
+        js.database.insert_account_info(address, info.clone());
+
+        // Also update the live journal state — after deploy the account is
+        // already loaded there, and value transfers read from the journal
+        // rather than reloading from the DB cache.
+        if let Some(account) = js.state.get_mut(&address) {
+            account.info.balance = info.balance;
         }
     }
 
@@ -1272,6 +1310,35 @@ mod tests {
     use ethers_core::{abi::Token, types::U256 as AbiU256};
     use std::process::Command;
 
+    fn initcode_returning_zero_runtime(runtime_len: usize) -> String {
+        assert!(
+            u16::try_from(runtime_len).is_ok(),
+            "runtime length must fit in PUSH2"
+        );
+
+        let runtime_len = runtime_len as u16;
+        let offset: u16 = 15;
+        let mut init = vec![
+            0x61,
+            (runtime_len >> 8) as u8,
+            runtime_len as u8,
+            0x61,
+            (offset >> 8) as u8,
+            offset as u8,
+            0x60,
+            0x00,
+            0x39,
+            0x61,
+            (runtime_len >> 8) as u8,
+            runtime_len as u8,
+            0x60,
+            0x00,
+            0xf3,
+        ];
+        init.extend(vec![0x00; runtime_len as usize]);
+        hex::encode(init)
+    }
+
     fn solc_available() -> bool {
         let solc_path = std::env::var("FE_SOLC_PATH").unwrap_or_else(|_| "solc".to_string());
         Command::new(solc_path)
@@ -1287,6 +1354,59 @@ mod tests {
         let dbg = format!("{err:?}");
         assert!(dbg.starts_with("solc error: DeclarationError:"));
         assert!(!dbg.contains("Solc(\""));
+    }
+
+    #[test]
+    fn deploy_tracked_allows_oversized_test_contracts() {
+        let initcode_hex = initcode_returning_zero_runtime(0x6001);
+
+        let default_result = {
+            let caller = Address::ZERO;
+            let mut db = InMemoryDB::default();
+            db.insert_account_info(
+                caller,
+                AccountInfo::new(
+                    U256::from(1_000_000_000u64),
+                    0,
+                    Default::default(),
+                    Bytecode::default(),
+                ),
+            );
+
+            let ctx = Context::mainnet().with_db(db);
+            let mut evm = ctx.build_mainnet();
+            let tx = TxEnv::builder()
+                .caller(caller)
+                .gas_limit(TEST_GAS_LIMIT)
+                .gas_price(0)
+                .kind(TxKind::Create)
+                .data(EvmBytes::from(
+                    hex_to_bytes(&initcode_hex).expect("valid initcode"),
+                ))
+                .nonce(0)
+                .build()
+                .expect("deployment tx should build");
+
+            evm.transact_commit(tx).expect("deployment should execute")
+        };
+
+        assert!(
+            matches!(
+                default_result,
+                ExecutionResult::Halt {
+                    reason: HaltReason::CreateContractSizeLimit,
+                    ..
+                }
+            ),
+            "default revm config should reject oversized runtime bytecode"
+        );
+
+        let (mut instance, _deploy_gas_used) = RuntimeInstance::deploy_tracked(&initcode_hex)
+            .expect("test harness should allow oversized test contracts");
+        let call_result = instance
+            .call_raw(&[], ExecutionOptions::default())
+            .expect("oversized runtime should remain callable after deployment");
+        assert!(call_result.return_data.is_empty());
     }
 
     #[test]

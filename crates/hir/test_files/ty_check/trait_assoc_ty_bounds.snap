@@ -1,5 +1,6 @@
 ---
 source: crates/hir/tests/ty_check.rs
+assertion_line: 41
 expression: res
 input_file: test_files/ty_check/trait_assoc_ty_bounds.fe
 ---
@@ -146,7 +147,7 @@ note:
    ┌─ trait_assoc_ty_bounds.fe:28:29
    │
 28 │             Option::None => { break }
-   │                             ^^^^^^^^^ ()
+   │                             ^^^^^^^^^ !
 
 note: 
    ┌─ trait_assoc_ty_bounds.fe:31:5

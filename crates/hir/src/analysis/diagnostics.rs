@@ -8,11 +8,11 @@ use crate::analysis::{
     name_resolution::diagnostics::{ImportDiag, PathResDiag},
     ty::{
         diagnostics::{
-            BodyDiag, DefConflictError, FuncBodyDiag, ImplDiag, TraitConstraintDiag,
-            TraitLowerDiag, TyDiagCollection, TyLowerDiag,
+            BodyDiag, CallConstraintDiagInfo, DefConflictError, FuncBodyDiag, ImplDiag,
+            TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
         },
         trait_def::TraitInstId,
-        trait_resolution::first_invalid_trait_const_goal,
+        trait_resolution::{TraitSolveCx, first_invalid_trait_const_goal_with_solve_cx},
         ty_check::{EffectParamOwner, RecordLike},
         ty_def::{TyData, TyId, TyVarSort},
     },
@@ -215,6 +215,18 @@ fn format_method_param_ty<'db>(
     }
     rendered.push_str(&ty);
     rendered
+}
+
+fn format_call_constraint_source<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    required_by: &CallConstraintDiagInfo<'db>,
+) -> String {
+    let callable_name = required_by
+        .callable_def
+        .name(db)
+        .map(|name| name.data(db).to_string())
+        .unwrap_or_else(|| "callable".to_string());
+    format!("required by this bound on `{callable_name}`")
 }
 
 /// All diagnostics accumulated in salsa-db should implement
@@ -438,6 +450,61 @@ impl DiagnosticVoucher for crate::ArithmeticAttrError {
     }
 }
 
+impl DiagnosticVoucher for crate::PayableError {
+    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        let span = Span::new(self.file, self.primary_range, SpanKind::Original);
+        let (local_code, message, label) = match &self.kind {
+            crate::PayableErrorKind::PayableAttrOnUnsupportedItem { item_kind } => (
+                1,
+                format!(
+                    "`#[payable]` is only valid on `init` blocks and `recv` arms (found on {item_kind})"
+                ),
+                "move this attribute to an `init` block or `recv` arm".to_string(),
+            ),
+            crate::PayableErrorKind::PayableAttrOnMsgVariant => (
+                3,
+                "`#[payable]` must be placed on the corresponding `recv` arm, not the `msg` variant"
+                    .to_string(),
+                "move this attribute to the matching `recv` arm".to_string(),
+            ),
+            crate::PayableErrorKind::InvalidPayableAttrForm => (
+                2,
+                "invalid `#[payable]` attribute form".to_string(),
+                "expected `#[payable]` with no arguments".to_string(),
+            ),
+            crate::PayableErrorKind::UnknownAttrOnContractEntry {
+                attr_name,
+                entry_kind,
+            } => {
+                if *entry_kind == "recv block" {
+                    (
+                        4,
+                        format!("unknown attribute `#[{attr_name}]` on recv block"),
+                        "remove this attribute; `recv` blocks do not support normal attributes"
+                            .to_string(),
+                    )
+                } else {
+                    (
+                        4,
+                        format!(
+                            "unknown attribute `#[{attr_name}]` on {entry_kind} (only `#[payable]` is allowed)"
+                        ),
+                        "remove this attribute or use `#[payable]`".to_string(),
+                    )
+                }
+            }
+        };
+
+        CompleteDiagnostic::new(
+            Severity::Error,
+            message,
+            vec![SubDiagnostic::new(LabelStyle::Primary, label, Some(span))],
+            vec![],
+            GlobalErrorCode::new(DiagnosticPass::PayableAttr, local_code),
+        )
+    }
+}
+
 impl DiagnosticVoucher for crate::SelectorError {
     fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
         use crate::SelectorErrorKind;
@@ -576,6 +643,91 @@ impl DiagnosticVoucher for crate::EventError {
         };
 
         let error_code = GlobalErrorCode::new(DiagnosticPass::EventLower, code);
+
+        CompleteDiagnostic::new(
+            Severity::Error,
+            message,
+            vec![SubDiagnostic::new(
+                LabelStyle::Primary,
+                label,
+                Some(primary_span),
+            )],
+            notes,
+            error_code,
+        )
+    }
+}
+
+impl DiagnosticVoucher for crate::InlineAttrError {
+    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        use crate::hir_def::InlineAttrErrorKind;
+
+        let primary_span = Span::new(self.file, self.primary_range, SpanKind::Original);
+        let func_name = self.func_name.as_deref().unwrap_or("<anonymous>");
+
+        let (code, message, label, notes) = match self.kind {
+            InlineAttrErrorKind::Duplicate => (
+                1,
+                format!("duplicate `#[inline]` attribute on function `{func_name}`"),
+                "remove the extra `#[inline]` attribute".to_string(),
+                vec![
+                    "functions support at most one inline hint".to_string(),
+                    "use one of `#[inline]`, `#[inline(always)]`, or `#[inline(never)]`"
+                        .to_string(),
+                ],
+            ),
+            InlineAttrErrorKind::InvalidForm => (
+                2,
+                format!("invalid `#[inline]` attribute on function `{func_name}`"),
+                "expected `#[inline]`, `#[inline(always)]`, or `#[inline(never)]`".to_string(),
+                vec![
+                    "supported inline hints are `#[inline]`, `#[inline(always)]`, and `#[inline(never)]`"
+                        .to_string(),
+                ],
+            ),
+        };
+
+        let error_code = GlobalErrorCode::new(DiagnosticPass::InlineAttr, code);
+
+        CompleteDiagnostic::new(
+            Severity::Error,
+            message,
+            vec![SubDiagnostic::new(
+                LabelStyle::Primary,
+                label,
+                Some(primary_span),
+            )],
+            notes,
+            error_code,
+        )
+    }
+}
+
+impl DiagnosticVoucher for crate::LoopUnrollAttrError {
+    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        use crate::hir_def::LoopUnrollAttrErrorKind;
+
+        let primary_span = Span::new(self.file, self.primary_range, SpanKind::Original);
+
+        let (code, message, label, notes) = match self.kind {
+            LoopUnrollAttrErrorKind::Duplicate => (
+                1,
+                "duplicate loop unroll attribute on `for` loop".to_string(),
+                "remove the extra loop unroll attribute".to_string(),
+                vec!["use at most one of `#[unroll]` or `#[unroll(never)]`".to_string()],
+            ),
+            LoopUnrollAttrErrorKind::InvalidForm => (
+                2,
+                "invalid loop unroll attribute on `for` loop".to_string(),
+                "expected `#[unroll]` or `#[unroll(never)]`".to_string(),
+                vec![
+                    "supported loop unroll hints are `#[unroll]` and `#[unroll(never)]`"
+                        .to_string(),
+                ],
+            ),
+        };
+
+        let error_code = GlobalErrorCode::new(DiagnosticPass::LoopUnrollAttr, code);
 
         CompleteDiagnostic::new(
             Severity::Error,
@@ -875,6 +1027,18 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                     error_code,
                 }
             }
+
+            Self::InfiniteBoundRecursion(span, msg) => CompleteDiagnostic {
+                severity,
+                message: "infinite trait bound recursion".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: msg.to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
 
             Self::InvalidPathSegment {
                 span: prim_span,
@@ -1735,19 +1899,31 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             },
 
-            Self::ConstHoleInValuePosition { span } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "layout hole `_` is not allowed in value position".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
+            Self::ConstHoleInValuePosition { span, ty } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message: "this type contains `_`, which is only allowed in contract fields and `uses (...)` parameter types".to_string(),
+                    message: "this type contains an inferred const (`_`)".to_string(),
                     span: span.resolve(db),
-                }],
-                notes: vec![
-                    "replace `_` with an explicit const argument in value positions".to_string(),
-                ],
-                error_code,
-            },
+                }];
+                if let Some(name_span) = ty.name_span(db) {
+                    let type_name = ty.base_ty(db).pretty_print(db);
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{type_name}` is defined here"),
+                        span: name_span.resolve(db),
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "type with inferred const generic parameter `_` can not be used here".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "specify an explicit const generic argument".to_string(),
+                    ],
+                    error_code,
+                }
+            }
 
             Self::OwnParamCannotBeBorrow { span, ty } => CompleteDiagnostic {
                 severity: Severity::Error,
@@ -1988,12 +2164,36 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::BindingsInOrPat(span) => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "bindings in `|` patterns are not supported".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "split this into separate arms or remove the binding".to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
             Self::DuplicatedRestPat(span) => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "duplicate `..` in pattern".to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
                     message: "`..` can be used only once".to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::UnexpectedRestPat(span) => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "unexpected `..` in pattern".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "`..` is only allowed inside tuple and record patterns".to_string(),
                     span: span.resolve(db),
                 }],
                 notes: vec![],
@@ -2569,6 +2769,62 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                         key_str, func_name, trait_str
                     ),
                     sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            }
+
+            Self::WithEffectTraitUnsatisfied {
+                primary,
+                key,
+                trait_req,
+                given,
+            } => {
+                let key_str = key.pretty_print(db);
+                let trait_str = trait_req.pretty_print(db, false);
+                let given_ty = given.pretty_print(db).to_string();
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!(
+                        "keyed effect binding `{}` requires `{}` to implement `{}`",
+                        key_str, given_ty, trait_str
+                    ),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "`{}` does not implement `{}` for effect `{}`",
+                            given_ty, trait_str, key_str
+                        ),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![],
+                    error_code,
+                }
+            }
+
+            Self::WithEffectTypeUnsatisfied {
+                primary,
+                key,
+                expected,
+                given,
+            } => {
+                let key_str = key.pretty_print(db);
+                let expected_ty = pretty_print_ty_for_mismatch(db, *expected);
+                let given_ty = pretty_print_ty_for_mismatch(db, *given);
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!(
+                        "keyed effect binding `{key_str}` requires a provider compatible with `{expected_ty}`, but `{given_ty}` is given",
+                    ),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "`{given_ty}` is not compatible with keyed effect `{key_str}`",
+                        ),
+                        span: primary.resolve(db),
+                    }],
                     notes: vec![],
                     error_code,
                 }
@@ -3286,12 +3542,24 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
-            Self::AmbiguousTraitInst { primary, cands } => {
+            Self::AmbiguousTraitInst {
+                primary,
+                cands,
+                required_by,
+            } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
                     message: "multiple implementations are found".to_string(),
                     span: primary.resolve(db),
                 }];
+
+                if let Some(required_by) = required_by {
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format_call_constraint_source(db, required_by),
+                        span: required_by.bound_span.resolve(db),
+                    });
+                }
 
                 let mut sorted: Vec<_> = cands.iter().copied().collect();
                 sorted.sort_by_key(|a| a.pretty_print(db, false));
@@ -3823,6 +4091,18 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
                     error_code,
                 }
             }
+
+            Self::CyclicTraitRef(impl_trait) => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "cyclic trait reference prevented lowering this impl".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "trait lowering entered a dependency cycle here".to_string(),
+                    span: impl_trait.span().trait_ref().resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
         }
     }
 }
@@ -3894,8 +4174,24 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                 span,
                 primary_goal,
                 unsat_subgoal,
+                required_by,
             } => {
-                let rendered_goal = if first_invalid_trait_const_goal(db, primary_goal).is_some() {
+                let rendered_goal = if let Some(unsat_subgoal) = *unsat_subgoal
+                    && first_invalid_trait_const_goal_with_solve_cx(
+                        db,
+                        TraitSolveCx::new(db, unsat_subgoal.def(db).scope()),
+                        &unsat_subgoal,
+                    )
+                    .is_some()
+                {
+                    unsat_subgoal
+                } else if first_invalid_trait_const_goal_with_solve_cx(
+                    db,
+                    TraitSolveCx::new(db, primary_goal.def(db).scope()),
+                    primary_goal,
+                )
+                .is_some()
+                {
                     (*unsat_subgoal).unwrap_or(*primary_goal)
                 } else {
                     *primary_goal
@@ -3928,6 +4224,14 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                         style: LabelStyle::Secondary,
                         message: subgoal.to_string(),
                         span: span.resolve(db),
+                    });
+                }
+
+                if let Some(required_by) = required_by {
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format_call_constraint_source(db, required_by),
+                        span: required_by.bound_span.resolve(db),
                     });
                 }
 

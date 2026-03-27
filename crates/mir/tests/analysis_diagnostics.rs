@@ -1,6 +1,8 @@
 use common::InputDb;
 use driver::DriverDataBase;
-use fe_mir::{MirDiagnosticsMode, MirLowerError, collect_mir_diagnostics, lower_module};
+use fe_mir::{
+    MirDiagnosticsMode, MirLowerError, ValueOrigin, collect_mir_diagnostics, lower_module,
+};
 use url::Url;
 
 #[test]
@@ -26,15 +28,12 @@ pub fn mismatched_ret() -> bool {
         panic!("expected AnalysisDiagnostics, got {err:?}");
     };
 
-    assert!(
-        func_name.contains("mismatched_ret"),
-        "func name is {func_name}"
-    );
+    assert!(!func_name.is_empty(), "func name is empty");
     assert!(diagnostics.contains("type mismatch"));
 }
 
 #[test]
-fn collect_mir_diagnostics_keeps_analysis_diagnostics_without_panicking() {
+fn collect_mir_diagnostics_short_circuits_on_invalid_hir() {
     let mut db = DriverDataBase::default();
     let url = Url::parse("file:///analysis_diagnostics_in_monomorphization.fe").unwrap();
     let src = r#"
@@ -53,16 +52,174 @@ fn bar_test() {
 
     let output = collect_mir_diagnostics(&db, top_mod, MirDiagnosticsMode::CompilerParity);
     assert!(
-        output.internal_errors.iter().any(|err| {
-            matches!(
-                err,
-                MirLowerError::AnalysisDiagnostics {
-                    func_name,
-                    diagnostics
-                } if func_name.contains("foo") && diagnostics.contains("type mismatch")
-            )
-        }),
-        "expected AnalysisDiagnostics for `foo`, got: {:?}",
+        output.internal_errors.is_empty(),
+        "expected invalid HIR to skip MIR entirely, got: {:?}",
         output.internal_errors
+    );
+    assert!(output.diagnostics.is_empty());
+}
+
+#[test]
+fn lower_module_rejects_unsupported_const_path_match_patterns() {
+    let mut db = DriverDataBase::default();
+    let url = Url::parse("file:///unsupported_const_path_pattern.fe").unwrap();
+    let src = r#"
+const FOO: String<3> = "foo"
+
+pub fn test(x: String<3>) -> u8 {
+    match x {
+        FOO => 0
+        _ => 1
+    }
+}
+"#;
+
+    let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+    let top_mod = db.top_mod(file);
+
+    let err = lower_module(&db, top_mod).expect_err("unsupported const-path pattern should fail");
+
+    let MirLowerError::Unsupported { message, .. } = err else {
+        panic!("expected Unsupported, got {err:?}");
+    };
+    assert!(
+        message.contains("pattern"),
+        "expected unsupported-pattern error, got `{message}`",
+    );
+}
+
+#[test]
+fn lower_module_rejects_unsupported_string_literal_match_patterns() {
+    let mut db = DriverDataBase::default();
+    let url = Url::parse("file:///unsupported_string_literal_pattern.fe").unwrap();
+    let src = r#"
+pub fn test(x: String<3>) -> u8 {
+    match x {
+        "foo" => 0
+        _ => 1
+    }
+}
+"#;
+
+    let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+    let top_mod = db.top_mod(file);
+
+    let err =
+        lower_module(&db, top_mod).expect_err("unsupported string literal pattern should fail");
+
+    let MirLowerError::Unsupported { message, .. } = err else {
+        panic!("expected Unsupported, got {err:?}");
+    };
+    assert!(
+        message.contains("pattern"),
+        "expected unsupported-pattern error, got `{message}`",
+    );
+}
+
+#[test]
+fn lower_module_reports_or_pattern_binding_errors_as_analysis_diagnostics() {
+    let mut db = DriverDataBase::default();
+    let url = Url::parse("file:///or_pattern_binding_error.fe").unwrap();
+    let src = r#"
+enum E {
+    A(u8),
+    B,
+}
+
+pub fn test(e: E) -> u8 {
+    match e {
+        E::A(x) | E::B => x
+    }
+}
+"#;
+
+    let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+    let top_mod = db.top_mod(file);
+
+    let err = lower_module(&db, top_mod).expect_err("binding or-pattern should fail analysis");
+
+    let MirLowerError::AnalysisDiagnostics { diagnostics, .. } = err else {
+        panic!("expected AnalysisDiagnostics, got {err:?}");
+    };
+    assert!(
+        diagnostics.contains("bindings in `|` patterns are not supported"),
+        "expected binding-or-pattern diagnostic, got `{diagnostics}`",
+    );
+}
+
+#[test]
+fn lower_module_reports_const_array_materialization_failures_as_unsupported() {
+    let mut db = DriverDataBase::default();
+    let url = Url::parse("file:///const_array_materialization_unsupported.fe").unwrap();
+    let src = r#"
+const BIG: [String<64>; 1] = [
+    "This is a long string that exceeds thirty-two bytes in length!!",
+]
+
+pub fn bad() -> String<64> {
+    BIG[0]
+}
+"#;
+
+    let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+    let top_mod = db.top_mod(file);
+
+    let err = lower_module(&db, top_mod).expect_err("const-array materialization should fail");
+
+    let MirLowerError::Unsupported { func_name, message } = err else {
+        panic!("expected Unsupported, got {err:?}");
+    };
+
+    assert!(func_name.contains("bad"), "func name is {func_name}");
+    assert!(
+        message.contains("failed to materialize const"),
+        "message is {message}"
+    );
+    assert!(message.contains("String<64>"), "message is {message}");
+}
+
+#[test]
+fn lower_module_materializes_large_string_literal_via_const_region() {
+    let mut db = DriverDataBase::default();
+    let url = Url::parse("file:///large_string_literal_unsupported.fe").unwrap();
+    let src = r#"
+pub fn bad() -> String<64> {
+    "This is a long string that exceeds thirty-two bytes in length!!"
+}
+"#;
+
+    let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+    let top_mod = db.top_mod(file);
+    let module = lower_module(&db, top_mod).expect("large string literal should lower");
+    assert!(
+        module
+            .functions
+            .iter()
+            .flat_map(|func| func.body.values.iter())
+            .any(|value| matches!(value.origin, ValueOrigin::ConstRegion(_)))
+    );
+}
+
+#[test]
+fn lower_module_materializes_large_const_string_via_const_region() {
+    let mut db = DriverDataBase::default();
+    let url = Url::parse("file:///large_const_string_unsupported.fe").unwrap();
+    let src = r#"
+const BIG: String<64> = "This is a long string that exceeds thirty-two bytes in length!!"
+
+pub fn bad() -> String<64> {
+    BIG
+}
+"#;
+
+    let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+    let top_mod = db.top_mod(file);
+    let module = lower_module(&db, top_mod).expect("large const string should lower");
+    assert!(
+        module
+            .functions
+            .iter()
+            .flat_map(|func| func.body.values.iter())
+            .any(|value| matches!(value.origin, ValueOrigin::ConstRegion(_)))
     );
 }

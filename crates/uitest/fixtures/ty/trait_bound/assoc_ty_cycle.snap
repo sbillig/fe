@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/ty.rs
+assertion_line: 65
+expression: diags
+input_file: fixtures/ty/trait_bound/assoc_ty_cycle.fe
+---
+error[2-0002]: `Assoc` is not found
+   ┌─ assoc_ty_cycle.fe:17:28
+   │
+17 │     fn fail(x: Self::Item::Assoc)
+   │                            ^^^^^ `Assoc` is not found

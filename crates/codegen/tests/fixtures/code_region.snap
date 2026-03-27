@@ -39,7 +39,7 @@ object "Foo" {
       ret := v0
       leave
     }
-    function $init__StorPtr_Evm___207f35a85ac4062e() {
+    function $init__Evm_hef0af3106e109414__3af54274b2985741() {
       let v0 := datasize("Child")
       let v1 := dataoffset("Child")
       let v2 := $allocate__Evm_hef0af3106e109414__3af54274b2985741(v0)
@@ -72,7 +72,7 @@ object "Foo" {
       ret := v0
       leave
     }
-    $init__StorPtr_Evm___207f35a85ac4062e()
+    $init__Evm_hef0af3106e109414__3af54274b2985741()
   }
 
   object "Foo_deployed" {
@@ -85,7 +85,7 @@ object "Foo" {
         ret := shr(224, v0)
         leave
       }
-      function $runtime__StorPtr_Evm___207f35a85ac4062e() {
+      function $runtime__Evm_hef0af3106e109414__3af54274b2985741() {
         let v0 := $read_selector__Evm_hef0af3106e109414__3af54274b2985741()
         switch v0
           case 305419896 {
@@ -101,28 +101,28 @@ object "Foo" {
       function $transfer__Evm_hef0af3106e109414__3af54274b2985741() {
         return(0, 0)
       }
-      $runtime__StorPtr_Evm___207f35a85ac4062e()
+      $runtime__Evm_hef0af3106e109414__3af54274b2985741()
       return(0, 0)
     }
   }
   object "Child" {
     code {
-      function $child_init__StorPtr_Evm___207f35a85ac4062e() {
+      function $child_init__Evm_hef0af3106e109414__3af54274b2985741() {
         let v0 := datasize("Child_deployed")
         let v1 := dataoffset("Child_deployed")
         codecopy(0, v1, v0)
         return(0, v0)
       }
-      $child_init__StorPtr_Evm___207f35a85ac4062e()
+      $child_init__Evm_hef0af3106e109414__3af54274b2985741()
     }
 
     object "Child_deployed" {
       code {
-        function $child_runtime__StorPtr_Evm___207f35a85ac4062e() {
+        function $child_runtime__Evm_hef0af3106e109414__3af54274b2985741() {
           calldatacopy(0, 0, 4)
           return(0, 4)
         }
-        $child_runtime__StorPtr_Evm___207f35a85ac4062e()
+        $child_runtime__Evm_hef0af3106e109414__3af54274b2985741()
         return(0, 0)
       }
     }

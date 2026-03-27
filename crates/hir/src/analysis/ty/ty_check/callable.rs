@@ -1,7 +1,7 @@
 use crate::{
     hir_def::{
-        BinOp, CallArg as HirCallArg, Expr, ExprId, FieldIndex, GenericArgListId, IdentId, LitKind,
-        Partial, UnOp,
+        BinOp, CallArg as HirCallArg, Expr, ExprId, FieldIndex, GenericArgListId, IdentId,
+        ItemKind, LitKind, Partial, UnOp,
     },
     span::{
         DynLazySpan,
@@ -15,19 +15,66 @@ use super::{ExprProp, TyChecker};
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
+        const_ty::LayoutHoleArgSite,
         diagnostics::{BodyDiag, FuncBodyDiag},
         fold::{AssocTySubst, TyFoldable, TyFolder},
         trait_def::TraitInstId,
-        trait_resolution::constraint::collect_func_def_constraints,
+        trait_resolution::{TraitSolveCx, constraint::collect_func_decl_constraints},
         ty_def::{BorrowKind, CapabilityKind},
-        ty_def::{InvalidCause, TyBase, TyData, TyId},
+        ty_def::{InvalidCause, TyBase, TyData, TyFlags, TyId},
+        ty_error::explicit_value_ty_wf_diag,
         ty_lower::lower_generic_arg_list,
-        visitor::{TyVisitable, TyVisitor},
+        visitor::{TyVisitable, TyVisitor, collect_flags},
     },
 };
 use crate::hir_def::Body;
 use crate::hir_def::CallableDef;
 use crate::hir_def::params::FuncParamMode;
+
+pub(super) enum CallGenericArgUnifyError {
+    ArityMismatch { given: usize, expected: usize },
+    UnificationFailed,
+}
+
+pub(super) fn unify_explicit_call_generic_args<'db>(
+    callable: &mut Callable<'db>,
+    tc: &mut TyChecker<'db>,
+    args: GenericArgListId<'db>,
+    mut unify_arg: impl FnMut(&mut TyChecker<'db>, usize, TyId<'db>, &mut TyId<'db>) -> bool,
+) -> Result<(), CallGenericArgUnifyError> {
+    let db = tc.db;
+    if !args.is_given(db) {
+        return Ok(());
+    }
+
+    let given_args = lower_generic_arg_list(
+        db,
+        args,
+        tc.env.scope(),
+        tc.env.assumptions(),
+        LayoutHoleArgSite::GenericArgList(args),
+    );
+    let offset = callable.callable_def.offset_to_explicit_params_position(db);
+    let current_args = &mut callable.generic_args[offset..];
+    if current_args.len() != given_args.len() {
+        return Err(CallGenericArgUnifyError::ArityMismatch {
+            given: given_args.len(),
+            expected: current_args.len(),
+        });
+    }
+
+    for (idx, (given, current)) in given_args
+        .into_iter()
+        .zip(current_args.iter_mut())
+        .enumerate()
+    {
+        if !unify_arg(tc, idx, given, current) {
+            return Err(CallGenericArgUnifyError::UnificationFailed);
+        }
+    }
+
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct Callable<'db> {
@@ -136,32 +183,22 @@ impl<'db> Callable<'db> {
         args: GenericArgListId<'db>,
         span: LazyGenericArgListSpan<'db>,
     ) -> bool {
-        let db = tc.db;
-        if !args.is_given(db) {
-            return true;
+        match unify_explicit_call_generic_args(self, tc, args, |tc, idx, given, current| {
+            *current = tc.equate_ty(given, *current, span.clone().arg(idx).into());
+            true
+        }) {
+            Ok(()) => true,
+            Err(CallGenericArgUnifyError::ArityMismatch { given, expected }) => {
+                tc.push_diag(BodyDiag::CallGenericArgNumMismatch {
+                    primary: span.into(),
+                    def_span: self.callable_def.name_span(),
+                    given,
+                    expected,
+                });
+                false
+            }
+            Err(CallGenericArgUnifyError::UnificationFailed) => false,
         }
-
-        let given_args = lower_generic_arg_list(db, args, tc.env.scope(), tc.env.assumptions());
-        let offset = self.callable_def.offset_to_explicit_params_position(db);
-        let current_args = &mut self.generic_args[offset..];
-
-        if current_args.len() != given_args.len() {
-            let diag = BodyDiag::CallGenericArgNumMismatch {
-                primary: span.into(),
-                def_span: self.callable_def.name_span(),
-                given: given_args.len(),
-                expected: current_args.len(),
-            };
-            tc.push_diag(diag);
-
-            return false;
-        }
-
-        for (i, (&given, arg)) in given_args.iter().zip(current_args.iter_mut()).enumerate() {
-            *arg = tc.equate_ty(given, *arg, span.clone().arg(i).into());
-        }
-
-        true
     }
 
     pub(super) fn check_args(
@@ -261,8 +298,23 @@ impl<'db> Callable<'db> {
             if let Some(inst) = self.trait_inst {
                 let mut subst = AssocTySubst::new(inst);
                 expected = expected.fold_with(db, &mut subst);
+                expected = tc.normalize_trait_inst_ty_in_scope(
+                    expected,
+                    inst,
+                    tc.env.scope(),
+                    tc.env.assumptions(),
+                );
             }
             let mut expected = tc.normalize_ty(expected);
+            tc.env.mark_explicit_value_wf_checked(given.expr);
+            if let Some(diag) = explicit_value_ty_wf_diag(
+                db,
+                TraitSolveCx::new(db, tc.env.scope()).with_assumptions(tc.env.assumptions()),
+                expected,
+                given.expr_span.clone(),
+            ) {
+                tc.push_diag(diag);
+            }
             let mode = func_params
                 .as_ref()
                 .and_then(|params| params.get(i).copied())
@@ -279,6 +331,8 @@ impl<'db> Callable<'db> {
                 None
             };
             let own_tyvar = mode == Some(FuncParamMode::Own) && expected.is_ty_var(db);
+            let variant_ctor_tyvar_arg =
+                matches!(self.callable_def, CallableDef::VariantCtor(_)) && expected.is_ty_var(db);
             let mut actual = if let Some((kind, inner)) = own_capability_inner {
                 tc.push_diag(BodyDiag::OwnArgMustBeOwnedMove {
                     primary: given.expr_span.clone(),
@@ -297,6 +351,8 @@ impl<'db> Callable<'db> {
                     });
                     TyId::invalid(db, InvalidCause::Other)
                 }
+            } else if variant_ctor_tyvar_arg {
+                tc.coerce_inferred_expr_capability(given.expr, &given.expr_prop)
             } else {
                 tc.try_coerce_capability_for_expr_to_expected(
                     given.expr,
@@ -510,53 +566,59 @@ impl<'db> CallArg<'db> {
 }
 
 impl<'db> Callable<'db> {
-    pub(super) fn check_constraints(&self, tc: &mut TyChecker<'db>, span: DynLazySpan<'db>) {
+    pub(super) fn enqueue_constraints(
+        &self,
+        tc: &mut TyChecker<'db>,
+        call_expr: ExprId,
+        span: DynLazySpan<'db>,
+    ) {
         let db = tc.db;
-
-        // Once a trait method has been selected, its parent trait/impl obligations
-        // are already discharged by confirming the selected trait instance.
-        // Re-registering those here only duplicates the same call-site failure.
-        let constraints =
-            collect_func_def_constraints(db, self.callable_def, self.trait_inst.is_none());
-        let selected_inst = self.trait_inst.map(|inst| {
-            let normalized_args: Vec<_> = inst
-                .args(db)
-                .iter()
-                .map(|&arg| tc.normalize_ty(arg))
-                .collect();
-            TraitInstId::new(
-                db,
-                inst.def(db),
-                normalized_args,
-                inst.assoc_type_bindings(db).clone(),
-            )
-        });
-
-        // Instantiate constraints with the actual type arguments
+        let include_parent = !self
+            .callable_def
+            .scope()
+            .parent_item(db)
+            .is_some_and(|parent| {
+                self.trait_inst.is_some() && matches!(parent, ItemKind::Trait(_))
+            });
+        let constraints = collect_func_decl_constraints(db, self.callable_def, include_parent);
         let instantiated = constraints.instantiate(db, &self.generic_args);
-
-        // Normalize each constraint to resolve associated types
-        for &constraint in instantiated.list(db) {
-            // Normalize the constraint's arguments
-            let normalized_args: Vec<_> = constraint
-                .args(db)
-                .iter()
-                .map(|&arg| tc.normalize_ty(arg))
-                .collect();
-
-            let normalized_constraint = TraitInstId::new(
-                db,
-                constraint.def(db),
-                normalized_args,
-                constraint.assoc_type_bindings(db).clone(),
+        let duplicate_impl_constraints = self.trait_inst.is_none()
+            && matches!(
+                self.callable_def.scope().parent_item(db),
+                Some(ItemKind::Impl(_))
             );
-            if selected_inst == Some(normalized_constraint) {
+
+        for (constraint_idx, &constraint) in instantiated.list(db).iter().enumerate() {
+            let constraint = if let Some(inst) = self.trait_inst {
+                let mut subst = AssocTySubst::new(inst);
+                constraint.fold_with(db, &mut subst)
+            } else {
+                constraint
+            };
+            let constraint = tc.normalize_trait_goal(constraint);
+            if collect_flags(db, constraint).contains(TyFlags::HAS_INVALID) {
                 continue;
             }
 
-            // Register the normalized constraint for confirmation
             tc.env
-                .register_confirmation(normalized_constraint, span.clone());
+                .register_trait_obligation(super::env::TraitObligation {
+                    goal: constraint,
+                    origin: super::env::TraitObligationOrigin::CallConstraint {
+                        call_expr,
+                        callable_def: self.callable_def,
+                        constraint_idx,
+                    },
+                    span: span.clone(),
+                });
+
+            if duplicate_impl_constraints {
+                tc.env
+                    .register_trait_obligation(super::env::TraitObligation {
+                        goal: constraint,
+                        origin: super::env::TraitObligationOrigin::GenericConfirmation,
+                        span: span.clone(),
+                    });
+            }
         }
     }
 }

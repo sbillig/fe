@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/method_selection/inherent_impl_bounds.fe
 ---
@@ -15,8 +16,23 @@ error[2-0010]: no method named `touch` found for View `View`
 42 │     box_.touch()
    │          ^^^^^ method not found in `View`
 
-error[6-0003]: trait bound is not satisfied
-   ┌─ inherent_impl_bounds.fe:62:5
+error[2-0010]: no method named `make` found for struct `Factory`
+   ┌─ inherent_impl_bounds.fe:62:14
    │
 62 │     Factory::make(item)
-   │     ^^^^^^^^^^^^^ `T` doesn't implement `FactoryInput`
+   │              ^^^^ method not found in `Factory`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ inherent_impl_bounds.fe:34:10
+   │
+29 │ impl<T: AssocStrong> AssocBox<T::Item> {
+   │         ----------- required by this bound on `touch`
+   ·
+34 │     box_.touch()
+   │          ^^^^^ `T::Item` doesn't implement `AssocStrong`
+
+error[8-0000]: type mismatch
+   ┌─ inherent_impl_bounds.fe:34:5
+   │
+34 │     box_.touch()
+   │     ^^^^ expected `AssocBox<T::Item::Item>`, but `AssocBox<T::Item>` is given

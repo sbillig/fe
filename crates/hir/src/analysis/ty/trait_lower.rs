@@ -2,60 +2,40 @@
 
 use crate::{
     core::hir_def::{
-        AssocTypeGenericArg, ConstGenericArgValue, HirIngot, IdentId, ItemKind, Partial, PathId,
-        Trait, TraitRefId, params::GenericArg, scope_graph::ScopeId,
+        AssocTypeGenericArg, ConstGenericArgValue, HirIngot, IdentId, ImplTrait, ItemKind, Partial,
+        PathId, PathKind, Trait, TraitRefId, params::GenericArg, scope_graph::ScopeId,
     },
     hir_def::Func,
 };
 use common::{indexmap::IndexMap, ingot::Ingot};
-use rustc_hash::FxHashMap;
 use salsa::Update;
 
 use super::{
-    admission::{AdmissionEngine, AdmissionSummary, TraitImplTable},
-    const_ty::ConstTyId,
-    context::{AnalysisCx, ProofCx},
+    admission::{AdmissionEngine, TraitImplTable},
+    binder::Binder,
+    const_ty::{AppFrameId, ConstTyId},
     fold::{TyFoldable, TyFolder},
+    layout_holes::rebase_structural_holes_under_app,
     trait_def::{ImplementorId, TraitInstId},
-    trait_resolution::{LocalImplementorSet, PredicateListId},
+    trait_resolution::{PredicateListId, TraitSolveCx},
     ty_def::{InvalidCause, TyId},
-    ty_lower::lower_hir_ty,
+    ty_lower::{ConstDefaultCompletion, lower_hir_ty, lower_opt_hir_ty},
 };
 use crate::analysis::{
     HirAnalysisDb,
-    name_resolution::{PathRes, PathResError, resolve_path},
-    ty::{
-        ty_def::{Kind, TyData},
-        ty_lower::lower_opt_hir_ty,
+    name_resolution::{
+        PathRes, PathResError, PathResErrorKind, available_traits_in_scope, resolve_path,
     },
+    ty::ty_def::{Kind, TyData},
 };
 
-fn collect_trait_impls_cycle_initial<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _ingot: Ingot<'db>,
-) -> TraitImplTable<'db> {
-    TraitImplTable::default()
-}
-
-fn collect_trait_impls_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &TraitImplTable<'db>,
-    _count: u32,
-    _ingot: Ingot<'db>,
-) -> salsa::CycleRecoveryAction<TraitImplTable<'db>> {
-    salsa::CycleRecoveryAction::Iterate
-}
-
-/// Internal fixed-point frontier used during recursive trait-env admission.
-///
-/// Callers that need the stable final admitted impl set should use
-/// [`collect_trait_impls`] instead.
-#[salsa::tracked(
-    return_ref,
-    cycle_fn=collect_trait_impls_cycle_recover,
-    cycle_initial=collect_trait_impls_cycle_initial
-)]
-pub(crate) fn collect_trait_impls_frontier<'db>(
+/// Collect all trait implementors in the ingot.
+/// The returned table doesn't contain the const(external) ingot
+/// implementors. If you need to obtain the environment that contains all
+/// available implementors in the ingot, please use
+/// [`TraitEnv`](super::trait_def::TraitEnv).
+#[salsa::tracked(return_ref)]
+pub(crate) fn collect_trait_impls<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
 ) -> TraitImplTable<'db> {
@@ -69,77 +49,17 @@ pub(crate) fn collect_trait_impls_frontier<'db>(
     AdmissionEngine::new(db, const_impls).collect(impl_traits)
 }
 
-fn admission_summary_cycle_initial<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _ingot: Ingot<'db>,
-) -> AdmissionSummary<'db> {
-    AdmissionSummary::default()
-}
-
-fn admission_summary_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &AdmissionSummary<'db>,
-    _count: u32,
-    _ingot: Ingot<'db>,
-) -> salsa::CycleRecoveryAction<AdmissionSummary<'db>> {
-    salsa::CycleRecoveryAction::Iterate
-}
-
-/// Collect all trait implementors in the ingot.
-/// The returned table doesn't contain the const(external) ingot
-/// implementors. If you need to obtain the environment that contains all
-/// available implementors in the ingot, please use
-/// [`TraitEnv`](super::trait_def::TraitEnv).
-#[salsa::tracked(
-    return_ref,
-    cycle_fn=collect_trait_impls_cycle_recover,
-    cycle_initial=collect_trait_impls_cycle_initial
-)]
-pub(crate) fn collect_trait_impls<'db>(
+/// Returns the corresponding implementors for the given [`ImplTrait`].
+/// If the implementor type or the trait reference is ill-formed, returns
+/// `None`.
+pub(crate) fn lower_impl_trait<'db>(
     db: &'db dyn HirAnalysisDb,
-    ingot: Ingot<'db>,
-) -> TraitImplTable<'db> {
-    admission_summary(db, ingot).admitted.clone()
-}
-
-pub(crate) fn final_local_implementors<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ingot: Ingot<'db>,
-) -> LocalImplementorSet<'db> {
-    let implementors_by_impl: FxHashMap<_, _> = admission_summary(db, ingot)
-        .admitted
-        .values()
-        .flat_map(|implementors| {
-            implementors
-                .iter()
-                .map(|implementor| (implementor.skip_binder().hir_impl_trait(db), *implementor))
-        })
-        .collect();
-    let implementors: Vec<_> = ingot
-        .all_impl_traits(db)
-        .iter()
-        .filter_map(|impl_trait| implementors_by_impl.get(impl_trait).copied())
-        .collect();
-    LocalImplementorSet::new(db, implementors)
-}
-
-#[salsa::tracked(
-    return_ref,
-    cycle_fn=admission_summary_cycle_recover,
-    cycle_initial=admission_summary_cycle_initial
-)]
-pub(crate) fn admission_summary<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ingot: Ingot<'db>,
-) -> AdmissionSummary<'db> {
-    let const_impls = ingot
-        .resolved_external_ingots(db)
-        .iter()
-        .map(|(_, external)| &admission_summary(db, *external).admitted)
-        .collect();
-
-    let impl_traits = ingot.all_impl_traits(db);
-    AdmissionEngine::new(db, const_impls).summarize(impl_traits)
+    impl_trait: ImplTrait<'db>,
+) -> Option<Binder<ImplementorId<'db>>> {
+    let cx = impl_trait.signature_analysis_cx(db);
+    impl_trait
+        .lowered_implementor_preconditions_in_cx(db, &cx)
+        .ok()
 }
 
 /// Lower a trait reference to a trait instance.
@@ -148,58 +68,10 @@ pub(crate) fn admission_summary<'db>(
 /// arguments and associated type bindings, while `self_ty` is used as the implementor (args[0]).
 /// This is needed for associated type bounds like `type Assoc: Encode<Self>` where `Self`
 /// refers to the owner trait's Self, not the associated type.
-#[salsa::tracked]
-pub(crate) fn lower_trait_ref_in_cx<'db>(
-    db: &'db dyn HirAnalysisDb,
-    self_ty: TyId<'db>,
-    trait_ref: TraitRefId<'db>,
-    scope: ScopeId<'db>,
-    cx: AnalysisCx<'db>,
-    owner_self: Option<TyId<'db>>,
-) -> Result<TraitInstId<'db>, TraitRefLowerError<'db>> {
-    let Partial::Present(path) = trait_ref.path(db) else {
-        return Err(TraitRefLowerError::Ignored);
-    };
-
-    let self_subst = owner_self.unwrap_or(self_ty);
-
-    match resolve_path(db, path, scope, cx.proof.assumptions(), false) {
-        Ok(PathRes::Trait(t)) => {
-            let mut args = t.args(db).clone();
-
-            struct SelfSubst<'db> {
-                db: &'db dyn HirAnalysisDb,
-                self_subst: TyId<'db>,
-            }
-
-            impl<'db> TyFolder<'db> for SelfSubst<'db> {
-                fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-                    match ty.data(self.db) {
-                        TyData::TyParam(p) if p.is_trait_self() => self.self_subst,
-                        _ => ty.super_fold_with(db, self),
-                    }
-                }
-            }
-
-            let mut folder = SelfSubst { db, self_subst };
-            args[0] = self_ty;
-            args.iter_mut()
-                .skip(1)
-                .for_each(|arg| *arg = arg.fold_with(db, &mut folder));
-
-            let mut assoc_bindings = t.assoc_type_bindings(db).clone();
-            assoc_bindings
-                .iter_mut()
-                .for_each(|(_, ty)| *ty = (*ty).fold_with(db, &mut folder));
-
-            Ok(TraitInstId::new(db, t.key(db), args, assoc_bindings))
-        }
-        Ok(res) => Err(TraitRefLowerError::InvalidDomain(res)),
-        Err(err) => Err(TraitRefLowerError::PathResError(err)),
-    }
-}
-
-#[salsa::tracked]
+#[salsa::tracked(
+    cycle_fn=lower_trait_ref_cycle_recover,
+    cycle_initial=lower_trait_ref_cycle_initial
+)]
 pub(crate) fn lower_trait_ref<'db>(
     db: &'db dyn HirAnalysisDb,
     self_ty: TyId<'db>,
@@ -208,8 +80,145 @@ pub(crate) fn lower_trait_ref<'db>(
     assumptions: PredicateListId<'db>,
     owner_self: Option<TyId<'db>>,
 ) -> Result<TraitInstId<'db>, TraitRefLowerError<'db>> {
-    let cx = AnalysisCx::new(ProofCx::new(db, scope).with_assumptions(assumptions));
-    lower_trait_ref_in_cx(db, self_ty, trait_ref, scope, cx, owner_self)
+    lower_trait_ref_inner(db, self_ty, trait_ref, scope, assumptions, owner_self)
+}
+
+fn lower_trait_ref_inner<'db>(
+    db: &'db (dyn HirAnalysisDb + 'static),
+    self_ty: TyId<'db>,
+    trait_ref: TraitRefId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    owner_self: Option<TyId<'db>>,
+) -> Result<TraitInstId<'db>, TraitRefLowerError<'db>> {
+    let Partial::Present(path) = trait_ref.path(db) else {
+        return Err(TraitRefLowerError::Ignored);
+    };
+
+    let self_subst = owner_self.unwrap_or(self_ty);
+    let trait_ = resolve_trait_path(db, path, scope, assumptions)?;
+    let lowered = lower_trait_ref_impl(db, path, scope, assumptions, trait_).map_err(|err| {
+        let kind = match err {
+            TraitArgError::ArgNumMismatch { expected, given } => {
+                PathResErrorKind::ArgNumMismatch { expected, given }
+            }
+            TraitArgError::ArgKindMisMatch { expected, given } => {
+                PathResErrorKind::ArgKindMisMatch { expected, given }
+            }
+            TraitArgError::ArgTypeMismatch { expected, given } => {
+                PathResErrorKind::ArgTypeMismatch { expected, given }
+            }
+            TraitArgError::ConstHoleNotAllowed { arg_idx } => {
+                PathResErrorKind::TraitConstHoleArg { arg_idx }
+            }
+            TraitArgError::Ignored => PathResErrorKind::ParseError,
+        };
+        TraitRefLowerError::PathResError(PathResError {
+            kind,
+            failed_at: path,
+        })
+    })?;
+    let mut args = lowered.args(db).clone();
+
+    // Substitute all occurrences of `Self` with `self_subst`
+    // TODO: this shouldn't be necessary; Self should resolve to self_ty in a later stage,
+    //  but something seems to be broken.
+    struct SelfSubst<'db> {
+        db: &'db dyn HirAnalysisDb,
+        self_subst: TyId<'db>,
+    }
+    impl<'db> TyFolder<'db> for SelfSubst<'db> {
+        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            match ty.data(self.db) {
+                TyData::TyParam(p) if p.is_trait_self() => self.self_subst,
+                _ => ty.super_fold_with(db, self),
+            }
+        }
+
+        fn fold_ty_app(
+            &mut self,
+            db: &'db dyn HirAnalysisDb,
+            abs: TyId<'db>,
+            arg: TyId<'db>,
+        ) -> TyId<'db> {
+            TyId::app_metadata_only(db, abs, arg)
+        }
+    }
+
+    let mut folder = SelfSubst { db, self_subst };
+    args[0] = self_ty;
+    args.iter_mut()
+        .skip(1)
+        .for_each(|a| *a = a.fold_with(db, &mut folder));
+
+    let mut assoc_bindings = lowered.assoc_type_bindings(db).clone();
+    assoc_bindings
+        .iter_mut()
+        .for_each(|(_, ty)| *ty = (*ty).fold_with(db, &mut folder));
+
+    Ok(TraitInstId::new(db, trait_, args, assoc_bindings))
+}
+
+fn resolve_trait_path<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Result<Trait<'db>, TraitRefLowerError<'db>> {
+    match resolve_path(db, path, scope, assumptions, false) {
+        Ok(PathRes::Trait(trait_inst)) => Ok(trait_inst.def(db)),
+        Ok(res) => resolve_visible_trait_fallback(db, path, scope)
+            .ok_or(TraitRefLowerError::InvalidDomain(res)),
+        Err(err) => resolve_visible_trait_fallback(db, path, scope)
+            .ok_or(TraitRefLowerError::PathResError(err)),
+    }
+}
+
+fn resolve_visible_trait_fallback<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+) -> Option<Trait<'db>> {
+    if path.parent(db).is_some() || matches!(path.kind(db), PathKind::QualifiedType { .. }) {
+        return None;
+    }
+
+    let ident = path.ident(db).to_opt()?;
+    let mut traits = available_traits_in_scope(db, scope)
+        .iter()
+        .copied()
+        .filter(|trait_| trait_.name(db).to_opt() == Some(ident));
+    let trait_ = traits.next()?;
+    if traits.next().is_some() {
+        return None;
+    }
+
+    Some(trait_)
+}
+
+fn lower_trait_ref_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _self_ty: TyId<'db>,
+    _trait_ref: TraitRefId<'db>,
+    _scope: ScopeId<'db>,
+    _assumptions: PredicateListId<'db>,
+    _owner_self: Option<TyId<'db>>,
+) -> Result<TraitInstId<'db>, TraitRefLowerError<'db>> {
+    Err(TraitRefLowerError::Cycle)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_trait_ref_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &Result<TraitInstId<'db>, TraitRefLowerError<'db>>,
+    _count: u32,
+    _self_ty: TyId<'db>,
+    _trait_ref: TraitRefId<'db>,
+    _scope: ScopeId<'db>,
+    _assumptions: PredicateListId<'db>,
+    _owner_self: Option<TyId<'db>>,
+) -> salsa::CycleRecoveryAction<Result<TraitInstId<'db>, TraitRefLowerError<'db>>> {
+    salsa::CycleRecoveryAction::Iterate
 }
 
 pub(crate) enum TraitArgError<'db> {
@@ -239,15 +248,34 @@ pub(crate) fn lower_trait_ref_impl<'db>(
     assumptions: PredicateListId<'db>,
     t: Trait<'db>,
 ) -> Result<TraitInstId<'db>, TraitArgError<'db>> {
+    lower_trait_ref_impl_inner(db, path, scope, assumptions, t)
+}
+
+fn lower_trait_ref_impl_inner<'db>(
+    db: &'db (dyn HirAnalysisDb + 'static),
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    t: Trait<'db>,
+) -> Result<TraitInstId<'db>, TraitArgError<'db>> {
     let trait_params: &[TyId<'db>] = t.params(db);
     let args = path.generic_args(db).data(db);
+    let arg_frame_root = AppFrameId::root_generic_arg_list(db, path.generic_args(db));
 
     // Lower provided explicit args (excluding Self)
     let mut provided_explicit = Vec::new();
+    let mut assoc_bindings = IndexMap::new();
     for (arg_idx, arg) in args.iter().enumerate() {
         match arg {
             GenericArg::Type(ty_arg) => {
-                provided_explicit.push(lower_opt_hir_ty(db, ty_arg.ty, scope, assumptions));
+                let hole_frame = ty_arg
+                    .ty
+                    .to_opt()
+                    .map(|hir_ty| arg_frame_root.child_type_component(db, hir_ty, arg_idx));
+                let ty = lower_opt_hir_ty(db, ty_arg.ty, scope, assumptions);
+                let ty =
+                    hole_frame.map_or(ty, |frame| rebase_structural_holes_under_app(db, ty, frame));
+                provided_explicit.push(ty);
             }
             GenericArg::Const(const_arg) => match const_arg.value {
                 ConstGenericArgValue::Expr(body) => {
@@ -257,16 +285,22 @@ pub(crate) fn lower_trait_ref_impl<'db>(
                     return Err(TraitArgError::ConstHoleNotAllowed { arg_idx });
                 }
             },
-            GenericArg::AssocType(..) => {}
+            GenericArg::AssocType(AssocTypeGenericArg { name, ty }) => {
+                if let (Some(name), Some(ty)) = (name.to_opt(), ty.to_opt()) {
+                    let ty = lower_hir_ty(db, ty, scope, assumptions);
+                    assoc_bindings.insert(name, ty);
+                }
+            }
         }
     }
 
     // Fill trailing defaults using the trait's param set. Bind Self (idx 0).
-    let non_self_completed = t.param_set(db).complete_explicit_args_with_defaults(
+    let non_self_completed = t.param_set(db).complete_explicit_args(
         db,
         Some(t.self_param(db)),
         &provided_explicit,
         assumptions,
+        ConstDefaultCompletion::evaluate(Some(path)),
     );
 
     if non_self_completed.len() != trait_params.len() - 1 {
@@ -279,6 +313,7 @@ pub(crate) fn lower_trait_ref_impl<'db>(
     let mut final_args: Vec<TyId<'db>> = Vec::with_capacity(trait_params.len());
     final_args.push(t.self_param(db));
     final_args.extend(non_self_completed);
+    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
 
     for (expected_ty, actual_ty) in trait_params.iter().zip(final_args.iter_mut()).skip(1) {
         if !expected_ty.kind(db).does_match(actual_ty.kind(db)) {
@@ -293,7 +328,7 @@ pub(crate) fn lower_trait_ref_impl<'db>(
             _ => None,
         };
 
-        match actual_ty.evaluate_const_ty(db, expected_const_ty) {
+        match actual_ty.evaluate_const_ty_with_solve_cx(db, expected_const_ty, solve_cx) {
             Ok(evaluated_ty) => *actual_ty = evaluated_ty,
             Err(InvalidCause::ConstTyMismatch { expected, given }) => {
                 return Err(TraitArgError::ArgTypeMismatch {
@@ -317,20 +352,83 @@ pub(crate) fn lower_trait_ref_impl<'db>(
         }
     }
 
-    let assoc_bindings: IndexMap<IdentId<'db>, TyId<'db>> = args
-        .iter()
-        .filter_map(|arg| match arg {
-            GenericArg::AssocType(AssocTypeGenericArg { name, ty }) => {
-                let (Some(name), Some(ty)) = (name.to_opt(), ty.to_opt()) else {
-                    return None;
-                };
-                Some((name, lower_hir_ty(db, ty, scope, assumptions)))
-            }
-            _ => None,
-        })
-        .collect();
-
     Ok(TraitInstId::new(db, t, final_args, assoc_bindings))
+}
+
+#[cfg(test)]
+mod layout_hole_tests {
+    use camino::Utf8PathBuf;
+
+    use super::lower_trait_ref_impl;
+    use crate::analysis::ty::{
+        const_ty::{ConstTyData, HoleId},
+        trait_resolution::PredicateListId,
+        ty_def::TyData,
+    };
+    use crate::hir_def::{ItemKind, PathId};
+    use crate::test_db::HirAnalysisTestDb;
+
+    #[test]
+    fn omitted_trait_hole_defaults_keep_distinct_path_arg_identity() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("omitted_trait_hole_defaults_keep_distinct_path_arg_identity.fe"),
+            r#"
+trait Cap<const LEFT: u256 = _, const RIGHT: u256 = _> {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+
+        let trait_ = top_mod
+            .children_non_nested(&db)
+            .find_map(|item| match item {
+                ItemKind::Trait(trait_)
+                    if trait_
+                        .name(&db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(&db) == "Cap") =>
+                {
+                    Some(trait_)
+                }
+                _ => None,
+            })
+            .expect("missing `Cap` trait");
+        let name = trait_.name(&db).to_opt().expect("trait must have a name");
+        let path = PathId::from_ident(&db, name);
+        let inst = match lower_trait_ref_impl(
+            &db,
+            path,
+            trait_.scope(),
+            PredicateListId::empty_list(&db),
+            trait_,
+        ) {
+            Ok(inst) => inst,
+            Err(_) => panic!("failed to lower trait ref"),
+        };
+        let args = inst.args(&db);
+
+        assert_eq!(args.len(), 3);
+        let left = args[1];
+        let right = args[2];
+        assert_ne!(left, right);
+
+        let TyData::ConstTy(left) = left.data(&db) else {
+            panic!("expected left arg to be a const hole");
+        };
+        let TyData::ConstTy(right) = right.data(&db) else {
+            panic!("expected right arg to be a const hole");
+        };
+
+        assert!(matches!(
+            left.data(&db),
+            ConstTyData::Hole(_, HoleId::Structural(_),)
+        ));
+        assert!(matches!(
+            right.data(&db),
+            ConstTyData::Hole(_, HoleId::Structural(_),)
+        ));
+    }
 }
 
 #[salsa::tracked(return_ref)]
@@ -350,7 +448,9 @@ pub(crate) fn collect_implementor_methods<'db>(
         ItemKind::Func(func) => Some(func),
         _ => None,
     }) {
-        let name = method.name(db).to_opt().expect("impl methods have names");
+        let Some(name) = method.name(db).to_opt() else {
+            continue;
+        };
         methods.insert(name, method);
     }
 
@@ -361,6 +461,36 @@ pub(crate) fn collect_implementor_methods<'db>(
 pub(crate) enum TraitRefLowerError<'db> {
     PathResError(PathResError<'db>),
     InvalidDomain(PathRes<'db>),
+    Cycle,
     /// Error is expected to be reported elsewhere.
     Ignored,
+}
+
+#[cfg(test)]
+mod tests {
+    use camino::Utf8PathBuf;
+
+    use super::*;
+    use crate::{
+        analysis::ty::ty_def::InvalidCause, core::hir_def::Partial, test_db::HirAnalysisTestDb,
+    };
+
+    #[test]
+    fn lower_trait_ref_cycle_initial_returns_cycle() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(Utf8PathBuf::from("cycle_initial.fe"), "");
+        let (top_mod, _) = db.top_mod(file);
+        let scope = ScopeId::from_item(top_mod.into());
+
+        let result = lower_trait_ref_cycle_initial(
+            &db,
+            TyId::invalid(&db, InvalidCause::Other),
+            TraitRefId::new(&db, Partial::Absent),
+            scope,
+            PredicateListId::empty_list(&db),
+            None,
+        );
+
+        assert_eq!(result, Err(TraitRefLowerError::Cycle));
+    }
 }

@@ -1,10 +1,12 @@
 use parser::ast::{self, prelude::*};
+use salsa::Accumulator as _;
 
-use super::FileLowerCtxt;
+use super::{FileLowerCtxt, attr::named_attr_specs};
 use crate::{
     hir_def::{
-        AttrListId, Body, EffectParamListId, FuncParamListId, GenericParamListId, IdentId, PathId,
-        TraitRefId, TupleTypeId, TypeBound, TypeId, WhereClauseId, item::*,
+        AttrListId, Body, EffectParamListId, FuncParamListId, GenericParamListId, IdentId,
+        InlineAttrErrorKind, KeywordAttrArgSpec, KeywordAttrSpec, PathId, TraitRefId, TupleTypeId,
+        TypeBound, TypeId, WhereClauseId, item::*, parse_inline_attr_specs,
     },
     lower::msg::lower_msg_as_mod,
     span::HirOrigin,
@@ -40,6 +42,15 @@ pub enum SelectorErrorKind {
     },
 }
 
+#[salsa::accumulator]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct InlineAttrError {
+    pub kind: InlineAttrErrorKind,
+    pub file: common::file::File,
+    pub primary_range: parser::TextRange,
+    pub func_name: Option<String>,
+}
+
 pub(crate) fn lower_module_items(ctxt: &mut FileLowerCtxt<'_>, items: ast::ItemList) {
     for item in items {
         ItemKind::lower_ast(ctxt, item);
@@ -56,15 +67,30 @@ impl<'db> ItemKind<'db> {
             ast::ItemKind::Mod(mod_) => {
                 super::arithmetic::report_invalid_mod_arithmetic_attrs(ctxt, mod_.attr_list());
                 super::event::report_event_attr_on_non_struct_item(ctxt, mod_.attr_list(), "mod");
+                super::payable::report_payable_attr_on_unsupported_item(
+                    ctxt,
+                    mod_.attr_list(),
+                    "mod",
+                );
                 Mod::lower_ast(ctxt, mod_);
             }
             ast::ItemKind::Func(fn_) => {
                 super::arithmetic::report_invalid_function_arithmetic_attrs(ctxt, &fn_);
                 super::event::report_event_attr_on_non_struct_item(ctxt, fn_.attr_list(), "fn");
+                super::payable::report_payable_attr_on_unsupported_item(
+                    ctxt,
+                    fn_.attr_list(),
+                    "fn",
+                );
                 Func::lower_ast(ctxt, fn_);
             }
             ast::ItemKind::Struct(struct_) => {
                 super::arithmetic::report_arithmetic_attr_on_unsupported_item(
+                    ctxt,
+                    struct_.attr_list(),
+                    "struct",
+                );
+                super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
                     struct_.attr_list(),
                     "struct",
@@ -82,6 +108,11 @@ impl<'db> ItemKind<'db> {
                     contract.attr_list(),
                     "contract",
                 );
+                super::payable::report_payable_attr_on_unsupported_item(
+                    ctxt,
+                    contract.attr_list(),
+                    "contract",
+                );
                 Contract::lower_ast(ctxt, contract);
             }
             ast::ItemKind::Enum(enum_) => {
@@ -91,6 +122,11 @@ impl<'db> ItemKind<'db> {
                     "enum",
                 );
                 super::event::report_event_attr_on_non_struct_item(ctxt, enum_.attr_list(), "enum");
+                super::payable::report_payable_attr_on_unsupported_item(
+                    ctxt,
+                    enum_.attr_list(),
+                    "enum",
+                );
                 Enum::lower_ast(ctxt, enum_);
             }
             ast::ItemKind::Msg(msg) => {
@@ -100,6 +136,11 @@ impl<'db> ItemKind<'db> {
                     "msg",
                 );
                 super::event::report_event_attr_on_non_struct_item(ctxt, msg.attr_list(), "msg");
+                super::payable::report_payable_attr_on_unsupported_item(
+                    ctxt,
+                    msg.attr_list(),
+                    "msg",
+                );
                 lower_msg_as_mod(ctxt, msg);
             }
             ast::ItemKind::TypeAlias(alias) => {
@@ -113,6 +154,11 @@ impl<'db> ItemKind<'db> {
                     alias.attr_list(),
                     "type alias",
                 );
+                super::payable::report_payable_attr_on_unsupported_item(
+                    ctxt,
+                    alias.attr_list(),
+                    "type alias",
+                );
                 TypeAlias::lower_ast(ctxt, alias);
             }
             ast::ItemKind::Impl(impl_) => {
@@ -122,6 +168,11 @@ impl<'db> ItemKind<'db> {
                     "impl",
                 );
                 super::event::report_event_attr_on_non_struct_item(ctxt, impl_.attr_list(), "impl");
+                super::payable::report_payable_attr_on_unsupported_item(
+                    ctxt,
+                    impl_.attr_list(),
+                    "impl",
+                );
                 Impl::lower_ast(ctxt, impl_);
             }
             ast::ItemKind::Trait(trait_) => {
@@ -131,6 +182,11 @@ impl<'db> ItemKind<'db> {
                     "trait",
                 );
                 super::event::report_event_attr_on_non_struct_item(
+                    ctxt,
+                    trait_.attr_list(),
+                    "trait",
+                );
+                super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
                     trait_.attr_list(),
                     "trait",
@@ -148,6 +204,11 @@ impl<'db> ItemKind<'db> {
                     impl_trait.attr_list(),
                     "impl trait",
                 );
+                super::payable::report_payable_attr_on_unsupported_item(
+                    ctxt,
+                    impl_trait.attr_list(),
+                    "impl trait",
+                );
                 ImplTrait::lower_ast(ctxt, impl_trait);
             }
             ast::ItemKind::Const(const_) => {
@@ -161,6 +222,11 @@ impl<'db> ItemKind<'db> {
                     const_.attr_list(),
                     "const",
                 );
+                super::payable::report_payable_attr_on_unsupported_item(
+                    ctxt,
+                    const_.attr_list(),
+                    "const",
+                );
                 Const::lower_ast(ctxt, const_);
             }
             ast::ItemKind::Use(use_) => {
@@ -170,6 +236,11 @@ impl<'db> ItemKind<'db> {
                     "use",
                 );
                 super::event::report_event_attr_on_non_struct_item(ctxt, use_.attr_list(), "use");
+                super::payable::report_payable_attr_on_unsupported_item(
+                    ctxt,
+                    use_.attr_list(),
+                    "use",
+                );
                 Use::lower_ast(ctxt, use_);
             }
             ast::ItemKind::Extern(extern_) => {
@@ -183,6 +254,11 @@ impl<'db> ItemKind<'db> {
                     extern_.attr_list(),
                     "extern",
                 );
+                super::payable::report_payable_attr_on_unsupported_item(
+                    ctxt,
+                    extern_.attr_list(),
+                    "extern",
+                );
                 if let Some(extern_block) = extern_.extern_block() {
                     for fn_ in extern_block {
                         super::arithmetic::report_arithmetic_attr_on_unsupported_item(
@@ -191,6 +267,11 @@ impl<'db> ItemKind<'db> {
                             "extern fn",
                         );
                         super::event::report_event_attr_on_non_struct_item(
+                            ctxt,
+                            fn_.attr_list(),
+                            "extern fn",
+                        );
+                        super::payable::report_payable_attr_on_unsupported_item(
                             ctxt,
                             fn_.attr_list(),
                             "extern fn",
@@ -214,6 +295,11 @@ impl<'db> Mod<'db> {
         super::arithmetic::report_invalid_mod_arithmetic_attrs(
             ctxt,
             ast.items().and_then(|items| items.inner_attr_list()),
+        );
+        super::payable::report_payable_attr_on_unsupported_item(
+            ctxt,
+            ast.items().and_then(|items| items.inner_attr_list()),
+            "module",
         );
         let attributes = AttrListId::lower_ast_merged(
             ctxt,
@@ -246,6 +332,7 @@ impl<'db> Func<'db> {
         let id = ctxt.joined_id(TrackedItemVariant::Func(name));
         ctxt.enter_item_scope(id, false);
 
+        validate_inline_attr(ctxt, &ast);
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let generic_params = GenericParamListId::lower_ast_opt(ctxt, sig.generic_params());
         let where_clause = WhereClauseId::lower_ast_opt(ctxt, sig.where_clause());
@@ -282,6 +369,55 @@ impl<'db> Func<'db> {
         );
         ctxt.leave_item_scope(fn_)
     }
+}
+
+fn validate_inline_attr<'db>(ctxt: &mut FileLowerCtxt<'db>, func: &ast::Func) {
+    let db = ctxt.db();
+    let file = ctxt.top_mod().file(db);
+    let func_name = func.sig().name().map(|name| name.text().to_string());
+    let inline_attrs = named_attr_specs(func.attr_list(), "inline")
+        .into_iter()
+        .map(|attr| {
+            let spec = KeywordAttrSpec {
+                has_value: attr.value.is_some(),
+                has_args: attr.has_args,
+                args: attr
+                    .args
+                    .into_iter()
+                    .map(|arg| KeywordAttrArgSpec {
+                        key: arg.key,
+                        has_value: arg.value.is_some(),
+                    })
+                    .collect(),
+            };
+            (spec, attr.range)
+        })
+        .collect::<Vec<_>>();
+
+    let Err(err) = parse_inline_attr_specs(inline_attrs.iter().map(|(spec, _)| spec.clone()))
+    else {
+        return;
+    };
+
+    if let Some((_, range)) = inline_attrs.get(err.attr_index) {
+        lower_inline_attr_error(db, file, *range, func_name, err.kind);
+    }
+}
+
+fn lower_inline_attr_error(
+    db: &dyn crate::HirDb,
+    file: common::file::File,
+    primary_range: parser::TextRange,
+    func_name: Option<String>,
+    kind: InlineAttrErrorKind,
+) {
+    InlineAttrError {
+        kind,
+        file,
+        primary_range,
+        func_name,
+    }
+    .accumulate(db);
 }
 
 impl<'db> Struct<'db> {
@@ -425,6 +561,11 @@ impl<'db> Impl<'db> {
 
         if let Some(item_list) = ast.item_list() {
             for impl_item in item_list {
+                super::payable::report_payable_attr_on_unsupported_item(
+                    ctxt,
+                    impl_item.attr_list(),
+                    "fn",
+                );
                 Func::lower_ast(ctxt, impl_item);
             }
         }
@@ -470,10 +611,27 @@ impl<'db> Trait<'db> {
             for impl_item in item_list {
                 match impl_item.kind() {
                     ast::TraitItemKind::Func(func) => {
+                        super::payable::report_payable_attr_on_unsupported_item(
+                            ctxt,
+                            func.attr_list(),
+                            "fn",
+                        );
                         Func::lower_ast(ctxt, func);
                     }
-                    ast::TraitItemKind::Type(t) => types.push(AssocTyDecl::lower_ast(ctxt, t)),
+                    ast::TraitItemKind::Type(t) => {
+                        super::payable::report_payable_attr_on_unsupported_item(
+                            ctxt,
+                            t.attr_list(),
+                            "type",
+                        );
+                        types.push(AssocTyDecl::lower_ast(ctxt, t));
+                    }
                     ast::TraitItemKind::Const(c) => {
+                        super::payable::report_payable_attr_on_unsupported_item(
+                            ctxt,
+                            c.attr_list(),
+                            "const",
+                        );
                         consts.push(AssocConstDecl::lower_ast(ctxt, c));
                     }
                 };
@@ -544,10 +702,27 @@ impl<'db> ImplTrait<'db> {
             for impl_item in item_list {
                 match impl_item.kind() {
                     ast::TraitItemKind::Func(func) => {
+                        super::payable::report_payable_attr_on_unsupported_item(
+                            ctxt,
+                            func.attr_list(),
+                            "fn",
+                        );
                         Func::lower_ast(ctxt, func);
                     }
-                    ast::TraitItemKind::Type(t) => types.push(AssocTyDef::lower_ast(ctxt, t)),
+                    ast::TraitItemKind::Type(t) => {
+                        super::payable::report_payable_attr_on_unsupported_item(
+                            ctxt,
+                            t.attr_list(),
+                            "type",
+                        );
+                        types.push(AssocTyDef::lower_ast(ctxt, t));
+                    }
                     ast::TraitItemKind::Const(c) => {
+                        super::payable::report_payable_attr_on_unsupported_item(
+                            ctxt,
+                            c.attr_list(),
+                            "const",
+                        );
                         consts.push(AssocConstDef::lower_ast(ctxt, c));
                     }
                 };
@@ -657,6 +832,7 @@ impl<'db> FieldDefListId<'db> {
 
 impl<'db> FieldDef<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::RecordFieldDef) -> Self {
+        super::payable::report_payable_attr_on_unsupported_item(ctxt, ast.attr_list(), "field");
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let type_ref = TypeId::lower_ast_partial(ctxt, ast.ty());
@@ -687,6 +863,7 @@ impl<'db> VariantDefListId<'db> {
 
 impl<'db> VariantDef<'db> {
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::VariantDef) -> Self {
+        super::payable::report_payable_attr_on_unsupported_item(ctxt, ast.attr_list(), "variant");
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let kind = match ast.kind() {

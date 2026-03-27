@@ -36,19 +36,15 @@ where
     /// # Returns
     /// The canonical value after initializing the unification table.
     ///
-    /// # Panics
-    /// This function will panic if the `table` is not empty.
     pub fn extract_identity<S>(self, table: &mut UnificationTableBase<'db, S>) -> T
     where
         S: UnificationStore<'db>,
     {
-        assert!(table.is_empty());
-
-        for var in collect_variables(table.db, &self.value) {
-            table.new_var(var.sort, &var.kind);
-        }
-
-        self.value
+        // Re-materialize canonical vars through the current table instead of
+        // assuming canonical keys are contiguous and start from zero.
+        let db = table.db;
+        let mut extractor = SolutionExtractor::new(table, FxHashMap::default());
+        self.value.fold_with(db, &mut extractor)
     }
 
     /// Canonicalize a new solution that corresponds to the canonical query.
@@ -225,6 +221,9 @@ impl<'db> TyFolder<'db> for Canonicalizer<'db> {
         if let Some(&canonical) = self.subst.get(&ty) {
             return canonical;
         }
+        if !ty.has_var(db) {
+            return ty;
+        }
 
         match ty.data(db) {
             TyData::TyVar(var) => {
@@ -280,6 +279,15 @@ impl<'db, S> TyFolder<'db> for SolutionExtractor<'_, 'db, S>
 where
     S: UnificationStore<'db>,
 {
+    fn fold_ty_app(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        abs: TyId<'db>,
+        arg: TyId<'db>,
+    ) -> TyId<'db> {
+        TyId::app_metadata_only(db, abs, arg)
+    }
+
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         if let Some(&ty) = self.subst.get(&ty) {
             return ty;

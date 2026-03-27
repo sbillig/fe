@@ -4,10 +4,8 @@ assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/storage_map_wrong_provider.fe
 ---
-error[8-0036]: missing effect `StorageMap<u256, u256, BALANCES_ROOT>` required by `needs_balances`
-   ┌─ storage_map_wrong_provider.fe:21:17
+error[8-0076]: keyed effect binding `StorageMap<u256, u256, BALANCES_ROOT>` requires a provider compatible with `lib::evm::storage_map::StorageMap<u256, u256, 0>`, but `lib::evm::storage_map::StorageMap<u256, u256, 1>` is given
+   ┌─ storage_map_wrong_provider.fe:20:59
    │
-21 │                 needs_balances()
-   │                 ^^^^^^^^^^^^^^^^ `needs_balances` requires effect `StorageMap<u256, u256, BALANCES_ROOT>` to be in scope
-   │
-   = provide it with `with (StorageMap<u256, u256, BALANCES_ROOT> = value)` or require it via `uses StorageMap<u256, u256, BALANCES_ROOT>`
+20 │             with (StorageMap<u256, u256, BALANCES_ROOT> = allowances) {
+   │                                                           ^^^^^^^^^^ `lib::evm::storage_map::StorageMap<u256, u256, 1>` is not compatible with keyed effect `StorageMap<u256, u256, BALANCES_ROOT>`

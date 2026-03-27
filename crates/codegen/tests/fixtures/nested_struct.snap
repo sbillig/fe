@@ -5,13 +5,13 @@ input_file: tests/fixtures/nested_struct.fe
 ---
 object "NestedStruct" {
   code {
-    function $init__StorPtr_Evm___207f35a85ac4062e() {
+    function $init__Evm_hef0af3106e109414__3af54274b2985741() {
       let v0 := datasize("NestedStruct_deployed")
       let v1 := dataoffset("NestedStruct_deployed")
       codecopy(0, v1, v0)
       return(0, v0)
     }
-    $init__StorPtr_Evm___207f35a85ac4062e()
+    $init__Evm_hef0af3106e109414__3af54274b2985741()
   }
 
   object "NestedStruct_deployed" {
@@ -31,7 +31,7 @@ object "NestedStruct" {
         ret := v0
         leave
       }
-      function $runtime__StorPtr_Evm___207f35a85ac4062e() {
+      function $runtime__Evm_hef0af3106e109414__3af54274b2985741() {
         let v0 := $stor_ptr_stor__Evm_hef0af3106e109414_Outer_hccd04e332bd35653__177c3c9a6f7ae368(0)
         let v1 := v0
         let v2 := calldataload(0)
@@ -68,7 +68,7 @@ object "NestedStruct" {
         sstore($outer, $value)
         leave
       }
-      $runtime__StorPtr_Evm___207f35a85ac4062e()
+      $runtime__Evm_hef0af3106e109414__3af54274b2985741()
       return(0, 0)
     }
   }

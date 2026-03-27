@@ -21,7 +21,7 @@ pub enum Stmt<'db> {
     /// The fourth field is the unroll hint:
     /// - `None`: no attribute, use auto-unroll heuristics (unroll if < 10 iterations)
     /// - `Some(true)`: #[unroll] attribute forces unrolling
-    /// - `Some(false)`: #[no_unroll] attribute prevents unrolling
+    /// - `Some(false)`: #[unroll(never)] attribute prevents unrolling
     For(PatId, ExprId, ExprId, Option<bool>),
 
     /// The first `CondId` is the condition of the while-loop.

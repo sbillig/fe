@@ -4,12 +4,24 @@ struct GenericMsg<T> {
     pub value: T,
 }
 
+impl<T> core::abi::AbiSize for GenericMsg<T>
+    where T: core::abi::AbiSize
+{
+    const ENCODED_SIZE: u256 = T::ENCODED_SIZE
+}
+
 impl<T> core::abi::Encode<std::abi::Sol> for GenericMsg<T>
     where T: core::abi::Encode<std::abi::Sol>
 {
+    const DIRECT_ENCODE: bool = false
+
     fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
         let Self { value } = self
         value.encode(e)
+    }
+
+    fn encode_to_ptr(own self, ptr: u256) {
+        core::panic()
     }
 }
 

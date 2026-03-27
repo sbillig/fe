@@ -2,21 +2,21 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::PathRes,
     ty::{
+        assoc_const::AssocConstUse,
         binder::Binder,
-        canonical::Canonical,
+        canonical::{Canonical, Canonicalized},
         const_expr::ConstExpr,
-        const_ty::{ConstTyData, ConstTyId, const_body_simple_path, const_ty_from_trait_const},
+        const_ty::{ConstTyData, const_body_simple_path, const_ty_from_trait_const},
         context::{AnalysisCx, ImplOverlay, LoweringMode, ProofCx},
         fold::{AssocTySubst, TyFoldable as _},
         normalize::normalize_ty_without_consts_with_solve_cx,
         trait_def::{
             ImplementorId, ImplementorOrigin, TraitInstId, impls_for_ty_with_constraints_in_cx,
         },
-        trait_resolution::Selection,
-        ty_def::{InvalidCause, TyData, TyFlags, TyId},
+        trait_resolution::{Selection, normalize_trait_inst_preserving_validity_with_solve_cx},
+        ty_def::{InvalidCause, TyData, TyId, inference_keys},
         ty_lower::contextual_path_resolution_in_cx,
         unify::UnificationTable,
-        visitor::collect_flags,
     },
 };
 use crate::hir_def::{Body, IdentId};
@@ -29,35 +29,19 @@ pub enum AssocConstBodyOrigin {
 }
 
 #[derive(Debug, Clone)]
-pub struct SelectedAssocConstBody<'db> {
-    pub selected_trait_inst: TraitInstId<'db>,
-    pub implementor: ImplementorId<'db>,
-    pub body: Body<'db>,
-    pub impl_args: Vec<TyId<'db>>,
-    pub origin: AssocConstBodyOrigin,
+pub(crate) struct SelectedAssocConstBody<'db> {
+    pub(crate) selected_trait_inst: TraitInstId<'db>,
+    pub(crate) implementor: ImplementorId<'db>,
+    pub(crate) body: Body<'db>,
+    pub(crate) impl_args: Vec<TyId<'db>>,
+    pub(crate) origin: AssocConstBodyOrigin,
 }
 
 #[derive(Debug, Clone)]
-pub struct AssocConstSelection<'db> {
-    pub trait_inst: TraitInstId<'db>,
-    pub name: IdentId<'db>,
-    pub declared_ty: TyId<'db>,
-    pub body: Option<SelectedAssocConstBody<'db>>,
-}
-
-#[derive(Debug, Clone)]
-pub enum TraitConstUseResolution<'db> {
-    Concrete(AssocConstSelection<'db>),
-    Abstract {
-        trait_inst: TraitInstId<'db>,
-        name: IdentId<'db>,
-        declared_ty: TyId<'db>,
-    },
-    MissingConcreteImpl {
-        trait_inst: TraitInstId<'db>,
-        name: IdentId<'db>,
-        declared_ty: TyId<'db>,
-    },
+pub(crate) struct AssocConstSelection<'db> {
+    pub(crate) trait_inst: TraitInstId<'db>,
+    pub(crate) declared_ty: TyId<'db>,
+    pub(crate) body: Option<SelectedAssocConstBody<'db>>,
 }
 
 fn selected_assoc_const_body_analysis_cx<'db>(
@@ -67,6 +51,11 @@ fn selected_assoc_const_body_analysis_cx<'db>(
 ) -> AnalysisCx<'db> {
     let trait_inst = body.selected_trait_inst;
     let implementor = body.implementor;
+    let assumptions = proof
+        .assumptions()
+        .merge(db, implementor.constraints(db))
+        .extend_all_bounds(db);
+    let proof = proof.with_assumptions(assumptions);
     let mode = match body.origin {
         AssocConstBodyOrigin::ImplOverride => LoweringMode::ImplTraitSignature {
             trait_inst,
@@ -110,13 +99,38 @@ pub(crate) fn normalize_const_tys_for_trait_inst<'db>(
     ty: TyId<'db>,
     trait_inst: TraitInstId<'db>,
 ) -> TyId<'db> {
+    fn is_identity_trait_inst<'db>(db: &'db dyn HirAnalysisDb, inst: TraitInstId<'db>) -> bool {
+        let trait_def = inst.def(db);
+        inst.assoc_type_bindings(db).is_empty() && inst.args(db) == trait_def.params(db)
+    }
+
+    fn rebase_trait_const_inst<'db>(
+        db: &'db dyn HirAnalysisDb,
+        inst: TraitInstId<'db>,
+        trait_inst: TraitInstId<'db>,
+    ) -> TraitInstId<'db> {
+        if inst.def(db) == trait_inst.def(db) && is_identity_trait_inst(db, inst) {
+            trait_inst
+        } else {
+            inst
+        }
+    }
+
     struct ConstFolder<'db> {
         cx: AnalysisCx<'db>,
         trait_inst: TraitInstId<'db>,
-        current_implementor: Option<ImplementorId<'db>>,
     }
 
     impl<'db> super::fold::TyFolder<'db> for ConstFolder<'db> {
+        fn fold_ty_app(
+            &mut self,
+            db: &'db dyn HirAnalysisDb,
+            abs: TyId<'db>,
+            arg: TyId<'db>,
+        ) -> TyId<'db> {
+            TyId::app_metadata_only(db, abs, arg)
+        }
+
         fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
             let TyData::ConstTy(const_ty) = ty.data(db) else {
                 return ty.super_fold_with(db, self);
@@ -124,18 +138,30 @@ pub(crate) fn normalize_const_tys_for_trait_inst<'db>(
 
             match const_ty.data(db) {
                 ConstTyData::Abstract(expr, expected_ty) => {
-                    let ConstExpr::TraitConst { inst, name } = expr.data(db) else {
+                    let ConstExpr::TraitConst(assoc) = expr.data(db) else {
                         return ty.super_fold_with(db, self);
                     };
+                    let inst = rebase_trait_const_inst(db, assoc.inst(), self.trait_inst);
 
-                    let Some(const_ty) = const_ty_from_trait_const(
-                        db,
-                        self.cx.proof.solve_cx(),
-                        *inst,
-                        *name,
-                        self.current_implementor,
-                    ) else {
-                        return ty.super_fold_with(db, self);
+                    let Some(const_ty) =
+                        const_ty_from_trait_const(db, self.cx.proof.solve_cx(), inst, assoc.name())
+                    else {
+                        if inst == assoc.inst() {
+                            return ty.super_fold_with(db, self);
+                        }
+                        let assoc =
+                            assoc.with_env(assoc.origin_scope(), self.cx.proof.assumptions());
+                        let expr = super::const_expr::ConstExprId::new(
+                            db,
+                            ConstExpr::TraitConst(assoc.with_inst(inst)),
+                        );
+                        return TyId::new(
+                            db,
+                            TyData::ConstTy(super::const_ty::ConstTyId::new(
+                                db,
+                                ConstTyData::Abstract(expr, *expected_ty),
+                            )),
+                        );
                     };
 
                     let evaluated = const_ty.evaluate_with_solve_cx(
@@ -155,46 +181,67 @@ pub(crate) fn normalize_const_tys_for_trait_inst<'db>(
                 ConstTyData::UnEvaluated {
                     body,
                     ty: expected_ty,
-                    const_def,
-                    generic_args,
-                    trait_inst: body_trait_inst,
-                    mode_kind,
-                    current_implementor,
                     ..
                 } => {
-                    let const_ty =
-                        if !matches!(mode_kind, super::const_ty::ConstBodyModeKind::Normal)
-                            && (*body_trait_inst != Some(self.trait_inst)
-                                || *current_implementor != self.current_implementor)
-                        {
-                            ConstTyId::new(
-                                db,
-                                ConstTyData::UnEvaluated {
-                                    body: *body,
-                                    ty: *expected_ty,
-                                    const_def: *const_def,
-                                    generic_args: generic_args.clone(),
-                                    trait_inst: Some(self.trait_inst),
-                                    mode_kind: *mode_kind,
-                                    current_implementor: self.current_implementor,
-                                },
-                            )
-                        } else {
-                            *const_ty
-                        };
                     let Some(path) = const_body_simple_path(db, *body) else {
-                        return TyId::new(db, TyData::ConstTy(const_ty)).super_fold_with(db, self);
+                        return TyId::new(db, TyData::ConstTy(*const_ty)).super_fold_with(db, self);
                     };
+                    if let Some(parent) = path.parent(db)
+                        && parent.is_self_ty(db)
+                        && let Some(name) = path.ident(db).to_opt()
+                        && path.generic_args(db).is_empty(db)
+                    {
+                        if let Some(repl) = const_ty_from_trait_const(
+                            db,
+                            self.cx.proof.solve_cx(),
+                            self.trait_inst,
+                            name,
+                        ) {
+                            return TyId::new(
+                                db,
+                                TyData::ConstTy(repl.evaluate_with_solve_cx(
+                                    db,
+                                    expected_ty.or(Some(repl.ty(db))),
+                                    self.cx.proof.solve_cx(),
+                                )),
+                            );
+                        }
+                        if let Some(expected_ty) = *expected_ty {
+                            let assoc = AssocConstUse::new(
+                                body.scope(),
+                                self.cx.proof.assumptions(),
+                                self.trait_inst,
+                                name,
+                            )
+                            .with_analysis_cx(self.cx);
+                            return TyId::new(
+                                db,
+                                TyData::ConstTy(super::const_ty::ConstTyId::new(
+                                    db,
+                                    ConstTyData::Abstract(
+                                        super::const_expr::ConstExprId::new(
+                                            db,
+                                            ConstExpr::TraitConst(assoc),
+                                        ),
+                                        expected_ty,
+                                    ),
+                                )),
+                            );
+                        }
+                    }
 
                     if let Some(PathRes::TraitConst(_, inst, name)) =
                         contextual_path_resolution_in_cx(db, body.scope(), path, true, &self.cx)
-                        && let Some(repl) = const_ty_from_trait_const(
-                            db,
-                            self.cx.proof.solve_cx(),
-                            inst,
-                            name,
-                            self.current_implementor,
-                        )
+                            .map(|res| match res {
+                                PathRes::TraitConst(recv_ty, inst, name) => PathRes::TraitConst(
+                                    recv_ty,
+                                    rebase_trait_const_inst(db, inst, self.trait_inst),
+                                    name,
+                                ),
+                                other => other,
+                            })
+                        && let Some(repl) =
+                            const_ty_from_trait_const(db, self.cx.proof.solve_cx(), inst, name)
                     {
                         return TyId::new(
                             db,
@@ -207,7 +254,7 @@ pub(crate) fn normalize_const_tys_for_trait_inst<'db>(
                     }
 
                     let Some(expected_ty) = *expected_ty else {
-                        return TyId::new(db, TyData::ConstTy(const_ty)).super_fold_with(db, self);
+                        return TyId::new(db, TyData::ConstTy(*const_ty)).super_fold_with(db, self);
                     };
                     TyId::new(
                         db,
@@ -226,7 +273,6 @@ pub(crate) fn normalize_const_tys_for_trait_inst<'db>(
     let mut folder = ConstFolder {
         cx: *cx,
         trait_inst,
-        current_implementor: cx.overlay.current_impl().or(cx.mode.current_impl()),
     };
     ty.fold_with(db, &mut folder)
 }
@@ -236,25 +282,38 @@ fn select_implementor_for_trait_inst<'db>(
     cx: &AnalysisCx<'db>,
     trait_inst: TraitInstId<'db>,
 ) -> Selection<ImplementorId<'db>> {
-    let self_ty = Canonical::new(db, trait_inst.self_ty(db));
     let (primary, secondary) = cx.proof.search_ingots_for_trait_inst(db, trait_inst);
-    let search_ingots = if primary.is_none() && secondary.is_none() {
-        vec![None]
-    } else {
-        vec![primary, secondary]
-    };
+    let mut search_ingots = vec![Some(primary)];
+    if let Some(secondary) = secondary {
+        search_ingots.push(Some(secondary));
+    }
+    let canonical_target = Canonicalized::new(db, trait_inst);
+    let canonical_self_ty = Canonical::new(db, canonical_target.value.value.self_ty(db));
     let mut matches = IndexSet::default();
+    let mut table = UnificationTable::new(db);
+    let target_inst = canonical_target.value.extract_identity(&mut table);
+    let target_keys = inference_keys(db, &target_inst);
 
     for ingot in search_ingots {
         for implementor in
-            impls_for_ty_with_constraints_in_cx(db, ingot, self_ty, cx.proof.solve_cx())
+            impls_for_ty_with_constraints_in_cx(db, ingot, canonical_self_ty, cx.proof.solve_cx())
         {
-            let mut table = UnificationTable::new(db);
-            let implementor = table.instantiate_with_fresh_vars(implementor);
-            if table.unify(implementor.trait_inst(db), trait_inst).is_err() {
+            let snapshot = table.snapshot();
+            let implementor: ImplementorId<'db> = table.instantiate_with_fresh_vars(implementor);
+            if table
+                .unify(implementor.trait_inst(db), target_inst)
+                .is_err()
+            {
+                table.rollback_to(snapshot);
                 continue;
             }
-            matches.insert(implementor.fold_with(db, &mut table));
+            let implementor = implementor.fold_with(db, &mut table);
+            if !inference_keys(db, &implementor).is_subset(&target_keys) {
+                table.rollback_to(snapshot);
+                continue;
+            }
+            matches.insert(canonical_target.decanonicalize(db, implementor));
+            table.rollback_to(snapshot);
         }
     }
 
@@ -270,8 +329,7 @@ pub(crate) fn normalize_trait_inst<'db>(
     cx: &AnalysisCx<'db>,
     trait_inst: TraitInstId<'db>,
 ) -> TraitInstId<'db> {
-    let scope = cx.proof.normalization_scope_for_trait_inst(db, trait_inst);
-    trait_inst.normalize_with_solve_cx(db, cx.proof.solve_cx(), scope, cx.proof.assumptions())
+    normalize_trait_inst_preserving_validity_with_solve_cx(db, trait_inst, cx.proof.solve_cx())
 }
 
 fn selected_assoc_const_body_for_implementor<'db>(
@@ -280,6 +338,10 @@ fn selected_assoc_const_body_for_implementor<'db>(
     inst: TraitInstId<'db>,
     const_name: IdentId<'db>,
 ) -> Option<SelectedAssocConstBody<'db>> {
+    if !inference_keys(db, &implementor).is_empty() || !inference_keys(db, &inst).is_empty() {
+        return None;
+    }
+
     let mut table = UnificationTable::new(db);
     let instantiated = table.instantiate_with_fresh_vars(Binder::bind(implementor));
     table.unify(instantiated.trait_inst(db), inst).ok()?;
@@ -328,7 +390,7 @@ fn overlay_selected_assoc_const_body<'db>(
         .and_then(|_| selected_assoc_const_body_for_implementor(db, current_impl, inst, const_name))
 }
 
-pub fn assoc_const_declared_ty<'db>(
+pub(crate) fn assoc_const_declared_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     cx: &AnalysisCx<'db>,
     trait_inst: TraitInstId<'db>,
@@ -343,7 +405,7 @@ pub fn assoc_const_declared_ty<'db>(
     Some(normalize_ty_for_trait_inst(db, cx, declared_ty, trait_inst))
 }
 
-pub fn resolve_assoc_const_selection<'db>(
+pub(crate) fn resolve_assoc_const_selection<'db>(
     db: &'db dyn HirAnalysisDb,
     cx: &AnalysisCx<'db>,
     trait_inst: TraitInstId<'db>,
@@ -383,7 +445,6 @@ pub fn resolve_assoc_const_selection<'db>(
 
     Some(AssocConstSelection {
         trait_inst,
-        name,
         declared_ty,
         body,
     })
@@ -396,46 +457,4 @@ pub(crate) fn analysis_cx_for_selected_assoc_const_body<'db>(
 ) -> Option<AnalysisCx<'db>> {
     let body = selection.body.as_ref()?;
     Some(selected_assoc_const_body_analysis_cx(db, proof, body))
-}
-
-pub fn resolve_trait_const_use<'db>(
-    db: &'db dyn HirAnalysisDb,
-    cx: &AnalysisCx<'db>,
-    trait_inst: TraitInstId<'db>,
-    name: IdentId<'db>,
-) -> Option<TraitConstUseResolution<'db>> {
-    let selection = resolve_assoc_const_selection(db, cx, trait_inst, name)?;
-    if selection.body.is_some() {
-        return Some(TraitConstUseResolution::Concrete(selection));
-    }
-
-    let flags = collect_flags(db, selection.trait_inst);
-    let has_matching_assumption =
-        cx.proof
-            .assumptions()
-            .list(db)
-            .iter()
-            .copied()
-            .any(|assumption| {
-                let mut table = UnificationTable::new(db);
-                table.unify(assumption, selection.trait_inst).is_ok()
-            });
-    let can_stay_abstract = !flags.contains(TyFlags::HAS_INVALID)
-        && (flags.intersects(TyFlags::HAS_PARAM | TyFlags::HAS_VAR)
-            || selection.trait_inst.self_ty(db).is_trait_self(db)
-            || has_matching_assumption);
-    let resolution = if can_stay_abstract {
-        TraitConstUseResolution::Abstract {
-            trait_inst: selection.trait_inst,
-            name: selection.name,
-            declared_ty: selection.declared_ty,
-        }
-    } else {
-        TraitConstUseResolution::MissingConcreteImpl {
-            trait_inst: selection.trait_inst,
-            name: selection.name,
-            declared_ty: selection.declared_ty,
-        }
-    };
-    Some(resolution)
 }

@@ -8,7 +8,6 @@ use crate::analysis::{
         self,
         assoc_items::{analysis_cx_for_selected_assoc_const_body, resolve_assoc_const_selection},
         binder::Binder,
-        canonical::Canonicalized,
         context::{AnalysisCx, ImplOverlay, LoweringMode, ProofCx},
         diagnostics::{
             BodyDiag, FuncBodyDiag, ImplDiag, TraitConstraintDiag, TraitLowerDiag,
@@ -19,18 +18,19 @@ use crate::analysis::{
         trait_def::{ImplementorId, ImplementorOrigin, TraitInstId},
         trait_lower::TraitRefLowerError,
         trait_resolution::{
-            GoalSatisfiability, LocalImplementorSet, WellFormedness, check_trait_inst_wf,
-            constraint::ty_constraints, is_goal_satisfiable,
+            CanonicalGoalQuery, GoalSatisfiability, LocalImplementorSet, WellFormedness,
+            check_trait_inst_wf, constraint::ty_constraints, is_goal_query_satisfiable,
+            is_goal_satisfiable,
         },
         ty_def::{InvalidCause, TyFlags, TyId},
         unify::UnificationTable,
         visitor::TyVisitable,
     },
 };
-use crate::hir_def::{IdentId, ImplTrait};
+use crate::hir_def::{HirIngot, IdentId, ImplTrait};
 use crate::span::DynLazySpan;
 use common::indexmap::IndexSet;
-use common::ingot::IngotKind;
+use common::ingot::{Ingot, IngotKind};
 
 pub(crate) type TraitImplTable<'db> =
     FxHashMap<crate::hir_def::Trait<'db>, Vec<Binder<ImplementorId<'db>>>>;
@@ -80,6 +80,46 @@ impl<'db> ty::fold::TyFoldable<'db> for ConflictCheckHeader<'db> {
             constraints: self.constraints.fold_with(db, folder),
         }
     }
+}
+
+pub(crate) fn implementors_conflict_with_local_implementors<'db>(
+    db: &'db dyn HirAnalysisDb,
+    local_implementors: LocalImplementorSet<'db>,
+    a: Binder<ImplementorId<'db>>,
+    b: Binder<ImplementorId<'db>>,
+) -> bool {
+    let mut table = UnificationTable::new(db);
+    let a = table.instantiate_with_fresh_vars(Binder::bind(ConflictCheckHeader {
+        trait_inst: a.instantiate_identity().trait_(db),
+        constraints: a.instantiate_identity().constraints(db),
+    }));
+    let b = table.instantiate_with_fresh_vars(Binder::bind(ConflictCheckHeader {
+        trait_inst: b.instantiate_identity().trait_(db),
+        constraints: b.instantiate_identity().constraints(db),
+    }));
+
+    if table.unify(a.trait_inst, b.trait_inst).is_err() {
+        return false;
+    }
+
+    if a.constraints.is_empty(db) && b.constraints.is_empty(db) {
+        return true;
+    }
+
+    let merged_constraints = a.constraints.merge(db, b.constraints);
+    let solve_cx = ty::trait_resolution::TraitSolveCx::new(db, a.trait_inst.def(db).scope())
+        .with_assumptions(ty::trait_resolution::PredicateListId::empty_list(db))
+        .with_local_implementors(local_implementors);
+
+    for &constraint in merged_constraints.list(db) {
+        let constraint = constraint.fold_with(db, &mut table);
+        match is_goal_satisfiable(db, solve_cx, constraint) {
+            GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid => return false,
+            GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation(_) => {}
+        }
+    }
+
+    true
 }
 
 pub(crate) struct AdmissionEngine<'db> {
@@ -213,8 +253,15 @@ impl<'db> AdmissionEngine<'db> {
             return true;
         }
 
-        self.header_issues_for_candidate(candidate).is_empty()
-            && self.interface_issues_for_candidate(candidate).is_empty()
+        let header_issues = self.header_issues_for_candidate(candidate).clone();
+        let interface_issues = if header_issues.is_empty() {
+            self.interface_issues_for_candidate(candidate).clone()
+        } else {
+            Vec::new()
+        };
+        let header_ok = header_issues.is_empty();
+        let interface_ok = header_ok && interface_issues.is_empty();
+        header_ok && interface_ok
     }
 
     fn clear_round_caches(&mut self) {
@@ -240,11 +287,13 @@ impl<'db> AdmissionEngine<'db> {
         ty::trait_resolution::TraitSolveCx::new(self.db, impl_trait.scope())
             .with_assumptions(impl_trait.elaborated_assumptions(self.db))
             .with_local_implementors(self.conflict_local_implementors())
-            .without_ingot_search()
     }
 
     fn analysis_cx(&self, impl_trait: ImplTrait<'db>) -> AnalysisCx<'db> {
-        AnalysisCx::new(ProofCx::from_solve_cx(self.solve_cx(impl_trait)))
+        impl_trait.signature_analysis_cx_in_caller_cx(
+            self.db,
+            &AnalysisCx::new(ProofCx::from_solve_cx(self.solve_cx(impl_trait))),
+        )
     }
 
     fn interface_cx(
@@ -252,7 +301,19 @@ impl<'db> AdmissionEngine<'db> {
         impl_trait: ImplTrait<'db>,
         current_impl: ImplementorId<'db>,
     ) -> AnalysisCx<'db> {
-        AnalysisCx::new(ProofCx::from_solve_cx(self.solve_cx(impl_trait)))
+        let local_implementors = LocalImplementorSet::new(
+            self.db,
+            self.conflict_local_implementors()
+                .implementors(self.db)
+                .iter()
+                .copied()
+                .chain(std::iter::once(Binder::bind(current_impl)))
+                .collect::<Vec<_>>(),
+        );
+        let solve_cx = ty::trait_resolution::TraitSolveCx::new(self.db, impl_trait.scope())
+            .with_assumptions(impl_trait.elaborated_assumptions(self.db))
+            .with_local_implementors(local_implementors);
+        AnalysisCx::new(ProofCx::from_solve_cx(solve_cx))
             .with_overlay(ImplOverlay::with_current_impl(current_impl))
             .with_mode(LoweringMode::ImplTraitSignature {
                 trait_inst: current_impl.trait_inst(self.db),
@@ -382,42 +443,12 @@ impl<'db> AdmissionEngine<'db> {
         a: Binder<ImplementorId<'db>>,
         b: Binder<ImplementorId<'db>>,
     ) -> bool {
-        let mut table = UnificationTable::new(self.db);
-        let a = table.instantiate_with_fresh_vars(Binder::bind(ConflictCheckHeader {
-            trait_inst: a.instantiate_identity().trait_(self.db),
-            constraints: a.instantiate_identity().constraints(self.db),
-        }));
-        let b = table.instantiate_with_fresh_vars(Binder::bind(ConflictCheckHeader {
-            trait_inst: b.instantiate_identity().trait_(self.db),
-            constraints: b.instantiate_identity().constraints(self.db),
-        }));
-
-        if table.unify(a.trait_inst, b.trait_inst).is_err() {
-            return false;
-        }
-
-        if a.constraints.is_empty(self.db) && b.constraints.is_empty(self.db) {
-            return true;
-        }
-
-        let merged_constraints = a.constraints.merge(self.db, b.constraints);
-        let solve_cx =
-            ty::trait_resolution::TraitSolveCx::new(self.db, a.trait_inst.def(self.db).scope())
-                .with_assumptions(ty::trait_resolution::PredicateListId::empty_list(self.db))
-                .with_local_implementors(self.conflict_local_implementors())
-                .without_ingot_search();
-
-        for &constraint in merged_constraints.list(self.db) {
-            let constraint = Canonicalized::new(self.db, constraint.fold_with(self.db, &mut table));
-            match is_goal_satisfiable(self.db, solve_cx, constraint.value) {
-                GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid => {
-                    return false;
-                }
-                GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation(_) => {}
-            }
-        }
-
-        true
+        implementors_conflict_with_local_implementors(
+            self.db,
+            self.conflict_local_implementors(),
+            a,
+            b,
+        )
     }
 }
 
@@ -611,13 +642,8 @@ fn check_selected_assoc_const_body<'db>(
         .as_ref()
         .expect("selected assoc const body analysis requires a selected body")
         .body;
-    let result = ty::ty_check::check_anon_const_body_in_mode(
-        db,
-        body,
-        selection.declared_ty,
-        analysis_cx.proof.solve_cx(),
-        analysis_cx.mode,
-    );
+    let result =
+        ty::ty_check::check_anon_const_body_in_cx(db, body, selection.declared_ty, analysis_cx);
     (result.0.clone(), result.1.clone())
 }
 
@@ -637,10 +663,8 @@ fn assoc_const_body_diags_and_deps<'db>(
 
     let mut deps = Vec::new();
     for (expr, _) in source.body.exprs(db).iter() {
-        if let Some(ty::ty_check::ConstRef::TraitConst { inst, name }) =
-            typed_body.expr_const_ref(expr)
-        {
-            deps.push((inst, name));
+        if let Some(ty::ty_check::ConstRef::TraitConst(assoc)) = typed_body.expr_const_ref(expr) {
+            deps.push((assoc.inst(), assoc.name()));
         }
     }
     Some((body_diags, deps))
@@ -672,20 +696,33 @@ pub(crate) fn check_impl_ty_wf_in_cx<'db>(
 
     for &goal in normalized_constraints.list(db) {
         let mut table = UnificationTable::new(db);
-        let canonical_goal = Canonicalized::new(db, goal);
-        match is_goal_satisfiable(db, solve_cx, canonical_goal.value) {
+        let query = CanonicalGoalQuery::new(db, goal, assumptions);
+        match is_goal_query_satisfiable(db, solve_cx, &query) {
             GoalSatisfiability::Satisfied(_)
             | GoalSatisfiability::NeedsConfirmation(_)
             | GoalSatisfiability::ContainsInvalid => {}
             GoalSatisfiability::UnSat(subgoal) => {
-                let subgoal =
-                    subgoal.map(|subgoal| canonical_goal.extract_solution(&mut table, subgoal));
+                let subgoal = subgoal.map(|subgoal| query.extract_solution(&mut table, subgoal));
                 return WellFormedness::IllFormed { goal, subgoal };
             }
         }
     }
 
     WellFormedness::WellFormed
+}
+
+#[salsa::tracked(return_ref)]
+pub(crate) fn summarize_impl_admission<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Ingot<'db>,
+) -> AdmissionSummary<'db> {
+    let const_impls = ingot
+        .resolved_external_ingots(db)
+        .iter()
+        .map(|(_, external)| ty::trait_lower::collect_trait_impls(db, *external))
+        .collect();
+
+    AdmissionEngine::new(db, const_impls).summarize(ingot.all_impl_traits(db))
 }
 
 pub(crate) fn check_impl_trait_implementor_wf_in_cx<'db>(
@@ -735,11 +772,7 @@ pub(crate) fn impl_header_issues<'db>(
     for super_trait in trait_inst.def(db).super_traits(db) {
         let goal = super_trait.instantiate(db, trait_inst.args(db));
         if matches!(
-            is_goal_satisfiable(
-                db,
-                cx.proof.solve_cx(),
-                ty::canonical::Canonical::new(db, goal)
-            ),
+            is_goal_satisfiable(db, cx.proof.solve_cx(), goal),
             GoalSatisfiability::UnSat(_)
         ) {
             issues.push(ImplHeaderIssue::SupertraitUnmet { goal });
@@ -853,15 +886,6 @@ fn method_conformance_issues<'db>(
     issues
 }
 
-pub fn impl_interface_issues<'db>(
-    db: &'db dyn HirAnalysisDb,
-    cx: &AnalysisCx<'db>,
-    impl_trait: ImplTrait<'db>,
-    current_impl: ImplementorId<'db>,
-) -> Vec<ImplInterfaceIssue<'db>> {
-    impl_interface_issues_with_assoc_type_bound_solve_cx(db, cx, impl_trait, current_impl, None)
-}
-
 fn impl_interface_issues_with_assoc_type_bound_solve_cx<'db>(
     db: &'db dyn HirAnalysisDb,
     cx: &AnalysisCx<'db>,
@@ -950,9 +974,8 @@ fn impl_interface_issues_with_assoc_type_bound_solve_cx<'db>(
                     trait_args,
                 };
                 let bound_inst = bound_inst.fold_with(db, &mut folder);
-                let canonical_bound = ty::canonical::Canonical::new(db, bound_inst);
                 if matches!(
-                    is_goal_satisfiable(db, assoc_type_bound_solve_cx, canonical_bound),
+                    is_goal_satisfiable(db, assoc_type_bound_solve_cx, bound_inst),
                     GoalSatisfiability::UnSat(_)
                 ) {
                     let assoc_ty_span = impl_trait
@@ -1181,6 +1204,7 @@ impl<'db> ImplInterfaceIssue<'db> {
                     span: span.clone(),
                     primary_goal: *primary_goal,
                     unsat_subgoal: None,
+                    required_by: None,
                 }
                 .into(),
             ],
@@ -1295,12 +1319,20 @@ impl<'db> ImplHeaderIssue<'db> {
                 TraitRefLowerError::Ignored => {
                     vec![TraitLowerDiag::ExternalTraitForExternalType(impl_trait).into()]
                 }
+                TraitRefLowerError::Cycle => vec![
+                    TraitConstraintDiag::InfiniteBoundRecursion(
+                        impl_trait.span().trait_ref().path().into(),
+                        "cyclic trait reference prevented lowering this trait bound".into(),
+                    )
+                    .into(),
+                ],
             },
             Self::ImplementorIllFormed { goal, subgoal } => vec![
                 TraitConstraintDiag::TraitBoundNotSat {
                     span: impl_trait.span().ty().into(),
                     primary_goal: *goal,
                     unsat_subgoal: *subgoal,
+                    required_by: None,
                 }
                 .into(),
             ],
@@ -1309,6 +1341,7 @@ impl<'db> ImplHeaderIssue<'db> {
                     span: impl_trait.span().trait_ref().into(),
                     primary_goal: *goal,
                     unsat_subgoal: *subgoal,
+                    required_by: None,
                 }
                 .into(),
             ],
@@ -1325,6 +1358,7 @@ impl<'db> ImplHeaderIssue<'db> {
                     span: impl_trait.span().ty().into(),
                     primary_goal: *goal,
                     unsat_subgoal: None,
+                    required_by: None,
                 }
                 .into(),
             ],

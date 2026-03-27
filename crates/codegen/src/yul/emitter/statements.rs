@@ -236,6 +236,16 @@ impl<'db> FunctionEmitter<'db> {
         docs.push(YulDoc::line(format!("mstore(0x40, add({name}, {size}))")));
     }
 
+    fn emit_code_load_scratch(&self, docs: &mut Vec<YulDoc>, state: &mut BlockState) -> String {
+        let scratch = state.alloc_local();
+        docs.push(YulDoc::line(format!("let {scratch} := mload(0x40)")));
+        docs.push(YulDoc::block(
+            format!("if iszero({scratch}) "),
+            vec![YulDoc::line(format!("{scratch} := 0x80"))],
+        ));
+        scratch
+    }
+
     fn emit_alloc_inst(
         &mut self,
         docs: &mut Vec<YulDoc>,
@@ -269,12 +279,10 @@ impl<'db> FunctionEmitter<'db> {
         data: &[u8],
         state: &mut BlockState,
     ) -> Result<(), YulError> {
-        let label = self.register_data_region(data.to_vec());
+        let label = self.register_data_region(data);
         let size = data.len();
         let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
-        // Allocate memory for the data
         self.emit_alloc_value(docs, &yul_name, size, declared);
-        // Copy data from bytecode to memory
         docs.push(YulDoc::line(format!(
             "datacopy({yul_name}, dataoffset(\"{label}\"), datasize(\"{label}\"))"
         )));
@@ -289,7 +297,21 @@ impl<'db> FunctionEmitter<'db> {
         state: &mut BlockState,
     ) -> Result<(), YulError> {
         let ty = self.mir_func.body.local(dest).ty;
-        let rhs = self.lower_place_load(place, ty, state)?;
+        let space = self.mir_func.body.place_address_space(place);
+        let rhs = if space == mir::ir::AddressSpaceKind::Code {
+            let addr = self.lower_place_address(place, state)?;
+            let packed = self.is_packed_scalar_array_access(place, ty)?;
+            let scratch = self.emit_code_load_scratch(docs, state);
+            if packed {
+                docs.push(YulDoc::line(format!("datacopy({scratch}, {addr}, 1)")));
+                self.apply_from_word_conversion(&format!("byte(0, mload({scratch}))"), ty)
+            } else {
+                docs.push(YulDoc::line(format!("datacopy({scratch}, {addr}, 32)")));
+                self.apply_from_word_conversion(&format!("mload({scratch})"), ty)
+            }
+        } else {
+            self.lower_place_load(place, ty, state)?
+        };
         let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
         if declared {
             docs.push(YulDoc::line(format!("let {yul_name} := {rhs}")));
@@ -326,7 +348,13 @@ impl<'db> FunctionEmitter<'db> {
         let rhs = self.lower_value(value, state)?;
         let stored = self.apply_to_word_conversion(&rhs, value_ty);
         let space = self.lower_place_space(place)?;
-        docs.push(YulDoc::line(Self::yul_store(space, &addr, &stored)));
+        if space == mir::ir::AddressSpaceKind::Memory
+            && self.is_packed_scalar_array_access(place, value_ty)?
+        {
+            docs.push(YulDoc::line(format!("mstore8({addr}, {stored})")));
+        } else {
+            docs.push(YulDoc::line(Self::yul_store(space, &addr, &stored)));
+        }
         Ok(())
     }
 
@@ -374,6 +402,31 @@ impl<'db> FunctionEmitter<'db> {
             return Ok(());
         }
         if value_ty.is_array(self.db) {
+            let dst_space = self.mir_func.body.place_address_space(dst_place);
+            let src_space = self.mir_func.body.place_address_space(src_place);
+            if dst_space == mir::ir::AddressSpaceKind::Memory
+                && src_space == mir::ir::AddressSpaceKind::Code
+                && src_place.projection.is_empty()
+            {
+                let copy_size = if let mir::ValueOrigin::ConstRegion(region_id) =
+                    &self.mir_func.body.value(src_place.base).origin
+                {
+                    Some(self.mir_func.body.const_region(*region_id).bytes.len())
+                } else {
+                    layout::ty_memory_size_in(self.db, &self.layout, value_ty)
+                };
+                if let Some(size) = copy_size {
+                    if size > 0 {
+                        let dst_addr = self.lower_place_ref(dst_place, state)?;
+                        let src_addr = self.lower_place_address(src_place, state)?;
+                        docs.push(YulDoc::line(format!(
+                            "datacopy({dst_addr}, {src_addr}, {size})"
+                        )));
+                    }
+                    return Ok(());
+                }
+            }
+
             let Some(len) = layout::array_len(self.db, value_ty) else {
                 return Err(YulError::Unsupported(
                     "array store requires a constant length".into(),
@@ -413,10 +466,30 @@ impl<'db> FunctionEmitter<'db> {
         }
 
         let addr = self.lower_place_ref(dst_place, state)?;
-        let rhs = self.lower_place_load(src_place, value_ty, state)?;
+        let src_space = self.mir_func.body.place_address_space(src_place);
+        let packed_src = self.is_packed_scalar_array_access(src_place, value_ty)?;
+        let rhs = if src_space == mir::ir::AddressSpaceKind::Code {
+            let src_addr = self.lower_place_address(src_place, state)?;
+            let scratch = self.emit_code_load_scratch(docs, state);
+            if packed_src {
+                docs.push(YulDoc::line(format!("datacopy({scratch}, {src_addr}, 1)")));
+                self.apply_from_word_conversion(&format!("byte(0, mload({scratch}))"), value_ty)
+            } else {
+                docs.push(YulDoc::line(format!("datacopy({scratch}, {src_addr}, 32)")));
+                self.apply_from_word_conversion(&format!("mload({scratch})"), value_ty)
+            }
+        } else {
+            self.lower_place_load(src_place, value_ty, state)?
+        };
         let stored = self.apply_to_word_conversion(&rhs, value_ty);
         let space = self.lower_place_space(dst_place)?;
-        docs.push(YulDoc::line(Self::yul_store(space, &addr, &stored)));
+        if space == mir::ir::AddressSpaceKind::Memory
+            && self.is_packed_scalar_array_access(dst_place, value_ty)?
+        {
+            docs.push(YulDoc::line(format!("mstore8({addr}, {stored})")));
+        } else {
+            docs.push(YulDoc::line(Self::yul_store(space, &addr, &stored)));
+        }
         Ok(())
     }
 
@@ -432,7 +505,13 @@ impl<'db> FunctionEmitter<'db> {
         let dst_addr = self.lower_place_ref(dst_place, state)?;
         let src_space = self.lower_place_space(src_place)?;
         let dst_space = self.lower_place_space(dst_place)?;
-        let discr = Self::yul_load(src_space, &src_addr);
+        let discr = if src_space == mir::ir::AddressSpaceKind::Code {
+            let scratch = self.emit_code_load_scratch(docs, state);
+            docs.push(YulDoc::line(format!("datacopy({scratch}, {src_addr}, 32)")));
+            format!("mload({scratch})")
+        } else {
+            Self::yul_load(src_space, &src_addr)
+        };
         let discr_temp = state.alloc_local();
         docs.push(YulDoc::line(format!("let {discr_temp} := {discr}")));
         docs.push(YulDoc::line(Self::yul_store(
@@ -452,10 +531,8 @@ impl<'db> FunctionEmitter<'db> {
         let variants = adt_def.fields(self.db);
         for (idx, _) in variants.iter().enumerate() {
             let enum_variant = hir::hir_def::EnumVariant::new(enm, idx);
-            let ctor = hir::analysis::ty::simplified_pattern::ConstructorKind::Variant(
-                enum_variant,
-                enum_ty,
-            );
+            let ctor =
+                hir::analysis::ty::pattern_ir::ConstructorKind::Variant(enum_variant, enum_ty);
             let field_tys = ctor.field_types(self.db);
             let mut case_docs = Vec::new();
             for (field_idx, field_ty) in field_tys.iter().enumerate() {
@@ -515,6 +592,7 @@ impl<'db> FunctionEmitter<'db> {
             mir::ir::AddressSpaceKind::Calldata => unreachable!("write to calldata"),
             mir::ir::AddressSpaceKind::Storage => format!("sstore({addr}, {value})"),
             mir::ir::AddressSpaceKind::TransientStorage => format!("tstore({addr}, {value})"),
+            mir::ir::AddressSpaceKind::Code => unreachable!("write to code space"),
         }
     }
 
@@ -524,6 +602,9 @@ impl<'db> FunctionEmitter<'db> {
             mir::ir::AddressSpaceKind::Calldata => format!("calldataload({addr})"),
             mir::ir::AddressSpaceKind::Storage => format!("sload({addr})"),
             mir::ir::AddressSpaceKind::TransientStorage => format!("tload({addr})"),
+            mir::ir::AddressSpaceKind::Code => {
+                unreachable!("cannot load pure word from code space")
+            }
         }
     }
 
@@ -669,14 +750,12 @@ impl<'db> FunctionEmitter<'db> {
             arg = *value;
         }
         let symbol = match &self.mir_func.body.value(arg).origin {
-            mir::ValueOrigin::FuncItem(root) => root.symbol.as_deref().ok_or_else(|| {
-                YulError::Unsupported(
-                    "code region function item is missing a resolved symbol".into(),
-                )
+            mir::ValueOrigin::CodeRegionRef(root) => root.symbol.as_deref().ok_or_else(|| {
+                YulError::Unsupported("code region reference is missing a resolved symbol".into())
             })?,
             _ => {
                 return Err(YulError::Unsupported(
-                    "code region intrinsic argument must be a function item".into(),
+                    "code region intrinsic argument must be a code-region reference".into(),
                 ));
             }
         };
@@ -800,6 +879,7 @@ impl<'db> FunctionEmitter<'db> {
             IntrinsicOp::Addmod => "addmod",
             IntrinsicOp::Mulmod => "mulmod",
             IntrinsicOp::Caller => "caller",
+            IntrinsicOp::Callvalue => "callvalue",
         }
     }
 }

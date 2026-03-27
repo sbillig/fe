@@ -26,7 +26,7 @@ pub fn parse_stmt<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Recovery
     };
 
     // Attributes parsed at statement position are currently only consumed by
-    // `for` statements (#[unroll]/#[no_unroll]). Report other uses explicitly
+    // `for` statements (#[unroll]/#[unroll(never)]). Report other uses explicitly
     // instead of silently dropping them.
     if checkpoint.is_some() && parser.current_kind() != Some(ForKw) {
         parser.error("statement attributes are only supported on `for` loops");

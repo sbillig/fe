@@ -636,7 +636,8 @@ fn value_depends_on_local<'db>(
         | ValueOrigin::ControlFlowResult { .. }
         | ValueOrigin::Unit
         | ValueOrigin::Synthetic(_)
-        | ValueOrigin::FuncItem(_) => false,
+        | ValueOrigin::CodeRegionRef(_)
+        | ValueOrigin::ConstRegion(_) => false,
     };
     value_visiting[value.index()] = false;
     depends
@@ -788,6 +789,7 @@ fn intrinsic_arg_may_escape(op: IntrinsicOp, arg_idx: usize) -> bool {
         | IntrinsicOp::Addmod
         | IntrinsicOp::Mulmod
         | IntrinsicOp::Caller
+        | IntrinsicOp::Callvalue
         | IntrinsicOp::Alloc => false,
     }
 }
@@ -961,7 +963,8 @@ fn value_must_alias_local_alloc<'db>(
         | ValueOrigin::Unary { .. }
         | ValueOrigin::Binary { .. }
         | ValueOrigin::Synthetic(_)
-        | ValueOrigin::FuncItem(_) => None,
+        | ValueOrigin::ConstRegion(_)
+        | ValueOrigin::CodeRegionRef(_) => None,
     };
 
     value_visiting[value.index()] = false;
@@ -993,7 +996,8 @@ fn value_origin_local<'db>(
         | ValueOrigin::Unary { .. }
         | ValueOrigin::Binary { .. }
         | ValueOrigin::Synthetic(_)
-        | ValueOrigin::FuncItem(_) => None,
+        | ValueOrigin::ConstRegion(_)
+        | ValueOrigin::CodeRegionRef(_) => None,
     };
 
     value_visiting[value.index()] = false;
@@ -1695,7 +1699,7 @@ mod tests {
                     dest: None,
                     rvalue: Rvalue::Call(CallOrigin {
                         expr: None,
-                        hir_target: None,
+                        target: None,
                         args: vec![alloc_value],
                         effect_args: vec![],
                         resolved_name: Some("escape_id".to_string()),
@@ -1772,7 +1776,7 @@ mod tests {
                     dest: Some(call_result_local),
                     rvalue: Rvalue::Call(CallOrigin {
                         expr: None,
-                        hir_target: None,
+                        target: None,
                         args: vec![alloc_value],
                         effect_args: vec![],
                         resolved_name: Some("escape_id".to_string()),
@@ -1849,7 +1853,7 @@ mod tests {
                     dest: Some(call_result_local),
                     rvalue: Rvalue::Call(CallOrigin {
                         expr: None,
-                        hir_target: None,
+                        target: None,
                         args: vec![],
                         effect_args: vec![alloc_value],
                         resolved_name: Some("escape_effect_id".to_string()),
@@ -1910,7 +1914,7 @@ mod tests {
                 dest: Some(local),
                 rvalue: Rvalue::Call(CallOrigin {
                     expr: None,
-                    hir_target: None,
+                    target: None,
                     args: vec![size_value],
                     effect_args: vec![],
                     resolved_name: Some("alloc".to_string()),
@@ -2597,7 +2601,7 @@ mod tests {
     fn call_arg_marks_alloc_as_escaping_for_cross_frame_safety() {
         let mut db = DriverDataBase::default();
         let url = Url::parse("file:///escape_reborrow_call.fe").unwrap();
-        let src = "pub fn escape_id(value: u256) -> u256 { value } pub fn escape_caller() {}";
+        let src = "pub fn escape_id(value: u256) -> u256 { value }\npub fn escape_caller() {}";
         let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
         let top_mod = db.top_mod(file);
         let mut module = crate::lower_module(&db, top_mod).expect("module should lower");
@@ -2707,7 +2711,7 @@ mod tests {
     fn returned_call_result_marks_alloc_as_escaping() {
         let mut db = DriverDataBase::default();
         let url = Url::parse("file:///escape_returned_call_result.fe").unwrap();
-        let src = "pub fn escape_id(value: u256) -> u256 { value } pub fn escape_returned_call_result() {}";
+        let src = "pub fn escape_id(value: u256) -> u256 { value }\npub fn escape_returned_call_result() {}";
         let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
         let top_mod = db.top_mod(file);
         let mut module = crate::lower_module(&db, top_mod).expect("module should lower");
@@ -2745,7 +2749,7 @@ mod tests {
     fn returned_effect_call_result_marks_alloc_as_escaping() {
         let mut db = DriverDataBase::default();
         let url = Url::parse("file:///escape_returned_effect_call_result.fe").unwrap();
-        let src = "pub fn escape_effect_id() {} pub fn escape_returned_effect_call_result() {}";
+        let src = "pub fn escape_effect_id() {}\npub fn escape_returned_effect_call_result() {}";
         let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
         let top_mod = db.top_mod(file);
         let mut module = crate::lower_module(&db, top_mod).expect("module should lower");

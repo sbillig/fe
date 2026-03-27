@@ -7,12 +7,16 @@ use common::indexmap::IndexSet;
 use cranelift_entity::{PrimaryMap, entity_impl};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::{GoalSatisfiability, PredicateListId, TraitGoalSolution, TraitSolveCx};
+use super::{
+    CanonicalGoalQuery, GoalSatisfiability, LocalImplementorSet, PredicateListId,
+    TraitGoalSolution, TraitSolveCx, TraitSolverQuery,
+    normalize_trait_inst_preserving_validity_with_solve_cx,
+};
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
         binder::Binder,
-        canonical::{Canonical, Canonicalized},
+        canonical::Canonical,
         fold::TyFoldable,
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_in_ingots},
         ty_def::{TyData, TyId},
@@ -20,6 +24,7 @@ use crate::analysis::{
         visitor::{TyVisitable, TyVisitor},
     },
 };
+use crate::core::hir_def::HirIngot;
 const MAXIMUM_SOLUTION_NUM: usize = 2;
 /// The maximum depth of any type that the solver will consider.
 ///
@@ -34,7 +39,7 @@ const MAXIMUM_TYPE_DEPTH: usize = 256;
 /// Since `TraitInstId` contains `Self` type as its first argument,
 /// the query for `Implements<Ty, Trait<i32>>` is represented as
 /// `Trait<Ty, i32>`.
-type Goal<'db> = Canonical<TraitInstId<'db>>;
+type Query<'db> = Canonical<TraitSolverQuery<'db>>;
 type Solution<'db> = crate::analysis::ty::canonical::Solution<TraitGoalSolution<'db>>;
 type UnsatSubgoal<'db> = crate::analysis::ty::canonical::Solution<TraitInstId<'db>>;
 
@@ -45,7 +50,8 @@ type UnsatSubgoal<'db> = crate::analysis::ty::canonical::Solution<TraitInstId<'d
 /// consumer nodes to keep track of the solving process, and a mapping from
 /// goals to generator nodes to avoid redundant computations.
 pub(super) struct ProofForest<'db> {
-    solve_cx: TraitSolveCx<'db>,
+    origin_ingot: crate::Ingot<'db>,
+    local_implementors: Option<LocalImplementorSet<'db>>,
 
     /// The root generator node.
     root: GeneratorNode,
@@ -63,11 +69,8 @@ pub(super) struct ProofForest<'db> {
     /// consumer nodes that are closer to the original goal.
     c_heap: BinaryHeap<(OrderedConsumerNode, Solution<'db>)>,
 
-    /// A mapping from goals to generator nodes.
-    goal_to_node: FxHashMap<Goal<'db>, GeneratorNode>,
-
-    /// The list of assumptions.
-    assumptions: PredicateListId<'db>,
+    /// A mapping from canonical solver queries to generator nodes.
+    query_to_node: FxHashMap<Query<'db>, GeneratorNode>,
 
     /// The maximum number of solutions.
     maximum_solution_num: usize,
@@ -116,27 +119,36 @@ impl<'db> ProofForest<'db> {
     /// assumptions.
     pub(super) fn new(
         db: &'db dyn HirAnalysisDb,
-        solve_cx: TraitSolveCx<'db>,
-        goal: Goal<'db>,
+        origin_ingot: crate::Ingot<'db>,
+        local_implementors: Option<LocalImplementorSet<'db>>,
+        query: Query<'db>,
     ) -> Self {
-        let assumptions = solve_cx.assumptions().extend_all_bounds(db);
-
         let mut forest = Self {
-            solve_cx,
+            origin_ingot,
+            local_implementors,
             root: GeneratorNode(0), // Set temporary root.
             g_nodes: PrimaryMap::new(),
             c_nodes: PrimaryMap::new(),
             g_stack: Vec::new(),
             c_heap: BinaryHeap::new(),
-            goal_to_node: FxHashMap::default(),
-            assumptions,
+            query_to_node: FxHashMap::default(),
             maximum_solution_num: MAXIMUM_SOLUTION_NUM,
             db,
         };
 
-        let root = forest.new_generator_node(goal);
+        let root = forest.new_generator_node(query);
         forest.root = root;
         forest
+    }
+
+    fn solve_cx(&self, assumptions: PredicateListId<'db>) -> TraitSolveCx<'db> {
+        let solve_cx = TraitSolveCx::new(self.db, self.origin_ingot.root_mod(self.db).scope())
+            .with_assumptions(assumptions);
+        if let Some(local_implementors) = self.local_implementors {
+            solve_cx.with_local_implementors(local_implementors)
+        } else {
+            solve_cx
+        }
     }
 
     /// Solves the trait goal using a proof forest approach.
@@ -189,10 +201,11 @@ impl<'db> ProofForest<'db> {
         }
     }
 
-    fn new_generator_node(&mut self, goal: Goal<'db>) -> GeneratorNode {
-        let g_node_data = GeneratorNodeData::new(self.db, self.solve_cx, goal, self.assumptions);
+    fn new_generator_node(&mut self, query: Query<'db>) -> GeneratorNode {
+        let g_node_data =
+            GeneratorNodeData::new(self.db, self.origin_ingot, self.local_implementors, query);
         let g_node = self.g_nodes.push(g_node_data);
-        self.goal_to_node.insert(goal, g_node);
+        self.query_to_node.insert(query, g_node);
         self.g_stack.push(g_node);
         g_node
     }
@@ -221,30 +234,32 @@ impl<'db> ProofForest<'db> {
     fn new_consumer_node(
         &mut self,
         root: GeneratorNode,
+        query: TraitSolverQuery<'db>,
         mut remaining_goals: Vec<TraitInstId<'db>>,
         table: PersistentUnificationTable<'db>,
         selected_impl: ImplementorId<'db>,
     ) -> ConsumerNode {
-        let query = remaining_goals.pop().unwrap();
-        let canonicalized_query = Canonicalized::new(self.db, query);
-        let goal = canonicalized_query.value;
+        let pending_goal = remaining_goals.pop().unwrap();
+        debug_assert_eq!(pending_goal, query.goal);
+        let query = CanonicalGoalQuery::from_query(self.db, query);
+        let canonical_query = query.canonical();
 
         let c_node_data = ConsumerNodeData {
             applied_solutions: FxHashSet::default(),
             remaining_goals,
             root,
             selected_impl,
-            query: (query, canonicalized_query),
+            query,
             table,
             children: Vec::new(),
         };
 
         let c_node = self.c_nodes.push(c_node_data);
-        if !self.goal_to_node.contains_key(&goal) {
-            self.new_generator_node(goal);
+        if !self.query_to_node.contains_key(&canonical_query) {
+            self.new_generator_node(canonical_query);
         }
 
-        self.goal_to_node[&goal].add_dependent(self, c_node);
+        self.query_to_node[&canonical_query].add_dependent(self, c_node);
         c_node
     }
 }
@@ -258,18 +273,16 @@ impl<'db> ProofForest<'db> {
 /// candidate to be processed, and the child consumer nodes.
 struct GeneratorNodeData<'db> {
     table: PersistentUnificationTable<'db>,
-    /// The canonical goal associated with the generator node.
-    goal: Goal<'db>,
-    /// The trait instance extracted from the goal.
-    extracted_goal: TraitInstId<'db>,
+    /// The canonical query associated with the generator node.
+    query: Query<'db>,
+    /// The solver query extracted into the node-local table.
+    extracted_query: TraitSolverQuery<'db>,
     /// A set of solutions found for the goal.
     solutions: IndexSet<Solution<'db>>,
     ///  A list of consumer nodes that depend on this generator node.
     dependents: Vec<ConsumerNode>,
     ///  A list of candidate implementors for the trait.
     cands: Vec<Binder<ImplementorId<'db>>>,
-    /// The list of assumptions for the goal.
-    assumptions: PredicateListId<'db>,
     /// The index of the next candidate to be tried.
     next_cand: usize,
     /// A list of child consumer nodes created for sub-goals.
@@ -282,35 +295,47 @@ entity_impl!(GeneratorNode);
 impl<'db> GeneratorNodeData<'db> {
     fn new(
         db: &'db dyn HirAnalysisDb,
-        solve_cx: TraitSolveCx<'db>,
-        goal: Goal<'db>,
-        assumptions: PredicateListId<'db>,
+        origin_ingot: crate::Ingot<'db>,
+        local_implementors: Option<LocalImplementorSet<'db>>,
+        query: Query<'db>,
     ) -> Self {
         let mut table = PersistentUnificationTable::new(db);
-        let extracted_goal = goal.extract_identity(&mut table);
-        let (primary, secondary) = solve_cx.search_ingots_for_trait_inst(db, extracted_goal);
-        let mut cands: IndexSet<_> =
-            impls_for_trait_in_ingots(db, primary, secondary, goal.value.def(db))
-                .iter()
-                .copied()
-                .collect();
-        cands.extend(
-            solve_cx
-                .local_implementors(db)
-                .iter()
-                .copied()
-                .filter(|implementor| {
-                    implementor.instantiate_identity().trait_def(db) == extracted_goal.def(db)
-                }),
+        let extracted_query = query.extract_identity(&mut table);
+        let extracted_goal = extracted_query.goal;
+        let cands = local_implementors.map_or_else(
+            || {
+                let (primary, secondary) = TraitSolveCx::search_ingots_for_trait_inst_with_origin(
+                    db,
+                    origin_ingot,
+                    extracted_goal,
+                );
+                impls_for_trait_in_ingots(
+                    db,
+                    primary,
+                    secondary,
+                    Canonical::new(db, extracted_goal),
+                )
+                .to_vec()
+            },
+            |local_implementors| {
+                local_implementors
+                    .implementors(db)
+                    .iter()
+                    .copied()
+                    .filter(|implementor| {
+                        implementor.instantiate_identity().trait_def(db) == extracted_goal.def(db)
+                    })
+                    .collect()
+            },
         );
+
         Self {
             table,
-            goal,
-            extracted_goal,
+            query,
+            extracted_query,
             solutions: IndexSet::default(),
             dependents: Vec::new(),
-            cands: cands.into_iter().collect(),
-            assumptions,
+            cands,
             next_cand: 0,
             children: Vec::new(),
         }
@@ -336,11 +361,11 @@ impl GeneratorNode {
         selected_impl: ImplementorId<'db>,
     ) {
         let g_node = &mut pf.g_nodes[self];
-        let solution = g_node.goal.canonicalize_solution(
+        let solution = g_node.query.canonicalize_solution(
             table.db,
             table,
             TraitGoalSolution {
-                inst: g_node.extracted_goal,
+                inst: g_node.extracted_query.goal,
                 implementor: selected_impl,
             },
         );
@@ -370,17 +395,18 @@ impl GeneratorNode {
     /// `true` if a new solution or sub-goal was found and processed; `false`
     /// otherwise.
     fn step(self, pf: &mut ProofForest) -> bool {
-        let g_node = &mut pf.g_nodes[self];
         let db = pf.db;
-        let scope = pf
-            .solve_cx
-            .normalization_scope_for_trait_inst(db, g_node.extracted_goal);
-        let normalized_goal = g_node.extracted_goal.normalize_with_solve_cx(
-            db,
-            pf.solve_cx,
-            scope,
-            g_node.assumptions,
-        );
+        let extracted_goal = pf.g_nodes[self].extracted_query.goal;
+        let assumptions = pf.g_nodes[self].extracted_query.assumptions;
+        let solve_cx = pf.solve_cx(assumptions);
+        let normalized_goal =
+            normalize_trait_inst_preserving_validity_with_solve_cx(db, extracted_goal, solve_cx);
+        let g_node = &mut pf.g_nodes[self];
+        let goal_needs_assumptions = normalized_goal.args(db).iter().copied().any(|ty| {
+            ty.has_param(db)
+                || ty.has_var(db)
+                || matches!(ty.data(db), TyData::AssocTy(_) | TyData::QualifiedTy(_))
+        });
 
         while let Some(&cand) = g_node.cands.get(g_node.next_cand) {
             g_node.next_cand += 1;
@@ -391,16 +417,12 @@ impl GeneratorNode {
 
             // TODO: require candidates to be pre-normalized
             // Normalize trait instance arguments before unification
-            let normalized_gen_cand = {
-                gen_cand.trait_inst(db).normalize_with_solve_cx(
-                    db,
-                    pf.solve_cx,
-                    scope,
-                    g_node.assumptions,
-                )
-            };
-
-            if table.unify(normalized_gen_cand, normalized_goal).is_err() {
+            let normalized_gen_cand = normalize_trait_inst_preserving_validity_with_solve_cx(
+                db,
+                gen_cand.trait_inst(db),
+                solve_cx,
+            );
+            if let Err(_err) = table.unify(normalized_gen_cand, normalized_goal) {
                 continue;
             }
 
@@ -409,30 +431,37 @@ impl GeneratorNode {
             if constraints.list(db).is_empty() {
                 self.register_solution_with(pf, &mut table, selected_impl);
             } else {
-                let sub_goals = {
+                let sub_goals: Vec<_> = {
                     constraints
                         .list(db)
                         .iter()
                         .map(|c| c.fold_with(db, &mut table))
                         .collect()
                 };
-                let child = pf.new_consumer_node(self, sub_goals, table, selected_impl);
+                let child_query = TraitSolverQuery {
+                    goal: *sub_goals.last().unwrap(),
+                    assumptions: assumptions.fold_with(db, &mut table),
+                };
+                let child =
+                    pf.new_consumer_node(self, child_query, sub_goals, table, selected_impl);
                 pf.g_nodes[self].children.push(child);
             }
 
             return true;
         }
 
-        let mut next_cand = g_node.next_cand - g_node.cands.len();
-        while let Some(&assumption) = g_node.assumptions.list(db).get(next_cand) {
-            g_node.next_cand += 1;
-            next_cand += 1;
-            let mut table = g_node.table.clone();
-            if table.unify(assumption, normalized_goal).is_ok() {
-                let selected_impl =
-                    ImplementorId::assumption(db, g_node.extracted_goal.fold_with(db, &mut table));
-                self.register_solution_with(pf, &mut table, selected_impl);
-                return true;
+        if goal_needs_assumptions {
+            let mut next_cand = g_node.next_cand - g_node.cands.len();
+            while let Some(&assumption) = assumptions.list(db).get(next_cand) {
+                g_node.next_cand += 1;
+                next_cand += 1;
+                let mut table = g_node.table.clone();
+                if table.unify(assumption, normalized_goal).is_ok() {
+                    let selected_impl =
+                        ImplementorId::assumption(db, extracted_goal.fold_with(db, &mut table));
+                    self.register_solution_with(pf, &mut table, selected_impl);
+                    return true;
+                }
             }
         }
 
@@ -474,7 +503,7 @@ struct ConsumerNodeData<'db> {
     selected_impl: ImplementorId<'db>,
 
     /// The current pending query that is resolved by another [`GeneratorNode`].
-    query: (TraitInstId<'db>, Canonicalized<'db, TraitInstId<'db>>),
+    query: CanonicalGoalQuery<'db>,
     table: PersistentUnificationTable<'db>,
     children: Vec<ConsumerNode>,
 }
@@ -496,6 +525,8 @@ impl ConsumerNode {
     /// - `pf`: A mutable reference to the `ProofForest`.
     /// - `solution`: The solution to be applied.
     fn apply_solution<'db>(self, pf: &mut ProofForest<'db>, solution: Solution<'db>) -> bool {
+        let pending_query = pf.c_nodes[self].query.clone();
+        let solve_cx = pf.solve_cx(pending_query.assumptions());
         let c_node = &mut pf.c_nodes[self];
 
         // If the solutions is already applied, do nothing.
@@ -507,32 +538,20 @@ impl ConsumerNode {
         let db = pf.db;
 
         // Extract solution to the current env.
-        let (pending_inst, canonicalized_pending_inst) = &c_node.query;
-        let solution = canonicalized_pending_inst
-            .extract_solution(&mut table, solution)
-            .inst;
+        let pending_inst = pending_query.goal();
+        let solution = pending_query.extract_solution(&mut table, solution).inst;
 
         // Normalize both instances before unification
-        let normalized_pending = {
-            let scope = pf
-                .solve_cx
-                .normalization_scope_for_trait_inst(db, *pending_inst);
-            let assumptions = pf.g_nodes[c_node.root].assumptions;
-            pending_inst
-                .fold_with(db, &mut table)
-                .normalize_with_solve_cx(db, pf.solve_cx, scope, assumptions)
-        };
-
-        let normalized_solution = {
-            let scope = pf.solve_cx.normalization_scope_for_trait_inst(db, solution);
-            let assumptions = pf.g_nodes[c_node.root].assumptions;
-            solution.fold_with(db, &mut table).normalize_with_solve_cx(
-                db,
-                pf.solve_cx,
-                scope,
-                assumptions,
-            )
-        };
+        let normalized_pending = normalize_trait_inst_preserving_validity_with_solve_cx(
+            db,
+            pending_inst.fold_with(db, &mut table),
+            solve_cx,
+        );
+        let normalized_solution = normalize_trait_inst_preserving_validity_with_solve_cx(
+            db,
+            solution.fold_with(db, &mut table),
+            solve_cx,
+        );
 
         // Try to unifies pending inst and solution.
         if table
@@ -553,7 +572,17 @@ impl ConsumerNode {
             tree_root.register_solution_with(pf, &mut table, selected_impl);
         } else {
             // Create a child consumer node for the subgoals.
-            let child = pf.new_consumer_node(tree_root, remaining_goals, table, selected_impl);
+            let child_query = TraitSolverQuery {
+                goal: *remaining_goals.last().unwrap(),
+                assumptions: pending_query.assumptions().fold_with(db, &mut table),
+            };
+            let child = pf.new_consumer_node(
+                tree_root,
+                child_query,
+                remaining_goals,
+                table,
+                selected_impl,
+            );
             pf.c_nodes[self].children.push(child);
         }
 
@@ -563,11 +592,12 @@ impl ConsumerNode {
     fn unresolved_subgoal<'db>(self, pf: &mut ProofForest<'db>) -> Option<UnsatSubgoal<'db>> {
         let c_node = &mut pf.c_nodes[self];
         if c_node.children.len() != 1 {
-            let unsat = c_node.query.0;
-            let unsat =
-                pf.g_nodes[c_node.root]
-                    .goal
-                    .canonicalize_solution(pf.db, &mut c_node.table, unsat);
+            let unsat = c_node.query.goal();
+            let unsat = pf.g_nodes[c_node.root].query.canonicalize_solution(
+                pf.db,
+                &mut c_node.table,
+                unsat,
+            );
             return Some(unsat);
         }
 

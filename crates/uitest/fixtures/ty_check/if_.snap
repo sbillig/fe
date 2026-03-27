@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/if_.fe
 ---
@@ -10,10 +11,15 @@ error[8-0000]: type mismatch
   │                ^^^ expected `bool`, but `String<1>` is given
 
 error[8-0000]: type mismatch
-   ┌─ if_.fe:11:9
-   │
-11 │         false
-   │         ^^^^^ expected `String<3>`, but `bool` is given
+   ┌─ if_.fe:8:13
+   │  
+ 8 │       let x = if true {
+   │ ╭─────────────^
+ 9 │ │         "FOO"
+10 │ │     } else {
+11 │ │         false
+12 │ │     }
+   │ ╰─────^ expected `bool`, but `String<3>` is given
 
 error[8-0000]: type mismatch
    ┌─ if_.fe:17:9

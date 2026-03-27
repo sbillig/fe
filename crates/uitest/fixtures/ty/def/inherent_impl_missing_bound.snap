@@ -8,3 +8,27 @@ error[6-0003]: trait bound is not satisfied
   │
 9 │ impl<T> Cache<T> {
   │         ^^^^^^^^ `T` doesn't implement `Hashable`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ inherent_impl_missing_bound.fe:10:14
+   │
+10 │     fn touch(self) {}
+   │              ^^^^ `_` doesn't implement `Hashable`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ inherent_impl_missing_bound.fe:22:25
+   │
+22 │ impl<T: RepeatHashable> RepeatCache<T> {
+   │                         ^^^^^^^^^^^^^^ `T` doesn't implement `RepeatHashable`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ inherent_impl_missing_bound.fe:37:9
+   │
+37 │ impl<T> WhereCache<T>
+   │         ^^^^^^^^^^^^^ `T` doesn't implement `WhereHashable`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ inherent_impl_missing_bound.fe:66:25
+   │
+66 │ impl<T: StrongHashable> SuperCache<T> {
+   │                         ^^^^^^^^^^^^^ `T` doesn't implement `SuperHashable`

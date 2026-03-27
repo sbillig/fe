@@ -4,6 +4,18 @@ assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/event_shadowed_address_type.fe
 ---
+error[2-0002]: `TOPIC0` is not found
+   ┌─ event_shadowed_address_type.fe:5:1
+   │  
+ 5 │ ╭ #[event]
+ 6 │ │ struct BadEvent {
+ 7 │ │     #[indexed]
+ 8 │ │     from: Address,
+ 9 │ │     #[indexed]
+10 │ │     to: std::evm::Address,
+11 │ │ }
+   │ ╰─^ `TOPIC0` is not found
+
 error[2-0002]: `SOL_TYPE` is not found
    ┌─ event_shadowed_address_type.fe:5:1
    │  
@@ -39,27 +51,3 @@ error[3-0011]: given type doesn't match the expected const type
 10 │ │     to: std::evm::Address,
 11 │ │ }
    │ ╰─^ expected `_` type here, but `(String<8>, String<1>, invalid(Other), String<1>, String<7>, String<1>)` is given
-
-error[6-0003]: trait bound is not satisfied
-   ┌─ event_shadowed_address_type.fe:5:1
-   │  
- 5 │ ╭ #[event]
- 6 │ │ struct BadEvent {
- 7 │ │     #[indexed]
- 8 │ │     from: Address,
- 9 │ │     #[indexed]
-10 │ │     to: std::evm::Address,
-11 │ │ }
-   │ ╰─^ `BadEvent` doesn't implement `Event`
-
-error[6-0017]: invalid associated const in trait implementation
-   ┌─ event_shadowed_address_type.fe:5:1
-   │  
- 5 │ ╭ #[event]
- 6 │ │ struct BadEvent {
- 7 │ │     #[indexed]
- 8 │ │     from: Address,
- 9 │ │     #[indexed]
-10 │ │     to: std::evm::Address,
-11 │ │ }
-   │ ╰─^ associated const `TOPIC0` from trait `Event` has an invalid value

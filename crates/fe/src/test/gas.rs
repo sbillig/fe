@@ -2,8 +2,7 @@
 
 use camino::Utf8PathBuf;
 use codegen::{
-    OptLevel, SonatinaTestDebugConfig, TestMetadata, emit_test_module_sonatina,
-    emit_test_module_yul,
+    OptLevel, SonatinaTestOptions, TestMetadata, emit_test_module_sonatina, emit_test_module_yul,
 };
 use contract_harness::CallGasProfile;
 use driver::DriverDataBase;
@@ -20,9 +19,9 @@ use super::{
     EvmRuntimeMetrics, GasComparisonCase, GasHotspotRow, GasMagnitudeTotals, GasMeasurement,
     GasTotals, ObservabilityCoverageRow, ObservabilityCoverageTotals, ObservabilityPcRange,
     ObservabilityRuntimeSnapshot, OpcodeAggregateTotals, OpcodeMagnitudeTotals, ReportContext,
-    SuiteDeltaTotals, SymtabEntry, TestResult, TraceObservabilityHotspotRow, TraceSymbolHotspotRow,
-    YUL_VERIFY_RUNTIME, compile_and_run_test, emit_with_catch_unwind, test_case_matches_filter,
-    write_report_error, write_yul_case_artifacts,
+    SuiteDeltaTotals, TestResult, TraceObservabilityHotspotRow, YUL_VERIFY_RUNTIME,
+    compile_and_run_test, emit_with_catch_unwind, test_case_matches_filter, write_report_error,
+    write_yul_case_artifacts,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -68,7 +67,10 @@ pub(super) fn collect_gas_comparison_cases(
                     db,
                     top_mod,
                     opt_level,
-                    &SonatinaTestDebugConfig::default(),
+                    SonatinaTestOptions {
+                        emit_observability: true,
+                    },
+                    filter,
                 )
             },
             "Sonatina",
@@ -104,7 +106,7 @@ pub(super) fn collect_gas_comparison_cases(
     } else if primary_backend.eq_ignore_ascii_case("sonatina") {
         let mut emit_output = String::new();
         match emit_with_catch_unwind(
-            || emit_test_module_yul(db, top_mod),
+            || emit_test_module_yul(db, top_mod, filter),
             "Yul",
             suite,
             None,
@@ -333,43 +335,6 @@ fn gas_profile_partition_violation(label: &str, profile: CallGasProfile) -> Opti
     }
 }
 
-fn parse_symtab_entries(contents: &str) -> Vec<SymtabEntry> {
-    let mut rows = Vec::new();
-    for line in contents.lines() {
-        let line = line.trim();
-        if !line.starts_with("off=") {
-            continue;
-        }
-        // Format:
-        // off=  3996 size=   700 test_erc20__StorPtr_Evm___...
-        let mut parts = line.split_whitespace();
-        let off_token = parts.next().unwrap_or_default();
-        let off_value = parts.next().unwrap_or_default();
-        let size_token = parts.next().unwrap_or_default();
-        let size_value = parts.next().unwrap_or_default();
-        if off_token != "off=" || size_token != "size=" {
-            continue;
-        }
-        let Ok(start) = off_value.parse::<u32>() else {
-            continue;
-        };
-        let Ok(size) = size_value.parse::<u32>() else {
-            continue;
-        };
-        let symbol = parts.collect::<Vec<_>>().join(" ");
-        if symbol.is_empty() {
-            continue;
-        }
-        rows.push(SymtabEntry {
-            start,
-            end: start.saturating_add(size),
-            symbol,
-        });
-    }
-    rows.sort_by_key(|row| row.start);
-    rows
-}
-
 fn parse_trace_tail_pcs(contents: &str) -> Vec<u32> {
     let mut pcs = Vec::new();
     for line in contents.lines() {
@@ -385,23 +350,6 @@ fn parse_trace_tail_pcs(contents: &str) -> Vec<u32> {
         }
     }
     pcs
-}
-
-fn map_pc_to_symbol(pc: u32, symtab: &[SymtabEntry]) -> Option<&str> {
-    let mut lo = 0usize;
-    let mut hi = symtab.len();
-    while lo < hi {
-        let mid = (lo + hi) / 2;
-        let row = &symtab[mid];
-        if pc < row.start {
-            hi = mid;
-        } else if pc >= row.end {
-            lo = mid + 1;
-        } else {
-            return Some(&row.symbol);
-        }
-    }
-    None
 }
 
 fn json_u64(value: Option<&Value>) -> u64 {
@@ -992,40 +940,6 @@ fn write_suite_delta_summary_csv(path: &Utf8PathBuf, suite_rollup: &[(String, Su
             totals.delta_vs_yul_opt_sum,
             csv_escape(&avg),
             csv_escape(&share),
-        ));
-    }
-    let _ = std::fs::write(path, out);
-}
-
-fn write_trace_symbol_hotspots_csv(path: &Utf8PathBuf, rows: &[TraceSymbolHotspotRow]) {
-    let mut sorted = rows.to_vec();
-    sorted.sort_by(|a, b| {
-        b.steps_in_symbol
-            .cmp(&a.steps_in_symbol)
-            .then_with(|| a.suite.cmp(&b.suite))
-            .then_with(|| a.test.cmp(&b.test))
-    });
-
-    let mut out = String::new();
-    out.push_str("suite,test,symbol,tail_steps_total,tail_steps_mapped,steps_in_symbol,symbol_share_of_tail_pct\n");
-    for row in sorted {
-        let pct = if row.tail_steps_total == 0 {
-            String::new()
-        } else {
-            format!(
-                "{:.2}%",
-                (row.steps_in_symbol as f64 * 100.0) / row.tail_steps_total as f64
-            )
-        };
-        out.push_str(&format!(
-            "{},{},{},{},{},{},{}\n",
-            csv_escape(&row.suite),
-            csv_escape(&row.test),
-            csv_escape(&row.symbol),
-            row.tail_steps_total,
-            row.tail_steps_mapped,
-            row.steps_in_symbol,
-            csv_escape(&pct)
         ));
     }
     let _ = std::fs::write(path, out);
@@ -1748,46 +1662,6 @@ fn append_hotspot_summary(
             totals.delta_vs_yul_opt_sum,
             avg,
             format_percent_cell(ratio_percent_i128(totals.delta_vs_yul_opt_sum, total_delta))
-        ));
-    }
-    out.push('\n');
-}
-
-fn append_trace_symbol_hotspots_summary(out: &mut String, rows: &[TraceSymbolHotspotRow]) {
-    if rows.is_empty() {
-        return;
-    }
-    let mut sorted = rows.to_vec();
-    sorted.sort_by(|a, b| {
-        b.steps_in_symbol
-            .cmp(&a.steps_in_symbol)
-            .then_with(|| a.suite.cmp(&b.suite))
-            .then_with(|| a.test.cmp(&b.test))
-    });
-
-    out.push_str("## Tail Trace Symbol Attribution (Sonatina)\n\n");
-    out.push_str(
-        "Sampled from each suite trace artifact (`debug/*.evm_trace.txt`), which keeps the last N steps.\n\n",
-    );
-    out.push_str("| rank | suite | test | symbol | steps_in_symbol | symbol_share_of_tail |\n");
-    out.push_str("| ---: | --- | --- | --- | ---: | ---: |\n");
-    for (idx, row) in sorted.iter().take(12).enumerate() {
-        let pct = if row.tail_steps_total == 0 {
-            "n/a".to_string()
-        } else {
-            format!(
-                "{:.2}%",
-                (row.steps_in_symbol as f64 * 100.0) / row.tail_steps_total as f64
-            )
-        };
-        out.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {} |\n",
-            idx + 1,
-            row.suite,
-            row.test,
-            row.symbol,
-            row.steps_in_symbol,
-            pct
         ));
     }
     out.push('\n');
@@ -2560,7 +2434,6 @@ pub(super) fn write_run_gas_comparison_summary(
     let mut deployment_attribution_totals = DeploymentGasAttributionTotals::default();
     let mut hotspots: Vec<GasHotspotRow> = Vec::new();
     let mut suite_rollup: FxHashMap<String, SuiteDeltaTotals> = FxHashMap::default();
-    let mut trace_symbol_hotspots: Vec<TraceSymbolHotspotRow> = Vec::new();
     let mut observability_coverage_rows: Vec<ObservabilityCoverageRow> = Vec::new();
     let mut observability_coverage_totals = ObservabilityCoverageTotals::default();
     let mut trace_observability_hotspots: Vec<TraceObservabilityHotspotRow> = Vec::new();
@@ -2697,10 +2570,6 @@ pub(super) fn write_run_gas_comparison_summary(
         }
 
         let debug_dir = suite_dir.join("debug");
-        let symtab_entries = std::fs::read_to_string(debug_dir.join("sonatina_symtab.txt"))
-            .ok()
-            .map(|contents| parse_symtab_entries(&contents))
-            .unwrap_or_default();
         if let Ok(entries) = std::fs::read_dir(&debug_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -2720,32 +2589,10 @@ pub(super) fn write_run_gas_comparison_summary(
                 if pcs.is_empty() {
                     continue;
                 }
-                let mut counts: FxHashMap<String, usize> = FxHashMap::default();
-                let mut mapped = 0usize;
-                if !symtab_entries.is_empty() {
-                    for pc in &pcs {
-                        if let Some(symbol) = map_pc_to_symbol(*pc, &symtab_entries) {
-                            *counts.entry(symbol.to_string()).or_default() += 1;
-                            mapped += 1;
-                        }
-                    }
-                }
                 let test_name = file_name
                     .strip_suffix(".evm_trace.txt")
                     .unwrap_or(file_name)
                     .to_string();
-                if !counts.is_empty() {
-                    for (symbol, steps_in_symbol) in counts {
-                        trace_symbol_hotspots.push(TraceSymbolHotspotRow {
-                            suite: suite.clone(),
-                            test: test_name.clone(),
-                            symbol,
-                            tail_steps_total: pcs.len(),
-                            tail_steps_mapped: mapped,
-                            steps_in_symbol,
-                        });
-                    }
-                }
 
                 if let Some(pc_ranges) = resolve_observability_test_ranges(
                     &suite,
@@ -2811,10 +2658,6 @@ pub(super) fn write_run_gas_comparison_summary(
         write_suite_delta_summary_csv(
             &artifacts_dir.join("gas_suite_delta_summary.csv"),
             &suite_rollup_rows,
-        );
-        write_trace_symbol_hotspots_csv(
-            &artifacts_dir.join("gas_tail_trace_symbol_hotspots.csv"),
-            &trace_symbol_hotspots,
         );
         if !trace_observability_hotspots.is_empty() {
             write_trace_observability_hotspots_csv(
@@ -2900,7 +2743,6 @@ pub(super) fn write_run_gas_comparison_summary(
     append_opcode_inflation_attribution(&mut summary, opcode_magnitude_totals);
     if wrote_any_rows {
         append_hotspot_summary(&mut summary, &hotspots, &suite_rollup_rows);
-        append_trace_symbol_hotspots_summary(&mut summary, &trace_symbol_hotspots);
         append_trace_observability_hotspots_summary(&mut summary, &trace_observability_hotspots);
     }
     append_observability_coverage_summary(
@@ -2915,7 +2757,7 @@ pub(super) fn write_run_gas_comparison_summary(
         summary.push_str(&format!("- {line}\n"));
     }
     if wrote_any_rows {
-        summary.push_str("\nSee `artifacts/gas_comparison_all.csv`, `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_breakdown_comparison_all.csv`, `artifacts/gas_breakdown_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_deployment_attribution_all.csv`, `artifacts/gas_hotspots_vs_yul_opt.csv`, `artifacts/gas_suite_delta_summary.csv`, `artifacts/gas_tail_trace_symbol_hotspots.csv`, and `artifacts/gas_tail_trace_observability_hotspots.csv` for machine-readable totals and rollups.\n");
+        summary.push_str("\nSee `artifacts/gas_comparison_all.csv`, `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_breakdown_comparison_all.csv`, `artifacts/gas_breakdown_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_deployment_attribution_all.csv`, `artifacts/gas_hotspots_vs_yul_opt.csv`, `artifacts/gas_suite_delta_summary.csv`, and `artifacts/gas_tail_trace_observability_hotspots.csv` for machine-readable totals and rollups.\n");
     }
     if !observability_coverage_rows.is_empty() {
         summary.push_str(

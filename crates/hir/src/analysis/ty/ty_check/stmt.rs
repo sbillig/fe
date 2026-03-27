@@ -79,7 +79,17 @@ impl<'db> TyChecker<'db> {
             Stmt::Continue => self.check_continue(stmt, stmt_data),
             Stmt::Break => self.check_break(stmt, stmt_data),
             Stmt::Return(..) => self.check_return(stmt, stmt_data),
-            Stmt::Expr(expr) => self.check_expr(*expr, expected).ty,
+            Stmt::Expr(expr) => {
+                let expected_wf_ty = self.env.raw_expected_return().unwrap_or(expected);
+                if expected != TyId::unit(self.db) {
+                    self.check_value_ty_wf(
+                        *expr,
+                        expected_wf_ty,
+                        expr.span(self.env.body()).into(),
+                    );
+                }
+                self.check_expr(*expr, expected).ty
+            }
         }
     }
 
@@ -97,7 +107,12 @@ impl<'db> TyChecker<'db> {
 
         if let Some(expr) = expr {
             let prop = self.check_expr(*expr, ascription);
-            let (pat_expected, mode) = self.destructure_source_mode(prop.ty);
+            let source_ty = if ascription.is_ty_var(self.db) {
+                self.coerce_inferred_expr_capability(*expr, &prop)
+            } else {
+                prop.ty
+            };
+            let (pat_expected, mode) = self.destructure_source_mode(source_ty);
             self.check_pat(*pat, pat_expected);
 
             match mode {
@@ -235,10 +250,10 @@ impl<'db> TyChecker<'db> {
 
             for ingot in search_ingots.into_iter().flatten() {
                 for impl_ in impls_for_ty(self.db, ingot, canonical_ty) {
-                    let snapshot = self.table.snapshot();
+                    let snapshot = self.snapshot_state();
                     let impl_id = impl_.skip_binder();
                     if impl_id.trait_def(self.db) != seq_trait {
-                        self.table.commit(snapshot);
+                        self.commit_state(snapshot);
                         continue;
                     }
 
@@ -252,7 +267,7 @@ impl<'db> TyChecker<'db> {
                     // Unify the trait's Self type with the iterable type
                     let self_ty = trait_inst.self_ty(self.db);
                     if self.table.unify(self_ty, iterable_lookup_ty).is_err() {
-                        self.table.rollback_to(snapshot);
+                        self.rollback_state(snapshot);
                         continue;
                     }
 
@@ -264,7 +279,7 @@ impl<'db> TyChecker<'db> {
                     let item_ident = IdentId::new(self.db, "Item".to_string());
                     let Some(&elem_ty) = trait_inst.assoc_type_bindings(self.db).get(&item_ident)
                     else {
-                        self.table.rollback_to(snapshot);
+                        self.rollback_state(snapshot);
                         continue;
                     };
                     let elem_ty = elem_ty.fold_with(self.db, &mut self.table);
@@ -275,11 +290,11 @@ impl<'db> TyChecker<'db> {
 
                     let method_defs = seq_trait.method_defs(self.db);
                     let Some(&len_method) = method_defs.get(&len_ident) else {
-                        self.table.rollback_to(snapshot);
+                        self.rollback_state(snapshot);
                         continue;
                     };
                     let Some(&get_method) = method_defs.get(&get_ident) else {
-                        self.table.rollback_to(snapshot);
+                        self.rollback_state(snapshot);
                         continue;
                     };
 
@@ -296,7 +311,7 @@ impl<'db> TyChecker<'db> {
                     let Ok(len_callable) =
                         Callable::new(self.db, len_func_ty, span.clone(), Some(trait_inst))
                     else {
-                        self.table.rollback_to(snapshot);
+                        self.rollback_state(snapshot);
                         continue;
                     };
 
@@ -307,17 +322,19 @@ impl<'db> TyChecker<'db> {
                         iterable_lookup_ty,
                         trait_inst,
                     );
-                    let Ok(get_callable) =
+                    let Ok(mut get_callable) =
                         Callable::new(self.db, get_func_ty, span, Some(trait_inst))
                     else {
-                        self.table.rollback_to(snapshot);
+                        self.rollback_state(snapshot);
                         continue;
                     };
+                    let mut len_callable = len_callable;
 
                     let call_span: crate::span::DynLazySpan<'db> = expr.span(self.body()).into();
                     let len_effect_args =
-                        self.resolve_callable_effects(call_span.clone(), &len_callable);
-                    let get_effect_args = self.resolve_callable_effects(call_span, &get_callable);
+                        self.resolve_callable_effects(call_span.clone(), &mut len_callable);
+                    let get_effect_args =
+                        self.resolve_callable_effects(call_span, &mut get_callable);
 
                     let for_loop_seq = ForLoopSeq {
                         iterable_ty,
@@ -329,7 +346,7 @@ impl<'db> TyChecker<'db> {
                         get_effect_args,
                     };
 
-                    self.table.commit(snapshot);
+                    self.commit_state(snapshot);
                     return (elem_ty, Some(for_loop_seq));
                 }
             }
@@ -418,6 +435,11 @@ impl<'db> TyChecker<'db> {
                 self.try_coerce_capability_for_expr_to_expected(expr, returned_ty, self.expected)
         {
             returned_ty = coerced;
+        }
+
+        if !had_child_err && let Some(expr) = returned_expr {
+            let expected_wf_ty = self.env.raw_expected_return().unwrap_or(self.expected);
+            self.check_value_ty_wf(expr, expected_wf_ty, expr.span(self.env.body()).into());
         }
 
         let ret_ty_ok = !had_child_err

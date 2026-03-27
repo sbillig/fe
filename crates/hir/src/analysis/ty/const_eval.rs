@@ -3,12 +3,8 @@ use num_bigint::BigUint;
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
-        assoc_items::{TraitConstUseResolution, resolve_trait_const_use},
-        const_expr::{ConstExpr, ConstExprId},
-        const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy, const_ty_from_selected_assoc_const},
-        context::AnalysisCx,
+        const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy, const_ty_from_assoc_const_use},
         ctfe::{CtfeConfig, CtfeInterpreter},
-        trait_resolution::TraitSolveCx,
         ty_check::ConstRef,
         ty_check::TypedBody,
         ty_def::{InvalidCause, TyData, TyId},
@@ -62,40 +58,10 @@ pub fn eval_const_ref<'db>(
                 .body(db)
                 .to_opt()
                 .ok_or(InvalidCause::ParseError)?;
-            ConstTyId::from_body(db, body, None, Some(const_def))
+            ConstTyId::from_body(db, body, Some(const_def.ty(db)), Some(const_def))
         }
-        ConstRef::TraitConst { inst, name } => {
-            let solve_cx = TraitSolveCx::new(db, inst.def(db).top_mod(db).scope());
-            let cx = AnalysisCx::from_solve_cx(solve_cx);
-            match resolve_trait_const_use(db, &cx, inst, name) {
-                Some(TraitConstUseResolution::Concrete(selection)) => {
-                    const_ty_from_selected_assoc_const(db, &selection)
-                        .expect("concrete trait-const selection must have a body")
-                }
-                Some(TraitConstUseResolution::Abstract {
-                    trait_inst,
-                    name,
-                    declared_ty,
-                }) => {
-                    let expr = ConstExprId::new(
-                        db,
-                        ConstExpr::TraitConst {
-                            inst: trait_inst,
-                            name,
-                        },
-                    );
-                    ConstTyId::new(db, ConstTyData::Abstract(expr, declared_ty))
-                }
-                Some(TraitConstUseResolution::MissingConcreteImpl {
-                    trait_inst, name, ..
-                }) => {
-                    return Err(InvalidCause::TraitConstNotImplemented {
-                        inst: trait_inst,
-                        name,
-                    });
-                }
-                None => return Err(InvalidCause::Other),
-            }
+        ConstRef::TraitConst(assoc) => {
+            const_ty_from_assoc_const_use(db, assoc).ok_or(InvalidCause::Other)?
         }
     };
     eval_const_ty(db, const_ty, Some(expected_ty))

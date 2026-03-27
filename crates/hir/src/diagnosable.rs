@@ -22,11 +22,10 @@ use crate::hir_def::{
 use crate::span::DynLazySpan;
 
 use crate::analysis::ty::adt_def::AdtRef;
-use crate::analysis::ty::binder::Binder;
-use crate::analysis::ty::trait_def::ImplementorId;
 use crate::semantic::{
     FieldView, FuncParamView, ImplAssocTypeView, SuperTraitRefView, VariantView,
-    WherePredicateBoundView, WherePredicateView, constraints_for, lower_hir_kind_local,
+    WherePredicateBoundView, WherePredicateView, constraints_for, header_constraints_for,
+    lower_hir_kind_local,
 };
 
 /// Unified "pull" diagnostics surface for HIR items and views.
@@ -67,6 +66,14 @@ fn const_ty_mismatch_diag<'db>(
     .into()
 }
 
+fn cyclic_trait_ref_diag<'db>(span: DynLazySpan<'db>, context: &str) -> TyDiagCollection<'db> {
+    TraitConstraintDiag::InfiniteBoundRecursion(
+        span,
+        format!("cyclic trait reference prevented lowering this {context}"),
+    )
+    .into()
+}
+
 impl<'db> SuperTraitRefView<'db> {
     /// Diagnostics for this super-trait reference in its owner's context.
     /// Uses the trait's `Self` as subject and checks WF; kind mismatch is emitted
@@ -96,6 +103,12 @@ impl<'db> SuperTraitRefView<'db> {
                     PathResDiag::ExpectedTrait(span.path().into(), ident, res.kind_name()).into(),
                 );
             }
+            Err(TraitRefLowerError::Cycle) => {
+                return Some(cyclic_trait_ref_diag(
+                    span.path().into(),
+                    "super-trait bound",
+                ));
+            }
             Err(TraitRefLowerError::Ignored) => return None,
         };
 
@@ -115,6 +128,7 @@ impl<'db> SuperTraitRefView<'db> {
                     span: span.into(),
                     primary_goal: goal,
                     unsat_subgoal: subgoal,
+                    required_by: None,
                 }
                 .into(),
             ),
@@ -153,7 +167,7 @@ impl<'db> WherePredicateView<'db> {
 
         // Path-resolution failures are carried via the subject's InvalidCause.
         let owner_item = ItemKind::from(self.clause.owner);
-        let assumptions = constraints_for(db, owner_item);
+        let assumptions = header_constraints_for(db, owner_item);
         if let Some(InvalidCause::PathResolutionFailed { path }) = subject.invalid_cause(db) {
             // Re-run name resolution on the failed path and surface a precise diagnostic
             // at the type path span within the where-predicate.
@@ -175,13 +189,14 @@ impl<'db> WherePredicateView<'db> {
             }
         }
         let span = self.span().ty().into();
+        let surface_subject = self.surface_subject_ty(db).unwrap_or(subject);
 
-        if subject.is_const_ty(db) {
-            return Some(TraitConstraintDiag::ConstTyBound(span, subject).into());
+        if surface_subject.is_const_ty(db) {
+            return Some(TraitConstraintDiag::ConstTyBound(span, surface_subject).into());
         }
 
-        if !subject.has_invalid(db) && !subject.has_param(db) {
-            return Some(TraitConstraintDiag::ConcreteTypeBound(span, subject).into());
+        if !surface_subject.has_invalid(db) && !surface_subject.has_param(db) {
+            return Some(TraitConstraintDiag::ConcreteTypeBound(span, surface_subject).into());
         }
 
         None
@@ -203,7 +218,7 @@ impl<'db> WherePredicateBoundView<'db> {
         let mut out = Vec::new();
         let owner_item = ItemKind::from(self.pred.clause.owner);
         let scope = owner_item.scope();
-        let assumptions = constraints_for(db, owner_item);
+        let assumptions = self.pred.analysis_cx(db).proof.assumptions();
         let is_trait_self_subject =
             matches!(owner_item, ItemKind::Trait(_)) && self.pred.is_self_subject(db);
         let tr = self.trait_ref(db);
@@ -243,6 +258,7 @@ impl<'db> WherePredicateBoundView<'db> {
                                     span: span.into(),
                                     primary_goal: goal,
                                     unsat_subgoal: None,
+                                    required_by: None,
                                 }
                                 .into(),
                             );
@@ -267,6 +283,9 @@ impl<'db> WherePredicateBoundView<'db> {
                             .into(),
                     );
                 }
+            }
+            Err(TraitRefLowerError::Cycle) => {
+                out.push(cyclic_trait_ref_diag(span.path().into(), "trait bound"));
             }
             Err(TraitRefLowerError::Ignored) => {}
         }
@@ -301,17 +320,36 @@ impl<'db> Func<'db> {
         .collect()
     }
 
-    /// Diagnostics related to the explicit return type.
+    /// Diagnostics related to the explicit return type (kind/const checks).
     pub fn diags_return(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        self.return_ty_diags_in_cx(db, &self.signature_analysis_cx(db))
+        let mut diags = Vec::new();
+        if self.has_explicit_return_ty(db) {
+            // First, surface name-resolution/path-domain errors on the return type itself
+            let errs = self.ret_ty_errors(db);
+            if !errs.is_empty() {
+                return errs;
+            }
+
+            // Then run kind/const checks on the lowered semantic type
+            let ret = self.return_ty(db);
+            let span = self.span().ret_ty().into();
+            if !ret.has_star_kind(db) {
+                diags.push(TyLowerDiag::ExpectedStarKind(span).into());
+            } else if ret.is_const_ty(db) {
+                diags.push(TyLowerDiag::NormalTypeExpected { span, given: ret }.into());
+            } else if ty::ty_contains_const_hole(db, ret) {
+                diags.push(TyLowerDiag::ConstHoleInValuePosition { span, ty: ret }.into());
+            }
+        }
+        diags
     }
 
-    /// Diagnostics for function parameter types.
+    /// Diagnostics for function parameter types:
+    /// - For all params: star kind required and reject const types
+    /// - For self param: enforce exact `Self` type shape
+    ///   Note: WF/invalid errors are still surfaced via the general type walker.
     pub fn diags_param_types(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        let cx = self.signature_analysis_cx(db);
-        self.params(db)
-            .flat_map(|param| param.ty_diags_in_cx(db, &cx))
-            .collect()
+        self.params(db).flat_map(|v| v.diags(db)).collect()
     }
 }
 
@@ -344,12 +382,11 @@ impl<'db> Trait<'db> {
                 continue;
             };
             for trait_inst in assoc.bounds_on_subject(db, default_ty) {
-                let canonical_inst = ty::canonical::Canonical::new(db, trait_inst);
                 match ty::trait_resolution::is_goal_satisfiable(
                     db,
                     ty::trait_resolution::TraitSolveCx::new(db, self.scope())
                         .with_assumptions(assumptions),
-                    canonical_inst,
+                    trait_inst,
                 ) {
                     ty::trait_resolution::GoalSatisfiability::Satisfied(_) => {}
                     ty::trait_resolution::GoalSatisfiability::UnSat(_) => {
@@ -358,6 +395,7 @@ impl<'db> Trait<'db> {
                                 span: self.span().into(),
                                 primary_goal: trait_inst,
                                 unsat_subgoal: None,
+                                required_by: None,
                             }
                             .into(),
                         );
@@ -380,7 +418,6 @@ impl<'db> Trait<'db> {
     /// Diagnostics for super-traits (semantic, kind-mismatch only).
     pub fn diags_super_traits(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         use ty::trait_resolution::{WellFormedness, check_trait_inst_wf};
-        use ty::ty_def::TyFlags;
 
         let mut diags = Vec::new();
         for view in self.super_trait_refs(db) {
@@ -397,12 +434,6 @@ impl<'db> Trait<'db> {
 
             // Additionally, ensure that the super-trait reference is well-formed
             if let Ok(inst) = view.trait_inst(db) {
-                let flags = ty::visitor::collect_flags(db, inst);
-                if !flags.contains(TyFlags::HAS_INVALID)
-                    && flags.intersects(TyFlags::HAS_PARAM | TyFlags::HAS_VAR)
-                {
-                    continue;
-                }
                 match check_trait_inst_wf(
                     db,
                     ty::trait_resolution::TraitSolveCx::new(db, self.scope())
@@ -416,6 +447,7 @@ impl<'db> Trait<'db> {
                                 span: view.span().into(),
                                 primary_goal: goal,
                                 unsat_subgoal: None,
+                                required_by: None,
                             }
                             .into(),
                         );
@@ -432,7 +464,8 @@ impl<'db> Impl<'db> {
     /// Generic parameter diagnostics are handled by `Diagnosable::diags`.
     pub fn diags_preconditions(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         use ty::diagnostics::ImplDiag;
-        use ty::trait_resolution::WellFormedness;
+        use ty::trait_resolution::constraint::ty_constraints;
+        use ty::trait_resolution::{TraitSolveCx, WellFormedness, check_ty_wf};
 
         let mut out = self.ty_errors(db);
 
@@ -461,14 +494,35 @@ impl<'db> Impl<'db> {
             return out;
         }
 
-        match self.target_ty_wf(db) {
-            WellFormedness::WellFormed => {}
+        match check_ty_wf(
+            db,
+            TraitSolveCx::new(db, self.scope()).with_assumptions(constraints_for(db, self.into())),
+            ty,
+        ) {
+            WellFormedness::WellFormed => {
+                let constraints = ty_constraints(db, ty);
+                for &goal in constraints.list(db) {
+                    if goal.self_ty(db).has_param(db) {
+                        out.push(
+                            TraitConstraintDiag::TraitBoundNotSat {
+                                span: self.span().target_ty().into(),
+                                primary_goal: goal,
+                                unsat_subgoal: None,
+                                required_by: None,
+                            }
+                            .into(),
+                        );
+                        break;
+                    }
+                }
+            }
             WellFormedness::IllFormed { goal, subgoal } => {
                 out.push(
                     TraitConstraintDiag::TraitBoundNotSat {
                         span: self.span().target_ty().into(),
                         primary_goal: goal,
                         unsat_subgoal: subgoal,
+                        required_by: None,
                     }
                     .into(),
                 );
@@ -476,123 +530,6 @@ impl<'db> Impl<'db> {
         }
 
         out
-    }
-}
-
-impl<'db> ImplTrait<'db> {
-    fn admission_summary(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> &'db ty::admission::AdmissionSummary<'db> {
-        ty::trait_lower::admission_summary(db, self.top_mod(db).ingot(db))
-    }
-
-    fn header_diags(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        self.admission_summary(db)
-            .header_issues
-            .get(&self)
-            .into_iter()
-            .flat_map(|issues| issues.iter())
-            .flat_map(|issue| issue.to_diags(db, self))
-            .collect()
-    }
-
-    fn interface_issue_diags<F>(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        include: F,
-    ) -> Vec<TyDiagCollection<'db>>
-    where
-        F: Fn(&ty::admission::ImplInterfaceIssue<'db>) -> bool,
-    {
-        self.admission_summary(db)
-            .interface_issues
-            .get(&self)
-            .into_iter()
-            .flat_map(|issues| issues.iter())
-            .filter(|issue| include(issue))
-            .flat_map(|issue| issue.to_diags())
-            .collect()
-    }
-
-    pub(crate) fn interface_diags(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        self.interface_issue_diags(db, |issue| {
-            !matches!(
-                issue,
-                ty::admission::ImplInterfaceIssue::MethodSignatureInvalid(..)
-            )
-        })
-    }
-
-    /// Lower the implementor view and report validity diagnostics (WF, conflicts, kind mismatch).
-    /// Returns the implementor view if successful, or None if critical errors occurred.
-    pub(crate) fn diags_implementor_validity(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> (
-        Option<Binder<ImplementorId<'db>>>,
-        Vec<TyDiagCollection<'db>>,
-    ) {
-        self.implementor_with_errors(db)
-    }
-
-    /// Diagnostics for missing associated types (required by the trait).
-    pub fn diags_missing_assoc_types(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> Vec<TyDiagCollection<'db>> {
-        self.interface_issue_diags(db, |issue| {
-            matches!(
-                issue,
-                ty::admission::ImplInterfaceIssue::MissingAssocType { .. }
-            )
-        })
-    }
-
-    /// Diagnostics for missing associated consts (required by the trait).
-    pub fn diags_missing_assoc_consts(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> Vec<TyDiagCollection<'db>> {
-        self.interface_issue_diags(db, |issue| {
-            matches!(
-                issue,
-                ty::admission::ImplInterfaceIssue::MissingAssocConst { .. }
-            )
-        })
-    }
-
-    /// Diagnostics for associated const values and validity.
-    pub fn diags_assoc_consts(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        self.interface_issue_diags(db, |issue| {
-            matches!(
-                issue,
-                ty::admission::ImplInterfaceIssue::ExtraAssocConst { .. }
-                    | ty::admission::ImplInterfaceIssue::MissingAssocConstValue { .. }
-                    | ty::admission::ImplInterfaceIssue::AssocConstInvalidDiag(..)
-                    | ty::admission::ImplInterfaceIssue::AssocConstInvalid { .. }
-            )
-        })
-    }
-
-    /// Diagnostics for associated type bounds on implemented assoc types.
-    pub fn diags_assoc_types_bounds(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> Vec<TyDiagCollection<'db>> {
-        self.interface_issue_diags(db, |issue| {
-            matches!(
-                issue,
-                ty::admission::ImplInterfaceIssue::AssocTypeBoundViolation { .. }
-            )
-        })
-    }
-
-    /// Diagnostics for implemented associated types' WF and invalid types.
-    pub fn diags_assoc_types_wf(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        self.assoc_types(db)
-            .flat_map(|view| view.diags(db))
-            .collect()
     }
 }
 
@@ -715,6 +652,7 @@ impl<'db> VariantView<'db> {
                             span: span.clone().into(),
                             primary_goal: goal,
                             unsat_subgoal: subgoal,
+                            required_by: None,
                         }
                         .into(),
                     );
@@ -907,8 +845,10 @@ impl<'db> GenericParamOwner<'db> {
         };
 
         let mut out = Vec::new();
-        let owner_item = ItemKind::from(self);
-        let assumptions = constraints_for(db, owner_item);
+        // Forward-ref checking only needs parameter occurrences in default types.
+        // Full assumptions can create non-converging cycles on malformed defaults
+        // (e.g. `T = Self`) and should not panic diagnostics collection.
+        let assumptions = ty::trait_resolution::PredicateListId::empty_list(db);
         let scope = self.scope();
 
         for view in self.params(db) {
@@ -919,6 +859,10 @@ impl<'db> GenericParamOwner<'db> {
             let Some(default_ty) = default_ty else {
                 continue;
             };
+
+            if default_ty.is_self_ty(db) {
+                continue;
+            }
 
             let lowered = lower_hir_ty(db, default_ty, scope, assumptions);
 
@@ -1003,7 +947,7 @@ impl<'db> GenericParamOwner<'db> {
         let mut out = Vec::new();
         let param_set = ty::ty_lower::collect_generic_params(db, self);
         let scope = self.scope();
-        let assumptions = constraints_for(db, self.into());
+        let assumptions = header_constraints_for(db, self.into());
 
         for view in self.params(db) {
             let GenericParam::Type(tp) = view.param else {
@@ -1053,6 +997,7 @@ impl<'db> GenericParamOwner<'db> {
                                     span: span.into(),
                                     primary_goal: goal,
                                     unsat_subgoal: None,
+                                    required_by: None,
                                 }
                                 .into(),
                             ),
@@ -1079,6 +1024,9 @@ impl<'db> GenericParamOwner<'db> {
                                 .into(),
                             );
                         }
+                    }
+                    Err(TraitRefLowerError::Cycle) => {
+                        out.push(cyclic_trait_ref_diag(span.path().into(), "trait bound"));
                     }
                     Err(TraitRefLowerError::Ignored) => {}
                 }
@@ -1218,20 +1166,21 @@ impl<'db> Diagnosable<'db> for ImplTrait<'db> {
     type Diagnostic = TyDiagCollection<'db>;
 
     fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
-        // Early path/domain/WF checks; bail out on errors to avoid noisy follow-ups
-        let (implementor_opt, validity_diags) = self.diags_implementor_validity(db);
-        let Some(_implementor) = implementor_opt else {
+        let (implementor_opt, validity_diags) = self.implementor_with_errors(db);
+        if implementor_opt.is_none() {
             return validity_diags;
-        };
-
-        let mut out = validity_diags;
-        let header_diags = self.header_diags(db);
-        if !header_diags.is_empty() {
-            out.extend(header_diags);
-            return out;
         }
 
-        out.extend(self.interface_diags(db));
+        let ingot = self.top_mod(db).ingot(db);
+        let summary = ty::admission::summarize_impl_admission(db, ingot);
+
+        let mut out = validity_diags;
+        if let Some(issues) = summary.header_issues.get(&self) {
+            out.extend(issues.iter().flat_map(|issue| issue.to_diags(db, self)));
+        }
+        if let Some(issues) = summary.interface_issues.get(&self) {
+            out.extend(issues.iter().flat_map(|issue| issue.to_diags()));
+        }
         out.extend(GenericParamOwner::ImplTrait(self).diags(db));
         out
     }
