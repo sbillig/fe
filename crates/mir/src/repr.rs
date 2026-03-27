@@ -28,8 +28,8 @@ use hir::projection::{Projection, ProjectionPath};
 
 use crate::core_lib::CoreLib;
 use crate::ir::{
-    AddressSpaceKind, LocalData, LocalId, MirProjection, Place, PointerInfo, RuntimeShape,
-    RuntimeWordKind, ValueData, ValueId, try_value_pointer_info_in,
+    AddressSpaceKind, LocalData, MirProjection, Place, PointerInfo, RuntimeShape, RuntimeWordKind,
+    ValueData, ValueId, try_value_pointer_info_in,
 };
 use crate::layout;
 use common::indexmap::IndexMap;
@@ -1136,29 +1136,29 @@ pub fn runtime_shape_for_local<'db>(
     type_shape
 }
 
-fn normalize_pointer_leaf_infos<'db>(
+fn try_normalize_pointer_leaf_infos<'db>(
     infos: Vec<(crate::MirProjectionPath<'db>, PointerInfo<'db>)>,
-) -> Vec<(crate::MirProjectionPath<'db>, PointerInfo<'db>)> {
+) -> Result<
+    Vec<(crate::MirProjectionPath<'db>, PointerInfo<'db>)>,
+    crate::capability_space::PointerInfoConflict<'db>,
+> {
     crate::capability_space::normalize_pointer_leaf_info_entries(infos)
-        .expect("MIR pointer leaf info conflicts should be resolved before runtime layout queries")
 }
 
-fn pointer_leaf_infos_for_projection_from_local<'db>(
-    locals: &[LocalData<'db>],
-    local: LocalId,
+pub(crate) fn try_pointer_leaf_infos_for_projection_from_entries<'db>(
+    infos: &[(crate::MirProjectionPath<'db>, PointerInfo<'db>)],
     projection: &crate::MirProjectionPath<'db>,
-) -> Vec<(crate::MirProjectionPath<'db>, PointerInfo<'db>)> {
-    let Some(local_data) = locals.get(local.index()) else {
-        return Vec::new();
-    };
-
-    let mut infos = Vec::new();
-    for (path, info) in &local_data.pointer_leaf_infos {
+) -> Result<
+    Vec<(crate::MirProjectionPath<'db>, PointerInfo<'db>)>,
+    crate::capability_space::PointerInfoConflict<'db>,
+> {
+    let mut projected = Vec::new();
+    for (path, info) in infos {
         if let Some(suffix) = crate::ir::projection_strip_prefix(path, projection) {
-            infos.push((suffix, *info));
+            projected.push((suffix, *info));
         }
     }
-    normalize_pointer_leaf_infos(infos)
+    try_normalize_pointer_leaf_infos(projected)
 }
 
 fn enum_tag_owner_place<'db>(place: &Place<'db>) -> Option<Place<'db>> {
@@ -1176,37 +1176,70 @@ fn enum_tag_owner_place<'db>(place: &Place<'db>) -> Option<Place<'db>> {
     Some(Place::new(place.base, owner_projection))
 }
 
-pub fn pointer_leaf_infos_for_enum_tag_place<'db>(
+fn try_pointer_leaf_infos_for_enum_tag_place_with_fallback<'db, F>(
     db: &'db dyn HirAnalysisDb,
     core: &CoreLib<'db>,
     values: &[ValueData<'db>],
     locals: &[LocalData<'db>],
     place: &Place<'db>,
-) -> Option<Vec<(crate::MirProjectionPath<'db>, PointerInfo<'db>)>> {
-    let owner_place = enum_tag_owner_place(place)?;
-    let enum_ty = place_object_ref_target_ty(db, core, values, locals, &owner_place)?;
-    enum_ty.as_enum(db)?;
-    let owner_infos = pointer_leaf_infos_for_place(db, core, values, locals, &owner_place, enum_ty);
-    Some(
+    fallback_place_address_space: &F,
+) -> Result<
+    Option<Vec<(crate::MirProjectionPath<'db>, PointerInfo<'db>)>>,
+    crate::capability_space::PointerInfoConflict<'db>,
+>
+where
+    F: Fn(&Place<'db>) -> AddressSpaceKind,
+{
+    let Some(owner_place) = enum_tag_owner_place(place) else {
+        return Ok(None);
+    };
+    let Some(enum_ty) = place_object_ref_target_ty(db, core, values, locals, &owner_place) else {
+        return Ok(None);
+    };
+    if enum_ty.as_enum(db).is_none() {
+        return Ok(None);
+    }
+    let owner_infos = try_pointer_leaf_infos_for_place_with_fallback(
+        db,
+        core,
+        values,
+        locals,
+        &owner_place,
+        enum_ty,
+        fallback_place_address_space,
+    )?;
+    Ok(Some(
         owner_infos
             .into_iter()
             .filter(|(path, _)| !path.is_empty())
             .collect(),
-    )
+    ))
 }
 
-pub fn pointer_leaf_infos_for_place<'db>(
+pub(crate) fn try_pointer_leaf_infos_for_place_with_fallback<'db, F>(
     db: &'db dyn HirAnalysisDb,
     core: &CoreLib<'db>,
     values: &[ValueData<'db>],
     locals: &[LocalData<'db>],
     place: &Place<'db>,
     target_ty: TyId<'db>,
-) -> Vec<(crate::MirProjectionPath<'db>, PointerInfo<'db>)> {
-    if let Some(enum_tag_infos) =
-        pointer_leaf_infos_for_enum_tag_place(db, core, values, locals, place)
-    {
-        return enum_tag_infos;
+    fallback_place_address_space: &F,
+) -> Result<
+    Vec<(crate::MirProjectionPath<'db>, PointerInfo<'db>)>,
+    crate::capability_space::PointerInfoConflict<'db>,
+>
+where
+    F: Fn(&Place<'db>) -> AddressSpaceKind,
+{
+    if let Some(enum_tag_infos) = try_pointer_leaf_infos_for_enum_tag_place_with_fallback(
+        db,
+        core,
+        values,
+        locals,
+        place,
+        fallback_place_address_space,
+    )? {
+        return Ok(enum_tag_infos);
     }
 
     let resolved = resolve_place(db, core, values, locals, place);
@@ -1225,8 +1258,7 @@ pub fn pointer_leaf_infos_for_place<'db>(
                 .map(|info| info.address_space)
                 .or(final_state.location_address_space())
         })
-        .or_else(|| crate::ir::try_place_address_space_in(values, locals, place))
-        .unwrap_or(AddressSpaceKind::Memory);
+        .unwrap_or_else(|| fallback_place_address_space(place));
     let target_infos = crate::capability_space::pointer_leaf_infos_for_ty_with_default(
         db,
         core,
@@ -1236,25 +1268,29 @@ pub fn pointer_leaf_infos_for_place<'db>(
     if !crosses_deref_boundary
         && let Some((local, base_projection)) =
             crate::ir::resolve_local_projection_root(values, place.base)
+        && let Some(local_data) = locals.get(local.index())
     {
         let full_projection = base_projection.concat(&place.projection);
-        let infos = pointer_leaf_infos_for_projection_from_local(locals, local, &full_projection);
+        let infos = try_pointer_leaf_infos_for_projection_from_entries(
+            &local_data.pointer_leaf_infos,
+            &full_projection,
+        )?;
         if !infos.is_empty() {
             if place_object_ref_target_ty(db, core, values, locals, place).is_some() {
                 let local_paths: FxHashSet<_> =
                     infos.iter().map(|(path, _)| path.clone()).collect();
-                return infos
+                return Ok(infos
                     .into_iter()
                     .chain(
                         target_infos
                             .into_iter()
                             .filter(|(path, _)| !path.is_empty() && !local_paths.contains(path)),
                     )
-                    .collect();
+                    .collect());
             }
 
             if target_infos.is_empty() {
-                return Vec::new();
+                return Ok(Vec::new());
             }
 
             let target_paths: FxHashSet<_> =
@@ -1264,44 +1300,76 @@ pub fn pointer_leaf_infos_for_place<'db>(
                 .filter(|(path, _)| target_paths.contains(path))
                 .collect();
             if local_infos.is_empty() {
-                return target_infos;
+                return Ok(target_infos);
             }
 
             let local_paths: FxHashSet<_> =
                 local_infos.iter().map(|(path, _)| path.clone()).collect();
-            return local_infos
+            return Ok(local_infos
                 .into_iter()
                 .chain(
                     target_infos
                         .into_iter()
                         .filter(|(path, _)| !local_paths.contains(path)),
                 )
-                .collect();
+                .collect());
         }
     }
 
-    target_infos
+    Ok(target_infos)
 }
 
-pub fn pointer_leaf_infos_for_value<'db>(
+pub fn pointer_leaf_infos_for_place<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    values: &[ValueData<'db>],
+    locals: &[LocalData<'db>],
+    place: &Place<'db>,
+    target_ty: TyId<'db>,
+) -> Vec<(crate::MirProjectionPath<'db>, PointerInfo<'db>)> {
+    let fallback = |place: &Place<'db>| {
+        crate::ir::try_place_address_space_in(values, locals, place)
+            .unwrap_or(AddressSpaceKind::Memory)
+    };
+    try_pointer_leaf_infos_for_place_with_fallback(
+        db, core, values, locals, place, target_ty, &fallback,
+    )
+    .expect("MIR pointer leaf info conflicts should be resolved before runtime layout queries")
+}
+
+pub(crate) fn try_pointer_leaf_infos_for_value_with_fallback<'db, F>(
     db: &'db dyn HirAnalysisDb,
     core: &CoreLib<'db>,
     values: &[ValueData<'db>],
     locals: &[LocalData<'db>],
     value: ValueId,
-) -> Vec<(crate::MirProjectionPath<'db>, PointerInfo<'db>)> {
+    fallback_place_address_space: &F,
+) -> Result<
+    Vec<(crate::MirProjectionPath<'db>, PointerInfo<'db>)>,
+    crate::capability_space::PointerInfoConflict<'db>,
+>
+where
+    F: Fn(&Place<'db>) -> AddressSpaceKind,
+{
     let Some(value_data) = values.get(value.index()) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    match &value_data.origin {
+    Ok(match &value_data.origin {
         crate::ir::ValueOrigin::Local(local) | crate::ir::ValueOrigin::PlaceRoot(local) => locals
             .get(local.index())
             .map(|local| local.pointer_leaf_infos.clone())
             .unwrap_or_default(),
         crate::ir::ValueOrigin::TransparentCast { value: inner } => {
-            let infos = pointer_leaf_infos_for_value(db, core, values, locals, *inner);
+            let infos = try_pointer_leaf_infos_for_value_with_fallback(
+                db,
+                core,
+                values,
+                locals,
+                *inner,
+                fallback_place_address_space,
+            )?;
             if !infos.is_empty() {
-                return infos;
+                return Ok(infos);
             }
             crate::ir::try_value_address_space_in(values, locals, *inner)
                 .and_then(|space| runtime_value_pointer_info_for_ty(db, core, value_data.ty, space))
@@ -1309,7 +1377,15 @@ pub fn pointer_leaf_infos_for_value<'db>(
                 .unwrap_or_default()
         }
         crate::ir::ValueOrigin::PlaceRef(place) | crate::ir::ValueOrigin::MoveOut { place } => {
-            pointer_leaf_infos_for_place(db, core, values, locals, place, value_data.ty)
+            return try_pointer_leaf_infos_for_place_with_fallback(
+                db,
+                core,
+                values,
+                locals,
+                place,
+                value_data.ty,
+                fallback_place_address_space,
+            );
         }
         crate::ir::ValueOrigin::FieldPtr(field_ptr) => {
             pointer_info_for_ty(db, core, value_data.ty, field_ptr.addr_space)
@@ -1322,7 +1398,22 @@ pub fn pointer_leaf_infos_for_value<'db>(
             })
             .map(|info| vec![(crate::MirProjectionPath::new(), info)])
             .unwrap_or_default(),
-    }
+    })
+}
+
+pub fn pointer_leaf_infos_for_value<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    values: &[ValueData<'db>],
+    locals: &[LocalData<'db>],
+    value: ValueId,
+) -> Vec<(crate::MirProjectionPath<'db>, PointerInfo<'db>)> {
+    let fallback = |place: &Place<'db>| {
+        crate::ir::try_place_address_space_in(values, locals, place)
+            .unwrap_or(AddressSpaceKind::Memory)
+    };
+    try_pointer_leaf_infos_for_value_with_fallback(db, core, values, locals, value, &fallback)
+        .expect("MIR pointer leaf info conflicts should be resolved before runtime layout queries")
 }
 
 fn value_inherits_object_root_runtime_shape<'db>(
