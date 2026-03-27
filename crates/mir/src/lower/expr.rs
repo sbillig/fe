@@ -4509,6 +4509,12 @@ impl CellMover {
         self.cell.value
     }
 }
+
+fn entry() -> u256 {
+    let mut cell = Cell { value: 1 }
+    let mut mover = CellMover { cell: mut cell, tag: 0 }
+    mover.bump(3)
+}
 "#;
 
         let file = db.workspace().touch(&mut db, url, Some(src.to_owned()));
