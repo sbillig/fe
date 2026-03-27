@@ -1983,10 +1983,18 @@ fn object_field_uses_object_ref<'db>(
     if !mir::repr::supports_object_ref_runtime_ty(db, core, ty) {
         return false;
     }
+
+    if matches!(
+        mir::repr::repr_kind_for_ty(db, core, ty),
+        mir::repr::ReprKind::Ref
+    ) {
+        return true;
+    }
+
     let object_ty = mir::repr::object_layout_ty(db, core, ty);
     object_ty != ty
-        || matches!(
-            mir::repr::repr_kind_for_ty(db, core, ty),
+        && matches!(
+            mir::repr::repr_kind_for_ty(db, core, object_ty),
             mir::repr::ReprKind::Ref
         )
 }
