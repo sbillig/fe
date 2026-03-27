@@ -22,11 +22,6 @@ func private %bump__StorPtr_Wrap___5036bb3e02939b91(v0.i256) {
         return;
 }
 
-func private %bump_hfb5a53c6af92b8a6_encode_hf98aaef2e32b4927_encode_to_ptr() {
-    block0:
-        return;
-}
-
 func private %__NewtypeByPlaceEffectArg_recv_0_0(v0.i256, v1.i256) -> i256 {
     block0:
         call %bump__StorPtr_Wrap___5036bb3e02939b91 v0;

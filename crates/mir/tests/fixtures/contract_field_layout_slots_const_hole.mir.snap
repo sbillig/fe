@@ -2,21 +2,6 @@
 source: crates/mir/tests/lowering_snapshots.rs
 expression: mir_output
 ---
-fn set_hc90b8ea7f5d56426_encode_hf98aaef2e32b4927_encode_to_ptr(v0: Set, v1: u256) -> ():
-  bb0:
-    v2: u256 = load mem[v0].0
-    eval u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95(v2, v1)
-    v4: u256 = checked_add<u256>(v1, 32)
-    v3: u256 = v4
-    v5: u256 = load mem[v0].1
-    eval u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95(v5, v3)
-    ret
-
-fn get_h7c52564759be682_encode_hf98aaef2e32b4927_encode_to_ptr(v0: Get, v1: u256) -> ():
-  bb0:
-    eval u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95(v0, v1)
-    ret
-
 fn __LayoutHoles_recv_0_0(v0: Set, v1: u256, v2: u256) -> ():
   ; runtime_abi values=[v0: Set] effects=[]
   bb0:
@@ -79,11 +64,6 @@ fn __LayoutHoles_runtime() -> ():
     v9: Get = get_h7c52564759be682_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v5)
     v10: u256 = __LayoutHoles_recv_0_1(v9)
     terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63(v10)
-
-fn u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95(v0: u256, v1: u256) -> ():
-  bb0:
-    eval sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_store_word(v1, v0)
-    ret
 
 fn storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__u256_u256_2__7d7bd47f3e4876cc(v0: StorageMap<u256, u256, 2>, v1: u256, v2: u256) -> ():
   ; runtime_abi values=[v1: u256, v2: u256] effects=[]
@@ -207,11 +187,6 @@ fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482
     v3: u256 = alloc(32)
     eval u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95(v1, v3)
     terminate return_data(v3, 32)
-
-fn sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_store_word(v0: u256, v1: u256) -> ():
-  bb0:
-    eval mstore(v0, v1)
-    ret
 
 fn u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word(v0: u256) -> u256:
   bb0:
@@ -338,6 +313,11 @@ fn solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v0: SolEncod
     init mem[v4] { .0 = v1, .1 = (v3 - v1) }
     ret v4
 
+fn u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95(v0: u256, v1: u256) -> ():
+  bb0:
+    eval sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_store_word(v1, v0)
+    ret
+
 fn storagemap_storage_slot_with_salt__u256__3271ca15373d4483(v0: u256, v1: u256) -> u256:
   bb0:
     v2: u256 = alloc(0)
@@ -412,6 +392,11 @@ fn solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word(v0: mut 
     v2: u256 = v3
     eval mstore(v2, v1)
     store mem[v0].*.1 = (v2 + 32)
+    ret
+
+fn sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_store_word(v0: u256, v1: u256) -> ():
+  bb0:
+    eval mstore(v0, v1)
     ret
 
 fn u256_h3271ca15373d4483_storagekey_hf9e3d38a13ff4409_write_key(v0: u256, v1: u256) -> u256:

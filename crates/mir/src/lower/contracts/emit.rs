@@ -829,6 +829,7 @@ impl<'db, 'a> SyntheticFnEmitter<'db, 'a> {
             returns_value: meta.returns_value,
             runtime_abi: meta.runtime_abi,
             runtime_return_shape: meta.runtime_return_shape,
+            runtime_return_pointer_leaf_infos: Vec::new(),
             contract_function: meta.contract_function,
             inline_hint: None,
             symbol_name: meta.symbol_name,

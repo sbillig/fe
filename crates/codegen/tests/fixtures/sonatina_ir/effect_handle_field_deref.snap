@@ -32,57 +32,6 @@ func private %write_cell__StorPtr_Cell___f0e99f91b10888d5(v0.i256, v1.i256) -> i
         return v2;
 }
 
-func private %cellmover_h6dc2778b4a1f6bf1_bump(v0.**i256, v1.i256) -> i256 {
-    block0:
-        v2.*i256 = bitcast v0 *i256;
-        v4.*i256 = gep v2 0.i256;
-        v5.i256 = mload v4 i256;
-        (v6.i256, v7.i1) = uaddo v5 v1;
-        br v7 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        v9.*i256 = bitcast v0 *i256;
-        v10.*i256 = gep v9 0.i256;
-        mstore v10 v6 i256;
-        v11.*i256 = bitcast v0 *i256;
-        v12.*i256 = gep v11 0.i256;
-        v13.i256 = mload v12 i256;
-        return v13;
-}
-
-func private %seedslot_h54140d6d3003b4fb_encode_hf98aaef2e32b4927_encode_to_ptr(v0.objref<@__fe_obj_SeedSlot_1>, v1.i256) {
-    block0:
-        v3.objref<i256> = obj.proj v0 0.i256;
-        v4.i256 = obj.load v3;
-        call %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95 v4 v1;
-        (v6.i256, v7.i1) = uaddo v1 32.i256;
-        br v7 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        v10.objref<i256> = obj.proj v0 1.i256;
-        v11.i256 = obj.load v10;
-        call %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95 v11 v6;
-        return;
-}
-
-func private %readviaholder_h9a52c49def8cf7ae_encode_hf98aaef2e32b4927_encode_to_ptr(v0.i256, v1.i256) {
-    block0:
-        call %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95 v0 v1;
-        return;
-}
-
-func private %bumpmover_hdc9ecd58bf94824a_encode_hf98aaef2e32b4927_encode_to_ptr(v0.i256, v1.i256) {
-    block0:
-        call %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95 v0 v1;
-        return;
-}
-
 func private %__EffectHandleFieldDeref_recv_0_0(v0.objref<@__fe_obj_SeedSlot_1>) -> i256 {
     block0:
         v3.objref<i256> = obj.proj v0 0.i256;
@@ -189,12 +138,6 @@ func private %__EffectHandleFieldDeref_runtime() {
         v25.i256 = call %__EffectHandleFieldDeref_recv_0_2 v23 v1;
         call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63 v25;
         evm_invalid;
-}
-
-func private %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95(v0.i256, v1.i256) {
-    block0:
-        call %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_store_word v1 v0;
-        return;
 }
 
 func private %stor_ptr_stor__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa8c50f26516a(v0.i256) -> i256 {
@@ -319,12 +262,6 @@ func private %bumpmover_hdc9ecd58bf94824a_decode_h624c3cd8c996d995_decode__SolDe
     block0:
         v1.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v0;
         return v1;
-}
-
-func private %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_store_word(v0.i256, v1.i256) {
-    block0:
-        mstore v0 v1 i256;
-        return;
 }
 
 func private %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Cell_hc7450704dd4a03d6__5989b97f954838c8(v0.i256) -> i256 {
@@ -453,6 +390,12 @@ func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(
         evm_return v0 v1;
 }
 
+func private %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95(v0.i256, v1.i256) {
+    block0:
+        call %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_store_word v1 v0;
+        return;
+}
+
 func private %s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35(v0.i256) -> i32 {
     block0:
         v1.i256 = call %u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word v0;
@@ -539,6 +482,12 @@ func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_wo
         v6.i256 = add v4 32.i256;
         v7.objref<i256> = obj.proj v0 1.i256;
         obj.store v7 v6;
+        return;
+}
+
+func private %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_store_word(v0.i256, v1.i256) {
+    block0:
+        mstore v0 v1 i256;
         return;
 }
 

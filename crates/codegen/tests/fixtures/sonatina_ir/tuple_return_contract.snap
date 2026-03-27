@@ -8,11 +8,6 @@ target = "evm-ethereum-osaka"
 type @__fe_obj_tuple_0 = {i256, i256};
 type @__fe_obj_SolEncoder_1 = {i256, i256, i256};
 
-func private %pair_h10fc5066dc282a3d_encode_hf98aaef2e32b4927_encode_to_ptr() {
-    block0:
-        return;
-}
-
 func private %__TupleReturnContract_recv_0_0() -> objref<@__fe_obj_tuple_0> {
     block0:
         v0.i256 = call %address_h257056268eac7027_zero;

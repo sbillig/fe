@@ -750,6 +750,7 @@ pub(crate) fn lower_function<'db>(
         returns_value,
         runtime_abi,
         runtime_return_shape,
+        runtime_return_pointer_leaf_infos: Vec::new(),
         contract_function,
         inline_hint: func.inline_hint(db),
         symbol_name,
@@ -1528,143 +1529,47 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         });
     }
 
-    fn pointer_leaf_infos_for_projection_from_local(
-        &mut self,
-        local: LocalId,
-        projection: &MirProjectionPath<'db>,
-    ) -> Vec<(MirProjectionPath<'db>, PointerInfo<'db>)> {
-        let Some(local_data) = self.builder.body.locals.get(local.index()) else {
-            return Vec::new();
-        };
-        let local_pointer_leaf_infos = local_data.pointer_leaf_infos.clone();
-
-        let mut infos = Vec::new();
-        for (path, info) in &local_pointer_leaf_infos {
-            if let Some(suffix) = crate::ir::projection_strip_prefix(path, projection) {
-                infos.push((suffix, *info));
-            }
-        }
-        self.normalize_pointer_leaf_infos(infos)
-    }
-
     fn pointer_leaf_infos_for_place(
         &mut self,
         place: &Place<'db>,
         target_ty: TyId<'db>,
     ) -> Vec<(MirProjectionPath<'db>, PointerInfo<'db>)> {
-        let resolved = crate::repr::resolve_place(
+        let fallback = |place: &Place<'db>| self.place_address_space(place);
+        match crate::repr::try_pointer_leaf_infos_for_place_with_fallback(
             self.db,
             &self.core,
             &self.builder.body.values,
             &self.builder.body.locals,
             place,
-        );
-        let crosses_deref_boundary = resolved.as_ref().is_some_and(|resolved| {
-            resolved
-                .segments
-                .iter()
-                .any(|segment| segment.start_kind.is_some())
-        });
-        let target_space = resolved
-            .as_ref()
-            .and_then(|resolved| {
-                let final_state = resolved.final_state();
-                final_state
-                    .pointer_info
-                    .map(|info| info.address_space)
-                    .or(final_state.location_address_space())
-            })
-            .unwrap_or_else(|| self.place_address_space(place));
-        let target_infos =
-            pointer_leaf_infos_for_ty_with_default(self.db, &self.core, target_ty, target_space);
-        if !crosses_deref_boundary
-            && let Some((local, base_projection)) =
-                crate::ir::resolve_local_projection_root(&self.builder.body.values, place.base)
-        {
-            let full_projection = base_projection.concat(&place.projection);
-            let infos = self.pointer_leaf_infos_for_projection_from_local(local, &full_projection);
-            if !infos.is_empty() {
-                if target_infos.is_empty() {
-                    return Vec::new();
-                }
-
-                let target_paths: FxHashSet<_> =
-                    target_infos.iter().map(|(path, _)| path.clone()).collect();
-                let local_infos: Vec<_> = infos
-                    .into_iter()
-                    .filter(|(path, _)| target_paths.contains(path))
-                    .collect();
-                if local_infos.is_empty() {
-                    return target_infos;
-                }
-
-                let local_paths: FxHashSet<_> =
-                    local_infos.iter().map(|(path, _)| path.clone()).collect();
-                return local_infos
-                    .into_iter()
-                    .chain(
-                        target_infos
-                            .into_iter()
-                            .filter(|(path, _)| !local_paths.contains(path)),
-                    )
-                    .collect();
+            target_ty,
+            &fallback,
+        ) {
+            Ok(infos) => infos,
+            Err(conflict) => {
+                self.defer_pointer_info_conflict(conflict);
+                Vec::new()
             }
         }
-
-        target_infos
     }
 
     fn pointer_leaf_infos_for_value(
         &mut self,
         value: ValueId,
     ) -> Vec<(MirProjectionPath<'db>, PointerInfo<'db>)> {
-        let (ty, origin) = {
-            let data = self.builder.body.value(value);
-            (data.ty, data.origin.clone())
-        };
-        match origin {
-            ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) => self
-                .builder
-                .body
-                .locals
-                .get(local.index())
-                .map(|local| local.pointer_leaf_infos.clone())
-                .unwrap_or_default(),
-            ValueOrigin::TransparentCast { value } => {
-                let infos = self.pointer_leaf_infos_for_value(value);
-                if !infos.is_empty() {
-                    return infos;
-                }
-                crate::ir::try_value_address_space_in(
-                    &self.builder.body.values,
-                    &self.builder.body.locals,
-                    value,
-                )
-                .and_then(|space| {
-                    crate::repr::runtime_pointer_info_for_ty(self.db, &self.core, ty, space)
-                })
-                .map(|info| vec![(MirProjectionPath::new(), info)])
-                .unwrap_or_default()
+        let fallback = |place: &Place<'db>| self.place_address_space(place);
+        match crate::repr::try_pointer_leaf_infos_for_value_with_fallback(
+            self.db,
+            &self.core,
+            &self.builder.body.values,
+            &self.builder.body.locals,
+            value,
+            &fallback,
+        ) {
+            Ok(infos) => infos,
+            Err(conflict) => {
+                self.defer_pointer_info_conflict(conflict);
+                Vec::new()
             }
-            ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
-                self.pointer_leaf_infos_for_place(&place, ty)
-            }
-            ValueOrigin::FieldPtr(field_ptr) => {
-                crate::repr::pointer_info_for_ty(self.db, &self.core, ty, field_ptr.addr_space)
-                    .map(|info| vec![(MirProjectionPath::new(), info)])
-                    .unwrap_or_default()
-            }
-            _ => crate::ir::try_value_pointer_info_in(
-                &self.builder.body.values,
-                &self.builder.body.locals,
-                value,
-            )
-            .filter(|_| {
-                crate::repr::pointer_info_for_ty(self.db, &self.core, ty, AddressSpaceKind::Memory)
-                    .is_some()
-            })
-            .map(|info| vec![(MirProjectionPath::new(), info)])
-            .unwrap_or_default(),
         }
     }
 

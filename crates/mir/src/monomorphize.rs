@@ -295,6 +295,9 @@ impl<'db> Monomorphizer<'db> {
             let Some(def) = self.func_defs.get(&func).copied() else {
                 continue;
             };
+            if def.receiver_ty(self.db).is_some() {
+                continue;
+            }
 
             // Seed non-generic functions immediately so we always emit them.
             let params = def.params(self.db);

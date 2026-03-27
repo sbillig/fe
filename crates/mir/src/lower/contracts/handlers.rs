@@ -221,6 +221,7 @@ fn finish_handler<'db>(
         returns_value: spec.returns_value,
         runtime_abi,
         runtime_return_shape: spec.runtime_return_shape,
+        runtime_return_pointer_leaf_infos: Vec::new(),
         contract_function: None,
         inline_hint: None,
         symbol_name: spec.symbol_name,

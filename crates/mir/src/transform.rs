@@ -8,8 +8,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::CoreLib;
 use crate::ir::{
     AddressSpaceKind, CallOrigin, LocalData, LocalId, MirBody, MirFunction, MirInst, MirModule,
-    MirProjectionPath, Place, RuntimeAbi, RuntimeShape, Rvalue, SourceInfoId, TerminatingCall,
-    Terminator, ValueData, ValueId, ValueOrigin, ValueRepr,
+    MirProjectionPath, Place, PointerInfo, RuntimeAbi, RuntimeShape, Rvalue, SourceInfoId,
+    TerminatingCall, Terminator, ValueData, ValueId, ValueOrigin, ValueRepr,
 };
 use crate::layout;
 
@@ -1196,6 +1196,65 @@ fn merge_runtime_shapes_in_context<'db>(
     })
 }
 
+fn merge_pointer_leaf_infos<'db>(
+    existing: &[(MirProjectionPath<'db>, PointerInfo<'db>)],
+    next: &[(MirProjectionPath<'db>, PointerInfo<'db>)],
+) -> Option<Vec<(MirProjectionPath<'db>, PointerInfo<'db>)>> {
+    crate::capability_space::normalize_pointer_leaf_info_entries(
+        existing.iter().cloned().chain(next.iter().cloned()),
+    )
+    .ok()
+}
+
+fn place_store_updates_local_pointer_leaf_infos<'db>(
+    func: &MirFunction<'db>,
+    local_pointer_infos: &mut [Vec<(MirProjectionPath<'db>, PointerInfo<'db>)>],
+    place: &Place<'db>,
+    value_pointer_infos: &[(MirProjectionPath<'db>, PointerInfo<'db>)],
+) {
+    if value_pointer_infos.is_empty() {
+        return;
+    }
+    let Some((local, base_projection)) =
+        crate::ir::resolve_local_projection_root(&func.body.values, place.base)
+    else {
+        return;
+    };
+    let full_projection = base_projection.concat(&place.projection);
+    if full_projection
+        .iter()
+        .any(|projection| matches!(projection, Projection::Deref))
+    {
+        return;
+    }
+
+    let mut updated_infos = Vec::with_capacity(value_pointer_infos.len());
+    for (path, info) in value_pointer_infos {
+        updated_infos.push((full_projection.concat(path), *info));
+    }
+    let updated_paths: FxHashSet<_> = updated_infos.iter().map(|(path, _)| path.clone()).collect();
+    let merged = merge_pointer_leaf_infos(
+        &local_pointer_infos[local.index()]
+            .iter()
+            .filter(|(path, _)| !updated_paths.contains(path))
+            .cloned()
+            .collect::<Vec<_>>(),
+        &updated_infos,
+    )
+    .unwrap_or_else(|| {
+        panic!(
+            "incompatible pointer leaf infos for local v{} `{}` in `{}` after store to {:?}: {:?} vs {:?}",
+            local.index(),
+            func.body.local(local).name,
+            func.symbol_name,
+            place,
+            local_pointer_infos[local.index()],
+            updated_infos,
+        )
+    });
+    local_pointer_infos[local.index()] = merged;
+}
+
 fn assigned_rvalue_runtime_shape<'db>(
     db: &'db dyn HirAnalysisDb,
     core: &CoreLib<'db>,
@@ -1252,6 +1311,44 @@ fn assigned_rvalue_runtime_shape<'db>(
                 .get(dest.index())
                 .map(|local| local.runtime_shape)
         }),
+    }
+}
+
+fn assigned_rvalue_pointer_leaf_infos<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    func: &MirFunction<'db>,
+    dest: LocalId,
+    rvalue: &Rvalue<'db>,
+    return_pointer_infos: &[Vec<(MirProjectionPath<'db>, PointerInfo<'db>)>],
+    func_indices: &FxHashMap<String, usize>,
+) -> Vec<(MirProjectionPath<'db>, PointerInfo<'db>)> {
+    match rvalue {
+        Rvalue::Value(value) => crate::repr::pointer_leaf_infos_for_value(
+            db,
+            core,
+            &func.body.values,
+            &func.body.locals,
+            *value,
+        ),
+        Rvalue::Load { place } => crate::repr::pointer_leaf_infos_for_place(
+            db,
+            core,
+            &func.body.values,
+            &func.body.locals,
+            place,
+            func.body.local(dest).ty,
+        ),
+        Rvalue::Call(call) => call
+            .resolved_name
+            .as_deref()
+            .and_then(|name| func_indices.get(name).copied())
+            .map(|callee_idx| return_pointer_infos[callee_idx].clone())
+            .unwrap_or_default(),
+        Rvalue::Intrinsic { .. }
+        | Rvalue::Alloc { .. }
+        | Rvalue::ZeroInit
+        | Rvalue::ConstAggregate { .. } => Vec::new(),
     }
 }
 
@@ -1360,7 +1457,20 @@ fn assert_normalized_runtime_shapes<'db>(db: &'db dyn HirAnalysisDb, func: &MirF
             continue;
         };
         let local_shape = func.body.local(local).runtime_shape;
-        if merge_runtime_shapes_in_context(db, &core, local_shape, value.runtime_shape).is_none() {
+        let compatible_place_root_object = matches!(value.origin, ValueOrigin::PlaceRoot(_))
+            && matches!(
+                value.runtime_shape,
+                RuntimeShape::ObjectRef { target_ty }
+                    if crate::repr::memory_scalar_object_ref_target_ty(
+                        db,
+                        &core,
+                        func.body.local(local).ty,
+                    ) == Some(target_ty)
+            );
+        if !compatible_place_root_object
+            && merge_runtime_shapes_in_context(db, &core, local_shape, value.runtime_shape)
+                .is_none()
+        {
             panic!(
                 "incompatible root local runtime shapes after MIR normalization in `{}` for v{idx}: local v{} `{}` has {:?}, value has {:?}, origin={:?}, ty={}, repr={:?}",
                 func.symbol_name,
@@ -1394,13 +1504,34 @@ pub(crate) fn normalize_runtime_shapes<'db>(
             crate::repr::runtime_return_shape_seed_for_ty(db, &core, func.ret_ty)
         })
         .collect();
+    let return_pointer_info_seeds: Vec<_> = module
+        .functions
+        .iter()
+        .map(|func| {
+            let core = function_core_lib(db, func);
+            crate::capability_space::pointer_leaf_infos_for_ty_with_default(
+                db,
+                &core,
+                func.ret_ty,
+                AddressSpaceKind::Memory,
+            )
+        })
+        .collect();
 
     for func in &mut module.functions {
         let core = function_core_lib(db, func);
         let live_values = compute_live_values(&func.body);
+        let spill_locals: FxHashSet<_> = func.body.spill_slots.values().copied().collect();
 
-        for local in &mut func.body.locals {
+        for (idx, local) in func.body.locals.iter_mut().enumerate() {
             local.runtime_shape = crate::repr::runtime_shape_for_local(db, &core, local);
+            if spill_locals.contains(&LocalId(idx as u32))
+                && matches!(local.address_space, AddressSpaceKind::Memory)
+                && let Some(target_ty) =
+                    crate::repr::memory_scalar_object_ref_target_ty(db, &core, local.ty)
+            {
+                local.runtime_shape = RuntimeShape::ObjectRef { target_ty };
+            }
         }
 
         for (idx, local_id) in func.body.param_locals.iter().copied().enumerate() {
@@ -1468,11 +1599,18 @@ pub(crate) fn normalize_runtime_shapes<'db>(
             .map(|func| func.runtime_return_shape)
             .collect();
         let mut next_return_shapes = current_return_shapes.clone();
+        let current_return_pointer_infos: Vec<_> = module
+            .functions
+            .iter()
+            .map(|func| func.runtime_return_pointer_leaf_infos.clone())
+            .collect();
+        let mut next_return_pointer_infos = current_return_pointer_infos.clone();
 
         for func_idx in 0..module.functions.len() {
             let func = &module.functions[func_idx];
             let core = function_core_lib(db, func);
             let mut runtime_return_shape = return_shape_seeds[func_idx];
+            let mut runtime_return_pointer_infos = return_pointer_info_seeds[func_idx].clone();
 
             for block in &func.body.blocks {
                 let Terminator::Return {
@@ -1497,6 +1635,23 @@ pub(crate) fn normalize_runtime_shapes<'db>(
                                 func.symbol_name, runtime_return_shape, returned
                             )
                         });
+                let returned_pointer_infos = crate::repr::pointer_leaf_infos_for_value(
+                    db,
+                    &core,
+                    &func.body.values,
+                    &func.body.locals,
+                    *value,
+                );
+                runtime_return_pointer_infos = merge_pointer_leaf_infos(
+                    &runtime_return_pointer_infos,
+                    &returned_pointer_infos,
+                )
+                .unwrap_or_else(|| {
+                    panic!(
+                        "incompatible runtime return pointer leaf infos in `{}`: {:?} vs {:?}",
+                        func.symbol_name, runtime_return_pointer_infos, returned_pointer_infos
+                    )
+                });
             }
 
             if runtime_return_shape.is_unresolved() {
@@ -1508,11 +1663,18 @@ pub(crate) fn normalize_runtime_shapes<'db>(
             }
 
             next_return_shapes[func_idx] = runtime_return_shape;
+            next_return_pointer_infos[func_idx] = runtime_return_pointer_infos;
         }
 
         for (func_idx, next_shape) in next_return_shapes.into_iter().enumerate() {
             if module.functions[func_idx].runtime_return_shape != next_shape {
                 module.functions[func_idx].runtime_return_shape = next_shape;
+                changed = true;
+            }
+        }
+        for (func_idx, next_infos) in next_return_pointer_infos.into_iter().enumerate() {
+            if module.functions[func_idx].runtime_return_pointer_leaf_infos != next_infos {
+                module.functions[func_idx].runtime_return_pointer_leaf_infos = next_infos;
                 changed = true;
             }
         }
@@ -1528,50 +1690,161 @@ pub(crate) fn normalize_runtime_shapes<'db>(
                     .collect()
             })
             .collect();
+        let mut next_local_pointer_infos: Vec<Vec<_>> = module
+            .functions
+            .iter()
+            .map(|func| {
+                func.body
+                    .locals
+                    .iter()
+                    .map(|local| local.pointer_leaf_infos.clone())
+                    .collect()
+            })
+            .collect();
         let return_shapes: Vec<_> = module
             .functions
             .iter()
             .map(|func| func.runtime_return_shape)
             .collect();
+        let return_pointer_infos: Vec<_> = module
+            .functions
+            .iter()
+            .map(|func| func.runtime_return_pointer_leaf_infos.clone())
+            .collect();
 
-        for (func_idx, local_shapes) in next_local_shapes.iter_mut().enumerate() {
+        for (func_idx, (local_shapes, local_pointer_infos)) in next_local_shapes
+            .iter_mut()
+            .zip(next_local_pointer_infos.iter_mut())
+            .enumerate()
+        {
             let func = &module.functions[func_idx];
             let core = function_core_lib(db, func);
 
             for block in &func.body.blocks {
                 for inst in &block.insts {
-                    let MirInst::Assign {
-                        dest: Some(dest),
-                        rvalue,
-                        ..
-                    } = inst
-                    else {
-                        continue;
-                    };
-                    let Some(shape) = assigned_rvalue_runtime_shape(
-                        db,
-                        &core,
-                        func,
-                        *dest,
-                        rvalue,
-                        &return_shapes,
-                        &func_indices,
-                    ) else {
-                        continue;
-                    };
-                    if !matches!(
-                        func.body.local(*dest).address_space,
-                        AddressSpaceKind::Memory
-                    ) {
-                        continue;
+                    match inst {
+                        MirInst::Assign {
+                            dest: Some(dest),
+                            rvalue,
+                            ..
+                        } => {
+                            let Some(shape) = assigned_rvalue_runtime_shape(
+                                db,
+                                &core,
+                                func,
+                                *dest,
+                                rvalue,
+                                &return_shapes,
+                                &func_indices,
+                            ) else {
+                                continue;
+                            };
+                            if !matches!(
+                                func.body.local(*dest).address_space,
+                                AddressSpaceKind::Memory
+                            ) {
+                                continue;
+                            }
+                            let local_shape = local_shapes[dest.index()];
+                            let Some(merged) =
+                                merge_runtime_shapes_in_context(db, &core, local_shape, shape)
+                            else {
+                                continue;
+                            };
+                            local_shapes[dest.index()] = merged;
+                            let assigned_pointer_infos = assigned_rvalue_pointer_leaf_infos(
+                                db,
+                                &core,
+                                func,
+                                *dest,
+                                rvalue,
+                                &return_pointer_infos,
+                                &func_indices,
+                            );
+                            if !assigned_pointer_infos.is_empty() {
+                                local_pointer_infos[dest.index()] = merge_pointer_leaf_infos(
+                                    &local_pointer_infos[dest.index()],
+                                    &assigned_pointer_infos,
+                                )
+                                .unwrap_or_else(|| {
+                                    panic!(
+                                        "incompatible pointer leaf infos for local v{} `{}` in `{}` from rvalue {:?}: {:?} vs {:?}",
+                                        dest.index(),
+                                        func.body.local(*dest).name,
+                                        func.symbol_name,
+                                        rvalue,
+                                        local_pointer_infos[dest.index()],
+                                        assigned_pointer_infos
+                                    )
+                                });
+                            }
+                            if let Rvalue::Value(value) = rvalue
+                                && let Some((source_local, projection)) =
+                                    crate::ir::resolve_local_projection_root(
+                                        &func.body.values,
+                                        *value,
+                                    )
+                                && projection.is_empty()
+                                && matches!(
+                                    func.body.local(source_local).address_space,
+                                    AddressSpaceKind::Memory
+                                )
+                            {
+                                local_pointer_infos[source_local.index()] =
+                                    merge_pointer_leaf_infos(
+                                        &local_pointer_infos[source_local.index()],
+                                        &local_pointer_infos[dest.index()],
+                                    )
+                                    .unwrap_or_else(|| {
+                                        panic!(
+                                            "incompatible pointer leaf infos for source local v{} `{}` in `{}` after assignment into v{} `{}`: {:?} vs {:?}",
+                                            source_local.index(),
+                                            func.body.local(source_local).name,
+                                            func.symbol_name,
+                                            dest.index(),
+                                            func.body.local(*dest).name,
+                                            local_pointer_infos[source_local.index()],
+                                            local_pointer_infos[dest.index()],
+                                        )
+                                    });
+                            }
+                        }
+                        MirInst::Store { place, value, .. } => {
+                            let value_pointer_infos = crate::repr::pointer_leaf_infos_for_value(
+                                db,
+                                &core,
+                                &func.body.values,
+                                &func.body.locals,
+                                *value,
+                            );
+                            place_store_updates_local_pointer_leaf_infos(
+                                func,
+                                local_pointer_infos,
+                                place,
+                                &value_pointer_infos,
+                            );
+                        }
+                        MirInst::InitAggregate { place, inits, .. } => {
+                            for (path, value) in inits {
+                                let value_pointer_infos = crate::repr::pointer_leaf_infos_for_value(
+                                    db,
+                                    &core,
+                                    &func.body.values,
+                                    &func.body.locals,
+                                    *value,
+                                );
+                                place_store_updates_local_pointer_leaf_infos(
+                                    func,
+                                    local_pointer_infos,
+                                    &Place::new(place.base, place.projection.concat(path)),
+                                    &value_pointer_infos,
+                                );
+                            }
+                        }
+                        MirInst::Assign { dest: None, .. }
+                        | MirInst::SetDiscriminant { .. }
+                        | MirInst::BindValue { .. } => {}
                     }
-                    let local_shape = local_shapes[dest.index()];
-                    let Some(merged) =
-                        merge_runtime_shapes_in_context(db, &core, local_shape, shape)
-                    else {
-                        continue;
-                    };
-                    local_shapes[dest.index()] = merged;
                 }
             }
         }
@@ -1617,6 +1890,17 @@ pub(crate) fn normalize_runtime_shapes<'db>(
             for (local_idx, next_shape) in local_shapes.into_iter().enumerate() {
                 if module.functions[func_idx].body.locals[local_idx].runtime_shape != next_shape {
                     module.functions[func_idx].body.locals[local_idx].runtime_shape = next_shape;
+                    changed = true;
+                }
+            }
+        }
+        for (func_idx, local_pointer_infos) in next_local_pointer_infos.into_iter().enumerate() {
+            for (local_idx, next_infos) in local_pointer_infos.into_iter().enumerate() {
+                if module.functions[func_idx].body.locals[local_idx].pointer_leaf_infos
+                    != next_infos
+                {
+                    module.functions[func_idx].body.locals[local_idx].pointer_leaf_infos =
+                        next_infos;
                     changed = true;
                 }
             }
@@ -2233,10 +2517,11 @@ mod tests {
     use driver::DriverDataBase;
     use hir::analysis::ty::ty_check::check_func_body;
     use hir::analysis::ty::ty_def::TyId;
+    use hir::projection::Projection;
     use url::Url;
 
     use crate::{
-        MirInst,
+        CoreLib, MirInst,
         ir::{
             AddressSpaceKind, BasicBlock, IntrinsicOp, LocalData, MirBody, MirProjectionPath,
             Place, PointerInfo, RuntimeShape, RuntimeWordKind, Rvalue, SourceInfoId, Terminator,
@@ -2856,6 +3141,105 @@ contract C {
     }
 
     #[test]
+    fn borrowed_reader_args_keep_reader_leaf_infos() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///borrowed_reader_args_keep_reader_leaf_infos.fe").unwrap();
+        let file = db.workspace().touch(
+            &mut db,
+            url,
+            Some(include_str!("../../fe/tests/fixtures/fe_test/ref_scalar_nested.fe").to_owned()),
+        );
+        let top_mod = db.top_mod(file);
+        let module = lower_module(&db, top_mod).expect("module should lower");
+
+        let test_func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "test_ref_scalar_nested")
+            .expect("expected ref_scalar_nested test");
+        let sum_reader = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "sum_reader")
+            .expect("expected sum_reader helper");
+        let reader_local = test_func
+            .body
+            .locals
+            .iter()
+            .position(|local| local.name == "reader")
+            .map(|idx| crate::LocalId(idx as u32))
+            .expect("expected reader local");
+        let call_arg = test_func
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                MirInst::Assign {
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } if call.resolved_name.as_deref() == Some("sum_reader") => {
+                    call.args.first().copied()
+                }
+                _ => None,
+            })
+            .expect("expected sum_reader call arg");
+        let arg_pointer_infos = crate::repr::pointer_leaf_infos_for_value(
+            &db,
+            &CoreLib::new(&db, top_mod.scope()),
+            &test_func.body.values,
+            &test_func.body.locals,
+            call_arg,
+        );
+
+        assert_eq!(
+            arg_pointer_infos,
+            test_func.body.local(reader_local).pointer_leaf_infos,
+            "borrowed Reader args should preserve the reader local's nested handle leaf infos",
+        );
+        assert!(
+            sum_reader
+                .body
+                .local(sum_reader.body.param_locals[0])
+                .pointer_leaf_infos
+                .iter()
+                .any(|(path, _)| {
+                    matches!(path.iter().next(), Some(Projection::Field(0))) && path.len() == 1
+                }),
+            "ref Reader params should retain nested `.source` handle leaf infos",
+        );
+    }
+
+    #[test]
+    fn runtime_shapes_refine_loaded_object_backed_scalar_handles() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///runtime_shapes_refine_loaded_object_backed_scalar_handles.fe",
+            include_str!("../../codegen/tests/fixtures/ref_is_not_a_copy.fe"),
+        );
+
+        let test_func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "test_ref_is_not_a_copy")
+            .expect("expected ref_is_not_a_copy test");
+        for local_name in ["live_x", "live_y"] {
+            let local = test_func
+                .body
+                .locals
+                .iter()
+                .find(|local| local.name == local_name)
+                .unwrap_or_else(|| panic!("expected {local_name} local"));
+            assert!(
+                matches!(local.runtime_shape, RuntimeShape::ObjectRef { .. }),
+                "{local_name} should refine to an object ref after loading from an object-backed handle field, got {:?}",
+                local.runtime_shape,
+            );
+        }
+    }
+
+    #[test]
     fn runtime_shapes_preserve_scalar_param_shapes() {
         let src = include_str!("../../codegen/tests/fixtures/array_mut.fe");
 
@@ -2934,6 +3318,124 @@ contract C {
                 RuntimeShape::Word(RuntimeWordKind::I8),
                 "scalar param runtime shape regressed after the full MIR pipeline",
             )
+        }
+    }
+
+    #[test]
+    fn runtime_shapes_refine_storage_handle_enum_returns_from_aggregate_stores() {
+        let src =
+            include_str!("../../fe/tests/fixtures/fe_test/option_mut_scalar_match_regression.fe");
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///option_mut_scalar_match_regression.fe",
+            src,
+        );
+
+        let maybe_value_mut = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name.contains("maybe_value_mut_stor"))
+            .expect("expected storage-specialized maybe_value_mut");
+        let payload_info = maybe_value_mut
+            .runtime_return_pointer_leaf_infos
+            .iter()
+            .find(|(path, _)| {
+                path.iter().any(|projection| {
+                    matches!(
+                        projection,
+                        Projection::VariantField { field_idx, .. } if *field_idx == 0
+                    )
+                })
+            })
+            .map(|(_, info)| *info)
+            .expect("expected return payload pointer leaf info");
+
+        assert_eq!(
+            payload_info.address_space,
+            AddressSpaceKind::Storage,
+            "storage-specialized enum return payload should preserve storage handle space",
+        );
+    }
+
+    #[test]
+    fn runtime_shapes_preserve_owner_leaf_infos_for_enum_tag_temps() {
+        let src =
+            include_str!("../../fe/tests/fixtures/fe_test/option_mut_scalar_match_regression.fe");
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///option_mut_scalar_match_regression.fe",
+            src,
+        );
+
+        let recv = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "__C_recv_0_0")
+            .expect("expected recv helper");
+        let discr_local = recv
+            .body
+            .locals
+            .iter()
+            .find(|local| matches!(local.runtime_shape, RuntimeShape::EnumTag { .. }))
+            .expect("expected enum-tag temp local in recv helper");
+        let payload_info = discr_local
+            .pointer_leaf_infos
+            .iter()
+            .find(|(path, _)| {
+                path.iter().any(|projection| {
+                    matches!(
+                        projection,
+                        Projection::VariantField { field_idx, .. } if *field_idx == 0
+                    )
+                })
+            })
+            .map(|(_, info)| *info)
+            .expect("expected enum-tag temp to preserve owner payload leaf info");
+
+        assert_eq!(
+            payload_info.address_space,
+            AddressSpaceKind::Storage,
+            "enum-tag temp should preserve the storage-specialized owner layout",
+        );
+    }
+
+    #[test]
+    fn runtime_shapes_refine_object_backed_match_discriminant_temps() {
+        let src = include_str!("../../fe/tests/fixtures/fe_test/if_let_while_let.fe");
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(&mut db, "file:///if_let_while_let.fe", src);
+
+        for func in &module.functions {
+            for block in &func.body.blocks {
+                for inst in &block.insts {
+                    let MirInst::Assign {
+                        dest: Some(dest),
+                        rvalue: Rvalue::Load { place },
+                        ..
+                    } = inst
+                    else {
+                        continue;
+                    };
+                    if !matches!(
+                        place.projection.iter().last(),
+                        Some(Projection::Discriminant)
+                    ) {
+                        continue;
+                    }
+                    let local = func.body.local(*dest);
+                    assert!(
+                        matches!(local.runtime_shape, RuntimeShape::EnumTag { .. }),
+                        "discriminant temp v{} `{}` in `{}` should lower as EnumTag, got {:?} for {:?}",
+                        dest.index(),
+                        local.name,
+                        func.symbol_name,
+                        local.runtime_shape,
+                        place,
+                    );
+                }
+            }
         }
     }
 
