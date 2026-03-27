@@ -1,12 +1,8 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
+assertion_line: 26
 expression: mir_output
 ---
-fn ping_he30fba0d8e5abf73_encode_hf98aaef2e32b4927_encode_to_ptr(v0: Ping, v1: u256) -> ():
-  ; runtime_abi values=[] effects=[]
-  bb0:
-    ret
-
 fn __ZeroPayloadContractArgs_recv_0_0() -> u256:
   bb0:
     ret 7

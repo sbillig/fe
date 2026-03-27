@@ -1,5 +1,6 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
+assertion_line: 26
 expression: mir_output
 ---
 fn needs__StorPtr_Storage_u8____e37e0e92de47c723(v0: u256) -> ():
@@ -14,10 +15,6 @@ fn caller(v0: Ptr<Storage<u8>>) -> ():
     ret
 
 fn ptr_storage_u8___ha1d45fed9b34d435_effecthandle_hfc52f915596f993a_from_raw(v0: u256) -> Ptr<Storage<u8>>:
-  bb0:
-    ret v0
-
-fn ptr_storage_u8___ha1d45fed9b34d435_effecthandle_hfc52f915596f993a_raw(v0: Ptr<Storage<u8>>) -> u256:
   bb0:
     ret v0
 

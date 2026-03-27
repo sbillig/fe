@@ -54,6 +54,8 @@ pub struct MirFunction<'db> {
     pub runtime_abi: RuntimeAbi<'db>,
     /// Backend-neutral runtime return shape after MIR normalization.
     pub runtime_return_shape: RuntimeShape<'db>,
+    /// Pointer metadata for leaves carried by the runtime return value.
+    pub runtime_return_pointer_leaf_infos: Vec<(MirProjectionPath<'db>, PointerInfo<'db>)>,
     /// Optional contract association declared via attributes.
     pub contract_function: Option<ContractFunction>,
     /// Inline hint declared via `#[inline]`-family source attributes.

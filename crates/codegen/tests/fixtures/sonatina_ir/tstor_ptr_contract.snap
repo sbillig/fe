@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/tstor_ptr_contract.fe
 ---
@@ -7,11 +8,6 @@ target = "evm-ethereum-osaka"
 
 type @__fe_obj_SolEncoder_0 = {i256, i256, i256};
 type @__fe_obj_tuple_1 = {i256, i256};
-
-func private %flip_h5b3ce0ea80335753_encode_hf98aaef2e32b4927_encode_to_ptr() {
-    block0:
-        return;
-}
 
 func private %__GuardContract_init_contract(v0.i256) {
     block0:

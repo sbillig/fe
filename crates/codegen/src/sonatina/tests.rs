@@ -1331,6 +1331,134 @@ fn keep() {
     }
 
     #[test]
+    fn specialized_storage_handle_enum_tags_verify_in_test_modules() {
+        let mut db = DriverDataBase::default();
+        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../fe/tests/fixtures/fe_test/option_mut_scalar_match_regression.fe");
+        let fixture_source = fs::read_to_string(&fixture_path)
+            .expect("option_mut_scalar_match_regression fixture should be readable");
+        let file_url = Url::from_file_path(&fixture_path).expect("fixture path should be absolute");
+        db.workspace()
+            .touch(&mut db, file_url.clone(), Some(fixture_source));
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O0,
+            SonatinaTestOptions::default(),
+            None,
+        )
+        .expect("storage-specialized enum-tag temps should verify in Sonatina test modules");
+    }
+
+    #[test]
+    fn transparent_scalar_newtype_borrows_verify_in_test_modules() {
+        let mut db = DriverDataBase::default();
+        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../fe/tests/fixtures/fe_test/ref_scalar_nested.fe");
+        let fixture_source = fs::read_to_string(&fixture_path)
+            .expect("ref_scalar_nested fixture should be readable");
+        let file_url = Url::from_file_path(&fixture_path).expect("fixture path should be absolute");
+        db.workspace()
+            .touch(&mut db, file_url.clone(), Some(fixture_source));
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O0,
+            SonatinaTestOptions::default(),
+            None,
+        )
+        .expect("transparent scalar newtype borrows should verify in Sonatina test modules");
+    }
+
+    #[test]
+    fn pointer_like_wrapper_handles_verify_in_test_modules() {
+        let mut db = DriverDataBase::default();
+        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../fe/tests/fixtures/fe_test/view_param_local_ref_take_reverse.fe");
+        let fixture_source = fs::read_to_string(&fixture_path)
+            .expect("view_param_local_ref_take_reverse fixture should be readable");
+        let file_url = Url::from_file_path(&fixture_path).expect("fixture path should be absolute");
+        db.workspace()
+            .touch(&mut db, file_url.clone(), Some(fixture_source));
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O0,
+            SonatinaTestOptions::default(),
+            None,
+        )
+        .expect("pointer-like wrapper handles should verify in Sonatina test modules");
+    }
+
+    #[test]
+    fn structural_type_cache_skips_irrelevant_pointer_metadata() {
+        let mut db = DriverDataBase::default();
+        let fixture_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/match_tuple.fe");
+        let fixture_source =
+            fs::read_to_string(&fixture_path).expect("match_tuple fixture should be readable");
+        let file_url = Url::from_file_path(&fixture_path).expect("fixture path should be absolute");
+        db.workspace()
+            .touch(&mut db, file_url.clone(), Some(fixture_source));
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let tuple_ir = crate::emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O0, None)
+            .expect("match_tuple should lower to Sonatina IR");
+        assert_eq!(
+            tuple_ir.matches("type @__fe_obj_tuple_").count(),
+            2,
+            "tuple lowering should reuse the same specialized object tuple types:\n{tuple_ir}"
+        );
+
+        let mut db = DriverDataBase::default();
+        let fixture_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/effect_ptr_domains.fe");
+        let fixture_source = fs::read_to_string(&fixture_path)
+            .expect("effect_ptr_domains fixture should be readable");
+        let file_url = Url::from_file_path(&fixture_path).expect("fixture path should be absolute");
+        db.workspace()
+            .touch(&mut db, file_url.clone(), Some(fixture_source));
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let effect_ir = crate::emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O0, None)
+            .expect("effect_ptr_domains should lower to Sonatina IR");
+        assert_eq!(
+            effect_ir.matches("type @__fe_Foo_").count(),
+            1,
+            "storage pointer lowering should not create duplicate non-object Foo types:\n{effect_ir}"
+        );
+        assert_eq!(
+            effect_ir.matches("type @__fe_obj_Foo_").count(),
+            1,
+            "memory object lowering should not create duplicate object Foo types:\n{effect_ir}"
+        );
+    }
+
+    #[test]
     fn static_typed_allocations_lower_to_obj_alloc() {
         let mut db = DriverDataBase::default();
         let file_url = temp_fixture_url("sonatina_static_typed_allocations_lower_to_obj_alloc.fe");

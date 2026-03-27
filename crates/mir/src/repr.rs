@@ -28,11 +28,12 @@ use hir::projection::{Projection, ProjectionPath};
 
 use crate::core_lib::CoreLib;
 use crate::ir::{
-    AddressSpaceKind, LocalData, MirProjection, Place, PointerInfo, RuntimeShape, RuntimeWordKind,
-    ValueData, ValueId, try_value_pointer_info_in,
+    AddressSpaceKind, LocalData, LocalId, MirProjection, Place, PointerInfo, RuntimeShape,
+    RuntimeWordKind, ValueData, ValueId, try_value_pointer_info_in,
 };
 use crate::layout;
 use common::indexmap::IndexMap;
+use rustc_hash::FxHashSet;
 
 /// Canonical representation categories for a type after transparent-newtype peeling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -259,6 +260,49 @@ pub fn supports_object_ref_runtime_ty<'db>(
     }
 }
 
+pub fn memory_scalar_object_ref_target_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    ty: TyId<'db>,
+) -> Option<TyId<'db>> {
+    let assumptions = PredicateListId::empty_list(db);
+    let ty = normalize_ty(db, ty, core.scope, assumptions);
+
+    if effect_provider_space_for_ty(db, core, ty).is_some() {
+        return None;
+    }
+
+    if let Some((CapabilityKind::View, inner)) = ty.as_capability(db) {
+        return memory_scalar_object_ref_target_ty(db, core, inner);
+    }
+    if ty.as_capability(db).is_some() {
+        return None;
+    }
+
+    let ty = object_layout_ty(db, core, ty);
+    (supports_object_ref_runtime_ty(db, core, ty)
+        && matches!(repr_kind_for_ty(db, core, ty), ReprKind::Word))
+    .then_some(ty)
+}
+
+pub fn memory_scalar_handle_object_ref_target_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    ty: TyId<'db>,
+) -> Option<TyId<'db>> {
+    let assumptions = PredicateListId::empty_list(db);
+    let ty = normalize_ty(db, ty, core.scope, assumptions);
+
+    if let Some((CapabilityKind::View, inner)) = ty.as_capability(db) {
+        return memory_scalar_handle_object_ref_target_ty(db, core, inner);
+    }
+
+    let (capability, inner) = ty.as_capability(db)?;
+    matches!(capability, CapabilityKind::Mut | CapabilityKind::Ref)
+        .then(|| memory_scalar_object_ref_target_ty(db, core, inner))
+        .flatten()
+}
+
 pub fn enum_is_payload_free<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
     let Some(enum_) = ty.as_enum(db) else {
         return false;
@@ -379,10 +423,18 @@ pub fn handle_pointer_info_for_ty<'db>(
     default_ref_space: AddressSpaceKind,
 ) -> Option<PointerInfo<'db>> {
     if let Some((capability, inner)) = ty.as_capability(db) {
+        let target_ty = deref_target_ty(db, core, inner).unwrap_or(inner);
+        let target_ty = if default_ref_space == AddressSpaceKind::Memory
+            && supports_object_ref_runtime_ty(db, core, target_ty)
+        {
+            object_layout_ty(db, core, target_ty)
+        } else {
+            target_ty
+        };
         return match capability {
             CapabilityKind::Mut | CapabilityKind::Ref => Some(PointerInfo {
                 address_space: default_ref_space,
-                target_ty: Some(inner),
+                target_ty: Some(target_ty),
             }),
             CapabilityKind::View => handle_pointer_info_for_ty(db, core, inner, default_ref_space),
         };
@@ -1084,6 +1136,195 @@ pub fn runtime_shape_for_local<'db>(
     type_shape
 }
 
+fn normalize_pointer_leaf_infos<'db>(
+    infos: Vec<(crate::MirProjectionPath<'db>, PointerInfo<'db>)>,
+) -> Vec<(crate::MirProjectionPath<'db>, PointerInfo<'db>)> {
+    crate::capability_space::normalize_pointer_leaf_info_entries(infos)
+        .expect("MIR pointer leaf info conflicts should be resolved before runtime layout queries")
+}
+
+fn pointer_leaf_infos_for_projection_from_local<'db>(
+    locals: &[LocalData<'db>],
+    local: LocalId,
+    projection: &crate::MirProjectionPath<'db>,
+) -> Vec<(crate::MirProjectionPath<'db>, PointerInfo<'db>)> {
+    let Some(local_data) = locals.get(local.index()) else {
+        return Vec::new();
+    };
+
+    let mut infos = Vec::new();
+    for (path, info) in &local_data.pointer_leaf_infos {
+        if let Some(suffix) = crate::ir::projection_strip_prefix(path, projection) {
+            infos.push((suffix, *info));
+        }
+    }
+    normalize_pointer_leaf_infos(infos)
+}
+
+fn enum_tag_owner_place<'db>(place: &Place<'db>) -> Option<Place<'db>> {
+    let Some(Projection::Discriminant) = place.projection.iter().last() else {
+        return None;
+    };
+    let mut owner_projection = crate::MirProjectionPath::new();
+    for projection in place
+        .projection
+        .iter()
+        .take(place.projection.len().saturating_sub(1))
+    {
+        owner_projection.push(projection.clone());
+    }
+    Some(Place::new(place.base, owner_projection))
+}
+
+pub fn pointer_leaf_infos_for_enum_tag_place<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    values: &[ValueData<'db>],
+    locals: &[LocalData<'db>],
+    place: &Place<'db>,
+) -> Option<Vec<(crate::MirProjectionPath<'db>, PointerInfo<'db>)>> {
+    let owner_place = enum_tag_owner_place(place)?;
+    let enum_ty = place_object_ref_target_ty(db, core, values, locals, &owner_place)?;
+    enum_ty.as_enum(db)?;
+    let owner_infos = pointer_leaf_infos_for_place(db, core, values, locals, &owner_place, enum_ty);
+    Some(
+        owner_infos
+            .into_iter()
+            .filter(|(path, _)| !path.is_empty())
+            .collect(),
+    )
+}
+
+pub fn pointer_leaf_infos_for_place<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    values: &[ValueData<'db>],
+    locals: &[LocalData<'db>],
+    place: &Place<'db>,
+    target_ty: TyId<'db>,
+) -> Vec<(crate::MirProjectionPath<'db>, PointerInfo<'db>)> {
+    if let Some(enum_tag_infos) =
+        pointer_leaf_infos_for_enum_tag_place(db, core, values, locals, place)
+    {
+        return enum_tag_infos;
+    }
+
+    let resolved = resolve_place(db, core, values, locals, place);
+    let crosses_deref_boundary = resolved.as_ref().is_some_and(|resolved| {
+        resolved
+            .segments
+            .iter()
+            .any(|segment| segment.start_kind.is_some())
+    });
+    let target_space = resolved
+        .as_ref()
+        .and_then(|resolved| {
+            let final_state = resolved.final_state();
+            final_state
+                .pointer_info
+                .map(|info| info.address_space)
+                .or(final_state.location_address_space())
+        })
+        .or_else(|| crate::ir::try_place_address_space_in(values, locals, place))
+        .unwrap_or(AddressSpaceKind::Memory);
+    let target_infos = crate::capability_space::pointer_leaf_infos_for_ty_with_default(
+        db,
+        core,
+        target_ty,
+        target_space,
+    );
+    if !crosses_deref_boundary
+        && let Some((local, base_projection)) =
+            crate::ir::resolve_local_projection_root(values, place.base)
+    {
+        let full_projection = base_projection.concat(&place.projection);
+        let infos = pointer_leaf_infos_for_projection_from_local(locals, local, &full_projection);
+        if !infos.is_empty() {
+            if place_object_ref_target_ty(db, core, values, locals, place).is_some() {
+                let local_paths: FxHashSet<_> =
+                    infos.iter().map(|(path, _)| path.clone()).collect();
+                return infos
+                    .into_iter()
+                    .chain(
+                        target_infos
+                            .into_iter()
+                            .filter(|(path, _)| !path.is_empty() && !local_paths.contains(path)),
+                    )
+                    .collect();
+            }
+
+            if target_infos.is_empty() {
+                return Vec::new();
+            }
+
+            let target_paths: FxHashSet<_> =
+                target_infos.iter().map(|(path, _)| path.clone()).collect();
+            let local_infos: Vec<_> = infos
+                .into_iter()
+                .filter(|(path, _)| target_paths.contains(path))
+                .collect();
+            if local_infos.is_empty() {
+                return target_infos;
+            }
+
+            let local_paths: FxHashSet<_> =
+                local_infos.iter().map(|(path, _)| path.clone()).collect();
+            return local_infos
+                .into_iter()
+                .chain(
+                    target_infos
+                        .into_iter()
+                        .filter(|(path, _)| !local_paths.contains(path)),
+                )
+                .collect();
+        }
+    }
+
+    target_infos
+}
+
+pub fn pointer_leaf_infos_for_value<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    values: &[ValueData<'db>],
+    locals: &[LocalData<'db>],
+    value: ValueId,
+) -> Vec<(crate::MirProjectionPath<'db>, PointerInfo<'db>)> {
+    let Some(value_data) = values.get(value.index()) else {
+        return Vec::new();
+    };
+    match &value_data.origin {
+        crate::ir::ValueOrigin::Local(local) | crate::ir::ValueOrigin::PlaceRoot(local) => locals
+            .get(local.index())
+            .map(|local| local.pointer_leaf_infos.clone())
+            .unwrap_or_default(),
+        crate::ir::ValueOrigin::TransparentCast { value: inner } => {
+            let infos = pointer_leaf_infos_for_value(db, core, values, locals, *inner);
+            if !infos.is_empty() {
+                return infos;
+            }
+            crate::ir::try_value_address_space_in(values, locals, *inner)
+                .and_then(|space| runtime_value_pointer_info_for_ty(db, core, value_data.ty, space))
+                .map(|info| vec![(crate::MirProjectionPath::new(), info)])
+                .unwrap_or_default()
+        }
+        crate::ir::ValueOrigin::PlaceRef(place) | crate::ir::ValueOrigin::MoveOut { place } => {
+            pointer_leaf_infos_for_place(db, core, values, locals, place, value_data.ty)
+        }
+        crate::ir::ValueOrigin::FieldPtr(field_ptr) => {
+            pointer_info_for_ty(db, core, value_data.ty, field_ptr.addr_space)
+                .map(|info| vec![(crate::MirProjectionPath::new(), info)])
+                .unwrap_or_default()
+        }
+        _ => try_value_pointer_info_in(values, locals, value)
+            .filter(|_| {
+                pointer_info_for_ty(db, core, value_data.ty, AddressSpaceKind::Memory).is_some()
+            })
+            .map(|info| vec![(crate::MirProjectionPath::new(), info)])
+            .unwrap_or_default(),
+    }
+}
+
 fn value_inherits_object_root_runtime_shape<'db>(
     db: &'db dyn HirAnalysisDb,
     core: &CoreLib<'db>,
@@ -1097,6 +1338,38 @@ fn value_inherits_object_root_runtime_shape<'db>(
     )
 }
 
+fn resolved_place_has_object_backed_memory_root<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    values: &[ValueData<'db>],
+    locals: &[LocalData<'db>],
+    place: &Place<'db>,
+    resolved: &ResolvedPlace<'db>,
+) -> bool {
+    if !matches!(
+        runtime_shape_for_value(db, core, values, locals, place.base),
+        Some(RuntimeShape::ObjectRef { .. })
+    ) {
+        return false;
+    }
+
+    for segment in &resolved.segments {
+        if segment.base.location_address_space() != Some(AddressSpaceKind::Memory) {
+            return false;
+        }
+        for projection in &segment.projections {
+            if matches!(
+                projection.projection,
+                Projection::Discriminant | Projection::Deref
+            ) {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
 pub fn place_object_ref_target_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     core: &CoreLib<'db>,
@@ -1105,25 +1378,8 @@ pub fn place_object_ref_target_ty<'db>(
     place: &Place<'db>,
 ) -> Option<TyId<'db>> {
     let resolved = resolve_place(db, core, values, locals, place)?;
-    if !matches!(
-        runtime_shape_for_value(db, core, values, locals, place.base)?,
-        RuntimeShape::ObjectRef { .. }
-    ) {
+    if !resolved_place_has_object_backed_memory_root(db, core, values, locals, place, &resolved) {
         return None;
-    }
-
-    for segment in &resolved.segments {
-        if segment.base.location_address_space() != Some(AddressSpaceKind::Memory) {
-            return None;
-        }
-        for projection in &segment.projections {
-            if matches!(
-                projection.projection,
-                Projection::Discriminant | Projection::Deref
-            ) {
-                return None;
-            }
-        }
     }
 
     runtime_object_ref_target_ty(
@@ -1141,23 +1397,26 @@ pub fn runtime_shape_for_loaded_place<'db>(
     locals: &[LocalData<'db>],
     place: &Place<'db>,
 ) -> Option<RuntimeShape<'db>> {
-    let Some(Projection::Discriminant) = place.projection.iter().last() else {
-        return None;
-    };
-
-    let mut owner_projection = crate::MirProjectionPath::new();
-    for projection in place
-        .projection
-        .iter()
-        .take(place.projection.len().saturating_sub(1))
-    {
-        owner_projection.push(projection.clone());
+    if let Some(Projection::Discriminant) = place.projection.iter().last() {
+        let mut owner_projection = crate::MirProjectionPath::new();
+        for projection in place
+            .projection
+            .iter()
+            .take(place.projection.len().saturating_sub(1))
+        {
+            owner_projection.push(projection.clone());
+        }
+        let owner_place = Place::new(place.base, owner_projection);
+        let enum_ty = place_object_ref_target_ty(db, core, values, locals, &owner_place)?;
+        return enum_ty
+            .as_enum(db)
+            .map(|_| RuntimeShape::EnumTag { enum_ty });
     }
-    let owner_place = Place::new(place.base, owner_projection);
-    let enum_ty = place_object_ref_target_ty(db, core, values, locals, &owner_place)?;
-    enum_ty
-        .as_enum(db)
-        .map(|_| RuntimeShape::EnumTag { enum_ty })
+
+    let resolved = resolve_place(db, core, values, locals, place)?;
+    let target_ty = memory_scalar_handle_object_ref_target_ty(db, core, resolved.final_state().ty)?;
+    resolved_place_has_object_backed_memory_root(db, core, values, locals, place, &resolved)
+        .then_some(RuntimeShape::ObjectRef { target_ty })
 }
 
 pub fn runtime_shape_for_value<'db>(
@@ -1168,10 +1427,22 @@ pub fn runtime_shape_for_value<'db>(
     value: ValueId,
 ) -> Option<RuntimeShape<'db>> {
     let value_data = values.get(value.index())?;
-    if let crate::ir::ValueOrigin::Local(local) | crate::ir::ValueOrigin::PlaceRoot(local) =
-        value_data.origin
-    {
+    if let crate::ir::ValueOrigin::Local(local) = value_data.origin {
         return locals.get(local.index()).map(|local| {
+            if local.runtime_shape.is_unresolved() {
+                runtime_shape_for_local(db, core, local)
+            } else {
+                local.runtime_shape
+            }
+        });
+    }
+    if let crate::ir::ValueOrigin::PlaceRoot(local) = value_data.origin {
+        return locals.get(local.index()).map(|local| {
+            if matches!(local.address_space, AddressSpaceKind::Memory)
+                && let Some(target_ty) = memory_scalar_object_ref_target_ty(db, core, local.ty)
+            {
+                return RuntimeShape::ObjectRef { target_ty };
+            }
             if local.runtime_shape.is_unresolved() {
                 runtime_shape_for_local(db, core, local)
             } else {

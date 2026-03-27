@@ -1,22 +1,8 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
+assertion_line: 26
 expression: mir_output
 ---
-fn fund_h7a618edfba2c6858_encode_hf98aaef2e32b4927_encode_to_ptr(v0: Fund, v1: u256) -> ():
-  ; runtime_abi values=[] effects=[]
-  bb0:
-    ret
-
-fn ping_h112279a71d174c3e_encode_hf98aaef2e32b4927_encode_to_ptr(v0: Ping, v1: u256) -> ():
-  ; runtime_abi values=[] effects=[]
-  bb0:
-    ret
-
-fn ping_h6808aa4e086097d5_encode_hf98aaef2e32b4927_encode_to_ptr(v0: Ping, v1: u256) -> ():
-  ; runtime_abi values=[] effects=[]
-  bb0:
-    ret
-
 fn __PayableInitAndRecv_recv_0_0() -> ():
   bb0:
     ret

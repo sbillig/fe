@@ -12,6 +12,7 @@ use common::ingot::Ingot;
 use driver::DriverDataBase;
 use hir::analysis::ty::ty_def::TyId;
 use hir::hir_def::{InlineHint, TopLevelMod};
+use mir::ir::PointerInfo;
 use mir::{CoreLib, MirModule, layout, layout::TargetDataLayout, lower_ingot, lower_module};
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
@@ -94,6 +95,12 @@ pub(super) struct RuntimeFunctionMetadata {
     pub(super) ret: Option<Type>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) enum LocalPlaceRoot {
+    MemorySlot(ValueId),
+    ObjectRoot(ValueId),
+}
+
 impl RuntimeFunctionMetadata {
     fn signature(&self, name: &str, linkage: sonatina_ir::Linkage) -> Signature {
         let ret_tys: Vec<_> = self.ret.into_iter().collect();
@@ -101,21 +108,63 @@ impl RuntimeFunctionMetadata {
     }
 }
 
+fn runtime_target_pointer_leaf_infos<'db>(
+    db: &'db DriverDataBase,
+    core: &CoreLib<'db>,
+    owner_ty: TyId<'db>,
+    target_ty: TyId<'db>,
+    pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
+) -> Vec<(mir::MirProjectionPath<'db>, PointerInfo<'db>)> {
+    if let Some((_, inner)) = owner_ty.as_capability(db) {
+        let nested_pointer_leaf_infos: Vec<_> = pointer_leaf_infos
+            .iter()
+            .filter(|(path, _)| !path.is_empty())
+            .cloned()
+            .collect();
+        return runtime_target_pointer_leaf_infos(
+            db,
+            core,
+            inner,
+            target_ty,
+            &nested_pointer_leaf_infos,
+        );
+    }
+
+    if mir::repr::effect_provider_space_for_ty(db, core, owner_ty).is_some() {
+        return Vec::new();
+    }
+
+    if let Some(inner) = mir::repr::transparent_newtype_field_ty(db, owner_ty) {
+        return runtime_target_pointer_leaf_infos(db, core, inner, target_ty, pointer_leaf_infos);
+    }
+
+    if owner_ty == target_ty || mir::repr::object_layout_ty(db, core, owner_ty) == target_ty {
+        return pointer_leaf_infos.to_vec();
+    }
+
+    Vec::new()
+}
+
 fn runtime_pointer_type_from_target<'db>(
     builder: &ModuleBuilder,
     db: &'db DriverDataBase,
     core: &CoreLib<'db>,
     target_layout: &TargetDataLayout,
+    owner_ty: TyId<'db>,
     target_ty: TyId<'db>,
+    pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
     cache: &mut FxHashMap<String, Option<Type>>,
     name_counter: &mut usize,
 ) -> Type {
-    let pointee = lower::fe_ty_to_sonatina(
+    let pointee_leaf_infos =
+        runtime_target_pointer_leaf_infos(db, core, owner_ty, target_ty, pointer_leaf_infos);
+    let pointee = lower::fe_ty_to_sonatina_with_pointer_leaf_infos(
         builder,
         db,
         core,
         target_layout,
         target_ty,
+        &pointee_leaf_infos,
         cache,
         name_counter,
     )
@@ -131,16 +180,21 @@ fn runtime_object_ref_type_from_target<'db>(
     db: &'db DriverDataBase,
     core: &CoreLib<'db>,
     target_layout: &TargetDataLayout,
+    owner_ty: TyId<'db>,
     target_ty: TyId<'db>,
+    pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
     cache: &mut FxHashMap<String, Option<Type>>,
     name_counter: &mut usize,
 ) -> Type {
-    let object_ty = lower::fe_object_ty_to_sonatina(
+    let object_pointer_leaf_infos =
+        runtime_target_pointer_leaf_infos(db, core, owner_ty, target_ty, pointer_leaf_infos);
+    let object_ty = lower::fe_object_ty_to_sonatina_with_pointer_leaf_infos(
         builder,
         db,
         core,
         target_layout,
         target_ty,
+        &object_pointer_leaf_infos,
         cache,
         name_counter,
     )
@@ -158,15 +212,17 @@ fn runtime_enum_tag_type_from_target<'db>(
     core: &CoreLib<'db>,
     target_layout: &TargetDataLayout,
     enum_ty: TyId<'db>,
+    pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
     cache: &mut FxHashMap<String, Option<Type>>,
     name_counter: &mut usize,
 ) -> Type {
-    let enum_ty = lower::fe_object_ty_to_sonatina(
+    let enum_ty = lower::fe_object_ty_to_sonatina_with_pointer_leaf_infos(
         builder,
         db,
         core,
         target_layout,
         enum_ty,
+        pointer_leaf_infos,
         cache,
         name_counter,
     )
@@ -185,12 +241,14 @@ fn function_core_lib<'db>(db: &'db DriverDataBase, func: &mir::MirFunction<'db>)
     CoreLib::new(db, scope)
 }
 
-pub(super) fn runtime_type_for_shape<'db>(
+pub(super) fn runtime_type_for_ty_and_shape<'db>(
     builder: &ModuleBuilder,
     db: &'db DriverDataBase,
     core: &CoreLib<'db>,
     target_layout: &TargetDataLayout,
+    ty: TyId<'db>,
     shape: mir::ir::RuntimeShape<'db>,
+    pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
     cache: &mut FxHashMap<String, Option<Type>>,
     name_counter: &mut usize,
 ) -> Type {
@@ -205,6 +263,7 @@ pub(super) fn runtime_type_for_shape<'db>(
             core,
             target_layout,
             enum_ty,
+            pointer_leaf_infos,
             cache,
             name_counter,
         ),
@@ -213,7 +272,9 @@ pub(super) fn runtime_type_for_shape<'db>(
             db,
             core,
             target_layout,
+            ty,
             target_ty,
+            pointer_leaf_infos,
             cache,
             name_counter,
         ),
@@ -225,7 +286,9 @@ pub(super) fn runtime_type_for_shape<'db>(
                     db,
                     core,
                     target_layout,
+                    ty,
                     target_ty,
+                    pointer_leaf_infos,
                     cache,
                     name_counter,
                 )
@@ -707,24 +770,28 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             let local = func.body.locals.get(local_id.index()).ok_or_else(|| {
                 LowerError::Internal(format!("unknown param local: {local_id:?}"))
             })?;
-            params.push(runtime_type_for_shape(
+            params.push(runtime_type_for_ty_and_shape(
                 &self.builder,
                 self.db,
                 &core,
                 &self.target_layout,
+                local.ty,
                 local.runtime_shape,
+                &local.pointer_leaf_infos,
                 &mut self.gep_type_cache,
                 &mut self.gep_name_counter,
             ));
         }
 
         let ret = (!func.runtime_return_shape.is_erased()).then(|| {
-            runtime_type_for_shape(
+            runtime_type_for_ty_and_shape(
                 &self.builder,
                 self.db,
                 &core,
                 &self.target_layout,
+                func.ret_ty,
                 func.runtime_return_shape,
+                &func.runtime_return_pointer_leaf_infos,
                 &mut self.gep_type_cache,
                 &mut self.gep_name_counter,
             )
@@ -1245,12 +1312,14 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             .locals
             .iter()
             .map(|local| {
-                runtime_type_for_shape(
+                runtime_type_for_ty_and_shape(
                     &self.builder,
                     self.db,
                     &core,
                     &self.target_layout,
+                    local.ty,
                     local.runtime_shape,
+                    &local.pointer_leaf_infos,
                     &mut self.gep_type_cache,
                     &mut self.gep_name_counter,
                 )
@@ -1271,12 +1340,21 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             }
         }
         for (idx, value) in func.body.values.iter().enumerate() {
-            let runtime_ty = runtime_type_for_shape(
+            let pointer_leaf_infos = mir::repr::pointer_leaf_infos_for_value(
+                self.db,
+                &core,
+                &func.body.values,
+                &func.body.locals,
+                mir::ValueId(idx as u32),
+            );
+            let runtime_ty = runtime_type_for_ty_and_shape(
                 &self.builder,
                 self.db,
                 &core,
                 &self.target_layout,
+                value.ty,
                 value.runtime_shape,
+                &pointer_leaf_infos,
                 &mut self.gep_type_cache,
                 &mut self.gep_name_counter,
             );
@@ -1432,7 +1510,7 @@ pub(super) struct LowerCtx<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> {
     pub(super) target_layout: &'a TargetDataLayout,
     pub(super) body: &'a mir::MirBody<'db>,
     pub(super) local_vars: &'a FxHashMap<mir::LocalId, Variable>,
-    pub(super) local_place_roots: &'a mut FxHashMap<mir::LocalId, ValueId>,
+    pub(super) local_place_roots: &'a mut FxHashMap<mir::LocalId, LocalPlaceRoot>,
     pub(super) initialized_locals: &'a mut FxHashSet<mir::LocalId>,
     pub(super) name_map: &'a FxHashMap<String, FuncRef>,
     pub(super) runtime_function_metadata: &'a FxHashMap<String, RuntimeFunctionMetadata>,
@@ -1456,15 +1534,42 @@ pub(super) struct LowerCtx<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> {
 }
 
 impl<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> LowerCtx<'a, 'db, C> {
-    pub(super) fn runtime_type_for_shape(&mut self, shape: mir::ir::RuntimeShape<'db>) -> Type {
-        runtime_type_for_shape(
+    pub(super) fn runtime_type_for_ty_and_shape(
+        &mut self,
+        ty: TyId<'db>,
+        shape: mir::ir::RuntimeShape<'db>,
+        pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
+    ) -> Type {
+        runtime_type_for_ty_and_shape(
             &self.fb.module_builder,
             self.db,
             self.core,
             self.target_layout,
+            ty,
             shape,
+            pointer_leaf_infos,
             &mut *self.gep_type_cache,
             &mut *self.gep_name_counter,
+        )
+    }
+
+    pub(super) fn runtime_type_for_shape(&mut self, shape: mir::ir::RuntimeShape<'db>) -> Type {
+        self.runtime_type_for_ty_and_shape(TyId::unit(self.db), shape, &[])
+    }
+
+    pub(super) fn runtime_type_for_value(&mut self, value: mir::ValueId) -> Type {
+        let value_data = self.body.value(value);
+        let pointer_leaf_infos = mir::repr::pointer_leaf_infos_for_value(
+            self.db,
+            self.core,
+            &self.body.values,
+            &self.body.locals,
+            value,
+        );
+        self.runtime_type_for_ty_and_shape(
+            value_data.ty,
+            value_data.runtime_shape,
+            &pointer_leaf_infos,
         )
     }
 

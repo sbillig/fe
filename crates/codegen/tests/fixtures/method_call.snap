@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/method_call.fe
 ---
@@ -12,13 +13,13 @@ function $call_method() -> ret {
   ret := v0
   leave
 }
-function $foo_h6dbce71a6ea992b8_gen_value() -> ret {
-  let v0 := $make_value()
+function $foo_h6dbce71a6ea992b8_return_value() -> ret {
+  let v0 := $foo_h6dbce71a6ea992b8_gen_value()
   ret := v0
   leave
 }
-function $foo_h6dbce71a6ea992b8_return_value() -> ret {
-  let v0 := $foo_h6dbce71a6ea992b8_gen_value()
+function $foo_h6dbce71a6ea992b8_gen_value() -> ret {
+  let v0 := $make_value()
   ret := v0
   leave
 }

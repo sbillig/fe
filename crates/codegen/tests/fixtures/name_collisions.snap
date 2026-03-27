@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/name_collisions.fe
 ---
@@ -97,6 +98,14 @@ function $main() -> ret {
   ret := 0
   leave
 }
+function $generic_fn__S_h730d9dc564aaaf27__8d32801e7ec9d42b($val) -> ret {
+  ret := $val
+  leave
+}
+function $generic_fn__S_h2db58d011b97b333__42a13489a1ec39e8($val) -> ret {
+  ret := $val
+  leave
+}
 function $widget_h8588afca9d68e578_process($self) -> ret {
   let v0 := $checked_mul_u32($self, 2)
   ret := v0
@@ -115,14 +124,6 @@ function $multitraitimpl_h60cc862fc809464_trait_h79853acec5b2b3ad_same_method($s
 function $multitraitimpl_h60cc862fc809464_trait_ha6da5e54b37dd39c_same_method($self) -> ret {
   let v0 := $checked_add_u32($self, 2)
   ret := v0
-  leave
-}
-function $generic_fn__S_h730d9dc564aaaf27__8d32801e7ec9d42b($val) -> ret {
-  ret := $val
-  leave
-}
-function $generic_fn__S_h2db58d011b97b333__42a13489a1ec39e8($val) -> ret {
-  ret := $val
   leave
 }
 function $checked_add_u32($a, $b) -> ret {

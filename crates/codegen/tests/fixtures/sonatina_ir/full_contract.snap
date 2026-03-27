@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/full_contract.fe
 ---
@@ -77,6 +78,12 @@ func private %dispatch__Evm_hef0af3106e109414__3af54274b2985741() {
         evm_invalid;
 }
 
+func private %u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0.i256, v1.i256) -> i1 {
+    block0:
+        v2.i1 = eq v0 v1;
+        return v2;
+}
+
 func private %point_hac92469562809d28_area(v0.objref<@__fe_obj_Point_0>) -> i256 {
     block0:
         v2.objref<i256> = obj.proj v0 0.i256;
@@ -103,12 +110,6 @@ func private %square_h97afaa872b6ea17e_area(v0.i256) -> i256 {
 
     block2:
         return v1;
-}
-
-func private %u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0.i256, v1.i256) -> i1 {
-    block0:
-        v2.i1 = eq v0 v1;
-        return v2;
 }
 
 

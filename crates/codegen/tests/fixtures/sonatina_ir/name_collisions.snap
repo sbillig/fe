@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/name_collisions.fe
 ---
@@ -132,6 +133,16 @@ func private %main() -> i32 {
         return 0.i32;
 }
 
+func private %generic_fn__S_h730d9dc564aaaf27__8d32801e7ec9d42b(v0.i32) -> i32 {
+    block0:
+        return v0;
+}
+
+func private %generic_fn__S_h2db58d011b97b333__42a13489a1ec39e8(v0.i64) -> i64 {
+    block0:
+        return v0;
+}
+
 func private %widget_h8588afca9d68e578_process(v0.i32) -> i32 {
     block0:
         (v2.i32, v3.i1) = umulo v0 2.i32;
@@ -178,16 +189,6 @@ func private %multitraitimpl_h60cc862fc809464_trait_ha6da5e54b37dd39c_same_metho
 
     block2:
         return v2;
-}
-
-func private %generic_fn__S_h730d9dc564aaaf27__8d32801e7ec9d42b(v0.i32) -> i32 {
-    block0:
-        return v0;
-}
-
-func private %generic_fn__S_h2db58d011b97b333__42a13489a1ec39e8(v0.i64) -> i64 {
-    block0:
-        return v0;
 }
 
 func private %__fe_sonatina_entry() {

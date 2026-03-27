@@ -750,6 +750,7 @@ pub(crate) fn lower_function<'db>(
         returns_value,
         runtime_abi,
         runtime_return_shape,
+        runtime_return_pointer_leaf_infos: Vec::new(),
         contract_function,
         inline_hint: func.inline_hint(db),
         symbol_name,
@@ -1552,6 +1553,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         place: &Place<'db>,
         target_ty: TyId<'db>,
     ) -> Vec<(MirProjectionPath<'db>, PointerInfo<'db>)> {
+        if let Some(enum_tag_infos) = crate::repr::pointer_leaf_infos_for_enum_tag_place(
+            self.db,
+            &self.core,
+            &self.builder.body.values,
+            &self.builder.body.locals,
+            place,
+        ) {
+            return enum_tag_infos;
+        }
+
         let resolved = crate::repr::resolve_place(
             self.db,
             &self.core,

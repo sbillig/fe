@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/newtype_storage_byplace_effect_arg.fe
 ---
@@ -19,11 +20,6 @@ func private %bump__StorPtr_Wrap___5036bb3e02939b91(v0.i256) {
 
     block2:
         evm_sstore v0 v3;
-        return;
-}
-
-func private %bump_hfb5a53c6af92b8a6_encode_hf98aaef2e32b4927_encode_to_ptr() {
-    block0:
         return;
 }
 

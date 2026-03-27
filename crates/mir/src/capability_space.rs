@@ -98,6 +98,9 @@ impl<'a, 'db> PointerLeafInfoCollector<'a, 'db> {
             crate::repr::handle_pointer_info_for_ty(self.db, self.core, ty, self.default_space)
         {
             self.out.push((prefix.clone(), info));
+            if let Some((_, inner)) = ty.as_capability(self.db) {
+                self.collect(inner, prefix);
+            }
         } else if let Some((_, inner)) = ty.as_capability(self.db) {
             self.collect(inner, prefix);
         } else if let Some(inner) = crate::repr::transparent_newtype_field_ty(self.db, ty) {
@@ -323,6 +326,113 @@ fn use_pair(pair: Pair) {}
                 MirProjectionPath::from_projection(Projection::Field(0)),
                 MirProjectionPath::from_projection(Projection::Field(1)),
             ]
+        );
+    }
+
+    #[test]
+    fn transparent_pointer_like_wrapper_targets_use_runtime_layout() {
+        let mut db = DriverDataBase::default();
+        let url =
+            Url::parse("file:///transparent_pointer_like_wrapper_targets_use_runtime_layout.fe")
+                .unwrap();
+        let src = r#"
+struct ReverseArr {
+    base: ref [u256; 8],
+}
+
+struct TakeReverseArr {
+    n: usize,
+    base: ref ReverseArr,
+}
+
+fn use_take(t: TakeReverseArr) {}
+"#;
+        let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+        let top_mod = db.top_mod(file);
+        let take_ty = top_mod
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "use_take")
+            })
+            .and_then(|func| func.params(&db).next())
+            .map(|param| param.ty(&db))
+            .expect("use_take parameter should exist");
+        let core = CoreLib::new(&db, top_mod.scope());
+        let infos =
+            pointer_leaf_infos_for_ty_with_default(&db, &core, take_ty, AddressSpaceKind::Memory);
+
+        let info = infos
+            .iter()
+            .find(|(path, _)| *path == MirProjectionPath::from_projection(Projection::Field(1)))
+            .expect("expected root pointer leaf info for `TakeReverseArr.base`");
+        assert_eq!(info.1.address_space, AddressSpaceKind::Memory);
+        assert_eq!(
+            info.1
+                .target_ty
+                .expect("pointer leaf info should preserve pointee type")
+                .pretty_print(&db),
+            "[u256; 8]"
+        );
+    }
+
+    #[test]
+    fn transparent_storage_handle_wrapper_targets_use_runtime_layout() {
+        let mut db = DriverDataBase::default();
+        let url =
+            Url::parse("file:///transparent_storage_handle_wrapper_targets_use_runtime_layout.fe")
+                .unwrap();
+        let src = r#"
+struct Cell {
+    value: u256,
+}
+
+struct CellMover {
+    cell: mut Cell,
+}
+
+fn use_mover(m: mut CellMover) {}
+"#;
+        let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+        let top_mod = db.top_mod(file);
+        let mover_ty = top_mod
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "use_mover")
+            })
+            .and_then(|func| func.params(&db).next())
+            .map(|param| param.ty(&db))
+            .expect("use_mover parameter should exist");
+        let core = CoreLib::new(&db, top_mod.scope());
+        let infos = normalize_pointer_leaf_info_entries(pointer_leaf_infos_for_ty_with_default(
+            &db,
+            &core,
+            mover_ty,
+            AddressSpaceKind::Storage,
+        ))
+        .expect("transparent storage handle wrapper should not conflict");
+
+        assert_eq!(
+            infos.len(),
+            1,
+            "transparent storage wrapper should collapse to one root leaf"
+        );
+        assert_eq!(infos[0].0, MirProjectionPath::new());
+        assert_eq!(infos[0].1.address_space, AddressSpaceKind::Storage);
+        assert_eq!(
+            infos[0]
+                .1
+                .target_ty
+                .expect("pointer leaf info should preserve pointee type")
+                .pretty_print(&db),
+            "Cell"
         );
     }
 }

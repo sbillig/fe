@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/newtype_field_mut_method_call.fe
 ---
@@ -25,12 +26,6 @@ function $newtype_field_mut_method_call($x) -> ret {
   let v4 := add(v3, 32)
   let v5 := mload(v4)
   ret := v5
-  leave
-}
-function $counter_h872958864d1ad471_bump($self) {
-  let v0 := mload($self)
-  let v1 := $checked_add_u256(v0, 1)
-  mstore($self, v1)
   leave
 }
 function $wrapcounter_hbcbd3a74a267488b_bump($self) {

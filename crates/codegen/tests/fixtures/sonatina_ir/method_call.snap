@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/method_call.fe
 ---
@@ -16,15 +17,15 @@ func private %call_method() -> i64 {
         return v1;
 }
 
-func private %foo_h6dbce71a6ea992b8_gen_value() -> i64 {
-    block0:
-        v1.i64 = call %make_value;
-        return v1;
-}
-
 func private %foo_h6dbce71a6ea992b8_return_value() -> i64 {
     block0:
         v1.i64 = call %foo_h6dbce71a6ea992b8_gen_value;
+        return v1;
+}
+
+func private %foo_h6dbce71a6ea992b8_gen_value() -> i64 {
+    block0:
+        v1.i64 = call %make_value;
         return v1;
 }
 

@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/create_contract.fe
 ---
@@ -14,49 +15,6 @@ type @__fe_obj_tuple_5 = {i256, i256};
 type @__fe_obj_Cursor_6 = {i256, i256};
 type @__fe_obj_SolDecoder_7 = {@__fe_obj_Cursor_6, i256};
 type @__fe_obj_SolEncoder_8 = {i256, i256, i256};
-
-func private %deploy_h5c6b1804553edb1_encode_hf98aaef2e32b4927_encode_to_ptr(v0.objref<@__fe_obj_Deploy_0>, v1.i256) {
-    block0:
-        v3.objref<i256> = obj.proj v0 0.i256;
-        v4.i256 = obj.load v3;
-        call %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95 v4 v1;
-        (v6.i256, v7.i1) = uaddo v1 32.i256;
-        br v7 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        v10.objref<i256> = obj.proj v0 1.i256;
-        v11.i256 = obj.load v10;
-        call %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95 v11 v6;
-        return;
-}
-
-func private %deploy2_ha2b981aa2f8bf9fd_encode_hf98aaef2e32b4927_encode_to_ptr(v0.objref<@__fe_obj_Deploy2_1>, v1.i256) {
-    block0:
-        v3.objref<i256> = obj.proj v0 0.i256;
-        v4.i256 = obj.load v3;
-        call %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95 v4 v1;
-        (v6.i256, v7.i1) = uaddo v1 32.i256;
-        br v7 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        v10.objref<i256> = obj.proj v0 1.i256;
-        v11.i256 = obj.load v10;
-        call %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95 v11 v6;
-        (v12.i256, v13.i1) = uaddo v6 32.i256;
-        br v13 block1 block3;
-
-    block3:
-        v16.objref<i256> = obj.proj v0 2.i256;
-        v17.i256 = obj.load v16;
-        call %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95 v17 v12;
-        return;
-}
 
 func private %__Child_init_contract(v0.i256, v1.i256, v2.i256) {
     block0:
@@ -213,12 +171,6 @@ func private %__Factory_runtime() {
         v16.i256 = call %__Factory_recv_0_1 v15;
         call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_Address_h257056268eac7027__1b35caa79fc81fc0 v16;
         evm_invalid;
-}
-
-func private %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95(v0.i256, v1.i256) {
-    block0:
-        call %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_store_word v1 v0;
-        return;
 }
 
 func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
@@ -426,12 +378,6 @@ func private %deploy2_ha2b981aa2f8bf9fd_decode_h624c3cd8c996d995_decode__SolDeco
         v10.objref<i256> = obj.proj v4 2.i256;
         obj.store v10 v3;
         return v4;
-}
-
-func private %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_store_word(v0.i256, v1.i256) {
-    block0:
-        mstore v0 v1 i256;
-        return;
 }
 
 func private %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0.objref<@__fe_obj_MemoryBytes_2>) -> objref<@__fe_obj_SolDecoder_4> {
@@ -792,6 +738,12 @@ func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_wo
         v6.i256 = add v4 32.i256;
         v7.objref<i256> = obj.proj v0 1.i256;
         obj.store v7 v6;
+        return;
+}
+
+func private %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_store_word(v0.i256, v1.i256) {
+    block0:
+        mstore v0 v1 i256;
         return;
 }
 
