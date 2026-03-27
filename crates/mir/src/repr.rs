@@ -1488,16 +1488,7 @@ pub fn runtime_shape_for_loaded_place<'db>(
     locals: &[LocalData<'db>],
     place: &Place<'db>,
 ) -> Option<RuntimeShape<'db>> {
-    if let Some(Projection::Discriminant) = place.projection.iter().last() {
-        let mut owner_projection = crate::MirProjectionPath::new();
-        for projection in place
-            .projection
-            .iter()
-            .take(place.projection.len().saturating_sub(1))
-        {
-            owner_projection.push(projection.clone());
-        }
-        let owner_place = Place::new(place.base, owner_projection);
+    if let Some(owner_place) = enum_tag_owner_place(place) {
         let enum_ty = place_object_ref_target_ty(db, core, values, locals, &owner_place)?;
         return enum_ty
             .as_enum(db)
