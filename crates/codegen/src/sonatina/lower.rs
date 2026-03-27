@@ -23,6 +23,7 @@ use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 use sonatina_ir::{
     BlockId, GlobalVariableData, GlobalVariableRef, I256, Immediate, Linkage, Type, Value, ValueId,
+    builder::ModuleBuilder,
     global_variable::GvInitializer,
     inst::{
         arith::{Add, Mul, Neg, Sar, Shl, Shr, Sub},
@@ -54,6 +55,35 @@ use sonatina_ir::{
 use super::{
     LocalPlaceRoot, LowerCtx, LowerError, is_erased_runtime_ty, types, zero_value_for_type,
 };
+
+pub(super) struct TypeLowerer<'a, 'db> {
+    builder: &'a ModuleBuilder,
+    db: &'db DriverDataBase,
+    core: &'a mir::CoreLib<'db>,
+    target_layout: &'a TargetDataLayout,
+    cache: &'a mut FxHashMap<String, Option<Type>>,
+    name_counter: &'a mut usize,
+}
+
+impl<'a, 'db> TypeLowerer<'a, 'db> {
+    pub(super) fn new(
+        builder: &'a ModuleBuilder,
+        db: &'db DriverDataBase,
+        core: &'a mir::CoreLib<'db>,
+        target_layout: &'a TargetDataLayout,
+        cache: &'a mut FxHashMap<String, Option<Type>>,
+        name_counter: &'a mut usize,
+    ) -> Self {
+        Self {
+            builder,
+            db,
+            core,
+            target_layout,
+            cache,
+            name_counter,
+        }
+    }
+}
 
 /// Lower a MIR instruction.
 pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
@@ -306,17 +336,10 @@ fn ensure_local_place_root_object<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 target_ty.pretty_print(ctx.db),
             ))
         })?;
-    let object_ty = fe_object_ty_to_sonatina_with_pointer_leaf_infos(
-        &ctx.fb.module_builder,
-        ctx.db,
-        ctx.core,
-        ctx.target_layout,
-        target_ty,
-        &[],
-        ctx.gep_type_cache,
-        ctx.gep_name_counter,
-    )
-    .unwrap_or_else(|| ctx.fb.declare_array_type(Type::I8, size_bytes));
+    let object_ty = ctx
+        .type_lowerer()
+        .fe_object_ty_to_sonatina_with_pointer_leaf_infos(target_ty, &[])
+        .unwrap_or_else(|| ctx.fb.declare_array_type(Type::I8, size_bytes));
     let object_ref = emit_obj_alloc_ref(ctx.fb, object_ty, ctx.is);
     if ctx.initialized_locals.contains(&local) {
         let var = ctx.local_vars.get(&local).copied().ok_or_else(|| {
@@ -2009,12 +2032,15 @@ fn projection_strip_prefix<'db>(
 fn root_pointer_leaf_info<'db>(
     pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
 ) -> Option<PointerInfo<'db>> {
-    for (path, info) in pointer_leaf_infos {
-        if path.is_empty() {
-            return Some(*info);
-        }
-    }
-    None
+    let root_infos: Vec<_> = pointer_leaf_infos
+        .iter()
+        .filter(|(path, _)| path.is_empty())
+        .cloned()
+        .collect();
+    normalize_pointer_leaf_infos(&root_infos)
+        .into_iter()
+        .next()
+        .map(|(_, info)| info)
 }
 
 fn strip_pointer_leaf_info_prefix<'db>(
@@ -2325,114 +2351,6 @@ fn fe_object_ty_to_sonatina_cache_key<'db>(
     fe_ty_to_sonatina_effective_cache_key(db, core, target_layout, ty, pointer_leaf_infos, true)
 }
 
-pub(super) fn fe_ty_to_sonatina_with_pointer_leaf_infos<'db>(
-    builder: &sonatina_ir::builder::ModuleBuilder,
-    db: &'db DriverDataBase,
-    core: &mir::CoreLib<'db>,
-    target_layout: &TargetDataLayout,
-    ty: hir::analysis::ty::ty_def::TyId<'db>,
-    pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
-    cache: &mut FxHashMap<String, Option<Type>>,
-    name_counter: &mut usize,
-) -> Option<Type> {
-    let cache_key = fe_ty_to_sonatina_cache_key(db, core, target_layout, ty, pointer_leaf_infos);
-    if let Some(cached) = cache.get(&cache_key) {
-        return *cached;
-    }
-
-    let result = fe_ty_to_sonatina_inner(
-        builder,
-        db,
-        core,
-        target_layout,
-        ty,
-        pointer_leaf_infos,
-        cache,
-        name_counter,
-    );
-    cache.insert(cache_key, result);
-    result
-}
-
-pub(super) fn fe_object_ty_to_sonatina_with_pointer_leaf_infos<'db>(
-    builder: &sonatina_ir::builder::ModuleBuilder,
-    db: &'db DriverDataBase,
-    core: &mir::CoreLib<'db>,
-    target_layout: &TargetDataLayout,
-    ty: hir::analysis::ty::ty_def::TyId<'db>,
-    pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
-    cache: &mut FxHashMap<String, Option<Type>>,
-    name_counter: &mut usize,
-) -> Option<Type> {
-    let cache_key =
-        fe_object_ty_to_sonatina_cache_key(db, core, target_layout, ty, pointer_leaf_infos);
-    if let Some(cached) = cache.get(&cache_key) {
-        return *cached;
-    }
-
-    let result = fe_object_ty_to_sonatina_inner(
-        builder,
-        db,
-        core,
-        target_layout,
-        ty,
-        pointer_leaf_infos,
-        cache,
-        name_counter,
-    );
-    cache.insert(cache_key, result);
-    result
-}
-
-pub(super) fn fe_ty_to_sonatina<'db>(
-    builder: &sonatina_ir::builder::ModuleBuilder,
-    db: &'db DriverDataBase,
-    core: &mir::CoreLib<'db>,
-    target_layout: &TargetDataLayout,
-    ty: hir::analysis::ty::ty_def::TyId<'db>,
-    cache: &mut FxHashMap<String, Option<Type>>,
-    name_counter: &mut usize,
-) -> Option<Type> {
-    fe_ty_to_sonatina_with_pointer_leaf_infos(
-        builder,
-        db,
-        core,
-        target_layout,
-        ty,
-        &[],
-        cache,
-        name_counter,
-    )
-}
-
-fn pointer_like_sonatina_ty<'db>(
-    builder: &sonatina_ir::builder::ModuleBuilder,
-    db: &'db DriverDataBase,
-    core: &mir::CoreLib<'db>,
-    target_layout: &TargetDataLayout,
-    ty: hir::analysis::ty::ty_def::TyId<'db>,
-    pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
-    cache: &mut FxHashMap<String, Option<Type>>,
-    name_counter: &mut usize,
-) -> Type {
-    let pointee = fe_ty_to_sonatina_with_pointer_leaf_infos(
-        builder,
-        db,
-        core,
-        target_layout,
-        ty,
-        pointer_leaf_infos,
-        cache,
-        name_counter,
-    )
-    .unwrap_or(Type::I8);
-    builder.ptr_type(if pointee == Type::Unit {
-        Type::I8
-    } else {
-        pointee
-    })
-}
-
 fn memory_effect_pointer_target_ty<'db>(
     db: &'db DriverDataBase,
     core: &mir::CoreLib<'db>,
@@ -2480,32 +2398,6 @@ fn scalar_handle_object_ref_target_ty<'db>(
     ty: hir::analysis::ty::ty_def::TyId<'db>,
 ) -> Option<TyId<'db>> {
     mir::repr::memory_scalar_object_ref_target_ty(db, core, ty)
-}
-
-fn scalar_handle_sonatina_ty<'db>(
-    builder: &sonatina_ir::builder::ModuleBuilder,
-    db: &'db DriverDataBase,
-    core: &mir::CoreLib<'db>,
-    target_layout: &TargetDataLayout,
-    ty: hir::analysis::ty::ty_def::TyId<'db>,
-    cache: &mut FxHashMap<String, Option<Type>>,
-    name_counter: &mut usize,
-) -> Option<Type> {
-    let target_ty = fe_object_ty_to_sonatina_with_pointer_leaf_infos(
-        builder,
-        db,
-        core,
-        target_layout,
-        ty,
-        &[],
-        cache,
-        name_counter,
-    )
-    .or_else(|| {
-        let size = layout::ty_memory_size_or_word_in(db, target_layout, ty)?;
-        Some(builder.declare_array_type(Type::I8, size))
-    })?;
-    Some(builder.objref_type(target_ty))
 }
 
 fn object_field_uses_object_ref<'db>(
@@ -2578,21 +2470,196 @@ fn const_aggregate_object_copy_compatible<'db>(
     }
 }
 
-struct FeEnumTypeDeclCtx<'a, 'db> {
-    builder: &'a sonatina_ir::builder::ModuleBuilder,
-    db: &'db DriverDataBase,
-    core: &'a mir::CoreLib<'db>,
-    target_layout: &'a TargetDataLayout,
-    pointer_leaf_infos: &'a [(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
-    cache: &'a mut FxHashMap<String, Option<Type>>,
-    name_counter: &'a mut usize,
-}
+impl<'db> TypeLowerer<'_, 'db> {
+    pub(super) fn fe_ty_to_sonatina_with_pointer_leaf_infos(
+        &mut self,
+        ty: TyId<'db>,
+        pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
+    ) -> Option<Type> {
+        let cache_key = fe_ty_to_sonatina_cache_key(
+            self.db,
+            self.core,
+            self.target_layout,
+            ty,
+            pointer_leaf_infos,
+        );
+        if let Some(cached) = self.cache.get(&cache_key) {
+            return *cached;
+        }
 
-impl<'db> FeEnumTypeDeclCtx<'_, 'db> {
+        let result = self.fe_ty_to_sonatina_inner(ty, pointer_leaf_infos);
+        self.cache.insert(cache_key, result);
+        result
+    }
+
+    pub(super) fn fe_object_ty_to_sonatina_with_pointer_leaf_infos(
+        &mut self,
+        ty: TyId<'db>,
+        pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
+    ) -> Option<Type> {
+        let cache_key = fe_object_ty_to_sonatina_cache_key(
+            self.db,
+            self.core,
+            self.target_layout,
+            ty,
+            pointer_leaf_infos,
+        );
+        if let Some(cached) = self.cache.get(&cache_key) {
+            return *cached;
+        }
+
+        let result = self.fe_object_ty_to_sonatina_inner(ty, pointer_leaf_infos);
+        self.cache.insert(cache_key, result);
+        result
+    }
+
+    pub(super) fn fe_ty_to_sonatina(&mut self, ty: TyId<'db>) -> Option<Type> {
+        self.fe_ty_to_sonatina_with_pointer_leaf_infos(ty, &[])
+    }
+
+    pub(super) fn runtime_type_for_ty_and_shape(
+        &mut self,
+        ty: TyId<'db>,
+        shape: mir::ir::RuntimeShape<'db>,
+        pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
+    ) -> Type {
+        match shape {
+            mir::ir::RuntimeShape::Unresolved => {
+                panic!("unresolved MIR runtime shape reached Sonatina codegen")
+            }
+            mir::ir::RuntimeShape::Erased => Type::Unit,
+            mir::ir::RuntimeShape::EnumTag { enum_ty } => {
+                self.runtime_enum_tag_type_from_target(enum_ty, pointer_leaf_infos)
+            }
+            mir::ir::RuntimeShape::ObjectRef { target_ty } => {
+                self.runtime_object_ref_type_from_target(ty, target_ty, pointer_leaf_infos)
+            }
+            mir::ir::RuntimeShape::Word(kind) => types::runtime_word_type(kind),
+            mir::ir::RuntimeShape::MemoryPtr { target_ty } => target_ty
+                .map(|target_ty| {
+                    self.runtime_pointer_type_from_target(ty, target_ty, pointer_leaf_infos)
+                })
+                .unwrap_or_else(|| self.builder.ptr_type(Type::I8)),
+            mir::ir::RuntimeShape::AddressWord(_) => Type::I256,
+        }
+    }
+
+    fn pointer_like_sonatina_ty(
+        &mut self,
+        ty: TyId<'db>,
+        pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
+    ) -> Type {
+        let pointee = self
+            .fe_ty_to_sonatina_with_pointer_leaf_infos(ty, pointer_leaf_infos)
+            .unwrap_or(Type::I8);
+        self.builder.ptr_type(if pointee == Type::Unit {
+            Type::I8
+        } else {
+            pointee
+        })
+    }
+
+    fn scalar_handle_sonatina_ty(&mut self, ty: TyId<'db>) -> Option<Type> {
+        let target_ty = self
+            .fe_object_ty_to_sonatina_with_pointer_leaf_infos(ty, &[])
+            .or_else(|| {
+                let size = layout::ty_memory_size_or_word_in(self.db, self.target_layout, ty)?;
+                Some(self.builder.declare_array_type(Type::I8, size))
+            })?;
+        Some(self.builder.objref_type(target_ty))
+    }
+
+    fn runtime_target_pointer_leaf_infos(
+        &self,
+        owner_ty: TyId<'db>,
+        target_ty: TyId<'db>,
+        pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
+    ) -> Vec<(mir::MirProjectionPath<'db>, PointerInfo<'db>)> {
+        if let Some((_, inner)) = owner_ty.as_capability(self.db) {
+            let nested_pointer_leaf_infos: Vec<_> = pointer_leaf_infos
+                .iter()
+                .filter(|(path, _)| !path.is_empty())
+                .cloned()
+                .collect();
+            return self.runtime_target_pointer_leaf_infos(
+                inner,
+                target_ty,
+                &nested_pointer_leaf_infos,
+            );
+        }
+
+        if mir::repr::effect_provider_space_for_ty(self.db, self.core, owner_ty).is_some() {
+            return Vec::new();
+        }
+
+        if let Some(inner) = mir::repr::transparent_newtype_field_ty(self.db, owner_ty) {
+            return self.runtime_target_pointer_leaf_infos(inner, target_ty, pointer_leaf_infos);
+        }
+
+        if owner_ty == target_ty
+            || mir::repr::object_layout_ty(self.db, self.core, owner_ty) == target_ty
+        {
+            return pointer_leaf_infos.to_vec();
+        }
+
+        Vec::new()
+    }
+
+    fn runtime_pointer_type_from_target(
+        &mut self,
+        owner_ty: TyId<'db>,
+        target_ty: TyId<'db>,
+        pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
+    ) -> Type {
+        let pointee_leaf_infos =
+            self.runtime_target_pointer_leaf_infos(owner_ty, target_ty, pointer_leaf_infos);
+        let pointee = self
+            .fe_ty_to_sonatina_with_pointer_leaf_infos(target_ty, &pointee_leaf_infos)
+            .unwrap_or(Type::I8);
+        if pointee == Type::Unit {
+            return self.builder.ptr_type(Type::I8);
+        }
+        self.builder.ptr_type(pointee)
+    }
+
+    fn runtime_object_ref_type_from_target(
+        &mut self,
+        owner_ty: TyId<'db>,
+        target_ty: TyId<'db>,
+        pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
+    ) -> Type {
+        let object_pointer_leaf_infos =
+            self.runtime_target_pointer_leaf_infos(owner_ty, target_ty, pointer_leaf_infos);
+        let object_ty = self
+            .fe_object_ty_to_sonatina_with_pointer_leaf_infos(target_ty, &object_pointer_leaf_infos)
+            .unwrap_or_else(|| {
+                let size =
+                    layout::ty_memory_size_or_word_in(self.db, self.target_layout, target_ty)
+                        .expect("object-backed runtime types must have a known memory size");
+                self.builder.declare_array_type(Type::I8, size)
+            });
+        self.builder.objref_type(object_ty)
+    }
+
+    fn runtime_enum_tag_type_from_target(
+        &mut self,
+        enum_ty: TyId<'db>,
+        pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
+    ) -> Type {
+        let enum_ty = self
+            .fe_object_ty_to_sonatina_with_pointer_leaf_infos(enum_ty, pointer_leaf_infos)
+            .expect("enum-tag runtime shapes must lower to a Sonatina enum type");
+        let Type::Compound(enum_ty) = enum_ty else {
+            panic!("enum-tag runtime shapes must lower to a Sonatina compound enum type");
+        };
+        Type::EnumTag(enum_ty)
+    }
+
     fn variant_data(
         &mut self,
-        enum_ty: hir::analysis::ty::ty_def::TyId<'db>,
+        enum_ty: TyId<'db>,
         object_layout: bool,
+        pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
     ) -> Option<Vec<VariantData>> {
         let enum_ = enum_ty.as_enum(self.db)?;
         let mut variants = Vec::with_capacity(enum_.len_variants(self.db));
@@ -2602,32 +2669,20 @@ impl<'db> FeEnumTypeDeclCtx<'_, 'db> {
             let mut fields = Vec::with_capacity(ctor.field_types(self.db).len());
             for (field_idx, field_ty) in ctor.field_types(self.db).iter().copied().enumerate() {
                 let field_pointer_leaf_infos = variant_field_pointer_leaf_infos(
-                    self.pointer_leaf_infos,
+                    pointer_leaf_infos,
                     variant,
                     enum_ty,
                     field_idx,
                 );
                 let lowered = if object_layout {
-                    fe_object_ty_to_sonatina_with_pointer_leaf_infos(
-                        self.builder,
-                        self.db,
-                        self.core,
-                        self.target_layout,
+                    self.fe_object_ty_to_sonatina_with_pointer_leaf_infos(
                         field_ty,
                         &field_pointer_leaf_infos,
-                        self.cache,
-                        self.name_counter,
                     )
                 } else {
-                    fe_ty_to_sonatina_with_pointer_leaf_infos(
-                        self.builder,
-                        self.db,
-                        self.core,
-                        self.target_layout,
+                    self.fe_ty_to_sonatina_with_pointer_leaf_infos(
                         field_ty,
                         &field_pointer_leaf_infos,
-                        self.cache,
-                        self.name_counter,
                     )
                 }?;
                 fields.push(lowered);
@@ -2643,10 +2698,11 @@ impl<'db> FeEnumTypeDeclCtx<'_, 'db> {
 
     fn declare_enum_type(
         &mut self,
-        enum_ty: hir::analysis::ty::ty_def::TyId<'db>,
+        enum_ty: TyId<'db>,
         object_layout: bool,
+        pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
     ) -> Option<Type> {
-        let variants = self.variant_data(enum_ty, object_layout)?;
+        let variants = self.variant_data(enum_ty, object_layout, pointer_leaf_infos)?;
         let name = enum_ty
             .adt_ref(self.db)
             .and_then(|adt_ref| adt_ref.name(self.db))
@@ -2661,434 +2717,279 @@ impl<'db> FeEnumTypeDeclCtx<'_, 'db> {
             EnumReprHint::Default,
         ))
     }
-}
 
-fn fe_ty_to_sonatina_inner<'db>(
-    builder: &sonatina_ir::builder::ModuleBuilder,
-    db: &'db DriverDataBase,
-    core: &mir::CoreLib<'db>,
-    target_layout: &TargetDataLayout,
-    ty: hir::analysis::ty::ty_def::TyId<'db>,
-    pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
-    cache: &mut FxHashMap<String, Option<Type>>,
-    name_counter: &mut usize,
-) -> Option<Type> {
-    let ty = normalize_sonatina_type_input(db, core, ty);
-    if is_erased_runtime_ty(db, target_layout, ty) {
-        return Some(Type::Unit);
+    fn fe_ty_to_sonatina_inner(
+        &mut self,
+        ty: TyId<'db>,
+        pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
+    ) -> Option<Type> {
+        let ty = normalize_sonatina_type_input(self.db, self.core, ty);
+        if is_erased_runtime_ty(self.db, self.target_layout, ty) {
+            return Some(Type::Unit);
+        }
+
+        let root_pointer_info = root_pointer_leaf_info(pointer_leaf_infos);
+        if let Some((capability, inner)) = ty.as_capability(self.db) {
+            return match capability {
+                CapabilityKind::View => {
+                    self.fe_ty_to_sonatina_with_pointer_leaf_infos(inner, pointer_leaf_infos)
+                }
+                CapabilityKind::Mut | CapabilityKind::Ref
+                    if root_pointer_info
+                        .is_some_and(|info| info.address_space != AddressSpaceKind::Memory) =>
+                {
+                    Some(Type::I256)
+                }
+                CapabilityKind::Mut | CapabilityKind::Ref
+                    if root_pointer_info
+                        .is_some_and(|info| info.address_space == AddressSpaceKind::Memory)
+                        && scalar_handle_object_ref_target_ty(self.db, self.core, inner)
+                            .is_some() =>
+                {
+                    self.scalar_handle_sonatina_ty(inner)
+                }
+                CapabilityKind::Mut => Some(self.pointer_like_sonatina_ty(inner, &[])),
+                CapabilityKind::Ref if lowers_by_ref_layout(self.db, self.core, inner) => {
+                    Some(self.pointer_like_sonatina_ty(inner, &[]))
+                }
+                CapabilityKind::Ref => Some(Type::I256),
+            };
+        }
+
+        if let Some(target_ty) = memory_effect_pointer_target_ty(self.db, self.core, ty) {
+            return Some(self.pointer_like_sonatina_ty(target_ty, &[]));
+        }
+
+        if let Some(inner) = mir::repr::transparent_newtype_field_ty(self.db, ty) {
+            return self.fe_ty_to_sonatina_with_pointer_leaf_infos(inner, pointer_leaf_infos);
+        }
+
+        if matches!(
+            mir::repr::repr_kind_for_ty(self.db, self.core, ty),
+            mir::repr::ReprKind::Word
+        ) {
+            return Some(types::value_type(self.db, ty));
+        }
+
+        let base_ty = ty.base_ty(self.db);
+        match base_ty.data(self.db) {
+            TyData::TyBase(TyBase::Prim(prim)) => match prim {
+                PrimTy::String => None,
+                PrimTy::Tuple(_) => {
+                    let field_tys = ty.field_types(self.db);
+                    if field_tys.is_empty() {
+                        return Some(Type::Unit);
+                    }
+                    let mut sonatina_fields = Vec::with_capacity(field_tys.len());
+                    for (field_idx, field_ty) in field_tys.iter().copied().enumerate() {
+                        let field_pointer_leaf_infos =
+                            field_pointer_leaf_infos(pointer_leaf_infos, field_idx);
+                        sonatina_fields.push(self.fe_ty_to_sonatina_with_pointer_leaf_infos(
+                            field_ty,
+                            &field_pointer_leaf_infos,
+                        )?);
+                    }
+                    let id = *self.name_counter;
+                    *self.name_counter += 1;
+                    Some(self.builder.declare_struct_type(
+                        &format!("__fe_tuple_{id}"),
+                        &sonatina_fields,
+                        false,
+                    ))
+                }
+                PrimTy::Array => {
+                    let elem_ty = layout::array_elem_ty(self.db, ty)?;
+                    let len = layout::array_len(self.db, ty)?;
+                    let elem_pointer_leaf_infos = array_elem_pointer_leaf_infos(pointer_leaf_infos);
+                    let sonatina_elem = self.fe_ty_to_sonatina_with_pointer_leaf_infos(
+                        elem_ty,
+                        &elem_pointer_leaf_infos,
+                    )?;
+                    Some(self.builder.declare_array_type(sonatina_elem, len))
+                }
+                _ => Some(types::value_type(self.db, ty)),
+            },
+            TyData::TyBase(TyBase::Adt(adt_def)) => match adt_def.adt_ref(self.db) {
+                AdtRef::Struct(_) => {
+                    let field_tys = ty.field_types(self.db);
+                    let mut sonatina_fields = Vec::with_capacity(field_tys.len());
+                    for (field_idx, field_ty) in field_tys.iter().copied().enumerate() {
+                        let field_pointer_leaf_infos =
+                            field_pointer_leaf_infos(pointer_leaf_infos, field_idx);
+                        sonatina_fields.push(self.fe_ty_to_sonatina_with_pointer_leaf_infos(
+                            field_ty,
+                            &field_pointer_leaf_infos,
+                        )?);
+                    }
+                    let name = adt_def
+                        .adt_ref(self.db)
+                        .name(self.db)
+                        .map(|id| id.data(self.db).to_string())
+                        .unwrap_or_else(|| "anon".to_string());
+                    let id = *self.name_counter;
+                    *self.name_counter += 1;
+                    Some(self.builder.declare_struct_type(
+                        &format!("__fe_{name}_{id}"),
+                        &sonatina_fields,
+                        false,
+                    ))
+                }
+                AdtRef::Enum(_) => self.declare_enum_type(ty, false, pointer_leaf_infos),
+            },
+            TyData::TyBase(TyBase::Contract(_)) | TyData::TyBase(TyBase::Func(_)) => {
+                Some(Type::Unit)
+            }
+            _ => None,
+        }
     }
 
-    let root_pointer_info = root_pointer_leaf_info(pointer_leaf_infos);
-    if let Some((capability, inner)) = ty.as_capability(db) {
-        return match capability {
-            CapabilityKind::View => fe_ty_to_sonatina_with_pointer_leaf_infos(
-                builder,
-                db,
-                core,
-                target_layout,
-                inner,
-                pointer_leaf_infos,
-                cache,
-                name_counter,
-            ),
-            CapabilityKind::Mut | CapabilityKind::Ref
-                if root_pointer_info
-                    .is_some_and(|info| info.address_space != AddressSpaceKind::Memory) =>
-            {
-                Some(Type::I256)
-            }
-            CapabilityKind::Mut | CapabilityKind::Ref
-                if root_pointer_info
-                    .is_some_and(|info| info.address_space == AddressSpaceKind::Memory)
-                    && scalar_handle_object_ref_target_ty(db, core, inner).is_some() =>
-            {
-                scalar_handle_sonatina_ty(
-                    builder,
-                    db,
-                    core,
-                    target_layout,
-                    inner,
-                    cache,
-                    name_counter,
-                )
-            }
-            CapabilityKind::Mut => Some(pointer_like_sonatina_ty(
-                builder,
-                db,
-                core,
-                target_layout,
-                inner,
-                &[],
-                cache,
-                name_counter,
-            )),
-            CapabilityKind::Ref if lowers_by_ref_layout(db, core, inner) => {
-                Some(pointer_like_sonatina_ty(
-                    builder,
-                    db,
-                    core,
-                    target_layout,
-                    inner,
-                    &[],
-                    cache,
-                    name_counter,
-                ))
-            }
-            CapabilityKind::Ref => Some(Type::I256),
-        };
-    }
-
-    if let Some(target_ty) = memory_effect_pointer_target_ty(db, core, ty) {
-        return Some(pointer_like_sonatina_ty(
-            builder,
-            db,
-            core,
-            target_layout,
-            target_ty,
-            &[],
-            cache,
-            name_counter,
-        ));
-    }
-
-    if let Some(inner) = mir::repr::transparent_newtype_field_ty(db, ty) {
-        return fe_ty_to_sonatina_with_pointer_leaf_infos(
-            builder,
-            db,
-            core,
-            target_layout,
-            inner,
-            pointer_leaf_infos,
-            cache,
-            name_counter,
+    fn fe_object_ty_to_sonatina_inner(
+        &mut self,
+        ty: TyId<'db>,
+        pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
+    ) -> Option<Type> {
+        let ty = normalize_sonatina_type_input(
+            self.db,
+            self.core,
+            mir::repr::object_layout_ty(self.db, self.core, ty),
         );
-    }
+        if is_erased_runtime_ty(self.db, self.target_layout, ty) {
+            return Some(Type::Unit);
+        }
 
-    if matches!(
-        mir::repr::repr_kind_for_ty(db, core, ty),
-        mir::repr::ReprKind::Word
-    ) {
-        return Some(types::value_type(db, ty));
-    }
-
-    let base_ty = ty.base_ty(db);
-    match base_ty.data(db) {
-        TyData::TyBase(TyBase::Prim(prim)) => match prim {
-            PrimTy::String => None,
-            PrimTy::Tuple(_) => {
-                let field_tys = ty.field_types(db);
-                if field_tys.is_empty() {
-                    return Some(Type::Unit);
+        let root_pointer_info = root_pointer_leaf_info(pointer_leaf_infos);
+        if let Some((capability, inner)) = ty.as_capability(self.db) {
+            return match capability {
+                CapabilityKind::View => {
+                    self.fe_object_ty_to_sonatina_with_pointer_leaf_infos(inner, pointer_leaf_infos)
                 }
-                let mut sonatina_fields = Vec::with_capacity(field_tys.len());
-                for (field_idx, field_ty) in field_tys.iter().copied().enumerate() {
-                    let field_pointer_leaf_infos =
-                        field_pointer_leaf_infos(pointer_leaf_infos, field_idx);
-                    sonatina_fields.push(fe_ty_to_sonatina_with_pointer_leaf_infos(
-                        builder,
-                        db,
-                        core,
-                        target_layout,
-                        field_ty,
-                        &field_pointer_leaf_infos,
-                        cache,
-                        name_counter,
-                    )?);
+                CapabilityKind::Mut | CapabilityKind::Ref
+                    if root_pointer_info
+                        .is_some_and(|info| info.address_space != AddressSpaceKind::Memory) =>
+                {
+                    Some(Type::I256)
                 }
-                let id = *name_counter;
-                *name_counter += 1;
-                Some(builder.declare_struct_type(
-                    &format!("__fe_tuple_{id}"),
-                    &sonatina_fields,
-                    false,
-                ))
-            }
-            PrimTy::Array => {
-                let elem_ty = layout::array_elem_ty(db, ty)?;
-                let len = layout::array_len(db, ty)?;
-                let elem_pointer_leaf_infos = array_elem_pointer_leaf_infos(pointer_leaf_infos);
-                let sonatina_elem = fe_ty_to_sonatina_with_pointer_leaf_infos(
-                    builder,
-                    db,
-                    core,
-                    target_layout,
-                    elem_ty,
-                    &elem_pointer_leaf_infos,
-                    cache,
-                    name_counter,
-                )?;
-                Some(builder.declare_array_type(sonatina_elem, len))
-            }
-            _ => Some(types::value_type(db, ty)),
-        },
-        TyData::TyBase(TyBase::Adt(adt_def)) => match adt_def.adt_ref(db) {
-            AdtRef::Struct(_) => {
-                let field_tys = ty.field_types(db);
-                let mut sonatina_fields = Vec::with_capacity(field_tys.len());
-                for (field_idx, field_ty) in field_tys.iter().copied().enumerate() {
-                    let field_pointer_leaf_infos =
-                        field_pointer_leaf_infos(pointer_leaf_infos, field_idx);
-                    sonatina_fields.push(fe_ty_to_sonatina_with_pointer_leaf_infos(
-                        builder,
-                        db,
-                        core,
-                        target_layout,
-                        field_ty,
-                        &field_pointer_leaf_infos,
-                        cache,
-                        name_counter,
-                    )?);
+                CapabilityKind::Mut | CapabilityKind::Ref
+                    if root_pointer_info
+                        .is_some_and(|info| info.address_space == AddressSpaceKind::Memory)
+                        && scalar_handle_object_ref_target_ty(self.db, self.core, inner)
+                            .is_some() =>
+                {
+                    self.scalar_handle_sonatina_ty(inner)
                 }
-                let name = adt_def
-                    .adt_ref(db)
-                    .name(db)
-                    .map(|id| id.data(db).to_string())
-                    .unwrap_or_else(|| "anon".to_string());
-                let id = *name_counter;
-                *name_counter += 1;
-                Some(builder.declare_struct_type(
-                    &format!("__fe_{name}_{id}"),
-                    &sonatina_fields,
-                    false,
-                ))
-            }
-            AdtRef::Enum(_) => FeEnumTypeDeclCtx {
-                builder,
-                db,
-                core,
-                target_layout,
-                pointer_leaf_infos,
-                cache,
-                name_counter,
-            }
-            .declare_enum_type(ty, false),
-        },
-        TyData::TyBase(TyBase::Contract(_)) | TyData::TyBase(TyBase::Func(_)) => Some(Type::Unit),
-        _ => None,
-    }
-}
-
-fn fe_object_ty_to_sonatina_inner<'db>(
-    builder: &sonatina_ir::builder::ModuleBuilder,
-    db: &'db DriverDataBase,
-    core: &mir::CoreLib<'db>,
-    target_layout: &TargetDataLayout,
-    ty: hir::analysis::ty::ty_def::TyId<'db>,
-    pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
-    cache: &mut FxHashMap<String, Option<Type>>,
-    name_counter: &mut usize,
-) -> Option<Type> {
-    let ty = normalize_sonatina_type_input(db, core, mir::repr::object_layout_ty(db, core, ty));
-    if is_erased_runtime_ty(db, target_layout, ty) {
-        return Some(Type::Unit);
-    }
-
-    let root_pointer_info = root_pointer_leaf_info(pointer_leaf_infos);
-    if let Some((capability, inner)) = ty.as_capability(db) {
-        return match capability {
-            CapabilityKind::View => fe_object_ty_to_sonatina_with_pointer_leaf_infos(
-                builder,
-                db,
-                core,
-                target_layout,
-                inner,
-                pointer_leaf_infos,
-                cache,
-                name_counter,
-            ),
-            CapabilityKind::Mut | CapabilityKind::Ref
-                if root_pointer_info
-                    .is_some_and(|info| info.address_space != AddressSpaceKind::Memory) =>
-            {
-                Some(Type::I256)
-            }
-            CapabilityKind::Mut | CapabilityKind::Ref
-                if root_pointer_info
-                    .is_some_and(|info| info.address_space == AddressSpaceKind::Memory)
-                    && scalar_handle_object_ref_target_ty(db, core, inner).is_some() =>
-            {
-                scalar_handle_sonatina_ty(
-                    builder,
-                    db,
-                    core,
-                    target_layout,
-                    inner,
-                    cache,
-                    name_counter,
-                )
-            }
-            CapabilityKind::Mut | CapabilityKind::Ref
-                if object_field_uses_object_ref(db, core, inner) =>
-            {
-                let target_ty = fe_object_ty_to_sonatina_with_pointer_leaf_infos(
-                    builder,
-                    db,
-                    core,
-                    target_layout,
-                    inner,
-                    &[],
-                    cache,
-                    name_counter,
-                )
-                .or_else(|| {
-                    let size = layout::ty_memory_size_or_word_in(db, target_layout, inner)?;
-                    Some(builder.declare_array_type(Type::I8, size))
-                })?;
-                Some(builder.objref_type(target_ty))
-            }
-            CapabilityKind::Mut => Some(pointer_like_sonatina_ty(
-                builder,
-                db,
-                core,
-                target_layout,
-                inner,
-                &[],
-                cache,
-                name_counter,
-            )),
-            CapabilityKind::Ref if lowers_by_ref_layout(db, core, inner) => {
-                Some(pointer_like_sonatina_ty(
-                    builder,
-                    db,
-                    core,
-                    target_layout,
-                    inner,
-                    &[],
-                    cache,
-                    name_counter,
-                ))
-            }
-            CapabilityKind::Ref => Some(Type::I256),
-        };
-    }
-
-    if let Some(target_ty) = memory_effect_pointer_target_ty(db, core, ty) {
-        return Some(pointer_like_sonatina_ty(
-            builder,
-            db,
-            core,
-            target_layout,
-            target_ty,
-            &[],
-            cache,
-            name_counter,
-        ));
-    }
-
-    if let Some(inner) = mir::repr::transparent_newtype_field_ty(db, ty) {
-        return fe_object_ty_to_sonatina_with_pointer_leaf_infos(
-            builder,
-            db,
-            core,
-            target_layout,
-            inner,
-            pointer_leaf_infos,
-            cache,
-            name_counter,
-        );
-    }
-
-    if matches!(
-        mir::repr::repr_kind_for_ty(db, core, ty),
-        mir::repr::ReprKind::Word
-    ) {
-        return Some(types::value_type(db, ty));
-    }
-
-    let base_ty = ty.base_ty(db);
-    match base_ty.data(db) {
-        TyData::TyBase(TyBase::Prim(prim)) => match prim {
-            PrimTy::String => None,
-            PrimTy::Tuple(_) => {
-                let field_tys = ty.field_types(db);
-                if field_tys.is_empty() {
-                    return Some(Type::Unit);
+                CapabilityKind::Mut | CapabilityKind::Ref
+                    if object_field_uses_object_ref(self.db, self.core, inner) =>
+                {
+                    let target_ty = self
+                        .fe_object_ty_to_sonatina_with_pointer_leaf_infos(inner, &[])
+                        .or_else(|| {
+                            let size = layout::ty_memory_size_or_word_in(
+                                self.db,
+                                self.target_layout,
+                                inner,
+                            )?;
+                            Some(self.builder.declare_array_type(Type::I8, size))
+                        })?;
+                    Some(self.builder.objref_type(target_ty))
                 }
-                let mut sonatina_fields = Vec::with_capacity(field_tys.len());
-                for (field_idx, field_ty) in field_tys.iter().copied().enumerate() {
-                    let field_pointer_leaf_infos =
-                        field_pointer_leaf_infos(pointer_leaf_infos, field_idx);
-                    sonatina_fields.push(fe_object_ty_to_sonatina_with_pointer_leaf_infos(
-                        builder,
-                        db,
-                        core,
-                        target_layout,
-                        field_ty,
-                        &field_pointer_leaf_infos,
-                        cache,
-                        name_counter,
-                    )?);
+                CapabilityKind::Mut => Some(self.pointer_like_sonatina_ty(inner, &[])),
+                CapabilityKind::Ref if lowers_by_ref_layout(self.db, self.core, inner) => {
+                    Some(self.pointer_like_sonatina_ty(inner, &[]))
                 }
-                let id = *name_counter;
-                *name_counter += 1;
-                Some(builder.declare_struct_type(
-                    &format!("__fe_obj_tuple_{id}"),
-                    &sonatina_fields,
-                    false,
-                ))
-            }
-            PrimTy::Array => {
-                let elem_ty = layout::array_elem_ty(db, ty)?;
-                let len = layout::array_len(db, ty)?;
-                let elem_pointer_leaf_infos = array_elem_pointer_leaf_infos(pointer_leaf_infos);
-                let sonatina_elem = fe_object_ty_to_sonatina_with_pointer_leaf_infos(
-                    builder,
-                    db,
-                    core,
-                    target_layout,
-                    elem_ty,
-                    &elem_pointer_leaf_infos,
-                    cache,
-                    name_counter,
-                )?;
-                Some(builder.declare_array_type(sonatina_elem, len))
-            }
-            _ => Some(types::value_type(db, ty)),
-        },
-        TyData::TyBase(TyBase::Adt(adt_def)) => match adt_def.adt_ref(db) {
-            AdtRef::Struct(_) => {
-                let field_tys = ty.field_types(db);
-                let mut sonatina_fields = Vec::with_capacity(field_tys.len());
-                for (field_idx, field_ty) in field_tys.iter().copied().enumerate() {
-                    let field_pointer_leaf_infos =
-                        field_pointer_leaf_infos(pointer_leaf_infos, field_idx);
-                    sonatina_fields.push(fe_object_ty_to_sonatina_with_pointer_leaf_infos(
-                        builder,
-                        db,
-                        core,
-                        target_layout,
-                        field_ty,
-                        &field_pointer_leaf_infos,
-                        cache,
-                        name_counter,
-                    )?);
+                CapabilityKind::Ref => Some(Type::I256),
+            };
+        }
+
+        if let Some(target_ty) = memory_effect_pointer_target_ty(self.db, self.core, ty) {
+            return Some(self.pointer_like_sonatina_ty(target_ty, &[]));
+        }
+
+        if let Some(inner) = mir::repr::transparent_newtype_field_ty(self.db, ty) {
+            return self
+                .fe_object_ty_to_sonatina_with_pointer_leaf_infos(inner, pointer_leaf_infos);
+        }
+
+        if matches!(
+            mir::repr::repr_kind_for_ty(self.db, self.core, ty),
+            mir::repr::ReprKind::Word
+        ) {
+            return Some(types::value_type(self.db, ty));
+        }
+
+        let base_ty = ty.base_ty(self.db);
+        match base_ty.data(self.db) {
+            TyData::TyBase(TyBase::Prim(prim)) => match prim {
+                PrimTy::String => None,
+                PrimTy::Tuple(_) => {
+                    let field_tys = ty.field_types(self.db);
+                    if field_tys.is_empty() {
+                        return Some(Type::Unit);
+                    }
+                    let mut sonatina_fields = Vec::with_capacity(field_tys.len());
+                    for (field_idx, field_ty) in field_tys.iter().copied().enumerate() {
+                        let field_pointer_leaf_infos =
+                            field_pointer_leaf_infos(pointer_leaf_infos, field_idx);
+                        sonatina_fields.push(
+                            self.fe_object_ty_to_sonatina_with_pointer_leaf_infos(
+                                field_ty,
+                                &field_pointer_leaf_infos,
+                            )?,
+                        );
+                    }
+                    let id = *self.name_counter;
+                    *self.name_counter += 1;
+                    Some(self.builder.declare_struct_type(
+                        &format!("__fe_obj_tuple_{id}"),
+                        &sonatina_fields,
+                        false,
+                    ))
                 }
-                let name = adt_def
-                    .adt_ref(db)
-                    .name(db)
-                    .map(|id| id.data(db).to_string())
-                    .unwrap_or_else(|| "anon".to_string());
-                let id = *name_counter;
-                *name_counter += 1;
-                Some(builder.declare_struct_type(
-                    &format!("__fe_obj_{name}_{id}"),
-                    &sonatina_fields,
-                    false,
-                ))
+                PrimTy::Array => {
+                    let elem_ty = layout::array_elem_ty(self.db, ty)?;
+                    let len = layout::array_len(self.db, ty)?;
+                    let elem_pointer_leaf_infos = array_elem_pointer_leaf_infos(pointer_leaf_infos);
+                    let sonatina_elem = self.fe_object_ty_to_sonatina_with_pointer_leaf_infos(
+                        elem_ty,
+                        &elem_pointer_leaf_infos,
+                    )?;
+                    Some(self.builder.declare_array_type(sonatina_elem, len))
+                }
+                _ => Some(types::value_type(self.db, ty)),
+            },
+            TyData::TyBase(TyBase::Adt(adt_def)) => match adt_def.adt_ref(self.db) {
+                AdtRef::Struct(_) => {
+                    let field_tys = ty.field_types(self.db);
+                    let mut sonatina_fields = Vec::with_capacity(field_tys.len());
+                    for (field_idx, field_ty) in field_tys.iter().copied().enumerate() {
+                        let field_pointer_leaf_infos =
+                            field_pointer_leaf_infos(pointer_leaf_infos, field_idx);
+                        sonatina_fields.push(
+                            self.fe_object_ty_to_sonatina_with_pointer_leaf_infos(
+                                field_ty,
+                                &field_pointer_leaf_infos,
+                            )?,
+                        );
+                    }
+                    let name = adt_def
+                        .adt_ref(self.db)
+                        .name(self.db)
+                        .map(|id| id.data(self.db).to_string())
+                        .unwrap_or_else(|| "anon".to_string());
+                    let id = *self.name_counter;
+                    *self.name_counter += 1;
+                    Some(self.builder.declare_struct_type(
+                        &format!("__fe_obj_{name}_{id}"),
+                        &sonatina_fields,
+                        false,
+                    ))
+                }
+                AdtRef::Enum(_) => self.declare_enum_type(ty, true, pointer_leaf_infos),
+            },
+            TyData::TyBase(TyBase::Contract(_)) | TyData::TyBase(TyBase::Func(_)) => {
+                Some(Type::Unit)
             }
-            AdtRef::Enum(_) => FeEnumTypeDeclCtx {
-                builder,
-                db,
-                core,
-                target_layout,
-                pointer_leaf_infos,
-                cache,
-                name_counter,
-            }
-            .declare_enum_type(ty, true),
-        },
-        TyData::TyBase(TyBase::Contract(_)) | TyData::TyBase(TyBase::Func(_)) => Some(Type::Unit),
-        _ => None,
+            _ => None,
+        }
     }
 }
 
@@ -3733,15 +3634,7 @@ fn lower_place_segment_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             &segment.projections,
         )
         .map_err(LowerError::Unsupported)?
-        && let Some(sonatina_ty) = fe_ty_to_sonatina(
-            &ctx.fb.module_builder,
-            ctx.db,
-            ctx.core,
-            ctx.target_layout,
-            segment.base.ty,
-            ctx.gep_type_cache,
-            ctx.gep_name_counter,
-        )
+        && let Some(sonatina_ty) = ctx.type_lowerer().fe_ty_to_sonatina(segment.base.ty)
         && place_supports_gep(ctx, sonatina_ty, &segment.projections)
     {
         let gep_ptr =
@@ -4481,17 +4374,11 @@ fn lower_alloc<C: sonatina_ir::func_cursor::FuncCursor>(
             ctx.local_runtime_types[dest.index()],
         ));
     }
-    let object_ty = fe_object_ty_to_sonatina_with_pointer_leaf_infos(
-        &ctx.fb.module_builder,
-        ctx.db,
-        ctx.core,
-        ctx.target_layout,
-        alloc_ty,
-        &ctx.body.local(dest).pointer_leaf_infos,
-        ctx.gep_type_cache,
-        ctx.gep_name_counter,
-    )
-    .unwrap_or_else(|| ctx.fb.declare_array_type(Type::I8, size_bytes));
+    let pointer_leaf_infos = ctx.body.local(dest).pointer_leaf_infos.clone();
+    let object_ty = ctx
+        .type_lowerer()
+        .fe_object_ty_to_sonatina_with_pointer_leaf_infos(alloc_ty, &pointer_leaf_infos)
+        .unwrap_or_else(|| ctx.fb.declare_array_type(Type::I8, size_bytes));
 
     Ok(emit_obj_alloc_ref(ctx.fb, object_ty, ctx.is))
 }
@@ -4961,17 +4848,11 @@ fn lower_const_aggregate<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 ctx.is,
             ));
         }
-        let object_ty = fe_object_ty_to_sonatina_with_pointer_leaf_infos(
-            &ctx.fb.module_builder,
-            ctx.db,
-            ctx.core,
-            ctx.target_layout,
-            ty,
-            &ctx.body.local(dest).pointer_leaf_infos,
-            ctx.gep_type_cache,
-            ctx.gep_name_counter,
-        )
-        .unwrap_or_else(|| ctx.fb.declare_array_type(Type::I8, size_bytes));
+        let pointer_leaf_infos = ctx.body.local(dest).pointer_leaf_infos.clone();
+        let object_ty = ctx
+            .type_lowerer()
+            .fe_object_ty_to_sonatina_with_pointer_leaf_infos(ty, &pointer_leaf_infos)
+            .unwrap_or_else(|| ctx.fb.declare_array_type(Type::I8, size_bytes));
         if const_aggregate_object_copy_compatible(ctx.db, ctx.core, ty) {
             let gv_ref = ensure_const_data_global(ctx, data);
             let object_ref = emit_obj_alloc_ref(ctx.fb, object_ty, ctx.is);
@@ -5722,4 +5603,37 @@ fn lower_unary_arg<C: sonatina_ir::func_cursor::FuncCursor>(
         )));
     };
     lower_value(ctx, *a)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_pointer_leaf_info_normalizes_root_entries() {
+        let pointer_leaf_infos = vec![
+            (
+                mir::MirProjectionPath::new(),
+                PointerInfo {
+                    address_space: AddressSpaceKind::Memory,
+                    target_ty: None,
+                },
+            ),
+            (
+                mir::MirProjectionPath::new(),
+                PointerInfo {
+                    address_space: AddressSpaceKind::Storage,
+                    target_ty: None,
+                },
+            ),
+        ];
+
+        assert_eq!(
+            root_pointer_leaf_info(&pointer_leaf_infos),
+            Some(PointerInfo {
+                address_space: AddressSpaceKind::Storage,
+                target_ty: None,
+            }),
+        );
+    }
 }

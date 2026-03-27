@@ -108,194 +108,12 @@ impl RuntimeFunctionMetadata {
     }
 }
 
-fn runtime_target_pointer_leaf_infos<'db>(
-    db: &'db DriverDataBase,
-    core: &CoreLib<'db>,
-    owner_ty: TyId<'db>,
-    target_ty: TyId<'db>,
-    pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
-) -> Vec<(mir::MirProjectionPath<'db>, PointerInfo<'db>)> {
-    if let Some((_, inner)) = owner_ty.as_capability(db) {
-        let nested_pointer_leaf_infos: Vec<_> = pointer_leaf_infos
-            .iter()
-            .filter(|(path, _)| !path.is_empty())
-            .cloned()
-            .collect();
-        return runtime_target_pointer_leaf_infos(
-            db,
-            core,
-            inner,
-            target_ty,
-            &nested_pointer_leaf_infos,
-        );
-    }
-
-    if mir::repr::effect_provider_space_for_ty(db, core, owner_ty).is_some() {
-        return Vec::new();
-    }
-
-    if let Some(inner) = mir::repr::transparent_newtype_field_ty(db, owner_ty) {
-        return runtime_target_pointer_leaf_infos(db, core, inner, target_ty, pointer_leaf_infos);
-    }
-
-    if owner_ty == target_ty || mir::repr::object_layout_ty(db, core, owner_ty) == target_ty {
-        return pointer_leaf_infos.to_vec();
-    }
-
-    Vec::new()
-}
-
-fn runtime_pointer_type_from_target<'db>(
-    builder: &ModuleBuilder,
-    db: &'db DriverDataBase,
-    core: &CoreLib<'db>,
-    target_layout: &TargetDataLayout,
-    owner_ty: TyId<'db>,
-    target_ty: TyId<'db>,
-    pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
-    cache: &mut FxHashMap<String, Option<Type>>,
-    name_counter: &mut usize,
-) -> Type {
-    let pointee_leaf_infos =
-        runtime_target_pointer_leaf_infos(db, core, owner_ty, target_ty, pointer_leaf_infos);
-    let pointee = lower::fe_ty_to_sonatina_with_pointer_leaf_infos(
-        builder,
-        db,
-        core,
-        target_layout,
-        target_ty,
-        &pointee_leaf_infos,
-        cache,
-        name_counter,
-    )
-    .unwrap_or(Type::I8);
-    if pointee == Type::Unit {
-        return builder.ptr_type(Type::I8);
-    }
-    builder.ptr_type(pointee)
-}
-
-fn runtime_object_ref_type_from_target<'db>(
-    builder: &ModuleBuilder,
-    db: &'db DriverDataBase,
-    core: &CoreLib<'db>,
-    target_layout: &TargetDataLayout,
-    owner_ty: TyId<'db>,
-    target_ty: TyId<'db>,
-    pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
-    cache: &mut FxHashMap<String, Option<Type>>,
-    name_counter: &mut usize,
-) -> Type {
-    let object_pointer_leaf_infos =
-        runtime_target_pointer_leaf_infos(db, core, owner_ty, target_ty, pointer_leaf_infos);
-    let object_ty = lower::fe_object_ty_to_sonatina_with_pointer_leaf_infos(
-        builder,
-        db,
-        core,
-        target_layout,
-        target_ty,
-        &object_pointer_leaf_infos,
-        cache,
-        name_counter,
-    )
-    .unwrap_or_else(|| {
-        let size = layout::ty_memory_size_or_word_in(db, target_layout, target_ty)
-            .expect("object-backed runtime types must have a known memory size");
-        builder.declare_array_type(Type::I8, size)
-    });
-    builder.objref_type(object_ty)
-}
-
-fn runtime_enum_tag_type_from_target<'db>(
-    builder: &ModuleBuilder,
-    db: &'db DriverDataBase,
-    core: &CoreLib<'db>,
-    target_layout: &TargetDataLayout,
-    enum_ty: TyId<'db>,
-    pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
-    cache: &mut FxHashMap<String, Option<Type>>,
-    name_counter: &mut usize,
-) -> Type {
-    let enum_ty = lower::fe_object_ty_to_sonatina_with_pointer_leaf_infos(
-        builder,
-        db,
-        core,
-        target_layout,
-        enum_ty,
-        pointer_leaf_infos,
-        cache,
-        name_counter,
-    )
-    .expect("enum-tag runtime shapes must lower to a Sonatina enum type");
-    let Type::Compound(enum_ty) = enum_ty else {
-        panic!("enum-tag runtime shapes must lower to a Sonatina compound enum type");
-    };
-    Type::EnumTag(enum_ty)
-}
-
 fn function_core_lib<'db>(db: &'db DriverDataBase, func: &mir::MirFunction<'db>) -> CoreLib<'db> {
     let scope = match func.origin {
         mir::ir::MirFunctionOrigin::Hir(hir_func) => hir_func.scope(),
         mir::ir::MirFunctionOrigin::Synthetic(synth) => synth.contract().scope(),
     };
     CoreLib::new(db, scope)
-}
-
-pub(super) fn runtime_type_for_ty_and_shape<'db>(
-    builder: &ModuleBuilder,
-    db: &'db DriverDataBase,
-    core: &CoreLib<'db>,
-    target_layout: &TargetDataLayout,
-    ty: TyId<'db>,
-    shape: mir::ir::RuntimeShape<'db>,
-    pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
-    cache: &mut FxHashMap<String, Option<Type>>,
-    name_counter: &mut usize,
-) -> Type {
-    match shape {
-        mir::ir::RuntimeShape::Unresolved => {
-            panic!("unresolved MIR runtime shape reached Sonatina codegen")
-        }
-        mir::ir::RuntimeShape::Erased => Type::Unit,
-        mir::ir::RuntimeShape::EnumTag { enum_ty } => runtime_enum_tag_type_from_target(
-            builder,
-            db,
-            core,
-            target_layout,
-            enum_ty,
-            pointer_leaf_infos,
-            cache,
-            name_counter,
-        ),
-        mir::ir::RuntimeShape::ObjectRef { target_ty } => runtime_object_ref_type_from_target(
-            builder,
-            db,
-            core,
-            target_layout,
-            ty,
-            target_ty,
-            pointer_leaf_infos,
-            cache,
-            name_counter,
-        ),
-        mir::ir::RuntimeShape::Word(kind) => types::runtime_word_type(kind),
-        mir::ir::RuntimeShape::MemoryPtr { target_ty } => target_ty
-            .map(|target_ty| {
-                runtime_pointer_type_from_target(
-                    builder,
-                    db,
-                    core,
-                    target_layout,
-                    ty,
-                    target_ty,
-                    pointer_leaf_infos,
-                    cache,
-                    name_counter,
-                )
-            })
-            .unwrap_or_else(|| builder.ptr_type(Type::I8)),
-        mir::ir::RuntimeShape::AddressWord(_) => Type::I256,
-    }
 }
 
 pub(super) fn zero_value_for_type<C: sonatina_ir::func_cursor::FuncCursor>(
@@ -695,6 +513,17 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         }
     }
 
+    fn type_lowerer<'b>(&'b mut self, core: &'b CoreLib<'db>) -> lower::TypeLowerer<'b, 'db> {
+        lower::TypeLowerer::new(
+            &self.builder,
+            self.db,
+            core,
+            &self.target_layout,
+            &mut self.gep_type_cache,
+            &mut self.gep_name_counter,
+        )
+    }
+
     /// Lower the entire module.
     fn lower(&mut self) -> Result<(), LowerError> {
         // First pass: declare runtime-relevant functions.
@@ -765,35 +594,24 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             .chain(func.runtime_effect_param_locals())
             .collect();
 
+        let mut type_lowerer = self.type_lowerer(&core);
         let mut params = Vec::with_capacity(runtime_param_locals.len());
         for local_id in runtime_param_locals {
             let local = func.body.locals.get(local_id.index()).ok_or_else(|| {
                 LowerError::Internal(format!("unknown param local: {local_id:?}"))
             })?;
-            params.push(runtime_type_for_ty_and_shape(
-                &self.builder,
-                self.db,
-                &core,
-                &self.target_layout,
+            params.push(type_lowerer.runtime_type_for_ty_and_shape(
                 local.ty,
                 local.runtime_shape,
                 &local.pointer_leaf_infos,
-                &mut self.gep_type_cache,
-                &mut self.gep_name_counter,
             ));
         }
 
         let ret = (!func.runtime_return_shape.is_erased()).then(|| {
-            runtime_type_for_ty_and_shape(
-                &self.builder,
-                self.db,
-                &core,
-                &self.target_layout,
+            type_lowerer.runtime_type_for_ty_and_shape(
                 func.ret_ty,
                 func.runtime_return_shape,
                 &func.runtime_return_pointer_leaf_infos,
-                &mut self.gep_type_cache,
-                &mut self.gep_name_counter,
             )
         });
 
@@ -1307,24 +1125,20 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         let mut fb = self.builder.func_builder::<InstInserter>(func_ref);
         let is = self.isa.inst_set();
         let core = function_core_lib(self.db, func);
-        let local_runtime_types: Vec<_> = func
-            .body
-            .locals
-            .iter()
-            .map(|local| {
-                runtime_type_for_ty_and_shape(
-                    &self.builder,
-                    self.db,
-                    &core,
-                    &self.target_layout,
-                    local.ty,
-                    local.runtime_shape,
-                    &local.pointer_leaf_infos,
-                    &mut self.gep_type_cache,
-                    &mut self.gep_name_counter,
-                )
-            })
-            .collect();
+        let local_runtime_types: Vec<_> = {
+            let mut type_lowerer = self.type_lowerer(&core);
+            func.body
+                .locals
+                .iter()
+                .map(|local| {
+                    type_lowerer.runtime_type_for_ty_and_shape(
+                        local.ty,
+                        local.runtime_shape,
+                        &local.pointer_leaf_infos,
+                    )
+                })
+                .collect()
+        };
         for (idx, local) in func.body.locals.iter().enumerate() {
             if !matches!(local.address_space, mir::ir::AddressSpaceKind::Memory)
                 && local_runtime_types[idx].is_obj_ref(&self.builder.ctx)
@@ -1347,16 +1161,10 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 &func.body.locals,
                 mir::ValueId(idx as u32),
             );
-            let runtime_ty = runtime_type_for_ty_and_shape(
-                &self.builder,
-                self.db,
-                &core,
-                &self.target_layout,
+            let runtime_ty = self.type_lowerer(&core).runtime_type_for_ty_and_shape(
                 value.ty,
                 value.runtime_shape,
                 &pointer_leaf_infos,
-                &mut self.gep_type_cache,
-                &mut self.gep_name_counter,
             );
             if runtime_ty.is_obj_ref(&self.builder.ctx)
                 && let Some(address_space) = value.repr.address_space()
@@ -1534,23 +1342,25 @@ pub(super) struct LowerCtx<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> {
 }
 
 impl<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> LowerCtx<'a, 'db, C> {
+    fn type_lowerer(&mut self) -> lower::TypeLowerer<'_, 'db> {
+        lower::TypeLowerer::new(
+            &self.fb.module_builder,
+            self.db,
+            self.core,
+            self.target_layout,
+            &mut *self.gep_type_cache,
+            &mut *self.gep_name_counter,
+        )
+    }
+
     pub(super) fn runtime_type_for_ty_and_shape(
         &mut self,
         ty: TyId<'db>,
         shape: mir::ir::RuntimeShape<'db>,
         pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
     ) -> Type {
-        runtime_type_for_ty_and_shape(
-            &self.fb.module_builder,
-            self.db,
-            self.core,
-            self.target_layout,
-            ty,
-            shape,
-            pointer_leaf_infos,
-            &mut *self.gep_type_cache,
-            &mut *self.gep_name_counter,
-        )
+        self.type_lowerer()
+            .runtime_type_for_ty_and_shape(ty, shape, pointer_leaf_infos)
     }
 
     pub(super) fn runtime_type_for_shape(&mut self, shape: mir::ir::RuntimeShape<'db>) -> Type {
