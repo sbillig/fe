@@ -48,26 +48,26 @@ note:
 note: 
    ┌─ goto_extern_call.fe:17:5
    │
-17 │     ops::revert(ret_ptr, ret_len)
+17 │     ops::revert(offset: ret_ptr, len: ret_len)
    │     ^^^ -> goto_extern_call::ops
 
 note: 
    ┌─ goto_extern_call.fe:17:10
    │
-17 │     ops::revert(ret_ptr, ret_len)
+17 │     ops::revert(offset: ret_ptr, len: ret_len)
    │          ^^^^^^ -> goto_extern_call::ops::revert
 
 note: 
-   ┌─ goto_extern_call.fe:17:17
+   ┌─ goto_extern_call.fe:17:25
    │
-17 │     ops::revert(ret_ptr, ret_len)
-   │                 ^^^^^^^ -> local: u256
+17 │     ops::revert(offset: ret_ptr, len: ret_len)
+   │                         ^^^^^^^ -> local: u256
 
 note: 
-   ┌─ goto_extern_call.fe:17:26
+   ┌─ goto_extern_call.fe:17:39
    │
-17 │     ops::revert(ret_ptr, ret_len)
-   │                          ^^^^^^^ -> local: u256
+17 │     ops::revert(offset: ret_ptr, len: ret_len)
+   │                                       ^^^^^^^ -> local: u256
 
 note: 
    ┌─ goto_extern_call.fe:18:5

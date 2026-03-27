@@ -7,7 +7,7 @@ struct Position {
 }
 
 impl Position {
-    fn accrue_fee(mut self, fee: u256) {
+    fn accrue_fee(mut self, _ fee: u256) {
         self.debt += fee
     }
 
@@ -16,14 +16,15 @@ impl Position {
     }
 }
 
-fn read_health(p: ref Position) -> u256 {
+fn read_health(_ p: ref Position) -> u256 {
     if p.debt == 0 {
         return 9999
     }
     p.collateral / p.debt
 }
 
-fn settle(mut p: own Position, payment: u256) -> Position {
+fn settle(_ p: own Position, _ payment: u256) -> Position {
+    let mut p = p
     if payment >= p.debt {
         p.collateral += payment - p.debt
         p.debt = 0
@@ -34,15 +35,15 @@ fn settle(mut p: own Position, payment: u256) -> Position {
     p
 }
 
-fn identity_u256(x: u256) -> u256 {
+fn identity_u256(_ x: u256) -> u256 {
     x
 }
 
-fn increment_version(v: mut u8) {
+fn increment_version(_ v: mut u8) {
     v += 1
 }
 
-fn close_position(p: own Position) -> (u256, u256, u8) {
+fn close_position(_ p: own Position) -> (u256, u256, u8) {
     (p.collateral, p.debt, p.version)
 }
 

@@ -2,11 +2,11 @@ struct NoCopy {
     value: u8,
 }
 
-fn take_u8(x: u8) -> u8 {
+fn take_u8(_ x: u8) -> u8 {
     x
 }
 
-fn take_no_copy(_x: NoCopy) {}
+fn take_no_copy(_: NoCopy) {}
 
 fn copy_from_ref(mut value: own u8) -> u8 {
     let r: ref u8 = ref value

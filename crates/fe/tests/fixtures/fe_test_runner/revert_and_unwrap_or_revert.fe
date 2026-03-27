@@ -25,8 +25,8 @@ impl<A: Abi> Encode<A> for MyError {
         e.write_word(self.to_int())
     }
 
-    fn encode_to_ptr(own self, ptr: u256) {
-        A::store_word(ptr, self.to_int())
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        A::store_word(ptr: ptr, value: self.to_int())
     }
 }
 
@@ -121,8 +121,8 @@ impl<A: Abi> Encode<A> for Inner {
         e.write_word(self.code)
     }
 
-    fn encode_to_ptr(own self, ptr: u256) {
-        A::store_word(ptr, self.code)
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        A::store_word(ptr: ptr, value: self.code)
     }
 }
 
@@ -143,9 +143,9 @@ impl<A: Abi> Encode<A> for Outer {
         e.write_word(self.extra)
     }
 
-    fn encode_to_ptr(own self, ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: u256) {
         self.inner.encode_to_ptr(ptr)
-        A::store_word(ptr + 32, self.extra)
+        A::store_word(ptr: ptr + 32, value: self.extra)
     }
 }
 

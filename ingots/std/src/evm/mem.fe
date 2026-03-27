@@ -7,5 +7,5 @@ extern {
     /// - Yul backend: uses the free-memory pointer at `0x40` and clamps it to `>= 0x2000`
     ///   (to stay above backend-reserved memory regions).
     /// - Sonatina backend: lowered to `evm_malloc`.
-    pub fn alloc(size: u256) -> u256
+    pub fn alloc(_ size: u256) -> u256
 }

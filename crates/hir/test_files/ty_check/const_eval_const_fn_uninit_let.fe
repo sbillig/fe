@@ -1,4 +1,4 @@
-const fn add1(x: usize) -> usize {
+const fn add1(_ x: usize) -> usize {
     let y: usize
     x + 1
 }

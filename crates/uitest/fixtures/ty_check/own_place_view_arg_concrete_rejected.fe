@@ -2,7 +2,7 @@ struct Foo {
     x: u8
 }
 
-fn take_own(_x: own Foo) {}
+fn take_own(_: own Foo) {}
 
 fn caller(foo: Foo) {
     take_own(foo)

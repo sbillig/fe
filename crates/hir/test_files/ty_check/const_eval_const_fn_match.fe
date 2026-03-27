@@ -1,4 +1,4 @@
-const fn choose(x: usize) -> usize {
+const fn choose(_ x: usize) -> usize {
     match x {
         0 => 10
         1 | 2 => 20

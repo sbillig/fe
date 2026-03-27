@@ -7,8 +7,8 @@ extern {
     // Memory
     // -------------------------------------------------------------------------
     pub fn mload(_: u256) -> u256
-    pub fn mstore(_: u256, _: u256)
-    pub fn mstore8(_: u256, _: u8)
+    pub fn mstore(addr: u256, value: u256)
+    pub fn mstore8(addr: u256, value: u8)
     pub fn msize() -> u256
 
     // -------------------------------------------------------------------------
@@ -31,9 +31,9 @@ extern {
     // -------------------------------------------------------------------------
     pub fn codecopy(dest: u256, offset: u256, len: u256)
     pub fn codesize() -> u256
-    pub fn keccak256(_: u256, _: u256) -> u256
-    pub fn addmod(a: u256, b: u256, m: u256) -> u256
-    pub fn mulmod(a: u256, b: u256, m: u256) -> u256
+    pub fn keccak256(offset: u256, len: u256) -> u256
+    pub fn addmod(_ a: u256, _ b: u256, m: u256) -> u256
+    pub fn mulmod(_ a: u256, _ b: u256, m: u256) -> u256
 
     // -------------------------------------------------------------------------
     // Environment
@@ -97,8 +97,8 @@ extern {
     // -------------------------------------------------------------------------
     // Control flow
     // -------------------------------------------------------------------------
-    pub fn revert(_: u256, _: u256) -> !
-    pub fn return_data(_: u256, _: u256) -> !
+    pub fn revert(offset: u256, len: u256) -> !
+    pub fn return_data(offset: u256, len: u256) -> !
     pub fn selfdestruct(_: u256) -> !
     pub fn stop() -> !
 }

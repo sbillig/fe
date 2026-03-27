@@ -2,5 +2,5 @@ use std::evm::ops::log0
 
 #[test]
 fn test_logs() {
-    log0(0, 32)
+    log0(offset: 0, len: 32)
 }

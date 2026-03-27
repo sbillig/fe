@@ -2,7 +2,7 @@ struct NoCopy {
     x: u8
 }
 
-fn consume<T>(_value: own T) {}
+fn consume<T>(_: own T) {}
 
 fn pass_ref() {
     let x = NoCopy { x: 1 }

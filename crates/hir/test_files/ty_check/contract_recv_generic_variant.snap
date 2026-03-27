@@ -50,10 +50,10 @@ note:
    │                      ^ mut E
 
 note: 
-   ┌─ contract_recv_generic_variant.fe:23:43
+   ┌─ contract_recv_generic_variant.fe:23:45
    │  
-23 │       fn encode_to_ptr(own self, ptr: u256) {
-   │ ╭───────────────────────────────────────────^
+23 │       fn encode_to_ptr(own self, _ ptr: u256) {
+   │ ╭─────────────────────────────────────────────^
 24 │ │         core::panic()
 25 │ │     }
    │ ╰─────^ ()

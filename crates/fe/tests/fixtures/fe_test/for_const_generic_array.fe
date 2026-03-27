@@ -1,6 +1,6 @@
 use std::evm::effects::assert
 
-fn sum<const N: usize>(arr: [u256; N]) -> u256 {
+fn sum<const N: usize>(_ arr: [u256; N]) -> u256 {
     let mut total: u256 = 0
     for x in arr {
         total += x

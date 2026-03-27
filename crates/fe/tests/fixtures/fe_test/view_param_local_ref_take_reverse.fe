@@ -9,19 +9,19 @@ struct Take<I, T: Seq<Item = I>> {
     base: ref T,
 }
 
-fn reverse<I, T: Seq<Item = I>>(seq: ref T) -> Reverse<I, T> {
+fn reverse<I, T: Seq<Item = I>>(_ seq: ref T) -> Reverse<I, T> {
     Reverse { base: seq }
 }
 
-fn take<I, T: Seq<Item = I>>(n: usize, seq: ref T) -> Take<I, T> {
+fn take<I, T: Seq<Item = I>>(_ n: usize, _ seq: ref T) -> Take<I, T> {
     Take { n, base: seq }
 }
 
-fn reverse_u256<T: Seq<Item = u256>>(seq: ref T) -> Reverse<u256, T> {
+fn reverse_u256<T: Seq<Item = u256>>(_ seq: ref T) -> Reverse<u256, T> {
     reverse(seq)
 }
 
-fn take_u256<T: Seq<Item = u256>>(n: usize, seq: ref T) -> Take<u256, T> {
+fn take_u256<T: Seq<Item = u256>>(_ n: usize, _ seq: ref T) -> Take<u256, T> {
     take(n, seq)
 }
 
@@ -32,7 +32,7 @@ impl<I, T: Seq<Item = I>> Seq for Reverse<I, T> {
         self.base.len()
     }
 
-    fn get(self, i: usize) -> I {
+    fn get(self, _ i: usize) -> I {
         let n = self.base.len()
         self.base.get(n - 1 - i)
     }
@@ -51,12 +51,12 @@ impl<I, T: Seq<Item = I>> Seq for Take<I, T> {
         }
     }
 
-    fn get(self, i: usize) -> I {
+    fn get(self, _ i: usize) -> I {
         self.base.get(i)
     }
 }
 
-fn sum_last4(arr: [u256; 8]) -> u256 {
+fn sum_last4(_ arr: [u256; 8]) -> u256 {
     let mut total = 0
     let rev = reverse_u256(ref arr)
     let tail = take_u256(4, ref rev)
@@ -66,7 +66,7 @@ fn sum_last4(arr: [u256; 8]) -> u256 {
     total
 }
 
-fn sum_first4(arr: [u256; 8]) -> u256 {
+fn sum_first4(_ arr: [u256; 8]) -> u256 {
     let mut total = 0
     let head = take_u256(4, ref arr)
     for x in head {

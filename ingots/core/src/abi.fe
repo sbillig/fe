@@ -20,8 +20,8 @@ pub enum AbiError {
 /// must use `len()` to enforce bounds/canonicality.
 pub trait ByteInput: Copy {
     fn len(self) -> u256
-    fn word_at(self, byte_offset: u256) -> u256
-    fn byte_at(self, byte_offset: u256) -> u8
+    fn word_at(self, _ byte_offset: u256) -> u256
+    fn byte_at(self, _ byte_offset: u256) -> u8
 }
 
 /// First-word prefix used for fast dispatch.
@@ -30,7 +30,7 @@ pub struct Prefix {
     pub word0: u256,
 }
 
-pub fn prefix<I: ByteInput>(input: I) -> Prefix {
+pub fn prefix<I: ByteInput>(_ input: I) -> Prefix {
     Prefix {
         len: input.len(),
         word0: input.word_at(0),
@@ -46,14 +46,14 @@ pub struct Cursor<I> {
 impl<I> Cursor<I>
     where I: ByteInput
 {
-    pub fn new(input: own I) -> Self {
+    pub fn new(_ input: own I) -> Self {
         Cursor {
             input,
             pos: 0,
         }
     }
 
-    pub fn fork(self, pos: u256) -> Self {
+    pub fn fork(self, _ pos: u256) -> Self {
         Cursor {
             input: self.input,
             pos,
@@ -74,7 +74,7 @@ impl<I> Cursor<I>
         w
     }
 
-    pub fn peek_word(self, at: u256) -> u256 {
+    pub fn peek_word(self, _ at: u256) -> u256 {
         self.input.word_at(at)
     }
 }
@@ -93,7 +93,7 @@ pub trait Abi {
     fn selector_from_prefix(_: u256) -> Self::Selector
 
     fn decoder_new<I: ByteInput>(_: own I) -> Self::Decoder<I>
-    fn decoder_with_base<I: ByteInput>(_: own I, base: u256) -> Self::Decoder<I>
+    fn decoder_with_base<I: ByteInput>(_: own I, _: u256) -> Self::Decoder<I>
 
     fn encoder_new() -> Self::Encoder
     fn store_word(ptr: u256, value: u256)
@@ -106,27 +106,27 @@ pub trait AbiDecoder<A: Abi> {
     fn input(self) -> Self::Input
     fn base(self) -> u256
     fn pos(self) -> u256
-    fn set_pos(mut self, new_pos: u256)
+    fn set_pos(mut self, _: u256)
 
     fn read_u8(mut self) -> u8
     fn read_word(mut self) -> u256
-    fn peek_word(self, at: u256) -> u256
+    fn peek_word(self, _: u256) -> u256
 
-    fn alloc(mut self, size: u256) -> u256
+    fn alloc(mut self, _: u256) -> u256
 }
 
 /// ABI encoder with cursor state and dynamic tail allocation.
 pub trait AbiEncoder<A: Abi> {
     fn base(self) -> u256
     fn pos(self) -> u256
-    fn set_pos(mut self, new_pos: u256)
+    fn set_pos(mut self, _: u256)
 
-    fn write_u8(mut self, v: u8)
-    fn write_word(mut self, v: u256)
-    fn write_word_at(mut self, at: u256, v: u256)
+    fn write_u8(mut self, _: u8)
+    fn write_word(mut self, _: u256)
+    fn write_word_at(mut self, at: u256, value: u256)
 
-    fn reserve_head(mut self, bytes: u256) -> u256
-    fn append_tail(mut self, bytes: u256) -> u256
+    fn reserve_head(mut self, _: u256) -> u256
+    fn append_tail(mut self, _: u256) -> u256
 
     fn finish(self) -> (u256, u256)
 }
@@ -146,10 +146,10 @@ pub trait Encode<A: Abi>: AbiSize {
     const DIRECT_ENCODE: bool
 
     fn encode<E: AbiEncoder<A>>(own self, _: mut E)
-    fn encode_to_ptr(own self, ptr: u256)
+    fn encode_to_ptr(own self, _: u256)
 }
 
-pub fn decode_or_revert<A: Abi, T, D>(d: mut D) -> T
+pub fn decode_or_revert<A: Abi, T, D>(_ d: mut D) -> T
     where T: Decode<A>, D: AbiDecoder<A>
 {
     T::decode(d)
@@ -165,12 +165,12 @@ impl<I> BytesView<I>
     where I: ByteInput
 {
     #[arithmetic(unchecked)]
-    pub fn byte_at(self, offset: u256) -> u8 {
+    pub fn byte_at(self, _ offset: u256) -> u8 {
         self.input.byte_at(self.start + offset)
     }
 
     #[arithmetic(unchecked)]
-    pub fn word_at(self, offset: u256) -> u256 {
+    pub fn word_at(self, _ offset: u256) -> u256 {
         self.input.word_at(self.start + offset)
     }
 }
@@ -407,8 +407,8 @@ impl<A: Abi> Encode<A> for u256 {
         e.write_word(self)
     }
 
-    fn encode_to_ptr(own self, ptr: u256) {
-        A::store_word(ptr, self)
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        A::store_word(ptr: ptr, value: self)
     }
 }
 
@@ -425,7 +425,7 @@ impl<A: Abi, const N: usize> Encode<A> for String<N> {
         e.write_word(super::addr_of(self))
     }
 
-    fn encode_to_ptr(own self, ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: u256) {
         super::panic()
     }
 }
@@ -456,7 +456,7 @@ impl<A: Abi, T, const N: usize> Encode<A> for [T; N]
     }
 
     #[arithmetic(unchecked)]
-    fn encode_to_ptr(own self, ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: u256) {
         let mut i: usize = 0
         while i < N {
             self[i].encode_to_ptr(ptr + ((i as u256) * T::ENCODED_SIZE))
@@ -482,11 +482,11 @@ impl<A: Abi> Encode<A> for bool {
         }
     }
 
-    fn encode_to_ptr(own self, ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: u256) {
         if self {
-            A::store_word(ptr, 1)
+            A::store_word(ptr: ptr, value: 1)
         } else {
-            A::store_word(ptr, 0)
+            A::store_word(ptr: ptr, value: 0)
         }
     }
 }
@@ -504,8 +504,8 @@ impl<A: Abi> Encode<A> for u8 {
         e.write_word(self as u256)
     }
 
-    fn encode_to_ptr(own self, ptr: u256) {
-        A::store_word(ptr, self as u256)
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        A::store_word(ptr: ptr, value: self as u256)
     }
 }
 
@@ -522,8 +522,8 @@ impl<A: Abi> Encode<A> for u16 {
         e.write_word(self as u256)
     }
 
-    fn encode_to_ptr(own self, ptr: u256) {
-        A::store_word(ptr, self as u256)
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        A::store_word(ptr: ptr, value: self as u256)
     }
 }
 
@@ -540,8 +540,8 @@ impl<A: Abi> Encode<A> for u32 {
         e.write_word(self as u256)
     }
 
-    fn encode_to_ptr(own self, ptr: u256) {
-        A::store_word(ptr, self as u256)
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        A::store_word(ptr: ptr, value: self as u256)
     }
 }
 
@@ -558,8 +558,8 @@ impl<A: Abi> Encode<A> for u64 {
         e.write_word(self as u256)
     }
 
-    fn encode_to_ptr(own self, ptr: u256) {
-        A::store_word(ptr, self as u256)
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        A::store_word(ptr: ptr, value: self as u256)
     }
 }
 
@@ -576,8 +576,8 @@ impl<A: Abi> Encode<A> for u128 {
         e.write_word(self as u256)
     }
 
-    fn encode_to_ptr(own self, ptr: u256) {
-        A::store_word(ptr, self as u256)
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        A::store_word(ptr: ptr, value: self as u256)
     }
 }
 
@@ -594,8 +594,8 @@ impl<A: Abi> Encode<A> for i8 {
         e.write_word(self.downcast_unchecked())
     }
 
-    fn encode_to_ptr(own self, ptr: u256) {
-        A::store_word(ptr, self.downcast_unchecked())
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        A::store_word(ptr: ptr, value: self.downcast_unchecked())
     }
 }
 
@@ -612,8 +612,8 @@ impl<A: Abi> Encode<A> for i16 {
         e.write_word(self.downcast_unchecked())
     }
 
-    fn encode_to_ptr(own self, ptr: u256) {
-        A::store_word(ptr, self.downcast_unchecked())
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        A::store_word(ptr: ptr, value: self.downcast_unchecked())
     }
 }
 
@@ -630,8 +630,8 @@ impl<A: Abi> Encode<A> for i32 {
         e.write_word(self.downcast_unchecked())
     }
 
-    fn encode_to_ptr(own self, ptr: u256) {
-        A::store_word(ptr, self.downcast_unchecked())
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        A::store_word(ptr: ptr, value: self.downcast_unchecked())
     }
 }
 
@@ -648,8 +648,8 @@ impl<A: Abi> Encode<A> for i64 {
         e.write_word(self.downcast_unchecked())
     }
 
-    fn encode_to_ptr(own self, ptr: u256) {
-        A::store_word(ptr, self.downcast_unchecked())
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        A::store_word(ptr: ptr, value: self.downcast_unchecked())
     }
 }
 
@@ -666,8 +666,8 @@ impl<A: Abi> Encode<A> for i128 {
         e.write_word(self.downcast_unchecked())
     }
 
-    fn encode_to_ptr(own self, ptr: u256) {
-        A::store_word(ptr, self.downcast_unchecked())
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        A::store_word(ptr: ptr, value: self.downcast_unchecked())
     }
 }
 
@@ -684,8 +684,8 @@ impl<A: Abi> Encode<A> for i256 {
         e.write_word(self.downcast_unchecked())
     }
 
-    fn encode_to_ptr(own self, ptr: u256) {
-        A::store_word(ptr, self.downcast_unchecked())
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        A::store_word(ptr: ptr, value: self.downcast_unchecked())
     }
 }
 
@@ -702,8 +702,8 @@ impl<A: Abi> Encode<A> for usize {
         e.write_word(self as u256)
     }
 
-    fn encode_to_ptr(own self, ptr: u256) {
-        A::store_word(ptr, self as u256)
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        A::store_word(ptr: ptr, value: self as u256)
     }
 }
 
@@ -720,8 +720,8 @@ impl<A: Abi> Encode<A> for isize {
         e.write_word(self.downcast_unchecked())
     }
 
-    fn encode_to_ptr(own self, ptr: u256) {
-        A::store_word(ptr, self.downcast_unchecked())
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        A::store_word(ptr: ptr, value: self.downcast_unchecked())
     }
 }
 
@@ -737,7 +737,7 @@ impl<A: Abi> Encode<A> for () {
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
     }
 
-    fn encode_to_ptr(own self, ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: u256) {
     }
 }
 
@@ -758,7 +758,7 @@ impl<A: Abi, T0> Encode<A> for (T0,)
         self.0.encode(mut e)
     }
 
-    fn encode_to_ptr(own self, ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: u256) {
         self.0.encode_to_ptr(ptr)
     }
 }
@@ -782,7 +782,7 @@ impl<A: Abi, T0, T1> Encode<A> for (T0, T1)
     }
 
     #[arithmetic(unchecked)]
-    fn encode_to_ptr(own self, ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: u256) {
         self.0.encode_to_ptr(ptr)
         self.1.encode_to_ptr(ptr + T0::ENCODED_SIZE)
     }
@@ -808,7 +808,7 @@ impl<A: Abi, T0, T1, T2> Encode<A> for (T0, T1, T2)
     }
 
     #[arithmetic(unchecked)]
-    fn encode_to_ptr(own self, ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: u256) {
         self.0.encode_to_ptr(ptr)
         self.1.encode_to_ptr(ptr + T0::ENCODED_SIZE)
         self.2
@@ -841,7 +841,7 @@ impl<A: Abi, T0, T1, T2, T3> Encode<A> for (T0, T1, T2, T3)
     }
 
     #[arithmetic(unchecked)]
-    fn encode_to_ptr(own self, ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: u256) {
         self.0.encode_to_ptr(ptr)
         self.1.encode_to_ptr(ptr + T0::ENCODED_SIZE)
         self.2
@@ -884,7 +884,7 @@ impl<A: Abi, T0, T1, T2, T3, T4> Encode<A> for (T0, T1, T2, T3, T4)
     }
 
     #[arithmetic(unchecked)]
-    fn encode_to_ptr(own self, ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: u256) {
         self.0.encode_to_ptr(ptr)
         self.1.encode_to_ptr(ptr + T0::ENCODED_SIZE)
         self.2
@@ -932,7 +932,7 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5> Encode<A> for (T0, T1, T2, T3, T4, T5)
     }
 
     #[arithmetic(unchecked)]
-    fn encode_to_ptr(own self, ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: u256) {
         self.0.encode_to_ptr(ptr)
         self.1.encode_to_ptr(ptr + T0::ENCODED_SIZE)
         self.2
@@ -985,7 +985,7 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6> Encode<A> for (T0, T1, T2, T3, T4, T5, 
     }
 
     #[arithmetic(unchecked)]
-    fn encode_to_ptr(own self, ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: u256) {
         self.0.encode_to_ptr(ptr)
         self.1.encode_to_ptr(ptr + T0::ENCODED_SIZE)
         self.2
@@ -1043,7 +1043,7 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7> Encode<A> for (T0, T1, T2, T3, T4, 
     }
 
     #[arithmetic(unchecked)]
-    fn encode_to_ptr(own self, ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: u256) {
         self.0.encode_to_ptr(ptr)
         self.1.encode_to_ptr(ptr + T0::ENCODED_SIZE)
         self.2
@@ -1106,7 +1106,7 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8> Encode<A> for (T0, T1, T2, T3, 
     }
 
     #[arithmetic(unchecked)]
-    fn encode_to_ptr(own self, ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: u256) {
         self.0.encode_to_ptr(ptr)
         self.1.encode_to_ptr(ptr + T0::ENCODED_SIZE)
         self.2
@@ -1176,7 +1176,7 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> Encode<A>
     }
 
     #[arithmetic(unchecked)]
-    fn encode_to_ptr(own self, ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: u256) {
         self.0.encode_to_ptr(ptr)
         self.1.encode_to_ptr(ptr + T0::ENCODED_SIZE)
         self.2
@@ -1251,7 +1251,7 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> Encode<A>
     }
 
     #[arithmetic(unchecked)]
-    fn encode_to_ptr(own self, ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: u256) {
         self.0.encode_to_ptr(ptr)
         self.1.encode_to_ptr(ptr + T0::ENCODED_SIZE)
         self.2
@@ -1331,7 +1331,7 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> Encode<A>
     }
 
     #[arithmetic(unchecked)]
-    fn encode_to_ptr(own self, ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: u256) {
         self.0.encode_to_ptr(ptr)
         self.1.encode_to_ptr(ptr + T0::ENCODED_SIZE)
         self.2

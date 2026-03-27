@@ -3,7 +3,7 @@ struct Position {
     b: u256,
 }
 
-fn read_a(p: Position) -> u256 {
+fn read_a(_ p: Position) -> u256 {
     p.a
 }
 

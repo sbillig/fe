@@ -27,7 +27,7 @@ impl Ledger {
         mut self.b
     }
 
-    fn pick_ac_mut(mut self, pick_c: bool) -> mut u256 {
+    fn pick_ac_mut(mut self, _ pick_c: bool) -> mut u256 {
         if pick_c {
             mut self.c
         } else {
@@ -50,7 +50,8 @@ fn set_scaled(mut value: own u256, base: u256, mul: u256) -> u256 {
     value
 }
 
-fn bump_twice(mut value: own u256) -> u256 {
+fn bump_twice(_ value: own u256) -> u256 {
+    let mut value = value
     value = add_forward(value, by: 1)
     add_forward(value, by: 1)
 }
@@ -67,19 +68,19 @@ pub contract C {
     recv Msg {
         MutateA { by } -> u256 uses (mut ledger) {
             let target = ledger.a_mut()
-            target = add(target, by: by)
+            target = add(value: target, by: by)
             ledger.a
         }
 
         MutateBForward { by } -> u256 uses (mut ledger) {
             let target = ledger.b_mut()
-            target = add_forward(target, by: by)
+            target = add_forward(value: target, by: by)
             ledger.b
         }
 
         SelectAndMutate { pick_c, base, mul } -> u256 uses (mut ledger) {
             let target = ledger.pick_ac_mut(pick_c: pick_c)
-            target = set_scaled(target, base: base, mul: mul)
+            target = set_scaled(value: target, base: base, mul: mul)
             if pick_c {
                 ledger.c
             } else {
@@ -92,7 +93,7 @@ pub contract C {
             target_a = bump_twice(target_a)
 
             let target_b = ledger.b_mut()
-            target_b = add(target_b, by: 3)
+            target_b = add(value: target_b, by: 3)
 
             ledger.a + ledger.b + ledger.c
         }

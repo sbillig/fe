@@ -632,8 +632,8 @@ struct Builder {}
 impl Builder {
     fn pair<const LEFT: usize, const RIGHT: usize>(
         self,
-        x: [u8; LEFT],
-        y: [u8; RIGHT],
+        _: [u8; LEFT],
+        _: [u8; RIGHT],
     ) -> Pair<LEFT, RIGHT> {
         Pair {}
     }
@@ -1225,8 +1225,8 @@ struct Outer<U> {
     b: Slot<u256>,
 }
 
-fn takes_root_2(x: Slot<u256, 2>) {}
-fn takes_root_3(x: Slot<u256, 3>) {}
+fn takes_root_2(_: Slot<u256, 2>) {}
+fn takes_root_3(_: Slot<u256, 3>) {}
 
 fn f(x: Outer<Slot<u256>, 2, 3>) {
     takes_root_2(x.a)
@@ -1719,7 +1719,7 @@ impl<T> EffectHandle for Ptr<T> {
     type Target = Payload<T>
     type AddressSpace = core::effect_ref::Storage
 
-    fn from_raw(raw: u256) -> Self {
+    fn from_raw(_ raw: u256) -> Self {
         Self { raw }
     }
 
@@ -1788,7 +1788,7 @@ impl<const LEFT: u256, const RIGHT: u256> EffectHandle for Wrapper<LEFT, RIGHT> 
     type Target = Pair<RIGHT, LEFT>
     type AddressSpace = core::effect_ref::Storage
 
-    fn from_raw(raw: u256) -> Self {
+    fn from_raw(_ raw: u256) -> Self {
         Self { raw }
     }
 
@@ -1868,7 +1868,7 @@ impl<const ROOT: u256> EffectHandle for Wrapper<ROOT> {
     type Target = u256
     type AddressSpace = core::effect_ref::Storage
 
-    fn from_raw(raw: u256) -> Self {
+    fn from_raw(_ raw: u256) -> Self {
         Self { raw }
     }
 

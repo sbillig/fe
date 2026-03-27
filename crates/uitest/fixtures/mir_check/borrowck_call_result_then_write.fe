@@ -5,7 +5,7 @@ struct Pair {
     b: u256,
 }
 
-fn borrow_a(x: mut Pair) -> mut u256 {
+fn borrow_a(_ x: mut Pair) -> mut u256 {
     mut x.a
 }
 

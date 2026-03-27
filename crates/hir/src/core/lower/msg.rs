@@ -8,9 +8,9 @@ use crate::{
     HirDb, SelectorError, SelectorErrorKind,
     hir_def::{
         ArithBinOp, AssocConstDef, AttrListId, BinOp, Body, BodyKind, Expr, FieldDef,
-        FieldDefListId, FieldIndex, FuncModifiers, FuncParam, FuncParamMode, FuncParamName,
-        IdentId, ImplTrait, IntegerId, LitKind, LogicalBinOp, Mod, Partial, Pat, PathId, PathKind,
-        Stmt, Struct, TrackedItemVariant, TraitRefId, TupleTypeId, TypeId, TypeKind, Visibility,
+        FieldDefListId, FieldIndex, FuncModifiers, IdentId, ImplTrait, IntegerId, LitKind,
+        LogicalBinOp, Mod, Partial, Pat, PathId, PathKind, Stmt, Struct, TrackedItemVariant,
+        TraitRefId, TupleTypeId, TypeId, TypeKind, Visibility,
     },
     lower::FileLowerCtxt,
     span::{MsgDesugared, MsgDesugaredFocus},
@@ -188,16 +188,7 @@ fn lower_msg_variant_encode_impl<'db>(
 
             let ptr_ident = builder.ident("ptr");
             let ptr_ty = builder.ty_ident(builder.ident("u256"));
-            let ptr_param = FuncParam {
-                mode: FuncParamMode::View,
-                is_mut: false,
-                has_ref_prefix: false,
-                has_own_prefix: false,
-                is_label_suppressed: false,
-                name: Partial::Present(FuncParamName::Ident(ptr_ident)),
-                ty: Partial::Present(ptr_ty),
-                self_ty_fallback: false,
-            };
+            let ptr_param = builder.param_underscore_named(ptr_ident, ptr_ty);
             let params = builder.params([builder.param_own_self(), ptr_param]);
             let encode_to_ptr_ident = builder.ident("encode_to_ptr");
 

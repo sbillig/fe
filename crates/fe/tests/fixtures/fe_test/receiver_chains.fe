@@ -13,12 +13,12 @@ impl Position {
         self.collateral / self.debt
     }
 
-    fn accrue(mut self, fee: u256) {
+    fn accrue(mut self, _ fee: u256) {
         self.debt += fee
         self.ver += 1
     }
 
-    fn settle(mut own self, payment: u256) -> Position {
+    fn settle(mut own self, _ payment: u256) -> Position {
         if payment >= self.debt {
             self.collateral += payment - self.debt
             self.debt = 0

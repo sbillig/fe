@@ -3,7 +3,7 @@ struct HandlePair {
     tag: u256,
 }
 
-fn mk_handle(x: mut u256) -> HandlePair {
+fn mk_handle(_ x: mut u256) -> HandlePair {
     HandlePair { h: x, tag: 0 }
 }
 

@@ -1,14 +1,13 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
 expression: res
 input_file: test_files/ty_check/const_eval_const_fn_match.fe
 ---
 note: 
-  ┌─ const_eval_const_fn_match.fe:1:36
+  ┌─ const_eval_const_fn_match.fe:1:38
   │  
-1 │   const fn choose(x: usize) -> usize {
-  │ ╭────────────────────────────────────^
+1 │   const fn choose(_ x: usize) -> usize {
+  │ ╭──────────────────────────────────────^
 2 │ │     match x {
 3 │ │         0 => 10
 4 │ │         1 | 2 => 20

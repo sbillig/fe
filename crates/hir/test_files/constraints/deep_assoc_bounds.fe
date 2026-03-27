@@ -36,7 +36,7 @@ trait Level0 {
     type Next0: Level1
 }
 
-fn require_final<T: Final>(_value: T) {}
+fn require_final<T: Final>(_: T) {}
 
 fn use_deep_bound<T: Level0>(value: T::Next0::Next1::Next2::Next3::Next4::Next5::Next6::Next7::Next8) {
     require_final(value)

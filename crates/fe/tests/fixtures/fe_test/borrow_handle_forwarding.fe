@@ -4,15 +4,15 @@ struct Wallet {
     nonce: u8,
 }
 
-fn read_balance(x: ref u256) -> u256 {
+fn read_balance(_ x: ref u256) -> u256 {
     x
 }
 
-fn bump_nonce(x: mut u8) {
+fn bump_nonce(_ x: mut u8) {
     x += 1
 }
 
-fn consume_wallet(w: own Wallet) -> (u256, u8) {
+fn consume_wallet(_ w: own Wallet) -> (u256, u8) {
     (w.balance, w.nonce)
 }
 

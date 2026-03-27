@@ -20,5 +20,5 @@ extern {
     /// index within the current contract.
     ///
     /// This is intended for compiler-generated code; the backend replaces this with a literal.
-    pub fn contract_field_slot(field_idx: u256) -> u256
+    pub fn contract_field_slot(_ field_idx: u256) -> u256
 }

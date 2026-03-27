@@ -30,36 +30,36 @@ const M: [[u256; 3]; 3] = [
     [1, 1, 2],
 ]
 
-fn ark(state: [u256; 3], offset: usize) -> [u256; 3] {
+fn ark(_ state: [u256; 3], _ offset: usize) -> [u256; 3] {
     return [
-        addmod(state[0], C[offset], P),
-        addmod(state[1], C[offset + 1], P),
-        addmod(state[2], C[offset + 2], P),
+        addmod(state[0], C[offset], m: P),
+        addmod(state[1], C[offset + 1], m: P),
+        addmod(state[2], C[offset + 2], m: P),
     ]
 }
 
-fn sigma(x: u256) -> u256 {
-    let x2: u256 = mulmod(x, x, P)
-    let x4: u256 = mulmod(x2, x2, P)
-    return mulmod(x4, x, P)
+fn sigma(_ x: u256) -> u256 {
+    let x2: u256 = mulmod(x, x, m: P)
+    let x4: u256 = mulmod(x2, x2, m: P)
+    return mulmod(x4, x, m: P)
 }
 
-fn sigma_full(state: [u256; 3]) -> [u256; 3] {
+fn sigma_full(_ state: [u256; 3]) -> [u256; 3] {
     return [sigma(state[0]), sigma(state[1]), sigma(state[2])]
 }
 
-fn mix(state: [u256; 3]) -> [u256; 3] {
+fn mix(_ state: [u256; 3]) -> [u256; 3] {
     let mut out: [u256; 3] = [0, 0, 0]
     for i in 0..3 {
         for j in 0..3 {
-            out[i] = addmod(out[i], mulmod(M[i][j], state[j], P), P)
+            out[i] = addmod(out[i], mulmod(M[i][j], state[j], m: P), m: P)
         }
     }
     return out
 }
 
-pub fn poseidon_mock(inp0: u256, inp1: u256) -> u256 {
-    let mut state: [u256; 3] = [inp0 % P, inp1 % P, 0]
+pub fn poseidon_mock(_ left: u256, _ right: u256) -> u256 {
+    let mut state: [u256; 3] = [left % P, right % P, 0]
     let mut round_cst: usize = 0
 
     // Full rounds (N_FULL total, split into two halves for Poseidon structure)

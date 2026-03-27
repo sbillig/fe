@@ -19,7 +19,7 @@ fn test_basic_assert() {
 fn test_memory_operations() {
     // Test basic memory operations
     let value: u256 = 42
-    mstore(0, value)
+    mstore(addr: 0, value: value)
     let val = mload(0)
     assert(val == value)
 }

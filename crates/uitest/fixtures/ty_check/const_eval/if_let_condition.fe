@@ -1,4 +1,4 @@
-const fn pick(x: usize) -> usize {
+const fn pick(_ x: usize) -> usize {
     if let y = x && y > 3 {
         y
     } else {

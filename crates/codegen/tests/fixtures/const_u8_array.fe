@@ -19,7 +19,7 @@ pub fn pass_then_index() -> u8 {
     f(SMALL)
 }
 
-fn f(arr: [u8; 2]) -> u8 {
+fn f(_ arr: [u8; 2]) -> u8 {
     arr[1]
 }
 

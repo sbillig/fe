@@ -11,7 +11,7 @@ func private %init__Evm_hef0af3106e109414__3af54274b2985741() {
         v2.i256 = sym_addr &child_init__Evm_hef0af3106e109414__3af54274b2985741;
         v3.i256 = call %allocate__Evm_hef0af3106e109414__3af54274b2985741 v1;
         evm_code_copy v3 v2 v1;
-        v6.i256 = call %evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw_stor_arg0_root_stor 0.i256 v2 v1 4660.i256;
+        v6.i256 = call %evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw_stor_arg0_root_stor 0.i256 v3 v1 4660.i256;
         v7.i256 = sym_size &runtime__Evm_hef0af3106e109414__3af54274b2985741;
         v8.i256 = sym_addr &runtime__Evm_hef0af3106e109414__3af54274b2985741;
         v9.i256 = call %allocate__Evm_hef0af3106e109414__3af54274b2985741 v7;

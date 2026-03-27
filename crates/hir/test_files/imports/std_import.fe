@@ -2,7 +2,7 @@ use std::evm::ops::{sload, sstore}
 
 fn increment(slot: u256) {
     let x = sload(slot)
-    sstore(slot, value: x + 1)
+    sstore(slot: slot, value: x + 1)
 }
 
 fn f() {

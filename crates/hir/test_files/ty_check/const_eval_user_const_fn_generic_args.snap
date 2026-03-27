@@ -1,14 +1,13 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 41
 expression: res
 input_file: test_files/ty_check/const_eval_user_const_fn_generic_args.fe
 ---
 note: 
-  ┌─ const_eval_user_const_fn_generic_args.fe:1:43
+  ┌─ const_eval_user_const_fn_generic_args.fe:1:47
   │  
-1 │   const fn add(a: usize, b: usize) -> usize {
-  │ ╭───────────────────────────────────────────^
+1 │   const fn add(_ a: usize, _ b: usize) -> usize {
+  │ ╭───────────────────────────────────────────────^
 2 │ │     a + b
 3 │ │ }
   │ ╰─^ usize

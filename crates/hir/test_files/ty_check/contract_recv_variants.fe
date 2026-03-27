@@ -35,7 +35,7 @@ mod TokenMsg {
             amount.encode(e)
         }
 
-        fn encode_to_ptr(own self, ptr: u256) {
+        fn encode_to_ptr(own self, _ ptr: u256) {
             core::panic()
         }
     }
@@ -69,7 +69,7 @@ mod TokenMsg {
             addr.encode(e)
         }
 
-        fn encode_to_ptr(own self, ptr: u256) {
+        fn encode_to_ptr(own self, _ ptr: u256) {
             core::panic()
         }
     }
@@ -106,7 +106,7 @@ impl core::abi::Encode<std::abi::Sol> for CustomQuery {
         key.encode(e)
     }
 
-    fn encode_to_ptr(own self, ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: u256) {
         core::panic()
     }
 }

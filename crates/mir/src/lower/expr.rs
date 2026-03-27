@@ -4579,7 +4579,7 @@ impl CellMover {
         let url =
             Url::parse("file:///resolved_place_keeps_empty_handle_roots_as_values.fe").unwrap();
         let src = r#"
-fn forward(value: mut u256) -> mut u256 {
+fn forward(_ value: mut u256) -> mut u256 {
     value
 }
 
@@ -4651,7 +4651,7 @@ fn entry() -> u256 {
         let url =
             Url::parse("file:///scalar_loads_from_handle_roots_use_explicit_deref.fe").unwrap();
         let src = r#"
-fn forward(value: mut u256) -> mut u256 {
+fn forward(_ value: mut u256) -> mut u256 {
     value
 }
 
@@ -4845,7 +4845,7 @@ pub fn borrow_handles_readback() -> u256 {
         let mut db = DriverDataBase::default();
         let url = Url::parse("file:///aug_assign_through_handle_local_stays_a_store.fe").unwrap();
         let src = r#"
-fn forward(value: mut u256) -> mut u256 {
+fn forward(_ value: mut u256) -> mut u256 {
     value
 }
 
@@ -4911,7 +4911,7 @@ fn entry() -> u256 {
         let mut db = DriverDataBase::default();
         let url = Url::parse("file:///place_ref_values_keep_handle_pointer_metadata.fe").unwrap();
         let src = r#"
-fn forward(value: mut u256) -> mut u256 {
+fn forward(_ value: mut u256) -> mut u256 {
     value
 }
 

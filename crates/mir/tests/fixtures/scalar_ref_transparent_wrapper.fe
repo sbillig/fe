@@ -7,7 +7,7 @@ struct RefWrap {
     x: ref u256,
 }
 
-fn read_ref(x: ref u256) -> u256 {
+fn read_ref(_ x: ref u256) -> u256 {
     x
 }
 

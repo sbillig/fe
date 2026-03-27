@@ -87,10 +87,10 @@ note:
    │                           ^ mut E
 
 note: 
-   ┌─ contract_recv_variants.fe:38:47
+   ┌─ contract_recv_variants.fe:38:49
    │  
-38 │           fn encode_to_ptr(own self, ptr: u256) {
-   │ ╭───────────────────────────────────────────────^
+38 │           fn encode_to_ptr(own self, _ ptr: u256) {
+   │ ╭─────────────────────────────────────────────────^
 39 │ │             core::panic()
 40 │ │         }
    │ ╰─────────^ ()
@@ -231,10 +231,10 @@ note:
    │                         ^ mut E
 
 note: 
-   ┌─ contract_recv_variants.fe:72:47
+   ┌─ contract_recv_variants.fe:72:49
    │  
-72 │           fn encode_to_ptr(own self, ptr: u256) {
-   │ ╭───────────────────────────────────────────────^
+72 │           fn encode_to_ptr(own self, _ ptr: u256) {
+   │ ╭─────────────────────────────────────────────────^
 73 │ │             core::panic()
 74 │ │         }
    │ ╰─────────^ ()
@@ -344,10 +344,10 @@ note:
     │                    ^ mut E
 
 note: 
-    ┌─ contract_recv_variants.fe:109:43
+    ┌─ contract_recv_variants.fe:109:45
     │  
-109 │       fn encode_to_ptr(own self, ptr: u256) {
-    │ ╭───────────────────────────────────────────^
+109 │       fn encode_to_ptr(own self, _ ptr: u256) {
+    │ ╭─────────────────────────────────────────────^
 110 │ │         core::panic()
 111 │ │     }
     │ ╰─────^ ()
