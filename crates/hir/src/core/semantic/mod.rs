@@ -3234,6 +3234,25 @@ pub enum SuperTraitLowerError {
     Ignored,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InherentImplAdmissibility<'db> {
+    Admissible {
+        ty: TyId<'db>,
+    },
+    NotAllowed {
+        ty: TyId<'db>,
+        is_nominal: bool,
+    },
+    InvalidTy {
+        ty: TyId<'db>,
+    },
+    IllFormed {
+        ty: TyId<'db>,
+        goal: TraitInstId<'db>,
+        subgoal: Option<TraitInstId<'db>>,
+    },
+}
+
 impl<'db> Impl<'db> {
     /// Semantic implementor type of this inherent impl.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
@@ -3257,6 +3276,48 @@ impl<'db> Impl<'db> {
             self.span().target_ty(),
             assumptions,
         )
+    }
+
+    pub(crate) fn inherent_impl_admissibility(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> InherentImplAdmissibility<'db> {
+        let ty = self.ty(db);
+        let ingot = self.top_mod(db).ingot(db);
+        if !ty.is_inherent_impl_allowed(db, ingot) {
+            let base = ty.base_ty(db);
+            return InherentImplAdmissibility::NotAllowed {
+                ty,
+                is_nominal: !base.is_param(db),
+            };
+        }
+        if ty.has_invalid(db) {
+            return InherentImplAdmissibility::InvalidTy { ty };
+        }
+
+        let assumptions = constraints_for(db, self.into());
+        match check_ty_wf(
+            db,
+            TraitSolveCx::new(db, self.scope()).with_assumptions(assumptions),
+            ty,
+        ) {
+            WellFormedness::WellFormed => InherentImplAdmissibility::Admissible { ty },
+            WellFormedness::IllFormed { goal, subgoal } => {
+                InherentImplAdmissibility::IllFormed { ty, goal, subgoal }
+            }
+        }
+    }
+
+    pub(crate) fn admissible_inherent_impl_ty(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<TyId<'db>> {
+        match self.inherent_impl_admissibility(db) {
+            InherentImplAdmissibility::Admissible { ty } => Some(ty),
+            InherentImplAdmissibility::NotAllowed { .. }
+            | InherentImplAdmissibility::InvalidTy { .. }
+            | InherentImplAdmissibility::IllFormed { .. } => None,
+        }
     }
 
     /// Returns the pretty-printed target type name from this impl block.

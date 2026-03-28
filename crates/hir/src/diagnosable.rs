@@ -29,9 +29,9 @@ use crate::analysis::ty::adt_def::AdtRef;
 use crate::analysis::ty::binder::Binder;
 use crate::analysis::ty::trait_def::ImplementorId;
 use crate::semantic::{
-    FieldView, FuncParamView, ImplAssocTypeView, SuperTraitRefView, VariantView,
-    WherePredicateBoundView, WherePredicateView, constraints_for, header_constraints_for,
-    lower_hir_kind_local,
+    FieldView, FuncParamView, ImplAssocTypeView, InherentImplAdmissibility, SuperTraitRefView,
+    VariantView, WherePredicateBoundView, WherePredicateView, constraints_for,
+    header_constraints_for, lower_hir_kind_local,
 };
 
 /// Unified "pull" diagnostics surface for HIR items and views.
@@ -482,59 +482,31 @@ impl<'db> Impl<'db> {
     /// Generic parameter diagnostics are handled by `Diagnosable::diags`.
     pub fn diags_preconditions(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         use ty::diagnostics::ImplDiag;
-        use ty::trait_resolution::constraint::ty_constraints;
-        use ty::trait_resolution::{TraitSolveCx, WellFormedness, check_ty_wf};
 
         let mut out = self.ty_errors(db);
-
-        let ty = self.ty(db);
-        let ingot = self.top_mod(db).ingot(db);
-        if !ty.is_inherent_impl_allowed(db, ingot) {
-            let base = ty.base_ty(db);
-            out.push(
-                ImplDiag::InherentImplIsNotAllowed {
-                    primary: self.span().target_ty().into(),
-                    ty: base.pretty_print(db).to_string(),
-                    is_nominal: !base.is_param(db),
-                }
-                .into(),
-            );
-            return out;
-        }
-
-        if let Some(diag) =
-            ty::ty_error::emit_invalid_ty_error(db, ty, self.span().target_ty().into())
-        {
-            out.push(diag);
-        }
-
-        if ty.has_invalid(db) {
-            return out;
-        }
-
-        match check_ty_wf(
-            db,
-            TraitSolveCx::new(db, self.scope()).with_assumptions(constraints_for(db, self.into())),
-            ty,
-        ) {
-            WellFormedness::WellFormed => {
-                let constraints = ty_constraints(db, ty);
-                for &goal in constraints.list(db) {
-                    if goal.self_ty(db).has_param(db) {
-                        out.push(
-                            TraitConstraintDiag::TraitBoundNotSat {
-                                span: self.span().target_ty().into(),
-                                primary_goal: goal,
-                                unsat_subgoal: None,
-                                required_by: None,
-                            }
-                            .into(),
-                        );
-                        break;
+        match self.inherent_impl_admissibility(db) {
+            InherentImplAdmissibility::Admissible { .. } => {}
+            InherentImplAdmissibility::NotAllowed { ty, is_nominal } => {
+                let base = ty.base_ty(db);
+                out.push(
+                    ImplDiag::InherentImplIsNotAllowed {
+                        primary: self.span().target_ty().into(),
+                        ty: base.pretty_print(db).to_string(),
+                        is_nominal,
                     }
-                }
+                    .into(),
+                );
+                return out;
             }
-            WellFormedness::IllFormed { goal, subgoal } => {
+            InherentImplAdmissibility::InvalidTy { ty } => {
+                if let Some(diag) =
+                    ty::ty_error::emit_invalid_ty_error(db, ty, self.span().target_ty().into())
+                {
+                    out.push(diag);
+                }
+                return out;
+            }
+            InherentImplAdmissibility::IllFormed { goal, subgoal, .. } => {
                 out.push(
                     TraitConstraintDiag::TraitBoundNotSat {
                         span: self.span().target_ty().into(),
@@ -1415,26 +1387,24 @@ impl<'db> Diagnosable<'db> for Func<'db> {
         if let Some(crate::hir_def::scope_graph::ScopeId::Item(ItemKind::Impl(impl_))) =
             self.scope().parent(db)
             && let Some(func_def) = self.as_callable(db)
+            && let Some(self_ty) = impl_.admissible_inherent_impl_ty(db)
         {
-            let self_ty = impl_.ty(db);
-            if !self_ty.has_invalid(db) {
-                let ingot = self.top_mod(db).ingot(db);
-                for &cand in probe_method(
-                    db,
-                    ingot,
-                    Canonical::new(db, self_ty),
-                    func_def.name(db).expect("impl methods have names"),
-                ) {
-                    if cand != func_def {
-                        out.push(
-                            ty::diagnostics::ImplDiag::ConflictMethodImpl {
-                                primary: func_def,
-                                conflict_with: cand,
-                            }
-                            .into(),
-                        );
-                        break;
-                    }
+            let ingot = self.top_mod(db).ingot(db);
+            for &cand in probe_method(
+                db,
+                ingot,
+                Canonical::new(db, self_ty),
+                func_def.name(db).expect("impl methods have names"),
+            ) {
+                if cand != func_def {
+                    out.push(
+                        ty::diagnostics::ImplDiag::ConflictMethodImpl {
+                            primary: func_def,
+                            conflict_with: cand,
+                        }
+                        .into(),
+                    );
+                    break;
                 }
             }
         }
