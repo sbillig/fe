@@ -543,6 +543,15 @@ where
     }
 }
 
+pub(crate) fn tys_structurally_match<'db>(
+    db: &'db dyn HirAnalysisDb,
+    expected: TyId<'db>,
+    actual: TyId<'db>,
+) -> bool {
+    let mut table = UnificationTable::new(db);
+    table.unify(expected, actual).is_ok()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct InferenceKey<'db>(pub(super) u32, pub(super) PhantomData<&'db ()>);
 

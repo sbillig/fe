@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/method_selection/inherent_impl_ill_formed_receiver.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ inherent_impl_ill_formed_receiver.fe:17:24
+   │
+17 │ fn bad_param<T>(cache: Cache<T>) {
+   │                        ^^^^^^^^ `_` doesn't implement `Hashable`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ inherent_impl_ill_formed_receiver.fe:22:16
+   │
+22 │     let cache: Cache<T>
+   │                ^^^^^^^^ `_` doesn't implement `Hashable`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ inherent_impl_ill_formed_receiver.fe:27:27
+   │
+27 │     let cache: Cache<T> = todo()
+   │                           ^^^^^^ `_` doesn't implement `Hashable`

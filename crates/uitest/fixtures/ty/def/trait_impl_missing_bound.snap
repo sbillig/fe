@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty/def/trait_impl_missing_bound.fe
 ---
@@ -7,10 +8,10 @@ error[6-0003]: trait bound is not satisfied
   ┌─ trait_impl_missing_bound.fe:9:9
   │
 9 │ impl<T> Foo for Cache<T> {}
-  │         ^^^ `_` doesn't implement `Hashable`
+  │         ^^^ `T` doesn't implement `Hashable`
 
 error[6-0003]: trait bound is not satisfied
   ┌─ trait_impl_missing_bound.fe:9:17
   │
 9 │ impl<T> Foo for Cache<T> {}
-  │                 ^^^^^^^^ `T` doesn't implement `Hashable`
+  │                 ^^^^^^^^ `_` doesn't implement `Hashable`

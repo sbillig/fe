@@ -13,13 +13,13 @@ use salsa::Update;
 use super::{
     admission::{AdmissionEngine, TraitImplTable},
     binder::Binder,
-    const_ty::{AppFrameId, ConstTyId},
+    const_ty::AppFrameId,
     fold::{TyFoldable, TyFolder},
     layout_holes::rebase_structural_holes_under_app,
     trait_def::{ImplementorId, TraitInstId},
     trait_resolution::{PredicateListId, TraitSolveCx},
     ty_def::{InvalidCause, TyId},
-    ty_lower::{ConstDefaultCompletion, lower_hir_ty, lower_opt_hir_ty},
+    ty_lower::{ConstDefaultCompletion, lower_hir_ty, lower_opt_const_body, lower_opt_hir_ty},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -279,7 +279,10 @@ fn lower_trait_ref_impl_inner<'db>(
             }
             GenericArg::Const(const_arg) => match const_arg.value {
                 ConstGenericArgValue::Expr(body) => {
-                    provided_explicit.push(TyId::const_ty(db, ConstTyId::from_opt_body(db, body)));
+                    provided_explicit.push(TyId::const_ty(
+                        db,
+                        lower_opt_const_body(db, body, scope, assumptions),
+                    ));
                 }
                 ConstGenericArgValue::Hole => {
                     return Err(TraitArgError::ConstHoleNotAllowed { arg_idx });

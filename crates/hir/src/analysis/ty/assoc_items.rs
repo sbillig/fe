@@ -6,14 +6,17 @@ use crate::analysis::{
         binder::Binder,
         canonical::{Canonical, Canonicalized},
         const_expr::ConstExpr,
-        const_ty::{ConstTyData, const_body_simple_path, const_ty_from_trait_const},
+        const_ty::{ConstTyData, const_body_simple_path, const_ty_from_trait_const_in_cx},
         context::{AnalysisCx, ImplOverlay, LoweringMode, ProofCx},
         fold::{AssocTySubst, TyFoldable as _},
         normalize::normalize_ty_without_consts_with_solve_cx,
         trait_def::{
             ImplementorId, ImplementorOrigin, TraitInstId, impls_for_ty_with_constraints_in_cx,
         },
-        trait_resolution::{Selection, normalize_trait_inst_preserving_validity_with_solve_cx},
+        trait_resolution::{
+            Selection, concretized_missing_trait_const_goal,
+            normalize_trait_inst_preserving_validity_with_solve_cx,
+        },
         ty_def::{InvalidCause, TyData, TyId, inference_keys},
         ty_lower::contextual_path_resolution_in_cx,
         unify::UnificationTable,
@@ -42,6 +45,39 @@ pub(crate) struct AssocConstSelection<'db> {
     pub(crate) trait_inst: TraitInstId<'db>,
     pub(crate) declared_ty: TyId<'db>,
     pub(crate) body: Option<SelectedAssocConstBody<'db>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum TraitConstUseResolution<'db> {
+    Selected(AssocConstSelection<'db>),
+    Abstract {
+        trait_inst: TraitInstId<'db>,
+        declared_ty: TyId<'db>,
+    },
+    MissingConcreteImpl {
+        trait_inst: TraitInstId<'db>,
+        declared_ty: TyId<'db>,
+    },
+}
+
+impl<'db> TraitConstUseResolution<'db> {
+    pub(crate) fn trait_inst(&self) -> TraitInstId<'db> {
+        match self {
+            Self::Selected(selection) => selection.trait_inst,
+            Self::Abstract { trait_inst, .. } | Self::MissingConcreteImpl { trait_inst, .. } => {
+                *trait_inst
+            }
+        }
+    }
+
+    pub(crate) fn declared_ty(&self) -> TyId<'db> {
+        match self {
+            Self::Selected(selection) => selection.declared_ty,
+            Self::Abstract { declared_ty, .. } | Self::MissingConcreteImpl { declared_ty, .. } => {
+                *declared_ty
+            }
+        }
+    }
 }
 
 fn selected_assoc_const_body_analysis_cx<'db>(
@@ -141,20 +177,18 @@ pub(crate) fn normalize_const_tys_for_trait_inst<'db>(
                     let ConstExpr::TraitConst(assoc) = expr.data(db) else {
                         return ty.super_fold_with(db, self);
                     };
-                    let inst = rebase_trait_const_inst(db, assoc.inst(), self.trait_inst);
-
+                    let assoc = *assoc;
+                    let original_inst = assoc.inst();
+                    let inst = rebase_trait_const_inst(db, original_inst, self.trait_inst);
+                    let assoc = assoc.with_inst(inst).with_analysis_cx(self.cx);
                     let Some(const_ty) =
-                        const_ty_from_trait_const(db, self.cx.proof.solve_cx(), inst, assoc.name())
+                        const_ty_from_trait_const_in_cx(db, &self.cx, inst, assoc.name())
                     else {
-                        if inst == assoc.inst() {
+                        if inst == original_inst {
                             return ty.super_fold_with(db, self);
                         }
-                        let assoc =
-                            assoc.with_env(assoc.origin_scope(), self.cx.proof.assumptions());
-                        let expr = super::const_expr::ConstExprId::new(
-                            db,
-                            ConstExpr::TraitConst(assoc.with_inst(inst)),
-                        );
+                        let expr =
+                            super::const_expr::ConstExprId::new(db, ConstExpr::TraitConst(assoc));
                         return TyId::new(
                             db,
                             TyData::ConstTy(super::const_ty::ConstTyId::new(
@@ -191,12 +225,9 @@ pub(crate) fn normalize_const_tys_for_trait_inst<'db>(
                         && let Some(name) = path.ident(db).to_opt()
                         && path.generic_args(db).is_empty(db)
                     {
-                        if let Some(repl) = const_ty_from_trait_const(
-                            db,
-                            self.cx.proof.solve_cx(),
-                            self.trait_inst,
-                            name,
-                        ) {
+                        if let Some(repl) =
+                            const_ty_from_trait_const_in_cx(db, &self.cx, self.trait_inst, name)
+                        {
                             return TyId::new(
                                 db,
                                 TyData::ConstTy(repl.evaluate_with_solve_cx(
@@ -241,7 +272,7 @@ pub(crate) fn normalize_const_tys_for_trait_inst<'db>(
                                 other => other,
                             })
                         && let Some(repl) =
-                            const_ty_from_trait_const(db, self.cx.proof.solve_cx(), inst, name)
+                            const_ty_from_trait_const_in_cx(db, &self.cx, inst, name)
                     {
                         return TyId::new(
                             db,
@@ -385,9 +416,9 @@ fn overlay_selected_assoc_const_body<'db>(
     const_name: IdentId<'db>,
 ) -> Option<SelectedAssocConstBody<'db>> {
     let current_impl = overlay.current_impl()?;
-    (current_impl.trait_def(db) == inst.def(db))
-        .then_some(())
-        .and_then(|_| selected_assoc_const_body_for_implementor(db, current_impl, inst, const_name))
+    (current_impl.trait_inst(db) == inst)
+        .then(|| selected_assoc_const_body_for_implementor(db, current_impl, inst, const_name))
+        .flatten()
 }
 
 pub(crate) fn assoc_const_declared_ty<'db>(
@@ -447,6 +478,34 @@ pub(crate) fn resolve_assoc_const_selection<'db>(
         trait_inst,
         declared_ty,
         body,
+    })
+}
+
+pub(crate) fn resolve_trait_const_use_in_cx<'db>(
+    db: &'db dyn HirAnalysisDb,
+    cx: &AnalysisCx<'db>,
+    trait_inst: TraitInstId<'db>,
+    name: IdentId<'db>,
+) -> Option<TraitConstUseResolution<'db>> {
+    let selection = resolve_assoc_const_selection(db, cx, trait_inst, name)?;
+    if selection.body.is_some() {
+        return Some(TraitConstUseResolution::Selected(selection));
+    }
+
+    let trait_inst = selection.trait_inst;
+    let declared_ty = selection.declared_ty;
+    if let Some(trait_inst) =
+        concretized_missing_trait_const_goal(db, cx.proof.solve_cx(), trait_inst, name)
+    {
+        return Some(TraitConstUseResolution::MissingConcreteImpl {
+            trait_inst,
+            declared_ty,
+        });
+    }
+
+    Some(TraitConstUseResolution::Abstract {
+        trait_inst,
+        declared_ty,
     })
 }
 

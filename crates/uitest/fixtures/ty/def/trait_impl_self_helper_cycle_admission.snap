@@ -1,0 +1,19 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/trait_impl_self_helper_cycle_admission.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_self_helper_cycle_admission.fe:16:14
+   │
+16 │     type X = SelfWrapCycle<SelfCycle>
+   │              ^^^^^^^^^^^^^^^^^^^^^^^^ `SelfWrapCycle<SelfCycle>` doesn't implement `SelfHelperCycle`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_self_helper_cycle_admission.fe:22:5
+   │
+19 │ fn needs_self_foo_cycle<T: SelfFooCycle>(_value: T) {}
+   │                            ------------ required by this bound on `needs_self_foo_cycle`
+   ·
+22 │     needs_self_foo_cycle(value)
+   │     ^^^^^^^^^^^^^^^^^^^^ `SelfCycle` doesn't implement `SelfFooCycle`

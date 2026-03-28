@@ -4,12 +4,6 @@ assertion_line: 27
 expression: diags
 input_file: fixtures/ty/def/const_generics_enum.fe
 ---
-error[3-0012]: expected const type
-   ┌─ const_generics_enum.fe:11:18
-   │
-11 │ fn make_ptr() -> Ptr<u8, AddrSpace::Mem> {
-   │                  ^^^^^^^^^^^^^^^^^^^^^^^ expected const type of `AddrSpace` here
-
 error[8-0031]: type annotation is needed
    ┌─ const_generics_enum.fe:12:5
    │

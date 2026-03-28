@@ -74,6 +74,21 @@ fn cyclic_trait_ref_diag<'db>(span: DynLazySpan<'db>, context: &str) -> TyDiagCo
     .into()
 }
 
+fn trait_inst_contains_assoc_ty_of_param<'db>(
+    db: &'db dyn HirAnalysisDb,
+    inst: ty::trait_def::TraitInstId<'db>,
+) -> bool {
+    inst.args(db)
+        .iter()
+        .copied()
+        .any(|arg| arg.contains_assoc_ty_of_param(db))
+        || inst
+            .assoc_type_bindings(db)
+            .values()
+            .copied()
+            .any(|ty| ty.contains_assoc_ty_of_param(db))
+}
+
 impl<'db> SuperTraitRefView<'db> {
     /// Diagnostics for this super-trait reference in its owner's context.
     /// Uses the trait's `Self` as subject and checks WF; kind mismatch is emitted
@@ -113,7 +128,7 @@ impl<'db> SuperTraitRefView<'db> {
         };
 
         // Do not emit when subject contains assoc types of params
-        if inst.self_ty(db).contains_assoc_ty_of_param(db) {
+        if trait_inst_contains_assoc_ty_of_param(db, inst) {
             return None;
         }
 
@@ -238,7 +253,7 @@ impl<'db> WherePredicateBoundView<'db> {
                     );
                 }
 
-                if inst.self_ty(db).contains_assoc_ty_of_param(db) {
+                if trait_inst_contains_assoc_ty_of_param(db, inst) {
                     return out;
                 }
 
@@ -434,6 +449,10 @@ impl<'db> Trait<'db> {
 
             // Additionally, ensure that the super-trait reference is well-formed
             if let Ok(inst) = view.trait_inst(db) {
+                if trait_inst_contains_assoc_ty_of_param(db, inst) {
+                    continue;
+                }
+
                 match check_trait_inst_wf(
                     db,
                     ty::trait_resolution::TraitSolveCx::new(db, self.scope())
@@ -464,8 +483,7 @@ impl<'db> Impl<'db> {
     /// Generic parameter diagnostics are handled by `Diagnosable::diags`.
     pub fn diags_preconditions(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         use ty::diagnostics::ImplDiag;
-        use ty::trait_resolution::constraint::ty_constraints;
-        use ty::trait_resolution::{TraitSolveCx, WellFormedness, check_ty_wf};
+        use ty::trait_resolution::{TraitSolveCx, WellFormedness, check_ty_wf_nested};
 
         let mut out = self.ty_errors(db);
 
@@ -494,28 +512,12 @@ impl<'db> Impl<'db> {
             return out;
         }
 
-        match check_ty_wf(
+        match check_ty_wf_nested(
             db,
-            TraitSolveCx::new(db, self.scope()).with_assumptions(constraints_for(db, self.into())),
+            TraitSolveCx::new(db, self.scope()).with_assumptions(self.elaborated_assumptions(db)),
             ty,
         ) {
-            WellFormedness::WellFormed => {
-                let constraints = ty_constraints(db, ty);
-                for &goal in constraints.list(db) {
-                    if goal.self_ty(db).has_param(db) {
-                        out.push(
-                            TraitConstraintDiag::TraitBoundNotSat {
-                                span: self.span().target_ty().into(),
-                                primary_goal: goal,
-                                unsat_subgoal: None,
-                                required_by: None,
-                            }
-                            .into(),
-                        );
-                        break;
-                    }
-                }
-            }
+            WellFormedness::WellFormed => {}
             WellFormedness::IllFormed { goal, subgoal } => {
                 out.push(
                     TraitConstraintDiag::TraitBoundNotSat {
@@ -571,7 +573,7 @@ impl<'db> VariantView<'db> {
     pub fn diags_tuple_elems_wf(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         use crate::hir_def::types::TypeKind as HirTyKind;
         use name_resolution::{PathRes, resolve_path};
-        use ty::trait_resolution::{TraitSolveCx, WellFormedness, check_ty_wf};
+        use ty::trait_resolution::{TraitSolveCx, WellFormedness, check_ty_wf_nested};
         use ty::ty_lower::lower_hir_ty;
 
         let mut out = Vec::new();
@@ -640,7 +642,7 @@ impl<'db> VariantView<'db> {
             }
 
             // Trait-bound well-formedness for element type.
-            match check_ty_wf(
+            match check_ty_wf_nested(
                 db,
                 TraitSolveCx::new(db, scope).with_assumptions(assumptions),
                 ty,
@@ -981,7 +983,7 @@ impl<'db> GenericParamOwner<'db> {
                             );
                         }
 
-                        if inst.self_ty(db).contains_assoc_ty_of_param(db) {
+                        if trait_inst_contains_assoc_ty_of_param(db, inst) {
                             continue;
                         }
 

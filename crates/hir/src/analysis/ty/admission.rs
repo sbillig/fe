@@ -18,12 +18,11 @@ use crate::analysis::{
         trait_def::{ImplementorId, ImplementorOrigin, TraitInstId},
         trait_lower::TraitRefLowerError,
         trait_resolution::{
-            CanonicalGoalQuery, GoalSatisfiability, LocalImplementorSet, WellFormedness,
-            check_trait_inst_wf, constraint::ty_constraints, is_goal_query_satisfiable,
-            is_goal_satisfiable,
+            GoalSatisfiability, LocalImplementorSet, WellFormedness, check_trait_inst_wf,
+            check_ty_wf_nested, is_goal_satisfiable,
         },
         ty_def::{InvalidCause, TyFlags, TyId},
-        unify::UnificationTable,
+        unify::{UnificationTable, tys_structurally_match},
         visitor::TyVisitable,
     },
 };
@@ -301,19 +300,7 @@ impl<'db> AdmissionEngine<'db> {
         impl_trait: ImplTrait<'db>,
         current_impl: ImplementorId<'db>,
     ) -> AnalysisCx<'db> {
-        let local_implementors = LocalImplementorSet::new(
-            self.db,
-            self.conflict_local_implementors()
-                .implementors(self.db)
-                .iter()
-                .copied()
-                .chain(std::iter::once(Binder::bind(current_impl)))
-                .collect::<Vec<_>>(),
-        );
-        let solve_cx = ty::trait_resolution::TraitSolveCx::new(self.db, impl_trait.scope())
-            .with_assumptions(impl_trait.elaborated_assumptions(self.db))
-            .with_local_implementors(local_implementors);
-        AnalysisCx::new(ProofCx::from_solve_cx(solve_cx))
+        AnalysisCx::new(ProofCx::from_solve_cx(self.solve_cx(impl_trait)))
             .with_overlay(ImplOverlay::with_current_impl(current_impl))
             .with_mode(LoweringMode::ImplTraitSignature {
                 trait_inst: current_impl.trait_inst(self.db),
@@ -675,40 +662,7 @@ pub(crate) fn check_impl_ty_wf_in_cx<'db>(
     solve_cx: ty::trait_resolution::TraitSolveCx<'db>,
     ty: TyId<'db>,
 ) -> WellFormedness<'db> {
-    let (_, args) = ty.decompose_ty_app(db);
-    for &arg in args {
-        let wf = check_impl_ty_wf_in_cx(db, solve_cx, arg);
-        if !matches!(wf, WellFormedness::WellFormed) {
-            return wf;
-        }
-    }
-
-    let assumptions = solve_cx.assumptions();
-    let normalized_constraints = {
-        let scope = solve_cx.origin_scope(db);
-        let normalized: Vec<_> = ty_constraints(db, ty)
-            .list(db)
-            .iter()
-            .map(|&goal| goal.normalize(db, scope, assumptions))
-            .collect();
-        ty::trait_resolution::PredicateListId::new(db, normalized)
-    };
-
-    for &goal in normalized_constraints.list(db) {
-        let mut table = UnificationTable::new(db);
-        let query = CanonicalGoalQuery::new(db, goal, assumptions);
-        match is_goal_query_satisfiable(db, solve_cx, &query) {
-            GoalSatisfiability::Satisfied(_)
-            | GoalSatisfiability::NeedsConfirmation(_)
-            | GoalSatisfiability::ContainsInvalid => {}
-            GoalSatisfiability::UnSat(subgoal) => {
-                let subgoal = subgoal.map(|subgoal| query.extract_solution(&mut table, subgoal));
-                return WellFormedness::IllFormed { goal, subgoal };
-            }
-        }
-    }
-
-    WellFormedness::WellFormed
+    check_ty_wf_nested(db, solve_cx, ty)
 }
 
 #[salsa::tracked(return_ref)]
@@ -1054,13 +1008,13 @@ fn impl_interface_issues_with_assoc_type_bound_solve_cx<'db>(
                 let Some(actual_ty) = impl_const.ty_in_cx(db, &cx) else {
                     continue;
                 };
-                let actual_ty = ty::trait_def::normalize_ty_for_trait_inst(
+                let actual_ty = ty::assoc_items::normalize_ty_for_trait_inst(
                     db,
-                    cx.proof.solve_cx(),
+                    &cx,
                     actual_ty,
                     current_impl.trait_inst(db),
                 );
-                if actual_ty != expected_ty {
+                if !tys_structurally_match(db, expected_ty, actual_ty) {
                     issues.push(ImplInterfaceIssue::AssocConstInvalidDiag(
                         const_ty_mismatch_diag(
                             impl_const.span().ty().into(),

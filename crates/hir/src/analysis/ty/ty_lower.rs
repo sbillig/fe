@@ -4,17 +4,18 @@ use crate::core::hir_def::{
     TypeAlias as HirTypeAlias, TypeBound, TypeId as HirTyId, TypeKind as HirTyKind, TypeMode,
     scope_graph::ScopeId,
 };
-use common::indexmap::IndexSet;
 use rustc_hash::FxHashMap;
 use salsa::Update;
 use smallvec::smallvec;
 
 use super::{
     assoc_const::AssocConstUse,
+    assoc_items::{TraitConstUseResolution, resolve_trait_const_use_in_cx},
     const_expr::{ConstExpr, ConstExprId},
     const_ty::{
         AppFrameId, CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, EvaluatedConstTy,
         HoleId, LayoutHoleArgSite, LocalFrameId, LocalFrameSite, StructuralHoleOrigin,
+        const_ty_from_selected_assoc_const,
     },
     context::{AnalysisCx, ImplOverlay, LoweringMode, ProofCx},
     effects::ResolvedEffectKey,
@@ -28,7 +29,7 @@ use super::{
     trait_def::{TraitInstId, specialize_trait_const_inst_to_receiver},
     trait_lower::lower_trait_ref,
     trait_resolution::{
-        PredicateListId, TraitSolveCx, concretized_missing_trait_const_goal,
+        PredicateListId, TraitSolveCx,
         constraint::{collect_constraints, collect_func_decl_constraints},
     },
     ty_def::{InvalidCause, Kind, TyData, TyId, TyParam},
@@ -38,6 +39,7 @@ use crate::analysis::name_resolution::{
     FindAssociatedTypeError, PathRes, PathResErrorKind, ReceiverPathResolutionCx,
     find_associated_type_with_solve_cx,
     method_selection::{MethodSelectionError, select_method_candidate},
+    path_resolver::{AssocConstSelection, select_assoc_const_candidate_in_cx},
     resolve_path, resolve_path_from_receiver_ty, resolve_path_in_cx,
 };
 use crate::analysis::{HirAnalysisDb, ty::binder::Binder};
@@ -77,77 +79,124 @@ pub(crate) fn lower_hir_ty_in_cx<'db>(
     lower_hir_ty_impl_in_cx(db, ty, scope, cx)
 }
 
+fn abstract_trait_const_use<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    cx: Option<&AnalysisCx<'db>>,
+    inst: TraitInstId<'db>,
+    name: IdentId<'db>,
+    declared_ty: TyId<'db>,
+) -> ConstTyId<'db> {
+    let assoc = cx.map_or_else(
+        || AssocConstUse::new(scope, assumptions, inst, name),
+        |cx| AssocConstUse::new(scope, assumptions, inst, name).with_analysis_cx(*cx),
+    );
+    let expr = ConstExprId::new(db, ConstExpr::TraitConst(assoc));
+    ConstTyId::new(db, ConstTyData::Abstract(expr, declared_ty))
+}
+
+fn lower_trait_const_path_to_const_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    cx: Option<&AnalysisCx<'db>>,
+    recv_ty: TyId<'db>,
+    inst: TraitInstId<'db>,
+    name: IdentId<'db>,
+) -> ConstTyId<'db> {
+    let inst = specialize_trait_const_inst_to_receiver(db, recv_ty, inst);
+    let resolution_cx = cx.copied().unwrap_or_else(|| {
+        AnalysisCx::from_solve_cx(TraitSolveCx::new(db, scope).with_assumptions(assumptions))
+    });
+
+    match resolve_trait_const_use_in_cx(db, &resolution_cx, inst, name) {
+        Some(TraitConstUseResolution::Selected(selection))
+            if !matches!(resolution_cx.mode, LoweringMode::ImplTraitSignature { .. }) =>
+        {
+            const_ty_from_selected_assoc_const(db, resolution_cx.proof, &selection)
+                .expect("selected trait const resolution should provide a body")
+        }
+        Some(TraitConstUseResolution::Selected(selection)) => abstract_trait_const_use(
+            db,
+            scope,
+            assumptions,
+            cx,
+            selection.trait_inst,
+            name,
+            selection.declared_ty,
+        ),
+        Some(TraitConstUseResolution::Abstract {
+            trait_inst,
+            declared_ty,
+        }) => abstract_trait_const_use(db, scope, assumptions, cx, trait_inst, name, declared_ty),
+        Some(TraitConstUseResolution::MissingConcreteImpl { trait_inst, .. }) => {
+            ConstTyId::invalid(
+                db,
+                InvalidCause::TraitConstNotImplemented {
+                    inst: trait_inst,
+                    name,
+                },
+            )
+        }
+        None => ConstTyId::invalid(db, InvalidCause::Other),
+    }
+}
+
 fn lower_const_body_impl<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> ConstTyId<'db> {
-    if let Some(path) = super::const_ty::const_body_simple_path(db, body)
-        && let Ok(resolved) = resolve_path(db, path, scope, assumptions, true)
-    {
-        match resolved {
-            PathRes::Const(const_def, ty) => {
-                if let Some(body) = const_def.body(db).to_opt() {
-                    return ConstTyId::from_body(db, body, Some(ty), Some(const_def));
+    if let Some(path) = super::const_ty::const_body_simple_path(db, body) {
+        let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+        let cx = AnalysisCx::from_solve_cx(solve_cx);
+        let resolved = resolve_path_in_cx(db, path, scope, true, &cx)
+            .ok()
+            .or_else(|| resolve_path(db, path, scope, assumptions, true).ok());
+        if let Some(resolved) = resolved {
+            match resolved {
+                PathRes::Const(const_def, ty) => {
+                    if let Some(body) = const_def.body(db).to_opt() {
+                        return ConstTyId::from_body(db, body, Some(ty), Some(const_def));
+                    }
+                    return ConstTyId::invalid(db, InvalidCause::ParseError);
                 }
-                return ConstTyId::invalid(db, InvalidCause::ParseError);
-            }
-            PathRes::TraitConst(recv_ty, inst, name) => {
-                let mut args = inst.args(db).clone();
-                if let Some(self_arg) = args.first_mut() {
-                    *self_arg = recv_ty;
-                }
-                let inst =
-                    TraitInstId::new(db, inst.def(db), args, inst.assoc_type_bindings(db).clone());
-
-                let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
-                if let Some(const_ty) =
-                    super::const_ty::const_ty_from_trait_const(db, solve_cx, inst, name)
-                {
-                    return const_ty;
-                }
-                if let Some(inst) = concretized_missing_trait_const_goal(db, solve_cx, inst, name) {
-                    return ConstTyId::invalid(
+                PathRes::TraitConst(recv_ty, inst, name) => {
+                    return lower_trait_const_path_to_const_ty(
                         db,
-                        InvalidCause::TraitConstNotImplemented { inst, name },
+                        scope,
+                        assumptions,
+                        None,
+                        recv_ty,
+                        inst,
+                        name,
                     );
                 }
-                if let Some(expected_ty) = inst
-                    .def(db)
-                    .const_(db, name)
-                    .and_then(|view| view.ty_binder(db))
-                    .map(|binder| binder.instantiate(db, inst.args(db)))
-                {
-                    let expr = ConstExprId::new(
+                PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
+                    if let TyData::ConstTy(const_ty) = ty.data(db) {
+                        return *const_ty;
+                    }
+                }
+                PathRes::EnumVariant(variant) if variant.ty.is_unit_variant_only_enum(db) => {
+                    return ConstTyId::new(
                         db,
-                        ConstExpr::TraitConst(AssocConstUse::new(scope, assumptions, inst, name)),
+                        ConstTyData::Evaluated(
+                            EvaluatedConstTy::EnumVariant(variant.variant),
+                            variant.ty,
+                        ),
                     );
-                    return ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty));
                 }
+                _ => {}
             }
-            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
-                if let TyData::ConstTy(const_ty) = ty.data(db) {
-                    return *const_ty;
-                }
-            }
-            PathRes::EnumVariant(variant) if variant.ty.is_unit_variant_only_enum(db) => {
-                return ConstTyId::new(
-                    db,
-                    ConstTyData::Evaluated(
-                        EvaluatedConstTy::EnumVariant(variant.variant),
-                        variant.ty,
-                    ),
-                );
-            }
-            _ => {}
         }
     }
 
     ConstTyId::from_body(db, body, None, None)
 }
 
-fn lower_opt_const_body<'db>(
+pub(crate) fn lower_opt_const_body<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Partial<Body<'db>>,
     scope: ScopeId<'db>,
@@ -178,53 +227,15 @@ fn lower_const_body_impl_in_cx<'db>(
                     return ConstTyId::invalid(db, InvalidCause::ParseError);
                 }
                 PathRes::TraitConst(recv_ty, inst, name) => {
-                    let mut args = inst.args(db).clone();
-                    if let Some(self_arg) = args.first_mut() {
-                        *self_arg = recv_ty;
-                    }
-                    let inst = TraitInstId::new(
+                    return lower_trait_const_path_to_const_ty(
                         db,
-                        inst.def(db),
-                        args,
-                        inst.assoc_type_bindings(db).clone(),
+                        scope,
+                        assumptions,
+                        Some(cx),
+                        recv_ty,
+                        inst,
+                        name,
                     );
-
-                    if !matches!(cx.mode, LoweringMode::ImplTraitSignature { .. }) {
-                        if let Some(const_ty) = super::const_ty::const_ty_from_trait_const(
-                            db,
-                            cx.proof.solve_cx(),
-                            inst,
-                            name,
-                        ) {
-                            return const_ty;
-                        }
-                        if let Some(inst) = concretized_missing_trait_const_goal(
-                            db,
-                            cx.proof.solve_cx(),
-                            inst,
-                            name,
-                        ) {
-                            return ConstTyId::invalid(
-                                db,
-                                InvalidCause::TraitConstNotImplemented { inst, name },
-                            );
-                        }
-                    }
-                    if let Some(expected_ty) = inst
-                        .def(db)
-                        .const_(db, name)
-                        .and_then(|view| view.ty_binder(db))
-                        .map(|binder| binder.instantiate(db, inst.args(db)))
-                    {
-                        let expr = ConstExprId::new(
-                            db,
-                            ConstExpr::TraitConst(
-                                AssocConstUse::new(scope, assumptions, inst, name)
-                                    .with_analysis_cx(*cx),
-                            ),
-                        );
-                        return ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty));
-                    }
                 }
                 PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
                     if let TyData::ConstTy(const_ty) = ty.data(db) {
@@ -482,126 +493,6 @@ pub(crate) fn contextual_path_resolution_in_cx<'db>(
     resolve_path_from_receiver_ty(db, receiver_ty, receiver_cx).ok()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ContextualAssocConstSelection<'db> {
-    Found(TraitInstId<'db>),
-    Ambiguous,
-    NotFound,
-}
-
-fn select_assoc_const_candidate_in_cx<'db>(
-    db: &'db dyn HirAnalysisDb,
-    receiver_ty: TyId<'db>,
-    name: IdentId<'db>,
-    scope: ScopeId<'db>,
-    cx: &AnalysisCx<'db>,
-) -> ContextualAssocConstSelection<'db> {
-    if let TyData::QualifiedTy(trait_inst) = receiver_ty.data(db) {
-        return if trait_inst.def(db).const_(db, name).is_some() {
-            ContextualAssocConstSelection::Found(*trait_inst)
-        } else {
-            ContextualAssocConstSelection::NotFound
-        };
-    }
-
-    let receiver_is_ty_param = matches!(
-        receiver_ty.base_ty(db).data(db),
-        TyData::TyParam(_) | TyData::AssocTy(_) | TyData::QualifiedTy(_)
-    );
-    if receiver_is_ty_param {
-        let mut matches: IndexSet<TraitInstId<'db>> = IndexSet::default();
-        let mut table = super::unify::UnificationTable::new(db);
-        let receiver = crate::analysis::ty::canonical::Canonical::new(db, receiver_ty);
-        let extracted_receiver_ty = receiver.extract_identity(&mut table);
-
-        for &pred in cx.proof.assumptions().list(db) {
-            let snapshot = table.snapshot();
-            let self_ty = table.instantiate_to_term(pred.self_ty(db));
-
-            if table.unify(extracted_receiver_ty, self_ty).is_ok() {
-                if pred.def(db).const_(db, name).is_some() {
-                    matches.insert(pred);
-                }
-
-                for super_trait in pred.def(db).super_traits(db) {
-                    let super_inst = super_trait.instantiate(db, pred.args(db));
-                    if super_inst.def(db).const_(db, name).is_some() {
-                        matches.insert(super_inst);
-                    }
-                }
-            }
-
-            table.rollback_to(snapshot);
-        }
-
-        if let TyData::AssocTy(assoc_ty) = receiver_ty.data(db) {
-            let trait_ = assoc_ty.trait_.def(db);
-            let assoc_name = assoc_ty.name;
-            if let Some(decl) = trait_.assoc_ty(db, assoc_name) {
-                let subject = extracted_receiver_ty.fold_with(db, &mut table);
-                let owner_self = assoc_ty.trait_.self_ty(db);
-                for bound in &decl.bounds {
-                    if let TypeBound::Trait(trait_ref) = *bound
-                        && let Ok(inst) = lower_trait_ref(
-                            db,
-                            subject,
-                            trait_ref,
-                            scope,
-                            cx.proof.assumptions(),
-                            Some(owner_self),
-                        )
-                    {
-                        if inst.def(db).const_(db, name).is_some() {
-                            matches.insert(inst);
-                        }
-
-                        for super_trait in inst.def(db).super_traits(db) {
-                            let super_inst = super_trait.instantiate(db, inst.args(db));
-                            if super_inst.def(db).const_(db, name).is_some() {
-                                matches.insert(super_inst);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        return match matches.len() {
-            0 => ContextualAssocConstSelection::NotFound,
-            1 => ContextualAssocConstSelection::Found(*matches.iter().next().unwrap()),
-            _ => ContextualAssocConstSelection::Ambiguous,
-        };
-    }
-
-    let canonical_receiver = crate::analysis::ty::canonical::Canonical::new(db, receiver_ty);
-    let scope_ingot = scope.ingot(db);
-    let search_ingots = [
-        Some(scope_ingot),
-        receiver_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
-    ];
-
-    let mut matches: IndexSet<TraitInstId<'db>> = IndexSet::default();
-    for ingot in search_ingots.into_iter().flatten() {
-        for cand in super::trait_def::impls_for_ty_with_constraints_in_cx(
-            db,
-            Some(ingot),
-            canonical_receiver,
-            cx.proof.solve_cx(),
-        ) {
-            let inst = cand.skip_binder().trait_(db);
-            if inst.def(db).const_(db, name).is_some() {
-                matches.insert(inst);
-            }
-        }
-    }
-
-    match matches.len() {
-        0 => ContextualAssocConstSelection::NotFound,
-        1 => ContextualAssocConstSelection::Found(*matches.iter().next().unwrap()),
-        _ => ContextualAssocConstSelection::Ambiguous,
-    }
-}
-
 fn resolve_path_from_receiver_ty_in_cx<'db>(
     db: &'db dyn HirAnalysisDb,
     receiver_ty: TyId<'db>,
@@ -645,11 +536,11 @@ fn resolve_path_from_receiver_ty_in_cx<'db>(
 
     if is_tail && resolve_tail_as_value {
         match select_assoc_const_candidate_in_cx(db, receiver_ty, ident, scope, cx) {
-            ContextualAssocConstSelection::Found(inst) => {
+            AssocConstSelection::Found(inst) => {
                 return Some(PathRes::TraitConst(receiver_ty, inst, ident));
             }
-            ContextualAssocConstSelection::Ambiguous => return None,
-            ContextualAssocConstSelection::NotFound => {}
+            AssocConstSelection::Ambiguous(_) => return None,
+            AssocConstSelection::NotFound => {}
         }
     }
 
@@ -737,49 +628,18 @@ fn lower_path_impl<'db>(
                             TyId::invalid(db, InvalidCause::ParseError)
                         }
                     }
-                    PathRes::TraitConst(recv_ty, inst, name) => {
-                        let mut args = inst.args(db).clone();
-                        if let Some(self_arg) = args.first_mut() {
-                            *self_arg = recv_ty;
-                        }
-                        let inst = TraitInstId::new(
+                    PathRes::TraitConst(recv_ty, inst, name) => TyId::const_ty(
+                        db,
+                        lower_trait_const_path_to_const_ty(
                             db,
-                            inst.def(db),
-                            args,
-                            inst.assoc_type_bindings(db).clone(),
-                        );
-
-                        let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
-                        if let Some(const_ty) =
-                            super::const_ty::const_ty_from_trait_const(db, solve_cx, inst, name)
-                        {
-                            TyId::const_ty(db, const_ty)
-                        } else if let Some(inst) =
-                            concretized_missing_trait_const_goal(db, solve_cx, inst, name)
-                        {
-                            TyId::invalid(db, InvalidCause::TraitConstNotImplemented { inst, name })
-                        } else if let Some(expected_ty) = inst
-                            .def(db)
-                            .const_(db, name)
-                            .and_then(|v| v.ty_binder(db))
-                            .map(|b| b.instantiate(db, inst.args(db)))
-                        {
-                            let expr = ConstExprId::new(
-                                db,
-                                ConstExpr::TraitConst(AssocConstUse::new(
-                                    scope,
-                                    assumptions,
-                                    inst,
-                                    name,
-                                )),
-                            );
-                            let const_ty =
-                                ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty));
-                            TyId::const_ty(db, const_ty)
-                        } else {
-                            TyId::invalid(db, InvalidCause::Other)
-                        }
-                    }
+                            scope,
+                            assumptions,
+                            None,
+                            recv_ty,
+                            inst,
+                            name,
+                        ),
+                    ),
                     other => TyId::invalid(db, InvalidCause::NotAType(other)),
                 };
             }
@@ -818,55 +678,18 @@ fn lower_path_impl_in_cx<'db>(
                         TyId::invalid(db, InvalidCause::ParseError)
                     }
                 }
-                Some(PathRes::TraitConst(recv_ty, inst, name)) => {
-                    let mut args = inst.args(db).clone();
-                    if let Some(self_arg) = args.first_mut() {
-                        *self_arg = recv_ty;
-                    }
-                    let inst = TraitInstId::new(
+                Some(PathRes::TraitConst(recv_ty, inst, name)) => TyId::const_ty(
+                    db,
+                    lower_trait_const_path_to_const_ty(
                         db,
-                        inst.def(db),
-                        args,
-                        inst.assoc_type_bindings(db).clone(),
-                    );
-
-                    if !matches!(cx.mode, LoweringMode::ImplTraitSignature { .. })
-                        && let Some(const_ty) = super::const_ty::const_ty_from_trait_const(
-                            db,
-                            cx.proof.solve_cx(),
-                            inst,
-                            name,
-                        )
-                    {
-                        TyId::const_ty(db, const_ty)
-                    } else if !matches!(cx.mode, LoweringMode::ImplTraitSignature { .. })
-                        && let Some(inst) = concretized_missing_trait_const_goal(
-                            db,
-                            cx.proof.solve_cx(),
-                            inst,
-                            name,
-                        )
-                    {
-                        TyId::invalid(db, InvalidCause::TraitConstNotImplemented { inst, name })
-                    } else if let Some(expected_ty) = inst
-                        .def(db)
-                        .const_(db, name)
-                        .and_then(|v| v.ty_binder_in_cx(db, cx))
-                        .map(|b| b.instantiate(db, inst.args(db)))
-                    {
-                        let expr = ConstExprId::new(
-                            db,
-                            ConstExpr::TraitConst(
-                                AssocConstUse::new(scope, assumptions, inst, name)
-                                    .with_analysis_cx(*cx),
-                            ),
-                        );
-                        let const_ty = ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty));
-                        TyId::const_ty(db, const_ty)
-                    } else {
-                        TyId::invalid(db, InvalidCause::Other)
-                    }
-                }
+                        scope,
+                        assumptions,
+                        Some(cx),
+                        recv_ty,
+                        inst,
+                        name,
+                    ),
+                ),
                 Some(other) => TyId::invalid(db, InvalidCause::NotAType(other)),
                 None => TyId::invalid(db, InvalidCause::PathResolutionFailed { path }),
             }
@@ -1514,43 +1337,18 @@ pub(crate) fn lower_generic_arg_list<'db>(
                             return TyId::invalid(db, InvalidCause::ParseError);
                         }
                         PathRes::TraitConst(recv_ty, inst, name) => {
-                            let mut args = inst.args(db).clone();
-                            if let Some(self_arg) = args.first_mut() {
-                                *self_arg = recv_ty;
-                            }
-                            let inst = TraitInstId::new(
+                            return TyId::const_ty(
                                 db,
-                                inst.def(db),
-                                args,
-                                inst.assoc_type_bindings(db).clone(),
-                            );
-
-                            let solve_cx =
-                                TraitSolveCx::new(db, scope).with_assumptions(assumptions);
-                            if let Some(const_ty) =
-                                super::const_ty::const_ty_from_trait_const(db, solve_cx, inst, name)
-                            {
-                                return TyId::const_ty(db, const_ty);
-                            }
-                            if let Some(expected_ty) = inst
-                                .def(db)
-                                .const_(db, name)
-                                .and_then(|v| v.ty_binder(db))
-                                .map(|b| b.instantiate(db, inst.args(db)))
-                            {
-                                let expr = ConstExprId::new(
+                                lower_trait_const_path_to_const_ty(
                                     db,
-                                    ConstExpr::TraitConst(AssocConstUse::new(
-                                        scope,
-                                        assumptions,
-                                        inst,
-                                        name,
-                                    )),
-                                );
-                                let const_ty =
-                                    ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty));
-                                return TyId::const_ty(db, const_ty);
-                            }
+                                    scope,
+                                    assumptions,
+                                    None,
+                                    recv_ty,
+                                    inst,
+                                    name,
+                                ),
+                            );
                         }
                         PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
                             if let TyData::ConstTy(const_ty) = ty.data(db) {

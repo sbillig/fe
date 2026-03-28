@@ -3965,10 +3965,15 @@ impl<'db> ImplTrait<'db> {
         db: &'db dyn HirAnalysisDb,
         trait_inst: TraitInstId<'db>,
     ) -> IndexMap<IdentId<'db>, TyId<'db>> {
+        let cx = self.signature_analysis_cx(db);
         // Semantic associated type implementations in this impl-trait block.
         let mut types: IndexMap<_, _> = self
             .assoc_types(db)
-            .filter_map(|v| v.name(db).and_then(|name| v.ty(db).map(|ty| (name, ty))))
+            .filter_map(|view| {
+                let name = view.name(db)?;
+                let ty = view.ty_in_cx(db, &cx)?;
+                Some((name, normalize_ty_for_trait_inst(db, &cx, ty, trait_inst)))
+            })
             .collect();
 
         // Merge trait associated type defaults into the implementor, but evaluated in
@@ -4000,7 +4005,7 @@ impl<'db> ImplTrait<'db> {
             .filter_map(|view| {
                 let name = view.name(db)?;
                 let ty = view.ty_in_cx(db, cx)?;
-                Some((name, ty))
+                Some((name, normalize_ty_for_trait_inst(db, cx, ty, trait_inst)))
             })
             .collect();
 

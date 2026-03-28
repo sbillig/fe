@@ -34,7 +34,7 @@ use crate::analysis::{
         fold::{TyFoldable, TyFolder},
         trait_def::TraitInstId,
         trait_resolution::{
-            PredicateListId,
+            PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf_nested,
             constraint::{
                 collect_constraints, collect_effect_constraints_for_func,
                 collect_func_decl_constraints,
@@ -87,6 +87,22 @@ pub(crate) struct TyCheckEnv<'db> {
 
     /// Resolved Seq trait methods for for-loops, keyed by the for statement.
     for_loop_seq: FxHashMap<StmtId, ForLoopSeq<'db>>,
+}
+
+fn binding_ty_has_wf_failure<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    ty: TyId<'db>,
+) -> bool {
+    matches!(
+        check_ty_wf_nested(
+            db,
+            TraitSolveCx::new(db, scope).with_assumptions(assumptions),
+            ty
+        ),
+        WellFormedness::IllFormed { .. }
+    )
 }
 
 impl<'db> TyCheckEnv<'db> {
@@ -242,6 +258,11 @@ impl<'db> TyCheckEnv<'db> {
                     if !view.is_self_param(db) && ty_contains_const_hole(db, ty) {
                         ty = TyId::invalid(db, InvalidCause::Other);
                     }
+                    if !ty.has_invalid(db)
+                        && binding_ty_has_wf_failure(db, owner_scope, base_assumptions, ty)
+                    {
+                        ty = TyId::invalid(db, InvalidCause::Other);
+                    }
                     let var = LocalBinding::Param {
                         site: ParamSite::Func(func),
                         idx,
@@ -277,6 +298,11 @@ impl<'db> TyCheckEnv<'db> {
                         ty = TyId::invalid(db, InvalidCause::Other);
                     }
                     if ty_contains_const_hole(db, ty) {
+                        ty = TyId::invalid(db, InvalidCause::Other);
+                    }
+                    if !ty.has_invalid(db)
+                        && binding_ty_has_wf_failure(db, owner_scope, base_assumptions, ty)
+                    {
                         ty = TyId::invalid(db, InvalidCause::Other);
                     }
 

@@ -18,7 +18,7 @@ error[6-0003]: trait bound is not satisfied
 9 │ impl Foo for Wrap<Seed> {}
   │              ^^^^^^^^^^
   │              │
-  │              `Seed` doesn't implement `Foo`
+  │              `_` doesn't implement `Foo`
   │              trait bound `Wrap<Seed>: Foo` is not satisfied
 
 error[6-0003]: trait bound is not satisfied
@@ -29,12 +29,3 @@ error[6-0003]: trait bound is not satisfied
    │                    │
    │                    `_` doesn't implement `Foo`
    │                    trait bound `Wrap<Seed>: Foo` is not satisfied
-
-error[6-0003]: trait bound is not satisfied
-   ┌─ trait_impl_cyclic_local_dependency.fe:19:5
-   │
-16 │ fn needs_foo<T: Foo>(_value: T) {}
-   │                 --- required by this bound on `needs_foo`
-   ·
-19 │     needs_foo(value)
-   │     ^^^^^^^^^ `Wrap<Seed>` doesn't implement `Foo`

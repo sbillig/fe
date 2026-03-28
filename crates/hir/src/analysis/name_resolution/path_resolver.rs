@@ -1457,7 +1457,7 @@ where
     Ok(r)
 }
 
-enum AssocConstSelection<'db> {
+pub(crate) enum AssocConstSelection<'db> {
     Found(TraitInstId<'db>),
     Ambiguous(ThinVec<TraitInstId<'db>>),
     NotFound,
@@ -1588,6 +1588,119 @@ fn select_assoc_const_candidate<'db>(
             let inst = cand.skip_binder().trait_(db);
             let trait_ = inst.def(db);
             if trait_.const_(db, name).is_some() {
+                matches.insert(inst);
+            }
+        }
+    }
+
+    match matches.len() {
+        0 => AssocConstSelection::NotFound,
+        1 => AssocConstSelection::Found(*matches.iter().next().unwrap()),
+        _ => AssocConstSelection::Ambiguous(matches.into_iter().collect()),
+    }
+}
+
+pub(crate) fn select_assoc_const_candidate_in_cx<'db>(
+    db: &'db dyn HirAnalysisDb,
+    receiver_ty: TyId<'db>,
+    name: IdentId<'db>,
+    scope: ScopeId<'db>,
+    cx: &AnalysisCx<'db>,
+) -> AssocConstSelection<'db> {
+    if let TyData::QualifiedTy(trait_inst) = receiver_ty.data(db) {
+        return if trait_inst.def(db).const_(db, name).is_some() {
+            AssocConstSelection::Found(*trait_inst)
+        } else {
+            AssocConstSelection::NotFound
+        };
+    }
+
+    let receiver_is_ty_param = matches!(
+        receiver_ty.base_ty(db).data(db),
+        TyData::TyParam(_) | TyData::AssocTy(_) | TyData::QualifiedTy(_)
+    );
+    if receiver_is_ty_param {
+        let mut matches: IndexSet<TraitInstId<'db>> = IndexSet::default();
+        let mut table = UnificationTable::new(db);
+        let receiver = Canonical::new(db, receiver_ty);
+        let extracted_receiver_ty = receiver.extract_identity(&mut table);
+
+        for &pred in cx.proof.assumptions().list(db) {
+            let snapshot = table.snapshot();
+            let self_ty = table.instantiate_to_term(pred.self_ty(db));
+
+            if table.unify(extracted_receiver_ty, self_ty).is_ok() {
+                if pred.def(db).const_(db, name).is_some() {
+                    matches.insert(pred);
+                }
+
+                for super_trait in pred.def(db).super_traits(db) {
+                    let super_inst = super_trait.instantiate(db, pred.args(db));
+                    if super_inst.def(db).const_(db, name).is_some() {
+                        matches.insert(super_inst);
+                    }
+                }
+            }
+
+            table.rollback_to(snapshot);
+        }
+
+        if let TyData::AssocTy(assoc_ty) = receiver_ty.data(db) {
+            let trait_ = assoc_ty.trait_.def(db);
+            let assoc_name = assoc_ty.name;
+            if let Some(decl) = trait_.assoc_ty(db, assoc_name) {
+                let subject = extracted_receiver_ty.fold_with(db, &mut table);
+                let owner_self = assoc_ty.trait_.self_ty(db);
+                for bound in &decl.bounds {
+                    if let TypeBound::Trait(trait_ref) = *bound
+                        && let Ok(inst) = lower_trait_ref(
+                            db,
+                            subject,
+                            trait_ref,
+                            scope,
+                            cx.proof.assumptions(),
+                            Some(owner_self),
+                        )
+                    {
+                        if inst.def(db).const_(db, name).is_some() {
+                            matches.insert(inst);
+                        }
+
+                        for super_trait in inst.def(db).super_traits(db) {
+                            let super_inst = super_trait.instantiate(db, inst.args(db));
+                            if super_inst.def(db).const_(db, name).is_some() {
+                                matches.insert(super_inst);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return match matches.len() {
+            0 => AssocConstSelection::NotFound,
+            1 => AssocConstSelection::Found(*matches.iter().next().unwrap()),
+            _ => AssocConstSelection::Ambiguous(matches.into_iter().collect()),
+        };
+    }
+
+    let canonical_receiver = Canonical::new(db, receiver_ty);
+    let scope_ingot = scope.ingot(db);
+    let search_ingots = [
+        Some(scope_ingot),
+        receiver_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
+    ];
+
+    let mut matches: IndexSet<TraitInstId<'db>> = IndexSet::default();
+    for ingot in search_ingots.into_iter().flatten() {
+        for cand in impls_for_ty_with_constraints_in_cx(
+            db,
+            Some(ingot),
+            canonical_receiver,
+            cx.proof.solve_cx(),
+        ) {
+            let inst = cand.skip_binder().trait_(db);
+            if inst.def(db).const_(db, name).is_some() {
                 matches.insert(inst);
             }
         }

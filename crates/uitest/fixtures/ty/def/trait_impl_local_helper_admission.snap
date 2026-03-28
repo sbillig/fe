@@ -1,6 +1,5 @@
 ---
 source: crates/uitest/tests/ty.rs
-assertion_line: 27
 expression: diags
 input_file: fixtures/ty/def/trait_impl_local_helper_admission.fe
 ---
@@ -60,6 +59,21 @@ error[6-0003]: trait bound is not satisfied
    ·
 58 │     needs_child_const(value)
    │     ^^^^^^^^^^^^^^^^^ `BadConst` doesn't implement `ChildConst`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_impl_local_helper_admission.fe:377:14
+    │
+377 │     type X = SelfWrapCycle<SelfCycle>
+    │              ^^^^^^^^^^^^^^^^^^^^^^^^ `SelfWrapCycle<SelfCycle>` doesn't implement `SelfHelperCycle`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_impl_local_helper_admission.fe:383:5
+    │
+380 │ fn needs_self_foo_cycle<T: SelfFooCycle>(_value: T) {}
+    │                            ------------ required by this bound on `needs_self_foo_cycle`
+    ·
+383 │     needs_self_foo_cycle(value)
+    │     ^^^^^^^^^^^^^^^^^^^^ `SelfCycle` doesn't implement `SelfFooCycle`
 
 error[6-0008]: method `run` has incompatible return type
    ┌─ trait_impl_local_helper_admission.fe:28:8

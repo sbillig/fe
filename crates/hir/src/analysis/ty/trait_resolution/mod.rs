@@ -3,10 +3,11 @@ use super::{
     canonical::{Canonical, Canonicalized, Solution},
     const_expr::ConstExpr,
     const_ty::{ConstTyData, StoredAnalysisCx, const_body_simple_path},
+    context::AnalysisCx,
     fold::{AssocTySubst, TyFoldable},
     normalize::normalize_ty_without_consts_with_solve_cx,
     trait_def::{ImplementorId, TraitInstId},
-    ty_def::{InvalidCause, TyData, TyFlags, TyId},
+    ty_def::{InvalidCause, TyData, TyFlags, TyId, TyParam},
     ty_lower::contextual_path_resolution_in_cx,
 };
 use crate::analysis::{
@@ -244,10 +245,6 @@ impl<'db> TraitSolveCx<'db> {
             .unwrap_or(origin_ingot);
         norm_ingot.root_mod(db).scope()
     }
-
-    pub(crate) fn origin_scope(self, db: &'db dyn HirAnalysisDb) -> ScopeId<'db> {
-        self.origin_ingot.root_mod(db).scope()
-    }
 }
 
 pub(crate) fn normalize_trait_inst_preserving_validity<'db>(
@@ -480,6 +477,41 @@ where
             self.db
         }
 
+        fn visit_invalid(&mut self, cause: &InvalidCause<'db>) {
+            if self.goal.is_some() {
+                return;
+            }
+
+            match cause {
+                InvalidCause::TraitConstNotImplemented { inst, .. } => self.goal = Some(*inst),
+                InvalidCause::KindMismatch { given, .. }
+                | InvalidCause::NormalTypeExpected { given } => self.visit_ty(*given),
+                InvalidCause::ConstTyMismatch { expected, given } => {
+                    self.visit_ty(*expected);
+                    if self.goal.is_none() {
+                        self.visit_ty(*given);
+                    }
+                }
+                InvalidCause::ConstTyExpected { expected } => self.visit_ty(*expected),
+                InvalidCause::NotFullyApplied
+                | InvalidCause::TooManyGenericArgs { .. }
+                | InvalidCause::InvalidConstParamTy
+                | InvalidCause::RecursiveConstParamTy
+                | InvalidCause::UnboundTypeAliasParam { .. }
+                | InvalidCause::AliasCycle(..)
+                | InvalidCause::InvalidConstTyExpr { .. }
+                | InvalidCause::ConstEvalUnsupported { .. }
+                | InvalidCause::ConstEvalNonConstCall { .. }
+                | InvalidCause::ConstEvalDivisionByZero { .. }
+                | InvalidCause::ConstEvalStepLimitExceeded { .. }
+                | InvalidCause::ConstEvalRecursionLimitExceeded { .. }
+                | InvalidCause::ParseError
+                | InvalidCause::PathResolutionFailed { .. }
+                | InvalidCause::NotAType(..)
+                | InvalidCause::Other => {}
+            }
+        }
+
         fn visit_ty(&mut self, ty: TyId<'db>) {
             if self.goal.is_some() {
                 return;
@@ -504,9 +536,19 @@ where
                         walk_const_ty(self, const_ty);
                         return;
                     };
+                    let solve_cx = self.solve_cx.with_assumptions(assoc.assumptions());
+                    if is_current_impl_trait_const_projection(
+                        self.db,
+                        solve_cx,
+                        assoc.analysis_cx(self.db, Some(solve_cx)),
+                        assoc.inst(),
+                    ) {
+                        walk_const_ty(self, const_ty);
+                        return;
+                    }
                     self.goal = concretized_missing_trait_const_goal(
                         self.db,
-                        self.solve_cx.with_assumptions(assoc.assumptions()),
+                        solve_cx,
                         assoc.inst(),
                         assoc.name(),
                     );
@@ -555,6 +597,15 @@ where
                             args,
                             inst.assoc_type_bindings(self.db).clone(),
                         );
+                        if is_current_impl_trait_const_projection(
+                            self.db,
+                            body_solve_cx,
+                            body_cx,
+                            inst,
+                        ) {
+                            walk_const_ty(self, const_ty);
+                            return;
+                        }
                         self.goal = concretized_missing_trait_const_goal(
                             self.db,
                             body_solve_cx,
@@ -622,6 +673,10 @@ where
             self.db
         }
 
+        fn visit_const_param(&mut self, _param: &TyParam<'db>, const_ty_ty: TyId<'db>) {
+            self.visit_ty(const_ty_ty);
+        }
+
         fn visit_ty(&mut self, ty: TyId<'db>) {
             let should_walk = if Some(ty) == self.skip_root {
                 true
@@ -649,8 +704,7 @@ where
             });
         }
 
-        let flags = collect_flags(db, ty);
-        if flags.intersects(TyFlags::HAS_PARAM | TyFlags::HAS_VAR) {
+        if collect_flags(db, ty).contains(TyFlags::HAS_INVALID) {
             return None;
         }
 
@@ -688,38 +742,10 @@ pub(crate) fn check_ty_wf<'db>(
         return WellFormedness::WellFormed;
     }
 
-    match ty.data(db) {
-        TyData::AssocTy(assoc_ty) => {
-            let goal = assoc_ty.trait_;
-            let wf = check_trait_inst_wf(db, solve_cx, goal);
-            if !wf.is_wf() {
-                return wf;
-            }
-            let mut table = UnificationTable::new(db);
-            let query = CanonicalGoalQuery::new(db, goal, solve_cx.assumptions());
-            if let GoalSatisfiability::UnSat(subgoal) =
-                is_goal_query_satisfiable(db, solve_cx, &query)
-            {
-                let subgoal = subgoal.map(|subgoal| query.extract_subgoal(&mut table, subgoal));
-                return WellFormedness::IllFormed { goal, subgoal };
-            }
-        }
-        TyData::QualifiedTy(trait_inst) => {
-            let goal = *trait_inst;
-            let wf = check_trait_inst_wf(db, solve_cx, goal);
-            if !wf.is_wf() {
-                return wf;
-            }
-            let mut table = UnificationTable::new(db);
-            let query = CanonicalGoalQuery::new(db, goal, solve_cx.assumptions());
-            if let GoalSatisfiability::UnSat(subgoal) =
-                is_goal_query_satisfiable(db, solve_cx, &query)
-            {
-                let subgoal = subgoal.map(|subgoal| query.extract_subgoal(&mut table, subgoal));
-                return WellFormedness::IllFormed { goal, subgoal };
-            }
-        }
-        _ => {}
+    if let Some(goal) = current_projection_goal(db, solve_cx, ty)
+        && let Some(wf) = check_projection_goal_wf(db, solve_cx, goal)
+    {
+        return wf;
     }
 
     let (_, args) = ty.decompose_ty_app(db);
@@ -758,6 +784,77 @@ pub(crate) fn check_ty_wf<'db>(
     WellFormedness::WellFormed
 }
 
+fn current_projection_goal<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    ty: TyId<'db>,
+) -> Option<TraitInstId<'db>> {
+    match ty.data(db) {
+        TyData::AssocTy(assoc_ty) => Some(assoc_ty.trait_),
+        TyData::QualifiedTy(trait_inst) => Some(*trait_inst),
+        TyData::ConstTy(const_ty) => {
+            let ConstTyData::Abstract(expr, _) = const_ty.data(db) else {
+                return None;
+            };
+            let ConstExpr::TraitConst(assoc) = expr.data(db) else {
+                return None;
+            };
+            let solve_cx = solve_cx.with_assumptions(assoc.assumptions());
+            if is_current_impl_trait_const_projection(
+                db,
+                solve_cx,
+                assoc.analysis_cx(db, Some(solve_cx)),
+                assoc.inst(),
+            ) {
+                return None;
+            }
+            Some(assoc.inst())
+        }
+        _ => None,
+    }
+}
+
+fn check_projection_goal_wf<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    goal: TraitInstId<'db>,
+) -> Option<WellFormedness<'db>> {
+    let wf = check_trait_inst_wf(db, solve_cx, goal);
+    if !wf.is_wf() {
+        return Some(wf);
+    }
+
+    let mut table = UnificationTable::new(db);
+    let query = CanonicalGoalQuery::new(db, goal, solve_cx.assumptions());
+    if let GoalSatisfiability::UnSat(subgoal) = is_goal_query_satisfiable(db, solve_cx, &query) {
+        let subgoal = subgoal.map(|subgoal| query.extract_subgoal(&mut table, subgoal));
+        return Some(WellFormedness::IllFormed { goal, subgoal });
+    }
+
+    None
+}
+
+fn is_current_impl_trait_const_projection<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    cx: Option<AnalysisCx<'db>>,
+    inst: TraitInstId<'db>,
+) -> bool {
+    let Some(cx) = cx else {
+        return false;
+    };
+    let Some(current_impl) = cx.mode.current_impl().or_else(|| cx.overlay.current_impl()) else {
+        return false;
+    };
+
+    normalize_trait_inst_preserving_validity_with_solve_cx(db, inst, solve_cx)
+        == normalize_trait_inst_preserving_validity_with_solve_cx(
+            db,
+            current_impl.trait_inst(db),
+            solve_cx,
+        )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Update)]
 pub(crate) enum WellFormedness<'db> {
     WellFormed,
@@ -788,7 +885,13 @@ pub(crate) fn check_trait_inst_wf<'db>(
         return WellFormedness::WellFormed;
     }
 
-    if let Some(wf) = first_ill_formed_nested_ty(db, solve_cx, &trait_inst, None)
+    let is_trait_header_root = matches!(
+        trait_inst.self_ty(db).data(db),
+        TyData::TyParam(param)
+            if !param.is_effect() && param.owner == trait_inst.def(db).scope() && param.idx == 0
+    );
+    if !is_trait_header_root
+        && let Some(wf) = first_ill_formed_nested_ty(db, solve_cx, &trait_inst, None)
         && !wf.is_wf()
     {
         return wf;
@@ -1019,8 +1122,8 @@ mod tests {
     use common::indexmap::IndexMap;
 
     use super::{
-        CanonicalGoalQuery, GoalSatisfiability, TraitInstId, TraitSolveCx,
-        is_goal_query_satisfiable,
+        CanonicalGoalQuery, GoalSatisfiability, TraitInstId, TraitSolveCx, WellFormedness,
+        check_trait_inst_wf, is_goal_query_satisfiable,
     };
     use crate::{
         analysis::ty::{
@@ -1116,6 +1219,40 @@ fn without_a<T>() -> bool {
         assert!(matches!(
             is_goal_query_satisfiable(&db, without_cx, &without_query),
             GoalSatisfiability::UnSat(_)
+        ));
+    }
+
+    #[test]
+    fn concrete_nested_trait_const_arg_is_ill_formed() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "concrete_nested_trait_const_arg_is_ill_formed.fe".into(),
+            r#"
+trait HasN {
+    const N: u32
+}
+
+struct Slot<const N: u32> {}
+
+trait Foo<T> {}
+
+struct Missing {}
+struct S {}
+
+impl Foo<Slot<{ <Missing as HasN>::N }>> for S {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let impl_trait = top_mod.all_impl_traits(&db)[0];
+        let trait_inst = impl_trait
+            .trait_inst_result(&db)
+            .expect("trait ref should lower before WF checking");
+        let solve_cx = TraitSolveCx::new(&db, impl_trait.scope())
+            .with_assumptions(impl_trait.assumptions(&db));
+
+        assert!(matches!(
+            check_trait_inst_wf(&db, solve_cx, trait_inst),
+            WellFormedness::IllFormed { .. }
         ));
     }
 }

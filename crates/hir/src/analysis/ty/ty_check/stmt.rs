@@ -99,11 +99,15 @@ impl<'db> TyChecker<'db> {
         };
 
         let span = stmt.span(self.env.body()).into_let_stmt();
+        let ty_span = span.clone().ty();
 
-        let ascription = match ascription {
-            Some(ty) => self.lower_ty(*ty, span.ty(), true),
-            None => self.fresh_ty(),
+        let (ascription, has_explicit_ascription) = match ascription {
+            Some(ty) => (self.lower_ty(*ty, ty_span.clone(), true), true),
+            None => (self.fresh_ty(), false),
         };
+        let explicit_binding_wf_failed = has_explicit_ascription
+            && !ascription.has_invalid(self.db)
+            && self.body_value_ty_has_wf_failure(ascription);
 
         if let Some(expr) = expr {
             let prop = self.check_expr(*expr, ascription);
@@ -126,7 +130,13 @@ impl<'db> TyChecker<'db> {
                 }
             }
         } else {
+            if explicit_binding_wf_failed {
+                self.explicit_body_value_ty_wf_diag(ascription, ty_span.into());
+            }
             self.check_pat(*pat, ascription);
+        }
+        if explicit_binding_wf_failed {
+            self.poison_pat_binding_tys(*pat);
         }
         self.check_mutable_pattern_bindings(*pat);
         self.env.flush_pending_bindings();

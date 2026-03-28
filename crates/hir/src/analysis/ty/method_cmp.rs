@@ -29,7 +29,7 @@ use super::{
     ty_check::{ConstRef, check_anon_const_body},
     ty_def::{InvalidCause, TyData, TyId},
     ty_lower::collect_generic_params_without_func_implicit,
-    unify::UnificationTable,
+    unify::tys_structurally_match,
 };
 use crate::analysis::HirAnalysisDb;
 use crate::hir_def::{CallableDef, Expr, Partial, PathId, PathKind, scope_graph::ScopeId};
@@ -396,15 +396,6 @@ fn compare_ty<'db>(
     }
 
     !err
-}
-
-fn tys_structurally_match<'db>(
-    db: &'db dyn HirAnalysisDb,
-    expected: TyId<'db>,
-    actual: TyId<'db>,
-) -> bool {
-    let mut table = UnificationTable::new(db);
-    table.unify(expected, actual).is_ok()
 }
 
 fn param_owner_and_idx<'db>(

@@ -10,8 +10,11 @@ use salsa::Update;
 use super::const_expr::{ConstExpr, ConstExprId, pretty_print_un_op};
 use super::{
     assoc_const::AssocConstUse,
-    assoc_items::{analysis_cx_for_selected_assoc_const_body, resolve_assoc_const_selection},
-    context::AnalysisCx,
+    assoc_items::{
+        AssocConstSelection, analysis_cx_for_selected_assoc_const_body,
+        resolve_assoc_const_selection,
+    },
+    context::{AnalysisCx, ProofCx},
     ctfe::{CtfeConfig, CtfeInterpreter, instantiate_typed_body},
     diagnostics::{BodyDiag, FuncBodyDiag},
     fold::{TyFoldable, TyFolder},
@@ -1365,13 +1368,11 @@ pub(super) fn const_ty_from_trait_const<'db>(
     const_ty_from_trait_const_in_cx(db, &cx, inst, name)
 }
 
-fn const_ty_from_trait_const_in_cx<'db>(
+pub(crate) fn const_ty_from_selected_assoc_const<'db>(
     db: &'db dyn HirAnalysisDb,
-    cx: &AnalysisCx<'db>,
-    inst: TraitInstId<'db>,
-    name: IdentId<'db>,
+    proof: ProofCx<'db>,
+    selection: &AssocConstSelection<'db>,
 ) -> Option<ConstTyId<'db>> {
-    let selection = resolve_assoc_const_selection(db, cx, inst, name)?;
     let source = selection.body.as_ref()?;
 
     Some(ConstTyId::from_body_with_generic_args_and_cx(
@@ -1380,9 +1381,18 @@ fn const_ty_from_trait_const_in_cx<'db>(
         Some(selection.declared_ty),
         None,
         source.impl_args.clone(),
-        analysis_cx_for_selected_assoc_const_body(db, cx.proof, &selection)
-            .map(StoredAnalysisCx::new),
+        analysis_cx_for_selected_assoc_const_body(db, proof, selection).map(StoredAnalysisCx::new),
     ))
+}
+
+pub(crate) fn const_ty_from_trait_const_in_cx<'db>(
+    db: &'db dyn HirAnalysisDb,
+    cx: &AnalysisCx<'db>,
+    inst: TraitInstId<'db>,
+    name: IdentId<'db>,
+) -> Option<ConstTyId<'db>> {
+    let selection = resolve_assoc_const_selection(db, cx, inst, name)?;
+    const_ty_from_selected_assoc_const(db, cx.proof, &selection)
 }
 
 // FIXME: When we add type inference, we need to use the inference engine to

@@ -15,10 +15,8 @@ use rustc_hash::FxHashMap;
 use salsa::Update;
 
 use super::{
-    assoc_items::normalize_ty_for_trait_inst as normalize_assoc_ty_for_trait_inst,
     binder::Binder,
     canonical::Canonical,
-    context::AnalysisCx,
     fold::TyFoldable as _,
     layout_holes::alpha_rename_hidden_layout_placeholders,
     trait_lower::collect_implementor_methods,
@@ -388,15 +386,6 @@ pub(crate) fn impls_for_ty<'db>(
             is_ok
         })
         .collect()
-}
-
-pub(crate) fn normalize_ty_for_trait_inst<'db>(
-    db: &'db dyn HirAnalysisDb,
-    solve_cx: TraitSolveCx<'db>,
-    ty: TyId<'db>,
-    trait_inst: TraitInstId<'db>,
-) -> TyId<'db> {
-    normalize_assoc_ty_for_trait_inst(db, &AnalysisCx::from_solve_cx(solve_cx), ty, trait_inst)
 }
 
 pub(crate) fn specialize_trait_const_inst_to_receiver<'db>(

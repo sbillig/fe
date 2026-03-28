@@ -11,7 +11,7 @@ use crate::analysis::{
     ty::adt_def::AdtRef,
     ty::{
         assoc_const::AssocConstUse,
-        assoc_items::assoc_const_declared_ty,
+        assoc_items::{TraitConstUseResolution, resolve_trait_const_use_in_cx},
         binder::Binder,
         const_eval::{ConstValue, try_eval_const_ref},
         diagnostics::BodyDiag,
@@ -19,8 +19,7 @@ use crate::analysis::{
         pattern_ir::{
             BindingRef, ConstructorKind, PatternAnalysisStatus, ValidatedPat, ValidatedPatKind,
         },
-        trait_def::TraitInstId,
-        trait_resolution::concretized_missing_trait_const_goal,
+        trait_def::specialize_trait_const_inst_to_receiver,
         ty_def::{InvalidCause, Kind, TyId, TyVarSort},
         ty_lower::lower_hir_ty,
     },
@@ -418,52 +417,59 @@ impl<'db> TyChecker<'db> {
             ),
 
             Ok(PathRes::TraitConst(recv_ty, inst, name)) => {
-                let mut args = inst.args(self.db).clone();
-                if let Some(self_arg) = args.first_mut() {
-                    *self_arg = recv_ty;
+                let cx = self.analysis_cx_in_scope(self.env.scope(), self.env.assumptions());
+                let inst = specialize_trait_const_inst_to_receiver(self.db, recv_ty, inst);
+                let Some(resolution) = resolve_trait_const_use_in_cx(self.db, &cx, inst, name)
+                else {
+                    return self.finish_pat_check(
+                        pat,
+                        expected,
+                        TyId::invalid(self.db, InvalidCause::Other),
+                        PatternAnalysisStatus::Invalid,
+                    );
+                };
+
+                if let TraitConstUseResolution::Abstract { trait_inst, .. } = &resolution {
+                    self.env
+                        .register_trait_obligation(super::env::TraitObligation {
+                            goal: *trait_inst,
+                            origin: super::env::TraitObligationOrigin::GenericConfirmation,
+                            span: pat.span(self.body()).into(),
+                        });
                 }
-                let inst = TraitInstId::new(
-                    self.db,
-                    inst.def(self.db),
-                    args,
-                    inst.assoc_type_bindings(self.db).clone(),
-                );
-                let solve_cx = self.solve_cx_in_scope(self.env.scope(), self.env.assumptions());
-                if let Some(inst) =
-                    concretized_missing_trait_const_goal(self.db, solve_cx, inst, name)
+
+                if let TraitConstUseResolution::MissingConcreteImpl { trait_inst, .. } = resolution
                 {
                     return self.finish_pat_check(
                         pat,
                         expected,
                         TyId::invalid(
                             self.db,
-                            InvalidCause::TraitConstNotImplemented { inst, name },
+                            InvalidCause::TraitConstNotImplemented {
+                                inst: trait_inst,
+                                name,
+                            },
                         ),
                         PatternAnalysisStatus::Invalid,
                     );
                 }
 
-                let cx = self.analysis_cx_in_scope(self.env.scope(), self.env.assumptions());
-                if let Some(ty) = assoc_const_declared_ty(self.db, &cx, inst, name) {
-                    let ty = self.table.instantiate_to_term(ty);
-                    let cref = ConstRef::TraitConst(
-                        AssocConstUse::new(self.env.scope(), self.env.assumptions(), inst, name)
-                            .with_analysis_cx(
-                                self.analysis_cx_in_scope(self.env.scope(), self.env.assumptions()),
-                            ),
-                    );
-                    (
-                        ty,
-                        self.eval_const_pattern_literal(cref, expected)
-                            .map(|lit| self.literal_constructor_status(expected, lit))
-                            .unwrap_or(PatternAnalysisStatus::Unsupported),
+                let ty = self.table.instantiate_to_term(resolution.declared_ty());
+                let cref = ConstRef::TraitConst(
+                    AssocConstUse::new(
+                        self.env.scope(),
+                        self.env.assumptions(),
+                        resolution.trait_inst(),
+                        name,
                     )
-                } else {
-                    (
-                        TyId::invalid(self.db, InvalidCause::Other),
-                        PatternAnalysisStatus::Invalid,
-                    )
-                }
+                    .with_analysis_cx(cx),
+                );
+                (
+                    ty,
+                    self.eval_const_pattern_literal(cref, expected)
+                        .map(|lit| self.literal_constructor_status(expected, lit))
+                        .unwrap_or(PatternAnalysisStatus::Unsupported),
+                )
             }
 
             Ok(PathRes::Trait(trait_)) => {

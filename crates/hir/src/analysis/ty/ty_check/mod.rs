@@ -58,8 +58,9 @@ use super::{
     effects::{EffectKeyKind, resolve_normalized_type_effect_key},
     trait_def::TraitInstId,
     trait_resolution::{
-        CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitSolveCx,
-        constraint::collect_func_decl_constraints, is_goal_query_satisfiable, is_goal_satisfiable,
+        CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitSolveCx, WellFormedness,
+        check_ty_wf_nested, constraint::collect_func_decl_constraints, is_goal_query_satisfiable,
+        is_goal_satisfiable,
     },
     ty_contains_const_hole,
     ty_def::{BorrowKind, CapabilityKind, InvalidCause, Kind, TyId, TyVarSort},
@@ -1383,13 +1384,33 @@ impl<'db> TyChecker<'db> {
         self.diags.push(diag.into())
     }
 
-    fn check_value_ty_wf(&mut self, expr: ExprId, ty: TyId<'db>, span: DynLazySpan<'db>) {
-        self.env.mark_explicit_value_wf_checked(expr);
-        let solve_cx =
-            TraitSolveCx::new(self.db, self.env.scope()).with_assumptions(self.env.assumptions());
+    fn body_value_ty_has_wf_failure(&self, ty: TyId<'db>) -> bool {
+        let solve_cx = self
+            .analysis_cx_in_scope(self.env.scope(), self.env.assumptions())
+            .proof
+            .solve_cx();
+        matches!(
+            check_ty_wf_nested(self.db, solve_cx, ty),
+            WellFormedness::IllFormed { .. }
+        )
+    }
+
+    fn explicit_body_value_ty_wf_diag(&mut self, ty: TyId<'db>, span: DynLazySpan<'db>) -> bool {
+        let solve_cx = self
+            .analysis_cx_in_scope(self.env.scope(), self.env.assumptions())
+            .proof
+            .solve_cx();
         if let Some(diag) = explicit_value_ty_wf_diag(self.db, solve_cx, ty, span) {
             self.push_diag(diag);
+            true
+        } else {
+            false
         }
+    }
+
+    fn check_value_ty_wf(&mut self, expr: ExprId, ty: TyId<'db>, span: DynLazySpan<'db>) {
+        self.env.mark_explicit_value_wf_checked(expr);
+        self.explicit_body_value_ty_wf_diag(ty, span);
     }
 
     fn body(&self) -> Body<'db> {
@@ -1852,6 +1873,36 @@ impl<'db> TyChecker<'db> {
             Pat::Or(lhs, rhs) => {
                 self.seed_pat_bindings(*lhs);
                 self.seed_pat_bindings(*rhs);
+            }
+            Pat::WildCard | Pat::Rest | Pat::Lit(..) => {}
+        }
+    }
+
+    fn poison_pat_binding_tys(&mut self, pat: PatId) {
+        let invalid = TyId::invalid(self.db, InvalidCause::Other);
+        let Partial::Present(pat_data) = pat.data(self.db, self.env.body()) else {
+            return;
+        };
+
+        match pat_data {
+            Pat::Path(..) => {
+                if matches!(self.env.pat_binding(pat), Some(LocalBinding::Local { .. })) {
+                    self.env.type_pat(pat, invalid);
+                }
+            }
+            Pat::Tuple(pats) | Pat::PathTuple(_, pats) => {
+                for &p in pats {
+                    self.poison_pat_binding_tys(p);
+                }
+            }
+            Pat::Record(_, fields) => {
+                for field in fields {
+                    self.poison_pat_binding_tys(field.pat);
+                }
+            }
+            Pat::Or(lhs, rhs) => {
+                self.poison_pat_binding_tys(*lhs);
+                self.poison_pat_binding_tys(*rhs);
             }
             Pat::WildCard | Pat::Rest | Pat::Lit(..) => {}
         }

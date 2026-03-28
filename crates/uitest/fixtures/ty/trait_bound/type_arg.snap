@@ -19,7 +19,7 @@ error[6-0003]: trait bound is not satisfied
    ┌─ type_arg.fe:15:9
    │
 15 │ impl<T> Foo<T> {
-   │         ^^^^^^ `T` doesn't implement `Trait1`
+   │         ^^^^^^ `_` doesn't implement `Trait2`
 
 error[6-0003]: trait bound is not satisfied
    ┌─ type_arg.fe:16:12

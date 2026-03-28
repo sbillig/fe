@@ -25,7 +25,7 @@ use crate::analysis::place::{Place, PlaceBase};
 use crate::analysis::ty::{
     adt_def::AdtRef,
     assoc_const::AssocConstUse,
-    assoc_items::assoc_const_declared_ty,
+    assoc_items::{TraitConstUseResolution, resolve_trait_const_use_in_cx},
     canonical::{Canonicalized, Solution},
     corelib::{resolve_core_range_types, resolve_core_trait, resolve_lib_type_path},
     diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection},
@@ -50,11 +50,8 @@ use crate::analysis::ty::{
         stored_value_contains_out_of_scope_params,
     },
     fold::{AssocTySubst, TyFoldable as _, TyFolder},
-    trait_def::TraitInstId,
-    trait_resolution::{
-        GoalSatisfiability, PredicateListId, TraitGoalSolution,
-        concretized_missing_trait_const_goal,
-    },
+    trait_def::{TraitInstId, specialize_trait_const_inst_to_receiver},
+    trait_resolution::{GoalSatisfiability, PredicateListId, TraitGoalSolution},
     ty_check::callable::Callable,
     ty_def::{CapabilityKind, PrimTy, TyBase, TyData, prim_int_bits},
     unify::UnificationTable,
@@ -3162,29 +3159,37 @@ impl<'db> TyChecker<'db> {
                     ExprProp::new(func_ty, true)
                 }
                 PathRes::TraitConst(recv_ty, inst, name) => {
-                    let mut args = inst.args(self.db).clone();
-                    if let Some(self_arg) = args.first_mut() {
-                        *self_arg = recv_ty;
+                    let cx = self.analysis_cx_in_scope(self.env.scope(), self.env.assumptions());
+                    let inst = specialize_trait_const_inst_to_receiver(self.db, recv_ty, inst);
+                    let Some(resolution) = resolve_trait_const_use_in_cx(self.db, &cx, inst, name)
+                    else {
+                        return ExprProp::invalid(self.db);
+                    };
+
+                    if let TraitConstUseResolution::Abstract { trait_inst, .. } = &resolution {
+                        self.env.register_trait_obligation(TraitObligation {
+                            goal: *trait_inst,
+                            origin: TraitObligationOrigin::GenericConfirmation,
+                            span: path_expr_span.clone().into(),
+                        });
                     }
-                    let inst = TraitInstId::new(
-                        self.db,
-                        inst.def(self.db),
-                        args,
-                        inst.assoc_type_bindings(self.db).clone(),
-                    );
-                    let solve_cx = self.solve_cx_in_scope(self.env.scope(), self.env.assumptions());
-                    if let Some(inst) =
-                        concretized_missing_trait_const_goal(self.db, solve_cx, inst, name)
+
+                    if let TraitConstUseResolution::MissingConcreteImpl { trait_inst, .. } =
+                        resolution
                     {
                         return ExprProp::new(
                             TyId::invalid(
                                 self.db,
-                                InvalidCause::TraitConstNotImplemented { inst, name },
+                                InvalidCause::TraitConstNotImplemented {
+                                    inst: trait_inst,
+                                    name,
+                                },
                             ),
                             true,
                         );
                     }
 
+                    let inst = resolution.trait_inst();
                     self.env.register_const_ref(
                         expr,
                         ConstRef::TraitConst(
@@ -3194,20 +3199,13 @@ impl<'db> TyChecker<'db> {
                                 inst,
                                 name,
                             )
-                            .with_analysis_cx(
-                                self.analysis_cx_in_scope(self.env.scope(), self.env.assumptions()),
-                            ),
+                            .with_analysis_cx(cx),
                         ),
                     );
-                    // Look up the associated const's declared type in the trait and
-                    // instantiate it with the trait instance's args (including Self).
-                    let cx = self.analysis_cx_in_scope(self.env.scope(), self.env.assumptions());
-                    if let Some(ty) = assoc_const_declared_ty(self.db, &cx, inst, name) {
-                        ExprProp::new(self.table.instantiate_to_term(ty), true)
-                    } else {
-                        // Fallback to invalid type if the declaration isn't found
-                        ExprProp::invalid(self.db)
-                    }
+                    ExprProp::new(
+                        self.table.instantiate_to_term(resolution.declared_ty()),
+                        true,
+                    )
                 }
                 PathRes::Mod(scope) => {
                     let diag = BodyDiag::NotValue {
