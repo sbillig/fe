@@ -723,6 +723,8 @@ struct Weird {
 
 impl core::abi::AbiSize for Weird {
     const ENCODED_SIZE: u256 = 64
+    const IS_DYNAMIC: bool = false
+    const NEEDS_PARENT_WRAPPER: bool = false
 }
 
 impl core::abi::Encode<std::abi::Sol> for Weird {

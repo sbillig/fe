@@ -327,6 +327,14 @@ impl<'db> TyId<'db> {
         TyId::app(db, array, len)
     }
 
+    pub fn string_with_len(db: &'db dyn HirAnalysisDb, len: usize) -> Self {
+        let string = Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::String)));
+        let len = EvaluatedConstTy::LitInt(IntegerId::new(db, BigUint::from(len)));
+        let len = ConstTyData::Evaluated(len, string.applicable_ty(db).unwrap().const_ty.unwrap());
+        let len = TyId::const_ty(db, ConstTyId::new(db, len));
+        TyId::app(db, string, len)
+    }
+
     pub fn unit(db: &'db dyn HirAnalysisDb) -> Self {
         Self::tuple(db, 0)
     }
@@ -466,6 +474,27 @@ impl<'db> TyId<'db> {
             self.base_ty(db).data(db),
             TyData::TyBase(TyBase::Prim(PrimTy::String))
         )
+    }
+
+    pub fn is_core_dyn_string(self, db: &'db dyn HirAnalysisDb) -> bool {
+        let ty = self
+            .as_capability(db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(self);
+        let base = ty.base_ty(db);
+        let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
+            return false;
+        };
+        let adt_ref = adt.adt_ref(db);
+        let Some(name) = adt_ref.name(db) else {
+            return false;
+        };
+        if name.data(db) != "DynString" {
+            return false;
+        }
+
+        base.ingot(db)
+            .is_some_and(|ingot| ingot.kind(db) == IngotKind::Core)
     }
 
     pub(crate) fn is_param(self, db: &dyn HirAnalysisDb) -> bool {
@@ -1249,10 +1278,19 @@ pub enum TyVarSort {
 
     /// Type variable that can be unified with only string types that has at
     /// least the given length.
-    String(usize),
+    String {
+        min_len: usize,
+        fallback: StringFallback,
+    },
 
     /// Type variable that can be unified with only integral types.
     Integral,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum StringFallback {
+    Dynamic,
+    Fixed,
 }
 
 impl PartialOrd for TyVarSort {
@@ -1261,8 +1299,20 @@ impl PartialOrd for TyVarSort {
             (Self::General, Self::General) => Some(std::cmp::Ordering::Equal),
             (Self::General, _) => Some(std::cmp::Ordering::Less),
             (_, Self::General) => Some(std::cmp::Ordering::Greater),
-            (Self::String(n1), Self::String(n2)) => n1.partial_cmp(n2),
-            (Self::String(_), _) | (_, Self::String(_)) => None,
+            (
+                Self::String {
+                    min_len: min_len1,
+                    fallback: fallback1,
+                },
+                Self::String {
+                    min_len: min_len2,
+                    fallback: fallback2,
+                },
+            ) => match min_len1.partial_cmp(min_len2) {
+                Some(std::cmp::Ordering::Equal) => fallback1.partial_cmp(fallback2),
+                other => other,
+            },
+            (Self::String { .. }, _) | (_, Self::String { .. }) => None,
             (Self::Integral, Self::Integral) => Some(std::cmp::Ordering::Equal),
         }
     }
@@ -1273,7 +1323,10 @@ impl TyVar<'_> {
         match self.sort {
             TyVarSort::General => ("_").to_string(),
             TyVarSort::Integral => "{integer}".to_string(),
-            TyVarSort::String(n) => format!("String<{n}>").to_string(),
+            TyVarSort::String { min_len, fallback } => match fallback {
+                StringFallback::Dynamic => format!("DynString({min_len})"),
+                StringFallback::Fixed => format!("String<{min_len}>"),
+            },
         }
     }
 }

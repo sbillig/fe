@@ -7,9 +7,9 @@ use crate::{
     hir_def::{
         AssocConstDef, AssocTyDef, AttrListId, Body, BodyKind, EffectParamListId, Expr, ExprId,
         FieldDefListId, FieldIndex, Func, FuncModifiers, FuncParam, FuncParamListId, FuncParamMode,
-        FuncParamName, GenericArgListId, GenericParam, GenericParamListId, IdentId, ImplTrait,
-        IntegerId, ItemKind, LitKind, Mod, Partial, Pat, PatId, PathId, Stmt, StmtId, Struct,
-        TopLevelMod, TrackedItemId, TrackedItemVariant, TraitRefId, TypeAlias, TypeBound,
+        FuncParamName, GenericArg, GenericArgListId, GenericParam, GenericParamListId, IdentId,
+        ImplTrait, ItemKind, Mod, Partial, Pat, PatId, PathId, PathKind, Stmt, StmtId, Struct,
+        TopLevelMod, TrackedItemId, TrackedItemVariant, TraitRefId, TypeBound, TypeGenericArg,
         TypeGenericParam, TypeId, TypeKind, TypeMode, UnOp, Visibility, WhereClauseId,
         expr::CallArg,
     },
@@ -328,26 +328,6 @@ where
         self.struct_simple(name, attributes, Visibility::Public, fields)
     }
 
-    pub(super) fn type_alias_simple(
-        &mut self,
-        name: Partial<IdentId<'db>>,
-        ty: Partial<TypeId<'db>>,
-    ) -> TypeAlias<'db> {
-        self.with_item_scope(TrackedItemVariant::TypeAlias(name), |this, id| {
-            TypeAlias::new(
-                this.db(),
-                id,
-                name,
-                this.empty_attrs(),
-                Visibility::Private,
-                this.empty_generic_params(),
-                ty,
-                this.top_mod(),
-                this.origin(),
-            )
-        })
-    }
-
     pub(super) fn new_impl_trait(
         &mut self,
         id: TrackedItemId<'db>,
@@ -491,7 +471,6 @@ where
     roots: LibRoots<'db>,
     desugared: O,
     stmts: Vec<StmtId>,
-    tmp_counter: usize,
 }
 
 impl<'ctxt, 'db, O> BodyBuilder<'ctxt, 'db, O>
@@ -510,12 +489,25 @@ where
             roots,
             desugared,
             stmts: Vec::new(),
-            tmp_counter: 0,
         }
     }
 
     pub(super) fn db(&self) -> &'db dyn HirDb {
         self.body.f_ctxt.db()
+    }
+
+    fn sol_ty(&self) -> TypeId<'db> {
+        let path = PathId::from_ident(self.db(), self.roots.std)
+            .push_str(self.db(), "abi")
+            .push_str(self.db(), "Sol");
+        TypeId::new(self.db(), TypeKind::Path(Partial::Present(path)))
+    }
+
+    fn abi_size_trait_ref(&self) -> TraitRefId<'db> {
+        let path = PathId::from_ident(self.db(), self.roots.core)
+            .push_str(self.db(), "abi")
+            .push_str(self.db(), "AbiSize");
+        TraitRefId::new(self.db(), Partial::Present(path))
     }
 
     fn expr_origin(&self) -> HirOrigin<ast::Expr> {
@@ -567,6 +559,18 @@ where
         self.push_expr(Expr::Path(Partial::Present(path)))
     }
 
+    pub(super) fn abi_size_assoc_expr(&mut self, ty: TypeId<'db>, assoc_name: &str) -> ExprId {
+        let qualified = PathId::new(
+            self.db(),
+            PathKind::QualifiedType {
+                type_: ty,
+                trait_: self.abi_size_trait_ref(),
+            },
+            None,
+        );
+        self.path_expr(qualified.push_str(self.db(), assoc_name))
+    }
+
     pub(super) fn mut_expr(&mut self, expr: ExprId) -> ExprId {
         self.push_expr(Expr::Un(expr, UnOp::Mut))
     }
@@ -597,84 +601,71 @@ where
         ))
     }
 
-    pub(super) fn encode_fields(&mut self, fields: &[IdentId<'db>], encoder_ident: IdentId<'db>) {
+    pub(super) fn encode_fields(
+        &mut self,
+        fields: &[(IdentId<'db>, TypeId<'db>)],
+        encoder_ident: IdentId<'db>,
+        encoder_ty: TypeId<'db>,
+    ) {
         if fields.is_empty() {
             return;
         }
 
-        // Encode fields directly from `self` in declaration order.
         let db = self.db();
         let self_expr = self.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
-        let encode_ident = IdentId::new(self.db(), "encode".to_string());
-        for field in fields.iter().copied() {
+        for (field, field_ty) in fields.iter().copied() {
             let receiver = self.push_expr(Expr::Field(
                 self_expr,
                 Partial::Present(FieldIndex::Ident(field)),
             ));
             let encoder_expr = self.ident_expr(encoder_ident);
-            let call = self.method_call_expr(receiver, encode_ident, vec![encoder_expr]);
+            let encode_field_args = GenericArgListId::given(
+                db,
+                vec![
+                    GenericArg::Type(TypeGenericArg {
+                        ty: Partial::Present(self.sol_ty()),
+                    }),
+                    GenericArg::Type(TypeGenericArg {
+                        ty: Partial::Present(field_ty),
+                    }),
+                    GenericArg::Type(TypeGenericArg {
+                        ty: Partial::Present(encoder_ty),
+                    }),
+                ],
+            );
+            let encode_field_path = PathId::from_ident(db, self.roots.core)
+                .push_str(db, "abi")
+                .push_str_args(db, "encode_field", encode_field_args);
+            let encode_field_callee = self.path_expr(encode_field_path);
+            let call = self.call_expr(encode_field_callee, vec![receiver, encoder_expr]);
             self.emit_expr_stmt(call);
         }
     }
 
-    fn revert_call(&mut self) -> ExprId {
+    pub(super) fn decode_into(
+        &mut self,
+        target_ident: IdentId<'db>,
+        ty: TypeId<'db>,
+        decoder_ty: TypeId<'db>,
+    ) {
         let db = self.db();
-        let revert_path = PathId::from_ident(db, self.roots.core).push_str(db, "revert");
-        let revert_callee = self.path_expr(revert_path);
-        let zero = Expr::Lit(LitKind::Int(IntegerId::from_usize(db, 0)));
-        let arg0 = self.push_expr(zero.clone());
-        let arg1 = self.push_expr(zero);
-        self.call_expr(revert_callee, vec![arg0, arg1])
-    }
-
-    fn fresh_tmp_ident(&mut self) -> IdentId<'db> {
-        let ident = IdentId::new(self.db(), format!("__tmp{}", self.tmp_counter));
-        self.tmp_counter += 1;
-        ident
-    }
-
-    pub(super) fn decode_into(&mut self, target_ident: IdentId<'db>, ty: TypeId<'db>) {
-        let db = self.db();
-
-        if let TypeKind::Tuple(tup) = ty.data(db) {
-            let mut elem_idents = Vec::new();
-            for elem_ty in tup.data(db) {
-                let Some(elem_ty) = elem_ty.to_opt() else {
-                    continue;
-                };
-                let elem_ident = self.fresh_tmp_ident();
-                self.decode_into(elem_ident, elem_ty);
-                elem_idents.push(elem_ident);
-            }
-
-            let elems = elem_idents
-                .into_iter()
-                .map(|ident| self.ident_expr(ident))
-                .collect();
-            let tuple_expr = self.push_expr(Expr::Tuple(elems));
-
-            let bind_pat = self.push_pat(Pat::Path(
-                Partial::Present(PathId::from_ident(db, target_ident)),
-                false,
-            ));
-            self.emit_stmt(Stmt::Let(bind_pat, None, Some(tuple_expr)));
-            return;
-        }
-
-        let Some(ty_path) = (match ty.data(db) {
-            TypeKind::Path(p) => p.to_opt(),
-            _ => None,
-        }) else {
-            let revert = self.revert_call();
-            let bind_pat = self.push_pat(Pat::Path(
-                Partial::Present(PathId::from_ident(db, target_ident)),
-                false,
-            ));
-            self.emit_stmt(Stmt::Let(bind_pat, None, Some(revert)));
-            return;
-        };
-
-        let decode_path = ty_path.push_str(db, "decode");
+        let decode_args = GenericArgListId::given(
+            db,
+            vec![
+                GenericArg::Type(TypeGenericArg {
+                    ty: Partial::Present(self.sol_ty()),
+                }),
+                GenericArg::Type(TypeGenericArg {
+                    ty: Partial::Present(ty),
+                }),
+                GenericArg::Type(TypeGenericArg {
+                    ty: Partial::Present(decoder_ty),
+                }),
+            ],
+        );
+        let decode_path = PathId::from_ident(db, self.roots.core)
+            .push_str(db, "abi")
+            .push_str_args(db, "decode_field", decode_args);
         let decode_callee = self.path_expr(decode_path);
         let d_expr = self.path_expr(PathId::from_str(db, "d"));
         let decode_call = self.call_expr(decode_callee, vec![d_expr]);
@@ -683,7 +674,7 @@ where
             Partial::Present(PathId::from_ident(db, target_ident)),
             false,
         ));
-        self.emit_stmt(Stmt::Let(bind_pat, None, Some(decode_call)));
+        self.emit_stmt(Stmt::Let(bind_pat, Some(ty), Some(decode_call)));
     }
 
     pub(super) fn return_record_self(&mut self, fields: &[IdentId<'db>]) {

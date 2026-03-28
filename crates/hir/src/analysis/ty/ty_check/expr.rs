@@ -291,7 +291,7 @@ impl<'db> TyChecker<'db> {
 
         self.env.enter_expr(expr);
         let mut actual = match expr_data {
-            Expr::Lit(lit) => ExprProp::new(self.lit_ty(lit), true),
+            Expr::Lit(lit) => ExprProp::new(self.lit_ty_for_expected(lit, expected), true),
             Expr::Block(..) => self.check_block(expr, expr_data, expected),
             Expr::Un(..) => self.check_unary(expr, expr_data),
             Expr::Cast(inner, ty) => self.check_cast(expr, *inner, *ty),
@@ -345,6 +345,13 @@ impl<'db> TyChecker<'db> {
     pub(super) fn check_expr_unknown(&mut self, expr: ExprId) -> ExprProp<'db> {
         let t = self.fresh_ty();
         self.check_expr(expr, t)
+    }
+
+    fn lit_ty_for_expected(&mut self, lit: &LitKind<'db>, expected: TyId<'db>) -> TyId<'db> {
+        match lit {
+            LitKind::String(_) if expected.is_core_dyn_string(self.db) => expected,
+            _ => self.lit_ty(lit),
+        }
     }
 
     fn check_block(
@@ -621,7 +628,23 @@ impl<'db> TyChecker<'db> {
             return false;
         }
 
+        if self.is_string_word_cast(from_leaf, to_leaf) {
+            return true;
+        }
+
         self.is_lossless_int_cast(from_leaf, to_leaf)
+    }
+
+    fn is_string_word_cast(&self, from: TyId<'db>, to: TyId<'db>) -> bool {
+        (from.is_string(self.db) && self.is_plain_u256(to))
+            || (self.is_plain_u256(from) && to.is_string(self.db))
+    }
+
+    fn is_plain_u256(&self, ty: TyId<'db>) -> bool {
+        matches!(
+            ty.base_ty(self.db).data(self.db),
+            TyData::TyBase(TyBase::Prim(PrimTy::U256))
+        )
     }
 
     fn transparent_newtype_field_ty(&self, ty: TyId<'db>) -> Option<TyId<'db>> {
@@ -840,7 +863,7 @@ impl<'db> TyChecker<'db> {
             return PendingPrimitiveOpResolution::Done;
         };
         let expr_ty = {
-            let mut prober = super::env::Prober::new(&mut self.table);
+            let mut prober = super::env::Prober::new(&mut self.table, self.env.scope());
             expr_prop.ty.fold_with(self.db, &mut prober)
         };
         if expr_ty.has_invalid(self.db) {
@@ -853,7 +876,7 @@ impl<'db> TyChecker<'db> {
                     return PendingPrimitiveOpResolution::Done;
                 };
                 let operand_ty = {
-                    let mut prober = super::env::Prober::new(&mut self.table);
+                    let mut prober = super::env::Prober::new(&mut self.table, self.env.scope());
                     inner_prop.ty.fold_with(self.db, &mut prober)
                 };
                 let operand_ty = operand_ty
@@ -899,11 +922,11 @@ impl<'db> TyChecker<'db> {
                     return PendingPrimitiveOpResolution::Done;
                 };
                 let lhs_ty = {
-                    let mut prober = super::env::Prober::new(&mut self.table);
+                    let mut prober = super::env::Prober::new(&mut self.table, self.env.scope());
                     lhs_prop.ty.fold_with(self.db, &mut prober)
                 };
                 let rhs_ty = {
-                    let mut prober = super::env::Prober::new(&mut self.table);
+                    let mut prober = super::env::Prober::new(&mut self.table, self.env.scope());
                     rhs_prop.ty.fold_with(self.db, &mut prober)
                 };
                 let lhs_ty = lhs_ty
@@ -2710,7 +2733,10 @@ impl<'db> TyChecker<'db> {
             method_assumptions,
             None,
         );
-        if matches!(candidate, Err(MethodSelectionError::NotFound)) {
+        if matches!(
+            candidate,
+            Err(MethodSelectionError::NotFound | MethodSelectionError::ReceiverTypeMustBeKnown)
+        ) {
             for &receiver_ty in receiver_tys.iter().skip(1) {
                 let fallback_canonical = Canonicalized::new(self.db, receiver_ty);
                 let fallback = select_method_candidate(
@@ -3637,7 +3663,7 @@ impl<'db> TyChecker<'db> {
         if !scrutinee_pat_ty.has_invalid(self.db)
             && arm_statuses.iter().all(|status| status.is_ready())
         {
-            let mut prober = super::env::Prober::new(&mut self.table);
+            let mut prober = super::env::Prober::new(&mut self.table, self.env.scope());
             let pattern_store = self
                 .env
                 .pattern_store()
@@ -3800,7 +3826,10 @@ impl<'db> TyChecker<'db> {
             method_assumptions,
             Some(trait_def),
         );
-        if matches!(method_candidate, Err(MethodSelectionError::NotFound)) {
+        if matches!(
+            method_candidate,
+            Err(MethodSelectionError::NotFound | MethodSelectionError::ReceiverTypeMustBeKnown)
+        ) {
             for &candidate_ty in lhs_candidates.iter().skip(1) {
                 let c_candidate_ty = Canonicalized::new(self.db, candidate_ty);
                 let fallback = select_method_candidate(

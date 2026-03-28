@@ -1,6 +1,5 @@
 ---
 source: crates/language-server/src/functionality/completion.rs
-assertion_line: 1722
 expression: snapshot
 input_file: test_files/completion.fe
 ---
@@ -41,6 +40,8 @@ completions:
   - Sol (Struct)
   - Some (EnumMember)
   - StorageMap (Struct)
+  - Text (Class)
+  - Vec (Class)
   - another_func_with_args (Function) -> "another_func_with_args(${1:x}, ${2:y})$0" [fn another_func_with_args(x: i32, y: i32) -> i32]
   - assert (Function) -> "assert(${1:b})$0" [fn assert(b: bool)]
   - func_with_args (Function) -> "func_with_args(${1:x}, ${2:y})$0" [use utils::func_with_args [fn func_with_args(x: i32, y: i32) -> i32]] {+0:use utils::func_with_args}
@@ -93,6 +94,8 @@ completions:
   - Result (Enum)
   - Sol (Struct)
   - StorageMap (Struct)
+  - Text (Class)
+  - Vec (Class)
 
 note: 
    ┌─ completion.fe:63:18
@@ -152,6 +155,8 @@ completions:
   - Result (Enum)
   - Sol (Struct)
   - StorageMap (Struct)
+  - Text (Class)
+  - Vec (Class)
 
 note: 
    ┌─ completion.fe:78:13
@@ -199,6 +204,8 @@ completions:
   - Result (Enum)
   - Sol (Struct)
   - StorageMap (Struct)
+  - Text (Class)
+  - Vec (Class)
 
 note: 
     ┌─ completion.fe:107:16
@@ -218,3 +225,5 @@ completions:
   - Result (Enum)
   - Sol (Struct)
   - StorageMap (Struct)
+  - Text (Class)
+  - Vec (Class)

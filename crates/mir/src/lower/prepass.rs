@@ -181,6 +181,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         let ty = self.typed_body.expr_ty(self.db, expr);
         if let Partial::Present(Expr::Lit(LitKind::String(str_id))) = expr.data(self.db, self.body)
+            && !self.is_core_dyn_string_ty(ty)
         {
             match self.alloc_bytes_value(ty, str_id.data(self.db).as_bytes().to_vec()) {
                 Ok(value_id) => {

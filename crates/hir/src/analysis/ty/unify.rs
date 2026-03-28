@@ -422,7 +422,7 @@ where
                 self.table.unify_var_var(var1.key, var2.key)
             }
 
-            (TyVarSort::String(_), TyVarSort::String(_)) => {
+            (TyVarSort::String { .. }, TyVarSort::String { .. }) => {
                 self.table.unify_var_var(var1.key, var2.key)
             }
 
@@ -480,11 +480,17 @@ where
                 }
             }
 
-            TyVarSort::String(n_var) => {
+            TyVarSort::String { min_len, .. } => {
                 let (base, args) = value.decompose_ty_app(self.db);
 
                 if base.is_never(self.db) {
                     return Ok(());
+                }
+
+                if value.is_core_dyn_string(self.db) {
+                    return self
+                        .table
+                        .unify_var_value(root_var.key, InferenceValue::Bound(value));
                 }
 
                 if !base.is_string(self.db) || args.len() != 1 {
@@ -501,7 +507,7 @@ where
                     return Ok(());
                 };
 
-                if &BigUint::from(n_var) <= n_value.data(self.db) {
+                if &BigUint::from(min_len) <= n_value.data(self.db) {
                     self.table
                         .unify_var_value(root_var.key, InferenceValue::Bound(value))
                 } else {

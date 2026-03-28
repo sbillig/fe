@@ -24,6 +24,8 @@ mod TokenMsg {
 
     impl core::abi::AbiSize for Transfer {
         const ENCODED_SIZE: u256 = 64
+        const IS_DYNAMIC: bool = false
+        const NEEDS_PARENT_WRAPPER: bool = false
     }
 
     impl core::abi::Encode<std::abi::Sol> for Transfer {
@@ -59,6 +61,8 @@ mod TokenMsg {
 
     impl core::abi::AbiSize for Balance {
         const ENCODED_SIZE: u256 = 32
+        const IS_DYNAMIC: bool = false
+        const NEEDS_PARENT_WRAPPER: bool = false
     }
 
     impl core::abi::Encode<std::abi::Sol> for Balance {
@@ -96,6 +100,8 @@ struct CustomQuery {
 
 impl core::abi::AbiSize for CustomQuery {
     const ENCODED_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+    const NEEDS_PARENT_WRAPPER: bool = false
 }
 
 impl core::abi::Encode<std::abi::Sol> for CustomQuery {

@@ -1136,6 +1136,27 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         (provider_ty == raw_storage).then_some(AddressSpaceKind::Storage)
     }
 
+    fn is_core_dyn_string_ty(&self, ty: TyId<'db>) -> bool {
+        let ty = ty
+            .as_capability(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(ty);
+        let base = ty.base_ty(self.db);
+        let TyData::TyBase(TyBase::Adt(adt)) = base.data(self.db) else {
+            return false;
+        };
+        let adt_ref = adt.adt_ref(self.db);
+        let Some(name) = adt_ref.name(self.db) else {
+            return false;
+        };
+        if name.data(self.db) != "DynString" {
+            return false;
+        }
+
+        base.ingot(self.db)
+            .is_some_and(|ingot| ingot.kind(self.db) == IngotKind::Core)
+    }
+
     fn infer_effect_provider_for_effect_param(
         &self,
         func: Func<'db>,

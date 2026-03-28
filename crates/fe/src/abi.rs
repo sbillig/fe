@@ -652,6 +652,19 @@ fn semantic_ty_to_abi_desc(db: &DriverDataBase, ty: TyId<'_>) -> Result<AbiTypeD
         return Ok(elem_desc.array(&len));
     }
 
+    if let Some(elem_ty) = core_dyn_array_elem_ty(db, ty) {
+        let elem_desc = semantic_ty_to_abi_desc(db, elem_ty)?;
+        return Ok(elem_desc.array(""));
+    }
+
+    if is_core_dyn_string_ty(db, ty) {
+        return Ok(AbiTypeDesc::simple("string"));
+    }
+
+    if is_core_bytes_ty(db, ty) {
+        return Ok(AbiTypeDesc::simple("bytes"));
+    }
+
     if ty.is_string(db) {
         return Ok(AbiTypeDesc::simple("string"));
     }
@@ -752,6 +765,72 @@ fn is_std_address_ty(db: &DriverDataBase, ty: TyId<'_>, adt_ref: AdtRef<'_>) -> 
     }
     ty.ingot(db)
         .is_some_and(|ingot| ingot.kind(db) == IngotKind::Std)
+}
+
+fn core_dyn_array_elem_ty<'db>(db: &'db DriverDataBase, ty: TyId<'db>) -> Option<TyId<'db>> {
+    if let Some((_, inner)) = ty.as_capability(db) {
+        return core_dyn_array_elem_ty(db, inner);
+    }
+
+    let (base, args) = ty.decompose_ty_app(db);
+    let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
+        return None;
+    };
+    let adt_ref = adt.adt_ref(db);
+    let name = adt_ref.name(db)?;
+    if name.data(db) != "DynArray" {
+        return None;
+    }
+    if !base
+        .ingot(db)
+        .is_some_and(|ingot| ingot.kind(db) == IngotKind::Core)
+    {
+        return None;
+    }
+
+    args.first().copied()
+}
+
+fn is_core_bytes_ty(db: &DriverDataBase, ty: TyId<'_>) -> bool {
+    if let Some((_, inner)) = ty.as_capability(db) {
+        return is_core_bytes_ty(db, inner);
+    }
+
+    let base = ty.base_ty(db);
+    let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
+        return false;
+    };
+    let adt_ref = adt.adt_ref(db);
+    let Some(name) = adt_ref.name(db) else {
+        return false;
+    };
+    if name.data(db) != "Bytes" {
+        return false;
+    }
+
+    base.ingot(db)
+        .is_some_and(|ingot| ingot.kind(db) == IngotKind::Core)
+}
+
+fn is_core_dyn_string_ty(db: &DriverDataBase, ty: TyId<'_>) -> bool {
+    if let Some((_, inner)) = ty.as_capability(db) {
+        return is_core_dyn_string_ty(db, inner);
+    }
+
+    let base = ty.base_ty(db);
+    let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
+        return false;
+    };
+    let adt_ref = adt.adt_ref(db);
+    let Some(name) = adt_ref.name(db) else {
+        return false;
+    };
+    if name.data(db) != "DynString" {
+        return false;
+    }
+
+    base.ingot(db)
+        .is_some_and(|ingot| ingot.kind(db) == IngotKind::Core)
 }
 
 /// Recognise `std::abi::sol` SolCompat wrapper types like `Uint160` / `Int24`

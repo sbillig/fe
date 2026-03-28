@@ -472,7 +472,8 @@ impl<'db> Monomorphizer<'db> {
                         | crate::ir::SyntheticId::ContractInitHandler(contract)
                         | crate::ir::SyntheticId::ContractInitCodeOffset(contract)
                         | crate::ir::SyntheticId::ContractInitCodeLen(contract) => contract.scope(),
-                        crate::ir::SyntheticId::ContractRecvArmHandler { contract, .. } => {
+                        crate::ir::SyntheticId::ContractRuntimeDispatchArm { contract, .. }
+                        | crate::ir::SyntheticId::ContractRecvArmHandler { contract, .. } => {
                             contract.scope()
                         }
                     },

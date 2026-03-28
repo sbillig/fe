@@ -536,6 +536,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             self.set_expr_value_from_lowered_value(expr_value, value);
             return value;
         }
+        if let Partial::Present(Expr::Lit(LitKind::String(str_id))) = expr.data(self.db, self.body)
+            && let Some(value) = self.try_lower_dyn_string_literal(expr, *str_id)
+        {
+            let expr_value = self.ensure_value(expr);
+            self.set_expr_value_from_lowered_value(expr_value, value);
+            return value;
+        }
 
         match expr.data(self.db, self.body) {
             Partial::Present(Expr::Block(stmts)) => {
@@ -2069,6 +2076,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             && self.builder.body.spill_slots.contains_key(&local)
             && let Some(place) = self.place_for_borrow_expr(expr)
         {
+            if self.is_by_ref_ty(ty) {
+                self.builder.body.values[value_id.index()].origin = ValueOrigin::PlaceRef(place);
+                self.builder.body.values[value_id.index()].repr =
+                    self.value_repr_for_expr(expr, ty);
+                return value_id;
+            }
+
             let dest = self.alloc_temp_local(ty, false, "spill");
             self.assign(None, Some(dest), Rvalue::Load { place });
             self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);

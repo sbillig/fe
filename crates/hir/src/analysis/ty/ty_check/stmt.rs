@@ -90,13 +90,14 @@ impl<'db> TyChecker<'db> {
 
         let span = stmt.span(self.env.body()).into_let_stmt();
 
-        let ascription = match ascription {
-            Some(ty) => self.lower_ty(*ty, span.ty(), true),
-            None => self.fresh_ty(),
-        };
+        let ascription = ascription.map(|ty| self.lower_ty(ty, span.ty(), true));
 
         if let Some(expr) = expr {
-            let prop = self.check_expr(*expr, ascription);
+            let prop = if let Some(ascription) = ascription {
+                self.check_expr(*expr, ascription)
+            } else {
+                self.check_expr_unknown(*expr)
+            };
             let (pat_expected, mode) = self.destructure_source_mode(prop.ty);
             self.check_pat(*pat, pat_expected);
             if let Some(LocalBinding::Local { pat, .. }) = self.env.pat_binding(*pat) {
@@ -115,6 +116,7 @@ impl<'db> TyChecker<'db> {
                 }
             }
         } else {
+            let ascription = ascription.unwrap_or_else(|| self.fresh_ty());
             self.check_pat(*pat, ascription);
         }
         self.check_mutable_pattern_bindings(*pat);

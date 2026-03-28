@@ -199,6 +199,11 @@ pub enum SyntheticId<'db> {
     ContractInitEntrypoint(Contract<'db>),
     ContractRuntimeEntrypoint(Contract<'db>),
     ContractInitHandler(Contract<'db>),
+    ContractRuntimeDispatchArm {
+        contract: Contract<'db>,
+        recv_idx: u32,
+        arm_idx: u32,
+    },
     ContractRecvArmHandler {
         contract: Contract<'db>,
         recv_idx: u32,
@@ -217,7 +222,8 @@ impl<'db> SyntheticId<'db> {
             | Self::ContractInitHandler(c)
             | Self::ContractInitCodeOffset(c)
             | Self::ContractInitCodeLen(c) => c,
-            Self::ContractRecvArmHandler { contract, .. } => contract,
+            Self::ContractRuntimeDispatchArm { contract, .. }
+            | Self::ContractRecvArmHandler { contract, .. } => contract,
         }
     }
 }

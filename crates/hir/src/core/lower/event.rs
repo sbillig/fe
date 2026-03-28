@@ -492,7 +492,7 @@ fn lower_emit_method<'db>(
     let log_param_ty = TypeId::new(db, TypeKind::Mode(TypeMode::Mut, Partial::Present(log_ty)));
 
     let self_param = FuncParam {
-        mode: FuncParamMode::View,
+        mode: FuncParamMode::Own,
         is_mut: false,
         has_ref_prefix: false,
         has_own_prefix: false,

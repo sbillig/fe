@@ -16,7 +16,6 @@ pub use self::contract::{
 };
 pub use self::path::RecordLike;
 use crate::analysis::name_resolution::resolve_path;
-use crate::analysis::ty::corelib::resolve_lib_type_path;
 use crate::analysis::ty::fold::TyFoldable;
 use crate::analysis::ty::visitor::TyVisitable;
 use crate::hir_def::CallableDef;
@@ -63,13 +62,14 @@ use super::{
         is_goal_query_satisfiable, is_goal_satisfiable,
     },
     ty_contains_const_hole,
-    ty_def::{BorrowKind, CapabilityKind, InvalidCause, Kind, TyId, TyVarSort},
+    ty_def::{BorrowKind, CapabilityKind, InvalidCause, Kind, StringFallback, TyId, TyVarSort},
     ty_lower::lower_hir_ty,
     unify::{InferenceKey, Snapshot, UnificationError, UnificationTable},
 };
 use crate::analysis::ty::ty_def::{TyBase, TyData};
 use crate::analysis::ty::{
     const_ty::ConstTyData,
+    corelib::resolve_lib_type_path,
     ctfe::{CtfeConfig, CtfeInterpreter},
     fold::AssocTySubst,
     normalize::normalize_ty,
@@ -190,6 +190,10 @@ enum CallConstraintBoundOwner<'db> {
 }
 
 impl<'db> TyChecker<'db> {
+    fn string_literal_fallback(&self) -> StringFallback {
+        StringFallback::Fixed
+    }
+
     fn new(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -> Result<Self, ()> {
         let env = TyCheckEnv::new(db, owner)?;
         let expected = env.compute_expected_return();
@@ -1028,7 +1032,7 @@ impl<'db> TyChecker<'db> {
 
             let result = (|| {
                 let recv_ty = {
-                    let mut prober = env::Prober::new(&mut this.table);
+                    let mut prober = env::Prober::new(&mut this.table, scope);
                     pending.recv_ty.fold_with(db, &mut prober)
                 };
 
@@ -1137,7 +1141,7 @@ impl<'db> TyChecker<'db> {
                             continue;
                         };
                         let expr_ty = {
-                            let mut prober = env::Prober::new(&mut self.table);
+                            let mut prober = env::Prober::new(&mut self.table, scope);
                             expr_prop.ty.fold_with(db, &mut prober)
                         };
                         if expr_ty.has_invalid(db) {
@@ -1172,7 +1176,7 @@ impl<'db> TyChecker<'db> {
                                     .typed_expr(receiver)
                                     .unwrap_or_else(|| ExprProp::invalid(db));
                                 let recv_ty = {
-                                    let mut prober = env::Prober::new(&mut self.table);
+                                    let mut prober = env::Prober::new(&mut self.table, scope);
                                     pending.recv_ty.fold_with(db, &mut prober)
                                 };
 
@@ -1262,7 +1266,7 @@ impl<'db> TyChecker<'db> {
                         continue;
                     };
                     let expr_ty = {
-                        let mut prober = env::Prober::new(&mut self.table);
+                        let mut prober = env::Prober::new(&mut self.table, scope);
                         expr_prop.ty.fold_with(db, &mut prober)
                     };
                     if expr_ty.has_invalid(db) {
@@ -1615,8 +1619,13 @@ impl<'db> TyChecker<'db> {
             LitKind::Int(_) => self.table.new_var(TyVarSort::Integral, &Kind::Star),
             LitKind::String(s) => {
                 let len_bytes = s.len_bytes(self.db);
-                self.table
-                    .new_var(TyVarSort::String(len_bytes), &Kind::Star)
+                self.table.new_var(
+                    TyVarSort::String {
+                        min_len: len_bytes,
+                        fallback: self.string_literal_fallback(),
+                    },
+                    &Kind::Star,
+                )
             }
         }
     }
@@ -1682,6 +1691,14 @@ impl<'db> TyChecker<'db> {
 
     fn capability_fallback_candidates(&self, ty: TyId<'db>) -> Vec<TyId<'db>> {
         let mut candidates = vec![ty];
+        if let TyData::TyVar(var) = ty.base_ty(self.db).data(self.db)
+            && matches!(var.sort, TyVarSort::String { .. })
+            && let Some(text_ty) =
+                resolve_lib_type_path(self.db, self.env.scope(), "core::abi::DynString")
+        {
+            candidates.push(text_ty);
+            candidates.push(TyId::view_of(self.db, text_ty));
+        }
         if let Some((cap, inner)) = ty.as_capability(self.db) {
             if matches!(cap, CapabilityKind::Mut) {
                 candidates.push(TyId::borrow_ref_of(self.db, inner));

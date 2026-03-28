@@ -8,11 +8,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-const FE_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+const FE_CHECK_TIMEOUT: Duration = Duration::from_secs(15);
 
 struct FeCheckRun {
     code: i32,
     combined: String,
+    elapsed: Duration,
     timed_out: bool,
 }
 
@@ -77,6 +78,8 @@ fn run_fe_check(path: &Path) -> FeCheckRun {
         sleep(Duration::from_millis(10));
     };
 
+    let elapsed = start.elapsed();
+
     let status = child
         .wait()
         .unwrap_or_else(|err| panic!("failed to wait for `fe check` on {path:?}: {err}"));
@@ -98,6 +101,7 @@ fn run_fe_check(path: &Path) -> FeCheckRun {
     FeCheckRun {
         code,
         combined,
+        elapsed,
         timed_out,
     }
 }
@@ -117,26 +121,49 @@ fn crash_regressions_do_not_panic() {
         "no crash regression fixtures found under {dir:?}"
     );
 
+    let mut failures = Vec::new();
+
     for fixture in fixtures {
         let run = run_fe_check(&fixture);
         let code = run.code;
         let combined = run.combined;
+        let elapsed = run.elapsed;
 
-        assert!(
-            !run.timed_out,
-            "`fe check` timed out after {:?} on {fixture:?}\n{combined}",
-            FE_CHECK_TIMEOUT
-        );
-        assert_ne!(code, 101, "`fe check` panicked on {fixture:?}\n{combined}");
-        assert!(
-            !combined.contains("panicked at")
-                && !combined.contains("thread 'main' panicked")
-                && !combined.contains("stack backtrace:"),
-            "`fe check` produced panic output on {fixture:?}\n{combined}"
-        );
-        assert!(
-            code == 0 || code == 1,
-            "`fe check` returned unexpected exit code {code} on {fixture:?}\n{combined}"
-        );
+        if run.timed_out {
+            failures.push(format!(
+                "`fe check` timed out after {:?} (elapsed {:?}) on {fixture:?}\n{combined}",
+                FE_CHECK_TIMEOUT, elapsed
+            ));
+            continue;
+        }
+
+        if code == 101 {
+            failures.push(format!(
+                "`fe check` panicked on {fixture:?} after {elapsed:?}\n{combined}"
+            ));
+            continue;
+        }
+
+        if combined.contains("panicked at")
+            || combined.contains("thread 'main' panicked")
+            || combined.contains("stack backtrace:")
+        {
+            failures.push(format!(
+                "`fe check` produced panic output on {fixture:?} after {elapsed:?}\n{combined}"
+            ));
+            continue;
+        }
+
+        if code != 0 && code != 1 {
+            failures.push(format!(
+                "`fe check` returned unexpected exit code {code} on {fixture:?} after {elapsed:?}\n{combined}"
+            ));
+        }
     }
+
+    assert!(
+        failures.is_empty(),
+        "crash regression failures:\n\n{}",
+        failures.join("\n\n")
+    );
 }

@@ -223,3 +223,95 @@ pub fn bad() -> String<64> {
             .any(|value| matches!(value.origin, ValueOrigin::ConstRegion(_)))
     );
 }
+
+#[test]
+fn lower_module_supports_builtin_seq_methods_on_const_generic_arrays() {
+    let mut db = DriverDataBase::default();
+    let url = Url::parse("file:///builtin_seq_const_generic_array.fe").unwrap();
+    let src = r#"
+use core::seq::Seq
+
+pub fn root(values: [u256; 5]) -> u256 {
+    values.get(0)
+}
+"#;
+
+    let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+    let top_mod = db.top_mod(file);
+    lower_module(&db, top_mod).expect("built-in const-generic array methods should lower");
+}
+
+#[test]
+fn lower_module_supports_encode_methods_on_const_generic_arrays() {
+    let mut db = DriverDataBase::default();
+    let url = Url::parse("file:///encode_const_generic_array.fe").unwrap();
+    let src = r#"
+use core::abi::Encode
+use std::abi::Sol
+
+pub fn root(values: [bool; 5]) {
+    values.encode_to_ptr(0)
+}
+"#;
+
+    let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+    let top_mod = db.top_mod(file);
+    lower_module(&db, top_mod).expect("Encode<Sol> array methods should lower");
+}
+
+#[test]
+fn lower_module_supports_generic_direct_encode_on_const_generic_arrays() {
+    let mut db = DriverDataBase::default();
+    let url = Url::parse("file:///generic_direct_encode_const_generic_array.fe").unwrap();
+    let src = r#"
+use core::abi::Encode
+use std::abi::Sol
+
+fn direct<T: Encode<Sol>>(_: T) -> bool {
+    T::DIRECT_ENCODE
+}
+
+pub fn root(values: [bool; 5]) -> bool {
+    direct(values)
+}
+"#;
+
+    let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+    let top_mod = db.top_mod(file);
+    lower_module(&db, top_mod).expect("generic DIRECT_ENCODE paths should lower");
+}
+
+#[test]
+fn lower_module_supports_generic_trait_methods_on_const_generic_arrays() {
+    let mut db = DriverDataBase::default();
+    let url = Url::parse("file:///generic_trait_method_const_generic_array.fe").unwrap();
+    let src = r#"
+trait Flag<A> {
+    fn flag(self) -> bool
+}
+
+struct Marker {}
+
+impl Flag<Marker> for bool {
+    fn flag(self) -> bool {
+        self
+    }
+}
+
+impl<T, A, const N: usize> Flag<A> for [T; N]
+    where T: Flag<A> + Copy
+{
+    fn flag(self) -> bool {
+        self[0].flag()
+    }
+}
+
+pub fn root(values: [bool; 5]) -> bool {
+    values.flag()
+}
+"#;
+
+    let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+    let top_mod = db.top_mod(file);
+    lower_module(&db, top_mod).expect("generic trait array methods should lower");
+}
