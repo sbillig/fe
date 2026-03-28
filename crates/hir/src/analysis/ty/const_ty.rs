@@ -14,7 +14,7 @@ use super::{
         AssocConstSelection, analysis_cx_for_selected_assoc_const_body,
         resolve_assoc_const_selection,
     },
-    context::{AnalysisCx, ProofCx},
+    context::AnalysisCx,
     ctfe::{CtfeConfig, CtfeInterpreter, instantiate_typed_body},
     diagnostics::{BodyDiag, FuncBodyDiag},
     fold::{TyFoldable, TyFolder},
@@ -25,12 +25,11 @@ use super::{
     },
     ty_check::{TypedBody, check_anon_const_body, check_anon_const_body_in_cx, check_const_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
-    ty_lower::contextual_path_resolution_in_cx,
     unify::UnificationTable,
 };
 use crate::analysis::{
     HirAnalysisDb,
-    name_resolution::{PathRes, resolve_path, resolve_path_in_cx},
+    name_resolution::{PathRes, resolve_path},
     ty::trait_resolution::PredicateListId,
     ty::ty_def::{Kind, PrimTy, TyBase, TyData, TyVarSort},
 };
@@ -1001,13 +1000,7 @@ fn evaluate_const_ty_with_solve_cx<'db>(
                 };
                 let assumptions = assumptions_for_body(db, body);
                 let resolved = analysis_cx
-                    .and_then(|cx| {
-                        contextual_path_resolution_in_cx(db, body.scope(), path, true, &cx)
-                    })
-                    .map(Ok)
-                    .or_else(|| {
-                        analysis_cx.map(|cx| resolve_path_in_cx(db, path, body.scope(), true, &cx))
-                    })
+                    .map(|cx| cx.resolve_path(db, body.scope(), path, true))
                     .unwrap_or_else(|| resolve_path(db, path, body.scope(), assumptions, true))
                     .map_err(|_| ConstIntError::NotIntExpr)?;
 
@@ -1112,9 +1105,7 @@ fn evaluate_const_ty_with_solve_cx<'db>(
         let assumptions =
             solve_cx.map_or_else(|| assumptions_for_body(db, body), TraitSolveCx::assumptions);
         let resolved_path = analysis_cx
-            .and_then(|cx| contextual_path_resolution_in_cx(db, body.scope(), path, true, &cx))
-            .map(Ok)
-            .or_else(|| analysis_cx.map(|cx| resolve_path_in_cx(db, path, body.scope(), true, &cx)))
+            .map(|cx| cx.resolve_path(db, body.scope(), path, true))
             .unwrap_or_else(|| resolve_path(db, path, body.scope(), assumptions, true));
         if let Ok(resolved_path) = resolved_path {
             match resolved_path {
@@ -1174,9 +1165,7 @@ fn evaluate_const_ty_with_solve_cx<'db>(
                         return evaluated;
                     }
 
-                    if let Some(inst) =
-                        concretized_missing_trait_const_goal(db, solve_cx, inst, name)
-                    {
+                    if let Some(inst) = concretized_missing_trait_const_goal(db, solve_cx, inst) {
                         return ConstTyId::invalid(
                             db,
                             InvalidCause::TraitConstNotImplemented { inst, name },
@@ -1370,7 +1359,7 @@ pub(super) fn const_ty_from_trait_const<'db>(
 
 pub(crate) fn const_ty_from_selected_assoc_const<'db>(
     db: &'db dyn HirAnalysisDb,
-    proof: ProofCx<'db>,
+    proof: TraitSolveCx<'db>,
     selection: &AssocConstSelection<'db>,
 ) -> Option<ConstTyId<'db>> {
     let source = selection.body.as_ref()?;

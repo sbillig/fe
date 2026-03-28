@@ -8,7 +8,7 @@ use crate::analysis::{
         self,
         assoc_items::{analysis_cx_for_selected_assoc_const_body, resolve_assoc_const_selection},
         binder::Binder,
-        context::{AnalysisCx, ImplOverlay, LoweringMode, ProofCx},
+        context::{AnalysisCx, ImplOverlay, LoweringMode},
         diagnostics::{
             BodyDiag, FuncBodyDiag, ImplDiag, TraitConstraintDiag, TraitLowerDiag,
             TyDiagCollection, TyLowerDiag,
@@ -291,7 +291,7 @@ impl<'db> AdmissionEngine<'db> {
     fn analysis_cx(&self, impl_trait: ImplTrait<'db>) -> AnalysisCx<'db> {
         impl_trait.signature_analysis_cx_in_caller_cx(
             self.db,
-            &AnalysisCx::new(ProofCx::from_solve_cx(self.solve_cx(impl_trait))),
+            &AnalysisCx::new(self.solve_cx(impl_trait)),
         )
     }
 
@@ -300,7 +300,7 @@ impl<'db> AdmissionEngine<'db> {
         impl_trait: ImplTrait<'db>,
         current_impl: ImplementorId<'db>,
     ) -> AnalysisCx<'db> {
-        AnalysisCx::new(ProofCx::from_solve_cx(self.solve_cx(impl_trait)))
+        AnalysisCx::new(self.solve_cx(impl_trait))
             .with_overlay(ImplOverlay::with_current_impl(current_impl))
             .with_mode(LoweringMode::ImplTraitSignature {
                 trait_inst: current_impl.trait_inst(self.db),
@@ -616,7 +616,7 @@ fn abstract_assoc_const_dependency_state<'db>(
 
 fn check_selected_assoc_const_body<'db>(
     db: &'db dyn HirAnalysisDb,
-    proof: ProofCx<'db>,
+    proof: ty::trait_resolution::TraitSolveCx<'db>,
     selection: &ty::assoc_items::AssocConstSelection<'db>,
 ) -> (
     Vec<FuncBodyDiag<'db>>,
@@ -684,7 +684,7 @@ pub(crate) fn check_impl_trait_implementor_wf_in_cx<'db>(
     impl_trait: ImplTrait<'db>,
     cx: &AnalysisCx<'db>,
 ) -> WellFormedness<'db> {
-    check_impl_ty_wf_in_cx(db, cx.proof.solve_cx(), impl_trait.ty_in_cx(db, cx))
+    check_impl_ty_wf_in_cx(db, cx.proof, impl_trait.ty_in_cx(db, cx))
 }
 
 pub(crate) fn impl_header_issues<'db>(
@@ -718,7 +718,7 @@ pub(crate) fn impl_header_issues<'db>(
     }
 
     if let WellFormedness::IllFormed { goal, subgoal } =
-        check_trait_inst_wf(db, cx.proof.solve_cx(), trait_inst)
+        check_trait_inst_wf(db, cx.proof, trait_inst)
     {
         issues.push(ImplHeaderIssue::TraitInstIllFormed { goal, subgoal });
     }
@@ -726,7 +726,7 @@ pub(crate) fn impl_header_issues<'db>(
     for super_trait in trait_inst.def(db).super_traits(db) {
         let goal = super_trait.instantiate(db, trait_inst.args(db));
         if matches!(
-            is_goal_satisfiable(db, cx.proof.solve_cx(), goal),
+            is_goal_satisfiable(db, cx.proof, goal),
             GoalSatisfiability::UnSat(_)
         ) {
             issues.push(ImplHeaderIssue::SupertraitUnmet { goal });
@@ -919,7 +919,7 @@ fn impl_interface_issues_with_assoc_type_bound_solve_cx<'db>(
 
         let trait_args = current_impl.trait_(db).args(db);
         let trait_scope = current_impl.trait_def(db).scope();
-        let assoc_type_bound_solve_cx = assoc_type_bound_solve_cx.unwrap_or(cx.proof.solve_cx());
+        let assoc_type_bound_solve_cx = assoc_type_bound_solve_cx.unwrap_or(cx.proof);
         for assoc in current_impl.assoc_type_views(db) {
             let Some(name) = assoc.name(db) else { continue };
             for bound_inst in assoc.bounds(db) {

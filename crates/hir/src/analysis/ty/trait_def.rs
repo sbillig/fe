@@ -225,10 +225,8 @@ pub(crate) fn impls_for_ty_with_constraints<'db>(
     ty: Canonical<TyId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> Vec<Binder<ImplementorId<'db>>> {
-    let canonical_ty = ty;
     let solve_cx = TraitSolveCx::new(db, ingot.root_mod(db).scope()).with_assumptions(assumptions);
-    let raw_impls = base_matching_impls_for_ty(db, ingot, canonical_ty);
-    filter_implementors_for_ty(db, canonical_ty, solve_cx, raw_impls)
+    impls_for_ty_with_solve_cx(db, Some(ingot), ty, solve_cx)
 }
 
 pub(crate) fn impls_for_ty_with_constraints_in_cx<'db>(
@@ -237,25 +235,29 @@ pub(crate) fn impls_for_ty_with_constraints_in_cx<'db>(
     ty: Canonical<TyId<'db>>,
     solve_cx: TraitSolveCx<'db>,
 ) -> Vec<Binder<ImplementorId<'db>>> {
-    if ty.value.has_invalid(db) {
-        return Vec::new();
-    }
-
-    if let Some(local_implementors) = solve_cx.local_implementors() {
-        return filter_implementors_for_ty(
-            db,
-            ty,
-            solve_cx,
-            local_implementors.implementors(db).to_vec(),
-        );
-    }
-
-    ingot.map_or_else(Vec::new, |ingot| {
-        impls_for_ty_with_constraints(db, ingot, ty, solve_cx.assumptions())
-    })
+    impls_for_ty_with_solve_cx(db, ingot, ty, solve_cx)
 }
 
 pub(crate) fn base_matching_impls_for_ty_with_constraints_in_cx<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Option<Ingot<'db>>,
+    ty: Canonical<TyId<'db>>,
+    solve_cx: TraitSolveCx<'db>,
+) -> Vec<Binder<ImplementorId<'db>>> {
+    raw_impls_for_ty_with_solve_cx(db, ingot, ty, solve_cx)
+}
+
+fn impls_for_ty_with_solve_cx<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Option<Ingot<'db>>,
+    ty: Canonical<TyId<'db>>,
+    solve_cx: TraitSolveCx<'db>,
+) -> Vec<Binder<ImplementorId<'db>>> {
+    let raw_impls = raw_impls_for_ty_with_solve_cx(db, ingot, ty, solve_cx);
+    filter_implementors_for_ty(db, ty, solve_cx, raw_impls)
+}
+
+fn raw_impls_for_ty_with_solve_cx<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Option<Ingot<'db>>,
     ty: Canonical<TyId<'db>>,

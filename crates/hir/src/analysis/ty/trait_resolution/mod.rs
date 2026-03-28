@@ -8,11 +8,10 @@ use super::{
     normalize::normalize_ty_without_consts_with_solve_cx,
     trait_def::{ImplementorId, TraitInstId},
     ty_def::{InvalidCause, TyData, TyFlags, TyId, TyParam},
-    ty_lower::contextual_path_resolution_in_cx,
 };
 use crate::analysis::{
     HirAnalysisDb,
-    name_resolution::{PathRes, resolve_path, resolve_path_in_cx},
+    name_resolution::{PathRes, resolve_path},
     ty::{
         trait_resolution::{constraint::ty_constraints, proof_forest::ProofForest},
         unify::UnificationTable,
@@ -546,12 +545,8 @@ where
                         walk_const_ty(self, const_ty);
                         return;
                     }
-                    self.goal = concretized_missing_trait_const_goal(
-                        self.db,
-                        solve_cx,
-                        assoc.inst(),
-                        assoc.name(),
-                    );
+                    self.goal =
+                        concretized_missing_trait_const_goal(self.db, solve_cx, assoc.inst());
                 }
                 ConstTyData::UnEvaluated {
                     body,
@@ -560,22 +555,11 @@ where
                 } => {
                     let body_cx = unevaluated_cx.map(StoredAnalysisCx::get);
                     let body_solve_cx = body_cx
-                        .map(|cx| cx.proof.solve_cx())
+                        .map(|cx| cx.proof)
                         .unwrap_or(self.solve_cx.with_assumptions(self.solve_cx.assumptions()));
                     if let Some(path) = const_body_simple_path(self.db, *body)
-                        && let Some(PathRes::TraitConst(recv_ty, inst, name)) = body_cx
-                            .and_then(|cx| {
-                                contextual_path_resolution_in_cx(
-                                    self.db,
-                                    body.scope(),
-                                    path,
-                                    true,
-                                    &cx,
-                                )
-                                .or_else(|| {
-                                    resolve_path_in_cx(self.db, path, body.scope(), true, &cx).ok()
-                                })
-                            })
+                        && let Some(PathRes::TraitConst(recv_ty, inst, _name)) = body_cx
+                            .and_then(|cx| cx.resolve_path(self.db, body.scope(), path, true).ok())
                             .or_else(|| {
                                 resolve_path(
                                     self.db,
@@ -606,12 +590,8 @@ where
                             walk_const_ty(self, const_ty);
                             return;
                         }
-                        self.goal = concretized_missing_trait_const_goal(
-                            self.db,
-                            body_solve_cx,
-                            inst,
-                            name,
-                        );
+                        self.goal =
+                            concretized_missing_trait_const_goal(self.db, body_solve_cx, inst);
                     }
                 }
                 _ => {}
@@ -636,7 +616,6 @@ pub(crate) fn concretized_missing_trait_const_goal<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     inst: TraitInstId<'db>,
-    name: crate::hir_def::IdentId<'db>,
 ) -> Option<TraitInstId<'db>> {
     let inst = normalize_trait_inst_preserving_validity_with_solve_cx(db, inst, solve_cx);
     let flags = collect_flags(db, inst);
@@ -646,10 +625,7 @@ pub(crate) fn concretized_missing_trait_const_goal<'db>(
 
     match solve_cx.select_impl(db, inst) {
         Selection::NotFound => Some(inst),
-        Selection::Unique(_) | Selection::Ambiguous(_) => {
-            let _ = name;
-            None
-        }
+        Selection::Unique(_) | Selection::Ambiguous(_) => None,
     }
 }
 

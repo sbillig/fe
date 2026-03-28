@@ -1,7 +1,7 @@
 use salsa::Update;
 
 use super::{
-    context::{AnalysisCx, ProofCx},
+    context::AnalysisCx,
     fold::{TyFoldable, TyFolder},
     trait_def::TraitInstId,
     trait_resolution::{PredicateListId, TraitSolveCx},
@@ -66,11 +66,9 @@ impl<'db> AssocConstUse<'db> {
         solve_cx: Option<TraitSolveCx<'db>>,
     ) -> Option<AnalysisCx<'db>> {
         let cx = self.analysis_cx?;
-        let proof = ProofCx::from_solve_cx(
-            solve_cx
-                .unwrap_or_else(|| TraitSolveCx::new(db, self.origin_scope))
-                .with_assumptions(self.assumptions),
-        );
+        let proof = solve_cx
+            .unwrap_or_else(|| TraitSolveCx::new(db, self.origin_scope))
+            .with_assumptions(self.assumptions);
         Some(
             AnalysisCx::new(proof)
                 .with_overlay(cx.overlay)
@@ -82,13 +80,7 @@ impl<'db> AssocConstUse<'db> {
         Self {
             origin_scope,
             assumptions,
-            analysis_cx: self.analysis_cx.map(|cx| {
-                AnalysisCx::new(ProofCx::from_solve_cx(
-                    cx.proof.solve_cx().with_assumptions(assumptions),
-                ))
-                .with_overlay(cx.overlay)
-                .with_mode(cx.mode)
-            }),
+            analysis_cx: self.analysis_cx.map(|cx| cx.with_assumptions(assumptions)),
             ..self
         }
     }
@@ -149,11 +141,9 @@ impl<'db> TyFoldable<'db> for AssocConstUse<'db> {
                     current_impl: current_impl.map(|impl_| impl_.fold_with(db, folder)),
                 },
             };
-            AnalysisCx::new(ProofCx::from_solve_cx(
-                cx.proof.solve_cx().with_assumptions(assumptions),
-            ))
-            .with_overlay(overlay)
-            .with_mode(mode)
+            cx.with_assumptions(assumptions)
+                .with_overlay(overlay)
+                .with_mode(mode)
         });
         Self {
             origin_scope: self.origin_scope,

@@ -7,8 +7,7 @@ use crate::{
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{
-        ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path_in_cx,
-        resolve_path_with_observer, resolve_path_with_observer_in_cx,
+        ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path_with_observer,
     },
     ty::visitor::TyVisitor,
 };
@@ -19,7 +18,7 @@ use super::{
     diagnostics::{TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
     trait_resolution::{PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf_nested},
     ty_def::{InvalidCause, TyData, TyId},
-    ty_lower::{analysis_cx_for_mode, contextual_path_resolution_in_cx, lower_hir_ty_in_cx},
+    ty_lower::lower_hir_ty_in_cx,
 };
 use crate::visitor::prelude::LazyTraitRefSpan;
 
@@ -35,7 +34,8 @@ pub fn collect_hir_ty_diags<'db>(
     span: LazyTySpan<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    collect_hir_ty_diags_in_mode(db, scope, hir_ty, span, assumptions, LoweringMode::Normal)
+    let cx = AnalysisCx::minimal(db, scope, assumptions);
+    collect_hir_ty_diags_in_cx(db, scope, hir_ty, span, &cx)
 }
 
 pub(crate) fn collect_hir_ty_diags_in_cx<'db>(
@@ -64,20 +64,6 @@ pub(crate) fn collect_hir_ty_diags_in_cx<'db>(
         .collect()
 }
 
-pub(crate) fn collect_hir_ty_diags_in_mode<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    hir_ty: TypeId<'db>,
-    span: LazyTySpan<'db>,
-    assumptions: PredicateListId<'db>,
-    mode: LoweringMode<'db>,
-) -> Vec<TyDiagCollection<'db>> {
-    // Compatibility wrapper for non-contextual callers. Contextual lowering
-    // should prefer `collect_hir_ty_diags_in_cx(...)`.
-    let cx = analysis_cx_for_mode(db, scope, assumptions, mode);
-    collect_hir_ty_diags_in_cx(db, scope, hir_ty, span, &cx)
-}
-
 pub fn collect_ty_lower_errors<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -85,7 +71,8 @@ pub fn collect_ty_lower_errors<'db>(
     span: LazyTySpan<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    collect_ty_lower_errors_in_mode(db, scope, hir_ty, span, assumptions, LoweringMode::Normal)
+    let cx = AnalysisCx::minimal(db, scope, assumptions);
+    collect_ty_lower_errors_in_cx(db, scope, hir_ty, span, &cx)
 }
 
 pub(crate) fn collect_ty_lower_errors_in_cx<'db>(
@@ -103,20 +90,6 @@ pub(crate) fn collect_ty_lower_errors_in_cx<'db>(
     let mut ctxt = VisitorCtxt::new(db, scope, span);
     vis.visit_ty(&mut ctxt, hir_ty);
     vis.diags
-}
-
-pub(crate) fn collect_ty_lower_errors_in_mode<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    hir_ty: TypeId<'db>,
-    span: LazyTySpan<'db>,
-    assumptions: PredicateListId<'db>,
-    mode: LoweringMode<'db>,
-) -> Vec<TyDiagCollection<'db>> {
-    // Compatibility wrapper for non-contextual callers. Contextual lowering
-    // should prefer `collect_ty_lower_errors_in_cx(...)`.
-    let cx = analysis_cx_for_mode(db, scope, assumptions, mode);
-    collect_ty_lower_errors_in_cx(db, scope, hir_ty, span, &cx)
 }
 
 pub(crate) fn explicit_value_ty_wf_diag<'db>(
@@ -159,7 +132,9 @@ impl<'db> HirTyErrVisitor<'db> {
         path: PathId<'db>,
         resolve_tail_as_value: bool,
     ) -> Option<PathRes<'db>> {
-        contextual_path_resolution_in_cx(self.db, scope, path, resolve_tail_as_value, &self.cx)
+        self.cx
+            .resolve_path(self.db, scope, path, resolve_tail_as_value)
+            .ok()
     }
 }
 
@@ -176,9 +151,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
             && let Some(hir_ty) = type_arg.ty.to_opt()
             && let TypeKind::Path(path_partial) = hir_ty.data(self.db)
             && let Some(path) = path_partial.to_opt()
-            && let Some(resolved) = self
-                .contextual_path_resolution(ctxt.scope(), path, true)
-                .or_else(|| resolve_path_in_cx(self.db, path, ctxt.scope(), true, &self.cx).ok())
+            && let Some(resolved) = self.contextual_path_resolution(ctxt.scope(), path, true)
         {
             let is_const_like = match resolved {
                 PathRes::Const(..) | PathRes::TraitConst(..) => true,
@@ -196,54 +169,48 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                     // Preserve path visibility diagnostics even though we suppress
                     // "expected type" errors for const-like paths in generic-arg
                     // position.
-                    if self
-                        .contextual_path_resolution(ctxt.scope(), path, true)
-                        .is_none()
-                    {
-                        let scope = ctxt.scope();
-                        let mut invisible = None;
-                        let mut check_visibility = |path: PathId<'db>, reso: &PathRes<'db>| {
-                            if invisible.is_some() {
-                                return;
-                            }
-                            if !reso.is_visible_from(self.db, scope) {
-                                invisible = Some((path, reso.name_span(self.db)));
-                            }
-                        };
+                    let scope = ctxt.scope();
+                    let mut invisible = None;
+                    let mut check_visibility = |path: PathId<'db>, reso: &PathRes<'db>| {
+                        if invisible.is_some() {
+                            return;
+                        }
+                        if !reso.is_visible_from(self.db, scope) {
+                            invisible = Some((path, reso.name_span(self.db)));
+                        }
+                    };
 
-                        match resolve_path_with_observer(
-                            self.db,
-                            path,
-                            scope,
-                            self.cx.proof.assumptions(),
-                            true,
-                            &mut check_visibility,
-                        ) {
-                            Ok(_) => {
-                                if let Some((path, deriv_span)) = invisible
-                                    && let Some(ident) = path.ident(self.db).to_opt()
-                                {
-                                    let span = path_span
-                                        .clone()
-                                        .segment(path.segment_index(self.db))
-                                        .ident();
-                                    let diag =
-                                        PathResDiag::Invisible(span.into(), ident, deriv_span);
-                                    self.diags.push(diag.into());
-                                }
+                    match resolve_path_with_observer(
+                        self.db,
+                        path,
+                        scope,
+                        self.cx.proof.assumptions(),
+                        true,
+                        &mut check_visibility,
+                    ) {
+                        Ok(_) => {
+                            if let Some((path, deriv_span)) = invisible
+                                && let Some(ident) = path.ident(self.db).to_opt()
+                            {
+                                let span = path_span
+                                    .clone()
+                                    .segment(path.segment_index(self.db))
+                                    .ident();
+                                let diag = PathResDiag::Invisible(span.into(), ident, deriv_span);
+                                self.diags.push(diag.into());
                             }
-                            Err(err) => {
-                                if let Some(diag) = err.into_diag(
-                                    self.db,
-                                    path,
-                                    path_span.clone(),
-                                    ExpectedPathKind::Value,
-                                ) {
-                                    self.diags.push(diag.into());
-                                }
+                        }
+                        Err(err) => {
+                            if let Some(diag) = err.into_diag(
+                                self.db,
+                                path,
+                                path_span.clone(),
+                                ExpectedPathKind::Value,
+                            ) {
+                                self.diags.push(diag.into());
                             }
-                        };
-                    }
+                        }
+                    };
 
                     // Walk the underlying path to validate any nested generic arguments,
                     // but don't validate the path itself as a type.
@@ -325,27 +292,21 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
             }
         };
 
-        let res = if let Some(res) = self.contextual_path_resolution(scope, path, false) {
-            res
-        } else {
-            match resolve_path_with_observer_in_cx(
-                self.db,
-                path,
-                scope,
-                false,
-                &self.cx,
-                &mut check_visibility,
-            ) {
-                Ok(res) => res,
-
-                Err(err) => {
-                    if let Some(diag) =
-                        err.into_diag(self.db, path, path_span.clone(), ExpectedPathKind::Type)
-                    {
-                        self.diags.push(diag.into());
-                    }
-                    return;
+        let res = match self.cx.resolve_path_with_observer(
+            self.db,
+            scope,
+            path,
+            false,
+            &mut check_visibility,
+        ) {
+            Ok(res) => res,
+            Err(err) => {
+                if let Some(diag) =
+                    err.into_diag(self.db, path, path_span.clone(), ExpectedPathKind::Type)
+                {
+                    self.diags.push(diag.into());
                 }
+                return;
             }
         };
 
@@ -391,14 +352,10 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         // TODO(diags): In the future, refine this to walk only generic args
         // under the trait ref and surface kind/arg mismatches with precise
         // spans when available from semantic lowering.
-        match resolve_path_with_observer_in_cx(
-            self.db,
-            path,
-            scope,
-            false,
-            &self.cx,
-            &mut check_visibility,
-        ) {
+        match self
+            .cx
+            .resolve_path_with_observer(self.db, scope, path, false, &mut check_visibility)
+        {
             Ok(res) => {
                 if !matches!(res, crate::analysis::name_resolution::PathRes::Trait(_)) {
                     // Expected a trait in this context

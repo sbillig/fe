@@ -259,7 +259,7 @@ fn compare_ty<'db>(
         .merge(db, impl_assumptions)
         .merge(db, trait_assumptions)
         .extend_all_bounds(db);
-    let compare_solve_cx = cx.proof.solve_cx().with_assumptions(compare_assumptions);
+    let compare_solve_cx = cx.proof.with_assumptions(compare_assumptions);
     let trait_scope = impl_m.scope();
 
     for (idx, (trait_m_ty, impl_m_ty)) in trait_m_arg_tys
@@ -1075,11 +1075,7 @@ fn compare_constraints<'db>(
         if trait_m_constraints.list(db).contains(&goal) {
             continue;
         }
-        match is_goal_satisfiable(
-            db,
-            cx.proof.solve_cx().with_assumptions(trait_m_constraints),
-            goal,
-        ) {
+        match is_goal_satisfiable(db, cx.proof.with_assumptions(trait_m_constraints), goal) {
             GoalSatisfiability::Satisfied(_) | GoalSatisfiability::ContainsInvalid => {}
             GoalSatisfiability::NeedsConfirmation(_) => unreachable!(),
             GoalSatisfiability::UnSat(_) => {

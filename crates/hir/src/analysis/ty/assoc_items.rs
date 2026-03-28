@@ -7,7 +7,7 @@ use crate::analysis::{
         canonical::{Canonical, Canonicalized},
         const_expr::ConstExpr,
         const_ty::{ConstTyData, const_body_simple_path, const_ty_from_trait_const_in_cx},
-        context::{AnalysisCx, ImplOverlay, LoweringMode, ProofCx},
+        context::{AnalysisCx, ImplOverlay, LoweringMode},
         fold::{AssocTySubst, TyFoldable as _},
         normalize::normalize_ty_without_consts_with_solve_cx,
         trait_def::{
@@ -18,7 +18,6 @@ use crate::analysis::{
             normalize_trait_inst_preserving_validity_with_solve_cx,
         },
         ty_def::{InvalidCause, TyData, TyId, inference_keys},
-        ty_lower::contextual_path_resolution_in_cx,
         unify::UnificationTable,
     },
 };
@@ -82,7 +81,7 @@ impl<'db> TraitConstUseResolution<'db> {
 
 fn selected_assoc_const_body_analysis_cx<'db>(
     db: &'db dyn HirAnalysisDb,
-    proof: ProofCx<'db>,
+    proof: super::trait_resolution::TraitSolveCx<'db>,
     body: &SelectedAssocConstBody<'db>,
 ) -> AnalysisCx<'db> {
     let trait_inst = body.selected_trait_inst;
@@ -124,7 +123,7 @@ pub(crate) fn normalize_ty_for_trait_inst<'db>(
         ty,
         scope,
         cx.proof.assumptions(),
-        Some(cx.proof.solve_cx()),
+        Some(cx.proof),
     );
     normalize_const_tys_for_trait_inst(db, cx, ty, trait_inst)
 }
@@ -198,11 +197,8 @@ pub(crate) fn normalize_const_tys_for_trait_inst<'db>(
                         );
                     };
 
-                    let evaluated = const_ty.evaluate_with_solve_cx(
-                        db,
-                        Some(*expected_ty),
-                        self.cx.proof.solve_cx(),
-                    );
+                    let evaluated =
+                        const_ty.evaluate_with_solve_cx(db, Some(*expected_ty), self.cx.proof);
                     if matches!(
                         evaluated.ty(db).invalid_cause(db),
                         Some(InvalidCause::ConstEvalUnsupported { .. })
@@ -233,7 +229,7 @@ pub(crate) fn normalize_const_tys_for_trait_inst<'db>(
                                 TyData::ConstTy(repl.evaluate_with_solve_cx(
                                     db,
                                     expected_ty.or(Some(repl.ty(db))),
-                                    self.cx.proof.solve_cx(),
+                                    self.cx.proof,
                                 )),
                             );
                         }
@@ -261,16 +257,18 @@ pub(crate) fn normalize_const_tys_for_trait_inst<'db>(
                         }
                     }
 
-                    if let Some(PathRes::TraitConst(_, inst, name)) =
-                        contextual_path_resolution_in_cx(db, body.scope(), path, true, &self.cx)
-                            .map(|res| match res {
-                                PathRes::TraitConst(recv_ty, inst, name) => PathRes::TraitConst(
-                                    recv_ty,
-                                    rebase_trait_const_inst(db, inst, self.trait_inst),
-                                    name,
-                                ),
-                                other => other,
-                            })
+                    if let Some(PathRes::TraitConst(_, inst, name)) = self
+                        .cx
+                        .resolve_path(db, body.scope(), path, true)
+                        .ok()
+                        .map(|res| match res {
+                            PathRes::TraitConst(recv_ty, inst, name) => PathRes::TraitConst(
+                                recv_ty,
+                                rebase_trait_const_inst(db, inst, self.trait_inst),
+                                name,
+                            ),
+                            other => other,
+                        })
                         && let Some(repl) =
                             const_ty_from_trait_const_in_cx(db, &self.cx, inst, name)
                     {
@@ -279,7 +277,7 @@ pub(crate) fn normalize_const_tys_for_trait_inst<'db>(
                             TyData::ConstTy(repl.evaluate_with_solve_cx(
                                 db,
                                 expected_ty.or(Some(repl.ty(db))),
-                                self.cx.proof.solve_cx(),
+                                self.cx.proof,
                             )),
                         );
                     }
@@ -292,7 +290,7 @@ pub(crate) fn normalize_const_tys_for_trait_inst<'db>(
                         TyData::ConstTy(const_ty.evaluate_with_solve_cx(
                             db,
                             Some(expected_ty),
-                            self.cx.proof.solve_cx(),
+                            self.cx.proof,
                         )),
                     )
                 }
@@ -327,7 +325,7 @@ fn select_implementor_for_trait_inst<'db>(
 
     for ingot in search_ingots {
         for implementor in
-            impls_for_ty_with_constraints_in_cx(db, ingot, canonical_self_ty, cx.proof.solve_cx())
+            impls_for_ty_with_constraints_in_cx(db, ingot, canonical_self_ty, cx.proof)
         {
             let snapshot = table.snapshot();
             let implementor: ImplementorId<'db> = table.instantiate_with_fresh_vars(implementor);
@@ -360,7 +358,7 @@ pub(crate) fn normalize_trait_inst<'db>(
     cx: &AnalysisCx<'db>,
     trait_inst: TraitInstId<'db>,
 ) -> TraitInstId<'db> {
-    normalize_trait_inst_preserving_validity_with_solve_cx(db, trait_inst, cx.proof.solve_cx())
+    normalize_trait_inst_preserving_validity_with_solve_cx(db, trait_inst, cx.proof)
 }
 
 fn selected_assoc_const_body_for_implementor<'db>(
@@ -494,9 +492,7 @@ pub(crate) fn resolve_trait_const_use_in_cx<'db>(
 
     let trait_inst = selection.trait_inst;
     let declared_ty = selection.declared_ty;
-    if let Some(trait_inst) =
-        concretized_missing_trait_const_goal(db, cx.proof.solve_cx(), trait_inst, name)
-    {
+    if let Some(trait_inst) = concretized_missing_trait_const_goal(db, cx.proof, trait_inst) {
         return Some(TraitConstUseResolution::MissingConcreteImpl {
             trait_inst,
             declared_ty,
@@ -511,7 +507,7 @@ pub(crate) fn resolve_trait_const_use_in_cx<'db>(
 
 pub(crate) fn analysis_cx_for_selected_assoc_const_body<'db>(
     db: &'db dyn HirAnalysisDb,
-    proof: ProofCx<'db>,
+    proof: super::trait_resolution::TraitSolveCx<'db>,
     selection: &AssocConstSelection<'db>,
 ) -> Option<AnalysisCx<'db>> {
     let body = selection.body.as_ref()?;

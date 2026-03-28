@@ -2683,7 +2683,7 @@ impl<'db> TyChecker<'db> {
             .binding
             .and_then(|binding| self.env.binding_method_trait_hint(binding));
         let method_solve_cx = self.env.owner().analysis_cx(self.db).and_then(|cx| {
-            let solve_cx = cx.proof.solve_cx();
+            let solve_cx = cx.proof;
             solve_cx.local_implementors().is_some().then_some(solve_cx)
         });
 
@@ -3816,7 +3816,7 @@ impl<'db> TyChecker<'db> {
         let lhs_candidates = self.capability_fallback_candidates(lhs_ty);
         let method_assumptions = self.env.assumptions();
         let method_solve_cx = self.env.owner().analysis_cx(self.db).and_then(|cx| {
-            let solve_cx = cx.proof.solve_cx();
+            let solve_cx = cx.proof;
             solve_cx.local_implementors().is_some().then_some(solve_cx)
         });
 

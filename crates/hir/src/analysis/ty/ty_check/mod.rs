@@ -64,7 +64,7 @@ use super::{
     },
     ty_contains_const_hole,
     ty_def::{BorrowKind, CapabilityKind, InvalidCause, Kind, TyId, TyVarSort},
-    ty_lower::{contextual_path_resolution_in_cx, lower_hir_ty, lower_hir_ty_in_cx},
+    ty_lower::{lower_hir_ty, lower_hir_ty_in_cx},
     unify::{InferenceKey, Snapshot, UnificationError, UnificationTable},
 };
 use crate::analysis::ty::ty_def::{TyBase, TyData};
@@ -1387,8 +1387,7 @@ impl<'db> TyChecker<'db> {
     fn body_value_ty_has_wf_failure(&self, ty: TyId<'db>) -> bool {
         let solve_cx = self
             .analysis_cx_in_scope(self.env.scope(), self.env.assumptions())
-            .proof
-            .solve_cx();
+            .proof;
         matches!(
             check_ty_wf_nested(self.db, solve_cx, ty),
             WellFormedness::IllFormed { .. }
@@ -1398,8 +1397,7 @@ impl<'db> TyChecker<'db> {
     fn explicit_body_value_ty_wf_diag(&mut self, ty: TyId<'db>, span: DynLazySpan<'db>) -> bool {
         let solve_cx = self
             .analysis_cx_in_scope(self.env.scope(), self.env.assumptions())
-            .proof
-            .solve_cx();
+            .proof;
         if let Some(diag) = explicit_value_ty_wf_diag(self.db, solve_cx, ty, span) {
             self.push_diag(diag);
             true
@@ -1999,12 +1997,17 @@ impl<'db> TyChecker<'db> {
             }
         };
 
-        let contextual_res = self.env.owner().analysis_cx(self.db).and_then(|cx| {
-            contextual_path_resolution_in_cx(self.db, scope, path, resolve_tail_as_value, &cx)
-        });
-        let res = if let Some(resolved) = contextual_res {
-            check_visibility(path, &resolved);
-            Ok(resolved.map_over_ty(|ty| self.instantiate_to_term(ty)))
+        let res = if let Some(cx) = self.env.owner().analysis_cx(self.db) {
+            match cx.resolve_path_with_observer(
+                self.db,
+                scope,
+                path,
+                resolve_tail_as_value,
+                &mut check_visibility,
+            ) {
+                Ok(r) => Ok(r.map_over_ty(|ty| self.instantiate_to_term(ty))),
+                Err(err) => Err(err),
+            }
         } else {
             match resolve_path_with_observer(
                 self.db,
@@ -2135,10 +2138,7 @@ impl<'db> TyChecker<'db> {
     }
 
     fn solve_cx(&self) -> Option<TraitSolveCx<'db>> {
-        self.env
-            .owner()
-            .analysis_cx(self.db)
-            .map(|cx| cx.proof.solve_cx())
+        self.env.owner().analysis_cx(self.db).map(|cx| cx.proof)
     }
 
     pub(super) fn analysis_cx_in_scope(
@@ -2146,14 +2146,15 @@ impl<'db> TyChecker<'db> {
         scope: crate::hir_def::scope_graph::ScopeId<'db>,
         assumptions: PredicateListId<'db>,
     ) -> AnalysisCx<'db> {
-        if scope == self.env.scope()
-            && assumptions == self.env.assumptions()
-            && let Some(cx) = self.env.owner().analysis_cx(self.db)
-        {
-            return cx;
+        if let Some(cx) = self.env.owner().analysis_cx(self.db) {
+            if scope == self.env.scope() && assumptions == self.env.assumptions() {
+                return cx;
+            }
+
+            return cx.rebased(self.db, scope, assumptions);
         }
 
-        AnalysisCx::from_solve_cx(self.solve_cx_in_scope(scope, assumptions))
+        AnalysisCx::minimal(self.db, scope, assumptions)
     }
 
     pub(super) fn normalize_trait_inst_ty_in_scope(

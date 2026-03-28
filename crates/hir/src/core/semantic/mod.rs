@@ -34,7 +34,7 @@ use crate::HirDb;
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::ty::admission::implementors_conflict_with_local_implementors;
 use crate::analysis::ty::assoc_items::normalize_ty_for_trait_inst;
-use crate::analysis::ty::context::{AnalysisCx, ImplOverlay, LoweringMode, ProofCx};
+use crate::analysis::ty::context::{AnalysisCx, ImplOverlay, LoweringMode};
 use crate::analysis::ty::corelib::{
     resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
 };
@@ -599,15 +599,7 @@ impl<'db> Func<'db> {
 
     pub(crate) fn signature_analysis_cx(self, db: &'db dyn HirAnalysisDb) -> AnalysisCx<'db> {
         let mode = self.signature_lowering_mode(db);
-        AnalysisCx::new(
-            ProofCx::new(db, self.scope()).with_assumptions(self.elaborated_assumptions(db)),
-        )
-        .with_overlay(
-            mode.current_impl()
-                .map(ImplOverlay::with_current_impl)
-                .unwrap_or_default(),
-        )
-        .with_mode(mode)
+        AnalysisCx::for_mode(db, self.scope(), self.elaborated_assumptions(db), mode)
     }
 
     pub(crate) fn signature_analysis_cx_in_caller_cx(
@@ -621,9 +613,7 @@ impl<'db> Func<'db> {
         assumptions.extend(decl_assumptions.list(db).iter().copied());
         let assumptions = PredicateListId::new(db, assumptions.into_iter().collect::<Vec<_>>())
             .extend_all_bounds(db);
-        AnalysisCx::new(cx.proof.with_assumptions(assumptions))
-            .with_overlay(cx.overlay)
-            .with_mode(cx.mode)
+        cx.with_assumptions(assumptions)
     }
 
     pub(crate) fn decl_assumptions_in_cx(
@@ -678,9 +668,7 @@ impl<'db> Func<'db> {
                     .collect::<Vec<_>>(),
             )
             .extend_all_bounds(db);
-            let pred_cx = AnalysisCx::new(cx.proof.with_assumptions(assumptions))
-                .with_overlay(cx.overlay)
-                .with_mode(cx.mode);
+            let pred_cx = cx.with_assumptions(assumptions);
             let before = deferred.len();
             deferred.retain(|bound| {
                 let inst = match *bound {
@@ -889,7 +877,7 @@ impl<'db> Func<'db> {
             );
             return out;
         }
-        if let Some(diag) = explicit_value_ty_wf_diag(db, cx.proof.solve_cx(), ty, ty_span) {
+        if let Some(diag) = explicit_value_ty_wf_diag(db, cx.proof, ty, ty_span) {
             out.push(diag);
         }
 
@@ -1433,9 +1421,7 @@ impl<'db> FuncParamView<'db> {
         }
 
         // Well-formedness / trait-bound satisfaction for parameter type
-        if let WellFormedness::IllFormed { goal, subgoal } =
-            check_ty_wf_nested(db, cx.proof.solve_cx(), ty)
-        {
+        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf_nested(db, cx.proof, ty) {
             out.push(
                 TraitConstraintDiag::TraitBoundNotSat {
                     span: ty_span.clone(),
@@ -3723,9 +3709,7 @@ impl<'db> ImplTrait<'db> {
     }
 
     fn precondition_analysis_cx(self, db: &'db dyn HirAnalysisDb) -> AnalysisCx<'db> {
-        AnalysisCx::new(
-            ProofCx::new(db, self.scope()).with_assumptions(self.elaborated_assumptions(db)),
-        )
+        AnalysisCx::minimal(db, self.scope(), self.elaborated_assumptions(db))
     }
 
     fn signature_lowering_mode(self, db: &'db dyn HirAnalysisDb) -> Option<LoweringMode<'db>> {
@@ -3788,7 +3772,7 @@ impl<'db> ImplTrait<'db> {
         let mode = self
             .signature_lowering_mode(db)
             .unwrap_or(LoweringMode::Normal);
-        AnalysisCx::new(cx.proof.with_assumptions(self.elaborated_assumptions(db)))
+        cx.with_assumptions(self.elaborated_assumptions(db))
             .with_overlay(
                 mode.current_impl()
                     .map(ImplOverlay::with_current_impl)
@@ -4254,14 +4238,9 @@ impl<'db> ImplAssocTypeView<'db> {
             return Vec::new();
         };
 
-        crate::analysis::ty::ty_error::explicit_value_ty_wf_diag(
-            db,
-            cx.proof.solve_cx(),
-            ty,
-            ty_span.into(),
-        )
-        .into_iter()
-        .collect()
+        crate::analysis::ty::ty_error::explicit_value_ty_wf_diag(db, cx.proof, ty, ty_span.into())
+            .into_iter()
+            .collect()
     }
 }
 
@@ -4617,7 +4596,7 @@ impl<'db> TraitAssocConstView<'db> {
             .copied()
             .collect();
         assumptions.extend(cx.proof.assumptions().list(db).iter().copied());
-        let cx = crate::analysis::ty::context::AnalysisCx::new(
+        let cx = owner_cx.with_proof(
             owner_cx.proof.with_assumptions(
                 crate::analysis::ty::trait_resolution::PredicateListId::new(
                     db,
@@ -4625,9 +4604,7 @@ impl<'db> TraitAssocConstView<'db> {
                 )
                 .extend_all_bounds(db),
             ),
-        )
-        .with_overlay(owner_cx.overlay)
-        .with_mode(owner_cx.mode);
+        );
         let ty =
             crate::analysis::ty::ty_lower::lower_hir_ty_in_cx(db, hir, self.owner.scope(), &cx);
         Some(Binder::bind(ty))
@@ -4707,14 +4684,9 @@ impl<'db> ImplAssocConstView<'db> {
             return Vec::new();
         };
 
-        crate::analysis::ty::ty_error::explicit_value_ty_wf_diag(
-            db,
-            cx.proof.solve_cx(),
-            ty,
-            ty_span.into(),
-        )
-        .into_iter()
-        .collect()
+        crate::analysis::ty::ty_error::explicit_value_ty_wf_diag(db, cx.proof, ty, ty_span.into())
+            .into_iter()
+            .collect()
     }
 }
 
