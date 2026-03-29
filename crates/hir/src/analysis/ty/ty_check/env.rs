@@ -75,6 +75,7 @@ pub(crate) struct TyCheckEnv<'db> {
     param_bindings: Vec<LocalBinding<'db>>,
     /// Pat bindings for transfer to TypedBody
     pat_bindings: FxHashMap<PatId, LocalBinding<'db>>,
+    local_borrow_providers: FxHashMap<PatId, ConcreteBorrowProvider>,
     /// Binding capture mode for local variables (keyed by the pattern that introduces them)
     pat_binding_modes: FxHashMap<PatId, PatBindingMode>,
     pattern_store: PatternStore<'db>,
@@ -200,6 +201,7 @@ impl<'db> TyCheckEnv<'db> {
             expr_stack: Vec::new(),
             param_bindings: Vec::new(),
             pat_bindings: FxHashMap::default(),
+            local_borrow_providers: FxHashMap::default(),
             pat_binding_modes: FxHashMap::default(),
             pattern_store: PatternStore::default(),
             pattern_status: FxHashMap::default(),
@@ -349,7 +351,7 @@ impl<'db> TyCheckEnv<'db> {
             .map(|(contract, site)| (contract, EffectEnvView::new(site)))
     }
 
-    fn semantic_effect_binding(
+    pub(super) fn semantic_effect_binding(
         &self,
         site: EffectParamSite<'db>,
         idx: usize,
@@ -578,6 +580,22 @@ impl<'db> TyCheckEnv<'db> {
         self.pat_bindings.get(&pat).copied()
     }
 
+    pub(super) fn local_borrow_provider(&self, pat: PatId) -> Option<ConcreteBorrowProvider> {
+        self.local_borrow_providers.get(&pat).copied()
+    }
+
+    pub(super) fn set_local_borrow_provider(
+        &mut self,
+        pat: PatId,
+        provider: Option<ConcreteBorrowProvider>,
+    ) {
+        if let Some(provider) = provider {
+            self.local_borrow_providers.insert(pat, provider);
+        } else {
+            self.local_borrow_providers.remove(&pat);
+        }
+    }
+
     pub(super) fn set_pat_binding_mode(&mut self, pat: PatId, mode: PatBindingMode) {
         if self.pat_bindings.contains_key(&pat) {
             self.pat_binding_modes.insert(pat, mode);
@@ -588,6 +606,7 @@ impl<'db> TyCheckEnv<'db> {
         let Some(binding) = self.pat_bindings.remove(&pat) else {
             return;
         };
+        self.local_borrow_providers.remove(&pat);
         self.pat_binding_modes.remove(&pat);
         self.pending_vars.retain(|_, pending| *pending != binding);
     }
@@ -1190,6 +1209,7 @@ pub struct ExprProp<'db> {
     pub ty: TyId<'db>,
     pub is_mut: bool,
     pub binding: Option<LocalBinding<'db>>,
+    pub borrow_provider: Option<ConcreteBorrowProvider>,
 }
 
 impl<'db> ExprProp<'db> {
@@ -1198,14 +1218,7 @@ impl<'db> ExprProp<'db> {
             ty,
             is_mut,
             binding: None,
-        }
-    }
-
-    pub(super) fn new_binding_ref(ty: TyId<'db>, is_mut: bool, binding: LocalBinding<'db>) -> Self {
-        Self {
-            ty,
-            is_mut,
-            binding: Some(binding),
+            borrow_provider: None,
         }
     }
 
@@ -1214,6 +1227,26 @@ impl<'db> ExprProp<'db> {
             ty: TyId::invalid(db, InvalidCause::Other),
             is_mut: true,
             binding: None,
+            borrow_provider: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum ConcreteBorrowProvider {
+    Memory,
+    Storage,
+    TransientStorage,
+    Calldata,
+}
+
+impl ConcreteBorrowProvider {
+    pub fn pretty(self) -> &'static str {
+        match self {
+            Self::Memory => "memory",
+            Self::Storage => "storage",
+            Self::TransientStorage => "transient storage",
+            Self::Calldata => "calldata",
         }
     }
 }
@@ -1270,6 +1303,15 @@ impl<'db> LocalBinding<'db> {
                 path.ident(hir_db).unwrap()
             }
 
+            Self::Param {
+                site: ParamSite::EffectField(effect_site),
+                idx,
+                ..
+            } => env
+                .semantic_effect_binding(*effect_site, *idx)
+                .map(|binding| binding.binding_name)
+                .or_else(|| param_name(env.db, ParamSite::EffectField(*effect_site), *idx))
+                .unwrap_or_else(|| IdentId::new(env.db, "_".to_string())),
             Self::Param { site, idx, .. } => param_name(env.db, *site, *idx)
                 .unwrap_or_else(|| IdentId::new(env.db, "_".to_string())),
             Self::EffectParam { key_path, .. } => key_path

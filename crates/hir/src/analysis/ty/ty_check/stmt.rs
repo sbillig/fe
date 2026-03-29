@@ -3,7 +3,7 @@ use salsa::Update;
 use crate::analysis::HirAnalysisDb;
 use crate::core::hir_def::{ExprId, IdentId, Partial, Pat, PatId, Stmt, StmtId};
 
-use super::{Callable, TyChecker, instantiate_trait_method};
+use super::{Callable, LocalBinding, TyChecker, instantiate_trait_method};
 use crate::analysis::ty::{
     canonical::Canonical,
     corelib::resolve_core_trait,
@@ -99,6 +99,10 @@ impl<'db> TyChecker<'db> {
             let prop = self.check_expr(*expr, ascription);
             let (pat_expected, mode) = self.destructure_source_mode(prop.ty);
             self.check_pat(*pat, pat_expected);
+            if let Some(LocalBinding::Local { pat, .. }) = self.env.pat_binding(*pat) {
+                self.env
+                    .set_local_borrow_provider(pat, prop.borrow_provider);
+            }
 
             match mode {
                 super::DestructureSourceMode::Owned => {
@@ -403,15 +407,16 @@ impl<'db> TyChecker<'db> {
             unreachable!()
         };
 
-        let (returned_expr, mut returned_ty, had_child_err) = if let Some(expr) = expr {
-            let before = self.diags.len();
-            let expected = self.fresh_ty();
-            self.check_expr(*expr, expected);
-            let ty = expected.fold_with(self.db, &mut self.table);
-            (Some(*expr), ty, self.diags.len() > before)
-        } else {
-            (None, TyId::unit(self.db), false)
-        };
+        let (returned_expr, returned_prop, mut returned_ty, had_child_err) =
+            if let Some(expr) = expr {
+                let before = self.diags.len();
+                let expected = self.fresh_ty();
+                let prop = self.check_expr(*expr, expected);
+                let ty = expected.fold_with(self.db, &mut self.table);
+                (Some(*expr), Some(prop), ty, self.diags.len() > before)
+            } else {
+                (None, None, TyId::unit(self.db), false)
+            };
 
         if !had_child_err
             && !returned_ty.has_invalid(self.db)
@@ -439,6 +444,24 @@ impl<'db> TyChecker<'db> {
             self.push_diag(diag);
         } else if ret_ty_ok && let Some(expr) = returned_expr {
             self.record_implicit_move_for_owned_expr(expr, self.expected);
+        }
+
+        if ret_ty_ok
+            && let Some(expr) = returned_expr
+            && let Some(prop) = returned_prop
+            && let Some(provider) = prop.borrow_provider
+        {
+            if let Some((ref previous_span, previous_provider)) = self.first_return_borrow_provider
+            {
+                self.merge_concrete_borrow_providers(
+                    previous_span.clone(),
+                    Some(previous_provider),
+                    expr.span(self.body()).into(),
+                    Some(provider),
+                );
+            } else {
+                self.first_return_borrow_provider = Some((expr.span(self.body()).into(), provider));
+            }
         }
 
         TyId::never(self.db)

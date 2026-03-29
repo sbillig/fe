@@ -19,19 +19,6 @@ func private %extract_ptr(v0.objref<@__fe_obj_Holder_0>) -> i256 {
         return v3;
 }
 
-func private %read_cell__StorPtr_Cell___f0e99f91b10888d5(v0.i256) -> i256 {
-    block0:
-        v1.i256 = evm_sload v0;
-        return v1;
-}
-
-func private %write_cell__StorPtr_Cell___f0e99f91b10888d5(v0.i256, v1.i256) -> i256 {
-    block0:
-        evm_sstore v1 v0;
-        v2.i256 = evm_sload v1;
-        return v2;
-}
-
 func private %__EffectHandleFieldDeref_recv_0_0(v0.objref<@__fe_obj_SeedSlot_1>) -> i256 {
     block0:
         v3.objref<i256> = obj.proj v0 0.i256;
@@ -146,11 +133,24 @@ func private %stor_ptr_stor__Evm_hef0af3106e109414_Cell_hc7450704dd4a03d6__db7aa
         return v2;
 }
 
+func private %write_cell__StorPtr_Cell___f0e99f91b10888d5(v0.i256, v1.i256) -> i256 {
+    block0:
+        evm_sstore v1 v0;
+        v2.i256 = evm_sload v1;
+        return v2;
+}
+
 func private %extract_ptr_arg0_f0_stor(v0.objref<@__fe_obj_Holder_0>) -> i256 {
     block0:
         v2.objref<i256> = obj.proj v0 0.i256;
         v3.i256 = obj.load v2;
         return v3;
+}
+
+func private %read_cell__StorPtr_Cell___f0e99f91b10888d5(v0.i256) -> i256 {
+    block0:
+        v1.i256 = evm_sload v0;
+        return v1;
 }
 
 func private %cellmover_h6dc2778b4a1f6bf1_bump_stor_arg0_root_stor(v0.i256, v1.i256) -> i256 {

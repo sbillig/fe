@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/erc20.fe
 ---
@@ -31,7 +32,7 @@ func private %__CoolCoin_init_contract(v0.i256, v1.i256, v2.i256) {
         br v9 block1 block2;
 
     block1:
-        call %mint__0_1_StorPtr_TokenStore_0__1___Evm_hef0af3106e109414__4094b60766812ceb v1 v0 v2;
+        call %mint_eff0_stor__0_1_TokenStore_0__1__Evm_hef0af3106e109414__23ea53994a8fbaec v1 v0 v2;
         jump block2;
 
     block2:
@@ -45,7 +46,7 @@ func private %__CoolCoin_recv_0_0(v0.objref<@__fe_obj_Transfer_0>, v1.i256) -> i
         v8.objref<i256> = obj.proj v0 1.i256;
         v9.i256 = obj.load v8;
         v10.i256 = evm_caller;
-        call %transfer__0_1_StorPtr_TokenStore_0__1___Evm_hef0af3106e109414__4094b60766812ceb v10 v6 v9 v1;
+        call %transfer_eff0_stor__0_1_TokenStore_0__1__Evm_hef0af3106e109414__23ea53994a8fbaec v10 v6 v9 v1;
         return 1.i1;
 }
 
@@ -56,7 +57,7 @@ func private %__CoolCoin_recv_0_1(v0.objref<@__fe_obj_Approve_1>, v1.i256) -> i1
         v8.objref<i256> = obj.proj v0 1.i256;
         v9.i256 = obj.load v8;
         v10.i256 = evm_caller;
-        call %approve__0_1_StorPtr_TokenStore_0__1___Evm_hef0af3106e109414__4094b60766812ceb v10 v6 v9 v1;
+        call %approve_eff0_stor__0_1_TokenStore_0__1__Evm_hef0af3106e109414__23ea53994a8fbaec v10 v6 v9 v1;
         return 1.i1;
 }
 
@@ -69,8 +70,8 @@ func private %__CoolCoin_recv_0_2(v0.objref<@__fe_obj_TransferFrom_2>, v1.i256) 
         v11.objref<i256> = obj.proj v0 2.i256;
         v12.i256 = obj.load v11;
         v13.i256 = evm_caller;
-        call %spend_allowance__0_1_StorPtr_TokenStore_0__1____d3adca980e228028 v6 v13 v12 v1;
-        call %transfer__0_1_StorPtr_TokenStore_0__1___Evm_hef0af3106e109414__4094b60766812ceb v6 v9 v12 v1;
+        call %spend_allowance_eff0_stor__0_1_TokenStore_0__1___2d6f91026cd3e364 v6 v13 v12 v1;
+        call %transfer_eff0_stor__0_1_TokenStore_0__1__Evm_hef0af3106e109414__23ea53994a8fbaec v6 v9 v12 v1;
         return 1.i1;
 }
 
@@ -123,14 +124,14 @@ func private %__CoolCoin_recv_1_0(v0.objref<@__fe_obj_Mint_4>, v1.i256) -> i1 {
         v9.objref<i256> = obj.proj v0 1.i256;
         v10.i256 = obj.load v9;
         call %accesscontrol____h4c85da5bbb505ade_require_stor__3_Evm_hef0af3106e109414__5baaa260f0d18873 1.i256;
-        call %mint__0_1_StorPtr_TokenStore_0__1___Evm_hef0af3106e109414__4094b60766812ceb v7 v10 v1;
+        call %mint_eff0_stor__0_1_TokenStore_0__1__Evm_hef0af3106e109414__23ea53994a8fbaec v7 v10 v1;
         return 1.i1;
 }
 
 func private %__CoolCoin_recv_1_1(v0.i256, v1.i256) -> i1 {
     block0:
         v4.i256 = evm_caller;
-        call %burn__0_1_StorPtr_TokenStore_0__1___Evm_hef0af3106e109414__4094b60766812ceb v4 v0 v1;
+        call %burn_eff0_stor__0_1_TokenStore_0__1__Evm_hef0af3106e109414__23ea53994a8fbaec v4 v0 v1;
         return 1.i1;
 }
 
@@ -141,8 +142,8 @@ func private %__CoolCoin_recv_1_2(v0.objref<@__fe_obj_BurnFrom_5>, v1.i256) -> i
         v8.objref<i256> = obj.proj v0 1.i256;
         v9.i256 = obj.load v8;
         v10.i256 = evm_caller;
-        call %spend_allowance__0_1_StorPtr_TokenStore_0__1____d3adca980e228028 v6 v10 v9 v1;
-        call %burn__0_1_StorPtr_TokenStore_0__1___Evm_hef0af3106e109414__4094b60766812ceb v6 v9 v1;
+        call %spend_allowance_eff0_stor__0_1_TokenStore_0__1___2d6f91026cd3e364 v6 v10 v9 v1;
+        call %burn_eff0_stor__0_1_TokenStore_0__1__Evm_hef0af3106e109414__23ea53994a8fbaec v6 v9 v1;
         return 1.i1;
 }
 
@@ -166,7 +167,7 @@ func private %__CoolCoin_recv_1_3(v0.objref<@__fe_obj_IncreaseAllowance_6>, v1.i
         evm_revert 0.i256 0.i256;
 
     block2:
-        call %approve__0_1_StorPtr_TokenStore_0__1___Evm_hef0af3106e109414__4094b60766812ceb v10 v6 v15 v1;
+        call %approve_eff0_stor__0_1_TokenStore_0__1__Evm_hef0af3106e109414__23ea53994a8fbaec v10 v6 v15 v1;
         return 1.i1;
 }
 
@@ -192,7 +193,7 @@ func private %__CoolCoin_recv_1_4(v0.objref<@__fe_obj_DecreaseAllowance_7>, v1.i
         evm_revert 0.i256 0.i256;
 
     block2:
-        call %approve__0_1_StorPtr_TokenStore_0__1___Evm_hef0af3106e109414__4094b60766812ceb v10 v6 v16 v1;
+        call %approve_eff0_stor__0_1_TokenStore_0__1__Evm_hef0af3106e109414__23ea53994a8fbaec v10 v6 v16 v1;
         return 1.i1;
 }
 
@@ -492,7 +493,7 @@ func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v0.i256, v1.i256) ->
         return v2;
 }
 
-func private %mint__0_1_StorPtr_TokenStore_0__1___Evm_hef0af3106e109414__4094b60766812ceb(v0.i256, v1.i256, v2.i256) {
+func private %mint_eff0_stor__0_1_TokenStore_0__1__Evm_hef0af3106e109414__23ea53994a8fbaec(v0.i256, v1.i256, v2.i256) {
     block0:
         v4.i256 = call %address_h257056268eac7027_zero;
         v5.i1 = call %ne__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2 v0 v4;
@@ -524,7 +525,7 @@ func private %mint__0_1_StorPtr_TokenStore_0__1___Evm_hef0af3106e109414__4094b60
         return;
 }
 
-func private %transfer__0_1_StorPtr_TokenStore_0__1___Evm_hef0af3106e109414__4094b60766812ceb(v0.i256, v1.i256, v2.i256, v3.i256) {
+func private %transfer_eff0_stor__0_1_TokenStore_0__1__Evm_hef0af3106e109414__23ea53994a8fbaec(v0.i256, v1.i256, v2.i256, v3.i256) {
     block0:
         v5.i256 = call %address_h257056268eac7027_zero;
         v6.i1 = call %ne__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2 v0 v5;
@@ -560,7 +561,7 @@ func private %transfer__0_1_StorPtr_TokenStore_0__1___Evm_hef0af3106e109414__409
         return;
 }
 
-func private %approve__0_1_StorPtr_TokenStore_0__1___Evm_hef0af3106e109414__4094b60766812ceb(v0.i256, v1.i256, v2.i256, v3.i256) {
+func private %approve_eff0_stor__0_1_TokenStore_0__1__Evm_hef0af3106e109414__23ea53994a8fbaec(v0.i256, v1.i256, v2.i256, v3.i256) {
     block0:
         v5.i256 = call %address_h257056268eac7027_zero;
         v6.i1 = call %ne__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2 v0 v5;
@@ -585,7 +586,7 @@ func private %approve__0_1_StorPtr_TokenStore_0__1___Evm_hef0af3106e109414__4094
         return;
 }
 
-func private %spend_allowance__0_1_StorPtr_TokenStore_0__1____d3adca980e228028(v0.i256, v1.i256, v2.i256, v3.i256) {
+func private %spend_allowance_eff0_stor__0_1_TokenStore_0__1___2d6f91026cd3e364(v0.i256, v1.i256, v2.i256, v3.i256) {
     block0:
         v4.objref<@__fe_obj_tuple_8> = obj.alloc @__fe_obj_tuple_8;
         v6.objref<i256> = obj.proj v4 0.i256;
@@ -639,7 +640,7 @@ func private %accesscontrol____h4c85da5bbb505ade_require_stor__3_Evm_hef0af3106e
         return;
 }
 
-func private %burn__0_1_StorPtr_TokenStore_0__1___Evm_hef0af3106e109414__4094b60766812ceb(v0.i256, v1.i256, v2.i256) {
+func private %burn_eff0_stor__0_1_TokenStore_0__1__Evm_hef0af3106e109414__23ea53994a8fbaec(v0.i256, v1.i256, v2.i256) {
     block0:
         v4.i256 = call %address_h257056268eac7027_zero;
         v5.i1 = call %ne__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2 v0 v4;

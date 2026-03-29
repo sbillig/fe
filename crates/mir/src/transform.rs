@@ -3692,6 +3692,7 @@ fn smoke() {}
     ) -> (
         crate::MirModule<'db>,
         LocalId,
+        LocalId,
         RuntimeShape<'db>,
         Vec<(MirProjectionPath<'db>, PointerInfo<'db>)>,
     ) {
@@ -3809,6 +3810,7 @@ fn smoke() {}
         (
             module,
             source_local,
+            dest_local,
             expected_source_shape,
             expected_source_infos,
         )
@@ -3817,7 +3819,7 @@ fn smoke() {}
     #[test]
     fn source_local_pointer_infos_do_not_absorb_rebound_dest_infos() {
         let mut db = DriverDataBase::default();
-        let (module, source_local, _, expected_source_infos) =
+        let (module, source_local, _, _, expected_source_infos) =
             normalize_rebound_handle_copy_probe(&mut db, true, false);
         let smoke = module
             .functions
@@ -3835,7 +3837,7 @@ fn smoke() {}
     #[test]
     fn source_local_runtime_shape_does_not_change_after_dest_rebind() {
         let mut db = DriverDataBase::default();
-        let (module, source_local, expected_source_shape, _) =
+        let (module, source_local, _, expected_source_shape, _) =
             normalize_rebound_handle_copy_probe(&mut db, true, false);
         let smoke = module
             .functions
@@ -3853,7 +3855,7 @@ fn smoke() {}
     #[test]
     fn less_informed_source_local_backfills_same_site_dest_infos_only() {
         let mut db = DriverDataBase::default();
-        let (module, source_local, _, _) =
+        let (module, source_local, _, _, _) =
             normalize_rebound_handle_copy_probe(&mut db, false, true);
         let smoke = module
             .functions
@@ -3881,7 +3883,7 @@ fn smoke() {}
     #[test]
     fn less_informed_source_runtime_shape_stays_stable_after_dest_rebind() {
         let mut db = DriverDataBase::default();
-        let (module, source_local, expected_source_shape, _) =
+        let (module, source_local, _, expected_source_shape, _) =
             normalize_rebound_handle_copy_probe(&mut db, false, true);
         let smoke = module
             .functions
@@ -3893,6 +3895,39 @@ fn smoke() {}
         assert_eq!(
             source.runtime_shape, expected_source_shape,
             "copying a less-informed `source` into a pre-specialized `dest` must not let later `dest` assignments reclassify `source`",
+        );
+    }
+
+    #[test]
+    fn incompatible_whole_local_rebinds_do_not_partially_merge_dest_layout_facts() {
+        let mut db = DriverDataBase::default();
+        let (module, _, dest_local, _, _) =
+            normalize_rebound_handle_copy_probe(&mut db, true, false);
+        let smoke = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "smoke")
+            .expect("expected smoke helper");
+        let dest = smoke.body.local(dest_local);
+
+        assert!(
+            matches!(
+                dest.pointer_leaf_infos.as_slice(),
+                [(
+                    path,
+                    PointerInfo {
+                        address_space: AddressSpaceKind::Memory,
+                        target_ty: Some(_),
+                    },
+                )] if path.is_empty()
+            ),
+            "incompatible whole-local rebinds should not partially rewrite the assignee leaf metadata, got {:?}",
+            dest.pointer_leaf_infos,
+        );
+        assert!(
+            matches!(dest.runtime_shape, RuntimeShape::MemoryPtr { .. }),
+            "incompatible whole-local rebinds should not partially rewrite the assignee runtime shape, got {:?}",
+            dest.runtime_shape,
         );
     }
 

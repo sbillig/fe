@@ -2881,6 +2881,37 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     error_code,
                 }
             }
+            Self::IncompatibleBorrowProviders {
+                primary,
+                previous,
+                previous_provider,
+                current_provider,
+            } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "incompatible borrow providers".to_string(),
+                sub_diagnostics: vec![
+                    SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "this borrow is {}-backed",
+                            current_provider.pretty()
+                        ),
+                        span: primary.resolve(db),
+                    },
+                    SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!(
+                            "the previous value here is {}-backed",
+                            previous_provider.pretty()
+                        ),
+                        span: previous.resolve(db),
+                    },
+                ],
+                notes: vec![
+                    "Fe cannot assign or join `mut`/`ref` values backed by different providers into one value".to_string(),
+                ],
+                error_code,
+            },
             Self::TypeMustBeKnown(span) => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "type must be known".to_string(),
