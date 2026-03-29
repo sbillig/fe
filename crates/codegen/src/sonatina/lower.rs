@@ -83,6 +83,10 @@ impl<'a, 'db> TypeLowerer<'a, 'db> {
             name_counter,
         }
     }
+
+    pub(super) fn is_obj_ref(&self, ty: Type) -> bool {
+        ty.is_obj_ref(&self.builder.ctx)
+    }
 }
 
 /// Lower a MIR instruction.
@@ -148,19 +152,30 @@ pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     Ok(())
 }
 
-fn local_has_object_ref_root<C: sonatina_ir::func_cursor::FuncCursor>(
+fn local_runtime_value_is_object_ref<C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &LowerCtx<'_, '_, C>,
     local: mir::LocalId,
 ) -> bool {
     ctx.local_runtime_types[local.index()].is_obj_ref(&ctx.fb.module_builder.ctx)
 }
 
-fn local_place_root_object_target_ty<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+fn local_place_root_layout<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &LowerCtx<'_, 'db, C>,
     local: mir::LocalId,
-) -> Option<TyId<'db>> {
-    let local_ty = ctx.body.locals.get(local.index())?.ty;
-    mir::repr::memory_scalar_object_ref_target_ty(ctx.db, ctx.core, local_ty)
+) -> Option<mir::ir::LocalPlaceRootLayout<'db>> {
+    ctx.body
+        .locals
+        .get(local.index())
+        .map(|local| local.place_root_layout)
+}
+
+fn materialized_local_place_root<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &LowerCtx<'_, 'db, C>,
+    local: mir::LocalId,
+) -> Option<LocalPlaceRoot> {
+    (!local_runtime_value_is_object_ref(ctx, local))
+        .then(|| ctx.local_place_roots.get(&local).copied())
+        .flatten()
 }
 
 fn store_runtime_value_to_local_place_root<'db, C: sonatina_ir::func_cursor::FuncCursor>(
@@ -207,9 +222,7 @@ fn write_local_result<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     let value = coerce_value_to_runtime_ty(ctx, value, dest_ty, expected_runtime_ty);
     ctx.fb.def_var(dest_var, value);
     ctx.initialized_locals.insert(dest_local);
-    if !local_has_object_ref_root(ctx, dest_local)
-        && let Some(place_root) = ctx.local_place_roots.get(&dest_local).copied()
-    {
+    if let Some(place_root) = materialized_local_place_root(ctx, dest_local) {
         store_runtime_value_to_local_place_root(ctx, dest_local, place_root, value)?;
     }
     Ok(())
@@ -219,7 +232,10 @@ fn allocate_local_place_root_slot<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
     local: mir::LocalId,
 ) -> Result<ValueId, LowerError> {
-    if local_has_object_ref_root(ctx, local) {
+    if matches!(
+        local_place_root_layout(ctx, local),
+        Some(mir::ir::LocalPlaceRootLayout::ObjectRoot { .. })
+    ) {
         return Err(LowerError::Internal(format!(
             "object-backed local {local:?} must not use a synthetic place-root slot"
         )));
@@ -323,12 +339,32 @@ fn ensure_local_place_root_object<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         .get(local.index())
         .ok_or_else(|| LowerError::Internal(format!("unknown local: {local:?}")))?
         .ty;
-    let Some(target_ty) = local_place_root_object_target_ty(ctx, local) else {
+    let Some(target_ty) =
+        local_place_root_layout(ctx, local).and_then(|layout| layout.object_target_ty())
+    else {
         return Err(LowerError::Internal(format!(
             "local {local:?} `{}` does not support an object-backed place root",
             local_ty.pretty_print(ctx.db),
         )));
     };
+    let current = if ctx.initialized_locals.contains(&local) {
+        let var = ctx.local_vars.get(&local).copied().ok_or_else(|| {
+            LowerError::Internal(format!("missing SSA variable for local {local:?}"))
+        })?;
+        Some(ctx.fb.use_var(var))
+    } else {
+        None
+    };
+    if let Some(current) = current
+        && ctx
+            .fb
+            .type_of(current)
+            .is_obj_ref(&ctx.fb.module_builder.ctx)
+    {
+        ctx.local_place_roots
+            .insert(local, LocalPlaceRoot::ObjectRoot(current));
+        return Ok(current);
+    }
     let size_bytes = layout::ty_memory_size_or_word_in(ctx.db, ctx.target_layout, target_ty)
         .ok_or_else(|| {
             LowerError::Unsupported(format!(
@@ -341,11 +377,7 @@ fn ensure_local_place_root_object<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         .fe_object_ty_to_sonatina_with_pointer_leaf_infos(target_ty, &[])
         .unwrap_or_else(|| ctx.fb.declare_array_type(Type::I8, size_bytes));
     let object_ref = emit_obj_alloc_ref(ctx.fb, object_ty, ctx.is);
-    if ctx.initialized_locals.contains(&local) {
-        let var = ctx.local_vars.get(&local).copied().ok_or_else(|| {
-            LowerError::Internal(format!("missing SSA variable for local {local:?}"))
-        })?;
-        let current = ctx.fb.use_var(var);
+    if let Some(current) = current {
         store_runtime_value_to_local_place_root(
             ctx,
             local,
@@ -1059,9 +1091,7 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             }
         },
         ValueOrigin::Local(local_id) => {
-            if !local_has_object_ref_root(ctx, *local_id)
-                && let Some(place_root) = ctx.local_place_roots.get(local_id).copied()
-            {
+            if let Some(place_root) = materialized_local_place_root(ctx, *local_id) {
                 return load_runtime_value_from_local_place_root(
                     ctx, *local_id, place_root, result_ty,
                 );
@@ -1072,23 +1102,23 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             Ok(ctx.fb.use_var(var))
         }
         ValueOrigin::PlaceRoot(local_id) => {
-            if local_has_object_ref_root(ctx, *local_id) {
-                let var = ctx.local_vars.get(local_id).copied().ok_or_else(|| {
-                    LowerError::Internal(format!(
-                        "SSA variable not found for object local {local_id:?}"
-                    ))
-                })?;
-                return Ok(ctx.fb.use_var(var));
+            match local_place_root_layout(ctx, *local_id).ok_or_else(|| {
+                LowerError::Internal(format!(
+                    "missing local metadata for place root {local_id:?}"
+                ))
+            })? {
+                mir::ir::LocalPlaceRootLayout::ObjectRoot { .. } => {
+                    let object_ref = ensure_local_place_root_object(ctx, *local_id)?;
+                    Ok(coerce_value_to_type(ctx, object_ref, result_ty))
+                }
+                mir::ir::LocalPlaceRootLayout::MemorySlot => {
+                    let slot_ptr = ensure_local_place_root_slot(ctx, *local_id)?;
+                    Ok(coerce_value_to_type(ctx, slot_ptr, result_ty))
+                }
+                mir::ir::LocalPlaceRootLayout::Direct => Err(LowerError::Internal(format!(
+                    "direct local {local_id:?} reached Sonatina place-root lowering without explicit runtime owner layout"
+                ))),
             }
-            if matches!(
-                value_data.runtime_shape,
-                mir::ir::RuntimeShape::ObjectRef { .. }
-            ) {
-                let object_ref = ensure_local_place_root_object(ctx, *local_id)?;
-                return Ok(coerce_value_to_type(ctx, object_ref, result_ty));
-            }
-            let slot_ptr = ensure_local_place_root_slot(ctx, *local_id)?;
-            Ok(coerce_value_to_type(ctx, slot_ptr, result_ty))
         }
         ValueOrigin::Unit => Ok(types::zero_value(ctx.fb, result_ty)),
         ValueOrigin::Unary { op, inner } => {
@@ -1970,48 +2000,7 @@ fn normalize_sonatina_type_input<'db>(
 fn normalize_pointer_leaf_infos<'db>(
     pointer_leaf_infos: &[(mir::MirProjectionPath<'db>, PointerInfo<'db>)],
 ) -> Vec<(mir::MirProjectionPath<'db>, PointerInfo<'db>)> {
-    let mut merged: FxHashMap<mir::MirProjectionPath<'db>, PointerInfo<'db>> = FxHashMap::default();
-    for (path, info) in pointer_leaf_infos.iter().cloned() {
-        let Some(existing) = merged.get(&path).copied() else {
-            merged.insert(path, info);
-            continue;
-        };
-        if existing == info {
-            continue;
-        }
-        let merged_address_space = match (existing.address_space, info.address_space) {
-            (lhs, rhs) if lhs == rhs => lhs,
-            (AddressSpaceKind::Memory, rhs) => rhs,
-            (lhs, AddressSpaceKind::Memory) => lhs,
-            _ => {
-                panic!(
-                    "pointer leaf info conflicts should be resolved before Sonatina lowering: {:?} vs {:?} at {path:?}",
-                    existing, info
-                )
-            }
-        };
-        let merged_target_ty = match (existing.target_ty, info.target_ty) {
-            (lhs, rhs) if lhs == rhs => lhs,
-            (Some(lhs), None) => Some(lhs),
-            (None, Some(rhs)) => Some(rhs),
-            _ => {
-                panic!(
-                    "pointer leaf info conflicts should be resolved before Sonatina lowering: {:?} vs {:?} at {path:?}",
-                    existing, info
-                )
-            }
-        };
-        merged.insert(
-            path,
-            PointerInfo {
-                address_space: merged_address_space,
-                target_ty: merged_target_ty,
-            },
-        );
-    }
-    let mut out: Vec<_> = merged.into_iter().collect();
-    out.sort_by_cached_key(|(path, _)| format!("{path:?}"));
-    out
+    mir::repr::normalize_pointer_leaf_infos(pointer_leaf_infos.to_vec())
 }
 
 fn projection_strip_prefix<'db>(
@@ -2075,7 +2064,7 @@ fn array_elem_pointer_leaf_infos<'db>(
         let Some(first_proj) = path.iter().next() else {
             continue;
         };
-        if !matches!(first_proj, Projection::Index(IndexSource::Constant(_))) {
+        if !matches!(first_proj, Projection::Index(_)) {
             continue;
         }
         let mut suffix = mir::MirProjectionPath::new();
@@ -3674,6 +3663,23 @@ fn terminal_runtime_value<'db>(terminal: LoweredPlaceTerminal<'db>) -> ValueId {
     terminal.runtime_addr()
 }
 
+fn place_before_deref_segment<'db>(
+    place: &Place<'db>,
+    segments: &[ResolvedPlaceSegment<'db>],
+    segment_idx: usize,
+) -> Place<'db> {
+    let mut projection = mir::MirProjectionPath::new();
+    for segment in segments.iter().take(segment_idx) {
+        if segment.start_kind.is_some() {
+            projection.push(Projection::Deref);
+        }
+        for step in &segment.projections {
+            projection.push(step.projection.clone());
+        }
+    }
+    Place::new(place.base, projection)
+}
+
 fn lower_place_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
     place: &Place<'db>,
@@ -3681,9 +3687,7 @@ fn lower_place_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     let resolved = resolve_place(ctx, place)?;
     let root_runtime = match ctx.body.value(place.base).origin {
         mir::ValueOrigin::Local(local) => {
-            if !local_has_object_ref_root(ctx, local)
-                && let Some(place_root) = ctx.local_place_roots.get(&local).copied()
-            {
+            if let Some(place_root) = materialized_local_place_root(ctx, local) {
                 match place_root {
                     LocalPlaceRoot::MemorySlot(slot_ptr) => slot_ptr,
                     LocalPlaceRoot::ObjectRoot(object_ref) => object_ref,
@@ -3710,7 +3714,8 @@ fn lower_place_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             (true, Some(mir::repr::DerefStepKind::LoadLocationValue), None) => {
                 let base_terminal =
                     lower_place_state_terminal(ctx, place, segment.before, root_runtime)?;
-                let runtime_ty = deref_boundary_runtime_ty(ctx, place, segment.before)?;
+                let boundary_place = place_before_deref_segment(place, &resolved.segments, idx);
+                let runtime_ty = deref_boundary_runtime_ty(ctx, &boundary_place, segment.before)?;
                 load_from_terminal(
                     ctx,
                     base_terminal,
@@ -3724,7 +3729,8 @@ fn lower_place_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 terminal_runtime_value(terminal)
             }
             (false, Some(mir::repr::DerefStepKind::LoadLocationValue), Some(terminal)) => {
-                let runtime_ty = deref_boundary_runtime_ty(ctx, place, segment.before)?;
+                let boundary_place = place_before_deref_segment(place, &resolved.segments, idx);
+                let runtime_ty = deref_boundary_runtime_ty(ctx, &boundary_place, segment.before)?;
                 load_from_terminal(ctx, terminal, place, segment.before.ty, runtime_ty, false)?
             }
             (false, None, Some(_))
@@ -3763,12 +3769,16 @@ fn deref_boundary_runtime_ty<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             ))
         })?
         .address_space;
-    Ok(ctx.runtime_type_for_shape(mir::repr::runtime_shape_for_ty(
+    let shape = mir::repr::runtime_shape_for_ty(ctx.db, ctx.core, state.ty, address_space);
+    let pointer_leaf_infos = mir::repr::pointer_leaf_infos_for_place(
         ctx.db,
         ctx.core,
+        &ctx.body.values,
+        &ctx.body.locals,
+        place,
         state.ty,
-        address_space,
-    )))
+    );
+    Ok(ctx.runtime_type_for_ty_and_shape(state.ty, shape, &pointer_leaf_infos))
 }
 
 /// Computes the address for a place by walking the projection path.
@@ -4563,12 +4573,16 @@ fn deep_copy_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     if let Some(info) =
         mir::repr::pointer_info_for_ty(ctx.db, ctx.core, value_ty, AddressSpaceKind::Memory)
     {
-        let runtime_ty = ctx.runtime_type_for_shape(mir::repr::runtime_shape_for_ty(
+        let shape = mir::repr::runtime_shape_for_ty(ctx.db, ctx.core, value_ty, info.address_space);
+        let pointer_leaf_infos = mir::repr::pointer_leaf_infos_for_place(
             ctx.db,
             ctx.core,
+            &ctx.body.values,
+            &ctx.body.locals,
+            src_place,
             value_ty,
-            info.address_space,
-        ));
+        );
+        let runtime_ty = ctx.runtime_type_for_ty_and_shape(value_ty, shape, &pointer_leaf_infos);
         let loaded = load_place_runtime(ctx, src_place, value_ty, runtime_ty)?;
         return store_runtime_value_to_place(ctx, dst_place, value_ty, loaded);
     }
@@ -4664,7 +4678,7 @@ fn deep_copy_enum_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 .unwrap_or(mir::ir::RuntimeShape::Word(
                     mir::repr::runtime_word_kind_for_ty(ctx.db, discr_ty),
                 ));
-            ctx.runtime_type_for_shape(discr_shape)
+            ctx.runtime_type_for_ty_and_shape(discr_ty, discr_shape, &[])
         });
     let discr = load_place_runtime(ctx, &src_discr_place, discr_ty, discr_runtime_ty)?;
 
@@ -4833,7 +4847,7 @@ fn lower_const_aggregate<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ty: TyId<'db>,
     data: &[u8],
 ) -> Result<ValueId, LowerError> {
-    if local_has_object_ref_root(ctx, dest) {
+    if local_runtime_value_is_object_ref(ctx, dest) {
         let size_bytes = layout::ty_memory_size_or_word_in(ctx.db, ctx.target_layout, ty)
             .ok_or_else(|| {
                 LowerError::Unsupported(format!(
@@ -5634,6 +5648,48 @@ mod tests {
                 address_space: AddressSpaceKind::Storage,
                 target_ty: None,
             }),
+        );
+    }
+
+    #[test]
+    fn array_elem_pointer_leaf_infos_preserve_dynamic_index_entries() {
+        let pointer_leaf_infos = vec![
+            (
+                mir::MirProjectionPath::from_projection(Projection::Index(IndexSource::Constant(
+                    0,
+                ))),
+                PointerInfo {
+                    address_space: AddressSpaceKind::Memory,
+                    target_ty: None,
+                },
+            ),
+            (
+                mir::MirProjectionPath::from_projection(Projection::Index(IndexSource::Dynamic(
+                    mir::ValueId(7),
+                ))),
+                PointerInfo {
+                    address_space: AddressSpaceKind::Storage,
+                    target_ty: None,
+                },
+            ),
+            (
+                mir::MirProjectionPath::from_projection(Projection::Field(0)),
+                PointerInfo {
+                    address_space: AddressSpaceKind::Calldata,
+                    target_ty: None,
+                },
+            ),
+        ];
+
+        assert_eq!(
+            array_elem_pointer_leaf_infos(&pointer_leaf_infos),
+            vec![(
+                mir::MirProjectionPath::new(),
+                PointerInfo {
+                    address_space: AddressSpaceKind::Storage,
+                    target_ty: None,
+                },
+            )],
         );
     }
 }

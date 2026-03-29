@@ -255,6 +255,7 @@ mod tests {
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Calldata,
             pointer_leaf_infos: Vec::new(),
+            place_root_layout: crate::ir::LocalPlaceRootLayout::Direct,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let base_value = func.body.alloc_value(ValueData {

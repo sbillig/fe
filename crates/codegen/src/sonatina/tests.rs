@@ -992,6 +992,55 @@ fn smoke() {
     }
 
     #[test]
+    fn joined_scalar_ref_handles_that_spill_lower_without_panic() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_joined_scalar_ref_handles_spill_test.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+struct Data {
+    x: u256,
+    y: u256,
+}
+
+fn choose(flag: bool, d: ref Data) -> ref u256 {
+    if flag {
+        ref d.x
+    } else {
+        ref d.y
+    }
+}
+
+#[test]
+fn smoke() {
+    let d = Data { x: 10, y: 20 }
+    let picked = choose(true, ref d)
+    assert(picked == d.x)
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let output = emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O0,
+            SonatinaTestOptions::default(),
+            None,
+        )
+        .expect("joined scalar ref handles that spill should lower without panicking");
+        assert_eq!(output.tests.len(), 1, "expected one runnable smoke test");
+    }
+
+    #[test]
     fn wrapped_test_and_code_region_roots_are_not_forced_as_section_includes() {
         let mut db = DriverDataBase::default();
         let file_url = temp_fixture_url("sonatina_test_object_include_roots_test.fe");

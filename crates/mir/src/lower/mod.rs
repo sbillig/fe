@@ -1014,6 +1014,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             source: crate::ir::SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos,
+            place_root_layout: crate::repr::declared_local_place_root_layout(
+                self.db,
+                &self.core,
+                ty,
+                AddressSpaceKind::Memory,
+            ),
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         self.builder.body.param_locals.push(local);
@@ -1037,6 +1043,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             source: crate::ir::SourceInfoId::SYNTHETIC,
             address_space,
             pointer_leaf_infos: Vec::new(),
+            place_root_layout: crate::repr::declared_local_place_root_layout(
+                self.db,
+                &self.core,
+                ty,
+                address_space,
+            ),
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         self.builder.body.effect_param_locals.push(local);
@@ -1480,6 +1492,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             source: crate::ir::SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos,
+            place_root_layout: crate::repr::declared_local_place_root_layout(
+                self.db,
+                &self.core,
+                ty,
+                AddressSpaceKind::Memory,
+            ),
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         })
     }
@@ -2254,6 +2272,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             if let Some(address_space) = address_space {
                 self.builder.body.locals[dest.index()].address_space = address_space;
             }
+            if let Rvalue::Alloc { address_space } = rvalue {
+                let ty = self.builder.body.local(dest).ty;
+                self.builder.body.locals[dest.index()].place_root_layout =
+                    crate::repr::materialized_local_place_root_layout(
+                        self.db,
+                        &self.core,
+                        ty,
+                        address_space,
+                        crate::ir::ObjectRootSource::AllocatedMemory,
+                    );
+            }
         }
 
         let source = stmt
@@ -2743,6 +2772,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 source,
                 address_space,
                 pointer_leaf_infos,
+                place_root_layout: crate::repr::declared_local_place_root_layout(
+                    self.db,
+                    &self.core,
+                    ty,
+                    address_space,
+                ),
                 runtime_shape: crate::ir::RuntimeShape::Unresolved,
             });
             self.builder.body.param_locals.push(local);
@@ -2794,6 +2829,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 source: effects_source,
                 address_space,
                 pointer_leaf_infos,
+                place_root_layout: crate::repr::declared_local_place_root_layout(
+                    self.db,
+                    &self.core,
+                    self.u256_ty(),
+                    address_space,
+                ),
                 runtime_shape: crate::ir::RuntimeShape::Unresolved,
             });
             self.builder.body.effect_param_locals.push(local);
@@ -2856,6 +2897,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             source,
             address_space,
             pointer_leaf_infos,
+            place_root_layout: crate::repr::declared_local_place_root_layout(
+                self.db,
+                &self.core,
+                ty,
+                address_space,
+            ),
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         if needs_effect_param_local {

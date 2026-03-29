@@ -6,8 +6,8 @@ use hir::projection::Projection;
 use crate::core_lib::CoreLib;
 use crate::ir::{
     AddressSpaceKind, BasicBlock, LocalData, LocalId, MirBackend, MirBody, MirInst,
-    MirProjectionPath, MirStage, Place, Rvalue, SourceInfoId, ValueData, ValueId, ValueOrigin,
-    ValueRepr,
+    MirProjectionPath, MirStage, ObjectRootSource, Place, Rvalue, SourceInfoId, ValueData, ValueId,
+    ValueOrigin, ValueRepr,
 };
 use crate::{layout, repr};
 
@@ -143,6 +143,15 @@ fn repr_for_plain_ty<'db>(
         }
         repr::ReprKind::Ref => ValueRepr::Ref(fallback_space),
     }
+}
+
+fn materialized_place_root_layout<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    local: &LocalData<'db>,
+    source: ObjectRootSource,
+) -> crate::ir::LocalPlaceRootLayout<'db> {
+    repr::materialized_local_place_root_layout(db, core, local.ty, local.address_space, source)
 }
 
 fn place_base_spill_owner<'db>(
@@ -916,6 +925,33 @@ fn rewrite_place_like_origin<'db>(
     ctx.rewrite_place_like_origin(place, desired, target_ty, as_move_out)
 }
 
+fn seed_live_place_root_layouts<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    body: &mut MirBody<'db>,
+) {
+    for value in &body.values {
+        let ValueOrigin::PlaceRoot(local) = value.origin else {
+            continue;
+        };
+        let Some(local_data) = body.locals.get_mut(local.index()) else {
+            continue;
+        };
+        if !matches!(
+            local_data.place_root_layout,
+            crate::ir::LocalPlaceRootLayout::Direct
+        ) {
+            continue;
+        }
+        local_data.place_root_layout = materialized_place_root_layout(
+            db,
+            core,
+            local_data,
+            ObjectRootSource::MaterializedScalarBorrow,
+        );
+    }
+}
+
 fn recompute_value_pointer_infos<'db>(
     db: &'db dyn HirAnalysisDb,
     core: &CoreLib<'db>,
@@ -1139,6 +1175,7 @@ pub(crate) fn lower_capability_to_repr<'db>(
         }
     }
 
+    seed_live_place_root_layouts(db, core, body);
     recompute_value_pointer_infos(db, core, body);
     body.stage = MirStage::Repr;
 }
@@ -1398,6 +1435,12 @@ pub(crate) fn prepare_body_for_evm_yul_codegen<'db>(
                     source: SourceInfoId::SYNTHETIC,
                     address_space: AddressSpaceKind::Memory,
                     pointer_leaf_infos: owner_data.pointer_leaf_infos.clone(),
+                    place_root_layout: materialized_place_root_layout(
+                        db,
+                        core,
+                        owner_data,
+                        ObjectRootSource::SpillOf(owner),
+                    ),
                     runtime_shape: crate::ir::RuntimeShape::Unresolved,
                 },
             );
@@ -1503,6 +1546,7 @@ pub(crate) fn prepare_body_for_evm_yul_codegen<'db>(
             ctx.rewrite_block(block);
         }
     }
+    seed_live_place_root_layouts(db, core, body);
 
     let mut spill_prelude = Vec::new();
     for (owner, spill) in body.spill_slots.clone() {
@@ -1611,6 +1655,7 @@ mod tests {
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos: Vec::new(),
+            place_root_layout: crate::ir::LocalPlaceRootLayout::Direct,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let base = body.alloc_value(ValueData {
@@ -1670,6 +1715,7 @@ mod tests {
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos: Vec::new(),
+            place_root_layout: crate::ir::LocalPlaceRootLayout::Direct,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let root = body.alloc_value(ValueData {
@@ -1802,6 +1848,7 @@ pub fn field_ptr_origin_preserves_address_space(x: mut u256) {}
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Storage,
             pointer_leaf_infos: Vec::new(),
+            place_root_layout: crate::ir::LocalPlaceRootLayout::Direct,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let base = body.alloc_value(ValueData {
@@ -2145,6 +2192,7 @@ pub fn transparent_cast_over_raw_pointer_handle_does_not_spill(x: mut Pair) {}
                     target_ty: Some(pair_ty),
                 },
             )],
+            place_root_layout: crate::ir::LocalPlaceRootLayout::Direct,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         body.effect_param_locals.push(raw_local);
@@ -2252,6 +2300,7 @@ pub fn transparent_cast_over_raw_pointer_handle_does_not_spill(x: mut Pair) {}
                     target_ty: None,
                 },
             )],
+            place_root_layout: crate::ir::LocalPlaceRootLayout::Direct,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let base = body.alloc_value(ValueData {
@@ -2321,6 +2370,7 @@ pub fn lower_capability_to_repr_recomputes_pointer_info_after_origin_rewrite(x: 
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos: Vec::new(),
+            place_root_layout: crate::ir::LocalPlaceRootLayout::Direct,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let root = body.alloc_value(ValueData {

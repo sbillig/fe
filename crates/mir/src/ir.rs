@@ -714,8 +714,37 @@ pub struct LocalData<'db> {
     /// that path. Aggregate locals keep only nested pointer leaves here; root
     /// by-reference storage stays in `address_space`.
     pub pointer_leaf_infos: Vec<(MirProjectionPath<'db>, PointerInfo<'db>)>,
+    /// Explicit runtime-owner layout for place roots materialized from this local.
+    pub place_root_layout: LocalPlaceRootLayout<'db>,
     /// Backend-neutral runtime shape for this local after MIR normalization.
     pub runtime_shape: RuntimeShape<'db>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ObjectRootSource {
+    DeclaredByRefAggregate,
+    AllocatedMemory,
+    MaterializedScalarBorrow,
+    SpillOf(LocalId),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LocalPlaceRootLayout<'db> {
+    Direct,
+    MemorySlot,
+    ObjectRoot {
+        target_ty: TyId<'db>,
+        source: ObjectRootSource,
+    },
+}
+
+impl<'db> LocalPlaceRootLayout<'db> {
+    pub fn object_target_ty(self) -> Option<TyId<'db>> {
+        match self {
+            Self::ObjectRoot { target_ty, .. } => Some(target_ty),
+            Self::Direct | Self::MemorySlot => None,
+        }
+    }
 }
 
 /// MIR projection using MIR value IDs for dynamic indices.
@@ -1323,6 +1352,7 @@ mod tests {
                     target_ty: Some(ty),
                 },
             )],
+            place_root_layout: LocalPlaceRootLayout::Direct,
             runtime_shape: RuntimeShape::Unresolved,
         }];
 
@@ -1358,6 +1388,7 @@ mod tests {
                     target_ty: Some(ty),
                 },
             )],
+            place_root_layout: LocalPlaceRootLayout::Direct,
             runtime_shape: RuntimeShape::Unresolved,
         }];
 
@@ -1385,6 +1416,7 @@ mod tests {
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos: Vec::new(),
+            place_root_layout: LocalPlaceRootLayout::Direct,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         }];
         let values = vec![ValueData {

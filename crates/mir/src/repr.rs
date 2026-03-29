@@ -28,8 +28,9 @@ use hir::projection::{Projection, ProjectionPath};
 
 use crate::core_lib::CoreLib;
 use crate::ir::{
-    AddressSpaceKind, LocalData, MirProjection, Place, PointerInfo, RuntimeShape, RuntimeWordKind,
-    ValueData, ValueId, try_value_pointer_info_in,
+    AddressSpaceKind, LocalData, LocalPlaceRootLayout, MirProjection, ObjectRootSource, Place,
+    PointerInfo, RuntimeShape, RuntimeWordKind, ValueData, ValueId, lookup_local_pointer_leaf_info,
+    resolve_local_projection_root, try_value_pointer_info_in,
 };
 use crate::layout;
 use common::indexmap::IndexMap;
@@ -301,6 +302,59 @@ pub fn memory_scalar_handle_object_ref_target_ty<'db>(
     matches!(capability, CapabilityKind::Mut | CapabilityKind::Ref)
         .then(|| memory_scalar_object_ref_target_ty(db, core, inner))
         .flatten()
+}
+
+pub fn declared_local_place_root_layout<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    ty: TyId<'db>,
+    address_space: AddressSpaceKind,
+) -> LocalPlaceRootLayout<'db> {
+    if address_space != AddressSpaceKind::Memory {
+        return LocalPlaceRootLayout::Direct;
+    }
+
+    runtime_object_ref_target_ty(db, core, ty, address_space)
+        .map(|target_ty| LocalPlaceRootLayout::ObjectRoot {
+            target_ty,
+            source: ObjectRootSource::DeclaredByRefAggregate,
+        })
+        .unwrap_or(LocalPlaceRootLayout::Direct)
+}
+
+pub fn materialized_local_place_root_layout<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    ty: TyId<'db>,
+    address_space: AddressSpaceKind,
+    source: ObjectRootSource,
+) -> LocalPlaceRootLayout<'db> {
+    if address_space != AddressSpaceKind::Memory {
+        return LocalPlaceRootLayout::Direct;
+    }
+
+    runtime_object_ref_target_ty(db, core, ty, address_space)
+        .or_else(|| memory_scalar_object_ref_target_ty(db, core, ty))
+        .map(|target_ty| LocalPlaceRootLayout::ObjectRoot { target_ty, source })
+        .unwrap_or(LocalPlaceRootLayout::MemorySlot)
+}
+
+pub fn place_root_runtime_shape_for_local<'db>(
+    local: &LocalData<'db>,
+) -> Option<RuntimeShape<'db>> {
+    if local.address_space != AddressSpaceKind::Memory {
+        return None;
+    }
+
+    match local.place_root_layout {
+        LocalPlaceRootLayout::Direct => None,
+        LocalPlaceRootLayout::MemorySlot => Some(RuntimeShape::MemoryPtr {
+            target_ty: Some(local.ty),
+        }),
+        LocalPlaceRootLayout::ObjectRoot { target_ty, .. } => {
+            Some(RuntimeShape::ObjectRef { target_ty })
+        }
+    }
 }
 
 pub fn enum_is_payload_free<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
@@ -838,7 +892,11 @@ pub fn place_yields_location_value<'db>(
     Some(false)
 }
 
-fn runtime_ty_matches<'db>(db: &'db dyn HirAnalysisDb, lhs: TyId<'db>, rhs: TyId<'db>) -> bool {
+pub(crate) fn runtime_ty_matches<'db>(
+    db: &'db dyn HirAnalysisDb,
+    lhs: TyId<'db>,
+    rhs: TyId<'db>,
+) -> bool {
     let lhs = peel_transparent_newtypes(db, lhs);
     let rhs = peel_transparent_newtypes(db, rhs);
     lhs == rhs || lhs.pretty_print(db) == rhs.pretty_print(db)
@@ -1122,6 +1180,13 @@ pub fn runtime_shape_for_local<'db>(
     core: &CoreLib<'db>,
     local: &LocalData<'db>,
 ) -> RuntimeShape<'db> {
+    if let LocalPlaceRootLayout::ObjectRoot { target_ty, source } = local.place_root_layout
+        && local.address_space == AddressSpaceKind::Memory
+        && !matches!(source, ObjectRootSource::MaterializedScalarBorrow)
+    {
+        return RuntimeShape::ObjectRef { target_ty };
+    }
+
     let type_shape = runtime_shape_for_ty(db, core, local.ty, local.address_space);
     if let Some((_, info)) = local
         .pointer_leaf_infos
@@ -1143,6 +1208,13 @@ fn try_normalize_pointer_leaf_infos<'db>(
     crate::capability_space::PointerInfoConflict<'db>,
 > {
     crate::capability_space::normalize_pointer_leaf_info_entries(infos)
+}
+
+pub fn normalize_pointer_leaf_infos<'db>(
+    infos: Vec<(crate::MirProjectionPath<'db>, PointerInfo<'db>)>,
+) -> Vec<(crate::MirProjectionPath<'db>, PointerInfo<'db>)> {
+    try_normalize_pointer_leaf_infos(infos)
+        .expect("MIR pointer leaf info conflicts should be resolved before runtime layout queries")
 }
 
 pub(crate) fn try_pointer_leaf_infos_for_projection_from_entries<'db>(
@@ -1416,31 +1488,44 @@ pub fn pointer_leaf_infos_for_value<'db>(
         .expect("MIR pointer leaf info conflicts should be resolved before runtime layout queries")
 }
 
-fn value_inherits_object_root_runtime_shape<'db>(
-    db: &'db dyn HirAnalysisDb,
-    core: &CoreLib<'db>,
+fn value_place_root_object_target_ty<'db>(
     values: &[ValueData<'db>],
     locals: &[LocalData<'db>],
-    value: ValueId,
-) -> bool {
-    matches!(
-        runtime_shape_for_value(db, core, values, locals, value),
-        Some(RuntimeShape::ObjectRef { .. })
-    )
+    mut value: ValueId,
+) -> Option<TyId<'db>> {
+    loop {
+        match &values.get(value.index())?.origin {
+            crate::ir::ValueOrigin::Local(local) | crate::ir::ValueOrigin::PlaceRoot(local) => {
+                let local = locals.get(local.index())?;
+                return (local.address_space == AddressSpaceKind::Memory)
+                    .then(|| {
+                        local
+                            .place_root_layout
+                            .object_target_ty()
+                            .or(match local.runtime_shape {
+                                RuntimeShape::ObjectRef { target_ty } => Some(target_ty),
+                                _ => None,
+                            })
+                    })
+                    .flatten();
+            }
+            crate::ir::ValueOrigin::TransparentCast { value: inner } => value = *inner,
+            crate::ir::ValueOrigin::PlaceRef(place) | crate::ir::ValueOrigin::MoveOut { place } => {
+                value = place.base;
+            }
+            crate::ir::ValueOrigin::FieldPtr(field_ptr) => value = field_ptr.base,
+            _ => return None,
+        }
+    }
 }
 
-fn resolved_place_has_object_backed_memory_root<'db>(
-    db: &'db dyn HirAnalysisDb,
-    core: &CoreLib<'db>,
+fn resolved_place_has_object_root_layout<'db>(
     values: &[ValueData<'db>],
     locals: &[LocalData<'db>],
     place: &Place<'db>,
     resolved: &ResolvedPlace<'db>,
 ) -> bool {
-    if !matches!(
-        runtime_shape_for_value(db, core, values, locals, place.base),
-        Some(RuntimeShape::ObjectRef { .. })
-    ) {
+    if value_place_root_object_target_ty(values, locals, place.base).is_none() {
         return false;
     }
 
@@ -1461,6 +1546,29 @@ fn resolved_place_has_object_backed_memory_root<'db>(
     true
 }
 
+fn exact_local_place_leaf_pointer_info<'db>(
+    values: &[ValueData<'db>],
+    locals: &[LocalData<'db>],
+    place: &Place<'db>,
+) -> Option<PointerInfo<'db>> {
+    let (local, mut path) = resolve_local_projection_root(values, place.base)?;
+    let local_data = locals.get(local.index())?;
+    for projection in place.projection.iter() {
+        if matches!(projection, Projection::Deref) {
+            if !local_data
+                .pointer_leaf_infos
+                .iter()
+                .any(|(leaf_path, _)| path.is_prefix_of(leaf_path))
+            {
+                return None;
+            }
+            continue;
+        }
+        path.push(projection.clone());
+    }
+    lookup_local_pointer_leaf_info(locals, local, &path)
+}
+
 pub fn place_object_ref_target_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     core: &CoreLib<'db>,
@@ -1469,7 +1577,7 @@ pub fn place_object_ref_target_ty<'db>(
     place: &Place<'db>,
 ) -> Option<TyId<'db>> {
     let resolved = resolve_place(db, core, values, locals, place)?;
-    if !resolved_place_has_object_backed_memory_root(db, core, values, locals, place, &resolved) {
+    if !resolved_place_has_object_root_layout(values, locals, place, &resolved) {
         return None;
     }
 
@@ -1497,8 +1605,10 @@ pub fn runtime_shape_for_loaded_place<'db>(
 
     let resolved = resolve_place(db, core, values, locals, place)?;
     let target_ty = memory_scalar_handle_object_ref_target_ty(db, core, resolved.final_state().ty)?;
-    resolved_place_has_object_backed_memory_root(db, core, values, locals, place, &resolved)
-        .then_some(RuntimeShape::ObjectRef { target_ty })
+    let info = exact_local_place_leaf_pointer_info(values, locals, place)?;
+    (info.address_space == AddressSpaceKind::Memory
+        && resolved_place_has_object_root_layout(values, locals, place, &resolved))
+    .then_some(RuntimeShape::ObjectRef { target_ty })
 }
 
 pub fn runtime_shape_for_value<'db>(
@@ -1520,10 +1630,8 @@ pub fn runtime_shape_for_value<'db>(
     }
     if let crate::ir::ValueOrigin::PlaceRoot(local) = value_data.origin {
         return locals.get(local.index()).map(|local| {
-            if matches!(local.address_space, AddressSpaceKind::Memory)
-                && let Some(target_ty) = memory_scalar_object_ref_target_ty(db, core, local.ty)
-            {
-                return RuntimeShape::ObjectRef { target_ty };
+            if let Some(shape) = place_root_runtime_shape_for_local(local) {
+                return shape;
             }
             if local.runtime_shape.is_unresolved() {
                 runtime_shape_for_local(db, core, local)
@@ -1579,27 +1687,19 @@ pub fn runtime_shape_for_value<'db>(
                 match &value_data.origin {
                     crate::ir::ValueOrigin::PlaceRef(place)
                     | crate::ir::ValueOrigin::MoveOut { place }
-                        if value_inherits_object_root_runtime_shape(
-                            db, core, values, locals, place.base,
-                        ) =>
+                        if value_place_root_object_target_ty(values, locals, place.base)
+                            .is_some() =>
                     {
                         return Some(RuntimeShape::ObjectRef { target_ty });
                     }
                     crate::ir::ValueOrigin::FieldPtr(field_ptr)
-                        if value_inherits_object_root_runtime_shape(
-                            db,
-                            core,
-                            values,
-                            locals,
-                            field_ptr.base,
-                        ) =>
+                        if value_place_root_object_target_ty(values, locals, field_ptr.base)
+                            .is_some() =>
                     {
                         return Some(RuntimeShape::ObjectRef { target_ty });
                     }
                     crate::ir::ValueOrigin::TransparentCast { value: inner }
-                        if value_inherits_object_root_runtime_shape(
-                            db, core, values, locals, *inner,
-                        ) =>
+                        if value_place_root_object_target_ty(values, locals, *inner).is_some() =>
                     {
                         return Some(RuntimeShape::ObjectRef { target_ty });
                     }
@@ -1639,27 +1739,19 @@ pub fn runtime_shape_for_value<'db>(
                 match &value_data.origin {
                     crate::ir::ValueOrigin::PlaceRef(place)
                     | crate::ir::ValueOrigin::MoveOut { place }
-                        if value_inherits_object_root_runtime_shape(
-                            db, core, values, locals, place.base,
-                        ) =>
+                        if value_place_root_object_target_ty(values, locals, place.base)
+                            .is_some() =>
                     {
                         return Some(RuntimeShape::ObjectRef { target_ty });
                     }
                     crate::ir::ValueOrigin::FieldPtr(field_ptr)
-                        if value_inherits_object_root_runtime_shape(
-                            db,
-                            core,
-                            values,
-                            locals,
-                            field_ptr.base,
-                        ) =>
+                        if value_place_root_object_target_ty(values, locals, field_ptr.base)
+                            .is_some() =>
                     {
                         return Some(RuntimeShape::ObjectRef { target_ty });
                     }
                     crate::ir::ValueOrigin::TransparentCast { value: inner }
-                        if value_inherits_object_root_runtime_shape(
-                            db, core, values, locals, *inner,
-                        ) =>
+                        if value_place_root_object_target_ty(values, locals, *inner).is_some() =>
                     {
                         return Some(RuntimeShape::ObjectRef { target_ty });
                     }
@@ -1669,5 +1761,57 @@ pub fn runtime_shape_for_value<'db>(
 
             Some(runtime_shape_for_pointer_info(info))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use common::InputDb;
+    use driver::DriverDataBase;
+    use hir::analysis::ty::ty_def::TyId;
+    use url::Url;
+
+    use super::*;
+
+    #[test]
+    fn memory_scalar_place_root_refines_to_object_ref_without_pointer_metadata() {
+        let mut db = DriverDataBase::default();
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse(
+                "file:///memory_scalar_place_root_refines_to_object_ref_without_pointer_metadata.fe",
+            )
+            .expect("test url should be valid"),
+            Some("fn marker() {}".to_owned()),
+        );
+        let top_mod = db.top_mod(file);
+        let core = CoreLib::new(&db, top_mod.scope());
+        let ty = TyId::u256(&db);
+        let locals = vec![LocalData {
+            name: "root".to_owned(),
+            ty,
+            is_mut: true,
+            source: crate::ir::SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Memory,
+            pointer_leaf_infos: Vec::new(),
+            place_root_layout: LocalPlaceRootLayout::ObjectRoot {
+                target_ty: ty,
+                source: ObjectRootSource::MaterializedScalarBorrow,
+            },
+            runtime_shape: RuntimeShape::Unresolved,
+        }];
+        let values = vec![ValueData {
+            ty,
+            origin: crate::ir::ValueOrigin::PlaceRoot(crate::LocalId(0)),
+            source: crate::ir::SourceInfoId::SYNTHETIC,
+            repr: crate::ir::ValueRepr::Word,
+            pointer_info: None,
+            runtime_shape: RuntimeShape::Unresolved,
+        }];
+
+        assert_eq!(
+            runtime_shape_for_value(&db, &core, &values, &locals, crate::ValueId(0)),
+            Some(RuntimeShape::ObjectRef { target_ty: ty }),
+        );
     }
 }

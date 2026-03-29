@@ -1153,20 +1153,24 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 )));
             }
         }
+        let db = self.db;
+        let values = &func.body.values;
+        let locals = &func.body.locals;
+        let mut type_lowerer = self.type_lowerer(&core);
         for (idx, value) in func.body.values.iter().enumerate() {
             let pointer_leaf_infos = mir::repr::pointer_leaf_infos_for_value(
-                self.db,
+                db,
                 &core,
-                &func.body.values,
-                &func.body.locals,
+                values,
+                locals,
                 mir::ValueId(idx as u32),
             );
-            let runtime_ty = self.type_lowerer(&core).runtime_type_for_ty_and_shape(
+            let runtime_ty = type_lowerer.runtime_type_for_ty_and_shape(
                 value.ty,
                 value.runtime_shape,
                 &pointer_leaf_infos,
             );
-            if runtime_ty.is_obj_ref(&self.builder.ctx)
+            if type_lowerer.is_obj_ref(runtime_ty)
                 && let Some(address_space) = value.repr.address_space()
                 && !matches!(address_space, mir::ir::AddressSpaceKind::Memory)
             {
@@ -1361,10 +1365,6 @@ impl<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> LowerCtx<'a, 'db, C> {
     ) -> Type {
         self.type_lowerer()
             .runtime_type_for_ty_and_shape(ty, shape, pointer_leaf_infos)
-    }
-
-    pub(super) fn runtime_type_for_shape(&mut self, shape: mir::ir::RuntimeShape<'db>) -> Type {
-        self.runtime_type_for_ty_and_shape(TyId::unit(self.db), shape, &[])
     }
 
     pub(super) fn runtime_type_for_value(&mut self, value: mir::ValueId) -> Type {

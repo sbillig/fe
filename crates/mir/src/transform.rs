@@ -1175,6 +1175,18 @@ fn merge_runtime_shapes_in_context<'db>(
 ) -> Option<RuntimeShape<'db>> {
     merge_runtime_shapes(existing, next).or_else(|| match (existing, next) {
         (
+            RuntimeShape::ObjectRef {
+                target_ty: lhs_target,
+            },
+            RuntimeShape::ObjectRef {
+                target_ty: rhs_target,
+            },
+        ) if crate::repr::runtime_ty_matches(db, lhs_target, rhs_target) => {
+            Some(RuntimeShape::ObjectRef {
+                target_ty: lhs_target,
+            })
+        }
+        (
             RuntimeShape::MemoryPtr { target_ty },
             RuntimeShape::ObjectRef {
                 target_ty: object_target_ty,
@@ -1187,7 +1199,11 @@ fn merge_runtime_shapes_in_context<'db>(
             RuntimeShape::MemoryPtr { target_ty },
         ) => target_ty
             .filter(|target_ty| {
-                crate::repr::object_layout_ty(db, core, *target_ty) == object_target_ty
+                crate::repr::runtime_ty_matches(
+                    db,
+                    crate::repr::object_layout_ty(db, core, *target_ty),
+                    object_target_ty,
+                )
             })
             .map(|_| RuntimeShape::ObjectRef {
                 target_ty: object_target_ty,
@@ -1450,33 +1466,34 @@ fn assert_normalized_runtime_shapes<'db>(db: &'db dyn HirAnalysisDb, func: &MirF
                 value.pointer_info,
             );
         }
-        let Some(local) = (match value.origin {
-            ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) => Some(local),
+        let Some((local, expected_root_shape)) = (match value.origin {
+            ValueOrigin::Local(local) => func
+                .body
+                .locals
+                .get(local.index())
+                .map(|local_data| (local, local_data.runtime_shape)),
+            ValueOrigin::PlaceRoot(local) => {
+                func.body.locals.get(local.index()).map(|local_data| {
+                    (
+                        local,
+                        crate::repr::place_root_runtime_shape_for_local(local_data)
+                            .unwrap_or(local_data.runtime_shape),
+                    )
+                })
+            }
             _ => None,
         }) else {
             continue;
         };
-        let local_shape = func.body.local(local).runtime_shape;
-        let compatible_place_root_object = matches!(value.origin, ValueOrigin::PlaceRoot(_))
-            && matches!(
-                value.runtime_shape,
-                RuntimeShape::ObjectRef { target_ty }
-                    if crate::repr::memory_scalar_object_ref_target_ty(
-                        db,
-                        &core,
-                        func.body.local(local).ty,
-                    ) == Some(target_ty)
-            );
-        if !compatible_place_root_object
-            && merge_runtime_shapes_in_context(db, &core, local_shape, value.runtime_shape)
-                .is_none()
+        if merge_runtime_shapes_in_context(db, &core, expected_root_shape, value.runtime_shape)
+            .is_none()
         {
             panic!(
                 "incompatible root local runtime shapes after MIR normalization in `{}` for v{idx}: local v{} `{}` has {:?}, value has {:?}, origin={:?}, ty={}, repr={:?}",
                 func.symbol_name,
                 local.index(),
                 func.body.local(local).name,
-                local_shape,
+                expected_root_shape,
                 value.runtime_shape,
                 value.origin,
                 value.ty.pretty_print(db),
@@ -1525,12 +1542,16 @@ pub(crate) fn normalize_runtime_shapes<'db>(
 
         for (idx, local) in func.body.locals.iter_mut().enumerate() {
             local.runtime_shape = crate::repr::runtime_shape_for_local(db, &core, local);
-            if spill_locals.contains(&LocalId(idx as u32))
-                && matches!(local.address_space, AddressSpaceKind::Memory)
-                && let Some(target_ty) =
-                    crate::repr::memory_scalar_object_ref_target_ty(db, &core, local.ty)
-            {
-                local.runtime_shape = RuntimeShape::ObjectRef { target_ty };
+            if spill_locals.contains(&LocalId(idx as u32)) {
+                local.runtime_shape = match local.place_root_layout {
+                    crate::ir::LocalPlaceRootLayout::Direct => local.runtime_shape,
+                    crate::ir::LocalPlaceRootLayout::MemorySlot => RuntimeShape::MemoryPtr {
+                        target_ty: Some(local.ty),
+                    },
+                    crate::ir::LocalPlaceRootLayout::ObjectRoot { target_ty, .. } => {
+                        RuntimeShape::ObjectRef { target_ty }
+                    }
+                };
             }
         }
 
@@ -2523,9 +2544,10 @@ mod tests {
     use crate::{
         CoreLib, MirInst,
         ir::{
-            AddressSpaceKind, BasicBlock, IntrinsicOp, LocalData, MirBody, MirProjectionPath,
-            Place, PointerInfo, RuntimeShape, RuntimeWordKind, Rvalue, SourceInfoId, Terminator,
-            ValueData, ValueOrigin, ValueRepr,
+            AddressSpaceKind, BasicBlock, IntrinsicOp, LocalData, LocalId, LocalPlaceRootLayout,
+            MirBody, MirProjectionPath, ObjectRootSource, Place, PointerInfo, RuntimeShape,
+            RuntimeWordKind, Rvalue, SourceInfoId, Terminator, ValueData, ValueId, ValueOrigin,
+            ValueRepr,
         },
         lower::{lower_function, lower_module},
     };
@@ -2585,6 +2607,7 @@ pub fn transparent_newtype_projection_keeps_non_memory_space(w: mut Wrap) {}
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Storage,
             pointer_leaf_infos: Vec::new(),
+            place_root_layout: crate::ir::LocalPlaceRootLayout::Direct,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let base = body.alloc_value(ValueData {
@@ -2647,6 +2670,7 @@ pub fn transparent_newtype_projection_keeps_non_memory_space(w: mut Wrap) {}
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos: Vec::new(),
+            place_root_layout: crate::ir::LocalPlaceRootLayout::Direct,
             runtime_shape: RuntimeShape::Unresolved,
         });
         let root = body.alloc_value(ValueData {
@@ -2713,6 +2737,7 @@ pub fn transparent_newtype_projection_keeps_non_memory_space(w: mut Wrap) {}
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos: Vec::new(),
+            place_root_layout: crate::ir::LocalPlaceRootLayout::Direct,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let root = body.alloc_value(ValueData {
@@ -3211,6 +3236,334 @@ contract C {
     }
 
     #[test]
+    fn ref_call_args_materialize_plain_scalar_place_roots_as_object_refs() {
+        let src = include_str!("../../fe/tests/fixtures/fe_test/ref_scalar_local_place_root.fe");
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(&mut db, "file:///ref_scalar_local_place_root.fe", src);
+
+        let test_func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "test_ref_scalar_local_place_root")
+            .expect("expected ref_scalar_local_place_root test");
+        let call_arg = test_func
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                MirInst::Assign {
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } if call.resolved_name.as_deref() == Some("read_value") => {
+                    call.args.first().copied()
+                }
+                _ => None,
+            })
+            .expect("expected read_value call arg");
+        let crate::ValueOrigin::PlaceRef(place) = &test_func.body.value(call_arg).origin else {
+            panic!(
+                "expected read_value arg to materialize through a PlaceRef, got {:?}",
+                test_func.body.value(call_arg).origin
+            );
+        };
+        let crate::ValueOrigin::PlaceRoot(local) = test_func.body.value(place.base).origin else {
+            panic!(
+                "expected read_value PlaceRef base to be a PlaceRoot, got {:?}",
+                test_func.body.value(place.base).origin
+            );
+        };
+        let root_local = test_func.body.local(local);
+
+        assert!(
+            root_local.pointer_leaf_infos.is_empty(),
+            "plain scalar temp PlaceRoot should not need pointer metadata: {:?}",
+            root_local.pointer_leaf_infos,
+        );
+        assert_eq!(
+            root_local.place_root_layout,
+            crate::ir::LocalPlaceRootLayout::ObjectRoot {
+                target_ty: root_local.ty,
+                source: crate::ir::ObjectRootSource::MaterializedScalarBorrow,
+            },
+            "plain scalar PlaceRoots should now be classified explicitly during MIR lowering",
+        );
+        assert_eq!(
+            test_func.body.value(place.base).runtime_shape,
+            RuntimeShape::ObjectRef {
+                target_ty: root_local.ty,
+            },
+            "plain scalar PlaceRoot backing a `ref u256` call arg should currently refine to ObjectRef",
+        );
+    }
+
+    #[test]
+    fn explicit_memory_slot_place_roots_stay_memory_ptrs_for_object_compatible_types() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse(
+            "file:///explicit_memory_slot_place_roots_stay_memory_ptrs_for_object_compatible_types.fe",
+        )
+        .expect("test url should be valid");
+        let file = db.workspace().touch(
+            &mut db,
+            url,
+            Some(
+                r#"
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+fn marker() {
+    let pair = Pair { a: 1, b: 2 }
+}
+"#
+                .to_owned(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let core = CoreLib::new(&db, top_mod.scope());
+        let module = lower_module(&db, top_mod).expect("module should lower");
+        let pair_ty = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "marker")
+            .and_then(|func| func.body.locals.iter().find(|local| local.name == "pair"))
+            .expect("expected `pair` local")
+            .ty;
+        let locals = vec![LocalData {
+            name: "pair_root".to_owned(),
+            ty: pair_ty,
+            is_mut: true,
+            source: SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Memory,
+            pointer_leaf_infos: Vec::new(),
+            place_root_layout: LocalPlaceRootLayout::MemorySlot,
+            runtime_shape: RuntimeShape::Unresolved,
+        }];
+        let values = vec![ValueData {
+            ty: pair_ty,
+            origin: ValueOrigin::PlaceRoot(LocalId(0)),
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Word,
+            pointer_info: None,
+            runtime_shape: RuntimeShape::Unresolved,
+        }];
+
+        assert_eq!(
+            crate::repr::place_root_runtime_shape_for_local(&locals[0]),
+            Some(RuntimeShape::MemoryPtr {
+                target_ty: Some(pair_ty),
+            }),
+            "explicit MemorySlot provenance should classify the place root as a memory slot",
+        );
+        assert_eq!(
+            crate::repr::runtime_shape_for_value(&db, &core, &values, &locals, ValueId(0)),
+            Some(RuntimeShape::MemoryPtr {
+                target_ty: Some(pair_ty),
+            }),
+            "explicit MemorySlot provenance must not refine object-compatible aggregate roots to ObjectRef",
+        );
+    }
+
+    #[test]
+    fn view_call_args_for_non_copy_structs_stay_by_ref_without_place_root_materialization() {
+        let src = include_str!("../../fe/tests/fixtures/fe_test/view_pair_param.fe");
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(&mut db, "file:///view_pair_param.fe", src);
+
+        let first = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "first")
+            .expect("expected first helper");
+        let first_param_ty = first.body.local(first.body.param_locals[0]).ty;
+        let test_func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "test_view_pair_param")
+            .expect("expected view_pair_param test");
+        let call_arg = test_func
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                MirInst::Assign {
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } if call.resolved_name.as_deref() == Some("first") => call.args.first().copied(),
+                _ => None,
+            })
+            .expect("expected first call arg");
+        let crate::ValueOrigin::TransparentCast { value: inner } =
+            test_func.body.value(call_arg).origin
+        else {
+            panic!(
+                "expected first arg to lower through a view TransparentCast, got {:?}",
+                test_func.body.value(call_arg).origin,
+            );
+        };
+        let crate::ValueOrigin::Local(local) = test_func.body.value(inner).origin else {
+            panic!(
+                "expected view Pair arg to reuse a by-ref local instead of a PlaceRoot, got {:?}",
+                test_func.body.value(inner).origin,
+            );
+        };
+        let local_data = test_func.body.local(local);
+
+        assert_eq!(
+            test_func.body.value(call_arg).ty,
+            first_param_ty,
+            "the call arg should lower to the callee's internal view param type",
+        );
+        assert_ne!(
+            first_param_ty, local_data.ty,
+            "the internal view type should stay distinct from the aggregate local type",
+        );
+        assert_eq!(
+            test_func.body.value(inner).runtime_shape,
+            RuntimeShape::ObjectRef {
+                target_ty: local_data.ty,
+            },
+            "non-Copy aggregate locals passed to bare params should stay object-backed",
+        );
+        assert_eq!(
+            local_data.place_root_layout,
+            crate::ir::LocalPlaceRootLayout::ObjectRoot {
+                target_ty: local_data.ty,
+                source: crate::ir::ObjectRootSource::DeclaredByRefAggregate,
+            },
+            "aggregate locals should carry explicit object-root provenance from initial lowering",
+        );
+        assert_eq!(
+            test_func.body.value(call_arg).runtime_shape,
+            RuntimeShape::ObjectRef {
+                target_ty: local_data.ty,
+            },
+            "the view cast should preserve the aggregate's object-backed runtime shape",
+        );
+    }
+
+    #[test]
+    fn explicit_object_root_spill_provenance_survives_joined_scalar_ref_flow() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse(
+            "file:///explicit_object_root_spill_provenance_survives_joined_scalar_ref_flow.fe",
+        )
+        .expect("test url should be valid");
+        let file = db.workspace().touch(
+            &mut db,
+            url,
+            Some(
+                r#"
+fn smoke() {}
+"#
+                .to_owned(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let mut module = lower_module(&db, top_mod).expect("module should lower");
+        let smoke = module
+            .functions
+            .iter_mut()
+            .find(|func| func.symbol_name == "smoke")
+            .expect("expected smoke helper");
+
+        let mut body = MirBody::new();
+        body.stage = crate::ir::MirStage::Repr;
+        body.blocks.push(BasicBlock {
+            insts: Vec::new(),
+            terminator: Terminator::Return {
+                source: SourceInfoId::SYNTHETIC,
+                value: None,
+            },
+        });
+
+        let spill_target_ty = TyId::u256(&db);
+        let owner_local = body.alloc_local(LocalData {
+            name: "owner".to_owned(),
+            ty: spill_target_ty,
+            is_mut: false,
+            source: SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Memory,
+            pointer_leaf_infos: Vec::new(),
+            place_root_layout: LocalPlaceRootLayout::Direct,
+            runtime_shape: RuntimeShape::Unresolved,
+        });
+        let spill_local = body.alloc_local(LocalData {
+            name: "spill0".to_owned(),
+            ty: spill_target_ty,
+            is_mut: false,
+            source: SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Memory,
+            pointer_leaf_infos: Vec::new(),
+            place_root_layout: LocalPlaceRootLayout::ObjectRoot {
+                target_ty: spill_target_ty,
+                source: ObjectRootSource::SpillOf(owner_local),
+            },
+            runtime_shape: RuntimeShape::Unresolved,
+        });
+        body.spill_slots.insert(owner_local, spill_local);
+
+        let spill_value = body.alloc_value(ValueData {
+            ty: spill_target_ty,
+            origin: ValueOrigin::Local(spill_local),
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Word,
+            pointer_info: None,
+            runtime_shape: RuntimeShape::Unresolved,
+        });
+        let spill_place_root = body.alloc_value(ValueData {
+            ty: spill_target_ty,
+            origin: ValueOrigin::PlaceRoot(spill_local),
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Word,
+            pointer_info: None,
+            runtime_shape: RuntimeShape::Unresolved,
+        });
+        body.blocks[0].insts.push(MirInst::BindValue {
+            source: SourceInfoId::SYNTHETIC,
+            value: spill_value,
+        });
+        body.blocks[0].insts.push(MirInst::BindValue {
+            source: SourceInfoId::SYNTHETIC,
+            value: spill_place_root,
+        });
+        smoke.body = body;
+        smoke.runtime_abi = crate::ir::RuntimeAbi::source_shaped(0, Vec::new());
+
+        super::normalize_runtime_shapes(&db, &mut module);
+        let smoke = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "smoke")
+            .expect("expected smoke helper after normalization");
+        let spill_local_data = smoke.body.local(spill_local);
+
+        assert_eq!(
+            spill_local_data.runtime_shape,
+            RuntimeShape::ObjectRef {
+                target_ty: spill_target_ty,
+            },
+            "spill locals with explicit ObjectRoot provenance should normalize as object refs",
+        );
+        assert!(
+            smoke.body.values.iter().any(|value| {
+                matches!(
+                    value.origin,
+                    ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) if local == spill_local
+                ) && matches!(
+                    value.runtime_shape,
+                    RuntimeShape::ObjectRef { target_ty }
+                        if target_ty == spill_target_ty
+                )
+            }),
+            "joined scalar-ref spills should keep object-ref runtime shapes on values that reload from the spill",
+        );
+    }
+
+    #[test]
     fn runtime_shapes_refine_loaded_object_backed_scalar_handles() {
         let mut db = DriverDataBase::default();
         let module = lower_inline_module(
@@ -3398,6 +3751,42 @@ contract C {
             payload_info.address_space,
             AddressSpaceKind::Storage,
             "enum-tag temp should preserve the storage-specialized owner layout",
+        );
+    }
+
+    #[test]
+    fn runtime_shapes_keep_storage_scalar_payload_loads_as_address_words() {
+        let src =
+            include_str!("../../fe/tests/fixtures/fe_test/option_mut_scalar_match_regression.fe");
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///option_mut_scalar_match_regression.fe",
+            src,
+        );
+
+        let recv = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "__C_recv_0_0")
+            .expect("expected recv helper");
+        let value_local = recv
+            .body
+            .locals
+            .iter()
+            .find(|local| local.name == "value")
+            .expect("expected Option::Some payload binding local");
+
+        let target_ty = match value_local.runtime_shape {
+            RuntimeShape::AddressWord(PointerInfo {
+                address_space: AddressSpaceKind::Storage,
+                target_ty,
+            }) => target_ty,
+            other => panic!("unexpected payload binding runtime shape: {other:?}"),
+        };
+        assert!(
+            target_ty.is_some(),
+            "storage-backed scalar payload bindings should stay typed storage address words",
         );
     }
 
