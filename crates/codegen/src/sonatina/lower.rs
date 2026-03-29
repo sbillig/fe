@@ -3711,7 +3711,8 @@ fn lower_place_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 let base_terminal =
                     lower_place_state_terminal(ctx, place, segment.before, root_runtime)?;
                 let boundary_place = place_before_deref_segment(place, &resolved.segments, idx);
-                let runtime_ty = deref_boundary_runtime_ty(ctx, &boundary_place, segment.before)?;
+                let runtime_ty =
+                    deref_boundary_runtime_ty(ctx, &boundary_place, segment.before.ty)?;
                 load_from_terminal(
                     ctx,
                     base_terminal,
@@ -3726,7 +3727,8 @@ fn lower_place_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             }
             (false, Some(mir::repr::DerefStepKind::LoadLocationValue), Some(terminal)) => {
                 let boundary_place = place_before_deref_segment(place, &resolved.segments, idx);
-                let runtime_ty = deref_boundary_runtime_ty(ctx, &boundary_place, segment.before)?;
+                let runtime_ty =
+                    deref_boundary_runtime_ty(ctx, &boundary_place, segment.before.ty)?;
                 load_from_terminal(ctx, terminal, place, segment.before.ty, runtime_ty, false)?
             }
             (false, None, Some(_))
@@ -3755,26 +3757,9 @@ fn lower_place_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 fn deref_boundary_runtime_ty<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
     place: &Place<'db>,
-    state: PlaceState<'db>,
+    loaded_ty: TyId<'db>,
 ) -> Result<Type, LowerError> {
-    let address_space = state
-        .pointer_info
-        .ok_or_else(|| {
-            LowerError::Internal(format!(
-                "missing pointer metadata at deref boundary for {place:?}"
-            ))
-        })?
-        .address_space;
-    let shape = mir::repr::runtime_shape_for_ty(ctx.db, ctx.core, state.ty, address_space);
-    let pointer_leaf_infos = mir::repr::pointer_leaf_infos_for_place(
-        ctx.db,
-        ctx.core,
-        &ctx.body.values,
-        &ctx.body.locals,
-        place,
-        state.ty,
-    );
-    Ok(ctx.runtime_type_for_ty_and_shape(state.ty, shape, &pointer_leaf_infos))
+    ctx.runtime_type_for_loaded_place(place, loaded_ty)
 }
 
 /// Computes the address for a place by walking the projection path.
@@ -4566,19 +4551,10 @@ fn deep_copy_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         return deep_copy_enum_from_places(ctx, dst_place, src_place, value_ty);
     }
 
-    if let Some(info) =
-        mir::repr::pointer_info_for_ty(ctx.db, ctx.core, value_ty, AddressSpaceKind::Memory)
+    if mir::repr::pointer_info_for_ty(ctx.db, ctx.core, value_ty, AddressSpaceKind::Memory)
+        .is_some()
     {
-        let shape = mir::repr::runtime_shape_for_ty(ctx.db, ctx.core, value_ty, info.address_space);
-        let pointer_leaf_infos = mir::repr::pointer_leaf_infos_for_place(
-            ctx.db,
-            ctx.core,
-            &ctx.body.values,
-            &ctx.body.locals,
-            src_place,
-            value_ty,
-        );
-        let runtime_ty = ctx.runtime_type_for_ty_and_shape(value_ty, shape, &pointer_leaf_infos);
+        let runtime_ty = ctx.runtime_type_for_loaded_place(src_place, value_ty)?;
         let loaded = load_place_runtime(ctx, src_place, value_ty, runtime_ty)?;
         return store_runtime_value_to_place(ctx, dst_place, value_ty, loaded);
     }

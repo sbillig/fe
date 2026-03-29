@@ -1041,6 +1041,59 @@ fn smoke() {
     }
 
     #[test]
+    fn nested_scalar_handle_loads_and_copies_verify_in_test_modules() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_nested_scalar_handle_loads_and_copies_test.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+struct Reader {
+    source: ref u256,
+    bias: u256,
+}
+
+fn sum_reader(r: ref Reader) -> u256 {
+    r.source + r.bias
+}
+
+fn pass_through(r: own Reader) -> Reader {
+    r
+}
+
+#[test]
+fn smoke() {
+    let base = 7
+    let reader = Reader {
+        source: ref base,
+        bias: 3,
+    }
+    let copy = pass_through(reader)
+    assert(sum_reader(ref copy) == 10)
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let output = emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O0,
+            SonatinaTestOptions::default(),
+            None,
+        )
+        .expect("nested scalar handle loads and copies should verify in Sonatina test modules");
+        assert_eq!(output.tests.len(), 1, "expected one runnable smoke test");
+    }
+
+    #[test]
     fn wrapped_test_and_code_region_roots_are_not_forced_as_section_includes() {
         let mut db = DriverDataBase::default();
         let file_url = temp_fixture_url("sonatina_test_object_include_roots_test.fe");

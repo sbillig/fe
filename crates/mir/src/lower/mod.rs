@@ -922,6 +922,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.expr_lower_states[expr.index()] = state;
     }
 
+    pub(super) fn set_local_address_space(&mut self, local: LocalId, space: AddressSpaceKind) {
+        let local_data = &mut self.builder.body.locals[local.index()];
+        crate::repr::set_declared_local_address_space(self.db, &self.core, local_data, space);
+    }
+
     fn source_for_expr(&mut self, expr: ExprId) -> crate::ir::SourceInfoId {
         self.source_info_for_span(expr.span(self.body).resolve(self.db))
     }
@@ -2270,7 +2275,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             let address_space = self.local_address_space_for_rvalue(dest, &rvalue, &infos);
             self.builder.body.locals[dest.index()].pointer_leaf_infos = infos;
             if let Some(address_space) = address_space {
-                self.builder.body.locals[dest.index()].address_space = address_space;
+                self.set_local_address_space(dest, address_space);
             }
             if let Rvalue::Alloc { address_space } = rvalue {
                 let ty = self.builder.body.local(dest).ty;
@@ -2586,7 +2591,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             );
         }
         let dest = self.alloc_temp_local(field_ty, false, "arg");
-        self.builder.body.locals[dest.index()].address_space = AddressSpaceKind::Memory;
+        self.set_local_address_space(dest, AddressSpaceKind::Memory);
         self.assign(None, Some(dest), Rvalue::Load { place });
         self.alloc_value(field_ty, ValueOrigin::Local(dest), ValueRepr::Word)
     }
@@ -3109,7 +3114,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             })
             .collect();
         for local in locals_to_update {
-            self.builder.body.locals[local.index()].address_space = space;
+            self.set_local_address_space(local, space);
         }
     }
 }

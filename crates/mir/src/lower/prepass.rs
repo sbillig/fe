@@ -894,7 +894,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.current_block()?;
 
         let dest = self.alloc_temp_local(array_ty, false, "const_array");
-        self.builder.body.locals[dest.index()].address_space = AddressSpaceKind::Memory;
+        self.set_local_address_space(dest, AddressSpaceKind::Memory);
 
         self.push_inst_here(MirInst::Assign {
             source: crate::ir::SourceInfoId::SYNTHETIC,

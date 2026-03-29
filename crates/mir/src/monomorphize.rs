@@ -1179,11 +1179,10 @@ impl<'db> Monomorphizer<'db> {
                 if path.is_empty()
                     && !capability_root_tracks_aggregate_storage(self.db, &core, local.ty)
                 {
-                    local.address_space = *space;
+                    crate::repr::set_declared_local_address_space(self.db, &core, local, *space);
                 }
             }
             local.pointer_leaf_infos = pointer_leaf_infos;
-            refresh_declared_local_place_root_layout(self.db, &core, local);
         }
     }
 
@@ -1201,8 +1200,7 @@ impl<'db> Monomorphizer<'db> {
                 break;
             };
             let local = &mut instance.body.locals[effect_local.index()];
-            local.address_space = space;
-            refresh_declared_local_place_root_layout(self.db, &core, local);
+            crate::repr::set_declared_local_address_space(self.db, &core, local, space);
         }
     }
 
@@ -2018,15 +2016,6 @@ impl<'db> Monomorphizer<'db> {
             normalized
         }
     }
-}
-
-fn refresh_declared_local_place_root_layout<'db>(
-    db: &'db dyn HirAnalysisDb,
-    core: &CoreLib<'db>,
-    local: &mut crate::ir::LocalData<'db>,
-) {
-    local.place_root_layout =
-        crate::repr::declared_local_place_root_layout(db, core, local.ty, local.address_space);
 }
 
 /// Simple folder that replaces `TyParam` occurrences with the concrete args for

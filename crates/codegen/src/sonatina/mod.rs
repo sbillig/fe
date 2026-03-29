@@ -1397,6 +1397,34 @@ impl<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> LowerCtx<'a, 'db, C> {
         )
     }
 
+    pub(super) fn runtime_type_for_loaded_place(
+        &mut self,
+        place: &mir::ir::Place<'db>,
+        loaded_ty: TyId<'db>,
+    ) -> Result<Type, LowerError> {
+        let shape = mir::repr::runtime_shape_for_place_load(
+            self.db,
+            self.core,
+            &self.body.values,
+            &self.body.locals,
+            place,
+        )
+        .ok_or_else(|| {
+            LowerError::Internal(format!(
+                "failed to compute runtime shape for loaded place {place:?}"
+            ))
+        })?;
+        let pointer_leaf_infos = mir::repr::pointer_leaf_infos_for_place(
+            self.db,
+            self.core,
+            &self.body.values,
+            &self.body.locals,
+            place,
+            loaded_ty,
+        );
+        Ok(self.runtime_type_for_ty_and_shape(loaded_ty, shape, &pointer_leaf_infos))
+    }
+
     pub(super) fn resolve_place(
         &self,
         place: &mir::ir::Place<'db>,
