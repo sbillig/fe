@@ -96,7 +96,7 @@ pub(super) struct RuntimeFunctionMetadata {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum LocalPlaceRoot {
+pub(super) enum MaterializedLocalPlaceRoot {
     MemorySlot(ValueId),
     ObjectRoot(ValueId),
 }
@@ -1195,7 +1195,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             let var = fb.declare_var(local_runtime_types[idx]);
             local_vars.insert(local_id, var);
         }
-        let mut local_place_roots = FxHashMap::default();
+        let mut materialized_local_place_roots = FxHashMap::default();
         let mut initialized_locals = FxHashSet::default();
 
         // Create blocks
@@ -1272,7 +1272,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 target_layout: &self.target_layout,
                 body: &func.body,
                 local_vars: &local_vars,
-                local_place_roots: &mut local_place_roots,
+                materialized_local_place_roots: &mut materialized_local_place_roots,
                 initialized_locals: &mut initialized_locals,
                 name_map: &self.name_map,
                 runtime_function_metadata: &self.runtime_function_metadata,
@@ -1322,7 +1322,8 @@ pub(super) struct LowerCtx<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> {
     pub(super) target_layout: &'a TargetDataLayout,
     pub(super) body: &'a mir::MirBody<'db>,
     pub(super) local_vars: &'a FxHashMap<mir::LocalId, Variable>,
-    pub(super) local_place_roots: &'a mut FxHashMap<mir::LocalId, LocalPlaceRoot>,
+    pub(super) materialized_local_place_roots:
+        &'a mut FxHashMap<mir::LocalId, MaterializedLocalPlaceRoot>,
     pub(super) initialized_locals: &'a mut FxHashSet<mir::LocalId>,
     pub(super) name_map: &'a FxHashMap<String, FuncRef>,
     pub(super) runtime_function_metadata: &'a FxHashMap<String, RuntimeFunctionMetadata>,

@@ -28,9 +28,9 @@ use hir::projection::{Projection, ProjectionPath};
 
 use crate::core_lib::CoreLib;
 use crate::ir::{
-    AddressSpaceKind, LocalData, LocalPlaceRootLayout, MirProjection, ObjectRootSource, Place,
-    PointerInfo, RuntimeShape, RuntimeWordKind, ValueData, ValueId, lookup_local_pointer_leaf_info,
-    resolve_local_projection_root, try_value_pointer_info_in,
+    AddressSpaceKind, LocalData, LocalId, LocalPlaceRootLayout, MirProjection, ObjectRootSource,
+    Place, PointerInfo, RuntimeShape, RuntimeWordKind, ValueData, ValueId,
+    lookup_local_pointer_leaf_info, resolve_local_projection_root, try_value_pointer_info_in,
 };
 use crate::layout;
 use common::indexmap::IndexMap;
@@ -315,19 +315,18 @@ pub fn declared_local_place_root_layout<'db>(
     }
 
     runtime_object_ref_target_ty(db, core, ty, address_space)
-        .map(|target_ty| LocalPlaceRootLayout::ObjectRoot {
+        .map(|target_ty| LocalPlaceRootLayout::ObjectRootValue {
             target_ty,
             source: ObjectRootSource::DeclaredByRefAggregate,
         })
         .unwrap_or(LocalPlaceRootLayout::Direct)
 }
 
-pub fn materialized_local_place_root_layout<'db>(
+pub fn allocated_local_place_root_layout<'db>(
     db: &'db dyn HirAnalysisDb,
     core: &CoreLib<'db>,
     ty: TyId<'db>,
     address_space: AddressSpaceKind,
-    source: ObjectRootSource,
 ) -> LocalPlaceRootLayout<'db> {
     if address_space != AddressSpaceKind::Memory {
         return LocalPlaceRootLayout::Direct;
@@ -335,7 +334,48 @@ pub fn materialized_local_place_root_layout<'db>(
 
     runtime_object_ref_target_ty(db, core, ty, address_space)
         .or_else(|| memory_scalar_object_ref_target_ty(db, core, ty))
-        .map(|target_ty| LocalPlaceRootLayout::ObjectRoot { target_ty, source })
+        .map(|target_ty| LocalPlaceRootLayout::ObjectRootValue {
+            target_ty,
+            source: ObjectRootSource::AllocatedMemory,
+        })
+        .unwrap_or(LocalPlaceRootLayout::MemorySlot)
+}
+
+pub fn live_place_root_layout<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    ty: TyId<'db>,
+    address_space: AddressSpaceKind,
+) -> LocalPlaceRootLayout<'db> {
+    if address_space != AddressSpaceKind::Memory {
+        return LocalPlaceRootLayout::Direct;
+    }
+
+    memory_scalar_object_ref_target_ty(db, core, ty)
+        .map(|target_ty| LocalPlaceRootLayout::ObjectRootStorage {
+            target_ty,
+            source: ObjectRootSource::MaterializedScalarBorrow,
+        })
+        .unwrap_or(LocalPlaceRootLayout::MemorySlot)
+}
+
+pub fn spill_local_place_root_layout<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    ty: TyId<'db>,
+    address_space: AddressSpaceKind,
+    owner: LocalId,
+) -> LocalPlaceRootLayout<'db> {
+    if address_space != AddressSpaceKind::Memory {
+        return LocalPlaceRootLayout::Direct;
+    }
+
+    runtime_object_ref_target_ty(db, core, ty, address_space)
+        .or_else(|| memory_scalar_object_ref_target_ty(db, core, ty))
+        .map(|target_ty| LocalPlaceRootLayout::ObjectRootValue {
+            target_ty,
+            source: ObjectRootSource::SpillOf(owner),
+        })
         .unwrap_or(LocalPlaceRootLayout::MemorySlot)
 }
 
@@ -351,7 +391,8 @@ pub fn place_root_runtime_shape_for_local<'db>(
         LocalPlaceRootLayout::MemorySlot => Some(RuntimeShape::MemoryPtr {
             target_ty: Some(local.ty),
         }),
-        LocalPlaceRootLayout::ObjectRoot { target_ty, .. } => {
+        LocalPlaceRootLayout::ObjectRootValue { target_ty, .. }
+        | LocalPlaceRootLayout::ObjectRootStorage { target_ty, .. } => {
             Some(RuntimeShape::ObjectRef { target_ty })
         }
     }
@@ -1180,9 +1221,8 @@ pub fn runtime_shape_for_local<'db>(
     core: &CoreLib<'db>,
     local: &LocalData<'db>,
 ) -> RuntimeShape<'db> {
-    if let LocalPlaceRootLayout::ObjectRoot { target_ty, source } = local.place_root_layout
+    if let LocalPlaceRootLayout::ObjectRootValue { target_ty, .. } = local.place_root_layout
         && local.address_space == AddressSpaceKind::Memory
-        && !matches!(source, ObjectRootSource::MaterializedScalarBorrow)
     {
         return RuntimeShape::ObjectRef { target_ty };
     }
@@ -1794,7 +1834,7 @@ mod tests {
             source: crate::ir::SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos: Vec::new(),
-            place_root_layout: LocalPlaceRootLayout::ObjectRoot {
+            place_root_layout: LocalPlaceRootLayout::ObjectRootStorage {
                 target_ty: ty,
                 source: ObjectRootSource::MaterializedScalarBorrow,
             },

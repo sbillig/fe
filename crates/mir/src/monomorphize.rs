@@ -1183,6 +1183,7 @@ impl<'db> Monomorphizer<'db> {
                 }
             }
             local.pointer_leaf_infos = pointer_leaf_infos;
+            refresh_declared_local_place_root_layout(self.db, &core, local);
         }
     }
 
@@ -1191,6 +1192,7 @@ impl<'db> Monomorphizer<'db> {
         instance: &mut MirFunction<'db>,
         effect_param_space_overrides: &[Option<AddressSpaceKind>],
     ) {
+        let core = self.core_for_origin(instance.origin);
         for (idx, space) in effect_param_space_overrides.iter().enumerate() {
             let Some(space) = *space else {
                 continue;
@@ -1198,7 +1200,9 @@ impl<'db> Monomorphizer<'db> {
             let Some(&effect_local) = instance.body.effect_param_locals.get(idx) else {
                 break;
             };
-            instance.body.locals[effect_local.index()].address_space = space;
+            let local = &mut instance.body.locals[effect_local.index()];
+            local.address_space = space;
+            refresh_declared_local_place_root_layout(self.db, &core, local);
         }
     }
 
@@ -2016,6 +2020,15 @@ impl<'db> Monomorphizer<'db> {
     }
 }
 
+fn refresh_declared_local_place_root_layout<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    local: &mut crate::ir::LocalData<'db>,
+) {
+    local.place_root_layout =
+        crate::repr::declared_local_place_root_layout(db, core, local.ty, local.address_space);
+}
+
 /// Simple folder that replaces `TyParam` occurrences with the concrete args for
 /// the instance under construction.
 struct ParamSubstFolder<'db, 'a> {
@@ -2212,6 +2225,114 @@ mod tests {
         };
         assert_eq!(func_name, "seed_roots");
         assert_eq!(message, "boom");
+    }
+
+    #[test]
+    fn synthetic_param_space_overrides_refresh_declared_place_root_layout() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///synthetic_param_place_root_layout.fe").unwrap();
+        let src = r#"
+struct Pair {
+    left: u256,
+    right: u256,
+}
+
+fn takes_pair(pair: own Pair) -> u256 {
+    pair.left
+}
+
+pub contract C {
+    init() {}
+}
+"#;
+
+        let file = db.workspace().touch(&mut db, url, Some(src.to_owned()));
+        let top_mod = db.top_mod(file);
+        let module = crate::lower::lower_module(&db, top_mod).expect("lowered MIR");
+        let pair_func = module
+            .functions
+            .iter()
+            .find(|func| {
+                matches!(func.origin, crate::ir::MirFunctionOrigin::Hir(_))
+                    && func.symbol_name.starts_with("takes_pair")
+            })
+            .expect("takes_pair function");
+        let pair_ty = pair_func.body.locals[pair_func.body.param_locals[0].index()].ty;
+        let synthetic_origin = module
+            .functions
+            .iter()
+            .find_map(|func| match func.origin {
+                crate::ir::MirFunctionOrigin::Synthetic(id) => {
+                    Some(crate::ir::MirFunctionOrigin::Synthetic(id))
+                }
+                crate::ir::MirFunctionOrigin::Hir(_) => None,
+            })
+            .expect("synthetic function origin");
+
+        let monomorphizer = Monomorphizer::new(&db, Vec::new());
+        let core = monomorphizer.core_for_origin(synthetic_origin);
+        let mut body = crate::ir::MirBody::new();
+        let local = body.alloc_local(crate::ir::LocalData {
+            name: "pair".to_owned(),
+            ty: pair_ty,
+            is_mut: false,
+            source: crate::ir::SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Memory,
+            pointer_leaf_infos: pointer_leaf_infos_for_ty_with_default(
+                &db,
+                &core,
+                pair_ty,
+                AddressSpaceKind::Memory,
+            ),
+            place_root_layout: crate::repr::declared_local_place_root_layout(
+                &db,
+                &core,
+                pair_ty,
+                AddressSpaceKind::Memory,
+            ),
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
+        });
+        assert!(matches!(
+            body.locals[local.index()].place_root_layout,
+            crate::ir::LocalPlaceRootLayout::ObjectRootValue { .. }
+        ));
+        body.param_locals.push(local);
+        let mut instance = MirFunction {
+            origin: synthetic_origin,
+            body,
+            typed_body: None,
+            generic_args: Vec::new(),
+            ret_ty: pair_ty,
+            returns_value: true,
+            runtime_abi: crate::ir::RuntimeAbi {
+                value_params: vec![true],
+                effect_params: Vec::new(),
+                effect_param_provider_tys: Vec::new(),
+            },
+            runtime_return_shape: crate::ir::RuntimeShape::Unresolved,
+            runtime_return_pointer_leaf_infos: Vec::new(),
+            contract_function: None,
+            inline_hint: None,
+            symbol_name: "synthetic_override_test".to_owned(),
+            symbol_source: crate::ir::SymbolSource::Internal,
+            receiver_space: None,
+            defer_root: false,
+        };
+
+        monomorphizer.apply_synthetic_param_capability_space_overrides(
+            &mut instance,
+            &[vec![(
+                crate::MirProjectionPath::new(),
+                AddressSpaceKind::Storage,
+            )]],
+        );
+
+        let local = &instance.body.locals[local.index()];
+        assert_eq!(local.address_space, AddressSpaceKind::Storage);
+        assert_eq!(
+            local.place_root_layout,
+            crate::ir::LocalPlaceRootLayout::Direct
+        );
     }
 
     #[test]

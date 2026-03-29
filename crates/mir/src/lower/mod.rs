@@ -2275,12 +2275,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             if let Rvalue::Alloc { address_space } = rvalue {
                 let ty = self.builder.body.local(dest).ty;
                 self.builder.body.locals[dest.index()].place_root_layout =
-                    crate::repr::materialized_local_place_root_layout(
+                    crate::repr::allocated_local_place_root_layout(
                         self.db,
                         &self.core,
                         ty,
                         address_space,
-                        crate::ir::ObjectRootSource::AllocatedMemory,
                     );
             }
         }

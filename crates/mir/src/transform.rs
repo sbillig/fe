@@ -1548,7 +1548,8 @@ pub(crate) fn normalize_runtime_shapes<'db>(
                     crate::ir::LocalPlaceRootLayout::MemorySlot => RuntimeShape::MemoryPtr {
                         target_ty: Some(local.ty),
                     },
-                    crate::ir::LocalPlaceRootLayout::ObjectRoot { target_ty, .. } => {
+                    crate::ir::LocalPlaceRootLayout::ObjectRootValue { target_ty, .. }
+                    | crate::ir::LocalPlaceRootLayout::ObjectRootStorage { target_ty, .. } => {
                         RuntimeShape::ObjectRef { target_ty }
                     }
                 };
@@ -3070,6 +3071,20 @@ contract C {
             target_ty.is_some(),
             "alloc-backed aug-assign temp locals must normalize as typed object refs",
         );
+        let LocalPlaceRootLayout::ObjectRootValue { target_ty, source } =
+            temp_local.place_root_layout
+        else {
+            panic!(
+                "alloc-backed temporaries should carry pass-through object-root provenance, got {:?}",
+                temp_local.place_root_layout,
+            );
+        };
+        assert_eq!(source, ObjectRootSource::AllocatedMemory);
+        assert_eq!(
+            temp_local.runtime_shape,
+            RuntimeShape::ObjectRef { target_ty },
+            "alloc-backed temporaries should carry object-root provenance consistent with their object runtime shape",
+        );
     }
 
     #[test]
@@ -3282,7 +3297,7 @@ contract C {
         );
         assert_eq!(
             root_local.place_root_layout,
-            crate::ir::LocalPlaceRootLayout::ObjectRoot {
+            crate::ir::LocalPlaceRootLayout::ObjectRootStorage {
                 target_ty: root_local.ty,
                 source: crate::ir::ObjectRootSource::MaterializedScalarBorrow,
             },
@@ -3430,7 +3445,7 @@ fn marker() {
         );
         assert_eq!(
             local_data.place_root_layout,
-            crate::ir::LocalPlaceRootLayout::ObjectRoot {
+            crate::ir::LocalPlaceRootLayout::ObjectRootValue {
                 target_ty: local_data.ty,
                 source: crate::ir::ObjectRootSource::DeclaredByRefAggregate,
             },
@@ -3498,7 +3513,7 @@ fn smoke() {}
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos: Vec::new(),
-            place_root_layout: LocalPlaceRootLayout::ObjectRoot {
+            place_root_layout: LocalPlaceRootLayout::ObjectRootValue {
                 target_ty: spill_target_ty,
                 source: ObjectRootSource::SpillOf(owner_local),
             },

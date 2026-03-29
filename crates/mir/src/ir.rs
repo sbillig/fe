@@ -732,7 +732,11 @@ pub enum ObjectRootSource {
 pub enum LocalPlaceRootLayout<'db> {
     Direct,
     MemorySlot,
-    ObjectRoot {
+    ObjectRootValue {
+        target_ty: TyId<'db>,
+        source: ObjectRootSource,
+    },
+    ObjectRootStorage {
         target_ty: TyId<'db>,
         source: ObjectRootSource,
     },
@@ -741,9 +745,22 @@ pub enum LocalPlaceRootLayout<'db> {
 impl<'db> LocalPlaceRootLayout<'db> {
     pub fn object_target_ty(self) -> Option<TyId<'db>> {
         match self {
-            Self::ObjectRoot { target_ty, .. } => Some(target_ty),
+            Self::ObjectRootValue { target_ty, .. } | Self::ObjectRootStorage { target_ty, .. } => {
+                Some(target_ty)
+            }
             Self::Direct | Self::MemorySlot => None,
         }
+    }
+
+    pub fn is_object_root(self) -> bool {
+        matches!(
+            self,
+            Self::ObjectRootValue { .. } | Self::ObjectRootStorage { .. }
+        )
+    }
+
+    pub fn is_materialized(self) -> bool {
+        matches!(self, Self::MemorySlot | Self::ObjectRootStorage { .. })
     }
 }
 

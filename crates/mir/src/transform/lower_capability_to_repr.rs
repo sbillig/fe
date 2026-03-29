@@ -6,8 +6,8 @@ use hir::projection::Projection;
 use crate::core_lib::CoreLib;
 use crate::ir::{
     AddressSpaceKind, BasicBlock, LocalData, LocalId, MirBackend, MirBody, MirInst,
-    MirProjectionPath, MirStage, ObjectRootSource, Place, Rvalue, SourceInfoId, ValueData, ValueId,
-    ValueOrigin, ValueRepr,
+    MirProjectionPath, MirStage, Place, Rvalue, SourceInfoId, ValueData, ValueId, ValueOrigin,
+    ValueRepr,
 };
 use crate::{layout, repr};
 
@@ -145,13 +145,21 @@ fn repr_for_plain_ty<'db>(
     }
 }
 
-fn materialized_place_root_layout<'db>(
+fn live_place_root_layout<'db>(
     db: &'db dyn HirAnalysisDb,
     core: &CoreLib<'db>,
     local: &LocalData<'db>,
-    source: ObjectRootSource,
 ) -> crate::ir::LocalPlaceRootLayout<'db> {
-    repr::materialized_local_place_root_layout(db, core, local.ty, local.address_space, source)
+    repr::live_place_root_layout(db, core, local.ty, local.address_space)
+}
+
+fn spill_place_root_layout<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    local: &LocalData<'db>,
+    owner: LocalId,
+) -> crate::ir::LocalPlaceRootLayout<'db> {
+    repr::spill_local_place_root_layout(db, core, local.ty, local.address_space, owner)
 }
 
 fn place_base_spill_owner<'db>(
@@ -943,12 +951,7 @@ fn seed_live_place_root_layouts<'db>(
         ) {
             continue;
         }
-        local_data.place_root_layout = materialized_place_root_layout(
-            db,
-            core,
-            local_data,
-            ObjectRootSource::MaterializedScalarBorrow,
-        );
+        local_data.place_root_layout = live_place_root_layout(db, core, local_data);
     }
 }
 
@@ -1435,12 +1438,7 @@ pub(crate) fn prepare_body_for_evm_yul_codegen<'db>(
                     source: SourceInfoId::SYNTHETIC,
                     address_space: AddressSpaceKind::Memory,
                     pointer_leaf_infos: owner_data.pointer_leaf_infos.clone(),
-                    place_root_layout: materialized_place_root_layout(
-                        db,
-                        core,
-                        owner_data,
-                        ObjectRootSource::SpillOf(owner),
-                    ),
+                    place_root_layout: spill_place_root_layout(db, core, owner_data, owner),
                     runtime_shape: crate::ir::RuntimeShape::Unresolved,
                 },
             );

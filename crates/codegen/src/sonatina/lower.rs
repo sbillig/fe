@@ -53,7 +53,8 @@ use sonatina_ir::{
 };
 
 use super::{
-    LocalPlaceRoot, LowerCtx, LowerError, is_erased_runtime_ty, types, zero_value_for_type,
+    LowerCtx, LowerError, MaterializedLocalPlaceRoot, is_erased_runtime_ty, types,
+    zero_value_for_type,
 };
 
 pub(super) struct TypeLowerer<'a, 'db> {
@@ -152,13 +153,6 @@ pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     Ok(())
 }
 
-fn local_runtime_value_is_object_ref<C: sonatina_ir::func_cursor::FuncCursor>(
-    ctx: &LowerCtx<'_, '_, C>,
-    local: mir::LocalId,
-) -> bool {
-    ctx.local_runtime_types[local.index()].is_obj_ref(&ctx.fb.module_builder.ctx)
-}
-
 fn local_place_root_layout<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &LowerCtx<'_, 'db, C>,
     local: mir::LocalId,
@@ -172,23 +166,23 @@ fn local_place_root_layout<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 fn materialized_local_place_root<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &LowerCtx<'_, 'db, C>,
     local: mir::LocalId,
-) -> Option<LocalPlaceRoot> {
-    (!local_runtime_value_is_object_ref(ctx, local))
-        .then(|| ctx.local_place_roots.get(&local).copied())
-        .flatten()
+) -> Option<MaterializedLocalPlaceRoot> {
+    local_place_root_layout(ctx, local)
+        .filter(|layout| layout.is_materialized())
+        .and_then(|_| ctx.materialized_local_place_roots.get(&local).copied())
 }
 
 fn store_runtime_value_to_local_place_root<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
     local: mir::LocalId,
-    place_root: LocalPlaceRoot,
+    place_root: MaterializedLocalPlaceRoot,
     value: ValueId,
 ) -> Result<(), LowerError> {
     match place_root {
-        LocalPlaceRoot::MemorySlot(slot_ptr) => {
+        MaterializedLocalPlaceRoot::MemorySlot(slot_ptr) => {
             store_runtime_value_to_local_slot_ptr(ctx, local, slot_ptr, value)
         }
-        LocalPlaceRoot::ObjectRoot(object_ref) => {
+        MaterializedLocalPlaceRoot::ObjectRoot(object_ref) => {
             let local_ty = ctx
                 .body
                 .locals
@@ -228,14 +222,22 @@ fn write_local_result<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     Ok(())
 }
 
+fn current_local_runtime_value<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    local: mir::LocalId,
+) -> Result<ValueId, LowerError> {
+    let var =
+        ctx.local_vars.get(&local).copied().ok_or_else(|| {
+            LowerError::Internal(format!("missing SSA variable for local {local:?}"))
+        })?;
+    Ok(ctx.fb.use_var(var))
+}
+
 fn allocate_local_place_root_slot<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
     local: mir::LocalId,
 ) -> Result<ValueId, LowerError> {
-    if matches!(
-        local_place_root_layout(ctx, local),
-        Some(mir::ir::LocalPlaceRootLayout::ObjectRoot { .. })
-    ) {
+    if local_place_root_layout(ctx, local).is_some_and(|layout| layout.is_object_root()) {
         return Err(LowerError::Internal(format!(
             "object-backed local {local:?} must not use a synthetic place-root slot"
         )));
@@ -298,10 +300,10 @@ pub(super) fn ensure_local_place_root_slot<'db, C: sonatina_ir::func_cursor::Fun
     ctx: &mut LowerCtx<'_, 'db, C>,
     local: mir::LocalId,
 ) -> Result<ValueId, LowerError> {
-    if let Some(place_root) = ctx.local_place_roots.get(&local).copied() {
+    if let Some(place_root) = ctx.materialized_local_place_roots.get(&local).copied() {
         return match place_root {
-            LocalPlaceRoot::MemorySlot(slot_ptr) => Ok(slot_ptr),
-            LocalPlaceRoot::ObjectRoot(_) => Err(LowerError::Internal(format!(
+            MaterializedLocalPlaceRoot::MemorySlot(slot_ptr) => Ok(slot_ptr),
+            MaterializedLocalPlaceRoot::ObjectRoot(_) => Err(LowerError::Internal(format!(
                 "object-backed place root already exists for local {local:?}"
             ))),
         };
@@ -309,14 +311,11 @@ pub(super) fn ensure_local_place_root_slot<'db, C: sonatina_ir::func_cursor::Fun
 
     let slot_ptr = allocate_local_place_root_slot(ctx, local)?;
     if ctx.initialized_locals.contains(&local) {
-        let var = ctx.local_vars.get(&local).copied().ok_or_else(|| {
-            LowerError::Internal(format!("missing SSA variable for local {local:?}"))
-        })?;
-        let current = ctx.fb.use_var(var);
+        let current = current_local_runtime_value(ctx, local)?;
         store_runtime_value_to_local_slot_ptr(ctx, local, slot_ptr, current)?;
     }
-    ctx.local_place_roots
-        .insert(local, LocalPlaceRoot::MemorySlot(slot_ptr));
+    ctx.materialized_local_place_roots
+        .insert(local, MaterializedLocalPlaceRoot::MemorySlot(slot_ptr));
     Ok(slot_ptr)
 }
 
@@ -324,10 +323,10 @@ fn ensure_local_place_root_object<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
     local: mir::LocalId,
 ) -> Result<ValueId, LowerError> {
-    if let Some(place_root) = ctx.local_place_roots.get(&local).copied() {
+    if let Some(place_root) = ctx.materialized_local_place_roots.get(&local).copied() {
         return match place_root {
-            LocalPlaceRoot::ObjectRoot(object_ref) => Ok(object_ref),
-            LocalPlaceRoot::MemorySlot(_) => Err(LowerError::Internal(format!(
+            MaterializedLocalPlaceRoot::ObjectRoot(object_ref) => Ok(object_ref),
+            MaterializedLocalPlaceRoot::MemorySlot(_) => Err(LowerError::Internal(format!(
                 "memory place-root slot already exists for object-backed local {local:?}"
             ))),
         };
@@ -339,32 +338,25 @@ fn ensure_local_place_root_object<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         .get(local.index())
         .ok_or_else(|| LowerError::Internal(format!("unknown local: {local:?}")))?
         .ty;
-    let Some(target_ty) =
-        local_place_root_layout(ctx, local).and_then(|layout| layout.object_target_ty())
+    let Some(target_ty) = local_place_root_layout(ctx, local)
+        .filter(|layout| {
+            matches!(
+                layout,
+                mir::ir::LocalPlaceRootLayout::ObjectRootStorage { .. }
+            )
+        })
+        .and_then(|layout| layout.object_target_ty())
     else {
         return Err(LowerError::Internal(format!(
-            "local {local:?} `{}` does not support an object-backed place root",
+            "local {local:?} `{}` does not use a materialized object-backed place root",
             local_ty.pretty_print(ctx.db),
         )));
     };
     let current = if ctx.initialized_locals.contains(&local) {
-        let var = ctx.local_vars.get(&local).copied().ok_or_else(|| {
-            LowerError::Internal(format!("missing SSA variable for local {local:?}"))
-        })?;
-        Some(ctx.fb.use_var(var))
+        Some(current_local_runtime_value(ctx, local)?)
     } else {
         None
     };
-    if let Some(current) = current
-        && ctx
-            .fb
-            .type_of(current)
-            .is_obj_ref(&ctx.fb.module_builder.ctx)
-    {
-        ctx.local_place_roots
-            .insert(local, LocalPlaceRoot::ObjectRoot(current));
-        return Ok(current);
-    }
     let size_bytes = layout::ty_memory_size_or_word_in(ctx.db, ctx.target_layout, target_ty)
         .ok_or_else(|| {
             LowerError::Unsupported(format!(
@@ -381,12 +373,12 @@ fn ensure_local_place_root_object<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         store_runtime_value_to_local_place_root(
             ctx,
             local,
-            LocalPlaceRoot::ObjectRoot(object_ref),
+            MaterializedLocalPlaceRoot::ObjectRoot(object_ref),
             current,
         )?;
     }
-    ctx.local_place_roots
-        .insert(local, LocalPlaceRoot::ObjectRoot(object_ref));
+    ctx.materialized_local_place_roots
+        .insert(local, MaterializedLocalPlaceRoot::ObjectRoot(object_ref));
     Ok(object_ref)
 }
 
@@ -418,14 +410,14 @@ fn load_runtime_value_from_local_slot<'db, C: sonatina_ir::func_cursor::FuncCurs
 fn load_runtime_value_from_local_place_root<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
     local: mir::LocalId,
-    place_root: LocalPlaceRoot,
+    place_root: MaterializedLocalPlaceRoot,
     expected_runtime_ty: Type,
 ) -> Result<ValueId, LowerError> {
     match place_root {
-        LocalPlaceRoot::MemorySlot(_) => {
+        MaterializedLocalPlaceRoot::MemorySlot(_) => {
             load_runtime_value_from_local_slot(ctx, local, expected_runtime_ty)
         }
-        LocalPlaceRoot::ObjectRoot(object_ref) => {
+        MaterializedLocalPlaceRoot::ObjectRoot(object_ref) => {
             let local_ty = ctx
                 .body
                 .locals
@@ -1107,7 +1099,11 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     "missing local metadata for place root {local_id:?}"
                 ))
             })? {
-                mir::ir::LocalPlaceRootLayout::ObjectRoot { .. } => {
+                mir::ir::LocalPlaceRootLayout::ObjectRootValue { .. } => {
+                    let value = current_local_runtime_value(ctx, *local_id)?;
+                    Ok(coerce_value_to_type(ctx, value, result_ty))
+                }
+                mir::ir::LocalPlaceRootLayout::ObjectRootStorage { .. } => {
                     let object_ref = ensure_local_place_root_object(ctx, *local_id)?;
                     Ok(coerce_value_to_type(ctx, object_ref, result_ty))
                 }
@@ -3689,8 +3685,8 @@ fn lower_place_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         mir::ValueOrigin::Local(local) => {
             if let Some(place_root) = materialized_local_place_root(ctx, local) {
                 match place_root {
-                    LocalPlaceRoot::MemorySlot(slot_ptr) => slot_ptr,
-                    LocalPlaceRoot::ObjectRoot(object_ref) => object_ref,
+                    MaterializedLocalPlaceRoot::MemorySlot(slot_ptr) => slot_ptr,
+                    MaterializedLocalPlaceRoot::ObjectRoot(object_ref) => object_ref,
                 }
             } else {
                 let root_local = ctx.body.spill_slots.get(&local).copied().unwrap_or(local);
@@ -4847,7 +4843,7 @@ fn lower_const_aggregate<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ty: TyId<'db>,
     data: &[u8],
 ) -> Result<ValueId, LowerError> {
-    if local_runtime_value_is_object_ref(ctx, dest) {
+    if ctx.local_runtime_types[dest.index()].is_obj_ref(&ctx.fb.module_builder.ctx) {
         let size_bytes = layout::ty_memory_size_or_word_in(ctx.db, ctx.target_layout, ty)
             .ok_or_else(|| {
                 LowerError::Unsupported(format!(
