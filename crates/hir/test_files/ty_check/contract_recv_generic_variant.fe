@@ -8,6 +8,8 @@ impl<T> core::abi::AbiSize for GenericMsg<T>
     where T: core::abi::AbiSize
 {
     const ENCODED_SIZE: u256 = T::ENCODED_SIZE
+    const IS_DYNAMIC: bool = T::IS_DYNAMIC
+    const NEEDS_PARENT_WRAPPER: bool = T::IS_DYNAMIC
 }
 
 impl<T> core::abi::Encode<std::abi::Sol> for GenericMsg<T>

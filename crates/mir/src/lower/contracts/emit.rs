@@ -5,7 +5,7 @@ use hir::{
         ty::{trait_def::TraitInstId, ty_def::TyId},
     },
     hir_def::{
-        CallableDef,
+        CallableDef, InlineHint,
         expr::{BinOp, CompBinOp},
     },
     semantic::EffectSource,
@@ -17,8 +17,8 @@ use crate::{
     ir::{
         AddressSpaceKind, BodyBuilder, CallOrigin, CallTargetRef, CodeRegionRef, ContractFunction,
         ContractFunctionKind, HirCallTarget, IntrinsicOp, MirFunction, MirFunctionOrigin,
-        RuntimeAbi, RuntimeShape, Rvalue, SourceInfoId, SwitchTarget, SwitchValue, SymbolSource,
-        SyntheticId, TerminatingCall, Terminator, ValueId, ValueOrigin, ValueRepr,
+        RuntimeAbi, RuntimeShape, Rvalue, SourceInfoId, SymbolSource, SyntheticId, TerminatingCall,
+        Terminator, ValueId, ValueOrigin, ValueRepr,
     },
     layout, repr,
 };
@@ -27,8 +27,8 @@ use super::{
     ContractLoweringConfig, MirLowerResult, handlers,
     plan::{
         CodeRegionQueryKind, CodeRegionQueryPlan, ContractPlan, DefaultAction, FieldBindingMode,
-        InitArgsPlan, InitEntrypointPlan, InitFinishPlan, RuntimeArgsPlan, RuntimeEntrypointPlan,
-        RuntimeReturnPlan, SyntheticFnPlan,
+        InitArgsPlan, InitEntrypointPlan, InitFinishPlan, RuntimeArgsPlan,
+        RuntimeDispatchArmHelperPlan, RuntimeEntrypointPlan, RuntimeReturnPlan, SyntheticFnPlan,
     },
     symbols::SymbolMangler,
     target::{AbiContext, TargetContext, TargetHostContext},
@@ -101,6 +101,9 @@ impl<'db, 'a> ContractEmitter<'db, 'a> {
             SyntheticFnPlan::RecvHandler(handler) => {
                 handlers::emit_recv_handler(self.db, plan.contract, handler, mangler)?
             }
+            SyntheticFnPlan::RuntimeDispatchArmHelper(helper) => {
+                self.emit_runtime_dispatch_arm_helper(plan, helper, mangler)
+            }
             SyntheticFnPlan::InitEntrypoint(entry) => {
                 self.emit_init_entrypoint(plan, entry, mangler, true)
             }
@@ -155,6 +158,7 @@ impl<'db, 'a> ContractEmitter<'db, 'a> {
                 contract_name: plan.display_name.clone(),
                 kind: ContractFunctionKind::Init,
             }),
+            inline_hint: None,
             runtime_abi: RuntimeAbi::source_shaped(0, Vec::new()),
             symbol_name: mangler.symbol_for(entry.id),
         })
@@ -168,8 +172,6 @@ impl<'db, 'a> ContractEmitter<'db, 'a> {
     ) -> MirFunction<'db> {
         let mut emitter = SyntheticFnEmitter::new(self.db, self.target, plan.contract);
         let root = emitter.root_effect();
-        let zero = emitter.zero_u256();
-        let fields = emitter.bind_all_fields(plan, entry.field_mode, root);
 
         let selector = emitter.assign_runtime_local(
             "selector",
@@ -179,59 +181,57 @@ impl<'db, 'a> ContractEmitter<'db, 'a> {
             Rvalue::Call(emitter.host_runtime_selector(root)),
         );
 
-        if entry
+        let default_block = emitter.body.make_block();
+        let arm_blocks: Vec<_> = entry
             .arms
             .iter()
-            .any(|arm| !matches!(arm.call.args, RuntimeArgsPlan::Empty))
-        {
-            emitter.ensure_runtime_decoder(root);
+            .map(|arm| (arm, emitter.body.make_block()))
+            .collect();
+
+        for (arm, block) in &arm_blocks {
+            emitter.body.move_to_block(*block);
+            emitter.body.terminate_current(Terminator::TerminatingCall {
+                source: SourceInfoId::SYNTHETIC,
+                call: TerminatingCall::Call(CallOrigin {
+                    expr: None,
+                    target: Some(CallTargetRef::Synthetic(arm.callee)),
+                    args: Vec::new(),
+                    effect_args: Vec::new(),
+                    resolved_name: None,
+                    checked_intrinsic: None,
+                    builtin_terminator: None,
+                    receiver_space: None,
+                }),
+            });
         }
 
-        let default_block = emitter.body.make_block();
-        let mut targets = Vec::with_capacity(entry.arms.len());
-        for arm in &entry.arms {
-            let block = emitter.body.make_block();
-            targets.push(SwitchTarget {
-                value: SwitchValue::Int(BigUint::from(arm.selector)),
-                block,
-            });
-
-            emitter.body.move_to_block(block);
-            if !arm.is_payable {
-                emitter.emit_callvalue_guard(
-                    format!("callvalue_{}_{}", arm.recv_idx, arm.arm_idx),
-                    zero,
-                    root,
+        let entry_block = emitter.body.entry_block();
+        emitter.body.move_to_block(entry_block);
+        if arm_blocks.is_empty() {
+            emitter.body.goto(default_block);
+        } else {
+            let mut next_test_block = None;
+            for (idx, (arm, target_block)) in arm_blocks.iter().enumerate() {
+                let fallthrough = if idx + 1 == arm_blocks.len() {
+                    default_block
+                } else {
+                    *next_test_block.get_or_insert_with(|| emitter.body.make_block())
+                };
+                let selector_match = emitter
+                    .body
+                    .const_int_value(self.target.abi.selector_ty, BigUint::from(arm.selector));
+                let cond = emitter.body.alloc_value(
+                    TyId::bool(self.db),
+                    ValueOrigin::Binary {
+                        op: BinOp::Comp(CompBinOp::Eq),
+                        lhs: selector,
+                        rhs: selector_match,
+                    },
+                    ValueRepr::Word,
                 );
-            }
-            let args = match arm.call.args {
-                RuntimeArgsPlan::Empty => Vec::new(),
-                RuntimeArgsPlan::DecodeRuntimeInput { ty } => {
-                    emitter.decode_runtime_payload(ty).into_iter().collect()
-                }
-            };
-            let effect_args = emitter.realize_effect_args(&arm.call.effects, zero, &fields);
-            match arm.ret {
-                RuntimeReturnPlan::Unit => {
-                    let _ = emitter.call_synthetic(
-                        arm.call.callee,
-                        args,
-                        effect_args,
-                        TyId::unit(self.db),
-                    );
-                    emitter.body.terminate_current(Terminator::TerminatingCall {
-                        source: SourceInfoId::SYNTHETIC,
-                        call: TerminatingCall::Call(emitter.host_return_unit(root)),
-                    });
-                }
-                RuntimeReturnPlan::Value { ty } => {
-                    let result = emitter
-                        .call_synthetic(arm.call.callee, args, effect_args, ty)
-                        .expect("value-returning synthetic call should materialize a value");
-                    emitter.body.terminate_current(Terminator::TerminatingCall {
-                        source: SourceInfoId::SYNTHETIC,
-                        call: TerminatingCall::Call(emitter.host_return_value(root, result, ty)),
-                    });
+                emitter.body.branch(cond, *target_block, fallthrough);
+                if let Some(block) = next_test_block.take() {
+                    emitter.body.move_to_block(block);
                 }
             }
         }
@@ -246,10 +246,6 @@ impl<'db, 'a> ContractEmitter<'db, 'a> {
             }
         }
 
-        let entry_block = emitter.body.entry_block();
-        emitter.body.move_to_block(entry_block);
-        emitter.body.switch(selector, targets, default_block);
-
         emitter.finish_synthetic_function(SyntheticFnMeta {
             id: entry.id,
             ret_ty: TyId::unit(self.db),
@@ -259,8 +255,75 @@ impl<'db, 'a> ContractEmitter<'db, 'a> {
                 contract_name: plan.display_name.clone(),
                 kind: ContractFunctionKind::Runtime,
             }),
+            inline_hint: Some(InlineHint::Never),
             runtime_abi: RuntimeAbi::source_shaped(0, Vec::new()),
             symbol_name: mangler.symbol_for(entry.id),
+        })
+    }
+
+    fn emit_runtime_dispatch_arm_helper(
+        &self,
+        plan: &ContractPlan<'db>,
+        arm: &RuntimeDispatchArmHelperPlan<'db>,
+        mangler: &SymbolMangler,
+    ) -> MirFunction<'db> {
+        let mut emitter = SyntheticFnEmitter::new(self.db, self.target, plan.contract);
+        let root = emitter.root_effect();
+        let zero = emitter.zero_u256();
+        let fields = emitter.bind_all_fields(plan, arm.field_mode, root);
+
+        if !arm.is_payable {
+            let SyntheticId::ContractRuntimeDispatchArm {
+                recv_idx, arm_idx, ..
+            } = arm.id
+            else {
+                unreachable!(
+                    "runtime dispatch helper should use runtime dispatch arm synthetic id"
+                );
+            };
+            emitter.emit_callvalue_guard(format!("callvalue_{recv_idx}_{arm_idx}"), zero, root);
+        }
+
+        if !matches!(arm.call.args, RuntimeArgsPlan::Empty) {
+            emitter.ensure_runtime_decoder(root);
+        }
+
+        let args = match arm.call.args {
+            RuntimeArgsPlan::Empty => Vec::new(),
+            RuntimeArgsPlan::DecodeRuntimeInput { ty } => {
+                emitter.decode_runtime_payload(ty).into_iter().collect()
+            }
+        };
+        let effect_args = emitter.realize_effect_args(&arm.call.effects, zero, &fields);
+        match arm.ret {
+            RuntimeReturnPlan::Unit => {
+                let _ =
+                    emitter.call_synthetic(arm.call.callee, args, effect_args, TyId::unit(self.db));
+                emitter.body.terminate_current(Terminator::TerminatingCall {
+                    source: SourceInfoId::SYNTHETIC,
+                    call: TerminatingCall::Call(emitter.host_return_unit(root)),
+                });
+            }
+            RuntimeReturnPlan::Value { ty } => {
+                let result = emitter
+                    .call_synthetic(arm.call.callee, args, effect_args, ty)
+                    .expect("value-returning synthetic call should materialize a value");
+                emitter.body.terminate_current(Terminator::TerminatingCall {
+                    source: SourceInfoId::SYNTHETIC,
+                    call: TerminatingCall::Call(emitter.host_return_value(root, result, ty)),
+                });
+            }
+        }
+
+        emitter.finish_synthetic_function(SyntheticFnMeta {
+            id: arm.id,
+            ret_ty: TyId::unit(self.db),
+            returns_value: false,
+            runtime_return_shape: RuntimeShape::Erased,
+            contract_function: None,
+            inline_hint: Some(InlineHint::Never),
+            runtime_abi: RuntimeAbi::source_shaped(0, Vec::new()),
+            symbol_name: mangler.symbol_for(arm.id),
         })
     }
 
@@ -291,6 +354,7 @@ impl<'db, 'a> ContractEmitter<'db, 'a> {
             returns_value: true,
             runtime_return_shape: RuntimeShape::Word(crate::ir::RuntimeWordKind::I256),
             contract_function: None,
+            inline_hint: None,
             runtime_abi: RuntimeAbi::source_shaped(0, Vec::new()),
             symbol_name: mangler.symbol_for(query.id),
         })
@@ -831,7 +895,7 @@ impl<'db, 'a> SyntheticFnEmitter<'db, 'a> {
             runtime_return_shape: meta.runtime_return_shape,
             runtime_return_pointer_leaf_infos: Vec::new(),
             contract_function: meta.contract_function,
-            inline_hint: None,
+            inline_hint: meta.inline_hint,
             symbol_name: meta.symbol_name,
             symbol_source: SymbolSource::Internal,
             receiver_space: None,
@@ -846,6 +910,7 @@ struct SyntheticFnMeta<'db> {
     returns_value: bool,
     runtime_return_shape: RuntimeShape<'db>,
     contract_function: Option<ContractFunction>,
+    inline_hint: Option<InlineHint>,
     runtime_abi: RuntimeAbi<'db>,
     symbol_name: String,
 }

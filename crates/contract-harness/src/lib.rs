@@ -761,6 +761,53 @@ impl RuntimeInstance {
         }
     }
 
+    /// Deploys another contract into the same in-memory EVM context.
+    pub fn deploy_sidecar(
+        &mut self,
+        init_bytecode_hex: &str,
+        constructor_args: &[u8],
+    ) -> Result<Address, HarnessError> {
+        let mut init_code = hex_to_bytes(init_bytecode_hex)?;
+        init_code.extend_from_slice(constructor_args);
+
+        let caller = Address::ZERO;
+        let nonce = self.effective_nonce(ExecutionOptions {
+            caller,
+            ..ExecutionOptions::default()
+        });
+
+        let tx = TxEnv::builder()
+            .caller(caller)
+            .gas_limit(10_000_000)
+            .gas_price(0)
+            .kind(TxKind::Create)
+            .data(EvmBytes::from(init_code))
+            .nonce(nonce)
+            .build()
+            .map_err(|err| HarnessError::Execution(format!("{err:?}")))?;
+
+        let result = self
+            .evm
+            .transact_commit(tx)
+            .map_err(|err| HarnessError::Execution(err.to_string()))?;
+
+        match result {
+            ExecutionResult::Success {
+                output: Output::Create(_, Some(deployed_address)),
+                ..
+            } => Ok(deployed_address),
+            ExecutionResult::Success { output, .. } => Err(HarnessError::Execution(format!(
+                "deployment returned unexpected output: {output:?}"
+            ))),
+            ExecutionResult::Revert { output, .. } => {
+                Err(HarnessError::Revert(RevertData(output.to_vec())))
+            }
+            ExecutionResult::Halt { reason, gas_used } => {
+                Err(HarnessError::Halted { reason, gas_used })
+            }
+        }
+    }
+
     /// Gives the deployed contract the specified balance (in wei).
     ///
     /// This is useful for tests that need the contract to send ETH
@@ -1191,6 +1238,11 @@ impl FeContractHarness {
         &self.contract.runtime_bytecode
     }
 
+    /// Returns the init bytecode emitted by `solc`.
+    pub fn init_bytecode(&self) -> &str {
+        &self.contract.bytecode
+    }
+
     /// Executes the compiled runtime with arbitrary calldata.
     pub fn call_raw(
         &self,
@@ -1229,11 +1281,6 @@ impl FeContractHarness {
     ) -> Result<RuntimeInstance, HarnessError> {
         let args = ethers_core::abi::encode(constructor_args);
         RuntimeInstance::deploy_with_constructor_args(&self.contract.bytecode, &args)
-    }
-
-    /// Returns the raw init bytecode emitted by `solc`.
-    pub fn init_bytecode(&self) -> &str {
-        &self.contract.bytecode
     }
 }
 
@@ -1307,7 +1354,10 @@ pub fn bytes_to_u256(bytes: &[u8]) -> Result<U256, HarnessError> {
 #[allow(clippy::print_stderr)]
 mod tests {
     use super::*;
-    use ethers_core::{abi::Token, types::U256 as AbiU256};
+    use ethers_core::{
+        abi::{AbiParser, Function, Param, ParamType, StateMutability, Token, decode},
+        types::U256 as AbiU256,
+    };
     use std::process::Command;
 
     fn initcode_returning_zero_runtime(runtime_len: usize) -> String {
@@ -1337,6 +1387,1221 @@ mod tests {
         ];
         init.extend(vec![0x00; runtime_len as usize]);
         hex::encode(init)
+    }
+
+    fn compile_calldata_decode_contract() -> Option<FeContractHarness> {
+        if !solc_available() {
+            eprintln!("skipping calldata decode contract tests because solc is missing");
+            return None;
+        }
+
+        let source = r#"
+use std::abi::sol
+use std::abi::{decode_input, decode_input_at}
+use std::evm::{CallData, Evm}
+
+msg DecodeMsg {
+    #[selector = sol("raw(uint256)")]
+    Raw { value: u256 } -> u256,
+    #[selector = sol("read(uint256)")]
+    Read { value: u256 } -> u256,
+    #[selector = sol("selector()")]
+    Selector -> u256,
+    #[selector = sol("args(uint256)")]
+    Args { value: u256 } -> u256,
+    #[selector = sol("tuple(uint64,bool)")]
+    Tuple { a: u64, flag: bool } -> u256,
+    #[selector = sol("generic(uint256)")]
+    Generic { value: u256 } -> u256,
+    #[selector = sol("bad()")]
+    Bad -> u256,
+    #[selector = sol("bad_view()")]
+    BadView -> u256,
+}
+
+pub contract DecodeHarness {
+    recv DecodeMsg {
+        Raw { value: _ } -> u256 {
+            CallData::new().decode<u256>()
+        }
+
+        Read { value } -> u256 {
+            let decoded = CallData::with_base(4).decode<u256>()
+            assert(decoded == value)
+            decoded
+        }
+
+        Selector -> u256 uses (evm: Evm) {
+            evm.selector() as u256
+        }
+
+        Args { value } -> u256 uses (evm: mut Evm) {
+            let decoded = evm.decode_args<u256>()
+            assert(decoded == value)
+            decoded
+        }
+
+        Tuple { a, flag } -> u256 uses (evm: mut Evm) {
+            let decoded: (u64, bool) = evm.decode_args<(u64, bool)>()
+            assert(decoded.0 == a)
+            assert(decoded.1 == flag)
+            if flag {
+                a as u256
+            } else {
+                0
+            }
+        }
+
+        Generic { value } -> u256 {
+            let input = CallData::with_base(4)
+            let decoded: u256 = decode_input(input)
+            let decoded_at: u256 = decode_input_at(CallData::new(), 4)
+            assert(decoded == value)
+            assert(decoded_at == value)
+            decoded
+        }
+
+        Bad -> u256 {
+            decode_input_at(CallData::new(), 5)
+        }
+
+        BadView -> u256 {
+            CallData::with_base(5).decode<u256>()
+        }
+    }
+}
+"#;
+
+        Some(
+            FeContractHarness::compile_from_source(
+                "DecodeHarness",
+                source,
+                CompileOptions::default(),
+            )
+            .expect("calldata decode contract should compile"),
+        )
+    }
+
+    fn compile_canonical_decode_contract() -> Option<FeContractHarness> {
+        if !solc_available() {
+            eprintln!("skipping canonical decode contract tests because solc is missing");
+            return None;
+        }
+
+        let source = r#"
+use std::abi::sol
+use std::evm::Address
+
+msg CanonicalMsg {
+    #[selector = sol("readBool(bool)")]
+    ReadBool { value: bool } -> u256,
+    #[selector = sol("readU8(uint8)")]
+    ReadU8 { value: u8 } -> u256,
+    #[selector = sol("readI8(int8)")]
+    ReadI8 { value: i8 } -> u256,
+    #[selector = sol("readAddress(address)")]
+    ReadAddress { value: Address } -> u256,
+}
+
+pub contract CanonicalHarness {
+    recv CanonicalMsg {
+        ReadBool { value } -> u256 {
+            if value { 1 } else { 0 }
+        }
+
+        ReadU8 { value } -> u256 {
+            value as u256
+        }
+
+        ReadI8 { value } -> u256 {
+            if value == 127 { 1 } else { 0 }
+        }
+
+        ReadAddress { value } -> u256 {
+            value.inner
+        }
+    }
+}
+"#;
+
+        Some(
+            FeContractHarness::compile_from_source(
+                "CanonicalHarness",
+                source,
+                CompileOptions::default(),
+            )
+            .expect("canonical decode contract should compile"),
+        )
+    }
+
+    fn compile_dynamic_view_contract() -> Option<FeContractHarness> {
+        if !solc_available() {
+            eprintln!("skipping dynamic view contract tests because solc is missing");
+            return None;
+        }
+
+        let source = r#"
+use std::abi::sol
+use std::abi::sol::{decode_bytes_view, decode_bytes_view_at, decode_string_view}
+use std::evm::{CallData, Evm}
+
+const BYTES_LEN_SELECTOR: u32 = sol("bytesLen(bytes)")
+const SECOND_BYTES_LEN_SELECTOR: u32 = sol("secondBytesLen(bytes,bytes)")
+const STRING_FIRST_SELECTOR: u32 = sol("stringFirst(string)")
+const STRING_LEN_SELECTOR: u32 = sol("stringLen(string)")
+
+#[contract_init(ViewHarness)]
+fn init() uses (evm: mut Evm) {
+    evm.create_contract(runtime)
+}
+
+#[contract_runtime(ViewHarness)]
+fn runtime() uses (evm: mut Evm) {
+    let sel = evm.selector()
+
+    if sel == BYTES_LEN_SELECTOR {
+        let view = decode_bytes_view(CallData::with_base(4))
+        evm.mstore(0, view.len())
+        evm.return_data(0, 32)
+    }
+
+    if sel == SECOND_BYTES_LEN_SELECTOR {
+        let view = decode_bytes_view_at(CallData::with_base(4), 0, 32)
+        evm.mstore(0, view.len())
+        evm.return_data(0, 32)
+    }
+
+    if sel == STRING_FIRST_SELECTOR {
+        let view = decode_string_view(CallData::with_base(4))
+        let first: u256 = if view.is_empty() { 0 } else { view.byte_at(0) as u256 }
+        evm.mstore(0, first)
+        evm.return_data(0, 32)
+    }
+
+    if sel == STRING_LEN_SELECTOR {
+        let view = decode_string_view(CallData::with_base(4))
+        evm.mstore(0, view.len())
+        evm.return_data(0, 32)
+    }
+
+    evm.revert(0, 0)
+}
+"#;
+
+        Some(
+            FeContractHarness::compile_from_source(
+                "ViewHarness",
+                source,
+                CompileOptions::default(),
+            )
+            .expect("dynamic view contract should compile"),
+        )
+    }
+
+    fn compile_storage_bytes_contract() -> Option<FeContractHarness> {
+        if !solc_available() {
+            eprintln!("skipping storage bytes contract tests because solc is missing");
+            return None;
+        }
+
+        let source = r#"
+use std::abi::sol
+use std::abi::sol::{decode_bytes_view, decode_bytes_view_at}
+use std::evm::{CallData, Evm, StorageBytes, emit_bytes_event_view}
+
+const SET_SELECTOR: u32 = sol("set(bytes)")
+const GET_SELECTOR: u32 = sol("get()")
+const CLEAR_SELECTOR: u32 = sol("clear()")
+const EMIT_SELECTOR: u32 = sol("emit(bytes)")
+const TOPIC0: u256 = 0x1234
+
+type Blobs = StorageBytes<u256, 0, 1>
+
+#[contract_init(StorageBytesHarness)]
+fn init() uses (evm: mut Evm) {
+    evm.create_contract(runtime)
+}
+
+#[contract_runtime(StorageBytesHarness)]
+fn runtime() uses (evm: mut Evm) {
+    let sel = evm.selector()
+    let blobs: Blobs = Blobs::new()
+
+    if sel == SET_SELECTOR {
+        let view = decode_bytes_view(CallData::with_base(4))
+        blobs.store_view(0, view)
+        evm.return_data(0, 0)
+    }
+
+    if sel == GET_SELECTOR {
+        blobs.encode_return(0)
+    }
+
+    if sel == CLEAR_SELECTOR {
+        blobs.clear(0)
+        evm.return_data(0, 0)
+    }
+
+    if sel == EMIT_SELECTOR {
+        let view = decode_bytes_view_at(CallData::new(), 4, 0)
+        emit_bytes_event_view(TOPIC0, view)
+        evm.return_data(0, 0)
+    }
+
+    evm.revert(0, 0)
+}
+"#;
+
+        Some(
+            FeContractHarness::compile_from_source(
+                "StorageBytesHarness",
+                source,
+                CompileOptions::default(),
+            )
+            .expect("storage bytes contract should compile"),
+        )
+    }
+
+    fn emit_then_text_contract_source() -> &'static str {
+        r#"
+use std::abi::{sol, Bytes}
+use std::evm::emit_bytes_event_view
+
+const TOPIC0: u256 = 0x1234
+
+msg EmitThenTextMsg {
+    #[selector = sol("emitAndReturn(bytes)")]
+    EmitAndReturn { data: Bytes } -> Text,
+}
+
+pub contract EmitThenText {
+    recv EmitThenTextMsg {
+        EmitAndReturn { data } -> Text {
+            emit_bytes_event_view(TOPIC0, data.view())
+            "emit-and-return-abcdefghijklmnopqrstuvwxyz-ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789"
+        }
+    }
+}
+"#
+    }
+
+    fn compile_emit_then_text_contract() -> Option<FeContractHarness> {
+        if !solc_available() {
+            eprintln!("skipping emit-then-text contract tests because solc is missing");
+            return None;
+        }
+
+        Some(
+            FeContractHarness::compile_from_source(
+                "EmitThenText",
+                emit_then_text_contract_source(),
+                CompileOptions::default(),
+            )
+            .expect("emit-then-text contract should compile"),
+        )
+    }
+
+    fn raw_static_target_contract_source() -> &'static str {
+        r#"
+use std::abi::sol
+
+msg RawStaticTargetMsg {
+    #[selector = sol("word()")]
+    Word -> u256,
+
+    #[selector = sol("flag()")]
+    Flag -> bool,
+}
+
+pub contract RawStaticTarget {
+    recv RawStaticTargetMsg {
+        Word -> u256 {
+            7
+        }
+
+        Flag -> bool {
+            true
+        }
+    }
+}
+"#
+    }
+
+    fn compile_raw_static_target_contract() -> Option<FeContractHarness> {
+        if !solc_available() {
+            eprintln!("skipping raw static target contract tests because solc is missing");
+            return None;
+        }
+
+        Some(
+            FeContractHarness::compile_from_source(
+                "RawStaticTarget",
+                raw_static_target_contract_source(),
+                CompileOptions::default(),
+            )
+            .expect("raw static target contract should compile"),
+        )
+    }
+
+    fn raw_static_caller_contract_source() -> &'static str {
+        r#"
+use std::abi::sol
+use std::evm::{Address, staticcall_decode}
+use std::evm::ops
+
+const WORD_SELECTOR: u32 = sol("word()")
+const FLAG_SELECTOR: u32 = sol("flag()")
+
+msg RawStaticCallerMsg {
+    #[selector = sol("callWord(address)")]
+    CallWord { target: Address } -> u256,
+
+    #[selector = sol("callFlag(address)")]
+    CallFlag { target: Address } -> bool,
+}
+
+pub contract RawStaticCaller {
+    recv RawStaticCallerMsg {
+        CallWord { target } -> u256 {
+            ops::mstore(0, (WORD_SELECTOR as u256) << 224)
+            staticcall_decode(target, ops::gas(), 0, 4)
+        }
+
+        CallFlag { target } -> bool {
+            ops::mstore(0, (FLAG_SELECTOR as u256) << 224)
+            staticcall_decode(target, ops::gas(), 0, 4)
+        }
+    }
+}
+"#
+    }
+
+    fn compile_raw_static_caller_contract() -> Option<FeContractHarness> {
+        if !solc_available() {
+            eprintln!("skipping raw static caller contract tests because solc is missing");
+            return None;
+        }
+
+        Some(
+            FeContractHarness::compile_from_source(
+                "RawStaticCaller",
+                raw_static_caller_contract_source(),
+                CompileOptions::default(),
+            )
+            .expect("raw static caller contract should compile"),
+        )
+    }
+
+    fn bad_bool_target_contract_source() -> &'static str {
+        r#"
+use std::abi::sol
+use std::evm::Evm
+
+const FLAG_SELECTOR: u32 = sol("flag()")
+
+#[contract_init(BadBoolTarget)]
+fn init() uses (evm: mut Evm) {
+    evm.create_contract(runtime)
+}
+
+#[contract_runtime(BadBoolTarget)]
+fn runtime() uses (evm: mut Evm) {
+    if evm.selector() == FLAG_SELECTOR {
+        evm.mstore(0, 2)
+        evm.return_data(0, 32)
+    }
+
+    evm.revert(0, 0)
+}
+"#
+    }
+
+    fn compile_bad_bool_target_contract() -> Option<FeContractHarness> {
+        if !solc_available() {
+            eprintln!("skipping bad bool target contract tests because solc is missing");
+            return None;
+        }
+
+        Some(
+            FeContractHarness::compile_from_source(
+                "BadBoolTarget",
+                bad_bool_target_contract_source(),
+                CompileOptions::default(),
+            )
+            .expect("bad bool target contract should compile"),
+        )
+    }
+
+    fn string_echo_contract_source() -> &'static str {
+        r#"
+use std::abi::sol
+use std::evm::effects::Log
+
+msg EchoMsg {
+    #[selector = sol("echo(string)")]
+    Echo { text: Text } -> Text,
+
+    #[selector = sol("emit(string)")]
+    Emit { text: Text } -> bool,
+}
+
+#[event]
+struct Echoed {
+    text: Text,
+}
+
+pub contract StringEcho uses (log: mut Log) {
+    recv EchoMsg {
+        Echo { text } -> Text {
+            text
+        }
+
+        Emit { text } -> bool uses (mut log) {
+            log.emit(Echoed { text })
+            true
+        }
+    }
+}
+"#
+    }
+
+    fn string_caller_contract_source() -> &'static str {
+        r#"
+use std::abi::sol
+use std::evm::{Address, Call}
+
+msg EchoMsg {
+    #[selector = sol("echo(string)")]
+    Echo { text: Text } -> Text,
+}
+
+msg CallerMsg {
+    #[selector = sol("callEcho(address,string)")]
+    CallEcho { target: Address, text: Text } -> Text,
+}
+
+pub contract StringCaller uses (call: mut Call) {
+    recv CallerMsg {
+        CallEcho { target, text } -> Text uses (mut call) {
+            target.call(EchoMsg::Echo { text })
+        }
+    }
+}
+"#
+    }
+
+    fn string_literal_contract_source() -> &'static str {
+        r#"
+use std::abi::sol
+
+msg LiteralMsg {
+    #[selector = sol("literal()")]
+    Literal -> Text,
+}
+
+pub contract StringLiteral {
+    recv LiteralMsg {
+        Literal -> Text {
+            let text = "literal-abcdefghijklmnopqrstuvwxyz-ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789"
+            text
+        }
+    }
+}
+"#
+    }
+
+    fn compile_string_echo_contract() -> Option<FeContractHarness> {
+        if !solc_available() {
+            eprintln!("skipping string echo contract tests because solc is missing");
+            return None;
+        }
+
+        Some(
+            FeContractHarness::compile_from_source(
+                "StringEcho",
+                string_echo_contract_source(),
+                CompileOptions::default(),
+            )
+            .expect("string echo contract should compile"),
+        )
+    }
+
+    fn compile_string_caller_contract() -> Option<FeContractHarness> {
+        if !solc_available() {
+            eprintln!("skipping string caller contract tests because solc is missing");
+            return None;
+        }
+
+        Some(
+            FeContractHarness::compile_from_source(
+                "StringCaller",
+                string_caller_contract_source(),
+                CompileOptions::default(),
+            )
+            .expect("string caller contract should compile"),
+        )
+    }
+
+    fn compile_string_literal_contract() -> Option<FeContractHarness> {
+        if !solc_available() {
+            eprintln!("skipping string literal contract tests because solc is missing");
+            return None;
+        }
+
+        Some(
+            FeContractHarness::compile_from_source(
+                "StringLiteral",
+                string_literal_contract_source(),
+                CompileOptions::default(),
+            )
+            .expect("string literal contract should compile"),
+        )
+    }
+
+    fn string_view_contract_source() -> &'static str {
+        r#"
+use std::abi::sol
+
+msg ViewMsg {
+    #[selector = sol("head(string)")]
+    Head { text: Text } -> u8,
+}
+
+pub contract StringViewHead {
+    recv ViewMsg {
+        Head { text } -> u8 {
+            text.view().byte_at(0)
+        }
+    }
+}
+"#
+    }
+
+    fn compile_string_view_contract() -> Option<FeContractHarness> {
+        if !solc_available() {
+            eprintln!("skipping string view contract tests because solc is missing");
+            return None;
+        }
+
+        Some(
+            FeContractHarness::compile_from_source(
+                "StringViewHead",
+                string_view_contract_source(),
+                CompileOptions::default(),
+            )
+            .expect("string view contract should compile"),
+        )
+    }
+
+    fn vec_echo_contract_source() -> &'static str {
+        r#"
+use std::abi::sol
+
+msg VecMsg {
+    #[selector = sol("echo(uint256[])")]
+    Echo { values: Vec<u256> } -> Vec<u256>,
+}
+
+pub contract VecEcho {
+    recv VecMsg {
+        Echo { values } -> Vec<u256> {
+            values
+        }
+    }
+}
+"#
+    }
+
+    fn compile_vec_echo_contract() -> Option<FeContractHarness> {
+        if !solc_available() {
+            eprintln!("skipping vec echo contract tests because solc is missing");
+            return None;
+        }
+
+        Some(
+            FeContractHarness::compile_from_source(
+                "VecEcho",
+                vec_echo_contract_source(),
+                CompileOptions::default(),
+            )
+            .expect("vec echo contract should compile"),
+        )
+    }
+
+    fn nested_tuple_echo_contract_source() -> &'static str {
+        r#"
+use std::abi::sol
+
+msg NestedEchoMsg {
+    #[selector = sol("echo((string,uint64))")]
+    Echo { pair: (Text, u64) } -> (Text, u64),
+}
+
+pub contract NestedTupleEcho {
+    recv NestedEchoMsg {
+        Echo { pair } -> (Text, u64) {
+            pair
+        }
+    }
+}
+"#
+    }
+
+    fn nested_tuple_caller_contract_source() -> &'static str {
+        r#"
+use std::abi::sol
+use std::evm::{Address, Call}
+
+msg NestedEchoMsg {
+    #[selector = sol("echo((string,uint64))")]
+    Echo { pair: (Text, u64) } -> (Text, u64),
+}
+
+msg NestedCallerMsg {
+    #[selector = sol("callEcho(address,(string,uint64))")]
+    CallEcho { target: Address, pair: (Text, u64) } -> (Text, u64),
+}
+
+pub contract NestedTupleCaller uses (call: mut Call) {
+    recv NestedCallerMsg {
+        CallEcho { target, pair } -> (Text, u64) uses (mut call) {
+            target.call(NestedEchoMsg::Echo { pair })
+        }
+    }
+}
+"#
+    }
+
+    fn nested_tuple_init_contract_source() -> &'static str {
+        r#"
+use std::abi::sol
+
+msg StoredPairMsg {
+    #[selector = sol("getTextLen()")]
+    GetTextLen -> u256,
+    #[selector = sol("getFirstByte()")]
+    GetFirstByte -> u8,
+    #[selector = sol("getCount()")]
+    GetCount -> u64,
+}
+
+struct PairStore {
+    text_len: u256,
+    first_byte: u8,
+    count: u64,
+}
+
+pub contract NestedTupleInit {
+    mut store: PairStore
+
+    init(text: Text, count: u64) uses (mut store) {
+        store.text_len = text.len()
+        store.first_byte = if text.is_empty() { 0 } else { text.as_bytes().byte_at(0) }
+        store.count = count
+    }
+
+    recv StoredPairMsg {
+        GetTextLen -> u256 uses (store) {
+            store.text_len
+        }
+
+        GetFirstByte -> u8 uses (store) {
+            store.first_byte
+        }
+
+        GetCount -> u64 uses (store) {
+            store.count
+        }
+    }
+}
+"#
+    }
+
+    fn compile_nested_tuple_echo_contract() -> Option<FeContractHarness> {
+        if !solc_available() {
+            eprintln!("skipping nested tuple echo contract tests because solc is missing");
+            return None;
+        }
+
+        Some(
+            FeContractHarness::compile_from_source(
+                "NestedTupleEcho",
+                nested_tuple_echo_contract_source(),
+                CompileOptions::default(),
+            )
+            .expect("nested tuple echo contract should compile"),
+        )
+    }
+
+    fn compile_nested_tuple_caller_contract() -> Option<FeContractHarness> {
+        if !solc_available() {
+            eprintln!("skipping nested tuple caller contract tests because solc is missing");
+            return None;
+        }
+
+        Some(
+            FeContractHarness::compile_from_source(
+                "NestedTupleCaller",
+                nested_tuple_caller_contract_source(),
+                CompileOptions::default(),
+            )
+            .expect("nested tuple caller contract should compile"),
+        )
+    }
+
+    fn compile_nested_tuple_init_contract() -> Option<FeContractHarness> {
+        if !solc_available() {
+            eprintln!("skipping nested tuple init contract tests because solc is missing");
+            return None;
+        }
+
+        Some(
+            FeContractHarness::compile_from_source(
+                "NestedTupleInit",
+                nested_tuple_init_contract_source(),
+                CompileOptions::default(),
+            )
+            .expect("nested tuple init contract should compile"),
+        )
+    }
+
+    fn fixed_string_decode_contract_source() -> &'static str {
+        r#"
+use std::abi::sol
+
+msg FixedStringDecodeMsg {
+    #[selector = sol("ok(string)")]
+    Ok { text: String<32> } -> u256,
+}
+
+pub contract FixedStringDecode {
+    recv FixedStringDecodeMsg {
+        Ok { text } -> u256 {
+            1
+        }
+    }
+}
+"#
+    }
+
+    fn compile_fixed_string_decode_contract() -> Option<FeContractHarness> {
+        if !solc_available() {
+            eprintln!("skipping fixed string decode contract tests because solc is missing");
+            return None;
+        }
+
+        Some(
+            FeContractHarness::compile_from_source(
+                "FixedStringDecode",
+                fixed_string_decode_contract_source(),
+                CompileOptions::default(),
+            )
+            .expect("fixed string decode contract should compile"),
+        )
+    }
+
+    fn fixed_string_return_caller_contract_source() -> &'static str {
+        r#"
+use std::abi::sol
+use std::evm::{Address, Call}
+
+msg FixedStringEchoMsg {
+    #[selector = sol("echo(string)")]
+    Echo { text: Text } -> String<32>,
+}
+
+msg FixedStringCallerMsg {
+    #[selector = sol("forward(address,string)")]
+    Forward { target: Address, text: Text } -> String<32>,
+}
+
+pub contract FixedStringCaller uses (call: mut Call) {
+    recv FixedStringCallerMsg {
+        Forward { target, text } -> String<32> uses (mut call) {
+            target.call(FixedStringEchoMsg::Echo { text })
+        }
+    }
+}
+"#
+    }
+
+    fn compile_fixed_string_return_caller_contract() -> Option<FeContractHarness> {
+        if !solc_available() {
+            eprintln!("skipping fixed string return caller contract tests because solc is missing");
+            return None;
+        }
+
+        Some(
+            FeContractHarness::compile_from_source(
+                "FixedStringCaller",
+                fixed_string_return_caller_contract_source(),
+                CompileOptions::default(),
+            )
+            .expect("fixed string return caller contract should compile"),
+        )
+    }
+
+    fn create2_init_args_contract_source() -> &'static str {
+        r#"
+use std::abi::sol
+use std::evm::Create
+
+msg StaticChildMsg {
+    #[selector = sol("getByte()")]
+    GetByte -> u8,
+}
+
+msg DynamicChildMsg {
+    #[selector = sol("getTextLen()")]
+    GetTextLen -> u256,
+    #[selector = sol("getFirstByte()")]
+    GetFirstByte -> u8,
+    #[selector = sol("getCount()")]
+    GetCount -> u64,
+}
+
+msg ParentMsg {
+    #[selector = sol("deployStatic()")]
+    DeployStatic -> u256,
+    #[selector = sol("deployDynamic(string,uint64)")]
+    DeployDynamic { text: Text, count: u64 } -> u256,
+}
+
+pub contract StaticChild {
+    mut stored: u8
+
+    init(value: u8) uses (mut stored) {
+        stored = value
+    }
+
+    recv StaticChildMsg {
+        GetByte -> u8 uses (stored) {
+            stored
+        }
+    }
+}
+
+struct DynamicStore {
+    text_len: u256,
+    first_byte: u8,
+    count: u64,
+}
+
+pub contract DynamicChild {
+    mut store: DynamicStore
+
+    init(text: Text, count: u64) uses (mut store) {
+        store.text_len = text.len()
+        store.first_byte = if text.is_empty() { 0 } else { text.as_bytes().byte_at(0) }
+        store.count = count
+    }
+
+    recv DynamicChildMsg {
+        GetTextLen -> u256 uses (store) {
+            store.text_len
+        }
+
+        GetFirstByte -> u8 uses (store) {
+            store.first_byte
+        }
+
+        GetCount -> u64 uses (store) {
+            store.count
+        }
+    }
+}
+
+pub contract Create2Parent uses (create: mut Create) {
+    recv ParentMsg {
+        DeployStatic -> u256 uses (mut create) {
+            create.create2<StaticChild>(value: 0, args: (7,), salt: 1).inner
+        }
+
+        DeployDynamic { text, count } -> u256 uses (mut create) {
+            create.create2<DynamicChild>(value: 0, args: (text, count), salt: 2).inner
+        }
+    }
+}
+"#
+    }
+
+    fn compile_create2_init_args_contract() -> Option<FeContractHarness> {
+        if !solc_available() {
+            eprintln!("skipping create2 init arg contract tests because solc is missing");
+            return None;
+        }
+
+        Some(
+            FeContractHarness::compile_from_source(
+                "Create2Parent",
+                create2_init_args_contract_source(),
+                CompileOptions::default(),
+            )
+            .expect("create2 init arg contract should compile"),
+        )
+    }
+
+    fn custom_width_encode_contract_source() -> &'static str {
+        r#"
+use std::abi::sol::{self, Int40, Int136, Uint24, Uint160}
+use std::evm::effects::Log
+
+msg CustomWidthMsg {
+    #[selector = sol("goodUint24()")]
+    GoodUint24 -> Uint24,
+    #[selector = sol("badUint24()")]
+    BadUint24 -> Uint24,
+    #[selector = sol("goodUint160()")]
+    GoodUint160 -> Uint160,
+    #[selector = sol("badUint160()")]
+    BadUint160 -> Uint160,
+    #[selector = sol("goodInt40()")]
+    GoodInt40 -> Int40,
+    #[selector = sol("badInt40()")]
+    BadInt40 -> Int40,
+    #[selector = sol("goodInt136()")]
+    GoodInt136 -> Int136,
+    #[selector = sol("badInt136()")]
+    BadInt136 -> Int136,
+    #[selector = sol("emitGoodUint160()")]
+    EmitGoodUint160 -> bool,
+    #[selector = sol("emitBadUint160()")]
+    EmitBadUint160 -> bool,
+}
+
+#[event]
+struct SeenUint160 {
+    #[indexed]
+    value: Uint160,
+}
+
+pub contract CustomWidthBoundary uses (log: mut Log) {
+    recv CustomWidthMsg {
+        GoodUint24 -> Uint24 {
+            Uint24 { val: 7 }
+        }
+
+        BadUint24 -> Uint24 {
+            Uint24 { val: (1 as u32) << 31 }
+        }
+
+        GoodUint160 -> Uint160 {
+            Uint160 { val: 1 }
+        }
+
+        BadUint160 -> Uint160 {
+            Uint160 { val: (1 as u256) << 200 }
+        }
+
+        GoodInt40 -> Int40 {
+            Int40 { val: 5 }
+        }
+
+        BadInt40 -> Int40 {
+            Int40 { val: (1 as i64) << 60 }
+        }
+
+        GoodInt136 -> Int136 {
+            Int136 { val: 5 }
+        }
+
+        BadInt136 -> Int136 {
+            Int136 { val: (1 as i256) << 180 }
+        }
+
+        EmitGoodUint160 -> bool uses (mut log) {
+            log.emit(SeenUint160 { value: Uint160 { val: 1 } })
+            true
+        }
+
+        EmitBadUint160 -> bool uses (mut log) {
+            log.emit(SeenUint160 { value: Uint160 { val: (1 as u256) << 200 } })
+            true
+        }
+    }
+}
+"#
+    }
+
+    fn compile_custom_width_encode_contract() -> Option<FeContractHarness> {
+        if !solc_available() {
+            eprintln!("skipping custom width encode contract tests because solc is missing");
+            return None;
+        }
+
+        Some(
+            FeContractHarness::compile_from_source(
+                "CustomWidthBoundary",
+                custom_width_encode_contract_source(),
+                CompileOptions::default(),
+            )
+            .expect("custom width encode contract should compile"),
+        )
+    }
+
+    fn nested_tuple_param_type() -> ParamType {
+        ParamType::Tuple(vec![ParamType::String, ParamType::Uint(64)])
+    }
+
+    fn nested_tuple_token(text: &str, count: u64) -> Token {
+        Token::Tuple(vec![
+            Token::String(text.to_string()),
+            Token::Uint(AbiU256::from(count)),
+        ])
+    }
+
+    fn long_string_value(tag: &str) -> String {
+        format!("{tag}-abcdefghijklmnopqrstuvwxyz-ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789")
+    }
+
+    fn dyn_uint_array_param_type() -> ParamType {
+        ParamType::Array(Box::new(ParamType::Uint(256)))
+    }
+
+    fn dyn_uint_array_token(values: &[u64]) -> Token {
+        Token::Array(
+            values
+                .iter()
+                .map(|value| Token::Uint(AbiU256::from(*value)))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn fixed_bool_array_param_type(len: usize) -> ParamType {
+        ParamType::FixedArray(Box::new(ParamType::Bool), len)
+    }
+
+    fn fixed_bool_array_token(len: usize) -> Token {
+        Token::FixedArray(
+            (0..len)
+                .map(|i| Token::Bool(i % 2 == 0))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn fixed_string_array_param_type(len: usize) -> ParamType {
+        ParamType::FixedArray(Box::new(ParamType::String), len)
+    }
+
+    fn fixed_string_array_token(len: usize) -> Token {
+        Token::FixedArray(
+            (0..len)
+                .map(|i| Token::String(long_string_value(&format!("str-{i:02}"))))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn fixed_bytes_array_param_type(len: usize) -> ParamType {
+        ParamType::FixedArray(Box::new(ParamType::Bytes), len)
+    }
+
+    fn fixed_bytes_array_token(len: usize) -> Token {
+        Token::FixedArray(
+            (0..len)
+                .map(|i| Token::Bytes(vec![i as u8, (i as u8) ^ 0x5a, 0xff]))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn fixed_bool_array_contract_source(len: usize) -> String {
+        format!(
+            r#"
+use std::abi::sol
+
+msg FixedBoolArrayMsg {{
+    #[selector = sol("echo(bool[{len}])")]
+    Echo {{ value: [bool; {len}] }} -> [bool; {len}],
+}}
+
+pub contract FixedBoolArrayBoundary {{
+    recv FixedBoolArrayMsg {{
+        Echo {{ value }} -> [bool; {len}] {{
+            value
+        }}
+    }}
+}}
+"#
+        )
+    }
+
+    fn fixed_dynamic_array_contract_source(len: usize) -> String {
+        format!(
+            r#"
+use std::abi::{{sol, Bytes}}
+
+msg FixedDynamicArrayMsg {{
+    #[selector = sol("echoString(string[{len}])")]
+    EchoString {{ value: [Text; {len}] }} -> [Text; {len}],
+    #[selector = sol("echoBytes(bytes[{len}])")]
+    EchoBytes {{ value: [Bytes; {len}] }} -> [Bytes; {len}],
+}}
+
+pub contract FixedDynamicArrayBoundary {{
+    recv FixedDynamicArrayMsg {{
+        EchoString {{ value }} -> [Text; {len}] {{
+            value
+        }}
+
+        EchoBytes {{ value }} -> [Bytes; {len}] {{
+            value
+        }}
+    }}
+}}
+"#
+        )
+    }
+
+    #[allow(deprecated)]
+    fn encode_typed_function_call(
+        name: &str,
+        inputs: Vec<ParamType>,
+        args: &[Token],
+    ) -> Result<Vec<u8>, HarnessError> {
+        let function = Function {
+            name: name.to_string(),
+            inputs: inputs
+                .into_iter()
+                .map(|kind| Param {
+                    name: String::new(),
+                    kind,
+                    internal_type: None,
+                })
+                .collect(),
+            outputs: Vec::new(),
+            constant: None,
+            state_mutability: StateMutability::NonPayable,
+        };
+        Ok(function.encode_input(args)?)
+    }
+
+    fn assert_empty_revert(err: HarnessError) {
+        match err {
+            HarnessError::Revert(data) => {
+                assert!(data.0.is_empty(), "expected empty revert data, got {data}");
+            }
+            other => panic!("expected revert, got {other:?}"),
+        }
+    }
+
+    fn raw_single_word_call(signature: &str, word: [u8; 32]) -> Vec<u8> {
+        let function = AbiParser::default()
+            .parse_function(signature)
+            .expect("signature should parse");
+        let mut calldata = function.short_signature().to_vec();
+        calldata.extend_from_slice(&word);
+        calldata
+    }
+
+    fn word_from_u256(value: AbiU256) -> [u8; 32] {
+        let mut word = [0u8; 32];
+        value.to_big_endian(&mut word);
+        word
+    }
+
+    fn address_word(bytes: [u8; 20]) -> [u8; 32] {
+        let mut word = [0u8; 32];
+        word[12..].copy_from_slice(&bytes);
+        word
     }
 
     fn solc_available() -> bool {
@@ -1487,21 +2752,17 @@ object "Counter" {
         let name_res = instance
             .call_raw(&name_call, owner_opts)
             .expect("name() should succeed");
-        assert_eq!(
-            bytes_to_u256(&name_res.return_data).unwrap(),
-            U256::from(0x436f6f6c436f696eu64),
-            "name() should return CoolCoin"
-        );
+        let decoded_name = decode(&[ParamType::String], &name_res.return_data)
+            .expect("name() should return ABI-encoded string");
+        assert_eq!(decoded_name, vec![Token::String("CoolCoin".to_string())]);
 
         let symbol_call = encode_function_call("symbol()", &[]).unwrap();
         let symbol_res = instance
             .call_raw(&symbol_call, owner_opts)
             .expect("symbol() should succeed");
-        assert_eq!(
-            bytes_to_u256(&symbol_res.return_data).unwrap(),
-            U256::from(0x434f4f4cu64),
-            "symbol() should return COOL"
-        );
+        let decoded_symbol = decode(&[ParamType::String], &symbol_res.return_data)
+            .expect("symbol() should return ABI-encoded string");
+        assert_eq!(decoded_symbol, vec![Token::String("COOL".to_string())]);
 
         let decimals_call = encode_function_call("decimals()", &[]).unwrap();
         let decimals_res = instance
@@ -1681,6 +2942,1157 @@ object "Counter" {
             U256::from(1_005u64),
             "totalSupply should decrease after burn"
         );
+    }
+
+    #[test]
+    fn calldata_rebased_view_reads_after_selector() {
+        let Some(harness) = compile_calldata_decode_contract() else {
+            return;
+        };
+
+        let call = encode_function_call("read(uint256)", &[Token::Uint(AbiU256::from(42u64))])
+            .expect("calldata should encode");
+        let result = harness
+            .call_raw(&call, ExecutionOptions::default())
+            .expect("read(uint256) should succeed");
+
+        assert_eq!(
+            bytes_to_u256(&result.return_data).unwrap(),
+            U256::from(42u64),
+            "CallData::with_base(4).decode() should read the ABI word after the selector"
+        );
+    }
+
+    #[test]
+    fn calldata_decode_raw_starts_at_byte_zero() {
+        let Some(harness) = compile_calldata_decode_contract() else {
+            return;
+        };
+
+        let call = encode_function_call("raw(uint256)", &[Token::Uint(AbiU256::from(42u64))])
+            .expect("calldata should encode");
+        let result = harness
+            .call_raw(&call, ExecutionOptions::default())
+            .expect("raw(uint256) should succeed");
+
+        assert_eq!(
+            bytes_to_u256(&result.return_data).unwrap(),
+            bytes_to_u256(&call[..32]).unwrap(),
+            "CallData::new().decode() should read the first 32 calldata bytes including the selector prefix"
+        );
+    }
+
+    #[test]
+    fn evm_decode_args_reads_after_selector() {
+        let Some(harness) = compile_calldata_decode_contract() else {
+            return;
+        };
+
+        let call = encode_function_call("args(uint256)", &[Token::Uint(AbiU256::from(77u64))])
+            .expect("calldata should encode");
+        let result = harness
+            .call_raw(&call, ExecutionOptions::default())
+            .expect("args(uint256) should succeed");
+
+        assert_eq!(
+            bytes_to_u256(&result.return_data).unwrap(),
+            U256::from(77u64),
+            "evm.decode_args() should decode the ABI payload after the selector"
+        );
+    }
+
+    #[test]
+    fn evm_selector_matches_current_call_selector() {
+        let Some(harness) = compile_calldata_decode_contract() else {
+            return;
+        };
+
+        let call = encode_function_call("selector()", &[]).expect("calldata should encode");
+        let result = harness
+            .call_raw(&call, ExecutionOptions::default())
+            .expect("selector() should succeed");
+        let expected = u32::from_be_bytes([call[0], call[1], call[2], call[3]]);
+
+        assert_eq!(
+            bytes_to_u256(&result.return_data).unwrap(),
+            U256::from(expected),
+            "evm.selector() should return the current 4-byte selector"
+        );
+    }
+
+    #[test]
+    fn evm_decode_args_tuple_round_trip() {
+        let Some(harness) = compile_calldata_decode_contract() else {
+            return;
+        };
+
+        let call = encode_function_call(
+            "tuple(uint64,bool)",
+            &[Token::Uint(AbiU256::from(7u64)), Token::Bool(true)],
+        )
+        .expect("calldata should encode");
+        let result = harness
+            .call_raw(&call, ExecutionOptions::default())
+            .expect("tuple(uint64,bool) should succeed");
+
+        assert_eq!(
+            bytes_to_u256(&result.return_data).unwrap(),
+            U256::from(7u64),
+            "evm.selector() and evm.decode_args() should round-trip tuple arguments"
+        );
+    }
+
+    #[test]
+    fn calldata_decode_input_over_rebased_view_matches_decode_input_at() {
+        let Some(harness) = compile_calldata_decode_contract() else {
+            return;
+        };
+
+        let call = encode_function_call("generic(uint256)", &[Token::Uint(AbiU256::from(99u64))])
+            .expect("calldata should encode");
+        let result = harness
+            .call_raw(&call, ExecutionOptions::default())
+            .expect("generic(uint256) should succeed");
+
+        assert_eq!(
+            bytes_to_u256(&result.return_data).unwrap(),
+            U256::from(99u64),
+            "decode_input(CallData::with_base(4)) should match decode_input_at(CallData::new(), 4)"
+        );
+    }
+
+    #[test]
+    fn calldata_decode_input_at_reverts_when_base_is_past_end() {
+        let Some(harness) = compile_calldata_decode_contract() else {
+            return;
+        };
+
+        let call = encode_function_call("bad()", &[]).expect("calldata should encode");
+        let err = harness
+            .call_raw(&call, ExecutionOptions::default())
+            .expect_err("bad() should revert when decode_input_at base exceeds calldata len");
+
+        assert_empty_revert(err);
+    }
+
+    #[test]
+    fn calldata_view_decode_reverts_when_base_is_past_end() {
+        let Some(harness) = compile_calldata_decode_contract() else {
+            return;
+        };
+
+        let call = encode_function_call("bad_view()", &[]).expect("calldata should encode");
+        let err = harness
+            .call_raw(&call, ExecutionOptions::default())
+            .expect_err("bad_view() should revert when the rebased calldata view is past the end");
+
+        assert_empty_revert(err);
+    }
+
+    #[test]
+    fn canonical_bool_decode_accepts_only_zero_or_one() {
+        let Some(harness) = compile_canonical_decode_contract() else {
+            return;
+        };
+
+        let ok = harness
+            .call_function(
+                "readBool(bool)",
+                &[Token::Bool(true)],
+                ExecutionOptions::default(),
+            )
+            .expect("canonical bool should decode");
+        assert_eq!(bytes_to_u256(&ok.return_data).unwrap(), U256::from(1u64));
+
+        let invalid = raw_single_word_call("readBool(bool)", word_from_u256(AbiU256::from(2u64)));
+        let err = harness
+            .call_raw(&invalid, ExecutionOptions::default())
+            .expect_err("bool=2 should revert");
+        assert_empty_revert(err);
+    }
+
+    #[test]
+    fn canonical_u8_decode_rejects_nonzero_high_bits() {
+        let Some(harness) = compile_canonical_decode_contract() else {
+            return;
+        };
+
+        let ok = harness
+            .call_function(
+                "readU8(uint8)",
+                &[Token::Uint(AbiU256::from(42u64))],
+                ExecutionOptions::default(),
+            )
+            .expect("canonical uint8 should decode");
+        assert_eq!(bytes_to_u256(&ok.return_data).unwrap(), U256::from(42u64));
+
+        let invalid =
+            raw_single_word_call("readU8(uint8)", word_from_u256(AbiU256::from(0x100u64)));
+        let err = harness
+            .call_raw(&invalid, ExecutionOptions::default())
+            .expect_err("uint8 with nonzero high bits should revert");
+        assert_empty_revert(err);
+    }
+
+    #[test]
+    fn canonical_i8_decode_requires_sign_extension() {
+        let Some(harness) = compile_canonical_decode_contract() else {
+            return;
+        };
+
+        let ok = raw_single_word_call("readI8(int8)", word_from_u256(AbiU256::from(127u64)));
+        let result = harness
+            .call_raw(&ok, ExecutionOptions::default())
+            .expect("canonical int8=127 should decode");
+        assert_eq!(
+            bytes_to_u256(&result.return_data).unwrap(),
+            U256::from(1u64)
+        );
+
+        let mut invalid_word = [0u8; 32];
+        invalid_word[31] = 0xff;
+        let invalid = raw_single_word_call("readI8(int8)", invalid_word);
+        let err = harness
+            .call_raw(&invalid, ExecutionOptions::default())
+            .expect_err("non-sign-extended int8 should revert");
+        assert_empty_revert(err);
+    }
+
+    #[test]
+    fn canonical_address_decode_rejects_nonzero_high_bits() {
+        let Some(harness) = compile_canonical_decode_contract() else {
+            return;
+        };
+
+        let raw = [0x11u8; 20];
+        let ok_word = address_word(raw);
+        let ok = harness
+            .call_raw(
+                &raw_single_word_call("readAddress(address)", ok_word),
+                ExecutionOptions::default(),
+            )
+            .expect("canonical address should decode");
+        assert_eq!(
+            bytes_to_u256(&ok.return_data).unwrap(),
+            bytes_to_u256(&ok_word).unwrap(),
+            "address decode should preserve the low 160 bits"
+        );
+
+        let mut invalid_word = ok_word;
+        invalid_word[0] = 1;
+        let invalid = raw_single_word_call("readAddress(address)", invalid_word);
+        let err = harness
+            .call_raw(&invalid, ExecutionOptions::default())
+            .expect_err("address with nonzero high bits should revert");
+        assert_empty_revert(err);
+    }
+
+    #[test]
+    fn decode_bytes_view_reads_dynamic_arg_length() {
+        let Some(harness) = compile_dynamic_view_contract() else {
+            return;
+        };
+
+        let call = encode_function_call(
+            "bytesLen(bytes)",
+            &[Token::Bytes(vec![0xaa, 0xbb, 0xcc, 0xdd, 0xee])],
+        )
+        .expect("calldata should encode");
+        let result = harness
+            .call_raw(&call, ExecutionOptions::default())
+            .expect("bytesLen(bytes) should succeed");
+
+        assert_eq!(
+            bytes_to_u256(&result.return_data).unwrap(),
+            U256::from(5u64),
+            "decode_bytes_view should expose the dynamic byte length"
+        );
+    }
+
+    #[test]
+    fn decode_bytes_view_at_can_target_second_dynamic_arg() {
+        let Some(harness) = compile_dynamic_view_contract() else {
+            return;
+        };
+
+        let call = encode_function_call(
+            "secondBytesLen(bytes,bytes)",
+            &[
+                Token::Bytes(vec![0x01, 0x02]),
+                Token::Bytes(vec![0xaa, 0xbb, 0xcc, 0xdd]),
+            ],
+        )
+        .expect("calldata should encode");
+        let result = harness
+            .call_raw(&call, ExecutionOptions::default())
+            .expect("secondBytesLen(bytes,bytes) should succeed");
+
+        assert_eq!(
+            bytes_to_u256(&result.return_data).unwrap(),
+            U256::from(4u64),
+            "decode_bytes_view_at should decode the selected dynamic head"
+        );
+    }
+
+    #[test]
+    fn decode_string_view_exposes_string_bytes() {
+        let Some(harness) = compile_dynamic_view_contract() else {
+            return;
+        };
+
+        let first_call =
+            encode_function_call("stringFirst(string)", &[Token::String("hello".to_string())])
+                .expect("calldata should encode");
+        let first = harness
+            .call_raw(&first_call, ExecutionOptions::default())
+            .expect("stringFirst(string) should succeed");
+        assert_eq!(
+            bytes_to_u256(&first.return_data).unwrap(),
+            U256::from(b'h' as u64),
+            "decode_string_view should expose the underlying UTF-8 bytes"
+        );
+
+        let len_call =
+            encode_function_call("stringLen(string)", &[Token::String("hello".to_string())])
+                .expect("calldata should encode");
+        let len = harness
+            .call_raw(&len_call, ExecutionOptions::default())
+            .expect("stringLen(string) should succeed");
+        assert_eq!(
+            bytes_to_u256(&len.return_data).unwrap(),
+            U256::from(5u64),
+            "decode_string_view should expose the dynamic string length"
+        );
+    }
+
+    #[test]
+    fn storage_bytes_round_trip_and_clear() {
+        let Some(harness) = compile_storage_bytes_contract() else {
+            return;
+        };
+
+        let mut instance = harness
+            .deploy_with_init()
+            .expect("storage bytes contract should deploy");
+        let payload = vec![0xaa, 0xbb, 0xcc, 0xdd, 0xee];
+
+        instance
+            .call_function(
+                "set(bytes)",
+                &[Token::Bytes(payload.clone())],
+                ExecutionOptions::default(),
+            )
+            .expect("set(bytes) should succeed");
+
+        let stored = instance
+            .call_function("get()", &[], ExecutionOptions::default())
+            .expect("get() should succeed");
+        let decoded = decode(&[ParamType::Bytes], &stored.return_data)
+            .expect("get() should return ABI-encoded bytes");
+        assert_eq!(decoded, vec![Token::Bytes(payload.clone())]);
+
+        instance
+            .call_function("clear()", &[], ExecutionOptions::default())
+            .expect("clear() should succeed");
+
+        let cleared = instance
+            .call_function("get()", &[], ExecutionOptions::default())
+            .expect("get() after clear should succeed");
+        let decoded = decode(&[ParamType::Bytes], &cleared.return_data)
+            .expect("cleared get() should return ABI-encoded bytes");
+        assert_eq!(decoded, vec![Token::Bytes(Vec::new())]);
+    }
+
+    #[test]
+    fn emit_bytes_event_emits_a_log() {
+        let Some(harness) = compile_storage_bytes_contract() else {
+            return;
+        };
+
+        let mut instance = harness
+            .deploy_with_init()
+            .expect("storage bytes contract should deploy");
+        let call = encode_function_call("emit(bytes)", &[Token::Bytes(vec![0xaa, 0xbb, 0xcc])])
+            .expect("calldata should encode");
+        let result = instance
+            .call_raw_with_logs(&call, ExecutionOptions::default())
+            .expect("emit(bytes) should succeed");
+
+        assert_eq!(result.logs.len(), 1, "emit_bytes_event should emit one log");
+        assert!(
+            result.logs[0].contains("aabbcc"),
+            "log output should contain the event payload bytes"
+        );
+    }
+
+    #[test]
+    fn emit_bytes_event_does_not_clobber_subsequent_dynamic_return() {
+        let Some(harness) = compile_emit_then_text_contract() else {
+            return;
+        };
+
+        let payload = vec![0xaa, 0xbb, 0xcc, 0xdd];
+        let mut instance = harness
+            .deploy_with_init()
+            .expect("emit-then-text contract should deploy");
+        let call = encode_function_call("emitAndReturn(bytes)", &[Token::Bytes(payload.clone())])
+            .expect("calldata should encode");
+        let result = instance
+            .call_raw_with_logs(&call, ExecutionOptions::default())
+            .expect("emitAndReturn(bytes) should succeed");
+
+        assert_eq!(result.logs.len(), 1, "emit_bytes_event should emit one log");
+        assert!(
+            result.logs[0].contains("aabbccdd"),
+            "log output should contain the event payload bytes"
+        );
+
+        let decoded = decode(&[ParamType::String], &result.result.return_data)
+            .expect("emitAndReturn(bytes) should return ABI-encoded string");
+        assert_eq!(
+            decoded,
+            vec![Token::String(long_string_value("emit-and-return"))]
+        );
+    }
+
+    #[test]
+    fn raw_staticcall_decode_round_trips_word() {
+        let Some(target_harness) = compile_raw_static_target_contract() else {
+            return;
+        };
+        let Some(caller_harness) = compile_raw_static_caller_contract() else {
+            return;
+        };
+
+        let mut caller = caller_harness
+            .deploy_with_init()
+            .expect("raw static caller contract should deploy");
+        let target_addr = caller
+            .deploy_sidecar(target_harness.init_bytecode(), &[])
+            .expect("raw static target sidecar should deploy");
+        let target_abi = ethers_core::types::Address::from_slice(target_addr.as_slice());
+
+        let result = caller
+            .call_function(
+                "callWord(address)",
+                &[Token::Address(target_abi)],
+                ExecutionOptions::default(),
+            )
+            .expect("callWord(address) should succeed");
+
+        assert_eq!(
+            bytes_to_u256(&result.return_data).unwrap(),
+            U256::from(7u64),
+            "staticcall_decode should ABI-decode the returned word"
+        );
+    }
+
+    #[test]
+    fn raw_staticcall_decode_rejects_empty_returndata() {
+        let Some(harness) = compile_raw_static_caller_contract() else {
+            return;
+        };
+
+        let mut caller = harness
+            .deploy_with_init()
+            .expect("raw static caller contract should deploy");
+        let eoa = ethers_core::types::Address::from_low_u64_be(0x1234);
+        let err = caller
+            .call_function(
+                "callWord(address)",
+                &[Token::Address(eoa)],
+                ExecutionOptions::default(),
+            )
+            .expect_err("callWord(address) should revert on empty returndata");
+
+        assert_empty_revert(err);
+    }
+
+    #[test]
+    fn raw_staticcall_decode_rejects_noncanonical_bool() {
+        let Some(target_harness) = compile_bad_bool_target_contract() else {
+            return;
+        };
+        let Some(caller_harness) = compile_raw_static_caller_contract() else {
+            return;
+        };
+
+        let mut caller = caller_harness
+            .deploy_with_init()
+            .expect("raw static caller contract should deploy");
+        let target_addr = caller
+            .deploy_sidecar(target_harness.init_bytecode(), &[])
+            .expect("bad bool target sidecar should deploy");
+        let target_abi = ethers_core::types::Address::from_slice(target_addr.as_slice());
+        let err = caller
+            .call_function(
+                "callFlag(address)",
+                &[Token::Address(target_abi)],
+                ExecutionOptions::default(),
+            )
+            .expect_err("callFlag(address) should revert on non-canonical bool returndata");
+
+        assert_empty_revert(err);
+    }
+
+    #[test]
+    fn dynamic_string_unannotated_literal_binding_round_trips() {
+        let Some(harness) = compile_string_literal_contract() else {
+            return;
+        };
+
+        let expected = long_string_value("literal");
+        let mut instance = harness
+            .deploy_with_init()
+            .expect("string literal contract should deploy");
+        let result = instance
+            .call_function("literal()", &[], ExecutionOptions::default())
+            .expect("literal() should succeed");
+
+        let decoded = decode(&[ParamType::String], &result.return_data)
+            .expect("literal() should return ABI-encoded string");
+        assert_eq!(decoded, vec![Token::String(expected)]);
+    }
+
+    #[test]
+    fn dynamic_string_view_returns_first_byte() {
+        let Some(harness) = compile_string_view_contract() else {
+            return;
+        };
+
+        let payload = long_string_value("view");
+        let mut instance = harness
+            .deploy_with_init()
+            .expect("string view contract should deploy");
+        let result = instance
+            .call_function(
+                "head(string)",
+                &[Token::String(payload.clone())],
+                ExecutionOptions::default(),
+            )
+            .expect("head(string) should succeed");
+
+        assert_eq!(
+            bytes_to_u256(&result.return_data).unwrap(),
+            U256::from(payload.as_bytes()[0]),
+            "head(string) should read through Text.view()"
+        );
+    }
+
+    #[test]
+    fn dynamic_string_round_trip_supports_long_payloads() {
+        let Some(harness) = compile_string_echo_contract() else {
+            return;
+        };
+
+        let payload = long_string_value("echo");
+        let mut instance = harness
+            .deploy_with_init()
+            .expect("string echo contract should deploy");
+        let result = instance
+            .call_function(
+                "echo(string)",
+                &[Token::String(payload.clone())],
+                ExecutionOptions::default(),
+            )
+            .expect("echo(string) should succeed");
+
+        let decoded = decode(&[ParamType::String], &result.return_data)
+            .expect("echo(string) should return ABI-encoded string");
+        assert_eq!(decoded, vec![Token::String(payload)]);
+    }
+
+    #[test]
+    fn dynamic_string_decode_and_return_round_trip() {
+        let Some(harness) = compile_string_echo_contract() else {
+            return;
+        };
+
+        let payload = long_string_value("roundtrip");
+        let mut instance = harness
+            .deploy_with_init()
+            .expect("string echo contract should deploy");
+        let result = instance
+            .call_function(
+                "echo(string)",
+                &[Token::String(payload.clone())],
+                ExecutionOptions::default(),
+            )
+            .expect("echo(string) should succeed");
+
+        let decoded = decode(&[ParamType::String], &result.return_data)
+            .expect("echo(string) should return ABI-encoded string");
+        assert_eq!(decoded, vec![Token::String(payload)]);
+    }
+
+    #[test]
+    fn dynamic_vec_alias_round_trips() {
+        let Some(harness) = compile_vec_echo_contract() else {
+            return;
+        };
+
+        let value = dyn_uint_array_token(&[3, 5, 8, 13, 21]);
+        let mut instance = harness
+            .deploy_with_init()
+            .expect("vec echo contract should deploy");
+        let call = encode_typed_function_call(
+            "echo",
+            vec![dyn_uint_array_param_type()],
+            std::slice::from_ref(&value),
+        )
+        .expect("typed calldata should encode");
+        let result = instance
+            .call_raw(&call, ExecutionOptions::default())
+            .expect("echo(uint256[]) should succeed");
+        let decoded = decode(&[dyn_uint_array_param_type()], &result.return_data)
+            .expect("echo(uint256[]) should return ABI-encoded array");
+
+        assert_eq!(decoded, vec![value]);
+    }
+
+    #[test]
+    fn dynamic_string_msg_call_round_trips() {
+        let Some(echo_harness) = compile_string_echo_contract() else {
+            return;
+        };
+        let Some(caller_harness) = compile_string_caller_contract() else {
+            return;
+        };
+
+        let payload = long_string_value("caller");
+        let mut caller = caller_harness
+            .deploy_with_init()
+            .expect("string caller contract should deploy");
+        let echo_addr = caller
+            .deploy_sidecar(echo_harness.init_bytecode(), &[])
+            .expect("string echo sidecar should deploy");
+        let echo_abi = ethers_core::types::Address::from_slice(echo_addr.as_slice());
+
+        let result = caller
+            .call_function(
+                "callEcho(address,string)",
+                &[Token::Address(echo_abi), Token::String(payload.clone())],
+                ExecutionOptions::default(),
+            )
+            .expect("callEcho(address,string) should succeed");
+
+        let decoded = decode(&[ParamType::String], &result.return_data)
+            .expect("callEcho(address,string) should return ABI-encoded string");
+        assert_eq!(decoded, vec![Token::String(payload)]);
+    }
+
+    #[test]
+    fn dynamic_string_event_payload_is_abi_encoded() {
+        let Some(harness) = compile_string_echo_contract() else {
+            return;
+        };
+
+        let payload = long_string_value("event");
+        let mut instance = harness
+            .deploy_with_init()
+            .expect("string echo contract should deploy");
+        let call = encode_function_call("emit(string)", &[Token::String(payload.clone())])
+            .expect("calldata should encode");
+        let result = instance
+            .call_raw_with_logs(&call, ExecutionOptions::default())
+            .expect("emit(string) should succeed");
+
+        assert_eq!(result.logs.len(), 1, "emit(string) should emit one log");
+        assert!(
+            result.logs[0].contains(&hex::encode(payload.as_bytes())),
+            "log output should contain the ABI-encoded string payload"
+        );
+    }
+
+    #[test]
+    fn dynamic_tuple_return_is_solidity_compatible() {
+        let Some(harness) = compile_nested_tuple_echo_contract() else {
+            return;
+        };
+
+        let text = long_string_value("tuple-return");
+        let mut instance = harness
+            .deploy_with_init()
+            .expect("nested tuple echo contract should deploy");
+        let call = encode_typed_function_call(
+            "echo",
+            vec![nested_tuple_param_type()],
+            &[nested_tuple_token(&text, 7)],
+        )
+        .expect("typed calldata should encode");
+        let result = instance
+            .call_raw(&call, ExecutionOptions::default())
+            .expect("echo((string,uint64)) should succeed");
+
+        let decoded = decode(&[nested_tuple_param_type()], &result.return_data)
+            .expect("echo((string,uint64)) should return ABI-encoded outputs");
+        assert_eq!(decoded, vec![nested_tuple_token(&text, 7)]);
+    }
+
+    #[test]
+    fn dynamic_tuple_msg_call_round_trips() {
+        let Some(echo_harness) = compile_nested_tuple_echo_contract() else {
+            return;
+        };
+        let Some(caller_harness) = compile_nested_tuple_caller_contract() else {
+            return;
+        };
+
+        let text = long_string_value("tuple-call");
+        let mut caller = caller_harness
+            .deploy_with_init()
+            .expect("nested tuple caller contract should deploy");
+        let echo_addr = caller
+            .deploy_sidecar(echo_harness.init_bytecode(), &[])
+            .expect("nested tuple echo sidecar should deploy");
+        let echo_abi = ethers_core::types::Address::from_slice(echo_addr.as_slice());
+
+        let call = encode_typed_function_call(
+            "callEcho",
+            vec![ParamType::Address, nested_tuple_param_type()],
+            &[Token::Address(echo_abi), nested_tuple_token(&text, 9)],
+        )
+        .expect("typed calldata should encode");
+        let result = caller
+            .call_raw(&call, ExecutionOptions::default())
+            .expect("callEcho(address,(string,uint64)) should succeed");
+
+        let decoded = decode(&[nested_tuple_param_type()], &result.return_data)
+            .expect("callEcho(address,(string,uint64)) should return ABI-encoded outputs");
+        assert_eq!(decoded, vec![nested_tuple_token(&text, 9)]);
+    }
+
+    #[test]
+    fn dynamic_tuple_constructor_args_round_trip() {
+        let Some(harness) = compile_nested_tuple_init_contract() else {
+            return;
+        };
+
+        let text = long_string_value("ctor");
+        let mut instance = harness
+            .deploy_with_init_args(&[
+                Token::String(text.clone()),
+                Token::Uint(AbiU256::from(11u64)),
+            ])
+            .expect("nested tuple init contract should deploy");
+        let text_len = instance
+            .call_function("getTextLen()", &[], ExecutionOptions::default())
+            .expect("getTextLen() should succeed");
+        let first_byte = instance
+            .call_function("getFirstByte()", &[], ExecutionOptions::default())
+            .expect("getFirstByte() should succeed");
+        let count = instance
+            .call_function("getCount()", &[], ExecutionOptions::default())
+            .expect("getCount() should succeed");
+
+        let decoded_text_len = decode(&[ParamType::Uint(256)], &text_len.return_data)
+            .expect("getTextLen() should return ABI-encoded length");
+        assert_eq!(
+            decoded_text_len,
+            vec![Token::Uint(AbiU256::from(text.len()))],
+            "constructor should observe the full decoded string length"
+        );
+        let decoded_first_byte = decode(&[ParamType::Uint(8)], &first_byte.return_data)
+            .expect("getFirstByte() should return ABI-encoded byte");
+        assert_eq!(
+            decoded_first_byte,
+            vec![Token::Uint(AbiU256::from(text.as_bytes()[0]))],
+            "constructor should observe the decoded string payload"
+        );
+        assert_eq!(
+            bytes_to_u256(&count.return_data).unwrap(),
+            U256::from(11u64),
+            "constructor should store the tuple's scalar tail value"
+        );
+    }
+
+    #[test]
+    fn create2_static_constructor_args_round_trip() {
+        let Some(harness) = compile_create2_init_args_contract() else {
+            return;
+        };
+
+        let mut parent = harness
+            .deploy_with_init()
+            .expect("create2 parent contract should deploy");
+        let deployed = parent
+            .call_function("deployStatic()", &[], ExecutionOptions::default())
+            .expect("deployStatic() should succeed");
+        let child_address = Address::from_slice(&deployed.return_data[12..]);
+
+        let get_byte = encode_function_call("getByte()", &[]).expect("calldata should encode");
+        let child = parent
+            .call_raw_at(child_address, &get_byte, ExecutionOptions::default())
+            .expect("static child runtime should succeed");
+        let decoded = decode(&[ParamType::Uint(8)], &child.return_data)
+            .expect("getByte() should return ABI-encoded u8");
+        assert_eq!(
+            decoded,
+            vec![Token::Uint(AbiU256::from(7u64))],
+            "create2 should append direct static init args using ABI width, not memory size"
+        );
+    }
+
+    #[test]
+    fn create2_dynamic_constructor_args_round_trip() {
+        let Some(harness) = compile_create2_init_args_contract() else {
+            return;
+        };
+
+        let text = long_string_value("create2-ctor");
+        let mut parent = harness
+            .deploy_with_init()
+            .expect("create2 parent contract should deploy");
+        let deployed = parent
+            .call_function(
+                "deployDynamic(string,uint64)",
+                &[
+                    Token::String(text.clone()),
+                    Token::Uint(AbiU256::from(13u64)),
+                ],
+                ExecutionOptions::default(),
+            )
+            .expect("deployDynamic(string,uint64) should succeed");
+        let child_address = Address::from_slice(&deployed.return_data[12..]);
+
+        let text_len = parent
+            .call_raw_at(
+                child_address,
+                &encode_function_call("getTextLen()", &[]).expect("calldata should encode"),
+                ExecutionOptions::default(),
+            )
+            .expect("getTextLen() should succeed");
+        let first_byte = parent
+            .call_raw_at(
+                child_address,
+                &encode_function_call("getFirstByte()", &[]).expect("calldata should encode"),
+                ExecutionOptions::default(),
+            )
+            .expect("getFirstByte() should succeed");
+        let count = parent
+            .call_raw_at(
+                child_address,
+                &encode_function_call("getCount()", &[]).expect("calldata should encode"),
+                ExecutionOptions::default(),
+            )
+            .expect("getCount() should succeed");
+
+        assert_eq!(
+            bytes_to_u256(&text_len.return_data).unwrap(),
+            U256::from(text.len() as u64),
+            "create2 should encode dynamic init args without an extra root wrapper"
+        );
+        let decoded_first_byte = decode(&[ParamType::Uint(8)], &first_byte.return_data)
+            .expect("getFirstByte() should return ABI-encoded u8");
+        assert_eq!(
+            decoded_first_byte,
+            vec![Token::Uint(AbiU256::from(text.as_bytes()[0]))],
+            "constructor should observe the decoded string payload"
+        );
+        assert_eq!(
+            bytes_to_u256(&count.return_data).unwrap(),
+            U256::from(13u64),
+            "constructor should observe the scalar tail argument"
+        );
+    }
+
+    #[test]
+    fn fixed_string_calldata_decode_rejects_oversized_payloads() {
+        let Some(harness) = compile_fixed_string_decode_contract() else {
+            return;
+        };
+
+        harness
+            .call_function(
+                "ok(string)",
+                &[Token::String("short-string".to_string())],
+                ExecutionOptions::default(),
+            )
+            .expect("short string should decode into String<32>");
+
+        let err = harness
+            .call_function(
+                "ok(string)",
+                &[Token::String(long_string_value("fixed-string-overflow"))],
+                ExecutionOptions::default(),
+            )
+            .expect_err("33+ byte string should not silently truncate into String<32>");
+        assert_empty_revert(err);
+
+        let mut truncated =
+            encode_function_call("ok(string)", &[Token::String("hello".to_string())])
+                .expect("calldata should encode");
+        truncated.truncate(truncated.len() - 1);
+        let err = harness
+            .call_raw(&truncated, ExecutionOptions::default())
+            .expect_err("truncated string tail should revert during decode");
+        assert_empty_revert(err);
+    }
+
+    #[test]
+    fn fixed_string_returndata_decode_rejects_oversized_payloads() {
+        let Some(target_harness) = compile_string_echo_contract() else {
+            return;
+        };
+        let Some(caller_harness) = compile_fixed_string_return_caller_contract() else {
+            return;
+        };
+
+        let mut caller = caller_harness
+            .deploy_with_init()
+            .expect("fixed string return caller contract should deploy");
+        let target_addr = caller
+            .deploy_sidecar(target_harness.init_bytecode(), &[])
+            .expect("string echo sidecar should deploy");
+        let target_abi = ethers_core::types::Address::from_slice(target_addr.as_slice());
+
+        let short_text = "short-return".to_string();
+        let short_call = encode_typed_function_call(
+            "forward",
+            vec![ParamType::Address, ParamType::String],
+            &[
+                Token::Address(target_abi),
+                Token::String(short_text.clone()),
+            ],
+        )
+        .expect("typed calldata should encode");
+        let short_result = caller
+            .call_raw(&short_call, ExecutionOptions::default())
+            .expect("short return string should decode into String<32>");
+        let short_decoded = decode(&[ParamType::String], &short_result.return_data)
+            .expect("forward(address,string) should return ABI-encoded string");
+        assert_eq!(short_decoded, vec![Token::String(short_text)]);
+
+        let long_text = long_string_value("fixed-string-return-overflow");
+        let long_call = encode_typed_function_call(
+            "forward",
+            vec![ParamType::Address, ParamType::String],
+            &[Token::Address(target_abi), Token::String(long_text)],
+        )
+        .expect("typed calldata should encode");
+        let err = caller
+            .call_raw(&long_call, ExecutionOptions::default())
+            .expect_err("33+ byte returndata should not silently truncate into String<32>");
+        assert_empty_revert(err);
+    }
+
+    #[test]
+    fn custom_width_encode_rejects_non_canonical_values() {
+        let Some(harness) = compile_custom_width_encode_contract() else {
+            return;
+        };
+
+        let mut instance = harness
+            .deploy_with_init()
+            .expect("custom width encode contract should deploy");
+
+        let good_uint24 = instance
+            .call_function("goodUint24()", &[], ExecutionOptions::default())
+            .expect("goodUint24() should succeed");
+        assert_eq!(
+            decode(&[ParamType::Uint(24)], &good_uint24.return_data)
+                .expect("goodUint24() should return ABI-encoded uint24"),
+            vec![Token::Uint(AbiU256::from(7u64))]
+        );
+
+        let err = instance
+            .call_function("badUint24()", &[], ExecutionOptions::default())
+            .expect_err("out-of-range Uint24 should revert during ABI encode");
+        assert_empty_revert(err);
+
+        let good_uint160 = instance
+            .call_function("goodUint160()", &[], ExecutionOptions::default())
+            .expect("goodUint160() should succeed");
+        assert_eq!(
+            decode(&[ParamType::Uint(160)], &good_uint160.return_data)
+                .expect("goodUint160() should return ABI-encoded uint160"),
+            vec![Token::Uint(AbiU256::from(1u64))]
+        );
+
+        let err = instance
+            .call_function("badUint160()", &[], ExecutionOptions::default())
+            .expect_err("out-of-range Uint160 should revert during ABI encode");
+        assert_empty_revert(err);
+
+        let good_int40 = instance
+            .call_function("goodInt40()", &[], ExecutionOptions::default())
+            .expect("goodInt40() should succeed");
+        assert_eq!(
+            decode(&[ParamType::Int(40)], &good_int40.return_data)
+                .expect("goodInt40() should return ABI-encoded int40"),
+            vec![Token::Int(AbiU256::from(5u64))]
+        );
+
+        let err = instance
+            .call_function("badInt40()", &[], ExecutionOptions::default())
+            .expect_err("out-of-range Int40 should revert during ABI encode");
+        assert_empty_revert(err);
+
+        let good_int136 = instance
+            .call_function("goodInt136()", &[], ExecutionOptions::default())
+            .expect("goodInt136() should succeed");
+        assert_eq!(
+            decode(&[ParamType::Int(136)], &good_int136.return_data)
+                .expect("goodInt136() should return ABI-encoded int136"),
+            vec![Token::Int(AbiU256::from(5u64))]
+        );
+
+        let err = instance
+            .call_function("badInt136()", &[], ExecutionOptions::default())
+            .expect_err("out-of-range Int136 should revert during ABI encode");
+        assert_empty_revert(err);
+    }
+
+    #[test]
+    fn custom_width_topics_reject_non_canonical_values() {
+        let Some(harness) = compile_custom_width_encode_contract() else {
+            return;
+        };
+
+        let mut instance = harness
+            .deploy_with_init()
+            .expect("custom width encode contract should deploy");
+
+        let ok = instance
+            .call_raw_with_logs(
+                &encode_function_call("emitGoodUint160()", &[]).expect("calldata should encode"),
+                ExecutionOptions::default(),
+            )
+            .expect("canonical Uint160 topic should emit successfully");
+        assert_eq!(ok.logs.len(), 1, "expected a single emitted event");
+
+        let err = instance
+            .call_raw(
+                &encode_function_call("emitBadUint160()", &[]).expect("calldata should encode"),
+                ExecutionOptions::default(),
+            )
+            .expect_err("out-of-range Uint160 topic should revert during event emission");
+        assert_empty_revert(err);
+    }
+
+    #[test]
+    fn fixed_array_contract_round_trips_bool_array_64() {
+        if !solc_available() {
+            eprintln!(
+                "skipping fixed_array_contract_round_trips_bool_array_64 because solc is missing"
+            );
+            return;
+        }
+
+        let source = fixed_bool_array_contract_source(64);
+        let harness = FeContractHarness::compile_from_source(
+            "FixedBoolArrayBoundary",
+            &source,
+            CompileOptions::default(),
+        )
+        .expect("fixed bool[64] contract should compile");
+        let mut instance = harness
+            .deploy_with_init()
+            .expect("fixed bool[64] contract should deploy");
+        let value = fixed_bool_array_token(64);
+        let call = encode_typed_function_call(
+            "echo",
+            vec![fixed_bool_array_param_type(64)],
+            std::slice::from_ref(&value),
+        )
+        .expect("typed calldata should encode");
+        let result = instance
+            .call_raw(&call, ExecutionOptions::default())
+            .expect("echo(bool[64]) should succeed");
+        let decoded = decode(&[fixed_bool_array_param_type(64)], &result.return_data)
+            .expect("echo(bool[64]) should return ABI-encoded fixed array");
+
+        assert_eq!(decoded, vec![value]);
+    }
+
+    #[test]
+    fn fixed_array_contract_round_trips_bool_array_65() {
+        if !solc_available() {
+            eprintln!(
+                "skipping fixed_array_contract_round_trips_bool_array_65 because solc is missing"
+            );
+            return;
+        }
+
+        let source = fixed_bool_array_contract_source(65);
+        let harness = FeContractHarness::compile_from_source(
+            "FixedBoolArrayBoundary",
+            &source,
+            CompileOptions::default(),
+        )
+        .expect("fixed bool[65] contract should compile");
+        let mut instance = harness
+            .deploy_with_init()
+            .expect("fixed bool[65] contract should deploy");
+        let value = fixed_bool_array_token(65);
+        let call = encode_typed_function_call(
+            "echo",
+            vec![fixed_bool_array_param_type(65)],
+            std::slice::from_ref(&value),
+        )
+        .expect("typed calldata should encode");
+        let result = instance
+            .call_raw(&call, ExecutionOptions::default())
+            .expect("echo(bool[65]) should succeed");
+        let decoded = decode(&[fixed_bool_array_param_type(65)], &result.return_data)
+            .expect("echo(bool[65]) should return ABI-encoded fixed array");
+
+        assert_eq!(decoded, vec![value]);
+    }
+
+    #[test]
+    fn fixed_array_contract_round_trips_string_and_bytes_array_65() {
+        if !solc_available() {
+            eprintln!(
+                "skipping fixed_array_contract_round_trips_string_and_bytes_array_65 because solc is missing"
+            );
+            return;
+        }
+
+        let source = fixed_dynamic_array_contract_source(65);
+        let harness = FeContractHarness::compile_from_source(
+            "FixedDynamicArrayBoundary",
+            &source,
+            CompileOptions::default(),
+        )
+        .expect("fixed string[65]/bytes[65] contract should compile");
+        let mut instance = harness
+            .deploy_with_init()
+            .expect("fixed string[65]/bytes[65] contract should deploy");
+
+        let string_value = fixed_string_array_token(65);
+        let string_call = encode_typed_function_call(
+            "echoString",
+            vec![fixed_string_array_param_type(65)],
+            std::slice::from_ref(&string_value),
+        )
+        .expect("typed string calldata should encode");
+        let string_result = instance
+            .call_raw(&string_call, ExecutionOptions::default())
+            .expect("echoString(string[65]) should succeed");
+        let string_decoded = decode(
+            &[fixed_string_array_param_type(65)],
+            &string_result.return_data,
+        )
+        .expect("echoString(string[65]) should return ABI-encoded fixed array");
+        assert_eq!(string_decoded, vec![string_value]);
+
+        let bytes_value = fixed_bytes_array_token(65);
+        let bytes_call = encode_typed_function_call(
+            "echoBytes",
+            vec![fixed_bytes_array_param_type(65)],
+            std::slice::from_ref(&bytes_value),
+        )
+        .expect("typed bytes calldata should encode");
+        let bytes_result = instance
+            .call_raw(&bytes_call, ExecutionOptions::default())
+            .expect("echoBytes(bytes[65]) should succeed");
+        let bytes_decoded = decode(
+            &[fixed_bytes_array_param_type(65)],
+            &bytes_result.return_data,
+        )
+        .expect("echoBytes(bytes[65]) should return ABI-encoded fixed array");
+        assert_eq!(bytes_decoded, vec![bytes_value]);
     }
 
     #[test]

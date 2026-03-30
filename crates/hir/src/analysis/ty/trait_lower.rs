@@ -34,7 +34,11 @@ type TraitImplTable<'db> = FxHashMap<Trait<'db>, Vec<Binder<ImplementorId<'db>>>
 /// implementors. If you need to obtain the environment that contains all
 /// available implementors in the ingot, please use
 /// [`TraitEnv`](super::trait_def::TraitEnv).
-#[salsa::tracked(return_ref)]
+#[salsa::tracked(
+    return_ref,
+    cycle_fn=collect_trait_impls_cycle_recover,
+    cycle_initial=collect_trait_impls_cycle_initial
+)]
 pub(crate) fn collect_trait_impls<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
@@ -47,6 +51,22 @@ pub(crate) fn collect_trait_impls<'db>(
 
     let impl_traits = ingot.all_impl_traits(db);
     ImplementorCollector::new(db, const_impls).collect(impl_traits)
+}
+
+fn collect_trait_impls_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _ingot: Ingot<'db>,
+) -> TraitImplTable<'db> {
+    FxHashMap::default()
+}
+
+fn collect_trait_impls_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &TraitImplTable<'db>,
+    _count: u32,
+    _ingot: Ingot<'db>,
+) -> salsa::CycleRecoveryAction<TraitImplTable<'db>> {
+    salsa::CycleRecoveryAction::Iterate
 }
 
 /// Returns the corresponding implementors for the given [`ImplTrait`].

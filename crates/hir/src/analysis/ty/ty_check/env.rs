@@ -1,8 +1,8 @@
 use crate::{
     analysis::place::Place,
     hir_def::{
-        BinOp, Body, Contract, Expr, ExprId, Func, IdentId, IntegerId, ItemKind, Partial, Pat,
-        PatId, PathId, Stmt, StmtId, UnOp, prim_ty::PrimTy, scope_graph::ScopeId,
+        BinOp, Body, Contract, Expr, ExprId, Func, IdentId, ItemKind, Partial, Pat, PatId, PathId,
+        Stmt, StmtId, UnOp, scope_graph::ScopeId,
     },
     span::DynLazySpan,
 };
@@ -10,7 +10,6 @@ use crate::{
 use crate::hir_def::CallableDef;
 use crate::hir_def::params::FuncParamMode;
 use common::indexmap::IndexMap;
-use num_bigint::BigUint;
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
 use thin_vec::ThinVec;
@@ -24,7 +23,7 @@ use crate::analysis::ty::pattern_ir::{
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
-        const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
+        corelib::resolve_lib_type_path,
         effects::{
             EffectKeyKind,
             elaborate::{build_pattern_from_requirement_decl, seed_forwarder_from_requirement},
@@ -41,7 +40,7 @@ use crate::analysis::{
             },
         },
         ty_contains_const_hole,
-        ty_def::{InvalidCause, TyData, TyId, TyVarSort},
+        ty_def::{InvalidCause, StringFallback, TyData, TyId, TyVarSort},
         ty_lower::lower_hir_ty,
         unify::UnificationTable,
     },
@@ -786,7 +785,10 @@ impl<'db> TyCheckEnv<'db> {
     /// the unification table.
     ///
     pub(super) fn finish(mut self, table: &mut UnificationTable<'db>) -> TypedBody<'db> {
-        let mut prober = Prober { table };
+        let mut prober = Prober {
+            table,
+            scope: self.scope(),
+        };
 
         self.expr_ty
             .values_mut()
@@ -1349,11 +1351,12 @@ impl<'db> LocalBinding<'db> {
 
 pub(super) struct Prober<'db, 'a> {
     table: &'a mut UnificationTable<'db>,
+    scope: ScopeId<'db>,
 }
 
 impl<'db, 'a> Prober<'db, 'a> {
-    pub(super) fn new(table: &'a mut UnificationTable<'db>) -> Self {
-        Self { table }
+    pub(super) fn new(table: &'a mut UnificationTable<'db>, scope: ScopeId<'db>) -> Self {
+        Self { table, scope }
     }
 }
 
@@ -1365,12 +1368,14 @@ impl<'db> TyFolder<'db> for Prober<'db, '_> {
         };
 
         // String type variable fallback.
-        if let TyVarSort::String(len) = var.sort {
-            let ty = TyId::new(db, TyData::TyBase(PrimTy::String.into()));
-            let len = EvaluatedConstTy::LitInt(IntegerId::new(db, BigUint::from(len)));
-            let len = ConstTyData::Evaluated(len, ty.applicable_ty(db).unwrap().const_ty.unwrap());
-            let len = TyId::const_ty(db, ConstTyId::new(db, len));
-            TyId::app(db, ty, len)
+        if let TyVarSort::String { min_len, fallback } = var.sort {
+            match fallback {
+                StringFallback::Dynamic => {
+                    resolve_lib_type_path(db, self.scope, "core::abi::DynString")
+                        .unwrap_or_else(|| TyId::string_with_len(db, min_len))
+                }
+                StringFallback::Fixed => TyId::string_with_len(db, min_len),
+            }
         } else {
             ty.super_fold_with(db, self)
         }

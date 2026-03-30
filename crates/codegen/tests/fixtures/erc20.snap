@@ -76,6 +76,11 @@ object "CoolCoin" {
     }
     function $address_h257056268eac7027_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6($d) -> ret {
       let v0 := $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($d)
+      let v1 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(shr(160, v0), 0)
+      let v2 := v1
+      if v2 {
+        revert(0, 0)
+      }
       ret := v0
       leave
     }
@@ -131,6 +136,23 @@ object "CoolCoin" {
         revert(0, 0)
       }
       ret := v0
+      leave
+    }
+    function $checked_sub_u256($a, $b) -> ret {
+      let v0 := $checked_sub_unsigned_impl__u256__3271ca15373d4483($a, $b)
+      ret := v0
+      leave
+    }
+    function $checked_sub_unsigned_impl__u256__3271ca15373d4483($a, $b) -> ret {
+      let v0 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($b)
+      let v1 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($a)
+      let v2 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v0, v1)
+      let v3 := v2
+      if v3 {
+        revert(0, 0)
+      }
+      let v4 := $u256_h3271ca15373d4483_wrappingsub_h6880d1ff91f0a556_wrapping_sub($a, $b)
+      ret := v4
       leave
     }
     function $cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
@@ -225,17 +247,24 @@ object "CoolCoin" {
       let v0 := $self
       let v1 := $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_len(v0)
       let v2 := mload(add($self, 64))
-      let v3 := add(v2, 32)
-      let v4 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v3, v1)
-      let v5 := v4
-      if v5 {
+      let v3 := $checked_add_u256(v2, 32)
+      let v4 := v3
+      let v5 := mload(add($self, 64))
+      let v6 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v4, v5)
+      let v7 := v6
+      if v7 {
         revert(0, 0)
       }
-      let v6 := mload(add($self, 64))
-      let v7 := $self
-      let v8 := $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at(v7, v6)
-      mstore(add($self, 64), v3)
-      ret := v8
+      let v8 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v4, v1)
+      let v9 := v8
+      if v9 {
+        revert(0, 0)
+      }
+      let v10 := mload(add($self, 64))
+      let v11 := $self
+      let v12 := $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at(v11, v10)
+      mstore(add($self, 64), v4)
+      ret := v12
       leave
     }
     function $soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
@@ -256,15 +285,16 @@ object "CoolCoin" {
     function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish($self) -> ret {
       let v0 := mload($self)
       let v1 := v0
-      let v2 := mload(add($self, 64))
-      let v3 := mload(0x40)
-      if iszero(v3) {
-        v3 := 0x80
+      let v2 := mload(add($self, 96))
+      let v3 := $checked_sub_u256(v2, v1)
+      let v4 := mload(0x40)
+      if iszero(v4) {
+        v4 := 0x80
       }
-      mstore(0x40, add(v3, 64))
-      mstore(v3, v1)
-      mstore(add(v3, 32), sub(v2, v1))
-      ret := v3
+      mstore(0x40, add(v4, 64))
+      mstore(v4, v1)
+      mstore(add(v4, 32), v3)
+      ret := v4
       leave
     }
     function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head($self, $bytes) -> ret {
@@ -279,17 +309,20 @@ object "CoolCoin" {
         mstore(64, add(v3, $bytes))
         mstore($self, v3)
         mstore(add($self, 32), v3)
-        mstore(add($self, 64), add(v3, $bytes))
+        mstore(add($self, 64), v3)
+        let v4 := $checked_add_u256(v3, $bytes)
+        mstore(add($self, 96), v4)
       }
-      let v4 := mload($self)
-      ret := v4
+      let v5 := mload(add($self, 32))
+      ret := v5
       leave
     }
     function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($self, $v) {
-      let v0 := mload(add($self, 32))
+      let v0 := mload(add($self, 64))
       let v1 := v0
       mstore(v1, $v)
-      mstore(add($self, 32), add(v1, 32))
+      let v2 := $checked_add_u256(v1, 32)
+      mstore(add($self, 64), v2)
       leave
     }
     function $solencoder_h1b9228b90dad6928_new() -> ret {
@@ -297,10 +330,11 @@ object "CoolCoin" {
       if iszero(v0) {
         v0 := 0x80
       }
-      mstore(0x40, add(v0, 96))
+      mstore(0x40, add(v0, 128))
       mstore(v0, 0)
       mstore(add(v0, 32), 0)
       mstore(add(v0, 64), 0)
+      mstore(add(v0, 96), 0)
       ret := v0
       leave
     }
@@ -414,6 +448,11 @@ object "CoolCoin" {
       ret := v0
       leave
     }
+    function $u256_h3271ca15373d4483_eq_he50383edd273619f_ne($self, $other) -> ret {
+      let v0 := iszero(eq($self, $other))
+      ret := v0
+      leave
+    }
     function $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($self) -> ret {
       ret := $self
       leave
@@ -443,6 +482,11 @@ object "CoolCoin" {
     }
     function $u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add($self, $other) -> ret {
       let v0 := add($self, $other)
+      ret := v0
+      leave
+    }
+    function $u256_h3271ca15373d4483_wrappingsub_h6880d1ff91f0a556_wrapping_sub($self, $other) -> ret {
+      let v0 := sub($self, $other)
       ret := v0
       leave
     }
@@ -592,150 +636,238 @@ object "CoolCoin" {
         leave
       }
       function $__CoolCoin_runtime() {
+        let v0 := $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
+        let v1 := eq(and(v0, 0xffffffff), and(2835717307, 0xffffffff))
+        if v1 {
+          $__CoolCoin_runtime_arm_0_0()
+        }
+        let v2 := eq(and(v0, 0xffffffff), and(157198259, 0xffffffff))
+        if v2 {
+          $__CoolCoin_runtime_arm_0_1()
+        }
+        let v3 := eq(and(v0, 0xffffffff), and(599290589, 0xffffffff))
+        if v3 {
+          $__CoolCoin_runtime_arm_0_2()
+        }
+        let v4 := eq(and(v0, 0xffffffff), and(1889567281, 0xffffffff))
+        if v4 {
+          $__CoolCoin_runtime_arm_0_3()
+        }
+        let v5 := eq(and(v0, 0xffffffff), and(3714247998, 0xffffffff))
+        if v5 {
+          $__CoolCoin_runtime_arm_0_4()
+        }
+        let v6 := eq(and(v0, 0xffffffff), and(404098525, 0xffffffff))
+        if v6 {
+          $__CoolCoin_runtime_arm_0_5()
+        }
+        let v7 := eq(and(v0, 0xffffffff), and(117300739, 0xffffffff))
+        if v7 {
+          $__CoolCoin_runtime_arm_0_6()
+        }
+        let v8 := eq(and(v0, 0xffffffff), and(2514000705, 0xffffffff))
+        if v8 {
+          $__CoolCoin_runtime_arm_0_7()
+        }
+        let v9 := eq(and(v0, 0xffffffff), and(826074471, 0xffffffff))
+        if v9 {
+          $__CoolCoin_runtime_arm_0_8()
+        }
+        let v10 := eq(and(v0, 0xffffffff), and(1086394137, 0xffffffff))
+        if v10 {
+          $__CoolCoin_runtime_arm_1_0()
+        }
+        let v11 := eq(and(v0, 0xffffffff), and(1117154408, 0xffffffff))
+        if v11 {
+          $__CoolCoin_runtime_arm_1_1()
+        }
+        let v12 := eq(and(v0, 0xffffffff), and(2043438992, 0xffffffff))
+        if v12 {
+          $__CoolCoin_runtime_arm_1_2()
+        }
+        let v13 := eq(and(v0, 0xffffffff), and(961581905, 0xffffffff))
+        if v13 {
+          $__CoolCoin_runtime_arm_1_3()
+        }
+        let v14 := eq(and(v0, 0xffffffff), and(2757214935, 0xffffffff))
+        if v14 {
+          $__CoolCoin_runtime_arm_1_4()
+        }
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+      }
+      function $__CoolCoin_runtime_arm_0_0() {
         let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__TokenStore_0__1___175215aa56127bde(0)
         let v1 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__AccessControl_3___3633e113b859df5f(3)
-        let v2 := $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
-        let v3 := $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
-        switch v2
-          case 2835717307 {
-            let v4 := callvalue()
-            let v5 := iszero(eq(v4, 0))
-            if v5 {
-              $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-            }
-            let v6 := $transfer_h13f5ec5985ebba60_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v3)
-            let v7 := $__CoolCoin_recv_0_0(v6, v0)
-            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_bool__37232ead2a7830cb(v7)
-          }
-          case 157198259 {
-            let v8 := callvalue()
-            let v9 := iszero(eq(v8, 0))
-            if v9 {
-              $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-            }
-            let v10 := $approve_h90175fc19dafde67_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v3)
-            let v11 := $__CoolCoin_recv_0_1(v10, v0)
-            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_bool__37232ead2a7830cb(v11)
-          }
-          case 599290589 {
-            let v12 := callvalue()
-            let v13 := iszero(eq(v12, 0))
-            if v13 {
-              $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-            }
-            let v14 := $transferfrom_h939549e4bad999e8_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v3)
-            let v15 := $__CoolCoin_recv_0_2(v14, v0)
-            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_bool__37232ead2a7830cb(v15)
-          }
-          case 1889567281 {
-            let v16 := callvalue()
-            let v17 := iszero(eq(v16, 0))
-            if v17 {
-              $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-            }
-            let v18 := $balanceof_hf830ebedc81244a7_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v3)
-            let v19 := $__CoolCoin_recv_0_3(v18, v0)
-            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63(v19)
-          }
-          case 3714247998 {
-            let v20 := callvalue()
-            let v21 := iszero(eq(v20, 0))
-            if v21 {
-              $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-            }
-            let v22 := $allowance_h4bb1267f662bd2a8_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v3)
-            let v23 := $__CoolCoin_recv_0_4(v22, v0)
-            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63(v23)
-          }
-          case 404098525 {
-            let v24 := callvalue()
-            let v25 := iszero(eq(v24, 0))
-            if v25 {
-              $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-            }
-            let v26 := $__CoolCoin_recv_0_5(v0)
-            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63(v26)
-          }
-          case 117300739 {
-            let v27 := callvalue()
-            let v28 := iszero(eq(v27, 0))
-            if v28 {
-              $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-            }
-            let v29 := $__CoolCoin_recv_0_6()
-            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_String_32___e9bd76e6664882d4(v29)
-          }
-          case 2514000705 {
-            let v30 := callvalue()
-            let v31 := iszero(eq(v30, 0))
-            if v31 {
-              $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-            }
-            let v32 := $__CoolCoin_recv_0_7()
-            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_String_8___1834cf55196eb0a5(v32)
-          }
-          case 826074471 {
-            let v33 := callvalue()
-            let v34 := iszero(eq(v33, 0))
-            if v34 {
-              $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-            }
-            let v35 := $__CoolCoin_recv_0_8()
-            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u8__c96affccb17b69db(v35)
-          }
-          case 1086394137 {
-            let v36 := callvalue()
-            let v37 := iszero(eq(v36, 0))
-            if v37 {
-              $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-            }
-            let v38 := $mint_ha2f94817be433a2e_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v3)
-            let v39 := $__CoolCoin_recv_1_0(v38, v0)
-            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_bool__37232ead2a7830cb(v39)
-          }
-          case 1117154408 {
-            let v40 := callvalue()
-            let v41 := iszero(eq(v40, 0))
-            if v41 {
-              $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-            }
-            let v42 := $burn_h25a61f4466d20eed_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v3)
-            let v43 := $__CoolCoin_recv_1_1(v42, v0)
-            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_bool__37232ead2a7830cb(v43)
-          }
-          case 2043438992 {
-            let v44 := callvalue()
-            let v45 := iszero(eq(v44, 0))
-            if v45 {
-              $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-            }
-            let v46 := $burnfrom_ha9fb0972f143e40c_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v3)
-            let v47 := $__CoolCoin_recv_1_2(v46, v0)
-            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_bool__37232ead2a7830cb(v47)
-          }
-          case 961581905 {
-            let v48 := callvalue()
-            let v49 := iszero(eq(v48, 0))
-            if v49 {
-              $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-            }
-            let v50 := $increaseallowance_h9840135eaea36633_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v3)
-            let v51 := $__CoolCoin_recv_1_3(v50, v0)
-            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_bool__37232ead2a7830cb(v51)
-          }
-          case 2757214935 {
-            let v52 := callvalue()
-            let v53 := iszero(eq(v52, 0))
-            if v53 {
-              $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-            }
-            let v54 := $decreaseallowance_h635474f45639c83d_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v3)
-            let v55 := $__CoolCoin_recv_1_4(v54, v0)
-            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_bool__37232ead2a7830cb(v55)
-          }
-          default {
-            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-          }
+        let v2 := callvalue()
+        let v3 := iszero(eq(v2, 0))
+        if v3 {
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+        }
+        let v4 := $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
+        let v5 := $transfer_h13f5ec5985ebba60_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v4)
+        let v6 := $__CoolCoin_recv_0_0(v5, v0)
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_bool__37232ead2a7830cb(v6)
+      }
+      function $__CoolCoin_runtime_arm_0_1() {
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__TokenStore_0__1___175215aa56127bde(0)
+        let v1 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__AccessControl_3___3633e113b859df5f(3)
+        let v2 := callvalue()
+        let v3 := iszero(eq(v2, 0))
+        if v3 {
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+        }
+        let v4 := $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
+        let v5 := $approve_h90175fc19dafde67_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v4)
+        let v6 := $__CoolCoin_recv_0_1(v5, v0)
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_bool__37232ead2a7830cb(v6)
+      }
+      function $__CoolCoin_runtime_arm_0_2() {
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__TokenStore_0__1___175215aa56127bde(0)
+        let v1 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__AccessControl_3___3633e113b859df5f(3)
+        let v2 := callvalue()
+        let v3 := iszero(eq(v2, 0))
+        if v3 {
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+        }
+        let v4 := $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
+        let v5 := $transferfrom_h939549e4bad999e8_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v4)
+        let v6 := $__CoolCoin_recv_0_2(v5, v0)
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_bool__37232ead2a7830cb(v6)
+      }
+      function $__CoolCoin_runtime_arm_0_3() {
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__TokenStore_0__1___175215aa56127bde(0)
+        let v1 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__AccessControl_3___3633e113b859df5f(3)
+        let v2 := callvalue()
+        let v3 := iszero(eq(v2, 0))
+        if v3 {
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+        }
+        let v4 := $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
+        let v5 := $balanceof_hf830ebedc81244a7_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v4)
+        let v6 := $__CoolCoin_recv_0_3(v5, v0)
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63(v6)
+      }
+      function $__CoolCoin_runtime_arm_0_4() {
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__TokenStore_0__1___175215aa56127bde(0)
+        let v1 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__AccessControl_3___3633e113b859df5f(3)
+        let v2 := callvalue()
+        let v3 := iszero(eq(v2, 0))
+        if v3 {
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+        }
+        let v4 := $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
+        let v5 := $allowance_h4bb1267f662bd2a8_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v4)
+        let v6 := $__CoolCoin_recv_0_4(v5, v0)
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63(v6)
+      }
+      function $__CoolCoin_runtime_arm_0_5() {
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__TokenStore_0__1___175215aa56127bde(0)
+        let v1 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__AccessControl_3___3633e113b859df5f(3)
+        let v2 := callvalue()
+        let v3 := iszero(eq(v2, 0))
+        if v3 {
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+        }
+        let v4 := $__CoolCoin_recv_0_5(v0)
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63(v4)
+      }
+      function $__CoolCoin_runtime_arm_0_6() {
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__TokenStore_0__1___175215aa56127bde(0)
+        let v1 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__AccessControl_3___3633e113b859df5f(3)
+        let v2 := callvalue()
+        let v3 := iszero(eq(v2, 0))
+        if v3 {
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+        }
+        let v4 := $__CoolCoin_recv_0_6()
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_String_32___e9bd76e6664882d4(v4)
+      }
+      function $__CoolCoin_runtime_arm_0_7() {
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__TokenStore_0__1___175215aa56127bde(0)
+        let v1 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__AccessControl_3___3633e113b859df5f(3)
+        let v2 := callvalue()
+        let v3 := iszero(eq(v2, 0))
+        if v3 {
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+        }
+        let v4 := $__CoolCoin_recv_0_7()
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_String_8___1834cf55196eb0a5(v4)
+      }
+      function $__CoolCoin_runtime_arm_0_8() {
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__TokenStore_0__1___175215aa56127bde(0)
+        let v1 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__AccessControl_3___3633e113b859df5f(3)
+        let v2 := callvalue()
+        let v3 := iszero(eq(v2, 0))
+        if v3 {
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+        }
+        let v4 := $__CoolCoin_recv_0_8()
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u8__c96affccb17b69db(v4)
+      }
+      function $__CoolCoin_runtime_arm_1_0() {
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__TokenStore_0__1___175215aa56127bde(0)
+        let v1 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__AccessControl_3___3633e113b859df5f(3)
+        let v2 := callvalue()
+        let v3 := iszero(eq(v2, 0))
+        if v3 {
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+        }
+        let v4 := $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
+        let v5 := $mint_ha2f94817be433a2e_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v4)
+        let v6 := $__CoolCoin_recv_1_0(v5, v0)
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_bool__37232ead2a7830cb(v6)
+      }
+      function $__CoolCoin_runtime_arm_1_1() {
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__TokenStore_0__1___175215aa56127bde(0)
+        let v1 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__AccessControl_3___3633e113b859df5f(3)
+        let v2 := callvalue()
+        let v3 := iszero(eq(v2, 0))
+        if v3 {
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+        }
+        let v4 := $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
+        let v5 := $burn_h25a61f4466d20eed_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v4)
+        let v6 := $__CoolCoin_recv_1_1(v5, v0)
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_bool__37232ead2a7830cb(v6)
+      }
+      function $__CoolCoin_runtime_arm_1_2() {
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__TokenStore_0__1___175215aa56127bde(0)
+        let v1 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__AccessControl_3___3633e113b859df5f(3)
+        let v2 := callvalue()
+        let v3 := iszero(eq(v2, 0))
+        if v3 {
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+        }
+        let v4 := $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
+        let v5 := $burnfrom_ha9fb0972f143e40c_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v4)
+        let v6 := $__CoolCoin_recv_1_2(v5, v0)
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_bool__37232ead2a7830cb(v6)
+      }
+      function $__CoolCoin_runtime_arm_1_3() {
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__TokenStore_0__1___175215aa56127bde(0)
+        let v1 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__AccessControl_3___3633e113b859df5f(3)
+        let v2 := callvalue()
+        let v3 := iszero(eq(v2, 0))
+        if v3 {
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+        }
+        let v4 := $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
+        let v5 := $increaseallowance_h9840135eaea36633_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v4)
+        let v6 := $__CoolCoin_recv_1_3(v5, v0)
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_bool__37232ead2a7830cb(v6)
+      }
+      function $__CoolCoin_runtime_arm_1_4() {
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__TokenStore_0__1___175215aa56127bde(0)
+        let v1 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__AccessControl_3___3633e113b859df5f(3)
+        let v2 := callvalue()
+        let v3 := iszero(eq(v2, 0))
+        if v3 {
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+        }
+        let v4 := $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
+        let v5 := $decreaseallowance_h635474f45639c83d_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v4)
+        let v6 := $__CoolCoin_recv_1_4(v5, v0)
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_bool__37232ead2a7830cb(v6)
       }
       function $_a__b__h47f120de72304a2d_storagekey_hf9e3d38a13ff4409_write_key__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2($ptr, $self) -> ret {
         let v0 := mload($self)
@@ -757,6 +889,17 @@ object "CoolCoin" {
         ret := v5
         leave
       }
+      function $abi_root_head_size__u256__3271ca15373d4483() -> ret {
+        let v0 := 0
+        if v0 {
+          ret := 32
+          leave
+        }
+        if iszero(v0) {
+          ret := 32
+          leave
+        }
+      }
       function $accesscontrol____h4c85da5bbb505ade_require_stor__3_Evm_hef0af3106e109414__5baaa260f0d18873($role) {
         let v0 := caller()
         let v1 := mload(0x40)
@@ -773,6 +916,11 @@ object "CoolCoin" {
       }
       function $address_h257056268eac7027_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d) -> ret {
         let v0 := $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d)
+        let v1 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(shr(160, v0), 0)
+        let v2 := v1
+        if v2 {
+          revert(0, 0)
+        }
         ret := v0
         leave
       }
@@ -795,8 +943,8 @@ object "CoolCoin" {
         leave
       }
       function $allowance_h4bb1267f662bd2a8_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) -> ret {
-        let v0 := $address_h257056268eac7027_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
-        let v1 := $address_h257056268eac7027_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
+        let v0 := $decode_field__Sol_hfd482bb803ad8c5f_Address_h257056268eac7027_SolDecoder_CallData___dc56815d0588c9d4($d)
+        let v1 := $decode_field__Sol_hfd482bb803ad8c5f_Address_h257056268eac7027_SolDecoder_CallData___dc56815d0588c9d4($d)
         let v2 := mload(0x40)
         if iszero(v2) {
           v2 := 0x80
@@ -852,8 +1000,8 @@ object "CoolCoin" {
         leave
       }
       function $approve_h90175fc19dafde67_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) -> ret {
-        let v0 := $address_h257056268eac7027_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
-        let v1 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
+        let v0 := $decode_field__Sol_hfd482bb803ad8c5f_Address_h257056268eac7027_SolDecoder_CallData___dc56815d0588c9d4($d)
+        let v1 := $decode_field__Sol_hfd482bb803ad8c5f_u256_SolDecoder_CallData___6480d5da5e36cc2c($d)
         let v2 := mload(0x40)
         if iszero(v2) {
           v2 := 0x80
@@ -872,7 +1020,7 @@ object "CoolCoin" {
         leave
       }
       function $balanceof_hf830ebedc81244a7_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) -> ret {
-        let v0 := $address_h257056268eac7027_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
+        let v0 := $decode_field__Sol_hfd482bb803ad8c5f_Address_h257056268eac7027_SolDecoder_CallData___dc56815d0588c9d4($d)
         ret := v0
         leave
       }
@@ -931,13 +1079,13 @@ object "CoolCoin" {
         leave
       }
       function $burn_h25a61f4466d20eed_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) -> ret {
-        let v0 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
+        let v0 := $decode_field__Sol_hfd482bb803ad8c5f_u256_SolDecoder_CallData___6480d5da5e36cc2c($d)
         ret := v0
         leave
       }
       function $burnfrom_ha9fb0972f143e40c_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) -> ret {
-        let v0 := $address_h257056268eac7027_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
-        let v1 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
+        let v0 := $decode_field__Sol_hfd482bb803ad8c5f_Address_h257056268eac7027_SolDecoder_CallData___dc56815d0588c9d4($d)
+        let v1 := $decode_field__Sol_hfd482bb803ad8c5f_u256_SolDecoder_CallData___6480d5da5e36cc2c($d)
         let v2 := mload(0x40)
         if iszero(v2) {
           v2 := 0x80
@@ -950,7 +1098,16 @@ object "CoolCoin" {
       }
       function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len($self) -> ret {
         let v0 := calldatasize()
-        let v1 := $checked_sub_u256(v0, $self)
+        let v1 := 0
+        let v2 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt($self, v0)
+        let v3 := v2
+        if v3 {
+          v1 := 0
+        }
+        if iszero(v3) {
+          let v4 := $checked_sub_u256(v0, $self)
+          v1 := v4
+        }
         ret := v1
         leave
       }
@@ -958,6 +1115,10 @@ object "CoolCoin" {
         let v0 := add($self, $byte_offset)
         let v1 := calldataload(v0)
         ret := v1
+        leave
+      }
+      function $calldata_hf71d505b6ff5dc81_new() -> ret {
+        ret := 0
         leave
       }
       function $checked_add_u256($a, $b) -> ret {
@@ -977,6 +1138,39 @@ object "CoolCoin" {
         ret := v0
         leave
       }
+      function $checked_div_u256($a, $b) -> ret {
+        $ensure_nonzero_divisor__u256__3271ca15373d4483($b)
+        let v0 := div($a, $b)
+        ret := v0
+        leave
+      }
+      function $checked_mul_u256($a, $b) -> ret {
+        let v0 := $checked_mul_unsigned_impl__u256__3271ca15373d4483($a, $b)
+        ret := v0
+        leave
+      }
+      function $checked_mul_unsigned_impl__u256__3271ca15373d4483($a, $b) -> ret {
+        let v0 := $u256_h3271ca15373d4483_wrappingmul_h64e6b83610cda761_wrapping_mul($a, $b)
+        let v1 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($a)
+        let v2 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v1, 0)
+        let v3 := v2
+        if v3 {
+          let v4 := $checked_div_u256(v0, $a)
+          let v5 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v4)
+          let v6 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($b)
+          let v7 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v5, v6)
+          let v8 := v7
+          if v8 {
+            revert(0, 0)
+          }
+          ret := v0
+          leave
+        }
+        if iszero(v3) {
+          ret := v0
+          leave
+        }
+      }
       function $checked_sub_u256($a, $b) -> ret {
         let v0 := $checked_sub_unsigned_impl__u256__3271ca15373d4483($a, $b)
         ret := v0
@@ -994,9 +1188,88 @@ object "CoolCoin" {
         ret := v4
         leave
       }
+      function $cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($self, $pos) -> ret {
+        let v0 := mload($self)
+        let v1 := mload(0x40)
+        if iszero(v1) {
+          v1 := 0x80
+        }
+        mstore(0x40, add(v1, 64))
+        mstore(v1, v0)
+        mstore(add(v1, 32), $pos)
+        ret := v1
+        leave
+      }
+      function $cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input) -> ret {
+        let v0 := mload(0x40)
+        if iszero(v0) {
+          v0 := 0x80
+        }
+        mstore(0x40, add(v0, 64))
+        mstore(v0, $input)
+        mstore(add(v0, 32), 0)
+        ret := v0
+        leave
+      }
+      function $decode_field__Sol_hfd482bb803ad8c5f_Address_h257056268eac7027_SolDecoder_CallData___dc56815d0588c9d4($d) -> ret {
+        let v0 := mload(0x40)
+        if iszero(v0) {
+          v0 := 0x80
+        }
+        mstore(0x40, add(v0, 32))
+        mstore(v0, $d)
+        let v1 := 0
+        if v1 {
+          let v2 := $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d)
+          let v3 := $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d)
+          let v4 := $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_pos__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d)
+          let v5 := $checked_add_u256(v3, v2)
+          $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_set_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d, v5)
+          let v6 := $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d)
+          $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_set_pos__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d, v6)
+          let v7 := $address_h257056268eac7027_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98(mload(v0))
+          $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_set_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d, v3)
+          $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_set_pos__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d, v4)
+          ret := v7
+          leave
+        }
+        if iszero(v1) {
+          let v8 := $address_h257056268eac7027_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
+          ret := v8
+          leave
+        }
+      }
+      function $decode_field__Sol_hfd482bb803ad8c5f_u256_SolDecoder_CallData___6480d5da5e36cc2c($d) -> ret {
+        let v0 := mload(0x40)
+        if iszero(v0) {
+          v0 := 0x80
+        }
+        mstore(0x40, add(v0, 32))
+        mstore(v0, $d)
+        let v1 := 0
+        if v1 {
+          let v2 := $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d)
+          let v3 := $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d)
+          let v4 := $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_pos__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d)
+          let v5 := $checked_add_u256(v3, v2)
+          $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_set_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d, v5)
+          let v6 := $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d)
+          $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_set_pos__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d, v6)
+          let v7 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98(mload(v0))
+          $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_set_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d, v3)
+          $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_set_pos__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d, v4)
+          ret := v7
+          leave
+        }
+        if iszero(v1) {
+          let v8 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
+          ret := v8
+          leave
+        }
+      }
       function $decreaseallowance_h635474f45639c83d_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) -> ret {
-        let v0 := $address_h257056268eac7027_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
-        let v1 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
+        let v0 := $decode_field__Sol_hfd482bb803ad8c5f_Address_h257056268eac7027_SolDecoder_CallData___dc56815d0588c9d4($d)
+        let v1 := $decode_field__Sol_hfd482bb803ad8c5f_u256_SolDecoder_CallData___6480d5da5e36cc2c($d)
         let v2 := mload(0x40)
         if iszero(v2) {
           v2 := 0x80
@@ -1015,6 +1288,230 @@ object "CoolCoin" {
         $transferevent_h1c9ba82714a4a1f0_event_hd33e4481d4a34b05_emit_arg1_root_stor__Evm_hef0af3106e109414__3af54274b2985741($event)
         leave
       }
+      function $encode_field__Sol_hfd482bb803ad8c5f_String_32__SolEncoder_h1b9228b90dad6928__68b3570335d45d1c($value, $e) {
+        let v0 := mload(0x40)
+        if iszero(v0) {
+          v0 := 0x80
+        }
+        mstore(0x40, add(v0, 32))
+        mstore(v0, $e)
+        let v1 := 0
+        if v1 {
+          let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_base($e)
+          let v3 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_append_tail($e, 32)
+          let v4 := $checked_sub_u256(v3, v2)
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($e, v4)
+          let v5 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_pos($e)
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_base($e, v3)
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_pos($e, v3)
+          $string_const_n__usize__h78b9b185054e88a2_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_32_SolEncoder_h1b9228b90dad6928__562228df2278c1ed($value, mload(v0))
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_base($e, v2)
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_pos($e, v5)
+          leave
+        }
+        if iszero(v1) {
+          $string_const_n__usize__h78b9b185054e88a2_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_32_SolEncoder_h1b9228b90dad6928__562228df2278c1ed($value, mload(v0))
+          leave
+        }
+      }
+      function $encode_field__Sol_hfd482bb803ad8c5f_String_8__SolEncoder_h1b9228b90dad6928__51347bbb9e3bb9d4($value, $e) {
+        let v0 := mload(0x40)
+        if iszero(v0) {
+          v0 := 0x80
+        }
+        mstore(0x40, add(v0, 32))
+        mstore(v0, $e)
+        let v1 := 0
+        if v1 {
+          let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_base($e)
+          let v3 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_append_tail($e, 32)
+          let v4 := $checked_sub_u256(v3, v2)
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($e, v4)
+          let v5 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_pos($e)
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_base($e, v3)
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_pos($e, v3)
+          $string_const_n__usize__h78b9b185054e88a2_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_8_SolEncoder_h1b9228b90dad6928__1811d65564ab2650($value, mload(v0))
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_base($e, v2)
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_pos($e, v5)
+          leave
+        }
+        if iszero(v1) {
+          $string_const_n__usize__h78b9b185054e88a2_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_8_SolEncoder_h1b9228b90dad6928__1811d65564ab2650($value, mload(v0))
+          leave
+        }
+      }
+      function $encode_field__Sol_hfd482bb803ad8c5f_bool_SolEncoder_h1b9228b90dad6928__ff0def932f0b945b($value, $e) {
+        let v0 := mload(0x40)
+        if iszero(v0) {
+          v0 := 0x80
+        }
+        mstore(0x40, add(v0, 32))
+        mstore(v0, $e)
+        let v1 := 0
+        if v1 {
+          let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_base($e)
+          let v3 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_append_tail($e, 32)
+          let v4 := $checked_sub_u256(v3, v2)
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($e, v4)
+          let v5 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_pos($e)
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_base($e, v3)
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_pos($e, v3)
+          $bool_h947c0c03c59c6f07_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($value, mload(v0))
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_base($e, v2)
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_pos($e, v5)
+          leave
+        }
+        if iszero(v1) {
+          $bool_h947c0c03c59c6f07_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($value, mload(v0))
+          leave
+        }
+      }
+      function $encode_field__Sol_hfd482bb803ad8c5f_u256_SolEncoder_h1b9228b90dad6928__636972f1f7e9ec11($value, $e) {
+        let v0 := mload(0x40)
+        if iszero(v0) {
+          v0 := 0x80
+        }
+        mstore(0x40, add(v0, 32))
+        mstore(v0, $e)
+        let v1 := 0
+        if v1 {
+          let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_base($e)
+          let v3 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_append_tail($e, 32)
+          let v4 := $checked_sub_u256(v3, v2)
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($e, v4)
+          let v5 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_pos($e)
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_base($e, v3)
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_pos($e, v3)
+          $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($value, mload(v0))
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_base($e, v2)
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_pos($e, v5)
+          leave
+        }
+        if iszero(v1) {
+          $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($value, mload(v0))
+          leave
+        }
+      }
+      function $encode_field__Sol_hfd482bb803ad8c5f_u8_SolEncoder_h1b9228b90dad6928__5bb32446b2b3bbd1($value, $e) {
+        let v0 := mload(0x40)
+        if iszero(v0) {
+          v0 := 0x80
+        }
+        mstore(0x40, add(v0, 32))
+        mstore(v0, $e)
+        let v1 := 0
+        if v1 {
+          let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_base($e)
+          let v3 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_append_tail($e, 32)
+          let v4 := $checked_sub_u256(v3, v2)
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($e, v4)
+          let v5 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_pos($e)
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_base($e, v3)
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_pos($e, v3)
+          $u8_hbc9d6eeaea22ffb5_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($value, mload(v0))
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_base($e, v2)
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_pos($e, v5)
+          leave
+        }
+        if iszero(v1) {
+          $u8_hbc9d6eeaea22ffb5_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($value, mload(v0))
+          leave
+        }
+      }
+      function $encode_root__Sol_hfd482bb803ad8c5f_String_32__SolEncoder_h1b9228b90dad6928__68b3570335d45d1c($value, $e) {
+        let v0 := mload(0x40)
+        if iszero(v0) {
+          v0 := 0x80
+        }
+        mstore(0x40, add(v0, 32))
+        mstore(v0, $e)
+        let v1 := 0
+        if v1 {
+          $encode_field__Sol_hfd482bb803ad8c5f_String_32__SolEncoder_h1b9228b90dad6928__68b3570335d45d1c($value, mload(v0))
+          leave
+        }
+        if iszero(v1) {
+          $string_const_n__usize__h78b9b185054e88a2_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_32_SolEncoder_h1b9228b90dad6928__562228df2278c1ed($value, mload(v0))
+          leave
+        }
+      }
+      function $encode_root__Sol_hfd482bb803ad8c5f_String_8__SolEncoder_h1b9228b90dad6928__51347bbb9e3bb9d4($value, $e) {
+        let v0 := mload(0x40)
+        if iszero(v0) {
+          v0 := 0x80
+        }
+        mstore(0x40, add(v0, 32))
+        mstore(v0, $e)
+        let v1 := 0
+        if v1 {
+          $encode_field__Sol_hfd482bb803ad8c5f_String_8__SolEncoder_h1b9228b90dad6928__51347bbb9e3bb9d4($value, mload(v0))
+          leave
+        }
+        if iszero(v1) {
+          $string_const_n__usize__h78b9b185054e88a2_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_8_SolEncoder_h1b9228b90dad6928__1811d65564ab2650($value, mload(v0))
+          leave
+        }
+      }
+      function $encode_root__Sol_hfd482bb803ad8c5f_bool_SolEncoder_h1b9228b90dad6928__ff0def932f0b945b($value, $e) {
+        let v0 := mload(0x40)
+        if iszero(v0) {
+          v0 := 0x80
+        }
+        mstore(0x40, add(v0, 32))
+        mstore(v0, $e)
+        let v1 := 0
+        if v1 {
+          $encode_field__Sol_hfd482bb803ad8c5f_bool_SolEncoder_h1b9228b90dad6928__ff0def932f0b945b($value, mload(v0))
+          leave
+        }
+        if iszero(v1) {
+          $bool_h947c0c03c59c6f07_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($value, mload(v0))
+          leave
+        }
+      }
+      function $encode_root__Sol_hfd482bb803ad8c5f_u256_SolEncoder_h1b9228b90dad6928__636972f1f7e9ec11($value, $e) {
+        let v0 := mload(0x40)
+        if iszero(v0) {
+          v0 := 0x80
+        }
+        mstore(0x40, add(v0, 32))
+        mstore(v0, $e)
+        let v1 := 0
+        if v1 {
+          $encode_field__Sol_hfd482bb803ad8c5f_u256_SolEncoder_h1b9228b90dad6928__636972f1f7e9ec11($value, mload(v0))
+          leave
+        }
+        if iszero(v1) {
+          $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($value, mload(v0))
+          leave
+        }
+      }
+      function $encode_root__Sol_hfd482bb803ad8c5f_u8_SolEncoder_h1b9228b90dad6928__5bb32446b2b3bbd1($value, $e) {
+        let v0 := mload(0x40)
+        if iszero(v0) {
+          v0 := 0x80
+        }
+        mstore(0x40, add(v0, 32))
+        mstore(v0, $e)
+        let v1 := 0
+        if v1 {
+          $encode_field__Sol_hfd482bb803ad8c5f_u8_SolEncoder_h1b9228b90dad6928__5bb32446b2b3bbd1($value, mload(v0))
+          leave
+        }
+        if iszero(v1) {
+          $u8_hbc9d6eeaea22ffb5_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($value, mload(v0))
+          leave
+        }
+      }
+      function $ensure_nonzero_divisor__u256__3271ca15373d4483($b) {
+        let v0 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($b)
+        let v1 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0, 0)
+        let v2 := v1
+        if v2 {
+          revert(0, 0)
+        }
+        leave
+      }
       function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
         revert(0, 0)
       }
@@ -1029,144 +1526,160 @@ object "CoolCoin" {
         leave
       }
       function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input() -> ret {
-        ret := 0
+        let v0 := $calldata_hf71d505b6ff5dc81_new()
+        ret := v0
         leave
       }
       function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes($ptr, $len) {
         return($ptr, $len)
       }
       function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_String_32___e9bd76e6664882d4($value) {
-        let v0 := 0
+        let v0 := iszero(1)
         if iszero(v0) {
           let v1 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new()
-          let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v1, 32)
-          $string_const_n__usize__h78b9b185054e88a2_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_32_SolEncoder_h1b9228b90dad6928__562228df2278c1ed($value, v1)
-          let v3 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v1)
-          let v4 := mload(v3)
-          let v5 := mload(add(v3, 32))
-          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v4, v5)
+          let v2 := $abi_root_head_size__u256__3271ca15373d4483()
+          let v3 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v1, v2)
+          $encode_root__Sol_hfd482bb803ad8c5f_String_32__SolEncoder_h1b9228b90dad6928__68b3570335d45d1c($value, v1)
+          let v4 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v1)
+          let v5 := mload(v4)
+          let v6 := v5
+          let v7 := mload(add(v4, 32))
+          let v8 := v7
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v6, v8)
         }
-        let v6 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_le(32, 64)
-        let v7 := v6
-        if v7 {
+        let v9 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_le(32, 64)
+        let v10 := v9
+        if v10 {
           $string_const_n__usize__h78b9b185054e88a2_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f_32__f597d64bb224049()
           return(0, 32)
         }
-        let v8 := mload(64)
-        if iszero(v8) {
-          v8 := 0x80
+        let v11 := mload(64)
+        if iszero(v11) {
+          v11 := 0x80
         }
-        mstore(64, add(v8, 32))
+        mstore(64, add(v11, 32))
         $string_const_n__usize__h78b9b185054e88a2_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f_32__f597d64bb224049()
-        return(v8, 32)
+        return(v11, 32)
       }
       function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_String_8___1834cf55196eb0a5($value) {
-        let v0 := 0
+        let v0 := iszero(1)
         if iszero(v0) {
           let v1 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new()
-          let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v1, 32)
-          $string_const_n__usize__h78b9b185054e88a2_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_8_SolEncoder_h1b9228b90dad6928__1811d65564ab2650($value, v1)
-          let v3 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v1)
-          let v4 := mload(v3)
-          let v5 := mload(add(v3, 32))
-          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v4, v5)
+          let v2 := $abi_root_head_size__u256__3271ca15373d4483()
+          let v3 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v1, v2)
+          $encode_root__Sol_hfd482bb803ad8c5f_String_8__SolEncoder_h1b9228b90dad6928__51347bbb9e3bb9d4($value, v1)
+          let v4 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v1)
+          let v5 := mload(v4)
+          let v6 := v5
+          let v7 := mload(add(v4, 32))
+          let v8 := v7
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v6, v8)
         }
-        let v6 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_le(32, 64)
-        let v7 := v6
-        if v7 {
+        let v9 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_le(32, 64)
+        let v10 := v9
+        if v10 {
           $string_const_n__usize__h78b9b185054e88a2_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f_32__f597d64bb224049()
           return(0, 32)
         }
-        let v8 := mload(64)
-        if iszero(v8) {
-          v8 := 0x80
+        let v11 := mload(64)
+        if iszero(v11) {
+          v11 := 0x80
         }
-        mstore(64, add(v8, 32))
+        mstore(64, add(v11, 32))
         $string_const_n__usize__h78b9b185054e88a2_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f_32__f597d64bb224049()
-        return(v8, 32)
+        return(v11, 32)
       }
       function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_bool__37232ead2a7830cb($value) {
-        let v0 := 1
+        let v0 := iszero(0)
         if iszero(v0) {
           let v1 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new()
-          let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v1, 32)
-          $bool_h947c0c03c59c6f07_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($value, v1)
-          let v3 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v1)
-          let v4 := mload(v3)
-          let v5 := mload(add(v3, 32))
-          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v4, v5)
+          let v2 := $abi_root_head_size__u256__3271ca15373d4483()
+          let v3 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v1, v2)
+          $encode_root__Sol_hfd482bb803ad8c5f_bool_SolEncoder_h1b9228b90dad6928__ff0def932f0b945b($value, v1)
+          let v4 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v1)
+          let v5 := mload(v4)
+          let v6 := v5
+          let v7 := mload(add(v4, 32))
+          let v8 := v7
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v6, v8)
         }
-        let v6 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_le(32, 64)
-        let v7 := v6
-        if v7 {
+        let v9 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_le(32, 64)
+        let v10 := v9
+        if v10 {
           $bool_h947c0c03c59c6f07_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95($value, 0)
           return(0, 32)
         }
-        let v8 := mload(64)
-        if iszero(v8) {
-          v8 := 0x80
+        let v11 := mload(64)
+        if iszero(v11) {
+          v11 := 0x80
         }
-        mstore(64, add(v8, 32))
-        $bool_h947c0c03c59c6f07_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95($value, v8)
-        return(v8, 32)
+        mstore(64, add(v11, 32))
+        $bool_h947c0c03c59c6f07_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95($value, v11)
+        return(v11, 32)
       }
       function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63($value) {
-        let v0 := 1
+        let v0 := iszero(0)
         if iszero(v0) {
           let v1 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new()
-          let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v1, 32)
-          $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($value, v1)
-          let v3 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v1)
-          let v4 := mload(v3)
-          let v5 := mload(add(v3, 32))
-          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v4, v5)
+          let v2 := $abi_root_head_size__u256__3271ca15373d4483()
+          let v3 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v1, v2)
+          $encode_root__Sol_hfd482bb803ad8c5f_u256_SolEncoder_h1b9228b90dad6928__636972f1f7e9ec11($value, v1)
+          let v4 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v1)
+          let v5 := mload(v4)
+          let v6 := v5
+          let v7 := mload(add(v4, 32))
+          let v8 := v7
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v6, v8)
         }
-        let v6 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_le(32, 64)
-        let v7 := v6
-        if v7 {
+        let v9 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_le(32, 64)
+        let v10 := v9
+        if v10 {
           $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95($value, 0)
           return(0, 32)
         }
-        let v8 := mload(64)
-        if iszero(v8) {
-          v8 := 0x80
+        let v11 := mload(64)
+        if iszero(v11) {
+          v11 := 0x80
         }
-        mstore(64, add(v8, 32))
-        $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95($value, v8)
-        return(v8, 32)
+        mstore(64, add(v11, 32))
+        $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95($value, v11)
+        return(v11, 32)
       }
       function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u8__c96affccb17b69db($value) {
-        let v0 := 1
+        let v0 := iszero(0)
         if iszero(v0) {
           let v1 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new()
-          let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v1, 32)
-          $u8_hbc9d6eeaea22ffb5_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($value, v1)
-          let v3 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v1)
-          let v4 := mload(v3)
-          let v5 := mload(add(v3, 32))
-          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v4, v5)
+          let v2 := $abi_root_head_size__u256__3271ca15373d4483()
+          let v3 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v1, v2)
+          $encode_root__Sol_hfd482bb803ad8c5f_u8_SolEncoder_h1b9228b90dad6928__5bb32446b2b3bbd1($value, v1)
+          let v4 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v1)
+          let v5 := mload(v4)
+          let v6 := v5
+          let v7 := mload(add(v4, 32))
+          let v8 := v7
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v6, v8)
         }
-        let v6 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_le(32, 64)
-        let v7 := v6
-        if v7 {
+        let v9 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_le(32, 64)
+        let v10 := v9
+        if v10 {
           $u8_hbc9d6eeaea22ffb5_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95($value, 0)
           return(0, 32)
         }
-        let v8 := mload(64)
-        if iszero(v8) {
-          v8 := 0x80
+        let v11 := mload(64)
+        if iszero(v11) {
+          v11 := 0x80
         }
-        mstore(64, add(v8, 32))
-        $u8_hbc9d6eeaea22ffb5_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95($value, v8)
-        return(v8, 32)
+        mstore(64, add(v11, 32))
+        $u8_hbc9d6eeaea22ffb5_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95($value, v11)
+        return(v11, 32)
       }
       function $evm_hef0af3106e109414_log_h22d1a10952034bae_log3_stor_arg0_root_stor($offset, $len, $topic0, $topic1, $topic2) {
         log3($offset, $len, $topic0, $topic1, $topic2)
         leave
       }
       function $increaseallowance_h9840135eaea36633_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) -> ret {
-        let v0 := $address_h257056268eac7027_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
-        let v1 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
+        let v0 := $decode_field__Sol_hfd482bb803ad8c5f_Address_h257056268eac7027_SolDecoder_CallData___dc56815d0588c9d4($d)
+        let v1 := $decode_field__Sol_hfd482bb803ad8c5f_u256_SolDecoder_CallData___6480d5da5e36cc2c($d)
         let v2 := mload(0x40)
         if iszero(v2) {
           v2 := 0x80
@@ -1200,8 +1713,8 @@ object "CoolCoin" {
         leave
       }
       function $mint_ha2f94817be433a2e_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) -> ret {
-        let v0 := $address_h257056268eac7027_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
-        let v1 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
+        let v0 := $decode_field__Sol_hfd482bb803ad8c5f_Address_h257056268eac7027_SolDecoder_CallData___dc56815d0588c9d4($d)
+        let v1 := $decode_field__Sol_hfd482bb803ad8c5f_u256_SolDecoder_CallData___6480d5da5e36cc2c($d)
         let v2 := mload(0x40)
         if iszero(v2) {
           v2 := 0x80
@@ -1216,6 +1729,37 @@ object "CoolCoin" {
         let v0 := $address_h257056268eac7027_eq_h14b330e44530c410_eq($self, $other)
         ret := iszero(v0)
         leave
+      }
+      function $packed_string_len($word) -> ret {
+        let v0 := 0
+        let v1 := $word
+        for { } 1 { } {
+          let v2 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v1, 0)
+          if iszero(v2) {
+            break
+          }
+          let v3 := $checked_add_u256(v0, 1)
+          v0 := v3
+          v1 := shr(8, v1)
+        }
+        ret := v0
+        leave
+      }
+      function $round_up_words($len) -> ret {
+        let v0 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq($len, 0)
+        let v1 := v0
+        if v1 {
+          ret := 0
+          leave
+        }
+        if iszero(v1) {
+          let v2 := $checked_sub_u256($len, 1)
+          let v3 := $checked_div_u256(v2, 32)
+          let v4 := $checked_add_u256(v3, 1)
+          let v5 := $checked_mul_u256(v4, 32)
+          ret := v5
+          leave
+        }
       }
       function $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2() -> ret {
         let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input()
@@ -1261,55 +1805,97 @@ object "CoolCoin" {
         mstore($ptr, $value)
         leave
       }
+      function $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($self) -> ret {
+        let v0 := mload(add($self, 64))
+        ret := v0
+        leave
+      }
+      function $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_pos__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($self) -> ret {
+        let v0 := mload(add($self, 32))
+        ret := v0
+        leave
+      }
       function $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($self) -> ret {
         let v0 := mload($self)
         let v1 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0)
         let v2 := mload(add($self, 32))
-        let v3 := add(v2, 32)
-        let v4 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v3, v1)
-        let v5 := v4
-        if v5 {
+        let v3 := $checked_add_u256(v2, 32)
+        let v4 := v3
+        let v5 := mload(add($self, 32))
+        let v6 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v4, v5)
+        let v7 := v6
+        if v7 {
           revert(0, 0)
         }
-        let v6 := mload($self)
-        let v7 := mload(add($self, 32))
-        let v8 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v6, v7)
-        mstore(add($self, 32), v3)
-        ret := v8
+        let v8 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v4, v1)
+        let v9 := v8
+        if v9 {
+          revert(0, 0)
+        }
+        let v10 := mload($self)
+        let v11 := mload(add($self, 32))
+        let v12 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v10, v11)
+        mstore(add($self, 32), v4)
+        ret := v12
+        leave
+      }
+      function $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_set_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($self, $new_base) {
+        mstore(add($self, 64), $new_base)
+        leave
+      }
+      function $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_set_pos__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($self, $new_pos) {
+        mstore(add($self, 32), $new_pos)
         leave
       }
       function $soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input, $base) -> ret {
-        let v0 := mload(0x40)
+        let v0 := $cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input)
+        let v1 := $cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0, $base)
+        let v2 := mload(0x40)
+        if iszero(v2) {
+          v2 := 0x80
+        }
+        mstore(0x40, add(v2, 96))
+        let v3 := v1
+        mstore(v2, mload(v3))
+        mstore(add(v2, 32), mload(add(v3, 32)))
+        mstore(add(v2, 64), $base)
+        ret := v2
+        leave
+      }
+      function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_append_tail($self, $bytes) -> ret {
+        let v0 := mload(64)
         if iszero(v0) {
           v0 := 0x80
         }
-        mstore(0x40, add(v0, 64))
-        mstore(v0, $input)
-        mstore(add(v0, 32), $base)
-        let v1 := mload(0x40)
-        if iszero(v1) {
-          v1 := 0x80
-        }
-        mstore(0x40, add(v1, 96))
-        let v2 := v0
-        mstore(v1, mload(v2))
-        mstore(add(v1, 32), mload(add(v2, 32)))
-        mstore(add(v1, 64), $base)
-        ret := v1
+        mstore(64, add(v0, $bytes))
+        let v1 := $checked_add_u256(v0, $bytes)
+        mstore(add($self, 96), v1)
+        ret := v0
+        leave
+      }
+      function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_base($self) -> ret {
+        let v0 := mload(add($self, 32))
+        ret := v0
         leave
       }
       function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish($self) -> ret {
         let v0 := mload($self)
         let v1 := v0
-        let v2 := mload(add($self, 64))
-        let v3 := mload(0x40)
-        if iszero(v3) {
-          v3 := 0x80
+        let v2 := mload(add($self, 96))
+        let v3 := $checked_sub_u256(v2, v1)
+        let v4 := mload(0x40)
+        if iszero(v4) {
+          v4 := 0x80
         }
-        mstore(0x40, add(v3, 64))
-        mstore(v3, v1)
-        mstore(add(v3, 32), sub(v2, v1))
-        ret := v3
+        mstore(0x40, add(v4, 64))
+        mstore(v4, v1)
+        mstore(add(v4, 32), v3)
+        ret := v4
+        leave
+      }
+      function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_pos($self) -> ret {
+        let v0 := mload(add($self, 64))
+        ret := v0
         leave
       }
       function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head($self, $bytes) -> ret {
@@ -1324,17 +1910,32 @@ object "CoolCoin" {
           mstore(64, add(v3, $bytes))
           mstore($self, v3)
           mstore(add($self, 32), v3)
-          mstore(add($self, 64), add(v3, $bytes))
+          mstore(add($self, 64), v3)
+          let v4 := $checked_add_u256(v3, $bytes)
+          mstore(add($self, 96), v4)
         }
-        let v4 := mload($self)
-        ret := v4
+        let v5 := mload(add($self, 32))
+        ret := v5
+        leave
+      }
+      function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_base($self, $new_base) {
+        mstore(add($self, 32), $new_base)
+        leave
+      }
+      function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_pos($self, $new_pos) {
+        mstore(add($self, 64), $new_pos)
         leave
       }
       function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($self, $v) {
-        let v0 := mload(add($self, 32))
+        let v0 := mload(add($self, 64))
         let v1 := v0
         mstore(v1, $v)
-        mstore(add($self, 32), add(v1, 32))
+        let v2 := $checked_add_u256(v1, 32)
+        mstore(add($self, 64), v2)
+        leave
+      }
+      function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word_at($at, $v) {
+        mstore($at, $v)
         leave
       }
       function $solencoder_h1b9228b90dad6928_new() -> ret {
@@ -1342,10 +1943,11 @@ object "CoolCoin" {
         if iszero(v0) {
           v0 := 0x80
         }
-        mstore(0x40, add(v0, 96))
+        mstore(0x40, add(v0, 128))
         mstore(v0, 0)
         mstore(add(v0, 32), 0)
         mstore(add(v0, 64), 0)
+        mstore(add(v0, 96), 0)
         ret := v0
         leave
       }
@@ -1489,12 +2091,46 @@ object "CoolCoin" {
       }
       function $string_const_n__usize__h78b9b185054e88a2_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_32_SolEncoder_h1b9228b90dad6928__562228df2278c1ed($self, $e) {
         let v0 := $self
-        $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($e, v0)
+        let v1 := $packed_string_len(v0)
+        let v2 := $round_up_words(v1)
+        let v3 := $checked_add_u256(32, v2)
+        let v4 := v3
+        let v5 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_append_tail($e, v4)
+        let v6 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_base($e)
+        let v7 := $checked_sub_u256(v5, v6)
+        let v8 := v7
+        $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($e, v8)
+        $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word_at(v5, v1)
+        let v9 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v1, 0)
+        let v10 := v9
+        if v10 {
+          let v11 := $checked_add_u256(v5, 32)
+          let v12 := $checked_sub_u256(32, v1)
+          let v13 := $checked_mul_u256(v12, 8)
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word_at(v11, shl(v13, v0))
+        }
         leave
       }
       function $string_const_n__usize__h78b9b185054e88a2_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_8_SolEncoder_h1b9228b90dad6928__1811d65564ab2650($self, $e) {
         let v0 := $self
-        $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($e, v0)
+        let v1 := $packed_string_len(v0)
+        let v2 := $round_up_words(v1)
+        let v3 := $checked_add_u256(32, v2)
+        let v4 := v3
+        let v5 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_append_tail($e, v4)
+        let v6 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_base($e)
+        let v7 := $checked_sub_u256(v5, v6)
+        let v8 := v7
+        $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($e, v8)
+        $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word_at(v5, v1)
+        let v9 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v1, 0)
+        let v10 := v9
+        if v10 {
+          let v11 := $checked_add_u256(v5, 32)
+          let v12 := $checked_sub_u256(32, v1)
+          let v13 := $checked_mul_u256(v12, 8)
+          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word_at(v11, shl(v13, v0))
+        }
         leave
       }
       function $string_const_n__usize__h78b9b185054e88a2_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f_32__f597d64bb224049() {
@@ -1527,8 +2163,8 @@ object "CoolCoin" {
         leave
       }
       function $transfer_h13f5ec5985ebba60_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) -> ret {
-        let v0 := $address_h257056268eac7027_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
-        let v1 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
+        let v0 := $decode_field__Sol_hfd482bb803ad8c5f_Address_h257056268eac7027_SolDecoder_CallData___dc56815d0588c9d4($d)
+        let v1 := $decode_field__Sol_hfd482bb803ad8c5f_u256_SolDecoder_CallData___6480d5da5e36cc2c($d)
         let v2 := mload(0x40)
         if iszero(v2) {
           v2 := 0x80
@@ -1558,9 +2194,9 @@ object "CoolCoin" {
         leave
       }
       function $transferfrom_h939549e4bad999e8_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) -> ret {
-        let v0 := $address_h257056268eac7027_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
-        let v1 := $address_h257056268eac7027_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
-        let v2 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
+        let v0 := $decode_field__Sol_hfd482bb803ad8c5f_Address_h257056268eac7027_SolDecoder_CallData___dc56815d0588c9d4($d)
+        let v1 := $decode_field__Sol_hfd482bb803ad8c5f_Address_h257056268eac7027_SolDecoder_CallData___dc56815d0588c9d4($d)
+        let v2 := $decode_field__Sol_hfd482bb803ad8c5f_u256_SolDecoder_CallData___6480d5da5e36cc2c($d)
         let v3 := mload(0x40)
         if iszero(v3) {
           v3 := 0x80
@@ -1634,6 +2270,11 @@ object "CoolCoin" {
       }
       function $u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add($self, $other) -> ret {
         let v0 := add($self, $other)
+        ret := v0
+        leave
+      }
+      function $u256_h3271ca15373d4483_wrappingmul_h64e6b83610cda761_wrapping_mul($self, $other) -> ret {
+        let v0 := mul($self, $other)
         ret := v0
         leave
       }

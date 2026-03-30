@@ -36,6 +36,7 @@ pub struct FieldPlan<'db> {
 pub enum SyntheticFnPlan<'db> {
     InitHandler(InitHandlerPlan<'db>),
     RecvHandler(RecvHandlerPlan<'db>),
+    RuntimeDispatchArmHelper(RuntimeDispatchArmHelperPlan<'db>),
     InitEntrypoint(InitEntrypointPlan<'db>),
     RuntimeEntrypoint(RuntimeEntrypointPlan<'db>),
     CodeRegionQuery(CodeRegionQueryPlan<'db>),
@@ -46,6 +47,7 @@ impl<'db> SyntheticFnPlan<'db> {
         match self {
             Self::InitHandler(plan) => plan.id,
             Self::RecvHandler(plan) => plan.id,
+            Self::RuntimeDispatchArmHelper(plan) => plan.id,
             Self::InitEntrypoint(plan) => plan.id,
             Self::RuntimeEntrypoint(plan) => plan.id,
             Self::CodeRegionQuery(plan) => plan.id,
@@ -141,8 +143,15 @@ pub struct RuntimeDispatchArmPlan<'db> {
     pub recv_idx: u32,
     #[allow(dead_code)]
     pub arm_idx: u32,
-    pub is_payable: bool,
     pub selector: u32,
+    pub callee: SyntheticId<'db>,
+}
+
+#[derive(Clone)]
+pub struct RuntimeDispatchArmHelperPlan<'db> {
+    pub id: SyntheticId<'db>,
+    pub field_mode: FieldBindingMode,
+    pub is_payable: bool,
     pub call: RuntimeCallPlan<'db>,
     pub ret: RuntimeReturnPlan<'db>,
 }
@@ -150,7 +159,6 @@ pub struct RuntimeDispatchArmPlan<'db> {
 #[derive(Clone)]
 pub struct RuntimeEntrypointPlan<'db> {
     pub id: SyntheticId<'db>,
-    pub field_mode: FieldBindingMode,
     pub arms: Vec<RuntimeDispatchArmPlan<'db>>,
     pub default: DefaultAction,
 }
@@ -291,40 +299,54 @@ impl<'db> ContractPlan<'db> {
                                 arm.index(db)
                             ),
                         })?;
+                let helper_id = SyntheticId::ContractRuntimeDispatchArm {
+                    contract,
+                    recv_idx: recv.index(db),
+                    arm_idx: arm.index(db),
+                };
+                let is_payable = arm.arm(db).is_some_and(|a| a.is_payable(db));
+                let call = RuntimeCallPlan {
+                    callee: SyntheticId::ContractRecvArmHandler {
+                        contract,
+                        recv_idx: recv.index(db),
+                        arm_idx: arm.index(db),
+                    },
+                    args: if abi_payload_is_empty(db, abi_info.args_ty) {
+                        RuntimeArgsPlan::Empty
+                    } else {
+                        RuntimeArgsPlan::DecodeRuntimeInput {
+                            ty: abi_info.args_ty,
+                        }
+                    },
+                    effects: arm
+                        .effective_effect_env(db)
+                        .bindings(db)
+                        .iter()
+                        .map(|binding| binding.source)
+                        .collect(),
+                };
+                let ret = abi_info.ret_ty.map_or(RuntimeReturnPlan::Unit, |ty| {
+                    RuntimeReturnPlan::Value { ty }
+                });
+                functions.push(SyntheticFnPlan::RuntimeDispatchArmHelper(
+                    RuntimeDispatchArmHelperPlan {
+                        id: helper_id,
+                        field_mode: FieldBindingMode::Runtime,
+                        is_payable,
+                        call: call.clone(),
+                        ret,
+                    },
+                ));
                 arms.push(RuntimeDispatchArmPlan {
                     recv_idx: recv.index(db),
                     arm_idx: arm.index(db),
-                    is_payable: arm.arm(db).is_some_and(|a| a.is_payable(db)),
                     selector,
-                    call: RuntimeCallPlan {
-                        callee: SyntheticId::ContractRecvArmHandler {
-                            contract,
-                            recv_idx: recv.index(db),
-                            arm_idx: arm.index(db),
-                        },
-                        args: if abi_payload_is_empty(db, abi_info.args_ty) {
-                            RuntimeArgsPlan::Empty
-                        } else {
-                            RuntimeArgsPlan::DecodeRuntimeInput {
-                                ty: abi_info.args_ty,
-                            }
-                        },
-                        effects: arm
-                            .effective_effect_env(db)
-                            .bindings(db)
-                            .iter()
-                            .map(|binding| binding.source)
-                            .collect(),
-                    },
-                    ret: abi_info.ret_ty.map_or(RuntimeReturnPlan::Unit, |ty| {
-                        RuntimeReturnPlan::Value { ty }
-                    }),
+                    callee: helper_id,
                 });
             }
         }
         functions.push(SyntheticFnPlan::RuntimeEntrypoint(RuntimeEntrypointPlan {
             id: SyntheticId::ContractRuntimeEntrypoint(contract),
-            field_mode: FieldBindingMode::Runtime,
             arms,
             default: DefaultAction::Abort,
         }));

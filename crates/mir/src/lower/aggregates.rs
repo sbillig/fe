@@ -2,7 +2,7 @@
 
 use super::*;
 use hir::{
-    hir_def::{Expr, LitKind, Partial},
+    hir_def::{ArithBinOp, BinOp, Expr, LitKind, Partial},
     projection::{IndexSource, Projection},
 };
 use num_bigint::BigUint;
@@ -335,6 +335,151 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.emit_init_aggregate(value_id, inits);
 
         value_id
+    }
+
+    pub(super) fn try_lower_dyn_string_literal(
+        &mut self,
+        expr: ExprId,
+        literal: hir::hir_def::StringId<'db>,
+    ) -> Option<ValueId> {
+        let dyn_string_ty = self.typed_body.expr_ty(self.db, expr);
+        if !self.is_core_dyn_string_ty(dyn_string_ty) || self.current_block().is_none() {
+            return None;
+        }
+
+        let bytes = literal.data(self.db).as_bytes().to_vec();
+        let len = bytes.len();
+        let padded_len = len.next_multiple_of(32);
+        let payload_size = 32 + padded_len;
+        let payload_size_value = self.synthetic_u256(BigUint::from(payload_size));
+
+        let ptr_local = self.alloc_temp_local(TyId::u256(self.db), false, "dyn_string_ptr");
+        self.builder.body.locals[ptr_local.index()].address_space = AddressSpaceKind::Memory;
+        self.assign(
+            None,
+            Some(ptr_local),
+            Rvalue::Intrinsic {
+                op: IntrinsicOp::Alloc,
+                args: vec![payload_size_value],
+            },
+        );
+        let ptr_value = self.alloc_value(
+            TyId::u256(self.db),
+            ValueOrigin::Local(ptr_local),
+            ValueRepr::Word,
+        );
+
+        let len_value = self.synthetic_u256(BigUint::from(len));
+        self.assign(
+            None,
+            None,
+            Rvalue::Intrinsic {
+                op: IntrinsicOp::Mstore,
+                args: vec![ptr_value, len_value],
+            },
+        );
+
+        let zero = self.synthetic_u256(BigUint::from(0u8));
+        for offset in (32..payload_size).step_by(32) {
+            let offset_value = self.synthetic_u256(BigUint::from(offset));
+            let word_ptr = self.alloc_value(
+                TyId::u256(self.db),
+                ValueOrigin::Binary {
+                    op: BinOp::Arith(ArithBinOp::Add),
+                    lhs: ptr_value,
+                    rhs: offset_value,
+                },
+                ValueRepr::Word,
+            );
+            self.assign(
+                None,
+                None,
+                Rvalue::Intrinsic {
+                    op: IntrinsicOp::Mstore,
+                    args: vec![word_ptr, zero],
+                },
+            );
+        }
+
+        if len > 0 {
+            let data_offset = self.synthetic_u256(BigUint::from(32u8));
+            let data_ptr = self.alloc_value(
+                TyId::u256(self.db),
+                ValueOrigin::Binary {
+                    op: BinOp::Arith(ArithBinOp::Add),
+                    lhs: ptr_value,
+                    rhs: data_offset,
+                },
+                ValueRepr::Word,
+            );
+
+            if len <= 32 {
+                let shift = (32 - len) * 8;
+                let word_value = self.synthetic_u256(BigUint::from_bytes_be(&bytes) << shift);
+                self.assign(
+                    None,
+                    None,
+                    Rvalue::Intrinsic {
+                        op: IntrinsicOp::Mstore,
+                        args: vec![data_ptr, word_value],
+                    },
+                );
+            } else {
+                let region = self
+                    .builder
+                    .body
+                    .intern_const_region(TyId::u256(self.db), bytes);
+                let src = self.alloc_value(
+                    TyId::u256(self.db),
+                    ValueOrigin::ConstRegion(region),
+                    ValueRepr::Word,
+                );
+                self.assign(
+                    None,
+                    None,
+                    Rvalue::Intrinsic {
+                        op: IntrinsicOp::Codecopy,
+                        args: vec![data_ptr, src, len_value],
+                    },
+                );
+            }
+        }
+
+        let dyn_string = self.emit_alloc(expr, dyn_string_ty);
+        let size_value = self.synthetic_u256(BigUint::from(payload_size));
+
+        let data_ident = IdentId::new(self.db, "data".to_string());
+        let len_ident = IdentId::new(self.db, "len".to_string());
+        let size_ident = IdentId::new(self.db, "size".to_string());
+
+        let data_field = self
+            .field_access_info(dyn_string_ty, FieldIndex::Ident(data_ident))
+            .expect("core::abi::DynString should have a `data` field");
+        let len_field = self
+            .field_access_info(dyn_string_ty, FieldIndex::Ident(len_ident))
+            .expect("core::abi::DynString should have a `len` field");
+        let size_field = self
+            .field_access_info(dyn_string_ty, FieldIndex::Ident(size_ident))
+            .expect("core::abi::DynString should have a `size` field");
+
+        self.emit_init_aggregate(
+            dyn_string,
+            vec![
+                (
+                    MirProjectionPath::from_projection(Projection::Field(data_field.field_idx)),
+                    ptr_value,
+                ),
+                (
+                    MirProjectionPath::from_projection(Projection::Field(len_field.field_idx)),
+                    len_value,
+                ),
+                (
+                    MirProjectionPath::from_projection(Projection::Field(size_field.field_idx)),
+                    size_value,
+                ),
+            ],
+        );
+        Some(dyn_string)
     }
 
     /// Returns the field type and byte offset for a given receiver/field pair.

@@ -1,11 +1,14 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
+assertion_line: 26
 expression: mir_output
 ---
+#[inline(never)]
 fn __PayableInitAndRecv_recv_0_0() -> ():
   bb0:
     ret
 
+#[inline(never)]
 fn __PayableInitAndRecv_recv_0_1() -> ():
   bb0:
     ret
@@ -17,24 +20,38 @@ fn __PayableInitAndRecv_init() -> ():
     eval codecopy(0, v0, v1)
     terminate return_data(0, v1)
 
-fn __PayableInitAndRecv_runtime() -> ():
+#[inline(never)]
+fn __PayableInitAndRecv_runtime_arm_0_0() -> ():
   bb0:
-    v0: u32 = runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
-    switch v0 [3054322312 => bb2, 1547088262 => bb3] else bb1
+    eval __PayableInitAndRecv_recv_0_0()
+    terminate return_unit__Evm_hef0af3106e109414__3af54274b2985741()
+
+#[inline(never)]
+fn __PayableInitAndRecv_runtime_arm_0_1() -> ():
+  bb0:
+    v0: u256 = callvalue()
+    br (v0 != 0) bb1 bb2
   bb1:
     terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
   bb2:
-    eval __PayableInitAndRecv_recv_0_0()
-    terminate return_unit__Evm_hef0af3106e109414__3af54274b2985741()
-  bb3:
-    v1: u256 = callvalue()
-    br (v1 != 0) bb4 bb5
-  bb4:
-    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-  bb5:
     eval __PayableInitAndRecv_recv_0_1()
     terminate return_unit__Evm_hef0af3106e109414__3af54274b2985741()
 
+#[inline(never)]
+fn __PayableInitAndRecv_runtime() -> ():
+  bb0:
+    v0: u32 = runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
+    br (v0 == 3054322312) bb2 bb4
+  bb1:
+    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+  bb2:
+    terminate __PayableInitAndRecv_runtime_arm_0_0()
+  bb3:
+    terminate __PayableInitAndRecv_runtime_arm_0_1()
+  bb4:
+    br (v0 == 1547088262) bb3 bb1
+
+#[inline(never)]
 fn __NoInitContract_recv_0_0() -> ():
   bb0:
     ret
@@ -51,20 +68,36 @@ fn __NoInitContract_init() -> ():
     eval codecopy(0, v1, v2)
     terminate return_data(0, v2)
 
-fn __NoInitContract_runtime() -> ():
+#[inline(never)]
+fn __NoInitContract_runtime_arm_0_0() -> ():
   bb0:
-    v0: u32 = runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
-    switch v0 [1547088262 => bb2] else bb1
+    v0: u256 = callvalue()
+    br (v0 != 0) bb1 bb2
   bb1:
     terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
   bb2:
-    v1: u256 = callvalue()
-    br (v1 != 0) bb3 bb4
-  bb3:
-    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-  bb4:
     eval __NoInitContract_recv_0_0()
     terminate return_unit__Evm_hef0af3106e109414__3af54274b2985741()
+
+#[inline(never)]
+fn __NoInitContract_runtime() -> ():
+  bb0:
+    v0: u32 = runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
+    br (v0 == 1547088262) bb2 bb1
+  bb1:
+    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+  bb2:
+    terminate __NoInitContract_runtime_arm_0_0()
+
+fn return_unit__Evm_hef0af3106e109414__3af54274b2985741(v0: Evm) -> !:
+  ; runtime_abi values=[] effects=[]
+  bb0:
+    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(0, 0)
+
+fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(v0: Evm) -> !:
+  ; runtime_abi values=[] effects=[]
+  bb0:
+    terminate revert(0, 0)
 
 fn runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(v0: Evm) -> u32:
   ; runtime_abi values=[] effects=[]
@@ -80,25 +113,31 @@ fn runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805
     v5: u32 = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v4)
     ret v5
 
-fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(v0: Evm) -> !:
-  ; runtime_abi values=[] effects=[]
+fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v0: Evm, v1: u256, v2: u256) -> !:
+  ; runtime_abi values=[v1: u256, v2: u256] effects=[]
   bb0:
-    terminate revert(0, 0)
-
-fn return_unit__Evm_hef0af3106e109414__3af54274b2985741(v0: Evm) -> !:
-  ; runtime_abi values=[] effects=[]
-  bb0:
-    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(0, 0)
+    terminate return_data(v1, v2)
 
 fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(v0: Evm) -> CallData:
   ; runtime_abi values=[] effects=[]
   bb0:
-    ret 0
+    v1: CallData = calldata_hf71d505b6ff5dc81_new()
+    ret v1
 
 fn calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0: CallData) -> u256:
   bb0:
     v1: u256 = calldatasize()
-    v2: u256 = checked_sub<u256>(v1, v0)
+    v2: u256 = 0
+    v3: bool = u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v0, v1)
+    br v3 bb1 bb2
+  bb1:
+    v2 = 0
+    jmp bb3
+  bb2:
+    v4: u256 = checked_sub<u256>(v1, v0)
+    v2 = v4
+    jmp bb3
+  bb3:
     ret v2
 
 fn u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v0: u256, v1: u256) -> bool:
@@ -117,10 +156,14 @@ fn sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v0: u256) ->
     v1: u32 = s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35((v0 >> 224))
     ret v1
 
-fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v0: Evm, v1: u256, v2: u256) -> !:
-  ; runtime_abi values=[v1: u256, v2: u256] effects=[]
+fn calldata_hf71d505b6ff5dc81_new() -> CallData:
   bb0:
-    terminate return_data(v1, v2)
+    ret 0
+
+fn u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v0: u256, v1: u256) -> bool:
+  bb0:
+    v2: bool = __gt_u256(v0, v1)
+    ret v2
 
 fn s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35(v0: u256) -> u32:
   bb0:

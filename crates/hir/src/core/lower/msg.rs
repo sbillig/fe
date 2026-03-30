@@ -97,15 +97,23 @@ fn variant_struct_ty<'db>(db: &'db dyn HirDb, struct_: Struct<'db>) -> TypeId<'d
 }
 
 fn lower_msg_variant_field_specs<'db>(
-    db: &'db dyn HirDb,
-    struct_: Struct<'db>,
+    ctxt: &mut FileLowerCtxt<'db>,
+    variant: &ast::MsgVariant,
 ) -> Vec<(IdentId<'db>, TypeId<'db>)> {
-    struct_
-        .hir_fields(db)
-        .data(db)
-        .iter()
-        .filter_map(|field| Some((field.name.to_opt()?, field.type_ref().to_opt()?)))
-        .collect()
+    let mut fields = Vec::new();
+    if let Some(params_ast) = variant.params() {
+        for field in params_ast.into_iter() {
+            let Some(name_token) = field.name() else {
+                continue;
+            };
+            let field_name = IdentId::lower_token(ctxt, name_token);
+            let Some(field_ty) = TypeId::lower_ast_partial(ctxt, field.ty()).to_opt() else {
+                continue;
+            };
+            fields.push((field_name, field_ty));
+        }
+    }
+    fields
 }
 
 fn lower_msg_variant_encode_decode_impls<'db>(
@@ -120,12 +128,12 @@ fn lower_msg_variant_encode_decode_impls<'db>(
 
 fn lower_msg_variant_abi_size_impl<'db>(
     builder: &mut HirBuilder<'_, 'db, MsgDesugared>,
-    _variant: &ast::MsgVariant,
+    variant: &ast::MsgVariant,
     struct_: Struct<'db>,
 ) -> ImplTrait<'db> {
     let db = builder.db();
     let roots = builder.roots();
-    let field_specs = lower_msg_variant_field_specs(db, struct_);
+    let field_specs = lower_msg_variant_field_specs(builder.ctxt(), variant);
     let trait_path = PathId::from_ident(db, roots.core)
         .push_str(db, "abi")
         .push_str(db, "AbiSize");
@@ -133,21 +141,21 @@ fn lower_msg_variant_abi_size_impl<'db>(
     let ty = variant_struct_ty(db, struct_);
 
     builder.impl_trait_assocs_build(trait_ref, ty, |builder| {
-        let consts = vec![create_encoded_size_assoc_const(builder, &field_specs)];
+        let consts = vec![
+            create_encoded_size_assoc_const(builder, &field_specs),
+            create_is_dynamic_assoc_const(builder, &field_specs),
+            create_needs_parent_wrapper_assoc_const(builder, &field_specs),
+        ];
         (vec![], consts)
     })
 }
 
 fn lower_msg_variant_encode_impl<'db>(
     builder: &mut HirBuilder<'_, 'db, MsgDesugared>,
-    _variant: &ast::MsgVariant,
+    variant: &ast::MsgVariant,
     struct_: Struct<'db>,
 ) -> ImplTrait<'db> {
-    let field_specs = lower_msg_variant_field_specs(builder.db(), struct_);
-    let field_names = field_specs
-        .iter()
-        .map(|(name, _)| *name)
-        .collect::<Vec<_>>();
+    let field_specs = lower_msg_variant_field_specs(builder.ctxt(), variant);
 
     let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
     let trait_ref = Partial::Present(builder.core_abi_trait_ref_sol("Encode"));
@@ -182,7 +190,7 @@ fn lower_msg_variant_encode_impl<'db>(
                 None,
                 FuncModifiers::new(Visibility::Private, false, false, false),
                 |body| {
-                    body.encode_fields(&field_names, encoder_ident);
+                    body.encode_fields(&field_specs, encoder_ident, e_ty);
                 },
             );
 
@@ -322,9 +330,13 @@ fn build_direct_encode_expr<'db>(
             .to_opt()
             .map(|inner| build_direct_encode_expr(body_ctxt, origin.clone(), encode_trait, inner))
             .unwrap_or_else(|| push_bool_expr(body_ctxt, origin.clone(), false)),
-        TypeKind::Ptr(_) | TypeKind::Array(_, _) | TypeKind::Never => {
-            push_bool_expr(body_ctxt, origin, false)
-        }
+        TypeKind::Array(elem_ty, _) => elem_ty
+            .to_opt()
+            .map(|elem_ty| {
+                build_direct_encode_expr(body_ctxt, origin.clone(), encode_trait, elem_ty)
+            })
+            .unwrap_or_else(|| push_bool_expr(body_ctxt, origin.clone(), false)),
+        TypeKind::Ptr(_) | TypeKind::Never => push_bool_expr(body_ctxt, origin, false),
     }
 }
 
@@ -344,6 +356,123 @@ fn push_int_expr<'db>(
     let db = body_ctxt.f_ctxt.db();
     let value = BigUint::from(value);
     body_ctxt.push_expr(Expr::Lit(LitKind::Int(IntegerId::new(db, value))), origin)
+}
+
+fn abi_size_trait_ref<'db>(ctxt: &FileLowerCtxt<'db>) -> TraitRefId<'db> {
+    let db = ctxt.db();
+    let roots = super::hir_builder::LibRoots::for_ctxt(ctxt);
+    let path = PathId::from_ident(db, roots.core)
+        .push_str(db, "abi")
+        .push_str(db, "AbiSize");
+    TraitRefId::new(db, Partial::Present(path))
+}
+
+fn abi_size_assoc_expr<'db>(
+    body_ctxt: &mut BodyCtxt<'_, 'db>,
+    origin: crate::span::HirOrigin<ast::Expr>,
+    ty: TypeId<'db>,
+    assoc_name: &str,
+) -> crate::hir_def::ExprId {
+    let db = body_ctxt.f_ctxt.db();
+    let qualified = PathId::new(
+        db,
+        PathKind::QualifiedType {
+            type_: ty,
+            trait_: abi_size_trait_ref(body_ctxt.f_ctxt),
+        },
+        None,
+    );
+    body_ctxt.push_expr(
+        Expr::Path(Partial::Present(qualified.push_str(db, assoc_name))),
+        origin,
+    )
+}
+
+fn create_is_dynamic_assoc_const<'db>(
+    builder: &mut HirBuilder<'_, 'db, MsgDesugared>,
+    fields: &[(IdentId<'db>, TypeId<'db>)],
+) -> AssocConstDef<'db> {
+    create_bool_assoc_const(builder, "IS_DYNAMIC", fields)
+}
+
+fn create_needs_parent_wrapper_assoc_const<'db>(
+    builder: &mut HirBuilder<'_, 'db, MsgDesugared>,
+    fields: &[(IdentId<'db>, TypeId<'db>)],
+) -> AssocConstDef<'db> {
+    create_bool_assoc_const(builder, "NEEDS_PARENT_WRAPPER", fields)
+}
+
+fn create_bool_assoc_const<'db>(
+    builder: &mut HirBuilder<'_, 'db, MsgDesugared>,
+    name: &str,
+    fields: &[(IdentId<'db>, TypeId<'db>)],
+) -> AssocConstDef<'db> {
+    let db = builder.db();
+    let name = builder.ident(name);
+    let ty = builder.ty_ident(builder.ident("bool"));
+    let id = builder.ctxt().joined_id(TrackedItemVariant::NamelessBody);
+    let origin = builder.origin();
+    let mut body_ctxt = BodyCtxt::new(builder.ctxt(), id);
+    let mut expr = push_bool_expr(&mut body_ctxt, origin.clone(), false);
+
+    for (_, field_ty) in fields.iter().copied() {
+        let field_is_dynamic = build_is_dynamic_expr(&mut body_ctxt, origin.clone(), field_ty);
+        expr = body_ctxt.push_expr(
+            Expr::Bin(expr, field_is_dynamic, BinOp::Logical(LogicalBinOp::Or)),
+            origin.clone(),
+        );
+    }
+
+    let body = body_ctxt.build(None, expr, BodyKind::Anonymous);
+    AssocConstDef {
+        attributes: AttrListId::new(db, vec![]),
+        name: Partial::Present(name),
+        ty: Partial::Present(ty),
+        value: Partial::Present(body),
+    }
+}
+
+fn build_is_dynamic_expr<'db>(
+    body_ctxt: &mut BodyCtxt<'_, 'db>,
+    origin: crate::span::HirOrigin<ast::Expr>,
+    ty: TypeId<'db>,
+) -> crate::hir_def::ExprId {
+    let db = body_ctxt.f_ctxt.db();
+
+    match ty.data(db) {
+        TypeKind::Path(path) => path
+            .to_opt()
+            .map(|path| {
+                body_ctxt.push_expr(
+                    Expr::Path(Partial::Present(path.push_str(db, "IS_DYNAMIC"))),
+                    origin.clone(),
+                )
+            })
+            .unwrap_or_else(|| push_bool_expr(body_ctxt, origin.clone(), false)),
+        TypeKind::Tuple(tuple) => {
+            let mut expr = push_bool_expr(body_ctxt, origin.clone(), false);
+            for elem_ty in tuple.data(db).iter().copied() {
+                let elem_expr = elem_ty
+                    .to_opt()
+                    .map(|elem_ty| build_is_dynamic_expr(body_ctxt, origin.clone(), elem_ty))
+                    .unwrap_or_else(|| push_bool_expr(body_ctxt, origin.clone(), false));
+                expr = body_ctxt.push_expr(
+                    Expr::Bin(expr, elem_expr, BinOp::Logical(LogicalBinOp::Or)),
+                    origin.clone(),
+                );
+            }
+            expr
+        }
+        TypeKind::Mode(_, inner) => inner
+            .to_opt()
+            .map(|inner| build_is_dynamic_expr(body_ctxt, origin.clone(), inner))
+            .unwrap_or_else(|| push_bool_expr(body_ctxt, origin.clone(), false)),
+        TypeKind::Array(elem_ty, _) => elem_ty
+            .to_opt()
+            .map(|elem_ty| build_is_dynamic_expr(body_ctxt, origin.clone(), elem_ty))
+            .unwrap_or_else(|| push_bool_expr(body_ctxt, origin.clone(), false)),
+        TypeKind::Ptr(_) | TypeKind::Never => push_bool_expr(body_ctxt, origin, false),
+    }
 }
 
 fn create_encoded_size_assoc_const<'db>(
@@ -410,9 +539,8 @@ fn build_encoded_size_expr<'db>(
             .to_opt()
             .map(|inner| build_encoded_size_expr(body_ctxt, origin.clone(), inner))
             .unwrap_or_else(|| push_int_expr(body_ctxt, origin.clone(), 0)),
-        TypeKind::Ptr(_) | TypeKind::Array(_, _) | TypeKind::Never => {
-            push_int_expr(body_ctxt, origin, 0)
-        }
+        TypeKind::Array(_, _) => abi_size_assoc_expr(body_ctxt, origin, ty, "ENCODED_SIZE"),
+        TypeKind::Ptr(_) | TypeKind::Never => push_int_expr(body_ctxt, origin, 0),
     }
 }
 
@@ -448,7 +576,8 @@ fn build_encoded_size_body_expr<'db>(
             .unwrap_or_else(|| {
                 body.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, 0))))
             }),
-        TypeKind::Ptr(_) | TypeKind::Array(_, _) | TypeKind::Never => {
+        TypeKind::Array(_, _) => body.abi_size_assoc_expr(ty, "ENCODED_SIZE"),
+        TypeKind::Ptr(_) | TypeKind::Never => {
             body.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, 0))))
         }
     }
@@ -456,14 +585,15 @@ fn build_encoded_size_body_expr<'db>(
 
 fn lower_msg_variant_decode_trait_impl<'db>(
     builder: &mut HirBuilder<'_, 'db, MsgDesugared>,
-    _variant: &ast::MsgVariant,
+    variant: &ast::MsgVariant,
     struct_: Struct<'db>,
 ) -> ImplTrait<'db> {
-    let fields = lower_msg_variant_field_specs(builder.db(), struct_);
+    let db = builder.db();
+    let fields = lower_msg_variant_field_specs(builder.ctxt(), variant);
     let field_names = fields.iter().map(|(name, _)| *name).collect::<Vec<_>>();
 
     let trait_ref = builder.core_abi_trait_ref_sol("Decode");
-    let ty = variant_struct_ty(builder.db(), struct_);
+    let ty = variant_struct_ty(db, struct_);
 
     builder.impl_trait(trait_ref, ty, |builder| {
         let abi_decoder_trait_ref = builder.core_abi_trait_ref_sol("AbiDecoder");
@@ -481,7 +611,7 @@ fn lower_msg_variant_decode_trait_impl<'db>(
             FuncModifiers::new(Visibility::Private, false, false, false),
             |body| {
                 for (name, ty) in fields.iter().copied() {
-                    body.decode_into(name, ty);
+                    body.decode_into(name, ty, d_ty);
                 }
                 body.return_record_self(&field_names);
             },
@@ -497,33 +627,29 @@ fn lower_msg_variant_struct<'db>(
     let name = IdentId::lower_token_partial(builder.ctxt(), variant.name());
     super::payable::report_payable_attr_on_msg_variant(builder.ctxt(), variant.attr_list());
     let attributes = filter_msg_variant_attrs(builder.ctxt(), variant.attr_list());
-    let fields = lower_msg_variant_fields(builder, variant, variant.params());
+    let fields = lower_msg_variant_fields(builder.ctxt(), variant.params());
     builder.pub_struct(name, attributes, fields)
 }
 
 /// Lowers msg variant params to field definitions, making all fields public.
 fn lower_msg_variant_fields<'db>(
-    builder: &mut HirBuilder<'_, 'db, MsgDesugared>,
-    variant: &ast::MsgVariant,
+    ctxt: &mut FileLowerCtxt<'db>,
     params: Option<ast::MsgVariantParams>,
 ) -> FieldDefListId<'db> {
-    let db = builder.db();
+    let db = ctxt.db();
     match params {
         Some(params) => {
             let fields = params
                 .into_iter()
                 .map(|field| {
                     super::payable::report_payable_attr_on_unsupported_item(
-                        builder.ctxt(),
+                        ctxt,
                         field.attr_list(),
                         "field",
                     );
-                    let attributes = AttrListId::lower_ast_opt(builder.ctxt(), field.attr_list());
-                    let name = IdentId::lower_token_partial(builder.ctxt(), field.name());
-                    let type_ref = TypeId::lower_ast_partial(builder.ctxt(), field.ty())
-                        .to_opt()
-                        .map(|ty| lower_msg_variant_field_ty(builder, variant, name, ty))
-                        .into();
+                    let attributes = AttrListId::lower_ast_opt(ctxt, field.attr_list());
+                    let name = IdentId::lower_token_partial(ctxt, field.name());
+                    let type_ref = TypeId::lower_ast_partial(ctxt, field.ty());
                     // All msg variant fields are public
                     FieldDef::new(attributes, name, type_ref, Visibility::Public)
                 })
@@ -532,30 +658,6 @@ fn lower_msg_variant_fields<'db>(
         }
         None => FieldDefListId::new(db, vec![]),
     }
-}
-
-fn lower_msg_variant_field_ty<'db>(
-    builder: &mut HirBuilder<'_, 'db, MsgDesugared>,
-    variant: &ast::MsgVariant,
-    field_name: Partial<IdentId<'db>>,
-    field_ty: TypeId<'db>,
-) -> TypeId<'db> {
-    if matches!(field_ty.data(builder.db()), TypeKind::Path(_)) {
-        return field_ty;
-    }
-
-    let db = builder.db();
-    let variant_name = IdentId::lower_token_partial(builder.ctxt(), variant.name())
-        .to_opt()
-        .map(|ident| ident.data(db).to_string())
-        .unwrap_or_else(|| "_".to_string());
-    let field_name = field_name
-        .to_opt()
-        .map(|ident| ident.data(db).to_string())
-        .unwrap_or_else(|| "_".to_string());
-    let alias_name = IdentId::new(db, format!("__msg_{variant_name}_{field_name}_ty"));
-    builder.type_alias_simple(Partial::Present(alias_name), Partial::Present(field_ty));
-    builder.ty_path(PathId::from_ident(db, alias_name))
 }
 
 /// Creates an `impl MsgVariant for VariantStruct` block.

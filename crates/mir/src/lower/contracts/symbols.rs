@@ -18,6 +18,14 @@ impl SymbolMangler {
             SyntheticId::ContractInitHandler(_) => {
                 format!("__{}_init_contract", self.display_name)
             }
+            SyntheticId::ContractRuntimeDispatchArm {
+                recv_idx, arm_idx, ..
+            } => {
+                format!(
+                    "__{}_runtime_arm_{}_{}",
+                    self.display_name, recv_idx, arm_idx
+                )
+            }
             SyntheticId::ContractRecvArmHandler {
                 recv_idx, arm_idx, ..
             } => {

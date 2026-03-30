@@ -2980,8 +2980,22 @@ fn runtime_abi_cleanup_removes_dead_zero_arg_create2_encoder_materialization() u
             .clone();
         drop(module);
 
-        let has_dead_materialization_chain = helper_body.blocks.iter().any(|block| {
-            block.insts.iter().any(|inst| match inst {
+        let has_zero_arg_fast_path = helper_body.blocks.iter().any(|block| {
+            let has_create2_raw_call = block.insts.iter().any(|inst| match inst {
+                MirInst::Assign {
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } => call
+                    .resolved_name
+                    .as_deref()
+                    .is_some_and(|name| name.contains("create2_raw")),
+                MirInst::Store { .. }
+                | MirInst::InitAggregate { .. }
+                | MirInst::SetDiscriminant { .. }
+                | MirInst::BindValue { .. }
+                | MirInst::Assign { .. } => false,
+            });
+            let has_encoder_materialization = block.insts.iter().any(|inst| match inst {
                 MirInst::Assign {
                     dest: Some(_),
                     rvalue: Rvalue::Alloc { .. },
@@ -2992,12 +3006,14 @@ fn runtime_abi_cleanup_removes_dead_zero_arg_create2_encoder_materialization() u
                 | MirInst::SetDiscriminant { .. }
                 | MirInst::BindValue { .. }
                 | MirInst::Assign { .. } => false,
-            })
+            });
+
+            has_create2_raw_call && !has_encoder_materialization
         });
 
         assert!(
-            !has_dead_materialization_chain,
-            "zero-arg create2 helpers should not retain dead alloc/init materialization chains after runtime ABI cleanup",
+            has_zero_arg_fast_path,
+            "zero-arg create2 helpers should provide a direct create2_raw fast path without encoder materialization",
         );
     }
 
