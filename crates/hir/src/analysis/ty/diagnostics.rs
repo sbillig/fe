@@ -1,7 +1,7 @@
 use super::{
     adt_def::AdtCycleMember,
     trait_def::TraitInstId,
-    ty_check::{RecordLike, TraitOps},
+    ty_check::{ConcreteBorrowProvider, RecordLike, TraitOps},
     ty_def::{BorrowKind, CapabilityKind, Kind, TyId},
 };
 use crate::visitor::prelude::*;
@@ -370,6 +370,13 @@ pub enum BodyDiag<'db> {
         func: Option<CallableDef<'db>>,
     },
 
+    IncompatibleBorrowProviders {
+        primary: DynLazySpan<'db>,
+        previous: DynLazySpan<'db>,
+        previous_provider: ConcreteBorrowProvider,
+        current_provider: ConcreteBorrowProvider,
+    },
+
     TypeMustBeKnown(DynLazySpan<'db>),
     ConstValueMustBeKnown(DynLazySpan<'db>),
 
@@ -731,6 +738,7 @@ impl<'db> BodyDiag<'db> {
             Self::WithEffectTypeUnsatisfied { .. } => 76,
             Self::AmbiguousEffect { .. } => 40,
             Self::ReturnedTypeMismatch { .. } => 13,
+            Self::IncompatibleBorrowProviders { .. } => 77,
             Self::TypeMustBeKnown(..) => 14,
             Self::InvalidCast { .. } => 55,
             Self::ConstValueMustBeKnown(..) => 64,

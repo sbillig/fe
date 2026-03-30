@@ -54,6 +54,8 @@ pub struct MirFunction<'db> {
     pub runtime_abi: RuntimeAbi<'db>,
     /// Backend-neutral runtime return shape after MIR normalization.
     pub runtime_return_shape: RuntimeShape<'db>,
+    /// Pointer metadata for leaves carried by the runtime return value.
+    pub runtime_return_pointer_leaf_infos: Vec<(MirProjectionPath<'db>, PointerInfo<'db>)>,
     /// Optional contract association declared via attributes.
     pub contract_function: Option<ContractFunction>,
     /// Inline hint declared via `#[inline]`-family source attributes.
@@ -712,8 +714,54 @@ pub struct LocalData<'db> {
     /// that path. Aggregate locals keep only nested pointer leaves here; root
     /// by-reference storage stays in `address_space`.
     pub pointer_leaf_infos: Vec<(MirProjectionPath<'db>, PointerInfo<'db>)>,
+    /// Explicit runtime-owner layout for place roots materialized from this local.
+    pub place_root_layout: LocalPlaceRootLayout<'db>,
     /// Backend-neutral runtime shape for this local after MIR normalization.
     pub runtime_shape: RuntimeShape<'db>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ObjectRootSource {
+    DeclaredByRefAggregate,
+    AllocatedMemory,
+    MaterializedScalarBorrow,
+    SpillOf(LocalId),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LocalPlaceRootLayout<'db> {
+    Direct,
+    MemorySlot,
+    ObjectRootValue {
+        target_ty: TyId<'db>,
+        source: ObjectRootSource,
+    },
+    ObjectRootStorage {
+        target_ty: TyId<'db>,
+        source: ObjectRootSource,
+    },
+}
+
+impl<'db> LocalPlaceRootLayout<'db> {
+    pub fn object_target_ty(self) -> Option<TyId<'db>> {
+        match self {
+            Self::ObjectRootValue { target_ty, .. } | Self::ObjectRootStorage { target_ty, .. } => {
+                Some(target_ty)
+            }
+            Self::Direct | Self::MemorySlot => None,
+        }
+    }
+
+    pub fn is_object_root(self) -> bool {
+        matches!(
+            self,
+            Self::ObjectRootValue { .. } | Self::ObjectRootStorage { .. }
+        )
+    }
+
+    pub fn is_materialized(self) -> bool {
+        matches!(self, Self::MemorySlot | Self::ObjectRootStorage { .. })
+    }
 }
 
 /// MIR projection using MIR value IDs for dynamic indices.
@@ -1321,6 +1369,7 @@ mod tests {
                     target_ty: Some(ty),
                 },
             )],
+            place_root_layout: LocalPlaceRootLayout::Direct,
             runtime_shape: RuntimeShape::Unresolved,
         }];
 
@@ -1356,6 +1405,7 @@ mod tests {
                     target_ty: Some(ty),
                 },
             )],
+            place_root_layout: LocalPlaceRootLayout::Direct,
             runtime_shape: RuntimeShape::Unresolved,
         }];
 
@@ -1383,6 +1433,7 @@ mod tests {
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos: Vec::new(),
+            place_root_layout: LocalPlaceRootLayout::Direct,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         }];
         let values = vec![ValueData {

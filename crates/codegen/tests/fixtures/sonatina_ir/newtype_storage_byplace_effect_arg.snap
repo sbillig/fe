@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/newtype_storage_byplace_effect_arg.fe
 ---
@@ -8,28 +9,9 @@ target = "evm-ethereum-osaka"
 type @__fe_obj_SolEncoder_0 = {i256, i256, i256};
 type @__fe_obj_tuple_1 = {i256, i256};
 
-func private %bump__StorPtr_Wrap___5036bb3e02939b91(v0.i256) {
-    block0:
-        v1.i256 = evm_sload v0;
-        (v3.i256, v4.i1) = uaddo v1 1.i256;
-        br v4 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        evm_sstore v0 v3;
-        return;
-}
-
-func private %bump_hfb5a53c6af92b8a6_encode_hf98aaef2e32b4927_encode_to_ptr() {
-    block0:
-        return;
-}
-
 func private %__NewtypeByPlaceEffectArg_recv_0_0(v0.i256, v1.i256) -> i256 {
     block0:
-        call %bump__StorPtr_Wrap___5036bb3e02939b91 v0;
+        call %bump__Wrap_haf9e70905fcbd513__945a70bbbf171dbd v0;
         v2.i256 = evm_sload v1;
         (v4.i256, v5.i1) = uaddo v2 1.i256;
         br v5 block1 block2;
@@ -86,6 +68,20 @@ func private %__NewtypeByPlaceEffectArg_runtime() {
         v11.i256 = call %__NewtypeByPlaceEffectArg_recv_0_0 v3 v1;
         call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63 v11;
         evm_invalid;
+}
+
+func private %bump__Wrap_haf9e70905fcbd513__945a70bbbf171dbd(v0.i256) {
+    block0:
+        v1.i256 = evm_sload v0;
+        (v3.i256, v4.i1) = uaddo v1 1.i256;
+        br v4 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        evm_sstore v0 v3;
+        return;
 }
 
 func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {

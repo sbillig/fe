@@ -17,10 +17,6 @@ fn ptr_storage_u8___ha1d45fed9b34d435_effecthandle_hfc52f915596f993a_from_raw(v0
   bb0:
     ret v0
 
-fn ptr_storage_u8___ha1d45fed9b34d435_effecthandle_hfc52f915596f993a_raw(v0: Ptr<Storage<u8>>) -> u256:
-  bb0:
-    ret v0
-
 fn needs__Ptr_Storage_u8____a1d45fed9b34d435(v0: u256) -> ():
   ; runtime_abi values=[] effects=[]
   bb0:

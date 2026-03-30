@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/newtype_storage_byplace_effect_arg.fe
 ---
@@ -25,7 +26,7 @@ object "NewtypeByPlaceEffectArg" {
   object "NewtypeByPlaceEffectArg_deployed" {
     code {
       function $__NewtypeByPlaceEffectArg_recv_0_0($w, $x) -> ret {
-        $bump__StorPtr_Wrap___5036bb3e02939b91($w)
+        $bump__Wrap_haf9e70905fcbd513__945a70bbbf171dbd($w)
         let v0 := sload($x)
         let v1 := $checked_add_u256(v0, 1)
         sstore($x, v1)
@@ -51,7 +52,7 @@ object "NewtypeByPlaceEffectArg" {
             $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
           }
       }
-      function $bump__StorPtr_Wrap___5036bb3e02939b91($w) {
+      function $bump__Wrap_haf9e70905fcbd513__945a70bbbf171dbd($w) {
         let v0 := sload($w)
         let v1 := $checked_add_u256(v0, 1)
         sstore($w, v1)

@@ -12,11 +12,6 @@ fn entry() -> u256:
     v0 = load mem[v1]
     ret v2
 
-fn mockctx_he3e49fc78f7932c8_ctx_h4952b3c1f066f039_inc(v0: MockCtx) -> u256:
-  bb0:
-    v1: u256 = checked_add<u256>(v0, 1)
-    ret v1
-
 fn bump__MockCtx_he3e49fc78f7932c8_u256__63db6a77eadd62cf(v0: u256, v1: u256) -> u256:
   bb0:
     v2: u256 = mockctx_he3e49fc78f7932c8_ctx_h4952b3c1f066f039_inc_stor(v0)

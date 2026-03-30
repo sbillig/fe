@@ -51,7 +51,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return value_id;
         }
 
-        self.builder.body.locals[dest.index()].address_space = AddressSpaceKind::Memory;
+        self.set_local_address_space(dest, AddressSpaceKind::Memory);
         self.builder.body.locals[dest.index()]
             .pointer_leaf_infos
             .clear();
@@ -242,7 +242,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
             // Allocate memory and copy the constant array from code space.
             let dest = self.alloc_temp_local(array_ty, false, "array_data");
-            self.builder.body.locals[dest.index()].address_space = AddressSpaceKind::Memory;
+            self.set_local_address_space(dest, AddressSpaceKind::Memory);
 
             self.push_inst_here(MirInst::Assign {
                 source: crate::ir::SourceInfoId::SYNTHETIC,

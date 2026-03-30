@@ -14,13 +14,10 @@ use hir::analysis::{
     diagnostics::format_diags,
     ty::{
         const_ty::ConstTyData,
-        effects::EffectKeyKind,
         fold::{TyFoldable, TyFolder},
         normalize::normalize_ty,
         trait_def::{TraitInstId, resolve_trait_method_instance},
-        trait_resolution::{
-            GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
-        },
+        trait_resolution::{PredicateListId, TraitSolveCx, is_goal_satisfiable},
         ty_check::check_func_body,
         ty_def::{TyBase, TyData, TyId},
     },
@@ -295,6 +292,9 @@ impl<'db> Monomorphizer<'db> {
             let Some(def) = self.func_defs.get(&func).copied() else {
                 continue;
             };
+            if def.receiver_ty(self.db).is_some() {
+                continue;
+            }
 
             // Seed non-generic functions immediately so we always emit them.
             let params = def.params(self.db);
@@ -303,33 +303,38 @@ impl<'db> Monomorphizer<'db> {
                 continue;
             }
 
-            // Functions with only synthetic "type-effect provider" params should still get a
-            // default instance emitted (mirrors the old `effect_kinds = [stor; N]` behavior).
             let provider_param_count = params
                 .iter()
                 .filter(
                     |ty| matches!(ty.data(self.db), TyData::TyParam(p) if p.is_effect_provider()),
                 )
                 .count();
-            if provider_param_count == 0 || provider_param_count != params.len() {
+            let is_test = ItemKind::from(func)
+                .attrs(self.db)
+                .is_some_and(|attrs| attrs.has_attr(self.db, "test"));
+            let top_mod_has_contracts = !func.top_mod(self.db).all_contracts(self.db).is_empty();
+            if provider_param_count == 0
+                || provider_param_count != params.len()
+                || (!is_test && top_mod_has_contracts)
+            {
                 continue;
             }
 
             let stor_ptr_ctor =
                 resolve_lib_type_path(self.db, func.scope(), "core::effect_ref::StorPtr")
                     .unwrap_or_else(|| panic!("missing core type `core::effect_ref::StorPtr`"));
-
-            let mut args = Vec::with_capacity(provider_param_count);
             let assumptions = PredicateListId::empty_list(self.db);
             let root_effect_ty = resolve_default_root_effect_ty(self.db, func.scope(), assumptions);
             let effect_ref_trait =
                 resolve_core_trait(self.db, func.scope(), &["effect_ref", "EffectRef"]);
             let effect_ref_mut_trait =
                 resolve_core_trait(self.db, func.scope(), &["effect_ref", "EffectRefMut"]);
+            let mut args = Vec::with_capacity(provider_param_count);
             let mut can_seed = true;
+
             for binding in func.effect_bindings(self.db) {
                 match binding.key_kind {
-                    EffectKeyKind::Type => {
+                    hir::analysis::ty::effects::EffectKeyKind::Type => {
                         let Some(ty) = binding.key_ty else {
                             continue;
                         };
@@ -353,7 +358,9 @@ impl<'db> Monomorphizer<'db> {
                                         .with_assumptions(assumptions),
                                     goal,
                                 ),
-                                GoalSatisfiability::Satisfied(_)
+                                hir::analysis::ty::trait_resolution::GoalSatisfiability::Satisfied(
+                                    _
+                                )
                             ) {
                                 return false;
                             }
@@ -376,7 +383,9 @@ impl<'db> Monomorphizer<'db> {
                                         .with_assumptions(assumptions),
                                     goal,
                                 ),
-                                GoalSatisfiability::Satisfied(_)
+                                hir::analysis::ty::trait_resolution::GoalSatisfiability::Satisfied(
+                                    _
+                                )
                             )
                         });
                         args.push(
@@ -384,7 +393,7 @@ impl<'db> Monomorphizer<'db> {
                                 .unwrap_or_else(|| TyId::app(self.db, stor_ptr_ctor, ty)),
                         );
                     }
-                    EffectKeyKind::Trait => {
+                    hir::analysis::ty::effects::EffectKeyKind::Trait => {
                         let Some(root_effect_ty) = root_effect_ty else {
                             can_seed = false;
                             break;
@@ -410,16 +419,16 @@ impl<'db> Monomorphizer<'db> {
                                 self.db,
                                 TraitSolveCx::new(self.db, func.scope())
                                     .with_assumptions(assumptions),
-                                goal
+                                goal,
                             ),
-                            GoalSatisfiability::Satisfied(_)
+                            hir::analysis::ty::trait_resolution::GoalSatisfiability::Satisfied(_)
                         ) {
                             can_seed = false;
                             break;
                         }
                         args.push(root_effect_ty);
                     }
-                    EffectKeyKind::Other => continue,
+                    hir::analysis::ty::effects::EffectKeyKind::Other => {}
                 }
             }
 
@@ -1176,7 +1185,7 @@ impl<'db> Monomorphizer<'db> {
                 if path.is_empty()
                     && !capability_root_tracks_aggregate_storage(self.db, &core, local.ty)
                 {
-                    local.address_space = *space;
+                    crate::repr::set_declared_local_address_space(self.db, &core, local, *space);
                 }
             }
             local.pointer_leaf_infos = pointer_leaf_infos;
@@ -1188,6 +1197,7 @@ impl<'db> Monomorphizer<'db> {
         instance: &mut MirFunction<'db>,
         effect_param_space_overrides: &[Option<AddressSpaceKind>],
     ) {
+        let core = self.core_for_origin(instance.origin);
         for (idx, space) in effect_param_space_overrides.iter().enumerate() {
             let Some(space) = *space else {
                 continue;
@@ -1195,7 +1205,8 @@ impl<'db> Monomorphizer<'db> {
             let Some(&effect_local) = instance.body.effect_param_locals.get(idx) else {
                 break;
             };
-            instance.body.locals[effect_local.index()].address_space = space;
+            let local = &mut instance.body.locals[effect_local.index()];
+            crate::repr::set_declared_local_address_space(self.db, &core, local, space);
         }
     }
 
@@ -2212,6 +2223,114 @@ mod tests {
     }
 
     #[test]
+    fn synthetic_param_space_overrides_refresh_declared_place_root_layout() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///synthetic_param_place_root_layout.fe").unwrap();
+        let src = r#"
+struct Pair {
+    left: u256,
+    right: u256,
+}
+
+fn takes_pair(pair: own Pair) -> u256 {
+    pair.left
+}
+
+pub contract C {
+    init() {}
+}
+"#;
+
+        let file = db.workspace().touch(&mut db, url, Some(src.to_owned()));
+        let top_mod = db.top_mod(file);
+        let module = crate::lower::lower_module(&db, top_mod).expect("lowered MIR");
+        let pair_func = module
+            .functions
+            .iter()
+            .find(|func| {
+                matches!(func.origin, crate::ir::MirFunctionOrigin::Hir(_))
+                    && func.symbol_name.starts_with("takes_pair")
+            })
+            .expect("takes_pair function");
+        let pair_ty = pair_func.body.locals[pair_func.body.param_locals[0].index()].ty;
+        let synthetic_origin = module
+            .functions
+            .iter()
+            .find_map(|func| match func.origin {
+                crate::ir::MirFunctionOrigin::Synthetic(id) => {
+                    Some(crate::ir::MirFunctionOrigin::Synthetic(id))
+                }
+                crate::ir::MirFunctionOrigin::Hir(_) => None,
+            })
+            .expect("synthetic function origin");
+
+        let monomorphizer = Monomorphizer::new(&db, Vec::new());
+        let core = monomorphizer.core_for_origin(synthetic_origin);
+        let mut body = crate::ir::MirBody::new();
+        let local = body.alloc_local(crate::ir::LocalData {
+            name: "pair".to_owned(),
+            ty: pair_ty,
+            is_mut: false,
+            source: crate::ir::SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Memory,
+            pointer_leaf_infos: pointer_leaf_infos_for_ty_with_default(
+                &db,
+                &core,
+                pair_ty,
+                AddressSpaceKind::Memory,
+            ),
+            place_root_layout: crate::repr::declared_local_place_root_layout(
+                &db,
+                &core,
+                pair_ty,
+                AddressSpaceKind::Memory,
+            ),
+            runtime_shape: crate::ir::RuntimeShape::Unresolved,
+        });
+        assert!(matches!(
+            body.locals[local.index()].place_root_layout,
+            crate::ir::LocalPlaceRootLayout::ObjectRootValue { .. }
+        ));
+        body.param_locals.push(local);
+        let mut instance = MirFunction {
+            origin: synthetic_origin,
+            body,
+            typed_body: None,
+            generic_args: Vec::new(),
+            ret_ty: pair_ty,
+            returns_value: true,
+            runtime_abi: crate::ir::RuntimeAbi {
+                value_params: vec![true],
+                effect_params: Vec::new(),
+                effect_param_provider_tys: Vec::new(),
+            },
+            runtime_return_shape: crate::ir::RuntimeShape::Unresolved,
+            runtime_return_pointer_leaf_infos: Vec::new(),
+            contract_function: None,
+            inline_hint: None,
+            symbol_name: "synthetic_override_test".to_owned(),
+            symbol_source: crate::ir::SymbolSource::Internal,
+            receiver_space: None,
+            defer_root: false,
+        };
+
+        monomorphizer.apply_synthetic_param_capability_space_overrides(
+            &mut instance,
+            &[vec![(
+                crate::MirProjectionPath::new(),
+                AddressSpaceKind::Storage,
+            )]],
+        );
+
+        let local = &instance.body.locals[local.index()];
+        assert_eq!(local.address_space, AddressSpaceKind::Storage);
+        assert_eq!(
+            local.place_root_layout,
+            crate::ir::LocalPlaceRootLayout::Direct
+        );
+    }
+
+    #[test]
     fn repeated_field_types_collect_all_capability_paths() {
         let mut db = DriverDataBase::default();
         let url = url::Url::parse("file:///repeated_cap_paths.fe").unwrap();
@@ -2273,6 +2392,147 @@ pub contract C {
                 .iter()
                 .any(|name| { name.contains("arg0_f0_stor") && name.contains("arg0_f1_stor") }),
             "expected bump specialization to carry both repeated-field paths, got: {bump_symbols:?}",
+        );
+    }
+
+    #[test]
+    fn root_seeding_uses_canonical_effect_key_instances() {
+        let mut db = DriverDataBase::default();
+        let src = fs::read_to_string(format!(
+            "{}/../codegen/tests/fixtures/newtype_storage_byplace_effect_arg.fe",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .expect("read newtype fixture");
+        let url = Url::parse("file:///root_seed_canonical_effect_key.fe").unwrap();
+        let file = db.workspace().touch(&mut db, url, Some(src));
+        let top_mod = db.top_mod(file);
+        let module = crate::lower::lower_module(&db, top_mod).expect("lowered MIR");
+
+        let bump_symbols = module
+            .functions
+            .iter()
+            .map(|func| func.symbol_name.as_str())
+            .filter(|name| name.starts_with("bump"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            bump_symbols.len(),
+            1,
+            "expected one bump instance, got: {bump_symbols:?}"
+        );
+        assert!(
+            bump_symbols[0].contains("bump__Wrap"),
+            "expected canonical key-type bump instance, got: {bump_symbols:?}",
+        );
+        assert!(
+            !bump_symbols[0].contains("StorPtr"),
+            "legacy provider-wrapper root seed should be gone: {bump_symbols:?}",
+        );
+    }
+
+    #[test]
+    fn root_seeding_uses_storage_overrides_instead_of_provider_wrapper_args() {
+        let mut db = DriverDataBase::default();
+        let src = fs::read_to_string(format!(
+            "{}/../codegen/tests/fixtures/erc20.fe",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .expect("read erc20 fixture");
+        let url = Url::parse("file:///root_seed_storage_overrides.fe").unwrap();
+        let file = db.workspace().touch(&mut db, url, Some(src));
+        let top_mod = db.top_mod(file);
+        let module = crate::lower::lower_module(&db, top_mod).expect("lowered MIR");
+
+        let helper_symbols = module
+            .functions
+            .iter()
+            .map(|func| func.symbol_name.as_str())
+            .filter(|name| {
+                ["mint", "transfer", "approve", "spend_allowance", "burn"]
+                    .iter()
+                    .any(|prefix| name.starts_with(prefix))
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            helper_symbols
+                .iter()
+                .any(|name| name.contains("eff0_stor__0_1_TokenStore_0__1__Evm")),
+            "expected storage-specialized helper names, got: {helper_symbols:?}",
+        );
+        assert!(
+            !helper_symbols
+                .iter()
+                .any(|name| name.contains("StorPtr_TokenStore")),
+            "legacy provider-wrapper helper names should be gone: {helper_symbols:?}",
+        );
+    }
+
+    #[test]
+    fn test_entrypoints_with_only_effect_provider_params_are_root_seeded() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///test_root_seed_effect_only.fe").unwrap();
+        let src = r#"
+use std::evm::{Evm, assert}
+
+fn helper() uses (evm: mut Evm) {
+    assert(true)
+}
+
+#[test]
+fn smoke() uses (evm: mut Evm) {
+    assert(true)
+}
+"#;
+
+        let file = db.workspace().touch(&mut db, url, Some(src.to_owned()));
+        let top_mod = db.top_mod(file);
+        let module = crate::lower::lower_module(&db, top_mod).expect("lowered MIR");
+
+        assert!(
+            module
+                .functions
+                .iter()
+                .any(|func| func.symbol_name.starts_with("smoke__Evm")),
+            "expected #[test] entrypoint to be root-seeded: {:?}",
+            module
+                .functions
+                .iter()
+                .map(|func| func.symbol_name.as_str())
+                .collect::<Vec<_>>(),
+        );
+        assert!(
+            !module
+                .functions
+                .iter()
+                .any(|func| func.symbol_name == "helper"),
+            "ordinary effect-only helpers should still instantiate on demand only",
+        );
+    }
+
+    #[test]
+    fn test_entrypoints_with_trait_effects_root_seed_concrete_provider_args() {
+        let mut db = DriverDataBase::default();
+        let src = fs::read_to_string(format!(
+            "{}/../fe/tests/fixtures/fe_test/address_call_method.fe",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .expect("read address_call_method fixture");
+        let url = Url::parse("file:///test_root_seed_trait_effects.fe").unwrap();
+        let file = db.workspace().touch(&mut db, url, Some(src));
+        let top_mod = db.top_mod(file);
+        let module = crate::lower::lower_module(&db, top_mod).expect("lowered MIR");
+
+        assert!(
+            module.functions.iter().any(|func| func
+                .symbol_name
+                .starts_with("test_address_call_method__Evm")),
+            "expected test root to monomorphize concrete Evm providers: {:?}",
+            module
+                .functions
+                .iter()
+                .map(|func| func.symbol_name.as_str())
+                .collect::<Vec<_>>(),
         );
     }
 

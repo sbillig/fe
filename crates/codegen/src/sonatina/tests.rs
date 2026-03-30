@@ -992,6 +992,108 @@ fn smoke() {
     }
 
     #[test]
+    fn joined_scalar_ref_handles_that_spill_lower_without_panic() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_joined_scalar_ref_handles_spill_test.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+struct Data {
+    x: u256,
+    y: u256,
+}
+
+fn choose(flag: bool, d: ref Data) -> ref u256 {
+    if flag {
+        ref d.x
+    } else {
+        ref d.y
+    }
+}
+
+#[test]
+fn smoke() {
+    let d = Data { x: 10, y: 20 }
+    let picked = choose(true, ref d)
+    assert(picked == d.x)
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let output = emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O0,
+            SonatinaTestOptions::default(),
+            None,
+        )
+        .expect("joined scalar ref handles that spill should lower without panicking");
+        assert_eq!(output.tests.len(), 1, "expected one runnable smoke test");
+    }
+
+    #[test]
+    fn nested_scalar_handle_loads_and_copies_verify_in_test_modules() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("sonatina_nested_scalar_handle_loads_and_copies_test.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+struct Reader {
+    source: ref u256,
+    bias: u256,
+}
+
+fn sum_reader(r: ref Reader) -> u256 {
+    r.source + r.bias
+}
+
+fn pass_through(r: own Reader) -> Reader {
+    r
+}
+
+#[test]
+fn smoke() {
+    let base = 7
+    let reader = Reader {
+        source: ref base,
+        bias: 3,
+    }
+    let copy = pass_through(reader)
+    assert(sum_reader(ref copy) == 10)
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let output = emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O0,
+            SonatinaTestOptions::default(),
+            None,
+        )
+        .expect("nested scalar handle loads and copies should verify in Sonatina test modules");
+        assert_eq!(output.tests.len(), 1, "expected one runnable smoke test");
+    }
+
+    #[test]
     fn wrapped_test_and_code_region_roots_are_not_forced_as_section_includes() {
         let mut db = DriverDataBase::default();
         let file_url = temp_fixture_url("sonatina_test_object_include_roots_test.fe");
@@ -1328,6 +1430,134 @@ fn keep() {
             None,
         )
         .expect("branch-proven nested enum payload loads should verify after O2 test lowering");
+    }
+
+    #[test]
+    fn specialized_storage_handle_enum_tags_verify_in_test_modules() {
+        let mut db = DriverDataBase::default();
+        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../fe/tests/fixtures/fe_test/option_mut_scalar_match_regression.fe");
+        let fixture_source = fs::read_to_string(&fixture_path)
+            .expect("option_mut_scalar_match_regression fixture should be readable");
+        let file_url = Url::from_file_path(&fixture_path).expect("fixture path should be absolute");
+        db.workspace()
+            .touch(&mut db, file_url.clone(), Some(fixture_source));
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O0,
+            SonatinaTestOptions::default(),
+            None,
+        )
+        .expect("storage-specialized enum-tag temps should verify in Sonatina test modules");
+    }
+
+    #[test]
+    fn transparent_scalar_newtype_borrows_verify_in_test_modules() {
+        let mut db = DriverDataBase::default();
+        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../fe/tests/fixtures/fe_test/ref_scalar_nested.fe");
+        let fixture_source = fs::read_to_string(&fixture_path)
+            .expect("ref_scalar_nested fixture should be readable");
+        let file_url = Url::from_file_path(&fixture_path).expect("fixture path should be absolute");
+        db.workspace()
+            .touch(&mut db, file_url.clone(), Some(fixture_source));
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O0,
+            SonatinaTestOptions::default(),
+            None,
+        )
+        .expect("transparent scalar newtype borrows should verify in Sonatina test modules");
+    }
+
+    #[test]
+    fn pointer_like_wrapper_handles_verify_in_test_modules() {
+        let mut db = DriverDataBase::default();
+        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../fe/tests/fixtures/fe_test/view_param_local_ref_take_reverse.fe");
+        let fixture_source = fs::read_to_string(&fixture_path)
+            .expect("view_param_local_ref_take_reverse fixture should be readable");
+        let file_url = Url::from_file_path(&fixture_path).expect("fixture path should be absolute");
+        db.workspace()
+            .touch(&mut db, file_url.clone(), Some(fixture_source));
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O0,
+            SonatinaTestOptions::default(),
+            None,
+        )
+        .expect("pointer-like wrapper handles should verify in Sonatina test modules");
+    }
+
+    #[test]
+    fn structural_type_cache_skips_irrelevant_pointer_metadata() {
+        let mut db = DriverDataBase::default();
+        let fixture_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/match_tuple.fe");
+        let fixture_source =
+            fs::read_to_string(&fixture_path).expect("match_tuple fixture should be readable");
+        let file_url = Url::from_file_path(&fixture_path).expect("fixture path should be absolute");
+        db.workspace()
+            .touch(&mut db, file_url.clone(), Some(fixture_source));
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let tuple_ir = crate::emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O0, None)
+            .expect("match_tuple should lower to Sonatina IR");
+        assert_eq!(
+            tuple_ir.matches("type @__fe_obj_tuple_").count(),
+            2,
+            "tuple lowering should reuse the same specialized object tuple types:\n{tuple_ir}"
+        );
+
+        let mut db = DriverDataBase::default();
+        let fixture_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/effect_ptr_domains.fe");
+        let fixture_source = fs::read_to_string(&fixture_path)
+            .expect("effect_ptr_domains fixture should be readable");
+        let file_url = Url::from_file_path(&fixture_path).expect("fixture path should be absolute");
+        db.workspace()
+            .touch(&mut db, file_url.clone(), Some(fixture_source));
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let effect_ir = crate::emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O0, None)
+            .expect("effect_ptr_domains should lower to Sonatina IR");
+        assert_eq!(
+            effect_ir.matches("type @__fe_Foo_").count(),
+            1,
+            "storage pointer lowering should not create duplicate non-object Foo types:\n{effect_ir}"
+        );
+        assert_eq!(
+            effect_ir.matches("type @__fe_obj_Foo_").count(),
+            1,
+            "memory object lowering should not create duplicate object Foo types:\n{effect_ir}"
+        );
     }
 
     #[test]

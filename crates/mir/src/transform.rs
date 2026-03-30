@@ -8,8 +8,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::CoreLib;
 use crate::ir::{
     AddressSpaceKind, CallOrigin, LocalData, LocalId, MirBody, MirFunction, MirInst, MirModule,
-    MirProjectionPath, Place, RuntimeAbi, RuntimeShape, Rvalue, SourceInfoId, TerminatingCall,
-    Terminator, ValueData, ValueId, ValueOrigin, ValueRepr,
+    MirProjectionPath, Place, PointerInfo, RuntimeAbi, RuntimeShape, Rvalue, SourceInfoId,
+    TerminatingCall, Terminator, ValueData, ValueId, ValueOrigin, ValueRepr,
 };
 use crate::layout;
 
@@ -1175,6 +1175,18 @@ fn merge_runtime_shapes_in_context<'db>(
 ) -> Option<RuntimeShape<'db>> {
     merge_runtime_shapes(existing, next).or_else(|| match (existing, next) {
         (
+            RuntimeShape::ObjectRef {
+                target_ty: lhs_target,
+            },
+            RuntimeShape::ObjectRef {
+                target_ty: rhs_target,
+            },
+        ) if crate::repr::runtime_ty_matches(db, lhs_target, rhs_target) => {
+            Some(RuntimeShape::ObjectRef {
+                target_ty: lhs_target,
+            })
+        }
+        (
             RuntimeShape::MemoryPtr { target_ty },
             RuntimeShape::ObjectRef {
                 target_ty: object_target_ty,
@@ -1187,7 +1199,11 @@ fn merge_runtime_shapes_in_context<'db>(
             RuntimeShape::MemoryPtr { target_ty },
         ) => target_ty
             .filter(|target_ty| {
-                crate::repr::object_layout_ty(db, core, *target_ty) == object_target_ty
+                crate::repr::runtime_ty_matches(
+                    db,
+                    crate::repr::object_layout_ty(db, core, *target_ty),
+                    object_target_ty,
+                )
             })
             .map(|_| RuntimeShape::ObjectRef {
                 target_ty: object_target_ty,
@@ -1196,13 +1212,161 @@ fn merge_runtime_shapes_in_context<'db>(
     })
 }
 
+type PointerLeafInfoSet<'db> = Vec<(MirProjectionPath<'db>, PointerInfo<'db>)>;
+
+#[derive(Clone)]
+struct ReturnRuntimeLayoutState<'db> {
+    shape: RuntimeShape<'db>,
+    pointer_leaf_infos: PointerLeafInfoSet<'db>,
+}
+
+impl<'db> ReturnRuntimeLayoutState<'db> {
+    fn from_function(func: &MirFunction<'db>) -> Self {
+        Self {
+            shape: func.runtime_return_shape,
+            pointer_leaf_infos: func.runtime_return_pointer_leaf_infos.clone(),
+        }
+    }
+
+    fn apply(self, func: &mut MirFunction<'db>) -> bool {
+        let mut changed = false;
+        if func.runtime_return_shape != self.shape {
+            func.runtime_return_shape = self.shape;
+            changed = true;
+        }
+        if func.runtime_return_pointer_leaf_infos != self.pointer_leaf_infos {
+            func.runtime_return_pointer_leaf_infos = self.pointer_leaf_infos;
+            changed = true;
+        }
+        changed
+    }
+}
+
+#[derive(Clone)]
+struct LocalRuntimeLayoutState<'db> {
+    shapes: Vec<RuntimeShape<'db>>,
+    pointer_leaf_infos: Vec<PointerLeafInfoSet<'db>>,
+}
+
+impl<'db> LocalRuntimeLayoutState<'db> {
+    fn from_function(func: &MirFunction<'db>) -> Self {
+        Self {
+            shapes: func
+                .body
+                .locals
+                .iter()
+                .map(|local| local.runtime_shape)
+                .collect(),
+            pointer_leaf_infos: func
+                .body
+                .locals
+                .iter()
+                .map(|local| local.pointer_leaf_infos.clone())
+                .collect(),
+        }
+    }
+
+    fn shape(&self, local: LocalId) -> RuntimeShape<'db> {
+        self.shapes[local.index()]
+    }
+
+    fn set_shape(&mut self, local: LocalId, shape: RuntimeShape<'db>) {
+        self.shapes[local.index()] = shape;
+    }
+
+    fn pointer_leaf_infos(&self, local: LocalId) -> &PointerLeafInfoSet<'db> {
+        &self.pointer_leaf_infos[local.index()]
+    }
+
+    fn set_pointer_leaf_infos(&mut self, local: LocalId, infos: PointerLeafInfoSet<'db>) {
+        self.pointer_leaf_infos[local.index()] = infos;
+    }
+
+    fn apply(self, func: &mut MirFunction<'db>) -> bool {
+        let mut changed = false;
+        for (local_idx, next_shape) in self.shapes.into_iter().enumerate() {
+            if func.body.locals[local_idx].runtime_shape != next_shape {
+                func.body.locals[local_idx].runtime_shape = next_shape;
+                changed = true;
+            }
+        }
+        for (local_idx, next_infos) in self.pointer_leaf_infos.into_iter().enumerate() {
+            if func.body.locals[local_idx].pointer_leaf_infos != next_infos {
+                func.body.locals[local_idx].pointer_leaf_infos = next_infos;
+                changed = true;
+            }
+        }
+        changed
+    }
+}
+
+fn merge_pointer_leaf_infos<'db>(
+    existing: &PointerLeafInfoSet<'db>,
+    next: &PointerLeafInfoSet<'db>,
+) -> Option<PointerLeafInfoSet<'db>> {
+    crate::capability_space::normalize_pointer_leaf_info_entries(
+        existing.iter().cloned().chain(next.iter().cloned()),
+    )
+    .ok()
+}
+
+fn place_store_updates_local_pointer_leaf_infos<'db>(
+    func: &MirFunction<'db>,
+    local_layouts: &mut LocalRuntimeLayoutState<'db>,
+    place: &Place<'db>,
+    value_pointer_infos: &PointerLeafInfoSet<'db>,
+) {
+    if value_pointer_infos.is_empty() {
+        return;
+    }
+    let Some((local, base_projection)) =
+        crate::ir::resolve_local_projection_root(&func.body.values, place.base)
+    else {
+        return;
+    };
+    let full_projection = base_projection.concat(&place.projection);
+    if full_projection
+        .iter()
+        .any(|projection| matches!(projection, Projection::Deref))
+    {
+        return;
+    }
+
+    let mut updated_infos = Vec::with_capacity(value_pointer_infos.len());
+    for (path, info) in value_pointer_infos {
+        updated_infos.push((full_projection.concat(path), *info));
+    }
+    let updated_paths: FxHashSet<_> = updated_infos.iter().map(|(path, _)| path.clone()).collect();
+    let merged = merge_pointer_leaf_infos(
+        &local_layouts
+            .pointer_leaf_infos(local)
+            .iter()
+            .filter(|(path, _)| !updated_paths.contains(path))
+            .cloned()
+            .collect(),
+        &updated_infos,
+    )
+    .unwrap_or_else(|| {
+        panic!(
+            "incompatible pointer leaf infos for local v{} `{}` in `{}` after store to {:?}: {:?} vs {:?}",
+            local.index(),
+            func.body.local(local).name,
+            func.symbol_name,
+            place,
+            local_layouts.pointer_leaf_infos(local),
+            updated_infos,
+        )
+    });
+    local_layouts.set_pointer_leaf_infos(local, merged);
+}
+
 fn assigned_rvalue_runtime_shape<'db>(
     db: &'db dyn HirAnalysisDb,
     core: &CoreLib<'db>,
     func: &MirFunction<'db>,
     dest: LocalId,
     rvalue: &Rvalue<'db>,
-    return_shapes: &[RuntimeShape<'db>],
+    return_layouts: &[ReturnRuntimeLayoutState<'db>],
     func_indices: &FxHashMap<String, usize>,
 ) -> Option<RuntimeShape<'db>> {
     match rvalue {
@@ -1215,7 +1379,7 @@ fn assigned_rvalue_runtime_shape<'db>(
             .resolved_name
             .as_deref()
             .and_then(|name| func_indices.get(name).copied())
-            .map(|callee_idx| return_shapes[callee_idx])
+            .map(|callee_idx| return_layouts[callee_idx].shape)
             .or_else(|| {
                 func.body
                     .locals
@@ -1255,12 +1419,50 @@ fn assigned_rvalue_runtime_shape<'db>(
     }
 }
 
+fn assigned_rvalue_pointer_leaf_infos<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    func: &MirFunction<'db>,
+    dest: LocalId,
+    rvalue: &Rvalue<'db>,
+    return_layouts: &[ReturnRuntimeLayoutState<'db>],
+    func_indices: &FxHashMap<String, usize>,
+) -> PointerLeafInfoSet<'db> {
+    match rvalue {
+        Rvalue::Value(value) => crate::repr::pointer_leaf_infos_for_value(
+            db,
+            core,
+            &func.body.values,
+            &func.body.locals,
+            *value,
+        ),
+        Rvalue::Load { place } => crate::repr::pointer_leaf_infos_for_place(
+            db,
+            core,
+            &func.body.values,
+            &func.body.locals,
+            place,
+            func.body.local(dest).ty,
+        ),
+        Rvalue::Call(call) => call
+            .resolved_name
+            .as_deref()
+            .and_then(|name| func_indices.get(name).copied())
+            .map(|callee_idx| return_layouts[callee_idx].pointer_leaf_infos.clone())
+            .unwrap_or_default(),
+        Rvalue::Intrinsic { .. }
+        | Rvalue::Alloc { .. }
+        | Rvalue::ZeroInit
+        | Rvalue::ConstAggregate { .. } => Vec::new(),
+    }
+}
+
 fn refine_call_param_local_shapes<'db>(
     db: &'db dyn HirAnalysisDb,
     module: &MirModule<'db>,
     caller_idx: usize,
     call: &CallOrigin<'db>,
-    next_local_shapes: &mut [Vec<RuntimeShape<'db>>],
+    next_local_layouts: &mut [LocalRuntimeLayoutState<'db>],
     func_indices: &FxHashMap<String, usize>,
 ) {
     let Some(callee_name) = call.resolved_name.as_deref() else {
@@ -1289,12 +1491,12 @@ fn refine_call_param_local_shapes<'db>(
             continue;
         }
         let arg_shape = caller.body.value(*arg).runtime_shape;
-        let local_shape = next_local_shapes[callee_idx][local.index()];
+        let local_shape = next_local_layouts[callee_idx].shape(local);
         let Some(merged) = merge_runtime_shapes_in_context(db, &core, local_shape, arg_shape)
         else {
             continue;
         };
-        next_local_shapes[callee_idx][local.index()] = merged;
+        next_local_layouts[callee_idx].set_shape(local, merged);
     }
 
     let runtime_effect_params = callee.runtime_effect_param_locals();
@@ -1313,12 +1515,12 @@ fn refine_call_param_local_shapes<'db>(
             continue;
         }
         let arg_shape = caller.body.value(*arg).runtime_shape;
-        let local_shape = next_local_shapes[callee_idx][local.index()];
+        let local_shape = next_local_layouts[callee_idx].shape(local);
         let Some(merged) = merge_runtime_shapes_in_context(db, &core, local_shape, arg_shape)
         else {
             continue;
         };
-        next_local_shapes[callee_idx][local.index()] = merged;
+        next_local_layouts[callee_idx].set_shape(local, merged);
     }
 }
 
@@ -1353,20 +1555,34 @@ fn assert_normalized_runtime_shapes<'db>(db: &'db dyn HirAnalysisDb, func: &MirF
                 value.pointer_info,
             );
         }
-        let Some(local) = (match value.origin {
-            ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) => Some(local),
+        let Some((local, expected_root_shape)) = (match value.origin {
+            ValueOrigin::Local(local) => func
+                .body
+                .locals
+                .get(local.index())
+                .map(|local_data| (local, local_data.runtime_shape)),
+            ValueOrigin::PlaceRoot(local) => {
+                func.body.locals.get(local.index()).map(|local_data| {
+                    (
+                        local,
+                        crate::repr::place_root_runtime_shape_for_local(local_data)
+                            .unwrap_or(local_data.runtime_shape),
+                    )
+                })
+            }
             _ => None,
         }) else {
             continue;
         };
-        let local_shape = func.body.local(local).runtime_shape;
-        if merge_runtime_shapes_in_context(db, &core, local_shape, value.runtime_shape).is_none() {
+        if merge_runtime_shapes_in_context(db, &core, expected_root_shape, value.runtime_shape)
+            .is_none()
+        {
             panic!(
                 "incompatible root local runtime shapes after MIR normalization in `{}` for v{idx}: local v{} `{}` has {:?}, value has {:?}, origin={:?}, ty={}, repr={:?}",
                 func.symbol_name,
                 local.index(),
                 func.body.local(local).name,
-                local_shape,
+                expected_root_shape,
                 value.runtime_shape,
                 value.origin,
                 value.ty.pretty_print(db),
@@ -1376,78 +1592,132 @@ fn assert_normalized_runtime_shapes<'db>(db: &'db dyn HirAnalysisDb, func: &MirF
     }
 }
 
-pub(crate) fn normalize_runtime_shapes<'db>(
+fn seed_function_local_runtime_shapes<'db>(
     db: &'db dyn HirAnalysisDb,
-    module: &mut MirModule<'db>,
+    func: &mut MirFunction<'db>,
 ) {
-    let func_indices: FxHashMap<_, _> = module
-        .functions
-        .iter()
-        .enumerate()
-        .map(|(idx, func)| (func.symbol_name.clone(), idx))
-        .collect();
-    let return_shape_seeds: Vec<_> = module
-        .functions
-        .iter()
-        .map(|func| {
-            let core = function_core_lib(db, func);
-            crate::repr::runtime_return_shape_seed_for_ty(db, &core, func.ret_ty)
-        })
-        .collect();
+    let core = function_core_lib(db, func);
+    let live_values = compute_live_values(&func.body);
+    let spill_locals: FxHashSet<_> = func.body.spill_slots.values().copied().collect();
 
-    for func in &mut module.functions {
-        let core = function_core_lib(db, func);
-        let live_values = compute_live_values(&func.body);
-
-        for local in &mut func.body.locals {
-            local.runtime_shape = crate::repr::runtime_shape_for_local(db, &core, local);
-        }
-
-        for (idx, local_id) in func.body.param_locals.iter().copied().enumerate() {
-            if func.runtime_abi.value_param_visible(idx) {
-                continue;
-            }
-            if !live_values.iter().enumerate().any(|(value_idx, live)| {
-                *live
-                    && matches!(
-                        func.body.values[value_idx].origin,
-                        ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) if local == local_id
-                    )
-            }) {
-                func.body.locals[local_id.index()].runtime_shape = RuntimeShape::Erased;
-            }
-        }
-        for (idx, local_id) in func.body.effect_param_locals.iter().copied().enumerate() {
-            if func.runtime_abi.effect_param_visible(idx) {
-                continue;
-            }
-            if !live_values.iter().enumerate().any(|(value_idx, live)| {
-                *live
-                    && matches!(
-                        func.body.values[value_idx].origin,
-                        ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) if local == local_id
-                    )
-            }) {
-                func.body.locals[local_id.index()].runtime_shape = RuntimeShape::Erased;
-            }
+    for (idx, local) in func.body.locals.iter_mut().enumerate() {
+        local.runtime_shape = crate::repr::runtime_shape_for_local(db, &core, local);
+        if spill_locals.contains(&LocalId(idx as u32))
+            && let Some(place_root_shape) = crate::repr::place_root_runtime_shape_for_local(local)
+        {
+            local.runtime_shape = place_root_shape;
         }
     }
 
-    let mut changed = true;
-    while changed {
-        changed = false;
+    for (idx, local_id) in func.body.param_locals.iter().copied().enumerate() {
+        if !func.runtime_abi.value_param_visible(idx)
+            && !live_values.iter().enumerate().any(|(value_idx, live)| {
+                *live
+                    && matches!(
+                        func.body.values[value_idx].origin,
+                        ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) if local == local_id
+                    )
+            })
+        {
+            func.body.locals[local_id.index()].runtime_shape = RuntimeShape::Erased;
+        }
+    }
 
-        for func_idx in 0..module.functions.len() {
-            let core = {
-                let func = &module.functions[func_idx];
-                function_core_lib(db, func)
-            };
+    for (idx, local_id) in func.body.effect_param_locals.iter().copied().enumerate() {
+        if !func.runtime_abi.effect_param_visible(idx)
+            && !live_values.iter().enumerate().any(|(value_idx, live)| {
+                *live
+                    && matches!(
+                        func.body.values[value_idx].origin,
+                        ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) if local == local_id
+                    )
+            })
+        {
+            func.body.locals[local_id.index()].runtime_shape = RuntimeShape::Erased;
+        }
+    }
+}
+
+struct RuntimeLayoutFixpoint<'db, 'm> {
+    db: &'db dyn HirAnalysisDb,
+    module: &'m mut MirModule<'db>,
+    func_indices: FxHashMap<String, usize>,
+    return_layout_seeds: Vec<ReturnRuntimeLayoutState<'db>>,
+}
+
+impl<'db, 'm> RuntimeLayoutFixpoint<'db, 'm> {
+    fn new(db: &'db dyn HirAnalysisDb, module: &'m mut MirModule<'db>) -> Self {
+        let func_indices = module
+            .functions
+            .iter()
+            .enumerate()
+            .map(|(idx, func)| (func.symbol_name.clone(), idx))
+            .collect();
+        let return_layout_seeds = module
+            .functions
+            .iter()
+            .map(|func| {
+                let core = function_core_lib(db, func);
+                ReturnRuntimeLayoutState {
+                    shape: crate::repr::runtime_return_shape_seed_for_ty(db, &core, func.ret_ty),
+                    pointer_leaf_infos:
+                        crate::capability_space::pointer_leaf_infos_for_ty_with_default(
+                            db,
+                            &core,
+                            func.ret_ty,
+                            AddressSpaceKind::Memory,
+                        ),
+                }
+            })
+            .collect();
+
+        Self {
+            db,
+            module,
+            func_indices,
+            return_layout_seeds,
+        }
+    }
+
+    fn run(&mut self) {
+        for func in &mut self.module.functions {
+            seed_function_local_runtime_shapes(self.db, func);
+        }
+
+        while self.iterate() {}
+
+        for func in &self.module.functions {
+            assert_normalized_runtime_shapes(self.db, func);
+        }
+    }
+
+    fn iterate(&mut self) -> bool {
+        self.recompute_value_runtime_shapes();
+        let return_layouts = self.current_return_layouts();
+        let next_return_layouts = self.recompute_return_layouts();
+        let next_local_layouts = self.recompute_local_layouts(&return_layouts);
+
+        self.apply_return_layouts(next_return_layouts)
+            | self.apply_local_layouts(next_local_layouts)
+    }
+
+    fn current_return_layouts(&self) -> Vec<ReturnRuntimeLayoutState<'db>> {
+        self.module
+            .functions
+            .iter()
+            .map(ReturnRuntimeLayoutState::from_function)
+            .collect()
+    }
+
+    fn recompute_value_runtime_shapes(&mut self) {
+        for func_idx in 0..self.module.functions.len() {
+            let core = function_core_lib(self.db, &self.module.functions[func_idx]);
             let value_shapes: Vec<_> = {
-                let func = &module.functions[func_idx];
+                let func = &self.module.functions[func_idx];
                 (0..func.body.values.len())
                     .map(|idx| {
                         crate::repr::runtime_shape_for_value(
-                            db,
+                            self.db,
                             &core,
                             &func.body.values,
                             &func.body.locals,
@@ -1457,127 +1727,254 @@ pub(crate) fn normalize_runtime_shapes<'db>(
                     })
                     .collect()
             };
+
             for (idx, shape) in value_shapes.into_iter().enumerate() {
-                module.functions[func_idx].body.values[idx].runtime_shape = shape;
+                self.module.functions[func_idx].body.values[idx].runtime_shape = shape;
             }
         }
+    }
 
-        let current_return_shapes: Vec<_> = module
-            .functions
-            .iter()
-            .map(|func| func.runtime_return_shape)
-            .collect();
-        let mut next_return_shapes = current_return_shapes.clone();
+    fn recompute_return_layouts(&self) -> Vec<ReturnRuntimeLayoutState<'db>> {
+        (0..self.module.functions.len())
+            .map(|func_idx| {
+                let func = &self.module.functions[func_idx];
+                let core = function_core_lib(self.db, func);
+                let mut return_layout = self.return_layout_seeds[func_idx].clone();
 
-        for func_idx in 0..module.functions.len() {
-            let func = &module.functions[func_idx];
-            let core = function_core_lib(db, func);
-            let mut runtime_return_shape = return_shape_seeds[func_idx];
+                for block in &func.body.blocks {
+                    let Terminator::Return {
+                        value: Some(value), ..
+                    } = &block.terminator
+                    else {
+                        continue;
+                    };
+                    let Some(returned) = func
+                        .body
+                        .values
+                        .get(value.index())
+                        .map(|value| value.runtime_shape)
+                    else {
+                        continue;
+                    };
+                    return_layout.shape = merge_runtime_shapes_in_context(
+                        self.db,
+                        &core,
+                        return_layout.shape,
+                        returned,
+                    )
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "incompatible runtime return shapes in `{}`: {:?} vs {:?}",
+                            func.symbol_name, return_layout.shape, returned
+                        )
+                    });
+                    let returned_pointer_infos = crate::repr::pointer_leaf_infos_for_value(
+                        self.db,
+                        &core,
+                        &func.body.values,
+                        &func.body.locals,
+                        *value,
+                    );
+                    return_layout.pointer_leaf_infos = merge_pointer_leaf_infos(
+                        &return_layout.pointer_leaf_infos,
+                        &returned_pointer_infos,
+                    )
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "incompatible runtime return pointer leaf infos in `{}`: {:?} vs {:?}",
+                            func.symbol_name,
+                            return_layout.pointer_leaf_infos,
+                            returned_pointer_infos
+                        )
+                    });
+                }
 
-            for block in &func.body.blocks {
-                let Terminator::Return {
-                    value: Some(value), ..
-                } = &block.terminator
-                else {
-                    continue;
-                };
-                let Some(returned) = func
-                    .body
-                    .values
-                    .get(value.index())
-                    .map(|value| value.runtime_shape)
-                else {
-                    continue;
-                };
-                runtime_return_shape =
-                    merge_runtime_shapes_in_context(db, &core, runtime_return_shape, returned)
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "incompatible runtime return shapes in `{}`: {:?} vs {:?}",
-                                func.symbol_name, runtime_return_shape, returned
-                            )
-                        });
-            }
+                if return_layout.shape.is_unresolved() {
+                    panic!(
+                        "failed to resolve runtime return shape in `{}` for `{}`",
+                        func.symbol_name,
+                        func.ret_ty.pretty_print(self.db)
+                    );
+                }
 
-            if runtime_return_shape.is_unresolved() {
-                panic!(
-                    "failed to resolve runtime return shape in `{}` for `{}`",
-                    func.symbol_name,
-                    func.ret_ty.pretty_print(db)
-                );
-            }
-
-            next_return_shapes[func_idx] = runtime_return_shape;
-        }
-
-        for (func_idx, next_shape) in next_return_shapes.into_iter().enumerate() {
-            if module.functions[func_idx].runtime_return_shape != next_shape {
-                module.functions[func_idx].runtime_return_shape = next_shape;
-                changed = true;
-            }
-        }
-
-        let mut next_local_shapes: Vec<Vec<_>> = module
-            .functions
-            .iter()
-            .map(|func| {
-                func.body
-                    .locals
-                    .iter()
-                    .map(|local| local.runtime_shape)
-                    .collect()
+                return_layout
             })
-            .collect();
-        let return_shapes: Vec<_> = module
+            .collect()
+    }
+
+    fn recompute_local_layouts(
+        &self,
+        return_layouts: &[ReturnRuntimeLayoutState<'db>],
+    ) -> Vec<LocalRuntimeLayoutState<'db>> {
+        let mut next_local_layouts = self
+            .module
             .functions
             .iter()
-            .map(|func| func.runtime_return_shape)
-            .collect();
+            .map(LocalRuntimeLayoutState::from_function)
+            .collect::<Vec<_>>();
 
-        for (func_idx, local_shapes) in next_local_shapes.iter_mut().enumerate() {
-            let func = &module.functions[func_idx];
-            let core = function_core_lib(db, func);
+        for (func_idx, local_layouts) in next_local_layouts.iter_mut().enumerate() {
+            self.propagate_local_layouts_from_body(func_idx, local_layouts, return_layouts);
+        }
+        self.propagate_callsite_param_runtime_shapes(&mut next_local_layouts);
+        next_local_layouts
+    }
 
-            for block in &func.body.blocks {
-                for inst in &block.insts {
-                    let MirInst::Assign {
+    fn propagate_local_layouts_from_body(
+        &self,
+        func_idx: usize,
+        local_layouts: &mut LocalRuntimeLayoutState<'db>,
+        return_layouts: &[ReturnRuntimeLayoutState<'db>],
+    ) {
+        let func = &self.module.functions[func_idx];
+        let core = function_core_lib(self.db, func);
+
+        for block in &func.body.blocks {
+            for inst in &block.insts {
+                match inst {
+                    MirInst::Assign {
                         dest: Some(dest),
                         rvalue,
                         ..
-                    } = inst
-                    else {
-                        continue;
-                    };
-                    let Some(shape) = assigned_rvalue_runtime_shape(
-                        db,
-                        &core,
-                        func,
-                        *dest,
-                        rvalue,
-                        &return_shapes,
-                        &func_indices,
-                    ) else {
-                        continue;
-                    };
-                    if !matches!(
-                        func.body.local(*dest).address_space,
-                        AddressSpaceKind::Memory
-                    ) {
-                        continue;
+                    } => {
+                        let Some(shape) = assigned_rvalue_runtime_shape(
+                            self.db,
+                            &core,
+                            func,
+                            *dest,
+                            rvalue,
+                            return_layouts,
+                            &self.func_indices,
+                        ) else {
+                            continue;
+                        };
+                        if !matches!(
+                            func.body.local(*dest).address_space,
+                            AddressSpaceKind::Memory
+                        ) {
+                            continue;
+                        }
+                        let Some(merged) = merge_runtime_shapes_in_context(
+                            self.db,
+                            &core,
+                            local_layouts.shape(*dest),
+                            shape,
+                        ) else {
+                            continue;
+                        };
+                        local_layouts.set_shape(*dest, merged);
+
+                        let assigned_pointer_infos = assigned_rvalue_pointer_leaf_infos(
+                            self.db,
+                            &core,
+                            func,
+                            *dest,
+                            rvalue,
+                            return_layouts,
+                            &self.func_indices,
+                        );
+                        if !assigned_pointer_infos.is_empty() {
+                            local_layouts.set_pointer_leaf_infos(
+                                *dest,
+                                merge_pointer_leaf_infos(
+                                    local_layouts.pointer_leaf_infos(*dest),
+                                    &assigned_pointer_infos,
+                                )
+                                .unwrap_or_else(|| {
+                                    panic!(
+                                        "incompatible pointer leaf infos for local v{} `{}` in `{}` from rvalue {:?}: {:?} vs {:?}",
+                                        dest.index(),
+                                        func.body.local(*dest).name,
+                                        func.symbol_name,
+                                        rvalue,
+                                        local_layouts.pointer_leaf_infos(*dest),
+                                        assigned_pointer_infos
+                                    )
+                                }),
+                            );
+                        }
+
+                        if let Rvalue::Value(value) = rvalue
+                            && let Some((source_local, projection)) =
+                                crate::ir::resolve_local_projection_root(&func.body.values, *value)
+                            && projection.is_empty()
+                            && matches!(
+                                func.body.local(source_local).address_space,
+                                AddressSpaceKind::Memory
+                            )
+                        {
+                            // Keep direct memory-local aliases in sync when precise
+                            // pointer facts are first discovered on the assignee.
+                            // Without this backfill, later place-sensitive queries can
+                            // depend on which alias happened to pick up leaf metadata
+                            // first during fixpoint propagation.
+                            local_layouts.set_pointer_leaf_infos(
+                                source_local,
+                                merge_pointer_leaf_infos(
+                                    local_layouts.pointer_leaf_infos(source_local),
+                                    local_layouts.pointer_leaf_infos(*dest),
+                                )
+                                .unwrap_or_else(|| {
+                                    panic!(
+                                        "incompatible pointer leaf infos for source local v{} `{}` in `{}` after assignment into v{} `{}`: {:?} vs {:?}",
+                                        source_local.index(),
+                                        func.body.local(source_local).name,
+                                        func.symbol_name,
+                                        dest.index(),
+                                        func.body.local(*dest).name,
+                                        local_layouts.pointer_leaf_infos(source_local),
+                                        local_layouts.pointer_leaf_infos(*dest),
+                                    )
+                                }),
+                            );
+                        }
                     }
-                    let local_shape = local_shapes[dest.index()];
-                    let Some(merged) =
-                        merge_runtime_shapes_in_context(db, &core, local_shape, shape)
-                    else {
-                        continue;
-                    };
-                    local_shapes[dest.index()] = merged;
+                    MirInst::Store { place, value, .. } => {
+                        let value_pointer_infos = crate::repr::pointer_leaf_infos_for_value(
+                            self.db,
+                            &core,
+                            &func.body.values,
+                            &func.body.locals,
+                            *value,
+                        );
+                        place_store_updates_local_pointer_leaf_infos(
+                            func,
+                            local_layouts,
+                            place,
+                            &value_pointer_infos,
+                        );
+                    }
+                    MirInst::InitAggregate { place, inits, .. } => {
+                        for (path, value) in inits {
+                            let value_pointer_infos = crate::repr::pointer_leaf_infos_for_value(
+                                self.db,
+                                &core,
+                                &func.body.values,
+                                &func.body.locals,
+                                *value,
+                            );
+                            place_store_updates_local_pointer_leaf_infos(
+                                func,
+                                local_layouts,
+                                &Place::new(place.base, place.projection.concat(path)),
+                                &value_pointer_infos,
+                            );
+                        }
+                    }
+                    MirInst::Assign { dest: None, .. }
+                    | MirInst::SetDiscriminant { .. }
+                    | MirInst::BindValue { .. } => {}
                 }
             }
         }
+    }
 
-        for caller_idx in 0..module.functions.len() {
-            let func = &module.functions[caller_idx];
+    fn propagate_callsite_param_runtime_shapes(
+        &self,
+        next_local_layouts: &mut [LocalRuntimeLayoutState<'db>],
+    ) {
+        for caller_idx in 0..self.module.functions.len() {
+            let func = &self.module.functions[caller_idx];
             for block in &func.body.blocks {
                 for inst in &block.insts {
                     let MirInst::Assign {
@@ -1588,12 +1985,12 @@ pub(crate) fn normalize_runtime_shapes<'db>(
                         continue;
                     };
                     refine_call_param_local_shapes(
-                        db,
-                        module,
+                        self.db,
+                        self.module,
                         caller_idx,
                         call,
-                        &mut next_local_shapes,
-                        &func_indices,
+                        next_local_layouts,
+                        &self.func_indices,
                     );
                 }
                 if let Terminator::TerminatingCall {
@@ -1602,30 +1999,46 @@ pub(crate) fn normalize_runtime_shapes<'db>(
                 } = &block.terminator
                 {
                     refine_call_param_local_shapes(
-                        db,
-                        module,
+                        self.db,
+                        self.module,
                         caller_idx,
                         call,
-                        &mut next_local_shapes,
-                        &func_indices,
+                        next_local_layouts,
+                        &self.func_indices,
                     );
                 }
             }
         }
+    }
 
-        for (func_idx, local_shapes) in next_local_shapes.into_iter().enumerate() {
-            for (local_idx, next_shape) in local_shapes.into_iter().enumerate() {
-                if module.functions[func_idx].body.locals[local_idx].runtime_shape != next_shape {
-                    module.functions[func_idx].body.locals[local_idx].runtime_shape = next_shape;
-                    changed = true;
-                }
-            }
+    fn apply_return_layouts(
+        &mut self,
+        next_return_layouts: Vec<ReturnRuntimeLayoutState<'db>>,
+    ) -> bool {
+        let mut changed = false;
+        for (func_idx, next_layout) in next_return_layouts.into_iter().enumerate() {
+            changed |= next_layout.apply(&mut self.module.functions[func_idx]);
         }
+        changed
     }
 
-    for func in &module.functions {
-        assert_normalized_runtime_shapes(db, func);
+    fn apply_local_layouts(
+        &mut self,
+        next_local_layouts: Vec<LocalRuntimeLayoutState<'db>>,
+    ) -> bool {
+        let mut changed = false;
+        for (func_idx, next_layouts) in next_local_layouts.into_iter().enumerate() {
+            changed |= next_layouts.apply(&mut self.module.functions[func_idx]);
+        }
+        changed
     }
+}
+
+pub(crate) fn normalize_runtime_shapes<'db>(
+    db: &'db dyn HirAnalysisDb,
+    module: &mut MirModule<'db>,
+) {
+    RuntimeLayoutFixpoint::new(db, module).run();
 }
 
 /// Canonicalize transparent-newtype operations in MIR.
@@ -2233,14 +2646,16 @@ mod tests {
     use driver::DriverDataBase;
     use hir::analysis::ty::ty_check::check_func_body;
     use hir::analysis::ty::ty_def::TyId;
+    use hir::projection::Projection;
     use url::Url;
 
     use crate::{
-        MirInst,
+        CoreLib, MirInst,
         ir::{
-            AddressSpaceKind, BasicBlock, IntrinsicOp, LocalData, MirBody, MirProjectionPath,
-            Place, PointerInfo, RuntimeShape, RuntimeWordKind, Rvalue, SourceInfoId, Terminator,
-            ValueData, ValueOrigin, ValueRepr,
+            AddressSpaceKind, BasicBlock, IntrinsicOp, LocalData, LocalId, LocalPlaceRootLayout,
+            MirBody, MirProjectionPath, ObjectRootSource, Place, PointerInfo, RuntimeShape,
+            RuntimeWordKind, Rvalue, SourceInfoId, Terminator, ValueData, ValueId, ValueOrigin,
+            ValueRepr,
         },
         lower::{lower_function, lower_module},
     };
@@ -2300,6 +2715,7 @@ pub fn transparent_newtype_projection_keeps_non_memory_space(w: mut Wrap) {}
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Storage,
             pointer_leaf_infos: Vec::new(),
+            place_root_layout: crate::ir::LocalPlaceRootLayout::Direct,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let base = body.alloc_value(ValueData {
@@ -2362,6 +2778,7 @@ pub fn transparent_newtype_projection_keeps_non_memory_space(w: mut Wrap) {}
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos: Vec::new(),
+            place_root_layout: crate::ir::LocalPlaceRootLayout::Direct,
             runtime_shape: RuntimeShape::Unresolved,
         });
         let root = body.alloc_value(ValueData {
@@ -2428,6 +2845,7 @@ pub fn transparent_newtype_projection_keeps_non_memory_space(w: mut Wrap) {}
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
             pointer_leaf_infos: Vec::new(),
+            place_root_layout: crate::ir::LocalPlaceRootLayout::Direct,
             runtime_shape: crate::ir::RuntimeShape::Unresolved,
         });
         let root = body.alloc_value(ValueData {
@@ -2760,6 +3178,20 @@ contract C {
             target_ty.is_some(),
             "alloc-backed aug-assign temp locals must normalize as typed object refs",
         );
+        let LocalPlaceRootLayout::ObjectRootValue { target_ty, source } =
+            temp_local.place_root_layout
+        else {
+            panic!(
+                "alloc-backed temporaries should carry pass-through object-root provenance, got {:?}",
+                temp_local.place_root_layout,
+            );
+        };
+        assert_eq!(source, ObjectRootSource::AllocatedMemory);
+        assert_eq!(
+            temp_local.runtime_shape,
+            RuntimeShape::ObjectRef { target_ty },
+            "alloc-backed temporaries should carry object-root provenance consistent with their object runtime shape",
+        );
     }
 
     #[test]
@@ -2856,6 +3288,737 @@ contract C {
     }
 
     #[test]
+    fn borrowed_reader_args_keep_reader_leaf_infos() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///borrowed_reader_args_keep_reader_leaf_infos.fe").unwrap();
+        let file = db.workspace().touch(
+            &mut db,
+            url,
+            Some(include_str!("../../fe/tests/fixtures/fe_test/ref_scalar_nested.fe").to_owned()),
+        );
+        let top_mod = db.top_mod(file);
+        let module = lower_module(&db, top_mod).expect("module should lower");
+
+        let test_func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "test_ref_scalar_nested")
+            .expect("expected ref_scalar_nested test");
+        let sum_reader = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "sum_reader")
+            .expect("expected sum_reader helper");
+        let reader_local = test_func
+            .body
+            .locals
+            .iter()
+            .position(|local| local.name == "reader")
+            .map(|idx| crate::LocalId(idx as u32))
+            .expect("expected reader local");
+        let call_arg = test_func
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                MirInst::Assign {
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } if call.resolved_name.as_deref() == Some("sum_reader") => {
+                    call.args.first().copied()
+                }
+                _ => None,
+            })
+            .expect("expected sum_reader call arg");
+        let arg_pointer_infos = crate::repr::pointer_leaf_infos_for_value(
+            &db,
+            &CoreLib::new(&db, top_mod.scope()),
+            &test_func.body.values,
+            &test_func.body.locals,
+            call_arg,
+        );
+
+        assert_eq!(
+            arg_pointer_infos,
+            test_func.body.local(reader_local).pointer_leaf_infos,
+            "borrowed Reader args should preserve the reader local's nested handle leaf infos",
+        );
+        assert!(
+            sum_reader
+                .body
+                .local(sum_reader.body.param_locals[0])
+                .pointer_leaf_infos
+                .iter()
+                .any(|(path, _)| {
+                    matches!(path.iter().next(), Some(Projection::Field(0))) && path.len() == 1
+                }),
+            "ref Reader params should retain nested `.source` handle leaf infos",
+        );
+    }
+
+    #[test]
+    fn ref_call_args_materialize_plain_scalar_place_roots_as_object_refs() {
+        let src = include_str!("../../fe/tests/fixtures/fe_test/ref_scalar_local_place_root.fe");
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(&mut db, "file:///ref_scalar_local_place_root.fe", src);
+
+        let test_func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "test_ref_scalar_local_place_root")
+            .expect("expected ref_scalar_local_place_root test");
+        let call_arg = test_func
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                MirInst::Assign {
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } if call.resolved_name.as_deref() == Some("read_value") => {
+                    call.args.first().copied()
+                }
+                _ => None,
+            })
+            .expect("expected read_value call arg");
+        let crate::ValueOrigin::PlaceRef(place) = &test_func.body.value(call_arg).origin else {
+            panic!(
+                "expected read_value arg to materialize through a PlaceRef, got {:?}",
+                test_func.body.value(call_arg).origin
+            );
+        };
+        let crate::ValueOrigin::PlaceRoot(local) = test_func.body.value(place.base).origin else {
+            panic!(
+                "expected read_value PlaceRef base to be a PlaceRoot, got {:?}",
+                test_func.body.value(place.base).origin
+            );
+        };
+        let root_local = test_func.body.local(local);
+
+        assert!(
+            root_local.pointer_leaf_infos.is_empty(),
+            "plain scalar temp PlaceRoot should not need pointer metadata: {:?}",
+            root_local.pointer_leaf_infos,
+        );
+        assert_eq!(
+            root_local.place_root_layout,
+            crate::ir::LocalPlaceRootLayout::ObjectRootStorage {
+                target_ty: root_local.ty,
+                source: crate::ir::ObjectRootSource::MaterializedScalarBorrow,
+            },
+            "plain scalar PlaceRoots should now be classified explicitly during MIR lowering",
+        );
+        assert_eq!(
+            test_func.body.value(place.base).runtime_shape,
+            RuntimeShape::ObjectRef {
+                target_ty: root_local.ty,
+            },
+            "plain scalar PlaceRoot backing a `ref u256` call arg should currently refine to ObjectRef",
+        );
+    }
+
+    #[test]
+    fn explicit_memory_slot_place_roots_stay_memory_ptrs_for_object_compatible_types() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse(
+            "file:///explicit_memory_slot_place_roots_stay_memory_ptrs_for_object_compatible_types.fe",
+        )
+        .expect("test url should be valid");
+        let file = db.workspace().touch(
+            &mut db,
+            url,
+            Some(
+                r#"
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+fn marker() {
+    let pair = Pair { a: 1, b: 2 }
+}
+"#
+                .to_owned(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let core = CoreLib::new(&db, top_mod.scope());
+        let module = lower_module(&db, top_mod).expect("module should lower");
+        let pair_ty = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "marker")
+            .and_then(|func| func.body.locals.iter().find(|local| local.name == "pair"))
+            .expect("expected `pair` local")
+            .ty;
+        let locals = vec![LocalData {
+            name: "pair_root".to_owned(),
+            ty: pair_ty,
+            is_mut: true,
+            source: SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Memory,
+            pointer_leaf_infos: Vec::new(),
+            place_root_layout: LocalPlaceRootLayout::MemorySlot,
+            runtime_shape: RuntimeShape::Unresolved,
+        }];
+        let values = vec![ValueData {
+            ty: pair_ty,
+            origin: ValueOrigin::PlaceRoot(LocalId(0)),
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Word,
+            pointer_info: None,
+            runtime_shape: RuntimeShape::Unresolved,
+        }];
+
+        assert_eq!(
+            crate::repr::place_root_runtime_shape_for_local(&locals[0]),
+            Some(RuntimeShape::MemoryPtr {
+                target_ty: Some(pair_ty),
+            }),
+            "explicit MemorySlot provenance should classify the place root as a memory slot",
+        );
+        assert_eq!(
+            crate::repr::runtime_shape_for_value(&db, &core, &values, &locals, ValueId(0)),
+            Some(RuntimeShape::MemoryPtr {
+                target_ty: Some(pair_ty),
+            }),
+            "explicit MemorySlot provenance must not refine object-compatible aggregate roots to ObjectRef",
+        );
+    }
+
+    #[test]
+    fn view_call_args_for_non_copy_structs_stay_by_ref_without_place_root_materialization() {
+        let src = include_str!("../../fe/tests/fixtures/fe_test/view_pair_param.fe");
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(&mut db, "file:///view_pair_param.fe", src);
+
+        let first = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "first")
+            .expect("expected first helper");
+        let first_param_ty = first.body.local(first.body.param_locals[0]).ty;
+        let test_func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "test_view_pair_param")
+            .expect("expected view_pair_param test");
+        let call_arg = test_func
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .find_map(|inst| match inst {
+                MirInst::Assign {
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } if call.resolved_name.as_deref() == Some("first") => call.args.first().copied(),
+                _ => None,
+            })
+            .expect("expected first call arg");
+        let crate::ValueOrigin::TransparentCast { value: inner } =
+            test_func.body.value(call_arg).origin
+        else {
+            panic!(
+                "expected first arg to lower through a view TransparentCast, got {:?}",
+                test_func.body.value(call_arg).origin,
+            );
+        };
+        let crate::ValueOrigin::Local(local) = test_func.body.value(inner).origin else {
+            panic!(
+                "expected view Pair arg to reuse a by-ref local instead of a PlaceRoot, got {:?}",
+                test_func.body.value(inner).origin,
+            );
+        };
+        let local_data = test_func.body.local(local);
+
+        assert_eq!(
+            test_func.body.value(call_arg).ty,
+            first_param_ty,
+            "the call arg should lower to the callee's internal view param type",
+        );
+        assert_ne!(
+            first_param_ty, local_data.ty,
+            "the internal view type should stay distinct from the aggregate local type",
+        );
+        assert_eq!(
+            test_func.body.value(inner).runtime_shape,
+            RuntimeShape::ObjectRef {
+                target_ty: local_data.ty,
+            },
+            "non-Copy aggregate locals passed to bare params should stay object-backed",
+        );
+        assert_eq!(
+            local_data.place_root_layout,
+            crate::ir::LocalPlaceRootLayout::ObjectRootValue {
+                target_ty: local_data.ty,
+                source: crate::ir::ObjectRootSource::DeclaredByRefAggregate,
+            },
+            "aggregate locals should carry explicit object-root provenance from initial lowering",
+        );
+        assert_eq!(
+            test_func.body.value(call_arg).runtime_shape,
+            RuntimeShape::ObjectRef {
+                target_ty: local_data.ty,
+            },
+            "the view cast should preserve the aggregate's object-backed runtime shape",
+        );
+    }
+
+    #[test]
+    fn explicit_object_root_spill_provenance_survives_joined_scalar_ref_flow() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse(
+            "file:///explicit_object_root_spill_provenance_survives_joined_scalar_ref_flow.fe",
+        )
+        .expect("test url should be valid");
+        let file = db.workspace().touch(
+            &mut db,
+            url,
+            Some(
+                r#"
+fn smoke() {}
+"#
+                .to_owned(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let mut module = lower_module(&db, top_mod).expect("module should lower");
+        let smoke = module
+            .functions
+            .iter_mut()
+            .find(|func| func.symbol_name == "smoke")
+            .expect("expected smoke helper");
+
+        let mut body = MirBody::new();
+        body.stage = crate::ir::MirStage::Repr;
+        body.blocks.push(BasicBlock {
+            insts: Vec::new(),
+            terminator: Terminator::Return {
+                source: SourceInfoId::SYNTHETIC,
+                value: None,
+            },
+        });
+
+        let spill_target_ty = TyId::u256(&db);
+        let owner_local = body.alloc_local(LocalData {
+            name: "owner".to_owned(),
+            ty: spill_target_ty,
+            is_mut: false,
+            source: SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Memory,
+            pointer_leaf_infos: Vec::new(),
+            place_root_layout: LocalPlaceRootLayout::Direct,
+            runtime_shape: RuntimeShape::Unresolved,
+        });
+        let spill_local = body.alloc_local(LocalData {
+            name: "spill0".to_owned(),
+            ty: spill_target_ty,
+            is_mut: false,
+            source: SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Memory,
+            pointer_leaf_infos: Vec::new(),
+            place_root_layout: LocalPlaceRootLayout::ObjectRootValue {
+                target_ty: spill_target_ty,
+                source: ObjectRootSource::SpillOf(owner_local),
+            },
+            runtime_shape: RuntimeShape::Unresolved,
+        });
+        body.spill_slots.insert(owner_local, spill_local);
+
+        let spill_value = body.alloc_value(ValueData {
+            ty: spill_target_ty,
+            origin: ValueOrigin::Local(spill_local),
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Word,
+            pointer_info: None,
+            runtime_shape: RuntimeShape::Unresolved,
+        });
+        let spill_place_root = body.alloc_value(ValueData {
+            ty: spill_target_ty,
+            origin: ValueOrigin::PlaceRoot(spill_local),
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Word,
+            pointer_info: None,
+            runtime_shape: RuntimeShape::Unresolved,
+        });
+        body.blocks[0].insts.push(MirInst::BindValue {
+            source: SourceInfoId::SYNTHETIC,
+            value: spill_value,
+        });
+        body.blocks[0].insts.push(MirInst::BindValue {
+            source: SourceInfoId::SYNTHETIC,
+            value: spill_place_root,
+        });
+        smoke.body = body;
+        smoke.runtime_abi = crate::ir::RuntimeAbi::source_shaped(0, Vec::new());
+
+        super::normalize_runtime_shapes(&db, &mut module);
+        let smoke = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "smoke")
+            .expect("expected smoke helper after normalization");
+        let spill_local_data = smoke.body.local(spill_local);
+
+        assert_eq!(
+            spill_local_data.runtime_shape,
+            RuntimeShape::ObjectRef {
+                target_ty: spill_target_ty,
+            },
+            "spill locals with explicit ObjectRoot provenance should normalize as object refs",
+        );
+        assert!(
+            smoke.body.values.iter().any(|value| {
+                matches!(
+                    value.origin,
+                    ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) if local == spill_local
+                ) && matches!(
+                    value.runtime_shape,
+                    RuntimeShape::ObjectRef { target_ty }
+                        if target_ty == spill_target_ty
+                )
+            }),
+            "joined scalar-ref spills should keep object-ref runtime shapes on values that reload from the spill",
+        );
+    }
+
+    fn normalize_rebound_handle_copy_probe<'db>(
+        db: &'db mut DriverDataBase,
+        seed_source_memory_info: bool,
+        seed_dest_memory_info: bool,
+    ) -> (
+        crate::MirModule<'db>,
+        LocalId,
+        LocalId,
+        RuntimeShape<'db>,
+        Vec<(MirProjectionPath<'db>, PointerInfo<'db>)>,
+    ) {
+        let url =
+            Url::parse("file:///normalize_rebound_handle_copy_probe.fe").expect("valid test url");
+        let file = db
+            .workspace()
+            .touch(db, url, Some("fn smoke() {}".to_owned()));
+        let top_mod = db.top_mod(file);
+        let mut module = lower_module(db, top_mod).expect("module should lower");
+        let smoke = module
+            .functions
+            .iter_mut()
+            .find(|func| func.symbol_name == "smoke")
+            .expect("expected smoke helper");
+        let core = super::function_core_lib(db, smoke);
+
+        let handle_inner_ty = TyId::u256(db);
+        let handle_ty = TyId::borrow_mut_of(db, handle_inner_ty);
+        let root = MirProjectionPath::new();
+        let memory_info = PointerInfo {
+            address_space: AddressSpaceKind::Memory,
+            target_ty: Some(handle_inner_ty),
+        };
+        let storage_info = PointerInfo {
+            address_space: AddressSpaceKind::Storage,
+            target_ty: Some(handle_inner_ty),
+        };
+
+        let mut body = MirBody::new();
+        body.stage = crate::ir::MirStage::Repr;
+        body.blocks.push(BasicBlock {
+            insts: Vec::new(),
+            terminator: Terminator::Return {
+                source: SourceInfoId::SYNTHETIC,
+                value: None,
+            },
+        });
+
+        let memory_root_infos = || vec![(MirProjectionPath::new(), memory_info)];
+        let source_local = body.alloc_local(LocalData {
+            name: "source".to_owned(),
+            ty: handle_ty,
+            is_mut: true,
+            source: SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Memory,
+            pointer_leaf_infos: seed_source_memory_info
+                .then(memory_root_infos)
+                .unwrap_or_default(),
+            place_root_layout: LocalPlaceRootLayout::Direct,
+            runtime_shape: RuntimeShape::Unresolved,
+        });
+        let dest_local = body.alloc_local(LocalData {
+            name: "dest".to_owned(),
+            ty: handle_ty,
+            is_mut: true,
+            source: SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Memory,
+            pointer_leaf_infos: seed_dest_memory_info
+                .then(memory_root_infos)
+                .unwrap_or_default(),
+            place_root_layout: LocalPlaceRootLayout::Direct,
+            runtime_shape: RuntimeShape::Unresolved,
+        });
+        let other_local = body.alloc_local(LocalData {
+            name: "other".to_owned(),
+            ty: handle_ty,
+            is_mut: true,
+            source: SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Storage,
+            pointer_leaf_infos: vec![(root, storage_info)],
+            place_root_layout: LocalPlaceRootLayout::Direct,
+            runtime_shape: RuntimeShape::Unresolved,
+        });
+
+        let source_value = body.alloc_value(ValueData {
+            ty: handle_ty,
+            origin: ValueOrigin::Local(source_local),
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+            pointer_info: Some(memory_info),
+            runtime_shape: RuntimeShape::Unresolved,
+        });
+        let other_value = body.alloc_value(ValueData {
+            ty: handle_ty,
+            origin: ValueOrigin::Local(other_local),
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Ptr(AddressSpaceKind::Storage),
+            pointer_info: Some(storage_info),
+            runtime_shape: RuntimeShape::Unresolved,
+        });
+
+        body.blocks[0].insts.push(MirInst::Assign {
+            source: SourceInfoId::SYNTHETIC,
+            dest: Some(dest_local),
+            rvalue: Rvalue::Value(source_value),
+        });
+        body.blocks[0].insts.push(MirInst::Assign {
+            source: SourceInfoId::SYNTHETIC,
+            dest: Some(dest_local),
+            rvalue: Rvalue::Value(other_value),
+        });
+        body.blocks[0].insts.push(MirInst::BindValue {
+            source: SourceInfoId::SYNTHETIC,
+            value: source_value,
+        });
+        smoke.body = body;
+        smoke.runtime_abi = crate::ir::RuntimeAbi::source_shaped(0, Vec::new());
+
+        let expected_source_shape =
+            crate::repr::runtime_shape_for_local(db, &core, smoke.body.local(source_local));
+        let expected_source_infos = smoke.body.local(source_local).pointer_leaf_infos.clone();
+
+        super::normalize_runtime_shapes(db, &mut module);
+        (
+            module,
+            source_local,
+            dest_local,
+            expected_source_shape,
+            expected_source_infos,
+        )
+    }
+
+    #[test]
+    fn source_local_pointer_infos_do_not_absorb_rebound_dest_infos() {
+        let mut db = DriverDataBase::default();
+        let (module, source_local, _, _, expected_source_infos) =
+            normalize_rebound_handle_copy_probe(&mut db, true, false);
+        let smoke = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "smoke")
+            .expect("expected smoke helper");
+        let source = smoke.body.local(source_local);
+
+        assert_eq!(
+            source.pointer_leaf_infos, expected_source_infos,
+            "copying `source` into `dest` must not let later `dest` assignments rewrite `source` leaf metadata",
+        );
+    }
+
+    #[test]
+    fn source_local_runtime_shape_does_not_change_after_dest_rebind() {
+        let mut db = DriverDataBase::default();
+        let (module, source_local, _, expected_source_shape, _) =
+            normalize_rebound_handle_copy_probe(&mut db, true, false);
+        let smoke = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "smoke")
+            .expect("expected smoke helper");
+        let source = smoke.body.local(source_local);
+
+        assert_eq!(
+            source.runtime_shape, expected_source_shape,
+            "copying a handle local into `dest` must not let later `dest` rebinds reclassify `source`",
+        );
+    }
+
+    #[test]
+    fn less_informed_source_local_backfills_same_site_dest_infos_only() {
+        let mut db = DriverDataBase::default();
+        let (module, source_local, _, _, _) =
+            normalize_rebound_handle_copy_probe(&mut db, false, true);
+        let smoke = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "smoke")
+            .expect("expected smoke helper");
+        let source = smoke.body.local(source_local);
+
+        assert!(
+            matches!(
+                source.pointer_leaf_infos.as_slice(),
+                [(
+                    path,
+                    PointerInfo {
+                        address_space: AddressSpaceKind::Memory,
+                        target_ty: Some(_),
+                    },
+                )] if path.is_empty()
+            ),
+            "copying a less-informed `source` into a pre-specialized `dest` should backfill only the same-site memory handle metadata, got {:?}",
+            source.pointer_leaf_infos,
+        );
+    }
+
+    #[test]
+    fn less_informed_source_runtime_shape_stays_stable_after_dest_rebind() {
+        let mut db = DriverDataBase::default();
+        let (module, source_local, _, expected_source_shape, _) =
+            normalize_rebound_handle_copy_probe(&mut db, false, true);
+        let smoke = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "smoke")
+            .expect("expected smoke helper");
+        let source = smoke.body.local(source_local);
+
+        assert_eq!(
+            source.runtime_shape, expected_source_shape,
+            "copying a less-informed `source` into a pre-specialized `dest` must not let later `dest` assignments reclassify `source`",
+        );
+    }
+
+    #[test]
+    fn incompatible_whole_local_rebinds_do_not_partially_merge_dest_layout_facts() {
+        let mut db = DriverDataBase::default();
+        let (module, _, dest_local, _, _) =
+            normalize_rebound_handle_copy_probe(&mut db, true, false);
+        let smoke = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "smoke")
+            .expect("expected smoke helper");
+        let dest = smoke.body.local(dest_local);
+
+        assert!(
+            matches!(
+                dest.pointer_leaf_infos.as_slice(),
+                [(
+                    path,
+                    PointerInfo {
+                        address_space: AddressSpaceKind::Memory,
+                        target_ty: Some(_),
+                    },
+                )] if path.is_empty()
+            ),
+            "incompatible whole-local rebinds should not partially rewrite the assignee leaf metadata, got {:?}",
+            dest.pointer_leaf_infos,
+        );
+        assert!(
+            matches!(dest.runtime_shape, RuntimeShape::MemoryPtr { .. }),
+            "incompatible whole-local rebinds should not partially rewrite the assignee runtime shape, got {:?}",
+            dest.runtime_shape,
+        );
+    }
+
+    #[test]
+    fn selected_handle_fixtures_do_not_leave_memory_capability_locals_without_leaf_infos() {
+        let fixtures = [
+            (
+                "file:///borrow_handle_forwarding.fe",
+                include_str!("../../fe/tests/fixtures/fe_test/borrow_handle_forwarding.fe"),
+            ),
+            (
+                "file:///method_forwards_memory_mut_borrow.fe",
+                include_str!(
+                    "../../fe/tests/fixtures/fe_test/method_forwards_memory_mut_borrow.fe"
+                ),
+            ),
+            (
+                "file:///receiver_returns_non_mem_with_same_typed_memory_arg.fe",
+                include_str!(
+                    "../../fe/tests/fixtures/fe_test/receiver_returns_non_mem_with_same_typed_memory_arg.fe"
+                ),
+            ),
+            (
+                "file:///ref_scalar_nested.fe",
+                include_str!("../../fe/tests/fixtures/fe_test/ref_scalar_nested.fe"),
+            ),
+            (
+                "file:///contract_field_mut_borrow_matrix.fe",
+                include_str!("../../fe/tests/fixtures/fe_test/contract_field_mut_borrow_matrix.fe"),
+            ),
+            (
+                "file:///option_mut_scalar_match_regression.fe",
+                include_str!(
+                    "../../fe/tests/fixtures/fe_test/option_mut_scalar_match_regression.fe"
+                ),
+            ),
+        ];
+
+        for (path, src) in fixtures {
+            let mut db = DriverDataBase::default();
+            let module = lower_inline_module(&mut db, path, src);
+            for func in &module.functions {
+                for (idx, local) in func.body.locals.iter().enumerate() {
+                    if local.address_space == AddressSpaceKind::Memory
+                        && matches!(
+                            local.runtime_shape,
+                            RuntimeShape::MemoryPtr { .. } | RuntimeShape::AddressWord(_)
+                        )
+                    {
+                        assert!(
+                            !local.pointer_leaf_infos.is_empty(),
+                            "memory pointer-like local v{idx} `{}` in `{}` from `{path}` should carry pointer leaf infos",
+                            local.name,
+                            func.symbol_name,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn runtime_shapes_refine_loaded_object_backed_scalar_handles() {
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///runtime_shapes_refine_loaded_object_backed_scalar_handles.fe",
+            include_str!("../../codegen/tests/fixtures/ref_is_not_a_copy.fe"),
+        );
+
+        let test_func = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "test_ref_is_not_a_copy")
+            .expect("expected ref_is_not_a_copy test");
+        for local_name in ["live_x", "live_y"] {
+            let local = test_func
+                .body
+                .locals
+                .iter()
+                .find(|local| local.name == local_name)
+                .unwrap_or_else(|| panic!("expected {local_name} local"));
+            assert!(
+                matches!(local.runtime_shape, RuntimeShape::ObjectRef { .. }),
+                "{local_name} should refine to an object ref after loading from an object-backed handle field, got {:?}",
+                local.runtime_shape,
+            );
+        }
+    }
+
+    #[test]
     fn runtime_shapes_preserve_scalar_param_shapes() {
         let src = include_str!("../../codegen/tests/fixtures/array_mut.fe");
 
@@ -2934,6 +4097,160 @@ contract C {
                 RuntimeShape::Word(RuntimeWordKind::I8),
                 "scalar param runtime shape regressed after the full MIR pipeline",
             )
+        }
+    }
+
+    #[test]
+    fn runtime_shapes_refine_storage_handle_enum_returns_from_aggregate_stores() {
+        let src =
+            include_str!("../../fe/tests/fixtures/fe_test/option_mut_scalar_match_regression.fe");
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///option_mut_scalar_match_regression.fe",
+            src,
+        );
+
+        let maybe_value_mut = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name.contains("maybe_value_mut_stor"))
+            .expect("expected storage-specialized maybe_value_mut");
+        let payload_info = maybe_value_mut
+            .runtime_return_pointer_leaf_infos
+            .iter()
+            .find(|(path, _)| {
+                path.iter().any(|projection| {
+                    matches!(
+                        projection,
+                        Projection::VariantField { field_idx, .. } if *field_idx == 0
+                    )
+                })
+            })
+            .map(|(_, info)| *info)
+            .expect("expected return payload pointer leaf info");
+
+        assert_eq!(
+            payload_info.address_space,
+            AddressSpaceKind::Storage,
+            "storage-specialized enum return payload should preserve storage handle space",
+        );
+    }
+
+    #[test]
+    fn runtime_shapes_preserve_owner_leaf_infos_for_enum_tag_temps() {
+        let src =
+            include_str!("../../fe/tests/fixtures/fe_test/option_mut_scalar_match_regression.fe");
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///option_mut_scalar_match_regression.fe",
+            src,
+        );
+
+        let recv = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "__C_recv_0_0")
+            .expect("expected recv helper");
+        let discr_local = recv
+            .body
+            .locals
+            .iter()
+            .find(|local| matches!(local.runtime_shape, RuntimeShape::EnumTag { .. }))
+            .expect("expected enum-tag temp local in recv helper");
+        let payload_info = discr_local
+            .pointer_leaf_infos
+            .iter()
+            .find(|(path, _)| {
+                path.iter().any(|projection| {
+                    matches!(
+                        projection,
+                        Projection::VariantField { field_idx, .. } if *field_idx == 0
+                    )
+                })
+            })
+            .map(|(_, info)| *info)
+            .expect("expected enum-tag temp to preserve owner payload leaf info");
+
+        assert_eq!(
+            payload_info.address_space,
+            AddressSpaceKind::Storage,
+            "enum-tag temp should preserve the storage-specialized owner layout",
+        );
+    }
+
+    #[test]
+    fn runtime_shapes_keep_storage_scalar_payload_loads_as_address_words() {
+        let src =
+            include_str!("../../fe/tests/fixtures/fe_test/option_mut_scalar_match_regression.fe");
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(
+            &mut db,
+            "file:///option_mut_scalar_match_regression.fe",
+            src,
+        );
+
+        let recv = module
+            .functions
+            .iter()
+            .find(|func| func.symbol_name == "__C_recv_0_0")
+            .expect("expected recv helper");
+        let value_local = recv
+            .body
+            .locals
+            .iter()
+            .find(|local| local.name == "value")
+            .expect("expected Option::Some payload binding local");
+
+        let target_ty = match value_local.runtime_shape {
+            RuntimeShape::AddressWord(PointerInfo {
+                address_space: AddressSpaceKind::Storage,
+                target_ty,
+            }) => target_ty,
+            other => panic!("unexpected payload binding runtime shape: {other:?}"),
+        };
+        assert!(
+            target_ty.is_some(),
+            "storage-backed scalar payload bindings should stay typed storage address words",
+        );
+    }
+
+    #[test]
+    fn runtime_shapes_refine_object_backed_match_discriminant_temps() {
+        let src = include_str!("../../fe/tests/fixtures/fe_test/if_let_while_let.fe");
+        let mut db = DriverDataBase::default();
+        let module = lower_inline_module(&mut db, "file:///if_let_while_let.fe", src);
+
+        for func in &module.functions {
+            for block in &func.body.blocks {
+                for inst in &block.insts {
+                    let MirInst::Assign {
+                        dest: Some(dest),
+                        rvalue: Rvalue::Load { place },
+                        ..
+                    } = inst
+                    else {
+                        continue;
+                    };
+                    if !matches!(
+                        place.projection.iter().last(),
+                        Some(Projection::Discriminant)
+                    ) {
+                        continue;
+                    }
+                    let local = func.body.local(*dest);
+                    assert!(
+                        matches!(local.runtime_shape, RuntimeShape::EnumTag { .. }),
+                        "discriminant temp v{} `{}` in `{}` should lower as EnumTag, got {:?} for {:?}",
+                        dest.index(),
+                        local.name,
+                        func.symbol_name,
+                        local.runtime_shape,
+                        place,
+                    );
+                }
+            }
         }
     }
 

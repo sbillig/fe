@@ -13,22 +13,6 @@ type @__fe_obj_SolDecoder_4 = {@__fe_obj_Cursor_3, i256};
 type @__fe_obj_SolEncoder_5 = {i256, i256, i256};
 type @__fe_obj_tuple_6 = {i256, i256};
 
-func private %answer_he729876072a4af6_encode_hf98aaef2e32b4927_encode_to_ptr() {
-    block0:
-        return;
-}
-
-func private %echo_h9f932a87feb06bd2_encode_hf98aaef2e32b4927_encode_to_ptr(v0.i256, v1.i256) {
-    block0:
-        call %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95 v0 v1;
-        return;
-}
-
-func private %getx_hdbb0a53a8b757989_encode_hf98aaef2e32b4927_encode_to_ptr() {
-    block0:
-        return;
-}
-
 func private %__EchoContract_init_contract(v0.i256, v1.i256, v2.i256) {
     block0:
         evm_sstore v2 v0;
@@ -156,12 +140,6 @@ func private %__EchoContract_runtime() {
         evm_invalid;
 }
 
-func private %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95(v0.i256, v1.i256) {
-    block0:
-        call %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_store_word v1 v0;
-        return;
-}
-
 func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
     block0:
         evm_revert 0.i256 0.i256;
@@ -256,12 +234,6 @@ func private %echo_h9f932a87feb06bd2_decode_h624c3cd8c996d995_decode__SolDecoder
     block0:
         v1.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v0;
         return v1;
-}
-
-func private %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_store_word(v0.i256, v1.i256) {
-    block0:
-        mstore v0 v1 i256;
-        return;
 }
 
 func private %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0.objref<@__fe_obj_MemoryBytes_0>) -> objref<@__fe_obj_SolDecoder_2> {
@@ -437,6 +409,12 @@ func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(
         evm_return v0 v1;
 }
 
+func private %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95(v0.i256, v1.i256) {
+    block0:
+        call %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_store_word v1 v0;
+        return;
+}
+
 func private %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98(v0.objref<@__fe_obj_SolDecoder_4>) -> i256 {
     block0:
         v1.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v0;
@@ -545,6 +523,12 @@ func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_wo
         v6.i256 = add v4 32.i256;
         v7.objref<i256> = obj.proj v0 1.i256;
         obj.store v7 v6;
+        return;
+}
+
+func private %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_store_word(v0.i256, v1.i256) {
+    block0:
+        mstore v0 v1 i256;
         return;
 }
 
