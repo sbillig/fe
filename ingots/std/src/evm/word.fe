@@ -81,6 +81,15 @@ impl WordRepr for bool {
     }
 }
 
+impl WordRepr for Address {
+    fn from_word(word: u256) -> Self {
+        Address { inner: word }
+    }
+    fn to_word(own self) -> u256 {
+        self.inner
+    }
+}
+
 impl WordRepr for i8 {
     fn from_word(word: u256) -> Self {
         word.downcast_truncate()
