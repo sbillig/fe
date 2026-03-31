@@ -578,8 +578,9 @@ class FeCodeBlock extends HTMLElement {
    * and wrap matches in <a> links with hover highlighting.
    */
   _setupNameBasedLinking(codeEl) {
-    var scip = window.FE_SCIP;
+    var scip = this._scip || window.FE_SCIP;
     if (!scip) return;
+    var self = this;
 
     var linkableSet = {};
     for (var i = 0; i < FeCodeBlock.LINKABLE_CLASSES.length; i++) {
@@ -627,6 +628,22 @@ class FeCodeBlock extends HTMLElement {
         a.textContent = text;
         span.parentNode.replaceChild(a, span);
       }
+
+      // Click: dispatch fe-navigate instead of browser default link navigation
+      a.setAttribute("data-sym", match.symbol);
+      (function (docUrl, sym) {
+        a.addEventListener("click", function (clickEvt) {
+          clickEvt.preventDefault();
+          var ev = new CustomEvent("fe-navigate", {
+            bubbles: true, composed: true, cancelable: true,
+            detail: { symbol: sym, docPath: docUrl }
+          });
+          if (!self.dispatchEvent(ev)) return;
+          var base = self.getAttribute("base") || window.FE_DOCS_BASE || "";
+          if (base) location.href = base + "#" + docUrl;
+          else location.hash = "#" + docUrl;
+        });
+      })(match.doc_url, match.symbol);
 
       // Hover: highlight all same-symbol occurrences
       var symHash = scip.symbolHash(match.symbol);

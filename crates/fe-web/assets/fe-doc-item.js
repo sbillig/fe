@@ -224,7 +224,8 @@ class FeDocItem extends HTMLElement {
     html += '<div class="item-header"><div class="item-title">';
     html += '<span class="kind-badge ' + _diEsc(_diKindStr(item.kind)) + '">' +
       _diEsc(_diKindDisplay(item.kind)) + "</span>";
-    html += '<h1>' + _diEsc(item.name) + '</h1>';
+    html += '<h1>' + _diEsc(item.name) +
+      '<a href="' + this._itemHref(parentUrl) + '" class="anchor">\u00a7</a></h1>';
     html += "</div></div>";
 
     // Source link
@@ -248,6 +249,7 @@ class FeDocItem extends HTMLElement {
     if (!isModule && item.signature && !compact) {
       html += '<div class="signature-wrapper">';
       html += this._renderSignature(item);
+      html += '<a href="' + this._itemHref(parentUrl) + '" class="anchor">\u00a7</a>';
       html += '</div>';
     }
 
@@ -285,6 +287,17 @@ class FeDocItem extends HTMLElement {
 
     html += "</article>";
     return html;
+  }
+
+  /** Generate href for a doc path. */
+  _itemHref(docPath) {
+    var base = this.getAttribute("base") || "";
+    return base ? base + "#" + docPath : "#" + docPath;
+  }
+
+  /** Generate href for an in-page anchor (parentUrl~anchorId). */
+  _anchorHref(parentUrl, anchorId) {
+    return this._itemHref(parentUrl + "~" + anchorId);
   }
 
   _renderBreadcrumbs(item) {
@@ -350,7 +363,8 @@ class FeDocItem extends HTMLElement {
       var info = _CHILD_KIND[group.kind] || { anchor: group.kind };
       var sectionId = info.anchor + "s";
       html += '<section class="children-section">';
-      html += '<h2 id="' + _diEsc(sectionId) + '">' + _diEsc(group.plural) + "</h2>";
+      html += '<h2 id="' + _diEsc(sectionId) + '">' + _diEsc(group.plural) +
+        '<a href="' + this._anchorHref(parentUrl, sectionId) + '" class="anchor">\u00a7</a></h2>';
       html += '<div class="member-list">';
       for (var j = 0; j < group.items.length; j++) {
         var child = group.items[j];
@@ -358,6 +372,7 @@ class FeDocItem extends HTMLElement {
         html += '<div class="member-item" id="' + _diEsc(anchorId) + '">';
         html += '<div class="member-header">';
         html += this._renderChildSignature(child);
+        html += '<a href="' + this._anchorHref(parentUrl, anchorId) + '" class="anchor">\u00a7</a>';
         html += "</div>";
         if (child.docs) {
           var childHtml = child.docs.html_body || _diEsc(child.docs.body || child.docs.summary || "");
@@ -389,21 +404,23 @@ class FeDocItem extends HTMLElement {
 
     if (inherentImpls.length > 0) {
       html += '<section class="inherent-impls">';
-      html += '<h2 id="implementations">Implementations</h2>';
+      html += '<h2 id="implementations">Implementations' +
+        '<a href="' + this._anchorHref(parentUrl, "implementations") + '" class="anchor">\u00a7</a></h2>';
       html += '<div class="impl-list">';
       for (var ii = 0; ii < inherentImpls.length; ii++) {
-        html += this._renderImplBlock(inherentImpls[ii], "impl-" + ii);
+        html += this._renderImplBlock(inherentImpls[ii], "impl-" + ii, parentUrl);
       }
       html += "</div></section>";
     }
 
     if (traitImpls.length > 0) {
       html += '<section class="trait-impls">';
-      html += '<h2 id="trait-implementations">Trait Implementations</h2>';
+      html += '<h2 id="trait-implementations">Trait Implementations' +
+        '<a href="' + this._anchorHref(parentUrl, "trait-implementations") + '" class="anchor">\u00a7</a></h2>';
       html += '<div class="impl-list">';
       for (var ti = 0; ti < traitImpls.length; ti++) {
         var anchorId = "impl-" + traitImpls[ti].trait_name.replace(/[<> ,]/g, "_");
-        html += this._renderImplBlock(traitImpls[ti], anchorId);
+        html += this._renderImplBlock(traitImpls[ti], anchorId, parentUrl);
       }
       html += "</div></section>";
     }
@@ -412,13 +429,14 @@ class FeDocItem extends HTMLElement {
     return html;
   }
 
-  _renderImplBlock(impl_, anchorId) {
+  _renderImplBlock(impl_, anchorId, parentUrl) {
     var isTraitImpl = !!impl_.trait_name;
     var headerDisplay = isTraitImpl ? "impl " + impl_.trait_name : impl_.signature;
 
     var html = '<details class="impl-block toggle" open id="' + _diEsc(anchorId) + '">';
     html += "<summary><span class=\"impl-header\">";
     html += "<h3><code>" + _diEsc(headerDisplay) + "</code></h3>";
+    html += '<a href="' + this._anchorHref(parentUrl, anchorId) + '" class="anchor">\u00a7</a>';
     html += "</span></summary>";
     html += '<div class="impl-content">';
 
@@ -433,7 +451,7 @@ class FeDocItem extends HTMLElement {
       html += '<div class="impl-items">';
       for (var m = 0; m < methods.length; m++) {
         var methodAnchor = anchorId + ".method." + methods[m].name;
-        html += this._renderMethodItem(methods[m], methodAnchor);
+        html += this._renderMethodItem(methods[m], methodAnchor, parentUrl);
       }
       html += "</div>";
     }
@@ -442,12 +460,14 @@ class FeDocItem extends HTMLElement {
     return html;
   }
 
-  _renderMethodItem(method, anchorId) {
+  _renderMethodItem(method, anchorId, parentUrl) {
     var sigAttrs = 'lang="fe"';
     if (method.sig_scope) sigAttrs += ' data-scope="' + _diEsc(method.sig_scope) + '"';
+    var anchorLink = '<a href="' + this._anchorHref(parentUrl, anchorId) + '" class="anchor">\u00a7</a>';
     var headerHtml = '<div class="method-header">' +
       '<h4 class="code-header"><fe-code-block ' + sigAttrs + '>' +
-      _diEsc(method.signature || method.name) + '</fe-code-block></h4></div>';
+      _diEsc(method.signature || method.name) + '</fe-code-block></h4>' +
+      anchorLink + '</div>';
 
     if (method.docs) {
       var docsHtml = method.docs.html_body || _diEsc(method.docs.body || method.docs.summary || "");
@@ -460,7 +480,8 @@ class FeDocItem extends HTMLElement {
 
   _renderImplementors(implementors, parentUrl) {
     var html = '<section class="implementors">';
-    html += '<h2 id="implementors">Implementors</h2>';
+    html += '<h2 id="implementors">Implementors' +
+      '<a href="' + this._anchorHref(parentUrl, "implementors") + '" class="anchor">\u00a7</a></h2>';
     html += '<div class="implementor-list">';
     for (var i = 0; i < implementors.length; i++) {
       var imp = implementors[i];
@@ -470,6 +491,12 @@ class FeDocItem extends HTMLElement {
       if (imp.sig_scope) sigAttrs += ' data-scope="' + _diEsc(imp.sig_scope) + '"';
       html += '<fe-code-block ' + sigAttrs + ' class="implementor-sig">' +
         _diEsc(imp.signature || "") + '</fe-code-block>';
+      // ↪ link to the implementation on the type's page
+      if (imp.type_url && imp.trait_name) {
+        var implTarget = imp.type_url + "~impl-" + imp.trait_name.replace(/[<> ,]/g, "_");
+        html += '<a href="' + this._itemHref(implTarget) + '" class="impl-go" title="Go to implementation">\u21AA</a>';
+      }
+      html += '<a href="' + this._anchorHref(parentUrl, anchorId) + '" class="anchor">\u00a7</a>';
       html += "</div>";
     }
     html += "</div></section>";
@@ -495,11 +522,12 @@ class FeDocItem extends HTMLElement {
       html += '<div class="item-list">';
       for (var s = 0; s < submodules.length; s++) {
         if (this._isExcluded(submodules[s].name, submodules[s].path)) continue;
-        var href = base ? base + "#" + submodules[s].path + "/mod" : "#" + submodules[s].path + "/mod";
+        var href = this._itemHref(submodules[s].path + "/mod");
+        var modSummary = this._getModuleSummary(index, submodules[s].path);
         html += '<div class="item-row">';
         html += '<div class="item-name">' + _diKindBadge("mod") +
           '<a href="' + _diEsc(href) + '"><code>' + _diEsc(submodules[s].name) + "</code></a></div>";
-        html += '<div class="item-summary"></div>';
+        html += '<div class="item-summary">' + _diEsc(modSummary) + "</div>";
         html += "</div>";
       }
       html += "</div></section>";
@@ -531,7 +559,7 @@ class FeDocItem extends HTMLElement {
         for (var j = 0; j < group.items.length; j++) {
           var it = group.items[j];
           var url = it.path + "/" + _diKindStr(it.kind);
-          var itemHref = base ? base + "#" + url : "#" + url;
+          var itemHref = this._itemHref(url);
           html += '<div class="item-row">';
           html += '<div class="item-name">' + _diKindBadge(_diKindStr(it.kind)) +
             '<a href="' + _diEsc(itemHref) + '"><code>' + _diEsc(it.name) + "</code></a></div>";
@@ -544,6 +572,19 @@ class FeDocItem extends HTMLElement {
 
     html += "</div>";
     return html;
+  }
+
+  /** Look up a module's doc summary from the index items list. */
+  _getModuleSummary(index, modulePath) {
+    var items = index.items || [];
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].path === modulePath && items[i].kind === "module") {
+        var docs = items[i].docs;
+        if (docs && docs.summary) return docs.summary;
+        break;
+      }
+    }
+    return "";
   }
 
   _findModuleContent(modules, path) {
