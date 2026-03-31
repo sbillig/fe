@@ -1334,7 +1334,18 @@ module.exports = grammar({
       ')',
     )),
 
-    visibility: $ => 'pub',
+    visibility: $ => seq(
+      'pub',
+      optional(seq(
+        '(',
+        choice(
+          'ingot',
+          'super',
+          seq('in', $.path),
+        ),
+        ')',
+      )),
+    ),
 
     // ==================== LITERALS ====================
 

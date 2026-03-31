@@ -7771,8 +7771,60 @@
       }
     },
     "visibility": {
-      "type": "STRING",
-      "value": "pub"
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "pub"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "("
+                },
+                {
+                  "type": "CHOICE",
+                  "members": [
+                    {
+                      "type": "STRING",
+                      "value": "ingot"
+                    },
+                    {
+                      "type": "STRING",
+                      "value": "super"
+                    },
+                    {
+                      "type": "SEQ",
+                      "members": [
+                        {
+                          "type": "STRING",
+                          "value": "in"
+                        },
+                        {
+                          "type": "SYMBOL",
+                          "name": "path"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "STRING",
+                  "value": ")"
+                }
+              ]
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
     },
     "literal": {
       "type": "CHOICE",
@@ -8060,6 +8112,5 @@
     "_pattern",
     "_item",
     "_statement"
-  ],
-  "reserved": {}
+  ]
 }
