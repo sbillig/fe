@@ -4,7 +4,7 @@ use crate::{
     hir_def::{
         AttrListId, Body, BodyKind, Contract, ContractInit, ContractRecv, ContractRecvArm,
         ContractRecvArmListId, ContractRecvListId, Expr, FieldDef, FieldDefListId, FuncParamListId,
-        IdentId, Pat, TrackedItemVariant, TypeId, Visibility,
+        IdentId, Pat, TrackedItemVariant, TypeId,
     },
     lower::{FileLowerCtxt, body::BodyCtxt, item::lower_uses_clause_opt},
     span::HirOrigin,
@@ -138,11 +138,7 @@ fn lower_contract_field_def<'db>(
     let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
     let name = IdentId::lower_token_partial(ctxt, ast.name());
     let type_ref = TypeId::lower_ast_partial(ctxt, ast.ty());
-    let vis = if ast.pub_kw().is_some() {
-        Visibility::Public
-    } else {
-        Visibility::Private
-    };
+    let vis = super::lower_field_visibility(&ast);
 
     FieldDef::new(attributes, name, type_ref, vis)
 }

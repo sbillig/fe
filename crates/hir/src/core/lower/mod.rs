@@ -48,10 +48,38 @@ mod types;
 mod use_tree;
 
 pub(super) fn lower_visibility(owner: &impl ItemModifierOwner) -> Visibility {
-    if owner.pub_kw().is_some() {
-        Visibility::Public
-    } else {
-        Visibility::Private
+    if owner.pub_kw().is_none() {
+        return Visibility::Private;
+    }
+    lower_vis_restriction(owner.vis_restriction())
+}
+
+/// Lowers visibility for a record field definition.
+///
+/// `RecordFieldDef` has `pub_kw()` and `vis_restriction()` as inherent methods
+/// (it does not implement `ItemModifierOwner`), so this is a separate helper
+/// from `lower_visibility`.
+pub(super) fn lower_field_visibility(field: &ast::RecordFieldDef) -> Visibility {
+    if field.pub_kw().is_none() {
+        return Visibility::Private;
+    }
+    lower_vis_restriction(field.vis_restriction())
+}
+
+fn lower_vis_restriction(restriction: Option<ast::VisRestriction>) -> Visibility {
+    match restriction {
+        None => Visibility::Public,
+        Some(restriction) => {
+            if restriction.ingot_kw().is_some() {
+                Visibility::PubIngot
+            } else if restriction.super_kw().is_some() {
+                Visibility::PubSuper
+            } else {
+                // pub(in path) — parsed but not yet supported.
+                // Treat as private for safety (deny access rather than allow).
+                Visibility::Private
+            }
+        }
     }
 }
 

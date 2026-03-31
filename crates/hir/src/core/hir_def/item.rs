@@ -1547,11 +1547,18 @@ pub enum VariantKind<'db> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Visibility {
+    /// Unrestricted public visibility.
     Public,
+    /// Private to the defining scope.
     Private,
+    /// `pub(ingot)` — visible within the same ingot (like Rust's `pub(crate)`).
+    PubIngot,
+    /// `pub(super)` — visible within the parent module.
+    PubSuper,
 }
 
 impl Visibility {
+    /// Returns true only for unrestricted `pub`.
     pub fn is_pub(self) -> bool {
         self == Self::Public
     }

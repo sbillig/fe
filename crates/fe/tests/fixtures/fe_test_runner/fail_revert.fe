@@ -1,6 +1,6 @@
-use std::evm::ops::revert
+use std::evm::assert
 
 #[test]
 fn test_revert() {
-    revert(0, 0)
+    assert(false)
 }

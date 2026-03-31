@@ -149,6 +149,7 @@ pub trait Ctx {
     fn value(self) -> u256
     fn timestamp(self) -> u256
     fn block_number(self) -> u256
+    fn gas(self) -> u256
 }
 
 /// Low-level raw memory operations.
@@ -419,6 +420,9 @@ impl Ctx for Evm {
     }
     fn block_number(self) -> u256 {
         ops::number()
+    }
+    fn gas(self) -> u256 {
+        ops::gas()
     }
 }
 

@@ -423,6 +423,8 @@ pub enum SyntaxKind {
     /// `extern { .. }`
     ExternItemList,
     ItemList,
+    /// `(ingot)`, `(super)`, `(in path::to::module)`
+    VisRestriction,
 
     // Types. These are non-leaf nodes.
     /// `*i32`
@@ -789,6 +791,7 @@ impl SyntaxKind {
             SyntaxKind::UsesParam => "`uses` parameter",
             SyntaxKind::RecvArmList => "recv arm list",
             SyntaxKind::RecvArm => "recv arm",
+            SyntaxKind::VisRestriction => "visibility restriction",
             SyntaxKind::Root => "module",
             SyntaxKind::Error => "error",
         }

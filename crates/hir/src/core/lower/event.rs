@@ -284,11 +284,7 @@ fn parse_event_fields<'db>(
 
         let ty_ref = TypeId::lower_ast_partial(ctxt, field.ty());
 
-        let vis = if field.pub_kw().is_some() {
-            Visibility::Public
-        } else {
-            Visibility::Private
-        };
+        let vis = super::lower_field_visibility(&field);
 
         hir_fields.push(FieldDef::new(attrs, name_ident, ty_ref, vis));
 

@@ -1788,7 +1788,6 @@
   {
     "type": "block_comment",
     "named": true,
-    "extra": true,
     "fields": {}
   },
   {
@@ -8468,6 +8467,21 @@
     }
   },
   {
+    "type": "visibility",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "path",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "where_clause",
     "named": true,
     "fields": {},
@@ -9103,8 +9117,7 @@
   },
   {
     "type": "line_comment",
-    "named": true,
-    "extra": true
+    "named": true
   },
   {
     "type": "match",
@@ -9124,6 +9137,10 @@
   },
   {
     "type": "own",
+    "named": false
+  },
+  {
+    "type": "pub",
     "named": false
   },
   {
@@ -9173,10 +9190,6 @@
   {
     "type": "uses",
     "named": false
-  },
-  {
-    "type": "visibility",
-    "named": true
   },
   {
     "type": "where",

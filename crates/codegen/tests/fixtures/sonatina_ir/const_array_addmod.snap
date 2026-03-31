@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/const_array_addmod.fe
 ---
@@ -17,8 +18,18 @@ func private %get_sum() -> i256 {
         v7.i256 = ptr_to_int v6 i256;
         evm_code_copy v7 v4 32.i256;
         v8.i256 = mload v7 i256;
-        v11.i256 = evm_add_mod 1.i256 v8 100.i256;
-        return v11;
+        (v10.i256, v11.i1) = uaddo 1.i256 v8;
+        br v11 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        (v13.i256, v14.i1) = evm_umodo v10 100.i256;
+        br v14 block1 block3;
+
+    block3:
+        return v13;
 }
 
 func private %__fe_sonatina_entry() {
