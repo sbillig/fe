@@ -21,7 +21,7 @@
 
 class FeDocViewer extends HTMLElement {
   static get observedAttributes() {
-    return ["src", "title", "routing", "filter", "filter-kind", "exclude"];
+    return ["src", "title", "routing", "filter", "filter-kind", "exclude", "lsp"];
   }
 
   attributeChangedCallback(name, oldVal, newVal) {
@@ -34,6 +34,7 @@ class FeDocViewer extends HTMLElement {
     this._createStructure();
     this._loadSrc();
     this._setupRouting();
+    this._connectLsp();
   }
 
   disconnectedCallback() {
@@ -45,6 +46,33 @@ class FeDocViewer extends HTMLElement {
       this._targetStyle.parentNode.removeChild(this._targetStyle);
       this._targetStyle = null;
     }
+    if (this._lsp) {
+      this._lsp.close();
+      this._lsp = null;
+    }
+  }
+
+  // ---- LSP Live Mode ----
+
+  _connectLsp() {
+    var lspUrl = this.getAttribute("lsp");
+    if (!lspUrl || typeof feConnectLsp !== "function") return;
+    var self = this;
+    this._lsp = feConnectLsp(lspUrl);
+
+    // Listen for doc reload events (hot reload on save)
+    document.addEventListener("fe-web-ready", function () {
+      self._index = window.FE_DOC_INDEX;
+      self._scip = window.FE_SCIP || null;
+      self._currentPath = null;
+      var raw = location.hash.replace(/^#\/?/, "");
+      if (raw) {
+        var parts = self._splitHash(raw);
+        self._showItem(parts.path);
+      } else {
+        self._showWelcome();
+      }
+    });
   }
 
   _createStructure() {
@@ -340,11 +368,6 @@ class FeDocViewer extends HTMLElement {
       var tildeIdx = typePath.indexOf("~");
       if (tildeIdx !== -1) typePath = typePath.substring(0, tildeIdx);
 
-      var _builtinPrimitives = [
-        "u8","u16","u32","u64","u128","u256",
-        "i8","i16","i32","i64","i128","i256","bool"
-      ];
-
       if (typePath.charAt(0) === "(") {
         this._contentEl.innerHTML = '<div class="generated-type">' +
           '<h1>Compiler-Generated Type</h1>' +
@@ -355,11 +378,13 @@ class FeDocViewer extends HTMLElement {
         this._clearOutline();
         return;
       }
-      if (_builtinPrimitives.indexOf(typePath) !== -1) {
+      // Any unresolved simple type name (no :: path) is likely a builtin or
+      // compiler-generated type (u8-u256, i8-i256, bool, isize, usize, etc.)
+      if (typePath.indexOf("::") === -1 && /^[a-z]/.test(typePath)) {
         this._contentEl.innerHTML = '<div class="generated-type">' +
-          '<h1>Built-in Primitive: <code>' + _feViewerEsc(typePath) + '</code></h1>' +
+          '<h1>Built-in Type: <code>' + _feViewerEsc(typePath) + '</code></h1>' +
           '<p><code>' + _feViewerEsc(typePath) +
-          '</code> is a built-in primitive type provided by the compiler. ' +
+          '</code> is a built-in type provided by the compiler. ' +
           'Trait implementations for this type are generated automatically.</p></div>';
         this._clearOutline();
         return;
