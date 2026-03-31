@@ -392,6 +392,10 @@ class FeDocViewer extends HTMLElement {
     this._contentEl.appendChild(docItem);
     this._contentEl.scrollTop = 0;
 
+    // Update page title
+    var viewerTitle = this.getAttribute("title") || "Fe Documentation";
+    document.title = item.name + " \u2014 " + viewerTitle;
+
     // Build outline after content renders
     var self = this;
     setTimeout(function () {
