@@ -561,6 +561,7 @@ version = "0.1.0"
 "#,
     );
     write_file(&member_path.join("src/lib.fe"), "pub fn main() {}\n");
+    write_file(&workspace_repo.join("outside.txt"), "outside\n");
 
     let rev = git_commit(&workspace_repo, "initial");
     let source_url = Url::from_directory_path(workspace_repo.as_std_path())
@@ -599,6 +600,10 @@ core = {{ source = "{}", rev = "{}", name = "core", version = "0.1.0" }}
         let description =
             GitDescription::new(Url::parse(&source_url).expect("source url"), rev.clone());
         let checkout_path = git.checkout_path(&description);
+        assert!(
+            checkout_path.join("outside.txt").is_file(),
+            "expected full checkout to include repo-root files"
+        );
         let member_url = Url::from_directory_path(checkout_path.join("ingots/core").as_std_path())
             .expect("member url");
 
@@ -675,6 +680,7 @@ version = "0.1.0"
 "#,
     );
     write_file(&member_path.join("src/lib.fe"), "pub fn main() {}\n");
+    write_file(&workspace_repo.join("outside.txt"), "outside\n");
 
     let rev = git_commit(&workspace_repo, "initial");
     let source_url = Url::from_directory_path(workspace_repo.as_std_path())
@@ -713,6 +719,14 @@ core = {{ source = "{}", rev = "{}", path = "workspace", name = "core", version 
         let description =
             GitDescription::new(Url::parse(&source_url).expect("source url"), rev.clone());
         let checkout_path = git.checkout_path(&description);
+        assert!(
+            checkout_path.join("workspace/fe.toml").is_file(),
+            "expected sparse checkout to include workspace config"
+        );
+        assert!(
+            !checkout_path.join("outside.txt").is_file(),
+            "expected sparse checkout to exclude repo-root files"
+        );
         let member_url =
             Url::from_directory_path(checkout_path.join("workspace/ingots/core").as_std_path())
                 .expect("member url");
@@ -731,6 +745,132 @@ core = {{ source = "{}", rev = "{}", path = "workspace", name = "core", version 
             has_source_files,
             "expected member ingot to load source files"
         );
+    });
+}
+
+#[test]
+fn resolves_remote_workspace_member_by_direct_path_with_workspace_dependencies() {
+    let temp = TempDir::new().unwrap();
+    let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+    let workspace_repo = root.join("remote_ws");
+    let core_path = workspace_repo.join("ingots/core");
+    let util_path = workspace_repo.join("ingots/util");
+
+    fs::create_dir_all(workspace_repo.as_std_path()).unwrap();
+    Command::new("git")
+        .arg("-C")
+        .arg(workspace_repo.as_std_path())
+        .arg("init")
+        .status()
+        .expect("git init")
+        .success()
+        .then_some(())
+        .expect("git init success");
+    Command::new("git")
+        .arg("-C")
+        .arg(workspace_repo.as_std_path())
+        .args(["config", "user.email", "fe@example.com"])
+        .status()
+        .expect("git config email")
+        .success()
+        .then_some(())
+        .expect("git config email success");
+    Command::new("git")
+        .arg("-C")
+        .arg(workspace_repo.as_std_path())
+        .args(["config", "user.name", "fe"])
+        .status()
+        .expect("git config name")
+        .success()
+        .then_some(())
+        .expect("git config name success");
+
+    write_file(
+        &workspace_repo.join("fe.toml"),
+        r#"
+name = "remote-workspace"
+version = "0.1.0"
+members = [
+  { path = "ingots/core", name = "core", version = "0.1.0" },
+  { path = "ingots/util", name = "util", version = "0.1.0" },
+]
+"#,
+    );
+    write_file(
+        &core_path.join("fe.toml"),
+        r#"
+[ingot]
+name = "core"
+version = "0.1.0"
+
+[dependencies]
+util = true
+"#,
+    );
+    write_file(&core_path.join("src/lib.fe"), "pub fn main() {}\n");
+    write_file(
+        &util_path.join("fe.toml"),
+        r#"
+[ingot]
+name = "util"
+version = "0.1.0"
+"#,
+    );
+    write_file(&util_path.join("src/lib.fe"), "pub fn helper() {}\n");
+
+    let rev = git_commit(&workspace_repo, "initial");
+    let source_url = Url::from_directory_path(workspace_repo.as_std_path())
+        .expect("repo url")
+        .to_string();
+
+    let cache_root = root.join("git-cache");
+    fs::create_dir_all(cache_root.as_std_path()).unwrap();
+
+    let local_root = root.join("consumer");
+    let local_ingot = local_root.join("ingot");
+    write_file(
+        &local_ingot.join("fe.toml"),
+        &format!(
+            r#"
+[ingot]
+name = "consumer"
+version = "0.1.0"
+
+[dependencies]
+core = {{ source = "{}", rev = "{}", path = "ingots/core" }}
+"#,
+            source_url, rev
+        ),
+    );
+    write_file(&local_ingot.join("src/lib.fe"), "pub fn main() {}\n");
+
+    with_remote_cache_dir(&cache_root, || {
+        let ingot_url = Url::from_directory_path(local_ingot.as_std_path()).expect("ingot url");
+        let mut db = DriverDataBase::default();
+        let had_diagnostics = init_ingot(&mut db, &ingot_url);
+        assert!(!had_diagnostics, "unexpected diagnostics");
+
+        let cache_root = remote_git_cache_dir().expect("cache dir");
+        let git = GitResolver::new(cache_root);
+        let checkout_path = git.checkout_path(&GitDescription::new(
+            Url::parse(&source_url).expect("source url"),
+            rev.clone(),
+        ));
+        assert!(
+            checkout_path.join("fe.toml").is_file(),
+            "expected sparse checkout to preserve workspace config"
+        );
+
+        let core_url = Url::from_directory_path(checkout_path.join("ingots/core").as_std_path())
+            .expect("core url");
+        let util_url = Url::from_directory_path(checkout_path.join("ingots/util").as_std_path())
+            .expect("util url");
+
+        let consumer_deps = db.dependency_graph().dependency_urls(&db, &ingot_url);
+        assert!(consumer_deps.contains(&core_url));
+
+        let core_deps = db.dependency_graph().dependency_urls(&db, &core_url);
+        assert!(core_deps.contains(&util_url));
     });
 }
 
