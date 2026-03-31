@@ -510,3 +510,118 @@ impl<'db> AssembledCandidates<'db> {
         self.inherent_methods.insert(method);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use camino::Utf8PathBuf;
+
+    use crate::{
+        analysis::{
+            name_resolution::{PathRes, resolve_path},
+            ty::{
+                canonical::Canonical, trait_def::impls_for_ty, trait_resolution::PredicateListId,
+            },
+        },
+        hir_def::{IdentId, PathId},
+        test_db::HirAnalysisTestDb,
+    };
+
+    #[test]
+    fn address_has_wordrepr_impl_in_std_trait_env() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("address_has_wordrepr_impl_in_std_trait_env.fe"),
+            r#"
+use std::evm::word::WordRepr
+
+fn test_it() {
+    let _ = Address::zero()
+}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+
+        let assumptions = PredicateListId::empty_list(&db);
+        let scope = top_mod.scope();
+
+        let address = match resolve_path(
+            &db,
+            PathId::from_ident(&db, IdentId::new(&db, "Address".to_string())),
+            scope,
+            assumptions,
+            false,
+        )
+        .unwrap()
+        {
+            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => ty,
+            res => panic!("expected Address to resolve to a type, got {res:?}"),
+        };
+        let wordrepr = match resolve_path(
+            &db,
+            PathId::from_ident(&db, IdentId::new(&db, "WordRepr".to_string())),
+            scope,
+            assumptions,
+            false,
+        )
+        .unwrap()
+        {
+            PathRes::Trait(inst) => inst.def(&db),
+            res => panic!("expected WordRepr to resolve to a trait, got {res:?}"),
+        };
+
+        let std_ingot = address.ingot(&db).expect("Address should come from std");
+        let impls = impls_for_ty(&db, std_ingot, Canonical::new(&db, address));
+        let impl_trait_names: Vec<_> = impls
+            .iter()
+            .map(|imp| {
+                imp.skip_binder()
+                    .trait_(&db)
+                    .pretty_print(&db, false)
+                    .to_string()
+            })
+            .collect();
+
+        assert!(
+            impls
+                .iter()
+                .any(|imp| imp.skip_binder().trait_def(&db) == wordrepr),
+            "expected WordRepr impl for Address, found {impl_trait_names:?}"
+        );
+    }
+
+    #[test]
+    fn address_wordrepr_method_resolves_across_std_modules() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("address_wordrepr_method_resolves_across_std_modules.fe"),
+            r#"
+use std::evm::word::WordRepr
+
+fn test_it() {
+    let a = Address { inner: 42 }
+    let _w = a.to_word()
+}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+    }
+
+    #[test]
+    fn storage_map_address_value_uses_wordrepr_impl() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("storage_map_address_value_uses_wordrepr_impl.fe"),
+            r#"
+use std::evm::StorageMap
+
+fn test_it() {
+    let _map: StorageMap<Address, Address, 0> = StorageMap::new()
+}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+    }
+}

@@ -1,4 +1,5 @@
 use core::num::*
+use super::effects::Address
 
 /// A value that can round-trip through an EVM word (`u256`).
 ///

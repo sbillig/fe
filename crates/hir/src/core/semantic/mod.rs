@@ -3352,6 +3352,15 @@ impl<'db> ImplTrait<'db> {
             .unwrap_or_else(|| TyId::invalid(db, InvalidCause::ParseError))
     }
 
+    /// Type lowering errors for the implementor type.
+    pub fn ty_errors(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        let Some(hir_ty) = self.type_ref(db).to_opt() else {
+            return Vec::new();
+        };
+        let assumptions = constraints_for(db, self.into());
+        collect_ty_lower_errors(db, self.scope(), hir_ty, self.span().ty(), assumptions)
+    }
+
     /// Lowers this impl-trait to a semantic implementor view, performing
     /// conflict detection and kind checks.
     pub(crate) fn lowered_implementor(
@@ -3574,10 +3583,14 @@ impl<'db> ImplTrait<'db> {
 
         // First check implementor type
         let ty = self.ty(db);
-        if let Some(diag) = ty.emit_diag(db, self.span().ty().into()) {
-            return (None, vec![diag]);
-        }
         if ty.has_invalid(db) {
+            let diags = self.ty_errors(db);
+            if !diags.is_empty() {
+                return (None, diags);
+            }
+            if let Some(diag) = ty.emit_diag(db, self.span().ty().into()) {
+                return (None, vec![diag]);
+            }
             return (None, Vec::new());
         }
 
