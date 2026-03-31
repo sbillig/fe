@@ -1,26 +1,26 @@
 use std::evm::effects::assert
 
-fn add_assign_overflow_u8(v: mut u8) {
+fn add_assign_overflow_u8(_ v: mut u8) {
     v += 1
 }
 
-fn sub_assign_underflow_u8(v: mut u8) {
+fn sub_assign_underflow_u8(_ v: mut u8) {
     v -= 1
 }
 
-fn mul_assign_overflow_u8(v: mut u8) {
+fn mul_assign_overflow_u8(_ v: mut u8) {
     v *= 16
 }
 
-fn div_assign_zero_u8(v: mut u8) {
+fn div_assign_zero_u8(_ v: mut u8) {
     v /= 0
 }
 
-fn rem_assign_zero_u8(v: mut u8) {
+fn rem_assign_zero_u8(_ v: mut u8) {
     v %= 0
 }
 
-fn pow_assign_overflow_u8(v: mut u8) {
+fn pow_assign_overflow_u8(_ v: mut u8) {
     v **= 8
 }
 

@@ -5,11 +5,11 @@ struct Stats {
     total: u256,
 }
 
-fn sum_fields(s: ref Stats) -> u256 {
+fn sum_fields(_ s: ref Stats) -> u256 {
     s.a + s.b
 }
 
-fn finalize(s: own Stats) -> u256 {
+fn finalize(_ s: own Stats) -> u256 {
     s.total
 }
 

@@ -1005,7 +1005,7 @@ struct Data {
     y: u256,
 }
 
-fn choose(flag: bool, d: ref Data) -> ref u256 {
+fn choose(_ flag: bool, _ d: ref Data) -> ref u256 {
     if flag {
         ref d.x
     } else {
@@ -1054,11 +1054,11 @@ struct Reader {
     bias: u256,
 }
 
-fn sum_reader(r: ref Reader) -> u256 {
+fn sum_reader(_ r: ref Reader) -> u256 {
     r.source + r.bias
 }
 
-fn pass_through(r: own Reader) -> Reader {
+fn pass_through(_ r: own Reader) -> Reader {
     r
 }
 
@@ -1214,7 +1214,7 @@ msg FooMsg {
 struct Mixer {}
 
 impl Mixer {
-    fn mix(input: [u256; 3]) -> [u256; 3] {
+    fn mix(_ input: [u256; 3]) -> [u256; 3] {
         let mut out: [u256; 3] = [0, 0, 0]
         for i in 0..3 {
             out[i] = input[i]
@@ -1263,7 +1263,7 @@ const M: [[u256; 3]; 3] = [
     [1, 1, 2],
 ]
 
-fn mix(state: [u256; 3]) -> [u256; 3] {
+fn mix(_ state: [u256; 3]) -> [u256; 3] {
     let mut out: [u256; 3] = [0, 0, 0]
     for i in 0..3 {
         for j in 0..3 {
@@ -1334,16 +1334,16 @@ use std::evm::Evm
 fn a_init() uses (evm: mut Evm) {
     let len = evm.code_region_len(b_init)
     let offset = evm.code_region_offset(b_init)
-    evm.codecopy(dest: 0, offset, len)
-    evm.return_data(0, len)
+    evm.codecopy(dest: 0, offset: offset, len: len)
+    evm.return_data(offset: 0, len: len)
 }
 
 #[contract_init(B)]
 fn b_init() uses (evm: mut Evm) {
     let len = evm.code_region_len(a_init)
     let offset = evm.code_region_offset(a_init)
-    evm.codecopy(dest: 0, offset, len)
-    evm.return_data(0, len)
+    evm.codecopy(dest: 0, offset: offset, len: len)
+    evm.return_data(offset: 0, len: len)
 }
 
 #[test]

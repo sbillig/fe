@@ -3,7 +3,7 @@ struct Pair {
     b: u256,
 }
 
-fn head(pair: ref Pair) -> u256 {
+fn head(_ pair: ref Pair) -> u256 {
     pair.a
 }
 

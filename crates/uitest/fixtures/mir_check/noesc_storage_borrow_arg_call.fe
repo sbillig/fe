@@ -1,6 +1,6 @@
 // Non-memory borrow handles must not be passed as regular function arguments.
 
-fn bump(handle: mut u256) {
+fn bump(_ handle: mut u256) {
     handle += 1
 }
 

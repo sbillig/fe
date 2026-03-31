@@ -27,7 +27,7 @@ const M: [[u256; 3]; 3] = [
     [1, 1, 2],
 ]
 
-fn ark(state: [u256; 3], offset: usize) -> [u256; 3] {
+fn ark(_ state: [u256; 3], _ offset: usize) -> [u256; 3] {
     return [
         state[0] + C[offset],
         state[1] + C[offset + 1],
@@ -35,15 +35,15 @@ fn ark(state: [u256; 3], offset: usize) -> [u256; 3] {
     ]
 }
 
-fn sigma(x: u256) -> u256 {
+fn sigma(_ x: u256) -> u256 {
     return x * x + x
 }
 
-fn sigma_full(state: [u256; 3]) -> [u256; 3] {
+fn sigma_full(_ state: [u256; 3]) -> [u256; 3] {
     return [sigma(state[0]), sigma(state[1]), sigma(state[2])]
 }
 
-fn mix(state: [u256; 3]) -> [u256; 3] {
+fn mix(_ state: [u256; 3]) -> [u256; 3] {
     let mut out: [u256; 3] = [0, 0, 0]
     for i in 0..3 {
         for j in 0..3 {
@@ -53,8 +53,8 @@ fn mix(state: [u256; 3]) -> [u256; 3] {
     return out
 }
 
-pub fn mock_hash(inp0: u256, inp1: u256) -> u256 {
-    let mut state: [u256; 3] = [inp0, inp1, 0]
+pub fn mock_hash(left: u256, right: u256) -> u256 {
+    let mut state: [u256; 3] = [left, right, 0]
     let mut round_cst: usize = 0
 
     for _ in 0..N_ROUNDS {
@@ -69,21 +69,21 @@ pub fn mock_hash(inp0: u256, inp1: u256) -> u256 {
 
 #[test]
 fn test_deterministic() {
-    let a: u256 = mock_hash(1, 2)
-    let b: u256 = mock_hash(1, 2)
+    let a: u256 = mock_hash(left: 1, right: 2)
+    let b: u256 = mock_hash(left: 1, right: 2)
     assert(a == b)
 }
 
 #[test]
 fn test_different_inputs() {
-    let a: u256 = mock_hash(1, 2)
-    let b: u256 = mock_hash(3, 4)
+    let a: u256 = mock_hash(left: 1, right: 2)
+    let b: u256 = mock_hash(left: 3, right: 4)
     assert(a != b)
 }
 
 #[test]
 fn test_zero_inputs() {
-    let result: u256 = mock_hash(0, 0)
+    let result: u256 = mock_hash(left: 0, right: 0)
     assert(result > 0)
 }
 

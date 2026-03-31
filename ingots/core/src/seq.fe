@@ -9,7 +9,7 @@ pub trait Seq {
     fn len(self) -> usize
 
     /// Returns the element at the given index.
-    fn get(self, i: usize) -> Self::Item
+    fn get(self, _ i: usize) -> Self::Item
 }
 
 /// Array implementation of Seq.
@@ -22,7 +22,7 @@ impl<T, const N: usize> Seq for [T; N]
         N
     }
 
-    fn get(self, i: usize) -> T {
+    fn get(self, _ i: usize) -> T {
         self[i]
     }
 }

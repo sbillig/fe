@@ -102,7 +102,7 @@ fn checked_neg_signed_impl<T>(x: T) -> T
 fn signed_min_word<T>() -> u256
     where T: IntWord
 {
-    sign_extend(T::SIGN_BIT, T::MASK, T::SIGN_BIT)
+    sign_extend(word: T::SIGN_BIT, mask: T::MASK, sign_bit: T::SIGN_BIT)
 }
 
 fn signed_max_word<T>() -> u256
@@ -176,7 +176,7 @@ fn saturating_mul_signed_impl<T>(a: T, b: T) -> T
         T::from_word(0)
     } else {
         let min = signed_min_word<T>()
-        let neg_one = sign_extend(T::MASK, T::MASK, T::SIGN_BIT)
+        let neg_one = sign_extend(word: T::MASK, mask: T::MASK, sign_bit: T::SIGN_BIT)
         if (a.to_word() == min && b.to_word() == neg_one)
             || (b.to_word() == min && a.to_word() == neg_one)
         {
@@ -207,8 +207,8 @@ fn ensure_signed_div_no_overflow<T>(a: T, b: T)
     where T: IntWord
 {
     ensure_nonzero_divisor(b)
-    let min_word = sign_extend(T::SIGN_BIT, T::MASK, T::SIGN_BIT)
-    let neg_one_word = sign_extend(T::MASK, T::MASK, T::SIGN_BIT)
+    let min_word = sign_extend(word: T::SIGN_BIT, mask: T::MASK, sign_bit: T::SIGN_BIT)
+    let neg_one_word = sign_extend(word: T::MASK, mask: T::MASK, sign_bit: T::SIGN_BIT)
     if a.to_word() == min_word && b.to_word() == neg_one_word { panic() }
 }
 

@@ -9,7 +9,7 @@ fn extern_generics_get_mangled_names() {
     let url = Url::parse("file:///extern_generics.fe").unwrap();
     let src = r#"
 extern {
-    fn id<T>(value: T) -> T
+    fn id<T>(_: T) -> T
 }
 
 fn main() {
@@ -60,16 +60,16 @@ use core::abi::Abi
 use std::abi::Sol
 
 extern {
-    fn id<T>(value: T) -> T
+    fn id<T>(_: T) -> T
 }
 
-fn call_selector<A>(value: A::Selector) -> A::Selector
+fn call_selector<A>(_ value: A::Selector) -> A::Selector
     where A: Abi
 {
     id<A::Selector>(value)
 }
 
-fn main(x: u32) -> u32 {
+fn main(_ x: u32) -> u32 {
     let a = id<u32>(x)
     let b = call_selector<Sol>(x)
     a + b

@@ -1,6 +1,6 @@
 extern {
-    const fn add(x: usize, y: usize) -> usize
-    const fn plus1(x: usize) -> usize
+    const fn add(_ x: usize, _ y: usize) -> usize
+    const fn plus1(_: usize) -> usize
 }
 
 const ONE: usize = 1

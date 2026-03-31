@@ -210,6 +210,23 @@ where
         }
     }
 
+    pub(super) fn param_underscore_named(
+        &self,
+        name: IdentId<'db>,
+        ty: TypeId<'db>,
+    ) -> FuncParam<'db> {
+        FuncParam {
+            mode: FuncParamMode::View,
+            is_mut: false,
+            has_ref_prefix: false,
+            has_own_prefix: false,
+            is_label_suppressed: true,
+            name: Partial::Present(FuncParamName::Ident(name)),
+            ty: Partial::Present(ty),
+            self_ty_fallback: false,
+        }
+    }
+
     pub(super) fn params(
         &self,
         params: impl IntoIterator<Item = FuncParam<'db>>,
@@ -576,10 +593,19 @@ where
     }
 
     pub(super) fn call_expr(&mut self, callee: ExprId, args: Vec<ExprId>) -> ExprId {
-        let args = args
-            .into_iter()
-            .map(|expr| CallArg { label: None, expr })
-            .collect();
+        self.call_expr_with_args(
+            callee,
+            args.into_iter()
+                .map(|expr| CallArg { label: None, expr })
+                .collect(),
+        )
+    }
+
+    pub(super) fn call_expr_with_args(
+        &mut self,
+        callee: ExprId,
+        args: Vec<CallArg<'db>>,
+    ) -> ExprId {
         self.push_expr(Expr::Call(callee, args))
     }
 
@@ -589,10 +615,21 @@ where
         name: IdentId<'db>,
         args: Vec<ExprId>,
     ) -> ExprId {
-        let args = args
-            .into_iter()
-            .map(|expr| CallArg { label: None, expr })
-            .collect();
+        self.method_call_expr_with_args(
+            receiver,
+            name,
+            args.into_iter()
+                .map(|expr| CallArg { label: None, expr })
+                .collect(),
+        )
+    }
+
+    pub(super) fn method_call_expr_with_args(
+        &mut self,
+        receiver: ExprId,
+        name: IdentId<'db>,
+        args: Vec<CallArg<'db>>,
+    ) -> ExprId {
         self.push_expr(Expr::MethodCall(
             receiver,
             Partial::Present(name),

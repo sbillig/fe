@@ -56,7 +56,7 @@ impl<A: Abi> Decode<A> for Address {
     fn decode<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         let word = d.read_word()
         if word >> 160 != 0 {
-            ops::revert(0, 0)
+            ops::revert(offset: 0, len: 0)
         }
         Address { inner: word }
     }
@@ -69,19 +69,19 @@ impl<A: Abi> Encode<A> for Address {
         e.write_word(self.inner)
     }
 
-    fn encode_to_ptr(own self, ptr: u256) {
-        A::store_word(ptr, self.inner)
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        A::store_word(ptr: ptr, value: self.inner)
     }
 }
 
 impl<A: Abi> AbiSpan<A> for Address {
-    fn abi_end<I: core::abi::ByteInput>(input: I, base: u256, pos: u256) -> u256 {
+    fn abi_end<I: core::abi::ByteInput>(_: I, base: u256, pos: u256) -> u256 {
         pos + 32
     }
 }
 
 /// Convert an EVM `Address` into its ABI word representation (`u256`).
-pub fn address_to_word(addr: Address) -> u256 {
+pub fn address_to_word(_ addr: Address) -> u256 {
     addr.inner
 }
 
@@ -102,7 +102,7 @@ impl<T> EffectHandle for CalldataPtr<T> {
     type Target = T
     type AddressSpace = core::effect_ref::Calldata
 
-    fn from_raw(raw: u256) -> Self {
+    fn from_raw(_ raw: u256) -> Self {
         Self { offset: raw }
     }
 
@@ -124,7 +124,7 @@ impl<T> EffectHandle for TStorPtr<T> {
     type Target = T
     type AddressSpace = core::effect_ref::TransientStorage
 
-    fn from_raw(raw: u256) -> Self {
+    fn from_raw(_ raw: u256) -> Self {
         Self { slot: raw }
     }
 
@@ -154,26 +154,26 @@ pub trait Ctx {
 
 /// Low-level raw memory operations.
 pub trait RawMem {
-    fn mload(self, addr: u256) -> u256
+    fn mload(self, _: u256) -> u256
     fn mstore(mut self, addr: u256, value: u256)
     fn mstore8(mut self, addr: u256, value: u8)
-    fn mem_ptr<T>(self, addr: u256) -> MemPtr<T> {
+    fn mem_ptr<T>(self, _ addr: u256) -> MemPtr<T> {
         MemPtr::from_raw(addr)
     }
 }
 
 /// Low-level raw storage operations.
 pub trait RawStorage {
-    fn sload(self, slot: u256) -> u256
+    fn sload(self, _: u256) -> u256
     fn sstore(mut self, slot: u256, value: u256)
-    fn stor_ptr<T>(self, slot: u256) -> StorPtr<T> {
+    fn stor_ptr<T>(self, _ slot: u256) -> StorPtr<T> {
         StorPtr::from_raw(slot)
     }
 }
 
 /// Access to low-level EVM op functions (Yul-exposed builtins, excluding raw stack ops).
 pub trait RawOps: RawMem + RawStorage {
-    fn calldataload(self, offset: u256) -> u256
+    fn calldataload(self, _: u256) -> u256
     fn calldatasize(self) -> u256
     fn calldatacopy(mut self, dest: u256, offset: u256, len: u256)
 
@@ -188,8 +188,8 @@ pub trait RawOps: RawMem + RawStorage {
     fn revert(self, offset: u256, len: u256) -> !
     fn return_data(self, offset: u256, len: u256) -> !
 
-    fn code_region_offset<F>(self, f: F) -> u256
-    fn code_region_len<F>(self, f: F) -> u256
+    fn code_region_offset<F>(self, _: F) -> u256
+    fn code_region_len<F>(self, _: F) -> u256
 }
 
 pub trait Log {
@@ -211,7 +211,7 @@ pub trait Log {
     ///
     /// This delegates to the `std::evm::Event` implementation generated for
     /// `#[event]` structs.
-    fn emit<E>(mut self, event: own E)
+    fn emit<E>(mut self, _ event: own E)
         where E: super::event::Event
     {
         event.emit(self)
@@ -237,12 +237,12 @@ pub trait Contract {
 pub trait Create {
     /// Low-level `CREATE` opcode.
     fn create_raw(mut self, value: u256, offset: u256, len: u256) -> Address {
-        Address { inner: ops::create(value, offset, len) }
+        Address { inner: ops::create(value: value, offset: offset, len: len) }
     }
 
     /// Low-level `CREATE2` opcode.
     fn create2_raw(mut self, value: u256, offset: u256, len: u256, salt: u256) -> Address {
-        Address { inner: ops::create2(value, offset, len, salt) }
+        Address { inner: ops::create2(value: value, offset: offset, len: len, salt: salt) }
     }
 
     /// Deploy a high-level contract using `CREATE`, bubbling revert data on failure.
@@ -254,15 +254,15 @@ pub trait Create {
         if !C::InitArgs::IS_DYNAMIC && C::InitArgs::ENCODED_SIZE == 0 {
             let init_ptr = mem::alloc(init_len)
             ops::codecopy(dest: init_ptr, offset: init_off, len: init_len)
-            addr = self.create_raw(value, init_ptr, init_len)
+            addr = self.create_raw(value: value, offset: init_ptr, len: init_len)
         } else {
             let encoded = encode_abi_payload<C::InitArgs>(args)
             let init_ptr = mem::alloc(init_len + encoded.1)
             ops::codecopy(dest: init_ptr, offset: init_off, len: init_len)
-            copy_words(init_ptr + init_len, encoded.0, encoded.1)
+            copy_words(dest: init_ptr + init_len, src: encoded.0, len: encoded.1)
             let total_len = init_len + encoded.1
 
-            addr = self.create_raw(value, init_ptr, total_len)
+            addr = self.create_raw(value: value, offset: init_ptr, len: total_len)
         }
 
         // Solidity-style behavior: bubble revert data if creation fails.
@@ -270,7 +270,7 @@ pub trait Create {
             let ret_len = ops::returndatasize()
             let ret_ptr = mem::alloc(ret_len)
             ops::returndatacopy(dest: ret_ptr, offset: 0, len: ret_len)
-            ops::revert(ret_ptr, ret_len)
+            ops::revert(offset: ret_ptr, len: ret_len)
         }
 
         addr
@@ -285,15 +285,15 @@ pub trait Create {
         if !C::InitArgs::IS_DYNAMIC && C::InitArgs::ENCODED_SIZE == 0 {
             let init_ptr = mem::alloc(init_len)
             ops::codecopy(dest: init_ptr, offset: init_off, len: init_len)
-            addr = self.create2_raw(value, init_ptr, init_len, salt)
+            addr = self.create2_raw(value: value, offset: init_ptr, len: init_len, salt: salt)
         } else {
             let encoded = encode_abi_payload<C::InitArgs>(args)
             let init_ptr = mem::alloc(init_len + encoded.1)
             ops::codecopy(dest: init_ptr, offset: init_off, len: init_len)
-            copy_words(init_ptr + init_len, encoded.0, encoded.1)
+            copy_words(dest: init_ptr + init_len, src: encoded.0, len: encoded.1)
             let total_len = init_len + encoded.1
 
-            addr = self.create2_raw(value, init_ptr, total_len, salt)
+            addr = self.create2_raw(value: value, offset: init_ptr, len: total_len, salt: salt)
         }
 
         // Solidity-style behavior: bubble revert data if creation fails.
@@ -301,7 +301,7 @@ pub trait Create {
             let ret_len = ops::returndatasize()
             let ret_ptr = mem::alloc(ret_len)
             ops::returndatacopy(dest: ret_ptr, offset: 0, len: ret_len)
-            ops::revert(ret_ptr, ret_len)
+            ops::revert(offset: ret_ptr, len: ret_len)
         }
 
         addr
@@ -311,12 +311,12 @@ pub trait Create {
 fn copy_words(dest: u256, src: u256, len: u256) {
     let mut offset: u256 = 0
     while offset < len {
-        ops::mstore(dest + offset, ops::mload(src + offset))
+        ops::mstore(addr: dest + offset, value: ops::mload(src + offset))
         offset += 32
     }
 }
 
-fn encode_abi_payload<T>(value: own T) -> (u256, u256)
+fn encode_abi_payload<T>(_ value: own T) -> (u256, u256)
     where T: Encode<Sol> + AbiSize
 {
     if !T::IS_DYNAMIC {
@@ -427,11 +427,11 @@ impl Ctx for Evm {
 }
 
 impl RawMem for Evm {
-    fn mload(self, addr: u256) -> u256 {
+    fn mload(self, _ addr: u256) -> u256 {
         ops::mload(addr)
     }
     fn mstore(mut self, addr: u256, value: u256) {
-        ops::mstore(addr, value)
+        ops::mstore(addr: addr, value: value)
     }
     fn mstore8(mut self, addr: u256, value: u8) {
         ops::mstore8(addr, value)
@@ -439,7 +439,7 @@ impl RawMem for Evm {
 }
 
 impl RawStorage for Evm {
-    fn sload(self, slot: u256) -> u256 {
+    fn sload(self, _ slot: u256) -> u256 {
         ops::sload(slot)
     }
     fn sstore(mut self, slot: u256, value: u256) {
@@ -448,7 +448,7 @@ impl RawStorage for Evm {
 }
 
 impl RawOps for Evm {
-    fn calldataload(self, offset: u256) -> u256 {
+    fn calldataload(self, _ offset: u256) -> u256 {
         ops::calldataload(offset)
     }
     fn calldatasize(self) -> u256 {
@@ -478,16 +478,16 @@ impl RawOps for Evm {
     }
 
     fn revert(self, offset: u256, len: u256) -> ! {
-        ops::revert(offset, len)
+        ops::revert(offset: offset, len: len)
     }
     fn return_data(self, offset: u256, len: u256) -> ! {
-        ops::return_data(offset, len)
+        ops::return_data(offset: offset, len: len)
     }
 
-    fn code_region_offset<F>(self, f: F) -> u256 {
+    fn code_region_offset<F>(self, _ f: F) -> u256 {
         intrinsic_code_region_offset(f)
     }
-    fn code_region_len<F>(self, f: F) -> u256 {
+    fn code_region_len<F>(self, _ f: F) -> u256 {
         intrinsic_code_region_len(f)
     }
 }
@@ -534,14 +534,14 @@ impl Log for Evm {
 
 impl Create for Evm {
     fn create_raw(mut self, value: u256, offset: u256, len: u256) -> Address {
-        Address { inner: ops::create(value, offset, len) }
+        Address { inner: ops::create(value: value, offset: offset, len: len) }
     }
     fn create2_raw(mut self, value: u256, offset: u256, len: u256, salt: u256) -> Address {
-        Address { inner: ops::create2(value, offset, len, salt) }
+        Address { inner: ops::create2(value: value, offset: offset, len: len, salt: salt) }
     }
 }
 
-fn encode_calldata<M>(selector: u32, message: own M) -> (u256, u256)
+fn encode_calldata<M>(_ selector: u32, _ message: own M) -> (u256, u256)
 where M: Encode<Sol>
 {
     let selector_size = size_of<Sol::Selector>()
@@ -550,7 +550,7 @@ where M: Encode<Sol>
     if !M::IS_DYNAMIC {
         let size = selector_size + M::ENCODED_SIZE
         let ptr = mem::alloc(size)
-        ops::mstore(ptr, selector_word)
+        ops::mstore(addr: ptr, value: selector_word)
         message.encode_to_ptr(ptr + selector_size)
         return (ptr, size)
     }
@@ -561,7 +561,7 @@ where M: Encode<Sol>
 
     // Encode the 4-byte selector into the first word (big-endian),
     // leaving the remaining 28 bytes as zeros.
-    ops::mstore(base, selector_word)
+    ops::mstore(addr: base, value: selector_word)
 
     enc.base = base + selector_size
     enc.set_pos(base + selector_size)
@@ -573,7 +573,7 @@ fn copy_returndata() -> MemoryBytes {
     let ret_len = ops::returndatasize()
     let ret_ptr = mem::alloc(ret_len)
     ops::returndatacopy(dest: ret_ptr, offset: 0, len: ret_len)
-    MemoryBytes::new(ret_ptr, ret_len)
+    MemoryBytes::new(base: ret_ptr, len: ret_len)
 }
 
 /// Copy the current returndata into freshly allocated memory.
@@ -584,11 +584,11 @@ pub fn last_returndata() -> MemoryBytes {
 /// Revert, bubbling the current returndata payload unchanged.
 pub fn bubble_last_revert() -> ! {
     let ret = copy_returndata()
-    ops::revert(ret.base, ret.len)
+    ops::revert(offset: ret.base, len: ret.len)
 }
 
 /// Decode Solidity ABI data from an in-memory returndata buffer.
-pub fn decode_returndata<R>(ret: MemoryBytes) -> R
+pub fn decode_returndata<R>(_ ret: MemoryBytes) -> R
     where R: Decode<Sol> + AbiSize
 {
     decode_output(ret)
@@ -623,7 +623,7 @@ impl Call for Evm {
     {
         let out: (u256, u256) = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
 
-        if !self.raw_call(addr, gas, value, out.0, out.1) {
+        if !self.raw_call(addr, gas, value, args_offset: out.0, args_len: out.1) {
             bubble_last_revert()
         }
 
@@ -634,7 +634,7 @@ impl Call for Evm {
     where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
     {
         let out: (u256, u256) = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
-        staticcall_decode(addr, gas, out.0, out.1)
+        staticcall_decode(addr: addr, gas: gas, args_offset: out.0, args_len: out.1)
     }
 
     fn delegate<M>(mut self, addr: own Address, gas: u256, message: own M) -> M::Return
@@ -659,21 +659,21 @@ impl Call for Evm {
 }
 
 pub fn assert(_ b: own bool) {
-    if !b { ops::revert(0, 0) }
+    if !b { ops::revert(offset: 0, len: 0) }
 }
 
 /// Revert the current transaction with ABI-encoded data.
 ///
 /// Encodes the given value using Solidity ABI encoding and reverts
 /// with the encoded bytes as revert data.
-pub fn revert<T>(value: own T) -> !
+pub fn revert<T>(_ value: own T) -> !
     where T: Encode<Sol> + AbiSize
 {
     let mut enc = SolEncoder::new()
     enc.reserve_head(abi_root_head_size<T>())
     encode_root<Sol, T, SolEncoder>(value, mut enc)
     let (result_ptr, result_len) = enc.finish()
-    ops::revert(result_ptr, result_len)
+    ops::revert(offset: result_ptr, len: result_len)
 }
 
 /// EVM-specific extension methods for `Result`.
@@ -705,7 +705,7 @@ impl ContractHost for Evm {
         CallData::new()
     }
 
-    fn init_input<F>(mut self, runtime: F) -> Self::InitInput {
+    fn init_input<F>(mut self, _ runtime: F) -> Self::InitInput {
         let offset = self.code_region_offset(runtime)
         let len = self.code_region_len(runtime)
         let args_offset = offset + len
@@ -715,47 +715,47 @@ impl ContractHost for Evm {
         }
         let args_len = code_size - args_offset
         let args_ptr = mem::alloc(args_len)
-        self.codecopy(args_ptr, args_offset, args_len)
-        MemoryBytes::new(args_ptr, args_len)
+        self.codecopy(dest: args_ptr, offset: args_offset, len: args_len)
+        MemoryBytes::new(base: args_ptr, len: args_len)
     }
 
-    fn field<T>(mut self, slot: u256) -> core::effect_ref::StorPtr<T> {
+    fn field<T>(mut self, _ slot: u256) -> core::effect_ref::StorPtr<T> {
         self.stor_ptr(slot)
     }
 
-    fn create_contract<F>(mut self, runtime: F) -> ! {
+    fn create_contract<F>(mut self, _ runtime: F) -> ! {
         let len = self.code_region_len(runtime)
         let offset = self.code_region_offset(runtime)
-        self.codecopy(0, offset, len)
-        self.return_data(0, len)
+        self.codecopy(dest: 0, offset: offset, len: len)
+        self.return_data(offset: 0, len: len)
     }
 
     fn abort(self) -> ! {
-        self.revert(0, 0)
+        self.revert(offset: 0, len: 0)
     }
 
     fn return_bytes(self, ptr: u256, len: u256) -> ! {
-        self.return_data(ptr, len)
+        self.return_data(offset: ptr, len: len)
     }
 
-    fn return_value<A: Abi, T>(mut self, value: own T) -> !
+    fn return_value<A: Abi, T>(mut self, _ value: own T) -> !
         where T: Encode<A> + AbiSize
     {
         if !T::IS_DYNAMIC {
             if T::ENCODED_SIZE <= 64 {
                 value.encode_to_ptr(0)
-                self.return_data(0, T::ENCODED_SIZE)
+                self.return_data(offset: 0, len: T::ENCODED_SIZE)
             } else {
                 let ptr = mem::alloc(T::ENCODED_SIZE)
                 value.encode_to_ptr(ptr)
-                self.return_data(ptr, T::ENCODED_SIZE)
+                self.return_data(offset: ptr, len: T::ENCODED_SIZE)
             }
         } else {
             let mut enc = A::encoder_new()
             enc.reserve_head(abi_root_head_size<T>())
             encode_root<A, T, A::Encoder>(value, mut enc)
             let (out_ptr, out_len) = enc.finish()
-            self.return_bytes(out_ptr, out_len)
+            self.return_bytes(ptr: out_ptr, len: out_len)
         }
     }
 }

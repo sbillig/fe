@@ -21,7 +21,7 @@ struct SFixed {
 }
 
 impl SFixed {
-    fn from_int(value: u256, neg: bool) -> Self {
+    fn from_int(_ value: u256, _ neg: bool) -> Self {
         SFixed { mag: value * SCALE, neg: neg }
     }
 
@@ -88,7 +88,7 @@ impl Complex {
 
     // z^2 + c
     // (a+bi)^2 = (a^2 - b^2) + (2ab)i
-    fn square_add(self, c: Complex) -> Complex {
+    fn square_add(self, _ c: Complex) -> Complex {
         let aa = self.re * self.re
         let bb = self.im * self.im
         let ab = self.re * self.im
@@ -106,7 +106,7 @@ enum EscapeResult {
 }
 // ---------- Core iteration ----------
 
-fn iterate(c: Complex, max_iter: u256) -> EscapeResult {
+fn iterate(_ c: Complex, _ max_iter: u256) -> EscapeResult {
     let mut z = Complex::zero()
     let mut i: u256 = 0
 
@@ -126,7 +126,7 @@ fn iterate(c: Complex, max_iter: u256) -> EscapeResult {
 }
 
 // Classify a point: returns iteration count (0 = in set)
-fn classify(c: Complex, max_iter: u256) -> u256 {
+fn classify(_ c: Complex, _ max_iter: u256) -> u256 {
     match iterate(c, max_iter) {
         EscapeResult::Escaped(n) => n
         EscapeResult::InSet => 0
@@ -197,7 +197,13 @@ pub contract Mandelbrot {
             let im = SFixed { mag: im_mag, neg: im_neg }
             let re_start = SFixed { mag: re_start_mag, neg: re_start_neg }
             let re_step = SFixed { mag: re_step_mag, neg: false }
-            compute_row_sum(im, re_start, re_step, width, max_iter)
+            compute_row_sum(
+                row_im: im,
+                re_start: re_start,
+                re_step: re_step,
+                width: width,
+                max_iter: max_iter,
+            )
         }
     }
 }

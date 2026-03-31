@@ -107,8 +107,8 @@ fn transfer(from: Address, to: Address, amount: u256)
     let from_balance = store.balances.get(from)
     assert(from_balance >= amount)
 
-    store.balances.set(from, from_balance - amount)
-    store.balances.set(to, store.balances.get(to) + amount)
+    store.balances.set(key: from, value: from_balance - amount)
+    store.balances.set(key: to, value: store.balances.get(to) + amount)
 
     log.emit(TransferEvent { from, to, value: amount })
 }
@@ -119,7 +119,7 @@ fn mint(to: Address, amount: u256)
     assert(to != Address::zero())
 
     store.total_supply += amount
-    store.balances.set(to, store.balances.get(to) + amount)
+    store.balances.set(key: to, value: store.balances.get(to) + amount)
 
     log.emit(TransferEvent { from: Address::zero(), to, value: amount })
 }
@@ -132,7 +132,7 @@ fn burn(from: Address, amount: u256)
     let from_balance = store.balances.get(from)
     assert(from_balance >= amount)
 
-    store.balances.set(from, from_balance - amount)
+    store.balances.set(key: from, value: from_balance - amount)
     store.total_supply -= amount
 
     log.emit(TransferEvent { from, to: Address::zero(), value: amount })
@@ -144,7 +144,7 @@ fn approve(owner: Address, spender: Address, amount: u256)
     assert(owner != Address::zero())
     assert(spender != Address::zero())
 
-    store.allowances.set((owner, spender), amount)
+    store.allowances.set(key: (owner, spender), value: amount)
 
     log.emit(ApprovalEvent { owner, spender, value: amount })
 }
@@ -156,7 +156,7 @@ fn spend_allowance(owner: Address, spender: Address, amount: u256)
     let current = store.allowances.get((owner, spender))
     // if current != u256::MAX { // TODO: define ::MAX constants
         assert(current >= amount)
-        store.allowances.set((owner, spender), current - amount)
+        store.allowances.set(key: (owner, spender), value: current - amount)
     // }
 }
 
@@ -180,11 +180,11 @@ impl AccessControl {
     }
 
     pub fn grant(mut self, role: u256, to: Address) {
-        self.roles.set((role, to), true)
+        self.roles.set(key: (role, to), value: true)
     }
 
     pub fn revoke(mut self, role: u256, from: Address) {
-        self.roles.set((role, from), false)
+        self.roles.set(key: (role, from), value: false)
     }
 }
 

@@ -1,6 +1,6 @@
 use std::evm::effects::assert
 
-fn count_until(limit: u256) -> u256 {
+fn count_until(_ limit: u256) -> u256 {
     let mut value: u256 = 0
     let mut steps: u256 = 0
 

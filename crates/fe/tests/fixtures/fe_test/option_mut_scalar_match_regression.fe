@@ -11,7 +11,7 @@ struct Counter {
 }
 
 impl Counter {
-    fn maybe_value_mut(mut self, do_inc: bool) -> Option<mut u256> {
+    fn maybe_value_mut(mut self, _ do_inc: bool) -> Option<mut u256> {
         if do_inc {
             Option::Some(mut self.value)
         } else {

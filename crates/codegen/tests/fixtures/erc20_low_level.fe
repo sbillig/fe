@@ -6,16 +6,16 @@ const BALANCES_SALT: u256 = 0
 const ALLOWANCES_SALT: u256 = 1
 
 fn abi_encode_u256(value: u256) -> ! uses (ops: mut RawOps) {
-    ops.mstore(0, value)
-    ops.return_data(0, 32)
+    ops.mstore(addr: 0, value: value)
+    ops.return_data(offset: 0, len: 32)
 }
 
 fn abi_encode_string(word: u256, len: u256) -> ! uses (ops: mut RawOps) {
     // ABI encoding for a single dynamic string literal
-    ops.mstore(0, 32)   // offset to data
-    ops.mstore(32, len) // string length
-    ops.mstore(64, word)
-    ops.return_data(0, 96)
+    ops.mstore(addr: 0, value: 32)   // offset to data
+    ops.mstore(addr: 32, value: len) // string length
+    ops.mstore(addr: 64, value: word)
+    ops.return_data(offset: 0, len: 96)
 }
 
 // ERC20 storage ---------------------------------------------------------
@@ -47,7 +47,7 @@ impl Erc20 {
 
     fn set_owner_once(mut self, owner: Address) uses (ops: RawOps) {
         if self.owner != Address::zero() {
-            ops.revert(0, 0)
+            ops.revert(offset: 0, len: 0)
         }
         self.owner = owner
     }
@@ -55,7 +55,7 @@ impl Erc20 {
     fn transfer(mut self, from: Address, to: Address, amount: u256) uses (ops: RawOps) {
         let from_bal = self.balance_of(addr: from)
         if from_bal < amount {
-            ops.revert(0, 0)
+            ops.revert(offset: 0, len: 0)
         }
         let to_bal = self.balance_of(addr: to)
         self.balances.set(key: from, value: from_bal - amount)
@@ -66,7 +66,7 @@ impl Erc20 {
         let spender = ctx.caller()
         let allowed = self.allowance(owner: owner, spender: spender)
         if allowed < amount {
-            ops.revert(0, 0)
+            ops.revert(offset: 0, len: 0)
         }
         self.transfer(from: owner, to: to, amount: amount)
         self.allowances.set(key: (owner, spender), value: allowed - amount)
@@ -75,7 +75,7 @@ impl Erc20 {
     fn mint(mut self, to: Address, amount: u256) uses (ctx: Ctx, ops: RawOps) {
         let caller = ctx.caller()
         if caller != self.owner {
-            ops.revert(0, 0)
+            ops.revert(offset: 0, len: 0)
         }
         let bal = self.balance_of(addr: to)
         self.balances.set(key: to, value: bal + amount)
@@ -125,8 +125,8 @@ fn init() uses (evm: mut Evm) {
     }
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
-    evm.codecopy(dest: 0, offset, len)
-    evm.return_data(0, len)
+    evm.codecopy(dest: 0, offset: offset, len: len)
+    evm.return_data(offset: 0, len: len)
 }
 
 #[contract_runtime(Erc20Contract)]
@@ -180,7 +180,7 @@ fn runtime() uses (evm: mut Evm) {
                 let amount = evm.calldataload(36)
                 abi_encode_u256(value: mint(to: to, amount: amount))
             }
-            _ => evm.revert(0, 0)
+            _ => evm.revert(offset: 0, len: 0)
         }
     }
 }

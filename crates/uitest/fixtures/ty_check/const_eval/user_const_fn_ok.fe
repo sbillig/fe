@@ -14,11 +14,11 @@ const fn agg_len() -> usize {
     agg.a as usize
 }
 
-const fn add(a: usize, b: usize) -> usize {
+const fn add(_ a: usize, _ b: usize) -> usize {
     a + b
 }
 
-const fn pick(flag: bool) -> usize {
+const fn pick(_ flag: bool) -> usize {
     if flag {
         1
     } else {
@@ -48,10 +48,10 @@ type ArrBytes = [u8; bytes_tail()]
 type StorCode = [u8; stor_code()]
 type AggArr = [u8; agg_len()]
 
-fn takes_arr(_x: Arr) {}
-fn takes_bytes(_x: ArrBytes) {}
-fn takes_stor(_x: StorCode) {}
-fn takes_agg(_x: AggArr) {}
+fn takes_arr(_: Arr) {}
+fn takes_bytes(_: ArrBytes) {}
+fn takes_stor(_: StorCode) {}
+fn takes_agg(_: AggArr) {}
 
 fn ok(a: Arr, b: ArrBytes, c: StorCode, d: AggArr) {
     takes_arr(a)

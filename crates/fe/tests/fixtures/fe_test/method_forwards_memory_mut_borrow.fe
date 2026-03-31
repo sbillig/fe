@@ -11,7 +11,7 @@ struct Holder {
 }
 
 impl Holder {
-    fn forward(mut self, value: mut u256) -> mut u256 {
+    fn forward(mut self, _ value: mut u256) -> mut u256 {
         value
     }
 }

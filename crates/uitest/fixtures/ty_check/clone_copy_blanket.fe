@@ -2,13 +2,13 @@ struct CopyStruct {}
 
 impl Copy for CopyStruct {}
 
-fn dup<T>(x: T) -> T
+fn dup<T>(_ x: T) -> T
 where T: Copy + Clone
 {
     x.clone()
 }
 
-fn takes_clone<T>(x: T) -> T
+fn takes_clone<T>(_ x: T) -> T
 where T: Clone
 {
     x.clone()

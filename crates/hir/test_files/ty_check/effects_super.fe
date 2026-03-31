@@ -40,7 +40,7 @@ fn example() {
     }
 }
 
-fn do_stuff(x: u256) -> u256
+fn do_stuff(_ x: u256) -> u256
   uses (ctx: Ctx, mem: mut Mem, sto: mut Storage)
 {
     mem.store(offset: x, value: ctx.caller())

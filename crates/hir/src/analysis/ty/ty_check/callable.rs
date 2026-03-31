@@ -277,12 +277,9 @@ impl<'db> Callable<'db> {
         };
 
         for (i, (given, expected)) in args.into_iter().zip(expected_arg_tys.iter()).enumerate() {
-            // Only check labels when the caller explicitly provides one.
-            // If no label is provided (given.label is None), it's a positional argument.
-            if let Some(given_label) = given.label
-                && let Some(expected_label) = self.callable_def.param_label(db, i)
+            if let Some(expected_label) = self.callable_def.param_label(db, i)
                 && !expected_label.is_self(db)
-                && given_label != expected_label
+                && Some(expected_label) != given.label
             {
                 let diag = BodyDiag::CallArgLabelMismatch {
                     primary: given.label_span.unwrap_or(given.expr_span.clone()),
@@ -541,11 +538,7 @@ impl<'db> CallArg<'db> {
             let ty = tc.fresh_ty();
             tc.check_expr(arg.expr, ty)
         };
-        // Only use explicit labels for function calls, not inferred labels.
-        // The `label_eagerly` behavior (inferring labels from variable names) is
-        // useful for struct field initialization syntax, but for function calls
-        // we should only require a match when the user explicitly provides a label.
-        let label = arg.label;
+        let label = arg.label_eagerly(tc.db, tc.body());
         let label_span = arg.label.is_some().then(|| span.clone().label().into());
         let expr_span = span.expr().into();
 

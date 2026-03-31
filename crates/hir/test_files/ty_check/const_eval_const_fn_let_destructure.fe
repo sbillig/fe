@@ -3,12 +3,12 @@ struct Pair {
     b: usize,
 }
 
-const fn sum_tuple(pair: (usize, usize)) -> usize {
+const fn sum_tuple(_ pair: (usize, usize)) -> usize {
     let (a, b) = pair
     a + b
 }
 
-const fn sum_record(pair: Pair) -> usize {
+const fn sum_record(_ pair: Pair) -> usize {
     let Pair { a, b } = pair
     a + b
 }

@@ -8,7 +8,7 @@ struct LiveView {
     y: ref u256,
 }
 
-fn live_view(d: ref Data) -> LiveView {
+fn live_view(_ d: ref Data) -> LiveView {
     LiveView { x: ref d.x, y: ref d.y }
 }
 

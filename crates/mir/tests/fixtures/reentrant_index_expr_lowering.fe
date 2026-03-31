@@ -1,4 +1,4 @@
-fn id(x: usize) -> usize {
+fn id(_ x: usize) -> usize {
     x
 }
 

@@ -1561,30 +1561,30 @@ fn runtime() uses (evm: mut Evm) {
 
     if sel == BYTES_LEN_SELECTOR {
         let view = decode_bytes_view(CallData::with_base(4))
-        evm.mstore(0, view.len())
-        evm.return_data(0, 32)
+        evm.mstore(addr: 0, value: view.len())
+        evm.return_data(offset: 0, len: 32)
     }
 
     if sel == SECOND_BYTES_LEN_SELECTOR {
-        let view = decode_bytes_view_at(CallData::with_base(4), 0, 32)
-        evm.mstore(0, view.len())
-        evm.return_data(0, 32)
+        let view = decode_bytes_view_at(CallData::with_base(4), base: 0, head_pos: 32)
+        evm.mstore(addr: 0, value: view.len())
+        evm.return_data(offset: 0, len: 32)
     }
 
     if sel == STRING_FIRST_SELECTOR {
         let view = decode_string_view(CallData::with_base(4))
         let first: u256 = if view.is_empty() { 0 } else { view.byte_at(0) as u256 }
-        evm.mstore(0, first)
-        evm.return_data(0, 32)
+        evm.mstore(addr: 0, value: first)
+        evm.return_data(offset: 0, len: 32)
     }
 
     if sel == STRING_LEN_SELECTOR {
         let view = decode_string_view(CallData::with_base(4))
-        evm.mstore(0, view.len())
-        evm.return_data(0, 32)
+        evm.mstore(addr: 0, value: view.len())
+        evm.return_data(offset: 0, len: 32)
     }
 
-    evm.revert(0, 0)
+    evm.revert(offset: 0, len: 0)
 }
 "#;
 
@@ -1629,26 +1629,26 @@ fn runtime() uses (evm: mut Evm) {
 
     if sel == SET_SELECTOR {
         let view = decode_bytes_view(CallData::with_base(4))
-        blobs.store_view(0, view)
-        evm.return_data(0, 0)
+        blobs.store_view(key: 0, view: view)
+        evm.return_data(offset: 0, len: 0)
     }
 
     if sel == GET_SELECTOR {
-        blobs.encode_return(0)
+        blobs.encode_return(key: 0)
     }
 
     if sel == CLEAR_SELECTOR {
-        blobs.clear(0)
-        evm.return_data(0, 0)
+        blobs.clear(key: 0)
+        evm.return_data(offset: 0, len: 0)
     }
 
     if sel == EMIT_SELECTOR {
-        let view = decode_bytes_view_at(CallData::new(), 4, 0)
-        emit_bytes_event_view(TOPIC0, view)
-        evm.return_data(0, 0)
+        let view = decode_bytes_view_at(CallData::new(), base: 4, head_pos: 0)
+        emit_bytes_event_view(topic0: TOPIC0, view: view)
+        evm.return_data(offset: 0, len: 0)
     }
 
-    evm.revert(0, 0)
+    evm.revert(offset: 0, len: 0)
 }
 "#;
 
@@ -1677,7 +1677,7 @@ msg EmitThenTextMsg {
 pub contract EmitThenText {
     recv EmitThenTextMsg {
         EmitAndReturn { data } -> Text {
-            emit_bytes_event_view(TOPIC0, data.view())
+            emit_bytes_event_view(topic0: TOPIC0, view: data.view())
             "emit-and-return-abcdefghijklmnopqrstuvwxyz-ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789"
         }
     }
@@ -1762,13 +1762,12 @@ msg RawStaticCallerMsg {
 pub contract RawStaticCaller {
     recv RawStaticCallerMsg {
         CallWord { target } -> u256 uses (evm: mut Evm) {
-            evm.mstore(0, (WORD_SELECTOR as u256) << 224)
-            staticcall_decode(target, evm.gas(), 0, 4)
+            evm.mstore(addr: 0, value: (WORD_SELECTOR as u256) << 224)
+            staticcall_decode(addr: target, gas: evm.gas(), args_offset: 0, args_len: 4)
         }
-
         CallFlag { target } -> bool uses (evm: mut Evm) {
-            evm.mstore(0, (FLAG_SELECTOR as u256) << 224)
-            staticcall_decode(target, evm.gas(), 0, 4)
+            evm.mstore(addr: 0, value: (FLAG_SELECTOR as u256) << 224)
+            staticcall_decode(addr: target, gas: evm.gas(), args_offset: 0, args_len: 4)
         }
     }
 }
@@ -1806,11 +1805,11 @@ fn init() uses (evm: mut Evm) {
 #[contract_runtime(BadBoolTarget)]
 fn runtime() uses (evm: mut Evm) {
     if evm.selector() == FLAG_SELECTOR {
-        evm.mstore(0, 2)
-        evm.return_data(0, 32)
+        evm.mstore(addr: 0, value: 2)
+        evm.return_data(offset: 0, len: 32)
     }
 
-    evm.revert(0, 0)
+    evm.revert(offset: 0, len: 0)
 }
 "#
     }

@@ -174,12 +174,11 @@ fn solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v0: mu
     store mem[v0].*.0 = v4
     store mem[v0].*.1 = v4
     store mem[v0].*.2 = v4
-    v5: u256 = checked_add<u256>(v4, v1)
-    store mem[v0].*.3 = v5
+    store mem[v0].*.3 = (v4 + v1)
     jmp bb2
   bb2:
-    v6: u256 = load mem[v0].*.1
-    ret v6
+    v5: u256 = load mem[v0].*.1
+    ret v5
 
 fn solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v0: SolEncoder) -> (u256, u256):
   bb0:

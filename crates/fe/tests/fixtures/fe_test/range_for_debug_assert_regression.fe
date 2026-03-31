@@ -1,6 +1,6 @@
 use std::evm::effects::assert
 
-fn triangular(n: usize) -> usize {
+fn triangular(_ n: usize) -> usize {
     let mut total: usize = 0
     for i in 0..n {
         total += i
