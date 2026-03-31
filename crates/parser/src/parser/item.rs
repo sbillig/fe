@@ -200,9 +200,11 @@ pub(super) fn parse_vis_restriction<S: TokenStream>(parser: &mut Parser<S>) -> P
             ParsedVis::PubSuper
         }
         Some(SyntaxKind::InKw) => {
+            parser.error_msg_on_current_token(
+                "`pub(in path)` is not yet supported; use `pub(ingot)` or `pub(super)`",
+            );
             parser.bump();
-            // Parse the module path after `in`.
-            // Reuse the use-path parser for `foo::bar::baz` style paths.
+            // Parse the module path so the CST is well-formed for future use.
             let _ = parser.parse(UsePathScope::default());
             ParsedVis::PubIn
         }

@@ -66,10 +66,12 @@ pub fn is_scope_visible_from(db: &dyn HirAnalysisDb, scope: ScopeId, from_scope:
             let Some(def_scope) = def_scope_for_vis(db, scope) else {
                 return false;
             };
-            let Some(parent_of_def) = def_scope.parent(db) else {
-                return false;
-            };
-            from_scope.is_transitive_child_of(db, parent_of_def)
+            match def_scope.parent(db) {
+                Some(parent_of_def) => from_scope.is_transitive_child_of(db, parent_of_def),
+                // At the ingot root, pub(super) behaves like pub(ingot)
+                // (matches Rust where pub(super) at crate root = pub(crate)).
+                None => scope.ingot(db) == from_scope.ingot(db),
+            }
         }
 
         Visibility::Private => {
