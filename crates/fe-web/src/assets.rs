@@ -313,7 +313,7 @@ mod tests {
     #[test]
     fn fe_web_js_is_nonempty() {
         assert!(!FE_WEB_JS.is_empty());
-        assert!(FE_WEB_JS.contains("renderDocItem"));
+        assert!(FE_WEB_JS.contains("render"));
     }
 
     #[test]

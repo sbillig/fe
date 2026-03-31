@@ -1026,7 +1026,7 @@ mod tests {
         let html = std::fs::read_to_string(&html_path).unwrap();
         assert!(html.contains("<!DOCTYPE html>"));
         assert!(html.contains("FE_DOC_INDEX"));
-        assert!(html.contains("renderDocItem"));
+        assert!(html.contains("fe-doc-viewer"));
 
         for item in &index.items {
             assert!(
