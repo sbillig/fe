@@ -299,8 +299,8 @@ fn collect_auto_import_completions<'db>(
 
     // Iterate all items in the ingot (includes nested inline modules)
     for item in ingot.all_items(db).iter().copied() {
-        // Only include public items
-        if item.vis(db) != Visibility::Public {
+        // Only include items visible from the current scope
+        if item.vis(db) == Visibility::Private {
             continue;
         }
 

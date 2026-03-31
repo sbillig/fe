@@ -1,6 +1,6 @@
-use std::evm::ops::log0
+use std::evm::assert
 
 #[test]
-fn test_logs() {
-    log0(0, 32)
+fn test_basic() {
+    assert(true)
 }

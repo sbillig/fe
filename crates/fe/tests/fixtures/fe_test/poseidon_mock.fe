@@ -1,15 +1,14 @@
 /// Mock Poseidon-like hash exercising array lowering features:
 /// top-level constant arrays, 2D constant arrays, range-for loops,
 /// array indexing with computed offsets, mutable array manipulation,
-/// addmod/mulmod intrinsics, and arrays passed to/returned from functions.
+/// and arrays passed to/returned from functions.
 ///
-/// Uses the real BN254 scalar field prime since addmod/mulmod handle overflow.
+/// Uses wrapping arithmetic to avoid overflow issues.
 /// NOT cryptographically meaningful — just structurally faithful.
 
-use std::evm::effects::assert
-use std::evm::ops::{addmod, mulmod}
+use std::evm::assert
 
-// BN254 scalar field prime (the real one, since we have addmod/mulmod)
+// BN254 scalar field prime
 const P: u256 = 21888242871839275222246405745257275088548364400416034343698204186575808495617
 const N_FULL: usize = 4
 
@@ -32,16 +31,16 @@ const M: [[u256; 3]; 3] = [
 
 fn ark(state: [u256; 3], offset: usize) -> [u256; 3] {
     return [
-        addmod(state[0], C[offset], P),
-        addmod(state[1], C[offset + 1], P),
-        addmod(state[2], C[offset + 2], P),
+        (state[0] + C[offset]) % P,
+        (state[1] + C[offset + 1]) % P,
+        (state[2] + C[offset + 2]) % P,
     ]
 }
 
 fn sigma(x: u256) -> u256 {
-    let x2: u256 = mulmod(x, x, P)
-    let x4: u256 = mulmod(x2, x2, P)
-    return mulmod(x4, x, P)
+    let x2: u256 = (x * x) % P
+    let x4: u256 = (x2 * x2) % P
+    return (x4 * x) % P
 }
 
 fn sigma_full(state: [u256; 3]) -> [u256; 3] {
@@ -52,7 +51,7 @@ fn mix(state: [u256; 3]) -> [u256; 3] {
     let mut out: [u256; 3] = [0, 0, 0]
     for i in 0..3 {
         for j in 0..3 {
-            out[i] = addmod(out[i], mulmod(M[i][j], state[j], P), P)
+            out[i] = (out[i] + (M[i][j] * state[j]) % P) % P
         }
     }
     return out

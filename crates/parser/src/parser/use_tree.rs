@@ -57,7 +57,7 @@ impl super::Parse for UseTreeListScope {
 }
 
 define_scope! {
-    UsePathScope{ is_glob: Rc<Cell<bool>>},
+    pub(super) UsePathScope{ is_glob: Rc<Cell<bool>>},
     UsePath,
     (Colon2)
 }

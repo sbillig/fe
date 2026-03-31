@@ -129,6 +129,8 @@ impl Visibility {
         match self {
             Visibility::Public => "pub ",
             Visibility::Private => "",
+            Visibility::PubIngot => "pub(ingot) ",
+            Visibility::PubSuper => "pub(super) ",
         }
     }
 }

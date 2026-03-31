@@ -296,7 +296,9 @@ impl<'db> DocExtractor<'db> {
 
     fn convert_visibility(&self, vis: Visibility) -> DocVisibility {
         match vis {
-            Visibility::Public => DocVisibility::Public,
+            Visibility::Public
+            | Visibility::PubIngot
+            | Visibility::PubSuper => DocVisibility::Public,
             Visibility::Private => DocVisibility::Private,
         }
     }

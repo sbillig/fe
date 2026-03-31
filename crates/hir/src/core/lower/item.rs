@@ -836,11 +836,7 @@ impl<'db> FieldDef<'db> {
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let type_ref = TypeId::lower_ast_partial(ctxt, ast.ty());
-        let vis = if ast.pub_kw().is_some() {
-            Visibility::Public
-        } else {
-            Visibility::Private
-        };
+        let vis = super::lower_field_visibility(&ast);
 
         Self::new(attributes, name, type_ref, vis)
     }

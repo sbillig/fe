@@ -14,7 +14,7 @@ use super::{
     struct_::{RecordFieldDefListScope, RecordFieldDefScope},
     token_stream::{LexicalToken, TokenStream},
     type_::{TupleTypeScope, parse_type},
-    use_tree::UseTreeScope,
+    use_tree::{UseTreeScope, UsePathScope},
 };
 use crate::{
     ExpectedKind, SyntaxKind,
@@ -168,10 +168,65 @@ fn is_fn_item_head<S: TokenStream>(parser: &mut Parser<S>) -> bool {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum ParsedVis {
+    #[default]
+    Private,
+    Public,
+    PubIngot,
+    PubSuper,
+    PubIn,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct ItemModifiers {
     is_pub: bool,
     is_unsafe: bool,
+}
+
+/// Parse a visibility restriction after `pub(`: `ingot)`, `super)`, or `in path)`.
+/// The `pub` keyword and `(` have already been bumped. Emits a `VisRestriction`
+/// CST node wrapping the restriction tokens and closing `)`.
+pub(super) fn parse_vis_restriction<S: TokenStream>(parser: &mut Parser<S>) -> ParsedVis {
+    let cp = parser.checkpoint();
+
+    let vis = match parser.current_kind() {
+        Some(SyntaxKind::IngotKw) => {
+            parser.bump();
+            ParsedVis::PubIngot
+        }
+        Some(SyntaxKind::SuperKw) => {
+            parser.bump();
+            ParsedVis::PubSuper
+        }
+        Some(SyntaxKind::InKw) => {
+            parser.bump();
+            // Parse the module path after `in`.
+            // Reuse the use-path parser for `foo::bar::baz` style paths.
+            let _ = parser.parse(UsePathScope::default());
+            ParsedVis::PubIn
+        }
+        _ => {
+            parser.error_msg_on_current_token(
+                "expected `ingot`, `super`, or `in` after `pub(`",
+            );
+            ParsedVis::Public
+        }
+    };
+
+    // Expect closing `)`
+    if !parser.bump_if(SyntaxKind::RParen) {
+        parser.error_msg_on_current_token("expected `)` to close visibility restriction");
+    }
+
+    if !parser.is_dry_run() {
+        parser
+            .builder
+            .start_node_at(cp, SyntaxKind::VisRestriction.into());
+        parser.builder.finish_node();
+    }
+
+    vis
 }
 
 fn parse_item_modifiers<S: TokenStream>(
@@ -199,6 +254,15 @@ fn parse_item_modifiers<S: TokenStream>(
                 } else {
                     parser.bump();
                     modifiers.is_pub = true;
+
+                    // Check for visibility restriction: pub(ingot), pub(super), pub(in path).
+                    // The return value is discarded — parse_vis_restriction's main
+                    // job is emitting the VisRestriction CST node. Actual visibility
+                    // is determined during HIR lowering from the CST.
+                    if parser.current_kind() == Some(SyntaxKind::LParen) {
+                        parser.bump(); // (
+                        let _ = parse_vis_restriction(parser);
+                    }
                 }
             }
             Some(SyntaxKind::UnsafeKw) => {

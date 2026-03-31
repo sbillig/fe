@@ -1,6 +1,6 @@
 use rowan::ast::{AstNode, support};
 
-use super::{TraitRef, TupleType, TypeBoundList, ast_node};
+use super::{TraitRef, TupleType, TypeBoundList, ast_node, use_tree::UsePath};
 use crate::{FeLang, SyntaxKind as SK, SyntaxToken};
 
 ast_node! {
@@ -546,6 +546,11 @@ impl RecordFieldDef {
         support::token(self.syntax(), SK::PubKw)
     }
 
+    /// Returns the visibility restriction if exists, e.g. `(ingot)` in `pub(ingot)`.
+    pub fn vis_restriction(&self) -> Option<VisRestriction> {
+        support::child(self.syntax())
+    }
+
     /// Returns the mut keyword if exists.
     pub fn mut_kw(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::MutKw)
@@ -624,6 +629,26 @@ ast_node! {
     IntoIterator<Item=Func>,
 }
 
+ast_node! {
+    /// `(ingot)`, `(super)`, `(in path::to::module)`
+    pub struct VisRestriction,
+    SK::VisRestriction,
+}
+impl VisRestriction {
+    pub fn ingot_kw(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::IngotKw)
+    }
+    pub fn super_kw(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::SuperKw)
+    }
+    pub fn in_kw(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::InKw)
+    }
+    pub fn path(&self) -> Option<UsePath> {
+        support::child(self.syntax())
+    }
+}
+
 pub trait ItemModifierOwner: AstNode<Language = FeLang> {
     fn pub_kw(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::PubKw)
@@ -631,6 +656,10 @@ pub trait ItemModifierOwner: AstNode<Language = FeLang> {
 
     fn unsafe_kw(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::UnsafeKw)
+    }
+
+    fn vis_restriction(&self) -> Option<VisRestriction> {
+        support::child(self.syntax())
     }
 }
 
