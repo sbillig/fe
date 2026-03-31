@@ -188,33 +188,71 @@ pub fn generate_docs(
     let scip_json = generate_scip_json_for_doc(&mut db, path, &mut index, builtins);
 
     match action {
-        Some(crate::DocAction::Static) => {
+        Some(crate::DocAction::Static { self_contained }) => {
             let output_dir = output
                 .map(|p| p.as_std_path().to_path_buf())
                 .unwrap_or_else(|| std::path::PathBuf::from("docs"));
 
             let source_link_base = detect_source_link_base(path.as_std_path());
 
-            if let Err(e) = fe_web::static_site::StaticSiteGenerator::generate_full(
-                &index,
-                &output_dir,
-                scip_json.as_deref(),
-                source_link_base.as_deref(),
-            ) {
+            let result = if *self_contained {
+                fe_web::static_site::StaticSiteGenerator::generate_full(
+                    &index,
+                    &output_dir,
+                    scip_json.as_deref(),
+                    source_link_base.as_deref(),
+                )
+            } else {
+                fe_web::static_site::StaticSiteGenerator::generate_split(
+                    &index,
+                    &output_dir,
+                    scip_json.as_deref(),
+                    source_link_base.as_deref(),
+                )
+            };
+
+            if let Err(e) = result {
                 eprintln!("Error generating static docs: {e}");
                 std::process::exit(1);
             }
 
+            let mode = if *self_contained {
+                "self-contained"
+            } else {
+                "split"
+            };
             let suffix = if scip_json.is_some() {
                 " (with SCIP)"
             } else {
                 ""
             };
-            println!("Static docs written to {}{suffix}", output_dir.display());
+            println!(
+                "Static docs written to {} ({mode}){suffix}",
+                output_dir.display()
+            );
         }
-        Some(crate::DocAction::Json) => {
+        Some(crate::DocAction::Json { merge }) => {
             let merged = build_merged_json(&index, scip_json.as_deref());
-            if let Some(output_path) = output {
+            if let Some(merge_target) = merge {
+                // Merge into existing docs.json
+                let target_path = merge_target.as_std_path();
+                if target_path.exists() {
+                    match merge_docs_json(target_path, &merged) {
+                        Ok(()) => println!("Merged into {merge_target}"),
+                        Err(e) => {
+                            eprintln!("Error merging into {merge_target}: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                } else {
+                    // Target doesn't exist yet, just write it
+                    std::fs::write(target_path, &merged).unwrap_or_else(|e| {
+                        eprintln!("Error writing {merge_target}: {e}");
+                        std::process::exit(1);
+                    });
+                    println!("Wrote {merge_target}");
+                }
+            } else if let Some(output_path) = output {
                 let output_dir = output_path.as_std_path();
                 std::fs::create_dir_all(output_dir).unwrap_or_else(|e| {
                     eprintln!("Error creating output directory {output_path}: {e}");
@@ -271,7 +309,7 @@ pub fn generate_docs(
                 std::process::exit(1);
             }
         }
-        Some(crate::DocAction::Bundle) => {
+        Some(crate::DocAction::Bundle { .. }) => {
             unreachable!("Bundle is handled before generate_docs is called")
         }
         None => {
@@ -509,7 +547,16 @@ fn generate_scip_json_for_doc(
 
     // Use the workspace root for relative path computation so SCIP document
     // paths match the display_file paths used by the doc extractor.
-    let workspace_root = path.canonicalize_utf8().unwrap_or_else(|_| path.clone());
+    // For single files, use the parent directory so strip_prefix produces a filename.
+    let canonical = path.canonicalize_utf8().unwrap_or_else(|_| path.clone());
+    let workspace_root = if canonical.is_file() {
+        canonical
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or(canonical)
+    } else {
+        canonical
+    };
 
     for ingot_url in &ingot_urls {
         match crate::scip_index::generate_scip_with_root(db, ingot_url, &workspace_root) {
@@ -680,6 +727,101 @@ fn build_merged_json(index: &DocIndex, scip_json: Option<&str>) -> String {
     serde_json::to_string_pretty(&merged).unwrap()
 }
 
+/// Merge new docs JSON into an existing docs.json file.
+///
+/// Combines index items (deduplicating by path), modules, and SCIP data
+/// (symbols and files). Preserves existing doc_urls when the new data has none.
+fn merge_docs_json(target_path: &std::path::Path, new_json: &str) -> std::io::Result<()> {
+    use serde_json::Value;
+
+    let existing_str = std::fs::read_to_string(target_path)?;
+    let mut existing: Value = serde_json::from_str(&existing_str).map_err(std::io::Error::other)?;
+    let new: Value = serde_json::from_str(new_json).map_err(std::io::Error::other)?;
+
+    // Merge index.items (deduplicate by path)
+    if let (Some(ex_items), Some(new_items)) = (
+        existing
+            .pointer_mut("/index/items")
+            .and_then(|v| v.as_array_mut()),
+        new.pointer("/index/items").and_then(|v| v.as_array()),
+    ) {
+        let existing_paths: std::collections::HashSet<String> = ex_items
+            .iter()
+            .filter_map(|i| i.get("path").and_then(|p| p.as_str()).map(String::from))
+            .collect();
+        for item in new_items {
+            if let Some(path) = item.get("path").and_then(|p| p.as_str())
+                && !existing_paths.contains(path)
+            {
+                ex_items.push(item.clone());
+            }
+        }
+    }
+
+    // Merge index.modules
+    if let (Some(ex_mods), Some(new_mods)) = (
+        existing
+            .pointer_mut("/index/modules")
+            .and_then(|v| v.as_array_mut()),
+        new.pointer("/index/modules").and_then(|v| v.as_array()),
+    ) {
+        let existing_names: std::collections::HashSet<String> = ex_mods
+            .iter()
+            .filter_map(|m| m.get("name").and_then(|n| n.as_str()).map(String::from))
+            .collect();
+        for module in new_mods {
+            if let Some(name) = module.get("name").and_then(|n| n.as_str())
+                && !existing_names.contains(name)
+            {
+                ex_mods.push(module.clone());
+            }
+        }
+    }
+
+    // Merge SCIP symbols (preserve existing doc_urls)
+    if let (Some(Value::Object(ex_syms)), Some(Value::Object(new_syms))) = (
+        existing.pointer_mut("/scip/symbols"),
+        new.pointer("/scip/symbols"),
+    ) {
+        for (sym, info) in new_syms {
+            if let Some(existing_info) = ex_syms.get_mut(sym) {
+                // Preserve existing doc_url if new one is missing
+                if let Some(existing_obj) = existing_info.as_object_mut()
+                    && let Some(new_obj) = info.as_object()
+                    && !existing_obj.contains_key("doc_url")
+                    && let Some(url) = new_obj.get("doc_url")
+                {
+                    existing_obj.insert("doc_url".into(), url.clone());
+                }
+            } else {
+                ex_syms.insert(sym.clone(), info.clone());
+            }
+        }
+    }
+
+    // Merge SCIP files
+    if let (Some(Value::Object(ex_files)), Some(Value::Object(new_files))) = (
+        existing.pointer_mut("/scip/files"),
+        new.pointer("/scip/files"),
+    ) {
+        for (file, occs) in new_files {
+            // Use filename when key is empty (single-file input)
+            let key = if file.is_empty() {
+                "input.fe".to_string()
+            } else {
+                file.clone()
+            };
+            if !ex_files.contains_key(&key) {
+                ex_files.insert(key, occs.clone());
+            }
+        }
+    }
+
+    let output = serde_json::to_string_pretty(&existing).map_err(std::io::Error::other)?;
+    std::fs::write(target_path, output)?;
+    Ok(())
+}
+
 /// Write the fe-web.js component bundle to a file path.
 pub fn write_bundle(path: &Utf8PathBuf) {
     let bundle = fe_web::assets::web_component_bundle();
@@ -696,6 +838,23 @@ pub fn write_bundle(path: &Utf8PathBuf) {
         std::process::exit(1);
     });
     println!("Wrote fe-web.js to {path}");
+}
+
+/// Write the fe-highlight.css syntax theme to a file path.
+pub fn write_highlight_css(path: &Utf8PathBuf) {
+    if let Some(parent) = path.parent()
+        && !parent.as_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).unwrap_or_else(|e| {
+            eprintln!("Error creating directory {parent}: {e}");
+            std::process::exit(1);
+        });
+    }
+    std::fs::write(path, fe_web::assets::FE_HIGHLIGHT_CSS).unwrap_or_else(|e| {
+        eprintln!("Error writing CSS to {path}: {e}");
+        std::process::exit(1);
+    });
+    println!("Wrote fe-highlight.css to {path}");
 }
 
 fn print_doc_summary(index: &DocIndex) {

@@ -37,6 +37,31 @@ function _getCodeBlockSheet() {
         break;
       }
     }
+    // Also check linked stylesheets (e.g. <link rel="stylesheet" href="fe-highlight.css">)
+    if (!css) {
+      try {
+        var sheets = document.styleSheets;
+        for (var s = 0; s < sheets.length; s++) {
+          try {
+            var rules = sheets[s].cssRules || sheets[s].rules;
+            if (!rules) continue;
+            var sheetText = "";
+            var hasHighlight = false;
+            for (var r = 0; r < rules.length; r++) {
+              var ruleText = rules[r].cssText || "";
+              sheetText += ruleText + "\n";
+              if (ruleText.indexOf(".hl-keyword") !== -1) hasHighlight = true;
+            }
+            if (hasHighlight) {
+              css = sheetText;
+              break;
+            }
+          } catch (_) {
+            // CORS: can't read cross-origin stylesheet rules
+          }
+        }
+      } catch (_) {}
+    }
     // If no highlight stylesheet found, use all page styles as fallback
     if (!css) {
       for (var j = 0; j < styles.length; j++) {
@@ -109,13 +134,17 @@ function _regexEscape(s) {
 }
 
 class FeCodeBlock extends HTMLElement {
-  static get observedAttributes() { return ["symbol", "region"]; }
+  static get observedAttributes() { return ["symbol", "region", "src", "base", "link-filter"]; }
 
   attributeChangedCallback(name, oldVal, newVal) {
     if (oldVal === newVal || !this.shadowRoot) return;
     if (name === "symbol") {
       this._rawSource = null;
       this._resolveSymbol();
+    }
+    if (name === "src") {
+      this._loadSrc();
+      return; // _loadSrc triggers _render after fetch
     }
     this._render();
   }
@@ -145,6 +174,41 @@ class FeCodeBlock extends HTMLElement {
     }
 
     this._render();
+
+    // If `src` attribute is set, fetch docs.json and re-render with SCIP data
+    this._loadSrc();
+  }
+
+  /**
+   * Load docs.json via the `src` attribute. Uses the shared fetch cache so
+   * multiple components pointing at the same URL share one request.
+   * Stores a per-component ScipStore reference so different code blocks can
+   * use different SCIP datasets.
+   */
+  _loadSrc() {
+    var src = this.getAttribute("src");
+    if (!src) return;
+    var self = this;
+    feLoadSrc(src).then(function (result) {
+      if (result.scip) {
+        self._scip = result.scip;
+      }
+      if (result.index) {
+        self._index = result.index;
+      }
+      self._resolveSymbol();
+      self._render();
+    });
+  }
+
+  /** Look up an item by path in per-component or global index. */
+  _findItem(path) {
+    var index = this._index || window.FE_DOC_INDEX;
+    if (!index || !index.items) return null;
+    for (var i = 0; i < index.items.length; i++) {
+      if (index.items[i].path === path) return index.items[i];
+    }
+    return null;
   }
 
   /**
@@ -156,10 +220,14 @@ class FeCodeBlock extends HTMLElement {
     var symbolPath = this.getAttribute("symbol");
     if (!symbolPath) return;
 
-    var self = this;
-    if (!feWhenReady(function () { self._resolveSymbol(); self._render(); })) return;
+    // If we have a per-component index from `src`, use it; otherwise wait for global
+    var index = this._index || window.FE_DOC_INDEX;
+    if (!index || !index.items) {
+      var self = this;
+      if (!feWhenReady(function () { self._resolveSymbol(); self._render(); })) return;
+    }
 
-    var item = feFindItem(symbolPath);
+    var item = this._findItem(symbolPath);
     if (item) {
       if (item.source_text) {
         this._rawSource = item.source_text;
@@ -280,9 +348,26 @@ class FeCodeBlock extends HTMLElement {
     this._setupLspDiagnostics(code);
   }
 
+  /** Check if a doc path matches the link-filter glob pattern. */
+  _matchesLinkFilter(docPath) {
+    var linkFilter = this.getAttribute("link-filter");
+    if (!linkFilter) return true;
+    var patterns = linkFilter.split(",");
+    for (var p = 0; p < patterns.length; p++) {
+      var pat = patterns[p].trim();
+      if (!pat) continue;
+      if (pat.endsWith("*")) {
+        if (docPath.indexOf(pat.slice(0, -1)) === 0) return true;
+      } else {
+        if (docPath === pat) return true;
+      }
+    }
+    return false;
+  }
+
   /** Add click-to-navigate and hover highlighting on spans using ScipStore. */
   _setupScipInteraction(codeEl) {
-    var scip = window.FE_SCIP;
+    var scip = this._scip || window.FE_SCIP;
     if (!scip) return;
 
     var file = this.getAttribute("data-file") || this.getAttribute("data-scope");
@@ -408,6 +493,8 @@ class FeCodeBlock extends HTMLElement {
       if (annotated) self._scipAnnotated = true;
     }
 
+    var _matchesLinkFilter = self._matchesLinkFilter.bind(self);
+
     // Universal event handlers for any span with data-sym
     codeEl.addEventListener("click", function (e) {
       var target = e.target;
@@ -423,7 +510,25 @@ class FeCodeBlock extends HTMLElement {
       }
       if (sym) {
         var docPath = scip.docUrl(sym);
-        if (docPath) location.hash = "#" + docPath;
+        if (!docPath || !_matchesLinkFilter(docPath)) return;
+
+        // Prevent the <a> href from firing — we handle navigation
+        e.preventDefault();
+
+        // Dispatch cancelable event — host page can preventDefault() and handle differently
+        var ev = new CustomEvent("fe-navigate", {
+          bubbles: true, composed: true, cancelable: true,
+          detail: { symbol: sym, docPath: docPath }
+        });
+        if (!self.dispatchEvent(ev)) return;
+
+        // Default navigation: use base attribute, FE_DOCS_BASE global, or hash
+        var base = self.getAttribute("base") || window.FE_DOCS_BASE || "";
+        if (base) {
+          location.href = base + "#" + docPath;
+        } else {
+          location.hash = "#" + docPath;
+        }
       }
     });
 
@@ -450,7 +555,8 @@ class FeCodeBlock extends HTMLElement {
         } catch (_) {}
       }
 
-      target.style.cursor = scip.docUrl(sym) ? "pointer" : "default";
+      var symDocUrl = scip.docUrl(sym);
+      target.style.cursor = (symDocUrl && _matchesLinkFilter(symDocUrl)) ? "pointer" : "default";
       feHighlight(scip.symbolHash(sym));
     });
 
@@ -472,8 +578,9 @@ class FeCodeBlock extends HTMLElement {
    * and wrap matches in <a> links with hover highlighting.
    */
   _setupNameBasedLinking(codeEl) {
-    var scip = window.FE_SCIP;
+    var scip = this._scip || window.FE_SCIP;
     if (!scip) return;
+    var self = this;
 
     var linkableSet = {};
     for (var i = 0; i < FeCodeBlock.LINKABLE_CLASSES.length; i++) {
@@ -499,9 +606,13 @@ class FeCodeBlock extends HTMLElement {
       var match = this._scipLookupName(scip, lookupName);
       if (!match) continue;
 
+      // Respect link-filter: don't create link anchors for filtered-out symbols
+      if (!this._matchesLinkFilter(match.doc_url)) continue;
+
       // Create an anchor wrapping the identifier text
       var a = document.createElement("a");
-      a.href = "#" + match.doc_url;
+      var navBase = this.getAttribute("base") || window.FE_DOCS_BASE || "";
+      a.href = navBase ? navBase + "#" + match.doc_url : "#" + match.doc_url;
       a.className = span.className + " type-link";
 
       var symClass = scip.symbolClass(match.symbol);
@@ -517,6 +628,22 @@ class FeCodeBlock extends HTMLElement {
         a.textContent = text;
         span.parentNode.replaceChild(a, span);
       }
+
+      // Click: dispatch fe-navigate instead of browser default link navigation
+      a.setAttribute("data-sym", match.symbol);
+      (function (docUrl, sym) {
+        a.addEventListener("click", function (clickEvt) {
+          clickEvt.preventDefault();
+          var ev = new CustomEvent("fe-navigate", {
+            bubbles: true, composed: true, cancelable: true,
+            detail: { symbol: sym, docPath: docUrl }
+          });
+          if (!self.dispatchEvent(ev)) return;
+          var base = self.getAttribute("base") || window.FE_DOCS_BASE || "";
+          if (base) location.href = base + "#" + docUrl;
+          else location.hash = "#" + docUrl;
+        });
+      })(match.doc_url, match.symbol);
 
       // Hover: highlight all same-symbol occurrences
       var symHash = scip.symbolHash(match.symbol);

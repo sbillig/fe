@@ -845,8 +845,29 @@ pub fn scip_to_json_data(index: &types::Index, doc_urls: &HashMap<String, String
             symbols.insert(si.symbol.clone(), Value::Object(entry));
         }
 
-        // Collect occurrences
-        let file_occs = files.entry(doc.relative_path.clone()).or_default();
+        // Collect occurrences — derive a sensible key when relative_path is empty
+        // (happens when running `fe doc` on a single file as the project root)
+        let file_key = if doc.relative_path.is_empty() {
+            // Try to extract filename from the SCIP document's language or any symbol
+            doc.symbols
+                .first()
+                .and_then(|si| {
+                    // SCIP symbol format: "... descriptor/ ..." — extract module name
+                    let parts: Vec<&str> = si.symbol.split(' ').collect();
+                    parts
+                        .iter()
+                        .rev()
+                        .find(|p| !p.is_empty() && **p != "/")
+                        .map(|s| {
+                            let name = s.trim_end_matches('/').trim_end_matches('#');
+                            format!("{}.fe", name)
+                        })
+                })
+                .unwrap_or_else(|| "input.fe".to_string())
+        } else {
+            doc.relative_path.clone()
+        };
+        let file_occs = files.entry(file_key).or_default();
         for occ in &doc.occurrences {
             if occ.range.is_empty() || occ.symbol.is_empty() {
                 continue;
