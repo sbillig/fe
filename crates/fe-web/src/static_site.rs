@@ -45,20 +45,86 @@ impl StaticSiteGenerator {
         scip_json: Option<&str>,
         source_link_base: Option<&str>,
     ) -> std::io::Result<()> {
+        Self::generate_impl(index, output_dir, scip_json, source_link_base, true)
+    }
+
+    /// Generate a split documentation site with separate files:
+    ///   docs.json, index.html (minimal shell), fe-web.js, fe-highlight.css
+    ///
+    /// This is the composable output mode — the host site loads the files
+    /// individually and can override styles via normal CSS cascade.
+    pub fn generate_split(
+        index: &DocIndex,
+        output_dir: &Path,
+        scip_json: Option<&str>,
+        source_link_base: Option<&str>,
+    ) -> std::io::Result<()> {
+        Self::generate_impl(index, output_dir, scip_json, source_link_base, false)
+    }
+
+    fn generate_impl(
+        index: &DocIndex,
+        output_dir: &Path,
+        scip_json: Option<&str>,
+        source_link_base: Option<&str>,
+        self_contained: bool,
+    ) -> std::io::Result<()> {
         std::fs::create_dir_all(output_dir)?;
 
         // Serialize to a JSON Value so we can inject html_body fields
         let mut value = serde_json::to_value(index).map_err(std::io::Error::other)?;
-
-        // Pre-render markdown bodies to HTML
         inject_html_bodies(&mut value);
-
         let json = serde_json::to_string(&value).map_err(std::io::Error::other)?;
-
         let title = index_title(index);
-        let html = assets::html_shell_full(&title, &json, scip_json, source_link_base);
 
-        std::fs::write(output_dir.join("index.html"), html)?;
+        if self_contained {
+            let html = assets::html_shell_full(&title, &json, scip_json, source_link_base);
+            std::fs::write(output_dir.join("index.html"), html)?;
+        } else {
+            // Write separate files
+            let merged = if let Some(scip) = scip_json {
+                format!(r#"{{"index":{json},"scip":{scip}}}"#)
+            } else {
+                json.clone()
+            };
+            std::fs::write(output_dir.join("docs.json"), &merged)?;
+            std::fs::write(output_dir.join("fe-web.js"), assets::web_component_bundle())?;
+            std::fs::write(output_dir.join("fe-highlight.css"), assets::FE_HIGHLIGHT_CSS)?;
+            std::fs::write(output_dir.join("styles.css"), assets::STYLES_CSS)?;
+
+            // Minimal shell that loads the separate files
+            let source_script = if let Some(base) = source_link_base {
+                format!(
+                    "\n  <script>window.FE_SOURCE_BASE = \"{}\";</script>",
+                    crate::escape::escape_script_content(base)
+                )
+            } else {
+                String::new()
+            };
+
+            let html = format!(
+                r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{title}</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="fe-highlight.css">
+</head>
+<body>
+  <script src="fe-web.js" data-src="docs.json"></script>{source_script}
+  <div class="doc-layout">
+    <div id="sidebar"></div>
+    <main id="content" class="doc-content"></main>
+  </div>
+</body>
+</html>"#,
+                title = crate::escape::escape_html_text(&title),
+                source_script = source_script,
+            );
+            std::fs::write(output_dir.join("index.html"), html)?;
+        }
 
         Ok(())
     }
@@ -172,8 +238,8 @@ mod tests {
 
         // Contains inlined CSS
         assert!(html.contains(":root"), "should contain CSS");
-        // Contains inlined JS
-        assert!(html.contains("renderDocItem"), "should contain JS");
+        // Uses fe-doc-viewer component
+        assert!(html.contains("fe-doc-viewer"), "should use fe-doc-viewer");
         // Contains the JSON data
         assert!(html.contains("mylib::Greeter"), "should contain item path");
         // Contains pre-rendered markdown (html_body with <strong>)

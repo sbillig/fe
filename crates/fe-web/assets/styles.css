@@ -1033,3 +1033,218 @@ fe-code-block {
     outline-offset: 0;
     border-radius: 2px;
 }
+
+/* ============================================================================
+   <fe-doc-viewer> Component Styles
+   ============================================================================ */
+
+.fe-doc-viewer {
+    display: block;
+    min-height: 100vh;
+}
+
+.fe-doc-viewer-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.5rem 1rem;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+}
+
+.fe-doc-viewer-back {
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 0.875rem;
+}
+
+.fe-doc-viewer-back:hover {
+    text-decoration: underline;
+}
+
+.fe-doc-viewer-title {
+    font-weight: 600;
+    color: var(--text);
+}
+
+.fe-doc-viewer-layout {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    min-height: calc(100vh - 3rem);
+    width: 100%;
+}
+
+.fe-doc-viewer-content {
+    padding: 1.5rem 2rem;
+    overflow-y: auto;
+    background: var(--bg);
+}
+
+.fe-doc-viewer-content > * {
+    max-width: 900px;
+}
+
+/* Ensure the viewer fills its container width */
+fe-doc-viewer, .fe-doc-viewer {
+    width: 100%;
+}
+
+.fe-doc-viewer-welcome {
+    padding: 2rem;
+}
+
+.fe-doc-viewer-not-found {
+    padding: 2rem;
+    color: var(--text-muted);
+}
+
+/* ============================================================================
+   <fe-doc-nav> Component Styles
+   ============================================================================ */
+
+.fe-doc-nav {
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border);
+    padding: 0.75rem;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+}
+
+.fe-doc-nav-search {
+    margin-bottom: 0.75rem;
+}
+
+.fe-doc-nav-tree {
+    margin-top: 0.5rem;
+}
+
+.fe-nav-module {
+    margin-bottom: 0.25rem;
+}
+
+.fe-nav-module > summary {
+    list-style: none;
+    cursor: pointer;
+}
+
+.fe-nav-module > summary::-webkit-details-marker {
+    display: none;
+}
+
+.fe-nav-module > summary::before {
+    content: "\25b8\00a0";
+    font-size: 0.7em;
+    color: var(--text-muted);
+}
+
+.fe-nav-module[open] > summary::before {
+    content: "\25be\00a0";
+}
+
+.fe-nav-mod-name {
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.fe-nav-mod-name a {
+    color: var(--text);
+    text-decoration: none;
+}
+
+.fe-nav-mod-name a:hover {
+    color: var(--accent);
+}
+
+.fe-nav-mod-name.current a {
+    color: var(--accent);
+}
+
+.fe-nav-mod-content {
+    margin-left: 0.75rem;
+    padding-left: 0.5rem;
+}
+
+.fe-nav-kind-group {
+    margin-bottom: 0.75rem;
+}
+
+.fe-nav-kind-header {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.25rem;
+    padding-left: 0.25rem;
+}
+
+.fe-nav-items {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.fe-nav-items li {
+    margin: 0.15rem 0;
+}
+
+.fe-nav-items a {
+    color: var(--text-muted);
+    text-decoration: none;
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.1rem 0.25rem;
+    border-radius: 3px;
+}
+
+.fe-nav-items a:hover {
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.fe-nav-items li.current a {
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.fe-nav-badge {
+    font-size: 0.65rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    background: var(--border);
+    color: var(--text-muted);
+    text-transform: lowercase;
+    flex-shrink: 0;
+}
+
+.fe-nav-badge.struct { background: #2d4a3e; color: #7ee787; }
+.fe-nav-badge.enum { background: #3d3a2d; color: #e7c77e; }
+.fe-nav-badge.fn { background: #2d3a4a; color: #7eb8e7; }
+.fe-nav-badge.trait { background: #4a2d4a; color: #e77ee7; }
+.fe-nav-badge.mod { background: #2d2d4a; color: #9d7ee7; }
+.fe-nav-badge.contract { background: #4a3d2d; color: #e7b87e; }
+.fe-nav-badge.type { background: #2d4a4a; color: #7ee7e7; }
+.fe-nav-badge.const { background: #3a2d4a; color: #b87ee7; }
+
+/* ============================================================================
+   Responsive: mobile layout for new components
+   ============================================================================ */
+
+@media (max-width: 768px) {
+    .fe-doc-viewer-layout {
+        grid-template-columns: 1fr;
+    }
+    .fe-doc-nav {
+        position: static;
+        height: auto;
+        max-height: 50vh;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+    }
+}

@@ -369,19 +369,39 @@ pub enum Command {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum DocAction {
-    /// Generate a self-contained static site (index.html)
-    Static,
-    /// Produce docs.json for web component consumption
-    Json,
-    /// Write the fe-web.js component bundle
-    Bundle,
+    /// Generate a documentation site (separate files by default).
+    ///
+    /// Default output: docs.json, index.html, fe-web.js, fe-highlight.css.
+    /// Use --self-contained for a single index.html with everything inlined.
+    Static {
+        /// Output a single self-contained index.html instead of separate files
+        #[arg(long)]
+        self_contained: bool,
+    },
+    /// Produce docs.json (DocIndex + SCIP data) for web components.
+    ///
+    /// The JSON can be consumed by <fe-code-block src="docs.json">,
+    /// <fe-doc-item src="docs.json">, and <fe-doc-viewer src="docs.json">.
+    Json {
+        /// Merge into an existing docs.json (deduplicates items, symbols, and files)
+        #[arg(long)]
+        merge: Option<Utf8PathBuf>,
+    },
+    /// Write the fe-web.js component bundle and fe-highlight.css.
+    ///
+    /// Does not require compiling a project — just outputs the reusable assets.
+    Bundle {
+        /// Also write fe-highlight.css alongside the bundle
+        #[arg(long)]
+        with_css: bool,
+    },
     /// Generate Starlight-compatible markdown pages
     Pages {
         /// Base URL prefix for generated links
         #[arg(long, default_value = "/api")]
         base_url: String,
     },
-    /// Start an HTTP server to browse docs
+    /// Start a live documentation server with hot reload
     Serve {
         /// Port for HTTP server
         #[arg(long, default_value = "8080")]
@@ -512,9 +532,12 @@ pub fn run(opts: &Options) {
             builtins,
             action,
         } => {
-            if let Some(DocAction::Bundle) = action {
+            if let Some(DocAction::Bundle { with_css }) = action {
                 let output_dir = output.clone().unwrap_or_else(|| Utf8PathBuf::from("."));
                 doc::write_bundle(&output_dir.join("fe-web.js"));
+                if *with_css {
+                    doc::write_highlight_css(&output_dir.join("fe-highlight.css"));
+                }
             } else {
                 doc::generate_docs(path, output.as_ref(), *builtins, action.as_ref());
             }

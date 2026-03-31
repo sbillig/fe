@@ -356,3 +356,126 @@ function feEnrichLink(anchor, docUrl) {
     } catch (_) {}
   }
 }
+
+// ============================================================================
+// Shared fetch cache for `src` attribute — multiple components sharing the
+// same URL share a single fetch.  Returns a Promise that resolves to
+// { index: DocIndex, scip: ScipStore|null }.
+// ============================================================================
+var _feSrcCache = {};
+
+function feLoadSrc(url) {
+  if (_feSrcCache[url]) return _feSrcCache[url];
+  _feSrcCache[url] = fetch(url)
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var result = { index: null, scip: null };
+      if (data.index) {
+        result.index = data.index;
+        if (data.scip) {
+          result.scip = new ScipStore(data.scip);
+        }
+      } else {
+        // Plain DocIndex without SCIP wrapper
+        result.index = data;
+      }
+      // Also populate globals if not already set (first component to load wins)
+      if (!window.FE_DOC_INDEX && result.index) {
+        window.FE_DOC_INDEX = result.index;
+      }
+      if (!window.FE_SCIP && result.scip) {
+        window.FE_SCIP = result.scip;
+        document.dispatchEvent(new CustomEvent("fe-web-ready"));
+      }
+      return result;
+    });
+  return _feSrcCache[url];
+}
+
+// Explicit global exports — allows loading as type="module" without losing access
+window.feHighlight = feHighlight;
+window.feUnhighlight = feUnhighlight;
+window.feSetDefaultHighlight = feSetDefaultHighlight;
+window.feClearDefaultHighlight = feClearDefaultHighlight;
+window.feEscapeHtml = feEscapeHtml;
+window.feFindItem = feFindItem;
+window.feWhenReady = feWhenReady;
+window.feEnrichLink = feEnrichLink;
+window.feLoadSrc = feLoadSrc;
+
+// ============================================================================
+// LSP WebSocket Client (for `fe doc serve` live mode)
+// ============================================================================
+
+function feConnectLsp(wsUrl) {
+  var ws = new WebSocket(wsUrl);
+  var nextId = 1;
+  var pending = {};
+  var diagnostics = {};
+  var ready = false;
+
+  ws.onopen = function () {
+    sendRequest("initialize", {
+      processId: null,
+      capabilities: { textDocument: { publishDiagnostics: { relatedInformation: true } } },
+      rootUri: null,
+    }).then(function (result) {
+      sendNotification("initialized", {});
+      ready = true;
+      console.log("[fe-lsp] Connected:", result.serverInfo || {});
+    });
+  };
+
+  ws.onmessage = function (event) {
+    var msg;
+    try { msg = JSON.parse(event.data); } catch (_) { return; }
+    if (msg.id != null && pending[msg.id]) {
+      if (msg.error) pending[msg.id].reject(msg.error);
+      else pending[msg.id].resolve(msg.result);
+      delete pending[msg.id];
+    } else if (msg.method === "textDocument/publishDiagnostics") {
+      var params = msg.params || {};
+      diagnostics[params.uri] = params.diagnostics || [];
+      document.dispatchEvent(new CustomEvent("fe-diagnostics", {
+        detail: { uri: params.uri, diagnostics: params.diagnostics || [] }
+      }));
+    } else if (msg.method === "fe/docReload") {
+      var p = msg.params || {};
+      if (p.docIndex) window.FE_DOC_INDEX = p.docIndex;
+      if (p.scipData) {
+        var obj = typeof p.scipData === "string" ? JSON.parse(p.scipData) : p.scipData;
+        window.FE_SCIP_DATA = obj;
+        if (typeof ScipStore !== "undefined") window.FE_SCIP = new ScipStore(obj);
+      }
+      document.dispatchEvent(new CustomEvent("fe-web-ready"));
+    } else if (msg.method === "fe/navigate") {
+      var path = (msg.params || {}).path;
+      if (path) document.dispatchEvent(new CustomEvent("fe-navigate", {
+        bubbles: true, detail: { docPath: path }
+      }));
+    }
+  };
+
+  ws.onerror = function (err) { console.warn("[fe-lsp] Error:", err); };
+  ws.onclose = function () { ready = false; console.log("[fe-lsp] Disconnected"); };
+
+  function sendRequest(method, params) {
+    return new Promise(function (resolve, reject) {
+      var id = nextId++;
+      pending[id] = { resolve: resolve, reject: reject };
+      ws.send(JSON.stringify({ jsonrpc: "2.0", id: id, method: method, params: params }));
+    });
+  }
+  function sendNotification(method, params) {
+    ws.send(JSON.stringify({ jsonrpc: "2.0", method: method, params: params }));
+  }
+
+  return {
+    request: sendRequest,
+    notify: sendNotification,
+    getDiagnostics: function (uri) { return diagnostics[uri] || []; },
+    isReady: function () { return ready; },
+    close: function () { ws.close(); },
+  };
+}
+window.feConnectLsp = feConnectLsp;

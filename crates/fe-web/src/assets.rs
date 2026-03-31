@@ -23,6 +23,12 @@ pub const FE_DOC_ITEM_JS: &str = include_str!("../assets/fe-doc-item.js");
 /// `<fe-symbol-link>` custom element.
 pub const FE_SYMBOL_LINK_JS: &str = include_str!("../assets/fe-symbol-link.js");
 
+/// `<fe-doc-nav>` custom element.
+pub const FE_DOC_NAV_JS: &str = include_str!("../assets/fe-doc-nav.js");
+
+/// `<fe-doc-viewer>` custom element.
+pub const FE_DOC_VIEWER_JS: &str = include_str!("../assets/fe-doc-viewer.js");
+
 /// Standalone syntax highlighting CSS (hardcoded colors, no CSS variables).
 /// For embedding in Starlight/Astro or any external site.
 pub const FE_HIGHLIGHT_CSS: &str = include_str!("../assets/fe-highlight.css");
@@ -156,11 +162,13 @@ pub fn html_shell_full(
   <script>{doc_item_js}</script>
   <script>{symbol_link_js}</script>
   <script>{search_js}</script>
-  <div class="doc-layout">
-    <div id="sidebar"></div>
-    <main id="content" class="doc-content"></main>
-  </div>
-  <script>{js}</script>
+  <script>{doc_nav_js}</script>
+  <script>{doc_viewer_js}</script>
+  <fe-doc-viewer title="{title}" routing="hash" show-search></fe-doc-viewer>
+  <script>
+    // Signal data is ready for components using global store
+    document.dispatchEvent(new CustomEvent('fe-web-ready'));
+  </script>
 </body>
 </html>"#,
         title = safe_title,
@@ -176,7 +184,8 @@ pub fn html_shell_full(
         doc_item_js = FE_DOC_ITEM_JS,
         symbol_link_js = FE_SYMBOL_LINK_JS,
         search_js = FE_SEARCH_JS,
-        js = FE_WEB_JS,
+        doc_nav_js = FE_DOC_NAV_JS,
+        doc_viewer_js = FE_DOC_VIEWER_JS,
     )
 }
 
@@ -273,6 +282,10 @@ pub fn web_component_bundle() -> String {
 {symbol_link_js}
 
 {search_js}
+
+{doc_nav_js}
+
+{doc_viewer_js}
 "#,
         scip_store_js = FE_SCIP_STORE_JS,
         tree_sitter_js = TREE_SITTER_JS,
@@ -282,6 +295,8 @@ pub fn web_component_bundle() -> String {
         doc_item_js = FE_DOC_ITEM_JS,
         symbol_link_js = FE_SYMBOL_LINK_JS,
         search_js = FE_SEARCH_JS,
+        doc_nav_js = FE_DOC_NAV_JS,
+        doc_viewer_js = FE_DOC_VIEWER_JS,
     )
 }
 
@@ -342,16 +357,16 @@ mod tests {
         assert!(html.contains("<!DOCTYPE html>"));
         assert!(html.contains("<title>Test Docs</title>"));
         assert!(html.contains(":root"));
-        assert!(html.contains("renderDocItem"));
         assert!(html.contains(r#"window.FE_DOC_INDEX = {"items":[],"modules":[]}"#));
-        assert!(html.contains(r#"<div id="sidebar">"#));
-        assert!(html.contains(r#"<main id="content""#));
-        // Custom elements are loaded before the main app JS
+        // Uses <fe-doc-viewer> component instead of manual div layout
+        assert!(html.contains("fe-doc-viewer"));
+        // Custom elements are loaded
         assert!(html.contains("fe-code-block"));
         assert!(html.contains("fe-signature"));
         assert!(html.contains("fe-doc-item"));
         assert!(html.contains("fe-symbol-link"));
         assert!(html.contains("fe-search"));
+        assert!(html.contains("fe-doc-nav"));
         // Tree-sitter and highlighter are loaded
         assert!(
             html.contains("TreeSitter"),
