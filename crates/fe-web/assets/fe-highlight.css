@@ -41,7 +41,7 @@ fe-code-block {
     display: flex;
     background: var(--fe-code-bg, #0d1117);
     border: 1px solid var(--fe-code-border, #2d3748);
-    border-radius: 6px;
+    border-radius: var(--fe-code-radius, 6px);
     overflow-x: auto;
 }
 
