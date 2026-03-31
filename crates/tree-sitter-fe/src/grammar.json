@@ -1388,156 +1388,165 @@
       ]
     },
     "recv_arm_pattern": {
-      "type": "SEQ",
+      "type": "CHOICE",
       "members": [
         {
-          "type": "FIELD",
-          "name": "name",
-          "content": {
-            "type": "CHOICE",
-            "members": [
-              {
-                "type": "SYMBOL",
-                "name": "identifier"
-              },
-              {
-                "type": "SYMBOL",
-                "name": "path"
-              }
-            ]
-          }
+          "type": "SYMBOL",
+          "name": "wildcard_pattern"
         },
         {
-          "type": "CHOICE",
+          "type": "SEQ",
           "members": [
             {
-              "type": "SEQ",
+              "type": "FIELD",
+              "name": "name",
+              "content": {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "SYMBOL",
+                    "name": "identifier"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "path"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "CHOICE",
               "members": [
                 {
-                  "type": "STRING",
-                  "value": "{"
-                },
-                {
-                  "type": "CHOICE",
+                  "type": "SEQ",
                   "members": [
                     {
-                      "type": "SEQ",
+                      "type": "STRING",
+                      "value": "{"
+                    },
+                    {
+                      "type": "CHOICE",
                       "members": [
                         {
-                          "type": "CHOICE",
+                          "type": "SEQ",
                           "members": [
                             {
-                              "type": "SEQ",
+                              "type": "CHOICE",
                               "members": [
                                 {
-                                  "type": "FIELD",
-                                  "name": "name",
-                                  "content": {
-                                    "type": "SYMBOL",
-                                    "name": "identifier"
-                                  }
+                                  "type": "SEQ",
+                                  "members": [
+                                    {
+                                      "type": "FIELD",
+                                      "name": "name",
+                                      "content": {
+                                        "type": "SYMBOL",
+                                        "name": "identifier"
+                                      }
+                                    },
+                                    {
+                                      "type": "STRING",
+                                      "value": ":"
+                                    },
+                                    {
+                                      "type": "FIELD",
+                                      "name": "binding",
+                                      "content": {
+                                        "type": "SYMBOL",
+                                        "name": "_pattern"
+                                      }
+                                    }
+                                  ]
                                 },
                                 {
-                                  "type": "STRING",
-                                  "value": ":"
+                                  "type": "SYMBOL",
+                                  "name": "identifier"
                                 },
                                 {
-                                  "type": "FIELD",
-                                  "name": "binding",
-                                  "content": {
-                                    "type": "SYMBOL",
-                                    "name": "_pattern"
-                                  }
+                                  "type": "SYMBOL",
+                                  "name": "rest_pattern"
                                 }
                               ]
                             },
                             {
-                              "type": "SYMBOL",
-                              "name": "identifier"
-                            },
-                            {
-                              "type": "SYMBOL",
-                              "name": "rest_pattern"
-                            }
-                          ]
-                        },
-                        {
-                          "type": "REPEAT",
-                          "content": {
-                            "type": "SEQ",
-                            "members": [
-                              {
-                                "type": "STRING",
-                                "value": ","
-                              },
-                              {
-                                "type": "CHOICE",
+                              "type": "REPEAT",
+                              "content": {
+                                "type": "SEQ",
                                 "members": [
                                   {
-                                    "type": "SEQ",
+                                    "type": "STRING",
+                                    "value": ","
+                                  },
+                                  {
+                                    "type": "CHOICE",
                                     "members": [
                                       {
-                                        "type": "FIELD",
-                                        "name": "name",
-                                        "content": {
-                                          "type": "SYMBOL",
-                                          "name": "identifier"
-                                        }
+                                        "type": "SEQ",
+                                        "members": [
+                                          {
+                                            "type": "FIELD",
+                                            "name": "name",
+                                            "content": {
+                                              "type": "SYMBOL",
+                                              "name": "identifier"
+                                            }
+                                          },
+                                          {
+                                            "type": "STRING",
+                                            "value": ":"
+                                          },
+                                          {
+                                            "type": "FIELD",
+                                            "name": "binding",
+                                            "content": {
+                                              "type": "SYMBOL",
+                                              "name": "_pattern"
+                                            }
+                                          }
+                                        ]
                                       },
                                       {
-                                        "type": "STRING",
-                                        "value": ":"
+                                        "type": "SYMBOL",
+                                        "name": "identifier"
                                       },
                                       {
-                                        "type": "FIELD",
-                                        "name": "binding",
-                                        "content": {
-                                          "type": "SYMBOL",
-                                          "name": "_pattern"
-                                        }
+                                        "type": "SYMBOL",
+                                        "name": "rest_pattern"
                                       }
                                     ]
-                                  },
-                                  {
-                                    "type": "SYMBOL",
-                                    "name": "identifier"
-                                  },
-                                  {
-                                    "type": "SYMBOL",
-                                    "name": "rest_pattern"
                                   }
                                 ]
                               }
-                            ]
-                          }
-                        },
-                        {
-                          "type": "CHOICE",
-                          "members": [
-                            {
-                              "type": "STRING",
-                              "value": ","
                             },
                             {
-                              "type": "BLANK"
+                              "type": "CHOICE",
+                              "members": [
+                                {
+                                  "type": "STRING",
+                                  "value": ","
+                                },
+                                {
+                                  "type": "BLANK"
+                                }
+                              ]
                             }
                           ]
+                        },
+                        {
+                          "type": "BLANK"
                         }
                       ]
                     },
                     {
-                      "type": "BLANK"
+                      "type": "STRING",
+                      "value": "}"
                     }
                   ]
                 },
                 {
-                  "type": "STRING",
-                  "value": "}"
+                  "type": "BLANK"
                 }
               ]
-            },
-            {
-              "type": "BLANK"
             }
           ]
         }
@@ -8051,5 +8060,6 @@
     "_pattern",
     "_item",
     "_statement"
-  ]
+  ],
+  "reserved": {}
 }

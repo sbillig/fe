@@ -909,6 +909,13 @@ impl<'db> ContractRecvArm<'db> {
         }
     }
 
+    pub fn is_fallback(&self, db: &'db dyn HirDb) -> bool {
+        matches!(
+            self.pat.data(db, self.body),
+            Partial::Present(Pat::WildCard)
+        )
+    }
+
     /// Returns `true` if this recv arm is marked `#[payable]`.
     pub fn is_payable(&self, db: &'db dyn HirDb) -> bool {
         self.attributes.has_marker_attr(db, "payable")
