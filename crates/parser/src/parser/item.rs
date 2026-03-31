@@ -14,7 +14,7 @@ use super::{
     struct_::{RecordFieldDefListScope, RecordFieldDefScope},
     token_stream::{LexicalToken, TokenStream},
     type_::{TupleTypeScope, parse_type},
-    use_tree::{UseTreeScope, UsePathScope},
+    use_tree::{UsePathScope, UseTreeScope},
 };
 use crate::{
     ExpectedKind, SyntaxKind,
@@ -207,9 +207,7 @@ pub(super) fn parse_vis_restriction<S: TokenStream>(parser: &mut Parser<S>) -> P
             ParsedVis::PubIn
         }
         _ => {
-            parser.error_msg_on_current_token(
-                "expected `ingot`, `super`, or `in` after `pub(`",
-            );
+            parser.error_msg_on_current_token("expected `ingot`, `super`, or `in` after `pub(`");
             ParsedVis::Public
         }
     };

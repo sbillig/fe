@@ -36,11 +36,7 @@ fn def_scope_for_vis<'db>(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> Op
 }
 
 /// Return `true` if the given `scope` is visible from `from_scope`.
-pub(crate) fn is_scope_visible_from(
-    db: &dyn HirAnalysisDb,
-    scope: ScopeId,
-    from_scope: ScopeId,
-) -> bool {
+pub fn is_scope_visible_from(db: &dyn HirAnalysisDb, scope: ScopeId, from_scope: ScopeId) -> bool {
     use crate::core::hir_def::item::Visibility;
 
     let vis = scope.data(db).vis;
@@ -51,10 +47,10 @@ pub(crate) fn is_scope_visible_from(
     }
 
     // Trait members are always visible regardless of their declared visibility.
-    if matches!(scope, ScopeId::Item(ItemKind::Func(_))) {
-        if matches!(scope.parent_item(db), Some(ItemKind::Trait(..))) {
-            return true;
-        }
+    if matches!(scope, ScopeId::Item(ItemKind::Func(_)))
+        && matches!(scope.parent_item(db), Some(ItemKind::Trait(..)))
+    {
+        return true;
     }
 
     match vis {

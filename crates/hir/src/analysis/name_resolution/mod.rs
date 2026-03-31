@@ -7,6 +7,7 @@ mod name_resolver;
 pub mod path_resolver;
 pub(crate) mod traits_in_scope;
 mod visibility_checker;
+pub use visibility_checker::is_scope_visible_from;
 
 use crate::core::hir_def::TopLevelMod;
 use common::ingot::Ingot;
@@ -23,7 +24,6 @@ pub use path_resolver::{
 };
 use tracing::debug;
 pub use traits_in_scope::available_traits_in_scope;
-pub(crate) use visibility_checker::is_scope_visible_from;
 
 use self::{diagnostics::ImportDiag, import_resolver::DefaultImporter};
 use crate::analysis::{

@@ -7,10 +7,11 @@ use async_lsp::lsp_types::{
 use common::InputDb;
 use driver::DriverDataBase;
 use hir::{
-    analysis::name_resolution::{NameDomain, NameResKind, available_traits_in_scope},
+    analysis::name_resolution::{
+        NameDomain, NameResKind, available_traits_in_scope, is_scope_visible_from,
+    },
     hir_def::{
-        Body, Func, HirIngot, ItemKind, Partial, Pat, Stmt, TopLevelMod, Visibility,
-        scope_graph::ScopeId,
+        Body, Func, HirIngot, ItemKind, Partial, Pat, Stmt, TopLevelMod, scope_graph::ScopeId,
     },
     lower::map_file_to_mod,
     visitor::prelude::*,
@@ -300,7 +301,8 @@ fn collect_auto_import_completions<'db>(
     // Iterate all items in the ingot (includes nested inline modules)
     for item in ingot.all_items(db).iter().copied() {
         // Only include items visible from the current scope
-        if item.vis(db) == Visibility::Private {
+        let item_scope = ScopeId::from_item(item);
+        if !is_scope_visible_from(db, item_scope, current_scope) {
             continue;
         }
 
