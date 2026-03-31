@@ -750,10 +750,10 @@ fn merge_docs_json(target_path: &std::path::Path, new_json: &str) -> std::io::Re
             .filter_map(|i| i.get("path").and_then(|p| p.as_str()).map(String::from))
             .collect();
         for item in new_items {
-            if let Some(path) = item.get("path").and_then(|p| p.as_str()) {
-                if !existing_paths.contains(path) {
-                    ex_items.push(item.clone());
-                }
+            if let Some(path) = item.get("path").and_then(|p| p.as_str())
+                && !existing_paths.contains(path)
+            {
+                ex_items.push(item.clone());
             }
         }
     }
@@ -770,10 +770,10 @@ fn merge_docs_json(target_path: &std::path::Path, new_json: &str) -> std::io::Re
             .filter_map(|m| m.get("name").and_then(|n| n.as_str()).map(String::from))
             .collect();
         for module in new_mods {
-            if let Some(name) = module.get("name").and_then(|n| n.as_str()) {
-                if !existing_names.contains(name) {
-                    ex_mods.push(module.clone());
-                }
+            if let Some(name) = module.get("name").and_then(|n| n.as_str())
+                && !existing_names.contains(name)
+            {
+                ex_mods.push(module.clone());
             }
         }
     }
@@ -786,14 +786,12 @@ fn merge_docs_json(target_path: &std::path::Path, new_json: &str) -> std::io::Re
         for (sym, info) in new_syms {
             if let Some(existing_info) = ex_syms.get_mut(sym) {
                 // Preserve existing doc_url if new one is missing
-                if let Some(existing_obj) = existing_info.as_object_mut() {
-                    if let Some(new_obj) = info.as_object() {
-                        if !existing_obj.contains_key("doc_url") {
-                            if let Some(url) = new_obj.get("doc_url") {
-                                existing_obj.insert("doc_url".into(), url.clone());
-                            }
-                        }
-                    }
+                if let Some(existing_obj) = existing_info.as_object_mut()
+                    && let Some(new_obj) = info.as_object()
+                    && !existing_obj.contains_key("doc_url")
+                    && let Some(url) = new_obj.get("doc_url")
+                {
+                    existing_obj.insert("doc_url".into(), url.clone());
                 }
             } else {
                 ex_syms.insert(sym.clone(), info.clone());

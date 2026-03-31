@@ -243,6 +243,19 @@ class FeDocViewer extends HTMLElement {
       } else {
         this._showWelcome();
       }
+    } else if (routing === "path") {
+      var base = this.getAttribute("base") || "/";
+      var pathname = location.pathname;
+      if (pathname.indexOf(base) === 0) {
+        var docPath = pathname.substring(base.length);
+        if (docPath) {
+          this._showItem(docPath);
+        } else {
+          this._showWelcome();
+        }
+      } else {
+        this._showWelcome();
+      }
     } else {
       this._showWelcome();
     }

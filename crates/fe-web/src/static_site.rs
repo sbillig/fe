@@ -117,10 +117,7 @@ impl StaticSiteGenerator {
 </head>
 <body>
   <script src="fe-web.js" data-src="docs.json"></script>{source_script}
-  <div class="doc-layout">
-    <div id="sidebar"></div>
-    <main id="content" class="doc-content"></main>
-  </div>
+  <fe-doc-viewer title="{title}" src="docs.json" routing="hash"></fe-doc-viewer>
 </body>
 </html>"#,
                 title = crate::escape::escape_html_text(&title),
