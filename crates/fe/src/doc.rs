@@ -735,8 +735,7 @@ fn merge_docs_json(target_path: &std::path::Path, new_json: &str) -> std::io::Re
     use serde_json::Value;
 
     let existing_str = std::fs::read_to_string(target_path)?;
-    let mut existing: Value =
-        serde_json::from_str(&existing_str).map_err(std::io::Error::other)?;
+    let mut existing: Value = serde_json::from_str(&existing_str).map_err(std::io::Error::other)?;
     let new: Value = serde_json::from_str(new_json).map_err(std::io::Error::other)?;
 
     // Merge index.items (deduplicate by path)

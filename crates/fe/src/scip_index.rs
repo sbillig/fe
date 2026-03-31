@@ -854,10 +854,14 @@ pub fn scip_to_json_data(index: &types::Index, doc_urls: &HashMap<String, String
                 .and_then(|si| {
                     // SCIP symbol format: "... descriptor/ ..." — extract module name
                     let parts: Vec<&str> = si.symbol.split(' ').collect();
-                    parts.iter().rev().find(|p| !p.is_empty() && **p != "/").map(|s| {
-                        let name = s.trim_end_matches('/').trim_end_matches('#');
-                        format!("{}.fe", name)
-                    })
+                    parts
+                        .iter()
+                        .rev()
+                        .find(|p| !p.is_empty() && **p != "/")
+                        .map(|s| {
+                            let name = s.trim_end_matches('/').trim_end_matches('#');
+                            format!("{}.fe", name)
+                        })
                 })
                 .unwrap_or_else(|| "input.fe".to_string())
         } else {

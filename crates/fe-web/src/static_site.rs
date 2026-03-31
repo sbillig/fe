@@ -89,7 +89,10 @@ impl StaticSiteGenerator {
             };
             std::fs::write(output_dir.join("docs.json"), &merged)?;
             std::fs::write(output_dir.join("fe-web.js"), assets::web_component_bundle())?;
-            std::fs::write(output_dir.join("fe-highlight.css"), assets::FE_HIGHLIGHT_CSS)?;
+            std::fs::write(
+                output_dir.join("fe-highlight.css"),
+                assets::FE_HIGHLIGHT_CSS,
+            )?;
             std::fs::write(output_dir.join("styles.css"), assets::STYLES_CSS)?;
 
             // Minimal shell that loads the separate files
