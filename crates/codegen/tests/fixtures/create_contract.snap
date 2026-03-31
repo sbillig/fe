@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 33
 expression: output
 input_file: tests/fixtures/create_contract.fe
 ---
@@ -1057,105 +1056,10 @@ object "Factory" {
       object "Child_deployed" {
         code {
           function $__Child_runtime() {
-            let v0 := $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
             $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-          }
-          function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len($self) -> ret {
-            let v0 := calldatasize()
-            let v1 := 0
-            let v2 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt($self, v0)
-            let v3 := v2
-            if v3 {
-              v1 := 0
-            }
-            if iszero(v3) {
-              let v4 := $checked_sub_u256(v0, $self)
-              v1 := v4
-            }
-            ret := v1
-            leave
-          }
-          function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at($self, $byte_offset) -> ret {
-            let v0 := add($self, $byte_offset)
-            let v1 := calldataload(v0)
-            ret := v1
-            leave
-          }
-          function $calldata_hf71d505b6ff5dc81_new() -> ret {
-            ret := 0
-            leave
-          }
-          function $checked_sub_u256($a, $b) -> ret {
-            let v0 := $checked_sub_unsigned_impl__u256__3271ca15373d4483($a, $b)
-            ret := v0
-            leave
-          }
-          function $checked_sub_unsigned_impl__u256__3271ca15373d4483($a, $b) -> ret {
-            let v0 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($b)
-            let v1 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($a)
-            let v2 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v0, v1)
-            let v3 := v2
-            if v3 {
-              revert(0, 0)
-            }
-            let v4 := $u256_h3271ca15373d4483_wrappingsub_h6880d1ff91f0a556_wrapping_sub($a, $b)
-            ret := v4
-            leave
           }
           function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
             revert(0, 0)
-          }
-          function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input() -> ret {
-            let v0 := $calldata_hf71d505b6ff5dc81_new()
-            ret := v0
-            leave
-          }
-          function $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2() -> ret {
-            let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input()
-            let v1 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0)
-            let v2 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v1, 4)
-            let v3 := v2
-            if v3 {
-              $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-            }
-            let v4 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v0, 0)
-            let v5 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v4)
-            ret := v5
-            leave
-          }
-          function $s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35($self) -> ret {
-            let v0 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($self)
-            let v1 := $u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_from_word(v0)
-            ret := v1
-            leave
-          }
-          function $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix($prefix) -> ret {
-            let v0 := $s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35(shr(224, $prefix))
-            ret := v0
-            leave
-          }
-          function $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($self) -> ret {
-            ret := $self
-            leave
-          }
-          function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt($self, $other) -> ret {
-            let v0 := gt($self, $other)
-            ret := v0
-            leave
-          }
-          function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt($self, $other) -> ret {
-            let v0 := lt($self, $other)
-            ret := v0
-            leave
-          }
-          function $u256_h3271ca15373d4483_wrappingsub_h6880d1ff91f0a556_wrapping_sub($self, $other) -> ret {
-            let v0 := sub($self, $other)
-            ret := v0
-            leave
-          }
-          function $u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_from_word($word) -> ret {
-            ret := $word
-            leave
           }
           $__Child_runtime()
           return(0, 0)

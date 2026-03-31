@@ -297,7 +297,26 @@ fn check_named_recv_block<'db>(
     };
 
     for (arm_idx, arm) in recv.arms.data(db).iter().enumerate() {
-        let pat_span: DynLazySpan<'db> = recv_span.clone().arms().arm(arm_idx).pat().into();
+        let arm_span = recv_span.clone().arms().arm(arm_idx);
+        let pat_span: DynLazySpan<'db> = arm_span.clone().pat().into();
+
+        if arm.is_fallback(db) {
+            diags.push(
+                BodyDiag::RecvFallbackOnlyInBareBlock {
+                    primary: pat_span.clone(),
+                }
+                .into(),
+            );
+            if arm.ret_ty.is_some() {
+                diags.push(
+                    BodyDiag::RecvFallbackReturnTypeNotAllowed {
+                        primary: arm_span.ret_ty().into(),
+                    }
+                    .into(),
+                );
+            }
+            continue;
+        }
 
         let Some(path) = arm.variant_path(db) else {
             continue;
@@ -407,7 +426,20 @@ fn check_bare_recv_block<'db>(
     let mut checked_decode = FxHashSet::<Struct<'db>>::default();
 
     for (arm_idx, arm) in recv.arms.data(db).iter().enumerate() {
-        let pat_span: DynLazySpan<'db> = recv_span.clone().arms().arm(arm_idx).pat().into();
+        let arm_span = recv_span.clone().arms().arm(arm_idx);
+        let pat_span: DynLazySpan<'db> = arm_span.clone().pat().into();
+
+        if arm.is_fallback(db) {
+            if arm.ret_ty.is_some() {
+                diags.push(
+                    BodyDiag::RecvFallbackReturnTypeNotAllowed {
+                        primary: arm_span.ret_ty().into(),
+                    }
+                    .into(),
+                );
+            }
+            continue;
+        }
 
         let Some(path) = arm.variant_path(db) else {
             continue;
@@ -474,6 +506,7 @@ pub fn check_contract_recv_blocks<'db>(
 ) -> Vec<FuncBodyDiag<'db>> {
     let mut diags = Vec::new();
     let mut seen_msg_blocks = FxHashMap::<Mod<'db>, (DynLazySpan<'db>, IdentId<'db>)>::default();
+    let mut seen_fallback: Option<DynLazySpan<'db>> = None;
 
     // Track selectors across ALL recv blocks: selector -> (span, variant_name, struct)
     // We store the struct to correctly identify duplicates - comparing by name alone fails
@@ -490,6 +523,25 @@ pub fn check_contract_recv_blocks<'db>(
     for (idx, recv) in contract.recvs(db).data(db).iter().enumerate() {
         let recv_span = contract.span().recv(idx);
         let path_span = recv_span.clone().path();
+
+        for (arm_idx, arm) in recv.arms.data(db).iter().enumerate() {
+            if !arm.is_fallback(db) {
+                continue;
+            }
+
+            let pat_span: DynLazySpan<'db> = recv_span.clone().arms().arm(arm_idx).pat().into();
+            if let Some(first_use) = &seen_fallback {
+                diags.push(
+                    BodyDiag::RecvDuplicateFallback {
+                        primary: pat_span,
+                        first_use: first_use.clone(),
+                    }
+                    .into(),
+                );
+            } else {
+                seen_fallback = Some(pat_span);
+            }
+        }
 
         // Check if this is a named recv block
         if let Some(msg_mod) = resolve_recv_msg_mod(
@@ -555,6 +607,10 @@ pub fn check_contract_recv_blocks<'db>(
             // Bare recv block - check each arm individually
             for (arm_idx, arm) in recv.arms.data(db).iter().enumerate() {
                 let pat_span: DynLazySpan<'db> = recv_span.clone().arms().arm(arm_idx).pat().into();
+
+                if arm.is_fallback(db) {
+                    continue;
+                }
 
                 let Some(path) = arm.variant_path(db) else {
                     continue;

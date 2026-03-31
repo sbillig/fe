@@ -86,9 +86,13 @@ pub enum FieldBindingMode {
     Runtime,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum DefaultAction {
+#[derive(Clone)]
+pub enum DefaultAction<'db> {
     Abort,
+    Fallback {
+        is_payable: bool,
+        call: RuntimeCallPlan<'db>,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -160,7 +164,7 @@ pub struct RuntimeDispatchArmHelperPlan<'db> {
 pub struct RuntimeEntrypointPlan<'db> {
     pub id: SyntheticId<'db>,
     pub arms: Vec<RuntimeDispatchArmPlan<'db>>,
-    pub default: DefaultAction,
+    pub default: DefaultAction<'db>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -285,9 +289,47 @@ impl<'db> ContractPlan<'db> {
         }));
 
         let mut arms = Vec::new();
+        let mut default = DefaultAction::Abort;
         for recv in contract.recv_views(db) {
             for arm in recv.arms(db) {
                 let abi_info = arm.abi_info(db, target.abi.abi_ty);
+                let call = RuntimeCallPlan {
+                    callee: SyntheticId::ContractRecvArmHandler {
+                        contract,
+                        recv_idx: recv.index(db),
+                        arm_idx: arm.index(db),
+                    },
+                    args: if abi_payload_is_empty(db, abi_info.args_ty) {
+                        RuntimeArgsPlan::Empty
+                    } else {
+                        RuntimeArgsPlan::DecodeRuntimeInput {
+                            ty: abi_info.args_ty,
+                        }
+                    },
+                    effects: arm
+                        .effective_effect_env(db)
+                        .bindings(db)
+                        .iter()
+                        .map(|binding| binding.source)
+                        .collect(),
+                };
+
+                if abi_info.is_fallback {
+                    if !matches!(&default, DefaultAction::Abort) {
+                        return Err(MirLowerError::Unsupported {
+                            func_name: "<contract lowering>".into(),
+                            message: format!(
+                                "contract `{display_name}` has multiple fallback recv arms"
+                            ),
+                        });
+                    }
+                    default = DefaultAction::Fallback {
+                        is_payable: arm.arm(db).is_some_and(|a| a.is_payable(db)),
+                        call,
+                    };
+                    continue;
+                }
+
                 let selector =
                     abi_info
                         .selector_value
@@ -348,7 +390,7 @@ impl<'db> ContractPlan<'db> {
         functions.push(SyntheticFnPlan::RuntimeEntrypoint(RuntimeEntrypointPlan {
             id: SyntheticId::ContractRuntimeEntrypoint(contract),
             arms,
-            default: DefaultAction::Abort,
+            default,
         }));
         functions.push(SyntheticFnPlan::CodeRegionQuery(CodeRegionQueryPlan {
             id: SyntheticId::ContractInitCodeOffset(contract),

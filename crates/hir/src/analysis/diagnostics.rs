@@ -3950,6 +3950,58 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     error_code,
                 }
             }
+            BodyDiag::RecvFallbackOnlyInBareBlock { primary } => {
+                let sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "fallback arm `_` is only allowed in `recv { ... }`".to_string(),
+                    span: primary.resolve(db),
+                }];
+                CompleteDiagnostic {
+                    severity,
+                    message: "fallback arm is only allowed in a bare recv block".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "named recv blocks remain exhaustive over their declared msg root"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
+            BodyDiag::RecvDuplicateFallback { primary, first_use } => {
+                let sub_diagnostics = vec![
+                    SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: "duplicate fallback arm".to_string(),
+                        span: primary.resolve(db),
+                    },
+                    SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: "first fallback arm declared here".to_string(),
+                        span: first_use.resolve(db),
+                    },
+                ];
+                CompleteDiagnostic {
+                    severity,
+                    message: "duplicate fallback arm".to_string(),
+                    sub_diagnostics,
+                    notes: vec!["a contract can define at most one fallback arm".to_string()],
+                    error_code,
+                }
+            }
+            BodyDiag::RecvFallbackReturnTypeNotAllowed { primary } => {
+                let sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "remove the return type from this fallback arm".to_string(),
+                    span: primary.resolve(db),
+                }];
+                CompleteDiagnostic {
+                    severity,
+                    message: "fallback arm cannot declare a return type".to_string(),
+                    sub_diagnostics,
+                    notes: vec!["fallback arms are unit-returning in this version".to_string()],
+                    error_code,
+                }
+            }
 
             BodyDiag::ConstFnEffectsNotAllowed(primary) => primary_diag(
                 severity,

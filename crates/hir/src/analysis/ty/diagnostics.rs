@@ -616,6 +616,22 @@ pub enum BodyDiag<'db> {
         handler_ty: TyId<'db>,
     },
 
+    /// A fallback arm `_` is only allowed in a bare recv block.
+    RecvFallbackOnlyInBareBlock {
+        primary: DynLazySpan<'db>,
+    },
+
+    /// At most one fallback arm may exist in a contract.
+    RecvDuplicateFallback {
+        primary: DynLazySpan<'db>,
+        first_use: DynLazySpan<'db>,
+    },
+
+    /// Fallback arms are unit-returning and may not declare `-> T`.
+    RecvFallbackReturnTypeNotAllowed {
+        primary: DynLazySpan<'db>,
+    },
+
     // Const fn / const-check diagnostics -----------------------------------
     ConstFnEffectsNotAllowed(DynLazySpan<'db>),
     ConstFnWithNotAllowed(DynLazySpan<'db>),
@@ -782,6 +798,9 @@ impl<'db> BodyDiag<'db> {
             Self::RecvArmNotVariantOfMsg { .. } => 48,
             Self::RecvArmNotMsgVariantTrait { .. } => 49,
             Self::RecvDuplicateHandler { .. } => 50,
+            Self::RecvFallbackOnlyInBareBlock { .. } => 78,
+            Self::RecvDuplicateFallback { .. } => 79,
+            Self::RecvFallbackReturnTypeNotAllowed { .. } => 80,
             Self::ConstFnEffectsNotAllowed(_) => 55,
             Self::ConstFnWithNotAllowed(_) => 56,
             Self::ConstFnLoopNotAllowed(_) => 57,

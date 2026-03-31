@@ -187,9 +187,26 @@ fn recv_arm_to_abi_entry(
     arm_view: hir::semantic::RecvArmView<'_>,
     sol_ty: TyId<'_>,
 ) -> Result<RecvArmAbiEmission, String> {
-    arm_view
+    let arm = arm_view
         .arm(db)
         .ok_or_else(|| "missing recv arm during ABI generation".to_string())?;
+    let abi_info = arm_view.abi_info(db, sol_ty);
+
+    if abi_info.is_fallback {
+        return Ok(RecvArmAbiEmission::Emit(AbiEntry {
+            entry_type: "fallback".to_string(),
+            name: None,
+            inputs: None,
+            outputs: None,
+            state_mutability: Some(if arm.is_payable(db) {
+                "payable".to_string()
+            } else {
+                "nonpayable".to_string()
+            }),
+            anonymous: None,
+        }));
+    }
+
     let variant_ty = arm_view.variant_ty(db);
     let variant_struct = struct_from_ty(db, variant_ty).ok_or_else(|| {
         format!(
@@ -207,7 +224,6 @@ fn recv_arm_to_abi_entry(
             "skipping recv arm `{variant_name}`: ABI shape is not compiler-known for manual `MsgVariant` impls; only `msg`-generated variants are emitted"
         )));
     }
-    let abi_info = arm_view.abi_info(db, sol_ty);
     let Some(selector_signature) = abi_info.selector_signature.as_deref() else {
         return Ok(RecvArmAbiEmission::Skip(format!(
             "skipping recv arm `{variant_name}`: selector signature is unknown; \
@@ -1723,6 +1739,40 @@ pub contract Wallet {
         assert_eq!(fund["stateMutability"], "payable");
         assert_eq!(peek["stateMutability"], "pure");
         assert_eq!(peek["outputs"][0]["type"], "uint256");
+    }
+
+    #[test]
+    fn fallback_recv_arm_emits_standard_fallback_abi_entry() {
+        let code = r#"
+use std::abi::sol
+
+msg WalletMsg {
+    #[selector = sol("peek()")]
+    Peek -> u256,
+}
+
+pub contract Wallet {
+    recv {
+        WalletMsg::Peek {} -> u256 {
+            7
+        }
+
+        #[payable]
+        _ {}
+    }
+}
+"#;
+
+        let entries = abi_entries(code, "Wallet");
+        let fallback = entries
+            .iter()
+            .find(|entry| entry["type"] == "fallback")
+            .expect("fallback entry");
+
+        assert_eq!(fallback["stateMutability"], "payable");
+        assert!(fallback.get("name").is_none());
+        assert!(fallback.get("inputs").is_none());
+        assert!(fallback.get("outputs").is_none());
     }
 
     #[test]

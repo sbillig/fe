@@ -198,6 +198,14 @@ impl super::Parse for RecvArmPatScope {
     type Error = Recovery<ErrProof>;
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        if parser.current_kind() == Some(SyntaxKind::Underscore) {
+            self.set_kind(SyntaxKind::WildCardPat);
+            parser
+                .parse(WildCardPatScope::default())
+                .expect("wildcard recv arm pattern parsing should be infallible");
+            return Ok(());
+        }
+
         parser.or_recover(|p| {
             let pos = p.current_pos;
             p.parse(PathScope::default())

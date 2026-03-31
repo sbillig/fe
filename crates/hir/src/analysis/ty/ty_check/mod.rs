@@ -1337,6 +1337,10 @@ impl<'db> TyChecker<'db> {
     ) -> (TyId<'db>, TyId<'db>) {
         let invalid_ty = TyId::invalid(self.db, InvalidCause::Other);
 
+        if arm.is_fallback(self.db) {
+            return (TyId::unit(self.db), TyId::unit(self.db));
+        }
+
         // Get variant path from arm pattern
         let Some(variant_path) = arm.variant_path(self.db) else {
             return (invalid_ty, invalid_ty);

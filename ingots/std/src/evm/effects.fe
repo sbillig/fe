@@ -333,6 +333,29 @@ fn encode_abi_payload<T>(value: own T) -> (u256, u256)
 
 /// High-level contract calls with ABI encoding/decoding.
 pub trait Call {
+    /// Low-level `CALL` opcode.
+    ///
+    /// Returns `true` on success and `false` on failure. Any returndata is left
+    /// available for inspection via `last_returndata()`.
+    fn raw_call(
+        mut self,
+        addr: own Address,
+        gas: u256,
+        value: u256,
+        args_offset: u256,
+        args_len: u256,
+    ) -> bool {
+        ops::call(
+            gas: gas,
+            addr: addr.inner,
+            value: value,
+            args_offset: args_offset,
+            args_len: args_len,
+            ret_offset: 0,
+            ret_len: 0,
+        ) != 0
+    }
+
     fn call<M>(mut self, addr: own Address, gas: u256, value: u256, message: own M) -> M::Return
     where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
 
@@ -595,17 +618,8 @@ impl Call for Evm {
     where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
     {
         let out: (u256, u256) = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
-        let ok = ops::call(
-            gas: gas,
-            addr: addr.inner,
-            value: value,
-            args_offset: out.0,
-            args_len: out.1,
-            ret_offset: 0,
-            ret_len: 0,
-        )
 
-        if ok == 0 {
+        if !self.raw_call(addr, gas, value, out.0, out.1) {
             bubble_last_revert()
         }
 

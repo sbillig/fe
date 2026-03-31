@@ -1278,6 +1278,10 @@ impl<'db> RecvArmView<'db> {
             .recv_arm(db, recv.recv_idx(db) as usize, self.arm_idx(db) as usize)
     }
 
+    pub fn is_fallback(self, db: &'db dyn HirDb) -> bool {
+        self.arm(db).is_some_and(|arm| arm.is_fallback(db))
+    }
+
     pub fn effects(self, db: &'db dyn HirDb) -> EffectParamListId<'db> {
         self.arm(db)
             .map(|a| a.effects)
@@ -1323,6 +1327,16 @@ impl<'db> RecvArmView<'db> {
 
     #[salsa::tracked]
     pub fn abi_info(self, db: &'db dyn HirAnalysisDb, abi: TyId<'db>) -> RecvArmAbiInfo<'db> {
+        if self.is_fallback(db) {
+            return RecvArmAbiInfo {
+                is_fallback: true,
+                selector_value: None,
+                selector_signature: None,
+                args_ty: TyId::unit(db),
+                ret_ty: None,
+            };
+        }
+
         let assumptions = PredicateListId::empty_list(db);
         let recv = self.recv(db);
         let contract = recv.contract(db);
@@ -1334,6 +1348,7 @@ impl<'db> RecvArmView<'db> {
             resolve_core_trait(db, contract.scope(), &["message", "MsgVariant"])
         else {
             return RecvArmAbiInfo {
+                is_fallback: false,
                 selector_value: selector_info.value,
                 selector_signature: selector_info.signature,
                 args_ty: variant_ty,
@@ -1359,6 +1374,7 @@ impl<'db> RecvArmView<'db> {
         let ret_ty = (variant_ret_ty != TyId::unit(db)).then_some(variant_ret_ty);
 
         RecvArmAbiInfo {
+            is_fallback: false,
             selector_value: selector_info.value,
             selector_signature: selector_info.signature,
             args_ty,
@@ -1368,6 +1384,10 @@ impl<'db> RecvArmView<'db> {
 
     #[salsa::tracked(return_ref)]
     pub fn arg_bindings(self, db: &'db dyn HirAnalysisDb) -> Vec<ArgBinding<'db>> {
+        if self.is_fallback(db) {
+            return Vec::new();
+        }
+
         let assumptions = PredicateListId::empty_list(db);
         let recv = self.recv(db);
         let contract = recv.contract(db);
@@ -1505,6 +1525,7 @@ impl<'db> EffectEnvView<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct RecvArmAbiInfo<'db> {
+    pub is_fallback: bool,
     pub selector_value: Option<u32>,
     pub selector_signature: Option<String>,
     pub args_ty: TyId<'db>,

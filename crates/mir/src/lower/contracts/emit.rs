@@ -172,15 +172,6 @@ impl<'db, 'a> ContractEmitter<'db, 'a> {
     ) -> MirFunction<'db> {
         let mut emitter = SyntheticFnEmitter::new(self.db, self.target, plan.contract);
         let root = emitter.root_effect();
-
-        let selector = emitter.assign_runtime_local(
-            "selector",
-            self.target.abi.selector_ty,
-            false,
-            AddressSpaceKind::Memory,
-            Rvalue::Call(emitter.host_runtime_selector(root)),
-        );
-
         let default_block = emitter.body.make_block();
         let arm_blocks: Vec<_> = entry
             .arms
@@ -207,41 +198,137 @@ impl<'db, 'a> ContractEmitter<'db, 'a> {
 
         let entry_block = emitter.body.entry_block();
         emitter.body.move_to_block(entry_block);
-        if arm_blocks.is_empty() {
-            emitter.body.goto(default_block);
-        } else {
-            let mut next_test_block = None;
-            for (idx, (arm, target_block)) in arm_blocks.iter().enumerate() {
-                let fallthrough = if idx + 1 == arm_blocks.len() {
-                    default_block
+        match &entry.default {
+            DefaultAction::Abort => {
+                if arm_blocks.is_empty() {
+                    emitter.body.goto(default_block);
                 } else {
-                    *next_test_block.get_or_insert_with(|| emitter.body.make_block())
-                };
-                let selector_match = emitter
+                    let selector = emitter.assign_runtime_local(
+                        "selector",
+                        self.target.abi.selector_ty,
+                        false,
+                        AddressSpaceKind::Memory,
+                        Rvalue::Call(emitter.host_runtime_selector(root)),
+                    );
+                    let mut next_test_block = None;
+                    for (idx, (arm, target_block)) in arm_blocks.iter().enumerate() {
+                        let fallthrough = if idx + 1 == arm_blocks.len() {
+                            default_block
+                        } else {
+                            *next_test_block.get_or_insert_with(|| emitter.body.make_block())
+                        };
+                        let selector_match = emitter.body.const_int_value(
+                            self.target.abi.selector_ty,
+                            BigUint::from(arm.selector),
+                        );
+                        let cond = emitter.body.alloc_value(
+                            TyId::bool(self.db),
+                            ValueOrigin::Binary {
+                                op: BinOp::Comp(CompBinOp::Eq),
+                                lhs: selector,
+                                rhs: selector_match,
+                            },
+                            ValueRepr::Word,
+                        );
+                        emitter.body.branch(cond, *target_block, fallthrough);
+                        if let Some(block) = next_test_block.take() {
+                            emitter.body.move_to_block(block);
+                        }
+                    }
+                }
+            }
+            DefaultAction::Fallback { .. } if entry.arms.is_empty() => {
+                emitter.body.goto(default_block);
+            }
+            DefaultAction::Fallback { .. } => {
+                let input = emitter.assign_runtime_local(
+                    "input",
+                    self.target.host.input_ty,
+                    false,
+                    AddressSpaceKind::Memory,
+                    Rvalue::Call(emitter.host_input(root)),
+                );
+                let input_len = emitter.assign_runtime_local(
+                    "input_len",
+                    TyId::u256(self.db),
+                    false,
+                    AddressSpaceKind::Memory,
+                    Rvalue::Call(emitter.byte_input_len(input)),
+                );
+                let selector_size = emitter
                     .body
-                    .const_int_value(self.target.abi.selector_ty, BigUint::from(arm.selector));
-                let cond = emitter.body.alloc_value(
+                    .const_int_value(TyId::u256(self.db), self.target.abi.selector_size.clone());
+                let is_short = emitter.body.alloc_value(
                     TyId::bool(self.db),
                     ValueOrigin::Binary {
-                        op: BinOp::Comp(CompBinOp::Eq),
-                        lhs: selector,
-                        rhs: selector_match,
+                        op: BinOp::Comp(CompBinOp::Lt),
+                        lhs: input_len,
+                        rhs: selector_size,
                     },
                     ValueRepr::Word,
                 );
-                emitter.body.branch(cond, *target_block, fallthrough);
-                if let Some(block) = next_test_block.take() {
-                    emitter.body.move_to_block(block);
+                let dispatch_block = emitter.body.make_block();
+                emitter.body.branch(is_short, default_block, dispatch_block);
+                emitter.body.move_to_block(dispatch_block);
+
+                let selector = emitter.assign_runtime_local(
+                    "selector",
+                    self.target.abi.selector_ty,
+                    false,
+                    AddressSpaceKind::Memory,
+                    Rvalue::Call(emitter.host_runtime_selector(root)),
+                );
+                let mut next_test_block = None;
+                for (idx, (arm, target_block)) in arm_blocks.iter().enumerate() {
+                    let fallthrough = if idx + 1 == arm_blocks.len() {
+                        default_block
+                    } else {
+                        *next_test_block.get_or_insert_with(|| emitter.body.make_block())
+                    };
+                    let selector_match = emitter
+                        .body
+                        .const_int_value(self.target.abi.selector_ty, BigUint::from(arm.selector));
+                    let cond = emitter.body.alloc_value(
+                        TyId::bool(self.db),
+                        ValueOrigin::Binary {
+                            op: BinOp::Comp(CompBinOp::Eq),
+                            lhs: selector,
+                            rhs: selector_match,
+                        },
+                        ValueRepr::Word,
+                    );
+                    emitter.body.branch(cond, *target_block, fallthrough);
+                    if let Some(block) = next_test_block.take() {
+                        emitter.body.move_to_block(block);
+                    }
                 }
             }
         }
 
+        let zero = emitter.zero_u256();
         emitter.body.move_to_block(default_block);
-        match entry.default {
+        match &entry.default {
             DefaultAction::Abort => {
                 emitter.body.terminate_current(Terminator::TerminatingCall {
                     source: SourceInfoId::SYNTHETIC,
                     call: TerminatingCall::Call(emitter.host_abort(root)),
+                });
+            }
+            DefaultAction::Fallback { is_payable, call } => {
+                let fields = emitter.bind_all_fields(plan, FieldBindingMode::Runtime, root);
+                if !*is_payable {
+                    emitter.emit_callvalue_guard("callvalue_fallback", zero, root);
+                }
+                let effect_args = emitter.realize_effect_args(&call.effects, zero, &fields);
+                let _ = emitter.call_synthetic(
+                    call.callee,
+                    Vec::new(),
+                    effect_args,
+                    TyId::unit(self.db),
+                );
+                emitter.body.terminate_current(Terminator::TerminatingCall {
+                    source: SourceInfoId::SYNTHETIC,
+                    call: TerminatingCall::Call(emitter.host_return_unit(root)),
                 });
             }
         }
@@ -687,6 +774,15 @@ impl<'db, 'a> SyntheticFnEmitter<'db, 'a> {
         )
     }
 
+    fn host_input(&self, root: ValueId) -> CallOrigin<'db> {
+        self.call_hir(
+            CallableDef::Func(self.host.input_fn),
+            self.host.contract_host_inst.args(self.db).to_vec(),
+            Some(self.host.contract_host_inst),
+            vec![root],
+        )
+    }
+
     fn emit_callvalue_guard(&mut self, label: impl Into<String>, zero: ValueId, root: ValueId) {
         let callvalue = self.assign_runtime_local(
             label,
@@ -752,6 +848,15 @@ impl<'db, 'a> SyntheticFnEmitter<'db, 'a> {
             generic_args,
             Some(self.host.contract_host_inst),
             vec![root],
+        )
+    }
+
+    fn byte_input_len(&self, input: ValueId) -> CallOrigin<'db> {
+        self.call_hir(
+            CallableDef::Func(self.host.byte_input_len_fn),
+            self.host.input_byte_input_inst.args(self.db).to_vec(),
+            Some(self.host.input_byte_input_inst),
+            vec![input],
         )
     }
 

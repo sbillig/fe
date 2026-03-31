@@ -4,12 +4,18 @@ use hir::{
         HirAnalysisDb,
         name_resolution::{PathRes, resolve_path},
         ty::{
-            corelib::resolve_core_trait, normalize::normalize_ty, trait_def::TraitInstId,
-            trait_resolution::PredicateListId, ty_def::TyId,
+            const_eval::{ConstValue, try_eval_const_body},
+            corelib::resolve_core_trait,
+            normalize::normalize_ty,
+            trait_def::TraitInstId,
+            trait_def::assoc_const_body_for_trait_inst,
+            trait_resolution::{PredicateListId, TraitSolveCx},
+            ty_def::TyId,
         },
     },
     hir_def::{Func, IdentId, PathId, TopLevelMod, Trait, scope_graph::ScopeId},
 };
+use num_bigint::BigUint;
 
 use super::{MirLowerError, MirLowerResult};
 
@@ -23,10 +29,13 @@ pub(super) struct TargetHostContext<'db> {
     pub contract_host_inst: TraitInstId<'db>,
     pub init_input_ty: TyId<'db>,
     pub input_ty: TyId<'db>,
+    pub input_byte_input_inst: TraitInstId<'db>,
     pub effect_handle_trait: Trait<'db>,
     pub effect_handle_from_raw_fn: Func<'db>,
+    pub input_fn: Func<'db>,
     pub field_fn: Func<'db>,
     pub init_field_fn: Func<'db>,
+    pub byte_input_len_fn: Func<'db>,
     pub runtime_selector_fn: Func<'db>,
     pub runtime_decoder_fn: Func<'db>,
     pub return_value_fn: Func<'db>,
@@ -38,6 +47,7 @@ pub(super) struct AbiContext<'db> {
     pub abi_ty: TyId<'db>,
     pub abi_inst: TraitInstId<'db>,
     pub selector_ty: TyId<'db>,
+    pub selector_size: BigUint,
     pub init_decoder_ty: TyId<'db>,
     pub runtime_decoder_ty: TyId<'db>,
     pub abi_decoder_new: Func<'db>,
@@ -114,6 +124,15 @@ impl<'db> TargetHostContext<'db> {
         let init_input_ty =
             resolve_assoc_ty(db, contract_host_inst, scope, assumptions, "InitInput");
         let input_ty = resolve_assoc_ty(db, contract_host_inst, scope, assumptions, "Input");
+        let byte_input_trait =
+            resolve_core_trait(db, scope, &["abi", "ByteInput"]).ok_or_else(|| {
+                MirLowerError::Unsupported {
+                    func_name: "<contract lowering>".into(),
+                    message: "missing core trait `abi::ByteInput`".into(),
+                }
+            })?;
+        let input_byte_input_inst =
+            TraitInstId::new(db, byte_input_trait, vec![input_ty], IndexMap::new());
 
         let effect_handle_trait = resolve_core_trait(db, scope, &["effect_ref", "EffectHandle"])
             .expect("missing required core trait `core::effect_ref::EffectHandle`");
@@ -124,10 +143,13 @@ impl<'db> TargetHostContext<'db> {
             contract_host_inst,
             init_input_ty,
             input_ty,
+            input_byte_input_inst,
             effect_handle_trait,
             effect_handle_from_raw_fn: effect_handle_from_raw,
+            input_fn: require_trait_method(db, contract_host_trait, "input")?,
             field_fn: require_trait_method(db, contract_host_trait, "field")?,
             init_field_fn: require_trait_method(db, contract_host_trait, "init_field")?,
+            byte_input_len_fn: require_trait_method(db, byte_input_trait, "len")?,
             runtime_selector_fn: require_trait_method(db, contract_host_trait, "runtime_selector")?,
             runtime_decoder_fn: require_trait_method(db, contract_host_trait, "runtime_decoder")?,
             return_value_fn: require_trait_method(db, contract_host_trait, "return_value")?,
@@ -155,6 +177,29 @@ impl<'db> AbiContext<'db> {
         })?;
         let abi_inst = TraitInstId::new(db, abi_trait, vec![abi_ty], IndexMap::new());
         let selector_ty = resolve_assoc_ty(db, abi_inst, scope, assumptions, "Selector");
+        let selector_size_name = IdentId::new(db, "SELECTOR_SIZE".to_string());
+        let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+        let selector_size_body =
+            assoc_const_body_for_trait_inst(db, solve_cx, abi_inst, selector_size_name)
+                .ok_or_else(|| MirLowerError::Unsupported {
+                    func_name: "<contract lowering>".into(),
+                    message: format!(
+                        "missing evaluable associated const `SELECTOR_SIZE` for ABI `{}`",
+                        abi_ty.pretty_print(db)
+                    ),
+                })?;
+        let selector_size = match try_eval_const_body(db, selector_size_body, TyId::u256(db)) {
+            Some(ConstValue::Int(value)) => value,
+            _ => {
+                return Err(MirLowerError::Unsupported {
+                    func_name: "<contract lowering>".into(),
+                    message: format!(
+                        "failed to evaluate associated const `SELECTOR_SIZE` for ABI `{}`",
+                        abi_ty.pretty_print(db)
+                    ),
+                });
+            }
+        };
 
         let decoder_ctor = resolve_assoc_ty(db, abi_inst, scope, assumptions, "Decoder");
         let init_decoder_ty = normalize_ty(
@@ -182,6 +227,7 @@ impl<'db> AbiContext<'db> {
             abi_ty,
             abi_inst,
             selector_ty,
+            selector_size,
             init_decoder_ty,
             runtime_decoder_ty,
             abi_decoder_new,

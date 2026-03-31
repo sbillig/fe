@@ -294,18 +294,21 @@ module.exports = grammar({
       field('body', $.block),
     ),
 
-    recv_arm_pattern: $ => seq(
-      field('name', choice($.identifier, $.path)),
-      optional(seq(
-        '{',
-        sepTrailing(choice(
-          // Labeled binding: `a: x` or `a: (x, y)`
-          seq(field('name', $.identifier), ':', field('binding', $._pattern)),
-          $.identifier,
-          $.rest_pattern,
-        ), ','),
-        '}',
-      )),
+    recv_arm_pattern: $ => choice(
+      $.wildcard_pattern,
+      seq(
+        field('name', choice($.identifier, $.path)),
+        optional(seq(
+          '{',
+          sepTrailing(choice(
+            // Labeled binding: `a: x` or `a: (x, y)`
+            seq(field('name', $.identifier), ':', field('binding', $._pattern)),
+            $.identifier,
+            $.rest_pattern,
+          ), ','),
+          '}',
+        )),
+      ),
     ),
 
     // Msg definition
