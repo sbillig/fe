@@ -1,10 +1,9 @@
 //! Test harness utilities for compiling Fe contracts and exercising their runtimes with `revm`.
-use codegen::{Backend, SonatinaBackend, emit_module_yul};
+use codegen::{Backend, EVM_LAYOUT, SonatinaBackend, emit_module_yul};
 use common::InputDb;
 use driver::DriverDataBase;
 use ethers_core::abi::{AbiParser, ParamType, ParseError as AbiParseError, Token, decode};
 use hex::FromHex;
-use mir::layout;
 pub use revm::primitives::U256;
 use revm::{
     InspectCommitEvm,
@@ -1301,12 +1300,7 @@ pub fn compile_runtime_sonatina_from_source(source: &str) -> Result<String, Harn
     }
 
     let output = SonatinaBackend
-        .compile(
-            &db,
-            top_mod,
-            layout::EVM_LAYOUT,
-            codegen::OptLevel::default(),
-        )
+        .compile(&db, top_mod, EVM_LAYOUT, codegen::OptLevel::default())
         .map_err(|err| HarnessError::EmitSonatina(err.to_string()))?;
     let bytes = output
         .as_bytecode()

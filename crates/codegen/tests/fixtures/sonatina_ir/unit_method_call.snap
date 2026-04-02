@@ -5,26 +5,40 @@ input_file: crates/codegen/tests/fixtures/unit_method_call.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %call_unit_method() {
-    block0:
-        call %counter_h872958864d1ad471_increment;
-        return;
-}
+type @__fe_layout_0 = {i256};
 
-func private %counter_h872958864d1ad471_increment() {
+func private %__fe_main_root() {
     block0:
-        return;
-}
-
-func private %__fe_sonatina_entry() {
-    block0:
-        call %call_unit_method;
+        call %call_unit_method undef.@__fe_layout_0;
         evm_stop;
 }
 
+func private %call_unit_method(v0.@__fe_layout_0) {
+    block0:
+        v1.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        obj.store v1 v0;
+        v2.@__fe_layout_0 = obj.load v1;
+        call %increment_0 v2;
+        return;
+}
 
-object @Contract {
-    section runtime {
-        entry %__fe_sonatina_entry;
+func private %increment_0(v0.@__fe_layout_0) {
+    block0:
+        v1.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        obj.store v1 v0;
+        return;
+}
+
+func private %increment_1(v0.@__fe_layout_0) {
+    block0:
+        v1.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        obj.store v1 v0;
+        return;
+}
+
+
+object @main {
+    section main {
+        entry %__fe_main_root;
     }
 }

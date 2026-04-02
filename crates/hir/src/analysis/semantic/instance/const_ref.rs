@@ -14,6 +14,7 @@ use crate::{
     },
     hir_def::{CallableDef, Const},
 };
+use common::indexmap::IndexSet;
 
 use super::{GenericSubst, ImplEnv, SemanticInstanceKey};
 
@@ -23,6 +24,8 @@ pub(crate) fn semantic_callee_key<'db>(
     typed_body: &TypedBody<'db>,
     callable: &Callable<'db>,
 ) -> Option<SemanticInstanceKey<'db>> {
+    let impl_env = caller_key.impl_env(db);
+    let assumptions = semantic_impl_env_assumptions(db, caller_key, typed_body);
     let (owner, subst_args) = match callable.callable_def() {
         CallableDef::Func(func) => {
             let mut subst_args = callable.generic_args().to_vec();
@@ -30,17 +33,18 @@ pub(crate) fn semantic_callee_key<'db>(
                 && let Some(name) = func.name(db).to_opt()
                 && let Some((impl_func, impl_args)) = resolve_trait_method_instance(
                     db,
-                    TraitSolveCx::new(db, caller_key.owner(db).scope())
-                        .with_assumptions(typed_body.assumptions()),
+                    TraitSolveCx::new(db, impl_env.normalization_scope(db))
+                        .with_assumptions(assumptions),
                     inst,
                     name,
                 ) {
                 let trait_arg_len = inst.args(db).len();
-                if subst_args.len() >= trait_arg_len {
-                    let mut resolved_args = impl_args;
-                    resolved_args.extend_from_slice(&subst_args[trait_arg_len..]);
-                    subst_args = resolved_args;
-                }
+                let mut resolved_args = impl_args;
+                let tail = subst_args
+                    .get(trait_arg_len..)
+                    .unwrap_or(subst_args.as_slice());
+                resolved_args.extend_from_slice(tail);
+                subst_args = resolved_args;
                 BodyOwner::Func(impl_func)
             } else {
                 BodyOwner::Func(func)
@@ -50,21 +54,16 @@ pub(crate) fn semantic_callee_key<'db>(
         CallableDef::VariantCtor(_) => return None,
     };
 
-    let impl_env = if let Some(witness) = callable.trait_inst() {
-        ImplEnv::new(
-            db,
-            caller_key.impl_env(db).normalization_scope(db),
-            typed_body.assumptions(),
-            vec![witness],
-        )
-    } else {
-        ImplEnv::new(
-            db,
-            caller_key.impl_env(db).normalization_scope(db),
-            typed_body.assumptions(),
-            Vec::new(),
-        )
-    };
+    let mut witnesses: IndexSet<_> = impl_env.witnesses(db).iter().copied().collect();
+    if let Some(witness) = callable.trait_inst() {
+        witnesses.insert(witness);
+    }
+    let impl_env = ImplEnv::new(
+        db,
+        impl_env.normalization_scope(db),
+        assumptions,
+        witnesses.into_iter().collect::<Vec<_>>(),
+    );
 
     Some(SemanticInstanceKey::new(
         db,
@@ -85,6 +84,21 @@ pub(crate) fn resolve_semantic_const_ref<'db>(
         ConstRef::TraitConst(assoc) => semantic_const_key_for_assoc_const(db, assoc, ty),
     }?;
     Some(SemanticConstRef::new(db, instance, ty, origin))
+}
+
+fn semantic_impl_env_assumptions<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller_key: SemanticInstanceKey<'db>,
+    typed_body: &TypedBody<'db>,
+) -> crate::analysis::ty::trait_resolution::PredicateListId<'db> {
+    let impl_env = caller_key.impl_env(db);
+    let mut predicates: IndexSet<_> = typed_body.assumptions().list(db).iter().copied().collect();
+    predicates.extend(impl_env.assumptions(db).list(db).iter().copied());
+    predicates.extend(impl_env.witnesses(db).iter().copied());
+    crate::analysis::ty::trait_resolution::PredicateListId::new(
+        db,
+        predicates.into_iter().collect::<Vec<_>>(),
+    )
 }
 
 fn semantic_const_key_for_const<'db>(

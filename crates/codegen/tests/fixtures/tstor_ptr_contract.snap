@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 33
 expression: output
 input_file: tests/fixtures/tstor_ptr_contract.fe
 ---
@@ -27,13 +26,13 @@ object "GuardContract" {
     function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
       revert(0, 0)
     }
-    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__u256__3271ca15373d4483($slot) -> ret {
+    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field_arg0_root_mem__u256__3271ca15373d4483($slot) -> ret {
       let v0 := $stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9($slot)
       ret := v0
       leave
     }
     function $init_field__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9($slot) -> ret {
-      let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__u256__3271ca15373d4483($slot)
+      let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field_arg0_root_mem__u256__3271ca15373d4483($slot)
       ret := v0
       leave
     }

@@ -5,46 +5,51 @@ input_file: crates/codegen/tests/fixtures/const_array.fe
 ---
 target = "evm-ethereum-osaka"
 
-global private const [i256; 3] $__fe_const_data_0 = [10, 20, 30];
+global private const [i256; 3] $__fe_const_region_0 = [10, 20, 30];
 
-func private %sum_two(v0.i256, v1.i256) -> i256 {
-    block0:
-        v2.constref<[i256; 3]> = const.ref $__fe_const_data_0;
-        v4.i1 = lt v0 3.i256;
-        v5.i1 = is_zero v4;
-        br v5 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        v7.constref<i256> = const.index v2 v0;
-        v8.i256 = const.load v7;
-        v9.constref<[i256; 3]> = const.ref $__fe_const_data_0;
-        v11.i1 = lt v1 3.i256;
-        v12.i1 = is_zero v11;
-        br v12 block1 block3;
-
-    block3:
-        v13.constref<i256> = const.index v9 v1;
-        v14.i256 = const.load v13;
-        (v16.i256, v17.i1) = uaddo v8 v14;
-        br v17 block1 block4;
-
-    block4:
-        return v16;
-}
-
-func private %__fe_sonatina_entry() {
+func private %__fe_main_root() {
     block0:
         v1.i256 = call %sum_two 0.i256 0.i256;
         evm_stop;
 }
 
+func private %sum_two(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        v5.*i256 = alloca i256;
+        v6.*i256 = alloca i256;
+        mstore v2 v0 i256;
+        mstore v3 v1 i256;
+        v7.constref<[i256; 3]> = const.ref $__fe_const_region_0;
+        v8.i256 = mload v2 i256;
+        v9.constref<i256> = const.index v7 v8;
+        v10.i256 = const.load v9;
+        mstore v4 v10 i256;
+        v11.constref<[i256; 3]> = const.ref $__fe_const_region_0;
+        v12.i256 = mload v3 i256;
+        v13.constref<i256> = const.index v11 v12;
+        v14.i256 = const.load v13;
+        mstore v5 v14 i256;
+        v15.i256 = mload v4 i256;
+        v16.i256 = mload v5 i256;
+        (v17.i256, v18.i1) = uaddo v15 v16;
+        br v18 block1 block2;
 
-object @Contract {
-    section runtime {
-        entry %__fe_sonatina_entry;
-        data $__fe_const_data_0;
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        mstore v6 v17 i256;
+        v20.i256 = mload v6 i256;
+        return v20;
+}
+
+
+object @main {
+    section main {
+        entry %__fe_main_root;
+        data $__fe_const_region_0;
     }
 }

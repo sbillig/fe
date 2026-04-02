@@ -5,16 +5,16 @@ edition.workspace = true
 
 [dependencies]
 driver = { path = "../driver", package = "fe-driver" }
-mir = { path = "../mir", package = "fe-mir" }
+mir2 = { path = "../mir2", package = "fe-mir2" }
 hir.workspace = true
 common.workspace = true
 hex = "0.4"
-num-bigint.workspace = true
 rustc-hash.workspace = true
 sonatina-ir.workspace = true
 sonatina-triple.workspace = true
 sonatina-codegen.workspace = true
 sonatina-verifier.workspace = true
+smallvec.workspace = true
 smallvec1.workspace = true
 tracing.workspace = true
 

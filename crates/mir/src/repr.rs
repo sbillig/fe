@@ -557,11 +557,13 @@ pub fn place_root_runtime_shape_for_local<'db>(
         .find_map(|(path, info)| path.is_empty().then_some(*info));
     match local.place_root_layout {
         LocalPlaceRootLayout::Direct => root_info.map(runtime_shape_for_pointer_info),
-        LocalPlaceRootLayout::MemorySlot => root_info.map(runtime_shape_for_pointer_info).or(
-            Some(RuntimeShape::MemoryPtr {
-                target_ty: Some(local.ty),
-            }),
-        ),
+        LocalPlaceRootLayout::MemorySlot => {
+            root_info
+                .map(runtime_shape_for_pointer_info)
+                .or(Some(RuntimeShape::MemoryPtr {
+                    target_ty: Some(local.ty),
+                }))
+        }
         LocalPlaceRootLayout::ObjectRootValue { target_ty, .. }
         | LocalPlaceRootLayout::ObjectRootStorage { target_ty, .. } => {
             Some(RuntimeShape::ObjectRef { target_ty })
@@ -1479,7 +1481,9 @@ pub fn normalize_plain_word_runtime_shape_for_ty<'db>(
     }
 
     match proposed_shape {
-        RuntimeShape::Word(_) | RuntimeShape::EnumTag { .. } | RuntimeShape::Erased => proposed_shape,
+        RuntimeShape::Word(_) | RuntimeShape::EnumTag { .. } | RuntimeShape::Erased => {
+            proposed_shape
+        }
         RuntimeShape::Unresolved
         | RuntimeShape::ConstRef { .. }
         | RuntimeShape::ObjectRef { .. }
@@ -1649,9 +1653,8 @@ pub fn runtime_shape_for_ty<'db>(
     }
 
     if default_ref_space == AddressSpaceKind::Memory
-        && let Some(MemoryObjectRefClass::Direct { target_ty }) = classify_memory_object_ref(
-            db, core, ty,
-        )
+        && let Some(MemoryObjectRefClass::Direct { target_ty }) =
+            classify_memory_object_ref(db, core, ty)
     {
         return RuntimeShape::ObjectRef { target_ty };
     }
@@ -1713,8 +1716,14 @@ pub fn runtime_shape_for_local<'db>(
     }
 
     if let Some(info) = root_info
-        && !matches!(local.place_root_layout, LocalPlaceRootLayout::ObjectRootValue { .. })
-        && !matches!(local.place_root_layout, LocalPlaceRootLayout::ObjectRootStorage { .. })
+        && !matches!(
+            local.place_root_layout,
+            LocalPlaceRootLayout::ObjectRootValue { .. }
+        )
+        && !matches!(
+            local.place_root_layout,
+            LocalPlaceRootLayout::ObjectRootStorage { .. }
+        )
     {
         return runtime_shape_for_pointer_info(info);
     }
@@ -2619,9 +2628,8 @@ pub fn runtime_shape_for_value<'db>(
             value_data.runtime_shape,
         ));
     }
-    inferred_runtime_shape_for_value(db, core, values, locals, value).map(|shape| {
-        normalize_plain_word_runtime_shape_for_ty(db, core, value_data.ty, shape)
-    })
+    inferred_runtime_shape_for_value(db, core, values, locals, value)
+        .map(|shape| normalize_plain_word_runtime_shape_for_ty(db, core, value_data.ty, shape))
 }
 
 #[cfg(test)]

@@ -17,7 +17,9 @@ use crate::{
 };
 use smallvec1::SmallVec;
 
-use crate::core::semantic::EffectBinding;
+use crate::core::semantic::{
+    EffectRequirement, EffectRequirementKey as SemanticEffectRequirementKey,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EffectRequirementDecl<'db> {
@@ -202,25 +204,25 @@ pub enum BarrierReason<'db> {
 }
 
 impl<'db> EffectRequirementDecl<'db> {
-    pub fn from_effect_binding(
+    pub fn from_effect_requirement(
         db: &'db dyn HirAnalysisDb,
-        binding: &EffectBinding<'db>,
+        requirement: &EffectRequirement<'db>,
     ) -> Option<Self> {
-        let key = match binding.key_kind {
-            super::EffectKeyKind::Type => EffectRequirementKey::Type(TypeKeySchema {
-                carrier: binding.key_ty?,
-            }),
-            super::EffectKeyKind::Trait => EffectRequirementKey::Trait(
-                TraitKeySchema::from_canonical_trait_binding(db, binding.key_trait?),
+        let key = match requirement.key {
+            SemanticEffectRequirementKey::Type(carrier) => {
+                EffectRequirementKey::Type(TypeKeySchema { carrier })
+            }
+            SemanticEffectRequirementKey::Trait(trait_inst) => EffectRequirementKey::Trait(
+                TraitKeySchema::from_canonical_trait_binding(db, trait_inst),
             ),
-            super::EffectKeyKind::Other => return None,
+            SemanticEffectRequirementKey::Other => return None,
         };
 
         Some(Self {
-            binding_idx: binding.binding_idx,
-            required_mut: binding.is_mut,
-            name: Some(binding.binding_name),
-            key_path: Some(binding.binding_path),
+            binding_idx: requirement.binding_idx,
+            required_mut: requirement.is_mut,
+            name: Some(requirement.binding_name),
+            key_path: Some(requirement.binding_path),
             key,
         })
     }

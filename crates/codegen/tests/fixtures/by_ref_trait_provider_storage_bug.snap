@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 33
 expression: output
 input_file: tests/fixtures/by_ref_trait_provider_storage_bug.fe
 ---
@@ -35,13 +34,13 @@ object "ByRefTraitProviderStorageBug" {
     function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
       revert(0, 0)
     }
-    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Pair_h956dff41e88ee341__acec41afdc898140($slot) -> ret {
+    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field_arg0_root_mem__Pair_h956dff41e88ee341__acec41afdc898140($slot) -> ret {
       let v0 := $stor_ptr__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785($slot)
       ret := v0
       leave
     }
     function $init_field__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785($slot) -> ret {
-      let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Pair_h956dff41e88ee341__acec41afdc898140($slot)
+      let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field_arg0_root_mem__Pair_h956dff41e88ee341__acec41afdc898140($slot)
       ret := v0
       leave
     }
@@ -240,7 +239,7 @@ object "ByRefTraitProviderStorageBug" {
         $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95($value, v11)
         return(v11, 32)
       }
-      function $pair_h956dff41e88ee341_ctx_h4952b3c1f066f039_sum_stor($self) -> ret {
+      function $pair_h956dff41e88ee341_ctx_h4952b3c1f066f039_sum_stor_arg0_root_stor($self) -> ret {
         let v0 := sload($self)
         let v1 := sload(add($self, 1))
         let v2 := $checked_add_u256(v0, v1)
@@ -418,7 +417,7 @@ object "ByRefTraitProviderStorageBug" {
         leave
       }
       function $use_ctx_eff0_stor__Pair_h956dff41e88ee341__acec41afdc898140($ctx) -> ret {
-        let v0 := $pair_h956dff41e88ee341_ctx_h4952b3c1f066f039_sum_stor($ctx)
+        let v0 := $pair_h956dff41e88ee341_ctx_h4952b3c1f066f039_sum_stor_arg0_root_stor($ctx)
         ret := v0
         leave
       }

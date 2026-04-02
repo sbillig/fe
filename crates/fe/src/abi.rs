@@ -1060,7 +1060,7 @@ fn resolve_sol_abi_ty<'db>(
     }
 }
 
-/// Derive ABI state mutability from the effective recv-arm effect set.
+/// Derive ABI state mutability from the effective recv-arm effect requirement set.
 fn derive_state_mutability(
     db: &DriverDataBase,
     arm_view: hir::semantic::RecvArmView<'_>,
@@ -1072,7 +1072,7 @@ fn derive_state_mutability(
         return "payable".to_string();
     }
 
-    let effects = arm_view.effective_effect_bindings(db);
+    let effects = arm_view.effective_effect_requirements(db);
     if effects.is_empty() {
         "pure".to_string()
     } else if effects.iter().any(|effect| effect.is_mut) {

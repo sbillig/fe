@@ -1414,11 +1414,7 @@ impl<'db> ConstTyId<'db> {
         }
     }
 
-    pub(crate) fn evaluate(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        expected_ty: Option<TyId<'db>>,
-    ) -> Self {
+    pub fn evaluate(self, db: &'db dyn HirAnalysisDb, expected_ty: Option<TyId<'db>>) -> Self {
         evaluate_const_ty(db, self, expected_ty)
     }
 

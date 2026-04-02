@@ -400,10 +400,13 @@ fn f() uses (cap: Cap<Slot<u256>>) {}
     assert_eq!(implicit_layout_params, 1);
 
     let effect_binding = func
-        .effect_bindings(&db)
+        .effect_requirements(&db)
         .first()
         .expect("missing effect binding");
-    let key_trait = effect_binding.key_trait.expect("missing trait effect key");
+    let key_trait = effect_binding
+        .key
+        .key_trait()
+        .expect("missing trait effect key");
     assert!(
         key_trait
             .args(&db)
@@ -452,10 +455,11 @@ fn f() uses (cap: Cap) {}
     assert_eq!(implicit_layout_params, 2);
 
     let key_trait = func
-        .effect_bindings(&db)
+        .effect_requirements(&db)
         .first()
         .expect("missing effect binding")
-        .key_trait
+        .key
+        .key_trait()
         .expect("missing trait effect key");
     let args = key_trait.args(&db);
     assert_eq!(args.len(), 3);
@@ -510,10 +514,13 @@ fn f<T: HasRootTy<RootTy = u256>>() uses (slot: Slot<T>) {}
     assert_eq!(implicit_layout_params, 1);
 
     let effect_binding = func
-        .effect_bindings(&db)
+        .effect_requirements(&db)
         .first()
         .expect("missing effect binding");
-    let key_ty = effect_binding.key_ty.expect("missing type effect key");
+    let key_ty = effect_binding
+        .key
+        .key_ty()
+        .expect("missing type effect key");
     assert!(
         !ty_contains_const_hole(&db, key_ty),
         "unelaborated const hole remained in type effect key: {key_ty:?}"
@@ -826,10 +833,11 @@ fn f() uses (slot: Pair<_, _>) {}
     assert_eq!(implicit_layout_params, 2);
 
     let key_ty = func
-        .effect_bindings(&db)
+        .effect_requirements(&db)
         .first()
         .expect("missing effect binding")
-        .key_ty
+        .key
+        .key_ty()
         .expect("missing type effect key");
     let args = key_ty.generic_args(&db);
     assert_eq!(args.len(), 2);
@@ -1054,10 +1062,11 @@ fn f() uses (slots: TwoSlots) {}
     assert_eq!(implicit_layout_params, 2);
 
     let key_ty = func
-        .effect_bindings(&db)
+        .effect_requirements(&db)
         .first()
         .expect("missing effect binding")
-        .key_ty
+        .key
+        .key_ty()
         .expect("missing type effect key");
     let fields = key_ty.field_types(&db);
     assert_eq!(fields.len(), 2);
@@ -1111,10 +1120,11 @@ fn f() uses (cap: Cap<Wrap, Wrap>) {}
     assert_eq!(implicit_layout_params, 2);
 
     let key_trait = func
-        .effect_bindings(&db)
+        .effect_requirements(&db)
         .first()
         .expect("missing effect binding")
-        .key_trait
+        .key
+        .key_trait()
         .expect("missing trait effect key");
     let args = key_trait.args(&db);
     assert_eq!(args.len(), 3);
@@ -1181,10 +1191,11 @@ fn f() uses (cap: Cap<Slot, Slot>) {}
     assert_eq!(implicit_layout_params, 2);
 
     let key_trait = func
-        .effect_bindings(&db)
+        .effect_requirements(&db)
         .first()
         .expect("missing effect binding")
-        .key_trait
+        .key
+        .key_trait()
         .expect("missing trait effect key");
     let args = key_trait.args(&db);
     assert_eq!(args.len(), 3);
@@ -1423,10 +1434,11 @@ fn f() uses (slot: Repeated) {}
     assert_eq!(implicit_layout_params, 1);
 
     let key_ty = func
-        .effect_bindings(&db)
+        .effect_requirements(&db)
         .first()
         .expect("missing effect binding")
-        .key_ty
+        .key
+        .key_ty()
         .expect("missing type effect key");
     let fields = key_ty.field_types(&db);
     assert_eq!(fields.len(), 2);

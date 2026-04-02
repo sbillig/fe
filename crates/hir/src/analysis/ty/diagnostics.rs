@@ -1,7 +1,8 @@
 use super::{
     adt_def::AdtCycleMember,
+    provider::ProviderAddressSpace,
     trait_def::TraitInstId,
-    ty_check::{ConcreteBorrowProvider, RecordLike, TraitOps},
+    ty_check::{RecordLike, TraitOps},
     ty_def::{BorrowKind, CapabilityKind, Kind, TyId},
 };
 use crate::visitor::prelude::*;
@@ -380,8 +381,8 @@ pub enum BodyDiag<'db> {
     IncompatibleBorrowProviders {
         primary: DynLazySpan<'db>,
         previous: DynLazySpan<'db>,
-        previous_provider: ConcreteBorrowProvider,
-        current_provider: ConcreteBorrowProvider,
+        previous_provider: ProviderAddressSpace,
+        current_provider: ProviderAddressSpace,
     },
 
     TypeMustBeKnown(DynLazySpan<'db>),

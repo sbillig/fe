@@ -5,42 +5,66 @@ input_file: crates/codegen/tests/fixtures/match_mixed_return.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %f(v0.i256) -> i256 {
+type @__fe_layout_0 = enum {
+    #A,
+    #B,
+};
+
+func private %__fe_main_root() {
     block0:
-        jump block4;
-
-    block1:
-        return 0.i256;
-
-    block2:
-        jump block3;
-
-    block3:
-        (v4.i256, v5.i1) = uaddo 1.i256 1.i256;
-        br v5 block6 block7;
-
-    block4:
-        br_table v0 block5 (0.i256 block1) (1.i256 block2);
-
-    block5:
-        evm_invalid;
-
-    block6:
-        evm_revert 0.i256 0.i256;
-
-    block7:
-        return v4;
-}
-
-func private %__fe_sonatina_entry() {
-    block0:
-        v1.i256 = call %f 0.i256;
+        v1.i256 = call %f undef.@__fe_layout_0;
         evm_stop;
 }
 
+func private %f(v0.@__fe_layout_0) -> i256 {
+    block0:
+        v1.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v2.*i256 = alloca i256;
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        v5.*i256 = alloca i256;
+        v6.*i256 = alloca i256;
+        v7.*i256 = alloca i256;
+        v8.*i8 = alloca i8;
+        obj.store v1 v0;
+        v9.@__fe_layout_0 = obj.load v1;
+        v10.i8 = enum.tag v9;
+        mstore v8 v10 i8;
+        v11.i8 = mload v8 i8;
+        br_table v11 (0.i256 block2) (1.i256 block3);
 
-object @Contract {
-    section runtime {
-        entry %__fe_sonatina_entry;
+    block1:
+        v14.i256 = mload v3 i256;
+        mstore v2 v14 i256;
+        mstore v6 1.i256 i256;
+        v15.i256 = mload v2 i256;
+        v16.i256 = mload v6 i256;
+        (v17.i256, v18.i1) = uaddo v15 v16;
+        br v18 block4 block5;
+
+    block2:
+        mstore v4 0.i256 i256;
+        v20.i256 = mload v4 i256;
+        return v20;
+
+    block3:
+        mstore v5 1.i256 i256;
+        v21.i256 = mload v5 i256;
+        mstore v3 v21 i256;
+        jump block1;
+
+    block4:
+        evm_revert 0.i256 0.i256;
+
+    block5:
+        mstore v7 v17 i256;
+        v19.i256 = mload v7 i256;
+        return v19;
+}
+
+
+object @main {
+    section main {
+        entry %__fe_main_root;
     }
 }

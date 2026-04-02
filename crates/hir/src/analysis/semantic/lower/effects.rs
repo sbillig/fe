@@ -5,14 +5,13 @@ use crate::{
         ty::{
             effects::EffectKeyKind,
             ty_check::{
-                BodyOwner, EffectArg, EffectParamSite, EffectPassMode, LocalBinding, ParamSite,
+                BodyOwner, EffectArg, EffectParamSite, EffectPassMode, LocalBinding,
                 ResolvedEffectArg,
             },
-            ty_def::{InvalidCause, TyId},
         },
     },
-    hir_def::{ExprId, params::FuncParamMode},
-    semantic::{EffectEnvView, EffectSource},
+    hir_def::ExprId,
+    semantic::EffectEnvView,
 };
 
 use super::body::SmirLowerCtxt;
@@ -85,30 +84,24 @@ impl<'db> SmirLowerCtxt<'db> {
     }
 }
 
-pub(super) fn owner_effect_bindings<'db>(
+pub fn owner_effect_bindings<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
 ) -> Vec<LocalBinding<'db>> {
     effect_param_site(owner)
         .into_iter()
-        .flat_map(|site| EffectEnvView::new(site).bindings(db).iter())
-        .filter(|binding| matches!(binding.key_kind, EffectKeyKind::Type | EffectKeyKind::Trait))
-        .map(|binding| match binding.source {
-            EffectSource::Root => LocalBinding::EffectParam {
-                site: binding.binding_site,
-                idx: binding.binding_idx as usize,
-                key_path: binding.binding_path,
-                is_mut: binding.is_mut,
-            },
-            EffectSource::Field(_) => LocalBinding::Param {
-                site: ParamSite::EffectField(binding.binding_site),
-                idx: binding.binding_idx as usize,
-                mode: FuncParamMode::View,
-                ty: binding
-                    .key_ty
-                    .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other)),
-                is_mut: binding.is_mut,
-            },
+        .flat_map(|site| EffectEnvView::new(site).requirements(db))
+        .filter(|binding| {
+            matches!(
+                binding.key.kind(),
+                EffectKeyKind::Type | EffectKeyKind::Trait
+            )
+        })
+        .map(|binding| LocalBinding::EffectParam {
+            site: binding.binding_site,
+            idx: binding.binding_idx as usize,
+            key_path: binding.binding_path,
+            is_mut: binding.is_mut,
         })
         .collect()
 }

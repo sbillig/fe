@@ -532,7 +532,7 @@ fn collect_effect_provider_entries<'db>(
     let provider_param_map = place_effect_provider_param_index_map(db, func);
     let params = method.params(db);
 
-    func.effect_bindings(db)
+    func.effect_requirements(db)
         .iter()
         .filter_map(|binding| {
             let effect_idx = binding.binding_idx as usize;
@@ -541,13 +541,13 @@ fn collect_effect_provider_entries<'db>(
                 .copied()
                 .flatten()?;
             let provider_param = *params.get(provider_param_idx)?;
-            let key_ty = binding.key_ty.map(|key_ty| {
+            let key_ty = binding.key.key_ty().map(|key_ty| {
                 let key_ty = param_subst.map_or(key_ty, |subst| {
                     instantiate_with_partial_map(db, Binder::bind(key_ty), subst)
                 });
                 normalize_effect_identity_ty(db, key_ty, scope, assumptions, Some(trait_inst))
             });
-            let key_trait = binding.key_trait.map(|key_trait| {
+            let key_trait = binding.key.key_trait().map(|key_trait| {
                 let key_trait = param_subst.map_or(key_trait, |subst| {
                     instantiate_with_partial_map(db, Binder::bind(key_trait), subst)
                 });
@@ -557,7 +557,7 @@ fn collect_effect_provider_entries<'db>(
                 effect_idx,
                 provider_param,
                 identity: EffectIdentity {
-                    key_kind: binding.key_kind,
+                    key_kind: binding.key.kind(),
                     key_ty,
                     key_trait,
                     key_path: binding.binding_path,

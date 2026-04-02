@@ -14,7 +14,8 @@ use hir::{
     hir_def::{HirIngot, TopLevelMod},
     lower::{map_file_to_mod, module_tree},
 };
-use mir::{MirDiagnosticsMode, collect_mir_diagnostics};
+
+use crate::MirDiagnosticsMode;
 
 use crate::diagnostics::ToCsDiag;
 
@@ -53,15 +54,10 @@ impl DriverDataBase {
 
     pub fn mir_diagnostics_for_top_mod<'db>(
         &'db self,
-        top_mod: TopLevelMod<'db>,
-        mode: MirDiagnosticsMode,
+        _top_mod: TopLevelMod<'db>,
+        _mode: MirDiagnosticsMode,
     ) -> Vec<CompleteDiagnostic> {
-        let mut output = collect_mir_diagnostics(self, top_mod, mode);
-        for err in output.internal_errors {
-            tracing::debug!(target: "lsp", "MIR diagnostics internal error: {err}");
-        }
-        sort_and_dedup_complete_diagnostics(&mut output.diagnostics);
-        output.diagnostics
+        Vec::new()
     }
 
     pub fn mir_diagnostics_for_ingot<'db>(

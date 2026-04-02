@@ -148,43 +148,6 @@ impl<'db> EffectEnv<'db> {
         self.current_frame_mut().unkeyed.push(binding);
     }
 
-    pub fn lookup_by_binding(
-        &self,
-        binding: super::env::LocalBinding<'db>,
-    ) -> Option<ProvidedEffect<'db>> {
-        for frame in self.frames.iter().rev() {
-            if let Some(provided) = frame
-                .unkeyed
-                .iter()
-                .copied()
-                .find(|provided| provided.binding == Some(binding))
-            {
-                return Some(provided);
-            }
-            if let Some(provided) = frame
-                .keyed_by_family
-                .values()
-                .flat_map(|entries| entries.iter())
-                .find_map(|entry| match entry {
-                    KeyedEffectEntry::Witness(witness)
-                        if witness.provider.binding == Some(binding) =>
-                    {
-                        Some(witness.provider)
-                    }
-                    KeyedEffectEntry::Forwarder(forwarder)
-                        if forwarder.provider.binding == Some(binding) =>
-                    {
-                        Some(forwarder.provider)
-                    }
-                    _ => None,
-                })
-            {
-                return Some(provided);
-            }
-        }
-        None
-    }
-
     pub fn lookup_effect_frames(
         &self,
         query: &EffectQuery<'db>,

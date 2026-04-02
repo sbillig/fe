@@ -43,9 +43,9 @@ fn f() uses (slot: Slot<u256>) {}
 
     let func = find_func(&db, top_mod, "f");
     let key_ty = func
-        .effect_bindings(&db)
+        .effect_requirements(&db)
         .first()
-        .and_then(|binding| binding.key_ty)
+        .and_then(|binding| binding.key.key_ty())
         .expect("missing type effect key");
     let default_arg = key_ty
         .generic_args(&db)
@@ -82,9 +82,9 @@ fn f() uses (slot: Slot<u256>) {}
 
     let func = find_func(&db, top_mod, "f");
     let key_ty = func
-        .effect_bindings(&db)
+        .effect_requirements(&db)
         .first()
-        .and_then(|binding| binding.key_ty)
+        .and_then(|binding| binding.key.key_ty())
         .expect("missing type effect key");
     let default_arg = key_ty
         .generic_args(&db)
@@ -119,9 +119,9 @@ fn f() uses (slot: Slot<7>) {}
 
     let func = find_func(&db, top_mod, "f");
     let key_ty = func
-        .effect_bindings(&db)
+        .effect_requirements(&db)
         .first()
-        .and_then(|binding| binding.key_ty)
+        .and_then(|binding| binding.key.key_ty())
         .expect("missing type effect key");
     let base_arg = key_ty
         .generic_args(&db)

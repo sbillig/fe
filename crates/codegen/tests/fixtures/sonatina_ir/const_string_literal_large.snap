@@ -5,20 +5,23 @@ input_file: crates/codegen/tests/fixtures/const_string_literal_large.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %large_string_const() -> i256 {
-    block0:
-        return 14193761522114409556417378784065189563003639806809333727936228505845386929253.i256;
-}
-
-func private %__fe_sonatina_entry() {
+func private %__fe_main_root() {
     block0:
         v0.i256 = call %large_string_const;
         evm_stop;
 }
 
+func private %large_string_const() -> i256 {
+    block0:
+        v0.*i256 = alloca i256;
+        mstore v0 172063216033151516844329818169388221396727601204421676283161692387156386917.i256 i256;
+        v2.i256 = mload v0 i256;
+        return v2;
+}
 
-object @Contract {
-    section runtime {
-        entry %__fe_sonatina_entry;
+
+object @main {
+    section main {
+        entry %__fe_main_root;
     }
 }

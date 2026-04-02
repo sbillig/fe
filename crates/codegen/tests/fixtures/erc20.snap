@@ -152,12 +152,12 @@ object "CoolCoin" {
     function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
       revert(0, 0)
     }
-    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__AccessControl_3___3633e113b859df5f($slot) -> ret {
+    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field_arg0_root_mem__AccessControl_3___3633e113b859df5f($slot) -> ret {
       let v0 := $stor_ptr__Evm_hef0af3106e109414_AccessControl_3___1911f7c438797961($slot)
       ret := v0
       leave
     }
-    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__TokenStore_0__1___175215aa56127bde($slot) -> ret {
+    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field_arg0_root_mem__TokenStore_0__1___175215aa56127bde($slot) -> ret {
       let v0 := $stor_ptr__Evm_hef0af3106e109414_TokenStore_0__1___db7d7c067dc14cc5($slot)
       ret := v0
       leave
@@ -167,12 +167,12 @@ object "CoolCoin" {
       leave
     }
     function $init_field__Evm_hef0af3106e109414_AccessControl_3___1911f7c438797961($slot) -> ret {
-      let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__AccessControl_3___3633e113b859df5f($slot)
+      let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field_arg0_root_mem__AccessControl_3___3633e113b859df5f($slot)
       ret := v0
       leave
     }
     function $init_field__Evm_hef0af3106e109414_TokenStore_0__1___db7d7c067dc14cc5($slot) -> ret {
-      let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__TokenStore_0__1___175215aa56127bde($slot)
+      let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field_arg0_root_mem__TokenStore_0__1___175215aa56127bde($slot)
       ret := v0
       leave
     }

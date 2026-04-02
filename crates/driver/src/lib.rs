@@ -20,7 +20,6 @@ use common::{
 };
 pub use db::DriverDataBase;
 use ingot_handler::IngotHandler;
-pub use mir::{MirDiagnosticsMode, MirDiagnosticsOutput};
 use smol_str::SmolStr;
 
 use hir::analysis::core_requirements;
@@ -33,6 +32,18 @@ use resolver::{
     ingot::{IngotDescriptor, IngotResolutionError, IngotResolverImpl, RemoteProgress},
 };
 use url::Url;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MirDiagnosticsMode {
+    CompilerParity,
+    TemplatesOnly,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct MirDiagnosticsOutput {
+    pub diagnostics: Vec<common::diagnostics::CompleteDiagnostic>,
+    pub internal_errors: Vec<String>,
+}
 
 struct LoggingProgress;
 

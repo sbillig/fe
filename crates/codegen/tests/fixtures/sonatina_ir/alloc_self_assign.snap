@@ -1,27 +1,41 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/alloc_self_assign.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %bump_self_assign(v0.i256) -> i256 {
-    block0:
-        v1.*i8 = evm_malloc v0;
-        v2.i256 = ptr_to_int v1 i256;
-        return v2;
-}
-
-func private %__fe_sonatina_entry() {
+func private %__fe_main_root() {
     block0:
         v1.i256 = call %bump_self_assign 0.i256;
         evm_stop;
 }
 
+func private %bump_self_assign(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        v2.*i256 = alloca i256;
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        v5.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        v6.i256 = mload v1 i256;
+        mstore v2 v6 i256;
+        v7.i256 = mload v2 i256;
+        v8.*i8 = evm_malloc v7;
+        v9.i256 = ptr_to_int v8 i256;
+        mstore v5 v9 i256;
+        v10.i256 = mload v5 i256;
+        mstore v3 v10 i256;
+        v11.i256 = mload v3 i256;
+        mstore v2 v11 i256;
+        v12.i256 = mload v2 i256;
+        return v12;
+}
 
-object @Contract {
-    section runtime {
-        entry %__fe_sonatina_entry;
+
+object @main {
+    section main {
+        entry %__fe_main_root;
     }
 }

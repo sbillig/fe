@@ -10,8 +10,8 @@ use parser::ast;
 
 use super::{
     AttrListId, Body, EffectParamListId, FuncParamListId, FuncParamName, GenericParamListId,
-    HirIngot, IdentId, InlineAttr, InlineAttrErrorKind, InlineHint, Partial, Pat, PatId,
-    TupleTypeId, TypeBound, TypeId, UseAlias, WhereClauseId,
+    HirIngot, IdentId, InlineAttr, InlineAttrErrorKind, InlineHint, ManualContractRootAttr,
+    Partial, Pat, PatId, TupleTypeId, TypeBound, TypeId, UseAlias, WhereClauseId,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use crate::{
@@ -688,6 +688,27 @@ impl<'db> Func<'db> {
             Some(InlineAttr::Error(kind)) => Some(kind),
             Some(InlineAttr::Hint(_)) | None => None,
         }
+    }
+
+    pub fn manual_contract_root_attr(
+        self,
+        db: &'db dyn HirDb,
+    ) -> Option<ManualContractRootAttr<'db>> {
+        let attr = self.attributes(db).manual_contract_root_attr(db)?;
+        if matches!(attr, ManualContractRootAttr::Error(_)) {
+            return Some(attr);
+        }
+        if self.is_method(db)
+            || self.is_associated_func(db)
+            || self.is_extern(db)
+            || self.params(db).next().is_some()
+            || !self.generic_params(db).data(db).is_empty()
+        {
+            return Some(ManualContractRootAttr::Error(
+                crate::hir_def::ManualContractRootAttrError::WrongTarget,
+            ));
+        }
+        Some(attr)
     }
 
     pub fn is_extern(self, db: &dyn HirDb) -> bool {

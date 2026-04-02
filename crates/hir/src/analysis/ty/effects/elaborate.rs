@@ -30,7 +30,7 @@ use crate::{
             visitor::{TyVisitable, TyVisitor, walk_ty},
         },
     },
-    core::semantic::EffectBinding,
+    core::semantic::EffectRequirement,
     hir_def::{
         CallableDef, GenericArgListId, GenericParamOwner, IdentId, PathId, PathKind, Trait,
         scope_graph::ScopeId,
@@ -43,13 +43,13 @@ pub fn effect_requirement_decls_for_callable<'db>(
     db: &'db dyn HirAnalysisDb,
     callable_def: CallableDef<'db>,
 ) -> SmallVec<[EffectRequirementDecl<'db>; 2]> {
-    let bindings: &[EffectBinding<'db>] = match callable_def {
-        CallableDef::Func(func) => func.effective_effect_bindings(db),
+    let bindings: &[EffectRequirement<'db>] = match callable_def {
+        CallableDef::Func(func) => func.effective_effect_requirements(db),
         CallableDef::VariantCtor(_) => &[],
     };
     bindings
         .iter()
-        .filter_map(|binding| EffectRequirementDecl::from_effect_binding(db, binding))
+        .filter_map(|binding| EffectRequirementDecl::from_effect_requirement(db, binding))
         .collect()
 }
 

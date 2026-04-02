@@ -16,15 +16,16 @@ pub use self::contract::{
 };
 pub use self::path::RecordLike;
 use crate::analysis::name_resolution::resolve_path;
-use crate::analysis::ty::corelib::{resolve_core_trait, resolve_lib_type_path};
+pub use crate::analysis::ty::ProviderAddressSpace;
 use crate::analysis::ty::fold::TyFoldable;
+use crate::analysis::ty::provider::{address_space_from_ty, provider_semantics};
 use crate::analysis::ty::visitor::TyVisitable;
 use crate::hir_def::CallableDef;
 use crate::{
     hir_def::{
         Body, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParam,
-        GenericParamOwner, IdentId, ItemKind, LitKind, Partial, Pat, PatId, PathId, StmtId,
-        StringId, TypeBound, TypeId as HirTyId, WhereClauseOwner,
+        GenericParamOwner, ItemKind, LitKind, Partial, Pat, PatId, PathId, StmtId, StringId,
+        TypeBound, TypeId as HirTyId, WhereClauseOwner,
     },
     span::{
         DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan,
@@ -36,9 +37,7 @@ use callable::{CallGenericArgUnifyError, unify_explicit_call_generic_args};
 use common::indexmap::IndexMap;
 use ena::unify::InPlace;
 use env::TyCheckEnv;
-pub use env::{
-    ConcreteBorrowProvider, EffectParamSite, ExprProp, LocalBinding, ParamSite, PatBindingMode,
-};
+pub use env::{EffectParamSite, ExprProp, LocalBinding, ParamSite, PatBindingMode};
 pub(super) use expr::TraitOps;
 pub use owner::BodyOwner;
 pub use owner::EffectParamOwner;
@@ -70,6 +69,7 @@ use super::{
     ty_lower::lower_hir_ty,
     unify::{InferenceKey, Snapshot, UnificationError, UnificationTable},
 };
+use crate::analysis::semantic::SemanticCodeRegionRef;
 use crate::analysis::ty::ty_def::{TyBase, TyData};
 use crate::analysis::ty::{
     const_ty::ConstTyData,
@@ -120,7 +120,16 @@ pub(super) fn check_body<'db>(
     owner: BodyOwner<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
     let Ok(mut checker) = TyChecker::new(db, owner) else {
-        return (Vec::new(), TypedBody::empty(db));
+        return (
+            Vec::new(),
+            match owner {
+                BodyOwner::Func(func) => typed_body_for_bodyless_func(db, func),
+                BodyOwner::Const(_)
+                | BodyOwner::AnonConstBody { .. }
+                | BodyOwner::ContractInit { .. }
+                | BodyOwner::ContractRecvArm { .. } => TypedBody::empty(db),
+            },
+        );
     };
 
     checker.run();
@@ -160,13 +169,77 @@ pub(super) fn check_body<'db>(
     (diags, typed_body)
 }
 
+fn typed_body_for_bodyless_func<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+) -> TypedBody<'db> {
+    let mut preds =
+        crate::analysis::ty::trait_resolution::constraint::collect_func_decl_constraints(
+            db,
+            func.into(),
+            true,
+        )
+        .instantiate_identity();
+    if let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) {
+        let self_pred = TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
+        let mut merged = preds.list(db).to_vec();
+        merged.push(self_pred);
+        preds = PredicateListId::new(db, merged);
+    }
+    let assumptions = preds.extend_all_bounds(db);
+    let mut result_ty = func.return_ty(db);
+    if !result_ty.is_star_kind(db) || ty_contains_const_hole(db, result_ty) {
+        result_ty = TyId::invalid(db, InvalidCause::Other);
+    }
+    let param_bindings = func
+        .params(db)
+        .enumerate()
+        .map(|(idx, view)| {
+            let mut ty = *func
+                .arg_tys(db)
+                .get(idx)
+                .map(|binder| binder.skip_binder())
+                .unwrap_or(&TyId::invalid(db, InvalidCause::ParseError));
+            if !ty.is_star_kind(db) || (!view.is_self_param(db) && ty_contains_const_hole(db, ty)) {
+                ty = TyId::invalid(db, InvalidCause::Other);
+            }
+            LocalBinding::Param {
+                site: ParamSite::Func(func),
+                idx,
+                mode: view.mode(db),
+                ty,
+                is_mut: view.is_mut(db),
+            }
+        })
+        .collect();
+    TypedBody {
+        body: None,
+        result_ty,
+        assumptions,
+        pat_ty: FxHashMap::default(),
+        expr_ty: FxHashMap::default(),
+        implicit_moves: FxHashSet::default(),
+        const_refs: FxHashMap::default(),
+        code_region_refs: FxHashMap::default(),
+        callables: FxHashMap::default(),
+        call_effect_args: FxHashMap::default(),
+        return_borrow_provider: None,
+        param_bindings,
+        pat_bindings: FxHashMap::default(),
+        pat_binding_modes: FxHashMap::default(),
+        pattern_store: PatternStore::default(),
+        pattern_status: FxHashMap::default(),
+        for_loop_seq: FxHashMap::default(),
+    }
+}
+
 pub struct TyChecker<'db> {
     pub(crate) db: &'db dyn HirAnalysisDb,
     pub(crate) env: TyCheckEnv<'db>,
     pub(crate) table: UnificationTable<'db>,
     expected: TyId<'db>,
     effect_provider_keys: FxHashSet<InferenceKey<'db>>,
-    first_return_borrow_provider: Option<(DynLazySpan<'db>, ConcreteBorrowProvider)>,
+    first_return_borrow_provider: Option<(DynLazySpan<'db>, ProviderAddressSpace)>,
     diags: Vec<FuncBodyDiag<'db>>,
 }
 
@@ -358,8 +431,12 @@ impl<'db> TyChecker<'db> {
             .collect();
 
         let assumptions = PredicateListId::empty_list(self.db);
-        let root_effect_ty =
-            super::resolve_default_root_effect_ty(self.db, contract.scope(), assumptions);
+        let root_effect_ty = crate::analysis::ty::registered_root_providers(
+            self.db,
+            EffectParamSite::Contract(contract),
+        )
+        .first()
+        .map(|registration| registration.provider_ty);
 
         for (idx, effect) in effects.data(self.db).iter().enumerate() {
             let Some(key_path) = effect
@@ -478,91 +555,32 @@ impl<'db> TyChecker<'db> {
     fn concrete_borrow_provider_from_address_space(
         &self,
         address_space: TyId<'db>,
-    ) -> Option<ConcreteBorrowProvider> {
-        let scope = self.env.scope();
-        let memory = resolve_lib_type_path(self.db, scope, "core::effect_ref::Memory")?;
-        let storage = resolve_lib_type_path(self.db, scope, "core::effect_ref::Storage")?;
-        let transient =
-            resolve_lib_type_path(self.db, scope, "core::effect_ref::TransientStorage")?;
-        let calldata = resolve_lib_type_path(self.db, scope, "core::effect_ref::Calldata")?;
-
-        if address_space == memory {
-            Some(ConcreteBorrowProvider::Memory)
-        } else if address_space == storage {
-            Some(ConcreteBorrowProvider::Storage)
-        } else if address_space == transient {
-            Some(ConcreteBorrowProvider::TransientStorage)
-        } else if address_space == calldata {
-            Some(ConcreteBorrowProvider::Calldata)
-        } else {
-            None
-        }
+    ) -> Option<ProviderAddressSpace> {
+        address_space_from_ty(self.db, self.env.scope(), address_space)
     }
 
     fn concrete_borrow_provider_for_effect_handle_ty(
         &self,
         ty: TyId<'db>,
-    ) -> Option<ConcreteBorrowProvider> {
-        let scope = self.env.scope();
-        let assumptions = self.env.assumptions();
-        let effect_handle = resolve_core_trait(self.db, scope, &["effect_ref", "EffectHandle"])
-            .expect("missing required core trait `core::effect_ref::EffectHandle`");
-        let address_space_ident = IdentId::new(self.db, "AddressSpace".to_string());
-        let inst = TraitInstId::new(self.db, effect_handle, vec![ty], IndexMap::new());
-
-        match self.trait_effect_goal_satisfiability_in_scope(scope, assumptions, inst) {
-            GoalSatisfiability::Satisfied(_) => {}
-            GoalSatisfiability::NeedsConfirmation(_)
-            | GoalSatisfiability::ContainsInvalid
-            | GoalSatisfiability::UnSat(_) => return None,
-        }
-
-        for (space_ty, provider) in [
-            (
-                resolve_lib_type_path(self.db, scope, "core::effect_ref::Memory")?,
-                ConcreteBorrowProvider::Memory,
-            ),
-            (
-                resolve_lib_type_path(self.db, scope, "core::effect_ref::Storage")?,
-                ConcreteBorrowProvider::Storage,
-            ),
-            (
-                resolve_lib_type_path(self.db, scope, "core::effect_ref::TransientStorage")?,
-                ConcreteBorrowProvider::TransientStorage,
-            ),
-            (
-                resolve_lib_type_path(self.db, scope, "core::effect_ref::Calldata")?,
-                ConcreteBorrowProvider::Calldata,
-            ),
-        ] {
-            let mut assoc = IndexMap::new();
-            assoc.insert(address_space_ident, space_ty);
-            let inst = TraitInstId::new(self.db, effect_handle, vec![ty], assoc);
-            match self.trait_effect_goal_satisfiability_in_scope(scope, assumptions, inst) {
-                GoalSatisfiability::Satisfied(_) => return Some(provider),
-                GoalSatisfiability::NeedsConfirmation(_) => return None,
-                GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => {}
-            }
-        }
-
-        panic!(
-            "`{}` implements `EffectHandle` but `AddressSpace` is not one of: core::effect_ref::Memory | Storage | TransientStorage | Calldata",
-            ty.pretty_print(self.db)
-        )
+    ) -> Option<ProviderAddressSpace> {
+        provider_semantics(self.db, self.env.scope(), self.env.assumptions(), ty).address_space
     }
 
     fn concrete_borrow_provider_for_effect_field(
         &self,
         site: EffectParamSite<'db>,
         idx: usize,
-    ) -> Option<ConcreteBorrowProvider> {
+    ) -> Option<ProviderAddressSpace> {
         let contract = match site {
             EffectParamSite::Func(_) => return None,
             EffectParamSite::Contract(contract)
             | EffectParamSite::ContractInit { contract }
             | EffectParamSite::ContractRecvArm { contract, .. } => contract,
         };
-        let name = self.env.semantic_effect_binding(site, idx)?.binding_name;
+        let name = self
+            .env
+            .semantic_effect_requirement(site, idx)?
+            .binding_name;
         let field = contract.field_layout(self.db).get(&name)?;
         self.concrete_borrow_provider_for_effect_handle_ty(field.address_space)
             .or_else(|| self.concrete_borrow_provider_from_address_space(field.address_space))
@@ -572,35 +590,22 @@ impl<'db> TyChecker<'db> {
         &self,
         site: EffectParamSite<'db>,
         name: crate::hir_def::IdentId<'db>,
-    ) -> Option<ConcreteBorrowProvider> {
-        let contract = match site {
-            EffectParamSite::Func(_) => return None,
-            EffectParamSite::Contract(contract)
-            | EffectParamSite::ContractInit { contract }
-            | EffectParamSite::ContractRecvArm { contract, .. } => contract,
-        };
-        if let Some(field) = contract.field_layout(self.db).get(&name) {
-            return self
-                .concrete_borrow_provider_for_effect_handle_ty(field.address_space)
-                .or_else(|| self.concrete_borrow_provider_from_address_space(field.address_space));
-        }
-        let root_effect_ty = super::resolve_default_root_effect_ty(
-            self.db,
-            contract.scope(),
-            self.env.base_assumptions(),
-        )?;
-        self.concrete_borrow_provider_for_effect_handle_ty(root_effect_ty)
-            .or_else(|| self.concrete_borrow_provider_from_address_space(root_effect_ty))
+    ) -> Option<ProviderAddressSpace> {
+        let requirement = crate::core::semantic::EffectEnvView::new(site)
+            .requirements(self.db)
+            .into_iter()
+            .find(|binding| binding.binding_name == name)?;
+        self.env
+            .resolved_provider_binding(site, requirement.binding_idx as usize)?
+            .semantics
+            .address_space
     }
 
     fn concrete_borrow_provider_for_binding(
         &self,
         binding: LocalBinding<'db>,
-    ) -> Option<ConcreteBorrowProvider> {
+    ) -> Option<ProviderAddressSpace> {
         let binding_ty = self.env.lookup_binding_ty(&binding);
-        if binding_ty.as_capability(self.db).is_some() {
-            return Some(ConcreteBorrowProvider::Memory);
-        }
         if let Some(provider) = self.concrete_borrow_provider_for_effect_handle_ty(binding_ty) {
             return Some(provider);
         }
@@ -623,12 +628,17 @@ impl<'db> TyChecker<'db> {
                 }),
             _ => None,
         }
+        .or_else(|| {
+            binding_ty
+                .as_capability(self.db)
+                .map(|_| ProviderAddressSpace::Memory)
+        })
     }
 
     fn concrete_borrow_provider_for_place(
         &self,
         place: &Place<'db>,
-    ) -> Option<ConcreteBorrowProvider> {
+    ) -> Option<ProviderAddressSpace> {
         let PlaceBase::Binding(binding) = place.base;
         if self
             .env
@@ -646,7 +656,7 @@ impl<'db> TyChecker<'db> {
                 ..
             } => self.concrete_borrow_provider_for_binding(binding),
             LocalBinding::Local { .. } | LocalBinding::Param { .. } => {
-                Some(ConcreteBorrowProvider::Memory)
+                Some(ProviderAddressSpace::Memory)
             }
         }
     }
@@ -654,10 +664,10 @@ impl<'db> TyChecker<'db> {
     fn merge_concrete_borrow_providers(
         &mut self,
         previous_span: DynLazySpan<'db>,
-        previous: Option<ConcreteBorrowProvider>,
+        previous: Option<ProviderAddressSpace>,
         current_span: DynLazySpan<'db>,
-        current: Option<ConcreteBorrowProvider>,
-    ) -> Option<ConcreteBorrowProvider> {
+        current: Option<ProviderAddressSpace>,
+    ) -> Option<ProviderAddressSpace> {
         if let (Some(previous), Some(current)) = (previous, current)
             && previous != current
         {
@@ -2191,7 +2201,7 @@ pub struct ResolvedEffectArg<'db> {
     pub pass_mode: EffectPassMode,
     pub key_kind: EffectKeyKind,
     pub instantiated_target_ty: Option<TyId<'db>>,
-    pub provider: Option<ConcreteBorrowProvider>,
+    pub provider: Option<ProviderAddressSpace>,
 }
 
 /// Resolved reference for a `const`-valued path expression.
@@ -2228,14 +2238,16 @@ impl<'db> TyFoldable<'db> for ConstRef<'db> {
 #[derive(Debug, Clone, PartialEq, Eq, Update)]
 pub struct TypedBody<'db> {
     body: Option<Body<'db>>,
+    result_ty: TyId<'db>,
     assumptions: PredicateListId<'db>,
     pat_ty: FxHashMap<PatId, TyId<'db>>,
     expr_ty: FxHashMap<ExprId, ExprProp<'db>>,
     implicit_moves: FxHashSet<ExprId>,
     const_refs: FxHashMap<ExprId, ConstRef<'db>>,
+    code_region_refs: FxHashMap<ExprId, SemanticCodeRegionRef<'db>>,
     callables: FxHashMap<ExprId, Callable<'db>>,
     call_effect_args: FxHashMap<ExprId, Vec<ResolvedEffectArg<'db>>>,
-    return_borrow_provider: Option<ConcreteBorrowProvider>,
+    return_borrow_provider: Option<ProviderAddressSpace>,
     /// Bindings for function parameters (indexed by param position)
     param_bindings: Vec<LocalBinding<'db>>,
     /// Bindings for local variables (keyed by the pattern that introduces them)
@@ -2267,6 +2279,7 @@ impl<'db> TyVisitable<'db> for TypedBody<'db> {
         V: crate::analysis::ty::visitor::TyVisitor<'db> + ?Sized,
     {
         self.assumptions.visit_with(visitor);
+        self.result_ty.visit_with(visitor);
         for ty in self.pat_ty.values() {
             ty.visit_with(visitor);
         }
@@ -2291,6 +2304,7 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
     where
         F: crate::analysis::ty::fold::TyFolder<'db>,
     {
+        let result_ty = self.result_ty.fold_with(db, folder);
         let assumptions = self.assumptions.fold_with(db, folder);
         let pat_ty = self
             .pat_ty
@@ -2307,6 +2321,7 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             .into_iter()
             .map(|(expr, cref)| (expr, cref.fold_with(db, folder)))
             .collect();
+        let code_region_refs = self.code_region_refs;
         let callables = self
             .callables
             .into_iter()
@@ -2343,11 +2358,13 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
 
         Self {
             body: self.body,
+            result_ty,
             assumptions,
             pat_ty,
             expr_ty,
             implicit_moves: self.implicit_moves,
             const_refs,
+            code_region_refs,
             callables,
             pat_binding_modes: self.pat_binding_modes,
             call_effect_args,
@@ -2364,6 +2381,10 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
 impl<'db> TypedBody<'db> {
     pub fn body(&self) -> Option<Body<'db>> {
         self.body
+    }
+
+    pub fn result_ty(&self) -> TyId<'db> {
+        self.result_ty
     }
 
     pub fn assumptions(&self) -> PredicateListId<'db> {
@@ -2389,6 +2410,10 @@ impl<'db> TypedBody<'db> {
         self.const_refs.get(&expr).copied()
     }
 
+    pub fn code_region_ref(&self, expr: ExprId) -> Option<&SemanticCodeRegionRef<'db>> {
+        self.code_region_refs.get(&expr)
+    }
+
     pub fn pat_ty(&self, db: &'db dyn HirAnalysisDb, pat: PatId) -> TyId<'db> {
         self.pat_ty
             .get(&pat)
@@ -2404,7 +2429,7 @@ impl<'db> TypedBody<'db> {
         self.call_effect_args.get(&call_expr).map(|v| v.as_slice())
     }
 
-    pub fn return_borrow_provider(&self) -> Option<ConcreteBorrowProvider> {
+    pub fn return_borrow_provider(&self) -> Option<ProviderAddressSpace> {
         self.return_borrow_provider
     }
 
@@ -2429,26 +2454,23 @@ impl<'db> TypedBody<'db> {
             LocalBinding::Param { ty, .. } => ty,
             LocalBinding::EffectParam { site, idx, .. } => {
                 crate::core::semantic::EffectEnvView::new(site)
-                    .bindings(db)
+                    .requirements(db)
                     .iter()
-                    .find(|effect| effect.binding_idx as usize == idx)
-                    .and_then(|effect| match effect.source {
-                        crate::core::semantic::EffectSource::Root => match effect.key_kind {
-                            crate::analysis::ty::effects::EffectKeyKind::Trait => {
-                                let scope = match site {
-                                    EffectParamSite::Func(func) => func.scope(),
-                                    EffectParamSite::Contract(contract)
-                                    | EffectParamSite::ContractInit { contract }
-                                    | EffectParamSite::ContractRecvArm { contract, .. } => {
-                                        contract.scope()
-                                    }
-                                };
-                                super::resolve_default_root_effect_ty(db, scope, self.assumptions)
-                            }
-                            crate::analysis::ty::effects::EffectKeyKind::Type => effect.key_ty,
-                            crate::analysis::ty::effects::EffectKeyKind::Other => None,
-                        },
-                        crate::core::semantic::EffectSource::Field(_) => effect.key_ty,
+                    .find(|requirement| requirement.binding_idx as usize == idx)
+                    .and_then(|requirement| requirement.key.key_ty())
+                    .or_else(|| {
+                        let view = crate::core::semantic::EffectEnvView::new(site);
+                        view.resolutions(db)
+                            .iter()
+                            .find(|resolution| resolution.requirement_idx as usize == idx)
+                            .and_then(|resolution| {
+                                view.providers(db)
+                                    .iter()
+                                    .find(|provider| {
+                                        provider.provider_idx == resolution.provider_idx
+                                    })
+                                    .map(|provider| provider.provider_ty)
+                            })
                     })
                     .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
             }
@@ -3350,11 +3372,13 @@ impl<'db> TypedBody<'db> {
     fn empty(db: &'db dyn HirAnalysisDb) -> Self {
         Self {
             body: None,
+            result_ty: TyId::unit(db),
             assumptions: PredicateListId::empty_list(db),
             pat_ty: FxHashMap::default(),
             expr_ty: FxHashMap::default(),
             implicit_moves: FxHashSet::default(),
             const_refs: FxHashMap::default(),
+            code_region_refs: FxHashMap::default(),
             callables: FxHashMap::default(),
             call_effect_args: FxHashMap::default(),
             return_borrow_provider: None,

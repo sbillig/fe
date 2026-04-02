@@ -15,12 +15,13 @@ use crate::{
             FieldIndex, SConst, SExpr, SLocalId, SPlace, SPlaceElem, SStmt, STerminator,
             SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticBody, SemanticConstRef,
             VariantIndex, array_const, bool_const, bytes_const, enum_const, int_const,
-            int_ty_shape, normalize_int_to_shape, sem_const_from_ty, struct_const, tuple_const,
-            unit_const,
+            int_ty_shape, normalize_int_to_shape, runtime_size_bytes, sem_const_from_ty,
+            struct_const, tuple_const, unit_const,
         },
         ty::{
             const_expr::{ConstExpr, ConstExprId},
             const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy, const_ty_from_sem_const},
+            normalize::normalize_ty,
             ty_check::BodyOwner,
             ty_def::{PrimTy, TyBase, TyData, TyId},
         },
@@ -420,7 +421,13 @@ impl<'db> CtfeMachine<'db> {
                     && func.is_extern(self.db)
                 {
                     let value_args = self.materialize_args(args, origin)?;
-                    return match self.eval_extern_const_fn(func, result_ty, &value_args, origin) {
+                    return match self.eval_extern_const_fn(
+                        instance,
+                        func,
+                        result_ty,
+                        &value_args,
+                        origin,
+                    ) {
                         Ok(value) => Ok(CtfeValue::Value(value)),
                         Err(CtfeError::NotConstEvaluable { .. }) => Ok(CtfeValue::Value(
                             self.abstract_const_call(
@@ -492,6 +499,9 @@ impl<'db> CtfeMachine<'db> {
                     }),
                 }
             }
+            SExpr::CodeRegionOffset { .. } | SExpr::CodeRegionLen { .. } => {
+                Err(CtfeError::NotConstEvaluable { origin })
+            }
         }
     }
 
@@ -510,6 +520,7 @@ impl<'db> CtfeMachine<'db> {
 
     fn eval_extern_const_fn(
         &self,
+        instance: SemanticInstance<'db>,
         func: crate::hir_def::Func<'db>,
         result_ty: TyId<'db>,
         args: &[SemConstId<'db>],
@@ -520,10 +531,41 @@ impl<'db> CtfeMachine<'db> {
         };
 
         match name.data(self.db).as_str() {
+            "size_of" => self.eval_intrinsic_size_of(instance, result_ty, args, origin),
             "__as_bytes" => self.eval_intrinsic_as_bytes(result_ty, args, origin),
             "__keccak256" => self.eval_intrinsic_keccak(result_ty, args, origin),
             _ => Err(CtfeError::NotConstEvaluable { origin }),
         }
+    }
+
+    fn eval_intrinsic_size_of(
+        &self,
+        instance: SemanticInstance<'db>,
+        result_ty: TyId<'db>,
+        args: &[SemConstId<'db>],
+        origin: SemOrigin<'db>,
+    ) -> Result<SemConstId<'db>, CtfeError<'db>> {
+        if !args.is_empty() {
+            return Err(CtfeError::NotConstEvaluable { origin });
+        }
+        let ty = *instance
+            .key(self.db)
+            .subst(self.db)
+            .generic_args(self.db)
+            .first()
+            .ok_or(CtfeError::NotConstEvaluable { origin })?;
+        let ty = normalize_ty(
+            self.db,
+            ty,
+            instance.key(self.db).owner(self.db).scope(),
+            instance
+                .key(self.db)
+                .instantiate_typed_body(self.db)
+                .assumptions(),
+        );
+        let size =
+            runtime_size_bytes(self.db, ty).ok_or(CtfeError::NotConstEvaluable { origin })?;
+        Ok(int_const(self.db, result_ty, BigInt::from(size)))
     }
 
     fn abstract_const_call(&self, expr: ConstExpr<'db>, result_ty: TyId<'db>) -> SemConstId<'db> {

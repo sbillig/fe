@@ -4,22 +4,22 @@ use crate::{
     db::MirDb,
     runtime::{
         ConstScalar, HandleView, Layout, LayoutId, LocalSlotKind, PlaceElem, PlaceRoot,
-        RuntimeBody, RuntimeClass, RuntimeProgramView, ScalarClass, ScalarRepr, ScalarRole,
-        VariantId,
+        ResolvedPlaceElem, ResolvedPlaceRootKind, ResolvedRuntimePlace, RuntimeBody, RuntimeClass,
+        RuntimeProgramView, ScalarClass, ScalarRepr, ScalarRole, VariantId,
     },
     verify::VerifyError,
 };
 
-pub(super) fn project_place<'db>(
+pub fn resolve_runtime_place<'db>(
     db: &'db dyn MirDb,
     program: &impl RuntimeProgramView<'db>,
     body: &RuntimeBody<'db>,
-    place: &crate::runtime::RuntimePlace,
-) -> Result<RuntimeClass<'db>, VerifyError<'db>> {
-    let mut current = match place.root {
+    place: &crate::runtime::RuntimePlace<'db>,
+) -> Result<ResolvedRuntimePlace<'db>, VerifyError<'db>> {
+    let mut current = match &place.root {
         PlaceRoot::Slot(local) => match &body
-            .local(local)
-            .ok_or(VerifyError::MissingRuntimeLocal(local))?
+            .local(*local)
+            .ok_or(VerifyError::MissingRuntimeLocal(*local))?
             .slot
         {
             LocalSlotKind::None => {
@@ -31,25 +31,107 @@ pub(super) fn project_place<'db>(
             LocalSlotKind::Slot(class) => class.clone(),
         },
         PlaceRoot::Handle(value) => body
-            .value_class(value)
+            .value_class(*value)
             .cloned()
-            .ok_or(VerifyError::ErasedRuntimeValue(value))?,
+            .ok_or(VerifyError::ErasedRuntimeValue(*value))?,
+        PlaceRoot::Ptr { addr, space, class } => {
+            match body
+                .value_class(*addr)
+                .ok_or(VerifyError::ErasedRuntimeValue(*addr))?
+            {
+                RuntimeClass::RawAddr {
+                    space: actual_space,
+                    ..
+                } if *actual_space == *space => {}
+                RuntimeClass::Handle {
+                    kind:
+                        crate::runtime::HandleKind::Provider {
+                            space: actual_space,
+                            ..
+                        },
+                    ..
+                } if *actual_space == *space => {}
+                value_class => return Err(VerifyError::InvalidPlace(value_class.clone())),
+            }
+            class.clone()
+        }
     };
 
+    let root_kind = match &place.root {
+        PlaceRoot::Slot(local) => ResolvedPlaceRootKind::Slot {
+            local: *local,
+            class: current.clone(),
+        },
+        PlaceRoot::Handle(value) => ResolvedPlaceRootKind::Handle {
+            value: *value,
+            class: current.clone(),
+        },
+        PlaceRoot::Ptr { addr, space, .. } => ResolvedPlaceRootKind::Ptr {
+            addr: *addr,
+            space: *space,
+            class: current.clone(),
+        },
+    };
+
+    let mut path = Vec::with_capacity(place.path.len());
     for elem in place.path.iter() {
-        current = match elem {
-            PlaceElem::Field(field) => project_field(program, current, *field)?,
+        match elem {
+            PlaceElem::Field(field) => {
+                current = project_field(program, current, *field)?;
+                path.push(ResolvedPlaceElem::Field {
+                    field: *field,
+                    class: current.clone(),
+                });
+            }
             PlaceElem::Index(index) => {
                 let _ = body
                     .value_class(*index)
                     .ok_or(VerifyError::ErasedRuntimeValue(*index))?;
-                project_index(program, current)?
+                current = project_index(program, current)?;
+                path.push(ResolvedPlaceElem::Index {
+                    index: *index,
+                    class: current.clone(),
+                });
             }
-            PlaceElem::VariantField(field) => project_variant_field(db, current, *field)?,
-        };
+            PlaceElem::VariantField(field) => {
+                let RuntimeClass::Handle {
+                    view: HandleView::EnumVariant(variant),
+                    ..
+                } = current
+                else {
+                    return Err(VerifyError::InvalidVariantPlace(current));
+                };
+                current = project_variant_field(db, current, *field)?;
+                path.push(ResolvedPlaceElem::VariantField {
+                    variant,
+                    field: *field,
+                    class: current.clone(),
+                });
+            }
+        }
     }
 
-    Ok(current)
+    if place.path.is_empty()
+        && let PlaceRoot::Handle(_) = &place.root
+        && let RuntimeClass::Handle { layout, .. } = current
+    {
+        current = RuntimeClass::AggregateValue { layout };
+    }
+
+    Ok(ResolvedRuntimePlace {
+        root_kind,
+        result_class: current,
+        path: path.into_boxed_slice(),
+    })
+}
+
+pub(super) fn project_place<'db>(
+    db: &'db dyn MirDb,
+    program: &impl RuntimeProgramView<'db>,
+    body: &RuntimeBody<'db>,
+    place: &crate::runtime::RuntimePlace<'db>,
+) -> Result<RuntimeClass<'db>, VerifyError<'db>> {
+    Ok(resolve_runtime_place(db, program, body, place)?.result_class)
 }
 
 pub(super) fn runtime_value_class<'a, 'db>(
@@ -178,6 +260,29 @@ pub(super) fn verify_value_enum_variant<'db>(
     variant: VariantId<'db>,
     fields: &[crate::runtime::RValueId],
 ) -> Result<(), VerifyError<'db>> {
+    let variant_layout = verify_value_enum_variant_ref(program, value_class, variant)?;
+    if variant_layout.fields.len() != fields.len() {
+        return Err(VerifyError::InvalidVariant(
+            variant.enum_layout,
+            variant.index,
+        ));
+    }
+    for (field, expected) in fields.iter().zip(variant_layout.fields.iter()) {
+        if runtime_value_class(body, *field)? != expected {
+            return Err(VerifyError::InvalidVariant(
+                variant.enum_layout,
+                variant.index,
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn verify_value_enum_variant_ref<'db>(
+    program: &impl RuntimeProgramView<'db>,
+    value_class: RuntimeClass<'db>,
+    variant: VariantId<'db>,
+) -> Result<crate::runtime::EnumVariantLayout<'db>, VerifyError<'db>> {
     let RuntimeClass::AggregateValue { layout } = value_class else {
         return Err(VerifyError::InvalidVariantPlace(value_class));
     };
@@ -187,18 +292,11 @@ pub(super) fn verify_value_enum_variant<'db>(
     let Layout::Enum(enum_layout) = program.layout(layout) else {
         return Err(VerifyError::InvalidEnumTag(layout));
     };
-    let Some(variant_layout) = enum_layout.variants.get(variant.index as usize) else {
-        return Err(VerifyError::InvalidVariant(layout, variant.index));
-    };
-    if variant_layout.fields.len() != fields.len() {
-        return Err(VerifyError::InvalidVariant(layout, variant.index));
-    }
-    for (field, expected) in fields.iter().zip(variant_layout.fields.iter()) {
-        if runtime_value_class(body, *field)? != expected {
-            return Err(VerifyError::InvalidVariant(layout, variant.index));
-        }
-    }
-    Ok(())
+    enum_layout
+        .variants
+        .get(variant.index as usize)
+        .cloned()
+        .ok_or(VerifyError::InvalidVariant(layout, variant.index))
 }
 
 pub(super) fn enum_extract_class<'db>(

@@ -59,6 +59,20 @@ pub enum LoopUnrollAttr {
     Error(LoopUnrollAttrErrorKind),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+pub enum ManualContractRootAttr<'db> {
+    Init { contract_name: StringId<'db> },
+    Runtime { contract_name: StringId<'db> },
+    Error(ManualContractRootAttrError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub enum ManualContractRootAttrError {
+    InvalidForm,
+    Duplicate,
+    WrongTarget,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct KeywordAttrSpec {
     pub has_value: bool,
@@ -81,6 +95,12 @@ pub(crate) struct InlineAttrParseError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LoopUnrollAttrParseError {
     pub kind: LoopUnrollAttrErrorKind,
+    pub attr_index: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ManualContractRootAttrParseError {
+    pub kind: ManualContractRootAttrError,
     pub attr_index: usize,
 }
 
@@ -129,6 +149,29 @@ pub(crate) fn parse_loop_unroll_attr_specs(
     Ok(unroll_hint)
 }
 
+pub(crate) fn parse_manual_contract_root_attr_specs<'db>(
+    db: &'db dyn HirDb,
+    attrs: impl IntoIterator<Item = (&'db str, KeywordAttrSpec)>,
+) -> Result<Option<ManualContractRootAttr<'db>>, ManualContractRootAttrParseError> {
+    let mut root_attr = None;
+
+    for (attr_index, (name, attr)) in attrs.into_iter().enumerate() {
+        let parsed = parse_manual_contract_root_attr_spec(db, name, &attr)
+            .map_err(|kind| ManualContractRootAttrParseError { kind, attr_index })?;
+
+        if root_attr.is_some() {
+            return Err(ManualContractRootAttrParseError {
+                kind: ManualContractRootAttrError::Duplicate,
+                attr_index,
+            });
+        }
+
+        root_attr = Some(parsed);
+    }
+
+    Ok(root_attr)
+}
+
 fn parse_inline_attr_spec(attr: &KeywordAttrSpec) -> Result<InlineHint, InlineAttrErrorKind> {
     parse_keyword_attr_spec(
         attr,
@@ -136,6 +179,30 @@ fn parse_inline_attr_spec(attr: &KeywordAttrSpec) -> Result<InlineHint, InlineAt
         &[("always", InlineHint::Always), ("never", InlineHint::Never)],
     )
     .map_err(|()| InlineAttrErrorKind::InvalidForm)
+}
+
+fn parse_manual_contract_root_attr_spec<'db>(
+    db: &'db dyn HirDb,
+    name: &str,
+    attr: &KeywordAttrSpec,
+) -> Result<ManualContractRootAttr<'db>, ManualContractRootAttrError> {
+    if attr.has_value || !attr.has_args || attr.args.len() != 1 {
+        return Err(ManualContractRootAttrError::InvalidForm);
+    }
+
+    let arg = &attr.args[0];
+    if arg.has_value {
+        return Err(ManualContractRootAttrError::InvalidForm);
+    }
+    let Some(key) = arg.key.as_deref() else {
+        return Err(ManualContractRootAttrError::InvalidForm);
+    };
+    let contract_name = StringId::new(db, key.to_string());
+    match name {
+        "contract_init" => Ok(ManualContractRootAttr::Init { contract_name }),
+        "contract_runtime" => Ok(ManualContractRootAttr::Runtime { contract_name }),
+        _ => Err(ManualContractRootAttrError::InvalidForm),
+    }
 }
 
 pub(crate) fn parse_marker_attr_spec(attr: &KeywordAttrSpec) -> Result<(), ()> {
@@ -283,6 +350,31 @@ impl<'db> AttrListId<'db> {
             Ok(Some(hint)) => Some(LoopUnrollAttr::Hint(hint)),
             Ok(None) => None,
             Err(err) => Some(LoopUnrollAttr::Error(err.kind)),
+        }
+    }
+
+    pub fn manual_contract_root_attr(
+        self,
+        db: &'db dyn HirDb,
+    ) -> Option<ManualContractRootAttr<'db>> {
+        match parse_manual_contract_root_attr_specs(
+            db,
+            self.data(db).iter().filter_map(|attr| {
+                let Attr::Normal(normal_attr) = attr else {
+                    return None;
+                };
+                let name = normal_attr
+                    .path
+                    .to_opt()
+                    .and_then(|path| path.as_ident(db))
+                    .map(|ident| ident.data(db).as_str())?;
+                matches!(name, "contract_init" | "contract_runtime")
+                    .then_some((name, normal_attr.keyword_attr_spec(db)))
+            }),
+        ) {
+            Ok(Some(attr)) => Some(attr),
+            Ok(None) => None,
+            Err(err) => Some(ManualContractRootAttr::Error(err.kind)),
         }
     }
 }

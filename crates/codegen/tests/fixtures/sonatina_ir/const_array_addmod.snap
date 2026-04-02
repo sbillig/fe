@@ -5,27 +5,46 @@ input_file: crates/codegen/tests/fixtures/const_array_addmod.fe
 ---
 target = "evm-ethereum-osaka"
 
-global private const [i256; 3] $__fe_const_data_0 = [10, 20, 30];
+global private const [i256; 3] $__fe_const_region_0 = [10, 20, 30];
 
-func private %get_sum() -> i256 {
-    block0:
-        v0.constref<[i256; 3]> = const.ref $__fe_const_data_0;
-        v2.constref<i256> = const.index v0 0.i256;
-        v3.i256 = const.load v2;
-        v6.i256 = evm_add_mod 1.i256 v3 100.i256;
-        return v6;
-}
-
-func private %__fe_sonatina_entry() {
+func private %__fe_main_root() {
     block0:
         v0.i256 = call %get_sum;
         evm_stop;
 }
 
+func private %get_sum() -> i256 {
+    block0:
+        v0.*i256 = alloca i256;
+        v1.*i256 = alloca i256;
+        v2.*i256 = alloca i256;
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        v5.*i256 = alloca i256;
+        v6.*i256 = alloca i256;
+        mstore v0 1.i256 i256;
+        v8.constref<[i256; 3]> = const.ref $__fe_const_region_0;
+        mstore v1 0.i256 i256;
+        v10.i256 = mload v1 i256;
+        v11.constref<i256> = const.index v8 v10;
+        v12.i256 = const.load v11;
+        mstore v2 v12 i256;
+        mstore v3 100.i256 i256;
+        v14.i256 = mload v0 i256;
+        v15.i256 = mload v2 i256;
+        v16.i256 = mload v3 i256;
+        v17.i256 = evm_add_mod v14 v15 v16;
+        mstore v6 v17 i256;
+        v18.i256 = mload v6 i256;
+        mstore v4 v18 i256;
+        v19.i256 = mload v4 i256;
+        return v19;
+}
 
-object @Contract {
-    section runtime {
-        entry %__fe_sonatina_entry;
-        data $__fe_const_data_0;
+
+object @main {
+    section main {
+        entry %__fe_main_root;
+        data $__fe_const_region_0;
     }
 }

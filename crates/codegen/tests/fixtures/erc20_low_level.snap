@@ -150,7 +150,7 @@ object "Erc20Contract" {
         ret := v4
         leave
       }
-      function $erc20_______h94f6fe6e679122ca_allowance_stor__0_1__e4c8be10cab939c2($self, $owner, $spender) -> ret {
+      function $erc20_______h94f6fe6e679122ca_allowance_stor_arg0_root_stor__0_1__e4c8be10cab939c2($self, $owner, $spender) -> ret {
         let v0 := mload(0x40)
         if iszero(v0) {
           v0 := 0x80
@@ -173,7 +173,7 @@ object "Erc20Contract" {
         $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor___Address__Address__u256_1__12414c27d5bfff1f(v0, $value)
         leave
       }
-      function $erc20_______h94f6fe6e679122ca_balance_of_stor__0_1__e4c8be10cab939c2($self, $addr) -> ret {
+      function $erc20_______h94f6fe6e679122ca_balance_of_stor_arg0_root_stor__0_1__e4c8be10cab939c2($self, $addr) -> ret {
         let v0 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3($addr)
         ret := v0
         leave
@@ -186,7 +186,7 @@ object "Erc20Contract" {
         if v3 {
           revert(0, 0)
         }
-        let v4 := $erc20_______h94f6fe6e679122ca_balance_of_stor__0_1__e4c8be10cab939c2($self, $to)
+        let v4 := $erc20_______h94f6fe6e679122ca_balance_of_stor_arg0_root_stor__0_1__e4c8be10cab939c2($self, $to)
         let v5 := $checked_add_u256(v4, $amount)
         $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3($to, v5)
         let v6 := sload($self)
@@ -196,7 +196,7 @@ object "Erc20Contract" {
       }
       function $erc20_______h94f6fe6e679122ca_transfer_from_stor_arg0_root_stor__0_1_Evm_hef0af3106e109414_Evm_hef0af3106e109414__ca7def21e0c734ee($self, $owner, $to, $amount) {
         let v0 := caller()
-        let v1 := $erc20_______h94f6fe6e679122ca_allowance_stor__0_1__e4c8be10cab939c2($self, $owner, v0)
+        let v1 := $erc20_______h94f6fe6e679122ca_allowance_stor_arg0_root_stor__0_1__e4c8be10cab939c2($self, $owner, v0)
         let v2 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v1, $amount)
         let v3 := v2
         if v3 {
@@ -215,13 +215,13 @@ object "Erc20Contract" {
         leave
       }
       function $erc20_______h94f6fe6e679122ca_transfer_stor_arg0_root_stor__0_1_Evm_hef0af3106e109414__2bfe0780cafbc4d2($self, $from, $to, $amount) {
-        let v0 := $erc20_______h94f6fe6e679122ca_balance_of_stor__0_1__e4c8be10cab939c2($self, $from)
+        let v0 := $erc20_______h94f6fe6e679122ca_balance_of_stor_arg0_root_stor__0_1__e4c8be10cab939c2($self, $from)
         let v1 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v0, $amount)
         let v2 := v1
         if v2 {
           revert(0, 0)
         }
-        let v3 := $erc20_______h94f6fe6e679122ca_balance_of_stor__0_1__e4c8be10cab939c2($self, $to)
+        let v3 := $erc20_______h94f6fe6e679122ca_balance_of_stor_arg0_root_stor__0_1__e4c8be10cab939c2($self, $to)
         let v4 := $checked_sub_u256(v0, $amount)
         $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3($from, v4)
         let v5 := $checked_add_u256(v3, $amount)

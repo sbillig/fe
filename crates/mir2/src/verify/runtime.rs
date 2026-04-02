@@ -4,9 +4,9 @@ use crate::{
     db::MirDb,
     instance::RuntimeInstance,
     runtime::{
-        HandleKind, HandleView, Layout, LocalSlotKind, RExpr, RStmt, RTerminator, RuntimeBody,
-        RuntimeCarrier, RuntimeClass, RuntimeProgramView, RuntimeSignature, ScalarClass,
-        ScalarRepr, ScalarRole,
+        AddressSpaceKind, HandleKind, HandleView, Layout, LocalSlotKind, RExpr, RStmt, RTerminator,
+        RuntimeBody, RuntimeBuiltin, RuntimeCarrier, RuntimeClass, RuntimeProgramView,
+        RuntimeSignature, ScalarClass, ScalarRepr, ScalarRole,
     },
     verify::VerifyError,
 };
@@ -17,7 +17,7 @@ use super::{
     place::{
         enum_extract_class, enum_tag_class, enum_tag_class_from_value, project_place,
         runtime_value_class, scalar_class_from_const, verify_enum_handle,
-        verify_enum_write_variant, verify_value_enum_variant,
+        verify_enum_write_variant, verify_value_enum_variant, verify_value_enum_variant_ref,
     },
 };
 
@@ -120,7 +120,18 @@ fn verify_assign<'db>(
 
     let expr_class = match expr {
         RExpr::Use(value) => Some(runtime_value_class(body, *value)?.clone()),
-        RExpr::ConstScalar(value) => Some(RuntimeClass::Scalar(scalar_class_from_const(value))),
+        RExpr::ConstScalar(value) => match (value, &dst_class) {
+            (
+                crate::runtime::ConstScalar::FixedBytes(bytes),
+                Some(RuntimeClass::Scalar(ScalarClass {
+                    repr: ScalarRepr::FixedBytes { len },
+                    role: ScalarRole::Plain,
+                })),
+            ) if bytes.len() <= usize::from(*len) => dst_class.clone(),
+            _ => Some(RuntimeClass::Scalar(scalar_class_from_const(value))),
+        },
+        RExpr::Placeholder { class } => Some(class.clone()),
+        RExpr::Builtin(builtin) => verify_builtin(program, body, builtin)?,
         RExpr::Unary { value, .. } => {
             if !matches!(
                 (runtime_value_class(body, *value)?, &dst_class),
@@ -214,6 +225,27 @@ fn verify_assign<'db>(
                 view: HandleView::Whole,
             })
         }
+        RExpr::WordToRawAddr {
+            value,
+            space,
+            target,
+        } => {
+            let RuntimeClass::Scalar(ScalarClass {
+                repr:
+                    ScalarRepr::Int {
+                        bits: 256,
+                        signed: false,
+                    },
+                role: ScalarRole::Plain,
+            }) = runtime_value_class(body, *value)?
+            else {
+                return Err(VerifyError::InvalidExprClass(dst));
+            };
+            Some(RuntimeClass::RawAddr {
+                space: *space,
+                target: *target,
+            })
+        }
         RExpr::AddrOf { place } => {
             let _ = project_place(db, program, body, place)?;
             if !matches!(
@@ -260,12 +292,10 @@ fn verify_assign<'db>(
         }
         RExpr::EnumTagOfValue { value } => Some(enum_tag_class_from_value(db, body, *value)?),
         RExpr::EnumIsVariant { value, variant } => {
-            verify_value_enum_variant(
+            verify_value_enum_variant_ref(
                 program,
-                body,
                 runtime_value_class(body, *value)?.clone(),
                 *variant,
-                &[],
             )?;
             Some(RuntimeClass::Scalar(ScalarClass {
                 repr: ScalarRepr::Bool,
@@ -305,7 +335,15 @@ fn verify_assign<'db>(
     {
         return Err(VerifyError::InvalidExprClass(dst));
     }
-    if dst_class.is_none() && matches!(expr, RExpr::Call { .. }) {
+    if dst_class.is_none()
+        && matches!(
+            expr,
+            RExpr::Call { .. }
+                | RExpr::Builtin(
+                    RuntimeBuiltin::CallDataCopy { .. } | RuntimeBuiltin::CodeCopy { .. }
+                )
+        )
+    {
         return Ok(());
     }
     if dst_class.is_none() && expr_class.is_some() {
@@ -314,11 +352,265 @@ fn verify_assign<'db>(
     Ok(())
 }
 
+fn verify_builtin<'db>(
+    program: &impl RuntimeProgramView<'db>,
+    body: &RuntimeBody<'db>,
+    builtin: &RuntimeBuiltin<'db>,
+) -> Result<Option<RuntimeClass<'db>>, VerifyError<'db>> {
+    match builtin {
+        RuntimeBuiltin::Mload { addr } => {
+            verify_address_operand(body, *addr, AddressSpaceKind::Memory)?;
+            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+        }
+        RuntimeBuiltin::Mstore { addr, value } => {
+            verify_address_operand(body, *addr, AddressSpaceKind::Memory)?;
+            verify_word_value(body, *value)?;
+            Ok(None)
+        }
+        RuntimeBuiltin::Mstore8 { addr, value } => {
+            verify_address_operand(body, *addr, AddressSpaceKind::Memory)?;
+            let RuntimeClass::Scalar(ScalarClass {
+                repr:
+                    ScalarRepr::Int {
+                        bits: 8,
+                        signed: false,
+                    },
+                ..
+            }) = runtime_value_class(body, *value)?
+            else {
+                return Err(VerifyError::InvalidExprClass(*value));
+            };
+            Ok(None)
+        }
+        RuntimeBuiltin::Msize
+        | RuntimeBuiltin::CallValue
+        | RuntimeBuiltin::ReturnDataSize
+        | RuntimeBuiltin::CallDataSize
+        | RuntimeBuiltin::CodeSize
+        | RuntimeBuiltin::Address
+        | RuntimeBuiltin::Caller
+        | RuntimeBuiltin::Origin
+        | RuntimeBuiltin::GasPrice
+        | RuntimeBuiltin::CoinBase
+        | RuntimeBuiltin::Timestamp
+        | RuntimeBuiltin::Number
+        | RuntimeBuiltin::PrevRandao
+        | RuntimeBuiltin::GasLimit
+        | RuntimeBuiltin::ChainId
+        | RuntimeBuiltin::BaseFee
+        | RuntimeBuiltin::SelfBalance
+        | RuntimeBuiltin::Gas => Ok(Some(RuntimeClass::Scalar(word_scalar_class()))),
+        RuntimeBuiltin::Sload { slot } => {
+            verify_address_operand(body, *slot, AddressSpaceKind::Storage)?;
+            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+        }
+        RuntimeBuiltin::Sstore { slot, value } => {
+            verify_address_operand(body, *slot, AddressSpaceKind::Storage)?;
+            verify_word_value(body, *value)?;
+            Ok(None)
+        }
+        RuntimeBuiltin::CallDataLoad { offset } => {
+            verify_word_value(body, *offset)?;
+            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+        }
+        RuntimeBuiltin::ReturnDataCopy { dst, offset, len }
+        | RuntimeBuiltin::CallDataCopy { dst, offset, len }
+        | RuntimeBuiltin::CodeCopy { dst, offset, len } => {
+            verify_address_operand(body, *dst, AddressSpaceKind::Memory)?;
+            verify_word_value(body, *offset)?;
+            verify_word_value(body, *len)?;
+            Ok(None)
+        }
+        RuntimeBuiltin::Keccak256 { offset, len } => {
+            verify_address_operand(body, *offset, AddressSpaceKind::Memory)?;
+            verify_word_value(body, *len)?;
+            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+        }
+        RuntimeBuiltin::AddMod { lhs, rhs, modulus }
+        | RuntimeBuiltin::MulMod { lhs, rhs, modulus } => {
+            verify_word_value(body, *lhs)?;
+            verify_word_value(body, *rhs)?;
+            verify_word_value(body, *modulus)?;
+            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+        }
+        RuntimeBuiltin::IntrinsicArith {
+            lhs, rhs, class, ..
+        } => {
+            let expected = RuntimeClass::Scalar(class.clone());
+            if runtime_value_class(body, *lhs)? != &expected
+                || runtime_value_class(body, *rhs)? != &expected
+            {
+                return Err(VerifyError::InvalidExprClass(*lhs));
+            }
+            Ok(Some(expected))
+        }
+        RuntimeBuiltin::Saturating {
+            lhs, rhs, class, ..
+        } => {
+            let expected = RuntimeClass::Scalar(class.clone());
+            if runtime_value_class(body, *lhs)? != &expected
+                || runtime_value_class(body, *rhs)? != &expected
+            {
+                return Err(VerifyError::InvalidExprClass(*lhs));
+            }
+            Ok(Some(expected))
+        }
+        RuntimeBuiltin::BlockHash { block } => {
+            verify_word_value(body, *block)?;
+            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+        }
+        RuntimeBuiltin::CodeRegionOffset { region } | RuntimeBuiltin::CodeRegionLen { region } => {
+            let _ = program.code_region(*region);
+            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+        }
+        RuntimeBuiltin::Malloc { size } => {
+            verify_word_value(body, *size)?;
+            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+        }
+        RuntimeBuiltin::Call {
+            gas,
+            addr,
+            value,
+            args_offset,
+            args_len,
+            ret_offset,
+            ret_len,
+        } => {
+            verify_word_value(body, *gas)?;
+            verify_word_value(body, *addr)?;
+            verify_word_value(body, *value)?;
+            verify_address_operand(body, *args_offset, AddressSpaceKind::Memory)?;
+            verify_word_value(body, *args_len)?;
+            verify_address_operand(body, *ret_offset, AddressSpaceKind::Memory)?;
+            verify_word_value(body, *ret_len)?;
+            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+        }
+        RuntimeBuiltin::StaticCall {
+            gas,
+            addr,
+            args_offset,
+            args_len,
+            ret_offset,
+            ret_len,
+        }
+        | RuntimeBuiltin::DelegateCall {
+            gas,
+            addr,
+            args_offset,
+            args_len,
+            ret_offset,
+            ret_len,
+        } => {
+            verify_word_value(body, *gas)?;
+            verify_word_value(body, *addr)?;
+            verify_address_operand(body, *args_offset, AddressSpaceKind::Memory)?;
+            verify_word_value(body, *args_len)?;
+            verify_address_operand(body, *ret_offset, AddressSpaceKind::Memory)?;
+            verify_word_value(body, *ret_len)?;
+            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+        }
+        RuntimeBuiltin::Create { value, offset, len } => {
+            verify_word_value(body, *value)?;
+            verify_address_operand(body, *offset, AddressSpaceKind::Memory)?;
+            verify_word_value(body, *len)?;
+            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+        }
+        RuntimeBuiltin::Create2 {
+            value,
+            offset,
+            len,
+            salt,
+        } => {
+            verify_word_value(body, *value)?;
+            verify_address_operand(body, *offset, AddressSpaceKind::Memory)?;
+            verify_word_value(body, *len)?;
+            verify_word_value(body, *salt)?;
+            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+        }
+        RuntimeBuiltin::Log0 { offset, len } => {
+            verify_address_operand(body, *offset, AddressSpaceKind::Memory)?;
+            verify_word_value(body, *len)?;
+            Ok(None)
+        }
+        RuntimeBuiltin::Log1 {
+            offset,
+            len,
+            topic0,
+        } => {
+            verify_address_operand(body, *offset, AddressSpaceKind::Memory)?;
+            verify_word_value(body, *len)?;
+            verify_word_value(body, *topic0)?;
+            Ok(None)
+        }
+        RuntimeBuiltin::Log2 {
+            offset,
+            len,
+            topic0,
+            topic1,
+        } => {
+            verify_address_operand(body, *offset, AddressSpaceKind::Memory)?;
+            verify_word_value(body, *len)?;
+            verify_word_value(body, *topic0)?;
+            verify_word_value(body, *topic1)?;
+            Ok(None)
+        }
+        RuntimeBuiltin::Log3 {
+            offset,
+            len,
+            topic0,
+            topic1,
+            topic2,
+        } => {
+            verify_address_operand(body, *offset, AddressSpaceKind::Memory)?;
+            verify_word_value(body, *len)?;
+            verify_word_value(body, *topic0)?;
+            verify_word_value(body, *topic1)?;
+            verify_word_value(body, *topic2)?;
+            Ok(None)
+        }
+        RuntimeBuiltin::Log4 {
+            offset,
+            len,
+            topic0,
+            topic1,
+            topic2,
+            topic3,
+        } => {
+            verify_address_operand(body, *offset, AddressSpaceKind::Memory)?;
+            verify_word_value(body, *len)?;
+            verify_word_value(body, *topic0)?;
+            verify_word_value(body, *topic1)?;
+            verify_word_value(body, *topic2)?;
+            verify_word_value(body, *topic3)?;
+            Ok(None)
+        }
+        RuntimeBuiltin::CallDataSelector => Ok(Some(RuntimeClass::Scalar(ScalarClass {
+            repr: ScalarRepr::Int {
+                bits: 32,
+                signed: false,
+            },
+            role: ScalarRole::Plain,
+        }))),
+        RuntimeBuiltin::MakeContractFieldHandle { class, kind, .. } => {
+            if let RuntimeClass::Handle {
+                kind: actual_kind,
+                view: HandleView::Whole,
+                ..
+            } = class
+                && actual_kind != kind
+            {
+                return Err(VerifyError::InvalidPlace(class.clone()));
+            }
+            Ok(Some(class.clone()))
+        }
+    }
+}
+
 fn verify_store<'db>(
     db: &'db dyn MirDb,
     program: &impl RuntimeProgramView<'db>,
     body: &RuntimeBody<'db>,
-    dst: &crate::runtime::RuntimePlace,
+    dst: &crate::runtime::RuntimePlace<'db>,
     src: crate::runtime::RValueId,
 ) -> Result<(), VerifyError<'db>> {
     let target = project_place(db, program, body, dst)?;
@@ -333,7 +625,7 @@ fn verify_copy_into<'db>(
     db: &'db dyn MirDb,
     program: &impl RuntimeProgramView<'db>,
     body: &RuntimeBody<'db>,
-    dst: &crate::runtime::RuntimePlace,
+    dst: &crate::runtime::RuntimePlace<'db>,
     src: crate::runtime::RValueId,
 ) -> Result<(), VerifyError<'db>> {
     let target = project_place(db, program, body, dst)?;
@@ -345,8 +637,8 @@ fn verify_copy_into<'db>(
 }
 
 fn verify_terminator<'db>(
-    _db: &'db dyn MirDb,
-    _program: &impl RuntimeProgramView<'db>,
+    db: &'db dyn MirDb,
+    program: &impl RuntimeProgramView<'db>,
     body: &RuntimeBody<'db>,
     terminator: &RTerminator<'db>,
 ) -> Result<(), VerifyError<'db>> {
@@ -360,6 +652,17 @@ fn verify_terminator<'db>(
             else {
                 return Err(VerifyError::InvalidExprClass(*cond));
             };
+            Ok(())
+        }
+        RTerminator::SwitchScalar { discr, cases, .. } => {
+            let RuntimeClass::Scalar(discr_class) = runtime_value_class(body, *discr)? else {
+                return Err(VerifyError::InvalidExprClass(*discr));
+            };
+            for (value, _) in cases {
+                if scalar_class_from_const(value) != *discr_class {
+                    return Err(VerifyError::InvalidExprClass(*discr));
+                }
+            }
             Ok(())
         }
         RTerminator::MatchEnumTag {
@@ -386,6 +689,14 @@ fn verify_terminator<'db>(
             }
             Ok(())
         }
+        RTerminator::TerminalCall { callee, args } => verify_call(db, program, body, *callee, args),
+        RTerminator::ReturnData { offset, len } | RTerminator::Revert { offset, len } => {
+            verify_address_operand(body, *offset, AddressSpaceKind::Memory)?;
+            verify_word_value(body, *len)?;
+            Ok(())
+        }
+        RTerminator::SelfDestruct { beneficiary } => verify_word_value(body, *beneficiary),
+        RTerminator::Trap => Ok(()),
         RTerminator::Return(value) => {
             let class = value
                 .map(|value| runtime_value_class(body, value).cloned())
@@ -395,5 +706,55 @@ fn verify_terminator<'db>(
             }
             Ok(())
         }
+        RTerminator::Stop => Ok(()),
+    }
+}
+
+fn verify_word_value<'db>(
+    body: &RuntimeBody<'db>,
+    value: crate::runtime::RValueId,
+) -> Result<(), VerifyError<'db>> {
+    let RuntimeClass::Scalar(ScalarClass {
+        repr: ScalarRepr::Int {
+            bits: 256,
+            signed: false,
+        },
+        ..
+    }) = runtime_value_class(body, value)?
+    else {
+        return Err(VerifyError::InvalidExprClass(value));
+    };
+    Ok(())
+}
+
+fn verify_address_operand<'db>(
+    body: &RuntimeBody<'db>,
+    value: crate::runtime::RValueId,
+    space: AddressSpaceKind,
+) -> Result<(), VerifyError<'db>> {
+    match runtime_value_class(body, value)? {
+        RuntimeClass::RawAddr {
+            space: actual_space,
+            ..
+        } if *actual_space == space => Ok(()),
+        RuntimeClass::Scalar(ScalarClass {
+            repr:
+                ScalarRepr::Int {
+                    bits: 256,
+                    signed: false,
+                },
+            ..
+        }) => Ok(()),
+        _ => Err(VerifyError::InvalidExprClass(value)),
+    }
+}
+
+fn word_scalar_class<'db>() -> ScalarClass<'db> {
+    ScalarClass {
+        repr: ScalarRepr::Int {
+            bits: 256,
+            signed: false,
+        },
+        role: ScalarRole::Plain,
     }
 }

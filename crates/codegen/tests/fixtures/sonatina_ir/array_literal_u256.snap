@@ -5,24 +5,36 @@ input_file: crates/codegen/tests/fixtures/array_literal_u256.fe
 ---
 target = "evm-ethereum-osaka"
 
-global private const [i256; 4] $__fe_const_data_0 = [1, 2, 3, 4];
-
-func private %fixed_u256_array_literal() -> constref<[i256; 4]> {
+func private %__fe_main_root() {
     block0:
-        v0.constref<[i256; 4]> = const.ref $__fe_const_data_0;
-        return v0;
-}
-
-func private %__fe_sonatina_entry() {
-    block0:
-        v0.constref<[i256; 4]> = call %fixed_u256_array_literal;
+        v0.[i256; 4] = call %fixed_u256_array_literal;
         evm_stop;
 }
 
+func private %fixed_u256_array_literal() -> [i256; 4] {
+    block0:
+        v0.objref<[i256; 4]> = obj.alloc [i256; 4];
+        v1.*i256 = alloca i256;
+        v2.*i256 = alloca i256;
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        v5.objref<[i256; 4]> = obj.alloc [i256; 4];
+        mstore v1 1.i256 i256;
+        mstore v2 2.i256 i256;
+        mstore v3 3.i256 i256;
+        mstore v4 4.i256 i256;
+        v10.objref<[i256; 4]> = obj.alloc [i256; 4];
+        v11.[i256; 4] = obj.load v10;
+        obj.store v5 v11;
+        v12.[i256; 4] = obj.load v5;
+        obj.store v0 v12;
+        v13.[i256; 4] = obj.load v0;
+        return v13;
+}
 
-object @Contract {
-    section runtime {
-        entry %__fe_sonatina_entry;
-        data $__fe_const_data_0;
+
+object @main {
+    section main {
+        entry %__fe_main_root;
     }
 }

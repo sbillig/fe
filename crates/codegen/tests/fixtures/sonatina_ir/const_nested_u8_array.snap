@@ -5,27 +5,39 @@ input_file: crates/codegen/tests/fixtures/const_nested_u8_array.fe
 ---
 target = "evm-ethereum-osaka"
 
-global private const [[i8; 2]; 2] $__fe_const_data_0 = [[1, 2], [3, 4]];
+global private const [[i8; 2]; 2] $__fe_const_region_0 = [[1, 2], [3, 4]];
 
-func private %const_nested_u8_array() -> i8 {
-    block0:
-        v0.constref<[[i8; 2]; 2]> = const.ref $__fe_const_data_0;
-        v2.constref<[i8; 2]> = const.index v0 1.i256;
-        v4.constref<i8> = const.index v2 0.i256;
-        v5.i8 = const.load v4;
-        return v5;
-}
-
-func private %__fe_sonatina_entry() {
+func private %__fe_main_root() {
     block0:
         v0.i8 = call %const_nested_u8_array;
         evm_stop;
 }
 
+func private %const_nested_u8_array() -> i8 {
+    block0:
+        v0.*i256 = alloca i256;
+        v1.objref<[i8; 2]> = obj.alloc [i8; 2];
+        v2.*i256 = alloca i256;
+        v3.*i8 = alloca i8;
+        v4.constref<[[i8; 2]; 2]> = const.ref $__fe_const_region_0;
+        mstore v0 1.i256 i256;
+        v6.i256 = mload v0 i256;
+        v7.constref<[i8; 2]> = const.index v4 v6;
+        v8.[i8; 2] = const.load v7;
+        obj.store v1 v8;
+        mstore v2 0.i256 i256;
+        v10.i256 = mload v2 i256;
+        v11.objref<i8> = obj.index v1 v10;
+        v12.i8 = obj.load v11;
+        mstore v3 v12 i8;
+        v13.i8 = mload v3 i8;
+        return v13;
+}
 
-object @Contract {
-    section runtime {
-        entry %__fe_sonatina_entry;
-        data $__fe_const_data_0;
+
+object @main {
+    section main {
+        entry %__fe_main_root;
+        data $__fe_const_region_0;
     }
 }

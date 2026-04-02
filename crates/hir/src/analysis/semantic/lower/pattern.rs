@@ -118,6 +118,11 @@ impl<'db> SmirLowerCtxt<'db> {
         self.arm_variants_from_root(root)
     }
 
+    pub(super) fn pattern_enum_ty(&self, pat: PatId) -> Option<TyId<'db>> {
+        let root = self.typed_body.pattern_root(pat)?;
+        self.pattern_enum_ty_from_root(root)
+    }
+
     fn arm_variants_from_root(&self, pat: ValidatedPatId) -> ArmVariants {
         match &self.typed_body.pattern_store().node(pat).kind {
             ValidatedPatKind::Wildcard { .. } => ArmVariants::Default,
@@ -141,6 +146,23 @@ impl<'db> SmirLowerCtxt<'db> {
                 }
                 ArmVariants::Variants(variants)
             }
+        }
+    }
+
+    fn pattern_enum_ty_from_root(&self, pat: ValidatedPatId) -> Option<TyId<'db>> {
+        match &self.typed_body.pattern_store().node(pat).kind {
+            ValidatedPatKind::Wildcard { .. } => None,
+            ValidatedPatKind::Constructor {
+                ctor: ConstructorKind::Variant(_, enum_ty),
+                ..
+            } => Some(*enum_ty),
+            ValidatedPatKind::Constructor {
+                ctor: ConstructorKind::Type(_) | ConstructorKind::Literal(..),
+                ..
+            } => None,
+            ValidatedPatKind::Or(pats) => pats
+                .iter()
+                .find_map(|pat| self.pattern_enum_ty_from_root(*pat)),
         }
     }
 

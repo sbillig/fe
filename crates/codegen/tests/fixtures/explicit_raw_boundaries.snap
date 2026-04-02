@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 33
 expression: output
 input_file: tests/fixtures/explicit_raw_boundaries.fe
 ---
@@ -11,7 +10,7 @@ function $bump__MemPtr_u256___25949c86160e9382($value) {
   leave
 }
 function $raw_store__MemPtr_MemPtr_Data___Evm_hef0af3106e109414__5fa173fcd3b6f9f4($data) {
-  let v0 := $memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_raw__Data_h4653c22144245a74__b20d550d42df8b63($data)
+  let v0 := $memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_raw_arg0_root_mem__Data_h4653c22144245a74__b20d550d42df8b63($data)
   mstore(v0, 8)
   leave
 }
@@ -23,7 +22,7 @@ function $explicit_raw_boundaries__Evm_hef0af3106e109414__3af54274b2985741() {
   $raw_store__MemPtr_Data__Evm_hef0af3106e109414__239cf9c159fd8b13(v2)
   leave
 }
-function $memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_raw__Data_h4653c22144245a74__b20d550d42df8b63($self) -> ret {
+function $memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_raw_arg0_root_mem__Data_h4653c22144245a74__b20d550d42df8b63($self) -> ret {
   ret := $self
   leave
 }
@@ -38,7 +37,7 @@ function $mem_ptr_stor__Evm_hef0af3106e109414_Data_h4653c22144245a74__43563cb3bb
   leave
 }
 function $raw_store__MemPtr_Data__Evm_hef0af3106e109414__239cf9c159fd8b13($data) {
-  let v0 := $memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_raw__Data_h4653c22144245a74__b20d550d42df8b63($data)
+  let v0 := $memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_raw_arg0_root_mem__Data_h4653c22144245a74__b20d550d42df8b63($data)
   mstore(v0, 8)
   leave
 }

@@ -5,69 +5,170 @@ input_file: crates/codegen/tests/fixtures/for_array.fe
 ---
 target = "evm-ethereum-osaka"
 
-global private const [i64; 25] $__fe_const_data_0 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25];
-
-func private %for_array_sum() -> i64 {
-    block0:
-        v0.constref<[i64; 25]> = const.ref $__fe_const_data_0;
-        v3.i256 = call %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len_code__u64_25__540b817a073b29f5;
-        jump block1;
-
-    block1:
-        v20.i64 = phi (0.i64 block0) (v11 block3);
-        v4.i256 = phi (0.i256 block0) (v15 block3);
-        v6.i1 = lt v4 v3;
-        br v6 block2 block4;
-
-    block2:
-        v9.i64 = call %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get_code__u64_25__540b817a073b29f5 v0 v4;
-        (v11.i64, v12.i1) = uaddo v20 v9;
-        br v12 block5 block6;
-
-    block3:
-        v15.i256 = add v4 1.i256;
-        jump block1;
-
-    block4:
-        return v20;
-
-    block5:
-        evm_revert 0.i256 0.i256;
-
-    block6:
-        jump block3;
-}
-
-func private %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len_code__u64_25__540b817a073b29f5() -> i256 {
-    block0:
-        return 25.i256;
-}
-
-func private %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get_code__u64_25__540b817a073b29f5(v0.constref<[i64; 25]>, v1.i256) -> i64 {
-    block0:
-        v3.i1 = lt v1 25.i256;
-        v4.i1 = is_zero v3;
-        br v4 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        v6.constref<i64> = const.index v0 v1;
-        v7.i64 = const.load v6;
-        return v7;
-}
-
-func private %__fe_sonatina_entry() {
+func private %__fe_main_root() {
     block0:
         v0.i64 = call %for_array_sum;
         evm_stop;
 }
 
+func private %for_array_sum() -> i64 {
+    block0:
+        v0.objref<[i64; 25]> = obj.alloc [i64; 25];
+        v1.*i64 = alloca i64;
+        v2.*i64 = alloca i64;
+        v3.*i64 = alloca i64;
+        v4.*i64 = alloca i64;
+        v5.*i64 = alloca i64;
+        v6.*i64 = alloca i64;
+        v7.*i64 = alloca i64;
+        v8.*i64 = alloca i64;
+        v9.*i64 = alloca i64;
+        v10.*i64 = alloca i64;
+        v11.*i64 = alloca i64;
+        v12.*i64 = alloca i64;
+        v13.*i64 = alloca i64;
+        v14.*i64 = alloca i64;
+        v15.*i64 = alloca i64;
+        v16.*i64 = alloca i64;
+        v17.*i64 = alloca i64;
+        v18.*i64 = alloca i64;
+        v19.*i64 = alloca i64;
+        v20.*i64 = alloca i64;
+        v21.*i64 = alloca i64;
+        v22.*i64 = alloca i64;
+        v23.*i64 = alloca i64;
+        v24.*i64 = alloca i64;
+        v25.*i64 = alloca i64;
+        v26.*i64 = alloca i64;
+        v27.*i64 = alloca i64;
+        v28.objref<[i64; 25]> = obj.alloc [i64; 25];
+        v29.*i64 = alloca i64;
+        v30.*i256 = alloca i256;
+        v31.*i256 = alloca i256;
+        v32.*i1 = alloca i1;
+        v33.*i64 = alloca i64;
+        v34.*i64 = alloca i64;
+        v35.*i256 = alloca i256;
+        v36.*i256 = alloca i256;
+        v37.*i256 = alloca i256;
+        v38.*i64 = alloca i64;
+        mstore v3 1.i64 i64;
+        mstore v4 2.i64 i64;
+        mstore v5 3.i64 i64;
+        mstore v6 4.i64 i64;
+        mstore v7 5.i64 i64;
+        mstore v8 6.i64 i64;
+        mstore v9 7.i64 i64;
+        mstore v10 8.i64 i64;
+        mstore v11 9.i64 i64;
+        mstore v12 10.i64 i64;
+        mstore v13 11.i64 i64;
+        mstore v14 12.i64 i64;
+        mstore v15 13.i64 i64;
+        mstore v16 14.i64 i64;
+        mstore v17 15.i64 i64;
+        mstore v18 16.i64 i64;
+        mstore v19 17.i64 i64;
+        mstore v20 18.i64 i64;
+        mstore v21 19.i64 i64;
+        mstore v22 20.i64 i64;
+        mstore v23 21.i64 i64;
+        mstore v24 22.i64 i64;
+        mstore v25 23.i64 i64;
+        mstore v26 24.i64 i64;
+        mstore v27 25.i64 i64;
+        v64.objref<[i64; 25]> = obj.alloc [i64; 25];
+        v65.[i64; 25] = obj.load v64;
+        obj.store v28 v65;
+        v66.[i64; 25] = obj.load v28;
+        obj.store v0 v66;
+        mstore v29 0.i64 i64;
+        v68.i64 = mload v29 i64;
+        mstore v1 v68 i64;
+        mstore v30 0.i256 i256;
+        v70.[i64; 25] = obj.load v0;
+        v71.i256 = call %len v70;
+        mstore v37 v71 i256;
+        v72.i256 = mload v37 i256;
+        mstore v31 v72 i256;
+        jump block1;
 
-object @Contract {
-    section runtime {
-        entry %__fe_sonatina_entry;
-        data $__fe_const_data_0;
+    block1:
+        v73.i256 = mload v30 i256;
+        v74.i256 = mload v31 i256;
+        v75.i1 = ne v73 0.i256;
+        v76.i1 = ne v74 0.i256;
+        v77.i1 = lt v75 v76;
+        mstore v32 v77 i1;
+        v78.i1 = mload v32 i1;
+        br v78 block2 block3;
+
+    block2:
+        v79.[i64; 25] = obj.load v0;
+        v80.i256 = mload v30 i256;
+        v81.i64 = call %get v79 v80;
+        mstore v38 v81 i64;
+        v82.i64 = mload v38 i64;
+        mstore v33 v82 i64;
+        v83.i64 = mload v33 i64;
+        mstore v2 v83 i64;
+        v84.i64 = mload v1 i64;
+        v85.i64 = mload v2 i64;
+        (v86.i64, v87.i1) = uaddo v84 v85;
+        br v87 block4 block5;
+
+    block3:
+        v95.i64 = mload v1 i64;
+        return v95;
+
+    block4:
+        evm_revert 0.i256 0.i256;
+
+    block5:
+        mstore v34 v86 i64;
+        v88.i64 = mload v34 i64;
+        mstore v1 v88 i64;
+        mstore v35 1.i256 i256;
+        v90.i256 = mload v30 i256;
+        v91.i256 = mload v35 i256;
+        (v92.i256, v93.i1) = uaddo v90 v91;
+        br v93 block4 block6;
+
+    block6:
+        mstore v36 v92 i256;
+        v94.i256 = mload v36 i256;
+        mstore v30 v94 i256;
+        jump block1;
+}
+
+func private %get(v0.[i64; 25], v1.i256) -> i64 {
+    block0:
+        v2.objref<[i64; 25]> = obj.alloc [i64; 25];
+        v3.*i256 = alloca i256;
+        v4.*i64 = alloca i64;
+        obj.store v2 v0;
+        mstore v3 v1 i256;
+        v5.i256 = mload v3 i256;
+        v6.objref<i64> = obj.index v2 v5;
+        v7.i64 = obj.load v6;
+        mstore v4 v7 i64;
+        v8.i64 = mload v4 i64;
+        return v8;
+}
+
+func private %len(v0.[i64; 25]) -> i256 {
+    block0:
+        v1.objref<[i64; 25]> = obj.alloc [i64; 25];
+        v2.*i256 = alloca i256;
+        obj.store v1 v0;
+        mstore v2 25.i256 i256;
+        v4.i256 = mload v2 i256;
+        return v4;
+}
+
+
+object @main {
+    section main {
+        entry %__fe_main_root;
     }
 }

@@ -19,7 +19,8 @@ pub(super) fn const_scalar_from_value<'db>(
         | SemConstValue::Tuple { .. }
         | SemConstValue::Struct { .. }
         | SemConstValue::Array { .. }
-        | SemConstValue::Enum { .. } => None,
+        | SemConstValue::Enum { .. }
+        | SemConstValue::TypeLevel { .. } => None,
         SemConstValue::Scalar { value, .. } => match value {
             SemConstScalar::Bool(value) => Some(ConstScalar::Bool(value)),
             SemConstScalar::Int { value } => {
@@ -38,7 +39,10 @@ pub(super) fn const_scalar_from_value<'db>(
                     }),
                 }
             }
-            SemConstScalar::Bytes(bytes) => Some(ConstScalar::FixedBytes(bytes.clone())),
+            SemConstScalar::Bytes(bytes) => scalar_class_for_ty(db, ty).and_then(|scalar| {
+                matches!(scalar.repr, ScalarRepr::FixedBytes { .. })
+                    .then(|| ConstScalar::FixedBytes(bytes.clone()))
+            }),
         },
     }
 }
@@ -64,8 +68,30 @@ fn lower_const_node<'db>(db: &'db dyn MirDb, value: SemConstId<'db>) -> Option<C
         return Some(ConstNode::Scalar(scalar));
     }
     let ty = sem_const_ty(db, value);
+    if let SemConstValue::Scalar {
+        value: SemConstScalar::Bytes(bytes),
+        ..
+    } = value.value(db)
+        && ty.is_array(db)
+    {
+        return Some(ConstNode::Aggregate {
+            layout: layout_for_ty(db, ty),
+            fields: bytes
+                .iter()
+                .map(|byte| {
+                    ConstNode::Scalar(ConstScalar::Int {
+                        bits: 8,
+                        signed: false,
+                        words: if *byte == 0 { Vec::new() } else { vec![*byte] },
+                    })
+                })
+                .collect(),
+        });
+    }
     match value.value(db) {
-        SemConstValue::Unit | SemConstValue::Scalar { .. } => None,
+        SemConstValue::Unit | SemConstValue::Scalar { .. } | SemConstValue::TypeLevel { .. } => {
+            None
+        }
         SemConstValue::Tuple { elems, .. }
         | SemConstValue::Struct { fields: elems, .. }
         | SemConstValue::Array { elems, .. } => Some(ConstNode::Aggregate {

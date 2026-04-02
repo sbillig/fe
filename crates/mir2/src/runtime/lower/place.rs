@@ -1,5 +1,5 @@
 use hir::analysis::semantic::{FieldIndex, SEffectArg};
-use hir::analysis::ty::ty_check::ConcreteBorrowProvider;
+use hir::analysis::ty::ProviderAddressSpace;
 
 use crate::{
     db::MirDb,
@@ -64,17 +64,19 @@ pub(super) fn project_variant_field_class<'db>(
         .clone()
 }
 
-pub(super) fn address_space_from_provider(provider: ConcreteBorrowProvider) -> AddressSpaceKind {
+pub(super) fn address_space_from_provider(provider: ProviderAddressSpace) -> AddressSpaceKind {
     match provider {
-        ConcreteBorrowProvider::Memory => AddressSpaceKind::Memory,
-        ConcreteBorrowProvider::Storage => AddressSpaceKind::Storage,
-        ConcreteBorrowProvider::TransientStorage => AddressSpaceKind::Transient,
-        ConcreteBorrowProvider::Calldata => AddressSpaceKind::Calldata,
+        ProviderAddressSpace::Memory => AddressSpaceKind::Memory,
+        ProviderAddressSpace::Storage => AddressSpaceKind::Storage,
+        ProviderAddressSpace::Transient => AddressSpaceKind::Transient,
+        ProviderAddressSpace::Calldata => AddressSpaceKind::Calldata,
     }
 }
 
 pub(super) fn effect_arg_address_space(arg: &SEffectArg<'_>) -> AddressSpaceKind {
-    address_space_from_provider(arg.provider.expect(
-        "effect/provider args must carry an explicit resolved address space before rMIR lowering",
-    ))
+    address_space_from_provider(arg.provider.unwrap_or_else(|| {
+        panic!(
+            "effect/provider args must carry an explicit resolved address space before rMIR lowering: {arg:?}"
+        )
+    }))
 }

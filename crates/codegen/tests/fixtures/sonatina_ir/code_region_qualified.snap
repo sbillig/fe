@@ -5,26 +5,90 @@ input_file: crates/codegen/tests/fixtures/code_region_qualified.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %init__Evm_hef0af3106e109414__3af54274b2985741() {
+func private %codecopy(v0.i256, v1.i256, v2.i256) {
     block0:
-        v1.i256 = sym_size &runtime__Evm_hef0af3106e109414__3af54274b2985741;
-        v2.i256 = sym_addr &runtime__Evm_hef0af3106e109414__3af54274b2985741;
-        evm_code_copy 0.i256 v2 v1;
-        evm_return 0.i256 v1;
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        v5.*i256 = alloca i256;
+        mstore v3 v0 i256;
+        mstore v4 v1 i256;
+        mstore v5 v2 i256;
+        v6.i256 = mload v3 i256;
+        v7.i256 = mload v4 i256;
+        v8.i256 = mload v5 i256;
+        evm_code_copy v6 v7 v8;
+        return;
 }
 
-func private %runtime__Evm_hef0af3106e109414__3af54274b2985741() {
+func private %init() {
     block0:
-        evm_return 0.i256 0.i256;
+        v0.*i256 = alloca i256;
+        v1.*i256 = alloca i256;
+        v2.*i256 = alloca i256;
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        v5.*i256 = alloca i256;
+        v6.i256 = sym_size &__Foo_runtime;
+        mstore v2 v6 i256;
+        v7.i256 = mload v2 i256;
+        mstore v0 v7 i256;
+        v8.i256 = sym_addr &__Foo_runtime;
+        mstore v3 v8 i256;
+        v9.i256 = mload v3 i256;
+        mstore v1 v9 i256;
+        mstore v4 0.i256 i256;
+        v11.i256 = mload v4 i256;
+        v12.i256 = mload v1 i256;
+        v13.i256 = mload v0 i256;
+        call %codecopy v11 v12 v13;
+        mstore v5 0.i256 i256;
+        v15.i256 = mload v5 i256;
+        v16.i256 = mload v0 i256;
+        call %return_data_1 v15 v16;
+        unreachable;
+}
+
+func private %return_data_0(v0.i256, v1.i256) {
+    block0:
+        v2.*i256 = alloca i256;
+        v3.*i256 = alloca i256;
+        mstore v2 v0 i256;
+        mstore v3 v1 i256;
+        v4.i256 = mload v2 i256;
+        v5.i256 = mload v3 i256;
+        evm_return v4 v5;
+}
+
+func private %return_data_1(v0.i256, v1.i256) {
+    block0:
+        v2.*i256 = alloca i256;
+        v3.*i256 = alloca i256;
+        mstore v2 v0 i256;
+        mstore v3 v1 i256;
+        v4.i256 = mload v2 i256;
+        v5.i256 = mload v3 i256;
+        evm_return v4 v5;
+}
+
+func private %runtime() {
+    block0:
+        v0.*i256 = alloca i256;
+        v1.*i256 = alloca i256;
+        mstore v0 0.i256 i256;
+        mstore v1 0.i256 i256;
+        v3.i256 = mload v0 i256;
+        v4.i256 = mload v1 i256;
+        call %return_data_0 v3 v4;
+        unreachable;
 }
 
 
 object @Foo {
     section init {
-        entry %init__Evm_hef0af3106e109414__3af54274b2985741;
-        embed .runtime as &runtime__Evm_hef0af3106e109414__3af54274b2985741;
+        entry %init;
+        embed .runtime as &__Foo_runtime;
     }
     section runtime {
-        entry %runtime__Evm_hef0af3106e109414__3af54274b2985741;
+        entry %runtime;
     }
 }

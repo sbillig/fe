@@ -7589,16 +7589,12 @@ fn read() -> u256 {
             crate::prepare_module_for_evm_yul_codegen(&db, &mut module);
         }));
 
-        for func in module
-            .functions
-            .iter()
-            .filter(|func| {
-                func.symbol_name.contains("u8")
-                    && (func.symbol_name.contains("checked_add")
-                        || func.symbol_name.contains("saturating_add")
-                        || func.symbol_name.contains("wrappingadd"))
-            })
-        {
+        for func in module.functions.iter().filter(|func| {
+            func.symbol_name.contains("u8")
+                && (func.symbol_name.contains("checked_add")
+                    || func.symbol_name.contains("saturating_add")
+                    || func.symbol_name.contains("wrappingadd"))
+        }) {
             eprintln!(
                 "helper {} ret={:?} locals={:?}",
                 func.symbol_name,
@@ -7636,7 +7632,12 @@ fn read() -> u256 {
                 param.runtime_shape,
             );
         }
-        if let Some(result_local) = checked_add.body.locals.iter().find(|local| local.name == "result") {
+        if let Some(result_local) = checked_add
+            .body
+            .locals
+            .iter()
+            .find(|local| local.name == "result")
+        {
             assert_eq!(
                 result_local.runtime_shape,
                 RuntimeShape::Word(RuntimeWordKind::I8),

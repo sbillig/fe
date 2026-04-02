@@ -5,37 +5,72 @@ input_file: crates/codegen/tests/fixtures/generic_identity.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %call_identity_u32() -> i32 {
+func private %__fe_main_root() {
     block0:
-        v1.i32 = call %identity__u32__20aa0c10687491ad 7.i32;
-        return v1;
+        v0.i1 = call %call_identity_bool;
+        evm_stop;
 }
 
 func private %call_identity_bool() -> i1 {
     block0:
-        v1.i1 = call %identity__bool__947c0c03c59c6f07 1.i1;
-        return v1;
+        v0.*i1 = alloca i1;
+        v1.*i1 = alloca i1;
+        v2.*i1 = alloca i1;
+        v3.*i1 = alloca i1;
+        mstore v1 1.i1 i1;
+        v5.i1 = mload v1 i1;
+        v6.i1 = call %identity_0 v5;
+        mstore v3 v6 i1;
+        v7.i1 = mload v3 i1;
+        mstore v2 v7 i1;
+        v8.i1 = mload v2 i1;
+        mstore v0 v8 i1;
+        v9.i1 = mload v0 i1;
+        return v9;
 }
 
-func private %identity__u32__20aa0c10687491ad(v0.i32) -> i32 {
+func private %call_identity_u32() -> i32 {
     block0:
-        return v0;
+        v0.*i32 = alloca i32;
+        v1.*i32 = alloca i32;
+        v2.*i32 = alloca i32;
+        v3.*i32 = alloca i32;
+        mstore v1 7.i32 i32;
+        v5.i32 = mload v1 i32;
+        v6.i32 = call %identity_2 v5;
+        mstore v3 v6 i32;
+        v7.i32 = mload v3 i32;
+        mstore v2 v7 i32;
+        v8.i32 = mload v2 i32;
+        mstore v0 v8 i32;
+        v9.i32 = mload v0 i32;
+        return v9;
 }
 
-func private %identity__bool__947c0c03c59c6f07(v0.i1) -> i1 {
+func private %identity_0(v0.i1) -> i1 {
     block0:
-        return v0;
+        v1.*i1 = alloca i1;
+        mstore v1 v0 i1;
+        v2.i1 = mload v1 i1;
+        return v2;
 }
 
-func private %__fe_sonatina_entry() {
+func private %identity_1() {
     block0:
-        v0.i32 = call %call_identity_u32;
-        evm_stop;
+        return;
+}
+
+func private %identity_2(v0.i32) -> i32 {
+    block0:
+        v1.*i32 = alloca i32;
+        mstore v1 v0 i32;
+        v2.i32 = mload v1 i32;
+        return v2;
 }
 
 
-object @Contract {
-    section runtime {
-        entry %__fe_sonatina_entry;
+object @main {
+    section main {
+        entry %__fe_main_root;
     }
 }

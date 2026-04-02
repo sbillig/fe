@@ -1,5 +1,6 @@
 mod consts;
 mod layout;
+mod package;
 mod place;
 mod runtime;
 
@@ -26,7 +27,17 @@ pub enum VerifyError<'db> {
     InvalidCopyClass,
     CallArgCountMismatch(RuntimeInstance<'db>),
     CallArgClassMismatch(RuntimeInstance<'db>, usize),
+    InvalidCodeRegion(crate::runtime::RuntimeCodeRegion<'db>),
+    InvalidPackageFunction(crate::instance::RuntimeInstance<'db>),
+    InvalidPackageObject(crate::runtime::RuntimeObject<'db>),
+    InvalidPackageSection(
+        crate::runtime::RuntimeObject<'db>,
+        crate::runtime::RuntimeSectionName,
+    ),
+    DuplicateRuntimeSymbol(String),
 }
 
 pub use consts::verify_const_region;
+pub use package::verify_runtime_package;
+pub use place::resolve_runtime_place;
 pub use runtime::verify_runtime_body;

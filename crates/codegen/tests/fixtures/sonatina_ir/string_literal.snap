@@ -5,20 +5,24 @@ input_file: crates/codegen/tests/fixtures/string_literal.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %string_literal() -> i256 {
-    block0:
-        return 2446016337127940063024752106452865988248421195047584704994838213399005888512.i256;
-}
-
-func private %__fe_sonatina_entry() {
+func private %__fe_main_root() {
     block0:
         v0.i256 = call %string_literal;
         evm_stop;
 }
 
+func private %string_literal() -> i256 {
+    block0:
+        v0.*i256 = alloca i256;
+        v2.i256 = zext 448378203247.i64 i256;
+        mstore v0 v2 i256;
+        v3.i256 = mload v0 i256;
+        return v3;
+}
 
-object @Contract {
-    section runtime {
-        entry %__fe_sonatina_entry;
+
+object @main {
+    section main {
+        entry %__fe_main_root;
     }
 }

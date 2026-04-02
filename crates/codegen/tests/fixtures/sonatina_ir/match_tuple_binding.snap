@@ -5,125 +5,329 @@ input_file: crates/codegen/tests/fixtures/match_tuple_binding.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @__fe_obj_tuple_0 = {i8, i8};
-type @__fe_obj_tuple_1 = {@__fe_obj_tuple_0, i8};
+type @__fe_layout_0 = {i8, i8};
+type @__fe_layout_1 = {@__fe_layout_0, i8};
 
-func private %match_tuple_extract(v0.objref<@__fe_obj_tuple_0>) -> i8 {
+func private %__fe_main_root() {
     block0:
-        jump block5;
-
-    block1:
-        v5.objref<i8> = obj.proj v0 1.i256;
-        v6.i8 = obj.load v5;
-        jump block2;
-
-    block2:
-        v7.i8 = phi (v6 block1) (v10 block3) (v16 block8);
-        return v7;
-
-    block3:
-        v9.objref<i8> = obj.proj v0 0.i256;
-        v10.i8 = obj.load v9;
-        jump block2;
-
-    block4:
-        v12.objref<i8> = obj.proj v0 0.i256;
-        v13.i8 = obj.load v12;
-        v14.objref<i8> = obj.proj v0 1.i256;
-        v15.i8 = obj.load v14;
-        (v16.i8, v17.i1) = uaddo v13 v15;
-        br v17 block7 block8;
-
-    block5:
-        v19.objref<i8> = obj.proj v0 0.i256;
-        v20.i8 = obj.load v19;
-        br_table v20 block6 (0.i8 block1);
-
-    block6:
-        v22.objref<i8> = obj.proj v0 1.i256;
-        v23.i8 = obj.load v22;
-        br_table v23 block4 (0.i8 block3);
-
-    block7:
-        evm_revert 0.i256 0.i256;
-
-    block8:
-        jump block2;
+        v1.i8 = call %match_nested_extract undef.@__fe_layout_1;
+        evm_stop;
 }
 
-func private %match_nested_extract(v0.objref<@__fe_obj_tuple_1>) -> i8 {
+func private %match_nested_extract(v0.@__fe_layout_1) -> i8 {
     block0:
-        jump block5;
+        v1.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v2.*i8 = alloca i8;
+        v3.*i8 = alloca i8;
+        v4.*i8 = alloca i8;
+        v5.*i8 = alloca i8;
+        v6.*i8 = alloca i8;
+        v7.*i8 = alloca i8;
+        v8.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v9.*i8 = alloca i8;
+        v10.*i8 = alloca i8;
+        v11.*i1 = alloca i1;
+        v12.*i8 = alloca i8;
+        v13.*i8 = alloca i8;
+        v14.*i1 = alloca i1;
+        v15.*i8 = alloca i8;
+        v16.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v17.*i8 = alloca i8;
+        v18.*i8 = alloca i8;
+        v19.*i8 = alloca i8;
+        v20.*i8 = alloca i8;
+        v21.*i1 = alloca i1;
+        v22.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v23.*i8 = alloca i8;
+        v24.*i8 = alloca i8;
+        v25.*i8 = alloca i8;
+        v26.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v27.*i8 = alloca i8;
+        v28.*i8 = alloca i8;
+        v29.*i8 = alloca i8;
+        v30.*i8 = alloca i8;
+        v31.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v32.*i8 = alloca i8;
+        v33.*i8 = alloca i8;
+        v34.*i8 = alloca i8;
+        v35.*i8 = alloca i8;
+        obj.store v1 v0;
+        v37.objref<@__fe_layout_0> = obj.proj v1 0.i256;
+        v38.@__fe_layout_0 = obj.load v37;
+        obj.store v8 v38;
+        v39.objref<i8> = obj.proj v8 0.i256;
+        v40.i8 = obj.load v39;
+        mstore v9 v40 i8;
+        mstore v10 0.i8 i8;
+        v42.i8 = mload v9 i8;
+        v43.i8 = mload v10 i8;
+        v44.i1 = ne v42 0.i8;
+        v45.i1 = ne v43 0.i8;
+        v46.i1 = eq v44 v45;
+        mstore v11 v46 i1;
+        v47.i1 = mload v11 i1;
+        br v47 block7 block5;
 
     block1:
-        v5.objref<i8> = obj.proj v0 1.i256;
-        v6.i8 = obj.load v5;
-        jump block2;
+        v48.i8 = mload v7 i8;
+        return v48;
 
     block2:
-        v7.i8 = phi (v6 block1) (v15 block10) (v23 block11);
-        return v7;
+        v49.objref<@__fe_layout_0> = obj.proj v1 0.i256;
+        v50.@__fe_layout_0 = obj.load v49;
+        obj.store v22 v50;
+        v51.objref<i8> = obj.proj v22 0.i256;
+        v52.i8 = obj.load v51;
+        mstore v23 v52 i8;
+        v54.objref<i8> = obj.proj v22 1.i256;
+        v55.i8 = obj.load v54;
+        mstore v24 v55 i8;
+        v56.objref<i8> = obj.proj v1 1.i256;
+        v57.i8 = obj.load v56;
+        mstore v25 v57 i8;
+        v58.i8 = mload v25 i8;
+        mstore v2 v58 i8;
+        v59.i8 = mload v2 i8;
+        mstore v7 v59 i8;
+        jump block1;
 
     block3:
-        v9.objref<@__fe_obj_tuple_0> = obj.proj v0 0.i256;
-        v10.objref<i8> = obj.proj v9 1.i256;
-        v11.i8 = obj.load v10;
-        v12.objref<@__fe_obj_tuple_0> = obj.proj v0 0.i256;
-        v13.objref<i8> = obj.proj v12 0.i256;
-        v14.i8 = obj.load v13;
-        (v15.i8, v16.i1) = uaddo v14 v11;
-        br v16 block9 block10;
+        v60.objref<@__fe_layout_0> = obj.proj v1 0.i256;
+        v61.@__fe_layout_0 = obj.load v60;
+        obj.store v26 v61;
+        v62.objref<i8> = obj.proj v26 0.i256;
+        v63.i8 = obj.load v62;
+        mstore v27 v63 i8;
+        v64.i8 = mload v27 i8;
+        mstore v3 v64 i8;
+        v65.objref<i8> = obj.proj v26 1.i256;
+        v66.i8 = obj.load v65;
+        mstore v28 v66 i8;
+        v67.i8 = mload v28 i8;
+        mstore v4 v67 i8;
+        v68.objref<i8> = obj.proj v1 1.i256;
+        v69.i8 = obj.load v68;
+        mstore v29 v69 i8;
+        v70.i8 = mload v3 i8;
+        v71.i8 = mload v4 i8;
+        (v72.i8, v73.i1) = uaddo v70 v71;
+        br v73 block11 block12;
 
     block4:
-        v18.objref<@__fe_obj_tuple_0> = obj.proj v0 0.i256;
-        v19.objref<i8> = obj.proj v18 0.i256;
-        v20.i8 = obj.load v19;
-        v21.objref<i8> = obj.proj v0 1.i256;
-        v22.i8 = obj.load v21;
-        (v23.i8, v24.i1) = uaddo v20 v22;
-        br v24 block9 block11;
+        v75.objref<@__fe_layout_0> = obj.proj v1 0.i256;
+        v76.@__fe_layout_0 = obj.load v75;
+        obj.store v31 v76;
+        v77.objref<i8> = obj.proj v31 0.i256;
+        v78.i8 = obj.load v77;
+        mstore v32 v78 i8;
+        v79.i8 = mload v32 i8;
+        mstore v5 v79 i8;
+        v80.objref<i8> = obj.proj v31 1.i256;
+        v81.i8 = obj.load v80;
+        mstore v33 v81 i8;
+        v82.objref<i8> = obj.proj v1 1.i256;
+        v83.i8 = obj.load v82;
+        mstore v34 v83 i8;
+        v84.i8 = mload v34 i8;
+        mstore v6 v84 i8;
+        v85.i8 = mload v5 i8;
+        v86.i8 = mload v6 i8;
+        (v87.i8, v88.i1) = uaddo v85 v86;
+        br v88 block11 block13;
 
     block5:
-        v26.objref<@__fe_obj_tuple_0> = obj.proj v0 0.i256;
-        v27.objref<i8> = obj.proj v26 1.i256;
-        v28.i8 = obj.load v27;
-        br_table v28 block8 (0.i8 block6);
+        v90.objref<@__fe_layout_0> = obj.proj v1 0.i256;
+        v91.@__fe_layout_0 = obj.load v90;
+        obj.store v16 v91;
+        v92.objref<i8> = obj.proj v16 0.i256;
+        v93.i8 = obj.load v92;
+        mstore v17 v93 i8;
+        jump block10;
 
     block6:
-        v30.objref<@__fe_obj_tuple_0> = obj.proj v0 0.i256;
-        v31.objref<i8> = obj.proj v30 0.i256;
-        v32.i8 = obj.load v31;
-        br_table v32 block7 (0.i8 block1);
+        v94.objref<i8> = obj.proj v1 1.i256;
+        v95.i8 = obj.load v94;
+        mstore v15 v95 i8;
+        jump block2;
 
     block7:
-        v34.objref<i8> = obj.proj v0 1.i256;
-        v35.i8 = obj.load v34;
-        br_table v35 block4 (0.i8 block3);
+        v96.objref<i8> = obj.proj v8 1.i256;
+        v97.i8 = obj.load v96;
+        mstore v12 v97 i8;
+        mstore v13 0.i8 i8;
+        v98.i8 = mload v12 i8;
+        v99.i8 = mload v13 i8;
+        v100.i1 = ne v98 0.i8;
+        v101.i1 = ne v99 0.i8;
+        v102.i1 = eq v100 v101;
+        mstore v14 v102 i1;
+        v103.i1 = mload v14 i1;
+        br v103 block6 block5;
 
     block8:
-        v37.objref<i8> = obj.proj v0 1.i256;
-        v38.i8 = obj.load v37;
-        br_table v38 block4 (0.i8 block3);
+        jump block4;
+
+    block9:
+        v104.objref<i8> = obj.proj v1 1.i256;
+        v105.i8 = obj.load v104;
+        mstore v19 v105 i8;
+        mstore v20 0.i8 i8;
+        v106.i8 = mload v19 i8;
+        v107.i8 = mload v20 i8;
+        v108.i1 = ne v106 0.i8;
+        v109.i1 = ne v107 0.i8;
+        v110.i1 = eq v108 v109;
+        mstore v21 v110 i1;
+        v111.i1 = mload v21 i1;
+        br v111 block3 block8;
+
+    block10:
+        v112.objref<i8> = obj.proj v16 1.i256;
+        v113.i8 = obj.load v112;
+        mstore v18 v113 i8;
+        jump block9;
+
+    block11:
+        evm_revert 0.i256 0.i256;
+
+    block12:
+        mstore v30 v72 i8;
+        v74.i8 = mload v30 i8;
+        mstore v7 v74 i8;
+        jump block1;
+
+    block13:
+        mstore v35 v87 i8;
+        v89.i8 = mload v35 i8;
+        mstore v7 v89 i8;
+        jump block1;
+}
+
+func private %match_tuple_extract(v0.@__fe_layout_0) -> i8 {
+    block0:
+        v1.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v2.*i8 = alloca i8;
+        v3.*i8 = alloca i8;
+        v4.*i8 = alloca i8;
+        v5.*i8 = alloca i8;
+        v6.*i8 = alloca i8;
+        v7.*i8 = alloca i8;
+        v8.*i8 = alloca i8;
+        v9.*i1 = alloca i1;
+        v10.*i8 = alloca i8;
+        v11.*i8 = alloca i8;
+        v12.*i8 = alloca i8;
+        v13.*i8 = alloca i8;
+        v14.*i1 = alloca i1;
+        v15.*i8 = alloca i8;
+        v16.*i8 = alloca i8;
+        v17.*i8 = alloca i8;
+        v18.*i8 = alloca i8;
+        v19.*i8 = alloca i8;
+        v20.*i8 = alloca i8;
+        v21.*i8 = alloca i8;
+        obj.store v1 v0;
+        v23.objref<i8> = obj.proj v1 0.i256;
+        v24.i8 = obj.load v23;
+        mstore v7 v24 i8;
+        mstore v8 0.i8 i8;
+        v26.i8 = mload v7 i8;
+        v27.i8 = mload v8 i8;
+        v28.i1 = ne v26 0.i8;
+        v29.i1 = ne v27 0.i8;
+        v30.i1 = eq v28 v29;
+        mstore v9 v30 i1;
+        v31.i1 = mload v9 i1;
+        br v31 block6 block5;
+
+    block1:
+        v32.i8 = mload v6 i8;
+        return v32;
+
+    block2:
+        v33.objref<i8> = obj.proj v1 0.i256;
+        v34.i8 = obj.load v33;
+        mstore v15 v34 i8;
+        v36.objref<i8> = obj.proj v1 1.i256;
+        v37.i8 = obj.load v36;
+        mstore v16 v37 i8;
+        v38.i8 = mload v16 i8;
+        mstore v2 v38 i8;
+        v39.i8 = mload v2 i8;
+        mstore v6 v39 i8;
+        jump block1;
+
+    block3:
+        v40.objref<i8> = obj.proj v1 0.i256;
+        v41.i8 = obj.load v40;
+        mstore v17 v41 i8;
+        v42.i8 = mload v17 i8;
+        mstore v3 v42 i8;
+        v43.objref<i8> = obj.proj v1 1.i256;
+        v44.i8 = obj.load v43;
+        mstore v18 v44 i8;
+        v45.i8 = mload v3 i8;
+        mstore v6 v45 i8;
+        jump block1;
+
+    block4:
+        v46.objref<i8> = obj.proj v1 0.i256;
+        v47.i8 = obj.load v46;
+        mstore v19 v47 i8;
+        v48.i8 = mload v19 i8;
+        mstore v4 v48 i8;
+        v49.objref<i8> = obj.proj v1 1.i256;
+        v50.i8 = obj.load v49;
+        mstore v20 v50 i8;
+        v51.i8 = mload v20 i8;
+        mstore v5 v51 i8;
+        v52.i8 = mload v4 i8;
+        v53.i8 = mload v5 i8;
+        (v54.i8, v55.i1) = uaddo v52 v53;
+        br v55 block9 block10;
+
+    block5:
+        v57.objref<i8> = obj.proj v1 0.i256;
+        v58.i8 = obj.load v57;
+        mstore v11 v58 i8;
+        jump block8;
+
+    block6:
+        v59.objref<i8> = obj.proj v1 1.i256;
+        v60.i8 = obj.load v59;
+        mstore v10 v60 i8;
+        jump block2;
+
+    block7:
+        jump block4;
+
+    block8:
+        v61.objref<i8> = obj.proj v1 1.i256;
+        v62.i8 = obj.load v61;
+        mstore v12 v62 i8;
+        mstore v13 0.i8 i8;
+        v63.i8 = mload v12 i8;
+        v64.i8 = mload v13 i8;
+        v65.i1 = ne v63 0.i8;
+        v66.i1 = ne v64 0.i8;
+        v67.i1 = eq v65 v66;
+        mstore v14 v67 i1;
+        v68.i1 = mload v14 i1;
+        br v68 block3 block7;
 
     block9:
         evm_revert 0.i256 0.i256;
 
     block10:
-        jump block2;
-
-    block11:
-        jump block2;
-}
-
-func private %__fe_sonatina_entry() {
-    block0:
-        v1.i8 = call %match_tuple_extract undef.objref<@__fe_obj_tuple_0>;
-        evm_stop;
+        mstore v21 v54 i8;
+        v56.i8 = mload v21 i8;
+        mstore v6 v56 i8;
+        jump block1;
 }
 
 
-object @Contract {
-    section runtime {
-        entry %__fe_sonatina_entry;
+object @main {
+    section main {
+        entry %__fe_main_root;
     }
 }

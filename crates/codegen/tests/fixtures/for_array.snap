@@ -10,9 +10,9 @@ object "main" {
       let v1 := v0
       let v2 := 0
       let v3 := 0
-      let v4 := $_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len_code__u64_25__540b817a073b29f5()
+      let v4 := $_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len_code_arg0_root_code__u64_25__540b817a073b29f5()
       for { } lt(v3, v4) { v3 := add(v3, 1) } {
-        let v5 := $_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get_code__u64_25__540b817a073b29f5(v1, v3)
+        let v5 := $_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get_code_arg0_root_code__u64_25__540b817a073b29f5(v1, v3)
         let v6 := v5
         let v7 := $checked_add_u64(v2, v6)
         v2 := v7
@@ -20,11 +20,11 @@ object "main" {
       ret := v2
       leave
     }
-    function $_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len_code__u64_25__540b817a073b29f5() -> ret {
+    function $_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len_code_arg0_root_code__u64_25__540b817a073b29f5() -> ret {
       ret := 25
       leave
     }
-    function $_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get_code__u64_25__540b817a073b29f5($self, $i) -> ret {
+    function $_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get_code_arg0_root_code__u64_25__540b817a073b29f5($self, $i) -> ret {
       let v0 := mload(0x40)
       if iszero(v0) {
         v0 := 0x80

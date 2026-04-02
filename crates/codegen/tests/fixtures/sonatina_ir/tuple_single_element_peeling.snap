@@ -5,51 +5,158 @@ input_file: crates/codegen/tests/fixtures/tuple_single_element_peeling.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %tuple_single_passthrough(v0.i256) -> i256 {
+type @__fe_layout_0 = {i1};
+type @__fe_layout_1 = {i256};
+type @__fe_layout_2 = {@__fe_layout_1};
+type @__fe_layout_3 = {i256};
+type @__fe_layout_4 = {@__fe_layout_3};
+
+func private %__fe_main_root() {
     block0:
-        return v0;
+        v1.i8 = call %match_single_element_tuple undef.@__fe_layout_0;
+        evm_stop;
+}
+
+func private %match_single_element_tuple(v0.@__fe_layout_0) -> i8 {
+    block0:
+        v1.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v2.*i8 = alloca i8;
+        v3.*i1 = alloca i1;
+        v4.*i1 = alloca i1;
+        v5.*i1 = alloca i1;
+        v6.*i1 = alloca i1;
+        v7.*i8 = alloca i8;
+        v8.*i1 = alloca i1;
+        v9.*i8 = alloca i8;
+        obj.store v1 v0;
+        v11.objref<i1> = obj.proj v1 0.i256;
+        v12.i1 = obj.load v11;
+        mstore v3 v12 i1;
+        mstore v4 1.i1 i1;
+        v14.i1 = mload v3 i1;
+        v15.i1 = mload v4 i1;
+        v16.i1 = eq v14 v15;
+        mstore v5 v16 i1;
+        v17.i1 = mload v5 i1;
+        br v17 block2 block4;
+
+    block1:
+        v18.i8 = mload v2 i8;
+        return v18;
+
+    block2:
+        v19.objref<i1> = obj.proj v1 0.i256;
+        v20.i1 = obj.load v19;
+        mstore v6 v20 i1;
+        mstore v7 1.i8 i8;
+        v22.i8 = mload v7 i8;
+        mstore v2 v22 i8;
+        jump block1;
+
+    block3:
+        v23.objref<i1> = obj.proj v1 0.i256;
+        v24.i1 = obj.load v23;
+        mstore v8 v24 i1;
+        mstore v9 0.i8 i8;
+        v26.i8 = mload v9 i8;
+        mstore v2 v26 i8;
+        jump block1;
+
+    block4:
+        jump block3;
 }
 
 func private %tuple_single_nested_passthrough(v0.i256) -> i256 {
     block0:
-        return v0;
+        v1.*i256 = alloca i256;
+        v2.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v3.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v4.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v5.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v6.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        v7.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v8.i256 = mload v1 i256;
+        v10.objref<i256> = obj.proj v7 0.i256;
+        obj.store v10 v8;
+        v11.@__fe_layout_1 = obj.load v7;
+        obj.store v3 v11;
+        v12.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v13.@__fe_layout_1 = obj.load v3;
+        v14.objref<@__fe_layout_1> = obj.proj v12 0.i256;
+        obj.store v14 v13;
+        v15.@__fe_layout_2 = obj.load v12;
+        obj.store v4 v15;
+        v16.@__fe_layout_2 = obj.load v4;
+        obj.store v2 v16;
+        v17.objref<@__fe_layout_1> = obj.proj v2 0.i256;
+        v18.@__fe_layout_1 = obj.load v17;
+        obj.store v5 v18;
+        v19.objref<i256> = obj.proj v5 0.i256;
+        v20.i256 = obj.load v19;
+        mstore v6 v20 i256;
+        v21.i256 = mload v6 i256;
+        return v21;
+}
+
+func private %tuple_single_passthrough(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        v2.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v3.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v4.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        v5.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v6.i256 = mload v1 i256;
+        v8.objref<i256> = obj.proj v5 0.i256;
+        obj.store v8 v6;
+        v9.@__fe_layout_1 = obj.load v5;
+        obj.store v3 v9;
+        v10.@__fe_layout_1 = obj.load v3;
+        obj.store v2 v10;
+        v11.objref<i256> = obj.proj v2 0.i256;
+        v12.i256 = obj.load v11;
+        mstore v4 v12 i256;
+        v13.i256 = mload v4 i256;
+        return v13;
 }
 
 func private %tuple_single_struct_newtype_nested(v0.i256) -> i256 {
     block0:
-        return v0;
+        v1.*i256 = alloca i256;
+        v2.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
+        v3.objref<@__fe_layout_3> = obj.alloc @__fe_layout_3;
+        v4.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
+        v5.objref<@__fe_layout_3> = obj.alloc @__fe_layout_3;
+        v6.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        v7.objref<@__fe_layout_3> = obj.alloc @__fe_layout_3;
+        v8.i256 = mload v1 i256;
+        v10.objref<i256> = obj.proj v7 0.i256;
+        obj.store v10 v8;
+        v11.@__fe_layout_3 = obj.load v7;
+        obj.store v3 v11;
+        v12.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
+        v13.@__fe_layout_3 = obj.load v3;
+        v14.objref<@__fe_layout_3> = obj.proj v12 0.i256;
+        obj.store v14 v13;
+        v15.@__fe_layout_4 = obj.load v12;
+        obj.store v4 v15;
+        v16.@__fe_layout_4 = obj.load v4;
+        obj.store v2 v16;
+        v17.objref<@__fe_layout_3> = obj.proj v2 0.i256;
+        v18.@__fe_layout_3 = obj.load v17;
+        obj.store v5 v18;
+        v19.objref<i256> = obj.proj v5 0.i256;
+        v20.i256 = obj.load v19;
+        mstore v6 v20 i256;
+        v21.i256 = mload v6 i256;
+        return v21;
 }
 
-func private %match_single_element_tuple(v0.i1) -> i8 {
-    block0:
-        jump block4;
 
-    block1:
-        jump block2;
-
-    block2:
-        v4.i8 = phi (1.i8 block1) (0.i8 block3);
-        return v4;
-
-    block3:
-        jump block2;
-
-    block4:
-        br_table v0 block5 (1.i1 block1) (0.i1 block3);
-
-    block5:
-        evm_invalid;
-}
-
-func private %__fe_sonatina_entry() {
-    block0:
-        v1.i256 = call %tuple_single_passthrough 0.i256;
-        evm_stop;
-}
-
-
-object @Contract {
-    section runtime {
-        entry %__fe_sonatina_entry;
+object @main {
+    section main {
+        entry %__fe_main_root;
     }
 }

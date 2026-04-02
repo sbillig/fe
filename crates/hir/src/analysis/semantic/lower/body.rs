@@ -12,10 +12,13 @@ use crate::{
         semantic::{
             Mutability, SBlock, SBlockId, SConst, SExpr, SLocal, SLocalId, SStmt, STerminator,
             SValueId, SemOrigin, SemanticBody, SemanticCalleeRef, VariantIndex, bool_const,
-            bytes_const, int_const, sem_const_from_ty, unit_const,
+            bytes_const, int_const, runtime_size_bytes, sem_const_from_ty, unit_const,
         },
         ty::{
             const_ty::const_ty_or_abstract_from_assoc_const_use,
+            corelib::resolve_lib_func_path,
+            normalize::normalize_ty,
+            pattern_analysis::check_exhaustiveness,
             ty_check::{BodyOwner, ConstRef, LocalBinding, RecordLike, TypedBody},
             ty_def::{BorrowKind, TyId},
         },
@@ -29,6 +32,7 @@ use crate::{
 
 use super::{
     effects::{lower_seq_effect_args, owner_effect_bindings},
+    expr_lowers_to_semantic_call,
     pattern::ArmVariants,
 };
 
@@ -39,10 +43,30 @@ pub fn lower_to_smir<'db>(
     typed_body: TypedBody<'db>,
 ) -> SemanticBody<'db> {
     let Some(body) = typed_body.body() else {
+        let mut locals = Vec::new();
+        let mut push_binding_local = |binding| {
+            locals.push(SLocal {
+                ty: typed_body.binding_ty(db, binding),
+                mutability: if binding.is_mut() {
+                    Mutability::Mutable
+                } else {
+                    Mutability::Immutable
+                },
+                source: Some(binding),
+            });
+        };
+        let mut idx = 0;
+        while let Some(binding) = typed_body.param_binding(idx) {
+            push_binding_local(binding);
+            idx += 1;
+        }
+        for binding in owner_effect_bindings(db, template_owner) {
+            push_binding_local(binding);
+        }
         return SemanticBody {
             owner: instance,
             template_owner,
-            locals: Vec::new(),
+            locals,
             blocks: vec![SBlock {
                 stmts: Vec::new(),
                 terminator: STerminator::Return(None),
@@ -119,6 +143,47 @@ impl<'db> SmirLowerCtxt<'db> {
         cx
     }
 
+    fn path_expr_uses_binding_local(&self, expr: ExprId, binding: LocalBinding<'db>) -> bool {
+        let mut expr_ty = normalize_ty(
+            self.db,
+            self.expr_ty(expr),
+            self.body.scope(),
+            self.typed_body.assumptions(),
+        );
+        let mut binding_ty = normalize_ty(
+            self.db,
+            self.typed_body.binding_ty(self.db, binding),
+            self.body.scope(),
+            self.typed_body.assumptions(),
+        );
+        if expr_ty == binding_ty {
+            return true;
+        }
+        while let Some((_, inner)) = expr_ty.as_capability(self.db) {
+            expr_ty = normalize_ty(
+                self.db,
+                inner,
+                self.body.scope(),
+                self.typed_body.assumptions(),
+            );
+            if expr_ty == binding_ty {
+                return true;
+            }
+        }
+        while let Some((_, inner)) = binding_ty.as_capability(self.db) {
+            binding_ty = normalize_ty(
+                self.db,
+                inner,
+                self.body.scope(),
+                self.typed_body.assumptions(),
+            );
+            if expr_ty == binding_ty {
+                return true;
+            }
+        }
+        expr_ty == binding_ty || expr_ty.base_ty(self.db) == binding_ty.base_ty(self.db)
+    }
+
     fn finish(self) -> SemanticBody<'db> {
         let blocks = self
             .blocks
@@ -142,6 +207,20 @@ impl<'db> SmirLowerCtxt<'db> {
         while let Some(binding) = self.typed_body.param_binding(param_idx) {
             self.alloc_binding_local(binding);
             param_idx += 1;
+        }
+        if let BodyOwner::ContractRecvArm {
+            contract,
+            recv_idx,
+            arm_idx,
+        } = self.template_owner
+        {
+            let recv = crate::semantic::RecvView::new(self.db, contract, recv_idx);
+            let arm = crate::semantic::RecvArmView::new(self.db, recv, arm_idx);
+            for binding in arm.arg_bindings(self.db) {
+                if let Some(binding) = self.typed_body.pat_binding(binding.pat) {
+                    self.alloc_binding_local(binding);
+                }
+            }
         }
         for binding in owner_effect_bindings(self.db, self.template_owner) {
             self.alloc_binding_local(binding);
@@ -294,10 +373,55 @@ impl<'db> SmirLowerCtxt<'db> {
                 )
             }
             Expr::Un(inner, op) => {
+                if expr_lowers_to_semantic_call(
+                    self.db,
+                    &self.typed_body,
+                    self.body,
+                    expr,
+                    expr_data,
+                ) {
+                    return self.lower_callable_expr(expr, Some(*inner), &[]);
+                }
                 let value = self.lower_expr(*inner);
                 self.emit_expr(self.expr_ty(expr), SExpr::Unary { op: *op, value })
             }
+            Expr::Bin(lhs, rhs, BinOp::Arith(ArithBinOp::Range)) => {
+                let ty = self.expr_ty(expr);
+                let lhs = self.lower_expr(*lhs);
+                let rhs = self.lower_expr(*rhs);
+                let unit = self.unit_value();
+                let fields = ty
+                    .field_types(self.db)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, field_ty)| {
+                        let field_ty = normalize_ty(
+                            self.db,
+                            field_ty,
+                            self.body.scope(),
+                            self.typed_body.assumptions(),
+                        );
+                        if field_ty == TyId::unit(self.db) || field_ty.is_zero_sized(self.db) {
+                            unit
+                        } else if idx == 0 {
+                            lhs
+                        } else {
+                            rhs
+                        }
+                    })
+                    .collect();
+                self.emit_expr(ty, SExpr::AggregateMake { ty, fields })
+            }
             Expr::Bin(lhs, rhs, op) => {
+                if expr_lowers_to_semantic_call(
+                    self.db,
+                    &self.typed_body,
+                    self.body,
+                    expr,
+                    expr_data,
+                ) {
+                    return self.lower_callable_expr(expr, Some(*lhs), &[*rhs]);
+                }
                 let lhs = self.lower_expr(*lhs);
                 let rhs = self.lower_expr(*rhs);
                 self.emit_expr(self.expr_ty(expr), SExpr::Binary { op: *op, lhs, rhs })
@@ -319,7 +443,7 @@ impl<'db> SmirLowerCtxt<'db> {
             Expr::Assign(dst, src) => {
                 let src = self.lower_expr(*src);
                 let dst_place = self.lower_place(*dst);
-                if dst_place.path.is_empty() {
+                if dst_place.path.is_empty() && !self.place_needs_indirect_store(&dst_place) {
                     self.push_stmt(SStmt::Assign {
                         dst: dst_place.local,
                         expr: SExpr::Use(src),
@@ -333,10 +457,20 @@ impl<'db> SmirLowerCtxt<'db> {
                 self.unit_value()
             }
             Expr::AugAssign(dst, src, op) => {
+                if expr_lowers_to_semantic_call(
+                    self.db,
+                    &self.typed_body,
+                    self.body,
+                    expr,
+                    expr_data,
+                ) {
+                    return self.lower_callable_expr(expr, Some(*dst), &[*src]);
+                }
                 let lhs = self.lower_expr(*dst);
                 let rhs = self.lower_expr(*src);
+                let dst_ty = self.projectable_place_ty(self.expr_ty(*dst));
                 let sum = self.emit_expr(
-                    self.expr_ty(*dst),
+                    dst_ty,
                     SExpr::Binary {
                         op: BinOp::Arith(*op),
                         lhs,
@@ -344,7 +478,7 @@ impl<'db> SmirLowerCtxt<'db> {
                     },
                 );
                 let dst_place = self.lower_place(*dst);
-                if dst_place.path.is_empty() {
+                if dst_place.path.is_empty() && !self.place_needs_indirect_store(&dst_place) {
                     self.push_stmt(SStmt::Assign {
                         dst: dst_place.local,
                         expr: SExpr::Use(sum),
@@ -402,10 +536,14 @@ impl<'db> SmirLowerCtxt<'db> {
 
     fn lower_path_expr(&mut self, expr: ExprId, path: &Partial<PathId<'db>>) -> SValueId {
         if let Some(binding) = self.typed_body.expr_binding(expr) {
-            return *self
+            let local = *self
                 .binding_locals
                 .get(&binding)
                 .expect("binding local should be allocated");
+            if self.path_expr_uses_binding_local(expr, binding) {
+                return local;
+            }
+            return self.emit_expr(self.expr_ty(expr), SExpr::Use(local));
         }
         if let Some(const_ref) = self.typed_body.expr_const_ref(expr) {
             return self.lower_const_ref(expr, const_ref);
@@ -535,17 +673,33 @@ impl<'db> SmirLowerCtxt<'db> {
         receiver: Option<ExprId>,
         args: &[CallArg<'db>],
     ) -> SValueId {
+        let arg_exprs = args.iter().map(|arg| arg.expr).collect::<Vec<_>>();
+        self.lower_callable_expr(expr, receiver, &arg_exprs)
+    }
+
+    fn lower_callable_expr(
+        &mut self,
+        expr: ExprId,
+        receiver: Option<ExprId>,
+        args: &[ExprId],
+    ) -> SValueId {
         let callable = self
             .typed_body
             .callable_expr(expr)
             .cloned()
-            .unwrap_or_else(|| panic!("callable missing for call expression {expr:?}"));
+            .unwrap_or_else(|| panic!("callable missing for semantic-call expression {expr:?}"));
+        if let Some(value) = self.lower_code_region_intrinsic(expr, &callable, args) {
+            return value;
+        }
+        if let Some(value) = self.lower_const_intrinsic(expr, &callable) {
+            return value;
+        }
         let mut values = Vec::with_capacity(args.len() + usize::from(receiver.is_some()));
         if let Some(receiver) = receiver {
             values.push(self.lower_expr(receiver));
         }
         for arg in args {
-            values.push(self.lower_expr(arg.expr));
+            values.push(self.lower_expr(*arg));
         }
 
         match callable.callable_def() {
@@ -572,6 +726,64 @@ impl<'db> SmirLowerCtxt<'db> {
                 )
             }
         }
+    }
+
+    fn lower_code_region_intrinsic(
+        &mut self,
+        expr: ExprId,
+        callable: &crate::analysis::ty::ty_check::Callable<'db>,
+        args: &[ExprId],
+    ) -> Option<SValueId> {
+        let [arg] = args else {
+            return None;
+        };
+        let region = self.typed_body.code_region_ref(*arg)?.clone();
+        let CallableDef::Func(func) = callable.callable_def() else {
+            return None;
+        };
+        let name = func.name(self.db).to_opt()?.data(self.db);
+        if !matches!(name.as_str(), "code_region_offset" | "code_region_len") {
+            return None;
+        }
+        let lowered = if name == "code_region_offset" {
+            SExpr::CodeRegionOffset { region }
+        } else {
+            SExpr::CodeRegionLen { region }
+        };
+        Some(self.emit_expr(self.expr_ty(expr), lowered))
+    }
+
+    fn lower_const_intrinsic(
+        &mut self,
+        expr: ExprId,
+        callable: &crate::analysis::ty::ty_check::Callable<'db>,
+    ) -> Option<SValueId> {
+        let crate::hir_def::CallableDef::Func(func) = callable.callable_def() else {
+            return None;
+        };
+        if resolve_lib_func_path(self.db, func.scope(), "core::size_of") != Some(func) {
+            return None;
+        }
+        let ty = normalize_ty(
+            self.db,
+            *callable.generic_args().first()?,
+            self.body.scope(),
+            self.typed_body.assumptions(),
+        );
+        let size = runtime_size_bytes(self.db, ty).unwrap_or_else(|| {
+            panic!(
+                "core::size_of should resolve for {}",
+                ty.pretty_print(self.db)
+            )
+        });
+        Some(self.emit_expr(
+            self.expr_ty(expr),
+            SExpr::Const(SConst::Value(int_const(
+                self.db,
+                self.expr_ty(expr),
+                BigInt::from(size),
+            ))),
+        ))
     }
 
     fn lower_block_expr(&mut self, stmts: &[StmtId]) -> SValueId {
@@ -771,12 +983,14 @@ impl<'db> SmirLowerCtxt<'db> {
         let then_bb = self.new_block();
         let else_bb = self.new_block();
         let join_bb = self.new_block();
+        let mut join_reachable = false;
 
         self.lower_cond_branch(cond, then_bb, else_bb);
 
         self.switch_to(then_bb);
         let then_value = self.lower_expr(then_expr);
         if !self.is_terminated(self.current) {
+            join_reachable = true;
             self.push_stmt(SStmt::Assign {
                 dst: result,
                 expr: SExpr::Use(then_value),
@@ -791,6 +1005,7 @@ impl<'db> SmirLowerCtxt<'db> {
             self.unit_value()
         };
         if !self.is_terminated(self.current) {
+            join_reachable = true;
             self.push_stmt(SStmt::Assign {
                 dst: result,
                 expr: SExpr::Use(else_value),
@@ -798,6 +1013,9 @@ impl<'db> SmirLowerCtxt<'db> {
             self.set_terminator(self.current, STerminator::Goto(join_bb));
         }
 
+        if !join_reachable {
+            self.set_terminator(join_bb, STerminator::Goto(join_bb));
+        }
         self.switch_to(join_bb);
         result
     }
@@ -812,21 +1030,28 @@ impl<'db> SmirLowerCtxt<'db> {
             panic!("match arms missing")
         };
         let value = self.lower_expr(scrutinee);
-        let enum_ty = self.expr_ty(scrutinee);
+        let enum_ty = self
+            .expr_ty(scrutinee)
+            .as_enum(self.db)
+            .map(|_| self.expr_ty(scrutinee))
+            .or_else(|| arms.iter().find_map(|arm| self.pattern_enum_ty(arm.pat)));
         let result = self.alloc_temp(self.expr_ty(expr));
         let join_bb = self.new_block();
 
-        if self.expr_ty(scrutinee).as_enum(self.db).is_none()
+        if enum_ty.is_none()
             || !arms
                 .iter()
                 .all(|arm| self.pattern_is_enum_dispatchable(arm.pat))
+            || !self.can_lower_match_expr_with_enum_dispatch(arms, enum_ty.expect("checked"))
         {
             return self.lower_match_expr_with_branches(value, result, join_bb, arms);
         }
+        let enum_ty = enum_ty.expect("enum match should have an enum scrutinee type");
 
         let mut cases = Vec::new();
         let mut default = None;
         let mut arm_blocks = Vec::with_capacity(arms.len());
+        let mut join_reachable = false;
 
         for arm in arms {
             let block = self.new_block();
@@ -854,6 +1079,7 @@ impl<'db> SmirLowerCtxt<'db> {
             self.bind_pattern(arm.pat, value);
             let arm_value = self.lower_expr(arm.body);
             if !self.is_terminated(self.current) {
+                join_reachable = true;
                 self.push_stmt(SStmt::Assign {
                     dst: result,
                     expr: SExpr::Use(arm_value),
@@ -862,8 +1088,47 @@ impl<'db> SmirLowerCtxt<'db> {
             }
         }
 
+        if !join_reachable {
+            self.set_terminator(join_bb, STerminator::Goto(join_bb));
+        }
         self.switch_to(join_bb);
         result
+    }
+
+    fn can_lower_match_expr_with_enum_dispatch(
+        &self,
+        arms: &[MatchArm],
+        enum_ty: TyId<'db>,
+    ) -> bool {
+        let Some(enum_) = enum_ty.as_enum(self.db) else {
+            return false;
+        };
+
+        let mut covered = FxHashMap::default();
+        let mut saw_default = false;
+        for (idx, arm) in arms.iter().enumerate() {
+            match self.arm_variants(arm.pat) {
+                ArmVariants::Variants(variants) => {
+                    if saw_default {
+                        return false;
+                    }
+
+                    for variant in variants {
+                        if covered.insert(variant, idx).is_some() {
+                            return false;
+                        }
+                    }
+                }
+                ArmVariants::Default => {
+                    if saw_default || idx + 1 != arms.len() {
+                        return false;
+                    }
+                    saw_default = true;
+                }
+            }
+        }
+
+        saw_default || covered.len() == enum_.len_variants(self.db)
     }
 
     fn lower_match_expr_with_branches(
@@ -873,6 +1138,19 @@ impl<'db> SmirLowerCtxt<'db> {
         join_bb: SBlockId,
         arms: &[MatchArm],
     ) -> SValueId {
+        let exhaustive = arms
+            .iter()
+            .map(|arm| self.typed_body.pattern_root(arm.pat))
+            .collect::<Option<Vec<_>>>()
+            .is_some_and(|roots| {
+                check_exhaustiveness(
+                    self.db,
+                    self.typed_body.pattern_store(),
+                    &roots,
+                    self.locals[value.index()].ty,
+                )
+                .is_ok()
+            });
         let mut arm_blocks = Vec::with_capacity(arms.len());
         for arm in arms {
             arm_blocks.push((arm, self.new_block()));
@@ -885,7 +1163,7 @@ impl<'db> SmirLowerCtxt<'db> {
                 self.switch_to(dispatch_bb);
             }
 
-            if self.pattern_is_irrefutable(arm.pat) {
+            if self.pattern_is_irrefutable(arm.pat) || exhaustive && idx + 1 == arm_blocks.len() {
                 self.set_terminator(self.current, STerminator::Goto(*arm_bb));
                 exhausted = true;
                 break;
@@ -900,11 +1178,13 @@ impl<'db> SmirLowerCtxt<'db> {
             panic!("non-enum match lowering requires an irrefutable fallback arm");
         }
 
+        let mut join_reachable = false;
         for (arm, block) in arm_blocks {
             self.switch_to(block);
             self.bind_pattern(arm.pat, value);
             let arm_value = self.lower_expr(arm.body);
             if !self.is_terminated(self.current) {
+                join_reachable = true;
                 self.push_stmt(SStmt::Assign {
                     dst: result,
                     expr: SExpr::Use(arm_value),
@@ -913,6 +1193,9 @@ impl<'db> SmirLowerCtxt<'db> {
             }
         }
 
+        if !join_reachable {
+            self.set_terminator(join_bb, STerminator::Goto(join_bb));
+        }
         self.switch_to(join_bb);
         result
     }
@@ -958,5 +1241,28 @@ impl<'db> SmirLowerCtxt<'db> {
                 }
             }
         }
+    }
+
+    fn place_needs_indirect_store(&self, place: &crate::analysis::semantic::SPlace) -> bool {
+        let Some(local) = self.locals.get(place.local.index()) else {
+            return false;
+        };
+        let Some(binding) = local.source else {
+            return false;
+        };
+        if matches!(
+            binding,
+            LocalBinding::EffectParam { .. }
+                | LocalBinding::Param {
+                    site: crate::analysis::ty::ty_check::ParamSite::EffectField(_),
+                    ..
+                }
+        ) {
+            return true;
+        }
+        self.typed_body
+            .binding_ty(self.db, binding)
+            .as_capability(self.db)
+            .is_some()
     }
 }

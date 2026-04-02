@@ -1,26 +1,31 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/bitnot.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %bit_not(v0.i256) -> i256 {
-    block0:
-        v1.i256 = not v0;
-        return v1;
-}
-
-func private %__fe_sonatina_entry() {
+func private %__fe_main_root() {
     block0:
         v1.i256 = call %bit_not 0.i256;
         evm_stop;
 }
 
+func private %bit_not(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        v2.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        v3.i256 = mload v1 i256;
+        v4.i256 = not v3;
+        mstore v2 v4 i256;
+        v5.i256 = mload v2 i256;
+        return v5;
+}
 
-object @Contract {
-    section runtime {
-        entry %__fe_sonatina_entry;
+
+object @main {
+    section main {
+        entry %__fe_main_root;
     }
 }

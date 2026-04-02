@@ -15,6 +15,13 @@ use crate::{
 use super::body::SmirLowerCtxt;
 
 impl<'db> SmirLowerCtxt<'db> {
+    pub(super) fn projectable_place_ty(&self, mut ty: TyId<'db>) -> TyId<'db> {
+        while let Some((_, inner)) = ty.as_capability(self.db) {
+            ty = inner;
+        }
+        ty
+    }
+
     pub(super) fn lower_place(&mut self, expr: ExprId) -> SPlace {
         let place = self
             .typed_body
@@ -25,7 +32,8 @@ impl<'db> SmirLowerCtxt<'db> {
 
     pub(super) fn lower_place_data(&mut self, place: Place<'db>) -> SPlace {
         let PlaceBase::Binding(binding) = place.base;
-        let mut current_ty = self.typed_body.binding_ty(self.db, binding);
+        let mut current_ty =
+            self.projectable_place_ty(self.typed_body.binding_ty(self.db, binding));
         let local = *self
             .binding_locals
             .get(&binding)
@@ -37,15 +45,18 @@ impl<'db> SmirLowerCtxt<'db> {
                 PlaceProjection::Field(field) => {
                     let lowered = self.lower_field_index(current_ty, Some(field));
                     path.push(SPlaceElem::Field(lowered));
-                    current_ty = current_ty.field_types(self.db)[lowered.0 as usize];
+                    current_ty = self
+                        .projectable_place_ty(current_ty.field_types(self.db)[lowered.0 as usize]);
                 }
                 PlaceProjection::Index { index_expr } => {
                     path.push(SPlaceElem::Index(self.lower_expr(index_expr)));
-                    current_ty = current_ty
-                        .field_types(self.db)
-                        .into_iter()
-                        .next()
-                        .unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other));
+                    current_ty = self.projectable_place_ty(
+                        current_ty
+                            .field_types(self.db)
+                            .into_iter()
+                            .next()
+                            .unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other)),
+                    );
                 }
             }
         }
@@ -61,6 +72,7 @@ impl<'db> SmirLowerCtxt<'db> {
         base_ty: TyId<'db>,
         field: Option<HirFieldIndex<'db>>,
     ) -> FieldIndex {
+        let base_ty = self.projectable_place_ty(base_ty);
         let idx = match field {
             Some(HirFieldIndex::Index(index)) => index
                 .data(self.db)

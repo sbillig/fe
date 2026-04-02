@@ -44,8 +44,11 @@ pub(crate) fn collect_effect_constraints_for_func<'db>(
     };
 
     let mut out = Vec::new();
-    for binding in func.effect_bindings(db) {
-        if !matches!(binding.key_kind, EffectKeyKind::Type | EffectKeyKind::Trait) {
+    for binding in func.effect_requirements(db) {
+        if !matches!(
+            binding.key.kind(),
+            EffectKeyKind::Type | EffectKeyKind::Trait
+        ) {
             continue;
         }
 
@@ -60,7 +63,7 @@ pub(crate) fn collect_effect_constraints_for_func<'db>(
             continue;
         };
 
-        match (binding.key_ty, binding.key_trait) {
+        match (binding.key.key_ty(), binding.key.key_trait()) {
             (_, Some(inst)) => {
                 debug_assert!(
                     collect_layout_hole_tys_in_order(db, inst).is_empty(),
@@ -598,12 +601,12 @@ where
         let slot_provider_idx = provider_map[1].expect("missing provider slot for slot");
         assert!(cap_provider_idx < slot_provider_idx);
 
-        let effect_bindings = func.effect_bindings(&db);
+        let effect_bindings = func.effect_requirements(&db);
         let slot_binding = effect_bindings
             .iter()
             .find(|binding| binding.binding_name.data(&db) == "slot")
             .expect("missing slot binding");
-        let key_ty = slot_binding.key_ty.expect("missing type effect key");
+        let key_ty = slot_binding.key.key_ty().expect("missing type effect key");
         assert!(!ty_contains_const_hole(&db, key_ty));
         let args = key_ty.generic_args(&db);
         assert_eq!(args.len(), 2);

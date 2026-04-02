@@ -5,44 +5,119 @@ input_file: crates/codegen/tests/fixtures/if_else.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %if_else(v0.i1) -> i64 {
+func private %__fe_main_root() {
     block0:
-        br v0 block1 block2;
-
-    block1:
-        v4.i64 = call %helper 1.i64;
-        jump block3;
-
-    block2:
-        v6.i64 = call %helper 2.i64;
-        jump block3;
-
-    block3:
-        v7.i64 = phi (v4 block1) (v6 block2);
-        return v7;
+        v1.i64 = call %helper_0 0.i64;
+        evm_stop;
 }
 
-func private %helper(v0.i64) -> i64 {
+func private %helper_0(v0.i64) -> i64 {
     block0:
-        (v2.i64, v3.i1) = uaddo v0 1.i64;
-        br v3 block1 block2;
+        v1.*i64 = alloca i64;
+        v2.*i64 = alloca i64;
+        v3.*i64 = alloca i64;
+        mstore v1 v0 i64;
+        mstore v2 1.i64 i64;
+        v5.i64 = mload v1 i64;
+        v6.i64 = mload v2 i64;
+        (v7.i64, v8.i1) = uaddo v5 v6;
+        br v8 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        return v2;
+        mstore v3 v7 i64;
+        v10.i64 = mload v3 i64;
+        return v10;
 }
 
-func private %__fe_sonatina_entry() {
+func private %helper_1(v0.i64) -> i64 {
     block0:
-        v2.i64 = call %if_else 0.i1;
-        evm_stop;
+        v1.*i64 = alloca i64;
+        v2.*i64 = alloca i64;
+        v3.*i64 = alloca i64;
+        mstore v1 v0 i64;
+        mstore v2 1.i64 i64;
+        v5.i64 = mload v1 i64;
+        v6.i64 = mload v2 i64;
+        (v7.i64, v8.i1) = uaddo v5 v6;
+        br v8 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        mstore v3 v7 i64;
+        v10.i64 = mload v3 i64;
+        return v10;
+}
+
+func private %helper_2(v0.i64) -> i64 {
+    block0:
+        v1.*i64 = alloca i64;
+        v2.*i64 = alloca i64;
+        v3.*i64 = alloca i64;
+        mstore v1 v0 i64;
+        mstore v2 1.i64 i64;
+        v5.i64 = mload v1 i64;
+        v6.i64 = mload v2 i64;
+        (v7.i64, v8.i1) = uaddo v5 v6;
+        br v8 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        mstore v3 v7 i64;
+        v10.i64 = mload v3 i64;
+        return v10;
+}
+
+func private %if_else(v0.i1) -> i64 {
+    block0:
+        v1.*i1 = alloca i1;
+        v2.*i64 = alloca i64;
+        v3.*i64 = alloca i64;
+        v4.*i64 = alloca i64;
+        v5.*i64 = alloca i64;
+        v6.*i64 = alloca i64;
+        v7.*i64 = alloca i64;
+        v8.*i64 = alloca i64;
+        mstore v1 v0 i1;
+        v9.i1 = mload v1 i1;
+        br v9 block1 block2;
+
+    block1:
+        mstore v3 1.i64 i64;
+        v11.i64 = mload v3 i64;
+        v12.i64 = call %helper_2 v11;
+        mstore v7 v12 i64;
+        v13.i64 = mload v7 i64;
+        mstore v4 v13 i64;
+        v14.i64 = mload v4 i64;
+        mstore v2 v14 i64;
+        jump block3;
+
+    block2:
+        mstore v5 2.i64 i64;
+        v16.i64 = mload v5 i64;
+        v17.i64 = call %helper_1 v16;
+        mstore v8 v17 i64;
+        v18.i64 = mload v8 i64;
+        mstore v6 v18 i64;
+        v19.i64 = mload v6 i64;
+        mstore v2 v19 i64;
+        jump block3;
+
+    block3:
+        v20.i64 = mload v2 i64;
+        return v20;
 }
 
 
-object @Contract {
-    section runtime {
-        entry %__fe_sonatina_entry;
+object @main {
+    section main {
+        entry %__fe_main_root;
     }
 }

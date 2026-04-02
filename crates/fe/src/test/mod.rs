@@ -27,7 +27,7 @@ use contract_harness::{CallGasProfile, EvmTraceOptions, ExecutionOptions, Runtim
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod, item::ItemKind};
-use mir::{fmt as mir_fmt, lower_module};
+use mir2::build_runtime_package;
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Setter;
 use solc_runner::compile_single_contract_with_solc;
@@ -2443,13 +2443,13 @@ fn maybe_write_suite_ir(
     let artifacts_dir = report.root_dir.join("artifacts");
     let _ = create_dir_all_utf8(&artifacts_dir);
 
-    match lower_module(db, top_mod) {
-        Ok(mir) => {
-            let path = artifacts_dir.join("mir.txt");
-            let _ = std::fs::write(&path, mir_fmt::format_module(db, &mir));
+    match build_runtime_package(db, top_mod) {
+        Ok(package) => {
+            let path = artifacts_dir.join("runtime_package.txt");
+            let _ = std::fs::write(&path, format!("{package:#?}"));
         }
         Err(err) => {
-            let path = artifacts_dir.join("mir_error.txt");
+            let path = artifacts_dir.join("runtime_package_error.txt");
             let _ = std::fs::write(&path, format!("{err}"));
         }
     }

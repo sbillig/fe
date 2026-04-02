@@ -4,6 +4,7 @@ use num_traits::ToPrimitive;
 use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 
+use crate::analysis::semantic::{ManualContractSection, SemanticCodeRegionRef};
 use crate::core::hir_def::{
     ArithBinOp, BinOp, CallableDef, Cond, CondId, Expr, ExprId, FieldIndex, IdentId, IntegerId,
     LitKind, LogicalBinOp, Partial, PatId, PathId, Stmt, UnOp, VariantKind, WithBinding,
@@ -26,7 +27,9 @@ use crate::analysis::ty::{
     adt_def::AdtRef,
     assoc_const::AssocConstUse,
     canonical::{Canonicalized, Solution},
-    corelib::{resolve_core_range_types, resolve_core_trait, resolve_lib_type_path},
+    corelib::{
+        resolve_core_range_types, resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
+    },
     diagnostics::{BodyDiag, FuncBodyDiag},
     effects::{
         BarrierReason, EffectBarrier, EffectKeyKind, EffectPatternKey, EffectQuery,
@@ -63,7 +66,7 @@ use crate::analysis::{
         diagnostics::PathResDiag,
         is_scope_visible_from,
         method_selection::{MethodCandidate, MethodSelectionError, select_method_candidate},
-        resolve_name_res, resolve_path, resolve_query,
+        resolve_name_res, resolve_query,
     },
     ty::{
         const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
@@ -74,7 +77,7 @@ use crate::analysis::{
         ty_lower::resolve_callable_input_effect_key,
     },
 };
-use crate::hir_def::{Attr, FieldParent, ItemKind, scope_graph::ScopeId};
+use crate::hir_def::{FieldParent, ItemKind, ManualContractRootAttr, scope_graph::ScopeId};
 use common::indexmap::IndexMap;
 
 #[derive(Debug, Clone, Copy)]
@@ -185,99 +188,56 @@ pub(super) enum PendingPrimitiveOpResolution {
     Done,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CodeRegionIntrinsicKind {
+    Offset,
+    Len,
+}
+
 impl<'db> TyChecker<'db> {
-    fn is_contract_entrypoint_func(&self, func: crate::hir_def::Func<'db>) -> bool {
-        let Some(attrs) = ItemKind::Func(func).attrs(self.db) else {
-            return false;
+    fn code_region_intrinsic_kind(
+        &self,
+        callable_def: CallableDef<'db>,
+    ) -> Option<CodeRegionIntrinsicKind> {
+        let CallableDef::Func(func) = callable_def else {
+            return None;
         };
-        attrs.data(self.db).iter().any(|attr| {
-            let Attr::Normal(normal) = attr else {
-                return false;
-            };
-            let Some(path) = normal.path.to_opt() else {
-                return false;
-            };
-            let Some(name) = path.as_ident(self.db) else {
-                return false;
-            };
-            matches!(
-                name.data(self.db).as_str(),
-                "contract_init" | "contract_runtime"
-            )
+        let offset = resolve_lib_func_path(
+            self.db,
+            self.env.scope(),
+            "std::evm::intrinsic::code_region_offset",
+        );
+        let len = resolve_lib_func_path(
+            self.db,
+            self.env.scope(),
+            "std::evm::intrinsic::code_region_len",
+        );
+        Some(if Some(func) == offset {
+            CodeRegionIntrinsicKind::Offset
+        } else if Some(func) == len {
+            CodeRegionIntrinsicKind::Len
+        } else {
+            return None;
         })
     }
 
-    fn instantiate_contract_func_item_ty(&mut self, ty: TyId<'db>) -> TyId<'db> {
-        let (base, args) = ty.decompose_ty_app(self.db);
-        let TyData::TyBase(TyBase::Func(CallableDef::Func(func))) = base.data(self.db) else {
-            return self.instantiate_to_term(ty);
-        };
-        if !self.is_contract_entrypoint_func(*func) {
-            return self.instantiate_to_term(ty);
+    fn code_region_method_kind(
+        &self,
+        receiver_ty: TyId<'db>,
+        method_name: IdentId<'db>,
+    ) -> Option<CodeRegionIntrinsicKind> {
+        let evm_ty = resolve_lib_type_path(self.db, self.env.scope(), "std::evm::Evm")?;
+        if receiver_ty != evm_ty {
+            return None;
         }
-        // If the path already supplies (or has been instantiated with) non-inference generic args,
-        // preserve the usual inference behavior.
-        //
-        // We only canonicalize contract entrypoint function-items when their generic arguments are
-        // absent or still purely inference vars (common when resolved through `resolve_path`,
-        // which instantiates callables to terms eagerly).
-        if !args.is_empty()
-            && !args
-                .iter()
-                .all(|arg| matches!(arg.data(self.db), TyData::TyVar(_)))
-        {
-            return self.instantiate_to_term(ty);
-        }
-        let entry_params = CallableDef::Func(*func).params(self.db);
-        if let Some(current_callable) = self.env.func()
-            && entry_params.len() == current_callable.params(self.db).len()
-        {
-            return TyId::foldl(self.db, base, current_callable.params(self.db));
-        }
-        let provider_param_count = entry_params
-            .iter()
-            .filter(|ty| matches!(ty.data(self.db), TyData::TyParam(p) if p.is_effect_provider()))
-            .count();
-        if provider_param_count != 0
-            && provider_param_count == entry_params.len()
-            && let Some(args) = self.default_effect_provider_args(*func, provider_param_count)
-        {
-            return TyId::foldl(self.db, base, &args);
-        }
-        TyId::foldl(self.db, base, entry_params)
-    }
-
-    fn default_effect_provider_args(
-        &mut self,
-        func: crate::hir_def::Func<'db>,
-        provider_param_count: usize,
-    ) -> Option<Vec<TyId<'db>>> {
-        let scope = self.env.body().scope();
-        let stor_ptr_ctor = resolve_lib_type_path(self.db, scope, "core::effect_ref::StorPtr")?;
-        let mut args = Vec::with_capacity(provider_param_count);
-        let assumptions = PredicateListId::empty_list(self.db);
-        for effect in func.effect_params(self.db) {
-            let Some(key_path) = effect.key_path(self.db) else {
-                continue;
-            };
-            let Ok(path_res) = resolve_path(self.db, key_path, func.scope(), assumptions, false)
-            else {
-                continue;
-            };
-            let target_ty = match path_res {
-                PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => ty,
-                _ => continue,
-            };
-            if !target_ty.is_star_kind(self.db) {
-                continue;
-            }
-            args.push(TyId::app(self.db, stor_ptr_ctor, target_ty));
-        }
-        if args.len() == provider_param_count {
-            Some(args)
+        let name = method_name.data(self.db);
+        Some(if name == "code_region_offset" {
+            CodeRegionIntrinsicKind::Offset
+        } else if name == "code_region_len" {
+            CodeRegionIntrinsicKind::Len
         } else {
-            None
-        }
+            return None;
+        })
     }
 
     pub(super) fn check_expr(&mut self, expr: ExprId, expected: TyId<'db>) -> ExprProp<'db> {
@@ -1187,6 +1147,22 @@ impl<'db> TyChecker<'db> {
 
         let call_span = expr.span(self.body()).into_call_expr();
 
+        if self
+            .code_region_intrinsic_kind(callable.callable_def())
+            .is_some()
+            && args.len() == 1
+            && let Some(result) = self.check_code_region_intrinsic(
+                expr,
+                &mut callable,
+                args,
+                call_span.clone().args(),
+                None,
+                Some(*callee),
+            )
+        {
+            return result;
+        }
+
         callable.check_args(self, args, call_span.clone().args(), None, false);
 
         self.check_callable_effects(expr, &mut callable);
@@ -1196,6 +1172,73 @@ impl<'db> TyChecker<'db> {
         let normalized_ret_ty = self.normalize_ty(ret_ty);
         self.env.register_callable(expr, callable);
         ExprProp::new(normalized_ret_ty, true)
+    }
+
+    fn check_code_region_intrinsic(
+        &mut self,
+        expr: ExprId,
+        callable: &mut Callable<'db>,
+        args: &[crate::hir_def::CallArg<'db>],
+        arg_spans: crate::span::expr::LazyCallArgListSpan<'db>,
+        receiver: Option<(ExprId, ExprProp<'db>)>,
+        direct_callee: Option<ExprId>,
+    ) -> Option<ExprProp<'db>> {
+        let arg_expr = args[0].expr;
+        let code_region_ref = self.resolve_code_region_ref(arg_expr)?;
+
+        self.env.register_code_region_ref(arg_expr, code_region_ref);
+        callable.check_args(self, args, arg_spans, receiver, false);
+        if let Some(callee) = direct_callee {
+            self.env
+                .type_expr(callee, ExprProp::new(callable.ty(self.db), true));
+        }
+        self.env.register_callable(expr, callable.clone());
+        Some(ExprProp::new(TyId::u256(self.db), true))
+    }
+
+    fn resolve_code_region_ref(&mut self, expr: ExprId) -> Option<SemanticCodeRegionRef<'db>> {
+        let Partial::Present(Expr::Path(Partial::Present(path))) = expr.data(self.db, self.body())
+        else {
+            return None;
+        };
+        let resolved = if path.is_bare_ident(self.db) {
+            match resolve_ident_expr(self.db, &self.env, *path, expr.span(self.body()).into()) {
+                ResolvedPathInBody::Reso(resolved) => resolved,
+                ResolvedPathInBody::Binding(_)
+                | ResolvedPathInBody::NewBinding(_)
+                | ResolvedPathInBody::Diag(_)
+                | ResolvedPathInBody::Invalid => return None,
+            }
+        } else {
+            self.resolve_path(*path, true, expr.span(self.body()).into_path_expr().path())
+                .ok()?
+        };
+        let PathRes::Func(func_ty) = resolved else {
+            return None;
+        };
+        let typed_func_ty = self.instantiate_to_term(func_ty);
+        self.env.type_expr(expr, ExprProp::new(typed_func_ty, true));
+        let (base, _) = func_ty.decompose_ty_app(self.db);
+        let TyData::TyBase(TyBase::Func(CallableDef::Func(func))) = base.data(self.db) else {
+            return None;
+        };
+        match func.manual_contract_root_attr(self.db)? {
+            ManualContractRootAttr::Init { contract_name } => {
+                Some(SemanticCodeRegionRef::ManualContractRoot {
+                    func: *func,
+                    contract_name: contract_name.data(self.db).to_string(),
+                    section: ManualContractSection::Init,
+                })
+            }
+            ManualContractRootAttr::Runtime { contract_name } => {
+                Some(SemanticCodeRegionRef::ManualContractRoot {
+                    func: *func,
+                    contract_name: contract_name.data(self.db).to_string(),
+                    section: ManualContractSection::Runtime,
+                })
+            }
+            ManualContractRootAttr::Error(_) => None,
+        }
     }
 
     pub(super) fn check_callable_effects(&mut self, expr: ExprId, callable: &mut Callable<'db>) {
@@ -1374,7 +1417,10 @@ impl<'db> TyChecker<'db> {
                             target_ty,
                         );
                     }
-                    let provider_space = self.effect_arg_provider_space(&arg, pass_mode);
+                    let provider_space =
+                        self.effect_arg_provider_space(&arg, pass_mode).or_else(|| {
+                            self.concrete_borrow_provider_for_effect_handle_ty(provider.ty)
+                        });
                     if matches!(
                         pass_mode,
                         super::EffectPassMode::ByPlace | super::EffectPassMode::ByTempPlace
@@ -1966,7 +2012,7 @@ impl<'db> TyChecker<'db> {
         &self,
         arg: &super::EffectArg<'db>,
         pass_mode: super::EffectPassMode,
-    ) -> Option<super::ConcreteBorrowProvider> {
+    ) -> Option<super::ProviderAddressSpace> {
         match pass_mode {
             super::EffectPassMode::ByTempPlace => match arg {
                 super::EffectArg::Value(expr) => self.env.typed_expr(*expr).and_then(|prop| {
@@ -2786,7 +2832,7 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        let receiver_tys = self.capability_fallback_candidates(receiver_prop.ty);
+        let receiver_tys = self.method_receiver_tys(*receiver, &receiver_prop);
         let method_assumptions = self.env.assumptions();
 
         let mut selected_receiver_ty = receiver_tys[0];
@@ -2926,6 +2972,23 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
+        if self
+            .code_region_intrinsic_kind(callable.callable_def())
+            .or_else(|| self.code_region_method_kind(selected_receiver_ty, method_name))
+            .is_some()
+            && args.len() == 1
+            && let Some(result) = self.check_code_region_intrinsic(
+                expr,
+                &mut callable,
+                args,
+                call_span.clone().args(),
+                Some((*receiver, receiver_prop.clone())),
+                None,
+            )
+        {
+            return result;
+        }
+
         callable.check_args(
             self,
             args,
@@ -2943,6 +3006,14 @@ impl<'db> TyChecker<'db> {
         let normalized_ret_ty = self.normalize_ty(ret_ty);
         self.env.register_callable(expr, callable);
         ExprProp::new(normalized_ret_ty, true)
+    }
+
+    fn method_receiver_tys(
+        &self,
+        _receiver: ExprId,
+        receiver_prop: &ExprProp<'db>,
+    ) -> Vec<TyId<'db>> {
+        self.capability_fallback_candidates(receiver_prop.ty)
     }
 
     fn check_path(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
@@ -3060,10 +3131,7 @@ impl<'db> TyChecker<'db> {
                         return ExprProp::invalid(self.db);
                     }
 
-                    ExprProp::new(
-                        self.instantiate_contract_func_item_ty(callable.ty(self.db)),
-                        true,
-                    )
+                    ExprProp::new(self.instantiate_to_term(callable.ty(self.db)), true)
                 }
                 PathRes::Trait(trait_) => {
                     let diag = BodyDiag::NotValue {
@@ -3684,7 +3752,7 @@ impl<'db> TyChecker<'db> {
         };
 
         let mut match_ty = expected;
-        let mut first_provider: Option<(DynLazySpan<'db>, super::ConcreteBorrowProvider)> = None;
+        let mut first_provider: Option<(DynLazySpan<'db>, super::ProviderAddressSpace)> = None;
         let mut provider_unknown = false;
         let mut provider_conflict = false;
         let mut arm_statuses = Vec::with_capacity(arms.len());

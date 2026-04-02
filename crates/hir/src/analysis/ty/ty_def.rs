@@ -538,7 +538,7 @@ impl<'db> TyId<'db> {
         }
     }
 
-    pub(crate) fn as_scope(self, db: &'db dyn HirAnalysisDb) -> Option<ScopeId<'db>> {
+    pub fn as_scope(self, db: &'db dyn HirAnalysisDb) -> Option<ScopeId<'db>> {
         match self.base_ty(db).data(db) {
             TyData::TyParam(param) => Some(param.scope(db)),
             TyData::AssocTy(assoc_ty) => assoc_ty.scope(db),

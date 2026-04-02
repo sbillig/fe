@@ -595,12 +595,17 @@ pub(crate) fn try_value_pointer_info_in<'db>(
             address_space,
             target_ty: matches!(value_data.repr, ValueRepr::Ref(_)).then_some(value_data.ty),
         });
-    let runtime_shape_fallback =
-        merge_pointer_info(runtime_shape_pointer_info(value_data.runtime_shape), repr_fallback);
+    let runtime_shape_fallback = merge_pointer_info(
+        runtime_shape_pointer_info(value_data.runtime_shape),
+        repr_fallback,
+    );
     match &value_data.origin {
         ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) => merge_pointer_info(
             value_data.pointer_info,
-            merge_pointer_info(local_root_pointer_info(locals, *local), runtime_shape_fallback),
+            merge_pointer_info(
+                local_root_pointer_info(locals, *local),
+                runtime_shape_fallback,
+            ),
         ),
         ValueOrigin::TransparentCast { value } => merge_pointer_info(
             value_data.pointer_info,

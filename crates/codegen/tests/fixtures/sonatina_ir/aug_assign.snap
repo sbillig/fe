@@ -5,35 +5,63 @@ input_file: crates/codegen/tests/fixtures/aug_assign.fe
 ---
 target = "evm-ethereum-osaka"
 
+func private %__fe_main_root() {
+    block0:
+        v1.i64 = call %aug_assign 0.i64 0.i64;
+        evm_stop;
+}
+
 func private %aug_assign(v0.i64, v1.i64) -> i64 {
     block0:
-        (v2.i64, v3.i1) = uaddo v0 v1;
-        br v3 block1 block2;
+        v2.*i64 = alloca i64;
+        v3.*i64 = alloca i64;
+        v4.*i64 = alloca i64;
+        v5.*i64 = alloca i64;
+        v6.*i64 = alloca i64;
+        v7.*i64 = alloca i64;
+        v8.*i64 = alloca i64;
+        v9.*i64 = alloca i64;
+        mstore v2 v0 i64;
+        mstore v3 v1 i64;
+        v10.i64 = mload v2 i64;
+        mstore v4 v10 i64;
+        v11.i64 = mload v4 i64;
+        v12.i64 = mload v3 i64;
+        (v13.i64, v14.i1) = uaddo v11 v12;
+        br v14 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        (v6.i64, v7.i1) = umulo v2 2.i64;
-        br v7 block1 block3;
+        mstore v5 v13 i64;
+        v16.i64 = mload v5 i64;
+        mstore v4 v16 i64;
+        mstore v6 2.i64 i64;
+        v18.i64 = mload v4 i64;
+        v19.i64 = mload v6 i64;
+        (v20.i64, v21.i1) = umulo v18 v19;
+        br v21 block1 block3;
 
     block3:
-        (v8.i64, v9.i1) = evm_udivo v6 2.i64;
-        br v9 block1 block4;
+        mstore v7 v20 i64;
+        v22.i64 = mload v7 i64;
+        mstore v4 v22 i64;
+        mstore v8 2.i64 i64;
+        v23.i64 = mload v4 i64;
+        v24.i64 = mload v8 i64;
+        (v25.i64, v26.i1) = evm_udivo v23 v24;
+        br v26 block1 block4;
 
     block4:
-        return v8;
-}
-
-func private %__fe_sonatina_entry() {
-    block0:
-        v2.i64 = call %aug_assign 0.i64 0.i64;
-        evm_stop;
+        mstore v9 v25 i64;
+        v27.i64 = mload v9 i64;
+        return v27;
 }
 
 
-object @Contract {
-    section runtime {
-        entry %__fe_sonatina_entry;
+object @main {
+    section main {
+        entry %__fe_main_root;
     }
 }

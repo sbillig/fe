@@ -5,35 +5,54 @@ input_file: crates/codegen/tests/fixtures/tuple_expr.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @__fe_obj_tuple_0 = {i64, i1};
+type @__fe_layout_0 = {i64, i1};
 
-func private %tuple_expr() -> objref<@__fe_obj_tuple_0> {
+func private %__fe_main_root() {
     block0:
-        (v2.i64, v3.i1) = uaddo 1.i64 2.i64;
-        br v3 block1 block2;
+        v0.@__fe_layout_0 = call %tuple_expr;
+        evm_stop;
+}
+
+func private %tuple_expr() -> @__fe_layout_0 {
+    block0:
+        v0.*i64 = alloca i64;
+        v1.*i64 = alloca i64;
+        v2.*i64 = alloca i64;
+        v3.*i1 = alloca i1;
+        v4.*i1 = alloca i1;
+        v5.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        mstore v0 1.i64 i64;
+        mstore v1 2.i64 i64;
+        v8.i64 = mload v0 i64;
+        v9.i64 = mload v1 i64;
+        (v10.i64, v11.i1) = uaddo v8 v9;
+        br v11 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        v5.objref<@__fe_obj_tuple_0> = obj.alloc @__fe_obj_tuple_0;
-        v6.objref<i64> = obj.proj v5 0.i256;
-        obj.store v6 v2;
-        v8.i1 = is_zero 0.i1;
-        v10.objref<i1> = obj.proj v5 1.i256;
-        obj.store v10 v8;
-        return v5;
+        mstore v2 v10 i64;
+        mstore v3 0.i1 i1;
+        v14.i1 = mload v3 i1;
+        v15.i1 = is_zero v14;
+        mstore v4 v15 i1;
+        v16.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v17.i64 = mload v2 i64;
+        v18.objref<i64> = obj.proj v16 0.i256;
+        obj.store v18 v17;
+        v19.i1 = mload v4 i1;
+        v21.objref<i1> = obj.proj v16 1.i256;
+        obj.store v21 v19;
+        v22.@__fe_layout_0 = obj.load v16;
+        obj.store v5 v22;
+        v23.@__fe_layout_0 = obj.load v5;
+        return v23;
 }
 
-func private %__fe_sonatina_entry() {
-    block0:
-        v0.objref<@__fe_obj_tuple_0> = call %tuple_expr;
-        evm_stop;
-}
 
-
-object @Contract {
-    section runtime {
-        entry %__fe_sonatina_entry;
+object @main {
+    section main {
+        entry %__fe_main_root;
     }
 }

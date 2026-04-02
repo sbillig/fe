@@ -5,17 +5,56 @@ input_file: crates/codegen/tests/fixtures/zero_sized_aggregates.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @__fe_obj_tuple_0 = {unit, i256};
-type @__fe_obj_Wrap_1 = {unit, i256};
+type @__fe_layout_0 = {};
+type @__fe_layout_1 = {@__fe_layout_0, i256};
+type @__fe_layout_2 = {@__fe_layout_0, i256};
 
-func private %tuple_with_empty() -> i256 {
+func private %__fe_main_root() {
     block0:
-        v1.objref<@__fe_obj_tuple_0> = obj.alloc @__fe_obj_tuple_0;
-        v3.objref<i256> = obj.proj v1 1.i256;
-        obj.store v3 5.i256;
-        v4.objref<i256> = obj.proj v1 1.i256;
-        v5.i256 = obj.load v4;
-        return v5;
+        call %empty_field_assign;
+        evm_stop;
+}
+
+func private %empty_field_assign() {
+    block0:
+        v0.*i256 = alloca i256;
+        v1.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        mstore v0 1.i256 i256;
+        v3.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v4.i256 = mload v0 i256;
+        v5.objref<i256> = obj.proj v3 1.i256;
+        obj.store v5 v4;
+        v6.@__fe_layout_1 = obj.load v3;
+        obj.store v1 v6;
+        v7.@__fe_layout_1 = obj.load v1;
+        v8.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        obj.store v8 v7;
+        return;
+}
+
+func private %struct_with_empty() -> i256 {
+    block0:
+        v0.*i256 = alloca i256;
+        v1.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v2.*i256 = alloca i256;
+        v3.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v4.*i256 = alloca i256;
+        mstore v2 7.i256 i256;
+        v6.i256 = mload v2 i256;
+        mstore v0 v6 i256;
+        v7.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v8.i256 = mload v0 i256;
+        v10.objref<i256> = obj.proj v7 1.i256;
+        obj.store v10 v8;
+        v11.@__fe_layout_1 = obj.load v7;
+        obj.store v3 v11;
+        v12.@__fe_layout_1 = obj.load v3;
+        obj.store v1 v12;
+        v13.objref<i256> = obj.proj v1 1.i256;
+        v14.i256 = obj.load v13;
+        mstore v4 v14 i256;
+        v15.i256 = mload v4 i256;
+        return v15;
 }
 
 func private %tuple_only_empty() {
@@ -23,30 +62,34 @@ func private %tuple_only_empty() {
         return;
 }
 
-func private %struct_with_empty() -> i256 {
+func private %tuple_with_empty() -> i256 {
     block0:
-        v1.objref<@__fe_obj_Wrap_1> = obj.alloc @__fe_obj_Wrap_1;
-        v3.objref<i256> = obj.proj v1 1.i256;
-        obj.store v3 7.i256;
-        v4.objref<i256> = obj.proj v1 1.i256;
-        v5.i256 = obj.load v4;
-        return v5;
+        v0.*i256 = alloca i256;
+        v1.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v2.*i256 = alloca i256;
+        v3.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v4.*i256 = alloca i256;
+        mstore v2 5.i256 i256;
+        v6.i256 = mload v2 i256;
+        mstore v0 v6 i256;
+        v7.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v8.i256 = mload v0 i256;
+        v10.objref<i256> = obj.proj v7 1.i256;
+        obj.store v10 v8;
+        v11.@__fe_layout_2 = obj.load v7;
+        obj.store v3 v11;
+        v12.@__fe_layout_2 = obj.load v3;
+        obj.store v1 v12;
+        v13.objref<i256> = obj.proj v1 1.i256;
+        v14.i256 = obj.load v13;
+        mstore v4 v14 i256;
+        v15.i256 = mload v4 i256;
+        return v15;
 }
 
-func private %empty_field_assign() {
-    block0:
-        return;
-}
 
-func private %__fe_sonatina_entry() {
-    block0:
-        v0.i256 = call %tuple_with_empty;
-        evm_stop;
-}
-
-
-object @Contract {
-    section runtime {
-        entry %__fe_sonatina_entry;
+object @main {
+    section main {
+        entry %__fe_main_root;
     }
 }

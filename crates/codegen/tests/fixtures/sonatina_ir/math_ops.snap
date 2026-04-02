@@ -5,39 +5,66 @@ input_file: crates/codegen/tests/fixtures/math_ops.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %math_ops() -> i64 {
-    block0:
-        (v2.i64, v3.i1) = usubo 10.i64 3.i64;
-        br v3 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        (v6.i64, v7.i1) = umulo v2 2.i64;
-        br v7 block1 block3;
-
-    block3:
-        (v9.i64, v10.i1) = evm_udivo v6 7.i64;
-        br v10 block1 block4;
-
-    block4:
-        (v11.i64, v12.i1) = evm_umodo v9 3.i64;
-        br v12 block1 block5;
-
-    block5:
-        return v11;
-}
-
-func private %__fe_sonatina_entry() {
+func private %__fe_main_root() {
     block0:
         v0.i64 = call %math_ops;
         evm_stop;
 }
 
+func private %math_ops() -> i64 {
+    block0:
+        v0.*i64 = alloca i64;
+        v1.*i64 = alloca i64;
+        v2.*i64 = alloca i64;
+        v3.*i64 = alloca i64;
+        v4.*i64 = alloca i64;
+        v5.*i64 = alloca i64;
+        v6.*i64 = alloca i64;
+        v7.*i64 = alloca i64;
+        v8.*i64 = alloca i64;
+        mstore v0 10.i64 i64;
+        mstore v1 3.i64 i64;
+        v11.i64 = mload v0 i64;
+        v12.i64 = mload v1 i64;
+        (v13.i64, v14.i1) = usubo v11 v12;
+        br v14 block1 block2;
 
-object @Contract {
-    section runtime {
-        entry %__fe_sonatina_entry;
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        mstore v2 v13 i64;
+        mstore v3 2.i64 i64;
+        v17.i64 = mload v2 i64;
+        v18.i64 = mload v3 i64;
+        (v19.i64, v20.i1) = umulo v17 v18;
+        br v20 block1 block3;
+
+    block3:
+        mstore v4 v19 i64;
+        mstore v5 7.i64 i64;
+        v22.i64 = mload v4 i64;
+        v23.i64 = mload v5 i64;
+        (v24.i64, v25.i1) = evm_udivo v22 v23;
+        br v25 block1 block4;
+
+    block4:
+        mstore v6 v24 i64;
+        mstore v7 3.i64 i64;
+        v26.i64 = mload v6 i64;
+        v27.i64 = mload v7 i64;
+        (v28.i64, v29.i1) = evm_umodo v26 v27;
+        br v29 block1 block5;
+
+    block5:
+        mstore v8 v28 i64;
+        v30.i64 = mload v8 i64;
+        return v30;
+}
+
+
+object @main {
+    section main {
+        entry %__fe_main_root;
     }
 }

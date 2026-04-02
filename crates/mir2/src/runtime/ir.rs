@@ -1,9 +1,10 @@
 use cranelift_entity::{EntityRef, entity_impl};
-use hir::analysis::ty::ty_def::TyId;
-use hir::hir_def::{BinOp, UnOp};
+use hir::analysis::{
+    semantic::{FieldIndex, ManualContractSection, SemanticInstance},
+    ty::ty_def::TyId,
+};
+use hir::hir_def::{BinOp, Contract, TopLevelMod, UnOp};
 use salsa::Update;
-
-use hir::analysis::semantic::{FieldIndex, SemanticCalleeRef};
 
 use crate::{
     db::MirDb,
@@ -290,19 +291,267 @@ pub struct RBlock<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct RuntimeCallEdge<'db> {
-    pub semantic_callee: SemanticCalleeRef<'db>,
-    pub runtime_arg_classes: Vec<RuntimeClass<'db>>,
+    pub callee: RuntimeInstance<'db>,
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct RuntimeCodeRegion<'db> {
+    pub key: RuntimeCodeRegionKey<'db>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub enum PlaceRoot {
+pub enum RuntimeCodeRegionKey<'db> {
+    ContractInit {
+        contract: Contract<'db>,
+    },
+    ContractRuntime {
+        contract: Contract<'db>,
+    },
+    ManualContractSection {
+        contract_name: String,
+        section: ManualContractSection,
+        callee: RuntimeInstance<'db>,
+    },
+    FunctionRoot {
+        symbol: String,
+        callee: RuntimeInstance<'db>,
+    },
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct ResolvedCodeRegion<'db> {
+    pub region: RuntimeCodeRegion<'db>,
+    pub symbol: String,
+    pub source: RuntimeSectionRef<'db>,
+    pub root: RuntimeFunction<'db>,
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct RuntimePackage<'db> {
+    pub top_mod: TopLevelMod<'db>,
+    pub functions: Vec<RuntimeFunction<'db>>,
+    pub plan: RuntimePackagePlan<'db>,
+}
+
+impl<'db> RuntimePackage<'db> {
+    pub fn objects(self, db: &'db dyn MirDb) -> Vec<RuntimeObject<'db>> {
+        self.plan(db).objects(db)
+    }
+
+    pub fn const_regions(self, db: &'db dyn MirDb) -> Vec<ConstRegionId<'db>> {
+        self.plan(db).const_regions(db)
+    }
+
+    pub fn code_regions(self, db: &'db dyn MirDb) -> Vec<ResolvedCodeRegion<'db>> {
+        self.plan(db).code_regions(db)
+    }
+
+    pub fn root_objects(self, db: &'db dyn MirDb) -> Vec<RuntimeObject<'db>> {
+        self.plan(db).root_objects(db)
+    }
+
+    pub fn primary_object(self, db: &'db dyn MirDb) -> Option<RuntimeObject<'db>> {
+        self.plan(db).primary_object(db)
+    }
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct RuntimePackagePlan<'db> {
+    pub objects: Vec<RuntimeObject<'db>>,
+    pub const_regions: Vec<ConstRegionId<'db>>,
+    pub code_regions: Vec<ResolvedCodeRegion<'db>>,
+    pub root_objects: Vec<RuntimeObject<'db>>,
+    pub primary_object: Option<RuntimeObject<'db>>,
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct RuntimeFunction<'db> {
+    pub instance: RuntimeInstance<'db>,
+    pub symbol: String,
+    pub linkage: RuntimeLinkage,
+    pub inline_hint: RuntimeInlineHint,
+    pub owner: RuntimeFunctionOwner<'db>,
+    pub referenced_const_regions: Vec<ConstRegionId<'db>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum RuntimeLinkage {
+    Private,
+    Internal,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum RuntimeInlineHint {
+    Auto,
+    Hint,
+    Always,
+    Never,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum RuntimeFunctionOwner<'db> {
+    Semantic(SemanticInstance<'db>),
+    Synthetic(RuntimeSyntheticSpec<'db>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum RuntimeSyntheticSpec<'db> {
+    MainRoot {
+        callee: RuntimeInstance<'db>,
+    },
+    TestRoot {
+        name: String,
+        callee: RuntimeInstance<'db>,
+    },
+    ContractInitAbi {
+        plan: ContractInitAbiPlan<'db>,
+    },
+    ContractRecvAbi {
+        plan: ContractRecvAbiPlan<'db>,
+    },
+    ContractInitRoot {
+        contract: Contract<'db>,
+        init_abi: Option<RuntimeInstance<'db>>,
+        runtime_region: RuntimeCodeRegion<'db>,
+    },
+    ContractRuntimeRoot {
+        contract: Contract<'db>,
+        dispatch: Box<[DispatchArm<'db>]>,
+        default: DispatchDefault,
+    },
+    CodeRegionRoot {
+        symbol: String,
+        callee: RuntimeInstance<'db>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct ContractInitAbiPlan<'db> {
+    pub contract: Contract<'db>,
+    pub payable: bool,
+    pub user_init: Option<RuntimeInstance<'db>>,
+    pub field_bindings: Box<[ContractFieldBinding<'db>]>,
+    pub init_args: InitArgsPlan<'db>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct ContractRecvAbiPlan<'db> {
+    pub contract: Contract<'db>,
+    pub selector: u32,
+    pub payable: bool,
+    pub user_recv: RuntimeInstance<'db>,
+    pub field_bindings: Box<[ContractFieldBinding<'db>]>,
+    pub input: RuntimeInputPlan<'db>,
+    pub ret: RuntimeReturnPlan<'db>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct ContractFieldBinding<'db> {
+    pub slot: u128,
+    pub declared_ty: TyId<'db>,
+    pub class: RuntimeClass<'db>,
+    pub kind: HandleKind<'db>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum InitArgsPlan<'db> {
+    None,
+    DecodeInitTail {
+        tuple_ty: TyId<'db>,
+        decode_fn: RuntimeInstance<'db>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum RuntimeInputPlan<'db> {
+    None,
+    DecodeCalldataPayload {
+        msg_ty: TyId<'db>,
+        decode_fn: RuntimeInstance<'db>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum RuntimeReturnPlan<'db> {
+    Unit,
+    Value {
+        ty: TyId<'db>,
+        encode_fn: RuntimeInstance<'db>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct DispatchArm<'db> {
+    pub selector: u32,
+    pub wrapper: RuntimeInstance<'db>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum DispatchDefault {
+    RevertEmpty,
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct RuntimeObject<'db> {
+    pub name: String,
+    pub sections: Vec<RuntimeSection<'db>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct RuntimeSection<'db> {
+    pub name: RuntimeSectionName,
+    pub entry: RuntimeFunction<'db>,
+    pub embeds: Vec<RuntimeEmbed<'db>>,
+    pub const_regions: Vec<ConstRegionId<'db>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum RuntimeSectionName {
+    Init,
+    Runtime,
+    Main,
+    Test(String),
+    CodeRegion(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct RuntimeEmbed<'db> {
+    pub source: RuntimeSectionRef<'db>,
+    pub as_symbol: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum RuntimeSectionRef<'db> {
+    Local {
+        object: RuntimeObject<'db>,
+        section: RuntimeSectionName,
+    },
+    External {
+        object: RuntimeObject<'db>,
+        section: RuntimeSectionName,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum PlaceRoot<'db> {
     Slot(RLocalId),
     Handle(RValueId),
+    Ptr {
+        addr: RValueId,
+        space: AddressSpaceKind,
+        class: RuntimeClass<'db>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub struct RuntimePlace {
-    pub root: PlaceRoot,
+pub struct RuntimePlace<'db> {
+    pub root: PlaceRoot<'db>,
     pub path: Box<[PlaceElem]>,
 }
 
@@ -314,9 +563,238 @@ pub enum PlaceElem {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct ResolvedRuntimePlace<'db> {
+    pub root_kind: ResolvedPlaceRootKind<'db>,
+    pub result_class: RuntimeClass<'db>,
+    pub path: Box<[ResolvedPlaceElem<'db>]>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum ResolvedPlaceRootKind<'db> {
+    Slot {
+        local: RLocalId,
+        class: RuntimeClass<'db>,
+    },
+    Handle {
+        value: RValueId,
+        class: RuntimeClass<'db>,
+    },
+    Ptr {
+        addr: RValueId,
+        space: AddressSpaceKind,
+        class: RuntimeClass<'db>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum ResolvedPlaceElem<'db> {
+    Field {
+        field: FieldIndex,
+        class: RuntimeClass<'db>,
+    },
+    Index {
+        index: RValueId,
+        class: RuntimeClass<'db>,
+    },
+    VariantField {
+        variant: VariantId<'db>,
+        field: FieldIndex,
+        class: RuntimeClass<'db>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum RuntimeBuiltin<'db> {
+    Mload {
+        addr: RValueId,
+    },
+    Mstore {
+        addr: RValueId,
+        value: RValueId,
+    },
+    Mstore8 {
+        addr: RValueId,
+        value: RValueId,
+    },
+    Msize,
+    Sload {
+        slot: RValueId,
+    },
+    Sstore {
+        slot: RValueId,
+        value: RValueId,
+    },
+    CallValue,
+    ReturnDataSize,
+    ReturnDataCopy {
+        dst: RValueId,
+        offset: RValueId,
+        len: RValueId,
+    },
+    CallDataSize,
+    CallDataLoad {
+        offset: RValueId,
+    },
+    CallDataCopy {
+        dst: RValueId,
+        offset: RValueId,
+        len: RValueId,
+    },
+    CodeSize,
+    CodeCopy {
+        dst: RValueId,
+        offset: RValueId,
+        len: RValueId,
+    },
+    Keccak256 {
+        offset: RValueId,
+        len: RValueId,
+    },
+    AddMod {
+        lhs: RValueId,
+        rhs: RValueId,
+        modulus: RValueId,
+    },
+    MulMod {
+        lhs: RValueId,
+        rhs: RValueId,
+        modulus: RValueId,
+    },
+    IntrinsicArith {
+        op: IntrinsicArithBinOp,
+        lhs: RValueId,
+        rhs: RValueId,
+        class: ScalarClass<'db>,
+    },
+    Saturating {
+        op: SaturatingBinOp,
+        lhs: RValueId,
+        rhs: RValueId,
+        class: ScalarClass<'db>,
+    },
+    Address,
+    Caller,
+    Origin,
+    GasPrice,
+    CoinBase,
+    Timestamp,
+    Number,
+    PrevRandao,
+    GasLimit,
+    ChainId,
+    BaseFee,
+    SelfBalance,
+    BlockHash {
+        block: RValueId,
+    },
+    Gas,
+    CodeRegionOffset {
+        region: RuntimeCodeRegion<'db>,
+    },
+    CodeRegionLen {
+        region: RuntimeCodeRegion<'db>,
+    },
+    Malloc {
+        size: RValueId,
+    },
+    Call {
+        gas: RValueId,
+        addr: RValueId,
+        value: RValueId,
+        args_offset: RValueId,
+        args_len: RValueId,
+        ret_offset: RValueId,
+        ret_len: RValueId,
+    },
+    StaticCall {
+        gas: RValueId,
+        addr: RValueId,
+        args_offset: RValueId,
+        args_len: RValueId,
+        ret_offset: RValueId,
+        ret_len: RValueId,
+    },
+    DelegateCall {
+        gas: RValueId,
+        addr: RValueId,
+        args_offset: RValueId,
+        args_len: RValueId,
+        ret_offset: RValueId,
+        ret_len: RValueId,
+    },
+    Create {
+        value: RValueId,
+        offset: RValueId,
+        len: RValueId,
+    },
+    Create2 {
+        value: RValueId,
+        offset: RValueId,
+        len: RValueId,
+        salt: RValueId,
+    },
+    Log0 {
+        offset: RValueId,
+        len: RValueId,
+    },
+    Log1 {
+        offset: RValueId,
+        len: RValueId,
+        topic0: RValueId,
+    },
+    Log2 {
+        offset: RValueId,
+        len: RValueId,
+        topic0: RValueId,
+        topic1: RValueId,
+    },
+    Log3 {
+        offset: RValueId,
+        len: RValueId,
+        topic0: RValueId,
+        topic1: RValueId,
+        topic2: RValueId,
+    },
+    Log4 {
+        offset: RValueId,
+        len: RValueId,
+        topic0: RValueId,
+        topic1: RValueId,
+        topic2: RValueId,
+        topic3: RValueId,
+    },
+    CallDataSelector,
+    MakeContractFieldHandle {
+        slot: u128,
+        class: RuntimeClass<'db>,
+        kind: HandleKind<'db>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum SaturatingBinOp {
+    Add,
+    Sub,
+    Mul,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum IntrinsicArithBinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum RExpr<'db> {
     Use(RValueId),
     ConstScalar(ConstScalar),
+    Placeholder {
+        class: RuntimeClass<'db>,
+    },
+    Builtin(RuntimeBuiltin<'db>),
     Unary {
         op: UnOp,
         value: RValueId,
@@ -346,14 +824,19 @@ pub enum RExpr<'db> {
         space: AddressSpaceKind,
         layout: LayoutId<'db>,
     },
+    WordToRawAddr {
+        value: RValueId,
+        space: AddressSpaceKind,
+        target: Option<LayoutId<'db>>,
+    },
     ProviderToRaw {
         value: RValueId,
     },
     AddrOf {
-        place: RuntimePlace,
+        place: RuntimePlace<'db>,
     },
     Load {
-        place: RuntimePlace,
+        place: RuntimePlace<'db>,
     },
     Call {
         callee: RuntimeInstance<'db>,
@@ -392,11 +875,11 @@ pub enum RStmt<'db> {
         expr: RExpr<'db>,
     },
     Store {
-        dst: RuntimePlace,
+        dst: RuntimePlace<'db>,
         src: RValueId,
     },
     CopyInto {
-        dst: RuntimePlace,
+        dst: RuntimePlace<'db>,
         src: RValueId,
     },
     EnumSetTag {
@@ -418,19 +901,42 @@ pub enum RTerminator<'db> {
         then_bb: RBlockId,
         else_bb: RBlockId,
     },
+    SwitchScalar {
+        discr: RValueId,
+        cases: Box<[(ConstScalar, RBlockId)]>,
+        default: RBlockId,
+    },
     MatchEnumTag {
         tag: RValueId,
         enum_layout: LayoutId<'db>,
         cases: Box<[(VariantId<'db>, RBlockId)]>,
         default: Option<RBlockId>,
     },
+    TerminalCall {
+        callee: RuntimeInstance<'db>,
+        args: Box<[RValueId]>,
+    },
+    ReturnData {
+        offset: RValueId,
+        len: RValueId,
+    },
+    Revert {
+        offset: RValueId,
+        len: RValueId,
+    },
+    SelfDestruct {
+        beneficiary: RValueId,
+    },
+    Trap,
     Return(Option<RValueId>),
+    Stop,
 }
 
 pub trait RuntimeProgramView<'db> {
     fn body(&self, id: RuntimeInstance<'db>) -> RuntimeBody<'db>;
     fn layout(&self, id: LayoutId<'db>) -> Layout<'db>;
     fn const_region(&self, id: ConstRegionId<'db>) -> ConstRegion<'db>;
+    fn code_region(&self, id: RuntimeCodeRegion<'db>) -> Option<ResolvedCodeRegion<'db>>;
 }
 
 impl<'db> RuntimeProgramView<'db> for &'db dyn MirDb {
@@ -444,5 +950,9 @@ impl<'db> RuntimeProgramView<'db> for &'db dyn MirDb {
 
     fn const_region(&self, id: ConstRegionId<'db>) -> ConstRegion<'db> {
         id.data(*self)
+    }
+
+    fn code_region(&self, _id: RuntimeCodeRegion<'db>) -> Option<ResolvedCodeRegion<'db>> {
+        None
     }
 }

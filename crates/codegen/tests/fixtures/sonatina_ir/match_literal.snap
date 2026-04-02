@@ -5,285 +5,760 @@ input_file: crates/codegen/tests/fixtures/match_literal.fe
 ---
 target = "evm-ethereum-osaka"
 
+func private %__fe_main_root() {
+    block0:
+        v1.i64 = call %match_bool 0.i1;
+        evm_stop;
+}
+
 func private %match_bool(v0.i1) -> i64 {
     block0:
-        jump block4;
+        v1.*i1 = alloca i1;
+        v2.*i64 = alloca i64;
+        v3.*i1 = alloca i1;
+        v4.*i1 = alloca i1;
+        v5.*i64 = alloca i64;
+        v6.*i64 = alloca i64;
+        mstore v1 v0 i1;
+        mstore v3 1.i1 i1;
+        v8.i1 = mload v1 i1;
+        v9.i1 = mload v3 i1;
+        v10.i1 = eq v8 v9;
+        mstore v4 v10 i1;
+        v11.i1 = mload v4 i1;
+        br v11 block2 block4;
 
     block1:
-        jump block2;
+        v12.i64 = mload v2 i64;
+        return v12;
 
     block2:
-        v4.i64 = phi (1.i64 block1) (2.i64 block3);
-        return v4;
+        mstore v5 1.i64 i64;
+        v14.i64 = mload v5 i64;
+        mstore v2 v14 i64;
+        jump block1;
 
     block3:
-        jump block2;
+        mstore v6 2.i64 i64;
+        v16.i64 = mload v6 i64;
+        mstore v2 v16 i64;
+        jump block1;
 
     block4:
-        br_table v0 block3 (1.i1 block1);
-}
-
-func private %match_u8(v0.i8) -> i8 {
-    block0:
-        jump block5;
-
-    block1:
-        jump block2;
-
-    block2:
-        v4.i8 = phi (1.i8 block1) (2.i8 block3) (3.i8 block4);
-        return v4;
-
-    block3:
-        jump block2;
-
-    block4:
-        jump block2;
-
-    block5:
-        br_table v0 block4 (0.i8 block1) (-1.i8 block3);
-}
-
-func private %match_u16(v0.i16) -> i16 {
-    block0:
-        jump block5;
-
-    block1:
-        jump block2;
-
-    block2:
-        v4.i16 = phi (1.i16 block1) (2.i16 block3) (3.i16 block4);
-        return v4;
-
-    block3:
-        jump block2;
-
-    block4:
-        jump block2;
-
-    block5:
-        br_table v0 block4 (4660.i16 block1) (-21555.i16 block3);
-}
-
-func private %match_u32(v0.i32) -> i32 {
-    block0:
-        jump block5;
-
-    block1:
-        jump block2;
-
-    block2:
-        v4.i32 = phi (1.i32 block1) (2.i32 block3) (3.i32 block4);
-        return v4;
-
-    block3:
-        jump block2;
-
-    block4:
-        jump block2;
-
-    block5:
-        br_table v0 block4 (-559038737.i32 block1) (-889275714.i32 block3);
-}
-
-func private %match_u64(v0.i64) -> i64 {
-    block0:
-        jump block5;
-
-    block1:
-        jump block2;
-
-    block2:
-        v4.i64 = phi (1.i64 block1) (2.i64 block3) (3.i64 block4);
-        return v4;
-
-    block3:
-        jump block2;
-
-    block4:
-        jump block2;
-
-    block5:
-        br_table v0 block4 (0.i64 block1) (-1.i64 block3);
-}
-
-func private %match_u128(v0.i128) -> i128 {
-    block0:
-        jump block5;
-
-    block1:
-        jump block2;
-
-    block2:
-        v4.i128 = phi (1.i128 block1) (2.i128 block3) (3.i128 block4);
-        return v4;
-
-    block3:
-        jump block2;
-
-    block4:
-        jump block2;
-
-    block5:
-        br_table v0 block4 (0.i128 block1) (-1.i128 block3);
-}
-
-func private %match_u256(v0.i256) -> i256 {
-    block0:
-        jump block5;
-
-    block1:
-        jump block2;
-
-    block2:
-        v3.i256 = phi (1.i256 block1) (2.i256 block3) (3.i256 block4);
-        return v3;
-
-    block3:
-        jump block2;
-
-    block4:
-        jump block2;
-
-    block5:
-        br_table v0 block4 (0.i256 block1) (-1.i256 block3);
-}
-
-func private %match_i8(v0.i8) -> i8 {
-    block0:
-        jump block5;
-
-    block1:
-        jump block2;
-
-    block2:
-        v4.i8 = phi (1.i8 block1) (2.i8 block3) (3.i8 block4);
-        return v4;
-
-    block3:
-        jump block2;
-
-    block4:
-        jump block2;
-
-    block5:
-        br_table v0 block4 (0.i8 block1) (99.i8 block3);
-}
-
-func private %match_i16(v0.i16) -> i16 {
-    block0:
-        jump block5;
-
-    block1:
-        jump block2;
-
-    block2:
-        v4.i16 = phi (1.i16 block1) (2.i16 block3) (3.i16 block4);
-        return v4;
-
-    block3:
-        jump block2;
-
-    block4:
-        jump block2;
-
-    block5:
-        br_table v0 block4 (0.i16 block1) (32000.i16 block3);
-}
-
-func private %match_i32(v0.i32) -> i32 {
-    block0:
-        jump block5;
-
-    block1:
-        jump block2;
-
-    block2:
-        v4.i32 = phi (1.i32 block1) (2.i32 block3) (3.i32 block4);
-        return v4;
-
-    block3:
-        jump block2;
-
-    block4:
-        jump block2;
-
-    block5:
-        br_table v0 block4 (0.i32 block1) (2000000000.i32 block3);
-}
-
-func private %match_i64(v0.i64) -> i64 {
-    block0:
-        jump block5;
-
-    block1:
-        jump block2;
-
-    block2:
-        v4.i64 = phi (1.i64 block1) (2.i64 block3) (3.i64 block4);
-        return v4;
-
-    block3:
-        jump block2;
-
-    block4:
-        jump block2;
-
-    block5:
-        br_table v0 block4 (0.i64 block1) (9223372036854775807.i64 block3);
+        jump block3;
 }
 
 func private %match_i128(v0.i128) -> i128 {
     block0:
-        jump block5;
+        v1.*i128 = alloca i128;
+        v2.*i128 = alloca i128;
+        v3.*i128 = alloca i128;
+        v4.*i1 = alloca i1;
+        v5.*i128 = alloca i128;
+        v6.*i1 = alloca i1;
+        v7.*i128 = alloca i128;
+        v8.*i128 = alloca i128;
+        v9.*i128 = alloca i128;
+        mstore v1 v0 i128;
+        mstore v3 0.i128 i128;
+        v11.i128 = mload v1 i128;
+        v12.i128 = mload v3 i128;
+        v13.i1 = ne v11 0.i128;
+        v14.i1 = ne v12 0.i128;
+        v15.i1 = eq v13 v14;
+        mstore v4 v15 i1;
+        v16.i1 = mload v4 i1;
+        br v16 block2 block5;
 
     block1:
-        jump block2;
+        v17.i128 = mload v2 i128;
+        return v17;
 
     block2:
-        v4.i128 = phi (1.i128 block1) (2.i128 block3) (3.i128 block4);
-        return v4;
+        mstore v7 1.i128 i128;
+        v19.i128 = mload v7 i128;
+        mstore v2 v19 i128;
+        jump block1;
 
     block3:
-        jump block2;
+        mstore v8 2.i128 i128;
+        v21.i128 = mload v8 i128;
+        mstore v2 v21 i128;
+        jump block1;
 
     block4:
-        jump block2;
+        mstore v9 3.i128 i128;
+        v23.i128 = mload v9 i128;
+        mstore v2 v23 i128;
+        jump block1;
 
     block5:
-        br_table v0 block4 (0.i128 block1) (170141183460469231731687303715884105727.i128 block3);
+        mstore v5 170141183460469231731687303715884105727.i128 i128;
+        v25.i128 = mload v1 i128;
+        v26.i128 = mload v5 i128;
+        v27.i1 = ne v25 0.i128;
+        v28.i1 = ne v26 0.i128;
+        v29.i1 = eq v27 v28;
+        mstore v6 v29 i1;
+        v30.i1 = mload v6 i1;
+        br v30 block3 block6;
+
+    block6:
+        jump block4;
+}
+
+func private %match_i16(v0.i16) -> i16 {
+    block0:
+        v1.*i16 = alloca i16;
+        v2.*i16 = alloca i16;
+        v3.*i16 = alloca i16;
+        v4.*i1 = alloca i1;
+        v5.*i16 = alloca i16;
+        v6.*i1 = alloca i1;
+        v7.*i16 = alloca i16;
+        v8.*i16 = alloca i16;
+        v9.*i16 = alloca i16;
+        mstore v1 v0 i16;
+        mstore v3 0.i16 i16;
+        v11.i16 = mload v1 i16;
+        v12.i16 = mload v3 i16;
+        v13.i1 = ne v11 0.i16;
+        v14.i1 = ne v12 0.i16;
+        v15.i1 = eq v13 v14;
+        mstore v4 v15 i1;
+        v16.i1 = mload v4 i1;
+        br v16 block2 block5;
+
+    block1:
+        v17.i16 = mload v2 i16;
+        return v17;
+
+    block2:
+        mstore v7 1.i16 i16;
+        v19.i16 = mload v7 i16;
+        mstore v2 v19 i16;
+        jump block1;
+
+    block3:
+        mstore v8 2.i16 i16;
+        v21.i16 = mload v8 i16;
+        mstore v2 v21 i16;
+        jump block1;
+
+    block4:
+        mstore v9 3.i16 i16;
+        v23.i16 = mload v9 i16;
+        mstore v2 v23 i16;
+        jump block1;
+
+    block5:
+        mstore v5 32000.i16 i16;
+        v25.i16 = mload v1 i16;
+        v26.i16 = mload v5 i16;
+        v27.i1 = ne v25 0.i16;
+        v28.i1 = ne v26 0.i16;
+        v29.i1 = eq v27 v28;
+        mstore v6 v29 i1;
+        v30.i1 = mload v6 i1;
+        br v30 block3 block6;
+
+    block6:
+        jump block4;
 }
 
 func private %match_i256(v0.i256) -> i256 {
     block0:
-        jump block5;
+        v1.*i256 = alloca i256;
+        v2.*i256 = alloca i256;
+        v3.*i256 = alloca i256;
+        v4.*i1 = alloca i1;
+        v5.*i256 = alloca i256;
+        v6.*i1 = alloca i1;
+        v7.*i256 = alloca i256;
+        v8.*i256 = alloca i256;
+        v9.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        mstore v3 0.i256 i256;
+        v11.i256 = mload v1 i256;
+        v12.i256 = mload v3 i256;
+        v13.i1 = ne v11 0.i256;
+        v14.i1 = ne v12 0.i256;
+        v15.i1 = eq v13 v14;
+        mstore v4 v15 i1;
+        v16.i1 = mload v4 i1;
+        br v16 block2 block5;
 
     block1:
-        jump block2;
+        v17.i256 = mload v2 i256;
+        return v17;
 
     block2:
-        v3.i256 = phi (1.i256 block1) (2.i256 block3) (3.i256 block4);
-        return v3;
+        mstore v7 1.i256 i256;
+        v19.i256 = mload v7 i256;
+        mstore v2 v19 i256;
+        jump block1;
 
     block3:
-        jump block2;
+        mstore v8 2.i256 i256;
+        v21.i256 = mload v8 i256;
+        mstore v2 v21 i256;
+        jump block1;
 
     block4:
-        jump block2;
+        mstore v9 3.i256 i256;
+        v23.i256 = mload v9 i256;
+        mstore v2 v23 i256;
+        jump block1;
 
     block5:
-        br_table v0 block4 (0.i256 block1) (-1.i256 block3);
+        mstore v5 -1.i256 i256;
+        v25.i256 = mload v1 i256;
+        v26.i256 = mload v5 i256;
+        v27.i1 = ne v25 0.i256;
+        v28.i1 = ne v26 0.i256;
+        v29.i1 = eq v27 v28;
+        mstore v6 v29 i1;
+        v30.i1 = mload v6 i1;
+        br v30 block3 block6;
+
+    block6:
+        jump block4;
 }
 
-func private %__fe_sonatina_entry() {
+func private %match_i32(v0.i32) -> i32 {
     block0:
-        v2.i64 = call %match_bool 0.i1;
-        evm_stop;
+        v1.*i32 = alloca i32;
+        v2.*i32 = alloca i32;
+        v3.*i32 = alloca i32;
+        v4.*i1 = alloca i1;
+        v5.*i32 = alloca i32;
+        v6.*i1 = alloca i1;
+        v7.*i32 = alloca i32;
+        v8.*i32 = alloca i32;
+        v9.*i32 = alloca i32;
+        mstore v1 v0 i32;
+        mstore v3 0.i32 i32;
+        v11.i32 = mload v1 i32;
+        v12.i32 = mload v3 i32;
+        v13.i1 = ne v11 0.i32;
+        v14.i1 = ne v12 0.i32;
+        v15.i1 = eq v13 v14;
+        mstore v4 v15 i1;
+        v16.i1 = mload v4 i1;
+        br v16 block2 block5;
+
+    block1:
+        v17.i32 = mload v2 i32;
+        return v17;
+
+    block2:
+        mstore v7 1.i32 i32;
+        v19.i32 = mload v7 i32;
+        mstore v2 v19 i32;
+        jump block1;
+
+    block3:
+        mstore v8 2.i32 i32;
+        v21.i32 = mload v8 i32;
+        mstore v2 v21 i32;
+        jump block1;
+
+    block4:
+        mstore v9 3.i32 i32;
+        v23.i32 = mload v9 i32;
+        mstore v2 v23 i32;
+        jump block1;
+
+    block5:
+        mstore v5 2000000000.i32 i32;
+        v25.i32 = mload v1 i32;
+        v26.i32 = mload v5 i32;
+        v27.i1 = ne v25 0.i32;
+        v28.i1 = ne v26 0.i32;
+        v29.i1 = eq v27 v28;
+        mstore v6 v29 i1;
+        v30.i1 = mload v6 i1;
+        br v30 block3 block6;
+
+    block6:
+        jump block4;
+}
+
+func private %match_i64(v0.i64) -> i64 {
+    block0:
+        v1.*i64 = alloca i64;
+        v2.*i64 = alloca i64;
+        v3.*i64 = alloca i64;
+        v4.*i1 = alloca i1;
+        v5.*i64 = alloca i64;
+        v6.*i1 = alloca i1;
+        v7.*i64 = alloca i64;
+        v8.*i64 = alloca i64;
+        v9.*i64 = alloca i64;
+        mstore v1 v0 i64;
+        mstore v3 0.i64 i64;
+        v11.i64 = mload v1 i64;
+        v12.i64 = mload v3 i64;
+        v13.i1 = ne v11 0.i64;
+        v14.i1 = ne v12 0.i64;
+        v15.i1 = eq v13 v14;
+        mstore v4 v15 i1;
+        v16.i1 = mload v4 i1;
+        br v16 block2 block5;
+
+    block1:
+        v17.i64 = mload v2 i64;
+        return v17;
+
+    block2:
+        mstore v7 1.i64 i64;
+        v19.i64 = mload v7 i64;
+        mstore v2 v19 i64;
+        jump block1;
+
+    block3:
+        mstore v8 2.i64 i64;
+        v21.i64 = mload v8 i64;
+        mstore v2 v21 i64;
+        jump block1;
+
+    block4:
+        mstore v9 3.i64 i64;
+        v23.i64 = mload v9 i64;
+        mstore v2 v23 i64;
+        jump block1;
+
+    block5:
+        mstore v5 9223372036854775807.i64 i64;
+        v25.i64 = mload v1 i64;
+        v26.i64 = mload v5 i64;
+        v27.i1 = ne v25 0.i64;
+        v28.i1 = ne v26 0.i64;
+        v29.i1 = eq v27 v28;
+        mstore v6 v29 i1;
+        v30.i1 = mload v6 i1;
+        br v30 block3 block6;
+
+    block6:
+        jump block4;
+}
+
+func private %match_i8(v0.i8) -> i8 {
+    block0:
+        v1.*i8 = alloca i8;
+        v2.*i8 = alloca i8;
+        v3.*i8 = alloca i8;
+        v4.*i1 = alloca i1;
+        v5.*i8 = alloca i8;
+        v6.*i1 = alloca i1;
+        v7.*i8 = alloca i8;
+        v8.*i8 = alloca i8;
+        v9.*i8 = alloca i8;
+        mstore v1 v0 i8;
+        mstore v3 0.i8 i8;
+        v11.i8 = mload v1 i8;
+        v12.i8 = mload v3 i8;
+        v13.i1 = ne v11 0.i8;
+        v14.i1 = ne v12 0.i8;
+        v15.i1 = eq v13 v14;
+        mstore v4 v15 i1;
+        v16.i1 = mload v4 i1;
+        br v16 block2 block5;
+
+    block1:
+        v17.i8 = mload v2 i8;
+        return v17;
+
+    block2:
+        mstore v7 1.i8 i8;
+        v19.i8 = mload v7 i8;
+        mstore v2 v19 i8;
+        jump block1;
+
+    block3:
+        mstore v8 2.i8 i8;
+        v21.i8 = mload v8 i8;
+        mstore v2 v21 i8;
+        jump block1;
+
+    block4:
+        mstore v9 3.i8 i8;
+        v23.i8 = mload v9 i8;
+        mstore v2 v23 i8;
+        jump block1;
+
+    block5:
+        mstore v5 99.i8 i8;
+        v25.i8 = mload v1 i8;
+        v26.i8 = mload v5 i8;
+        v27.i1 = ne v25 0.i8;
+        v28.i1 = ne v26 0.i8;
+        v29.i1 = eq v27 v28;
+        mstore v6 v29 i1;
+        v30.i1 = mload v6 i1;
+        br v30 block3 block6;
+
+    block6:
+        jump block4;
+}
+
+func private %match_u128(v0.i128) -> i128 {
+    block0:
+        v1.*i128 = alloca i128;
+        v2.*i128 = alloca i128;
+        v3.*i128 = alloca i128;
+        v4.*i1 = alloca i1;
+        v5.*i128 = alloca i128;
+        v6.*i1 = alloca i1;
+        v7.*i128 = alloca i128;
+        v8.*i128 = alloca i128;
+        v9.*i128 = alloca i128;
+        mstore v1 v0 i128;
+        mstore v3 0.i128 i128;
+        v11.i128 = mload v1 i128;
+        v12.i128 = mload v3 i128;
+        v13.i1 = ne v11 0.i128;
+        v14.i1 = ne v12 0.i128;
+        v15.i1 = eq v13 v14;
+        mstore v4 v15 i1;
+        v16.i1 = mload v4 i1;
+        br v16 block2 block5;
+
+    block1:
+        v17.i128 = mload v2 i128;
+        return v17;
+
+    block2:
+        mstore v7 1.i128 i128;
+        v19.i128 = mload v7 i128;
+        mstore v2 v19 i128;
+        jump block1;
+
+    block3:
+        mstore v8 2.i128 i128;
+        v21.i128 = mload v8 i128;
+        mstore v2 v21 i128;
+        jump block1;
+
+    block4:
+        mstore v9 3.i128 i128;
+        v23.i128 = mload v9 i128;
+        mstore v2 v23 i128;
+        jump block1;
+
+    block5:
+        mstore v5 -1.i128 i128;
+        v25.i128 = mload v1 i128;
+        v26.i128 = mload v5 i128;
+        v27.i1 = ne v25 0.i128;
+        v28.i1 = ne v26 0.i128;
+        v29.i1 = eq v27 v28;
+        mstore v6 v29 i1;
+        v30.i1 = mload v6 i1;
+        br v30 block3 block6;
+
+    block6:
+        jump block4;
+}
+
+func private %match_u16(v0.i16) -> i16 {
+    block0:
+        v1.*i16 = alloca i16;
+        v2.*i16 = alloca i16;
+        v3.*i16 = alloca i16;
+        v4.*i1 = alloca i1;
+        v5.*i16 = alloca i16;
+        v6.*i1 = alloca i1;
+        v7.*i16 = alloca i16;
+        v8.*i16 = alloca i16;
+        v9.*i16 = alloca i16;
+        mstore v1 v0 i16;
+        mstore v3 4660.i16 i16;
+        v11.i16 = mload v1 i16;
+        v12.i16 = mload v3 i16;
+        v14.i1 = ne v11 0.i16;
+        v15.i1 = ne v12 0.i16;
+        v16.i1 = eq v14 v15;
+        mstore v4 v16 i1;
+        v17.i1 = mload v4 i1;
+        br v17 block2 block5;
+
+    block1:
+        v18.i16 = mload v2 i16;
+        return v18;
+
+    block2:
+        mstore v7 1.i16 i16;
+        v20.i16 = mload v7 i16;
+        mstore v2 v20 i16;
+        jump block1;
+
+    block3:
+        mstore v8 2.i16 i16;
+        v22.i16 = mload v8 i16;
+        mstore v2 v22 i16;
+        jump block1;
+
+    block4:
+        mstore v9 3.i16 i16;
+        v24.i16 = mload v9 i16;
+        mstore v2 v24 i16;
+        jump block1;
+
+    block5:
+        mstore v5 -21555.i16 i16;
+        v26.i16 = mload v1 i16;
+        v27.i16 = mload v5 i16;
+        v28.i1 = ne v26 0.i16;
+        v29.i1 = ne v27 0.i16;
+        v30.i1 = eq v28 v29;
+        mstore v6 v30 i1;
+        v31.i1 = mload v6 i1;
+        br v31 block3 block6;
+
+    block6:
+        jump block4;
+}
+
+func private %match_u256(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        v2.*i256 = alloca i256;
+        v3.*i256 = alloca i256;
+        v4.*i1 = alloca i1;
+        v5.*i256 = alloca i256;
+        v6.*i1 = alloca i1;
+        v7.*i256 = alloca i256;
+        v8.*i256 = alloca i256;
+        v9.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        mstore v3 0.i256 i256;
+        v11.i256 = mload v1 i256;
+        v12.i256 = mload v3 i256;
+        v13.i1 = ne v11 0.i256;
+        v14.i1 = ne v12 0.i256;
+        v15.i1 = eq v13 v14;
+        mstore v4 v15 i1;
+        v16.i1 = mload v4 i1;
+        br v16 block2 block5;
+
+    block1:
+        v17.i256 = mload v2 i256;
+        return v17;
+
+    block2:
+        mstore v7 1.i256 i256;
+        v19.i256 = mload v7 i256;
+        mstore v2 v19 i256;
+        jump block1;
+
+    block3:
+        mstore v8 2.i256 i256;
+        v21.i256 = mload v8 i256;
+        mstore v2 v21 i256;
+        jump block1;
+
+    block4:
+        mstore v9 3.i256 i256;
+        v23.i256 = mload v9 i256;
+        mstore v2 v23 i256;
+        jump block1;
+
+    block5:
+        mstore v5 -1.i256 i256;
+        v25.i256 = mload v1 i256;
+        v26.i256 = mload v5 i256;
+        v27.i1 = ne v25 0.i256;
+        v28.i1 = ne v26 0.i256;
+        v29.i1 = eq v27 v28;
+        mstore v6 v29 i1;
+        v30.i1 = mload v6 i1;
+        br v30 block3 block6;
+
+    block6:
+        jump block4;
+}
+
+func private %match_u32(v0.i32) -> i32 {
+    block0:
+        v1.*i32 = alloca i32;
+        v2.*i32 = alloca i32;
+        v3.*i32 = alloca i32;
+        v4.*i1 = alloca i1;
+        v5.*i32 = alloca i32;
+        v6.*i1 = alloca i1;
+        v7.*i32 = alloca i32;
+        v8.*i32 = alloca i32;
+        v9.*i32 = alloca i32;
+        mstore v1 v0 i32;
+        mstore v3 -559038737.i32 i32;
+        v11.i32 = mload v1 i32;
+        v12.i32 = mload v3 i32;
+        v14.i1 = ne v11 0.i32;
+        v15.i1 = ne v12 0.i32;
+        v16.i1 = eq v14 v15;
+        mstore v4 v16 i1;
+        v17.i1 = mload v4 i1;
+        br v17 block2 block5;
+
+    block1:
+        v18.i32 = mload v2 i32;
+        return v18;
+
+    block2:
+        mstore v7 1.i32 i32;
+        v20.i32 = mload v7 i32;
+        mstore v2 v20 i32;
+        jump block1;
+
+    block3:
+        mstore v8 2.i32 i32;
+        v22.i32 = mload v8 i32;
+        mstore v2 v22 i32;
+        jump block1;
+
+    block4:
+        mstore v9 3.i32 i32;
+        v24.i32 = mload v9 i32;
+        mstore v2 v24 i32;
+        jump block1;
+
+    block5:
+        mstore v5 -889275714.i32 i32;
+        v26.i32 = mload v1 i32;
+        v27.i32 = mload v5 i32;
+        v28.i1 = ne v26 0.i32;
+        v29.i1 = ne v27 0.i32;
+        v30.i1 = eq v28 v29;
+        mstore v6 v30 i1;
+        v31.i1 = mload v6 i1;
+        br v31 block3 block6;
+
+    block6:
+        jump block4;
+}
+
+func private %match_u64(v0.i64) -> i64 {
+    block0:
+        v1.*i64 = alloca i64;
+        v2.*i64 = alloca i64;
+        v3.*i64 = alloca i64;
+        v4.*i1 = alloca i1;
+        v5.*i64 = alloca i64;
+        v6.*i1 = alloca i1;
+        v7.*i64 = alloca i64;
+        v8.*i64 = alloca i64;
+        v9.*i64 = alloca i64;
+        mstore v1 v0 i64;
+        mstore v3 0.i64 i64;
+        v11.i64 = mload v1 i64;
+        v12.i64 = mload v3 i64;
+        v13.i1 = ne v11 0.i64;
+        v14.i1 = ne v12 0.i64;
+        v15.i1 = eq v13 v14;
+        mstore v4 v15 i1;
+        v16.i1 = mload v4 i1;
+        br v16 block2 block5;
+
+    block1:
+        v17.i64 = mload v2 i64;
+        return v17;
+
+    block2:
+        mstore v7 1.i64 i64;
+        v19.i64 = mload v7 i64;
+        mstore v2 v19 i64;
+        jump block1;
+
+    block3:
+        mstore v8 2.i64 i64;
+        v21.i64 = mload v8 i64;
+        mstore v2 v21 i64;
+        jump block1;
+
+    block4:
+        mstore v9 3.i64 i64;
+        v23.i64 = mload v9 i64;
+        mstore v2 v23 i64;
+        jump block1;
+
+    block5:
+        mstore v5 -1.i64 i64;
+        v25.i64 = mload v1 i64;
+        v26.i64 = mload v5 i64;
+        v27.i1 = ne v25 0.i64;
+        v28.i1 = ne v26 0.i64;
+        v29.i1 = eq v27 v28;
+        mstore v6 v29 i1;
+        v30.i1 = mload v6 i1;
+        br v30 block3 block6;
+
+    block6:
+        jump block4;
+}
+
+func private %match_u8(v0.i8) -> i8 {
+    block0:
+        v1.*i8 = alloca i8;
+        v2.*i8 = alloca i8;
+        v3.*i8 = alloca i8;
+        v4.*i1 = alloca i1;
+        v5.*i8 = alloca i8;
+        v6.*i1 = alloca i1;
+        v7.*i8 = alloca i8;
+        v8.*i8 = alloca i8;
+        v9.*i8 = alloca i8;
+        mstore v1 v0 i8;
+        mstore v3 0.i8 i8;
+        v11.i8 = mload v1 i8;
+        v12.i8 = mload v3 i8;
+        v13.i1 = ne v11 0.i8;
+        v14.i1 = ne v12 0.i8;
+        v15.i1 = eq v13 v14;
+        mstore v4 v15 i1;
+        v16.i1 = mload v4 i1;
+        br v16 block2 block5;
+
+    block1:
+        v17.i8 = mload v2 i8;
+        return v17;
+
+    block2:
+        mstore v7 1.i8 i8;
+        v19.i8 = mload v7 i8;
+        mstore v2 v19 i8;
+        jump block1;
+
+    block3:
+        mstore v8 2.i8 i8;
+        v21.i8 = mload v8 i8;
+        mstore v2 v21 i8;
+        jump block1;
+
+    block4:
+        mstore v9 3.i8 i8;
+        v23.i8 = mload v9 i8;
+        mstore v2 v23 i8;
+        jump block1;
+
+    block5:
+        mstore v5 -1.i8 i8;
+        v25.i8 = mload v1 i8;
+        v26.i8 = mload v5 i8;
+        v27.i1 = ne v25 0.i8;
+        v28.i1 = ne v26 0.i8;
+        v29.i1 = eq v27 v28;
+        mstore v6 v29 i1;
+        v30.i1 = mload v6 i1;
+        br v30 block3 block6;
+
+    block6:
+        jump block4;
 }
 
 
-object @Contract {
-    section runtime {
-        entry %__fe_sonatina_entry;
+object @main {
+    section main {
+        entry %__fe_main_root;
     }
 }

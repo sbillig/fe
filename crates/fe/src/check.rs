@@ -6,10 +6,10 @@ use common::{
     config::{Config, WorkspaceConfig},
     file::IngotFileKind,
 };
-use driver::DriverDataBase;
 use driver::cli_target::{CliTarget, resolve_cli_target};
+use driver::{DriverDataBase, MirDiagnosticsMode};
 use hir::hir_def::{HirIngot, TopLevelMod};
-use mir::{MirDiagnosticsMode, fmt as mir_fmt, lower_module};
+use mir2::build_runtime_package;
 use salsa::Setter;
 use url::Url;
 
@@ -582,12 +582,12 @@ fn print_dependency_info(db: &DriverDataBase, dependency_url: &Url) {
 }
 
 fn dump_module_mir(db: &DriverDataBase, top_mod: TopLevelMod<'_>) {
-    match lower_module(db, top_mod) {
-        Ok(mir_module) => {
-            println!("=== MIR for module ===");
-            print!("{}", mir_fmt::format_module(db, &mir_module));
+    match build_runtime_package(db, top_mod) {
+        Ok(package) => {
+            println!("=== Runtime Package for module ===");
+            print!("{package:#?}");
         }
-        Err(err) => eprintln!("failed to lower MIR: {err}"),
+        Err(err) => eprintln!("failed to build runtime package: {err}"),
     }
 }
 
@@ -610,16 +610,20 @@ fn write_check_manifest(
 }
 
 fn write_check_artifacts(db: &DriverDataBase, top_mod: TopLevelMod<'_>, report: &ReportContext) {
-    match lower_module(db, top_mod) {
-        Ok(mir) => {
+    match build_runtime_package(db, top_mod) {
+        Ok(package) => {
             write_report_file(
                 report,
-                "artifacts/mir.txt",
-                &mir_fmt::format_module(db, &mir),
+                "artifacts/runtime_package.txt",
+                &format!("{package:#?}"),
             );
         }
         Err(err) => {
-            write_report_file(report, "artifacts/mir_error.txt", &format!("{err}"));
+            write_report_file(
+                report,
+                "artifacts/runtime_package_error.txt",
+                &format!("{err}"),
+            );
         }
     }
 }

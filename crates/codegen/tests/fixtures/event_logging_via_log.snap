@@ -12,14 +12,14 @@ function $emit_transfer($from, $to, $amount) {
   mstore(v0, $from)
   mstore(add(v0, 32), $to)
   mstore(add(v0, 64), $amount)
-  $emit__Evm_hef0af3106e109414_Transfer_h628c212e2bb5f76f__243b05efdcd63652(v0)
+  $emit_arg0_root_mem__Evm_hef0af3106e109414_Transfer_h628c212e2bb5f76f__243b05efdcd63652(v0)
   leave
 }
-function $emit__Evm_hef0af3106e109414_Transfer_h628c212e2bb5f76f__243b05efdcd63652($event) {
-  $transfer_h628c212e2bb5f76f_event_hd33e4481d4a34b05_emit__Evm_hef0af3106e109414__3af54274b2985741($event)
+function $emit_arg0_root_mem__Evm_hef0af3106e109414_Transfer_h628c212e2bb5f76f__243b05efdcd63652($event) {
+  $transfer_h628c212e2bb5f76f_event_hd33e4481d4a34b05_emit_arg1_root_mem__Evm_hef0af3106e109414__3af54274b2985741($event)
   leave
 }
-function $transfer_h628c212e2bb5f76f_event_hd33e4481d4a34b05_emit__Evm_hef0af3106e109414__3af54274b2985741($self) {
+function $transfer_h628c212e2bb5f76f_event_hd33e4481d4a34b05_emit_arg1_root_mem__Evm_hef0af3106e109414__3af54274b2985741($self) {
   let v0 := $solencoder_h1b9228b90dad6928_new()
   let v1 := 32
   let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v0, v1)
@@ -34,7 +34,7 @@ function $transfer_h628c212e2bb5f76f_event_hd33e4481d4a34b05_emit__Evm_hef0af310
   let v10 := $address_h257056268eac7027_topicvalue_hc8981c1d4c24e77d_as_topic(v9)
   let v11 := mload(add($self, 32))
   let v12 := $address_h257056268eac7027_topicvalue_hc8981c1d4c24e77d_as_topic(v11)
-  $evm_hef0af3106e109414_log_h22d1a10952034bae_log3(v6, v8, 100389287136786176327247604509743168900146139575972864366142685224231313322991, v10, v12)
+  $evm_hef0af3106e109414_log_h22d1a10952034bae_log3_arg0_root_mem(v6, v8, 100389287136786176327247604509743168900146139575972864366142685224231313322991, v10, v12)
   leave
 }
 function $solencoder_h1b9228b90dad6928_new() -> ret {
@@ -92,7 +92,7 @@ function $address_h257056268eac7027_topicvalue_hc8981c1d4c24e77d_as_topic($self)
   ret := $self
   leave
 }
-function $evm_hef0af3106e109414_log_h22d1a10952034bae_log3($offset, $len, $topic0, $topic1, $topic2) {
+function $evm_hef0af3106e109414_log_h22d1a10952034bae_log3_arg0_root_mem($offset, $len, $topic0, $topic1, $topic2) {
   log3($offset, $len, $topic0, $topic1, $topic2)
   leave
 }

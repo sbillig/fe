@@ -3,10 +3,17 @@ use rustc_hash::FxHashSet;
 use crate::{
     analysis::{
         HirAnalysisDb,
-        semantic::{SemanticBody, SemanticCalleeRef, lower::lower_to_smir, verify_semantic_body},
-        ty::ty_check::{BodyOwner, TypedBody},
+        semantic::{
+            SBlockId, SExpr, SStmt, STerminator, SemanticBody, SemanticCalleeRef,
+            lower::{expr_lowers_to_semantic_call, lower_to_smir},
+            verify_semantic_body,
+        },
+        ty::{
+            corelib::resolve_lib_func_path,
+            ty_check::{BodyOwner, TypedBody},
+        },
     },
-    hir_def::{Expr, Partial},
+    hir_def::Partial,
 };
 
 use super::{
@@ -46,6 +53,72 @@ impl<'db> SemanticInstance<'db> {
     }
 }
 
+#[salsa::tracked(
+    cycle_fn=semantic_may_return_normally_cycle_recover,
+    cycle_initial=semantic_may_return_normally_cycle_initial
+)]
+pub fn semantic_may_return_normally<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> bool {
+    if semantic_is_nonreturning_builtin(db, instance) {
+        return false;
+    }
+
+    let body = instance.body(db);
+    if body.blocks.is_empty() {
+        return true;
+    }
+
+    let mut pending = vec![SBlockId::from_u32(0)];
+    let mut visited = FxHashSet::default();
+    while let Some(block_id) = pending.pop() {
+        if !visited.insert(block_id) {
+            continue;
+        }
+        let Some(block) = body.block(block_id) else {
+            continue;
+        };
+        let mut terminated_in_stmt = false;
+        for stmt in &block.stmts {
+            let SStmt::Assign {
+                expr: SExpr::Call { callee, .. },
+                ..
+            } = stmt
+            else {
+                continue;
+            };
+            if !semantic_may_return_normally(db, SemanticInstance::new(db, callee.key)) {
+                terminated_in_stmt = true;
+                break;
+            }
+        }
+        if terminated_in_stmt {
+            continue;
+        }
+
+        match &block.terminator {
+            STerminator::Return(_) => return true,
+            STerminator::Goto(next) => pending.push(*next),
+            STerminator::Branch {
+                then_bb, else_bb, ..
+            } => {
+                pending.push(*then_bb);
+                pending.push(*else_bb);
+            }
+            STerminator::MatchEnum { cases, default, .. } => {
+                pending.extend(cases.iter().map(|(_, block)| *block));
+                if let Some(default) = default {
+                    pending.push(*default);
+                }
+            }
+        }
+    }
+
+    false
+}
+
+#[salsa::tracked]
 pub fn get_or_build_semantic_instance<'db>(
     db: &'db dyn HirAnalysisDb,
     key: SemanticInstanceKey<'db>,
@@ -84,7 +157,7 @@ fn collect_semantic_callees<'db>(
         let Partial::Present(expr) = expr else {
             continue;
         };
-        if !matches!(expr, Expr::Call(..) | Expr::MethodCall(..)) {
+        if !expr_lowers_to_semantic_call(db, &typed_body, body, expr_id, expr) {
             continue;
         }
 
@@ -101,4 +174,43 @@ fn collect_semantic_callees<'db>(
     }
 
     callees
+}
+
+fn semantic_is_nonreturning_builtin<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> bool {
+    let BodyOwner::Func(func) = instance.key(db).owner(db) else {
+        return false;
+    };
+    let scope = func.scope();
+
+    resolve_lib_func_path(db, scope, "std::evm::ops::return_data")
+        .is_some_and(|builtin| builtin == func)
+        || resolve_lib_func_path(db, scope, "std::evm::ops::revert")
+            .is_some_and(|builtin| builtin == func)
+        || resolve_lib_func_path(db, scope, "std::evm::ops::selfdestruct")
+            .is_some_and(|builtin| builtin == func)
+        || resolve_lib_func_path(db, scope, "std::evm::ops::stop")
+            .is_some_and(|builtin| builtin == func)
+        || resolve_lib_func_path(db, scope, "core::panic").is_some_and(|builtin| builtin == func)
+        || resolve_lib_func_path(db, scope, "core::todo").is_some_and(|builtin| builtin == func)
+        || resolve_lib_func_path(db, scope, "core::panic_with_value")
+            .is_some_and(|builtin| builtin == func)
+}
+
+fn semantic_may_return_normally_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _instance: SemanticInstance<'db>,
+) -> bool {
+    true
+}
+
+fn semantic_may_return_normally_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &bool,
+    _count: u32,
+    _instance: SemanticInstance<'db>,
+) -> salsa::CycleRecoveryAction<bool> {
+    salsa::CycleRecoveryAction::Iterate
 }

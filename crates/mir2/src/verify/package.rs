@@ -1,0 +1,297 @@
+use rustc_hash::FxHashSet;
+
+use crate::{
+    db::MirDb,
+    runtime::{
+        RExpr, RStmt, RTerminator, ResolvedCodeRegion, RuntimeCodeRegion, RuntimeFunctionOwner,
+        RuntimeObject, RuntimePackage, RuntimeProgramView, RuntimeSyntheticSpec,
+    },
+    verify::{VerifyError, verify_runtime_body},
+};
+
+struct PackageView<'db> {
+    db: &'db dyn MirDb,
+    package: RuntimePackage<'db>,
+}
+
+impl<'db> RuntimeProgramView<'db> for PackageView<'db> {
+    fn body(&self, id: crate::instance::RuntimeInstance<'db>) -> crate::runtime::RuntimeBody<'db> {
+        id.body(self.db).clone()
+    }
+
+    fn layout(&self, id: crate::runtime::LayoutId<'db>) -> crate::runtime::Layout<'db> {
+        id.data(self.db)
+    }
+
+    fn const_region(
+        &self,
+        id: crate::runtime::ConstRegionId<'db>,
+    ) -> crate::runtime::ConstRegion<'db> {
+        id.data(self.db)
+    }
+
+    fn code_region(&self, id: RuntimeCodeRegion<'db>) -> Option<ResolvedCodeRegion<'db>> {
+        self.package
+            .code_regions(self.db)
+            .iter()
+            .find(|region| region.region(self.db) == id)
+            .copied()
+    }
+}
+
+pub fn verify_runtime_package<'db>(
+    db: &'db dyn MirDb,
+    package: RuntimePackage<'db>,
+) -> Result<(), VerifyError<'db>> {
+    let view = PackageView { db, package };
+    let functions = package.functions(db);
+    let function_instances = functions
+        .iter()
+        .map(|function| function.instance(db))
+        .collect::<FxHashSet<_>>();
+    let objects = package.objects(db);
+    let object_set = objects.iter().copied().collect::<FxHashSet<_>>();
+
+    let mut seen_symbols = FxHashSet::default();
+    for function in functions {
+        if !seen_symbols.insert(function.symbol(db).clone()) {
+            return Err(VerifyError::DuplicateRuntimeSymbol(
+                function.symbol(db).clone(),
+            ));
+        }
+        let body = function.instance(db).body(db);
+        verify_runtime_body(db, &view, &body)?;
+        verify_code_region_refs(&view, &body)?;
+        verify_synthetic_function(function.owner(db), &body)?;
+    }
+    for region in package.code_regions(db) {
+        if !seen_symbols.insert(region.symbol(db).clone()) {
+            return Err(VerifyError::DuplicateRuntimeSymbol(
+                region.symbol(db).clone(),
+            ));
+        }
+        verify_resolved_code_region(db, &region, &function_instances, &objects)?;
+    }
+    for &object in objects.iter() {
+        verify_object(db, object, &function_instances, &objects)?;
+    }
+    for object in package.root_objects(db) {
+        if !object_set.contains(&object) {
+            return Err(VerifyError::InvalidPackageObject(object));
+        }
+    }
+    if let Some(primary) = package.primary_object(db)
+        && !package.root_objects(db).contains(&primary)
+    {
+        return Err(VerifyError::InvalidPackageObject(primary));
+    }
+    Ok(())
+}
+
+fn verify_code_region_refs<'db>(
+    view: &PackageView<'db>,
+    body: &crate::runtime::RuntimeBody<'db>,
+) -> Result<(), VerifyError<'db>> {
+    for block in &body.blocks {
+        for stmt in &block.stmts {
+            let RStmt::Assign { expr, .. } = stmt else {
+                continue;
+            };
+            let RExpr::Builtin(
+                crate::runtime::RuntimeBuiltin::CodeRegionOffset { region }
+                | crate::runtime::RuntimeBuiltin::CodeRegionLen { region },
+            ) = expr
+            else {
+                continue;
+            };
+            if view.code_region(*region).is_none() {
+                return Err(VerifyError::InvalidCodeRegion(*region));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn verify_synthetic_function<'db>(
+    owner: RuntimeFunctionOwner<'db>,
+    body: &crate::runtime::RuntimeBody<'db>,
+) -> Result<(), VerifyError<'db>> {
+    match owner {
+        RuntimeFunctionOwner::Semantic(_) => Ok(()),
+        RuntimeFunctionOwner::Synthetic(spec) => match spec {
+            RuntimeSyntheticSpec::ContractRuntimeRoot { dispatch, .. } => {
+                let Some(entry) = body.blocks.first() else {
+                    return Err(VerifyError::InvalidReturnClass);
+                };
+                let RTerminator::SwitchScalar { cases, .. } = &entry.terminator else {
+                    return Err(VerifyError::InvalidReturnClass);
+                };
+                if cases.len() != dispatch.len() {
+                    return Err(VerifyError::InvalidReturnClass);
+                }
+                for (_, block) in cases {
+                    let Some(target) = body.block(*block) else {
+                        return Err(VerifyError::MissingRuntimeBlock(*block));
+                    };
+                    if !matches!(target.terminator, RTerminator::TerminalCall { .. }) {
+                        return Err(VerifyError::InvalidReturnClass);
+                    }
+                }
+                Ok(())
+            }
+            RuntimeSyntheticSpec::ContractInitRoot { .. } => {
+                verify_has_terminator(body, |term| matches!(term, RTerminator::ReturnData { .. }))
+            }
+            RuntimeSyntheticSpec::ContractRecvAbi { .. } => verify_has_terminator(body, |term| {
+                matches!(
+                    term,
+                    RTerminator::ReturnData { .. } | RTerminator::Revert { .. }
+                )
+            }),
+            RuntimeSyntheticSpec::MainRoot { .. }
+            | RuntimeSyntheticSpec::TestRoot { .. }
+            | RuntimeSyntheticSpec::ContractInitAbi { .. }
+            | RuntimeSyntheticSpec::CodeRegionRoot { .. } => Ok(()),
+        },
+    }
+}
+
+fn verify_has_terminator<'db>(
+    body: &crate::runtime::RuntimeBody<'db>,
+    pred: impl Fn(&RTerminator<'db>) -> bool,
+) -> Result<(), VerifyError<'db>> {
+    if body.blocks.iter().any(|block| pred(&block.terminator)) {
+        Ok(())
+    } else {
+        Err(VerifyError::InvalidReturnClass)
+    }
+}
+
+fn verify_object<'db>(
+    db: &'db dyn MirDb,
+    object: RuntimeObject<'db>,
+    function_instances: &FxHashSet<crate::instance::RuntimeInstance<'db>>,
+    objects: &[RuntimeObject<'db>],
+) -> Result<(), VerifyError<'db>> {
+    for section in object.sections(db) {
+        if !function_instances.contains(&section.entry.instance(db)) {
+            return Err(VerifyError::InvalidPackageFunction(
+                section.entry.instance(db),
+            ));
+        }
+        for embed in &section.embeds {
+            match &embed.source {
+                crate::runtime::RuntimeSectionRef::Local {
+                    object: source_object,
+                    section: source_section,
+                }
+                | crate::runtime::RuntimeSectionRef::External {
+                    object: source_object,
+                    section: source_section,
+                } => {
+                    let Some(source_object) = resolve_package_object(db, objects, *source_object)
+                    else {
+                        return Err(VerifyError::InvalidPackageObject(*source_object));
+                    };
+                    if !source_object
+                        .sections(db)
+                        .iter()
+                        .any(|candidate| candidate.name == *source_section)
+                    {
+                        return Err(VerifyError::InvalidPackageSection(
+                            source_object,
+                            source_section.clone(),
+                        ));
+                    }
+                    if matches!(
+                        &embed.source,
+                        crate::runtime::RuntimeSectionRef::Local {
+                            object: source_object,
+                            section: source_section,
+                        } if source_object.name(db) == object.name(db) && *source_section == section.name
+                    ) {
+                        return Err(VerifyError::InvalidPackageSection(
+                            object,
+                            section.name.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn verify_resolved_code_region<'db>(
+    db: &'db dyn MirDb,
+    region: &ResolvedCodeRegion<'db>,
+    function_instances: &FxHashSet<crate::instance::RuntimeInstance<'db>>,
+    objects: &[RuntimeObject<'db>],
+) -> Result<(), VerifyError<'db>> {
+    if !function_instances.contains(&region.root(db).instance(db)) {
+        return Err(VerifyError::InvalidPackageFunction(
+            region.root(db).instance(db),
+        ));
+    }
+    match region.source(db) {
+        crate::runtime::RuntimeSectionRef::Local {
+            object,
+            ref section,
+        }
+        | crate::runtime::RuntimeSectionRef::External {
+            object,
+            ref section,
+        } => {
+            let Some(object) = resolve_package_object(db, objects, object) else {
+                return Err(VerifyError::InvalidPackageObject(object));
+            };
+            if !object
+                .sections(db)
+                .iter()
+                .any(|candidate| candidate.name == *section)
+            {
+                return Err(VerifyError::InvalidPackageSection(object, section.clone()));
+            }
+        }
+    }
+    if let crate::runtime::RuntimeCodeRegionKey::ManualContractSection {
+        ref contract_name,
+        section,
+        callee,
+    } = region.region(db).key(db)
+    {
+        if region.root(db).instance(db) != callee {
+            return Err(VerifyError::InvalidCodeRegion(region.region(db)));
+        }
+        let expected_symbol = match section {
+            hir::analysis::semantic::ManualContractSection::Init => {
+                format!("__{}_init", sanitize_symbol(contract_name))
+            }
+            hir::analysis::semantic::ManualContractSection::Runtime => {
+                format!("__{}_runtime", sanitize_symbol(contract_name))
+            }
+        };
+        if region.symbol(db) != expected_symbol {
+            return Err(VerifyError::InvalidCodeRegion(region.region(db)));
+        }
+    }
+    Ok(())
+}
+
+fn resolve_package_object<'db>(
+    db: &'db dyn MirDb,
+    objects: &[RuntimeObject<'db>],
+    object: RuntimeObject<'db>,
+) -> Option<RuntimeObject<'db>> {
+    objects
+        .iter()
+        .find(|candidate| candidate.name(db) == object.name(db))
+        .copied()
+}
+
+fn sanitize_symbol(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect()
+}

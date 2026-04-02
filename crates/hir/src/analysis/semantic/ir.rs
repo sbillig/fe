@@ -5,11 +5,12 @@ use crate::{
     analysis::{
         semantic::instance::{SemanticInstance, SemanticInstanceKey},
         ty::{
-            ty_check::{BodyOwner, ConcreteBorrowProvider, EffectPassMode, LocalBinding},
+            provider::ProviderAddressSpace,
+            ty_check::{BodyOwner, EffectPassMode, LocalBinding},
             ty_def::{BorrowKind, TyId},
         },
     },
-    hir_def::{BinOp, ExprId, StmtId, UnOp},
+    hir_def::{BinOp, ExprId, Func, StmtId, UnOp},
 };
 
 use super::consts::SemConstId;
@@ -104,6 +105,21 @@ pub struct SemanticConstRef<'db> {
     pub origin: SemOrigin<'db>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum ManualContractSection {
+    Init,
+    Runtime,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum SemanticCodeRegionRef<'db> {
+    ManualContractRoot {
+        func: Func<'db>,
+        contract_name: String,
+        section: ManualContractSection,
+    },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct SPlace {
     pub local: SLocalId,
@@ -121,7 +137,7 @@ pub struct SEffectArg<'db> {
     pub arg: SEffectArgValue,
     pub pass_mode: EffectPassMode,
     pub target_ty: Option<TyId<'db>>,
-    pub provider: Option<ConcreteBorrowProvider>,
+    pub provider: Option<ProviderAddressSpace>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -167,7 +183,7 @@ pub enum SExpr<'db> {
     Borrow {
         place: SPlace,
         kind: BorrowKind,
-        provider: Option<ConcreteBorrowProvider>,
+        provider: Option<ProviderAddressSpace>,
     },
     GetEnumTag {
         value: SValueId,
@@ -180,6 +196,12 @@ pub enum SExpr<'db> {
         value: SValueId,
         variant: VariantIndex,
         field: FieldIndex,
+    },
+    CodeRegionOffset {
+        region: SemanticCodeRegionRef<'db>,
+    },
+    CodeRegionLen {
+        region: SemanticCodeRegionRef<'db>,
     },
     Call {
         callee: SemanticCalleeRef<'db>,

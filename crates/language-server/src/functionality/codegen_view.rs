@@ -9,6 +9,7 @@ use common::InputDb;
 use driver::DriverDataBase;
 use hir::hir_def::TopLevelMod;
 use hir::lower::map_file_to_mod;
+use mir2::build_runtime_package;
 use serde_json::Value;
 use url::Url;
 
@@ -45,9 +46,9 @@ fn generate_codegen_string(
 ) -> Result<String, String> {
     match kind {
         CodegenKind::Mir => {
-            let module =
-                mir::lower_module(db, top_mod).map_err(|e| format!("MIR lowering: {e}"))?;
-            Ok(mir::fmt::format_module(db, &module))
+            let package = build_runtime_package(db, top_mod)
+                .map_err(|e| format!("runtime package lowering: {e}"))?;
+            Ok(format!("{package:#?}"))
         }
         CodegenKind::Yul => {
             codegen::emit_module_yul(db, top_mod).map_err(|e| format!("Yul emit: {e}"))

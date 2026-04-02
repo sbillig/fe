@@ -1236,7 +1236,10 @@ fn lower_call_args<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         .zip(expected_arg_tys.iter().copied())
     {
         if expected_ty.is_obj_ref(&ctx.fb.module_builder.ctx)
-            && matches!(mir::repr::repr_kind_for_ty(ctx.db, ctx.core, arg_ty), mir::repr::ReprKind::Word)
+            && matches!(
+                mir::repr::repr_kind_for_ty(ctx.db, ctx.core, arg_ty),
+                mir::repr::ReprKind::Word
+            )
             && arg_ty.as_capability(ctx.db).is_none()
             && mir::repr::effect_provider_space_for_ty(ctx.db, ctx.core, arg_ty).is_none()
         {
@@ -1311,7 +1314,10 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         _ => ctx.runtime_type_for_value(value_id),
     };
     if result_ty.is_obj_ref(&ctx.fb.module_builder.ctx)
-        && matches!(mir::repr::repr_kind_for_ty(ctx.db, ctx.core, value_data.ty), mir::repr::ReprKind::Word)
+        && matches!(
+            mir::repr::repr_kind_for_ty(ctx.db, ctx.core, value_data.ty),
+            mir::repr::ReprKind::Word
+        )
         && value_data.ty.as_capability(ctx.db).is_none()
         && mir::repr::effect_provider_space_for_ty(ctx.db, ctx.core, value_data.ty).is_none()
     {

@@ -46,6 +46,7 @@ pub mod pattern_analysis;
 pub mod pattern_ir;
 pub mod provider;
 pub(crate) mod scratch;
+pub mod provider;
 pub mod trait_def;
 pub mod trait_lower;
 pub mod trait_resolution; // This line was previously 'pub mod name_resolution;'
@@ -58,8 +59,19 @@ pub mod visitor;
 
 pub use layout_holes::ty_contains_const_hole;
 pub use msg_selector::MsgSelectorAnalysisPass;
+pub use provider::{
+    ProviderAddressSpace, ProviderKind, ProviderSemantics, ProviderTransport,
+    RootProviderRegistration, RootProviderSiteKind, address_space_from_ty, provider_semantics,
+    registered_root_providers,
+};
 
 const DEFAULT_TARGET_TY_PATH: &[&str] = &["std", "evm", "EvmTarget"];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EffectHandleMetadata<'db> {
+    pub address_space: TyId<'db>,
+    pub target_ty: TyId<'db>,
+}
 
 pub fn ty_is_borrow<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -328,7 +340,12 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
 
             // 2. Validate contract-level effects (`contract Foo uses (ctx: Ctx)`).
             let assumptions = PredicateListId::empty_list(db);
-            let root_effect_ty = resolve_default_root_effect_ty(db, contract.scope(), assumptions);
+            let root_effect_ty = registered_root_providers(
+                db,
+                crate::analysis::ty::ty_check::EffectParamSite::Contract(contract),
+            )
+            .first()
+            .map(|registration| registration.provider_ty);
             for (idx, effect) in contract.effects(db).data(db).iter().enumerate() {
                 let Some(key_path) = effect
                     .key_path
@@ -438,7 +455,7 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
     }
 }
 
-pub(crate) fn resolve_default_root_effect_ty<'db>(
+pub fn resolve_default_root_effect_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
@@ -459,6 +476,46 @@ pub(crate) fn resolve_default_root_effect_ty<'db>(
         scope,
         assumptions,
     ))
+}
+
+pub fn effect_handle_metadata<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    ty: TyId<'db>,
+) -> Option<EffectHandleMetadata<'db>> {
+    let effect_handle = corelib::resolve_core_trait(db, scope, &["effect_ref", "EffectHandle"])?;
+    let address_space_ident = IdentId::new(db, "AddressSpace".to_string());
+    let target_ident = IdentId::new(db, "Target".to_string());
+    let inst = trait_def::TraitInstId::new(db, effect_handle, vec![ty], IndexMap::new());
+    match is_goal_satisfiable(
+        db,
+        TraitSolveCx::new(db, scope).with_assumptions(assumptions),
+        inst,
+    ) {
+        GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => None,
+        GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation(_) => {
+            let address_space = normalize::normalize_ty(
+                db,
+                inst.assoc_ty(db, address_space_ident)?,
+                scope,
+                assumptions,
+            );
+            let target_ty = normalize::normalize_ty(
+                db,
+                inst.assoc_ty(db, target_ident).unwrap_or(ty),
+                scope,
+                assumptions,
+            );
+            (!address_space.has_invalid(db)
+                && !ty_contains_const_hole(db, address_space)
+                && !target_ty.has_invalid(db))
+            .then_some(EffectHandleMetadata {
+                address_space,
+                target_ty,
+            })
+        }
+    }
 }
 
 fn instantiate_trait_self<'db>(

@@ -1,11 +1,13 @@
 use num_bigint::{BigInt, Sign};
+use num_traits::ToPrimitive;
+use rustc_hash::FxHashSet;
 use salsa::Update;
 
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
         const_ty::{ConstTyData, EvaluatedConstTy},
-        ty_def::{TyData, TyId},
+        ty_def::{PrimTy, TyBase, TyData, TyId, prim_int_bits},
     },
 };
 
@@ -257,8 +259,6 @@ pub fn normalize_int_to_shape(value: BigInt, bits: u16, signed: bool) -> BigInt 
 }
 
 pub fn int_ty_shape<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<(u16, bool)> {
-    use crate::analysis::ty::ty_def::{PrimTy, TyBase, TyData};
-
     let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(db).data(db) else {
         return None;
     };
@@ -284,4 +284,99 @@ pub fn int_ty_shape<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<(u
         | PrimTy::BorrowMut
         | PrimTy::BorrowRef => return None,
     })
+}
+
+pub fn runtime_size_bytes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<usize> {
+    const WORD_SIZE_BYTES: usize = 32;
+    const ENUM_TAG_SIZE_BYTES: usize = 1;
+
+    fn array_len<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<usize> {
+        let (_, args) = ty.decompose_ty_app(db);
+        let TyData::ConstTy(const_ty) = args.get(1)?.data(db) else {
+            return None;
+        };
+        match const_ty.data(db) {
+            ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) => {
+                int_id.data(db).to_usize()
+            }
+            _ => None,
+        }
+    }
+
+    fn inner<'db>(
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+        visiting: &mut FxHashSet<TyId<'db>>,
+    ) -> Option<usize> {
+        if !visiting.insert(ty) {
+            return None;
+        }
+
+        let result = if ty.has_invalid(db) || ty.has_var(db) {
+            None
+        } else if let TyData::TyParam(param) = ty.data(db)
+            && (param.is_effect() || param.is_effect_provider() || param.is_trait_self())
+        {
+            Some(0)
+        } else if ty.has_param(db) {
+            None
+        } else if ty.is_tuple(db) {
+            ty.field_types(db)
+                .into_iter()
+                .try_fold(0usize, |size, field| {
+                    Some(size + inner(db, field, visiting)?)
+                })
+        } else if matches!(
+            ty.base_ty(db).data(db),
+            TyData::TyBase(TyBase::Func(_) | TyBase::Contract(_))
+        ) {
+            Some(0)
+        } else if let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(db).data(db) {
+            match prim {
+                PrimTy::Bool => Some(1),
+                PrimTy::String
+                | PrimTy::Ptr
+                | PrimTy::View
+                | PrimTy::BorrowMut
+                | PrimTy::BorrowRef => Some(WORD_SIZE_BYTES),
+                PrimTy::Array | PrimTy::Tuple(_) => None,
+                _ => prim_int_bits(*prim).map(|bits| bits / 8),
+            }
+        } else if ty.is_array(db) {
+            let (_, args) = ty.decompose_ty_app(db);
+            let elem = args.first().copied()?;
+            let stride = inner(db, elem, visiting).unwrap_or(WORD_SIZE_BYTES);
+            Some(array_len(db, ty)? * stride)
+        } else if ty.is_struct(db) {
+            ty.field_types(db)
+                .into_iter()
+                .try_fold(0usize, |size, field| {
+                    Some(size + inner(db, field, visiting)?)
+                })
+        } else if let Some(enum_) = ty.as_enum(db) {
+            let args = ty.generic_args(db);
+            let max_payload = enum_
+                .variants(db)
+                .map(|variant| {
+                    variant
+                        .field_tys(db)
+                        .into_iter()
+                        .try_fold(0usize, |size, field| {
+                            Some(size + inner(db, field.instantiate(db, args), visiting)?)
+                        })
+                })
+                .collect::<Option<Vec<_>>>()?
+                .into_iter()
+                .max()
+                .unwrap_or(0);
+            Some(ENUM_TAG_SIZE_BYTES + max_payload)
+        } else {
+            None
+        };
+
+        visiting.remove(&ty);
+        result
+    }
+
+    inner(db, ty, &mut FxHashSet::default())
 }

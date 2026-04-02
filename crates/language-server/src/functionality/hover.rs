@@ -8,8 +8,10 @@ use hir::{
         ty_check::{EffectParamSite, LocalBinding, ParamSite},
         ty_def::TyId,
     },
-    core::semantic::EffectSource,
-    core::semantic::reference::{ReferenceView, Target},
+    core::semantic::{
+        EffectEnvView, ProviderSource,
+        reference::{ReferenceView, Target},
+    },
     hir_def::{FieldParent, ItemKind, PathId, scope_graph::ScopeId},
     lower::map_file_to_mod,
     span::LazySpan,
@@ -83,40 +85,21 @@ fn effect_key_path_at_site<'db>(
     }
 }
 
-fn effect_binding_source_at_site<'db>(
+fn effect_binding_provider_source_at_site<'db>(
     db: &'db DriverDataBase,
     site: EffectParamSite<'db>,
     idx: usize,
-) -> Option<EffectSource> {
-    match site {
-        EffectParamSite::Func(func) => func
-            .effect_bindings(db)
-            .iter()
-            .find(|binding| binding.binding_idx as usize == idx)
-            .map(|binding| binding.source),
-        EffectParamSite::Contract(contract) => contract
-            .effect_bindings(db)
-            .iter()
-            .find(|binding| binding.binding_idx as usize == idx)
-            .map(|binding| binding.source),
-        EffectParamSite::ContractInit { contract } => contract
-            .init_effect_bindings(db)
-            .iter()
-            .find(|binding| binding.binding_idx as usize == idx)
-            .map(|binding| binding.source),
-        EffectParamSite::ContractRecvArm {
-            contract,
-            recv_idx,
-            arm_idx,
-        } => {
-            let recv = contract.recv(db, recv_idx)?;
-            let arm = recv.arm(db, arm_idx)?;
-            arm.effective_effect_bindings(db)
-                .iter()
-                .find(|binding| binding.binding_idx as usize == idx)
-                .map(|binding| binding.source)
-        }
-    }
+) -> Option<ProviderSource<'db>> {
+    let view = EffectEnvView::new(site);
+    let provider_idx = view
+        .resolutions(db)
+        .into_iter()
+        .find(|resolution| resolution.requirement_idx as usize == idx)?
+        .provider_idx;
+    view.providers(db)
+        .into_iter()
+        .find(|provider| provider.provider_idx == provider_idx)
+        .map(|provider| provider.source)
 }
 
 fn contract_field_layout_by_index<'db>(
@@ -165,7 +148,8 @@ fn contract_field_layout_from_local_binding<'db>(
             Some((field.slot_offset, field.slot_count, field.address_space))
         }
         LocalBinding::EffectParam { site, idx, .. } => {
-            let EffectSource::Field(field_idx) = effect_binding_source_at_site(db, site, idx)?
+            let ProviderSource::ContractField { field_idx, .. } =
+                effect_binding_provider_source_at_site(db, site, idx)?
             else {
                 return None;
             };

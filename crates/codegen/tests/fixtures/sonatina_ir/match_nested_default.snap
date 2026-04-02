@@ -5,149 +5,301 @@ input_file: crates/codegen/tests/fixtures/match_nested_default.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @__fe_obj_Outer_0 = enum {
-    #First(i256),
-    #Second(i256),
+type @__fe_layout_0 = enum {
+    #A,
+    #B,
+    #C,
 };
-type @__fe_obj_Deep_1 = enum {
-    #Wrap(@__fe_obj_Outer_0),
+type @__fe_layout_1 = enum {
+    #First(@__fe_layout_0),
+    #Second(@__fe_layout_0),
+};
+type @__fe_layout_2 = enum {
+    #Wrap(@__fe_layout_1),
 };
 
-func private %nested_with_defaults(v0.objref<@__fe_obj_Outer_0>) -> i8 {
+func private %__fe_main_root() {
     block0:
-        jump block5;
-
-    block1:
-        jump block2;
-
-    block2:
-        v4.i8 = phi (1.i8 block1) (2.i8 block3) (0.i8 block4);
-        return v4;
-
-    block3:
-        jump block2;
-
-    block4:
-        jump block2;
-
-    block5:
-        v7.enumtag(@__fe_obj_Outer_0) = enum.get_tag v0;
-        br_table v7 block4 (0.enumtag(@__fe_obj_Outer_0) block6) (1.enumtag(@__fe_obj_Outer_0) block7);
-
-    block6:
-        v11.objref<@__fe_obj_Outer_0> = enum.assert_variant_ref v0 #First;
-        v12.objref<i256> = enum.proj v11 #First 0.i256;
-        v13.i256 = obj.load v12;
-        br_table v13 block4 (0.i256 block1);
-
-    block7:
-        v15.objref<@__fe_obj_Outer_0> = enum.assert_variant_ref v0 #Second;
-        v16.objref<i256> = enum.proj v15 #Second 0.i256;
-        v17.i256 = obj.load v16;
-        br_table v17 block4 (1.i256 block3);
-}
-
-func private %outer_specific_inner_wildcard(v0.objref<@__fe_obj_Outer_0>) -> i8 {
-    block0:
-        jump block5;
-
-    block1:
-        jump block2;
-
-    block2:
-        v4.i8 = phi (1.i8 block1) (2.i8 block3) (3.i8 block4);
-        return v4;
-
-    block3:
-        jump block2;
-
-    block4:
-        jump block2;
-
-    block5:
-        v8.enumtag(@__fe_obj_Outer_0) = enum.get_tag v0;
-        br_table v8 block4 (0.enumtag(@__fe_obj_Outer_0) block6);
-
-    block6:
-        v11.objref<@__fe_obj_Outer_0> = enum.assert_variant_ref v0 #First;
-        v12.objref<i256> = enum.proj v11 #First 0.i256;
-        v13.i256 = obj.load v12;
-        br_table v13 block3 (0.i256 block1);
-}
-
-func private %deeply_nested_wildcard(v0.objref<@__fe_obj_Deep_1>) -> i8 {
-    block0:
-        jump block4;
-
-    block1:
-        jump block2;
-
-    block2:
-        v4.i8 = phi (1.i8 block1) (0.i8 block3);
-        return v4;
-
-    block3:
-        jump block2;
-
-    block4:
-        v6.enumtag(@__fe_obj_Deep_1) = enum.get_tag v0;
-        br_table v6 block3 (0.enumtag(@__fe_obj_Deep_1) block5);
-
-    block5:
-        v9.objref<@__fe_obj_Deep_1> = enum.assert_variant_ref v0 #Wrap;
-        v10.objref<@__fe_obj_Outer_0> = enum.proj v9 #Wrap 0.i256;
-        v11.enumtag(@__fe_obj_Outer_0) = enum.get_tag v10;
-        br_table v11 block3 (0.enumtag(@__fe_obj_Outer_0) block6);
-
-    block6:
-        v14.objref<@__fe_obj_Deep_1> = enum.assert_variant_ref v0 #Wrap;
-        v15.objref<@__fe_obj_Outer_0> = enum.proj v14 #Wrap 0.i256;
-        v16.objref<@__fe_obj_Outer_0> = enum.assert_variant_ref v15 #First;
-        v17.objref<i256> = enum.proj v16 #First 0.i256;
-        v18.i256 = obj.load v17;
-        br_table v18 block3 (0.i256 block1);
-}
-
-func private %exhaustive_inner_outer_wildcard(v0.objref<@__fe_obj_Outer_0>) -> i8 {
-    block0:
-        jump block6;
-
-    block1:
-        jump block2;
-
-    block2:
-        v4.i8 = phi (1.i8 block1) (2.i8 block3) (3.i8 block4) (0.i8 block5);
-        return v4;
-
-    block3:
-        jump block2;
-
-    block4:
-        jump block2;
-
-    block5:
-        jump block2;
-
-    block6:
-        v8.enumtag(@__fe_obj_Outer_0) = enum.get_tag v0;
-        br_table v8 block5 (0.enumtag(@__fe_obj_Outer_0) block7);
-
-    block7:
-        v11.objref<@__fe_obj_Outer_0> = enum.assert_variant_ref v0 #First;
-        v12.objref<i256> = enum.proj v11 #First 0.i256;
-        v13.i256 = obj.load v12;
-        br_table v13 block5 (0.i256 block1) (1.i256 block3) (2.i256 block4);
-}
-
-func private %__fe_sonatina_entry() {
-    block0:
-        v1.i8 = call %nested_with_defaults undef.objref<@__fe_obj_Outer_0>;
+        v1.i8 = call %deeply_nested_wildcard undef.@__fe_layout_2;
         evm_stop;
 }
 
+func private %deeply_nested_wildcard(v0.@__fe_layout_2) -> i8 {
+    block0:
+        v1.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v2.*i8 = alloca i8;
+        v3.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v4.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v5.*i8 = alloca i8;
+        v6.*i8 = alloca i8;
+        v7.*i8 = alloca i8;
+        obj.store v1 v0;
+        v8.@__fe_layout_2 = obj.load v1;
+        v9.i8 = enum.tag v8;
+        mstore v7 v9 i8;
+        v10.i8 = mload v7 i8;
+        br_table v10 block3 (0.i256 block2);
 
-object @Contract {
-    section runtime {
-        entry %__fe_sonatina_entry;
+    block1:
+        v12.i8 = mload v2 i8;
+        return v12;
+
+    block2:
+        v13.@__fe_layout_2 = obj.load v1;
+        v14.@__fe_layout_1 = enum.extract v13 #Wrap 0.i256;
+        obj.store v3 v14;
+        v15.@__fe_layout_1 = obj.load v3;
+        v16.@__fe_layout_0 = enum.extract v15 #First 0.i256;
+        obj.store v4 v16;
+        mstore v5 1.i8 i8;
+        v18.i8 = mload v5 i8;
+        mstore v2 v18 i8;
+        jump block1;
+
+    block3:
+        mstore v6 0.i8 i8;
+        v20.i8 = mload v6 i8;
+        mstore v2 v20 i8;
+        jump block1;
+}
+
+func private %exhaustive_inner_outer_wildcard(v0.@__fe_layout_1) -> i8 {
+    block0:
+        v1.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v2.*i8 = alloca i8;
+        v3.*i1 = alloca i1;
+        v4.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v5.*i1 = alloca i1;
+        v6.*i1 = alloca i1;
+        v7.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v8.*i1 = alloca i1;
+        v9.*i1 = alloca i1;
+        v10.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v11.*i1 = alloca i1;
+        v12.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v13.*i8 = alloca i8;
+        v14.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v15.*i8 = alloca i8;
+        v16.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v17.*i8 = alloca i8;
+        v18.*i8 = alloca i8;
+        obj.store v1 v0;
+        v19.@__fe_layout_1 = obj.load v1;
+        v20.i1 = enum.is_variant v19 #First;
+        mstore v3 v20 i1;
+        v21.i1 = mload v3 i1;
+        br v21 block7 block6;
+
+    block1:
+        v22.i8 = mload v2 i8;
+        return v22;
+
+    block2:
+        v23.@__fe_layout_1 = obj.load v1;
+        v25.@__fe_layout_0 = enum.extract v23 #First 0.i256;
+        obj.store v12 v25;
+        mstore v13 1.i8 i8;
+        v27.i8 = mload v13 i8;
+        mstore v2 v27 i8;
+        jump block1;
+
+    block3:
+        v28.@__fe_layout_1 = obj.load v1;
+        v29.@__fe_layout_0 = enum.extract v28 #First 0.i256;
+        obj.store v14 v29;
+        mstore v15 2.i8 i8;
+        v31.i8 = mload v15 i8;
+        mstore v2 v31 i8;
+        jump block1;
+
+    block4:
+        v32.@__fe_layout_1 = obj.load v1;
+        v33.@__fe_layout_0 = enum.extract v32 #First 0.i256;
+        obj.store v16 v33;
+        mstore v17 3.i8 i8;
+        v35.i8 = mload v17 i8;
+        mstore v2 v35 i8;
+        jump block1;
+
+    block5:
+        mstore v18 0.i8 i8;
+        v37.i8 = mload v18 i8;
+        mstore v2 v37 i8;
+        jump block1;
+
+    block6:
+        v38.@__fe_layout_1 = obj.load v1;
+        v39.i1 = enum.is_variant v38 #First;
+        mstore v6 v39 i1;
+        v40.i1 = mload v6 i1;
+        br v40 block9 block8;
+
+    block7:
+        v41.@__fe_layout_1 = obj.load v1;
+        v42.@__fe_layout_0 = enum.extract v41 #First 0.i256;
+        obj.store v4 v42;
+        v43.@__fe_layout_0 = obj.load v4;
+        v44.i1 = enum.is_variant v43 #A;
+        mstore v5 v44 i1;
+        v45.i1 = mload v5 i1;
+        br v45 block2 block6;
+
+    block8:
+        v46.@__fe_layout_1 = obj.load v1;
+        v47.i1 = enum.is_variant v46 #First;
+        mstore v9 v47 i1;
+        v48.i1 = mload v9 i1;
+        br v48 block11 block10;
+
+    block9:
+        v49.@__fe_layout_1 = obj.load v1;
+        v50.@__fe_layout_0 = enum.extract v49 #First 0.i256;
+        obj.store v7 v50;
+        v51.@__fe_layout_0 = obj.load v7;
+        v52.i1 = enum.is_variant v51 #B;
+        mstore v8 v52 i1;
+        v53.i1 = mload v8 i1;
+        br v53 block3 block8;
+
+    block10:
+        jump block5;
+
+    block11:
+        v54.@__fe_layout_1 = obj.load v1;
+        v55.@__fe_layout_0 = enum.extract v54 #First 0.i256;
+        obj.store v10 v55;
+        v56.@__fe_layout_0 = obj.load v10;
+        v57.i1 = enum.is_variant v56 #C;
+        mstore v11 v57 i1;
+        v58.i1 = mload v11 i1;
+        br v58 block4 block10;
+}
+
+func private %nested_with_defaults(v0.@__fe_layout_1) -> i8 {
+    block0:
+        v1.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v2.*i8 = alloca i8;
+        v3.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v4.*i8 = alloca i8;
+        v5.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v6.*i8 = alloca i8;
+        v7.*i8 = alloca i8;
+        v8.*i8 = alloca i8;
+        obj.store v1 v0;
+        v9.@__fe_layout_1 = obj.load v1;
+        v10.i8 = enum.tag v9;
+        mstore v8 v10 i8;
+        v11.i8 = mload v8 i8;
+        br_table v11 block4 (0.i256 block2) (1.i256 block3);
+
+    block1:
+        v14.i8 = mload v2 i8;
+        return v14;
+
+    block2:
+        v15.@__fe_layout_1 = obj.load v1;
+        v16.@__fe_layout_0 = enum.extract v15 #First 0.i256;
+        obj.store v3 v16;
+        mstore v4 1.i8 i8;
+        v18.i8 = mload v4 i8;
+        mstore v2 v18 i8;
+        jump block1;
+
+    block3:
+        v19.@__fe_layout_1 = obj.load v1;
+        v20.@__fe_layout_0 = enum.extract v19 #Second 0.i256;
+        obj.store v5 v20;
+        mstore v6 2.i8 i8;
+        v22.i8 = mload v6 i8;
+        mstore v2 v22 i8;
+        jump block1;
+
+    block4:
+        mstore v7 0.i8 i8;
+        v24.i8 = mload v7 i8;
+        mstore v2 v24 i8;
+        jump block1;
+}
+
+func private %outer_specific_inner_wildcard(v0.@__fe_layout_1) -> i8 {
+    block0:
+        v1.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v2.*i8 = alloca i8;
+        v3.*i1 = alloca i1;
+        v4.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v5.*i1 = alloca i1;
+        v6.*i1 = alloca i1;
+        v7.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v8.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v9.*i8 = alloca i8;
+        v10.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v11.*i8 = alloca i8;
+        v12.*i8 = alloca i8;
+        obj.store v1 v0;
+        v13.@__fe_layout_1 = obj.load v1;
+        v14.i1 = enum.is_variant v13 #First;
+        mstore v3 v14 i1;
+        v15.i1 = mload v3 i1;
+        br v15 block6 block5;
+
+    block1:
+        v16.i8 = mload v2 i8;
+        return v16;
+
+    block2:
+        v17.@__fe_layout_1 = obj.load v1;
+        v19.@__fe_layout_0 = enum.extract v17 #First 0.i256;
+        obj.store v8 v19;
+        mstore v9 1.i8 i8;
+        v21.i8 = mload v9 i8;
+        mstore v2 v21 i8;
+        jump block1;
+
+    block3:
+        v22.@__fe_layout_1 = obj.load v1;
+        v23.@__fe_layout_0 = enum.extract v22 #First 0.i256;
+        obj.store v10 v23;
+        mstore v11 2.i8 i8;
+        v25.i8 = mload v11 i8;
+        mstore v2 v25 i8;
+        jump block1;
+
+    block4:
+        mstore v12 3.i8 i8;
+        v27.i8 = mload v12 i8;
+        mstore v2 v27 i8;
+        jump block1;
+
+    block5:
+        v28.@__fe_layout_1 = obj.load v1;
+        v29.i1 = enum.is_variant v28 #First;
+        mstore v6 v29 i1;
+        v30.i1 = mload v6 i1;
+        br v30 block8 block7;
+
+    block6:
+        v31.@__fe_layout_1 = obj.load v1;
+        v32.@__fe_layout_0 = enum.extract v31 #First 0.i256;
+        obj.store v4 v32;
+        v33.@__fe_layout_0 = obj.load v4;
+        v34.i1 = enum.is_variant v33 #A;
+        mstore v5 v34 i1;
+        v35.i1 = mload v5 i1;
+        br v35 block2 block5;
+
+    block7:
+        jump block4;
+
+    block8:
+        v36.@__fe_layout_1 = obj.load v1;
+        v37.@__fe_layout_0 = enum.extract v36 #First 0.i256;
+        obj.store v7 v37;
+        jump block3;
+}
+
+
+object @main {
+    section main {
+        entry %__fe_main_root;
     }
 }

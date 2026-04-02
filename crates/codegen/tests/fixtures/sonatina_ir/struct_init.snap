@@ -5,27 +5,40 @@ input_file: crates/codegen/tests/fixtures/struct_init.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @__fe_obj_Dummy_0 = {i64, i256};
+type @__fe_layout_0 = {i64, i256};
 
-func private %make_dummy() -> objref<@__fe_obj_Dummy_0> {
+func private %__fe_main_root() {
     block0:
-        v0.objref<@__fe_obj_Dummy_0> = obj.alloc @__fe_obj_Dummy_0;
-        v3.objref<i64> = obj.proj v0 0.i256;
-        obj.store v3 42.i64;
-        v6.objref<i256> = obj.proj v0 1.i256;
-        obj.store v6 99.i256;
-        return v0;
-}
-
-func private %__fe_sonatina_entry() {
-    block0:
-        v0.objref<@__fe_obj_Dummy_0> = call %make_dummy;
+        v0.@__fe_layout_0 = call %make_dummy;
         evm_stop;
 }
 
+func private %make_dummy() -> @__fe_layout_0 {
+    block0:
+        v0.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v1.*i64 = alloca i64;
+        v2.*i256 = alloca i256;
+        v3.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        mstore v1 42.i64 i64;
+        mstore v2 99.i256 i256;
+        v6.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v7.i64 = mload v1 i64;
+        v9.objref<i64> = obj.proj v6 0.i256;
+        obj.store v9 v7;
+        v10.i256 = mload v2 i256;
+        v12.objref<i256> = obj.proj v6 1.i256;
+        obj.store v12 v10;
+        v13.@__fe_layout_0 = obj.load v6;
+        obj.store v3 v13;
+        v14.@__fe_layout_0 = obj.load v3;
+        obj.store v0 v14;
+        v15.@__fe_layout_0 = obj.load v0;
+        return v15;
+}
 
-object @Contract {
-    section runtime {
-        entry %__fe_sonatina_entry;
+
+object @main {
+    section main {
+        entry %__fe_main_root;
     }
 }

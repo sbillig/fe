@@ -1,9 +1,7 @@
-use hir::analysis::semantic::SemanticCalleeRef;
-
 use crate::{
     db::MirDb,
     instance::RuntimeInstance,
-    runtime::{RExpr, RStmt, RuntimeCallEdge},
+    runtime::{RExpr, RStmt, RTerminator, RuntimeCallEdge},
 };
 
 pub fn collect_runtime_calls<'db>(
@@ -21,20 +19,12 @@ pub fn collect_runtime_calls<'db>(
             else {
                 continue;
             };
-            let runtime_arg_classes = args
-                .iter()
-                .map(|arg| {
-                    body.value_class(*arg)
-                        .cloned()
-                        .expect("call arguments should not be erased")
-                })
-                .collect();
-            calls.push(RuntimeCallEdge {
-                semantic_callee: SemanticCalleeRef {
-                    key: callee.key(db).semantic(db).key(db),
-                },
-                runtime_arg_classes,
-            });
+            let _ = args;
+            calls.push(RuntimeCallEdge { callee: *callee });
+        }
+        if let RTerminator::TerminalCall { callee, args } = &block.terminator {
+            let _ = args;
+            calls.push(RuntimeCallEdge { callee: *callee });
         }
     }
     calls

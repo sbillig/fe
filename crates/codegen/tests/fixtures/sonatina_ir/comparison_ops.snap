@@ -5,80 +5,105 @@ input_file: crates/codegen/tests/fixtures/comparison_ops.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @__fe_obj_tuple_0 = {i1, i1, i1, i1, i1, i1};
+type @__fe_layout_0 = {i1, i1, i1, i1, i1, i1};
 
-func private %comparison_ops() -> objref<@__fe_obj_tuple_0> {
+func private %__fe_main_root() {
     block0:
-        v3.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq 1.i256 1.i256;
-        v4.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_ne 1.i256 2.i256;
-        v5.i1 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt 1.i256 2.i256;
-        v6.i1 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_le 2.i256 2.i256;
-        v7.i1 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt 3.i256 2.i256;
-        v8.i1 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_ge 3.i256 3.i256;
-        v9.objref<@__fe_obj_tuple_0> = obj.alloc @__fe_obj_tuple_0;
-        v11.objref<i1> = obj.proj v9 0.i256;
-        obj.store v11 v3;
-        v12.objref<i1> = obj.proj v9 1.i256;
-        obj.store v12 v4;
-        v13.objref<i1> = obj.proj v9 2.i256;
-        obj.store v13 v5;
-        v14.objref<i1> = obj.proj v9 3.i256;
-        obj.store v14 v6;
-        v16.objref<i1> = obj.proj v9 4.i256;
-        obj.store v16 v7;
-        v18.objref<i1> = obj.proj v9 5.i256;
-        obj.store v18 v8;
-        return v9;
-}
-
-func private %u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0.i256, v1.i256) -> i1 {
-    block0:
-        v2.i1 = eq v0 v1;
-        return v2;
-}
-
-func private %u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v0.i256, v1.i256) -> i1 {
-    block0:
-        v2.i1 = eq v0 v1;
-        v3.i1 = is_zero v2;
-        return v3;
-}
-
-func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v0.i256, v1.i256) -> i1 {
-    block0:
-        v2.i1 = lt v0 v1;
-        return v2;
-}
-
-func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_le(v0.i256, v1.i256) -> i1 {
-    block0:
-        v2.i1 = gt v0 v1;
-        v3.i1 = is_zero v2;
-        return v3;
-}
-
-func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v0.i256, v1.i256) -> i1 {
-    block0:
-        v2.i1 = gt v0 v1;
-        return v2;
-}
-
-func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_ge(v0.i256, v1.i256) -> i1 {
-    block0:
-        v2.i1 = lt v0 v1;
-        v3.i1 = is_zero v2;
-        return v3;
-}
-
-func private %__fe_sonatina_entry() {
-    block0:
-        v0.objref<@__fe_obj_tuple_0> = call %comparison_ops;
+        v0.@__fe_layout_0 = call %comparison_ops;
         evm_stop;
 }
 
+func private %comparison_ops() -> @__fe_layout_0 {
+    block0:
+        v0.*i256 = alloca i256;
+        v1.*i256 = alloca i256;
+        v2.*i256 = alloca i256;
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        v5.*i256 = alloca i256;
+        v6.*i1 = alloca i1;
+        v7.*i1 = alloca i1;
+        v8.*i1 = alloca i1;
+        v9.*i1 = alloca i1;
+        v10.*i1 = alloca i1;
+        v11.*i1 = alloca i1;
+        v12.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        mstore v3 1.i256 i256;
+        v14.i256 = mload v3 i256;
+        mstore v0 v14 i256;
+        mstore v4 2.i256 i256;
+        v16.i256 = mload v4 i256;
+        mstore v1 v16 i256;
+        mstore v5 3.i256 i256;
+        v18.i256 = mload v5 i256;
+        mstore v2 v18 i256;
+        v19.i256 = mload v0 i256;
+        v20.i256 = mload v0 i256;
+        v22.i1 = ne v19 0.i256;
+        v23.i1 = ne v20 0.i256;
+        v24.i1 = eq v22 v23;
+        mstore v6 v24 i1;
+        v25.i256 = mload v0 i256;
+        v26.i256 = mload v1 i256;
+        v27.i1 = ne v25 0.i256;
+        v28.i1 = ne v26 0.i256;
+        v29.i1 = eq v27 v28;
+        v30.i1 = is_zero v29;
+        mstore v7 v30 i1;
+        v31.i256 = mload v0 i256;
+        v32.i256 = mload v1 i256;
+        v33.i1 = ne v31 0.i256;
+        v34.i1 = ne v32 0.i256;
+        v35.i1 = lt v33 v34;
+        mstore v8 v35 i1;
+        v36.i256 = mload v1 i256;
+        v37.i256 = mload v1 i256;
+        v38.i1 = ne v36 0.i256;
+        v39.i1 = ne v37 0.i256;
+        v40.i1 = gt v38 v39;
+        v41.i1 = is_zero v40;
+        mstore v9 v41 i1;
+        v42.i256 = mload v2 i256;
+        v43.i256 = mload v1 i256;
+        v44.i1 = ne v42 0.i256;
+        v45.i1 = ne v43 0.i256;
+        v46.i1 = gt v44 v45;
+        mstore v10 v46 i1;
+        v47.i256 = mload v2 i256;
+        v48.i256 = mload v2 i256;
+        v49.i1 = ne v47 0.i256;
+        v50.i1 = ne v48 0.i256;
+        v51.i1 = lt v49 v50;
+        v52.i1 = is_zero v51;
+        mstore v11 v52 i1;
+        v53.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v54.i1 = mload v6 i1;
+        v55.objref<i1> = obj.proj v53 0.i256;
+        obj.store v55 v54;
+        v56.i1 = mload v7 i1;
+        v57.objref<i1> = obj.proj v53 1.i256;
+        obj.store v57 v56;
+        v58.i1 = mload v8 i1;
+        v59.objref<i1> = obj.proj v53 2.i256;
+        obj.store v59 v58;
+        v60.i1 = mload v9 i1;
+        v61.objref<i1> = obj.proj v53 3.i256;
+        obj.store v61 v60;
+        v62.i1 = mload v10 i1;
+        v64.objref<i1> = obj.proj v53 4.i256;
+        obj.store v64 v62;
+        v65.i1 = mload v11 i1;
+        v67.objref<i1> = obj.proj v53 5.i256;
+        obj.store v67 v65;
+        v68.@__fe_layout_0 = obj.load v53;
+        obj.store v12 v68;
+        v69.@__fe_layout_0 = obj.load v12;
+        return v69;
+}
 
-object @Contract {
-    section runtime {
-        entry %__fe_sonatina_entry;
+
+object @main {
+    section main {
+        entry %__fe_main_root;
     }
 }
