@@ -5,6 +5,7 @@ use crate::{
     runtime::{
         RExpr, RStmt, RTerminator, ResolvedCodeRegion, RuntimeCodeRegion, RuntimeFunctionOwner,
         RuntimeObject, RuntimePackage, RuntimeProgramView, RuntimeSyntheticSpec,
+        code_region::{code_region_runtime_entry, code_region_section_name, code_region_symbol},
     },
     verify::{VerifyError, verify_runtime_body},
 };
@@ -254,24 +255,26 @@ fn verify_resolved_code_region<'db>(
             }
         }
     }
-    if let crate::runtime::RuntimeCodeRegionKey::ManualContractSection {
-        ref contract_name,
-        section,
-        callee,
-    } = region.region(db).key(db)
-    {
-        if region.root(db).instance(db) != callee {
+    if matches!(
+        region.region(db).key(db),
+        crate::runtime::RuntimeCodeRegionKey::ManualContractRoot { .. }
+    ) {
+        let expected_entry = code_region_runtime_entry(db, region.region(db))
+            .ok_or_else(|| VerifyError::InvalidCodeRegion(region.region(db)))?;
+        if region.root(db).instance(db) != expected_entry {
             return Err(VerifyError::InvalidCodeRegion(region.region(db)));
         }
-        let expected_symbol = match section {
-            hir::analysis::semantic::ManualContractSection::Init => {
-                format!("__{}_init", sanitize_symbol(contract_name))
-            }
-            hir::analysis::semantic::ManualContractSection::Runtime => {
-                format!("__{}_runtime", sanitize_symbol(contract_name))
-            }
-        };
+        let expected_symbol = code_region_symbol(db, region.region(db));
         if region.symbol(db) != expected_symbol {
+            return Err(VerifyError::InvalidCodeRegion(region.region(db)));
+        }
+        let expected_section = code_region_section_name(db, region.region(db))
+            .ok_or_else(|| VerifyError::InvalidCodeRegion(region.region(db)))?;
+        let source_section = match region.source(db).clone() {
+            crate::runtime::RuntimeSectionRef::Local { section, .. }
+            | crate::runtime::RuntimeSectionRef::External { section, .. } => section,
+        };
+        if source_section != expected_section {
             return Err(VerifyError::InvalidCodeRegion(region.region(db)));
         }
     }
@@ -287,11 +290,4 @@ fn resolve_package_object<'db>(
         .iter()
         .find(|candidate| candidate.name(db) == object.name(db))
         .copied()
-}
-
-fn sanitize_symbol(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-        .collect()
 }

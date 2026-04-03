@@ -1,4 +1,4 @@
-use hir::analysis::semantic::{FieldIndex, SEffectArg};
+use hir::analysis::semantic::FieldIndex;
 use hir::analysis::ty::ProviderAddressSpace;
 
 use crate::{
@@ -73,10 +73,10 @@ pub(super) fn address_space_from_provider(provider: ProviderAddressSpace) -> Add
     }
 }
 
-pub(super) fn effect_arg_address_space(arg: &SEffectArg<'_>) -> AddressSpaceKind {
-    address_space_from_provider(arg.provider.unwrap_or_else(|| {
+pub(super) fn resolved_address_space(provider: Option<ProviderAddressSpace>) -> AddressSpaceKind {
+    address_space_from_provider(provider.unwrap_or_else(|| {
         panic!(
-            "effect/provider args must carry an explicit resolved address space before rMIR lowering: {arg:?}"
+            "effect/provider args must carry an explicit resolved address space before rMIR lowering"
         )
     }))
 }

@@ -12,10 +12,10 @@ use crate::{
             get_or_build_semantic_instance, instantiate_with_generic_args,
         },
         semantic::{
-            FieldIndex, SConst, SExpr, SLocalId, SPlace, SPlaceElem, SStmt, STerminator,
-            SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticBody, SemanticConstRef,
-            VariantIndex, array_const, bool_const, bytes_const, enum_const, int_const,
-            int_ty_shape, normalize_int_to_shape, runtime_size_bytes, sem_const_from_ty,
+            FieldIndex, SConst, SExpr, SLocalId, SPlace, SPlaceElem, SStmt, SStmtKind,
+            STerminatorKind, SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticBody,
+            SemanticConstRef, VariantIndex, array_const, bool_const, bytes_const, enum_const,
+            int_const, int_ty_shape, normalize_int_to_shape, runtime_size_bytes, sem_const_from_ty,
             struct_const, tuple_const, unit_const,
         },
         ty::{
@@ -248,9 +248,9 @@ impl<'db> CtfeMachine<'db> {
                 self.exec_stmt(frame_idx, stmt, origin)?;
             }
             self.bump(origin)?;
-            match block.terminator {
-                STerminator::Goto(bb) => self.frames[frame_idx].current = bb.index(),
-                STerminator::Branch {
+            match block.terminator.kind {
+                STerminatorKind::Goto(bb) => self.frames[frame_idx].current = bb.index(),
+                STerminatorKind::Branch {
                     cond,
                     then_bb,
                     else_bb,
@@ -263,7 +263,7 @@ impl<'db> CtfeMachine<'db> {
                         else_bb.index()
                     };
                 }
-                STerminator::MatchEnum {
+                STerminatorKind::MatchEnum {
                     value,
                     cases,
                     default,
@@ -276,10 +276,10 @@ impl<'db> CtfeMachine<'db> {
                         .find(|(variant, _)| *variant == tag)
                         .map_or_else(|| default.map_or(0, |bb| bb.index()), |(_, bb)| bb.index());
                 }
-                STerminator::Return(Some(value)) => {
+                STerminatorKind::Return(Some(value)) => {
                     return self.read_slot(frame_idx, value, origin);
                 }
-                STerminator::Return(None) => return Ok(CtfeValue::Value(unit_const(self.db))),
+                STerminatorKind::Return(None) => return Ok(CtfeValue::Value(unit_const(self.db))),
             }
         }
     }
@@ -290,13 +290,13 @@ impl<'db> CtfeMachine<'db> {
         stmt: SStmt<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<(), CtfeError<'db>> {
-        match stmt {
-            SStmt::Assign { dst, expr } => {
+        match stmt.kind {
+            SStmtKind::Assign { dst, expr } => {
                 let ty = self.frames[frame_idx].body.locals[dst.index()].ty;
                 let value = self.eval_expr(frame_idx, ty, expr, origin)?;
                 self.frames[frame_idx].locals[dst.index()] = CtfeSlot::Init(value);
             }
-            SStmt::Store { dst, src } => {
+            SStmtKind::Store { dst, src } => {
                 let place = self.resolve_place(frame_idx, &dst, origin)?;
                 let CtfeValue::Value(value) = self.read_slot(frame_idx, src, origin)? else {
                     return Err(CtfeError::InvalidBorrow { origin });

@@ -11,6 +11,7 @@ use crate::{
         },
     },
     hir_def::{BinOp, ExprId, Func, StmtId, UnOp},
+    semantic::ProviderBinding,
 };
 
 use super::consts::SemConstId;
@@ -58,10 +59,10 @@ impl<'db> SemanticBody<'db> {
         let mut callees = Vec::new();
         for block in &self.blocks {
             for stmt in &block.stmts {
-                if let SStmt::Assign {
+                if let SStmtKind::Assign {
                     expr: SExpr::Call { callee, .. },
                     ..
-                } = stmt
+                } = &stmt.kind
                 {
                     callees.push(*callee);
                 }
@@ -76,6 +77,52 @@ pub struct SLocal<'db> {
     pub ty: TyId<'db>,
     pub mutability: Mutability,
     pub source: Option<LocalBinding<'db>>,
+    pub role: SemanticLocalRole<'db>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum ValueProvenance<'db> {
+    Ordinary,
+    RootProvider(ProviderBinding<'db>),
+    DerivedFrom(SLocalId),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum SemanticBindingLowering<'db> {
+    Erased,
+    DirectValue {
+        provenance: ValueProvenance<'db>,
+    },
+    PlaceCarrier {
+        value_ty: TyId<'db>,
+    },
+    PlaceBoundValue {
+        provider: ProviderBinding<'db>,
+        value_ty: TyId<'db>,
+    },
+    DirectCarrier {
+        provider: Option<ProviderBinding<'db>>,
+        target_ty: TyId<'db>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum SemanticLocalRole<'db> {
+    Erased,
+    DirectValue {
+        provenance: ValueProvenance<'db>,
+    },
+    PlaceCarrier {
+        value_ty: TyId<'db>,
+    },
+    PlaceBoundValue {
+        provider: ProviderBinding<'db>,
+        value_ty: TyId<'db>,
+    },
+    DirectCarrier {
+        provider: Option<ProviderBinding<'db>>,
+        target_ty: TyId<'db>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -113,11 +160,7 @@ pub enum ManualContractSection {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum SemanticCodeRegionRef<'db> {
-    ManualContractRoot {
-        func: Func<'db>,
-        contract_name: String,
-        section: ManualContractSection,
-    },
+    ManualContractRoot { func: Func<'db> },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -217,13 +260,25 @@ pub enum SConst<'db> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub enum SStmt<'db> {
+pub struct SStmt<'db> {
+    pub origin: SemOrigin<'db>,
+    pub kind: SStmtKind<'db>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum SStmtKind<'db> {
     Assign { dst: SLocalId, expr: SExpr<'db> },
     Store { dst: SPlace, src: SValueId },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub enum STerminator<'db> {
+pub struct STerminator<'db> {
+    pub origin: SemOrigin<'db>,
+    pub kind: STerminatorKind<'db>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum STerminatorKind<'db> {
     Goto(SBlockId),
     Branch {
         cond: SValueId,

@@ -28,67 +28,70 @@ func private %sum_loop(v0.i256) -> i256 {
         v11.*i256 = alloca i256;
         v12.*i256 = alloca i256;
         v13.*i256 = alloca i256;
+        v14.*i256 = alloca i256;
         mstore v1 v0 i256;
         mstore v5 0.i256 i256;
-        v15.i256 = mload v5 i256;
-        mstore v2 v15 i256;
+        v16.i256 = mload v5 i256;
+        mstore v2 v16 i256;
         mstore v6 0.i256 i256;
-        v16.i256 = mload v6 i256;
-        mstore v3 v16 i256;
+        v17.i256 = mload v6 i256;
+        mstore v3 v17 i256;
         jump block1;
 
     block1:
-        v17.i256 = mload v2 i256;
         v18.i256 = mload v1 i256;
-        v19.i1 = ne v17 0.i256;
-        v20.i1 = ne v18 0.i256;
-        v21.i1 = lt v19 v20;
-        mstore v7 v21 i1;
-        v22.i1 = mload v7 i1;
-        br v22 block2 block3;
+        mstore v14 v18 i256;
+        v19.i256 = mload v2 i256;
+        v20.i256 = mload v14 i256;
+        v21.i1 = ne v19 0.i256;
+        v22.i1 = ne v20 0.i256;
+        v23.i1 = lt v21 v22;
+        mstore v7 v23 i1;
+        v24.i1 = mload v7 i1;
+        br v24 block2 block3;
 
     block2:
         mstore v8 3.i256 i256;
-        v24.i256 = mload v2 i256;
-        v25.i256 = mload v8 i256;
-        (v26.i256, v27.i1) = evm_umodo v24 v25;
-        br v27 block4 block5;
+        v26.i256 = mload v2 i256;
+        v27.i256 = mload v8 i256;
+        (v28.i256, v29.i1) = evm_umodo v26 v27;
+        br v29 block4 block5;
 
     block3:
-        v44.i256 = mload v3 i256;
-        return v44;
+        v46.i256 = mload v3 i256;
+        return v46;
 
     block4:
         evm_revert 0.i256 0.i256;
 
     block5:
-        mstore v9 v26 i256;
-        v28.i256 = mload v9 i256;
-        mstore v4 v28 i256;
-        v29.constref<[i256; 3]> = const.ref $__fe_const_region_0;
-        v30.i256 = mload v4 i256;
-        v31.constref<i256> = const.index v29 v30;
-        v32.i256 = const.load v31;
-        mstore v10 v32 i256;
-        v33.i256 = mload v3 i256;
-        v34.i256 = mload v10 i256;
-        (v35.i256, v36.i1) = uaddo v33 v34;
-        br v36 block4 block6;
+        mstore v9 v28 i256;
+        v30.i256 = mload v9 i256;
+        mstore v4 v30 i256;
+        v31.constref<[i256; 3]> = const.ref $__fe_const_region_0;
+        v32.i256 = mload v4 i256;
+        v33.constref<i256> = const.index v31 v32;
+        v34.i256 = const.load v33;
+        mstore v10 v34 i256;
+        v35.i256 = mload v3 i256;
+        v36.i256 = mload v10 i256;
+        (v37.i256, v38.i1) = uaddo v35 v36;
+        br v38 block4 block6;
 
     block6:
-        mstore v11 v35 i256;
-        v37.i256 = mload v11 i256;
-        mstore v3 v37 i256;
+        mstore v11 v37 i256;
+        v39.i256 = mload v11 i256;
+        mstore v3 v39 i256;
         mstore v12 1.i256 i256;
-        v39.i256 = mload v2 i256;
-        v40.i256 = mload v12 i256;
-        (v41.i256, v42.i1) = uaddo v39 v40;
-        br v42 block4 block7;
+        v41.i256 = mload v2 i256;
+        v42.i256 = mload v12 i256;
+        (v43.i256, v44.i1) = uaddo v41 v42;
+        br v44 block4 block7;
 
     block7:
-        mstore v13 v41 i256;
-        v43.i256 = mload v13 i256;
-        mstore v2 v43 i256;
+        mstore v13 v43 i256;
+        v45.i256 = mload v13 i256;
+        mstore v2 v45 i256;
         jump block1;
 }
 

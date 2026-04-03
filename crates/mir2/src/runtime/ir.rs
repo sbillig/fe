@@ -1,9 +1,11 @@
 use cranelift_entity::{EntityRef, entity_impl};
 use hir::analysis::{
-    semantic::{FieldIndex, ManualContractSection, SemanticInstance},
+    semantic::{FieldIndex, SemanticInstance},
     ty::ty_def::TyId,
 };
-use hir::hir_def::{BinOp, Contract, TopLevelMod, UnOp};
+use hir::hir_def::{BinOp, Contract, Func, TopLevelMod, UnOp};
+use hir::projection::IndexSource;
+use hir::semantic::ProviderBinding;
 use salsa::Update;
 
 use crate::{
@@ -237,6 +239,8 @@ pub struct RuntimeBody<'db> {
     pub owner: RuntimeInstance<'db>,
     pub key: RuntimeInstanceKey<'db>,
     pub signature: RuntimeSignature<'db>,
+    pub semantic_locals: Vec<RuntimeLocalLowering<'db>>,
+    pub provider_bindings: Vec<RuntimeProviderBinding<'db>>,
     pub locals: Vec<RLocal<'db>>,
     pub blocks: Vec<RBlock<'db>>,
 }
@@ -262,13 +266,47 @@ impl<'db> RuntimeBody<'db> {
 pub struct RLocal<'db> {
     pub semantic_ty: TyId<'db>,
     pub carrier: RuntimeCarrier<'db>,
-    pub slot: LocalSlotKind<'db>,
+    pub root: RuntimeLocalRoot<'db>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub enum LocalSlotKind<'db> {
+pub enum RuntimeLocalRoot<'db> {
     None,
     Slot(RuntimeClass<'db>),
+    Handle(RuntimeClass<'db>),
+    Ptr {
+        space: AddressSpaceKind,
+        class: RuntimeClass<'db>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum RuntimeLocalLowering<'db> {
+    Erased,
+    DirectValue,
+    PlaceCarrier {
+        place_class: RuntimeClass<'db>,
+    },
+    PlaceBoundValue {
+        provider: RuntimeProviderBindingId,
+        place_class: RuntimeClass<'db>,
+    },
+    DirectCarrier {
+        provider: Option<RuntimeProviderBindingId>,
+        place_class: RuntimeClass<'db>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+pub struct RuntimeProviderBindingId(u32);
+entity_impl!(RuntimeProviderBindingId);
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct RuntimeProviderBinding<'db> {
+    pub provider: ProviderBinding<'db>,
+    pub value: RLocalId,
+    pub provider_class: RuntimeClass<'db>,
+    pub place_class: RuntimeClass<'db>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -308,10 +346,8 @@ pub enum RuntimeCodeRegionKey<'db> {
     ContractRuntime {
         contract: Contract<'db>,
     },
-    ManualContractSection {
-        contract_name: String,
-        section: ManualContractSection,
-        callee: RuntimeInstance<'db>,
+    ManualContractRoot {
+        func: Func<'db>,
     },
     FunctionRoot {
         symbol: String,
@@ -435,7 +471,7 @@ pub struct ContractInitAbiPlan<'db> {
     pub contract: Contract<'db>,
     pub payable: bool,
     pub user_init: Option<RuntimeInstance<'db>>,
-    pub field_bindings: Box<[ContractFieldBinding<'db>]>,
+    pub owner_effect_args: Box<[ContractEffectArgPlan<'db>]>,
     pub init_args: InitArgsPlan<'db>,
 }
 
@@ -445,9 +481,18 @@ pub struct ContractRecvAbiPlan<'db> {
     pub selector: u32,
     pub payable: bool,
     pub user_recv: RuntimeInstance<'db>,
-    pub field_bindings: Box<[ContractFieldBinding<'db>]>,
+    pub owner_effect_args: Box<[ContractEffectArgPlan<'db>]>,
     pub input: RuntimeInputPlan<'db>,
     pub ret: RuntimeReturnPlan<'db>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum ContractEffectArgPlan<'db> {
+    ContractField(ContractFieldBinding<'db>),
+    Placeholder {
+        declared_ty: TyId<'db>,
+        class: RuntimeClass<'db>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -542,6 +587,7 @@ pub enum RuntimeSectionRef<'db> {
 pub enum PlaceRoot<'db> {
     Slot(RLocalId),
     Handle(RValueId),
+    Provider(RuntimeProviderBindingId),
     Ptr {
         addr: RValueId,
         space: AddressSpaceKind,
@@ -558,7 +604,7 @@ pub struct RuntimePlace<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum PlaceElem {
     Field(FieldIndex),
-    Index(RValueId),
+    Index(IndexSource<RValueId>),
     VariantField(FieldIndex),
 }
 
@@ -579,6 +625,12 @@ pub enum ResolvedPlaceRootKind<'db> {
         value: RValueId,
         class: RuntimeClass<'db>,
     },
+    Provider {
+        binding: RuntimeProviderBindingId,
+        value: RLocalId,
+        provider_class: RuntimeClass<'db>,
+        class: RuntimeClass<'db>,
+    },
     Ptr {
         addr: RValueId,
         space: AddressSpaceKind,
@@ -593,7 +645,7 @@ pub enum ResolvedPlaceElem<'db> {
         class: RuntimeClass<'db>,
     },
     Index {
-        index: RValueId,
+        index: IndexSource<RValueId>,
         class: RuntimeClass<'db>,
     },
     VariantField {

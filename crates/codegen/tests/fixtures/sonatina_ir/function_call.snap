@@ -16,20 +16,24 @@ func private %add_one_0(v0.i64) -> i64 {
         v1.*i64 = alloca i64;
         v2.*i64 = alloca i64;
         v3.*i64 = alloca i64;
+        v4.*i64 = alloca i64;
         mstore v1 v0 i64;
         mstore v2 1.i64 i64;
-        v5.i64 = mload v1 i64;
-        v6.i64 = mload v2 i64;
-        (v7.i64, v8.i1) = uaddo v5 v6;
-        br v8 block1 block2;
+        v6.i256 = mload v1 i256;
+        v7.i64 = trunc v6 i64;
+        mstore v4 v7 i64;
+        v8.i64 = mload v4 i64;
+        v9.i64 = mload v2 i64;
+        (v10.i64, v11.i1) = uaddo v8 v9;
+        br v11 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        mstore v3 v7 i64;
-        v10.i64 = mload v3 i64;
-        return v10;
+        mstore v3 v10 i64;
+        v13.i64 = mload v3 i64;
+        return v13;
 }
 
 func private %add_one_1(v0.i64) -> i64 {
@@ -37,20 +41,24 @@ func private %add_one_1(v0.i64) -> i64 {
         v1.*i64 = alloca i64;
         v2.*i64 = alloca i64;
         v3.*i64 = alloca i64;
+        v4.*i64 = alloca i64;
         mstore v1 v0 i64;
         mstore v2 1.i64 i64;
-        v5.i64 = mload v1 i64;
-        v6.i64 = mload v2 i64;
-        (v7.i64, v8.i1) = uaddo v5 v6;
-        br v8 block1 block2;
+        v6.i256 = mload v1 i256;
+        v7.i64 = trunc v6 i64;
+        mstore v4 v7 i64;
+        v8.i64 = mload v4 i64;
+        v9.i64 = mload v2 i64;
+        (v10.i64, v11.i1) = uaddo v8 v9;
+        br v11 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        mstore v3 v7 i64;
-        v10.i64 = mload v3 i64;
-        return v10;
+        mstore v3 v10 i64;
+        v13.i64 = mload v3 i64;
+        return v13;
 }
 
 func private %call_add_one() -> i64 {

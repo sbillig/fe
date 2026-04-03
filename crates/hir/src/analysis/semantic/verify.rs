@@ -1,7 +1,7 @@
 use rustc_hash::FxHashSet;
 
 use crate::analysis::semantic::{
-    SBlockId, SLocalId, SStmt, STerminator, SemanticBody, VariantIndex,
+    SBlockId, SLocalId, SStmtKind, STerminatorKind, SemanticBody, VariantIndex,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -14,13 +14,13 @@ pub enum SemanticVerifyError {
 pub fn verify_semantic_body<'db>(body: &SemanticBody<'db>) -> Result<(), SemanticVerifyError> {
     for block in &body.blocks {
         for stmt in &block.stmts {
-            match stmt {
-                SStmt::Assign { dst, .. } => {
+            match &stmt.kind {
+                SStmtKind::Assign { dst, .. } => {
                     if body.local(*dst).is_none() {
                         return Err(SemanticVerifyError::MissingSemanticLocal(*dst));
                     }
                 }
-                SStmt::Store { dst, src } => {
+                SStmtKind::Store { dst, src } => {
                     if body.local(dst.local).is_none() {
                         return Err(SemanticVerifyError::MissingSemanticLocal(dst.local));
                     }
@@ -31,7 +31,7 @@ pub fn verify_semantic_body<'db>(body: &SemanticBody<'db>) -> Result<(), Semanti
             }
         }
 
-        if let STerminator::MatchEnum { cases, .. } = &block.terminator {
+        if let STerminatorKind::MatchEnum { cases, .. } = &block.terminator.kind {
             let mut seen = FxHashSet::default();
             for (variant, target) in cases.iter().copied() {
                 if !seen.insert(variant) {

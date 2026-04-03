@@ -16,9 +16,15 @@ func private %__fe_main_root() {
 func private %call_unit_method(v0.@__fe_layout_0) {
     block0:
         v1.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v2.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v3.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
         obj.store v1 v0;
-        v2.@__fe_layout_0 = obj.load v1;
-        call %increment_0 v2;
+        v4.@__fe_layout_0 = obj.load v1;
+        obj.store v2 v4;
+        v5.@__fe_layout_0 = obj.load v1;
+        obj.store v3 v5;
+        v6.@__fe_layout_0 = obj.load v3;
+        call %increment_0 v6;
         return;
 }
 

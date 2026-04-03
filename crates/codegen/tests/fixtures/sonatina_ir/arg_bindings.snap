@@ -17,22 +17,30 @@ func private %arg_bindings(v0.i64, v1.i64) -> i64 {
         v3.*i64 = alloca i64;
         v4.*i64 = alloca i64;
         v5.*i64 = alloca i64;
+        v6.*i64 = alloca i64;
+        v7.*i64 = alloca i64;
         mstore v2 v0 i64;
         mstore v3 v1 i64;
-        v6.i64 = mload v2 i64;
-        v7.i64 = mload v3 i64;
-        (v8.i64, v9.i1) = uaddo v6 v7;
-        br v9 block1 block2;
+        v8.i256 = mload v2 i256;
+        v9.i64 = trunc v8 i64;
+        mstore v6 v9 i64;
+        v10.i256 = mload v3 i256;
+        v11.i64 = trunc v10 i64;
+        mstore v7 v11 i64;
+        v12.i64 = mload v6 i64;
+        v13.i64 = mload v7 i64;
+        (v14.i64, v15.i1) = uaddo v12 v13;
+        br v15 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        mstore v5 v8 i64;
-        v11.i64 = mload v5 i64;
-        mstore v4 v11 i64;
-        v12.i64 = mload v4 i64;
-        return v12;
+        mstore v5 v14 i64;
+        v17.i64 = mload v5 i64;
+        mstore v4 v17 i64;
+        v18.i64 = mload v4 i64;
+        return v18;
 }
 
 

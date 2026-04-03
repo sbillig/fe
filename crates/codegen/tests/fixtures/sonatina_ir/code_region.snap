@@ -6,134 +6,155 @@ input_file: crates/codegen/tests/fixtures/code_region.fe
 target = "evm-ethereum-osaka"
 
 type @__fe_layout_0 = {i256};
+type @__fe_layout_1 = {};
+type @__fe_layout_2 = {};
+type @__fe_layout_3 = {};
+type @__fe_layout_4 = {};
 
 func private %allocate_0(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
         v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
+        v3.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
         v4.*i256 = alloca i256;
         v5.*i256 = alloca i256;
-        v6.*i1 = alloca i1;
-        v7.*i256 = alloca i256;
+        v6.*i256 = alloca i256;
+        v7.*i1 = alloca i1;
         v8.*i256 = alloca i256;
-        v9.*i256 = alloca i256;
+        v9.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
         v10.*i256 = alloca i256;
+        v11.*i256 = alloca i256;
+        v12.*i256 = alloca i256;
+        v13.*i256 = alloca i256;
+        v14.*i256 = alloca i256;
         mstore v1 v0 i256;
-        mstore v3 64.i256 i256;
-        v12.i256 = mload v3 i256;
-        v13.i256 = call %mload_0 v12;
-        mstore v10 v13 i256;
-        v14.i256 = mload v10 i256;
-        mstore v4 v14 i256;
-        v15.i256 = mload v4 i256;
-        mstore v2 v15 i256;
-        mstore v5 0.i256 i256;
-        v17.i256 = mload v2 i256;
-        v18.i256 = mload v5 i256;
-        v19.i1 = ne v17 0.i256;
-        v20.i1 = ne v18 0.i256;
-        v21.i1 = eq v19 v20;
-        mstore v6 v21 i1;
-        v22.i1 = mload v6 i1;
-        br v22 block1 block2;
+        mstore v4 64.i256 i256;
+        v16.i256 = mload v4 i256;
+        v17.i256 = call %mload_0 v16;
+        mstore v12 v17 i256;
+        v18.i256 = mload v12 i256;
+        mstore v5 v18 i256;
+        v19.i256 = mload v5 i256;
+        mstore v2 v19 i256;
+        mstore v6 0.i256 i256;
+        v21.i256 = mload v6 i256;
+        mstore v13 v21 i256;
+        v22.i256 = mload v2 i256;
+        v23.i256 = mload v13 i256;
+        v24.i1 = ne v22 0.i256;
+        v25.i1 = ne v23 0.i256;
+        v26.i1 = eq v24 v25;
+        mstore v7 v26 i1;
+        v27.i1 = mload v7 i1;
+        br v27 block1 block2;
 
     block1:
-        mstore v7 96.i256 i256;
-        v24.i256 = mload v7 i256;
-        mstore v2 v24 i256;
+        mstore v8 96.i256 i256;
+        v29.i256 = mload v8 i256;
+        mstore v2 v29 i256;
         jump block3;
 
     block2:
         jump block3;
 
     block3:
-        mstore v8 64.i256 i256;
-        v25.i256 = mload v2 i256;
-        v26.i256 = mload v1 i256;
-        (v27.i256, v28.i1) = uaddo v25 v26;
-        br v28 block4 block5;
+        mstore v10 64.i256 i256;
+        v30.i256 = mload v1 i256;
+        mstore v14 v30 i256;
+        v31.i256 = mload v2 i256;
+        v32.i256 = mload v14 i256;
+        (v33.i256, v34.i1) = uaddo v31 v32;
+        br v34 block4 block5;
 
     block4:
         evm_revert 0.i256 0.i256;
 
     block5:
-        mstore v9 v27 i256;
-        v29.i256 = mload v8 i256;
-        v30.i256 = mload v9 i256;
-        call %mstore_0 v29 v30;
-        v32.i256 = mload v2 i256;
-        return v32;
+        mstore v11 v33 i256;
+        v35.i256 = mload v10 i256;
+        v36.i256 = mload v11 i256;
+        call %mstore_0 v35 v36;
+        v38.i256 = mload v2 i256;
+        return v38;
 }
 
 func private %allocate_1(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
         v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
+        v3.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
         v4.*i256 = alloca i256;
         v5.*i256 = alloca i256;
-        v6.*i1 = alloca i1;
-        v7.*i256 = alloca i256;
+        v6.*i256 = alloca i256;
+        v7.*i1 = alloca i1;
         v8.*i256 = alloca i256;
-        v9.*i256 = alloca i256;
+        v9.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
         v10.*i256 = alloca i256;
+        v11.*i256 = alloca i256;
+        v12.*i256 = alloca i256;
+        v13.*i256 = alloca i256;
+        v14.*i256 = alloca i256;
         mstore v1 v0 i256;
-        mstore v3 64.i256 i256;
-        v12.i256 = mload v3 i256;
-        v13.i256 = call %mload_1 v12;
-        mstore v10 v13 i256;
-        v14.i256 = mload v10 i256;
-        mstore v4 v14 i256;
-        v15.i256 = mload v4 i256;
-        mstore v2 v15 i256;
-        mstore v5 0.i256 i256;
-        v17.i256 = mload v2 i256;
-        v18.i256 = mload v5 i256;
-        v19.i1 = ne v17 0.i256;
-        v20.i1 = ne v18 0.i256;
-        v21.i1 = eq v19 v20;
-        mstore v6 v21 i1;
-        v22.i1 = mload v6 i1;
-        br v22 block1 block2;
+        mstore v4 64.i256 i256;
+        v16.i256 = mload v4 i256;
+        v17.i256 = call %mload_1 v16;
+        mstore v12 v17 i256;
+        v18.i256 = mload v12 i256;
+        mstore v5 v18 i256;
+        v19.i256 = mload v5 i256;
+        mstore v2 v19 i256;
+        mstore v6 0.i256 i256;
+        v21.i256 = mload v6 i256;
+        mstore v13 v21 i256;
+        v22.i256 = mload v2 i256;
+        v23.i256 = mload v13 i256;
+        v24.i1 = ne v22 0.i256;
+        v25.i1 = ne v23 0.i256;
+        v26.i1 = eq v24 v25;
+        mstore v7 v26 i1;
+        v27.i1 = mload v7 i1;
+        br v27 block1 block2;
 
     block1:
-        mstore v7 96.i256 i256;
-        v24.i256 = mload v7 i256;
-        mstore v2 v24 i256;
+        mstore v8 96.i256 i256;
+        v29.i256 = mload v8 i256;
+        mstore v2 v29 i256;
         jump block3;
 
     block2:
         jump block3;
 
     block3:
-        mstore v8 64.i256 i256;
-        v25.i256 = mload v2 i256;
-        v26.i256 = mload v1 i256;
-        (v27.i256, v28.i1) = uaddo v25 v26;
-        br v28 block4 block5;
+        mstore v10 64.i256 i256;
+        v30.i256 = mload v1 i256;
+        mstore v14 v30 i256;
+        v31.i256 = mload v2 i256;
+        v32.i256 = mload v14 i256;
+        (v33.i256, v34.i1) = uaddo v31 v32;
+        br v34 block4 block5;
 
     block4:
         evm_revert 0.i256 0.i256;
 
     block5:
-        mstore v9 v27 i256;
-        v29.i256 = mload v8 i256;
-        v30.i256 = mload v9 i256;
-        call %mstore_1 v29 v30;
-        v32.i256 = mload v2 i256;
-        return v32;
+        mstore v11 v33 i256;
+        v35.i256 = mload v10 i256;
+        v36.i256 = mload v11 i256;
+        call %mstore_1 v35 v36;
+        v38.i256 = mload v2 i256;
+        return v38;
 }
 
 func private %balance() {
     block0:
-        v0.*i256 = alloca i256;
+        v0.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
         v1.*i256 = alloca i256;
-        mstore v0 0.i256 i256;
+        v2.*i256 = alloca i256;
         mstore v1 0.i256 i256;
-        v3.i256 = mload v0 i256;
+        mstore v2 0.i256 i256;
         v4.i256 = mload v1 i256;
-        call %return_data_0 v3 v4;
+        v5.i256 = mload v2 i256;
+        call %return_data_0 v4 v5;
         unreachable;
 }
 
@@ -142,13 +163,31 @@ func private %calldatacopy(v0.i256, v1.i256, v2.i256) {
         v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
         v5.*i256 = alloca i256;
+        v6.*i256 = alloca i256;
+        v7.*i256 = alloca i256;
+        v8.*i256 = alloca i256;
+        v9.*i256 = alloca i256;
+        v10.*i256 = alloca i256;
+        v11.*i256 = alloca i256;
         mstore v3 v0 i256;
         mstore v4 v1 i256;
         mstore v5 v2 i256;
-        v6.i256 = mload v3 i256;
-        v7.i256 = mload v4 i256;
-        v8.i256 = mload v5 i256;
-        evm_calldata_copy v6 v7 v8;
+        v12.i256 = mload v3 i256;
+        mstore v6 v12 i256;
+        v13.i256 = mload v4 i256;
+        mstore v7 v13 i256;
+        v14.i256 = mload v5 i256;
+        mstore v8 v14 i256;
+        v15.i256 = mload v3 i256;
+        mstore v9 v15 i256;
+        v16.i256 = mload v4 i256;
+        mstore v10 v16 i256;
+        v17.i256 = mload v5 i256;
+        mstore v11 v17 i256;
+        v18.i256 = mload v9 i256;
+        v19.i256 = mload v10 i256;
+        v20.i256 = mload v11 i256;
+        evm_calldata_copy v18 v19 v20;
         return;
 }
 
@@ -158,14 +197,20 @@ func private %calldataload(v0.i256) -> i256 {
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
+        v5.*i256 = alloca i256;
+        v6.*i256 = alloca i256;
         mstore v1 v0 i256;
-        v5.i256 = mload v1 i256;
-        v6.i256 = evm_calldata_load v5;
-        mstore v4 v6 i256;
-        v7.i256 = mload v4 i256;
-        mstore v2 v7 i256;
-        v8.i256 = mload v2 i256;
-        return v8;
+        v7.i256 = mload v1 i256;
+        mstore v3 v7 i256;
+        v8.i256 = mload v1 i256;
+        mstore v5 v8 i256;
+        v9.i256 = mload v5 i256;
+        v10.i256 = evm_calldata_load v9;
+        mstore v6 v10 i256;
+        v11.i256 = mload v6 i256;
+        mstore v2 v11 i256;
+        v12.i256 = mload v2 i256;
+        return v12;
 }
 
 func private %child_init() {
@@ -223,13 +268,31 @@ func private %codecopy_0(v0.i256, v1.i256, v2.i256) {
         v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
         v5.*i256 = alloca i256;
+        v6.*i256 = alloca i256;
+        v7.*i256 = alloca i256;
+        v8.*i256 = alloca i256;
+        v9.*i256 = alloca i256;
+        v10.*i256 = alloca i256;
+        v11.*i256 = alloca i256;
         mstore v3 v0 i256;
         mstore v4 v1 i256;
         mstore v5 v2 i256;
-        v6.i256 = mload v3 i256;
-        v7.i256 = mload v4 i256;
-        v8.i256 = mload v5 i256;
-        evm_code_copy v6 v7 v8;
+        v12.i256 = mload v3 i256;
+        mstore v6 v12 i256;
+        v13.i256 = mload v4 i256;
+        mstore v7 v13 i256;
+        v14.i256 = mload v5 i256;
+        mstore v8 v14 i256;
+        v15.i256 = mload v3 i256;
+        mstore v9 v15 i256;
+        v16.i256 = mload v4 i256;
+        mstore v10 v16 i256;
+        v17.i256 = mload v5 i256;
+        mstore v11 v17 i256;
+        v18.i256 = mload v9 i256;
+        v19.i256 = mload v10 i256;
+        v20.i256 = mload v11 i256;
+        evm_code_copy v18 v19 v20;
         return;
 }
 
@@ -238,13 +301,31 @@ func private %codecopy_1(v0.i256, v1.i256, v2.i256) {
         v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
         v5.*i256 = alloca i256;
+        v6.*i256 = alloca i256;
+        v7.*i256 = alloca i256;
+        v8.*i256 = alloca i256;
+        v9.*i256 = alloca i256;
+        v10.*i256 = alloca i256;
+        v11.*i256 = alloca i256;
         mstore v3 v0 i256;
         mstore v4 v1 i256;
         mstore v5 v2 i256;
-        v6.i256 = mload v3 i256;
-        v7.i256 = mload v4 i256;
-        v8.i256 = mload v5 i256;
-        evm_code_copy v6 v7 v8;
+        v12.i256 = mload v3 i256;
+        mstore v6 v12 i256;
+        v13.i256 = mload v4 i256;
+        mstore v7 v13 i256;
+        v14.i256 = mload v5 i256;
+        mstore v8 v14 i256;
+        v15.i256 = mload v3 i256;
+        mstore v9 v15 i256;
+        v16.i256 = mload v4 i256;
+        mstore v10 v16 i256;
+        v17.i256 = mload v5 i256;
+        mstore v11 v17 i256;
+        v18.i256 = mload v9 i256;
+        v19.i256 = mload v10 i256;
+        v20.i256 = mload v11 i256;
+        evm_code_copy v18 v19 v20;
         return;
 }
 
@@ -253,13 +334,31 @@ func private %codecopy_2(v0.i256, v1.i256, v2.i256) {
         v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
         v5.*i256 = alloca i256;
+        v6.*i256 = alloca i256;
+        v7.*i256 = alloca i256;
+        v8.*i256 = alloca i256;
+        v9.*i256 = alloca i256;
+        v10.*i256 = alloca i256;
+        v11.*i256 = alloca i256;
         mstore v3 v0 i256;
         mstore v4 v1 i256;
         mstore v5 v2 i256;
-        v6.i256 = mload v3 i256;
-        v7.i256 = mload v4 i256;
-        v8.i256 = mload v5 i256;
-        evm_code_copy v6 v7 v8;
+        v12.i256 = mload v3 i256;
+        mstore v6 v12 i256;
+        v13.i256 = mload v4 i256;
+        mstore v7 v13 i256;
+        v14.i256 = mload v5 i256;
+        mstore v8 v14 i256;
+        v15.i256 = mload v3 i256;
+        mstore v9 v15 i256;
+        v16.i256 = mload v4 i256;
+        mstore v10 v16 i256;
+        v17.i256 = mload v5 i256;
+        mstore v11 v17 i256;
+        v18.i256 = mload v9 i256;
+        v19.i256 = mload v10 i256;
+        v20.i256 = mload v11 i256;
+        evm_code_copy v18 v19 v20;
         return;
 }
 
@@ -273,26 +372,50 @@ func private %create2_raw(v0.i256, v1.i256, v2.i256, v3.i256) -> @__fe_layout_0 
         v9.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
         v10.*i256 = alloca i256;
         v11.*i256 = alloca i256;
+        v12.*i256 = alloca i256;
+        v13.*i256 = alloca i256;
+        v14.*i256 = alloca i256;
+        v15.*i256 = alloca i256;
+        v16.*i256 = alloca i256;
+        v17.*i256 = alloca i256;
+        v18.*i256 = alloca i256;
+        v19.*i256 = alloca i256;
         mstore v4 v0 i256;
         mstore v5 v1 i256;
         mstore v6 v2 i256;
         mstore v7 v3 i256;
-        v12.i256 = mload v4 i256;
-        v13.i256 = mload v5 i256;
-        v14.i256 = mload v6 i256;
-        v15.i256 = mload v7 i256;
-        v16.i256 = evm_create2 v12 v13 v14 v15;
-        mstore v11 v16 i256;
-        v17.i256 = mload v11 i256;
-        mstore v8 v17 i256;
-        v18.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
-        v19.i256 = mload v8 i256;
-        v21.objref<i256> = obj.proj v18 0.i256;
-        obj.store v21 v19;
-        v22.@__fe_layout_0 = obj.load v18;
-        obj.store v9 v22;
-        v23.@__fe_layout_0 = obj.load v9;
-        return v23;
+        v20.i256 = mload v4 i256;
+        mstore v10 v20 i256;
+        v21.i256 = mload v5 i256;
+        mstore v11 v21 i256;
+        v22.i256 = mload v6 i256;
+        mstore v12 v22 i256;
+        v23.i256 = mload v7 i256;
+        mstore v13 v23 i256;
+        v24.i256 = mload v4 i256;
+        mstore v15 v24 i256;
+        v25.i256 = mload v5 i256;
+        mstore v16 v25 i256;
+        v26.i256 = mload v6 i256;
+        mstore v17 v26 i256;
+        v27.i256 = mload v7 i256;
+        mstore v18 v27 i256;
+        v28.i256 = mload v15 i256;
+        v29.i256 = mload v16 i256;
+        v30.i256 = mload v17 i256;
+        v31.i256 = mload v18 i256;
+        v32.i256 = evm_create2 v28 v29 v30 v31;
+        mstore v19 v32 i256;
+        v33.i256 = mload v19 i256;
+        mstore v8 v33 i256;
+        v34.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v35.i256 = mload v8 i256;
+        v37.objref<i256> = obj.proj v34 0.i256;
+        obj.store v37 v35;
+        v38.@__fe_layout_0 = obj.load v34;
+        obj.store v9 v38;
+        v39.@__fe_layout_0 = obj.load v9;
+        return v39;
 }
 
 func private %init() {
@@ -375,14 +498,20 @@ func private %mload_0(v0.i256) -> i256 {
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
+        v5.*i256 = alloca i256;
+        v6.*i256 = alloca i256;
         mstore v1 v0 i256;
-        v5.i256 = mload v1 i256;
-        v6.i256 = mload v5 i256;
-        mstore v4 v6 i256;
-        v7.i256 = mload v4 i256;
-        mstore v2 v7 i256;
-        v8.i256 = mload v2 i256;
-        return v8;
+        v7.i256 = mload v1 i256;
+        mstore v3 v7 i256;
+        v8.i256 = mload v1 i256;
+        mstore v5 v8 i256;
+        v9.i256 = mload v5 i256;
+        v10.i256 = mload v9 i256;
+        mstore v6 v10 i256;
+        v11.i256 = mload v6 i256;
+        mstore v2 v11 i256;
+        v12.i256 = mload v2 i256;
+        return v12;
 }
 
 func private %mload_1(v0.i256) -> i256 {
@@ -391,25 +520,43 @@ func private %mload_1(v0.i256) -> i256 {
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
+        v5.*i256 = alloca i256;
+        v6.*i256 = alloca i256;
         mstore v1 v0 i256;
-        v5.i256 = mload v1 i256;
-        v6.i256 = mload v5 i256;
-        mstore v4 v6 i256;
-        v7.i256 = mload v4 i256;
-        mstore v2 v7 i256;
-        v8.i256 = mload v2 i256;
-        return v8;
+        v7.i256 = mload v1 i256;
+        mstore v3 v7 i256;
+        v8.i256 = mload v1 i256;
+        mstore v5 v8 i256;
+        v9.i256 = mload v5 i256;
+        v10.i256 = mload v9 i256;
+        mstore v6 v10 i256;
+        v11.i256 = mload v6 i256;
+        mstore v2 v11 i256;
+        v12.i256 = mload v2 i256;
+        return v12;
 }
 
 func private %mstore_0(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        v5.*i256 = alloca i256;
+        v6.*i256 = alloca i256;
+        v7.*i256 = alloca i256;
         mstore v2 v0 i256;
         mstore v3 v1 i256;
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        mstore v4 v5 i256;
+        v8.i256 = mload v2 i256;
+        mstore v4 v8 i256;
+        v9.i256 = mload v3 i256;
+        mstore v5 v9 i256;
+        v10.i256 = mload v2 i256;
+        mstore v6 v10 i256;
+        v11.i256 = mload v3 i256;
+        mstore v7 v11 i256;
+        v12.i256 = mload v6 i256;
+        v13.i256 = mload v7 i256;
+        mstore v12 v13 i256;
         return;
 }
 
@@ -417,103 +564,188 @@ func private %mstore_1(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        v5.*i256 = alloca i256;
+        v6.*i256 = alloca i256;
+        v7.*i256 = alloca i256;
         mstore v2 v0 i256;
         mstore v3 v1 i256;
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        mstore v4 v5 i256;
+        v8.i256 = mload v2 i256;
+        mstore v4 v8 i256;
+        v9.i256 = mload v3 i256;
+        mstore v5 v9 i256;
+        v10.i256 = mload v2 i256;
+        mstore v6 v10 i256;
+        v11.i256 = mload v3 i256;
+        mstore v7 v11 i256;
+        v12.i256 = mload v6 i256;
+        v13.i256 = mload v7 i256;
+        mstore v12 v13 i256;
         return;
 }
 
 func private %read_selector() -> i256 {
     block0:
         v0.*i256 = alloca i256;
-        v1.*i256 = alloca i256;
+        v1.objref<@__fe_layout_3> = obj.alloc @__fe_layout_3;
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
         v5.*i256 = alloca i256;
-        mstore v1 0.i256 i256;
-        v7.i256 = mload v1 i256;
-        v8.i256 = call %calldataload v7;
-        mstore v5 v8 i256;
-        v9.i256 = mload v5 i256;
-        mstore v2 v9 i256;
-        v10.i256 = mload v2 i256;
-        mstore v0 v10 i256;
-        mstore v3 224.i256 i256;
-        v12.i256 = mload v0 i256;
-        v13.i256 = mload v3 i256;
-        v14.i256 = shr v13 v12;
-        mstore v4 v14 i256;
-        v15.i256 = mload v4 i256;
-        return v15;
+        v6.*i256 = alloca i256;
+        mstore v2 0.i256 i256;
+        v8.i256 = mload v2 i256;
+        v9.i256 = call %calldataload v8;
+        mstore v6 v9 i256;
+        v10.i256 = mload v6 i256;
+        mstore v3 v10 i256;
+        v11.i256 = mload v3 i256;
+        mstore v0 v11 i256;
+        mstore v4 224.i256 i256;
+        v13.i256 = mload v0 i256;
+        v14.i256 = mload v4 i256;
+        v15.i256 = shr v14 v13;
+        mstore v5 v15 i256;
+        v16.i256 = mload v5 i256;
+        return v16;
 }
 
 func private %return_data_0(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        v5.*i256 = alloca i256;
+        v6.*i256 = alloca i256;
+        v7.*i256 = alloca i256;
         mstore v2 v0 i256;
         mstore v3 v1 i256;
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        v8.i256 = mload v2 i256;
+        mstore v4 v8 i256;
+        v9.i256 = mload v3 i256;
+        mstore v5 v9 i256;
+        v10.i256 = mload v2 i256;
+        mstore v6 v10 i256;
+        v11.i256 = mload v3 i256;
+        mstore v7 v11 i256;
+        v12.i256 = mload v6 i256;
+        v13.i256 = mload v7 i256;
+        evm_return v12 v13;
 }
 
 func private %return_data_1(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        v5.*i256 = alloca i256;
+        v6.*i256 = alloca i256;
+        v7.*i256 = alloca i256;
         mstore v2 v0 i256;
         mstore v3 v1 i256;
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        v8.i256 = mload v2 i256;
+        mstore v4 v8 i256;
+        v9.i256 = mload v3 i256;
+        mstore v5 v9 i256;
+        v10.i256 = mload v2 i256;
+        mstore v6 v10 i256;
+        v11.i256 = mload v3 i256;
+        mstore v7 v11 i256;
+        v12.i256 = mload v6 i256;
+        v13.i256 = mload v7 i256;
+        evm_return v12 v13;
 }
 
 func private %return_data_2(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        v5.*i256 = alloca i256;
+        v6.*i256 = alloca i256;
+        v7.*i256 = alloca i256;
         mstore v2 v0 i256;
         mstore v3 v1 i256;
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        v8.i256 = mload v2 i256;
+        mstore v4 v8 i256;
+        v9.i256 = mload v3 i256;
+        mstore v5 v9 i256;
+        v10.i256 = mload v2 i256;
+        mstore v6 v10 i256;
+        v11.i256 = mload v3 i256;
+        mstore v7 v11 i256;
+        v12.i256 = mload v6 i256;
+        v13.i256 = mload v7 i256;
+        evm_return v12 v13;
 }
 
 func private %return_data_3(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        v5.*i256 = alloca i256;
+        v6.*i256 = alloca i256;
+        v7.*i256 = alloca i256;
         mstore v2 v0 i256;
         mstore v3 v1 i256;
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        v8.i256 = mload v2 i256;
+        mstore v4 v8 i256;
+        v9.i256 = mload v3 i256;
+        mstore v5 v9 i256;
+        v10.i256 = mload v2 i256;
+        mstore v6 v10 i256;
+        v11.i256 = mload v3 i256;
+        mstore v7 v11 i256;
+        v12.i256 = mload v6 i256;
+        v13.i256 = mload v7 i256;
+        evm_return v12 v13;
 }
 
 func private %return_data_4(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        v5.*i256 = alloca i256;
+        v6.*i256 = alloca i256;
+        v7.*i256 = alloca i256;
         mstore v2 v0 i256;
         mstore v3 v1 i256;
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        v8.i256 = mload v2 i256;
+        mstore v4 v8 i256;
+        v9.i256 = mload v3 i256;
+        mstore v5 v9 i256;
+        v10.i256 = mload v2 i256;
+        mstore v6 v10 i256;
+        v11.i256 = mload v3 i256;
+        mstore v7 v11 i256;
+        v12.i256 = mload v6 i256;
+        v13.i256 = mload v7 i256;
+        evm_return v12 v13;
 }
 
 func private %return_data_5(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        v5.*i256 = alloca i256;
+        v6.*i256 = alloca i256;
+        v7.*i256 = alloca i256;
         mstore v2 v0 i256;
         mstore v3 v1 i256;
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        v8.i256 = mload v2 i256;
+        mstore v4 v8 i256;
+        v9.i256 = mload v3 i256;
+        mstore v5 v9 i256;
+        v10.i256 = mload v2 i256;
+        mstore v6 v10 i256;
+        v11.i256 = mload v3 i256;
+        mstore v7 v11 i256;
+        v12.i256 = mload v6 i256;
+        v13.i256 = mload v7 i256;
+        evm_return v12 v13;
 }
 
 func private %runtime() {
@@ -576,13 +808,14 @@ func private %runtime() {
 
 func private %transfer() {
     block0:
-        v0.*i256 = alloca i256;
+        v0.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v1.*i256 = alloca i256;
-        mstore v0 0.i256 i256;
+        v2.*i256 = alloca i256;
         mstore v1 0.i256 i256;
-        v3.i256 = mload v0 i256;
+        mstore v2 0.i256 i256;
         v4.i256 = mload v1 i256;
-        call %return_data_1 v3 v4;
+        v5.i256 = mload v2 i256;
+        call %return_data_1 v4 v5;
         unreachable;
 }
 

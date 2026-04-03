@@ -19,7 +19,10 @@ mod pattern;
 mod place;
 
 pub use body::lower_to_smir;
-pub use effects::owner_effect_bindings;
+pub use effects::{
+    effect_param_site, owner_effect_bindings, resolved_provider_binding_for_owner_effect,
+    same_owner_effect_binding,
+};
 
 pub(crate) fn expr_lowers_to_semantic_call<'db>(
     db: &'db dyn HirAnalysisDb,

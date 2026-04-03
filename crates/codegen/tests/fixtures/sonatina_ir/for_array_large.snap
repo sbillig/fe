@@ -116,14 +116,17 @@ func private %get(v0.[i64; 10], v1.i256) -> i64 {
         v2.objref<[i64; 10]> = obj.alloc [i64; 10];
         v3.*i256 = alloca i256;
         v4.*i64 = alloca i64;
+        v5.*i256 = alloca i256;
         obj.store v2 v0;
         mstore v3 v1 i256;
-        v5.i256 = mload v3 i256;
-        v6.objref<i64> = obj.index v2 v5;
-        v7.i64 = obj.load v6;
-        mstore v4 v7 i64;
-        v8.i64 = mload v4 i64;
-        return v8;
+        v6.i256 = mload v3 i256;
+        mstore v5 v6 i256;
+        v7.i256 = mload v5 i256;
+        v8.objref<i64> = obj.index v2 v7;
+        v9.i64 = obj.load v8;
+        mstore v4 v9 i64;
+        v10.i64 = mload v4 i64;
+        return v10;
 }
 
 func private %len(v0.[i64; 10]) -> i256 {

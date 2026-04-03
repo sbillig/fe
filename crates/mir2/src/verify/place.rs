@@ -1,4 +1,6 @@
+use cranelift_entity::EntityRef;
 use hir::analysis::semantic::FieldIndex;
+use hir::projection::IndexSource;
 
 use crate::{
     db::MirDb,
@@ -34,6 +36,14 @@ pub fn resolve_runtime_place<'db>(
             .value_class(*value)
             .cloned()
             .ok_or(VerifyError::ErasedRuntimeValue(*value))?,
+        PlaceRoot::Provider(binding) => body
+            .provider_bindings
+            .get(binding.index())
+            .map(|binding| binding.place_class.clone())
+            .ok_or(VerifyError::InvalidPlace(RuntimeClass::RawAddr {
+                space: crate::runtime::AddressSpaceKind::Memory,
+                target: None,
+            }))?,
         PlaceRoot::Ptr { addr, space, class } => {
             match body
                 .value_class(*addr)
@@ -66,6 +76,29 @@ pub fn resolve_runtime_place<'db>(
             value: *value,
             class: current.clone(),
         },
+        PlaceRoot::Provider(binding) => {
+            let provider =
+                body.provider_bindings
+                    .get(binding.index())
+                    .ok_or(VerifyError::InvalidPlace(RuntimeClass::RawAddr {
+                        space: crate::runtime::AddressSpaceKind::Memory,
+                        target: None,
+                    }))?;
+            match &provider.provider_class {
+                RuntimeClass::RawAddr { .. }
+                | RuntimeClass::Handle {
+                    kind: crate::runtime::HandleKind::Provider { .. },
+                    ..
+                } => {}
+                class => return Err(VerifyError::InvalidPlace(class.clone())),
+            }
+            ResolvedPlaceRootKind::Provider {
+                binding: *binding,
+                value: provider.value,
+                provider_class: provider.provider_class.clone(),
+                class: current.clone(),
+            }
+        }
         PlaceRoot::Ptr { addr, space, .. } => ResolvedPlaceRootKind::Ptr {
             addr: *addr,
             space: *space,
@@ -84,9 +117,11 @@ pub fn resolve_runtime_place<'db>(
                 });
             }
             PlaceElem::Index(index) => {
-                let _ = body
-                    .value_class(*index)
-                    .ok_or(VerifyError::ErasedRuntimeValue(*index))?;
+                if let IndexSource::Dynamic(index) = index {
+                    let _ = body
+                        .value_class(*index)
+                        .ok_or(VerifyError::ErasedRuntimeValue(*index))?;
+                }
                 current = project_index(program, current)?;
                 path.push(ResolvedPlaceElem::Index {
                     index: *index,
@@ -112,7 +147,7 @@ pub fn resolve_runtime_place<'db>(
     }
 
     if place.path.is_empty()
-        && let PlaceRoot::Handle(_) = &place.root
+        && let PlaceRoot::Handle(_) | PlaceRoot::Provider(_) = &place.root
         && let RuntimeClass::Handle { layout, .. } = current
     {
         current = RuntimeClass::AggregateValue { layout };

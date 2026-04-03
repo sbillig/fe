@@ -11,7 +11,7 @@ use crate::{
         },
     },
     hir_def::ExprId,
-    semantic::EffectEnvView,
+    semantic::{EffectEnvView, ProviderBinding},
 };
 
 use super::body::SmirLowerCtxt;
@@ -106,7 +106,33 @@ pub fn owner_effect_bindings<'db>(
         .collect()
 }
 
-fn effect_param_site<'db>(owner: BodyOwner<'db>) -> Option<EffectParamSite<'db>> {
+pub fn resolved_provider_binding_for_owner_effect<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+    binding: LocalBinding<'db>,
+) -> Option<ProviderBinding<'db>> {
+    let binding_idx = match binding {
+        LocalBinding::EffectParam { idx, .. }
+        | LocalBinding::Param {
+            site: crate::analysis::ty::ty_check::ParamSite::EffectField(_),
+            idx,
+            ..
+        } => idx,
+        LocalBinding::Local { .. } | LocalBinding::Param { .. } => return None,
+    };
+    let site = effect_param_site(owner)?;
+    let view = EffectEnvView::new(site);
+    let provider_idx = view
+        .resolutions(db)
+        .into_iter()
+        .find(|resolution| resolution.requirement_idx as usize == binding_idx)?
+        .provider_idx;
+    view.providers(db)
+        .into_iter()
+        .find(|provider| provider.provider_idx == provider_idx)
+}
+
+pub fn effect_param_site<'db>(owner: BodyOwner<'db>) -> Option<EffectParamSite<'db>> {
     match owner {
         BodyOwner::Func(func) => Some(EffectParamSite::Func(func)),
         BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => None,
@@ -120,6 +146,38 @@ fn effect_param_site<'db>(owner: BodyOwner<'db>) -> Option<EffectParamSite<'db>>
             recv_idx,
             arm_idx,
         }),
+    }
+}
+
+pub fn same_owner_effect_binding<'db>(lhs: LocalBinding<'db>, rhs: LocalBinding<'db>) -> bool {
+    match (lhs, rhs) {
+        (
+            LocalBinding::EffectParam {
+                idx: lhs_idx,
+                key_path: lhs_key,
+                ..
+            },
+            LocalBinding::EffectParam {
+                idx: rhs_idx,
+                key_path: rhs_key,
+                ..
+            },
+        ) => lhs_idx == rhs_idx && lhs_key == rhs_key,
+        (
+            LocalBinding::Param {
+                site: crate::analysis::ty::ty_check::ParamSite::EffectField(_),
+                idx: lhs_idx,
+                ty: lhs_ty,
+                ..
+            },
+            LocalBinding::Param {
+                site: crate::analysis::ty::ty_check::ParamSite::EffectField(_),
+                idx: rhs_idx,
+                ty: rhs_ty,
+                ..
+            },
+        ) => lhs_idx == rhs_idx && lhs_ty == rhs_ty,
+        _ => lhs == rhs,
     }
 }
 

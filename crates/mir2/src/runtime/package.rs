@@ -3,7 +3,8 @@ use hir::{
     analysis::{
         semantic::{
             GenericSubst, ImplEnv, ManualContractSection, SemanticInstance, SemanticInstanceKey,
-            get_or_build_semantic_instance, owner_effect_bindings,
+            ValueProvenance, get_or_build_semantic_instance, owner_effect_bindings,
+            semantic_binding_lowering,
         },
         ty::{
             corelib::{resolve_core_trait, resolve_lib_type_path},
@@ -23,17 +24,21 @@ use crate::{
         RuntimeInstance, RuntimeInstanceKey, RuntimeInstanceSource, RuntimeSyntheticInstance,
         get_or_build_runtime_instance,
     },
+    runtime::code_region::{code_region_symbol, runtime_code_region_for_manual_root},
     runtime::lower::class::{
-        provider_class_for_target, resolved_provider_binding_for_owner_effect,
-        runtime_class_for_provider_binding, runtime_param_class, top_level_class_for_ty_in_context,
+        provider_class_for_target_in_env, runtime_class_for_direct_value_provider_in_env,
+        runtime_class_for_effect_binding_provider_in_env, runtime_param_class,
+        top_level_class_for_ty_in_env,
     },
+    runtime::lower::layout::RuntimeTypeEnv,
     runtime::{
-        AddressSpaceKind, ConstRegionId, ContractFieldBinding, ContractInitAbiPlan,
-        ContractRecvAbiPlan, DispatchArm, DispatchDefault, HandleKind, InitArgsPlan, RExpr, RStmt,
-        ResolvedCodeRegion, RuntimeBuiltin, RuntimeCodeRegion, RuntimeCodeRegionKey,
-        RuntimeFunction, RuntimeFunctionOwner, RuntimeInlineHint, RuntimeInputPlan, RuntimeLinkage,
-        RuntimeObject, RuntimePackage, RuntimePackagePlan, RuntimeReturnPlan, RuntimeSection,
-        RuntimeSectionName, RuntimeSectionRef, RuntimeSyntheticSpec,
+        AddressSpaceKind, ConstRegionId, ContractEffectArgPlan, ContractFieldBinding,
+        ContractInitAbiPlan, ContractRecvAbiPlan, DispatchArm, DispatchDefault, HandleKind,
+        InitArgsPlan, RExpr, RStmt, ResolvedCodeRegion, RuntimeBuiltin, RuntimeCodeRegion,
+        RuntimeCodeRegionKey, RuntimeFunction, RuntimeFunctionOwner, RuntimeInlineHint,
+        RuntimeInputPlan, RuntimeLinkage, RuntimeObject, RuntimePackage, RuntimePackagePlan,
+        RuntimeReturnPlan, RuntimeSection, RuntimeSectionName, RuntimeSectionRef,
+        RuntimeSyntheticSpec,
     },
     verify::verify_runtime_package,
 };
@@ -482,10 +487,11 @@ fn contract_init_abi<'db>(
         db,
         semantic_instance_for_owner(db, BodyOwner::ContractInit { contract }),
     ));
-    let field_bindings = contract_field_bindings_for_site(
+    let owner_effect_args = contract_effect_arg_plans_for_site(
         db,
         contract,
         hir::analysis::ty::ty_check::EffectParamSite::ContractInit { contract },
+        semantic_instance_for_owner(db, BodyOwner::ContractInit { contract }),
     )?;
     let init_args = if contract.init_args_ty(db) == TyId::unit(db) {
         InitArgsPlan::None
@@ -502,7 +508,7 @@ fn contract_init_abi<'db>(
                 contract,
                 payable: init.is_payable(db),
                 user_init,
-                field_bindings: field_bindings.into_boxed_slice(),
+                owner_effect_args: owner_effect_args.into_boxed_slice(),
                 init_args,
             },
         },
@@ -535,7 +541,7 @@ fn contract_recv_dispatch_arm<'db>(
             },
         ),
     );
-    let field_bindings = contract_field_bindings_for_site(
+    let owner_effect_args = contract_effect_arg_plans_for_site(
         db,
         contract,
         hir::analysis::ty::ty_check::EffectParamSite::ContractRecvArm {
@@ -543,6 +549,14 @@ fn contract_recv_dispatch_arm<'db>(
             recv_idx: recv.recv_idx(db),
             arm_idx: arm.arm_idx(db),
         },
+        semantic_instance_for_owner(
+            db,
+            BodyOwner::ContractRecvArm {
+                contract,
+                recv_idx: recv.recv_idx(db),
+                arm_idx: arm.arm_idx(db),
+            },
+        ),
     )?;
     let input = if abi_info.args_ty == TyId::unit(db) {
         RuntimeInputPlan::None
@@ -571,7 +585,7 @@ fn contract_recv_dispatch_arm<'db>(
                     None => false,
                 },
                 user_recv,
-                field_bindings: field_bindings.into_boxed_slice(),
+                owner_effect_args: owner_effect_args.into_boxed_slice(),
                 input,
                 ret,
             },
@@ -942,30 +956,8 @@ fn resolved_section_region<'db>(
             let BodyOwner::Func(func) = semantic.key(db).owner(db) else {
                 return None;
             };
-            let attr = func.manual_contract_root_attr(db)?;
-            let (contract_name, section_kind) = match attr {
-                ManualContractRootAttr::Init { contract_name } => (
-                    contract_name.data(db).to_string(),
-                    ManualContractSection::Init,
-                ),
-                ManualContractRootAttr::Runtime { contract_name } => (
-                    contract_name.data(db).to_string(),
-                    ManualContractSection::Runtime,
-                ),
-                ManualContractRootAttr::Error(_) => return None,
-            };
-            let symbol = manual_contract_section_symbol(&contract_name, section_kind);
-            Some((
-                RuntimeCodeRegion::new(
-                    db,
-                    RuntimeCodeRegionKey::ManualContractSection {
-                        contract_name: contract_name.to_string(),
-                        section: section_kind,
-                        callee: section.entry.instance(db),
-                    },
-                ),
-                symbol,
-            ))
+            let region = runtime_code_region_for_manual_root(db, func)?;
+            Some((region, code_region_symbol(db, region)))
         }
         RuntimeFunctionOwner::Synthetic(
             RuntimeSyntheticSpec::MainRoot { .. }
@@ -1161,7 +1153,7 @@ fn runtime_root_candidate<'db>(db: &'db dyn MirDb, func: Func<'db>) -> bool {
     let semantic = semantic_instance_for_owner(db, BodyOwner::Func(func));
     owner_effect_bindings(db, BodyOwner::Func(func))
         .into_iter()
-        .all(|binding| root_owner_effect_binding_class(db, semantic, binding).is_some())
+        .all(|binding| owner_effect_binding_class(db, semantic, binding).is_some())
 }
 
 pub(crate) fn runtime_instance_for_semantic<'db>(
@@ -1170,15 +1162,13 @@ pub(crate) fn runtime_instance_for_semantic<'db>(
 ) -> RuntimeInstance<'db> {
     let typed_body = semantic.key(db).instantiate_typed_body(db);
     let owner = semantic.key(db).owner(db);
-    let scope = Some(owner.scope());
-    let assumptions = typed_body.assumptions();
+    let env = RuntimeTypeEnv::new(Some(owner.scope()), typed_body.assumptions());
     let mut params = Vec::new();
     let mut idx = 0;
     while let Some(binding) = typed_body.param_binding(idx) {
         let ty = typed_body.binding_ty(db, binding);
-        let class =
-            top_level_class_for_ty_in_context(db, ty, AddressSpaceKind::Memory, scope, assumptions)
-                .map(|class| runtime_param_class(db, &typed_body, binding, class));
+        let class = top_level_class_for_ty_in_env(db, env, ty, AddressSpaceKind::Memory)
+            .map(|class| runtime_param_class(db, &typed_body, binding, class));
         if let Some(class) = class {
             params.push(class);
         }
@@ -1197,19 +1187,15 @@ pub(crate) fn runtime_instance_for_semantic<'db>(
                 continue;
             };
             let ty = typed_body.binding_ty(db, binding);
-            if let Some(class) = top_level_class_for_ty_in_context(
-                db,
-                ty,
-                AddressSpaceKind::Memory,
-                scope,
-                assumptions,
-            ) {
+            if let Some(class) =
+                top_level_class_for_ty_in_env(db, env, ty, AddressSpaceKind::Memory)
+            {
                 params.push(class);
             }
         }
     }
     for binding in owner_effect_bindings(db, owner) {
-        if let Some(class) = root_owner_effect_binding_class(db, semantic, binding) {
+        if let Some(class) = owner_effect_binding_class(db, semantic, binding) {
             params.push(class);
         }
     }
@@ -1223,51 +1209,26 @@ fn owner_effect_binding_class<'db>(
     binding: hir::analysis::ty::ty_check::LocalBinding<'db>,
 ) -> Option<crate::runtime::RuntimeClass<'db>> {
     let owner = semantic.key(db).owner(db);
-    let assumptions = semantic.key(db).instantiate_typed_body(db).assumptions();
-    let binding_idx = match binding {
-        hir::analysis::ty::ty_check::LocalBinding::EffectParam { idx, .. }
-        | hir::analysis::ty::ty_check::LocalBinding::Param {
-            site: hir::analysis::ty::ty_check::ParamSite::EffectField(_),
-            idx,
-            ..
-        } => idx,
-        hir::analysis::ty::ty_check::LocalBinding::Local { .. }
-        | hir::analysis::ty::ty_check::LocalBinding::Param { .. } => return None,
-    };
-    let provider = resolved_provider_binding_for_owner_effect(db, owner, binding_idx)
-        .unwrap_or_else(|| {
-            panic!("missing provider binding metadata for {owner:?} binding {binding:?}")
-        });
-    runtime_class_for_provider_binding(db, &provider, Some(owner.scope()), assumptions)
-}
-
-fn root_owner_effect_binding_class<'db>(
-    db: &'db dyn MirDb,
-    semantic: SemanticInstance<'db>,
-    binding: hir::analysis::ty::ty_check::LocalBinding<'db>,
-) -> Option<crate::runtime::RuntimeClass<'db>> {
-    owner_effect_binding_class(db, semantic, binding).or_else(|| {
-        let owner = semantic.key(db).owner(db);
-        let typed_body = semantic.key(db).instantiate_typed_body(db);
-        let requirement_ty = typed_body.binding_ty(db, binding);
-        let scope = Some(owner.scope());
-        let assumptions = typed_body.assumptions();
-        match top_level_class_for_ty_in_context(
-            db,
-            requirement_ty,
-            AddressSpaceKind::Memory,
-            scope,
-            assumptions,
-        ) {
-            Some(crate::runtime::RuntimeClass::AggregateValue { .. })
-            | Some(crate::runtime::RuntimeClass::Scalar(_)) => Some(provider_class_for_target(
-                db,
-                Some(requirement_ty),
-                AddressSpaceKind::Memory,
-            )),
-            class => class,
+    let typed_body = semantic.key(db).instantiate_typed_body(db);
+    let env = RuntimeTypeEnv::new(Some(owner.scope()), typed_body.assumptions());
+    let binding_ty = typed_body.binding_ty(db, binding);
+    match semantic_binding_lowering(db, semantic, binding) {
+        hir::analysis::semantic::SemanticBindingLowering::Erased => None,
+        hir::analysis::semantic::SemanticBindingLowering::DirectValue {
+            provenance: ValueProvenance::RootProvider(provider),
+        } => runtime_class_for_direct_value_provider_in_env(db, env, &provider, binding_ty),
+        hir::analysis::semantic::SemanticBindingLowering::DirectValue { .. }
+        | hir::analysis::semantic::SemanticBindingLowering::DirectCarrier { .. } => {
+            top_level_class_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory)
         }
-    })
+        hir::analysis::semantic::SemanticBindingLowering::PlaceCarrier { value_ty } => {
+            top_level_class_for_ty_in_env(db, env, value_ty, AddressSpaceKind::Memory)
+        }
+        hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
+            provider,
+            value_ty,
+        } => runtime_class_for_effect_binding_provider_in_env(db, env, &provider, value_ty),
+    }
 }
 
 fn synthetic_instance<'db>(
@@ -1280,11 +1241,12 @@ fn synthetic_instance<'db>(
     get_or_build_runtime_instance(db, key)
 }
 
-fn contract_field_bindings_for_site<'db>(
+fn contract_effect_arg_plans_for_site<'db>(
     db: &'db dyn MirDb,
     contract: Contract<'db>,
     site: hir::analysis::ty::ty_check::EffectParamSite<'db>,
-) -> Result<Vec<ContractFieldBinding<'db>>, LowerError> {
+    semantic: SemanticInstance<'db>,
+) -> Result<Vec<ContractEffectArgPlan<'db>>, LowerError> {
     let field_layout = contract.field_layout(db);
     let field_by_index = field_layout
         .values()
@@ -1293,27 +1255,68 @@ fn contract_field_bindings_for_site<'db>(
         .collect::<FxHashMap<_, _>>();
     let view = hir::semantic::EffectEnvView::new(site);
     let providers = view.providers(db);
-    view.resolutions(db)
+    let providers_by_idx = providers
         .into_iter()
-        .filter_map(|resolution| {
-            providers
-                .iter()
-                .find(|provider| provider.provider_idx == resolution.provider_idx)
-                .and_then(|provider| match provider.source {
-                    ProviderSource::ContractField { field_idx, .. } => Some(field_idx),
-                    ProviderSource::UsesParam { .. } | ProviderSource::RootProvider { .. } => None,
+        .map(|provider| (provider.provider_idx, provider))
+        .collect::<FxHashMap<_, _>>();
+    let resolutions_by_requirement = view
+        .resolutions(db)
+        .into_iter()
+        .map(|resolution| (resolution.requirement_idx, resolution.provider_idx))
+        .collect::<FxHashMap<_, _>>();
+    owner_effect_bindings(db, semantic.key(db).owner(db))
+        .into_iter()
+        .filter_map(|binding| {
+            let requirement_idx = effect_binding_requirement_idx(binding)?;
+            let provider_idx = *resolutions_by_requirement.get(&requirement_idx)?;
+            let provider = providers_by_idx.get(&provider_idx)?;
+            Some((|| {
+                Ok(match provider.source {
+                    ProviderSource::ContractField { field_idx, .. } => {
+                        let field = field_by_index.get(&field_idx).ok_or_else(|| {
+                            LowerError::Unsupported(format!(
+                                "missing contract field layout for field {field_idx} in `{}`",
+                                contract_name(db, contract)
+                            ))
+                        })?;
+                        ContractEffectArgPlan::ContractField(contract_field_binding(
+                            db, contract, field,
+                        )?)
+                    }
+                    ProviderSource::UsesParam { .. } | ProviderSource::RootProvider { .. } => {
+                        let Some(class) = owner_effect_binding_class(db, semantic, binding) else {
+                            return Err(LowerError::Unsupported(format!(
+                                "missing runtime class for owner effect binding {binding:?} in `{}`",
+                                contract_name(db, contract)
+                            )));
+                        };
+                        ContractEffectArgPlan::Placeholder {
+                            declared_ty: semantic
+                                .key(db)
+                                .instantiate_typed_body(db)
+                                .binding_ty(db, binding),
+                            class,
+                        }
+                    }
                 })
-        })
-        .map(|idx| {
-            let field = field_by_index.get(&idx).ok_or_else(|| {
-                LowerError::Unsupported(format!(
-                    "missing contract field layout for field {idx} in `{}`",
-                    contract_name(db, contract)
-                ))
-            })?;
-            contract_field_binding(db, contract, field)
+            })())
         })
         .collect()
+}
+
+fn effect_binding_requirement_idx(
+    binding: hir::analysis::ty::ty_check::LocalBinding<'_>,
+) -> Option<u32> {
+    match binding {
+        hir::analysis::ty::ty_check::LocalBinding::EffectParam { idx, .. }
+        | hir::analysis::ty::ty_check::LocalBinding::Param {
+            site: hir::analysis::ty::ty_check::ParamSite::EffectField(_),
+            idx,
+            ..
+        } => Some(idx as u32),
+        hir::analysis::ty::ty_check::LocalBinding::Local { .. }
+        | hir::analysis::ty::ty_check::LocalBinding::Param { .. } => None,
+    }
 }
 
 pub(crate) fn contract_field_binding<'db>(
@@ -1322,7 +1325,15 @@ pub(crate) fn contract_field_binding<'db>(
     field: &ContractFieldLayoutInfo<'db>,
 ) -> Result<ContractFieldBinding<'db>, LowerError> {
     let space = address_space_from_ty(db, contract.scope(), field.address_space)?;
-    let class = provider_class_for_target(db, Some(field.target_ty), space);
+    let class = provider_class_for_target_in_env(
+        db,
+        RuntimeTypeEnv::new(
+            Some(contract.scope()),
+            hir::analysis::ty::trait_resolution::PredicateListId::empty_list(db),
+        ),
+        Some(field.target_ty),
+        space,
+    );
     let kind = match &class {
         crate::runtime::RuntimeClass::Handle { kind, .. } => kind.clone(),
         crate::runtime::RuntimeClass::RawAddr { .. } => HandleKind::Provider {
@@ -1766,32 +1777,6 @@ fn collect_expr_const_regions<'db>(
         && seen.insert(*region)
     {
         regions.push(*region);
-    }
-}
-
-fn code_region_symbol<'db>(db: &'db dyn MirDb, region: RuntimeCodeRegion<'db>) -> String {
-    match region.key(db) {
-        RuntimeCodeRegionKey::ContractInit { contract } => {
-            format!("{}_init", contract_name(db, contract))
-        }
-        RuntimeCodeRegionKey::ContractRuntime { contract } => {
-            format!("{}_runtime", contract_name(db, contract))
-        }
-        RuntimeCodeRegionKey::ManualContractSection {
-            contract_name,
-            section,
-            ..
-        } => manual_contract_section_symbol(&contract_name, section),
-        RuntimeCodeRegionKey::FunctionRoot { symbol, .. } => symbol.clone(),
-    }
-}
-
-fn manual_contract_section_symbol(contract_name: &str, section: ManualContractSection) -> String {
-    match section {
-        ManualContractSection::Init => format!("__{}_init", sanitize_symbol(contract_name)),
-        ManualContractSection::Runtime => {
-            format!("__{}_runtime", sanitize_symbol(contract_name))
-        }
     }
 }
 

@@ -2,8 +2,8 @@ use fe_hir::test_db::HirAnalysisTestDb;
 use fe_hir::{
     analysis::{
         semantic::{
-            GenericSubst, ImplEnv, ManualContractSection, SExpr, SStmt, SemanticCodeRegionRef,
-            SemanticInstanceKey, get_or_build_semantic_instance,
+            GenericSubst, ImplEnv, SExpr, SStmtKind, SemanticCodeRegionRef, SemanticInstanceKey,
+            get_or_build_semantic_instance,
         },
         ty::ty_check::{BodyOwner, check_func_body},
     },
@@ -318,8 +318,7 @@ fn runtime() uses (evm: mut Evm) {}"#,
     assert_eq!(refs.len(), 2);
     assert!(refs.iter().all(|region| matches!(
         region,
-        SemanticCodeRegionRef::ManualContractRoot { func, contract_name, section }
-            if *func == runtime && contract_name == "Coin" && *section == ManualContractSection::Runtime
+        SemanticCodeRegionRef::ManualContractRoot { func } if *func == runtime
     )));
 
     let instance = get_or_build_semantic_instance(
@@ -336,22 +335,20 @@ fn runtime() uses (evm: mut Evm) {}"#,
         .blocks
         .iter()
         .flat_map(|block| block.stmts.iter())
-        .filter_map(|stmt| match stmt {
-            SStmt::Assign { expr, .. } => Some(expr),
-            SStmt::Store { .. } => None,
+        .filter_map(|stmt| match &stmt.kind {
+            SStmtKind::Assign { expr, .. } => Some(expr),
+            SStmtKind::Store { .. } => None,
         })
         .collect::<Vec<_>>();
     assert!(exprs.iter().any(|expr| matches!(
         expr,
-        SExpr::CodeRegionLen {
-            region: SemanticCodeRegionRef::ManualContractRoot { func, contract_name, section }
-        } if *func == runtime && contract_name == "Coin" && *section == ManualContractSection::Runtime
+        SExpr::CodeRegionLen { region: SemanticCodeRegionRef::ManualContractRoot { func } }
+            if *func == runtime
     )));
     assert!(exprs.iter().any(|expr| matches!(
         expr,
-        SExpr::CodeRegionOffset {
-            region: SemanticCodeRegionRef::ManualContractRoot { func, contract_name, section }
-        } if *func == runtime && contract_name == "Coin" && *section == ManualContractSection::Runtime
+        SExpr::CodeRegionOffset { region: SemanticCodeRegionRef::ManualContractRoot { func } }
+            if *func == runtime
     )));
 }
 
@@ -407,7 +404,6 @@ fn runtime() uses (evm: mut Evm) {}"#,
     assert_eq!(refs.len(), 2);
     assert!(refs.iter().all(|region| matches!(
         region,
-        SemanticCodeRegionRef::ManualContractRoot { func, contract_name, section }
-            if *func == runtime && contract_name == "Coin" && *section == ManualContractSection::Runtime
+        SemanticCodeRegionRef::ManualContractRoot { func } if *func == runtime
     )));
 }

@@ -1,3 +1,4 @@
+pub(crate) mod code_region;
 pub mod ir;
 pub mod lower;
 pub(crate) mod package;

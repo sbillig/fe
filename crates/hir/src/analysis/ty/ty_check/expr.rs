@@ -4,7 +4,7 @@ use num_traits::ToPrimitive;
 use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 
-use crate::analysis::semantic::{ManualContractSection, SemanticCodeRegionRef};
+use crate::analysis::semantic::SemanticCodeRegionRef;
 use crate::core::hir_def::{
     ArithBinOp, BinOp, CallableDef, Cond, CondId, Expr, ExprId, FieldIndex, IdentId, IntegerId,
     LitKind, LogicalBinOp, Partial, PatId, PathId, Stmt, UnOp, VariantKind, WithBinding,
@@ -12,7 +12,7 @@ use crate::core::hir_def::{
 use crate::span::DynLazySpan;
 
 use super::{
-    ConstRef, RecordLike, Typeable,
+    ConstRef, RecordLike, Typeable, ValuePathRef,
     effect_env::{
         FamilyKeyedEntry, FrameLookupResult, MatchedForwarder, MatchedKeyedEntry, MatchedWitness,
     },
@@ -1223,19 +1223,8 @@ impl<'db> TyChecker<'db> {
             return None;
         };
         match func.manual_contract_root_attr(self.db)? {
-            ManualContractRootAttr::Init { contract_name } => {
-                Some(SemanticCodeRegionRef::ManualContractRoot {
-                    func: *func,
-                    contract_name: contract_name.data(self.db).to_string(),
-                    section: ManualContractSection::Init,
-                })
-            }
-            ManualContractRootAttr::Runtime { contract_name } => {
-                Some(SemanticCodeRegionRef::ManualContractRoot {
-                    func: *func,
-                    contract_name: contract_name.data(self.db).to_string(),
-                    section: ManualContractSection::Runtime,
-                })
+            ManualContractRootAttr::Init { .. } | ManualContractRootAttr::Runtime { .. } => {
+                Some(SemanticCodeRegionRef::ManualContractRoot { func: *func })
             }
             ManualContractRootAttr::Error(_) => None,
         }
@@ -3103,6 +3092,8 @@ impl<'db> TyChecker<'db> {
             ResolvedPathInBody::Reso(reso) => match reso {
                 PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
                     if let Some(const_ty_ty) = ty.const_ty_ty(self.db) {
+                        self.env
+                            .register_value_path_ref(expr, ValuePathRef::TypeConst(ty));
                         ExprProp::new(self.table.instantiate_to_term(const_ty_ty), true)
                     } else {
                         let diag = if ty.is_struct(self.db) {
@@ -3143,7 +3134,11 @@ impl<'db> TyChecker<'db> {
                 }
                 PathRes::EnumVariant(variant) => {
                     let ty = match variant.kind(self.db) {
-                        VariantKind::Unit => variant.ty,
+                        VariantKind::Unit => {
+                            self.env
+                                .register_value_path_ref(expr, ValuePathRef::UnitVariant(variant));
+                            variant.ty
+                        }
                         VariantKind::Tuple(_) => {
                             let ty = variant.constructor_func_ty(self.db).unwrap();
                             self.instantiate_to_term(ty)

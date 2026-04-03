@@ -19,29 +19,33 @@ func private %match_bool(v0.i1) -> i64 {
         v4.*i1 = alloca i1;
         v5.*i64 = alloca i64;
         v6.*i64 = alloca i64;
+        v7.*i1 = alloca i1;
         mstore v1 v0 i1;
         mstore v3 1.i1 i1;
-        v8.i1 = mload v1 i1;
-        v9.i1 = mload v3 i1;
-        v10.i1 = eq v8 v9;
-        mstore v4 v10 i1;
-        v11.i1 = mload v4 i1;
-        br v11 block2 block4;
+        v9.i256 = mload v1 i256;
+        v11.i1 = ne v9 0.i256;
+        mstore v7 v11 i1;
+        v12.i1 = mload v7 i1;
+        v13.i1 = mload v3 i1;
+        v14.i1 = eq v12 v13;
+        mstore v4 v14 i1;
+        v15.i1 = mload v4 i1;
+        br v15 block2 block4;
 
     block1:
-        v12.i64 = mload v2 i64;
-        return v12;
+        v16.i64 = mload v2 i64;
+        return v16;
 
     block2:
         mstore v5 1.i64 i64;
-        v14.i64 = mload v5 i64;
-        mstore v2 v14 i64;
+        v18.i64 = mload v5 i64;
+        mstore v2 v18 i64;
         jump block1;
 
     block3:
         mstore v6 2.i64 i64;
-        v16.i64 = mload v6 i64;
-        mstore v2 v16 i64;
+        v20.i64 = mload v6 i64;
+        mstore v2 v20 i64;
         jump block1;
 
     block4:
@@ -59,49 +63,57 @@ func private %match_i128(v0.i128) -> i128 {
         v7.*i128 = alloca i128;
         v8.*i128 = alloca i128;
         v9.*i128 = alloca i128;
+        v10.*i128 = alloca i128;
+        v11.*i128 = alloca i128;
         mstore v1 v0 i128;
         mstore v3 0.i128 i128;
-        v11.i128 = mload v1 i128;
-        v12.i128 = mload v3 i128;
-        v13.i1 = ne v11 0.i128;
-        v14.i1 = ne v12 0.i128;
-        v15.i1 = eq v13 v14;
-        mstore v4 v15 i1;
-        v16.i1 = mload v4 i1;
-        br v16 block2 block5;
+        v13.i256 = mload v1 i256;
+        v14.i128 = trunc v13 i128;
+        mstore v10 v14 i128;
+        v15.i128 = mload v10 i128;
+        v16.i128 = mload v3 i128;
+        v17.i1 = ne v15 0.i128;
+        v18.i1 = ne v16 0.i128;
+        v19.i1 = eq v17 v18;
+        mstore v4 v19 i1;
+        v20.i1 = mload v4 i1;
+        br v20 block2 block5;
 
     block1:
-        v17.i128 = mload v2 i128;
-        return v17;
+        v21.i128 = mload v2 i128;
+        return v21;
 
     block2:
         mstore v7 1.i128 i128;
-        v19.i128 = mload v7 i128;
-        mstore v2 v19 i128;
+        v23.i128 = mload v7 i128;
+        mstore v2 v23 i128;
         jump block1;
 
     block3:
         mstore v8 2.i128 i128;
-        v21.i128 = mload v8 i128;
-        mstore v2 v21 i128;
+        v25.i128 = mload v8 i128;
+        mstore v2 v25 i128;
         jump block1;
 
     block4:
         mstore v9 3.i128 i128;
-        v23.i128 = mload v9 i128;
-        mstore v2 v23 i128;
+        v27.i128 = mload v9 i128;
+        mstore v2 v27 i128;
         jump block1;
 
     block5:
         mstore v5 170141183460469231731687303715884105727.i128 i128;
-        v25.i128 = mload v1 i128;
-        v26.i128 = mload v5 i128;
-        v27.i1 = ne v25 0.i128;
-        v28.i1 = ne v26 0.i128;
-        v29.i1 = eq v27 v28;
-        mstore v6 v29 i1;
-        v30.i1 = mload v6 i1;
-        br v30 block3 block6;
+        v29.i256 = mload v1 i256;
+        v30.i128 = trunc v29 i128;
+        mstore v11 v30 i128;
+        v31.i128 = mload v11 i128;
+        v32.i128 = mload v5 i128;
+        v33.i1 = ne v31 0.i128;
+        v34.i1 = ne v32 0.i128;
+        v35.i1 = eq v33 v34;
+        mstore v6 v35 i1;
+        v36.i1 = mload v6 i1;
+        br v36 block3 block6;
 
     block6:
         jump block4;
@@ -118,49 +130,57 @@ func private %match_i16(v0.i16) -> i16 {
         v7.*i16 = alloca i16;
         v8.*i16 = alloca i16;
         v9.*i16 = alloca i16;
+        v10.*i16 = alloca i16;
+        v11.*i16 = alloca i16;
         mstore v1 v0 i16;
         mstore v3 0.i16 i16;
-        v11.i16 = mload v1 i16;
-        v12.i16 = mload v3 i16;
-        v13.i1 = ne v11 0.i16;
-        v14.i1 = ne v12 0.i16;
-        v15.i1 = eq v13 v14;
-        mstore v4 v15 i1;
-        v16.i1 = mload v4 i1;
-        br v16 block2 block5;
+        v13.i256 = mload v1 i256;
+        v14.i16 = trunc v13 i16;
+        mstore v10 v14 i16;
+        v15.i16 = mload v10 i16;
+        v16.i16 = mload v3 i16;
+        v17.i1 = ne v15 0.i16;
+        v18.i1 = ne v16 0.i16;
+        v19.i1 = eq v17 v18;
+        mstore v4 v19 i1;
+        v20.i1 = mload v4 i1;
+        br v20 block2 block5;
 
     block1:
-        v17.i16 = mload v2 i16;
-        return v17;
+        v21.i16 = mload v2 i16;
+        return v21;
 
     block2:
         mstore v7 1.i16 i16;
-        v19.i16 = mload v7 i16;
-        mstore v2 v19 i16;
+        v23.i16 = mload v7 i16;
+        mstore v2 v23 i16;
         jump block1;
 
     block3:
         mstore v8 2.i16 i16;
-        v21.i16 = mload v8 i16;
-        mstore v2 v21 i16;
+        v25.i16 = mload v8 i16;
+        mstore v2 v25 i16;
         jump block1;
 
     block4:
         mstore v9 3.i16 i16;
-        v23.i16 = mload v9 i16;
-        mstore v2 v23 i16;
+        v27.i16 = mload v9 i16;
+        mstore v2 v27 i16;
         jump block1;
 
     block5:
         mstore v5 32000.i16 i16;
-        v25.i16 = mload v1 i16;
-        v26.i16 = mload v5 i16;
-        v27.i1 = ne v25 0.i16;
-        v28.i1 = ne v26 0.i16;
-        v29.i1 = eq v27 v28;
-        mstore v6 v29 i1;
-        v30.i1 = mload v6 i1;
-        br v30 block3 block6;
+        v29.i256 = mload v1 i256;
+        v30.i16 = trunc v29 i16;
+        mstore v11 v30 i16;
+        v31.i16 = mload v11 i16;
+        v32.i16 = mload v5 i16;
+        v33.i1 = ne v31 0.i16;
+        v34.i1 = ne v32 0.i16;
+        v35.i1 = eq v33 v34;
+        mstore v6 v35 i1;
+        v36.i1 = mload v6 i1;
+        br v36 block3 block6;
 
     block6:
         jump block4;
@@ -177,49 +197,55 @@ func private %match_i256(v0.i256) -> i256 {
         v7.*i256 = alloca i256;
         v8.*i256 = alloca i256;
         v9.*i256 = alloca i256;
+        v10.*i256 = alloca i256;
+        v11.*i256 = alloca i256;
         mstore v1 v0 i256;
         mstore v3 0.i256 i256;
-        v11.i256 = mload v1 i256;
-        v12.i256 = mload v3 i256;
-        v13.i1 = ne v11 0.i256;
-        v14.i1 = ne v12 0.i256;
-        v15.i1 = eq v13 v14;
-        mstore v4 v15 i1;
-        v16.i1 = mload v4 i1;
-        br v16 block2 block5;
+        v13.i256 = mload v1 i256;
+        mstore v10 v13 i256;
+        v14.i256 = mload v10 i256;
+        v15.i256 = mload v3 i256;
+        v16.i1 = ne v14 0.i256;
+        v17.i1 = ne v15 0.i256;
+        v18.i1 = eq v16 v17;
+        mstore v4 v18 i1;
+        v19.i1 = mload v4 i1;
+        br v19 block2 block5;
 
     block1:
-        v17.i256 = mload v2 i256;
-        return v17;
+        v20.i256 = mload v2 i256;
+        return v20;
 
     block2:
         mstore v7 1.i256 i256;
-        v19.i256 = mload v7 i256;
-        mstore v2 v19 i256;
+        v22.i256 = mload v7 i256;
+        mstore v2 v22 i256;
         jump block1;
 
     block3:
         mstore v8 2.i256 i256;
-        v21.i256 = mload v8 i256;
-        mstore v2 v21 i256;
+        v24.i256 = mload v8 i256;
+        mstore v2 v24 i256;
         jump block1;
 
     block4:
         mstore v9 3.i256 i256;
-        v23.i256 = mload v9 i256;
-        mstore v2 v23 i256;
+        v26.i256 = mload v9 i256;
+        mstore v2 v26 i256;
         jump block1;
 
     block5:
         mstore v5 -1.i256 i256;
-        v25.i256 = mload v1 i256;
-        v26.i256 = mload v5 i256;
-        v27.i1 = ne v25 0.i256;
-        v28.i1 = ne v26 0.i256;
-        v29.i1 = eq v27 v28;
-        mstore v6 v29 i1;
-        v30.i1 = mload v6 i1;
-        br v30 block3 block6;
+        v28.i256 = mload v1 i256;
+        mstore v11 v28 i256;
+        v29.i256 = mload v11 i256;
+        v30.i256 = mload v5 i256;
+        v31.i1 = ne v29 0.i256;
+        v32.i1 = ne v30 0.i256;
+        v33.i1 = eq v31 v32;
+        mstore v6 v33 i1;
+        v34.i1 = mload v6 i1;
+        br v34 block3 block6;
 
     block6:
         jump block4;
@@ -236,49 +262,57 @@ func private %match_i32(v0.i32) -> i32 {
         v7.*i32 = alloca i32;
         v8.*i32 = alloca i32;
         v9.*i32 = alloca i32;
+        v10.*i32 = alloca i32;
+        v11.*i32 = alloca i32;
         mstore v1 v0 i32;
         mstore v3 0.i32 i32;
-        v11.i32 = mload v1 i32;
-        v12.i32 = mload v3 i32;
-        v13.i1 = ne v11 0.i32;
-        v14.i1 = ne v12 0.i32;
-        v15.i1 = eq v13 v14;
-        mstore v4 v15 i1;
-        v16.i1 = mload v4 i1;
-        br v16 block2 block5;
+        v13.i256 = mload v1 i256;
+        v14.i32 = trunc v13 i32;
+        mstore v10 v14 i32;
+        v15.i32 = mload v10 i32;
+        v16.i32 = mload v3 i32;
+        v17.i1 = ne v15 0.i32;
+        v18.i1 = ne v16 0.i32;
+        v19.i1 = eq v17 v18;
+        mstore v4 v19 i1;
+        v20.i1 = mload v4 i1;
+        br v20 block2 block5;
 
     block1:
-        v17.i32 = mload v2 i32;
-        return v17;
+        v21.i32 = mload v2 i32;
+        return v21;
 
     block2:
         mstore v7 1.i32 i32;
-        v19.i32 = mload v7 i32;
-        mstore v2 v19 i32;
+        v23.i32 = mload v7 i32;
+        mstore v2 v23 i32;
         jump block1;
 
     block3:
         mstore v8 2.i32 i32;
-        v21.i32 = mload v8 i32;
-        mstore v2 v21 i32;
+        v25.i32 = mload v8 i32;
+        mstore v2 v25 i32;
         jump block1;
 
     block4:
         mstore v9 3.i32 i32;
-        v23.i32 = mload v9 i32;
-        mstore v2 v23 i32;
+        v27.i32 = mload v9 i32;
+        mstore v2 v27 i32;
         jump block1;
 
     block5:
         mstore v5 2000000000.i32 i32;
-        v25.i32 = mload v1 i32;
-        v26.i32 = mload v5 i32;
-        v27.i1 = ne v25 0.i32;
-        v28.i1 = ne v26 0.i32;
-        v29.i1 = eq v27 v28;
-        mstore v6 v29 i1;
-        v30.i1 = mload v6 i1;
-        br v30 block3 block6;
+        v29.i256 = mload v1 i256;
+        v30.i32 = trunc v29 i32;
+        mstore v11 v30 i32;
+        v31.i32 = mload v11 i32;
+        v32.i32 = mload v5 i32;
+        v33.i1 = ne v31 0.i32;
+        v34.i1 = ne v32 0.i32;
+        v35.i1 = eq v33 v34;
+        mstore v6 v35 i1;
+        v36.i1 = mload v6 i1;
+        br v36 block3 block6;
 
     block6:
         jump block4;
@@ -295,49 +329,57 @@ func private %match_i64(v0.i64) -> i64 {
         v7.*i64 = alloca i64;
         v8.*i64 = alloca i64;
         v9.*i64 = alloca i64;
+        v10.*i64 = alloca i64;
+        v11.*i64 = alloca i64;
         mstore v1 v0 i64;
         mstore v3 0.i64 i64;
-        v11.i64 = mload v1 i64;
-        v12.i64 = mload v3 i64;
-        v13.i1 = ne v11 0.i64;
-        v14.i1 = ne v12 0.i64;
-        v15.i1 = eq v13 v14;
-        mstore v4 v15 i1;
-        v16.i1 = mload v4 i1;
-        br v16 block2 block5;
+        v13.i256 = mload v1 i256;
+        v14.i64 = trunc v13 i64;
+        mstore v10 v14 i64;
+        v15.i64 = mload v10 i64;
+        v16.i64 = mload v3 i64;
+        v17.i1 = ne v15 0.i64;
+        v18.i1 = ne v16 0.i64;
+        v19.i1 = eq v17 v18;
+        mstore v4 v19 i1;
+        v20.i1 = mload v4 i1;
+        br v20 block2 block5;
 
     block1:
-        v17.i64 = mload v2 i64;
-        return v17;
+        v21.i64 = mload v2 i64;
+        return v21;
 
     block2:
         mstore v7 1.i64 i64;
-        v19.i64 = mload v7 i64;
-        mstore v2 v19 i64;
+        v23.i64 = mload v7 i64;
+        mstore v2 v23 i64;
         jump block1;
 
     block3:
         mstore v8 2.i64 i64;
-        v21.i64 = mload v8 i64;
-        mstore v2 v21 i64;
+        v25.i64 = mload v8 i64;
+        mstore v2 v25 i64;
         jump block1;
 
     block4:
         mstore v9 3.i64 i64;
-        v23.i64 = mload v9 i64;
-        mstore v2 v23 i64;
+        v27.i64 = mload v9 i64;
+        mstore v2 v27 i64;
         jump block1;
 
     block5:
         mstore v5 9223372036854775807.i64 i64;
-        v25.i64 = mload v1 i64;
-        v26.i64 = mload v5 i64;
-        v27.i1 = ne v25 0.i64;
-        v28.i1 = ne v26 0.i64;
-        v29.i1 = eq v27 v28;
-        mstore v6 v29 i1;
-        v30.i1 = mload v6 i1;
-        br v30 block3 block6;
+        v29.i256 = mload v1 i256;
+        v30.i64 = trunc v29 i64;
+        mstore v11 v30 i64;
+        v31.i64 = mload v11 i64;
+        v32.i64 = mload v5 i64;
+        v33.i1 = ne v31 0.i64;
+        v34.i1 = ne v32 0.i64;
+        v35.i1 = eq v33 v34;
+        mstore v6 v35 i1;
+        v36.i1 = mload v6 i1;
+        br v36 block3 block6;
 
     block6:
         jump block4;
@@ -354,49 +396,57 @@ func private %match_i8(v0.i8) -> i8 {
         v7.*i8 = alloca i8;
         v8.*i8 = alloca i8;
         v9.*i8 = alloca i8;
+        v10.*i8 = alloca i8;
+        v11.*i8 = alloca i8;
         mstore v1 v0 i8;
         mstore v3 0.i8 i8;
-        v11.i8 = mload v1 i8;
-        v12.i8 = mload v3 i8;
-        v13.i1 = ne v11 0.i8;
-        v14.i1 = ne v12 0.i8;
-        v15.i1 = eq v13 v14;
-        mstore v4 v15 i1;
-        v16.i1 = mload v4 i1;
-        br v16 block2 block5;
+        v13.i256 = mload v1 i256;
+        v14.i8 = trunc v13 i8;
+        mstore v10 v14 i8;
+        v15.i8 = mload v10 i8;
+        v16.i8 = mload v3 i8;
+        v17.i1 = ne v15 0.i8;
+        v18.i1 = ne v16 0.i8;
+        v19.i1 = eq v17 v18;
+        mstore v4 v19 i1;
+        v20.i1 = mload v4 i1;
+        br v20 block2 block5;
 
     block1:
-        v17.i8 = mload v2 i8;
-        return v17;
+        v21.i8 = mload v2 i8;
+        return v21;
 
     block2:
         mstore v7 1.i8 i8;
-        v19.i8 = mload v7 i8;
-        mstore v2 v19 i8;
+        v23.i8 = mload v7 i8;
+        mstore v2 v23 i8;
         jump block1;
 
     block3:
         mstore v8 2.i8 i8;
-        v21.i8 = mload v8 i8;
-        mstore v2 v21 i8;
+        v25.i8 = mload v8 i8;
+        mstore v2 v25 i8;
         jump block1;
 
     block4:
         mstore v9 3.i8 i8;
-        v23.i8 = mload v9 i8;
-        mstore v2 v23 i8;
+        v27.i8 = mload v9 i8;
+        mstore v2 v27 i8;
         jump block1;
 
     block5:
         mstore v5 99.i8 i8;
-        v25.i8 = mload v1 i8;
-        v26.i8 = mload v5 i8;
-        v27.i1 = ne v25 0.i8;
-        v28.i1 = ne v26 0.i8;
-        v29.i1 = eq v27 v28;
-        mstore v6 v29 i1;
-        v30.i1 = mload v6 i1;
-        br v30 block3 block6;
+        v29.i256 = mload v1 i256;
+        v30.i8 = trunc v29 i8;
+        mstore v11 v30 i8;
+        v31.i8 = mload v11 i8;
+        v32.i8 = mload v5 i8;
+        v33.i1 = ne v31 0.i8;
+        v34.i1 = ne v32 0.i8;
+        v35.i1 = eq v33 v34;
+        mstore v6 v35 i1;
+        v36.i1 = mload v6 i1;
+        br v36 block3 block6;
 
     block6:
         jump block4;
@@ -413,49 +463,57 @@ func private %match_u128(v0.i128) -> i128 {
         v7.*i128 = alloca i128;
         v8.*i128 = alloca i128;
         v9.*i128 = alloca i128;
+        v10.*i128 = alloca i128;
+        v11.*i128 = alloca i128;
         mstore v1 v0 i128;
         mstore v3 0.i128 i128;
-        v11.i128 = mload v1 i128;
-        v12.i128 = mload v3 i128;
-        v13.i1 = ne v11 0.i128;
-        v14.i1 = ne v12 0.i128;
-        v15.i1 = eq v13 v14;
-        mstore v4 v15 i1;
-        v16.i1 = mload v4 i1;
-        br v16 block2 block5;
+        v13.i256 = mload v1 i256;
+        v14.i128 = trunc v13 i128;
+        mstore v10 v14 i128;
+        v15.i128 = mload v10 i128;
+        v16.i128 = mload v3 i128;
+        v17.i1 = ne v15 0.i128;
+        v18.i1 = ne v16 0.i128;
+        v19.i1 = eq v17 v18;
+        mstore v4 v19 i1;
+        v20.i1 = mload v4 i1;
+        br v20 block2 block5;
 
     block1:
-        v17.i128 = mload v2 i128;
-        return v17;
+        v21.i128 = mload v2 i128;
+        return v21;
 
     block2:
         mstore v7 1.i128 i128;
-        v19.i128 = mload v7 i128;
-        mstore v2 v19 i128;
+        v23.i128 = mload v7 i128;
+        mstore v2 v23 i128;
         jump block1;
 
     block3:
         mstore v8 2.i128 i128;
-        v21.i128 = mload v8 i128;
-        mstore v2 v21 i128;
+        v25.i128 = mload v8 i128;
+        mstore v2 v25 i128;
         jump block1;
 
     block4:
         mstore v9 3.i128 i128;
-        v23.i128 = mload v9 i128;
-        mstore v2 v23 i128;
+        v27.i128 = mload v9 i128;
+        mstore v2 v27 i128;
         jump block1;
 
     block5:
         mstore v5 -1.i128 i128;
-        v25.i128 = mload v1 i128;
-        v26.i128 = mload v5 i128;
-        v27.i1 = ne v25 0.i128;
-        v28.i1 = ne v26 0.i128;
-        v29.i1 = eq v27 v28;
-        mstore v6 v29 i1;
-        v30.i1 = mload v6 i1;
-        br v30 block3 block6;
+        v29.i256 = mload v1 i256;
+        v30.i128 = trunc v29 i128;
+        mstore v11 v30 i128;
+        v31.i128 = mload v11 i128;
+        v32.i128 = mload v5 i128;
+        v33.i1 = ne v31 0.i128;
+        v34.i1 = ne v32 0.i128;
+        v35.i1 = eq v33 v34;
+        mstore v6 v35 i1;
+        v36.i1 = mload v6 i1;
+        br v36 block3 block6;
 
     block6:
         jump block4;
@@ -472,49 +530,57 @@ func private %match_u16(v0.i16) -> i16 {
         v7.*i16 = alloca i16;
         v8.*i16 = alloca i16;
         v9.*i16 = alloca i16;
+        v10.*i16 = alloca i16;
+        v11.*i16 = alloca i16;
         mstore v1 v0 i16;
         mstore v3 4660.i16 i16;
-        v11.i16 = mload v1 i16;
-        v12.i16 = mload v3 i16;
-        v14.i1 = ne v11 0.i16;
-        v15.i1 = ne v12 0.i16;
-        v16.i1 = eq v14 v15;
-        mstore v4 v16 i1;
-        v17.i1 = mload v4 i1;
-        br v17 block2 block5;
+        v13.i256 = mload v1 i256;
+        v14.i16 = trunc v13 i16;
+        mstore v10 v14 i16;
+        v15.i16 = mload v10 i16;
+        v16.i16 = mload v3 i16;
+        v18.i1 = ne v15 0.i16;
+        v19.i1 = ne v16 0.i16;
+        v20.i1 = eq v18 v19;
+        mstore v4 v20 i1;
+        v21.i1 = mload v4 i1;
+        br v21 block2 block5;
 
     block1:
-        v18.i16 = mload v2 i16;
-        return v18;
+        v22.i16 = mload v2 i16;
+        return v22;
 
     block2:
         mstore v7 1.i16 i16;
-        v20.i16 = mload v7 i16;
-        mstore v2 v20 i16;
+        v24.i16 = mload v7 i16;
+        mstore v2 v24 i16;
         jump block1;
 
     block3:
         mstore v8 2.i16 i16;
-        v22.i16 = mload v8 i16;
-        mstore v2 v22 i16;
+        v26.i16 = mload v8 i16;
+        mstore v2 v26 i16;
         jump block1;
 
     block4:
         mstore v9 3.i16 i16;
-        v24.i16 = mload v9 i16;
-        mstore v2 v24 i16;
+        v28.i16 = mload v9 i16;
+        mstore v2 v28 i16;
         jump block1;
 
     block5:
         mstore v5 -21555.i16 i16;
-        v26.i16 = mload v1 i16;
-        v27.i16 = mload v5 i16;
-        v28.i1 = ne v26 0.i16;
-        v29.i1 = ne v27 0.i16;
-        v30.i1 = eq v28 v29;
-        mstore v6 v30 i1;
-        v31.i1 = mload v6 i1;
-        br v31 block3 block6;
+        v30.i256 = mload v1 i256;
+        v31.i16 = trunc v30 i16;
+        mstore v11 v31 i16;
+        v32.i16 = mload v11 i16;
+        v33.i16 = mload v5 i16;
+        v34.i1 = ne v32 0.i16;
+        v35.i1 = ne v33 0.i16;
+        v36.i1 = eq v34 v35;
+        mstore v6 v36 i1;
+        v37.i1 = mload v6 i1;
+        br v37 block3 block6;
 
     block6:
         jump block4;
@@ -531,49 +597,55 @@ func private %match_u256(v0.i256) -> i256 {
         v7.*i256 = alloca i256;
         v8.*i256 = alloca i256;
         v9.*i256 = alloca i256;
+        v10.*i256 = alloca i256;
+        v11.*i256 = alloca i256;
         mstore v1 v0 i256;
         mstore v3 0.i256 i256;
-        v11.i256 = mload v1 i256;
-        v12.i256 = mload v3 i256;
-        v13.i1 = ne v11 0.i256;
-        v14.i1 = ne v12 0.i256;
-        v15.i1 = eq v13 v14;
-        mstore v4 v15 i1;
-        v16.i1 = mload v4 i1;
-        br v16 block2 block5;
+        v13.i256 = mload v1 i256;
+        mstore v10 v13 i256;
+        v14.i256 = mload v10 i256;
+        v15.i256 = mload v3 i256;
+        v16.i1 = ne v14 0.i256;
+        v17.i1 = ne v15 0.i256;
+        v18.i1 = eq v16 v17;
+        mstore v4 v18 i1;
+        v19.i1 = mload v4 i1;
+        br v19 block2 block5;
 
     block1:
-        v17.i256 = mload v2 i256;
-        return v17;
+        v20.i256 = mload v2 i256;
+        return v20;
 
     block2:
         mstore v7 1.i256 i256;
-        v19.i256 = mload v7 i256;
-        mstore v2 v19 i256;
+        v22.i256 = mload v7 i256;
+        mstore v2 v22 i256;
         jump block1;
 
     block3:
         mstore v8 2.i256 i256;
-        v21.i256 = mload v8 i256;
-        mstore v2 v21 i256;
+        v24.i256 = mload v8 i256;
+        mstore v2 v24 i256;
         jump block1;
 
     block4:
         mstore v9 3.i256 i256;
-        v23.i256 = mload v9 i256;
-        mstore v2 v23 i256;
+        v26.i256 = mload v9 i256;
+        mstore v2 v26 i256;
         jump block1;
 
     block5:
         mstore v5 -1.i256 i256;
-        v25.i256 = mload v1 i256;
-        v26.i256 = mload v5 i256;
-        v27.i1 = ne v25 0.i256;
-        v28.i1 = ne v26 0.i256;
-        v29.i1 = eq v27 v28;
-        mstore v6 v29 i1;
-        v30.i1 = mload v6 i1;
-        br v30 block3 block6;
+        v28.i256 = mload v1 i256;
+        mstore v11 v28 i256;
+        v29.i256 = mload v11 i256;
+        v30.i256 = mload v5 i256;
+        v31.i1 = ne v29 0.i256;
+        v32.i1 = ne v30 0.i256;
+        v33.i1 = eq v31 v32;
+        mstore v6 v33 i1;
+        v34.i1 = mload v6 i1;
+        br v34 block3 block6;
 
     block6:
         jump block4;
@@ -590,49 +662,57 @@ func private %match_u32(v0.i32) -> i32 {
         v7.*i32 = alloca i32;
         v8.*i32 = alloca i32;
         v9.*i32 = alloca i32;
+        v10.*i32 = alloca i32;
+        v11.*i32 = alloca i32;
         mstore v1 v0 i32;
         mstore v3 -559038737.i32 i32;
-        v11.i32 = mload v1 i32;
-        v12.i32 = mload v3 i32;
-        v14.i1 = ne v11 0.i32;
-        v15.i1 = ne v12 0.i32;
-        v16.i1 = eq v14 v15;
-        mstore v4 v16 i1;
-        v17.i1 = mload v4 i1;
-        br v17 block2 block5;
+        v13.i256 = mload v1 i256;
+        v14.i32 = trunc v13 i32;
+        mstore v10 v14 i32;
+        v15.i32 = mload v10 i32;
+        v16.i32 = mload v3 i32;
+        v18.i1 = ne v15 0.i32;
+        v19.i1 = ne v16 0.i32;
+        v20.i1 = eq v18 v19;
+        mstore v4 v20 i1;
+        v21.i1 = mload v4 i1;
+        br v21 block2 block5;
 
     block1:
-        v18.i32 = mload v2 i32;
-        return v18;
+        v22.i32 = mload v2 i32;
+        return v22;
 
     block2:
         mstore v7 1.i32 i32;
-        v20.i32 = mload v7 i32;
-        mstore v2 v20 i32;
+        v24.i32 = mload v7 i32;
+        mstore v2 v24 i32;
         jump block1;
 
     block3:
         mstore v8 2.i32 i32;
-        v22.i32 = mload v8 i32;
-        mstore v2 v22 i32;
+        v26.i32 = mload v8 i32;
+        mstore v2 v26 i32;
         jump block1;
 
     block4:
         mstore v9 3.i32 i32;
-        v24.i32 = mload v9 i32;
-        mstore v2 v24 i32;
+        v28.i32 = mload v9 i32;
+        mstore v2 v28 i32;
         jump block1;
 
     block5:
         mstore v5 -889275714.i32 i32;
-        v26.i32 = mload v1 i32;
-        v27.i32 = mload v5 i32;
-        v28.i1 = ne v26 0.i32;
-        v29.i1 = ne v27 0.i32;
-        v30.i1 = eq v28 v29;
-        mstore v6 v30 i1;
-        v31.i1 = mload v6 i1;
-        br v31 block3 block6;
+        v30.i256 = mload v1 i256;
+        v31.i32 = trunc v30 i32;
+        mstore v11 v31 i32;
+        v32.i32 = mload v11 i32;
+        v33.i32 = mload v5 i32;
+        v34.i1 = ne v32 0.i32;
+        v35.i1 = ne v33 0.i32;
+        v36.i1 = eq v34 v35;
+        mstore v6 v36 i1;
+        v37.i1 = mload v6 i1;
+        br v37 block3 block6;
 
     block6:
         jump block4;
@@ -649,49 +729,57 @@ func private %match_u64(v0.i64) -> i64 {
         v7.*i64 = alloca i64;
         v8.*i64 = alloca i64;
         v9.*i64 = alloca i64;
+        v10.*i64 = alloca i64;
+        v11.*i64 = alloca i64;
         mstore v1 v0 i64;
         mstore v3 0.i64 i64;
-        v11.i64 = mload v1 i64;
-        v12.i64 = mload v3 i64;
-        v13.i1 = ne v11 0.i64;
-        v14.i1 = ne v12 0.i64;
-        v15.i1 = eq v13 v14;
-        mstore v4 v15 i1;
-        v16.i1 = mload v4 i1;
-        br v16 block2 block5;
+        v13.i256 = mload v1 i256;
+        v14.i64 = trunc v13 i64;
+        mstore v10 v14 i64;
+        v15.i64 = mload v10 i64;
+        v16.i64 = mload v3 i64;
+        v17.i1 = ne v15 0.i64;
+        v18.i1 = ne v16 0.i64;
+        v19.i1 = eq v17 v18;
+        mstore v4 v19 i1;
+        v20.i1 = mload v4 i1;
+        br v20 block2 block5;
 
     block1:
-        v17.i64 = mload v2 i64;
-        return v17;
+        v21.i64 = mload v2 i64;
+        return v21;
 
     block2:
         mstore v7 1.i64 i64;
-        v19.i64 = mload v7 i64;
-        mstore v2 v19 i64;
+        v23.i64 = mload v7 i64;
+        mstore v2 v23 i64;
         jump block1;
 
     block3:
         mstore v8 2.i64 i64;
-        v21.i64 = mload v8 i64;
-        mstore v2 v21 i64;
+        v25.i64 = mload v8 i64;
+        mstore v2 v25 i64;
         jump block1;
 
     block4:
         mstore v9 3.i64 i64;
-        v23.i64 = mload v9 i64;
-        mstore v2 v23 i64;
+        v27.i64 = mload v9 i64;
+        mstore v2 v27 i64;
         jump block1;
 
     block5:
         mstore v5 -1.i64 i64;
-        v25.i64 = mload v1 i64;
-        v26.i64 = mload v5 i64;
-        v27.i1 = ne v25 0.i64;
-        v28.i1 = ne v26 0.i64;
-        v29.i1 = eq v27 v28;
-        mstore v6 v29 i1;
-        v30.i1 = mload v6 i1;
-        br v30 block3 block6;
+        v29.i256 = mload v1 i256;
+        v30.i64 = trunc v29 i64;
+        mstore v11 v30 i64;
+        v31.i64 = mload v11 i64;
+        v32.i64 = mload v5 i64;
+        v33.i1 = ne v31 0.i64;
+        v34.i1 = ne v32 0.i64;
+        v35.i1 = eq v33 v34;
+        mstore v6 v35 i1;
+        v36.i1 = mload v6 i1;
+        br v36 block3 block6;
 
     block6:
         jump block4;
@@ -708,49 +796,57 @@ func private %match_u8(v0.i8) -> i8 {
         v7.*i8 = alloca i8;
         v8.*i8 = alloca i8;
         v9.*i8 = alloca i8;
+        v10.*i8 = alloca i8;
+        v11.*i8 = alloca i8;
         mstore v1 v0 i8;
         mstore v3 0.i8 i8;
-        v11.i8 = mload v1 i8;
-        v12.i8 = mload v3 i8;
-        v13.i1 = ne v11 0.i8;
-        v14.i1 = ne v12 0.i8;
-        v15.i1 = eq v13 v14;
-        mstore v4 v15 i1;
-        v16.i1 = mload v4 i1;
-        br v16 block2 block5;
+        v13.i256 = mload v1 i256;
+        v14.i8 = trunc v13 i8;
+        mstore v10 v14 i8;
+        v15.i8 = mload v10 i8;
+        v16.i8 = mload v3 i8;
+        v17.i1 = ne v15 0.i8;
+        v18.i1 = ne v16 0.i8;
+        v19.i1 = eq v17 v18;
+        mstore v4 v19 i1;
+        v20.i1 = mload v4 i1;
+        br v20 block2 block5;
 
     block1:
-        v17.i8 = mload v2 i8;
-        return v17;
+        v21.i8 = mload v2 i8;
+        return v21;
 
     block2:
         mstore v7 1.i8 i8;
-        v19.i8 = mload v7 i8;
-        mstore v2 v19 i8;
+        v23.i8 = mload v7 i8;
+        mstore v2 v23 i8;
         jump block1;
 
     block3:
         mstore v8 2.i8 i8;
-        v21.i8 = mload v8 i8;
-        mstore v2 v21 i8;
+        v25.i8 = mload v8 i8;
+        mstore v2 v25 i8;
         jump block1;
 
     block4:
         mstore v9 3.i8 i8;
-        v23.i8 = mload v9 i8;
-        mstore v2 v23 i8;
+        v27.i8 = mload v9 i8;
+        mstore v2 v27 i8;
         jump block1;
 
     block5:
         mstore v5 -1.i8 i8;
-        v25.i8 = mload v1 i8;
-        v26.i8 = mload v5 i8;
-        v27.i1 = ne v25 0.i8;
-        v28.i1 = ne v26 0.i8;
-        v29.i1 = eq v27 v28;
-        mstore v6 v29 i1;
-        v30.i1 = mload v6 i1;
-        br v30 block3 block6;
+        v29.i256 = mload v1 i256;
+        v30.i8 = trunc v29 i8;
+        mstore v11 v30 i8;
+        v31.i8 = mload v11 i8;
+        v32.i8 = mload v5 i8;
+        v33.i1 = ne v31 0.i8;
+        v34.i1 = ne v32 0.i8;
+        v35.i1 = eq v33 v34;
+        mstore v6 v35 i1;
+        v36.i1 = mload v6 i1;
+        br v36 block3 block6;
 
     block6:
         jump block4;

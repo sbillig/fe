@@ -19,25 +19,21 @@ func private %borrow_handles_readback() -> i256 {
         v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
         v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
         mstore v2 0.i256 i256;
-        v8.i256 = mload v2 i256;
-        mstore v0 v8 i256;
-        v9.i256 = ptr_to_int v0 i256;
-        mstore v3 v9 i256;
-        v10.i256 = mload v3 i256;
-        v11.i256 = mload v10 i256;
-        mstore v5 v11 i256;
-        v12.i256 = mload v5 i256;
-        mstore v6 v12 i256;
-        v13.i256 = mload v6 i256;
-        mstore v1 v13 i256;
+        v7.i256 = mload v2 i256;
+        mstore v0 v7 i256;
+        v8.i256 = ptr_to_int v0 i256;
+        mstore v3 v8 i256;
+        v9.i256 = mload v3 i256;
+        v10.i256 = mload v9 i256;
+        mstore v5 v10 i256;
+        v11.i256 = mload v5 i256;
+        mstore v1 v11 i256;
         mstore v4 5.i256 i256;
-        v15.i256 = mload v4 i256;
-        v16.i256 = mload v1 i256;
-        mstore v16 v15 i256;
-        v17.i256 = mload v0 i256;
-        return v17;
+        v13.i256 = mload v4 i256;
+        mstore v1 v13 i256;
+        v14.i256 = mload v0 i256;
+        return v14;
 }
 
 

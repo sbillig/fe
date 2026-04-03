@@ -28,81 +28,102 @@ func private %cast_u8_usize_cmp(v0.[i8; 8], v1.i256, v2.i256) -> i8 {
         v15.*i1 = alloca i1;
         v16.*i8 = alloca i8;
         v17.*i8 = alloca i8;
+        v18.*i256 = alloca i256;
+        v19.*i256 = alloca i256;
+        v20.*i256 = alloca i256;
+        v21.*i256 = alloca i256;
+        v22.*i256 = alloca i256;
+        v23.*i256 = alloca i256;
+        v24.*i256 = alloca i256;
         obj.store v3 v0;
         mstore v4 v1 i256;
         mstore v5 v2 i256;
-        v18.i256 = mload v4 i256;
-        v19.objref<i8> = obj.index v3 v18;
-        v20.i8 = obj.load v19;
-        mstore v7 v20 i8;
-        v21.i8 = mload v7 i8;
-        mstore v6 v21 i8;
-        v22.i8 = mload v6 i8;
-        v23.i256 = zext v22 i256;
-        mstore v8 v23 i256;
-        v24.i256 = mload v5 i256;
-        v25.i256 = mload v8 i256;
-        v27.i1 = ne v24 0.i256;
-        v28.i1 = ne v25 0.i256;
-        v29.i1 = lt v27 v28;
-        mstore v9 v29 i1;
-        v30.i1 = mload v9 i1;
-        br v30 block1 block2;
+        v25.i256 = mload v4 i256;
+        mstore v18 v25 i256;
+        v26.i256 = mload v18 i256;
+        v27.objref<i8> = obj.index v3 v26;
+        v28.i8 = obj.load v27;
+        mstore v7 v28 i8;
+        v29.i8 = mload v7 i8;
+        mstore v6 v29 i8;
+        v30.i8 = mload v6 i8;
+        v31.i256 = zext v30 i256;
+        mstore v8 v31 i256;
+        v32.i256 = mload v5 i256;
+        mstore v19 v32 i256;
+        v33.i256 = mload v8 i256;
+        mstore v20 v33 i256;
+        v34.i256 = mload v19 i256;
+        v35.i256 = mload v20 i256;
+        v37.i1 = ne v34 0.i256;
+        v38.i1 = ne v35 0.i256;
+        v39.i1 = lt v37 v38;
+        mstore v9 v39 i1;
+        v40.i1 = mload v9 i1;
+        br v40 block1 block2;
 
     block1:
         mstore v10 1.i8 i8;
-        v32.i8 = mload v10 i8;
-        return v32;
+        v42.i8 = mload v10 i8;
+        return v42;
 
     block2:
         jump block3;
 
     block3:
-        v33.i8 = mload v6 i8;
-        v34.i256 = zext v33 i256;
-        mstore v11 v34 i256;
-        v35.i256 = mload v5 i256;
-        v36.i256 = mload v11 i256;
-        v37.i1 = ne v35 0.i256;
-        v38.i1 = ne v36 0.i256;
-        v39.i1 = eq v37 v38;
-        mstore v12 v39 i1;
-        v40.i1 = mload v12 i1;
-        br v40 block4 block5;
+        v43.i8 = mload v6 i8;
+        v44.i256 = zext v43 i256;
+        mstore v11 v44 i256;
+        v45.i256 = mload v5 i256;
+        mstore v21 v45 i256;
+        v46.i256 = mload v11 i256;
+        mstore v22 v46 i256;
+        v47.i256 = mload v21 i256;
+        v48.i256 = mload v22 i256;
+        v49.i1 = ne v47 0.i256;
+        v50.i1 = ne v48 0.i256;
+        v51.i1 = eq v49 v50;
+        mstore v12 v51 i1;
+        v52.i1 = mload v12 i1;
+        br v52 block4 block5;
 
     block4:
         mstore v13 2.i8 i8;
-        v42.i8 = mload v13 i8;
-        return v42;
+        v54.i8 = mload v13 i8;
+        return v54;
 
     block5:
         jump block6;
 
     block6:
-        v43.i8 = mload v6 i8;
-        v44.i256 = zext v43 i256;
-        mstore v14 v44 i256;
-        v45.i256 = mload v5 i256;
-        v46.i256 = mload v14 i256;
-        v47.i1 = ne v45 0.i256;
-        v48.i1 = ne v46 0.i256;
-        v49.i1 = gt v47 v48;
-        mstore v15 v49 i1;
-        v50.i1 = mload v15 i1;
-        br v50 block7 block8;
+        v55.i8 = mload v6 i8;
+        v56.i256 = zext v55 i256;
+        mstore v14 v56 i256;
+        v57.i256 = mload v5 i256;
+        mstore v23 v57 i256;
+        v58.i256 = mload v14 i256;
+        mstore v24 v58 i256;
+        v59.i256 = mload v23 i256;
+        v60.i256 = mload v24 i256;
+        v61.i1 = ne v59 0.i256;
+        v62.i1 = ne v60 0.i256;
+        v63.i1 = gt v61 v62;
+        mstore v15 v63 i1;
+        v64.i1 = mload v15 i1;
+        br v64 block7 block8;
 
     block7:
         mstore v16 3.i8 i8;
-        v52.i8 = mload v16 i8;
-        return v52;
+        v66.i8 = mload v16 i8;
+        return v66;
 
     block8:
         jump block9;
 
     block9:
         mstore v17 0.i8 i8;
-        v54.i8 = mload v17 i8;
-        return v54;
+        v68.i8 = mload v17 i8;
+        return v68;
 }
 
 

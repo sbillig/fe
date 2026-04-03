@@ -26,39 +26,42 @@ func private %match_enum(v0.@__fe_layout_0) -> i8 {
         v5.*i8 = alloca i8;
         v6.*i8 = alloca i8;
         v7.*i8 = alloca i8;
+        v8.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
         obj.store v1 v0;
-        v8.@__fe_layout_0 = obj.load v1;
-        v9.i8 = enum.tag v8;
-        mstore v7 v9 i8;
-        v10.i8 = mload v7 i8;
-        br_table v10 block5 (0.i256 block2) (1.i256 block3) (2.i256 block4);
+        v9.@__fe_layout_0 = obj.load v1;
+        obj.store v8 v9;
+        v10.@__fe_layout_0 = obj.load v8;
+        v11.i8 = enum.tag v10;
+        mstore v7 v11 i8;
+        v12.i8 = mload v7 i8;
+        br_table v12 block5 (0.i256 block2) (1.i256 block3) (2.i256 block4);
 
     block1:
-        v14.i8 = mload v2 i8;
-        return v14;
+        v16.i8 = mload v2 i8;
+        return v16;
 
     block2:
         mstore v3 1.i8 i8;
-        v16.i8 = mload v3 i8;
-        mstore v2 v16 i8;
+        v18.i8 = mload v3 i8;
+        mstore v2 v18 i8;
         jump block1;
 
     block3:
         mstore v4 2.i8 i8;
-        v18.i8 = mload v4 i8;
-        mstore v2 v18 i8;
+        v20.i8 = mload v4 i8;
+        mstore v2 v20 i8;
         jump block1;
 
     block4:
         mstore v5 3.i8 i8;
-        v20.i8 = mload v5 i8;
-        mstore v2 v20 i8;
+        v22.i8 = mload v5 i8;
+        mstore v2 v22 i8;
         jump block1;
 
     block5:
         mstore v6 4.i8 i8;
-        v22.i8 = mload v6 i8;
-        mstore v2 v22 i8;
+        v24.i8 = mload v6 i8;
+        mstore v2 v24 i8;
         jump block1;
 }
 

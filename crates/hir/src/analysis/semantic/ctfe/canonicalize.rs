@@ -1,9 +1,9 @@
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        SConst, SExpr, SStmt, SemConstId, SemConstValue, SemanticBody, array_const, enum_const,
-        instance::SemanticInstance, instantiate_with_generic_args, sem_const_from_ty, struct_const,
-        tuple_const,
+        SConst, SExpr, SStmt, SStmtKind, SemConstId, SemConstValue, SemanticBody, array_const,
+        enum_const, instance::SemanticInstance, instantiate_with_generic_args, sem_const_from_ty,
+        struct_const, tuple_const,
     },
     ty::{
         const_ty::ConstTyData,
@@ -32,9 +32,9 @@ fn canonicalize_stmt<'db>(
     instance: SemanticInstance<'db>,
     stmt: &mut SStmt<'db>,
 ) {
-    match stmt {
-        SStmt::Assign { expr, .. } => canonicalize_expr(db, instance, expr),
-        SStmt::Store { .. } => {}
+    match &mut stmt.kind {
+        SStmtKind::Assign { expr, .. } => canonicalize_expr(db, instance, expr),
+        SStmtKind::Store { .. } => {}
     }
 }
 

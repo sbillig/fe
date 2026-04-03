@@ -1,0 +1,285 @@
+use common::diagnostics::CompleteDiagnostic;
+use cranelift_entity::{EntityRef, entity_impl};
+use salsa::Update;
+
+use crate::{
+    analysis::{
+        semantic::{
+            FieldIndex, Mutability, SConst, SLocalId, SemOrigin, SemanticBody, SemanticCalleeRef,
+            SemanticCodeRegionRef, VariantIndex,
+        },
+        ty::{
+            provider::ProviderAddressSpace,
+            ty_check::{BodyOwner, EffectPassMode, LocalBinding},
+            ty_def::{BorrowKind, TyId},
+        },
+    },
+    projection::ProjectionPath,
+    semantic::ProviderBinding,
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NBorrowRootId(u32);
+entity_impl!(NBorrowRootId);
+
+pub type NSProjectionPath<'db> = ProjectionPath<TyId<'db>, VariantIndex, SLocalId>;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct NormalizedSemanticBody<'db> {
+    pub owner: crate::analysis::semantic::SemanticInstance<'db>,
+    pub template_owner: BodyOwner<'db>,
+    pub locals: Vec<NSLocal<'db>>,
+    pub blocks: Vec<NSBlock<'db>>,
+    pub borrow_roots: Vec<NBorrowRoot<'db>>,
+}
+
+impl<'db> NormalizedSemanticBody<'db> {
+    pub fn local(&self, id: SLocalId) -> Option<&NSLocal<'db>> {
+        self.locals.get(id.index())
+    }
+
+    pub fn block(&self, id: crate::analysis::semantic::SBlockId) -> Option<&NSBlock<'db>> {
+        self.blocks.get(id.index())
+    }
+
+    pub fn root(&self, id: NBorrowRootId) -> Option<&NBorrowRoot<'db>> {
+        self.borrow_roots.get(id.index())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct NSLocal<'db> {
+    pub ty: TyId<'db>,
+    pub mutability: Mutability,
+    pub source: Option<LocalBinding<'db>>,
+    pub lowering: NormalizedBindingLowering<'db>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum NormalizedBindingLowering<'db> {
+    Erased,
+    ValueLocal {
+        root: NBorrowRootId,
+    },
+    PlaceBoundValue {
+        root: NBorrowRootId,
+        value_ty: TyId<'db>,
+    },
+    CarrierLocal {
+        root: Option<NBorrowRootId>,
+        provider: Option<ProviderBinding<'db>>,
+        target_ty: TyId<'db>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum NBorrowRoot<'db> {
+    Param { local: SLocalId, param_idx: u32 },
+    LocalSlot { local: SLocalId },
+    Provider { binding: ProviderBinding<'db> },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct NSBlock<'db> {
+    pub stmts: Vec<NSStmt<'db>>,
+    pub terminator: NSTerminator<'db>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct NSPlace<'db> {
+    pub root: NSPlaceRoot,
+    pub path: NSProjectionPath<'db>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum NSPlaceRoot {
+    Root(NBorrowRootId),
+    CarrierDerefLocal(SLocalId),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ReadMode {
+    Copy,
+    Move,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct NOperand {
+    pub local: SLocalId,
+    pub mode: ReadMode,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct NEffectArg<'db> {
+    pub arg: NEffectArgValue<'db>,
+    pub pass_mode: EffectPassMode,
+    pub target_ty: Option<TyId<'db>>,
+    pub provider: Option<ProviderAddressSpace>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum NEffectArgValue<'db> {
+    Place(NSPlace<'db>),
+    Value(NOperand),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum NExpr<'db> {
+    Use(NOperand),
+    ReadPlace {
+        place: NSPlace<'db>,
+        mode: ReadMode,
+    },
+    Borrow {
+        place: NSPlace<'db>,
+        kind: BorrowKind,
+        provider: Option<ProviderAddressSpace>,
+    },
+    Const(SConst<'db>),
+    Unary {
+        op: crate::hir_def::UnOp,
+        value: NOperand,
+    },
+    Binary {
+        op: crate::hir_def::BinOp,
+        lhs: NOperand,
+        rhs: NOperand,
+    },
+    Cast {
+        value: NOperand,
+        to: TyId<'db>,
+    },
+    AggregateMake {
+        ty: TyId<'db>,
+        fields: Box<[NOperand]>,
+    },
+    EnumMake {
+        enum_ty: TyId<'db>,
+        variant: VariantIndex,
+        fields: Box<[NOperand]>,
+    },
+    GetEnumTag {
+        value: NOperand,
+    },
+    IsEnumVariant {
+        value: NOperand,
+        variant: VariantIndex,
+    },
+    ExtractEnumField {
+        value: NOperand,
+        variant: VariantIndex,
+        field: FieldIndex,
+    },
+    CodeRegionOffset {
+        region: SemanticCodeRegionRef<'db>,
+    },
+    CodeRegionLen {
+        region: SemanticCodeRegionRef<'db>,
+    },
+    Call {
+        callee: SemanticCalleeRef<'db>,
+        args: Box<[NOperand]>,
+        effect_args: Box<[NEffectArg<'db>]>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct NSStmt<'db> {
+    pub origin: SemOrigin<'db>,
+    pub kind: NSStmtKind<'db>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum NSStmtKind<'db> {
+    Assign { dst: SLocalId, expr: NExpr<'db> },
+    Store { dst: NSPlace<'db>, src: SLocalId },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct NSTerminator<'db> {
+    pub origin: SemOrigin<'db>,
+    pub kind: NSTerminatorKind<'db>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum NSTerminatorKind<'db> {
+    Goto(crate::analysis::semantic::SBlockId),
+    Branch {
+        cond: NOperand,
+        then_bb: crate::analysis::semantic::SBlockId,
+        else_bb: crate::analysis::semantic::SBlockId,
+    },
+    MatchEnum {
+        value: NOperand,
+        enum_ty: TyId<'db>,
+        cases: Box<[(VariantIndex, crate::analysis::semantic::SBlockId)]>,
+        default: Option<crate::analysis::semantic::SBlockId>,
+    },
+    Return(Option<NOperand>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum SemanticNormalizeError<'db> {
+    MissingBorrowRoot {
+        local: SLocalId,
+    },
+    IllegalCarrierPlace {
+        local: SLocalId,
+        origin: SemOrigin<'db>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BorrowInputRef {
+    Param(u32),
+    EffectArg(u32),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct BorrowTransform<'db> {
+    pub input: BorrowInputRef,
+    pub proj: NSProjectionPath<'db>,
+}
+
+pub type BorrowSummary<'db> = Vec<BorrowTransform<'db>>;
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct BorrowSummaryId<'db> {
+    #[return_ref]
+    pub items: Vec<BorrowTransform<'db>>,
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct BorrowDiagnosticId<'db> {
+    pub diag: CompleteDiagnostic,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum SemanticBorrowSummaryResult<'db> {
+    Ok(Option<BorrowSummaryId<'db>>),
+    Err(BorrowDiagnosticId<'db>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum SemanticBorrowDiagKind {
+    BorrowConflict,
+    MoveConflict,
+    InvalidReturnBorrow,
+    Internal,
+}
+
+pub fn empty_normalized_body<'db>(
+    body: &SemanticBody<'db>,
+    locals: Vec<NSLocal<'db>>,
+    borrow_roots: Vec<NBorrowRoot<'db>>,
+) -> NormalizedSemanticBody<'db> {
+    NormalizedSemanticBody {
+        owner: body.owner,
+        template_owner: body.template_owner,
+        locals,
+        blocks: Vec::new(),
+        borrow_roots,
+    }
+}

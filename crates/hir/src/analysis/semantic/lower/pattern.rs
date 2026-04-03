@@ -3,8 +3,8 @@ use num_bigint::BigInt;
 use crate::{
     analysis::{
         semantic::{
-            FieldIndex, SBlockId, SConst, SExpr, SStmt, STerminator, SValueId, VariantIndex,
-            bool_const, bytes_const, int_const,
+            FieldIndex, SBlockId, SConst, SExpr, SStmtKind, STerminatorKind, SValueId,
+            VariantIndex, bool_const, bytes_const, int_const,
         },
         ty::{
             pattern_ir::{ConstructorKind, ValidatedPatId, ValidatedPatKind},
@@ -54,7 +54,7 @@ impl<'db> SmirLowerCtxt<'db> {
         else_bb: SBlockId,
     ) {
         let Some(root) = self.typed_body.pattern_root(pat) else {
-            self.set_terminator(self.current, STerminator::Goto(then_bb));
+            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
             return;
         };
         self.lower_validated_pattern_branch(root, value, then_bb, else_bb);
@@ -69,7 +69,7 @@ impl<'db> SmirLowerCtxt<'db> {
                         self.typed_body.pat_binding(binding.representative_pat)
                 {
                     let dst = self.alloc_binding_local(local_binding);
-                    self.push_stmt(SStmt::Assign {
+                    self.push_synthetic_stmt(SStmtKind::Assign {
                         dst,
                         expr: SExpr::Use(value),
                     });
@@ -193,7 +193,7 @@ impl<'db> SmirLowerCtxt<'db> {
         let node = self.typed_body.pattern_store().node(pat).clone();
         match node.kind {
             ValidatedPatKind::Wildcard { .. } => {
-                self.set_terminator(self.current, STerminator::Goto(then_bb));
+                self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
             }
             ValidatedPatKind::Constructor { ctor, fields } => match ctor {
                 ConstructorKind::Literal(lit, ty) => {
@@ -206,9 +206,9 @@ impl<'db> SmirLowerCtxt<'db> {
                             rhs,
                         },
                     );
-                    self.set_terminator(
+                    self.set_synthetic_terminator(
                         self.current,
-                        STerminator::Branch {
+                        STerminatorKind::Branch {
                             cond,
                             then_bb,
                             else_bb,
@@ -228,9 +228,9 @@ impl<'db> SmirLowerCtxt<'db> {
                             variant: VariantIndex(variant.idx),
                         },
                     );
-                    self.set_terminator(
+                    self.set_synthetic_terminator(
                         self.current,
-                        STerminator::Branch {
+                        STerminatorKind::Branch {
                             cond,
                             then_bb: success_bb,
                             else_bb,
@@ -253,7 +253,7 @@ impl<'db> SmirLowerCtxt<'db> {
             },
             ValidatedPatKind::Or(pats) => {
                 let Some((last, rest)) = pats.split_last() else {
-                    self.set_terminator(self.current, STerminator::Goto(else_bb));
+                    self.set_synthetic_terminator(self.current, STerminatorKind::Goto(else_bb));
                     return;
                 };
                 for pat in rest {
@@ -274,7 +274,7 @@ impl<'db> SmirLowerCtxt<'db> {
         else_bb: SBlockId,
     ) {
         if fields.is_empty() {
-            self.set_terminator(self.current, STerminator::Goto(then_bb));
+            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
             return;
         }
 
@@ -307,7 +307,7 @@ impl<'db> SmirLowerCtxt<'db> {
         else_bb: SBlockId,
     ) {
         if fields.is_empty() {
-            self.set_terminator(self.current, STerminator::Goto(then_bb));
+            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
             return;
         }
 

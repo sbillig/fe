@@ -26,40 +26,43 @@ func private %f(v0.@__fe_layout_0) -> i256 {
         v6.*i256 = alloca i256;
         v7.*i256 = alloca i256;
         v8.*i8 = alloca i8;
+        v9.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
         obj.store v1 v0;
-        v9.@__fe_layout_0 = obj.load v1;
-        v10.i8 = enum.tag v9;
-        mstore v8 v10 i8;
-        v11.i8 = mload v8 i8;
-        br_table v11 (0.i256 block2) (1.i256 block3);
+        v10.@__fe_layout_0 = obj.load v1;
+        obj.store v9 v10;
+        v11.@__fe_layout_0 = obj.load v9;
+        v12.i8 = enum.tag v11;
+        mstore v8 v12 i8;
+        v13.i8 = mload v8 i8;
+        br_table v13 (0.i256 block2) (1.i256 block3);
 
     block1:
-        v14.i256 = mload v3 i256;
-        mstore v2 v14 i256;
+        v16.i256 = mload v3 i256;
+        mstore v2 v16 i256;
         mstore v6 1.i256 i256;
-        v15.i256 = mload v2 i256;
-        v16.i256 = mload v6 i256;
-        (v17.i256, v18.i1) = uaddo v15 v16;
-        br v18 block4 block5;
+        v17.i256 = mload v2 i256;
+        v18.i256 = mload v6 i256;
+        (v19.i256, v20.i1) = uaddo v17 v18;
+        br v20 block4 block5;
 
     block2:
         mstore v4 0.i256 i256;
-        v20.i256 = mload v4 i256;
-        return v20;
+        v22.i256 = mload v4 i256;
+        return v22;
 
     block3:
         mstore v5 1.i256 i256;
-        v21.i256 = mload v5 i256;
-        mstore v3 v21 i256;
+        v23.i256 = mload v5 i256;
+        mstore v3 v23 i256;
         jump block1;
 
     block4:
         evm_revert 0.i256 0.i256;
 
     block5:
-        mstore v7 v17 i256;
-        v19.i256 = mload v7 i256;
-        return v19;
+        mstore v7 v19 i256;
+        v21.i256 = mload v7 i256;
+        return v21;
 }
 
 

@@ -27,81 +27,101 @@ func private %retfoo(v0.i1, v1.i64) -> i64 {
         v13.*i64 = alloca i64;
         v14.*i64 = alloca i64;
         v15.*i64 = alloca i64;
+        v16.*i1 = alloca i1;
+        v17.*i64 = alloca i64;
+        v18.*i64 = alloca i64;
+        v19.*i64 = alloca i64;
+        v20.*i64 = alloca i64;
         mstore v2 v0 i1;
         mstore v3 v1 i64;
-        v16.i1 = mload v2 i1;
-        br v16 block1 block2;
+        v21.i256 = mload v2 i256;
+        v23.i1 = ne v21 0.i256;
+        mstore v16 v23 i1;
+        v24.i1 = mload v16 i1;
+        br v24 block1 block2;
 
     block1:
         mstore v5 0.i64 i64;
-        v18.i64 = mload v5 i64;
-        return v18;
+        v26.i64 = mload v5 i64;
+        return v26;
 
     block2:
         jump block3;
 
     block3:
         mstore v6 5.i64 i64;
-        v20.i64 = mload v3 i64;
-        v21.i64 = mload v6 i64;
-        v22.i1 = ne v20 0.i64;
-        v23.i1 = ne v21 0.i64;
-        v24.i1 = lt v22 v23;
-        mstore v7 v24 i1;
-        v25.i1 = mload v7 i1;
-        br v25 block4 block5;
+        v28.i256 = mload v3 i256;
+        v29.i64 = trunc v28 i64;
+        mstore v17 v29 i64;
+        v30.i256 = mload v6 i256;
+        v31.i64 = trunc v30 i64;
+        mstore v18 v31 i64;
+        v32.i64 = mload v17 i64;
+        v33.i64 = mload v18 i64;
+        v34.i1 = ne v32 0.i64;
+        v35.i1 = ne v33 0.i64;
+        v36.i1 = lt v34 v35;
+        mstore v7 v36 i1;
+        v37.i1 = mload v7 i1;
+        br v37 block4 block5;
 
     block4:
         mstore v8 1.i64 i64;
-        v27.i64 = mload v8 i64;
-        return v27;
+        v39.i64 = mload v8 i64;
+        return v39;
 
     block5:
         jump block6;
 
     block6:
         mstore v9 1.i64 i64;
-        v28.i64 = mload v3 i64;
-        v29.i64 = mload v9 i64;
-        (v30.i64, v31.i1) = usubo v28 v29;
-        br v31 block10 block11;
+        v40.i256 = mload v3 i256;
+        v41.i64 = trunc v40 i64;
+        mstore v19 v41 i64;
+        v42.i64 = mload v19 i64;
+        v43.i64 = mload v9 i64;
+        (v44.i64, v45.i1) = usubo v42 v43;
+        br v45 block10 block11;
 
     block7:
         mstore v13 2.i64 i64;
-        v42.i64 = mload v13 i64;
-        return v42;
+        v57.i64 = mload v13 i64;
+        return v57;
 
     block8:
         jump block9;
 
     block9:
         mstore v14 1.i64 i64;
-        v43.i64 = mload v4 i64;
-        v44.i64 = mload v14 i64;
-        (v45.i64, v46.i1) = uaddo v43 v44;
-        br v46 block10 block12;
+        v58.i64 = mload v4 i64;
+        v59.i64 = mload v14 i64;
+        (v60.i64, v61.i1) = uaddo v58 v59;
+        br v61 block10 block12;
 
     block10:
         evm_revert 0.i256 0.i256;
 
     block11:
-        mstore v10 v30 i64;
-        v33.i64 = mload v10 i64;
-        mstore v4 v33 i64;
+        mstore v10 v44 i64;
+        v46.i64 = mload v10 i64;
+        mstore v4 v46 i64;
         mstore v11 42.i64 i64;
-        v35.i64 = mload v4 i64;
-        v36.i64 = mload v11 i64;
-        v37.i1 = ne v35 0.i64;
-        v38.i1 = ne v36 0.i64;
-        v39.i1 = eq v37 v38;
-        mstore v12 v39 i1;
-        v40.i1 = mload v12 i1;
-        br v40 block7 block8;
+        v48.i256 = mload v11 i256;
+        v49.i64 = trunc v48 i64;
+        mstore v20 v49 i64;
+        v50.i64 = mload v4 i64;
+        v51.i64 = mload v20 i64;
+        v52.i1 = ne v50 0.i64;
+        v53.i1 = ne v51 0.i64;
+        v54.i1 = eq v52 v53;
+        mstore v12 v54 i1;
+        v55.i1 = mload v12 i1;
+        br v55 block7 block8;
 
     block12:
-        mstore v15 v45 i64;
-        v47.i64 = mload v15 i64;
-        return v47;
+        mstore v15 v60 i64;
+        v62.i64 = mload v15 i64;
+        return v62;
 }
 
 

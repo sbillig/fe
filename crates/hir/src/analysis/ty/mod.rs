@@ -15,7 +15,7 @@ use diagnostics::{DefConflictError, TraitLowerDiag, TyLowerDiag};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::SmallVec;
 use trait_resolution::constraint::super_trait_cycle;
-use ty_def::{BorrowKind, InvalidCause, TyData, TyId, instantiate_adt_field_ty};
+use ty_def::{BorrowKind, InvalidCause, TyBase, TyData, TyId, instantiate_adt_field_ty};
 use ty_lower::lower_type_alias;
 
 use crate::analysis::name_resolution::{PathRes, resolve_path};
@@ -46,7 +46,6 @@ pub mod pattern_analysis;
 pub mod pattern_ir;
 pub mod provider;
 pub(crate) mod scratch;
-pub mod provider;
 pub mod trait_def;
 pub mod trait_lower;
 pub mod trait_resolution; // This line was previously 'pub mod name_resolution;'
@@ -71,6 +70,16 @@ const DEFAULT_TARGET_TY_PATH: &[&str] = &["std", "evm", "EvmTarget"];
 pub struct EffectHandleMetadata<'db> {
     pub address_space: TyId<'db>,
     pub target_ty: TyId<'db>,
+}
+
+fn ty_may_require_effect_handle_metadata<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    matches!(
+        ty.base_ty(db).data(db),
+        TyData::TyParam(_)
+            | TyData::AssocTy(_)
+            | TyData::QualifiedTy(_)
+            | TyData::TyBase(TyBase::Adt(_))
+    )
 }
 
 pub fn ty_is_borrow<'db>(
@@ -484,6 +493,9 @@ pub fn effect_handle_metadata<'db>(
     assumptions: PredicateListId<'db>,
     ty: TyId<'db>,
 ) -> Option<EffectHandleMetadata<'db>> {
+    if ty.as_capability(db).is_some() || !ty_may_require_effect_handle_metadata(db, ty) {
+        return None;
+    }
     let effect_handle = corelib::resolve_core_trait(db, scope, &["effect_ref", "EffectHandle"])?;
     let address_space_ident = IdentId::new(db, "AddressSpace".to_string());
     let target_ident = IdentId::new(db, "Target".to_string());

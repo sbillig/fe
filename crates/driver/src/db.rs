@@ -8,7 +8,10 @@ use common::{
     define_input_db,
     diagnostics::{CompleteDiagnostic, Severity, cmp_complete_diagnostics},
 };
-use hir::analysis::{diagnostics::DiagnosticVoucher, initialize_analysis_pass};
+use hir::analysis::{
+    diagnostics::DiagnosticVoucher, initialize_analysis_pass,
+    semantic::collect_semantic_borrow_diagnostics,
+};
 use hir::{
     Ingot,
     hir_def::{HirIngot, TopLevelMod},
@@ -54,10 +57,10 @@ impl DriverDataBase {
 
     pub fn mir_diagnostics_for_top_mod<'db>(
         &'db self,
-        _top_mod: TopLevelMod<'db>,
+        top_mod: TopLevelMod<'db>,
         _mode: MirDiagnosticsMode,
     ) -> Vec<CompleteDiagnostic> {
-        Vec::new()
+        collect_semantic_borrow_diagnostics(self, top_mod)
     }
 
     pub fn mir_diagnostics_for_ingot<'db>(

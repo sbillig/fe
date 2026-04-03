@@ -189,6 +189,7 @@ pub enum DiagnosticPass {
     TyCheck,
 
     Mir,
+    SemanticBorrowck,
 
     ExternalAnalysis(ExternalAnalysisKey),
 }
@@ -211,6 +212,7 @@ impl DiagnosticPass {
             Self::MethodDefinition => 7,
             Self::TyCheck => 8,
             Self::Mir => 11,
+            Self::SemanticBorrowck => 16,
 
             Self::ExternalAnalysis(_) => u16::MAX,
         }

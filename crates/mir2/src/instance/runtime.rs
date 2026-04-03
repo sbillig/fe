@@ -3,7 +3,8 @@ use hir::{
     analysis::{
         semantic::{
             GenericSubst, ImplEnv, SemConstScalar, SemConstValue, SemanticInstance,
-            SemanticInstanceKey, eval_const_instance, get_or_build_semantic_instance,
+            SemanticInstanceKey, check_semantic_borrows, eval_const_instance,
+            get_or_build_semantic_instance,
         },
         ty::{
             corelib::{resolve_core_trait, resolve_lib_type_path},
@@ -11,7 +12,7 @@ use hir::{
                 TraitInstId, assoc_const_body_and_impl_args_for_trait_inst,
                 resolve_trait_method_instance,
             },
-            trait_resolution::TraitSolveCx,
+            trait_resolution::{PredicateListId, TraitSolveCx},
             ty_check::BodyOwner,
             ty_def::{InvalidCause, TyId},
         },
@@ -24,16 +25,19 @@ use hir::{
 use num_traits::ToPrimitive;
 use salsa::Update;
 
-use crate::runtime::lower::class::{semantic_return_ty, top_level_class_for_ty};
+use crate::runtime::lower::{
+    class::{semantic_return_ty, top_level_class_for_ty_in_env},
+    layout::RuntimeTypeEnv,
+};
 use crate::{
     db::MirDb,
     runtime::{
-        AddressSpaceKind, ConstScalar, ContractInitAbiPlan, ContractRecvAbiPlan, DispatchDefault,
-        HandleKind, HandleView, InitArgsPlan, LocalSlotKind, PlaceElem, PlaceRoot, RBlock,
-        RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RuntimeBody, RuntimeBuiltin,
-        RuntimeCallEdge, RuntimeCarrier, RuntimeClass, RuntimeInputPlan, RuntimePlace,
-        RuntimeReturnPlan, RuntimeSignature, RuntimeSyntheticSpec, ScalarClass, ScalarRepr,
-        ScalarRole,
+        AddressSpaceKind, ConstScalar, ContractEffectArgPlan, ContractInitAbiPlan,
+        ContractRecvAbiPlan, DispatchDefault, HandleKind, HandleView, InitArgsPlan, PlaceElem,
+        PlaceRoot, RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RuntimeBody,
+        RuntimeBuiltin, RuntimeCallEdge, RuntimeCarrier, RuntimeClass, RuntimeInputPlan,
+        RuntimeLocalRoot, RuntimePlace, RuntimeReturnPlan, RuntimeSignature, RuntimeSyntheticSpec,
+        ScalarClass, ScalarRepr, ScalarRole,
         lower::{
             body::lower_to_rmir, call::collect_runtime_calls as collect_runtime_calls_lowered,
         },
@@ -104,7 +108,16 @@ pub fn get_or_build_runtime_instance<'db>(
 
 fn lower_runtime_body<'db>(db: &'db dyn MirDb, instance: RuntimeInstance<'db>) -> RuntimeBody<'db> {
     let body = match instance.key(db).source(db) {
-        RuntimeInstanceSource::Semantic(_) => lower_to_rmir(db, instance),
+        RuntimeInstanceSource::Semantic(semantic) => {
+            if let Err(diag) = check_semantic_borrows(db, semantic) {
+                panic!(
+                    "semantic borrow checking failed for {:?}: {}",
+                    semantic.key(db),
+                    diag.message,
+                );
+            }
+            lower_to_rmir(db, instance)
+        }
         RuntimeInstanceSource::Synthetic(synthetic) => {
             lower_synthetic_runtime_body(db, instance, synthetic.spec(db).clone())
         }
@@ -179,6 +192,8 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 params: Vec::new(),
                 ret: None,
             },
+            semantic_locals: Vec::new(),
+            provider_bindings: Vec::new(),
             locals: self.locals,
             blocks: self.blocks,
         }
@@ -195,7 +210,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             let local = self.push_local(
                 semantic_ty,
                 RuntimeCarrier::Value(param.class.clone()),
-                LocalSlotKind::None,
+                RuntimeLocalRoot::None,
             );
             self.push_stmt(
                 RBlockId::from_u32(0),
@@ -217,7 +232,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     .map(|local| local.semantic_ty)
                     .unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other)),
                 RuntimeCarrier::Value(class),
-                LocalSlotKind::None,
+                RuntimeLocalRoot::None,
             );
             self.push_stmt(
                 RBlockId::from_u32(0),
@@ -253,7 +268,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             self.emit_nonpayable_guard(zero)
         };
 
-        let mut call_args = self.emit_contract_field_handles(cont_bb, &plan.field_bindings);
+        let mut call_args = Vec::new();
         if let InitArgsPlan::DecodeInitTail {
             tuple_ty,
             decode_fn,
@@ -300,11 +315,22 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 resolve_sol_decoder_new(self.db, plan.contract.scope()).expect("decoder_new");
             let decoder = self.push_call_result(cont_bb, decoder_new, vec![input]);
             if let Some(decoded) = self.push_call(cont_bb, decode_fn, vec![decoder]) {
-                call_args.splice(0..0, self.extract_tuple_fields(cont_bb, decoded, tuple_ty));
+                call_args.extend(self.extract_tuple_fields(
+                    cont_bb,
+                    decoded,
+                    tuple_ty,
+                    plan.contract.scope(),
+                ));
             }
         }
 
         if let Some(user_init) = plan.user_init {
+            call_args.extend(self.owner_effect_call_args(
+                cont_bb,
+                user_init,
+                call_args.len(),
+                &plan.owner_effect_args,
+            ));
             let _ = self.push_ignored_call(cont_bb, user_init, call_args);
         }
         self.blocks[cont_bb.index()].terminator = RTerminator::Return(None);
@@ -352,10 +378,20 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 resolve_sol_decoder_new(self.db, plan.contract.scope()).expect("decoder_new");
             let decoder = self.push_call_result(cont_bb, decoder_new, vec![input]);
             if let Some(decoded) = self.push_call(cont_bb, decode_fn, vec![decoder]) {
-                call_args.extend(self.extract_tuple_fields(cont_bb, decoded, msg_ty));
+                call_args.extend(self.extract_tuple_fields(
+                    cont_bb,
+                    decoded,
+                    msg_ty,
+                    plan.contract.scope(),
+                ));
             }
         }
-        call_args.extend(self.emit_contract_field_handles(cont_bb, &plan.field_bindings));
+        call_args.extend(self.owner_effect_call_args(
+            cont_bb,
+            plan.user_recv,
+            call_args.len(),
+            &plan.owner_effect_args,
+        ));
 
         let ret = self.push_call(cont_bb, plan.user_recv, call_args);
         match plan.ret {
@@ -384,6 +420,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     cont_bb,
                     encoded,
                     self.locals[encoded.index()].semantic_ty,
+                    scope,
                 );
                 let [offset, len]: [RLocalId; 2] = fields
                     .try_into()
@@ -490,15 +527,15 @@ impl<'db> SyntheticBodyBuilder<'db> {
         cont_bb
     }
 
-    fn emit_contract_field_handles(
+    fn emit_contract_effect_args(
         &mut self,
         bb: RBlockId,
-        bindings: &[crate::runtime::ContractFieldBinding<'db>],
+        bindings: &[ContractEffectArgPlan<'db>],
     ) -> Vec<RLocalId> {
         bindings
             .iter()
-            .map(|binding| {
-                self.push_builtin_value(
+            .map(|binding| match binding {
+                ContractEffectArgPlan::ContractField(binding) => self.push_builtin_value(
                     bb,
                     binding.declared_ty,
                     binding.class.clone(),
@@ -507,9 +544,55 @@ impl<'db> SyntheticBodyBuilder<'db> {
                         class: binding.class.clone(),
                         kind: binding.kind.clone(),
                     },
-                )
+                ),
+                ContractEffectArgPlan::Placeholder { declared_ty, class } => {
+                    let local = self.push_local(
+                        *declared_ty,
+                        RuntimeCarrier::Value(class.clone()),
+                        RuntimeLocalRoot::None,
+                    );
+                    self.push_stmt(
+                        bb,
+                        RStmt::Assign {
+                            dst: local,
+                            expr: RExpr::Placeholder {
+                                class: class.clone(),
+                            },
+                        },
+                    );
+                    local
+                }
             })
             .collect()
+    }
+
+    fn owner_effect_call_args(
+        &mut self,
+        bb: RBlockId,
+        callee: RuntimeInstance<'db>,
+        provided_prefix: usize,
+        bindings: &[ContractEffectArgPlan<'db>],
+    ) -> Vec<RLocalId> {
+        let needed = callee
+            .body(self.db)
+            .signature
+            .params
+            .len()
+            .saturating_sub(provided_prefix);
+        let args = self.emit_contract_effect_args(bb, bindings);
+        assert_eq!(
+            args.len(),
+            needed,
+            "synthetic owner-effect arg count mismatch for {callee:?}"
+        );
+        args
+    }
+
+    fn runtime_type_env(
+        &self,
+        scope: hir::hir_def::scope_graph::ScopeId<'db>,
+    ) -> RuntimeTypeEnv<'db> {
+        RuntimeTypeEnv::new(Some(scope), PredicateListId::empty_list(self.db))
     }
 
     fn extract_tuple_fields(
@@ -517,16 +600,18 @@ impl<'db> SyntheticBodyBuilder<'db> {
         bb: RBlockId,
         tuple: RLocalId,
         tuple_ty: TyId<'db>,
+        scope: hir::hir_def::scope_graph::ScopeId<'db>,
     ) -> Vec<RLocalId> {
         let Some(tuple_class) = self.locals[tuple.index()].carrier.value_class().cloned() else {
             return Vec::new();
         };
+        let env = self.runtime_type_env(scope);
         let tuple_root = match tuple_class {
             RuntimeClass::Handle { .. } => PlaceRoot::Handle(tuple),
-            RuntimeClass::AggregateValue { layout } => {
-                if !matches!(self.locals[tuple.index()].slot, LocalSlotKind::None) {
-                    PlaceRoot::Slot(tuple)
-                } else {
+            RuntimeClass::AggregateValue { layout } => match &self.locals[tuple.index()].root {
+                RuntimeLocalRoot::Slot(_) => PlaceRoot::Slot(tuple),
+                RuntimeLocalRoot::Handle(_) => PlaceRoot::Handle(tuple),
+                RuntimeLocalRoot::Ptr { .. } | RuntimeLocalRoot::None => {
                     let handle = self.push_local(
                         tuple_ty,
                         RuntimeCarrier::Value(RuntimeClass::Handle {
@@ -534,7 +619,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                             kind: HandleKind::ObjectValue,
                             view: HandleView::Whole,
                         }),
-                        LocalSlotKind::None,
+                        RuntimeLocalRoot::None,
                     );
                     self.push_stmt(
                         bb,
@@ -545,7 +630,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     );
                     PlaceRoot::Handle(handle)
                 }
-            }
+            },
             RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => {
                 panic!("tuple extraction requires aggregate carrier")
             }
@@ -555,13 +640,17 @@ impl<'db> SyntheticBodyBuilder<'db> {
             .into_iter()
             .enumerate()
             .map(|(idx, field_ty)| {
-                let class = top_level_class_for_ty(self.db, field_ty, AddressSpaceKind::Memory)
-                    .unwrap_or(RuntimeClass::RawAddr {
-                        space: AddressSpaceKind::Memory,
-                        target: None,
-                    });
-                let dst =
-                    self.push_local(field_ty, RuntimeCarrier::Value(class), LocalSlotKind::None);
+                let class =
+                    top_level_class_for_ty_in_env(self.db, env, field_ty, AddressSpaceKind::Memory)
+                        .unwrap_or(RuntimeClass::RawAddr {
+                            space: AddressSpaceKind::Memory,
+                            target: None,
+                        });
+                let dst = self.push_local(
+                    field_ty,
+                    RuntimeCarrier::Value(class),
+                    RuntimeLocalRoot::None,
+                );
                 let place = RuntimePlace {
                     root: tuple_root.clone(),
                     path: vec![PlaceElem::Field(hir::analysis::semantic::FieldIndex(
@@ -598,7 +687,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             let dst = self.push_local(
                 semantic_ty,
                 RuntimeCarrier::Value(class),
-                LocalSlotKind::None,
+                RuntimeLocalRoot::None,
             );
             self.push_stmt(
                 bb,
@@ -705,7 +794,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                         kind: HandleKind::Provider { provider_ty, space },
                         view: crate::runtime::HandleView::Whole,
                     }),
-                    LocalSlotKind::None,
+                    RuntimeLocalRoot::None,
                 );
                 self.push_stmt(
                     bb,
@@ -734,7 +823,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 let dst = self.push_local(
                     semantic_ty,
                     RuntimeCarrier::Value(RuntimeClass::AggregateValue { layout }),
-                    LocalSlotKind::None,
+                    RuntimeLocalRoot::None,
                 );
                 self.push_stmt(
                     bb,
@@ -765,7 +854,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                         kind: HandleKind::ObjectValue,
                         view: crate::runtime::HandleView::Whole,
                     }),
-                    LocalSlotKind::None,
+                    RuntimeLocalRoot::None,
                 );
                 self.push_stmt(
                     bb,
@@ -795,7 +884,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                         kind: HandleKind::ObjectValue,
                         view: crate::runtime::HandleView::Whole,
                     }),
-                    LocalSlotKind::None,
+                    RuntimeLocalRoot::None,
                 );
                 self.push_stmt(
                     bb,
@@ -825,7 +914,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                         kind: HandleKind::Provider { provider_ty, space },
                         view: crate::runtime::HandleView::Whole,
                     }),
-                    LocalSlotKind::None,
+                    RuntimeLocalRoot::None,
                 );
                 self.push_stmt(
                     bb,
@@ -856,7 +945,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                         kind: HandleKind::ObjectValue,
                         view: HandleView::Whole,
                     }),
-                    LocalSlotKind::None,
+                    RuntimeLocalRoot::None,
                 );
                 self.push_stmt(
                     bb,
@@ -906,7 +995,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 let dst = self.push_local(
                     semantic_ty,
                     RuntimeCarrier::Value(target.clone()),
-                    LocalSlotKind::None,
+                    RuntimeLocalRoot::None,
                 );
                 self.push_stmt(
                     bb,
@@ -931,7 +1020,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 let dst = self.push_local(
                     semantic_ty,
                     RuntimeCarrier::Value(target.clone()),
-                    LocalSlotKind::None,
+                    RuntimeLocalRoot::None,
                 );
                 self.push_stmt(
                     bb,
@@ -961,7 +1050,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         let dst = self.push_local(
             semantic_ty,
             RuntimeCarrier::Value(class),
-            LocalSlotKind::None,
+            RuntimeLocalRoot::None,
         );
         self.push_stmt(
             bb,
@@ -1027,7 +1116,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         let dst = self.push_local(
             TyId::u256(self.db),
             RuntimeCarrier::Value(RuntimeClass::Scalar(word_scalar_class())),
-            LocalSlotKind::None,
+            RuntimeLocalRoot::None,
         );
         self.push_stmt(
             bb,
@@ -1053,7 +1142,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             let casted = self.push_local(
                 TyId::u256(self.db),
                 RuntimeCarrier::Value(RuntimeClass::Scalar(word_scalar_class())),
-                LocalSlotKind::None,
+                RuntimeLocalRoot::None,
             );
             self.push_stmt(
                 bb,
@@ -1070,13 +1159,18 @@ impl<'db> SyntheticBodyBuilder<'db> {
             ptr
         };
         let ty = memory_bytes_ty(self.db, scope).expect("MemoryBytes");
-        let class = top_level_class_for_ty(self.db, ty, AddressSpaceKind::Memory)
-            .expect("memory bytes runtime class");
-        let slot = match &class {
-            RuntimeClass::Handle { .. } => LocalSlotKind::None,
-            _ => LocalSlotKind::Slot(class.clone()),
+        let class = top_level_class_for_ty_in_env(
+            self.db,
+            self.runtime_type_env(scope),
+            ty,
+            AddressSpaceKind::Memory,
+        )
+        .expect("memory bytes runtime class");
+        let root = match &class {
+            RuntimeClass::Handle { .. } => RuntimeLocalRoot::Handle(class.clone()),
+            _ => RuntimeLocalRoot::Slot(class.clone()),
         };
-        let local = self.push_local(ty, RuntimeCarrier::Value(class.clone()), slot);
+        let local = self.push_local(ty, RuntimeCarrier::Value(class.clone()), root);
         let root = match class {
             RuntimeClass::Handle { layout, .. } => {
                 self.push_stmt(
@@ -1127,7 +1221,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         let dst = self.push_local(
             TyId::u256(self.db),
             RuntimeCarrier::Value(RuntimeClass::Scalar(word_scalar_class())),
-            LocalSlotKind::None,
+            RuntimeLocalRoot::None,
         );
         self.push_stmt(
             bb,
@@ -1153,7 +1247,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         let dst = self.push_local(
             TyId::bool(self.db),
             RuntimeCarrier::Value(RuntimeClass::Scalar(bool_scalar_class())),
-            LocalSlotKind::None,
+            RuntimeLocalRoot::None,
         );
         self.push_stmt(
             bb,
@@ -1173,19 +1267,19 @@ impl<'db> SyntheticBodyBuilder<'db> {
         &mut self,
         semantic_ty: TyId<'db>,
         carrier: RuntimeCarrier<'db>,
-        slot: LocalSlotKind<'db>,
+        root: RuntimeLocalRoot<'db>,
     ) -> RLocalId {
         let id = RLocalId::from_u32(self.locals.len() as u32);
         self.locals.push(RLocal {
             semantic_ty,
             carrier,
-            slot,
+            root,
         });
         id
     }
 
     fn push_erased_local(&mut self, semantic_ty: TyId<'db>) -> RLocalId {
-        self.push_local(semantic_ty, RuntimeCarrier::Erased, LocalSlotKind::None)
+        self.push_local(semantic_ty, RuntimeCarrier::Erased, RuntimeLocalRoot::None)
     }
 
     fn push_stmt(&mut self, bb: RBlockId, stmt: RStmt<'db>) {

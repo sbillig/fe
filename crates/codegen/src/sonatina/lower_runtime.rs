@@ -8,6 +8,7 @@ use hir::{
         ty::ty_def::{PrimTy, TyBase, TyData, TyId},
     },
     hir_def::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
+    projection::IndexSource,
 };
 use mir2::{
     AddressSpaceKind, ConstNode, ConstRegionId, ConstScalar, HandleKind, IntrinsicArithBinOp,
@@ -1895,6 +1896,47 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     ));
                 }
             },
+            ResolvedPlaceRootKind::Provider {
+                value,
+                provider_class,
+                class,
+                ..
+            } => match provider_class {
+                RuntimeClass::Handle {
+                    kind:
+                        HandleKind::Provider {
+                            space: AddressSpaceKind::Memory,
+                            ..
+                        },
+                    ..
+                } => PlaceTerminal::Object {
+                    value: self.local_value(value)?,
+                    class,
+                },
+                RuntimeClass::Handle {
+                    kind: HandleKind::Provider { space, .. },
+                    ..
+                } => PlaceTerminal::Ptr {
+                    addr: self.local_value(value)?,
+                    space,
+                    class,
+                },
+                RuntimeClass::RawAddr { space, .. } => PlaceTerminal::Ptr {
+                    addr: self.local_value(value)?,
+                    space,
+                    class,
+                },
+                RuntimeClass::Handle {
+                    kind: HandleKind::ConstValue | HandleKind::ObjectValue,
+                    ..
+                }
+                | RuntimeClass::Scalar(_)
+                | RuntimeClass::AggregateValue { .. } => {
+                    return Err(LowerError::Internal(
+                        "provider root did not lower to a provider carrier".to_string(),
+                    ));
+                }
+            },
             ResolvedPlaceRootKind::Ptr { addr, space, class } => PlaceTerminal::Ptr {
                 addr: self.local_value(addr)?,
                 space,
@@ -1921,7 +1963,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     PlaceTerminal::Object { value, .. },
                     ResolvedPlaceElem::Index { index, class },
                 ) => {
-                    let index = self.local_value(*index)?;
+                    let index = match index {
+                        IndexSource::Constant(index) => self.index_value(*index as u64),
+                        IndexSource::Dynamic(index) => self.local_value(*index)?,
+                    };
                     PlaceTerminal::Object {
                         value: self.fb.insert_inst(
                             ObjIndex::new(self.module.inst_set(), value, index),
@@ -1962,7 +2007,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     }
                 }
                 (PlaceTerminal::Const { value, .. }, ResolvedPlaceElem::Index { index, class }) => {
-                    let index = self.local_value(*index)?;
+                    let index = match index {
+                        IndexSource::Constant(index) => self.index_value(*index as u64),
+                        IndexSource::Dynamic(index) => self.local_value(*index)?,
+                    };
                     PlaceTerminal::Const {
                         value: self.fb.insert_inst(
                             ConstIndex::new(self.module.inst_set(), value, index),
@@ -1994,7 +2042,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     ResolvedPlaceElem::Index { index, class },
                 ) => {
                     let span = index_stride_for_class(&base_class, self.module.db)?;
-                    let idx = self.local_value(*index)?;
+                    let idx = match index {
+                        IndexSource::Constant(index) => self.index_value(*index as u64),
+                        IndexSource::Dynamic(index) => self.local_value(*index)?,
+                    };
                     let scale = self.scale_for_space(space, span);
                     let scaled = if scale == 1 {
                         idx
