@@ -1857,12 +1857,14 @@ impl<'db> TyChecker<'db> {
         // FIXME: This is a temporary workaround, this should be removed when we
         // implement subtyping.
         if expected.is_never(self.db) && !actual.is_never(self.db) {
-            let diag = BodyDiag::TypeMismatch {
-                span,
-                expected,
-                given: actual,
-            };
-            self.push_diag(diag);
+            if !actual.has_invalid(self.db) && !expected.has_invalid(self.db) {
+                let diag = BodyDiag::TypeMismatch {
+                    span,
+                    expected,
+                    given: actual,
+                };
+                self.push_diag(diag);
+            }
             return TyId::invalid(self.db, InvalidCause::Other);
         };
 
@@ -1887,11 +1889,13 @@ impl<'db> TyChecker<'db> {
             Err(UnificationError::TypeMismatch) => {
                 let actual = actual.fold_with(self.db, &mut self.table);
                 let expected = expected.fold_with(self.db, &mut self.table);
-                self.push_diag(BodyDiag::TypeMismatch {
-                    span,
-                    expected,
-                    given: actual,
-                });
+                if !actual.has_invalid(self.db) && !expected.has_invalid(self.db) {
+                    self.push_diag(BodyDiag::TypeMismatch {
+                        span,
+                        expected,
+                        given: actual,
+                    });
+                }
                 TyId::invalid(self.db, InvalidCause::Other)
             }
 
