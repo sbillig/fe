@@ -1,3 +1,6 @@
+use super::{
+    GenericSubst, ImplEnv, SemanticInstance, SemanticInstanceKey, semantic_instance_assumptions,
+};
 use crate::{
     analysis::{
         HirAnalysisDb,
@@ -8,7 +11,7 @@ use crate::{
                 assoc_const_body_and_impl_args_for_trait_inst, resolve_trait_method_instance,
             },
             trait_resolution::TraitSolveCx,
-            ty_check::{BodyOwner, Callable, ConstRef, TypedBody},
+            ty_check::{BodyOwner, Callable, ConstRef},
             ty_def::TyId,
         },
     },
@@ -16,16 +19,13 @@ use crate::{
 };
 use common::indexmap::IndexSet;
 
-use super::{GenericSubst, ImplEnv, SemanticInstanceKey};
-
 pub(crate) fn semantic_callee_key<'db>(
     db: &'db dyn HirAnalysisDb,
     caller_key: SemanticInstanceKey<'db>,
-    typed_body: &TypedBody<'db>,
     callable: &Callable<'db>,
 ) -> Option<SemanticInstanceKey<'db>> {
     let impl_env = caller_key.impl_env(db);
-    let assumptions = semantic_impl_env_assumptions(db, caller_key, typed_body);
+    let assumptions = semantic_instance_assumptions(db, SemanticInstance::new(db, caller_key));
     let (owner, subst_args) = match callable.callable_def() {
         CallableDef::Func(func) => {
             let mut subst_args = callable.generic_args().to_vec();
@@ -84,21 +84,6 @@ pub(crate) fn resolve_semantic_const_ref<'db>(
         ConstRef::TraitConst(assoc) => semantic_const_key_for_assoc_const(db, assoc, ty),
     }?;
     Some(SemanticConstRef::new(db, instance, ty, origin))
-}
-
-fn semantic_impl_env_assumptions<'db>(
-    db: &'db dyn HirAnalysisDb,
-    caller_key: SemanticInstanceKey<'db>,
-    typed_body: &TypedBody<'db>,
-) -> crate::analysis::ty::trait_resolution::PredicateListId<'db> {
-    let impl_env = caller_key.impl_env(db);
-    let mut predicates: IndexSet<_> = typed_body.assumptions().list(db).iter().copied().collect();
-    predicates.extend(impl_env.assumptions(db).list(db).iter().copied());
-    predicates.extend(impl_env.witnesses(db).iter().copied());
-    crate::analysis::ty::trait_resolution::PredicateListId::new(
-        db,
-        predicates.into_iter().collect::<Vec<_>>(),
-    )
 }
 
 fn semantic_const_key_for_const<'db>(

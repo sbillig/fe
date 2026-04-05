@@ -12,7 +12,7 @@ use crate::core::hir_def::{
 use crate::span::DynLazySpan;
 
 use super::{
-    ConstRef, RecordLike, Typeable, ValuePathRef,
+    CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, RecordLike, Typeable, ValuePathRef,
     effect_env::{
         FamilyKeyedEntry, FrameLookupResult, MatchedForwarder, MatchedKeyedEntry, MatchedWitness,
     },
@@ -188,12 +188,6 @@ pub(super) enum PendingPrimitiveOpResolution {
     Done,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CodeRegionIntrinsicKind {
-    Offset,
-    Len,
-}
-
 impl<'db> TyChecker<'db> {
     fn code_region_intrinsic_kind(
         &self,
@@ -221,7 +215,7 @@ impl<'db> TyChecker<'db> {
         })
     }
 
-    fn code_region_method_kind(
+    pub(super) fn code_region_method_kind(
         &self,
         receiver_ty: TyId<'db>,
         method_name: IdentId<'db>,
@@ -238,6 +232,14 @@ impl<'db> TyChecker<'db> {
         } else {
             return None;
         })
+    }
+
+    fn const_intrinsic_kind(&self, callable_def: CallableDef<'db>) -> Option<ConstIntrinsicKind> {
+        let CallableDef::Func(func) = callable_def else {
+            return None;
+        };
+        (resolve_lib_func_path(self.db, self.env.scope(), "core::size_of") == Some(func))
+            .then_some(ConstIntrinsicKind::SizeOf)
     }
 
     pub(super) fn check_expr(&mut self, expr: ExprId, expected: TyId<'db>) -> ExprProp<'db> {
@@ -1147,15 +1149,13 @@ impl<'db> TyChecker<'db> {
 
         let call_span = expr.span(self.body()).into_call_expr();
 
-        if self
-            .code_region_intrinsic_kind(callable.callable_def())
-            .is_some()
+        if let Some(kind) = self.code_region_intrinsic_kind(callable.callable_def())
             && args.len() == 1
             && let Some(result) = self.check_code_region_intrinsic(
                 expr,
                 &mut callable,
                 args,
-                call_span.clone().args(),
+                kind,
                 None,
                 Some(*callee),
             )
@@ -1168,9 +1168,12 @@ impl<'db> TyChecker<'db> {
         self.check_callable_effects(expr, &mut callable);
 
         let ret_ty = callable.ret_ty(self.db);
-        // Normalize the return type to resolve any associated types
         let normalized_ret_ty = self.normalize_ty(ret_ty);
-        self.env.register_callable(expr, callable);
+        if let Some(kind) = self.const_intrinsic_kind(callable.callable_def()) {
+            self.env.register_const_intrinsic(expr, callable, kind);
+        } else {
+            self.env.register_semantic_call(expr, callable);
+        }
         ExprProp::new(normalized_ret_ty, true)
     }
 
@@ -1179,24 +1182,32 @@ impl<'db> TyChecker<'db> {
         expr: ExprId,
         callable: &mut Callable<'db>,
         args: &[crate::hir_def::CallArg<'db>],
-        arg_spans: crate::span::expr::LazyCallArgListSpan<'db>,
+        kind: CodeRegionIntrinsicKind,
         receiver: Option<(ExprId, ExprProp<'db>)>,
         direct_callee: Option<ExprId>,
     ) -> Option<ExprProp<'db>> {
         let arg_expr = args[0].expr;
         let code_region_ref = self.resolve_code_region_ref(arg_expr)?;
-
-        self.env.register_code_region_ref(arg_expr, code_region_ref);
-        callable.check_args(self, args, arg_spans, receiver, false);
+        callable.check_args(
+            self,
+            args,
+            expr.span(self.body()).into_call_expr().args(),
+            receiver,
+            false,
+        );
         if let Some(callee) = direct_callee {
             self.env
                 .type_expr(callee, ExprProp::new(callable.ty(self.db), true));
         }
-        self.env.register_callable(expr, callable.clone());
+        self.env
+            .register_code_region_intrinsic(expr, callable.clone(), code_region_ref, kind);
         Some(ExprProp::new(TyId::u256(self.db), true))
     }
 
-    fn resolve_code_region_ref(&mut self, expr: ExprId) -> Option<SemanticCodeRegionRef<'db>> {
+    pub(super) fn resolve_code_region_ref(
+        &mut self,
+        expr: ExprId,
+    ) -> Option<SemanticCodeRegionRef<'db>> {
         let Partial::Present(Expr::Path(Partial::Present(path))) = expr.data(self.db, self.body())
         else {
             return None;
@@ -2775,7 +2786,6 @@ impl<'db> TyChecker<'db> {
         }
 
         let Some(enclosing_inst) = (match current_func.scope().parent_item(self.db) {
-            Some(ItemKind::ImplTrait(impl_trait)) => impl_trait.trait_inst(self.db),
             Some(ItemKind::Trait(trait_)) => Some(TraitInstId::new(
                 self.db,
                 trait_,
@@ -2961,16 +2971,15 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        if self
+        if let Some(kind) = self
             .code_region_intrinsic_kind(callable.callable_def())
             .or_else(|| self.code_region_method_kind(selected_receiver_ty, method_name))
-            .is_some()
             && args.len() == 1
             && let Some(result) = self.check_code_region_intrinsic(
                 expr,
                 &mut callable,
                 args,
-                call_span.clone().args(),
+                kind,
                 Some((*receiver, receiver_prop.clone())),
                 None,
             )
@@ -2990,10 +2999,12 @@ impl<'db> TyChecker<'db> {
         self.check_callable_effects(expr, &mut callable);
 
         let ret_ty = callable.ret_ty(self.db);
-
-        // Normalize the return type to resolve any associated types
         let normalized_ret_ty = self.normalize_ty(ret_ty);
-        self.env.register_callable(expr, callable);
+        if let Some(kind) = self.const_intrinsic_kind(callable.callable_def()) {
+            self.env.register_const_intrinsic(expr, callable, kind);
+        } else {
+            self.env.register_semantic_call(expr, callable);
+        }
         ExprProp::new(normalized_ret_ty, true)
     }
 
@@ -4115,7 +4126,7 @@ impl<'db> TyChecker<'db> {
             .expect("failed to create Callable for core::ops trait method");
 
         let ret_ty = self.normalize_ty(callable.ret_ty(self.db));
-        self.env.register_callable(expr, callable);
+        self.env.register_semantic_call(expr, callable);
         ExprProp::new(ret_ty, true)
     }
 

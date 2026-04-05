@@ -5,8 +5,8 @@ use hir::projection::IndexSource;
 use crate::{
     db::MirDb,
     runtime::{
-        ConstScalar, HandleView, Layout, LayoutId, LocalSlotKind, PlaceElem, PlaceRoot,
-        ResolvedPlaceElem, ResolvedPlaceRootKind, ResolvedRuntimePlace, RuntimeBody, RuntimeClass,
+        ConstScalar, HandleView, Layout, LayoutId, PlaceElem, PlaceRoot, ResolvedPlaceElem,
+        ResolvedPlaceRootKind, ResolvedRuntimePlace, RuntimeBody, RuntimeClass, RuntimeLocalRoot,
         RuntimeProgramView, ScalarClass, ScalarRepr, ScalarRole, VariantId,
     },
     verify::VerifyError,
@@ -22,15 +22,15 @@ pub fn resolve_runtime_place<'db>(
         PlaceRoot::Slot(local) => match &body
             .local(*local)
             .ok_or(VerifyError::MissingRuntimeLocal(*local))?
-            .slot
+            .root
         {
-            LocalSlotKind::None => {
+            RuntimeLocalRoot::None | RuntimeLocalRoot::Handle(_) | RuntimeLocalRoot::Ptr { .. } => {
                 return Err(VerifyError::InvalidPlace(RuntimeClass::RawAddr {
                     space: crate::runtime::AddressSpaceKind::Memory,
                     target: None,
                 }));
             }
-            LocalSlotKind::Slot(class) => class.clone(),
+            RuntimeLocalRoot::Slot(class) => class.clone(),
         },
         PlaceRoot::Handle(value) => body
             .value_class(*value)
@@ -84,14 +84,6 @@ pub fn resolve_runtime_place<'db>(
                         space: crate::runtime::AddressSpaceKind::Memory,
                         target: None,
                     }))?;
-            match &provider.provider_class {
-                RuntimeClass::RawAddr { .. }
-                | RuntimeClass::Handle {
-                    kind: crate::runtime::HandleKind::Provider { .. },
-                    ..
-                } => {}
-                class => return Err(VerifyError::InvalidPlace(class.clone())),
-            }
             ResolvedPlaceRootKind::Provider {
                 binding: *binding,
                 value: provider.value,

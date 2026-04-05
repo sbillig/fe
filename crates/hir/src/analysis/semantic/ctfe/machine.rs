@@ -126,6 +126,20 @@ pub fn eval_body_owner_const<'db>(
     eval_const_instance(db, get_or_build_semantic_instance(db, key))
 }
 
+pub(super) fn try_eval_expr_to_const<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    result_ty: TyId<'db>,
+    expr: &SExpr<'db>,
+    locals: &[Option<SemConstId<'db>>],
+    origin: SemOrigin<'db>,
+) -> Option<SemConstId<'db>> {
+    let mut machine = CtfeMachine::new(db, CtfeConfig::default());
+    machine
+        .eval_expr_with_locals(instance, result_ty, expr.clone(), locals, origin)
+        .ok()
+}
+
 struct CtfeMachine<'db> {
     db: &'db dyn HirAnalysisDb,
     config: CtfeConfig,
@@ -185,6 +199,37 @@ impl<'db> CtfeMachine<'db> {
             return Err(CtfeError::InvalidBorrow { origin });
         };
         Ok(value)
+    }
+
+    fn eval_expr_with_locals(
+        &mut self,
+        instance: SemanticInstance<'db>,
+        result_ty: TyId<'db>,
+        expr: SExpr<'db>,
+        locals: &[Option<SemConstId<'db>>],
+        origin: SemOrigin<'db>,
+    ) -> Result<SemConstId<'db>, CtfeError<'db>> {
+        let body = instance.body(self.db);
+        let mut frame_locals = vec![CtfeSlot::Uninit; body.locals.len()];
+        for (idx, value) in locals.iter().copied().enumerate() {
+            if let Some(value) = value
+                && let Some(slot) = frame_locals.get_mut(idx)
+            {
+                *slot = CtfeSlot::Init(CtfeValue::Value(value));
+            }
+        }
+        let frame_idx = self.frames.len();
+        self.frames.push(CtfeFrame {
+            body,
+            locals: frame_locals,
+            current: 0,
+        });
+        let result = match self.eval_expr(frame_idx, result_ty, expr, origin)? {
+            CtfeValue::Value(value) => Ok(value),
+            CtfeValue::Ref(_) => Err(CtfeError::InvalidBorrow { origin }),
+        };
+        self.frames.pop();
+        result
     }
 
     fn eval_instance(

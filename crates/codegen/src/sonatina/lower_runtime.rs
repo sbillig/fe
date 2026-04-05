@@ -5,17 +5,21 @@ use driver::DriverDataBase;
 use hir::{
     analysis::{
         semantic::FieldIndex,
-        ty::ty_def::{PrimTy, TyBase, TyData, TyId},
+        ty::{
+            ty_check::BodyOwner,
+            ty_def::{PrimTy, TyBase, TyData, TyId},
+        },
     },
     hir_def::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
     projection::IndexSource,
 };
 use mir2::{
     AddressSpaceKind, ConstNode, ConstRegionId, ConstScalar, HandleKind, IntrinsicArithBinOp,
-    Layout, LayoutId, LocalSlotKind, RBlockId, RExpr, RLocalId, RStmt, RTerminator,
-    ResolvedPlaceElem, ResolvedPlaceRootKind, RuntimeBody, RuntimeBuiltin, RuntimeClass,
-    RuntimeFunction, RuntimeInlineHint, RuntimeLinkage, RuntimePackage, RuntimePlace,
-    SaturatingBinOp, ScalarClass, ScalarRepr, VariantId, resolve_runtime_place,
+    Layout, LayoutId, RBlockId, RExpr, RLocalId, RStmt, RTerminator, ResolvedPlaceElem,
+    ResolvedPlaceRootKind, RuntimeBody, RuntimeBuiltin, RuntimeClass, RuntimeFunction,
+    RuntimeInlineHint, RuntimeLinkage, RuntimeLocalRoot, RuntimePackage, RuntimePlace,
+    SaturatingBinOp, ScalarClass, ScalarRepr, VariantId, instance::RuntimeInstanceSource,
+    resolve_runtime_place,
 };
 use rustc_hash::FxHashMap;
 use smallvec1::{SmallVec, smallvec};
@@ -295,7 +299,16 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
     fn func_ref(&self, instance: mir2::RuntimeInstance<'db>) -> Result<FuncRef, LowerError> {
         self.func_map.get(&instance).copied().ok_or_else(|| {
-            LowerError::Internal(format!("missing declared function for {instance:?}"))
+            let declared = self
+                .package
+                .functions(self.db)
+                .iter()
+                .map(|func| describe_runtime_instance(self.db, func.instance(self.db)))
+                .collect::<Vec<_>>();
+            LowerError::Internal(format!(
+                "missing declared function for {instance:?}: {}; declared={declared:?}",
+                describe_runtime_instance(self.db, instance),
+            ))
         })
     }
 
@@ -403,6 +416,45 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 Immediate::from_i256(bytes_to_i256(bytes, false), Type::I256)
             }
         })
+    }
+}
+
+fn describe_runtime_instance<'db>(
+    db: &DriverDataBase,
+    instance: mir2::RuntimeInstance<'db>,
+) -> String {
+    let key = instance.key(db);
+    match key.source(db) {
+        RuntimeInstanceSource::Semantic(semantic) => {
+            let owner = semantic.key(db).owner(db);
+            let owner_desc = match owner {
+                BodyOwner::Func(func) => func
+                    .name(db)
+                    .to_opt()
+                    .map(|name| format!("func {}", name.data(db)))
+                    .unwrap_or_else(|| format!("func {func:?}")),
+                BodyOwner::Const(const_) => format!("const {const_:?}"),
+                BodyOwner::AnonConstBody { .. } => format!("{owner:?}"),
+                BodyOwner::ContractInit { contract } => contract
+                    .name(db)
+                    .to_opt()
+                    .map(|name| format!("contract-init {}", name.data(db)))
+                    .unwrap_or_else(|| format!("{owner:?}")),
+                BodyOwner::ContractRecvArm { contract, .. } => contract
+                    .name(db)
+                    .to_opt()
+                    .map(|name| format!("contract-recv {}", name.data(db)))
+                    .unwrap_or_else(|| format!("{owner:?}")),
+            };
+            format!("semantic owner={owner_desc} params={:?}", key.params(db))
+        }
+        RuntimeInstanceSource::Synthetic(spec) => {
+            format!(
+                "synthetic spec={:?} params={:?}",
+                spec.spec(db),
+                key.params(db)
+            )
+        }
     }
 }
 
@@ -576,8 +628,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             .locals
             .iter()
             .enumerate()
-            .filter_map(|(idx, local)| match local.slot {
-                LocalSlotKind::None => match &local.carrier {
+            .filter_map(|(idx, local)| match local.root {
+                RuntimeLocalRoot::Slot(_) => None,
+                RuntimeLocalRoot::None
+                | RuntimeLocalRoot::Handle(_)
+                | RuntimeLocalRoot::Ptr { .. } => match &local.carrier {
                     mir2::RuntimeCarrier::Value(class) => Some(
                         module
                             .ty_for_class(class)
@@ -585,7 +640,6 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     ),
                     mir2::RuntimeCarrier::Erased => None,
                 },
-                LocalSlotKind::Slot(_) => None,
             })
             .collect::<Result<FxHashMap<_, _>, _>>()?;
         Ok(Self {
@@ -638,9 +692,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         let locals = self.body.locals.clone();
         for (idx, local) in locals.iter().enumerate() {
             let local_id = RLocalId::from_u32(idx as u32);
-            match &local.slot {
-                LocalSlotKind::None => {}
-                LocalSlotKind::Slot(class) => {
+            match &local.root {
+                RuntimeLocalRoot::None
+                | RuntimeLocalRoot::Handle(_)
+                | RuntimeLocalRoot::Ptr { .. } => {}
+                RuntimeLocalRoot::Slot(class) => {
                     let class_ty = self.module.ty_for_class(class)?;
                     let root = match class {
                         RuntimeClass::AggregateValue { .. } => SlotRoot::Object(
@@ -1902,6 +1958,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 class,
                 ..
             } => match provider_class {
+                RuntimeClass::AggregateValue { .. } => PlaceTerminal::Object {
+                    value: self.local_value(value)?,
+                    class,
+                },
                 RuntimeClass::Handle {
                     kind:
                         HandleKind::Provider {
@@ -1930,8 +1990,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     kind: HandleKind::ConstValue | HandleKind::ObjectValue,
                     ..
                 }
-                | RuntimeClass::Scalar(_)
-                | RuntimeClass::AggregateValue { .. } => {
+                | RuntimeClass::Scalar(_) => {
                     return Err(LowerError::Internal(
                         "provider root did not lower to a provider carrier".to_string(),
                     ));

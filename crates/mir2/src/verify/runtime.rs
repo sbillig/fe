@@ -4,14 +4,15 @@ use crate::{
     db::MirDb,
     instance::RuntimeInstance,
     runtime::{
-        AddressSpaceKind, HandleKind, HandleView, Layout, LocalSlotKind, RExpr, RStmt, RTerminator,
-        RuntimeBody, RuntimeBuiltin, RuntimeCarrier, RuntimeClass, RuntimeProgramView,
+        AddressSpaceKind, HandleKind, HandleView, Layout, RExpr, RStmt, RTerminator, RuntimeBody,
+        RuntimeBuiltin, RuntimeCarrier, RuntimeClass, RuntimeLocalRoot, RuntimeProgramView,
         RuntimeSignature, ScalarClass, ScalarRepr, ScalarRole,
     },
     verify::VerifyError,
 };
 
 use super::{
+    RuntimeVerifyFailure, RuntimeVerifySite,
     consts::verify_const_region,
     layout::verify_class_layouts,
     place::{
@@ -26,41 +27,83 @@ pub fn verify_runtime_body<'db>(
     program: &impl RuntimeProgramView<'db>,
     body: &RuntimeBody<'db>,
 ) -> Result<(), VerifyError<'db>> {
-    verify_signature(body)?;
+    verify_runtime_body_detailed(db, program, body).map_err(|failure| failure.error)
+}
+
+pub fn verify_runtime_body_detailed<'db>(
+    db: &'db dyn MirDb,
+    program: &impl RuntimeProgramView<'db>,
+    body: &RuntimeBody<'db>,
+) -> Result<(), RuntimeVerifyFailure<'db>> {
+    verify_signature(body).map_err(|error| RuntimeVerifyFailure {
+        error,
+        site: RuntimeVerifySite::Body,
+    })?;
 
     let mut visited_layouts = FxHashSet::default();
-    for (local_idx, local) in body.locals.iter().enumerate() {
-        if let LocalSlotKind::Slot(class) = &local.slot
-            && !matches!(&local.carrier, RuntimeCarrier::Value(carrier) if carrier == class)
-        {
-            return Err(VerifyError::SlotCarrierMismatch(
-                crate::runtime::RLocalId::from_u32(local_idx as u32),
-            ));
+    for (idx, local) in body.locals.iter().enumerate() {
+        let local_id = crate::runtime::RLocalId::from_u32(idx as u32);
+        match &local.root {
+            RuntimeLocalRoot::None => {}
+            RuntimeLocalRoot::Slot(class) | RuntimeLocalRoot::Handle(class) => {
+                verify_class_layouts(db, program, class, &mut visited_layouts).map_err(
+                    |error| RuntimeVerifyFailure {
+                        error,
+                        site: RuntimeVerifySite::LocalRoot(local_id),
+                    },
+                )?;
+            }
+            RuntimeLocalRoot::Ptr { class, .. } => {
+                verify_class_layouts(db, program, class, &mut visited_layouts).map_err(
+                    |error| RuntimeVerifyFailure {
+                        error,
+                        site: RuntimeVerifySite::LocalRoot(local_id),
+                    },
+                )?;
+            }
         }
 
         if let RuntimeCarrier::Value(class) = &local.carrier {
-            verify_class_layouts(db, program, class, &mut visited_layouts)?;
+            verify_class_layouts(db, program, class, &mut visited_layouts).map_err(|error| {
+                RuntimeVerifyFailure {
+                    error,
+                    site: RuntimeVerifySite::LocalCarrier(local_id),
+                }
+            })?;
         }
     }
 
-    for block in &body.blocks {
-        for stmt in &block.stmts {
+    for (block_idx, block) in body.blocks.iter().enumerate() {
+        let block_id = crate::runtime::RBlockId::from_u32(block_idx as u32);
+        for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
             match stmt {
-                RStmt::Assign { dst, expr } => verify_assign(db, program, body, *dst, expr)?,
-                RStmt::Store { dst, src } => verify_store(db, program, body, dst, *src)?,
-                RStmt::CopyInto { dst, src } => verify_copy_into(db, program, body, dst, *src)?,
+                RStmt::Assign { dst, expr } => verify_assign(db, program, body, *dst, expr),
+                RStmt::Store { dst, src } => verify_store(db, program, body, dst, *src),
+                RStmt::CopyInto { dst, src } => verify_copy_into(db, program, body, dst, *src),
                 RStmt::EnumSetTag { root, variant } => {
-                    verify_enum_handle(body, *root, *variant, program)?;
+                    verify_enum_handle(body, *root, *variant, program).map(|_| ())
                 }
                 RStmt::EnumWriteVariant {
                     root,
                     variant,
                     fields,
-                } => verify_enum_write_variant(program, body, *root, *variant, fields)?,
+                } => verify_enum_write_variant(program, body, *root, *variant, fields),
             }
+            .map_err(|error| RuntimeVerifyFailure {
+                error,
+                site: RuntimeVerifySite::Stmt {
+                    block: block_id,
+                    stmt: stmt_idx,
+                },
+            })?;
         }
 
-        verify_terminator(db, program, body, &block.terminator)?;
+        verify_terminator(db, program, body, &block.terminator).map_err(|error| {
+            RuntimeVerifyFailure {
+                error,
+                site: RuntimeVerifySite::Terminator { block: block_id },
+            }
+        })?;
     }
 
     Ok(())
@@ -86,7 +129,7 @@ fn verify_call<'db>(
     callee: RuntimeInstance<'db>,
     args: &[crate::runtime::RValueId],
 ) -> Result<(), VerifyError<'db>> {
-    let RuntimeSignature { params, .. } = program.body(callee).signature;
+    let RuntimeSignature { params, .. } = program.signature(callee);
     if params.len() != args.len() {
         return Err(VerifyError::CallArgCountMismatch(callee));
     }
@@ -264,7 +307,7 @@ fn verify_assign<'db>(
         RExpr::Load { place } => Some(project_place(db, program, body, place)?),
         RExpr::Call { callee, args } => {
             verify_call(db, program, body, *callee, args)?;
-            program.body(*callee).signature.ret.clone()
+            program.signature(*callee).ret.clone()
         }
         RExpr::ProviderToRaw { value } => {
             if !matches!(

@@ -10,7 +10,7 @@ use super::{
     ty_def::{AssocTy, InvalidCause, PrimTy, TyBase, TyData, TyFlags, TyId, TyParam, TyVar},
 };
 use crate::analysis::HirAnalysisDb;
-use crate::analysis::place::{Place, PlaceBase};
+use crate::analysis::place::{Place, PlaceBase, PlaceProjection};
 use crate::hir_def::CallableDef;
 
 pub trait TyVisitable<'db> {
@@ -296,6 +296,22 @@ impl<'db> TyVisitable<'db> for Place<'db> {
         V: TyVisitor<'db> + ?Sized,
     {
         self.base.visit_with(visitor);
+        for projection in &self.projections {
+            projection.visit_with(visitor);
+        }
+    }
+}
+
+impl<'db> TyVisitable<'db> for PlaceProjection<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        match self {
+            PlaceProjection::Field { result_ty, .. } | PlaceProjection::Index { result_ty, .. } => {
+                result_ty.visit_with(visitor)
+            }
+        }
     }
 }
 

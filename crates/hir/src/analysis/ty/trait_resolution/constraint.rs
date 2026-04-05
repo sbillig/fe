@@ -12,7 +12,10 @@ use crate::analysis::{
         adt_def::AdtDef,
         binder::Binder,
         corelib::resolve_core_trait,
-        effects::{EffectKeyKind, place_effect_provider_param_index_map},
+        effects::{
+            EffectKeyCanonMode, EffectKeyKind, canonical_effect_identity_for_binding,
+            place_effect_provider_param_index_map,
+        },
         layout_holes::{collect_layout_hole_tys_in_order, ty_contains_const_hole},
         trait_def::TraitInstId,
         trait_lower::{lower_impl_trait, lower_trait_ref},
@@ -29,6 +32,10 @@ pub(crate) fn collect_effect_constraints_for_func<'db>(
 ) -> Vec<TraitInstId<'db>> {
     let provider_map = place_effect_provider_param_index_map(db, func);
     let provider_params = CallableDef::Func(func).params(db);
+    let scope = func.scope();
+    let assumptions = collect_func_decl_constraints(db, func.into(), true)
+        .instantiate_identity()
+        .extend_all_bounds(db);
 
     let Some(effect_ref_trait) = resolve_core_trait(db, func.scope(), &["effect_ref", "EffectRef"])
     else {
@@ -63,7 +70,16 @@ pub(crate) fn collect_effect_constraints_for_func<'db>(
             continue;
         };
 
-        match (binding.key.key_ty(), binding.key.key_trait()) {
+        let identity = canonical_effect_identity_for_binding(
+            db,
+            binding,
+            scope,
+            assumptions,
+            None,
+            EffectKeyCanonMode::Solver,
+        );
+
+        match (identity.key_ty, identity.key_trait) {
             (_, Some(inst)) => {
                 debug_assert!(
                     collect_layout_hole_tys_in_order(db, inst).is_empty(),
@@ -98,7 +114,7 @@ pub(crate) fn collect_effect_constraints_for_func<'db>(
                     IndexMap::new(),
                 ));
 
-                if binding.is_mut {
+                if identity.is_mut {
                     out.push(TraitInstId::new(
                         db,
                         effect_ref_mut_trait,
@@ -542,6 +558,36 @@ fn f() uses (slots: Repeated) {}
         let left = fields[0].generic_args(&db)[0];
         let right = fields[1].generic_args(&db)[0];
         assert_eq!(left, right);
+    }
+
+    #[test]
+    fn effect_constraints_canonicalize_omitted_const_expr_defaults() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("effect_constraints_canonicalize_omitted_const_expr_defaults.fe"),
+            r#"
+const fn plus1(x: usize) -> usize {
+    x + 1
+}
+
+trait Cap<T> {}
+
+struct Slot<const N: usize, const M: usize = plus1(N)> {}
+
+fn f() uses (cap: Cap<Slot<4>>) {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let func = find_func(&db, top_mod, "f");
+        let cap_trait = find_trait(&db, top_mod, "Cap");
+        let constraints = collect_effect_constraints_for_func(&db, func);
+        let cap_inst = constraints
+            .into_iter()
+            .find(|inst| inst.def(&db) == cap_trait)
+            .expect("missing Cap constraint");
+        let key_ty = cap_inst.args(&db)[1];
+        assert_eq!(key_ty.pretty_print(&db).to_string(), "Slot<4, 5>");
     }
 
     #[test]

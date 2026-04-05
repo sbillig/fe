@@ -7,6 +7,7 @@ pub mod diagnostics;
 pub mod file;
 pub mod indexmap;
 pub mod ingot;
+pub mod layout;
 pub mod options;
 pub mod paths;
 pub mod stdlib;

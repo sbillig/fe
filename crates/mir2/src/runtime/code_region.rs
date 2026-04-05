@@ -1,10 +1,7 @@
 use hir::{
-    analysis::{
-        semantic::{
-            GenericSubst, ImplEnv, ManualContractSection, SemanticCodeRegionRef, SemanticInstance,
-            SemanticInstanceKey, get_or_build_semantic_instance,
-        },
-        ty::ty_check::BodyOwner,
+    analysis::semantic::{
+        ManualContractSection, SemanticCodeRegionRef, SemanticInstance,
+        get_or_build_semantic_instance, root_semantic_instance_key,
     },
     hir_def::{Contract, Func, ManualContractRootAttr},
 };
@@ -125,15 +122,17 @@ fn manual_contract_root_metadata<'db>(
 }
 
 fn semantic_instance_for_func<'db>(db: &'db dyn MirDb, func: Func<'db>) -> SemanticInstance<'db> {
-    get_or_build_semantic_instance(
-        db,
-        SemanticInstanceKey::new(
-            db,
-            BodyOwner::Func(func),
-            GenericSubst::empty(db),
-            ImplEnv::empty(db, func.scope()),
-        ),
-    )
+    let key = root_semantic_instance_key(db, hir::analysis::ty::ty_check::BodyOwner::Func(func))
+        .unwrap_or_else(|err| {
+            panic!(
+                "manual contract root `{}` must synthesize a closed root semantic instance: {err:?}",
+                func.name(db)
+                    .to_opt()
+                    .map(|name| name.data(db).to_string())
+                    .unwrap_or_else(|| "<anonymous>".to_string())
+            )
+        });
+    get_or_build_semantic_instance(db, key)
 }
 
 fn manual_contract_section_symbol(contract_name: &str, section: ManualContractSection) -> String {

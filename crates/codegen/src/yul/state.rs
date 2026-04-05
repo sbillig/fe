@@ -1,59 +1,46 @@
-use std::rc::Rc;
+use crate::yul::legalize::{YLocalId, YulFunctionPlan, YulLocalRoot};
 
-use mir::LocalId;
-use rustc_hash::FxHashMap;
-use std::cell::Cell;
-
-/// Tracks the mapping between Fe bindings and their Yul local names within a block.
 #[derive(Clone)]
-pub(super) struct BlockState {
-    locals: FxHashMap<LocalId, String>,
-    next_local: Rc<Cell<usize>>,
-    /// Mapping from MIR ValueId index to Yul temp name for values bound in this scope.
-    value_temps: FxHashMap<usize, String>,
+pub(super) struct FunctionState {
+    value_names: Vec<Option<String>>,
+    root_names: Vec<Option<String>>,
+    next_temp: usize,
 }
 
-impl BlockState {
-    /// Creates a fresh state with no locals registered.
-    pub(super) fn new() -> Self {
+impl FunctionState {
+    pub(super) fn new<'db>(func: &YulFunctionPlan<'db>) -> Self {
+        let mut value_names = vec![None; func.locals.len()];
+        let mut root_names = vec![None; func.locals.len()];
+        for (idx, local) in func.locals.iter().enumerate() {
+            let local_id = YLocalId(idx as u32);
+            if matches!(local.root, YulLocalRoot::MemorySlot { .. }) {
+                root_names[idx] = Some(format!("r{idx}"));
+            } else if local.class.is_some() && !func.param_locals.contains(&local_id) {
+                value_names[idx] = Some(format!("v{idx}"));
+            }
+        }
         Self {
-            locals: FxHashMap::default(),
-            next_local: Rc::new(Cell::new(0)),
-            value_temps: FxHashMap::default(),
+            value_names,
+            root_names,
+            next_temp: func.locals.len(),
         }
     }
 
-    /// Caches the Yul temp name for a MIR value.
-    pub(super) fn insert_value_temp(&mut self, value_idx: usize, temp: String) {
-        self.value_temps.insert(value_idx, temp);
+    pub(super) fn assign_param_name(&mut self, local: YLocalId, name: String) {
+        self.value_names[local.index()] = Some(name);
     }
 
-    /// Returns the cached Yul temp name for a MIR value, if it exists.
-    pub(super) fn value_temp(&self, value_idx: usize) -> Option<&String> {
-        self.value_temps.get(&value_idx)
+    pub(super) fn value_name(&self, local: YLocalId) -> Option<&str> {
+        self.value_names[local.index()].as_deref()
     }
 
-    /// Allocates a new temporary Yul variable name.
-    pub(super) fn alloc_local(&mut self) -> String {
-        let current = self.next_local.get();
-        let name = format!("v{}", current);
-        self.next_local.set(current + 1);
-        name
+    pub(super) fn root_name(&self, local: YLocalId) -> Option<&str> {
+        self.root_names[local.index()].as_deref()
     }
 
-    /// Inserts or updates the mapping for a MIR local to a Yul name/expression.
-    pub(super) fn insert_local(&mut self, local: LocalId, name: String) -> String {
-        self.locals.insert(local, name.clone());
-        name
-    }
-
-    /// Returns the known Yul name for a local, if it exists.
-    pub(super) fn local(&self, local: LocalId) -> Option<String> {
-        self.locals.get(&local).cloned()
-    }
-
-    /// Resolves a local to its lowered Yul name/expression.
-    pub(super) fn resolve_local(&self, local: LocalId) -> Option<String> {
-        self.local(local)
+    pub(super) fn alloc_temp(&mut self) -> String {
+        let temp = format!("t{}", self.next_temp);
+        self.next_temp += 1;
+        temp
     }
 }

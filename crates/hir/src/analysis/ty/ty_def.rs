@@ -17,6 +17,7 @@ use common::{
     ingot::{Ingot, IngotKind},
 };
 use num_bigint::BigUint;
+use num_traits::ToPrimitive;
 use rustc_hash::FxHashSet;
 use salsa::Update;
 use smallvec::SmallVec;
@@ -423,6 +424,23 @@ impl<'db> TyId<'db> {
             self.base_ty(db).data(db),
             TyData::TyBase(TyBase::Prim(PrimTy::Array))
         )
+    }
+
+    pub fn array_len(self, db: &'db dyn HirAnalysisDb) -> Option<usize> {
+        if !self.is_array(db) {
+            return None;
+        }
+        let (_, args) = self.decompose_ty_app(db);
+        let len_ty = *args.get(1)?;
+        let TyData::ConstTy(const_ty) = len_ty.data(db) else {
+            return None;
+        };
+        match const_ty.data(db) {
+            ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) => {
+                int_id.data(db).to_usize()
+            }
+            _ => None,
+        }
     }
 
     /// Returns `true` if this type is known to have no runtime representation.
@@ -2024,38 +2042,14 @@ pub(crate) fn decompose_ty_app<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
 ) -> (TyId<'db>, Vec<TyId<'db>>) {
-    struct TyAppDecomposer<'db> {
-        db: &'db dyn HirAnalysisDb,
-        base: Option<TyId<'db>>,
-        args: Vec<TyId<'db>>,
+    let mut base = ty;
+    let mut args = Vec::new();
+    while let TyData::TyApp(lhs, rhs) = base.data(db) {
+        args.push(*rhs);
+        base = *lhs;
     }
-
-    impl<'db> TyVisitor<'db> for TyAppDecomposer<'db> {
-        fn db(&self) -> &'db dyn HirAnalysisDb {
-            self.db
-        }
-
-        fn visit_ty(&mut self, ty: TyId<'db>) {
-            let db = self.db;
-
-            match ty.data(db) {
-                TyData::TyApp(lhs, rhs) => {
-                    self.visit_ty(*lhs);
-                    self.args.push(*rhs);
-                }
-                _ => self.base = Some(ty),
-            }
-        }
-    }
-
-    let mut decomposer = TyAppDecomposer {
-        db,
-        base: None,
-        args: Vec::new(),
-    };
-
-    ty.visit_with(&mut decomposer);
-    (decomposer.base.unwrap(), decomposer.args)
+    args.reverse();
+    (base, args)
 }
 
 bitflags! {

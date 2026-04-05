@@ -13,7 +13,6 @@
 //!   as edge labels (Sea of Nodes) with the same vocabulary.
 
 use smallvec::SmallVec;
-
 /// Atomic projection step - generic over type representation.
 ///
 /// Each projection step describes one level of navigation into a compound type:
@@ -168,6 +167,17 @@ impl<Ty: Clone, Var: Clone, Idx: Clone> ProjectionPath<Ty, Var, Idx> {
         result.extend(other.0.iter().cloned());
         Self(result)
     }
+
+    /// Return the path without its first projection step.
+    pub fn without_first(&self) -> Option<Self> {
+        if self.0.is_empty() {
+            None
+        } else {
+            let mut steps = self.0.clone();
+            steps.remove(0);
+            Some(Self(steps))
+        }
+    }
 }
 
 impl<Ty: PartialEq, Var: PartialEq, Idx: PartialEq> ProjectionPath<Ty, Var, Idx> {
@@ -185,6 +195,38 @@ impl<Ty: PartialEq, Var: PartialEq, Idx: PartialEq> ProjectionPath<Ty, Var, Idx>
             }
         }
         true
+    }
+
+    /// Return the suffix after stripping `prefix` from the front of this path.
+    pub fn strip_prefix(&self, prefix: &Self) -> Option<Self>
+    where
+        Ty: Clone,
+        Var: Clone,
+        Idx: Clone,
+    {
+        if !prefix.is_prefix_of(self) {
+            return None;
+        }
+        Some(Self(
+            self.0
+                .iter()
+                .skip(prefix.len())
+                .cloned()
+                .collect::<SmallVec<_, 4>>(),
+        ))
+    }
+
+    /// Strip a leading `Deref` projection if present.
+    pub fn strip_leading_deref(&self) -> Option<Self>
+    where
+        Ty: Clone,
+        Var: Clone,
+        Idx: Clone,
+    {
+        matches!(self.0.first(), Some(Projection::Deref)).then(|| {
+            self.without_first()
+                .expect("leading deref requires at least one projection")
+        })
     }
 
     /// Determine the aliasing relationship between two projection paths.
@@ -421,6 +463,45 @@ mod tests {
 
         let combined = path1.concat(&path2);
         assert_eq!(combined.len(), 2);
+    }
+
+    #[test]
+    fn test_without_first() {
+        let mut path = TestPath::new();
+        path.push(Projection::Deref);
+        path.push(Projection::Field(0));
+        path.push(Projection::Index(IndexSource::Constant(3)));
+
+        let stripped = path.without_first().unwrap();
+        assert_eq!(stripped.len(), 2);
+        assert!(matches!(stripped.iter().next(), Some(Projection::Field(0))));
+    }
+
+    #[test]
+    fn test_strip_prefix() {
+        let mut prefix = TestPath::new();
+        prefix.push(Projection::Field(0));
+
+        let mut path = prefix.clone();
+        path.push(Projection::Index(IndexSource::Constant(7)));
+
+        let suffix = path.strip_prefix(&prefix).unwrap();
+        assert_eq!(suffix.len(), 1);
+        assert!(matches!(
+            suffix.iter().next(),
+            Some(Projection::Index(IndexSource::Constant(7)))
+        ));
+    }
+
+    #[test]
+    fn test_strip_leading_deref() {
+        let mut path = TestPath::new();
+        path.push(Projection::Deref);
+        path.push(Projection::Field(1));
+
+        let stripped = path.strip_leading_deref().unwrap();
+        assert_eq!(stripped.len(), 1);
+        assert!(matches!(stripped.iter().next(), Some(Projection::Field(1))));
     }
 
     #[test]

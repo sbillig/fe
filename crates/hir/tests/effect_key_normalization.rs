@@ -2,9 +2,16 @@ use camino::Utf8PathBuf;
 use common::diagnostics::{CompleteDiagnostic, cmp_complete_diagnostics};
 use fe_hir::analysis::diagnostics::DiagnosticVoucher;
 use fe_hir::analysis::place::PlaceBase;
+use fe_hir::analysis::semantic::{
+    GenericSubst, get_or_build_semantic_instance, instantiate_typed_body, instantiated_effect_env,
+    root_semantic_instance_key, semantic_binding_ty, typed_body_template,
+    validate_instantiated_effect_env_key,
+};
 use fe_hir::analysis::ty::effects::{EffectKeyKind, place_effect_provider_param_index_map};
+use fe_hir::analysis::ty::trait_def::resolve_trait_method_instance;
+use fe_hir::analysis::ty::trait_resolution::TraitSolveCx;
 use fe_hir::analysis::ty::ty_check::{
-    EffectArg, EffectPassMode, TypedBody, check_contract_recv_arm_body, check_func_body,
+    BodyOwner, EffectArg, EffectPassMode, TypedBody, check_contract_recv_arm_body, check_func_body,
 };
 use fe_hir::hir_def::{CallableDef, Contract, Expr, ExprId, Func, ItemKind, Partial, TopLevelMod};
 use fe_hir::test_db::{HirAnalysisTestDb, initialize_analysis_pass};
@@ -164,6 +171,25 @@ fn assert_callable_provider_arg<'db>(
     assert_eq!(provider_arg.pretty_print(db).to_string(), expected);
 }
 
+fn assert_all_calls_have_callables<'db>(
+    db: &'db HirAnalysisTestDb,
+    owner: &str,
+    typed_body: &TypedBody<'db>,
+) {
+    let body = typed_body.body().expect("missing typed body");
+    for expr in body.exprs(db).keys() {
+        if matches!(
+            expr.data(db, body),
+            Partial::Present(Expr::Call(..) | Expr::MethodCall(..))
+        ) {
+            assert!(
+                typed_body.callable_expr(expr).is_some(),
+                "missing callable for {owner} expression {expr:?}"
+            );
+        }
+    }
+}
+
 fn assert_callable_generic_arg<'db>(
     db: &'db HirAnalysisTestDb,
     caller: Func<'db>,
@@ -269,6 +295,36 @@ trait T {
 
 impl T for S {
     fn f(self) uses (cap: Cap<Slot<4, 5>>) {}
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn impl_method_effect_keys_match_with_substituted_omitted_const_expr_defaults() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from(
+            "impl_method_effect_keys_match_with_substituted_omitted_const_expr_defaults.fe",
+        ),
+        r#"
+const fn plus1(x: usize) -> usize {
+    x + 1
+}
+
+trait Cap<T> {}
+
+struct Slot<const N: usize, const M: usize = plus1(N)> {}
+struct S<const N: usize> {}
+
+trait T<const N: usize> {
+    fn f(self) uses (cap: Cap<Slot<N>>)
+}
+
+impl<const N: usize> T<N> for S<N> {
+    fn f(self) uses (cap: Cap<Slot<N, plus1(N)>>) {}
 }
 "#,
     );
@@ -4192,4 +4248,426 @@ fn caller() {
     let call_expr = find_named_call_expr(&db, caller, "needs");
     assert_callable_generic_arg(&db, caller, call_expr, 0, "0");
     assert_callable_provider_arg(&db, caller, call_expr, "StorageMap<u256, u256, 0>");
+}
+
+#[test]
+fn by_ref_trait_provider_storage_bug_fixture_keeps_callables_on_all_typed_calls() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("by_ref_trait_provider_storage_bug.fe"),
+        include_str!("../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe"),
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    for func in top_mod.all_funcs(&db) {
+        let (_, typed_body) = check_func_body(&db, *func);
+        if typed_body.body().is_none() {
+            continue;
+        }
+        let name = func
+            .name(&db)
+            .to_opt()
+            .map(|name| name.data(&db).to_string())
+            .unwrap_or_else(|| "<fn>".to_string());
+        assert_all_calls_have_callables(&db, &name, typed_body);
+    }
+
+    for impl_trait in top_mod.all_impl_traits(&db) {
+        for func in impl_trait.methods(&db) {
+            let (_, typed_body) = check_func_body(&db, func);
+            let name = func
+                .name(&db)
+                .to_opt()
+                .map(|name| name.data(&db).to_string())
+                .unwrap_or_else(|| "<fn>".to_string());
+            assert_all_calls_have_callables(&db, &format!("impl::{name}"), typed_body);
+        }
+    }
+
+    for contract in top_mod.all_contracts(&db) {
+        let recvs = contract.recvs(&db);
+        for (recv_idx, recv) in recvs.data(&db).iter().enumerate() {
+            for arm_idx in 0..recv.arms.data(&db).len() {
+                let (_, typed_body) =
+                    check_contract_recv_arm_body(&db, *contract, recv_idx as u32, arm_idx as u32);
+                assert_all_calls_have_callables(
+                    &db,
+                    &format!("recv[{recv_idx}][{arm_idx}]"),
+                    typed_body,
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn impl_trait_method_typed_body_instantiation_substitutes_self() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("by_ref_trait_provider_storage_bug.fe"),
+        include_str!("../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe"),
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let impl_trait = top_mod.all_impl_traits(&db)[0];
+    let method = impl_trait
+        .methods(&db)
+        .find(|func| {
+            func.name(&db)
+                .to_opt()
+                .is_some_and(|name| name.data(&db) == "sum")
+        })
+        .expect("missing impl-trait method");
+    let inst = impl_trait
+        .trait_inst(&db)
+        .expect("missing impl trait instance");
+    let (resolved_method, impl_args) = resolve_trait_method_instance(
+        &db,
+        TraitSolveCx::new(&db, impl_trait.scope()),
+        inst,
+        method.name(&db).to_opt().expect("missing method name"),
+    )
+    .expect("missing resolved impl method");
+    assert_eq!(resolved_method, method);
+
+    let instantiated = instantiate_typed_body(
+        &db,
+        typed_body_template(&db, BodyOwner::Func(method)),
+        GenericSubst::new(&db, impl_args),
+    );
+    let self_binding = instantiated.param_binding(0).expect("missing self binding");
+    let self_ty = instantiated.binding_ty(&db, self_binding);
+    assert_eq!(self_ty.pretty_print(&db).to_string(), "Pair");
+}
+
+#[test]
+fn impl_trait_method_self_paths_preserve_binding_ty_after_instantiation() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("by_ref_trait_provider_storage_bug.fe"),
+        include_str!("../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe"),
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let impl_trait = top_mod.all_impl_traits(&db)[0];
+    let method = impl_trait
+        .methods(&db)
+        .find(|func| {
+            func.name(&db)
+                .to_opt()
+                .is_some_and(|name| name.data(&db) == "sum")
+        })
+        .expect("missing impl-trait method");
+    let inst = impl_trait
+        .trait_inst(&db)
+        .expect("missing impl trait instance");
+    let (_, impl_args) = resolve_trait_method_instance(
+        &db,
+        TraitSolveCx::new(&db, impl_trait.scope()),
+        inst,
+        method.name(&db).to_opt().expect("missing method name"),
+    )
+    .expect("missing resolved impl method");
+
+    let instantiated = instantiate_typed_body(
+        &db,
+        typed_body_template(&db, BodyOwner::Func(method)),
+        GenericSubst::new(&db, impl_args),
+    );
+    let body = instantiated.body().expect("missing typed body");
+    let self_binding = instantiated.param_binding(0).expect("missing self binding");
+    let binding_ty = instantiated.binding_ty(&db, self_binding);
+    let self_exprs = body
+        .exprs(&db)
+        .keys()
+        .filter(|expr| {
+            matches!(expr.data(&db, body), Partial::Present(Expr::Path(_)))
+                && instantiated.expr_binding(*expr) == Some(self_binding)
+        })
+        .collect::<Vec<_>>();
+    assert!(!self_exprs.is_empty(), "expected self path expressions");
+    for expr in self_exprs {
+        assert_eq!(
+            instantiated.expr_ty(&db, expr),
+            binding_ty,
+            "instantiated self path should preserve binding type for {expr:?}",
+        );
+    }
+}
+
+#[test]
+fn use_ctx_semantic_body_keeps_receiver_as_effect_binding_local() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("by_ref_trait_provider_storage_bug.fe"),
+        include_str!("../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe"),
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let use_ctx = find_func(&db, top_mod, "use_ctx");
+    let instance = get_or_build_semantic_instance(
+        &db,
+        fe_hir::analysis::semantic::identity_semantic_instance_key(&db, BodyOwner::Func(use_ctx)),
+    );
+    let body = instance.body(&db);
+    assert_eq!(body.locals.len(), 2, "{body:#?}");
+    let args = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.stmts.iter())
+        .find_map(|stmt| match &stmt.kind {
+            fe_hir::analysis::semantic::SStmtKind::Assign {
+                expr: fe_hir::analysis::semantic::SExpr::Call { args, .. },
+                ..
+            } => Some(args),
+            fe_hir::analysis::semantic::SStmtKind::Assign { .. }
+            | fe_hir::analysis::semantic::SStmtKind::Store { .. } => None,
+        })
+        .unwrap_or_else(|| panic!("{body:#?}"));
+    assert_eq!(args.len(), 1);
+    assert_eq!(args[0], fe_hir::analysis::semantic::SLocalId::from_u32(0));
+}
+
+#[test]
+fn impl_sum_semantic_body_uses_self_binding_directly() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("by_ref_trait_provider_storage_bug.fe"),
+        include_str!("../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe"),
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let impl_trait = top_mod.all_impl_traits(&db)[0];
+    let method = impl_trait
+        .methods(&db)
+        .find(|func| {
+            func.name(&db)
+                .to_opt()
+                .is_some_and(|name| name.data(&db) == "sum")
+        })
+        .expect("missing impl-trait method");
+    let inst = impl_trait
+        .trait_inst(&db)
+        .expect("missing impl trait instance");
+    let (_, impl_args) = resolve_trait_method_instance(
+        &db,
+        TraitSolveCx::new(&db, impl_trait.scope()),
+        inst,
+        method.name(&db).to_opt().expect("missing method name"),
+    )
+    .expect("missing resolved impl method");
+    let instance = get_or_build_semantic_instance(
+        &db,
+        fe_hir::analysis::semantic::SemanticInstanceKey::new(
+            &db,
+            BodyOwner::Func(method),
+            GenericSubst::new(&db, impl_args),
+            fe_hir::analysis::semantic::ImplEnv::empty(&db, impl_trait.scope()),
+        ),
+    );
+    let body = instance.body(&db);
+    assert!(
+        body.blocks
+            .iter()
+            .flat_map(|block| block.stmts.iter())
+            .all(|stmt| match &stmt.kind {
+                fe_hir::analysis::semantic::SStmtKind::Assign {
+                    expr: fe_hir::analysis::semantic::SExpr::Use(local),
+                    ..
+                } => *local != fe_hir::analysis::semantic::SLocalId::from_u32(0),
+                fe_hir::analysis::semantic::SStmtKind::Assign { .. }
+                | fe_hir::analysis::semantic::SStmtKind::Store { .. } => true,
+            }),
+        "{body:#?}"
+    );
+}
+
+#[test]
+fn effect_handle_constructors_preserve_direct_carrier_roles() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("effect_handle_field_deref.fe"),
+        include_str!("../../codegen/tests/fixtures/effect_handle_field_deref.fe"),
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "EffectHandleFieldDeref");
+    let instance = get_or_build_semantic_instance(
+        &db,
+        fe_hir::analysis::semantic::identity_semantic_instance_key(
+            &db,
+            BodyOwner::ContractRecvArm {
+                contract,
+                recv_idx: 0,
+                arm_idx: 1,
+            },
+        ),
+    );
+    let body = instance.body(&db);
+    let fe_hir::analysis::semantic::SStmtKind::Assign {
+        expr: fe_hir::analysis::semantic::SExpr::Call { callee, .. },
+        ..
+    } = &body.blocks[0].stmts[0].kind
+    else {
+        panic!("{body:#?}");
+    };
+    let callee = get_or_build_semantic_instance(&db, callee.key);
+    let callee_body = callee.body(&db);
+    let fe_hir::analysis::semantic::SStmtKind::Assign {
+        expr: fe_hir::analysis::semantic::SExpr::Call { callee, .. },
+        ..
+    } = &callee_body.blocks[0].stmts[0].kind
+    else {
+        panic!("expected nested call in helper body: {callee_body:#?}");
+    };
+    let nested = get_or_build_semantic_instance(&db, callee.key);
+    let nested_body = nested.body(&db);
+    assert!(matches!(
+        nested_body.locals[1].role,
+        fe_hir::analysis::semantic::SemanticLocalRole::DirectCarrier { .. }
+    ));
+}
+
+#[test]
+fn function_effect_bindings_use_instantiated_provider_bindings() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("effect_handle_field_deref.fe"),
+        include_str!("../../codegen/tests/fixtures/effect_handle_field_deref.fe"),
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "EffectHandleFieldDeref");
+    let instance = get_or_build_semantic_instance(
+        &db,
+        fe_hir::analysis::semantic::identity_semantic_instance_key(
+            &db,
+            BodyOwner::ContractRecvArm {
+                contract,
+                recv_idx: 0,
+                arm_idx: 0,
+            },
+        ),
+    );
+    let body = instance.body(&db);
+    let callee = body.blocks[0]
+        .stmts
+        .iter()
+        .find_map(|stmt| {
+            let fe_hir::analysis::semantic::SStmtKind::Assign {
+                expr: fe_hir::analysis::semantic::SExpr::Call { callee, .. },
+                ..
+            } = &stmt.kind
+            else {
+                return None;
+            };
+            let instance = get_or_build_semantic_instance(&db, callee.key);
+            match instance.key(&db).owner(&db) {
+                BodyOwner::Func(func)
+                    if func
+                        .name(&db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(&db) == "write_cell") =>
+                {
+                    Some(instance)
+                }
+                BodyOwner::Func(_)
+                | BodyOwner::Const(_)
+                | BodyOwner::AnonConstBody { .. }
+                | BodyOwner::ContractInit { .. }
+                | BodyOwner::ContractRecvArm { .. } => None,
+            }
+        })
+        .unwrap_or_else(|| panic!("expected nested write_cell call in helper body: {body:#?}"));
+    let callee_body = callee.body(&db);
+    let effect_local = callee_body
+        .locals
+        .iter()
+        .find(|local| {
+            matches!(
+                local.source,
+                Some(fe_hir::analysis::ty::ty_check::LocalBinding::EffectParam { .. })
+            )
+        })
+        .expect("write_cell should have an effect binding local");
+    let fe_hir::analysis::semantic::SemanticLocalRole::PlaceBoundValue {
+        provider: local_provider,
+        value_ty,
+    } = &effect_local.role
+    else {
+        panic!(
+            "write_cell effect binding should be place-bound through its instantiated provider:\n{callee_body:#?}"
+        );
+    };
+    assert_eq!(
+        local_provider.provider_ty.pretty_print(&db).to_string(),
+        "StorPtr<Cell>"
+    );
+    assert_eq!(
+        local_provider.semantics.kind,
+        fe_hir::analysis::ty::ProviderKind::Handle
+    );
+    assert_eq!(local_provider.semantics.target_ty, Some(*value_ty));
+    assert_eq!(value_ty.pretty_print(&db).to_string(), "Cell");
+    let effect_binding = effect_local
+        .source
+        .expect("effect local should keep its source binding");
+    assert_eq!(
+        semantic_binding_ty(&db, callee, effect_binding)
+            .pretty_print(&db)
+            .to_string(),
+        "Cell"
+    );
+    let env = instantiated_effect_env(&db, callee).expect("effect env should exist");
+    let provider = env
+        .providers(&db)
+        .iter()
+        .find(|provider| provider.provider_ty == local_provider.provider_ty)
+        .expect("instantiated provider binding should exist");
+    assert_eq!(
+        provider.provider_ty.pretty_print(&db).to_string(),
+        "StorPtr<Cell>"
+    );
+}
+
+#[test]
+fn root_semantic_instance_keys_are_closed_under_root_provider_subst() {
+    let mut db = HirAnalysisTestDb::default();
+    let storage_map_file = db.new_stand_alone(
+        Utf8PathBuf::from("storage_map_contract.fe"),
+        include_str!("../../codegen/tests/fixtures/storage_map_contract.fe"),
+    );
+    let (top_mod, _) = db.top_mod(storage_map_file);
+    db.assert_no_diags(top_mod);
+    for name in ["init", "runtime"] {
+        let func = find_func(&db, top_mod, name);
+        let key = root_semantic_instance_key(&db, BodyOwner::Func(func))
+            .unwrap_or_else(|err| panic!("manual root `{name}` should synthesize a closed root semantic instance key: {err:?}"));
+        validate_instantiated_effect_env_key(&db, key).unwrap_or_else(|err| {
+            panic!(
+                "manual root `{name}` should have a closed effect env under synthesized root subst: {err:?}"
+            )
+        });
+    }
+
+    let test_file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_init_fixed_array_arg.fe"),
+        include_str!("../../fe/tests/fixtures/fe_test/contract_init_fixed_array_arg.fe"),
+    );
+    let (top_mod, _) = db.top_mod(test_file);
+    db.assert_no_diags(top_mod);
+    let test_func = find_func(&db, top_mod, "test_contract_init_fixed_array_arg");
+    let key = root_semantic_instance_key(&db, BodyOwner::Func(test_func)).unwrap_or_else(|err| {
+        panic!("test root should synthesize a closed root semantic instance key: {err:?}")
+    });
+    validate_instantiated_effect_env_key(&db, key).unwrap_or_else(|err| {
+        panic!("test root should have a closed effect env under synthesized root subst: {err:?}")
+    });
 }

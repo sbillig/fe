@@ -14,7 +14,10 @@ use sonatina_ir::{Module, ir_writer::ModuleWriter, isa::evm::Evm, module::Module
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
-use crate::{ExpectedRevert, OptLevel, TargetDataLayout, TestMetadata, TestModuleOutput};
+use crate::{
+    OptLevel, TargetDataLayout, TestMetadata, TestModuleOutput,
+    test_output::{TestRootMetadataError, runtime_test_root_metadata},
+};
 
 #[derive(Debug)]
 pub enum LowerError {
@@ -340,7 +343,7 @@ pub fn emit_test_module_sonatina(
         let Some(section) = sections.first() else {
             continue;
         };
-        let mir2::RuntimeSectionName::Test(name) = &section.name else {
+        let mir2::RuntimeSectionName::Test(_) = &section.name else {
             continue;
         };
         let artifact = artifacts_by_name
@@ -358,9 +361,14 @@ pub fn emit_test_module_sonatina(
                     object.name(db)
                 ))
             })?;
+        let metadata = runtime_test_root_metadata(db, &section.entry.owner(db), &section.name)
+            .map_err(|err| match err {
+                TestRootMetadataError::InvalidPackage(message) => LowerError::Internal(message),
+                TestRootMetadataError::Unsupported(message) => LowerError::Unsupported(message),
+            })?;
         tests.push(TestMetadata {
-            display_name: name.clone(),
-            hir_name: name.clone(),
+            display_name: metadata.display_name,
+            hir_name: metadata.hir_name,
             symbol_name: section.entry.symbol(db).clone(),
             object_name: object.name(db).clone(),
             yul: String::new(),
@@ -369,9 +377,29 @@ pub fn emit_test_module_sonatina(
             value_param_count: 0,
             effect_param_count: 0,
             init_bytecode: Vec::new(),
-            expected_revert: Some(ExpectedRevert::Any),
-            initial_balance: None,
+            expected_revert: metadata.expected_revert,
+            initial_balance: metadata.initial_balance,
         });
     }
     Ok(TestModuleOutput { tests })
+}
+
+pub fn emit_test_ingot_sonatina(
+    db: &DriverDataBase,
+    ingot: Ingot<'_>,
+    opt_level: OptLevel,
+    options: SonatinaTestOptions,
+    filter: Option<&str>,
+) -> Result<TestModuleOutput, LowerError> {
+    let mut top_mods = ingot.all_modules(db).to_vec();
+    top_mods.sort_by(|left, right| left.name(db).cmp(&right.name(db)));
+
+    let mut output = TestModuleOutput { tests: Vec::new() };
+    for top_mod in top_mods {
+        output.extend(emit_test_module_sonatina(
+            db, top_mod, opt_level, options, filter,
+        )?);
+    }
+    output.sort_tests();
+    Ok(output)
 }

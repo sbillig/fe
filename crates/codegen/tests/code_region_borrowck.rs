@@ -2,8 +2,8 @@ use common::InputDb;
 use driver::{DriverDataBase, MirDiagnosticsMode};
 use hir::{
     analysis::semantic::{
-        GenericSubst, ImplEnv, SemanticInstanceKey, check_semantic_borrows,
-        get_or_build_semantic_instance, normalize_semantic_body,
+        check_semantic_borrows, get_or_build_semantic_instance, identity_semantic_instance_key,
+        normalize_semantic_body,
     },
     analysis::ty::ty_check::BodyOwner,
     hir_def::ItemKind,
@@ -67,12 +67,7 @@ fn code_region_allocate_instance_has_no_semantic_borrow_diagnostics() {
             _ => None,
         })
         .expect("allocate fixture function");
-    let key = SemanticInstanceKey::new(
-        &db,
-        BodyOwner::Func(*allocate),
-        GenericSubst::empty(&db),
-        ImplEnv::empty(&db, allocate.scope()),
-    );
+    let key = identity_semantic_instance_key(&db, BodyOwner::Func(*allocate));
     let instance = get_or_build_semantic_instance(&db, key);
     if let Err(diag) = check_semantic_borrows(&db, instance) {
         panic!("{diag:#?}");
@@ -109,12 +104,7 @@ fn code_region_specialized_allocate_callee_has_no_semantic_borrow_diagnostics() 
         .expect("init fixture function");
     let init_instance = get_or_build_semantic_instance(
         &db,
-        SemanticInstanceKey::new(
-            &db,
-            BodyOwner::Func(*init),
-            GenericSubst::empty(&db),
-            ImplEnv::empty(&db, init.scope()),
-        ),
+        identity_semantic_instance_key(&db, BodyOwner::Func(*init)),
     );
     let allocate = init_instance
         .callees(&db)

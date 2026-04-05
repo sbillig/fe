@@ -1,5 +1,5 @@
 use num_bigint::{BigInt, BigUint, Sign};
-use num_traits::{One, Zero};
+use num_traits::{One, ToPrimitive, Zero};
 
 use crate::core::hir_def::{
     BinOp, Body, Const, EnumVariant, Expr, Func, GenericArgListId, GenericParamOwner, IdentId,
@@ -394,6 +394,142 @@ impl<'a, 'db> ConstBodyExprPrinter<'a, 'db> {
     }
 }
 
+pub(crate) fn evaluate_abstract_int_const_expr<'db>(
+    db: &'db dyn HirAnalysisDb,
+    expr: ConstExprId<'db>,
+    expected_ty: TyId<'db>,
+) -> Option<ConstTyId<'db>> {
+    fn eval_int_value<'db>(
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+        expected_ty: TyId<'db>,
+    ) -> Option<BigInt> {
+        let TyData::ConstTy(const_ty) = ty.data(db) else {
+            return None;
+        };
+        match const_ty.data(db) {
+            ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) => {
+                let (bits, signed) = int_ty_shape(db, expected_ty)?;
+                let raw = BigInt::from_bytes_be(Sign::Plus, &int_id.data(db).to_bytes_be());
+                Some(normalize_int_to_shape(raw, bits, signed))
+            }
+            ConstTyData::Abstract(expr, ty) => eval_expr(db, *expr, *ty),
+            _ => None,
+        }
+    }
+
+    fn eval_expr<'db>(
+        db: &'db dyn HirAnalysisDb,
+        expr: ConstExprId<'db>,
+        expected_ty: TyId<'db>,
+    ) -> Option<BigInt> {
+        let (bits, signed) = int_ty_shape(db, expected_ty)?;
+        let normalize = |value| normalize_int_to_shape(value, bits, signed);
+        match expr.data(db) {
+            ConstExpr::ArithBinOp { op, lhs, rhs } => {
+                let lhs = eval_int_value(db, *lhs, expected_ty)?;
+                let rhs = eval_int_value(db, *rhs, expected_ty)?;
+                Some(match op {
+                    crate::hir_def::ArithBinOp::Add => normalize(lhs + rhs),
+                    crate::hir_def::ArithBinOp::Sub => normalize(lhs - rhs),
+                    crate::hir_def::ArithBinOp::Mul => normalize(lhs * rhs),
+                    crate::hir_def::ArithBinOp::Div => {
+                        if rhs.is_zero() {
+                            return None;
+                        }
+                        normalize(lhs / rhs)
+                    }
+                    crate::hir_def::ArithBinOp::Rem => {
+                        if rhs.is_zero() {
+                            return None;
+                        }
+                        normalize(lhs % rhs)
+                    }
+                    crate::hir_def::ArithBinOp::Pow => {
+                        if rhs.sign() == Sign::Minus {
+                            return None;
+                        }
+                        let exp = rhs.to_u32()?;
+                        normalize(lhs.pow(exp))
+                    }
+                    _ => return None,
+                })
+            }
+            ConstExpr::UnOp { op, expr } => {
+                let value = eval_int_value(db, *expr, expected_ty)?;
+                Some(match op {
+                    crate::hir_def::UnOp::Minus => normalize(-value),
+                    crate::hir_def::UnOp::Plus => value,
+                    _ => return None,
+                })
+            }
+            ConstExpr::Cast { expr, to } => {
+                let value = eval_int_value(db, *expr, expected_ty)?;
+                let (bits, signed) = int_ty_shape(db, *to)?;
+                Some(normalize_int_to_shape(value, bits, signed))
+            }
+            ConstExpr::ExternConstFnCall { func, args, .. }
+            | ConstExpr::UserConstFnCall { func, args, .. } => {
+                let name = func.name(db).to_opt()?.data(db);
+                match (name.as_str(), args.as_slice()) {
+                    ("add", [lhs, rhs]) => Some(normalize(
+                        eval_int_value(db, *lhs, expected_ty)?
+                            + eval_int_value(db, *rhs, expected_ty)?,
+                    )),
+                    ("sub", [lhs, rhs]) => Some(normalize(
+                        eval_int_value(db, *lhs, expected_ty)?
+                            - eval_int_value(db, *rhs, expected_ty)?,
+                    )),
+                    ("mul", [lhs, rhs]) => Some(normalize(
+                        eval_int_value(db, *lhs, expected_ty)?
+                            * eval_int_value(db, *rhs, expected_ty)?,
+                    )),
+                    ("div", [lhs, rhs]) => {
+                        let rhs = eval_int_value(db, *rhs, expected_ty)?;
+                        if rhs.is_zero() {
+                            None
+                        } else {
+                            Some(normalize(eval_int_value(db, *lhs, expected_ty)? / rhs))
+                        }
+                    }
+                    ("rem", [lhs, rhs]) => {
+                        let rhs = eval_int_value(db, *rhs, expected_ty)?;
+                        if rhs.is_zero() {
+                            None
+                        } else {
+                            Some(normalize(eval_int_value(db, *lhs, expected_ty)? % rhs))
+                        }
+                    }
+                    ("pow", [lhs, rhs]) => {
+                        let rhs = eval_int_value(db, *rhs, expected_ty)?;
+                        if rhs.sign() == Sign::Minus {
+                            None
+                        } else {
+                            Some(normalize(
+                                eval_int_value(db, *lhs, expected_ty)?.pow(rhs.to_u32()?),
+                            ))
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    let value = eval_expr(db, expr, expected_ty)?;
+    let (bits, _) = int_ty_shape(db, expected_ty)?;
+    let encoded = normalize_int_to_shape(value, bits, false);
+    let (_, bytes) = encoded.to_bytes_be();
+    Some(ConstTyId::new(
+        db,
+        ConstTyData::Evaluated(
+            EvaluatedConstTy::LitInt(IntegerId::new(db, BigUint::from_bytes_be(&bytes))),
+            expected_ty,
+        ),
+    ))
+}
+
 pub(crate) fn normalize_const_tys_for_comparison<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
@@ -402,27 +538,39 @@ pub(crate) fn normalize_const_tys_for_comparison<'db>(
 
     impl<'db> TyFolder<'db> for ComparisonConstFolder {
         fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            let ty = ty.super_fold_with(db, self);
             let TyData::ConstTy(const_ty) = ty.data(db) else {
-                return ty.super_fold_with(db, self);
+                return ty;
             };
-            let ConstTyData::UnEvaluated {
-                ty: Some(expected_ty),
-                ..
-            } = const_ty.data(db)
-            else {
-                return ty.super_fold_with(db, self);
-            };
-
-            let normalized = const_ty.evaluate(db, Some(*expected_ty));
-            if normalized.ty(db).invalid_cause(db).is_none()
-                && matches!(
-                    normalized.data(db),
-                    ConstTyData::Evaluated(..) | ConstTyData::Abstract(..)
-                )
-            {
-                TyId::const_ty(db, normalized)
-            } else {
-                ty.super_fold_with(db, self)
+            match const_ty.data(db) {
+                ConstTyData::UnEvaluated {
+                    ty: Some(expected_ty),
+                    ..
+                } => {
+                    let normalized = const_ty.evaluate(db, Some(*expected_ty));
+                    if normalized.ty(db).invalid_cause(db).is_none()
+                        && matches!(
+                            normalized.data(db),
+                            ConstTyData::Evaluated(..) | ConstTyData::Abstract(..)
+                        )
+                    {
+                        if let ConstTyData::Abstract(expr, expected_ty) = normalized.data(db) {
+                            evaluate_abstract_int_const_expr(db, *expr, *expected_ty).map_or_else(
+                                || TyId::const_ty(db, normalized),
+                                |evaluated| TyId::const_ty(db, evaluated),
+                            )
+                        } else {
+                            TyId::const_ty(db, normalized)
+                        }
+                    } else {
+                        ty
+                    }
+                }
+                ConstTyData::Abstract(expr, expected_ty) => {
+                    evaluate_abstract_int_const_expr(db, *expr, *expected_ty)
+                        .map_or(ty, |evaluated| TyId::const_ty(db, evaluated))
+                }
+                _ => ty,
             }
         }
     }

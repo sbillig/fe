@@ -2,9 +2,11 @@ use hir::semantic::{ContractFieldLayoutInfo, ProviderSource, RecvArmView};
 use hir::{
     analysis::{
         semantic::{
-            GenericSubst, ImplEnv, ManualContractSection, SemanticInstance, SemanticInstanceKey,
-            ValueProvenance, get_or_build_semantic_instance, owner_effect_bindings,
-            semantic_binding_lowering,
+            GenericSubst, ImplEnv, ManualContractSection, RootSemanticInstanceError,
+            SemanticInstance, SemanticInstanceKey, ValueProvenance, get_or_build_semantic_instance,
+            owner_effect_bindings, resolved_provider_binding_for_instance_effect,
+            root_semantic_instance_key, semantic_binding_lowering, semantic_binding_ty,
+            semantic_instance_assumptions,
         },
         ty::{
             corelib::{resolve_core_trait, resolve_lib_type_path},
@@ -28,7 +30,7 @@ use crate::{
     runtime::lower::class::{
         provider_class_for_target_in_env, runtime_class_for_direct_value_provider_in_env,
         runtime_class_for_effect_binding_provider_in_env, runtime_param_class,
-        top_level_class_for_ty_in_env,
+        runtime_visible_binding_class, top_level_class_for_ty_in_env,
     },
     runtime::lower::layout::RuntimeTypeEnv,
     runtime::{
@@ -96,11 +98,12 @@ pub fn build_runtime_package<'db>(
             .map(|name| name.data(db).to_string())
             .unwrap_or_default()
     });
-    let entry_funcs = funcs
-        .iter()
-        .copied()
-        .filter(|func| runtime_root_candidate(db, *func))
-        .collect::<Vec<_>>();
+    let mut entry_funcs = Vec::new();
+    for func in funcs.iter().copied() {
+        if runtime_root_candidate(db, func)? {
+            entry_funcs.push(func);
+        }
+    }
     if entry_funcs.is_empty() {
         return Ok(RuntimePackage::new(
             db,
@@ -110,25 +113,35 @@ pub fn build_runtime_package<'db>(
         ));
     }
 
-    let roots = entry_funcs
-        .iter()
-        .copied()
-        .map(|func| {
+    let mut roots = Vec::new();
+    for func in entry_funcs.iter().copied() {
+        roots.push((
+            func,
             runtime_instance_for_semantic(
                 db,
-                semantic_instance_for_owner(db, BodyOwner::Func(func)),
-            )
+                semantic_instance_for_root_owner(db, BodyOwner::Func(func))?,
+            ),
+        ));
+    }
+    let entry = roots
+        .iter()
+        .find(|(func, _)| {
+            func.name(db)
+                .to_opt()
+                .is_some_and(|name| name.data(db) == "main")
         })
-        .collect::<Vec<_>>();
-    let entry = *roots
-        .first()
+        .or_else(|| roots.first())
+        .map(|(_, instance)| *instance)
         .expect("entry root candidates should include the chosen entry function");
     let root = synthetic_instance(
         db,
         RuntimeSyntheticSpec::MainRoot { callee: entry },
         Vec::new(),
     );
-    let mut package_roots = roots;
+    let mut package_roots = roots
+        .into_iter()
+        .map(|(_, instance)| instance)
+        .collect::<Vec<_>>();
     package_roots.push(root);
     let package = build_non_contract_package(
         db,
@@ -177,7 +190,7 @@ pub fn build_test_runtime_package<'db>(
             continue;
         }
 
-        let semantic = semantic_instance_for_owner(db, BodyOwner::Func(func));
+        let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func))?;
         let runtime_root = runtime_instance_for_semantic(db, semantic);
         let root = synthetic_instance(
             db,
@@ -279,7 +292,7 @@ fn build_contract_test_package<'db>(
         {
             continue;
         }
-        let semantic = semantic_instance_for_owner(db, BodyOwner::Func(func));
+        let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func))?;
         let runtime_root = runtime_instance_for_semantic(db, semantic);
         let root = synthetic_instance(
             db,
@@ -415,7 +428,7 @@ fn discover_manual_contract_roots<'db>(
             func,
             instance: runtime_instance_for_semantic(
                 db,
-                semantic_instance_for_owner(db, BodyOwner::Func(func)),
+                semantic_instance_for_root_owner(db, BodyOwner::Func(func))?,
             ),
             contract_name,
             section,
@@ -485,13 +498,12 @@ fn contract_init_abi<'db>(
 
     let user_init = Some(runtime_instance_for_semantic(
         db,
-        semantic_instance_for_owner(db, BodyOwner::ContractInit { contract }),
+        semantic_instance_for_root_owner(db, BodyOwner::ContractInit { contract })?,
     ));
     let owner_effect_args = contract_effect_arg_plans_for_site(
         db,
         contract,
-        hir::analysis::ty::ty_check::EffectParamSite::ContractInit { contract },
-        semantic_instance_for_owner(db, BodyOwner::ContractInit { contract }),
+        semantic_instance_for_root_owner(db, BodyOwner::ContractInit { contract })?,
     )?;
     let init_args = if contract.init_args_ty(db) == TyId::unit(db) {
         InitArgsPlan::None
@@ -532,31 +544,26 @@ fn contract_recv_dispatch_arm<'db>(
     let recv = arm.recv(db);
     let user_recv = runtime_instance_for_semantic(
         db,
-        semantic_instance_for_owner(
+        semantic_instance_for_root_owner(
             db,
             BodyOwner::ContractRecvArm {
                 contract,
                 recv_idx: recv.recv_idx(db),
                 arm_idx: arm.arm_idx(db),
             },
-        ),
+        )?,
     );
     let owner_effect_args = contract_effect_arg_plans_for_site(
         db,
         contract,
-        hir::analysis::ty::ty_check::EffectParamSite::ContractRecvArm {
-            contract,
-            recv_idx: recv.recv_idx(db),
-            arm_idx: arm.arm_idx(db),
-        },
-        semantic_instance_for_owner(
+        semantic_instance_for_root_owner(
             db,
             BodyOwner::ContractRecvArm {
                 contract,
                 recv_idx: recv.recv_idx(db),
                 arm_idx: arm.arm_idx(db),
             },
-        ),
+        )?,
     )?;
     let input = if abi_info.args_ty == TyId::unit(db) {
         RuntimeInputPlan::None
@@ -1130,17 +1137,33 @@ fn collect_expr_code_regions<'db>(
     }
 }
 
-fn semantic_instance_for_owner<'db>(
+fn semantic_instance_for_root_owner<'db>(
     db: &'db dyn MirDb,
     owner: BodyOwner<'db>,
-) -> SemanticInstance<'db> {
-    let key = SemanticInstanceKey::new(
-        db,
-        owner,
-        GenericSubst::empty(db),
-        ImplEnv::empty(db, owner.scope()),
-    );
-    get_or_build_semantic_instance(db, key)
+) -> Result<SemanticInstance<'db>, LowerError> {
+    let key = root_semantic_instance_key(db, owner).map_err(|err| match err {
+        RootSemanticInstanceError::UnsupportedGenericParam {
+            owner,
+            owner_scope,
+            offending_ty,
+            param_idx,
+        } => LowerError::Unsupported(format!(
+            "root semantic instance for {owner:?} has unsupported generic param {param_idx} in {owner_scope:?}: {}",
+            offending_ty.pretty_print(db),
+        )),
+        RootSemanticInstanceError::MissingRootProvider { owner } => LowerError::Unsupported(
+            format!("root semantic instance for {owner:?} is missing a root provider binding"),
+        ),
+        RootSemanticInstanceError::UnclosedEffectEnv(err) => LowerError::Unsupported(format!(
+            "root semantic instance for {:?} is not closed under synthesized root substitution: owner_scope={:?} param_idx={} args_len={} offending_ty={}",
+            err.owner,
+            err.owner_scope,
+            err.param_idx,
+            err.args_len,
+            err.offending_ty.pretty_print(db),
+        )),
+    })?;
+    Ok(get_or_build_semantic_instance(db, key))
 }
 
 fn is_test_func<'db>(db: &'db dyn MirDb, func: Func<'db>) -> bool {
@@ -1149,11 +1172,17 @@ fn is_test_func<'db>(db: &'db dyn MirDb, func: Func<'db>) -> bool {
         .is_some_and(|attrs| attrs.get_attr(db, "test").is_some())
 }
 
-fn runtime_root_candidate<'db>(db: &'db dyn MirDb, func: Func<'db>) -> bool {
-    let semantic = semantic_instance_for_owner(db, BodyOwner::Func(func));
-    owner_effect_bindings(db, BodyOwner::Func(func))
+fn runtime_root_candidate<'db>(db: &'db dyn MirDb, func: Func<'db>) -> Result<bool, LowerError> {
+    if func.is_associated_func(db) || func.params(db).next().is_some() {
+        return Ok(false);
+    }
+    let semantic = match semantic_instance_for_root_owner(db, BodyOwner::Func(func)) {
+        Ok(semantic) => semantic,
+        Err(LowerError::Unsupported(_)) => return Ok(false),
+    };
+    Ok(owner_effect_bindings(db, BodyOwner::Func(func))
         .into_iter()
-        .all(|binding| owner_effect_binding_class(db, semantic, binding).is_some())
+        .all(|binding| owner_effect_binding_class(db, semantic, binding).is_some()))
 }
 
 pub(crate) fn runtime_instance_for_semantic<'db>(
@@ -1162,14 +1191,24 @@ pub(crate) fn runtime_instance_for_semantic<'db>(
 ) -> RuntimeInstance<'db> {
     let typed_body = semantic.key(db).instantiate_typed_body(db);
     let owner = semantic.key(db).owner(db);
-    let env = RuntimeTypeEnv::new(Some(owner.scope()), typed_body.assumptions());
+    if let BodyOwner::Func(func) = owner
+        && func.body(db).is_none()
+    {
+        panic!(
+            "bodyless semantic function leaked into runtime instance construction: func={func:?} key={:?}",
+            semantic.key(db)
+        );
+    }
+    let env = RuntimeTypeEnv::new(
+        Some(owner.scope()),
+        semantic_instance_assumptions(db, semantic),
+    );
     let mut params = Vec::new();
     let mut idx = 0;
     while let Some(binding) = typed_body.param_binding(idx) {
-        let ty = typed_body.binding_ty(db, binding);
-        let class = top_level_class_for_ty_in_env(db, env, ty, AddressSpaceKind::Memory)
-            .map(|class| runtime_param_class(db, &typed_body, binding, class));
-        if let Some(class) = class {
+        if let Some(class) = runtime_visible_binding_class(db, semantic, binding)
+            .map(|class| runtime_param_class(db, &typed_body, binding, class))
+        {
             params.push(class);
         }
         idx += 1;
@@ -1186,7 +1225,7 @@ pub(crate) fn runtime_instance_for_semantic<'db>(
             let Some(binding) = typed_body.pat_binding(arg_binding.pat) else {
                 continue;
             };
-            let ty = typed_body.binding_ty(db, binding);
+            let ty = semantic_binding_ty(db, semantic, binding);
             if let Some(class) =
                 top_level_class_for_ty_in_env(db, env, ty, AddressSpaceKind::Memory)
             {
@@ -1209,14 +1248,16 @@ fn owner_effect_binding_class<'db>(
     binding: hir::analysis::ty::ty_check::LocalBinding<'db>,
 ) -> Option<crate::runtime::RuntimeClass<'db>> {
     let owner = semantic.key(db).owner(db);
-    let typed_body = semantic.key(db).instantiate_typed_body(db);
-    let env = RuntimeTypeEnv::new(Some(owner.scope()), typed_body.assumptions());
-    let binding_ty = typed_body.binding_ty(db, binding);
+    let env = RuntimeTypeEnv::new(
+        Some(owner.scope()),
+        semantic_instance_assumptions(db, semantic),
+    );
+    let binding_ty = semantic_binding_ty(db, semantic, binding);
     match semantic_binding_lowering(db, semantic, binding) {
         hir::analysis::semantic::SemanticBindingLowering::Erased => None,
         hir::analysis::semantic::SemanticBindingLowering::DirectValue {
             provenance: ValueProvenance::RootProvider(provider),
-        } => runtime_class_for_direct_value_provider_in_env(db, env, &provider, binding_ty),
+        } => runtime_class_for_direct_value_provider_in_env(db, env, &provider),
         hir::analysis::semantic::SemanticBindingLowering::DirectValue { .. }
         | hir::analysis::semantic::SemanticBindingLowering::DirectCarrier { .. } => {
             top_level_class_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory)
@@ -1224,10 +1265,9 @@ fn owner_effect_binding_class<'db>(
         hir::analysis::semantic::SemanticBindingLowering::PlaceCarrier { value_ty } => {
             top_level_class_for_ty_in_env(db, env, value_ty, AddressSpaceKind::Memory)
         }
-        hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
-            provider,
-            value_ty,
-        } => runtime_class_for_effect_binding_provider_in_env(db, env, &provider, value_ty),
+        hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue { provider, .. } => {
+            runtime_class_for_effect_binding_provider_in_env(db, env, &provider)
+        }
     }
 }
 
@@ -1244,7 +1284,6 @@ fn synthetic_instance<'db>(
 fn contract_effect_arg_plans_for_site<'db>(
     db: &'db dyn MirDb,
     contract: Contract<'db>,
-    site: hir::analysis::ty::ty_check::EffectParamSite<'db>,
     semantic: SemanticInstance<'db>,
 ) -> Result<Vec<ContractEffectArgPlan<'db>>, LowerError> {
     let field_layout = contract.field_layout(db);
@@ -1253,25 +1292,12 @@ fn contract_effect_arg_plans_for_site<'db>(
         .cloned()
         .map(|field| (field.index, field))
         .collect::<FxHashMap<_, _>>();
-    let view = hir::semantic::EffectEnvView::new(site);
-    let providers = view.providers(db);
-    let providers_by_idx = providers
-        .into_iter()
-        .map(|provider| (provider.provider_idx, provider))
-        .collect::<FxHashMap<_, _>>();
-    let resolutions_by_requirement = view
-        .resolutions(db)
-        .into_iter()
-        .map(|resolution| (resolution.requirement_idx, resolution.provider_idx))
-        .collect::<FxHashMap<_, _>>();
     owner_effect_bindings(db, semantic.key(db).owner(db))
         .into_iter()
         .filter_map(|binding| {
-            let requirement_idx = effect_binding_requirement_idx(binding)?;
-            let provider_idx = *resolutions_by_requirement.get(&requirement_idx)?;
-            let provider = providers_by_idx.get(&provider_idx)?;
+            let provider = resolved_provider_binding_for_instance_effect(db, semantic, binding)?;
             Some((|| {
-                Ok(match provider.source {
+                Ok(match provider.source.clone() {
                     ProviderSource::ContractField { field_idx, .. } => {
                         let field = field_by_index.get(&field_idx).ok_or_else(|| {
                             LowerError::Unsupported(format!(
@@ -1291,10 +1317,7 @@ fn contract_effect_arg_plans_for_site<'db>(
                             )));
                         };
                         ContractEffectArgPlan::Placeholder {
-                            declared_ty: semantic
-                                .key(db)
-                                .instantiate_typed_body(db)
-                                .binding_ty(db, binding),
+                            declared_ty: semantic_binding_ty(db, semantic, binding),
                             class,
                         }
                     }
@@ -1302,21 +1325,6 @@ fn contract_effect_arg_plans_for_site<'db>(
             })())
         })
         .collect()
-}
-
-fn effect_binding_requirement_idx(
-    binding: hir::analysis::ty::ty_check::LocalBinding<'_>,
-) -> Option<u32> {
-    match binding {
-        hir::analysis::ty::ty_check::LocalBinding::EffectParam { idx, .. }
-        | hir::analysis::ty::ty_check::LocalBinding::Param {
-            site: hir::analysis::ty::ty_check::ParamSite::EffectField(_),
-            idx,
-            ..
-        } => Some(idx as u32),
-        hir::analysis::ty::ty_check::LocalBinding::Local { .. }
-        | hir::analysis::ty::ty_check::LocalBinding::Param { .. } => None,
-    }
 }
 
 pub(crate) fn contract_field_binding<'db>(

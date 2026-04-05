@@ -59,6 +59,7 @@ pub struct ProviderSemantics<'db> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub enum RootProviderSiteKind {
+    Func,
     Contract,
     ContractInit,
     ContractRecvArm,
@@ -178,7 +179,7 @@ fn provider_kind_for_target_ty<'db>(
 
 fn root_provider_site_kind(site: EffectParamSite<'_>) -> Option<RootProviderSiteKind> {
     match site {
-        EffectParamSite::Func(_) => None,
+        EffectParamSite::Func(_) => Some(RootProviderSiteKind::Func),
         EffectParamSite::Contract(_) => Some(RootProviderSiteKind::Contract),
         EffectParamSite::ContractInit { .. } => Some(RootProviderSiteKind::ContractInit),
         EffectParamSite::ContractRecvArm { .. } => Some(RootProviderSiteKind::ContractRecvArm),

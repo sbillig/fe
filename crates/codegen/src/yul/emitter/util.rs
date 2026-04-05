@@ -1,56 +1,30 @@
-//! Shared utility helpers used across the Yul emitter modules.
-
-use driver::DriverDataBase;
-use hir::hir_def::{Func, HirIngot, item::ItemKind, scope_graph::ScopeId};
-
 pub(super) fn prefix_yul_name(name: &str) -> String {
     if name.starts_with('$') {
-        name.to_string()
+        sanitize_yul_ident(name)
     } else {
-        format!("${name}")
+        format!("${}", sanitize_yul_ident(name))
     }
 }
 
-pub(super) fn is_std_evm_ops(db: &DriverDataBase, func: Func<'_>) -> bool {
-    if func.body(db).is_some() {
-        return false;
-    }
-
-    let ingot = func.top_mod(db).ingot(db);
-    let root_mod = ingot.root_mod(db);
-
-    let mut path = Vec::new();
-    let mut scope = func.scope();
-    while let Some(parent) = scope.parent_module(db) {
-        match parent {
-            ScopeId::Item(ItemKind::Mod(mod_)) => {
-                if let Some(name) = mod_.name(db).to_opt() {
-                    path.push(name.data(db).to_string());
-                }
+pub(super) fn sanitize_yul_ident(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '$' {
+                ch
+            } else {
+                '_'
             }
-            ScopeId::Item(ItemKind::TopMod(top_mod)) => {
-                if top_mod != root_mod {
-                    path.push(top_mod.name(db).data(db).to_string());
-                }
-            }
-            _ => {}
-        }
-        scope = parent;
-    }
-    path.reverse();
-
-    path.last().is_some_and(|seg| seg == "ops")
-        && path.iter().rev().nth(1).is_some_and(|seg| seg == "evm")
+        })
+        .collect()
 }
 
-/// Returns the display name of a function or `<anonymous>` if one does not exist.
-///
-/// * `func` - HIR function to name.
-///
-/// Returns the display string used for diagnostics and Yul names.
-pub(super) fn function_name(db: &DriverDataBase, func: Func<'_>) -> String {
-    func.name(db)
-        .to_opt()
-        .map(|id| id.data(db).to_string())
-        .unwrap_or_else(|| "<anonymous>".into())
+pub(super) fn section_object_label(name: &mir2::RuntimeSectionName) -> String {
+    match name {
+        mir2::RuntimeSectionName::Init => "init".to_string(),
+        mir2::RuntimeSectionName::Runtime => "runtime".to_string(),
+        mir2::RuntimeSectionName::Main => "main".to_string(),
+        mir2::RuntimeSectionName::Test(name) => sanitize_yul_ident(name),
+        mir2::RuntimeSectionName::CodeRegion(symbol) => sanitize_yul_ident(symbol),
+    }
 }

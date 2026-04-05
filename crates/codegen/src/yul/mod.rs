@@ -1,94 +1,139 @@
+mod doc;
+mod emitter;
+mod errors;
+mod legalize;
+mod state;
+
 use common::ingot::Ingot;
 use driver::DriverDataBase;
-use hir::hir_def::TopLevelMod;
+use hir::hir_def::{HirIngot, TopLevelMod};
+use mir2::{RuntimePackage, build_runtime_package, build_test_runtime_package};
 
 use crate::{TargetDataLayout, TestModuleOutput};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum YulError {
-    Unsupported(String),
-}
+pub use errors::YulError;
 
-impl std::fmt::Display for YulError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            YulError::Unsupported(message) => write!(f, "{message}"),
-        }
-    }
-}
-
-impl std::error::Error for YulError {}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum EmitModuleError {
-    Unsupported(String),
+    RuntimeLower(mir2::LowerError),
+    Yul(YulError),
 }
 
 impl std::fmt::Display for EmitModuleError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EmitModuleError::Unsupported(message) => write!(f, "{message}"),
+            EmitModuleError::RuntimeLower(err) => write!(f, "{err}"),
+            EmitModuleError::Yul(err) => write!(f, "{err}"),
         }
     }
 }
 
 impl std::error::Error for EmitModuleError {}
 
-impl From<YulError> for EmitModuleError {
-    fn from(err: YulError) -> Self {
-        match err {
-            YulError::Unsupported(message) => EmitModuleError::Unsupported(message),
-        }
+impl From<mir2::LowerError> for EmitModuleError {
+    fn from(err: mir2::LowerError) -> Self {
+        EmitModuleError::RuntimeLower(err)
     }
 }
 
-fn unsupported() -> EmitModuleError {
-    EmitModuleError::Unsupported(
-        "the Yul backend has not been migrated to mir2 yet; only the Sonatina pipeline is supported"
-            .to_string(),
-    )
+impl From<YulError> for EmitModuleError {
+    fn from(err: YulError) -> Self {
+        EmitModuleError::Yul(err)
+    }
+}
+
+pub fn emit_runtime_package_yul<'db>(
+    db: &'db DriverDataBase,
+    package: &RuntimePackage<'db>,
+    layout: TargetDataLayout,
+) -> Result<String, EmitModuleError> {
+    let package = legalize::legalize_runtime_package(db, package, layout)?;
+    emitter::emit_runtime_package_yul(db, &package).map_err(Into::into)
+}
+
+pub fn emit_test_runtime_package_yul<'db>(
+    db: &'db DriverDataBase,
+    package: &RuntimePackage<'db>,
+    layout: TargetDataLayout,
+    filter: Option<&str>,
+) -> Result<TestModuleOutput, EmitModuleError> {
+    let package = legalize::legalize_runtime_package(db, package, layout)?;
+    emitter::emit_test_runtime_package_yul(db, &package, filter).map_err(Into::into)
 }
 
 pub fn emit_module_yul(
-    _db: &DriverDataBase,
-    _top_mod: TopLevelMod<'_>,
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
 ) -> Result<String, EmitModuleError> {
-    Err(unsupported())
+    emit_module_yul_with_layout(db, top_mod, crate::EVM_LAYOUT)
 }
 
 pub fn emit_module_yul_with_layout(
-    _db: &DriverDataBase,
-    _top_mod: TopLevelMod<'_>,
-    _layout: TargetDataLayout,
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    layout: TargetDataLayout,
 ) -> Result<String, EmitModuleError> {
-    Err(unsupported())
+    let package = build_runtime_package(db, top_mod)?;
+    emit_runtime_package_yul(db, &package, layout)
 }
 
-pub fn emit_ingot_yul(_db: &DriverDataBase, _ingot: Ingot<'_>) -> Result<String, EmitModuleError> {
-    Err(unsupported())
+pub fn emit_ingot_yul(db: &DriverDataBase, ingot: Ingot<'_>) -> Result<String, EmitModuleError> {
+    emit_ingot_yul_with_layout(db, ingot, crate::EVM_LAYOUT)
 }
 
 pub fn emit_ingot_yul_with_layout(
-    _db: &DriverDataBase,
-    _ingot: Ingot<'_>,
-    _layout: TargetDataLayout,
+    db: &DriverDataBase,
+    ingot: Ingot<'_>,
+    layout: TargetDataLayout,
 ) -> Result<String, EmitModuleError> {
-    Err(unsupported())
+    let mut modules = Vec::new();
+    for &top_mod in ingot.all_modules(db) {
+        modules.push(emit_module_yul_with_layout(db, top_mod, layout)?);
+    }
+    Ok(modules.join("\n\n"))
 }
 
 pub fn emit_test_module_yul(
-    _db: &DriverDataBase,
-    _top_mod: TopLevelMod<'_>,
-    _filter: Option<&str>,
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    filter: Option<&str>,
 ) -> Result<TestModuleOutput, EmitModuleError> {
-    Err(unsupported())
+    emit_test_module_yul_with_layout(db, top_mod, filter, crate::EVM_LAYOUT)
 }
 
 pub fn emit_test_module_yul_with_layout(
-    _db: &DriverDataBase,
-    _top_mod: TopLevelMod<'_>,
-    _filter: Option<&str>,
-    _layout: TargetDataLayout,
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    filter: Option<&str>,
+    layout: TargetDataLayout,
 ) -> Result<TestModuleOutput, EmitModuleError> {
-    Err(unsupported())
+    let package = build_test_runtime_package(db, top_mod, filter)?;
+    emit_test_runtime_package_yul(db, &package, layout, filter)
+}
+
+pub fn emit_test_ingot_yul(
+    db: &DriverDataBase,
+    ingot: Ingot<'_>,
+    filter: Option<&str>,
+) -> Result<TestModuleOutput, EmitModuleError> {
+    emit_test_ingot_yul_with_layout(db, ingot, filter, crate::EVM_LAYOUT)
+}
+
+pub fn emit_test_ingot_yul_with_layout(
+    db: &DriverDataBase,
+    ingot: Ingot<'_>,
+    filter: Option<&str>,
+    layout: TargetDataLayout,
+) -> Result<TestModuleOutput, EmitModuleError> {
+    let mut top_mods = ingot.all_modules(db).to_vec();
+    top_mods.sort_by(|left, right| left.name(db).cmp(&right.name(db)));
+
+    let mut output = TestModuleOutput { tests: Vec::new() };
+    for top_mod in top_mods {
+        output.extend(emit_test_module_yul_with_layout(
+            db, top_mod, filter, layout,
+        )?);
+    }
+    output.sort_tests();
+    Ok(output)
 }

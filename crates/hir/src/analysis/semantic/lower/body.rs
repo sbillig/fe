@@ -4,38 +4,37 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     analysis::semantic::instance::{
-        SemanticInstance, SemanticInstanceKey, resolve_semantic_const_ref, semantic_callee_key,
+        SemanticInstance, SemanticInstanceKey, resolve_semantic_const_ref, semantic_binding_ty,
+        semantic_callee_key, semantic_instance_assumptions,
     },
     analysis::{
         HirAnalysisDb,
         name_resolution::{PathRes, resolve_path},
+        place::resolve_place_field_index,
         semantic::{
-            Mutability, SBlock, SBlockId, SConst, SExpr, SLocal, SLocalId, SStmt, SStmtKind,
-            STerminator, STerminatorKind, SValueId, SemOrigin, SemanticBody, SemanticCalleeRef,
-            SemanticLocalRole, ValueProvenance, VariantIndex, bool_const, bytes_const, int_const,
-            runtime_size_bytes, sem_const_from_ty, unit_const,
+            FieldIndex, Mutability, SBlock, SBlockId, SConst, SExpr, SLocal, SLocalId, SStmt,
+            SStmtKind, STerminator, STerminatorKind, SValueId, SemOrigin, SemanticBody,
+            SemanticCalleeRef, SemanticLocalRole, ValueProvenance, VariantIndex, bool_const,
+            bytes_const, int_const, runtime_size_bytes, sem_const_from_ty, unit_const,
         },
         ty::{
             const_ty::const_ty_or_abstract_from_assoc_const_use,
-            corelib::resolve_lib_func_path,
             normalize::normalize_ty,
-            pattern_analysis::check_exhaustiveness,
-            ty_check::{BodyOwner, ConstRef, LocalBinding, RecordLike, TypedBody},
+            ty_check::{
+                BodyOwner, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, LocalBinding,
+                RecordLike, SemanticExprLowering, TypedBody, ValuePathRef,
+            },
             ty_def::{BorrowKind, TyId},
         },
     },
     hir_def::{
         ArithBinOp, Body, CallArg, CallableDef, Cond, CondId, Expr, ExprId, Field as HirField,
-        LitKind, MatchArm, Partial, PatId, PathId, Stmt, StmtId, VariantKind,
+        LitKind, MatchArm, Partial, PatId, PathId, Stmt, StmtId,
         expr::{BinOp, CompBinOp, LogicalBinOp, UnOp},
     },
 };
 
-use super::{
-    effects::{lower_seq_effect_args, owner_effect_bindings},
-    expr_lowers_to_semantic_call,
-    pattern::ArmVariants,
-};
+use super::{effects::owner_effect_bindings, pattern::ArmVariants};
 
 pub fn lower_to_smir<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -47,7 +46,7 @@ pub fn lower_to_smir<'db>(
         let mut locals = Vec::new();
         let mut push_binding_local = |binding| {
             locals.push(SLocal {
-                ty: typed_body.binding_ty(db, binding),
+                ty: semantic_binding_ty(db, instance, binding),
                 mutability: if binding.is_mut() {
                     Mutability::Mutable
                 } else {
@@ -103,6 +102,7 @@ pub(super) struct SmirLowerCtxt<'db> {
     pub(super) template_owner: BodyOwner<'db>,
     pub(super) typed_body: TypedBody<'db>,
     pub(super) body: Body<'db>,
+    pub(super) assumptions: crate::analysis::ty::trait_resolution::PredicateListId<'db>,
     pub(super) owner_key: SemanticInstanceKey<'db>,
     pub(super) locals: Vec<SLocal<'db>>,
     pub(super) blocks: Vec<BlockState<'db>>,
@@ -138,6 +138,7 @@ impl<'db> SmirLowerCtxt<'db> {
             template_owner,
             typed_body,
             body,
+            assumptions: semantic_instance_assumptions(db, instance),
             owner_key,
             locals: Vec::new(),
             blocks: Vec::new(),
@@ -166,35 +167,25 @@ impl<'db> SmirLowerCtxt<'db> {
             self.db,
             self.expr_ty(expr),
             self.body.scope(),
-            self.typed_body.assumptions(),
+            self.assumptions,
         );
         let mut binding_ty = normalize_ty(
             self.db,
-            self.typed_body.binding_ty(self.db, binding),
+            semantic_binding_ty(self.db, self.instance, binding),
             self.body.scope(),
-            self.typed_body.assumptions(),
+            self.assumptions,
         );
         if expr_ty == binding_ty {
             return true;
         }
         while let Some((_, inner)) = expr_ty.as_capability(self.db) {
-            expr_ty = normalize_ty(
-                self.db,
-                inner,
-                self.body.scope(),
-                self.typed_body.assumptions(),
-            );
+            expr_ty = normalize_ty(self.db, inner, self.body.scope(), self.assumptions);
             if expr_ty == binding_ty {
                 return true;
             }
         }
         while let Some((_, inner)) = binding_ty.as_capability(self.db) {
-            binding_ty = normalize_ty(
-                self.db,
-                inner,
-                self.body.scope(),
-                self.typed_body.assumptions(),
-            );
+            binding_ty = normalize_ty(self.db, inner, self.body.scope(), self.assumptions);
             if expr_ty == binding_ty {
                 return true;
             }
@@ -259,7 +250,7 @@ impl<'db> SmirLowerCtxt<'db> {
             return local;
         }
         let local = self.alloc_local(
-            self.typed_body.binding_ty(self.db, binding),
+            semantic_binding_ty(self.db, self.instance, binding),
             if binding.is_mut() {
                 Mutability::Mutable
             } else {
@@ -306,7 +297,7 @@ impl<'db> SmirLowerCtxt<'db> {
         self.current = block;
     }
 
-    fn is_terminated(&self, block: SBlockId) -> bool {
+    pub(super) fn is_terminated(&self, block: SBlockId) -> bool {
         self.blocks[block.index()].terminator.is_some()
     }
 
@@ -371,7 +362,7 @@ impl<'db> SmirLowerCtxt<'db> {
 
         match expr_data {
             Expr::Lit(lit) => self.lower_leaf_literal(expr, lit),
-            Expr::Path(path) => self.lower_path_expr(expr, path),
+            Expr::Path(_) => self.lower_path_expr(expr),
             Expr::Tuple(elems) | Expr::Array(elems) => {
                 let fields = elems.iter().map(|expr| self.lower_expr(*expr)).collect();
                 self.emit_expr_with_origin(
@@ -384,7 +375,10 @@ impl<'db> SmirLowerCtxt<'db> {
                 )
             }
             Expr::ArrayRep(elem, _) => {
-                let len = self.expr_ty(expr).field_count(self.db);
+                let len = self
+                    .expr_ty(expr)
+                    .array_len(self.db)
+                    .expect("array repeat lowering requires an array type");
                 let value = self.lower_expr(*elem);
                 self.emit_expr_with_origin(
                     origin,
@@ -399,7 +393,14 @@ impl<'db> SmirLowerCtxt<'db> {
             Expr::Field(base, field) => {
                 let base_expr = *base;
                 let base = self.lower_expr(base_expr);
-                let field = self.lower_field_index(self.expr_ty(base_expr), field.to_opt());
+                let field = FieldIndex(
+                    resolve_place_field_index(
+                        self.db,
+                        self.expr_ty(base_expr),
+                        field.to_opt().expect("missing field index"),
+                    )
+                    .expect("record field should resolve"),
+                );
                 self.emit_expr_with_origin(origin, self.expr_ty(expr), SExpr::Field { base, field })
             }
             Expr::Bin(base, index, BinOp::Index) => {
@@ -425,14 +426,8 @@ impl<'db> SmirLowerCtxt<'db> {
                 )
             }
             Expr::Un(inner, op) => {
-                if expr_lowers_to_semantic_call(
-                    self.db,
-                    &self.typed_body,
-                    self.body,
-                    expr,
-                    expr_data,
-                ) {
-                    return self.lower_callable_expr(expr, Some(*inner), &[]);
+                if self.typed_body.semantic_expr_lowering(expr).is_some() {
+                    return self.lower_call_like_expr(expr, Some(*inner), &[]);
                 }
                 let value = self.lower_expr(*inner);
                 self.emit_expr_with_origin(
@@ -451,12 +446,8 @@ impl<'db> SmirLowerCtxt<'db> {
                     .into_iter()
                     .enumerate()
                     .map(|(idx, field_ty)| {
-                        let field_ty = normalize_ty(
-                            self.db,
-                            field_ty,
-                            self.body.scope(),
-                            self.typed_body.assumptions(),
-                        );
+                        let field_ty =
+                            normalize_ty(self.db, field_ty, self.body.scope(), self.assumptions);
                         if field_ty == TyId::unit(self.db) || field_ty.is_zero_sized(self.db) {
                             unit
                         } else if idx == 0 {
@@ -469,14 +460,8 @@ impl<'db> SmirLowerCtxt<'db> {
                 self.emit_expr_with_origin(origin, ty, SExpr::AggregateMake { ty, fields })
             }
             Expr::Bin(lhs, rhs, op) => {
-                if expr_lowers_to_semantic_call(
-                    self.db,
-                    &self.typed_body,
-                    self.body,
-                    expr,
-                    expr_data,
-                ) {
-                    return self.lower_callable_expr(expr, Some(*lhs), &[*rhs]);
+                if self.typed_body.semantic_expr_lowering(expr).is_some() {
+                    return self.lower_call_like_expr(expr, Some(*lhs), &[*rhs]);
                 }
                 let lhs = self.lower_expr(*lhs);
                 let rhs = self.lower_expr(*rhs);
@@ -524,14 +509,8 @@ impl<'db> SmirLowerCtxt<'db> {
                 self.unit_value()
             }
             Expr::AugAssign(dst, src, op) => {
-                if expr_lowers_to_semantic_call(
-                    self.db,
-                    &self.typed_body,
-                    self.body,
-                    expr,
-                    expr_data,
-                ) {
-                    return self.lower_callable_expr(expr, Some(*dst), &[*src]);
+                if self.typed_body.semantic_expr_lowering(expr).is_some() {
+                    return self.lower_call_like_expr(expr, Some(*dst), &[*src]);
                 }
                 let lhs = self.lower_expr(*dst);
                 let rhs = self.lower_expr(*src);
@@ -620,7 +599,7 @@ impl<'db> SmirLowerCtxt<'db> {
         )
     }
 
-    fn lower_path_expr(&mut self, expr: ExprId, path: &Partial<PathId<'db>>) -> SValueId {
+    fn lower_path_expr(&mut self, expr: ExprId) -> SValueId {
         if let Some(binding) = self.typed_body.expr_binding(expr) {
             let local = *self
                 .binding_locals
@@ -639,38 +618,17 @@ impl<'db> SmirLowerCtxt<'db> {
             return self.lower_const_ref(expr, const_ref);
         }
 
-        let Some(path) = path.to_opt() else {
-            panic!("missing path for expression {expr:?}");
-        };
-        let resolved = resolve_path(
-            self.db,
-            path,
-            self.body.scope(),
-            self.typed_body.assumptions(),
-            false,
-        )
-        .ok();
-        match resolved {
-            Some(PathRes::EnumVariant(variant))
-                if matches!(variant.kind(self.db), VariantKind::Unit) =>
-            {
-                self.emit_expr_with_origin(
-                    SemOrigin::Expr(expr),
-                    self.expr_ty(expr),
-                    SExpr::EnumMake {
-                        enum_ty: variant.ty,
-                        variant: VariantIndex(variant.variant.idx),
-                        fields: Box::new([]),
-                    },
-                )
-            }
-            Some(PathRes::Ty(ty)) | Some(PathRes::TyAlias(_, ty)) => {
-                let generic_args = self.owner_key.subst(self.db);
-                let ty = crate::analysis::semantic::instantiate_with_generic_args(
-                    self.db,
-                    ty,
-                    generic_args.generic_args(self.db),
-                );
+        match self.typed_body.value_path_ref(expr) {
+            Some(ValuePathRef::UnitVariant(variant)) => self.emit_expr_with_origin(
+                SemOrigin::Expr(expr),
+                self.expr_ty(expr),
+                SExpr::EnumMake {
+                    enum_ty: variant.ty,
+                    variant: VariantIndex(variant.variant.idx),
+                    fields: Box::new([]),
+                },
+            ),
+            Some(ValuePathRef::TypeConst(ty)) => {
                 if let Some(value) = sem_const_from_ty(self.db, ty) {
                     self.emit_expr_with_origin(
                         SemOrigin::Expr(expr),
@@ -679,19 +637,15 @@ impl<'db> SmirLowerCtxt<'db> {
                     )
                 } else {
                     panic!(
-                        "non-binding path expression is not lowerable without const/callee info: path={} ty={} data={:?}",
-                        path.pretty_print(self.db),
+                        "typed const value path is not lowerable in semantic MIR: expr={expr:?} ty={} data={:?}",
                         ty.pretty_print(self.db),
                         ty.data(self.db),
                     )
                 }
             }
-            _ => {
-                panic!(
-                    "non-binding path expression is not lowerable without const/callee info: path={} resolved={resolved:?}",
-                    path.pretty_print(self.db),
-                )
-            }
+            None => panic!(
+                "typed path expression is missing semantic value-path classification: expr={expr:?}"
+            ),
         }
     }
 
@@ -704,14 +658,7 @@ impl<'db> SmirLowerCtxt<'db> {
         let Some(path) = path.to_opt() else {
             panic!("record init path missing")
         };
-        let path_res = resolve_path(
-            self.db,
-            path,
-            self.body.scope(),
-            self.typed_body.assumptions(),
-            false,
-        )
-        .ok();
+        let path_res = resolve_path(self.db, path, self.body.scope(), self.assumptions, false).ok();
         match path_res {
             Some(PathRes::EnumVariant(variant)) => {
                 let mut values = vec![None; fields.len()];
@@ -771,7 +718,37 @@ impl<'db> SmirLowerCtxt<'db> {
         args: &[CallArg<'db>],
     ) -> SValueId {
         let arg_exprs = args.iter().map(|arg| arg.expr).collect::<Vec<_>>();
-        self.lower_callable_expr(expr, receiver, &arg_exprs)
+        self.lower_call_like_expr(expr, receiver, &arg_exprs)
+    }
+
+    fn lower_call_like_expr(
+        &mut self,
+        expr: ExprId,
+        receiver: Option<ExprId>,
+        args: &[ExprId],
+    ) -> SValueId {
+        let lowering = self
+            .typed_body
+            .semantic_expr_lowering(expr)
+            .cloned()
+            .unwrap_or_else(|| {
+                panic!("semantic lowering missing for call-like expression {expr:?}")
+            });
+        match lowering {
+            SemanticExprLowering::Call { callable } => {
+                self.lower_callable_expr(expr, receiver, args, callable)
+            }
+            SemanticExprLowering::CodeRegionIntrinsic { region, kind, .. } => {
+                let lowered = match kind {
+                    CodeRegionIntrinsicKind::Offset => SExpr::CodeRegionOffset { region },
+                    CodeRegionIntrinsicKind::Len => SExpr::CodeRegionLen { region },
+                };
+                self.emit_expr_with_origin(SemOrigin::Expr(expr), self.expr_ty(expr), lowered)
+            }
+            SemanticExprLowering::ConstIntrinsic { callable, kind } => {
+                self.lower_const_intrinsic(expr, &callable, kind)
+            }
+        }
     }
 
     fn lower_callable_expr(
@@ -779,18 +756,8 @@ impl<'db> SmirLowerCtxt<'db> {
         expr: ExprId,
         receiver: Option<ExprId>,
         args: &[ExprId],
+        callable: crate::analysis::ty::ty_check::Callable<'db>,
     ) -> SValueId {
-        let callable = self
-            .typed_body
-            .callable_expr(expr)
-            .cloned()
-            .unwrap_or_else(|| panic!("callable missing for semantic-call expression {expr:?}"));
-        if let Some(value) = self.lower_code_region_intrinsic(expr, &callable, args) {
-            return value;
-        }
-        if let Some(value) = self.lower_const_intrinsic(expr, &callable) {
-            return value;
-        }
         let mut values = Vec::with_capacity(args.len() + usize::from(receiver.is_some()));
         if let Some(receiver) = receiver {
             values.push(self.lower_expr(receiver));
@@ -810,9 +777,8 @@ impl<'db> SmirLowerCtxt<'db> {
                 },
             ),
             CallableDef::Func(_) => {
-                let callee_key =
-                    semantic_callee_key(self.db, self.owner_key, &self.typed_body, &callable)
-                        .expect("callable function should produce a semantic callee");
+                let callee_key = semantic_callee_key(self.db, self.owner_key, &callable)
+                    .expect("callable function should produce a semantic callee");
                 let effect_args = self.lower_effect_args(expr);
                 self.emit_expr_with_origin(
                     SemOrigin::Expr(expr),
@@ -827,55 +793,30 @@ impl<'db> SmirLowerCtxt<'db> {
         }
     }
 
-    fn lower_code_region_intrinsic(
-        &mut self,
-        expr: ExprId,
-        callable: &crate::analysis::ty::ty_check::Callable<'db>,
-        args: &[ExprId],
-    ) -> Option<SValueId> {
-        let [arg] = args else {
-            return None;
-        };
-        let region = self.typed_body.code_region_ref(*arg)?.clone();
-        let CallableDef::Func(func) = callable.callable_def() else {
-            return None;
-        };
-        let name = func.name(self.db).to_opt()?.data(self.db);
-        if !matches!(name.as_str(), "code_region_offset" | "code_region_len") {
-            return None;
-        }
-        let lowered = if name == "code_region_offset" {
-            SExpr::CodeRegionOffset { region }
-        } else {
-            SExpr::CodeRegionLen { region }
-        };
-        Some(self.emit_expr_with_origin(SemOrigin::Expr(expr), self.expr_ty(expr), lowered))
-    }
-
     fn lower_const_intrinsic(
         &mut self,
         expr: ExprId,
         callable: &crate::analysis::ty::ty_check::Callable<'db>,
-    ) -> Option<SValueId> {
-        let crate::hir_def::CallableDef::Func(func) = callable.callable_def() else {
-            return None;
+        kind: ConstIntrinsicKind,
+    ) -> SValueId {
+        let ty = match kind {
+            ConstIntrinsicKind::SizeOf => normalize_ty(
+                self.db,
+                *callable
+                    .generic_args()
+                    .first()
+                    .expect("core::size_of lowering requires a concrete generic arg"),
+                self.body.scope(),
+                self.assumptions,
+            ),
         };
-        if resolve_lib_func_path(self.db, func.scope(), "core::size_of") != Some(func) {
-            return None;
-        }
-        let ty = normalize_ty(
-            self.db,
-            *callable.generic_args().first()?,
-            self.body.scope(),
-            self.typed_body.assumptions(),
-        );
         let size = runtime_size_bytes(self.db, ty).unwrap_or_else(|| {
             panic!(
                 "core::size_of should resolve for {}",
                 ty.pretty_print(self.db)
             )
         });
-        Some(self.emit_expr_with_origin(
+        self.emit_expr_with_origin(
             SemOrigin::Expr(expr),
             self.expr_ty(expr),
             SExpr::Const(SConst::Value(int_const(
@@ -883,7 +824,7 @@ impl<'db> SmirLowerCtxt<'db> {
                 self.expr_ty(expr),
                 BigInt::from(size),
             ))),
-        ))
+        )
     }
 
     fn lower_block_expr(&mut self, stmts: &[StmtId]) -> SValueId {
@@ -987,12 +928,10 @@ impl<'db> SmirLowerCtxt<'db> {
             .unwrap_or_else(|| panic!("missing Seq resolution for for-loop {stmt:?}"));
         let iter_value = self.lower_expr(iter);
         let usize_ty = seq.len_callable.ret_ty(self.db);
-        let len_callee =
-            semantic_callee_key(self.db, self.owner_key, &self.typed_body, &seq.len_callable)
-                .expect("Seq::len should lower to a semantic callee");
-        let get_callee =
-            semantic_callee_key(self.db, self.owner_key, &self.typed_body, &seq.get_callable)
-                .expect("Seq::get should lower to a semantic callee");
+        let len_callee = semantic_callee_key(self.db, self.owner_key, &seq.len_callable)
+            .expect("Seq::len should lower to a semantic callee");
+        let get_callee = semantic_callee_key(self.db, self.owner_key, &seq.get_callable)
+            .expect("Seq::get should lower to a semantic callee");
         let idx_local = self.alloc_temp(usize_ty);
         self.push_synthetic_stmt(SStmtKind::Assign {
             dst: idx_local,
@@ -1002,7 +941,7 @@ impl<'db> SmirLowerCtxt<'db> {
                 BigInt::default(),
             ))),
         });
-        let len_effect_args = lower_seq_effect_args(self, &seq.len_effect_args);
+        let len_effect_args = self.lower_seq_effect_args(&seq.len_effect_args);
         let len_value = self.emit_expr(
             usize_ty,
             SExpr::Call {
@@ -1040,7 +979,7 @@ impl<'db> SmirLowerCtxt<'db> {
             break_bb: exit_bb,
         });
         self.switch_to(body_bb);
-        let get_effect_args = lower_seq_effect_args(self, &seq.get_effect_args);
+        let get_effect_args = self.lower_seq_effect_args(&seq.get_effect_args);
         let elem = self.emit_expr(
             seq.elem_ty,
             SExpr::Call {
@@ -1150,7 +1089,7 @@ impl<'db> SmirLowerCtxt<'db> {
                 .all(|arm| self.pattern_is_enum_dispatchable(arm.pat))
             || !self.can_lower_match_expr_with_enum_dispatch(arms, enum_ty.expect("checked"))
         {
-            return self.lower_match_expr_with_branches(value, result, join_bb, arms);
+            return self.lower_match_expr_with_decision_tree(value, result, join_bb, arms);
         }
         let enum_ty = enum_ty.expect("enum match should have an enum scrutinee type");
 
@@ -1237,75 +1176,6 @@ impl<'db> SmirLowerCtxt<'db> {
         saw_default || covered.len() == enum_.len_variants(self.db)
     }
 
-    fn lower_match_expr_with_branches(
-        &mut self,
-        value: SValueId,
-        result: SLocalId,
-        join_bb: SBlockId,
-        arms: &[MatchArm],
-    ) -> SValueId {
-        let exhaustive = arms
-            .iter()
-            .map(|arm| self.typed_body.pattern_root(arm.pat))
-            .collect::<Option<Vec<_>>>()
-            .is_some_and(|roots| {
-                check_exhaustiveness(
-                    self.db,
-                    self.typed_body.pattern_store(),
-                    &roots,
-                    self.locals[value.index()].ty,
-                )
-                .is_ok()
-            });
-        let mut arm_blocks = Vec::with_capacity(arms.len());
-        for arm in arms {
-            arm_blocks.push((arm, self.new_block()));
-        }
-
-        let mut dispatch_bb = self.current;
-        let mut exhausted = false;
-        for (idx, (arm, arm_bb)) in arm_blocks.iter().enumerate() {
-            if idx > 0 {
-                self.switch_to(dispatch_bb);
-            }
-
-            if self.pattern_is_irrefutable(arm.pat) || exhaustive && idx + 1 == arm_blocks.len() {
-                self.set_synthetic_terminator(self.current, STerminatorKind::Goto(*arm_bb));
-                exhausted = true;
-                break;
-            }
-
-            let next_bb = self.new_block();
-            self.lower_pattern_branch(arm.pat, value, *arm_bb, next_bb);
-            dispatch_bb = next_bb;
-        }
-
-        if !exhausted {
-            panic!("non-enum match lowering requires an irrefutable fallback arm");
-        }
-
-        let mut join_reachable = false;
-        for (arm, block) in arm_blocks {
-            self.switch_to(block);
-            self.bind_pattern(arm.pat, value);
-            let arm_value = self.lower_expr(arm.body);
-            if !self.is_terminated(self.current) {
-                join_reachable = true;
-                self.push_synthetic_stmt(SStmtKind::Assign {
-                    dst: result,
-                    expr: SExpr::Use(arm_value),
-                });
-                self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
-            }
-        }
-
-        if !join_reachable {
-            self.set_synthetic_terminator(join_bb, STerminatorKind::Goto(join_bb));
-        }
-        self.switch_to(join_bb);
-        result
-    }
-
     fn lower_cond_branch(&mut self, cond: CondId, then_bb: SBlockId, else_bb: SBlockId) {
         let Partial::Present(cond_data) = cond.data(self.db, self.body) else {
             panic!("cannot lower absent condition")
@@ -1366,8 +1236,7 @@ impl<'db> SmirLowerCtxt<'db> {
         ) {
             return true;
         }
-        self.typed_body
-            .binding_ty(self.db, binding)
+        semantic_binding_ty(self.db, self.instance, binding)
             .as_capability(self.db)
             .is_some()
     }

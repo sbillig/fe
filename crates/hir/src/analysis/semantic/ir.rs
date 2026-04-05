@@ -81,10 +81,24 @@ pub struct SLocal<'db> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum SemanticProjection<'db> {
+    Field(usize),
+    VariantField {
+        variant: VariantIndex,
+        enum_ty: TyId<'db>,
+        field_idx: usize,
+    },
+    Index(SLocalId),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum ValueProvenance<'db> {
     Ordinary,
     RootProvider(ProviderBinding<'db>),
-    DerivedFrom(SLocalId),
+    DerivedPlace {
+        base: SLocalId,
+        path: Box<[SemanticProjection<'db>]>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]

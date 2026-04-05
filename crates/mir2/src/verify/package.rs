@@ -16,6 +16,13 @@ struct PackageView<'db> {
 }
 
 impl<'db> RuntimeProgramView<'db> for PackageView<'db> {
+    fn signature(
+        &self,
+        id: crate::instance::RuntimeInstance<'db>,
+    ) -> crate::runtime::RuntimeSignature<'db> {
+        id.signature(self.db)
+    }
+
     fn body(&self, id: crate::instance::RuntimeInstance<'db>) -> crate::runtime::RuntimeBody<'db> {
         id.body(self.db).clone()
     }

@@ -13,7 +13,7 @@ use super::{
 };
 use crate::analysis::{
     HirAnalysisDb,
-    place::{Place, PlaceBase},
+    place::{Place, PlaceBase, PlaceProjection},
     ty::const_expr::{ConstExpr, ConstExprId},
     ty::const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
 };
@@ -396,9 +396,32 @@ impl<'db> TyFoldable<'db> for Place<'db> {
         F: TyFolder<'db>,
     {
         let base = self.base.fold_with(db, folder);
-        Self {
-            base,
-            projections: self.projections,
+        let projections = self
+            .projections
+            .into_iter()
+            .map(|projection| projection.fold_with(db, folder))
+            .collect();
+        Self { base, projections }
+    }
+}
+
+impl<'db> TyFoldable<'db> for PlaceProjection<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        match self {
+            PlaceProjection::Field { index, result_ty } => PlaceProjection::Field {
+                index,
+                result_ty: result_ty.fold_with(db, folder),
+            },
+            PlaceProjection::Index {
+                index_expr,
+                result_ty,
+            } => PlaceProjection::Index {
+                index_expr,
+                result_ty: result_ty.fold_with(db, folder),
+            },
         }
     }
 }

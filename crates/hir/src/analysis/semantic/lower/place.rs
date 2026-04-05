@@ -1,25 +1,17 @@
-use num_traits::ToPrimitive;
-
 use crate::{
     analysis::{
-        place::{Place, PlaceBase, PlaceProjection},
+        place::{Place, PlaceBase, PlaceProjection, projectable_place_ty},
         semantic::{FieldIndex, SPlace, SPlaceElem},
-        ty::{
-            ty_check::RecordLike,
-            ty_def::{InvalidCause, TyId},
-        },
+        ty::ty_def::TyId,
     },
-    hir_def::{ExprId, FieldIndex as HirFieldIndex},
+    hir_def::ExprId,
 };
 
 use super::body::SmirLowerCtxt;
 
 impl<'db> SmirLowerCtxt<'db> {
-    pub(super) fn projectable_place_ty(&self, mut ty: TyId<'db>) -> TyId<'db> {
-        while let Some((_, inner)) = ty.as_capability(self.db) {
-            ty = inner;
-        }
-        ty
+    pub(super) fn projectable_place_ty(&self, ty: TyId<'db>) -> TyId<'db> {
+        projectable_place_ty(self.db, ty)
     }
 
     pub(super) fn lower_place(&mut self, expr: ExprId) -> SPlace {
@@ -32,8 +24,6 @@ impl<'db> SmirLowerCtxt<'db> {
 
     pub(super) fn lower_place_data(&mut self, place: Place<'db>) -> SPlace {
         let PlaceBase::Binding(binding) = place.base;
-        let mut current_ty =
-            self.projectable_place_ty(self.typed_body.binding_ty(self.db, binding));
         let local = *self
             .binding_locals
             .get(&binding)
@@ -42,21 +32,11 @@ impl<'db> SmirLowerCtxt<'db> {
 
         for projection in place.projections {
             match projection {
-                PlaceProjection::Field(field) => {
-                    let lowered = self.lower_field_index(current_ty, Some(field));
-                    path.push(SPlaceElem::Field(lowered));
-                    current_ty = self
-                        .projectable_place_ty(current_ty.field_types(self.db)[lowered.0 as usize]);
+                PlaceProjection::Field { index, .. } => {
+                    path.push(SPlaceElem::Field(FieldIndex(index)));
                 }
-                PlaceProjection::Index { index_expr } => {
+                PlaceProjection::Index { index_expr, .. } => {
                     path.push(SPlaceElem::Index(self.lower_expr(index_expr)));
-                    current_ty = self.projectable_place_ty(
-                        current_ty
-                            .field_types(self.db)
-                            .into_iter()
-                            .next()
-                            .unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other)),
-                    );
                 }
             }
         }
@@ -65,24 +45,5 @@ impl<'db> SmirLowerCtxt<'db> {
             local,
             path: path.into_boxed_slice(),
         }
-    }
-
-    pub(super) fn lower_field_index(
-        &self,
-        base_ty: TyId<'db>,
-        field: Option<HirFieldIndex<'db>>,
-    ) -> FieldIndex {
-        let base_ty = self.projectable_place_ty(base_ty);
-        let idx = match field {
-            Some(HirFieldIndex::Index(index)) => index
-                .data(self.db)
-                .to_usize()
-                .expect("tuple field index should fit usize"),
-            Some(HirFieldIndex::Ident(ident)) => RecordLike::Type(base_ty)
-                .record_field_idx(self.db, ident)
-                .expect("record field should resolve"),
-            None => panic!("missing field index"),
-        };
-        FieldIndex(idx as u16)
     }
 }

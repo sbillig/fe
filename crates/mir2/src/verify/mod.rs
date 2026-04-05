@@ -6,15 +6,15 @@ mod runtime;
 
 use crate::{
     instance::RuntimeInstance,
-    runtime::{ConstRegionId, LayoutId, RuntimeClass},
+    runtime::{ConstRegionId, LayoutId, RBlockId, RLocalId, RuntimeClass},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VerifyError<'db> {
-    MissingRuntimeLocal(crate::runtime::RLocalId),
-    MissingRuntimeBlock(crate::runtime::RBlockId),
+    MissingRuntimeLocal(RLocalId),
+    MissingRuntimeBlock(RBlockId),
     ErasedRuntimeValue(crate::runtime::RValueId),
-    SlotCarrierMismatch(crate::runtime::RLocalId),
+    SlotCarrierMismatch(RLocalId),
     InvalidLayoutHandleView(LayoutId<'db>),
     InvalidConstRegion(ConstRegionId<'db>),
     InvalidVariant(LayoutId<'db>, u16),
@@ -22,7 +22,7 @@ pub enum VerifyError<'db> {
     InvalidVariantPlace(RuntimeClass<'db>),
     InvalidEnumTag(LayoutId<'db>),
     InvalidReturnClass,
-    InvalidExprClass(crate::runtime::RLocalId),
+    InvalidExprClass(RLocalId),
     InvalidStoreClass,
     InvalidCopyClass,
     CallArgCountMismatch(RuntimeInstance<'db>),
@@ -37,7 +37,51 @@ pub enum VerifyError<'db> {
     DuplicateRuntimeSymbol(String),
 }
 
+impl<'db> VerifyError<'db> {
+    pub fn local(&self) -> Option<RLocalId> {
+        match self {
+            VerifyError::MissingRuntimeLocal(local)
+            | VerifyError::SlotCarrierMismatch(local)
+            | VerifyError::InvalidExprClass(local) => Some(*local),
+            VerifyError::MissingRuntimeBlock(_)
+            | VerifyError::ErasedRuntimeValue(_)
+            | VerifyError::InvalidLayoutHandleView(_)
+            | VerifyError::InvalidConstRegion(_)
+            | VerifyError::InvalidVariant(_, _)
+            | VerifyError::InvalidPlace(_)
+            | VerifyError::InvalidVariantPlace(_)
+            | VerifyError::InvalidEnumTag(_)
+            | VerifyError::InvalidReturnClass
+            | VerifyError::InvalidStoreClass
+            | VerifyError::InvalidCopyClass
+            | VerifyError::CallArgCountMismatch(_)
+            | VerifyError::CallArgClassMismatch(_, _)
+            | VerifyError::InvalidCodeRegion(_)
+            | VerifyError::InvalidPackageFunction(_)
+            | VerifyError::InvalidPackageObject(_)
+            | VerifyError::InvalidPackageSection(_, _)
+            | VerifyError::DuplicateRuntimeSymbol(_) => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuntimeVerifyFailure<'db> {
+    pub error: VerifyError<'db>,
+    pub site: RuntimeVerifySite,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RuntimeVerifySite {
+    SignatureParam(usize),
+    LocalRoot(RLocalId),
+    LocalCarrier(RLocalId),
+    Stmt { block: RBlockId, stmt: usize },
+    Terminator { block: RBlockId },
+    Body,
+}
+
 pub use consts::verify_const_region;
 pub use package::verify_runtime_package;
 pub use place::resolve_runtime_place;
-pub use runtime::verify_runtime_body;
+pub use runtime::{verify_runtime_body, verify_runtime_body_detailed};

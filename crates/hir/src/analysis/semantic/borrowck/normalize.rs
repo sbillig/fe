@@ -5,8 +5,8 @@ use crate::{
         HirAnalysisDb,
         semantic::{
             SExpr, SLocalId, SPlace, SPlaceElem, SStmtKind, STerminatorKind, SemanticBody,
-            SemanticInstance, SemanticLocalRole, ValueProvenance,
-            ctfe::canonicalize_semantic_consts,
+            SemanticInstance, SemanticLocalRole, SemanticProjection, ValueProvenance,
+            ctfe::canonicalize_semantic_consts, semantic_instance_assumptions,
         },
         ty::{ty_check::LocalBinding, ty_def::TyId, ty_is_copy},
     },
@@ -16,7 +16,8 @@ use crate::{
 use super::ir::{
     NBorrowRoot, NBorrowRootId, NEffectArg, NEffectArgValue, NExpr, NOperand, NSBlock, NSLocal,
     NSPlace, NSPlaceRoot, NSStmt, NSStmtKind, NSTerminator, NSTerminatorKind,
-    NormalizedBindingLowering, NormalizedSemanticBody, ReadMode, SemanticNormalizeError,
+    NormalizedBindingLowering, NormalizedSemanticBody, NormalizedSemanticBodyId, ReadMode,
+    SemanticNormalizeError, SemanticNormalizeErrorId, SemanticNormalizeResult,
     empty_normalized_body,
 };
 
@@ -24,10 +25,28 @@ pub fn normalize_semantic_body<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> Result<NormalizedSemanticBody<'db>, SemanticNormalizeError<'db>> {
+    match normalized_semantic_body_query(db, instance) {
+        SemanticNormalizeResult::Ok(body) => Ok(body.body(db).clone()),
+        SemanticNormalizeResult::Err(err) => Err(err.err(db).clone()),
+    }
+}
+
+#[salsa::tracked]
+fn normalized_semantic_body_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> SemanticNormalizeResult<'db> {
     let raw = canonicalize_semantic_consts(db, instance);
-    let typed_body = instance.key(db).instantiate_typed_body(db);
-    let cx = NormalizeCtxt::new(db, instance, raw, typed_body.assumptions());
-    cx.normalize()
+    let cx = NormalizeCtxt::new(
+        db,
+        instance,
+        raw,
+        semantic_instance_assumptions(db, instance),
+    );
+    match cx.normalize() {
+        Ok(body) => SemanticNormalizeResult::Ok(NormalizedSemanticBodyId::new(db, body)),
+        Err(err) => SemanticNormalizeResult::Err(SemanticNormalizeErrorId::new(db, err)),
+    }
 }
 
 struct NormalizeCtxt<'db> {
@@ -35,8 +54,16 @@ struct NormalizeCtxt<'db> {
     instance: SemanticInstance<'db>,
     raw: SemanticBody<'db>,
     assumptions: crate::analysis::ty::trait_resolution::PredicateListId<'db>,
-    locals: Vec<NSLocal<'db>>,
+    locals: Vec<Option<NSLocal<'db>>>,
+    local_state: Vec<LocalNormState>,
     borrow_roots: Vec<NBorrowRoot<'db>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LocalNormState {
+    Unseen,
+    Visiting,
+    Done,
 }
 
 impl<'db> NormalizeCtxt<'db> {
@@ -52,17 +79,21 @@ impl<'db> NormalizeCtxt<'db> {
             instance,
             raw,
             assumptions,
-            locals: Vec::with_capacity(local_capacity),
+            locals: vec![None; local_capacity],
+            local_state: vec![LocalNormState::Unseen; local_capacity],
             borrow_roots: Vec::new(),
         }
     }
 
     fn normalize(mut self) -> Result<NormalizedSemanticBody<'db>, SemanticNormalizeError<'db>> {
-        self.normalize_locals();
+        self.normalize_locals()?;
         if self.raw.blocks.is_empty() {
             return Ok(empty_normalized_body(
                 &self.raw,
-                self.locals,
+                self.locals
+                    .into_iter()
+                    .map(|local| local.expect("all locals normalized"))
+                    .collect(),
                 self.borrow_roots,
             ));
         }
@@ -89,61 +120,141 @@ impl<'db> NormalizeCtxt<'db> {
         Ok(NormalizedSemanticBody {
             owner: self.instance,
             template_owner: self.raw.template_owner,
-            locals: self.locals,
+            locals: self
+                .locals
+                .into_iter()
+                .map(|local| local.expect("all locals normalized"))
+                .collect(),
             blocks,
             borrow_roots: self.borrow_roots,
         })
     }
 
-    fn normalize_locals(&mut self) {
+    fn normalize_locals(&mut self) -> Result<(), SemanticNormalizeError<'db>> {
         let raw_locals = self.raw.locals.clone();
         for (idx, local) in raw_locals.iter().enumerate() {
             let local_id = SLocalId::from_u32(idx as u32);
-            let lowering = self.normalize_local_lowering(local_id, local);
-            self.locals.push(NSLocal {
-                ty: local.ty,
-                mutability: local.mutability,
-                source: local.source,
-                lowering,
-            });
+            self.ensure_local_normalized(local_id, local)?;
         }
+        Ok(())
+    }
+
+    fn ensure_local_normalized(
+        &mut self,
+        local: SLocalId,
+        raw_local: &crate::analysis::semantic::SLocal<'db>,
+    ) -> Result<(), SemanticNormalizeError<'db>> {
+        match self.local_state[local.index()] {
+            LocalNormState::Done => return Ok(()),
+            LocalNormState::Visiting => {
+                return Err(SemanticNormalizeError::LocalProvenanceCycle {
+                    owner: self.instance,
+                    local,
+                });
+            }
+            LocalNormState::Unseen => {}
+        }
+
+        self.local_state[local.index()] = LocalNormState::Visiting;
+        let lowering = self.normalize_local_lowering(local, raw_local)?;
+        self.locals[local.index()] = Some(NSLocal {
+            ty: raw_local.ty,
+            mutability: raw_local.mutability,
+            source: raw_local.source,
+            lowering,
+        });
+        self.local_state[local.index()] = LocalNormState::Done;
+        Ok(())
     }
 
     fn normalize_local_lowering(
         &mut self,
         local: SLocalId,
         raw_local: &crate::analysis::semantic::SLocal<'db>,
-    ) -> NormalizedBindingLowering<'db> {
+    ) -> Result<NormalizedBindingLowering<'db>, SemanticNormalizeError<'db>> {
         match raw_local.role.clone() {
-            SemanticLocalRole::Erased => NormalizedBindingLowering::Erased,
+            SemanticLocalRole::Erased => Ok(NormalizedBindingLowering::Erased),
             SemanticLocalRole::DirectValue { provenance } => {
-                let root = match provenance {
-                    ValueProvenance::Ordinary => self.push_local_root(local, raw_local.source),
-                    ValueProvenance::RootProvider(binding) => self.push_provider_root(binding),
+                let place = match provenance {
+                    ValueProvenance::Ordinary => self.local_root_place(local, raw_local.source),
+                    ValueProvenance::RootProvider(binding) => self.provider_root_place(binding),
+                    ValueProvenance::DerivedPlace { base, path } => {
+                        let raw_base = self.raw.locals[base.index()].clone();
+                        self.ensure_local_normalized(base, &raw_base)?;
+                        let mut place = self.propagated_place(base).ok_or(
+                            SemanticNormalizeError::NonPlaceDerivedValue {
+                                owner: self.instance,
+                                local,
+                                base,
+                            },
+                        )?;
+                        for projection in path.iter() {
+                            place.path.push(match projection {
+                                SemanticProjection::Field(field_idx) => {
+                                    Projection::Field(*field_idx)
+                                }
+                                SemanticProjection::VariantField {
+                                    variant,
+                                    enum_ty,
+                                    field_idx,
+                                } => Projection::VariantField {
+                                    variant: *variant,
+                                    enum_ty: *enum_ty,
+                                    field_idx: *field_idx,
+                                },
+                                SemanticProjection::Index(index) => {
+                                    Projection::Index(IndexSource::Dynamic(*index))
+                                }
+                            });
+                        }
+                        place
+                    }
                 };
-                NormalizedBindingLowering::ValueLocal { root }
+                Ok(NormalizedBindingLowering::ValueLocal { place })
             }
             SemanticLocalRole::PlaceBoundValue { provider, value_ty } => {
                 let root = self.push_provider_root(provider);
-                NormalizedBindingLowering::PlaceBoundValue { root, value_ty }
+                Ok(NormalizedBindingLowering::PlaceBoundValue { root, value_ty })
             }
             SemanticLocalRole::PlaceCarrier { value_ty }
             | SemanticLocalRole::DirectCarrier {
                 provider: None,
                 target_ty: value_ty,
-            } => NormalizedBindingLowering::CarrierLocal {
+            } => Ok(NormalizedBindingLowering::CarrierLocal {
                 root: Some(self.push_local_root(local, raw_local.source)),
                 provider: None,
                 target_ty: value_ty,
-            },
+            }),
             SemanticLocalRole::DirectCarrier {
                 provider,
                 target_ty,
-            } => NormalizedBindingLowering::CarrierLocal {
+            } => Ok(NormalizedBindingLowering::CarrierLocal {
                 root: Some(self.push_local_root(local, raw_local.source)),
                 provider,
                 target_ty,
-            },
+            }),
+        }
+    }
+
+    fn propagated_place(&self, local: SLocalId) -> Option<NSPlace<'db>> {
+        let local_data = self.locals.get(local.index())?.as_ref()?;
+        match &local_data.lowering {
+            NormalizedBindingLowering::ValueLocal { place } => Some(place.clone()),
+            NormalizedBindingLowering::PlaceBoundValue { root, .. } => Some(NSPlace {
+                root: NSPlaceRoot::Root(*root),
+                path: ProjectionPath::default(),
+            }),
+            NormalizedBindingLowering::CarrierLocal { .. }
+                if local_data.ty.as_capability(self.db).is_some() =>
+            {
+                Some(NSPlace {
+                    root: NSPlaceRoot::CarrierDerefLocal(local),
+                    path: ProjectionPath::default(),
+                })
+            }
+            NormalizedBindingLowering::CarrierLocal { .. } | NormalizedBindingLowering::Erased => {
+                None
+            }
         }
     }
 
@@ -165,6 +276,17 @@ impl<'db> NormalizeCtxt<'db> {
         root
     }
 
+    fn local_root_place(
+        &mut self,
+        local: SLocalId,
+        source: Option<LocalBinding<'db>>,
+    ) -> NSPlace<'db> {
+        NSPlace {
+            root: NSPlaceRoot::Root(self.push_local_root(local, source)),
+            path: ProjectionPath::default(),
+        }
+    }
+
     fn push_provider_root(
         &mut self,
         binding: crate::semantic::ProviderBinding<'db>,
@@ -172,6 +294,16 @@ impl<'db> NormalizeCtxt<'db> {
         let root = NBorrowRootId::from_u32(self.borrow_roots.len() as u32);
         self.borrow_roots.push(NBorrowRoot::Provider { binding });
         root
+    }
+
+    fn provider_root_place(
+        &mut self,
+        binding: crate::semantic::ProviderBinding<'db>,
+    ) -> NSPlace<'db> {
+        NSPlace {
+            root: NSPlaceRoot::Root(self.push_provider_root(binding)),
+            path: ProjectionPath::default(),
+        }
     }
 
     fn normalize_stmt(
@@ -230,7 +362,10 @@ impl<'db> NormalizeCtxt<'db> {
         dst: SLocalId,
         expr: &SExpr<'db>,
     ) -> Result<NExpr<'db>, SemanticNormalizeError<'db>> {
-        let dst_ty = self.locals[dst.index()].ty;
+        let dst_ty = self.locals[dst.index()]
+            .as_ref()
+            .expect("all locals normalized before block lowering")
+            .ty;
         Ok(match expr {
             SExpr::Use(value) => self
                 .normalize_direct_read(origin, *value, dst_ty)?
@@ -274,7 +409,7 @@ impl<'db> NormalizeCtxt<'db> {
                 let place =
                     self.project_local_place(*base, Projection::Field(field.0 as usize), origin)?;
                 NExpr::ReadPlace {
-                    mode: self.read_mode_for_place(origin, dst_ty, &place),
+                    mode: self.read_mode_for_local(dst, origin, dst_ty),
                     place,
                 }
             }
@@ -285,7 +420,7 @@ impl<'db> NormalizeCtxt<'db> {
                     origin,
                 )?;
                 NExpr::ReadPlace {
-                    mode: self.read_mode_for_place(origin, dst_ty, &place),
+                    mode: self.read_mode_for_local(dst, origin, dst_ty),
                     place,
                 }
             }
@@ -382,9 +517,13 @@ impl<'db> NormalizeCtxt<'db> {
         local: SLocalId,
         origin: crate::analysis::semantic::SemOrigin<'db>,
     ) -> NOperand {
+        let ty = self.locals[local.index()]
+            .as_ref()
+            .expect("all locals normalized before operand lowering")
+            .ty;
         NOperand {
             local,
-            mode: self.read_mode_for_local(local, origin, self.locals[local.index()].ty),
+            mode: self.read_mode_for_local(local, origin, ty),
         }
     }
 
@@ -395,6 +534,10 @@ impl<'db> NormalizeCtxt<'db> {
         local: SLocalId,
         origin: crate::analysis::semantic::SemOrigin<'db>,
     ) -> NOperand {
+        let ty = self.locals[local.index()]
+            .as_ref()
+            .expect("all locals normalized before call arg lowering")
+            .ty;
         let mode = match callee.key.owner(self.db) {
             crate::analysis::ty::ty_check::BodyOwner::Func(func) => func
                 .params(self.db)
@@ -402,10 +545,8 @@ impl<'db> NormalizeCtxt<'db> {
                 .map(|param| param.mode(self.db))
                 .filter(|mode| *mode == crate::hir_def::FuncParamMode::View)
                 .map(|_| ReadMode::Copy)
-                .unwrap_or_else(|| {
-                    self.read_mode_for_local(local, origin, self.locals[local.index()].ty)
-                }),
-            _ => self.read_mode_for_local(local, origin, self.locals[local.index()].ty),
+                .unwrap_or_else(|| self.read_mode_for_local(local, origin, ty)),
+            _ => self.read_mode_for_local(local, origin, ty),
         };
         NOperand { local, mode }
     }
@@ -446,13 +587,17 @@ impl<'db> NormalizeCtxt<'db> {
         allow_carrier: bool,
         origin: crate::analysis::semantic::SemOrigin<'db>,
     ) -> Result<Option<NSPlace<'db>>, SemanticNormalizeError<'db>> {
-        let Some(local_data) = self.locals.get(local.index()) else {
+        let Some(local_data) = self
+            .locals
+            .get(local.index())
+            .and_then(|local| local.as_ref())
+        else {
             return Ok(None);
         };
         Ok(match &local_data.lowering {
             NormalizedBindingLowering::Erased => None,
-            NormalizedBindingLowering::ValueLocal { root }
-            | NormalizedBindingLowering::PlaceBoundValue { root, .. } => Some(NSPlace {
+            NormalizedBindingLowering::ValueLocal { place } => Some(place.clone()),
+            NormalizedBindingLowering::PlaceBoundValue { root, .. } => Some(NSPlace {
                 root: NSPlaceRoot::Root(*root),
                 path: ProjectionPath::default(),
             }),
@@ -500,9 +645,16 @@ impl<'db> NormalizeCtxt<'db> {
         origin: crate::analysis::semantic::SemOrigin<'db>,
         ty: TyId<'db>,
     ) -> ReadMode {
-        match self.locals.get(local.index()).map(|local| &local.lowering) {
-            Some(NormalizedBindingLowering::ValueLocal { root })
-            | Some(NormalizedBindingLowering::PlaceBoundValue { root, .. }) => {
+        match self
+            .locals
+            .get(local.index())
+            .and_then(|local| local.as_ref())
+            .map(|local| &local.lowering)
+        {
+            Some(NormalizedBindingLowering::ValueLocal { place }) => {
+                self.read_mode_for_place(origin, ty, place)
+            }
+            Some(NormalizedBindingLowering::PlaceBoundValue { root, .. }) => {
                 self.read_mode_for_root(origin, ty, *root)
             }
             Some(NormalizedBindingLowering::CarrierLocal { .. }) => ReadMode::Copy,
@@ -530,6 +682,24 @@ impl<'db> NormalizeCtxt<'db> {
     ) -> ReadMode {
         match self.borrow_roots.get(root.index()) {
             Some(NBorrowRoot::Provider { .. }) => ReadMode::Copy,
+            Some(NBorrowRoot::Param { param_idx, .. })
+                if self
+                    .instance
+                    .key(self.db)
+                    .instantiate_typed_body(self.db)
+                    .param_binding(*param_idx as usize)
+                    .is_some_and(|binding| {
+                        matches!(
+                            binding,
+                            LocalBinding::Param {
+                                mode: crate::hir_def::FuncParamMode::View,
+                                ..
+                            }
+                        )
+                    }) =>
+            {
+                ReadMode::Copy
+            }
             Some(NBorrowRoot::Param { .. }) | Some(NBorrowRoot::LocalSlot { .. }) | None => {
                 self.read_mode(origin, ty)
             }

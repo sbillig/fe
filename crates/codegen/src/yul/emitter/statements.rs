@@ -1,958 +1,415 @@
-//! Helpers for lowering linear MIR statements into Yul docs.
-//!
-//! The functions defined in this module operate within `FunctionEmitter` and walk
-//! straight-line MIR instructions (non-terminators) to produce Yul statements.
-
-use hir::projection::Projection;
-use mir::ir::{IntrinsicOp, IntrinsicValue};
-use mir::{
-    self, ConstData, LocalId, MirProjectionPath, ValueId, layout, serialize_const_data_to_bytes,
+use crate::yul::{
+    doc::YulDoc,
+    errors::YulError,
+    legalize::{YStmt, YulAddressSpace, YulPlace, YulValueClass},
 };
 
-use crate::yul::{doc::YulDoc, state::BlockState};
+use super::function::{FunctionEmitter, RenderedValue};
 
-use super::{YulError, function::FunctionEmitter};
+impl<'a, 'db> FunctionEmitter<'a, 'db> {
+    pub(super) fn render_stmt(&mut self, stmt: &YStmt<'db>) -> Result<Vec<YulDoc>, YulError> {
+        match stmt {
+            YStmt::Assign { dst, expr } => {
+                let expected = self.plan.locals[dst.index()].class.as_ref();
+                let value = self.render_expr(expr, expected)?;
+                self.write_local_storage(*dst, value)
+            }
+            YStmt::Call { callee, args } => {
+                let mut docs = Vec::new();
+                let args = args
+                    .iter()
+                    .map(|arg| self.local_value(*arg))
+                    .collect::<Result<Vec<_>, _>>()?;
+                for arg in &args {
+                    docs.extend(arg.setup.clone());
+                }
+                let rendered_args = args
+                    .into_iter()
+                    .map(|arg| arg.value)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let callee_plan = self.index.function(*callee)?;
+                docs.push(YulDoc::line(format!(
+                    "{}({rendered_args})",
+                    super::util::prefix_yul_name(&callee_plan.symbol)
+                )));
+                Ok(docs)
+            }
+            YStmt::Builtin(builtin) => self.render_builtin_stmt(builtin),
+            YStmt::Store { dst, src } => {
+                let src = self.local_value(*src)?;
+                self.write_place_from_value(dst.clone(), src)
+            }
+            YStmt::CopyInto { dst, src } => {
+                let src = self.local_value(*src)?;
+                self.write_place_from_value(dst.clone(), src)
+            }
+            YStmt::EnumSetTag { root, variant } => {
+                let root = self.local_value(*root)?;
+                let layout = self.class_layout(&root.class)?;
+                let tag_class = self.enum_tag_class(layout)?;
+                self.write_scalar_to_addr(
+                    Self::root_space_for_class(&root.class)?,
+                    root.value,
+                    RenderedValue {
+                        setup: root.setup,
+                        value: variant.index.to_string(),
+                        class: YulValueClass::Word(tag_class),
+                    },
+                )
+            }
+            YStmt::EnumWriteVariant {
+                root,
+                variant,
+                fields,
+            } => {
+                let root = self.local_value(*root)?;
+                let layout = self.class_layout(&root.class)?;
+                let mut docs = root.setup;
+                docs.extend(self.write_enum_variant(
+                    &root.value,
+                    Self::root_space_for_class(&root.class)?,
+                    layout,
+                    *variant,
+                    fields,
+                )?);
+                Ok(docs)
+            }
+        }
+    }
 
-impl<'db> FunctionEmitter<'db> {
-    /// Lowers a linear sequence of MIR instructions into Yul docs.
-    ///
-    /// * `insts` - MIR instructions belonging to the current block.
-    /// * `state` - Mutable binding table shared across the block.
-    ///
-    /// Returns all emitted Yul statements prior to the block terminator.
-    pub(super) fn render_statements(
+    pub(super) fn write_place_from_value(
         &mut self,
-        insts: &[mir::MirInst<'db>],
-        state: &mut BlockState,
+        dst: YulPlace<'db>,
+        src: RenderedValue<'db>,
     ) -> Result<Vec<YulDoc>, YulError> {
-        let mut docs = Vec::new();
-        for inst in insts {
-            self.emit_inst(&mut docs, inst, state)?;
+        let (mut docs, addr, space) = self.address_of_place(&dst)?;
+        docs.extend(src.setup.clone());
+        match dst.storage_kind {
+            crate::yul::legalize::YulStorageKind::Cell => {
+                docs.extend(self.write_transport_word_to_addr(space, addr, src)?);
+            }
+            crate::yul::legalize::YulStorageKind::Bytes => {
+                if matches!(dst.result_class, YulValueClass::Word(_)) {
+                    docs.extend(self.write_scalar_to_addr(space, addr, src)?);
+                } else {
+                    docs.extend(self.copy_into_addr(dst.result_class.clone(), space, addr, src)?);
+                }
+            }
         }
         Ok(docs)
     }
 
-    /// Dispatches an individual MIR instruction to the appropriate lowering helper.
-    ///
-    /// * `docs` - Accumulator that stores every emitted Yul statement.
-    /// * `inst` - Instruction being lowered.
-    /// * `state` - Mutable per-block binding state shared across helpers.
-    ///
-    /// Returns `Ok(())` once the instruction has been lowered.
-    fn emit_inst(
+    pub(super) fn copy_into_addr(
         &mut self,
-        docs: &mut Vec<YulDoc>,
-        inst: &mir::MirInst<'db>,
-        state: &mut BlockState,
-    ) -> Result<(), YulError> {
-        match inst {
-            mir::MirInst::Assign { dest, rvalue, .. } => {
-                self.emit_assign_inst(docs, *dest, rvalue, state)?
-            }
-            mir::MirInst::BindValue { value, .. } => {
-                self.emit_bind_value_inst(docs, *value, state)?
-            }
-            mir::MirInst::Store { place, value, .. } => {
-                self.emit_store_inst(docs, place, *value, state)?
-            }
-            mir::MirInst::InitAggregate { place, inits, .. } => {
-                self.emit_init_aggregate_inst(docs, place, inits, state)?
-            }
-            mir::MirInst::SetDiscriminant { place, variant, .. } => {
-                self.emit_set_discriminant_inst(docs, place, *variant, state)?
-            }
-        }
-        Ok(())
-    }
-
-    fn emit_assign_inst(
-        &mut self,
-        docs: &mut Vec<YulDoc>,
-        dest: Option<LocalId>,
-        rvalue: &mir::ir::Rvalue<'db>,
-        state: &mut BlockState,
-    ) -> Result<(), YulError> {
-        match rvalue {
-            mir::ir::Rvalue::ZeroInit => {
-                let Some(dest) = dest else {
-                    return Err(YulError::Unsupported(
-                        "zero init without destination".into(),
-                    ));
-                };
-                let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
-                if declared {
-                    docs.push(YulDoc::line(format!("let {yul_name} := 0")));
-                } else {
-                    docs.push(YulDoc::line(format!("{yul_name} := 0")));
-                }
-            }
-            mir::ir::Rvalue::Value(value_id) => {
-                if let Some(dest) = dest {
-                    let dest_local = self.mir_func.body.local(dest);
-                    let value_data = self.mir_func.body.value(*value_id);
-                    if !dest_local.const_backing.is_const()
-                        && matches!(dest_local.address_space, mir::ir::AddressSpaceKind::Memory)
-                        && value_data.repr.is_ref()
-                        && matches!(
-                            value_data.repr.address_space(),
-                            Some(mir::ir::AddressSpaceKind::Code)
-                        )
-                    {
-                        let Some(size_bytes) =
-                            layout::ty_memory_size_or_word_in(self.db, &self.layout, dest_local.ty)
-                        else {
-                            return Err(YulError::Unsupported(format!(
-                                "cannot determine materialization size for `{}`",
-                                dest_local.ty.pretty_print(self.db)
-                            )));
-                        };
-                        let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
-                        if size_bytes == 0 {
-                            if declared {
-                                docs.push(YulDoc::line(format!("let {yul_name} := 0")));
-                            } else {
-                                docs.push(YulDoc::line(format!("{yul_name} := 0")));
-                            }
-                        } else {
-                            self.emit_alloc_value(docs, &yul_name, size_bytes, declared);
-                            let src_addr = self.lower_value(*value_id, state)?;
-                            docs.push(YulDoc::line(format!(
-                                "datacopy({yul_name}, {src_addr}, {size_bytes})"
-                            )));
-                        }
-                        return Ok(());
-                    }
-                    let rhs = self.lower_value(*value_id, state)?;
-                    let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
-                    if declared {
-                        docs.push(YulDoc::line(format!("let {yul_name} := {rhs}")));
-                    } else {
-                        docs.push(YulDoc::line(format!("{yul_name} := {rhs}")));
-                    }
-                } else {
-                    self.emit_eval_inst(docs, *value_id, state)?;
-                }
-            }
-            mir::ir::Rvalue::Call(call) => self.emit_call_inst(docs, dest, call, state)?,
-            mir::ir::Rvalue::Intrinsic { op, args } => {
-                self.emit_intrinsic_inst(docs, dest, *op, args, state)?
-            }
-            mir::ir::Rvalue::Load { place } => {
-                let Some(dest) = dest else {
-                    return Err(YulError::Unsupported("load without destination".into()));
-                };
-                self.emit_load_inst(docs, dest, place, state)?
-            }
-            mir::ir::Rvalue::Alloc { address_space } => {
-                let Some(dest) = dest else {
-                    return Err(YulError::Unsupported("alloc without destination".into()));
-                };
-                self.emit_alloc_inst(docs, dest, *address_space, state)?
-            }
-            mir::ir::Rvalue::ConstAggregate { data, ty } => {
-                let Some(dest) = dest else {
-                    return Err(YulError::Unsupported(
-                        "const_aggregate without destination".into(),
-                    ));
-                };
-                self.emit_const_aggregate_inst(docs, dest, *ty, data, state)?
-            }
-        }
-        Ok(())
-    }
-
-    /// Emits an expression statement whose value is not reused.
-    ///
-    /// * `docs` - Accumulator for any generated docs.
-    /// * `value` - MIR value used for the expression statement.
-    /// * `state` - Block state containing active bindings.
-    ///
-    /// Refrains from re-emitting expressions consumed elsewhere and returns `Ok(())`
-    /// after optionally pushing a doc.
-    fn emit_eval_inst(
-        &mut self,
-        docs: &mut Vec<YulDoc>,
-        value: ValueId,
-        state: &mut BlockState,
-    ) -> Result<(), YulError> {
-        if state.value_temp(value.index()).is_some() {
-            return Ok(());
-        }
-
-        let expr = self.lower_value(value, state)?;
-        docs.push(YulDoc::line(format!("pop({expr})")));
-        Ok(())
-    }
-
-    fn resolve_local_for_write(
-        &self,
-        local: LocalId,
-        state: &mut BlockState,
-    ) -> Result<(String, bool), YulError> {
-        if let Some(existing) = state.local(local) {
-            if !self.mir_func.body.local(local).is_mut {
-                return Err(YulError::Unsupported(
-                    "assignment to immutable local".into(),
+        dst_class: YulValueClass<'db>,
+        dst_space: YulAddressSpace,
+        dst_addr: String,
+        src: RenderedValue<'db>,
+    ) -> Result<Vec<YulDoc>, YulError> {
+        let mut docs = Vec::new();
+        let size = self.class_size_bytes(&dst_class)?;
+        match (&dst_class, &src.class, dst_space) {
+            (_, YulValueClass::MemoryPtr { .. }, YulAddressSpace::Memory) => {
+                docs.extend(self.copy_word_chunks(
+                    YulAddressSpace::Memory,
+                    dst_addr,
+                    YulAddressSpace::Memory,
+                    src.value,
+                    size,
                 ));
             }
-            return Ok((existing, false));
-        }
-        let temp = state.alloc_local();
-        state.insert_local(local, temp.clone());
-        Ok((temp, true))
-    }
-
-    fn emit_call_inst(
-        &mut self,
-        docs: &mut Vec<YulDoc>,
-        dest: Option<LocalId>,
-        call: &mir::CallOrigin<'db>,
-        state: &mut BlockState,
-    ) -> Result<(), YulError> {
-        // Builtin terminators (Abort / AbortWithValue) that appear as regular
-        // call instructions (due to never-type coercion in match arms).
-        if let Some(builtin) = call.builtin_terminator {
-            match builtin {
-                mir::ir::BuiltinTerminatorKind::Abort
-                | mir::ir::BuiltinTerminatorKind::AbortWithValue => {
-                    docs.push(YulDoc::line("revert(0, 0)"));
-                    return Ok(());
-                }
+            (_, YulValueClass::CodePtr { .. }, YulAddressSpace::Memory) => {
+                docs.push(YulDoc::line(format!(
+                    "datacopy({dst_addr}, {}, {size})",
+                    src.value
+                )));
             }
-        }
-
-        let call_expr = self.lower_call_value(docs, call, state)?;
-        if let Some(dest) = dest {
-            let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
-            if declared {
-                docs.push(YulDoc::line(format!("let {yul_name} := {call_expr}")));
-            } else {
-                docs.push(YulDoc::line(format!("{yul_name} := {call_expr}")));
+            (_, YulValueClass::CalldataPtr { .. }, YulAddressSpace::Memory) => {
+                docs.push(YulDoc::line(format!(
+                    "calldatacopy({dst_addr}, {}, {size})",
+                    src.value
+                )));
             }
-        } else {
-            docs.push(YulDoc::line(call_expr));
-        }
-        Ok(())
-    }
-
-    fn emit_bind_value_inst(
-        &mut self,
-        docs: &mut Vec<YulDoc>,
-        value: ValueId,
-        state: &mut BlockState,
-    ) -> Result<(), YulError> {
-        if state.value_temp(value.index()).is_some() {
-            return Ok(());
-        }
-
-        let temp = state.alloc_local();
-        let lowered = self.lower_value(value, state)?;
-        state.insert_value_temp(value.index(), temp.clone());
-        docs.push(YulDoc::line(format!("let {temp} := {lowered}")));
-        Ok(())
-    }
-
-    pub(super) fn emit_alloc_value(
-        &self,
-        docs: &mut Vec<YulDoc>,
-        name: &str,
-        size_bytes: usize,
-        declare: bool,
-    ) {
-        let size = size_bytes.to_string();
-        if declare {
-            docs.push(YulDoc::line(format!("let {name} := mload(0x40)")));
-        } else {
-            docs.push(YulDoc::line(format!("{name} := mload(0x40)")));
-        }
-        docs.push(YulDoc::block(
-            format!("if iszero({name}) "),
-            vec![YulDoc::line(format!("{name} := 0x80"))],
-        ));
-        docs.push(YulDoc::line(format!("mstore(0x40, add({name}, {size}))")));
-    }
-
-    fn emit_code_load_scratch(&self, docs: &mut Vec<YulDoc>, state: &mut BlockState) -> String {
-        let scratch = state.alloc_local();
-        docs.push(YulDoc::line(format!("let {scratch} := mload(0x40)")));
-        docs.push(YulDoc::block(
-            format!("if iszero({scratch}) "),
-            vec![YulDoc::line(format!("{scratch} := 0x80"))],
-        ));
-        scratch
-    }
-
-    fn emit_alloc_inst(
-        &mut self,
-        docs: &mut Vec<YulDoc>,
-        dest: LocalId,
-        address_space: mir::ir::AddressSpaceKind,
-        state: &mut BlockState,
-    ) -> Result<(), YulError> {
-        if !matches!(address_space, mir::ir::AddressSpaceKind::Memory) {
-            return Err(YulError::Unsupported(
-                "alloc is only supported for memory".into(),
-            ));
-        }
-        let ty = self.mir_func.body.local(dest).ty;
-        let Some(size_bytes) = layout::ty_memory_size_or_word_in(self.db, &self.layout, ty) else {
-            return Err(YulError::Unsupported(format!(
-                "cannot determine allocation size for `{}`",
-                ty.pretty_print(self.db)
-            )));
-        };
-        let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
-        self.emit_alloc_value(docs, &yul_name, size_bytes, declared);
-        Ok(())
-    }
-
-    /// Emits a constant aggregate by registering data for a Yul data section
-    /// and copying it into allocated memory.
-    fn emit_const_aggregate_inst(
-        &mut self,
-        docs: &mut Vec<YulDoc>,
-        dest: LocalId,
-        ty: hir::analysis::ty::ty_def::TyId<'db>,
-        data: &ConstData,
-        state: &mut BlockState,
-    ) -> Result<(), YulError> {
-        let bytes =
-            serialize_const_data_to_bytes(self.db, &self.layout, ty, data).ok_or_else(|| {
-                YulError::Unsupported(format!(
-                    "cannot serialize const aggregate `{}` for Yul",
-                    ty.pretty_print(self.db)
-                ))
-            })?;
-        let label = self.register_data_region(&bytes);
-        let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
-        let local = self.mir_func.body.local(dest);
-        if local.const_backing.is_const()
-            && matches!(local.address_space, mir::ir::AddressSpaceKind::Code)
-        {
-            let expr = format!("dataoffset(\"{label}\")");
-            if declared {
-                docs.push(YulDoc::line(format!("let {yul_name} := {expr}")));
-            } else {
-                docs.push(YulDoc::line(format!("{yul_name} := {expr}")));
-            }
-            return Ok(());
-        }
-
-        let size = bytes.len();
-        self.emit_alloc_value(docs, &yul_name, size, declared);
-        docs.push(YulDoc::line(format!(
-            "datacopy({yul_name}, dataoffset(\"{label}\"), datasize(\"{label}\"))"
-        )));
-        Ok(())
-    }
-
-    fn emit_load_inst(
-        &mut self,
-        docs: &mut Vec<YulDoc>,
-        dest: LocalId,
-        place: &mir::ir::Place<'db>,
-        state: &mut BlockState,
-    ) -> Result<(), YulError> {
-        let dest_local = self.mir_func.body.local(dest);
-        let ty = dest_local.ty;
-        let space = self.lower_place_space(place)?;
-        let rhs = if space == mir::ir::AddressSpaceKind::Code {
-            let addr = self.lower_place_address(place, state)?;
-            let pointer_info = mir::repr::runtime_value_pointer_info_for_ty(
-                self.db,
-                &self.core_lib(),
-                ty,
-                dest_local.address_space,
-            )
-            .or_else(|| self.mir_func.body.place_pointer_info(place));
-            if self.place_yields_location_value(place, ty, pointer_info)? {
-                addr
-            } else {
-                let packed = self.is_packed_scalar_array_access(place, ty)?;
-                let scratch = self.emit_code_load_scratch(docs, state);
-                if packed {
-                    docs.push(YulDoc::line(format!("datacopy({scratch}, {addr}, 1)")));
-                    self.apply_from_word_conversion(&format!("byte(0, mload({scratch}))"), ty)
-                } else {
-                    docs.push(YulDoc::line(format!("datacopy({scratch}, {addr}, 32)")));
-                    self.apply_from_word_conversion(&format!("mload({scratch})"), ty)
-                }
-            }
-        } else {
-            self.lower_place_load(place, ty, state)?
-        };
-        let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
-        if declared {
-            docs.push(YulDoc::line(format!("let {yul_name} := {rhs}")));
-        } else {
-            docs.push(YulDoc::line(format!("{yul_name} := {rhs}")));
-        }
-        Ok(())
-    }
-
-    fn emit_store_inst(
-        &mut self,
-        docs: &mut Vec<YulDoc>,
-        place: &mir::ir::Place<'db>,
-        value: ValueId,
-        state: &mut BlockState,
-    ) -> Result<(), YulError> {
-        let value_data = self.mir_func.body.value(value);
-        let value_ty = value_data.ty;
-        if layout::ty_size_bytes_in(self.db, &self.layout, value_ty).is_some_and(|size| size == 0) {
-            return Ok(());
-        }
-        if value_data.repr.is_ref()
-            && mir::repr::value_resolves_to_location(
-                self.db,
-                &self.core_lib(),
-                &self.mir_func.body.values,
-                &self.mir_func.body.locals,
-                value,
-            )
-        {
-            if state.value_temp(value.index()).is_none() {
-                let rhs = self.lower_value(value, state)?;
-                let temp = state.alloc_local();
-                state.insert_value_temp(value.index(), temp.clone());
-                docs.push(YulDoc::line(format!("let {temp} := {rhs}")));
-            }
-            let src_place = mir::ir::Place::new(value, MirProjectionPath::new());
-            return self.emit_store_from_places(docs, place, &src_place, value_ty, state);
-        }
-
-        let addr = self.lower_place_ref(place, state)?;
-        let rhs = self.lower_value(value, state)?;
-        let stored = self.apply_to_word_conversion(&rhs, value_ty);
-        let space = self.lower_place_space(place)?;
-        if space == mir::ir::AddressSpaceKind::Memory
-            && self.is_packed_scalar_array_access(place, value_ty)?
-        {
-            docs.push(YulDoc::line(format!("mstore8({addr}, {stored})")));
-        } else {
-            docs.push(YulDoc::line(Self::yul_store(space, &addr, &stored)));
-        }
-        Ok(())
-    }
-
-    fn emit_init_aggregate_inst(
-        &mut self,
-        docs: &mut Vec<YulDoc>,
-        place: &mir::ir::Place<'db>,
-        inits: &[(MirProjectionPath<'db>, ValueId)],
-        state: &mut BlockState,
-    ) -> Result<(), YulError> {
-        for (path, value) in inits {
-            let mut target = place.clone();
-            for proj in path.iter() {
-                target = self.extend_place(&target, proj.clone());
-            }
-            self.emit_store_inst(docs, &target, *value, state)?;
-        }
-        Ok(())
-    }
-
-    fn emit_store_from_places(
-        &mut self,
-        docs: &mut Vec<YulDoc>,
-        dst_place: &mir::ir::Place<'db>,
-        src_place: &mir::ir::Place<'db>,
-        value_ty: hir::analysis::ty::ty_def::TyId<'db>,
-        state: &mut BlockState,
-    ) -> Result<(), YulError> {
-        if layout::ty_size_bytes_in(self.db, &self.layout, value_ty).is_some_and(|size| size == 0) {
-            return Ok(());
-        }
-        if mir::repr::pointer_info_for_ty(
-            self.db,
-            &self.core_lib(),
-            value_ty,
-            mir::ir::AddressSpaceKind::Memory,
-        )
-        .is_some()
-        {
-            let addr = self.lower_place_ref(dst_place, state)?;
-            let rhs = self.lower_place_load(src_place, value_ty, state)?;
-            let stored = self.apply_to_word_conversion(&rhs, value_ty);
-            let space = self.lower_place_space(dst_place)?;
-            docs.push(YulDoc::line(Self::yul_store(space, &addr, &stored)));
-            return Ok(());
-        }
-        if value_ty.is_array(self.db) {
-            let dst_space = self.lower_place_space(dst_place)?;
-            let src_space = self.lower_place_space(src_place)?;
-            if dst_space == mir::ir::AddressSpaceKind::Memory
-                && src_space == mir::ir::AddressSpaceKind::Code
-                && src_place.projection.is_empty()
-            {
-                let copy_size = if let mir::ValueOrigin::ConstRegion(region_id) =
-                    &self.mir_func.body.value(src_place.base).origin
-                {
-                    let region = self.mir_func.body.const_region(*region_id);
-                    serialize_const_data_to_bytes(self.db, &self.layout, region.ty, &region.data)
-                        .map(|bytes| bytes.len())
-                } else {
-                    layout::ty_memory_size_in(self.db, &self.layout, value_ty)
-                };
-                if let Some(size) = copy_size {
-                    if size > 0 {
-                        let dst_addr = self.lower_place_ref(dst_place, state)?;
-                        let src_addr = self.lower_place_address(src_place, state)?;
-                        docs.push(YulDoc::line(format!(
-                            "datacopy({dst_addr}, {src_addr}, {size})"
-                        )));
-                    }
-                    return Ok(());
-                }
-            }
-
-            let Some(len) = layout::array_len(self.db, value_ty) else {
-                return Err(YulError::Unsupported(
-                    "array store requires a constant length".into(),
+            (_, YulValueClass::MemoryPtr { .. }, YulAddressSpace::Storage) => {
+                docs.extend(self.copy_word_chunks(
+                    YulAddressSpace::Storage,
+                    dst_addr,
+                    YulAddressSpace::Memory,
+                    src.value,
+                    size,
                 ));
-            };
-            let elem_ty = layout::array_elem_ty(self.db, value_ty)
-                .ok_or_else(|| YulError::Unsupported("array store requires element type".into()))?;
-            for idx in 0..len {
-                let dst_elem = self.extend_place(
-                    dst_place,
-                    Projection::Index(hir::projection::IndexSource::Constant(idx)),
-                );
-                let src_elem = self.extend_place(
-                    src_place,
-                    Projection::Index(hir::projection::IndexSource::Constant(idx)),
-                );
-                self.emit_store_from_places(docs, &dst_elem, &src_elem, elem_ty, state)?;
             }
-            return Ok(());
-        }
-
-        if value_ty.field_count(self.db) > 0 {
-            let field_tys = value_ty.field_types(self.db);
-            for (field_idx, field_ty) in field_tys.into_iter().enumerate() {
-                let dst_field = self.extend_place(dst_place, Projection::Field(field_idx));
-                let src_field = self.extend_place(src_place, Projection::Field(field_idx));
-                self.emit_store_from_places(docs, &dst_field, &src_field, field_ty, state)?;
+            (_, YulValueClass::MemoryPtr { .. }, YulAddressSpace::Transient) => {
+                docs.extend(self.copy_word_chunks(
+                    YulAddressSpace::Transient,
+                    dst_addr,
+                    YulAddressSpace::Memory,
+                    src.value,
+                    size,
+                ));
             }
-            return Ok(());
-        }
-
-        if value_ty
-            .adt_ref(self.db)
-            .is_some_and(|adt| matches!(adt, hir::analysis::ty::adt_def::AdtRef::Enum(_)))
-        {
-            return self.emit_enum_store(docs, dst_place, src_place, value_ty, state);
-        }
-
-        let addr = self.lower_place_ref(dst_place, state)?;
-        let src_space = self.lower_place_space(src_place)?;
-        let packed_src = self.is_packed_scalar_array_access(src_place, value_ty)?;
-        let rhs = if src_space == mir::ir::AddressSpaceKind::Code {
-            let src_addr = self.lower_place_address(src_place, state)?;
-            let scratch = self.emit_code_load_scratch(docs, state);
-            if packed_src {
-                docs.push(YulDoc::line(format!("datacopy({scratch}, {src_addr}, 1)")));
-                self.apply_from_word_conversion(&format!("byte(0, mload({scratch}))"), value_ty)
-            } else {
-                docs.push(YulDoc::line(format!("datacopy({scratch}, {src_addr}, 32)")));
-                self.apply_from_word_conversion(&format!("mload({scratch})"), value_ty)
+            (_, YulValueClass::StoragePtr { .. }, YulAddressSpace::Memory) => {
+                docs.extend(self.copy_word_chunks(
+                    YulAddressSpace::Memory,
+                    dst_addr,
+                    YulAddressSpace::Storage,
+                    src.value,
+                    size,
+                ));
             }
-        } else {
-            self.lower_place_load(src_place, value_ty, state)?
-        };
-        let stored = self.apply_to_word_conversion(&rhs, value_ty);
-        let space = self.lower_place_space(dst_place)?;
-        if space == mir::ir::AddressSpaceKind::Memory
-            && self.is_packed_scalar_array_access(dst_place, value_ty)?
-        {
-            docs.push(YulDoc::line(format!("mstore8({addr}, {stored})")));
-        } else {
-            docs.push(YulDoc::line(Self::yul_store(space, &addr, &stored)));
-        }
-        Ok(())
-    }
-
-    fn emit_enum_store(
-        &mut self,
-        docs: &mut Vec<YulDoc>,
-        dst_place: &mir::ir::Place<'db>,
-        src_place: &mir::ir::Place<'db>,
-        enum_ty: hir::analysis::ty::ty_def::TyId<'db>,
-        state: &mut BlockState,
-    ) -> Result<(), YulError> {
-        let src_addr = self.lower_place_ref(src_place, state)?;
-        let dst_addr = self.lower_place_ref(dst_place, state)?;
-        let src_space = self.lower_place_space(src_place)?;
-        let dst_space = self.lower_place_space(dst_place)?;
-        let discr = if src_space == mir::ir::AddressSpaceKind::Code {
-            let scratch = self.emit_code_load_scratch(docs, state);
-            docs.push(YulDoc::line(format!("datacopy({scratch}, {src_addr}, 32)")));
-            format!("mload({scratch})")
-        } else {
-            Self::yul_load(src_space, &src_addr)
-        };
-        let discr_temp = state.alloc_local();
-        docs.push(YulDoc::line(format!("let {discr_temp} := {discr}")));
-        docs.push(YulDoc::line(Self::yul_store(
-            dst_space,
-            &dst_addr,
-            &discr_temp,
-        )));
-
-        let Some(adt_def) = enum_ty.adt_def(self.db) else {
-            return Err(YulError::Unsupported("enum store requires enum adt".into()));
-        };
-        let hir::analysis::ty::adt_def::AdtRef::Enum(enm) = adt_def.adt_ref(self.db) else {
-            return Err(YulError::Unsupported("enum store requires enum adt".into()));
-        };
-
-        docs.push(YulDoc::line(format!("switch {discr_temp}")));
-        let variants = adt_def.fields(self.db);
-        for (idx, _) in variants.iter().enumerate() {
-            let enum_variant = hir::hir_def::EnumVariant::new(enm, idx);
-            let ctor =
-                hir::analysis::ty::pattern_ir::ConstructorKind::Variant(enum_variant, enum_ty);
-            let field_tys = ctor.field_types(self.db);
-            let mut case_docs = Vec::new();
-            for (field_idx, field_ty) in field_tys.iter().enumerate() {
-                let proj = Projection::VariantField {
-                    variant: enum_variant,
-                    enum_ty,
-                    field_idx,
-                };
-                let dst_field = self.extend_place(dst_place, proj.clone());
-                let src_field = self.extend_place(src_place, proj);
-                self.emit_store_from_places(
-                    &mut case_docs,
-                    &dst_field,
-                    &src_field,
-                    *field_ty,
-                    state,
-                )?;
+            (_, YulValueClass::StoragePtr { .. }, YulAddressSpace::Storage) => {
+                docs.extend(self.copy_word_chunks(
+                    YulAddressSpace::Storage,
+                    dst_addr,
+                    YulAddressSpace::Storage,
+                    src.value,
+                    size,
+                ));
             }
-            let literal = idx as u64;
-            docs.push(YulDoc::wide_block(format!("  case {literal} "), case_docs));
-        }
-        docs.push(YulDoc::wide_block("  default ", Vec::new()));
-        Ok(())
-    }
-
-    fn emit_set_discriminant_inst(
-        &mut self,
-        docs: &mut Vec<YulDoc>,
-        place: &mir::ir::Place<'db>,
-        variant: hir::hir_def::EnumVariant<'db>,
-        state: &mut BlockState,
-    ) -> Result<(), YulError> {
-        let addr = self.lower_place_ref(place, state)?;
-        let value = (variant.idx as u64).to_string();
-        let space = self.lower_place_space(place)?;
-        docs.push(YulDoc::line(Self::yul_store(space, &addr, &value)));
-        Ok(())
-    }
-
-    fn extend_place(
-        &self,
-        place: &mir::ir::Place<'db>,
-        proj: Projection<
-            hir::analysis::ty::ty_def::TyId<'db>,
-            hir::hir_def::EnumVariant<'db>,
-            ValueId,
-        >,
-    ) -> mir::ir::Place<'db> {
-        let mut path = place.projection.clone();
-        path.push(proj);
-        mir::ir::Place::new(place.base, path)
-    }
-
-    pub(super) fn yul_store(space: mir::ir::AddressSpaceKind, addr: &str, value: &str) -> String {
-        match space {
-            mir::ir::AddressSpaceKind::Memory => format!("mstore({addr}, {value})"),
-            mir::ir::AddressSpaceKind::Calldata => unreachable!("write to calldata"),
-            mir::ir::AddressSpaceKind::Storage => format!("sstore({addr}, {value})"),
-            mir::ir::AddressSpaceKind::TransientStorage => format!("tstore({addr}, {value})"),
-            mir::ir::AddressSpaceKind::Code => unreachable!("write to code space"),
-        }
-    }
-
-    pub(super) fn yul_load(space: mir::ir::AddressSpaceKind, addr: &str) -> String {
-        match space {
-            mir::ir::AddressSpaceKind::Memory => format!("mload({addr})"),
-            mir::ir::AddressSpaceKind::Calldata => format!("calldataload({addr})"),
-            mir::ir::AddressSpaceKind::Storage => format!("sload({addr})"),
-            mir::ir::AddressSpaceKind::TransientStorage => format!("tload({addr})"),
-            mir::ir::AddressSpaceKind::Code => {
-                unreachable!("cannot load pure word from code space")
+            (_, YulValueClass::CodePtr { .. }, YulAddressSpace::Storage) => {
+                docs.extend(self.copy_non_memory_source_via_scratch(
+                    &dst_class,
+                    YulAddressSpace::Storage,
+                    dst_addr,
+                    YulAddressSpace::Code,
+                    src.value,
+                    size,
+                )?);
             }
-        }
-    }
-
-    /// Emits Yul for an intrinsic instruction.
-    ///
-    /// * `docs` - Collection to append the statement to when one is emitted.
-    /// * `dest` - Optional destination local (value-returning intrinsics only).
-    /// * `op` - Intrinsic opcode.
-    /// * `args` - MIR value arguments.
-    /// * `state` - Block-local bindings used to lower the arguments.
-    ///
-    /// Returns `Ok(())` once the intrinsic (if applicable) has been appended.
-    fn emit_intrinsic_inst(
-        &mut self,
-        docs: &mut Vec<YulDoc>,
-        dest: Option<LocalId>,
-        op: IntrinsicOp,
-        args: &[ValueId],
-        state: &mut BlockState,
-    ) -> Result<(), YulError> {
-        if matches!(op, IntrinsicOp::Alloc) {
-            return self.emit_evm_alloc_intrinsic(docs, dest, args, state);
-        }
-
-        let intr = IntrinsicValue {
-            op,
-            args: args.to_vec(),
-        };
-        if let Some(dest) = dest {
-            let expr = self.lower_intrinsic_value(&intr, state)?;
-            let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
-            if declared {
-                docs.push(YulDoc::line(format!("let {yul_name} := {expr}")));
-            } else {
-                docs.push(YulDoc::line(format!("{yul_name} := {expr}")));
+            (_, YulValueClass::CodePtr { .. }, YulAddressSpace::Transient) => {
+                docs.extend(self.copy_non_memory_source_via_scratch(
+                    &dst_class,
+                    YulAddressSpace::Transient,
+                    dst_addr,
+                    YulAddressSpace::Code,
+                    src.value,
+                    size,
+                )?);
             }
-            return Ok(());
-        }
-
-        if intr.op.returns_value() {
-            let expr = self.lower_intrinsic_value(&intr, state)?;
-            docs.push(YulDoc::line(format!("pop({expr})")));
-            return Ok(());
-        }
-
-        if let Some(doc) = self.lower_intrinsic_stmt(&intr, state)? {
-            docs.push(doc);
-        }
-        Ok(())
-    }
-
-    fn emit_evm_alloc_intrinsic(
-        &mut self,
-        docs: &mut Vec<YulDoc>,
-        dest: Option<LocalId>,
-        args: &[ValueId],
-        state: &mut BlockState,
-    ) -> Result<(), YulError> {
-        debug_assert_eq!(args.len(), 1, "alloc intrinsic expects 1 argument");
-        let (ptr, declared) = match dest {
-            Some(dest) => self.resolve_local_for_write(dest, state)?,
-            None => (state.alloc_local(), true),
-        };
-
-        let size = self.lower_value(args[0], state)?;
-        // If we're assigning back into an existing local, avoid clobbering the size expression
-        // (e.g. `x = alloc(x)`).
-        let size = if !declared {
-            let size_tmp = state.alloc_local();
-            docs.push(YulDoc::line(format!("let {size_tmp} := {size}")));
-            size_tmp
-        } else {
-            size
-        };
-
-        if declared {
-            docs.push(YulDoc::line(format!("let {ptr} := mload(64)")));
-        } else {
-            docs.push(YulDoc::line(format!("{ptr} := mload(64)")));
-        }
-        docs.push(YulDoc::block(
-            format!("if iszero({ptr}) "),
-            vec![YulDoc::line(format!("{ptr} := 0x80"))],
-        ));
-        docs.push(YulDoc::line(format!("mstore(64, add({ptr}, {size}))")));
-        Ok(())
-    }
-
-    /// Converts intrinsic value-producing operations (`mload`/`sload`) into Yul.
-    ///
-    /// * `intr` - Intrinsic call metadata containing opcode and arguments.
-    /// * `state` - Read-only block state needed to lower arguments.
-    ///
-    /// Returns the Yul expression describing the intrinsic invocation.
-    pub(super) fn lower_intrinsic_value(
-        &self,
-        intr: &IntrinsicValue,
-        state: &BlockState,
-    ) -> Result<String, YulError> {
-        if !intr.op.returns_value() {
-            return Err(YulError::Unsupported(
-                "intrinsic does not yield a value".into(),
-            ));
-        }
-        if matches!(intr.op, IntrinsicOp::Alloc) {
-            return Err(YulError::Unsupported(
-                "alloc intrinsic must be emitted as a statement".into(),
-            ));
-        }
-        if matches!(
-            intr.op,
-            IntrinsicOp::CodeRegionOffset | IntrinsicOp::CodeRegionLen
-        ) {
-            return self.lower_code_region_query(intr);
-        }
-        if matches!(intr.op, IntrinsicOp::CurrentCodeRegionLen) {
-            return self.lower_current_code_region_len(intr);
-        }
-        let args = self.lower_intrinsic_args(intr, state)?;
-        Ok(format!(
-            "{}({})",
-            self.intrinsic_name(intr.op),
-            args.join(", ")
-        ))
-    }
-
-    /// Lowers `code_region_offset/len` into `dataoffset/datasize`.
-    fn lower_code_region_query(&self, intr: &IntrinsicValue) -> Result<String, YulError> {
-        debug_assert_eq!(
-            intr.args.len(),
-            1,
-            "code region intrinsic expects 1 argument"
-        );
-        let mut arg = intr.args[0];
-        while let mir::ValueOrigin::TransparentCast { value } =
-            &self.mir_func.body.value(arg).origin
-        {
-            arg = *value;
-        }
-        let symbol = match &self.mir_func.body.value(arg).origin {
-            mir::ValueOrigin::CodeRegionRef(root) => root.symbol.as_deref().ok_or_else(|| {
-                YulError::Unsupported("code region reference is missing a resolved symbol".into())
-            })?,
+            (_, YulValueClass::TransientPtr { .. }, YulAddressSpace::Memory) => {
+                docs.extend(self.copy_word_chunks(
+                    YulAddressSpace::Memory,
+                    dst_addr,
+                    YulAddressSpace::Transient,
+                    src.value,
+                    size,
+                ));
+            }
+            (_, YulValueClass::TransientPtr { .. }, YulAddressSpace::Transient) => {
+                docs.extend(self.copy_word_chunks(
+                    YulAddressSpace::Transient,
+                    dst_addr,
+                    YulAddressSpace::Transient,
+                    src.value,
+                    size,
+                ));
+            }
+            (_, YulValueClass::CalldataPtr { .. }, YulAddressSpace::Storage) => {
+                docs.extend(self.copy_non_memory_source_via_scratch(
+                    &dst_class,
+                    YulAddressSpace::Storage,
+                    dst_addr,
+                    YulAddressSpace::Calldata,
+                    src.value,
+                    size,
+                )?);
+            }
+            (_, YulValueClass::CalldataPtr { .. }, YulAddressSpace::Transient) => {
+                docs.extend(self.copy_non_memory_source_via_scratch(
+                    &dst_class,
+                    YulAddressSpace::Transient,
+                    dst_addr,
+                    YulAddressSpace::Calldata,
+                    src.value,
+                    size,
+                )?);
+            }
+            (_, YulValueClass::Word(_), YulAddressSpace::Memory) => {
+                docs.push(YulDoc::line(format!("mstore({dst_addr}, {})", src.value)));
+            }
+            (_, YulValueClass::Word(_), YulAddressSpace::Storage) => {
+                docs.push(YulDoc::line(format!("sstore({dst_addr}, {})", src.value)));
+            }
+            (_, YulValueClass::Word(_), YulAddressSpace::Transient) => {
+                docs.push(YulDoc::line(format!("tstore({dst_addr}, {})", src.value)));
+            }
+            (_, _, YulAddressSpace::Code | YulAddressSpace::Calldata) => {
+                return Err(YulError::Unsupported(format!(
+                    "cannot write aggregate values into {dst_space:?}"
+                )));
+            }
             _ => {
-                return Err(YulError::Unsupported(
-                    "code region intrinsic argument must be a code-region reference".into(),
-                ));
+                return Err(YulError::Unsupported(format!(
+                    "unsupported Yul aggregate copy from {:?} into {:?} in {dst_space:?}",
+                    src.class, dst_class
+                )));
             }
-        };
-        let label = self.code_regions.get(symbol).ok_or_else(|| {
-            YulError::Unsupported(format!("no code region available for `{symbol}`"))
-        })?;
-        let op = match intr.op {
-            IntrinsicOp::CodeRegionOffset => "dataoffset",
-            IntrinsicOp::CodeRegionLen => "datasize",
-            _ => unreachable!(),
-        };
-        Ok(format!("{op}(\"{label}\")"))
+        }
+        Ok(docs)
     }
 
-    /// Lowers `current_code_region_len` into `datasize("<current-region>")`.
-    fn lower_current_code_region_len(&self, intr: &IntrinsicValue) -> Result<String, YulError> {
-        if !intr.args.is_empty() {
-            return Err(YulError::Unsupported(
-                "current code region len intrinsic expects 0 arguments".into(),
-            ));
-        }
+    fn copy_non_memory_source_via_scratch(
+        &mut self,
+        dst_class: &YulValueClass<'db>,
+        dst_space: YulAddressSpace,
+        dst_addr: String,
+        src_space: YulAddressSpace,
+        src_addr: String,
+        size: usize,
+    ) -> Result<Vec<YulDoc>, YulError> {
+        let scratch = self.state.alloc_temp();
+        let mut docs = self.alloc_memory_slot(&scratch, dst_class)?;
+        docs.push(YulDoc::line(match src_space {
+            YulAddressSpace::Code => format!("datacopy({scratch}, {src_addr}, {size})"),
+            YulAddressSpace::Calldata => {
+                format!("calldatacopy({scratch}, {src_addr}, {size})")
+            }
+            YulAddressSpace::Memory | YulAddressSpace::Storage | YulAddressSpace::Transient => {
+                return Err(YulError::InvalidYulPackage(format!(
+                    "scratch staging is only valid for code/calldata sources, found {src_space:?}"
+                )));
+            }
+        }));
+        docs.extend(self.copy_word_chunks(
+            dst_space,
+            dst_addr,
+            YulAddressSpace::Memory,
+            scratch,
+            size,
+        ));
+        Ok(docs)
+    }
 
-        let Some(label) = self.code_regions.get(&self.mir_func.symbol_name) else {
+    fn copy_word_chunks(
+        &self,
+        dst_space: YulAddressSpace,
+        dst_addr: String,
+        src_space: YulAddressSpace,
+        src_addr: String,
+        size: usize,
+    ) -> Vec<YulDoc> {
+        let mut docs = Vec::new();
+        let words = size.div_ceil(self.index.package_layout().word_size_bytes);
+        for idx in 0..words {
+            let offset = idx * self.index.package_layout().word_size_bytes;
+            let dst = if offset == 0 {
+                dst_addr.clone()
+            } else {
+                format!("add({dst_addr}, {offset})")
+            };
+            let src = if offset == 0 {
+                src_addr.clone()
+            } else {
+                format!("add({src_addr}, {offset})")
+            };
+            let loaded = match src_space {
+                YulAddressSpace::Memory => format!("mload({src})"),
+                YulAddressSpace::Storage => format!("sload({src})"),
+                YulAddressSpace::Transient => format!("tload({src})"),
+                YulAddressSpace::Calldata => format!("calldataload({src})"),
+                YulAddressSpace::Code => format!("mload({src})"),
+            };
+            let stored = match dst_space {
+                YulAddressSpace::Memory => format!("mstore({dst}, {loaded})"),
+                YulAddressSpace::Storage => format!("sstore({dst}, {loaded})"),
+                YulAddressSpace::Transient => format!("tstore({dst}, {loaded})"),
+                YulAddressSpace::Calldata | YulAddressSpace::Code => unreachable!(),
+            };
+            docs.push(YulDoc::line(stored));
+        }
+        docs
+    }
+
+    fn write_scalar_to_addr(
+        &self,
+        space: YulAddressSpace,
+        addr: String,
+        src: RenderedValue<'db>,
+    ) -> Result<Vec<YulDoc>, YulError> {
+        let YulValueClass::Word(_) = src.class else {
             return Err(YulError::Unsupported(format!(
-                "current_code_region_len is only supported in code region root functions; `{}` is not a root",
-                self.mir_func.symbol_name
+                "scalar store requires a word source, found {:?}",
+                src.class
             )));
         };
-        Ok(format!("datasize(\"{label}\")"))
+        Ok(match space {
+            YulAddressSpace::Memory => vec![YulDoc::line(format!("mstore({addr}, {})", src.value))],
+            YulAddressSpace::Storage => {
+                vec![YulDoc::line(format!("sstore({addr}, {})", src.value))]
+            }
+            YulAddressSpace::Transient => {
+                vec![YulDoc::line(format!("tstore({addr}, {})", src.value))]
+            }
+            YulAddressSpace::Calldata | YulAddressSpace::Code => {
+                return Err(YulError::Unsupported(format!(
+                    "scalar store into {space:?} is not supported"
+                )));
+            }
+        })
     }
 
-    /// Converts intrinsic statement operations (`mstore`, …) into Yul.
-    ///
-    /// * `intr` - Intrinsic call metadata describing the opcode and args.
-    /// * `state` - Block state needed to lower the intrinsic operands.
-    ///
-    /// Returns the emitted doc when the intrinsic performs work.
-    pub(super) fn lower_intrinsic_stmt(
+    fn write_transport_word_to_addr(
         &self,
-        intr: &IntrinsicValue,
-        state: &BlockState,
-    ) -> Result<Option<YulDoc>, YulError> {
-        if intr.op.returns_value() {
-            return Ok(None);
-        }
-        let args = self.lower_intrinsic_args(intr, state)?;
-        let line = match intr.op {
-            IntrinsicOp::Mstore => {
-                format!("mstore({}, {})", args[0], args[1])
+        space: YulAddressSpace,
+        addr: String,
+        src: RenderedValue<'db>,
+    ) -> Result<Vec<YulDoc>, YulError> {
+        Ok(match space {
+            YulAddressSpace::Memory => vec![YulDoc::line(format!("mstore({addr}, {})", src.value))],
+            YulAddressSpace::Storage => {
+                vec![YulDoc::line(format!("sstore({addr}, {})", src.value))]
             }
-            IntrinsicOp::Mstore8 => {
-                format!("mstore8({}, {})", args[0], args[1])
+            YulAddressSpace::Transient => {
+                vec![YulDoc::line(format!("tstore({addr}, {})", src.value))]
             }
-            IntrinsicOp::Sstore => {
-                format!("sstore({}, {})", args[0], args[1])
+            YulAddressSpace::Calldata | YulAddressSpace::Code => {
+                return Err(YulError::Unsupported(format!(
+                    "cannot write a one-word transport into {space:?}"
+                )));
             }
-            IntrinsicOp::ReturnData => {
-                format!("return({}, {})", args[0], args[1])
-            }
-            IntrinsicOp::Revert => {
-                format!("revert({}, {})", args[0], args[1])
-            }
-            IntrinsicOp::Codecopy => {
-                format!("codecopy({}, {}, {})", args[0], args[1], args[2])
-            }
-            IntrinsicOp::Calldatacopy => {
-                format!("calldatacopy({}, {}, {})", args[0], args[1], args[2])
-            }
-            IntrinsicOp::Returndatacopy => {
-                format!("returndatacopy({}, {}, {})", args[0], args[1], args[2])
-            }
-            _ => unreachable!(),
-        };
-        Ok(Some(YulDoc::line(line)))
+        })
     }
 
-    /// Lowers all intrinsic arguments into Yul expressions.
-    ///
-    /// * `intr` - Intrinsic call describing the operands.
-    /// * `state` - Block state used to lower each operand.
-    ///
-    /// Returns the lowered argument list in call order.
-    fn lower_intrinsic_args(
-        &self,
-        intr: &IntrinsicValue,
-        state: &BlockState,
-    ) -> Result<Vec<String>, YulError> {
-        intr.args
-            .iter()
-            .map(|arg| self.lower_value(*arg, state))
-            .collect()
-    }
-
-    /// Returns the Yul builtin name for an intrinsic opcode.
-    ///
-    /// * `op` - Intrinsic opcode to translate.
-    ///
-    /// Returns the canonical Yul mnemonic corresponding to the opcode.
-    fn intrinsic_name(&self, op: IntrinsicOp) -> &'static str {
-        match op {
-            IntrinsicOp::Alloc => "alloc",
-            IntrinsicOp::Mload => "mload",
-            IntrinsicOp::Calldataload => "calldataload",
-            IntrinsicOp::Calldatacopy => "calldatacopy",
-            IntrinsicOp::Calldatasize => "calldatasize",
-            IntrinsicOp::Returndatacopy => "returndatacopy",
-            IntrinsicOp::Returndatasize => "returndatasize",
-            IntrinsicOp::Mstore => "mstore",
-            IntrinsicOp::Mstore8 => "mstore8",
-            IntrinsicOp::Sload => "sload",
-            IntrinsicOp::Sstore => "sstore",
-            IntrinsicOp::ReturnData => "return",
-            IntrinsicOp::Revert => "revert",
-            IntrinsicOp::Codecopy => "codecopy",
-            IntrinsicOp::Codesize => "codesize",
-            IntrinsicOp::CodeRegionOffset => "code_region_offset",
-            IntrinsicOp::CodeRegionLen => "code_region_len",
-            IntrinsicOp::CurrentCodeRegionLen => "current_code_region_len",
-            IntrinsicOp::Keccak => "keccak256",
-            IntrinsicOp::Addmod => "addmod",
-            IntrinsicOp::Mulmod => "mulmod",
-            IntrinsicOp::Caller => "caller",
-            IntrinsicOp::Callvalue => "callvalue",
+    pub(super) fn write_enum_variant(
+        &mut self,
+        root: &str,
+        space: YulAddressSpace,
+        layout: mir2::LayoutId<'db>,
+        variant: mir2::VariantId<'db>,
+        fields: &[crate::yul::legalize::YLocalId],
+    ) -> Result<Vec<YulDoc>, YulError> {
+        let tag_class = self.enum_tag_class(layout)?;
+        let mut docs = self.write_scalar_to_addr(
+            space,
+            root.to_string(),
+            RenderedValue {
+                setup: Vec::new(),
+                value: variant.index.to_string(),
+                class: YulValueClass::Word(tag_class),
+            },
+        )?;
+        for (idx, field) in fields.iter().enumerate() {
+            let src = self.local_value(*field)?;
+            let offset = self.variant_field_offset_bytes(
+                layout,
+                variant,
+                hir::analysis::semantic::FieldIndex(idx as u16),
+            );
+            let addr = match space {
+                YulAddressSpace::Memory | YulAddressSpace::Code | YulAddressSpace::Calldata => {
+                    format!("add({root}, {offset})")
+                }
+                YulAddressSpace::Storage | YulAddressSpace::Transient => {
+                    format!("add({root}, {})", self.storage_word_offset_bytes(offset))
+                }
+            };
+            if matches!(src.class, YulValueClass::Word(_)) {
+                docs.extend(self.write_scalar_to_addr(space, addr, src)?);
+            } else {
+                docs.extend(self.copy_into_addr(src.class.clone(), space, addr, src)?);
+            }
         }
+        Ok(docs)
     }
 }

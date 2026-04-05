@@ -17,7 +17,10 @@ use thin_vec::ThinVec;
 
 use super::effect_env as keyed_effect_env;
 use super::owner::BodyOwner;
-use super::{Callable, ConstRef, TyChecker, TypedBody, stmt::ForLoopSeq};
+use super::{
+    Callable, ConstIntrinsicKind, ConstRef, SemanticExprLowering, TyChecker, TypedBody,
+    ValuePathRef, stmt::ForLoopSeq,
+};
 use crate::analysis::ty::pattern_ir::{
     PatternAnalysisStatus, PatternStore, ValidatedPat, ValidatedPatId,
 };
@@ -35,10 +38,7 @@ use crate::analysis::{
         trait_def::TraitInstId,
         trait_resolution::{
             PredicateListId,
-            constraint::{
-                collect_constraints, collect_effect_constraints_for_func,
-                collect_func_decl_constraints,
-            },
+            constraint::{collect_constraints, collect_func_decl_constraints},
         },
         ty_contains_const_hole,
         ty_def::{InvalidCause, StringFallback, TyData, TyId, TyVarSort},
@@ -58,8 +58,9 @@ pub(crate) struct TyCheckEnv<'db> {
     expr_ty: FxHashMap<ExprId, ExprProp<'db>>,
     implicit_moves: FxHashSet<ExprId>,
     const_refs: FxHashMap<ExprId, ConstRef<'db>>,
-    code_region_refs: FxHashMap<ExprId, SemanticCodeRegionRef<'db>>,
+    value_path_refs: FxHashMap<ExprId, ValuePathRef<'db>>,
     callables: FxHashMap<ExprId, Callable<'db>>,
+    semantic_expr_lowering: FxHashMap<ExprId, SemanticExprLowering<'db>>,
 
     deferred: Vec<DeferredTask<'db>>,
 
@@ -190,8 +191,9 @@ impl<'db> TyCheckEnv<'db> {
             expr_ty: FxHashMap::default(),
             implicit_moves: FxHashSet::default(),
             const_refs: FxHashMap::default(),
-            code_region_refs: FxHashMap::default(),
+            value_path_refs: FxHashMap::default(),
             callables: FxHashMap::default(),
+            semantic_expr_lowering: FxHashMap::default(),
             deferred: Vec::new(),
             effect_env: keyed_effect_env::EffectEnv::new(),
             effect_bounds: ThinVec::new(),
@@ -304,8 +306,11 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     fn register_func_effect_bindings(&mut self, func: Func<'db>) {
-        self.effect_bounds
-            .extend(collect_effect_constraints_for_func(self.db, func));
+        self.effect_bounds.extend(
+            func.effect_requirements(self.db)
+                .iter()
+                .filter_map(|binding| binding.key.key_trait()),
+        );
         for binding in func.effect_requirements(self.db) {
             if !matches!(
                 binding.key.kind(),
@@ -400,10 +405,23 @@ impl<'db> TyCheckEnv<'db> {
         idx: usize,
     ) -> Option<TyId<'db>> {
         let requirement = self.semantic_effect_requirement(site, idx)?;
-        requirement.key.key_ty().or_else(|| {
-            self.resolved_provider_binding(site, idx)
+        let provider = self.resolved_provider_binding(site, idx);
+        match requirement.key {
+            crate::core::semantic::EffectRequirementKey::Trait(_) => provider
+                .filter(|binding| {
+                    matches!(
+                        binding.source,
+                        crate::core::semantic::ProviderSource::RootProvider { .. }
+                    )
+                })
                 .map(|binding| binding.provider_ty)
-        })
+                .or_else(|| requirement.key.binding_ty(self.db)),
+            crate::core::semantic::EffectRequirementKey::Type(_)
+            | crate::core::semantic::EffectRequirementKey::Other => requirement
+                .key
+                .binding_ty(self.db)
+                .or_else(|| provider.map(|binding| binding.provider_ty)),
+        }
     }
 
     fn register_contract_effect_bindings(&mut self, _base_assumptions: PredicateListId<'db>) {
@@ -449,9 +467,18 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     pub(super) fn expr_place(&self, expr: ExprId) -> Option<Place<'db>> {
-        Place::from_expr_in_body(self.db, self.body, expr, |expr| {
-            self.typed_expr(expr).and_then(|p| p.binding)
-        })
+        Place::from_expr_in_body(
+            self.db,
+            self.body,
+            expr,
+            |expr| self.typed_expr(expr).and_then(|p| p.binding),
+            |expr| {
+                self.typed_expr(expr).map_or_else(
+                    || TyId::invalid(self.db, InvalidCause::Other),
+                    |prop| prop.ty,
+                )
+            },
+        )
     }
 
     pub(super) fn register_callable(&mut self, expr: ExprId, callable: Callable<'db>) {
@@ -466,17 +493,9 @@ impl<'db> TyCheckEnv<'db> {
         }
     }
 
-    pub(super) fn register_code_region_ref(
-        &mut self,
-        expr: ExprId,
-        code_region_ref: SemanticCodeRegionRef<'db>,
-    ) {
-        if self
-            .code_region_refs
-            .insert(expr, code_region_ref)
-            .is_some()
-        {
-            panic!("code-region ref is already registered for the given expr")
+    pub(super) fn register_value_path_ref(&mut self, expr: ExprId, value_path: ValuePathRef<'db>) {
+        if self.value_path_refs.insert(expr, value_path).is_some() {
+            panic!("value path ref is already registered for the given expr")
         }
     }
 
@@ -488,6 +507,52 @@ impl<'db> TyCheckEnv<'db> {
 
     pub(super) fn callable_expr(&self, expr: ExprId) -> Option<&Callable<'db>> {
         self.callables.get(&expr)
+    }
+
+    pub(super) fn register_semantic_expr_lowering(
+        &mut self,
+        expr: ExprId,
+        lowering: SemanticExprLowering<'db>,
+    ) {
+        if self.semantic_expr_lowering.insert(expr, lowering).is_some() {
+            panic!("semantic expr lowering is already registered for the given expr")
+        }
+    }
+
+    pub(super) fn register_semantic_call(&mut self, expr: ExprId, callable: Callable<'db>) {
+        self.register_callable(expr, callable.clone());
+        self.register_semantic_expr_lowering(expr, SemanticExprLowering::Call { callable });
+    }
+
+    pub(super) fn register_code_region_intrinsic(
+        &mut self,
+        expr: ExprId,
+        callable: Callable<'db>,
+        region: SemanticCodeRegionRef<'db>,
+        kind: super::CodeRegionIntrinsicKind,
+    ) {
+        self.register_callable(expr, callable.clone());
+        self.register_semantic_expr_lowering(
+            expr,
+            SemanticExprLowering::CodeRegionIntrinsic {
+                callable,
+                region,
+                kind,
+            },
+        );
+    }
+
+    pub(super) fn register_const_intrinsic(
+        &mut self,
+        expr: ExprId,
+        callable: Callable<'db>,
+        kind: ConstIntrinsicKind,
+    ) {
+        self.register_callable(expr, callable.clone());
+        self.register_semantic_expr_lowering(
+            expr,
+            SemanticExprLowering::ConstIntrinsic { callable, kind },
+        );
     }
 
     pub(super) fn pattern_store(&self) -> &PatternStore<'db> {
@@ -821,10 +886,10 @@ impl<'db> TyCheckEnv<'db> {
         let assumptions = self.assumptions.fold_with(self.db, &mut prober);
         let pattern_store = self.pattern_store.fold_with(self.db, &mut prober);
 
-        let callables = self
-            .callables
+        let semantic_expr_lowering = self
+            .semantic_expr_lowering
             .into_iter()
-            .map(|(expr, callable)| (expr, callable.fold_with(self.db, &mut prober)))
+            .map(|(expr, lowering)| (expr, lowering.fold_with(self.db, &mut prober)))
             .collect();
 
         let for_loop_seq = self
@@ -845,8 +910,8 @@ impl<'db> TyCheckEnv<'db> {
             expr_ty: self.expr_ty,
             implicit_moves: self.implicit_moves,
             const_refs: self.const_refs,
-            code_region_refs: self.code_region_refs,
-            callables,
+            value_path_refs: self.value_path_refs,
+            semantic_expr_lowering,
             call_effect_args: self.call_effect_args,
             return_borrow_provider: None,
             param_bindings: self.param_bindings,
@@ -1304,11 +1369,46 @@ impl<'db> LocalBinding<'db> {
     }
 
     /// Get the definition span for this binding given just the body.
-    pub(super) fn def_span_in_body(&self, body: Body<'db>) -> DynLazySpan<'db> {
+    pub(crate) fn def_span_in_body(&self, body: Body<'db>) -> DynLazySpan<'db> {
         match self {
             LocalBinding::Local { pat, .. } => pat.span(body).into(),
             LocalBinding::Param { site, idx, .. } => param_span(*site, *idx),
             LocalBinding::EffectParam { site, idx, .. } => effect_param_span(*site, *idx),
+        }
+    }
+
+    pub(crate) fn pretty_name_in_body(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+    ) -> String {
+        match self {
+            Self::Local { pat, .. } => {
+                let Partial::Present(Pat::Path(Partial::Present(path), ..)) = pat.data(db, body)
+                else {
+                    return "_".to_string();
+                };
+                path.ident(db)
+                    .to_opt()
+                    .map(|ident| ident.data(db).to_string())
+                    .unwrap_or_else(|| "_".to_string())
+            }
+            Self::Param {
+                site: ParamSite::EffectField(effect_site),
+                idx,
+                ..
+            } => effect_param_name(db, *effect_site, *idx)
+                .or_else(|| param_name(db, ParamSite::EffectField(*effect_site), *idx))
+                .map(|ident| ident.data(db).to_string())
+                .unwrap_or_else(|| format!("%param{idx}")),
+            Self::Param { site, idx, .. } => param_name(db, *site, *idx)
+                .map(|ident| ident.data(db).to_string())
+                .unwrap_or_else(|| format!("%param{idx}")),
+            Self::EffectParam { key_path, idx, .. } => key_path
+                .ident(db)
+                .to_opt()
+                .map(|ident| ident.data(db).to_string())
+                .unwrap_or_else(|| format!("%effect{idx}")),
         }
     }
 }

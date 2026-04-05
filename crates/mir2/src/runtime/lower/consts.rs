@@ -7,10 +7,14 @@ use crate::{
     runtime::{ConstNode, ConstRegionId, ConstScalar, LayoutId, ScalarRepr},
 };
 
-use super::{class::scalar_class_for_ty, layout::layout_for_ty};
+use super::{
+    class::scalar_class_for_ty_in_env,
+    layout::{RuntimeTypeEnv, layout_for_ty_in_env},
+};
 
 pub(super) fn const_scalar_from_value<'db>(
     db: &'db dyn MirDb,
+    env: RuntimeTypeEnv<'db>,
     value: SemConstId<'db>,
 ) -> Option<ConstScalar> {
     let ty = sem_const_ty(db, value);
@@ -24,7 +28,7 @@ pub(super) fn const_scalar_from_value<'db>(
         SemConstValue::Scalar { value, .. } => match value {
             SemConstScalar::Bool(value) => Some(ConstScalar::Bool(value)),
             SemConstScalar::Int { value } => {
-                let scalar = scalar_class_for_ty(db, ty)?;
+                let scalar = scalar_class_for_ty_in_env(db, env, ty)?;
                 match scalar.repr {
                     ScalarRepr::Bool => None,
                     ScalarRepr::Int { bits, signed } => Some(ConstScalar::Int {
@@ -39,10 +43,12 @@ pub(super) fn const_scalar_from_value<'db>(
                     }),
                 }
             }
-            SemConstScalar::Bytes(bytes) => scalar_class_for_ty(db, ty).and_then(|scalar| {
-                matches!(scalar.repr, ScalarRepr::FixedBytes { .. })
-                    .then(|| ConstScalar::FixedBytes(bytes.clone()))
-            }),
+            SemConstScalar::Bytes(bytes) => {
+                scalar_class_for_ty_in_env(db, env, ty).and_then(|scalar| {
+                    matches!(scalar.repr, ScalarRepr::FixedBytes { .. })
+                        .then(|| ConstScalar::FixedBytes(bytes.clone()))
+                })
+            }
         },
     }
 }
@@ -56,15 +62,20 @@ fn encode_int_words(value: &num_bigint::BigInt, bits: u16, signed: bool) -> Vec<
 
 pub(super) fn lower_const_region<'db>(
     db: &'db dyn MirDb,
+    env: RuntimeTypeEnv<'db>,
     value: SemConstId<'db>,
 ) -> Option<ConstRegionId<'db>> {
-    let layout = layout_for_ty(db, sem_const_ty(db, value));
-    let value = lower_const_node(db, value)?;
+    let layout = layout_for_ty_in_env(db, env, sem_const_ty(db, value));
+    let value = lower_const_node(db, env, value)?;
     Some(ConstRegionId::new(db, layout, value))
 }
 
-fn lower_const_node<'db>(db: &'db dyn MirDb, value: SemConstId<'db>) -> Option<ConstNode<'db>> {
-    if let Some(scalar) = const_scalar_from_value(db, value) {
+fn lower_const_node<'db>(
+    db: &'db dyn MirDb,
+    env: RuntimeTypeEnv<'db>,
+    value: SemConstId<'db>,
+) -> Option<ConstNode<'db>> {
+    if let Some(scalar) = const_scalar_from_value(db, env, value) {
         return Some(ConstNode::Scalar(scalar));
     }
     let ty = sem_const_ty(db, value);
@@ -75,7 +86,7 @@ fn lower_const_node<'db>(db: &'db dyn MirDb, value: SemConstId<'db>) -> Option<C
         && ty.is_array(db)
     {
         return Some(ConstNode::Aggregate {
-            layout: layout_for_ty(db, ty),
+            layout: layout_for_ty_in_env(db, env, ty),
             fields: bytes
                 .iter()
                 .map(|byte| {
@@ -95,25 +106,25 @@ fn lower_const_node<'db>(db: &'db dyn MirDb, value: SemConstId<'db>) -> Option<C
         SemConstValue::Tuple { elems, .. }
         | SemConstValue::Struct { fields: elems, .. }
         | SemConstValue::Array { elems, .. } => Some(ConstNode::Aggregate {
-            layout: layout_for_ty(db, ty),
+            layout: layout_for_ty_in_env(db, env, ty),
             fields: elems
                 .iter()
                 .copied()
-                .map(|value| lower_const_node(db, value))
+                .map(|value| lower_const_node(db, env, value))
                 .collect::<Option<Vec<_>>>()?
                 .into_boxed_slice(),
         }),
         SemConstValue::Enum {
             variant, fields, ..
         } => {
-            let layout = layout_for_ty(db, ty);
+            let layout = layout_for_ty_in_env(db, env, ty);
             let mut nodes = Vec::with_capacity(fields.len() + 1);
             nodes.push(ConstNode::Scalar(enum_tag_scalar(db, layout, variant)?));
             nodes.extend(
                 fields
                     .iter()
                     .copied()
-                    .map(|field| lower_const_node(db, field))
+                    .map(|field| lower_const_node(db, env, field))
                     .collect::<Option<Vec<_>>>()?,
             );
             Some(ConstNode::Aggregate {

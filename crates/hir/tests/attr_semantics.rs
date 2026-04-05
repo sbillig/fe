@@ -2,8 +2,8 @@ use fe_hir::test_db::HirAnalysisTestDb;
 use fe_hir::{
     analysis::{
         semantic::{
-            GenericSubst, ImplEnv, SExpr, SStmtKind, SemanticCodeRegionRef, SemanticInstanceKey,
-            get_or_build_semantic_instance,
+            SExpr, SStmtKind, SemanticCodeRegionRef, get_or_build_semantic_instance,
+            identity_semantic_instance_key,
         },
         ty::ty_check::{BodyOwner, check_func_body},
     },
@@ -323,12 +323,7 @@ fn runtime() uses (evm: mut Evm) {}"#,
 
     let instance = get_or_build_semantic_instance(
         &db,
-        SemanticInstanceKey::new(
-            &db,
-            BodyOwner::Func(init),
-            GenericSubst::empty(&db),
-            ImplEnv::empty(&db, init.scope()),
-        ),
+        identity_semantic_instance_key(&db, BodyOwner::Func(init)),
     );
     let body = instance.body(&db);
     let exprs = body
@@ -406,4 +401,39 @@ fn runtime() uses (evm: mut Evm) {}"#,
         region,
         SemanticCodeRegionRef::ManualContractRoot { func } if *func == runtime
     )));
+}
+
+#[test]
+fn array_repeat_lowering_preserves_array_arity() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "array_repeat_lowering_preserves_array_arity.fe".into(),
+        r#"fn repeat(x: u256) -> [u256; 4] {
+    return [x; 4]
+}"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let [func] = top_mod.all_funcs(&db).as_slice() else {
+        panic!("expected exactly one function");
+    };
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
+    );
+    let body = instance.body(&db);
+    let array_aggregate_arity = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.stmts.iter())
+        .find_map(|stmt| match &stmt.kind {
+            SStmtKind::Assign {
+                expr: SExpr::AggregateMake { ty, fields },
+                ..
+            } if ty.is_array(&db) => Some(fields.len()),
+            SStmtKind::Assign { .. } | SStmtKind::Store { .. } => None,
+        })
+        .expect("expected an array aggregate in semantic lowering");
+    assert_eq!(array_aggregate_arity, 4);
 }

@@ -11,7 +11,7 @@ use crate::{
         },
     },
     hir_def::ExprId,
-    semantic::{EffectEnvView, ProviderBinding},
+    semantic::EffectEnvView,
 };
 
 use super::body::SmirLowerCtxt;
@@ -82,6 +82,42 @@ impl<'db> SmirLowerCtxt<'db> {
         }
         body_value
     }
+
+    pub(super) fn lower_seq_effect_args(
+        &mut self,
+        args: &[ResolvedEffectArg<'db>],
+    ) -> Box<[SEffectArg<'db>]> {
+        args.iter()
+            .map(|arg| SEffectArg {
+                arg: match &arg.arg {
+                    EffectArg::Place(place) => {
+                        SEffectArgValue::Place(self.lower_place_data(place.clone()))
+                    }
+                    EffectArg::Value(expr) => SEffectArgValue::Value(
+                        self.with_binding_values
+                            .get(expr)
+                            .copied()
+                            .unwrap_or_else(|| self.lower_expr(*expr)),
+                    ),
+                    EffectArg::Binding(binding) => {
+                        let local = self.alloc_binding_local(*binding);
+                        if matches!(arg.pass_mode, EffectPassMode::ByPlace) {
+                            SEffectArgValue::Place(SPlace {
+                                local,
+                                path: Box::default(),
+                            })
+                        } else {
+                            SEffectArgValue::Value(local)
+                        }
+                    }
+                    EffectArg::Unknown => SEffectArgValue::Value(self.unit_value()),
+                },
+                pass_mode: arg.pass_mode,
+                target_ty: arg.instantiated_target_ty,
+                provider: arg.provider,
+            })
+            .collect()
+    }
 }
 
 pub fn owner_effect_bindings<'db>(
@@ -104,32 +140,6 @@ pub fn owner_effect_bindings<'db>(
             is_mut: binding.is_mut,
         })
         .collect()
-}
-
-pub fn resolved_provider_binding_for_owner_effect<'db>(
-    db: &'db dyn HirAnalysisDb,
-    owner: BodyOwner<'db>,
-    binding: LocalBinding<'db>,
-) -> Option<ProviderBinding<'db>> {
-    let binding_idx = match binding {
-        LocalBinding::EffectParam { idx, .. }
-        | LocalBinding::Param {
-            site: crate::analysis::ty::ty_check::ParamSite::EffectField(_),
-            idx,
-            ..
-        } => idx,
-        LocalBinding::Local { .. } | LocalBinding::Param { .. } => return None,
-    };
-    let site = effect_param_site(owner)?;
-    let view = EffectEnvView::new(site);
-    let provider_idx = view
-        .resolutions(db)
-        .into_iter()
-        .find(|resolution| resolution.requirement_idx as usize == binding_idx)?
-        .provider_idx;
-    view.providers(db)
-        .into_iter()
-        .find(|provider| provider.provider_idx == provider_idx)
 }
 
 pub fn effect_param_site<'db>(owner: BodyOwner<'db>) -> Option<EffectParamSite<'db>> {
@@ -179,40 +189,4 @@ pub fn same_owner_effect_binding<'db>(lhs: LocalBinding<'db>, rhs: LocalBinding<
         ) => lhs_idx == rhs_idx && lhs_ty == rhs_ty,
         _ => lhs == rhs,
     }
-}
-
-pub(super) fn lower_seq_effect_args<'db>(
-    cx: &mut SmirLowerCtxt<'db>,
-    args: &[ResolvedEffectArg<'db>],
-) -> Box<[SEffectArg<'db>]> {
-    args.iter()
-        .map(|arg| SEffectArg {
-            arg: match &arg.arg {
-                EffectArg::Place(place) => {
-                    SEffectArgValue::Place(cx.lower_place_data(place.clone()))
-                }
-                EffectArg::Value(expr) => SEffectArgValue::Value(
-                    cx.with_binding_values
-                        .get(expr)
-                        .copied()
-                        .unwrap_or_else(|| cx.lower_expr(*expr)),
-                ),
-                EffectArg::Binding(binding) => {
-                    let local = cx.alloc_binding_local(*binding);
-                    if matches!(arg.pass_mode, EffectPassMode::ByPlace) {
-                        SEffectArgValue::Place(SPlace {
-                            local,
-                            path: Box::default(),
-                        })
-                    } else {
-                        SEffectArgValue::Value(local)
-                    }
-                }
-                EffectArg::Unknown => SEffectArgValue::Value(cx.unit_value()),
-            },
-            pass_mode: arg.pass_mode,
-            target_ty: arg.instantiated_target_ty,
-            provider: arg.provider,
-        })
-        .collect()
 }

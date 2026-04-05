@@ -15,7 +15,7 @@ use crate::workspace_ingot::{
 use camino::Utf8PathBuf;
 use codegen::{
     ExpectedRevert, OptLevel, SonatinaTestOptions, TestMetadata, TestModuleOutput,
-    emit_test_module_sonatina, emit_test_module_yul,
+    emit_test_ingot_sonatina, emit_test_ingot_yul, emit_test_module_sonatina, emit_test_module_yul,
 };
 use colored::Colorize;
 use common::{
@@ -2144,9 +2144,9 @@ fn prepare_tests_ingot(
     }
 
     maybe_write_suite_ir(db, root_mod, backend, opt_level, report);
-    prepare_discovered_tests(
+    prepare_ingot_discovered_tests(
         db,
-        root_mod,
+        ingot,
         suite,
         suite_key,
         filter,
@@ -2194,8 +2194,59 @@ fn prepare_discovered_tests(
         }
     };
 
-    let mut results = Vec::new();
+    suite_preparation_from_discovered(discovered, suite, suite_key, filter, debug, report, output)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_ingot_discovered_tests(
+    db: &DriverDataBase,
+    ingot: Ingot<'_>,
+    suite: &str,
+    suite_key: &str,
+    filter: Option<&str>,
+    backend: &str,
+    opt_level: OptLevel,
+    debug: &TestDebugOptions,
+    sonatina_options: SonatinaTestOptions,
+    report: Option<&ReportContext>,
+    output: &mut String,
+) -> SuitePreparation {
+    let discovered = match discover_ingot_tests(
+        db,
+        ingot,
+        suite,
+        filter,
+        backend,
+        opt_level,
+        sonatina_options,
+        report,
+        output,
+    ) {
+        Ok(discovered) => discovered,
+        Err(results) => {
+            return SuitePreparation {
+                results,
+                single_jobs: Vec::new(),
+                gas_comparison_cases: None,
+            };
+        }
+    };
+
+    suite_preparation_from_discovered(discovered, suite, suite_key, filter, debug, report, output)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn suite_preparation_from_discovered(
+    discovered: DiscoverResult,
+    suite: &str,
+    suite_key: &str,
+    filter: Option<&str>,
+    debug: &TestDebugOptions,
+    report: Option<&ReportContext>,
+    output: &mut String,
+) -> SuitePreparation {
     let report_root = report.map(|ctx| ctx.root_dir.clone());
+    let mut results = Vec::new();
     let mut single_jobs = Vec::new();
     for case in discovered.tests {
         if !test_case_matches_filter(&case, filter) {
@@ -2328,6 +2379,70 @@ fn discover_tests(
         gas::collect_gas_comparison_cases(
             db,
             top_mod,
+            suite,
+            filter,
+            ctx,
+            backend.as_str(),
+            opt_level,
+            &module_output.tests,
+        )
+    });
+
+    Ok(DiscoverResult {
+        tests: module_output.tests,
+        gas_comparison_cases,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn discover_ingot_tests(
+    db: &DriverDataBase,
+    ingot: Ingot<'_>,
+    suite: &str,
+    filter: Option<&str>,
+    backend: &str,
+    opt_level: OptLevel,
+    sonatina_options: SonatinaTestOptions,
+    report: Option<&ReportContext>,
+    output: &mut String,
+) -> Result<DiscoverResult, Vec<TestResult>> {
+    let backend = backend.to_lowercase();
+    let emit_result = match backend.as_str() {
+        "yul" => emit_with_catch_unwind(
+            || emit_test_ingot_yul(db, ingot, filter),
+            "Yul",
+            suite,
+            report,
+            output,
+        ),
+        "sonatina" => emit_with_catch_unwind(
+            || emit_test_ingot_sonatina(db, ingot, opt_level, sonatina_options, filter),
+            "Sonatina",
+            suite,
+            report,
+            output,
+        ),
+        other => {
+            return Err(suite_error_result(
+                suite,
+                "setup",
+                format!("unknown backend `{other}` (expected 'yul' or 'sonatina')"),
+            ));
+        }
+    };
+    let module_output = emit_result?;
+
+    if module_output.tests.is_empty() {
+        return Ok(DiscoverResult {
+            tests: Vec::new(),
+            gas_comparison_cases: None,
+        });
+    }
+
+    let gas_comparison_cases = report.map(|ctx| {
+        gas::collect_ingot_gas_comparison_cases(
+            db,
+            ingot,
             suite,
             filter,
             ctx,

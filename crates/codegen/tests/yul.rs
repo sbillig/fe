@@ -25,10 +25,7 @@ fn yul_snap(fixture: Fixture<&str>) {
         .expect("file should be loaded");
     let top_mod = db.top_mod(file);
 
-    let output = match emit_module_yul(&db, top_mod) {
-        Ok(yul) => yul,
-        Err(fe_codegen::EmitModuleError::Unsupported(_)) => return,
-    };
+    let output = emit_module_yul(&db, top_mod).expect("Yul emission should succeed");
 
     snap_test!(output, fixture.path());
 }

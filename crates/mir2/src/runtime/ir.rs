@@ -985,6 +985,7 @@ pub enum RTerminator<'db> {
 }
 
 pub trait RuntimeProgramView<'db> {
+    fn signature(&self, id: RuntimeInstance<'db>) -> RuntimeSignature<'db>;
     fn body(&self, id: RuntimeInstance<'db>) -> RuntimeBody<'db>;
     fn layout(&self, id: LayoutId<'db>) -> Layout<'db>;
     fn const_region(&self, id: ConstRegionId<'db>) -> ConstRegion<'db>;
@@ -992,6 +993,10 @@ pub trait RuntimeProgramView<'db> {
 }
 
 impl<'db> RuntimeProgramView<'db> for &'db dyn MirDb {
+    fn signature(&self, id: RuntimeInstance<'db>) -> RuntimeSignature<'db> {
+        id.signature(*self)
+    }
+
     fn body(&self, id: RuntimeInstance<'db>) -> RuntimeBody<'db> {
         id.body(*self).clone()
     }

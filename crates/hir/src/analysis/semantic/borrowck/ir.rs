@@ -59,7 +59,7 @@ pub struct NSLocal<'db> {
 pub enum NormalizedBindingLowering<'db> {
     Erased,
     ValueLocal {
-        root: NBorrowRootId,
+        place: NSPlace<'db>,
     },
     PlaceBoundValue {
         root: NBorrowRootId,
@@ -95,6 +95,33 @@ pub struct NSPlace<'db> {
 pub enum NSPlaceRoot {
     Root(NBorrowRootId),
     CarrierDerefLocal(SLocalId),
+}
+
+impl NSPlaceRoot {
+    pub fn borrow_root(&self) -> Option<NBorrowRootId> {
+        match self {
+            Self::Root(root) => Some(*root),
+            Self::CarrierDerefLocal(_) => None,
+        }
+    }
+}
+
+impl<'db> NormalizedBindingLowering<'db> {
+    pub fn root(&self) -> Option<NBorrowRootId> {
+        match self {
+            Self::Erased => None,
+            Self::ValueLocal { place } => place.root.borrow_root(),
+            Self::PlaceBoundValue { root, .. } => Some(*root),
+            Self::CarrierLocal { root, .. } => *root,
+        }
+    }
+
+    pub fn place(&self) -> Option<&NSPlace<'db>> {
+        match self {
+            Self::ValueLocal { place } => Some(place),
+            Self::Erased | Self::PlaceBoundValue { .. } | Self::CarrierLocal { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -223,6 +250,15 @@ pub enum SemanticNormalizeError<'db> {
     MissingBorrowRoot {
         local: SLocalId,
     },
+    LocalProvenanceCycle {
+        owner: crate::analysis::semantic::SemanticInstance<'db>,
+        local: SLocalId,
+    },
+    NonPlaceDerivedValue {
+        owner: crate::analysis::semantic::SemanticInstance<'db>,
+        local: SLocalId,
+        base: SLocalId,
+    },
     IllegalCarrierPlace {
         local: SLocalId,
         origin: SemOrigin<'db>,
@@ -256,10 +292,35 @@ pub struct BorrowDiagnosticId<'db> {
     pub diag: CompleteDiagnostic,
 }
 
+#[salsa::interned]
+#[derive(Debug)]
+pub struct NormalizedSemanticBodyId<'db> {
+    #[return_ref]
+    pub body: NormalizedSemanticBody<'db>,
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct SemanticNormalizeErrorId<'db> {
+    pub err: SemanticNormalizeError<'db>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
 pub enum SemanticBorrowSummaryResult<'db> {
     Ok(Option<BorrowSummaryId<'db>>),
     Err(BorrowDiagnosticId<'db>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum SemanticBorrowCheckResult<'db> {
+    Ok,
+    Err(BorrowDiagnosticId<'db>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum SemanticNormalizeResult<'db> {
+    Ok(NormalizedSemanticBodyId<'db>),
+    Err(SemanticNormalizeErrorId<'db>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

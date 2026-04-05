@@ -1,23 +1,44 @@
-use hir::analysis::ty::{
-    const_ty::{ConstTyData, EvaluatedConstTy},
-    normalize::normalize_ty,
-    trait_resolution::PredicateListId,
-    ty_def::{TyData, TyId},
+use hir::{
+    analysis::{
+        semantic::FieldIndex,
+        ty::{
+            normalize::normalize_ty,
+            trait_resolution::PredicateListId,
+            ty_def::{TyData, TyId},
+        },
+    },
+    projection::IndexSource,
 };
-use num_traits::ToPrimitive;
 
 use crate::{
     db::MirDb,
-    runtime::{ArrayLayout, EnumLayoutKey, EnumVariantLayout, LayoutId, LayoutKey, StructLayout},
+    runtime::{
+        ArrayLayout, EnumLayoutKey, EnumVariantLayout, Layout, LayoutId, LayoutKey, PlaceElem,
+        RuntimeClass, StructLayout,
+    },
 };
 
 use super::class::stored_class_for_ty_in_context;
 
-pub(crate) fn runtime_repr_ty<'db>(db: &'db dyn MirDb, mut ty: TyId<'db>) -> TyId<'db> {
-    while let Some(inner) = ty.as_view(db) {
-        ty = inner;
+#[derive(Clone, Copy)]
+pub(crate) struct RuntimeTypeEnv<'db> {
+    pub(crate) scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    pub(crate) assumptions: PredicateListId<'db>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AggregateCtorElem<'db> {
+    pub(crate) elem: PlaceElem,
+    pub(crate) class: RuntimeClass<'db>,
+}
+
+impl<'db> RuntimeTypeEnv<'db> {
+    pub(crate) fn new(
+        scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+        assumptions: PredicateListId<'db>,
+    ) -> Self {
+        Self { scope, assumptions }
     }
-    ty
 }
 
 pub(crate) fn runtime_repr_ty_in_context<'db>(
@@ -61,7 +82,7 @@ pub(crate) fn is_zero_sized_in_context<'db>(
             let Some(elem) = args.first().copied() else {
                 return false;
             };
-            array_len(db, ty)
+            ty.array_len(db)
                 .is_some_and(|len| len == 0 || inner(db, elem, scope, assumptions, visiting))
         } else if ty.is_tuple(db) || ty.is_struct(db) {
             ty.field_types(db)
@@ -83,8 +104,12 @@ pub(crate) fn is_zero_sized_in_context<'db>(
     )
 }
 
-pub(crate) fn layout_for_ty<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> LayoutId<'db> {
-    layout_for_ty_in_context(db, ty, ty.as_scope(db), PredicateListId::empty_list(db))
+pub(crate) fn layout_for_ty_in_env<'db>(
+    db: &'db dyn MirDb,
+    env: RuntimeTypeEnv<'db>,
+    ty: TyId<'db>,
+) -> LayoutId<'db> {
+    layout_for_ty_in_context(db, ty, env.scope, env.assumptions)
 }
 
 pub(crate) fn layout_for_ty_in_context<'db>(
@@ -108,7 +133,7 @@ pub(crate) fn layout_for_ty_in_context<'db>(
             LayoutKey::Array(ArrayLayout {
                 source_ty: ty,
                 elem: stored_class_for_ty_in_context(db, elem, scope, assumptions),
-                len: array_len(db, ty).expect("array length"),
+                len: ty.array_len(db).expect("array length") as u64,
             }),
         );
     }
@@ -123,6 +148,44 @@ pub(crate) fn layout_for_ty_in_context<'db>(
                 .collect(),
         }),
     )
+}
+
+pub(crate) fn aggregate_ctor_elems_for_layout<'db>(
+    db: &'db dyn MirDb,
+    layout: LayoutId<'db>,
+    arity: usize,
+) -> Box<[AggregateCtorElem<'db>]> {
+    match layout.data(db) {
+        Layout::Struct(layout) => {
+            assert_eq!(
+                layout.fields.len(),
+                arity,
+                "aggregate constructor arity mismatch for struct layout {layout:?}"
+            );
+            layout
+                .fields
+                .iter()
+                .enumerate()
+                .map(|(idx, class)| AggregateCtorElem {
+                    elem: PlaceElem::Field(FieldIndex(idx as u16)),
+                    class: class.clone(),
+                })
+                .collect()
+        }
+        Layout::Array(layout) => {
+            assert_eq!(
+                layout.len as usize, arity,
+                "aggregate constructor arity mismatch for array layout {layout:?}"
+            );
+            (0..arity)
+                .map(|idx| AggregateCtorElem {
+                    elem: PlaceElem::Index(IndexSource::Constant(idx)),
+                    class: layout.elem.clone(),
+                })
+                .collect()
+        }
+        Layout::Enum(_) => panic!("AggregateMake must not lower enum layouts"),
+    }
 }
 
 fn enum_layout_key<'db>(
@@ -156,17 +219,5 @@ fn enum_layout_key<'db>(
                     .collect(),
             })
             .collect(),
-    }
-}
-
-fn array_len<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> Option<u64> {
-    let (_, args) = ty.decompose_ty_app(db);
-    let len_ty = *args.get(1)?;
-    let TyData::ConstTy(const_ty) = len_ty.data(db) else {
-        return None;
-    };
-    match const_ty.data(db) {
-        ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) => int_id.data(db).to_u64(),
-        _ => None,
     }
 }

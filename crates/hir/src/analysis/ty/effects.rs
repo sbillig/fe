@@ -11,7 +11,9 @@ use crate::analysis::ty::trait_def::TraitInstId;
 use crate::analysis::ty::trait_resolution::PredicateListId;
 use crate::analysis::ty::trait_resolution::TraitSolveCx;
 use crate::analysis::ty::ty_def::{InvalidCause, TyBase, TyData, TyId};
-use crate::analysis::ty::ty_lower::{collect_generic_params, func_implicit_param_plan};
+use crate::analysis::ty::ty_lower::{
+    ConstDefaultCompletion, collect_generic_params, func_implicit_param_plan,
+};
 use crate::core::hir_def::GenericParamOwner;
 use crate::hir_def::scope_graph::ScopeId;
 use crate::hir_def::{CallableDef, Func, PathId};
@@ -47,6 +49,22 @@ pub(crate) enum ResolvedEffectKey<'db> {
     Other,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EffectKeyCanonMode {
+    Stored,
+    Solver,
+    Compare,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CanonicalEffectIdentity<'db> {
+    pub key_kind: EffectKeyKind,
+    pub key_ty: Option<TyId<'db>>,
+    pub key_trait: Option<TraitInstId<'db>>,
+    pub key_path: PathId<'db>,
+    pub is_mut: bool,
+}
+
 impl<'db> ResolvedEffectKey<'db> {
     pub(crate) fn into_parts(self) -> (EffectKeyKind, Option<TyId<'db>>, Option<TraitInstId<'db>>) {
         match self {
@@ -54,6 +72,148 @@ impl<'db> ResolvedEffectKey<'db> {
             Self::Trait(trait_inst) => (EffectKeyKind::Trait, None, Some(trait_inst)),
             Self::Other => (EffectKeyKind::Other, None, None),
         }
+    }
+}
+
+fn complete_effect_identity_default_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> TyId<'db> {
+    let (base, args) = ty.decompose_ty_app(db);
+    let TyData::TyBase(base_ty) = base.data(db) else {
+        return ty;
+    };
+    let (param_set, trait_self) = match base_ty {
+        TyBase::Adt(adt) => match adt.as_generic_param_owner(db) {
+            Some(owner) => (collect_generic_params(db, owner), None),
+            None => return ty,
+        },
+        TyBase::Func(func) => match *func {
+            CallableDef::Func(def) => (collect_generic_params(db, def.into()), None),
+            CallableDef::VariantCtor(_) => return ty,
+        },
+        _ => return ty,
+    };
+    let explicit_offset = param_set.offset_to_explicit_params_position(db);
+    if args.len() <= explicit_offset {
+        return ty;
+    }
+    let completed_args = param_set.complete_explicit_args(
+        db,
+        trait_self,
+        &args[explicit_offset..],
+        assumptions,
+        ConstDefaultCompletion::evaluate(None),
+    );
+    if completed_args.len() == args.len().saturating_sub(explicit_offset) {
+        return ty;
+    }
+    let mut full_args = args[..explicit_offset].to_vec();
+    full_args.extend(completed_args);
+    TyId::foldl(db, base, &full_args)
+}
+
+pub(crate) fn canonicalize_effect_type_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    assoc_ty_subst: Option<TraitInstId<'db>>,
+    mode: EffectKeyCanonMode,
+) -> TyId<'db> {
+    match mode {
+        EffectKeyCanonMode::Stored => {
+            if let Some(inst) = assoc_ty_subst {
+                let mut substituter = AssocTySubst::new(inst);
+                ty.fold_with(db, &mut substituter)
+            } else {
+                ty
+            }
+        }
+        EffectKeyCanonMode::Solver | EffectKeyCanonMode::Compare => {
+            let ty = complete_effect_identity_default_args(db, ty, assumptions);
+            normalize_effect_identity_ty(db, ty, scope, assumptions, assoc_ty_subst)
+        }
+    }
+}
+
+pub(crate) fn canonicalize_effect_trait_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_key: TraitInstId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    assoc_ty_subst: Option<TraitInstId<'db>>,
+    mode: EffectKeyCanonMode,
+) -> TraitInstId<'db> {
+    match mode {
+        EffectKeyCanonMode::Stored => {
+            if let Some(inst) = assoc_ty_subst {
+                let mut substituter = AssocTySubst::new(inst);
+                trait_key.fold_with(db, &mut substituter)
+            } else {
+                trait_key
+            }
+        }
+        EffectKeyCanonMode::Solver | EffectKeyCanonMode::Compare => {
+            let original_self = trait_key.self_ty(db);
+            let preserve_self =
+                assoc_ty_subst.is_some_and(|inst| inst.def(db) == trait_key.def(db));
+            let trait_key = if let Some(inst) = assoc_ty_subst {
+                let mut substituter = AssocTySubst::new(inst);
+                trait_key.fold_with(db, &mut substituter)
+            } else {
+                trait_key
+            };
+            let mut args: Vec<TyId<'db>> = trait_key
+                .args(db)
+                .iter()
+                .copied()
+                .map(|ty| canonicalize_effect_type_key(db, ty, scope, assumptions, None, mode))
+                .collect();
+            if preserve_self && let Some(self_ty) = args.first_mut() {
+                *self_ty =
+                    canonicalize_effect_type_key(db, original_self, scope, assumptions, None, mode);
+            }
+            let mut assoc_type_bindings: Vec<_> = trait_key
+                .assoc_type_bindings(db)
+                .iter()
+                .map(|(name, &ty)| {
+                    (
+                        *name,
+                        canonicalize_effect_type_key(db, ty, scope, assumptions, None, mode),
+                    )
+                })
+                .collect();
+            assoc_type_bindings.sort_by(|(lhs, _), (rhs, _)| lhs.data(db).cmp(rhs.data(db)));
+            TraitInstId::new(
+                db,
+                trait_key.def(db),
+                args,
+                assoc_type_bindings.into_iter().collect::<IndexMap<_, _>>(),
+            )
+        }
+    }
+}
+
+pub(crate) fn canonical_effect_identity_for_binding<'db>(
+    db: &'db dyn HirAnalysisDb,
+    binding: &crate::core::semantic::EffectRequirement<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    assoc_ty_subst: Option<TraitInstId<'db>>,
+    mode: EffectKeyCanonMode,
+) -> CanonicalEffectIdentity<'db> {
+    CanonicalEffectIdentity {
+        key_kind: binding.key.kind(),
+        key_ty: binding.key.key_ty().map(|ty| {
+            canonicalize_effect_type_key(db, ty, scope, assumptions, assoc_ty_subst, mode)
+        }),
+        key_trait: binding.key.key_trait().map(|trait_key| {
+            canonicalize_effect_trait_key(db, trait_key, scope, assumptions, assoc_ty_subst, mode)
+        }),
+        key_path: binding.binding_path,
+        is_mut: binding.is_mut,
     }
 }
 

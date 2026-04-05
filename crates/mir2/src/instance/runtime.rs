@@ -26,7 +26,7 @@ use num_traits::ToPrimitive;
 use salsa::Update;
 
 use crate::runtime::lower::{
-    class::{semantic_return_ty, top_level_class_for_ty_in_env},
+    class::{runtime_signature_for_key, semantic_return_ty, top_level_class_for_ty_in_env},
     layout::RuntimeTypeEnv,
 };
 use crate::{
@@ -42,8 +42,9 @@ use crate::{
             body::lower_to_rmir, call::collect_runtime_calls as collect_runtime_calls_lowered,
         },
         package::runtime_instance_for_semantic,
+        pretty::format_runtime_verify_failure,
     },
-    verify::verify_runtime_body,
+    verify::verify_runtime_body_detailed,
 };
 
 #[salsa::interned]
@@ -84,6 +85,16 @@ pub struct RuntimeInstance<'db> {
 #[salsa::tracked]
 impl<'db> RuntimeInstance<'db> {
     #[salsa::tracked]
+    pub fn signature(self, db: &'db dyn MirDb) -> RuntimeSignature<'db> {
+        match self.key(db).source(db) {
+            RuntimeInstanceSource::Semantic(semantic) => {
+                runtime_signature_for_key(db, semantic, self.key(db).params(db))
+            }
+            RuntimeInstanceSource::Synthetic(_) => self.body(db).signature,
+        }
+    }
+
+    #[salsa::tracked]
     pub fn body(self, db: &'db dyn MirDb) -> RuntimeBody<'db> {
         lower_runtime_body(db, self)
     }
@@ -99,11 +110,7 @@ pub fn get_or_build_runtime_instance<'db>(
     db: &'db dyn MirDb,
     key: RuntimeInstanceKey<'db>,
 ) -> RuntimeInstance<'db> {
-    let instance = RuntimeInstance::new(db, key);
-    for call in instance.calls(db) {
-        get_or_build_runtime_instance(db, call.callee.key(db));
-    }
-    instance
+    RuntimeInstance::new(db, key)
 }
 
 fn lower_runtime_body<'db>(db: &'db dyn MirDb, instance: RuntimeInstance<'db>) -> RuntimeBody<'db> {
@@ -122,10 +129,11 @@ fn lower_runtime_body<'db>(db: &'db dyn MirDb, instance: RuntimeInstance<'db>) -
             lower_synthetic_runtime_body(db, instance, synthetic.spec(db).clone())
         }
     };
-    if let Err(err) = verify_runtime_body(db, &db, &body) {
+    if let Err(failure) = verify_runtime_body_detailed(db, &db, &body) {
         panic!(
-            "runtime body verification failed for {:?}: {err:?}; body={body:#?}",
-            instance.key(db)
+            "runtime body verification failed for {:?}\n{}",
+            instance.key(db),
+            format_runtime_verify_failure(db, &body, &failure),
         );
     }
     body
@@ -135,7 +143,82 @@ fn collect_runtime_calls<'db>(
     db: &'db dyn MirDb,
     instance: RuntimeInstance<'db>,
 ) -> Vec<RuntimeCallEdge<'db>> {
-    collect_runtime_calls_lowered(db, instance)
+    match instance.key(db).source(db) {
+        RuntimeInstanceSource::Semantic(_) => collect_runtime_calls_lowered(db, instance),
+        RuntimeInstanceSource::Synthetic(synthetic) => {
+            collect_synthetic_runtime_calls(db, &synthetic.spec(db))
+        }
+    }
+}
+
+fn collect_synthetic_runtime_calls<'db>(
+    db: &'db dyn MirDb,
+    spec: &RuntimeSyntheticSpec<'db>,
+) -> Vec<RuntimeCallEdge<'db>> {
+    let mut calls = Vec::new();
+    match spec {
+        RuntimeSyntheticSpec::MainRoot { callee }
+        | RuntimeSyntheticSpec::TestRoot { callee, .. }
+        | RuntimeSyntheticSpec::CodeRegionRoot { callee, .. } => {
+            calls.push(RuntimeCallEdge { callee: *callee });
+        }
+        RuntimeSyntheticSpec::ContractInitAbi { plan } => {
+            if let InitArgsPlan::DecodeInitTail { decode_fn, .. } = plan.init_args {
+                if let Some(decoder_new) = resolve_sol_decoder_new(db, plan.contract.scope()) {
+                    calls.push(RuntimeCallEdge {
+                        callee: decoder_new,
+                    });
+                }
+                calls.push(RuntimeCallEdge { callee: decode_fn });
+            }
+            if let Some(user_init) = plan.user_init {
+                calls.push(RuntimeCallEdge { callee: user_init });
+            }
+        }
+        RuntimeSyntheticSpec::ContractRecvAbi { plan } => {
+            if let RuntimeInputPlan::DecodeCalldataPayload { decode_fn, .. } = plan.input {
+                if let Some(decoder_new) = resolve_sol_decoder_new(db, plan.contract.scope()) {
+                    calls.push(RuntimeCallEdge {
+                        callee: decoder_new,
+                    });
+                }
+                calls.push(RuntimeCallEdge { callee: decode_fn });
+            }
+            calls.push(RuntimeCallEdge {
+                callee: plan.user_recv,
+            });
+            if let RuntimeReturnPlan::Value { encode_fn, .. } = plan.ret {
+                let scope = plan.contract.scope();
+                if let Some(encoder_new) = resolve_sol_encoder_new(db, scope) {
+                    calls.push(RuntimeCallEdge {
+                        callee: encoder_new,
+                    });
+                }
+                if let Some(reserve_head) = resolve_sol_encoder_reserve_head(db, scope) {
+                    calls.push(RuntimeCallEdge {
+                        callee: reserve_head,
+                    });
+                }
+                calls.push(RuntimeCallEdge { callee: encode_fn });
+                if let Some(finish) = resolve_sol_encoder_finish(db, scope) {
+                    calls.push(RuntimeCallEdge { callee: finish });
+                }
+            }
+        }
+        RuntimeSyntheticSpec::ContractInitRoot { init_abi, .. } => {
+            if let Some(init_abi) = init_abi {
+                calls.push(RuntimeCallEdge { callee: *init_abi });
+            }
+        }
+        RuntimeSyntheticSpec::ContractRuntimeRoot { dispatch, .. } => {
+            for arm in dispatch.iter() {
+                calls.push(RuntimeCallEdge {
+                    callee: arm.wrapper,
+                });
+            }
+        }
+    }
+    calls
 }
 
 fn lower_synthetic_runtime_body<'db>(
@@ -778,7 +861,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             (
                 RuntimeClass::Handle {
                     layout,
-                    kind: HandleKind::ObjectValue,
+                    kind: HandleKind::ObjectValue | HandleKind::ConstValue,
                     view: crate::runtime::HandleView::Whole,
                 },
                 RuntimeClass::Handle {
@@ -793,6 +876,39 @@ impl<'db> SyntheticBodyBuilder<'db> {
                         layout,
                         kind: HandleKind::Provider { provider_ty, space },
                         view: crate::runtime::HandleView::Whole,
+                    }),
+                    RuntimeLocalRoot::None,
+                );
+                self.push_stmt(
+                    bb,
+                    RStmt::Assign {
+                        dst,
+                        expr: RExpr::AddrOf {
+                            place: RuntimePlace {
+                                root: PlaceRoot::Handle(src),
+                                path: Box::default(),
+                            },
+                        },
+                    },
+                );
+                dst
+            }
+            (
+                RuntimeClass::Handle {
+                    layout,
+                    kind: HandleKind::ObjectValue | HandleKind::ConstValue,
+                    view: crate::runtime::HandleView::Whole,
+                },
+                RuntimeClass::RawAddr {
+                    space,
+                    target: target_layout,
+                },
+            ) if target_layout.is_none_or(|target_layout| target_layout == layout) => {
+                let dst = self.push_local(
+                    semantic_ty,
+                    RuntimeCarrier::Value(RuntimeClass::RawAddr {
+                        space,
+                        target: Some(layout),
                     }),
                     RuntimeLocalRoot::None,
                 );
@@ -977,6 +1093,51 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 self.coerce_runtime_value(
                     bb,
                     object,
+                    &RuntimeClass::Handle {
+                        layout,
+                        kind: HandleKind::Provider { provider_ty, space },
+                        view: HandleView::Whole,
+                    },
+                    semantic_ty,
+                )
+            }
+            (
+                RuntimeClass::Scalar(ScalarClass {
+                    repr:
+                        ScalarRepr::Int {
+                            bits: 256,
+                            signed: false,
+                        },
+                    role: ScalarRole::Plain,
+                }),
+                RuntimeClass::Handle {
+                    layout,
+                    kind: HandleKind::Provider { provider_ty, space },
+                    view: HandleView::Whole,
+                },
+            ) => {
+                let raw = self.push_local(
+                    semantic_ty,
+                    RuntimeCarrier::Value(RuntimeClass::RawAddr {
+                        space,
+                        target: Some(layout),
+                    }),
+                    RuntimeLocalRoot::None,
+                );
+                self.push_stmt(
+                    bb,
+                    RStmt::Assign {
+                        dst: raw,
+                        expr: RExpr::WordToRawAddr {
+                            value: src,
+                            space,
+                            target: Some(layout),
+                        },
+                    },
+                );
+                self.coerce_runtime_value(
+                    bb,
+                    raw,
                     &RuntimeClass::Handle {
                         layout,
                         kind: HandleKind::Provider { provider_ty, space },

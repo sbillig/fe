@@ -1,1495 +1,1007 @@
-//! Expression and value lowering helpers shared across the Yul emitter.
+use hir::hir_def::expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp};
 
-use common::ingot::IngotKind;
-use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData, TyId};
-use hir::hir_def::{
-    CallableDef,
-    expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
-};
-use hir::projection::{IndexSource, Projection};
-use hir::span::LazySpan;
-use mir::{
-    CallOrigin, LocalId, ValueId, ValueOrigin,
-    ir::{FieldPtrOrigin, MirFunctionOrigin, Place, SyntheticValue},
-    layout,
-    repr::{PlaceState, ResolvedPlace, ResolvedPlaceSegment},
-};
-use num_bigint::BigUint;
-
-use crate::yul::{doc::YulDoc, state::BlockState};
-
-use super::{
-    YulError,
-    function::{CallArgAbi, FunctionEmitter},
-    util::{function_name, is_std_evm_ops, prefix_yul_name},
-};
-
-#[derive(Clone, Copy, Debug)]
-enum IntPrim {
-    Unsigned {
-        mask: Option<&'static str>,
+use crate::yul::{
+    doc::YulDoc,
+    errors::YulError,
+    legalize::{
+        YBuiltin, YExpr, YLocalId, YulAddressSpace, YulPlace, YulPlaceElem, YulPlaceRoot,
+        YulValueClass,
     },
-    Signed {
-        mask: Option<&'static str>,
-        signextend_byte: Option<u8>,
-    },
-}
+};
 
-fn int_prim_from_suffix(suffix: &str) -> Option<IntPrim> {
-    Some(match suffix {
-        "u8" => IntPrim::Unsigned { mask: Some("0xff") },
-        "u16" => IntPrim::Unsigned {
-            mask: Some("0xffff"),
-        },
-        "u32" => IntPrim::Unsigned {
-            mask: Some("0xffffffff"),
-        },
-        "u64" => IntPrim::Unsigned {
-            mask: Some("0xffffffffffffffff"),
-        },
-        "u128" => IntPrim::Unsigned {
-            mask: Some("0xffffffffffffffffffffffffffffffff"),
-        },
-        "u256" | "usize" => IntPrim::Unsigned { mask: None },
-        "i8" => IntPrim::Signed {
-            mask: Some("0xff"),
-            signextend_byte: Some(0),
-        },
-        "i16" => IntPrim::Signed {
-            mask: Some("0xffff"),
-            signextend_byte: Some(1),
-        },
-        "i32" => IntPrim::Signed {
-            mask: Some("0xffffffff"),
-            signextend_byte: Some(3),
-        },
-        "i64" => IntPrim::Signed {
-            mask: Some("0xffffffffffffffff"),
-            signextend_byte: Some(7),
-        },
-        "i128" => IntPrim::Signed {
-            mask: Some("0xffffffffffffffffffffffffffffffff"),
-            signextend_byte: Some(15),
-        },
-        "i256" | "isize" => IntPrim::Signed {
-            mask: None,
-            signextend_byte: None,
-        },
-        _ => return None,
-    })
-}
+use super::function::{FunctionEmitter, RenderedValue};
 
-fn int_prim_from_prim(prim: PrimTy) -> Option<IntPrim> {
-    int_prim_from_suffix(match prim {
-        PrimTy::U8 => "u8",
-        PrimTy::U16 => "u16",
-        PrimTy::U32 => "u32",
-        PrimTy::U64 => "u64",
-        PrimTy::U128 => "u128",
-        PrimTy::U256 => "u256",
-        PrimTy::Usize => "usize",
-        PrimTy::I8 => "i8",
-        PrimTy::I16 => "i16",
-        PrimTy::I32 => "i32",
-        PrimTy::I64 => "i64",
-        PrimTy::I128 => "i128",
-        PrimTy::I256 => "i256",
-        PrimTy::Isize => "isize",
-        _ => return None,
-    })
-}
-
-fn int_prim_from_ty(db: &driver::DriverDataBase, ty: TyId<'_>) -> Option<IntPrim> {
-    let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(db).data(db) else {
-        return None;
-    };
-    int_prim_from_prim(*prim)
-}
-
-fn trunc_bits(value: &str, prim: IntPrim) -> String {
-    match prim {
-        IntPrim::Unsigned { mask: Some(mask) }
-        | IntPrim::Signed {
-            mask: Some(mask), ..
-        } => {
-            format!("and({value}, {mask})")
-        }
-        IntPrim::Unsigned { mask: None } | IntPrim::Signed { mask: None, .. } => value.to_string(),
-    }
-}
-
-fn canonical_unsigned(value: &str, mask: Option<&'static str>) -> String {
-    match mask {
-        Some(mask) => format!("and({value}, {mask})"),
-        None => value.to_string(),
-    }
-}
-
-fn canonical_signed(
-    value: &str,
-    mask: Option<&'static str>,
-    signextend_byte: Option<u8>,
-) -> String {
-    match (mask, signextend_byte) {
-        (Some(mask), Some(byte)) => format!("signextend({byte}, and({value}, {mask}))"),
-        _ => value.to_string(),
-    }
-}
-
-fn lower_primitive_int_unary(op: UnOp, arg: &str, prim: IntPrim) -> Option<String> {
-    let (mask, signextend_byte, signed) = match prim {
-        IntPrim::Unsigned { mask } => (mask, None, false),
-        IntPrim::Signed {
-            mask,
-            signextend_byte,
-        } => (mask, signextend_byte, true),
-    };
-
-    let arg_unsigned = |value: &str| canonical_unsigned(value, mask);
-    let arg_signed = |value: &str| canonical_signed(value, mask, signextend_byte);
-    let result_unsigned = |value: String| canonical_unsigned(&value, mask);
-    let result_signed = |value: String| canonical_signed(&value, mask, signextend_byte);
-
-    match op {
-        UnOp::Minus if signed => Some(result_signed(format!("sub(0, {})", arg_signed(arg)))),
-        UnOp::Plus => Some(if signed {
-            result_signed(arg_signed(arg))
-        } else {
-            result_unsigned(arg_unsigned(arg))
-        }),
-        UnOp::BitNot => {
-            let arg_bits = trunc_bits(arg, prim);
-            Some(if signed {
-                result_signed(format!("not({arg_bits})"))
-            } else {
-                result_unsigned(format!("not({arg_bits})"))
-            })
-        }
-        _ => None,
-    }
-}
-
-fn lower_primitive_int_binary(op: BinOp, lhs: &str, rhs: &str, prim: IntPrim) -> Option<String> {
-    let (mask, signextend_byte, signed) = match prim {
-        IntPrim::Unsigned { mask } => (mask, None, false),
-        IntPrim::Signed {
-            mask,
-            signextend_byte,
-        } => (mask, signextend_byte, true),
-    };
-
-    let arg_unsigned = |value: &str| canonical_unsigned(value, mask);
-    let arg_signed = |value: &str| canonical_signed(value, mask, signextend_byte);
-    let result_unsigned = |value: String| canonical_unsigned(&value, mask);
-    let result_signed = |value: String| canonical_signed(&value, mask, signextend_byte);
-
-    match op {
-        BinOp::Arith(op) => match op {
-            ArithBinOp::Add => Some(if signed {
-                result_signed(format!("add({}, {})", arg_signed(lhs), arg_signed(rhs)))
-            } else {
-                result_unsigned(format!("add({}, {})", arg_unsigned(lhs), arg_unsigned(rhs)))
-            }),
-            ArithBinOp::Sub => Some(if signed {
-                result_signed(format!("sub({}, {})", arg_signed(lhs), arg_signed(rhs)))
-            } else {
-                result_unsigned(format!("sub({}, {})", arg_unsigned(lhs), arg_unsigned(rhs)))
-            }),
-            ArithBinOp::Mul => Some(if signed {
-                result_signed(format!("mul({}, {})", arg_signed(lhs), arg_signed(rhs)))
-            } else {
-                result_unsigned(format!("mul({}, {})", arg_unsigned(lhs), arg_unsigned(rhs)))
-            }),
-            ArithBinOp::Div => Some(if signed {
-                result_signed(format!("sdiv({}, {})", arg_signed(lhs), arg_signed(rhs)))
-            } else {
-                result_unsigned(format!("div({}, {})", arg_unsigned(lhs), arg_unsigned(rhs)))
-            }),
-            ArithBinOp::Rem => Some(if signed {
-                result_signed(format!("smod({}, {})", arg_signed(lhs), arg_signed(rhs)))
-            } else {
-                result_unsigned(format!("mod({}, {})", arg_unsigned(lhs), arg_unsigned(rhs)))
-            }),
-            ArithBinOp::Pow => {
-                let base_bits = trunc_bits(lhs, prim);
-                let exp_bits = trunc_bits(rhs, prim);
-                Some(if signed {
-                    result_signed(format!("exp({base_bits}, {exp_bits})"))
-                } else {
-                    result_unsigned(format!("exp({base_bits}, {exp_bits})"))
-                })
-            }
-            ArithBinOp::LShift => {
-                let value_bits = trunc_bits(lhs, prim);
-                let shift_bits = trunc_bits(rhs, prim);
-                Some(if signed {
-                    result_signed(format!("shl({shift_bits}, {value_bits})"))
-                } else {
-                    result_unsigned(format!("shl({shift_bits}, {value_bits})"))
-                })
-            }
-            ArithBinOp::RShift => {
-                let shift_bits = trunc_bits(rhs, prim);
-                Some(if signed {
-                    result_signed(format!("sar({shift_bits}, {})", arg_signed(lhs)))
-                } else {
-                    result_unsigned(format!("shr({shift_bits}, {})", arg_unsigned(lhs)))
-                })
-            }
-            ArithBinOp::BitAnd => {
-                let lhs_bits = trunc_bits(lhs, prim);
-                let rhs_bits = trunc_bits(rhs, prim);
-                Some(if signed {
-                    result_signed(format!("and({lhs_bits}, {rhs_bits})"))
-                } else {
-                    result_unsigned(format!("and({lhs_bits}, {rhs_bits})"))
-                })
-            }
-            ArithBinOp::BitOr => {
-                let lhs_bits = trunc_bits(lhs, prim);
-                let rhs_bits = trunc_bits(rhs, prim);
-                Some(if signed {
-                    result_signed(format!("or({lhs_bits}, {rhs_bits})"))
-                } else {
-                    result_unsigned(format!("or({lhs_bits}, {rhs_bits})"))
-                })
-            }
-            ArithBinOp::BitXor => {
-                let lhs_bits = trunc_bits(lhs, prim);
-                let rhs_bits = trunc_bits(rhs, prim);
-                Some(if signed {
-                    result_signed(format!("xor({lhs_bits}, {rhs_bits})"))
-                } else {
-                    result_unsigned(format!("xor({lhs_bits}, {rhs_bits})"))
-                })
-            }
-            ArithBinOp::Range => None,
-        },
-        BinOp::Comp(op) => match op {
-            CompBinOp::Eq => {
-                let lhs_bits = trunc_bits(lhs, prim);
-                let rhs_bits = trunc_bits(rhs, prim);
-                Some(format!("eq({lhs_bits}, {rhs_bits})"))
-            }
-            CompBinOp::NotEq => {
-                let lhs_bits = trunc_bits(lhs, prim);
-                let rhs_bits = trunc_bits(rhs, prim);
-                Some(format!("iszero(eq({lhs_bits}, {rhs_bits}))"))
-            }
-            CompBinOp::Lt => Some(if signed {
-                format!("slt({}, {})", arg_signed(lhs), arg_signed(rhs))
-            } else {
-                format!("lt({}, {})", arg_unsigned(lhs), arg_unsigned(rhs))
-            }),
-            CompBinOp::LtEq => Some(if signed {
-                format!("iszero(sgt({}, {}))", arg_signed(lhs), arg_signed(rhs))
-            } else {
-                format!("iszero(gt({}, {}))", arg_unsigned(lhs), arg_unsigned(rhs))
-            }),
-            CompBinOp::Gt => Some(if signed {
-                format!("sgt({}, {})", arg_signed(lhs), arg_signed(rhs))
-            } else {
-                format!("gt({}, {})", arg_unsigned(lhs), arg_unsigned(rhs))
-            }),
-            CompBinOp::GtEq => Some(if signed {
-                format!("iszero(slt({}, {}))", arg_signed(lhs), arg_signed(rhs))
-            } else {
-                format!("iszero(lt({}, {}))", arg_unsigned(lhs), arg_unsigned(rhs))
-            }),
-        },
-        BinOp::Logical(_) | BinOp::Index => None,
-    }
-}
-
-impl<'db> FunctionEmitter<'db> {
-    fn hidden_runtime_param_local(&self, local: LocalId) -> bool {
-        self.mir_func
-            .body
-            .param_locals
-            .iter()
-            .position(|&param_local| param_local == local)
-            .is_some_and(|idx| !self.mir_func.runtime_abi.value_param_visible(idx))
-            || self
-                .mir_func
-                .body
-                .effect_param_locals
-                .iter()
-                .position(|&effect_local| effect_local == local)
-                .is_some_and(|idx| !self.mir_func.runtime_abi.effect_param_visible(idx))
-    }
-
-    /// Attempts to lower a call to a core numeric intrinsic directly to inline Yul.
-    ///
-    /// This is an optimization that avoids generating separate Yul functions for
-    /// primitive arithmetic intrinsics like `__add_u8`, `__sub_i32`, `__mul_u256`, etc.
-    /// Instead, it recognizes the naming pattern `__<op>_<type>` and emits the
-    /// corresponding Yul opcode inline with appropriate bit masking.
-    ///
-    /// For types smaller than 256 bits, proper masking is applied:
-    /// - **Unsigned types**: Results are masked with `and(result, mask)` to truncate
-    ///   overflow bits (e.g., `u8` uses mask `0xff`).
-    /// - **Signed types**: Results use `signextend(byte, and(value, mask))` to
-    ///   correctly propagate the sign bit.
-    /// - **256-bit types** (`u256`, `i256`): No masking needed.
-    ///
-    /// # Parameters
-    /// - `call`: The call origin containing the target function and arguments.
-    /// - `state`: Current block state for lowering argument values.
-    ///
-    /// # Returns
-    /// - `Ok(Some(yul))`: The intrinsic was recognized and lowered to inline Yul.
-    /// - `Ok(None)`: The call is not a recognized core numeric intrinsic; the caller
-    ///   should fall back to normal function call emission.
-    /// - `Err(...)`: An error occurred during lowering.
-    fn try_lower_core_numeric_intrinsic_call(
-        &self,
-        call: &CallOrigin<'_>,
-        state: &BlockState,
-    ) -> Result<Option<String>, YulError> {
-        let Some(mir::CallTargetRef::Hir(target)) = call.target.as_ref() else {
-            return Ok(None);
-        };
-        let CallableDef::Func(func) = target.callable_def else {
-            return Ok(None);
-        };
-        if func.body(self.db).is_some() {
-            return Ok(None);
-        }
-
-        match target.callable_def.ingot(self.db).kind(self.db) {
-            IngotKind::Core | IngotKind::Std => {}
-            _ => return Ok(None),
-        }
-
-        let Some(name_id) = target.callable_def.name(self.db) else {
-            return Ok(None);
-        };
-        let name = name_id.data(self.db).as_str();
-        if name == "__bitcast" || !name.starts_with("__") {
-            return Ok(None);
-        }
-
-        let Some((op, suffix)) = name[2..].rsplit_once('_') else {
-            return Ok(None);
-        };
-
-        let mut lowered_args = Vec::with_capacity(call.args.len());
-        for &arg in &call.args {
-            lowered_args.push(self.lower_value(arg, state)?);
-        }
-        if !call.effect_args.is_empty() {
-            return Err(YulError::Unsupported(format!(
-                "core numeric intrinsic `{name}` unexpectedly has effect args"
-            )));
-        }
-
-        let lowered = if suffix == "bool" {
-            let normalize_bool = |value: &str| format!("iszero(iszero({value}))");
-
-            match (op, lowered_args.as_slice()) {
-                ("not", [arg]) => Some(format!("iszero({})", normalize_bool(arg))),
-                ("bitand", [lhs, rhs]) => Some(format!(
-                    "and({}, {})",
-                    normalize_bool(lhs),
-                    normalize_bool(rhs)
-                )),
-                ("bitor", [lhs, rhs]) => Some(format!(
-                    "or({}, {})",
-                    normalize_bool(lhs),
-                    normalize_bool(rhs)
-                )),
-                ("bitxor", [lhs, rhs]) => Some(format!(
-                    "xor({}, {})",
-                    normalize_bool(lhs),
-                    normalize_bool(rhs)
-                )),
-                ("eq", [lhs, rhs]) => Some(format!(
-                    "eq({}, {})",
-                    normalize_bool(lhs),
-                    normalize_bool(rhs)
-                )),
-                ("ne", [lhs, rhs]) => Some(format!(
-                    "iszero(eq({}, {}))",
-                    normalize_bool(lhs),
-                    normalize_bool(rhs)
-                )),
-                _ => None,
-            }
-        } else if let Some(int_prim) = int_prim_from_suffix(suffix) {
-            match (op, lowered_args.as_slice()) {
-                ("add", [lhs, rhs]) => {
-                    lower_primitive_int_binary(BinOp::Arith(ArithBinOp::Add), lhs, rhs, int_prim)
-                }
-                ("sub", [lhs, rhs]) => {
-                    lower_primitive_int_binary(BinOp::Arith(ArithBinOp::Sub), lhs, rhs, int_prim)
-                }
-                ("mul", [lhs, rhs]) => {
-                    lower_primitive_int_binary(BinOp::Arith(ArithBinOp::Mul), lhs, rhs, int_prim)
-                }
-                ("div", [lhs, rhs]) => {
-                    lower_primitive_int_binary(BinOp::Arith(ArithBinOp::Div), lhs, rhs, int_prim)
-                }
-                ("rem", [lhs, rhs]) => {
-                    lower_primitive_int_binary(BinOp::Arith(ArithBinOp::Rem), lhs, rhs, int_prim)
-                }
-                ("pow", [lhs, rhs]) => {
-                    lower_primitive_int_binary(BinOp::Arith(ArithBinOp::Pow), lhs, rhs, int_prim)
-                }
-                ("shl", [lhs, rhs]) => {
-                    lower_primitive_int_binary(BinOp::Arith(ArithBinOp::LShift), lhs, rhs, int_prim)
-                }
-                ("shr", [lhs, rhs]) => {
-                    lower_primitive_int_binary(BinOp::Arith(ArithBinOp::RShift), lhs, rhs, int_prim)
-                }
-                ("bitand", [lhs, rhs]) => {
-                    lower_primitive_int_binary(BinOp::Arith(ArithBinOp::BitAnd), lhs, rhs, int_prim)
-                }
-                ("bitor", [lhs, rhs]) => {
-                    lower_primitive_int_binary(BinOp::Arith(ArithBinOp::BitOr), lhs, rhs, int_prim)
-                }
-                ("bitxor", [lhs, rhs]) => {
-                    lower_primitive_int_binary(BinOp::Arith(ArithBinOp::BitXor), lhs, rhs, int_prim)
-                }
-                ("bitnot", [arg]) => lower_primitive_int_unary(UnOp::BitNot, arg, int_prim),
-                ("neg", [arg]) => lower_primitive_int_unary(UnOp::Minus, arg, int_prim),
-                ("eq", [lhs, rhs]) => {
-                    lower_primitive_int_binary(BinOp::Comp(CompBinOp::Eq), lhs, rhs, int_prim)
-                }
-                ("ne", [lhs, rhs]) => {
-                    lower_primitive_int_binary(BinOp::Comp(CompBinOp::NotEq), lhs, rhs, int_prim)
-                }
-                ("lt", [lhs, rhs]) => {
-                    lower_primitive_int_binary(BinOp::Comp(CompBinOp::Lt), lhs, rhs, int_prim)
-                }
-                ("le", [lhs, rhs]) => {
-                    lower_primitive_int_binary(BinOp::Comp(CompBinOp::LtEq), lhs, rhs, int_prim)
-                }
-                ("gt", [lhs, rhs]) => {
-                    lower_primitive_int_binary(BinOp::Comp(CompBinOp::Gt), lhs, rhs, int_prim)
-                }
-                ("ge", [lhs, rhs]) => {
-                    lower_primitive_int_binary(BinOp::Comp(CompBinOp::GtEq), lhs, rhs, int_prim)
-                }
-                _ => None,
-            }
-        } else {
-            None
-        };
-
-        Ok(lowered)
-    }
-    pub(super) fn core_lib(&self) -> mir::CoreLib<'db> {
-        let scope = match self.mir_func.origin {
-            MirFunctionOrigin::Hir(func) => func.scope(),
-            MirFunctionOrigin::Synthetic(synth) => synth.contract().scope(),
-        };
-        mir::CoreLib::new(self.db, scope)
-    }
-
-    fn format_hir_expr_context(&self, expr: hir::hir_def::ExprId) -> String {
-        let Some(body) = (match self.mir_func.origin {
-            MirFunctionOrigin::Hir(func) => func.body(self.db),
-            MirFunctionOrigin::Synthetic(_) => None,
-        }) else {
-            return format!(
-                "func={} expr={expr:?} (missing HIR body)",
-                self.mir_func.symbol_name
-            );
-        };
-
-        let span = expr.span(body).resolve(self.db);
-        let span_context = if let Some(span) = span {
-            let path = span
-                .file
-                .path(self.db)
-                .as_ref()
-                .map(|p| p.to_string())
-                .unwrap_or_else(|| "<unknown file>".into());
-            let start: usize = u32::from(span.range.start()) as usize;
-            let text = span.file.text(self.db);
-            let (mut line, mut col) = (1usize, 1usize);
-            for byte in text.as_bytes().iter().take(start) {
-                if *byte == b'\n' {
-                    line += 1;
-                    col = 1;
-                } else {
-                    col += 1;
-                }
-            }
-            format!("{path}:{line}:{col}")
-        } else {
-            "<no span>".into()
-        };
-
-        let expr_data = match expr.data(self.db, body) {
-            hir::hir_def::Partial::Present(expr_data) => match expr_data {
-                hir::hir_def::Expr::Path(path) => path
-                    .to_opt()
-                    .map(|path| format!("Path({})", path.pretty_print(self.db)))
-                    .unwrap_or_else(|| "Path(<absent>)".into()),
-                hir::hir_def::Expr::Call(callee, args) => {
-                    let callee_data = match callee.data(self.db, body) {
-                        hir::hir_def::Partial::Present(hir::hir_def::Expr::Path(path)) => path
-                            .to_opt()
-                            .map(|path| format!("Path({})", path.pretty_print(self.db)))
-                            .unwrap_or_else(|| "Path(<absent>)".into()),
-                        hir::hir_def::Partial::Present(other) => format!("{other:?}"),
-                        hir::hir_def::Partial::Absent => "<absent>".into(),
-                    };
-                    format!("Call({callee:?} {callee_data}, {args:?})")
-                }
-                hir::hir_def::Expr::MethodCall(receiver, method, _, args) => {
-                    let method_name = method
-                        .to_opt()
-                        .map(|id| id.data(self.db).to_string())
-                        .unwrap_or_else(|| "<absent>".into());
-                    format!("MethodCall({receiver:?}, {method_name}, {args:?})")
-                }
-                other => format!("{other:?}"),
-            },
-            hir::hir_def::Partial::Absent => "<absent>".into(),
-        };
-
-        format!(
-            "func={} expr={expr:?} at {}: {}",
-            self.mir_func.symbol_name, span_context, expr_data
-        )
-    }
-
-    /// Lowers a MIR `ValueId` into a Yul expression string.
-    ///
-    /// * `value_id` - Identifier selecting the MIR value.
-    /// * `state` - Current bindings for previously-evaluated expressions.
-    ///
-    /// Returns the Yul expression referencing the value or an error if unsupported.
-    pub(super) fn lower_value(
-        &self,
-        value_id: ValueId,
-        state: &BlockState,
-    ) -> Result<String, YulError> {
-        // Check if this value was already bound to a temp in the current scope
-        if let Some(temp) = state.value_temp(value_id.index()) {
-            return Ok(temp.clone());
-        }
-        let value = self.mir_func.body.value(value_id);
-        match &value.origin {
-            ValueOrigin::Expr(expr) => unreachable!(
-                "unlowered HIR expression reached codegen (MIR lowering should have failed earlier): {}",
-                self.format_hir_expr_context(*expr)
-            ),
-            ValueOrigin::ControlFlowResult { expr } => unreachable!(
-                "control-flow result value reached codegen without binding (MIR lowering should have inserted/used a temp): {}",
-                self.format_hir_expr_context(*expr)
-            ),
-            ValueOrigin::Unit => Ok("0".into()),
-            ValueOrigin::Unary { op, inner } => {
-                let lowered = self.lower_value(*inner, state)?;
-                if let Some(int_prim) =
-                    int_prim_from_ty(self.db, self.mir_func.body.value(*inner).ty)
-                    && let Some(expr) = lower_primitive_int_unary(*op, &lowered, int_prim)
-                {
-                    return Ok(expr);
-                }
-                match op {
-                    UnOp::Minus => Ok(format!("sub(0, {lowered})")),
-                    UnOp::Not => Ok(format!("iszero({lowered})")),
-                    UnOp::Plus => Ok(lowered),
-                    UnOp::BitNot => Ok(format!("not({lowered})")),
-                    UnOp::Mut => todo!(),
-                    UnOp::Ref => todo!(),
-                }
-            }
-            ValueOrigin::Binary { op, lhs, rhs } => {
-                let left = self.lower_value(*lhs, state)?;
-                let right = self.lower_value(*rhs, state)?;
-                if let Some(int_prim) = int_prim_from_ty(self.db, self.mir_func.body.value(*lhs).ty)
-                    && int_prim_from_ty(self.db, self.mir_func.body.value(*rhs).ty).is_some()
-                    && let Some(expr) = lower_primitive_int_binary(*op, &left, &right, int_prim)
-                {
-                    return Ok(expr);
-                }
-                match op {
-                    BinOp::Arith(op) => match op {
-                        ArithBinOp::Add => Ok(format!("add({left}, {right})")),
-                        ArithBinOp::Sub => Ok(format!("sub({left}, {right})")),
-                        ArithBinOp::Mul => Ok(format!("mul({left}, {right})")),
-                        ArithBinOp::Div => Ok(format!("div({left}, {right})")),
-                        ArithBinOp::Rem => Ok(format!("mod({left}, {right})")),
-                        ArithBinOp::Pow => Ok(format!("exp({left}, {right})")),
-                        ArithBinOp::LShift => Ok(format!("shl({right}, {left})")),
-                        ArithBinOp::RShift => Ok(format!("shr({right}, {left})")),
-                        ArithBinOp::BitAnd => Ok(format!("and({left}, {right})")),
-                        ArithBinOp::BitOr => Ok(format!("or({left}, {right})")),
-                        ArithBinOp::BitXor => Ok(format!("xor({left}, {right})")),
-                        // Range should be lowered to Range type construction before codegen
-                        ArithBinOp::Range => {
-                            todo!(
-                                "Range operator should be handled during type checking/MIR lowering"
-                            )
-                        }
-                    },
-                    BinOp::Comp(op) => {
-                        let expr = match op {
-                            CompBinOp::Eq => format!("eq({left}, {right})"),
-                            CompBinOp::NotEq => format!("iszero(eq({left}, {right}))"),
-                            CompBinOp::Lt => format!("lt({left}, {right})"),
-                            CompBinOp::LtEq => format!("iszero(gt({left}, {right}))"),
-                            CompBinOp::Gt => format!("gt({left}, {right})"),
-                            CompBinOp::GtEq => format!("iszero(lt({left}, {right}))"),
-                        };
-                        Ok(expr)
-                    }
-                    BinOp::Logical(op) => {
-                        let func = match op {
-                            LogicalBinOp::And => "and",
-                            LogicalBinOp::Or => "or",
-                        };
-                        Ok(format!("{func}({left}, {right})"))
-                    }
-                    BinOp::Index => Err(YulError::Unsupported(
-                        "index expressions should be lowered to places before codegen".into(),
-                    )),
-                }
-            }
-            ValueOrigin::Local(local) => {
-                if let Some(name) = state.resolve_local(*local) {
-                    return Ok(name);
-                }
-                if self.hidden_runtime_param_local(*local) {
-                    return Ok("0".into());
-                }
-
-                let local_data = self.mir_func.body.local(*local);
-                let is_param = self.mir_func.body.param_locals.contains(local);
-                let is_effect = self.mir_func.body.effect_param_locals.contains(local);
-
-                Err(YulError::Unsupported(format!(
-                    "unbound MIR local reached codegen (func={}, local=l{} `{}`, ty={}, param={is_param}, effect={is_effect})",
-                    self.mir_func.symbol_name,
-                    local.index(),
-                    local_data.name,
-                    local_data.ty.pretty_print(self.db),
-                )))
-            }
-            ValueOrigin::PlaceRoot(local) => {
-                if let Some(name) = state.resolve_local(*local) {
-                    return Ok(name);
-                }
-                if self.hidden_runtime_param_local(*local) {
-                    return Ok("0".into());
-                }
-                Err(YulError::Unsupported(format!(
-                    "unbound MIR place-root local reached codegen (func={}, local=l{} `{}`, ty={})",
-                    self.mir_func.symbol_name,
-                    local.index(),
-                    self.mir_func.body.local(*local).name,
-                    self.mir_func.body.local(*local).ty.pretty_print(self.db),
-                )))
-            }
-            ValueOrigin::CodeRegionRef(_) => {
-                debug_assert!(
-                    layout::is_zero_sized_ty_in(self.db, &self.layout, value.ty),
-                    "code-region values should be zero-sized (ty={})",
-                    value.ty.pretty_print(self.db)
-                );
-                Ok("0".into())
-            }
-            ValueOrigin::Synthetic(synth) => self.lower_synthetic_value(synth, value.ty),
-            ValueOrigin::FieldPtr(field_ptr) => self.lower_field_ptr(field_ptr, state),
-            ValueOrigin::PlaceRef(place) => {
-                if !mir::repr::place_resolves_to_location(
-                    self.db,
-                    &self.core_lib(),
-                    &self.mir_func.body.values,
-                    &self.mir_func.body.locals,
-                    place,
-                ) {
-                    return self.lower_value(place.base, state);
-                }
-                if !value.repr.is_ref() {
-                    if self.place_yields_location_value(
-                        place,
-                        value.ty,
-                        self.mir_func.body.value_pointer_info(value_id),
-                    )? {
-                        return self.lower_place_address(place, state);
-                    }
-                    let loaded_ty = if value.repr.address_space().is_none() {
-                        value
-                            .ty
-                            .as_capability(self.db)
-                            .map(|(_, inner_ty)| inner_ty)
-                            .unwrap_or(value.ty)
-                    } else {
-                        value.ty
-                    };
-                    return self.lower_place_load(place, loaded_ty, state);
-                }
-                self.lower_place_ref(place, state)
-            }
-            ValueOrigin::MoveOut { place } => {
-                if !mir::repr::place_resolves_to_location(
-                    self.db,
-                    &self.core_lib(),
-                    &self.mir_func.body.values,
-                    &self.mir_func.body.locals,
-                    place,
-                ) {
-                    return self.lower_value(place.base, state);
-                }
-                if value.repr.is_ref() {
-                    self.lower_place_ref(place, state)
-                } else {
-                    if self.place_yields_location_value(
-                        place,
-                        value.ty,
-                        self.mir_func.body.value_pointer_info(value_id),
-                    )? {
-                        return self.lower_place_address(place, state);
-                    }
-                    let loaded_ty = if value.repr.address_space().is_none() {
-                        value
-                            .ty
-                            .as_capability(self.db)
-                            .map(|(_, inner_ty)| inner_ty)
-                            .unwrap_or(value.ty)
-                    } else {
-                        value.ty
-                    };
-                    self.lower_place_load(place, loaded_ty, state)
-                }
-            }
-            ValueOrigin::ConstRegion(id) => {
-                let label = self.const_region_labels.get(id).unwrap();
-                Ok(format!("dataoffset(\"{label}\")"))
-            }
-            ValueOrigin::TransparentCast { value } => self.lower_value(*value, state),
-        }
-    }
-
-    /// Lowers a MIR call into a Yul function invocation.
-    ///
-    /// * `call` - Call origin describing the callee and arguments.
-    /// * `state` - Binding state used to lower argument expressions.
-    ///
-    /// Returns the Yul invocation string for the call.
-    pub(super) fn lower_call_value(
+impl<'a, 'db> FunctionEmitter<'a, 'db> {
+    pub(super) fn render_builtin_stmt(
         &mut self,
-        docs: &mut Vec<YulDoc>,
-        call: &CallOrigin<'_>,
-        state: &mut BlockState,
-    ) -> Result<String, YulError> {
-        if let Some(mir::CallTargetRef::Hir(target)) = call.target.as_ref()
-            && matches!(
-                target.callable_def.ingot(self.db).kind(self.db),
-                IngotKind::Core
-            )
-            && target.callable_def.name(self.db).is_some_and(|name_id| {
-                matches!(name_id.data(self.db).as_str(), "__as_bytes" | "__keccak256")
-            })
-        {
-            return Err(YulError::Unsupported(
-                "core::keccak requires a compile-time constant value".into(),
-            ));
-        }
+        builtin: &YBuiltin<'db>,
+    ) -> Result<Vec<YulDoc>, YulError> {
+        Ok(match builtin {
+            YBuiltin::Mstore { addr, value } => vec![YulDoc::line(format!(
+                "mstore({}, {})",
+                self.scalar_word_expr(*addr)?,
+                self.scalar_word_expr(*value)?
+            ))],
+            YBuiltin::Mstore8 { addr, value } => vec![YulDoc::line(format!(
+                "mstore8({}, {})",
+                self.scalar_word_expr(*addr)?,
+                self.scalar_word_expr(*value)?
+            ))],
+            YBuiltin::Sstore { slot, value } => vec![YulDoc::line(format!(
+                "sstore({}, {})",
+                self.scalar_word_expr(*slot)?,
+                self.scalar_word_expr(*value)?
+            ))],
+            YBuiltin::ReturnDataCopy { dst, offset, len } => vec![YulDoc::line(format!(
+                "returndatacopy({}, {}, {})",
+                self.scalar_word_expr(*dst)?,
+                self.scalar_word_expr(*offset)?,
+                self.scalar_word_expr(*len)?
+            ))],
+            YBuiltin::CallDataCopy { dst, offset, len } => vec![YulDoc::line(format!(
+                "calldatacopy({}, {}, {})",
+                self.scalar_word_expr(*dst)?,
+                self.scalar_word_expr(*offset)?,
+                self.scalar_word_expr(*len)?
+            ))],
+            YBuiltin::CodeCopy { dst, offset, len } => vec![YulDoc::line(format!(
+                "datacopy({}, {}, {})",
+                self.scalar_word_expr(*dst)?,
+                self.scalar_word_expr(*offset)?,
+                self.scalar_word_expr(*len)?
+            ))],
+            YBuiltin::Log0 { offset, len } => vec![YulDoc::line(format!(
+                "log0({}, {})",
+                self.scalar_word_expr(*offset)?,
+                self.scalar_word_expr(*len)?
+            ))],
+            YBuiltin::Log1 {
+                offset,
+                len,
+                topic0,
+            } => vec![YulDoc::line(format!(
+                "log1({}, {}, {})",
+                self.scalar_word_expr(*offset)?,
+                self.scalar_word_expr(*len)?,
+                self.scalar_word_expr(*topic0)?
+            ))],
+            YBuiltin::Log2 {
+                offset,
+                len,
+                topic0,
+                topic1,
+            } => vec![YulDoc::line(format!(
+                "log2({}, {}, {}, {})",
+                self.scalar_word_expr(*offset)?,
+                self.scalar_word_expr(*len)?,
+                self.scalar_word_expr(*topic0)?,
+                self.scalar_word_expr(*topic1)?
+            ))],
+            YBuiltin::Log3 {
+                offset,
+                len,
+                topic0,
+                topic1,
+                topic2,
+            } => vec![YulDoc::line(format!(
+                "log3({}, {}, {}, {}, {})",
+                self.scalar_word_expr(*offset)?,
+                self.scalar_word_expr(*len)?,
+                self.scalar_word_expr(*topic0)?,
+                self.scalar_word_expr(*topic1)?,
+                self.scalar_word_expr(*topic2)?
+            ))],
+            YBuiltin::Log4 {
+                offset,
+                len,
+                topic0,
+                topic1,
+                topic2,
+                topic3,
+            } => vec![YulDoc::line(format!(
+                "log4({}, {}, {}, {}, {}, {})",
+                self.scalar_word_expr(*offset)?,
+                self.scalar_word_expr(*len)?,
+                self.scalar_word_expr(*topic0)?,
+                self.scalar_word_expr(*topic1)?,
+                self.scalar_word_expr(*topic2)?,
+                self.scalar_word_expr(*topic3)?
+            ))],
+            _ => {
+                return Err(YulError::InvalidYulPackage(format!(
+                    "expression builtin `{builtin:?}` used as a statement"
+                )));
+            }
+        })
+    }
 
-        if call
-            .target
-            .as_ref()
-            .and_then(|target| match target {
-                mir::CallTargetRef::Hir(target) => target.callable_def.name(self.db),
-                mir::CallTargetRef::Synthetic(_) => None,
-            })
-            .is_some_and(|name_id| name_id.data(self.db) == "contract_field_slot")
-        {
-            return Err(YulError::Unsupported(
-                "`contract_field_slot` must be constant-folded before codegen".into(),
-            ));
+    pub(super) fn render_expr(
+        &mut self,
+        expr: &YExpr<'db>,
+        expected: Option<&YulValueClass<'db>>,
+    ) -> Result<RenderedValue<'db>, YulError> {
+        match expr {
+            YExpr::Use(local) => self.local_value(*local),
+            YExpr::ConstWord(value) => Ok(RenderedValue {
+                setup: Vec::new(),
+                value: self.const_scalar_expr(value),
+                class: expected.cloned().unwrap_or_else(|| {
+                    YulValueClass::Word(mir2::ScalarClass {
+                        repr: self.scalar_repr_for_const(value),
+                        role: mir2::ScalarRole::Plain,
+                    })
+                }),
+            }),
+            YExpr::Placeholder { class } => Ok(RenderedValue {
+                setup: Vec::new(),
+                value: Self::zero_for_class(class),
+                class: class.clone(),
+            }),
+            YExpr::Builtin(builtin) => self.render_builtin_expr(builtin, expected),
+            YExpr::Unary { op, value } => {
+                let value = self.local_value(*value)?;
+                let class = expected.cloned().unwrap_or_else(|| value.class.clone());
+                Ok(RenderedValue {
+                    setup: value.setup,
+                    value: self.render_unary_expr(*op, &value.value, &class)?,
+                    class,
+                })
+            }
+            YExpr::Binary { op, lhs, rhs } => {
+                let lhs = self.local_value(*lhs)?;
+                let rhs = self.local_value(*rhs)?;
+                let class = expected.cloned().unwrap_or_else(|| lhs.class.clone());
+                let mut setup = lhs.setup;
+                setup.extend(rhs.setup);
+                Ok(RenderedValue {
+                    setup,
+                    value: self.render_binary_expr(*op, &lhs.value, &rhs.value, &class)?,
+                    class,
+                })
+            }
+            YExpr::Cast { value, to } => {
+                let value = self.local_value(*value)?;
+                let class = YulValueClass::Word(to.clone());
+                Ok(RenderedValue {
+                    setup: value.setup,
+                    value: self.cast_word_expr(&value.value, to),
+                    class,
+                })
+            }
+            YExpr::ConstHandle { region, layout } => Ok(RenderedValue {
+                setup: Vec::new(),
+                value: format!("dataoffset(\"{}\")", self.index.const_label(*region)?),
+                class: YulValueClass::CodePtr { layout: *layout },
+            }),
+            YExpr::AllocObject { layout, .. } => Ok(RenderedValue {
+                setup: Vec::new(),
+                value: self.alloc_expr(
+                    self.class_size_bytes(&YulValueClass::MemoryPtr { layout: *layout })?,
+                ),
+                class: YulValueClass::MemoryPtr { layout: *layout },
+            }),
+            YExpr::MaterializeToObject { src, layout } => {
+                let src = self.local_value(*src)?;
+                if matches!(src.class, YulValueClass::MemoryPtr { .. }) {
+                    return Ok(RenderedValue {
+                        setup: src.setup,
+                        value: src.value,
+                        class: YulValueClass::MemoryPtr { layout: *layout },
+                    });
+                }
+                let temp = self.state.alloc_temp();
+                let mut setup = src.setup.clone();
+                let ptr_class = YulValueClass::MemoryPtr { layout: *layout };
+                setup.extend(self.alloc_memory_slot(&temp, &ptr_class)?);
+                setup.extend(self.copy_into_addr(
+                    ptr_class.clone(),
+                    YulAddressSpace::Memory,
+                    temp.clone(),
+                    src,
+                )?);
+                Ok(RenderedValue {
+                    setup,
+                    value: temp,
+                    class: ptr_class,
+                })
+            }
+            YExpr::ProviderFromRaw { raw, class } => {
+                let raw = self.local_value(*raw)?;
+                Ok(RenderedValue {
+                    setup: raw.setup,
+                    value: raw.value,
+                    class: class.clone(),
+                })
+            }
+            YExpr::WordToRawAddr { value, class } => {
+                let value = self.local_value(*value)?;
+                Ok(RenderedValue {
+                    setup: value.setup,
+                    value: value.value,
+                    class: class.clone(),
+                })
+            }
+            YExpr::ProviderToRaw { value } => {
+                let value = self.local_value(*value)?;
+                Ok(RenderedValue {
+                    setup: value.setup,
+                    value: value.value,
+                    class: YulValueClass::Word(mir2::ScalarClass {
+                        repr: mir2::ScalarRepr::Int {
+                            bits: 256,
+                            signed: false,
+                        },
+                        role: mir2::ScalarRole::Plain,
+                    }),
+                })
+            }
+            YExpr::AddrOf { place } => {
+                let (setup, value, _) = self.address_of_place(place)?;
+                Ok(RenderedValue {
+                    setup,
+                    value,
+                    class: expected
+                        .cloned()
+                        .unwrap_or_else(|| place.result_class.clone()),
+                })
+            }
+            YExpr::Load { place } => self.load_from_place(place),
+            YExpr::Call { callee, args } => {
+                let mut setup = Vec::new();
+                let args = args
+                    .iter()
+                    .map(|arg| self.local_value(*arg))
+                    .collect::<Result<Vec<_>, _>>()?;
+                for arg in &args {
+                    setup.extend(arg.setup.clone());
+                }
+                let rendered_args = args
+                    .into_iter()
+                    .map(|arg| arg.value)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let callee_plan = self.index.function(*callee)?;
+                let class = expected
+                    .cloned()
+                    .or_else(|| callee_plan.ret.clone())
+                    .ok_or_else(|| {
+                        YulError::InvalidYulPackage(format!(
+                            "value context requires a return value from `{}`",
+                            callee_plan.symbol
+                        ))
+                    })?;
+                Ok(RenderedValue {
+                    setup,
+                    value: format!(
+                        "{}({rendered_args})",
+                        super::util::prefix_yul_name(&callee_plan.symbol)
+                    ),
+                    class,
+                })
+            }
+            YExpr::EnumMake {
+                layout,
+                variant,
+                fields,
+            } => {
+                let temp = self.state.alloc_temp();
+                let ptr_class = expected
+                    .cloned()
+                    .unwrap_or(YulValueClass::MemoryPtr { layout: *layout });
+                let mut setup = self.alloc_memory_slot(&temp, &ptr_class)?;
+                setup.extend(self.write_enum_variant(
+                    &temp,
+                    YulAddressSpace::Memory,
+                    *layout,
+                    *variant,
+                    fields,
+                )?);
+                Ok(RenderedValue {
+                    setup,
+                    value: temp,
+                    class: ptr_class,
+                })
+            }
+            YExpr::EnumTagOfValue { value } => self.enum_tag_of_value(*value),
+            YExpr::EnumIsVariant { value, variant } => {
+                let tag = self.enum_tag_of_value(*value)?;
+                let cmp = format!("eq({}, {})", tag.value, variant.index);
+                let class = YulValueClass::Word(mir2::ScalarClass {
+                    repr: mir2::ScalarRepr::Bool,
+                    role: mir2::ScalarRole::Plain,
+                });
+                Ok(RenderedValue {
+                    setup: tag.setup,
+                    value: cmp,
+                    class,
+                })
+            }
+            YExpr::EnumExtract {
+                value,
+                variant,
+                field,
+            } => {
+                let base = self.local_value(*value)?;
+                let layout = self.class_layout(&base.class)?;
+                let ptr_class = base.class.clone();
+                let mut setup = base.setup;
+                let temp = self.state.alloc_temp();
+                let offset = self.variant_field_offset_bytes(layout, *variant, *field);
+                let addr = format!("add({}, {offset})", base.value);
+                let field_class = expected
+                    .cloned()
+                    .unwrap_or_else(|| panic!("enum extract requires destination class"));
+                match &field_class {
+                    YulValueClass::Word(_) => {
+                        setup.extend(self.read_scalar_from_addr(
+                            &field_class,
+                            Self::root_space_for_class(&ptr_class)?,
+                            addr.clone(),
+                            &temp,
+                        )?);
+                        Ok(RenderedValue {
+                            setup,
+                            value: temp,
+                            class: field_class,
+                        })
+                    }
+                    _ => Ok(RenderedValue {
+                        setup,
+                        value: addr,
+                        class: field_class,
+                    }),
+                }
+            }
+            YExpr::EnumGetTag { root } => self.enum_tag_of_value(*root),
+            YExpr::EnumAssertVariantRef { root, variant } => {
+                let tag = self.enum_tag_of_value(*root)?;
+                let mut setup = tag.setup;
+                setup.push(YulDoc::block(
+                    format!("if iszero(eq({}, {})) ", tag.value, variant.index),
+                    vec![YulDoc::line("invalid()")],
+                ));
+                let root = self.local_value(*root)?;
+                setup.extend(root.setup);
+                Ok(RenderedValue {
+                    setup,
+                    value: root.value,
+                    class: root.class,
+                })
+            }
         }
+    }
 
-        if let Some(intrinsic) = self.try_lower_core_numeric_intrinsic_call(call, state)? {
-            return Ok(intrinsic);
+    fn render_builtin_expr(
+        &mut self,
+        builtin: &YBuiltin<'db>,
+        expected: Option<&YulValueClass<'db>>,
+    ) -> Result<RenderedValue<'db>, YulError> {
+        Ok(match builtin {
+            YBuiltin::Mload { addr } => RenderedValue {
+                setup: Vec::new(),
+                value: format!("mload({})", self.scalar_word_expr(*addr)?),
+                class: expected
+                    .cloned()
+                    .unwrap_or_else(|| self.local_class(*addr).expect("mload addr class")),
+            },
+            YBuiltin::Msize => RenderedValue {
+                setup: Vec::new(),
+                value: "msize()".to_string(),
+                class: expected.cloned().unwrap_or_else(|| self.word_u256_class()),
+            },
+            YBuiltin::Sload { slot } => RenderedValue {
+                setup: Vec::new(),
+                value: format!("sload({})", self.scalar_word_expr(*slot)?),
+                class: expected.cloned().unwrap_or_else(|| self.word_u256_class()),
+            },
+            YBuiltin::CallValue => RenderedValue {
+                setup: Vec::new(),
+                value: "callvalue()".to_string(),
+                class: expected.cloned().unwrap_or_else(|| self.word_u256_class()),
+            },
+            YBuiltin::ReturnDataSize => RenderedValue {
+                setup: Vec::new(),
+                value: "returndatasize()".to_string(),
+                class: expected.cloned().unwrap_or_else(|| self.word_u256_class()),
+            },
+            YBuiltin::CallDataSize => RenderedValue {
+                setup: Vec::new(),
+                value: "calldatasize()".to_string(),
+                class: expected.cloned().unwrap_or_else(|| self.word_u256_class()),
+            },
+            YBuiltin::CallDataLoad { offset } => RenderedValue {
+                setup: Vec::new(),
+                value: format!("calldataload({})", self.scalar_word_expr(*offset)?),
+                class: expected.cloned().unwrap_or_else(|| self.word_u256_class()),
+            },
+            YBuiltin::CodeSize => RenderedValue {
+                setup: Vec::new(),
+                value: "codesize()".to_string(),
+                class: expected.cloned().unwrap_or_else(|| self.word_u256_class()),
+            },
+            YBuiltin::Keccak256 { offset, len } => RenderedValue {
+                setup: Vec::new(),
+                value: format!(
+                    "keccak256({}, {})",
+                    self.scalar_word_expr(*offset)?,
+                    self.scalar_word_expr(*len)?
+                ),
+                class: expected.cloned().unwrap_or_else(|| self.word_u256_class()),
+            },
+            YBuiltin::AddMod { lhs, rhs, modulus } => RenderedValue {
+                setup: Vec::new(),
+                value: format!(
+                    "addmod({}, {}, {})",
+                    self.scalar_word_expr(*lhs)?,
+                    self.scalar_word_expr(*rhs)?,
+                    self.scalar_word_expr(*modulus)?
+                ),
+                class: expected.cloned().unwrap_or_else(|| self.word_u256_class()),
+            },
+            YBuiltin::MulMod { lhs, rhs, modulus } => RenderedValue {
+                setup: Vec::new(),
+                value: format!(
+                    "mulmod({}, {}, {})",
+                    self.scalar_word_expr(*lhs)?,
+                    self.scalar_word_expr(*rhs)?,
+                    self.scalar_word_expr(*modulus)?
+                ),
+                class: expected.cloned().unwrap_or_else(|| self.word_u256_class()),
+            },
+            YBuiltin::IntrinsicArith { op, lhs, rhs, .. } => RenderedValue {
+                setup: Vec::new(),
+                value: match op {
+                    mir2::IntrinsicArithBinOp::Add => {
+                        format!(
+                            "add({}, {})",
+                            self.scalar_word_expr(*lhs)?,
+                            self.scalar_word_expr(*rhs)?
+                        )
+                    }
+                    mir2::IntrinsicArithBinOp::Sub => {
+                        format!(
+                            "sub({}, {})",
+                            self.scalar_word_expr(*lhs)?,
+                            self.scalar_word_expr(*rhs)?
+                        )
+                    }
+                    mir2::IntrinsicArithBinOp::Mul => {
+                        format!(
+                            "mul({}, {})",
+                            self.scalar_word_expr(*lhs)?,
+                            self.scalar_word_expr(*rhs)?
+                        )
+                    }
+                    mir2::IntrinsicArithBinOp::Div => {
+                        format!(
+                            "div({}, {})",
+                            self.scalar_word_expr(*lhs)?,
+                            self.scalar_word_expr(*rhs)?
+                        )
+                    }
+                    mir2::IntrinsicArithBinOp::Rem => {
+                        format!(
+                            "mod({}, {})",
+                            self.scalar_word_expr(*lhs)?,
+                            self.scalar_word_expr(*rhs)?
+                        )
+                    }
+                },
+                class: expected.cloned().unwrap_or_else(|| self.word_u256_class()),
+            },
+            YBuiltin::Saturating { op, lhs, rhs, .. } => RenderedValue {
+                setup: Vec::new(),
+                value: match op {
+                    mir2::SaturatingBinOp::Add => {
+                        format!(
+                            "add({}, {})",
+                            self.scalar_word_expr(*lhs)?,
+                            self.scalar_word_expr(*rhs)?
+                        )
+                    }
+                    mir2::SaturatingBinOp::Sub => {
+                        format!(
+                            "sub({}, {})",
+                            self.scalar_word_expr(*lhs)?,
+                            self.scalar_word_expr(*rhs)?
+                        )
+                    }
+                    mir2::SaturatingBinOp::Mul => {
+                        format!(
+                            "mul({}, {})",
+                            self.scalar_word_expr(*lhs)?,
+                            self.scalar_word_expr(*rhs)?
+                        )
+                    }
+                },
+                class: expected.cloned().unwrap_or_else(|| self.word_u256_class()),
+            },
+            YBuiltin::Address => self.word_builtin("address()"),
+            YBuiltin::Caller => self.word_builtin("caller()"),
+            YBuiltin::Origin => self.word_builtin("origin()"),
+            YBuiltin::GasPrice => self.word_builtin("gasprice()"),
+            YBuiltin::CoinBase => self.word_builtin("coinbase()"),
+            YBuiltin::Timestamp => self.word_builtin("timestamp()"),
+            YBuiltin::Number => self.word_builtin("number()"),
+            YBuiltin::PrevRandao => self.word_builtin("prevrandao()"),
+            YBuiltin::GasLimit => self.word_builtin("gaslimit()"),
+            YBuiltin::ChainId => self.word_builtin("chainid()"),
+            YBuiltin::BaseFee => self.word_builtin("basefee()"),
+            YBuiltin::SelfBalance => self.word_builtin("selfbalance()"),
+            YBuiltin::BlockHash { block } => {
+                self.word_builtin(&format!("blockhash({})", self.scalar_word_expr(*block)?))
+            }
+            YBuiltin::Gas => self.word_builtin("gas()"),
+            YBuiltin::CodeRegionOffset { region } => self.word_builtin(&format!(
+                "dataoffset(\"{}\")",
+                self.index.code_region_label(*region)?
+            )),
+            YBuiltin::CodeRegionLen { region } => self.word_builtin(&format!(
+                "datasize(\"{}\")",
+                self.index.code_region_label(*region)?
+            )),
+            YBuiltin::Malloc { size } => RenderedValue {
+                setup: Vec::new(),
+                value: self.alloc_expr_dynamic(&self.scalar_word_expr(*size)?),
+                class: expected.cloned().unwrap_or_else(|| self.word_u256_class()),
+            },
+            YBuiltin::Call {
+                gas,
+                addr,
+                value,
+                args_offset,
+                args_len,
+                ret_offset,
+                ret_len,
+            } => self.word_builtin(&format!(
+                "call({}, {}, {}, {}, {}, {}, {})",
+                self.scalar_word_expr(*gas)?,
+                self.scalar_word_expr(*addr)?,
+                self.scalar_word_expr(*value)?,
+                self.scalar_word_expr(*args_offset)?,
+                self.scalar_word_expr(*args_len)?,
+                self.scalar_word_expr(*ret_offset)?,
+                self.scalar_word_expr(*ret_len)?,
+            )),
+            YBuiltin::StaticCall {
+                gas,
+                addr,
+                args_offset,
+                args_len,
+                ret_offset,
+                ret_len,
+            } => self.word_builtin(&format!(
+                "staticcall({}, {}, {}, {}, {}, {})",
+                self.scalar_word_expr(*gas)?,
+                self.scalar_word_expr(*addr)?,
+                self.scalar_word_expr(*args_offset)?,
+                self.scalar_word_expr(*args_len)?,
+                self.scalar_word_expr(*ret_offset)?,
+                self.scalar_word_expr(*ret_len)?,
+            )),
+            YBuiltin::DelegateCall {
+                gas,
+                addr,
+                args_offset,
+                args_len,
+                ret_offset,
+                ret_len,
+            } => self.word_builtin(&format!(
+                "delegatecall({}, {}, {}, {}, {}, {})",
+                self.scalar_word_expr(*gas)?,
+                self.scalar_word_expr(*addr)?,
+                self.scalar_word_expr(*args_offset)?,
+                self.scalar_word_expr(*args_len)?,
+                self.scalar_word_expr(*ret_offset)?,
+                self.scalar_word_expr(*ret_len)?,
+            )),
+            YBuiltin::Create { value, offset, len } => self.word_builtin(&format!(
+                "create({}, {}, {})",
+                self.scalar_word_expr(*value)?,
+                self.scalar_word_expr(*offset)?,
+                self.scalar_word_expr(*len)?,
+            )),
+            YBuiltin::Create2 {
+                value,
+                offset,
+                len,
+                salt,
+            } => self.word_builtin(&format!(
+                "create2({}, {}, {}, {})",
+                self.scalar_word_expr(*value)?,
+                self.scalar_word_expr(*offset)?,
+                self.scalar_word_expr(*len)?,
+                self.scalar_word_expr(*salt)?,
+            )),
+            YBuiltin::CallDataSelector => self.word_builtin("shr(224, calldataload(0))"),
+            YBuiltin::MakeContractFieldHandle { slot, class, .. } => RenderedValue {
+                setup: Vec::new(),
+                value: slot.to_string(),
+                class: class.clone(),
+            },
+            YBuiltin::Mstore { .. }
+            | YBuiltin::Mstore8 { .. }
+            | YBuiltin::Sstore { .. }
+            | YBuiltin::ReturnDataCopy { .. }
+            | YBuiltin::CallDataCopy { .. }
+            | YBuiltin::CodeCopy { .. }
+            | YBuiltin::Log0 { .. }
+            | YBuiltin::Log1 { .. }
+            | YBuiltin::Log2 { .. }
+            | YBuiltin::Log3 { .. }
+            | YBuiltin::Log4 { .. } => {
+                return Err(YulError::InvalidYulPackage(format!(
+                    "statement-only builtin `{builtin:?}` used as an expression"
+                )));
+            }
+        })
+    }
+
+    fn word_builtin(&self, value: &str) -> RenderedValue<'db> {
+        RenderedValue {
+            setup: Vec::new(),
+            value: value.to_string(),
+            class: self.word_u256_class(),
         }
+    }
 
-        let is_evm_op = match call.target.as_ref() {
-            Some(mir::CallTargetRef::Hir(target)) => {
-                matches!(
-                    target.callable_def,
-                    CallableDef::Func(func) if is_std_evm_ops(self.db, func)
+    fn load_from_place(&mut self, place: &YulPlace<'db>) -> Result<RenderedValue<'db>, YulError> {
+        let (mut setup, addr, space) = self.address_of_place(place)?;
+        match place.storage_kind {
+            crate::yul::legalize::YulStorageKind::Cell => {
+                let temp = self.state.alloc_temp();
+                setup.extend(self.read_transport_word_from_addr(space, addr, &temp)?);
+                Ok(RenderedValue {
+                    setup,
+                    value: temp,
+                    class: place.result_class.clone(),
+                })
+            }
+            crate::yul::legalize::YulStorageKind::Bytes => Ok(RenderedValue {
+                setup,
+                value: addr,
+                class: place.result_class.clone(),
+            }),
+        }
+    }
+
+    pub(super) fn address_of_place(
+        &mut self,
+        place: &YulPlace<'db>,
+    ) -> Result<(Vec<YulDoc>, String, YulAddressSpace), YulError> {
+        let (setup, mut addr, space, mut layout) = match &place.root {
+            YulPlaceRoot::Slot(local) => {
+                let root = self.root_slot_name(*local)?.to_string();
+                let class = match &self.local(*local)?.root {
+                    crate::yul::legalize::YulLocalRoot::MemorySlot { class } => class,
+                    _ => unreachable!(),
+                };
+                (
+                    Vec::new(),
+                    root,
+                    YulAddressSpace::Memory,
+                    match class {
+                        mir2::RuntimeClass::AggregateValue { layout }
+                        | mir2::RuntimeClass::Handle { layout, .. } => Some(*layout),
+                        mir2::RuntimeClass::Scalar(_) | mir2::RuntimeClass::RawAddr { .. } => None,
+                    },
                 )
             }
-            Some(mir::CallTargetRef::Synthetic(_)) | None => false,
-        };
-        let callee = if let Some(name) = &call.resolved_name {
-            name.clone()
-        } else {
-            let Some(mir::CallTargetRef::Hir(target)) = call.target.as_ref() else {
-                return Err(YulError::Unsupported(
-                    "call is missing a resolved symbol name".into(),
-                ));
-            };
-            match target.callable_def {
-                CallableDef::Func(func) => function_name(self.db, func),
-                CallableDef::VariantCtor(_) => {
-                    return Err(YulError::Unsupported(
-                        "callable without hir function definition is not supported yet".into(),
-                    ));
-                }
-            }
-        };
-        let callee = if is_evm_op {
-            callee
-        } else {
-            prefix_yul_name(&callee)
-        };
-        let call_abi = call
-            .resolved_name
-            .as_ref()
-            .and_then(|name| self.call_abis.get(name))
-            .or_else(|| {
-                let mir::CallTargetRef::Hir(target) = call.target.as_ref()? else {
-                    return None;
-                };
-                let CallableDef::Func(func) = target.callable_def else {
-                    return None;
-                };
-                self.call_abis.get(&function_name(self.db, func))
-            })
-            .cloned();
-        let mut lowered_args = Vec::with_capacity(call.args.len());
-        for (idx, &arg) in call.args.iter().enumerate() {
-            let expected = call_abi
-                .as_ref()
-                .and_then(|abi| abi.value_params.get(idx).copied())
-                .or_else(|| {
-                    (idx == 0).then(|| {
-                        call.receiver_space.map(|address_space| CallArgAbi {
-                            address_space,
-                            const_backing: if matches!(
-                                address_space,
-                                mir::ir::AddressSpaceKind::Code
-                            ) {
-                                mir::ir::LocalConstBacking::Const
-                            } else {
-                                mir::ir::LocalConstBacking::Runtime
-                            },
-                        })
-                    })?
-                });
-            lowered_args.push(self.lower_call_arg_value(docs, arg, state, expected)?);
-        }
-        for (idx, &arg) in call.effect_args.iter().enumerate() {
-            let expected = call_abi
-                .as_ref()
-                .and_then(|abi| abi.effect_params.get(idx).copied());
-            lowered_args.push(self.lower_call_arg_value(docs, arg, state, expected)?);
-        }
-        if lowered_args.is_empty() {
-            Ok(format!("{callee}()"))
-        } else {
-            Ok(format!("{callee}({})", lowered_args.join(", ")))
-        }
-    }
-
-    fn lower_call_arg_value(
-        &mut self,
-        docs: &mut Vec<YulDoc>,
-        value_id: ValueId,
-        state: &mut BlockState,
-        expected: Option<CallArgAbi>,
-    ) -> Result<String, YulError> {
-        let value = self.mir_func.body.value(value_id);
-        let code_backed = self.lower_call_arg_value_originates_from_code(value_id);
-        if code_backed {
-            if expected.is_some_and(|expected| {
-                !matches!(expected.address_space, mir::ir::AddressSpaceKind::Memory)
-                    || matches!(expected.const_backing, mir::ir::LocalConstBacking::Const)
-            }) {
-                return self.lower_value(value_id, state);
-            }
-
-            let materialized_ty = match &value.origin {
-                ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) => {
-                    self.mir_func.body.local(*local).ty
-                }
-                ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
-                    self.resolve_place(place)?.final_state().ty
-                }
-                ValueOrigin::TransparentCast { value } => self.mir_func.body.value(*value).ty,
-                _ => self
-                    .mir_func
-                    .body
-                    .value_pointer_info(value_id)
-                    .and_then(|info| info.target_ty)
-                    .unwrap_or(value.ty),
-            };
-            let Some(size_bytes) =
-                layout::ty_memory_size_in(self.db, &self.layout, materialized_ty).or_else(|| {
-                    layout::ty_memory_size_or_word_in(self.db, &self.layout, materialized_ty)
-                })
-            else {
-                return Err(YulError::Unsupported(format!(
-                    "cannot determine materialization size for call arg `{}`",
-                    materialized_ty.pretty_print(self.db)
-                )));
-            };
-            if size_bytes == 0 {
-                return Ok("0".into());
-            }
-
-            let temp = state.alloc_local();
-            self.emit_alloc_value(docs, &temp, size_bytes, true);
-            let src_addr = self.lower_value(value_id, state)?;
-            docs.push(YulDoc::line(format!(
-                "datacopy({temp}, {src_addr}, {size_bytes})"
-            )));
-            return Ok(temp);
-        }
-
-        self.lower_value(value_id, state)
-    }
-
-    fn lower_call_arg_value_originates_from_code(&self, value_id: ValueId) -> bool {
-        let value = self.mir_func.body.value(value_id);
-        if value.repr.is_ref()
-            && self
-                .mir_func
-                .body
-                .value_pointer_info(value_id)
-                .is_some_and(|info| matches!(info.address_space, mir::ir::AddressSpaceKind::Code))
-        {
-            return true;
-        }
-        match &value.origin {
-            ValueOrigin::ConstRegion(_) => true,
-            ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) => {
-                let local = self.mir_func.body.local(*local);
-                local.const_backing.is_const()
-                    && matches!(local.address_space, mir::ir::AddressSpaceKind::Code)
-            }
-            ValueOrigin::TransparentCast { value } => {
-                self.lower_call_arg_value_originates_from_code(*value)
-            }
-            ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
-                if let Some((local, _)) =
-                    mir::ir::resolve_local_projection_root(&self.mir_func.body.values, place.base)
-                {
-                    let local = self.mir_func.body.local(local);
-                    if local.const_backing.is_const()
-                        && matches!(local.address_space, mir::ir::AddressSpaceKind::Code)
-                    {
-                        return true;
-                    }
-                }
-                self.resolve_place(place)
-                    .ok()
-                    .and_then(|resolved| resolved.final_state().location_address_space())
-                    .is_some_and(|space| matches!(space, mir::ir::AddressSpaceKind::Code))
-            }
-            _ => matches!(
-                value.repr.address_space(),
-                Some(mir::ir::AddressSpaceKind::Code)
-            ),
-        }
-    }
-
-    /// Lowers special MIR synthetic values such as constants into Yul expressions.
-    ///
-    /// * `value` - Synthetic value emitted during MIR construction.
-    ///
-    /// Returns the literal Yul expression for the synthetic value.
-    fn lower_synthetic_value(
-        &self,
-        value: &SyntheticValue,
-        ty: TyId<'db>,
-    ) -> Result<String, YulError> {
-        match value {
-            SyntheticValue::Int(int) => {
-                let ty = ty
-                    .as_capability(self.db)
-                    .map(|(_, inner)| inner)
-                    .unwrap_or(ty);
-                let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(self.db).data(self.db) else {
-                    return Ok(int.to_string());
-                };
-                let maybe_signed_subword = match prim {
-                    PrimTy::I8 => Some((BigUint::from(0xffu16), BigUint::from(0x80u16), 0u8)),
-                    PrimTy::I16 => Some((BigUint::from(0xffffu32), BigUint::from(0x8000u32), 1)),
-                    PrimTy::I32 => Some((
-                        BigUint::from(0xffff_ffffu64),
-                        BigUint::from(0x8000_0000u64),
-                        3,
-                    )),
-                    PrimTy::I64 => Some((BigUint::from(u64::MAX), BigUint::from(1u128 << 63), 7)),
-                    PrimTy::I128 => {
-                        Some((BigUint::from(u128::MAX), BigUint::from(1u128 << 127), 15))
-                    }
-                    _ => None,
-                };
-                if let Some((mask, sign_bit, byte)) = maybe_signed_subword {
-                    let masked = int & mask;
-                    if (&masked & sign_bit) != BigUint::from(0u8) {
-                        return Ok(format!("signextend({byte}, {})", masked));
-                    }
-                    return Ok(masked.to_string());
-                }
-                Ok(int.to_string())
-            }
-            SyntheticValue::Bool(flag) => Ok(if *flag { "1" } else { "0" }.into()),
-            SyntheticValue::Bytes(bytes) => {
-                if bytes.len() > 32 {
-                    return Err(YulError::Unsupported(format!(
-                        "SyntheticValue::Bytes must fit in one EVM word, got {} bytes",
-                        bytes.len()
-                    )));
-                }
-                Ok(format!("0x{}", hex::encode(bytes)))
-            }
-        }
-    }
-
-    /// Lowers a FieldPtr (pointer arithmetic for nested struct access) into a Yul add expression.
-    ///
-    /// * `field_ptr` - The FieldPtrOrigin containing base pointer and offset.
-    /// * `state` - Current bindings for previously-evaluated expressions.
-    ///
-    /// Returns a Yul expression representing `base + offset`.
-    fn lower_field_ptr(
-        &self,
-        field_ptr: &FieldPtrOrigin,
-        state: &BlockState,
-    ) -> Result<String, YulError> {
-        let base = self.lower_value(field_ptr.base, state)?;
-        if field_ptr.offset_bytes == 0 {
-            Ok(base)
-        } else {
-            let offset = match field_ptr.addr_space {
-                mir::ir::AddressSpaceKind::Memory
-                | mir::ir::AddressSpaceKind::Calldata
-                | mir::ir::AddressSpaceKind::Code => field_ptr.offset_bytes,
-                mir::ir::AddressSpaceKind::Storage
-                | mir::ir::AddressSpaceKind::TransientStorage => field_ptr.offset_bytes / 32,
-            };
-            Ok(format!("add({}, {})", base, offset))
-        }
-    }
-
-    /// Lowers a PlaceLoad (load value from a place with projection path).
-    ///
-    /// Walks the projection path to compute the byte offset from the base,
-    /// then emits a load instruction based on the address space, applying
-    /// the appropriate type conversion (masking, sign extension, etc.).
-    pub(super) fn lower_place_load(
-        &self,
-        place: &Place<'db>,
-        loaded_ty: TyId<'db>,
-        state: &BlockState,
-    ) -> Result<String, YulError> {
-        if layout::ty_size_bytes_in(self.db, &self.layout, loaded_ty).is_some_and(|size| size == 0)
-        {
-            return Ok("0".into());
-        }
-
-        let packed = self.is_packed_scalar_array_access(place, loaded_ty)?;
-        let (addr, place_state) = self.lower_place_terminal(place, state)?;
-        let Some(address_space) = place_state.location_address_space() else {
-            return Ok(self.apply_from_word_conversion(&addr, loaded_ty));
-        };
-        let raw_load = match address_space {
-            mir::ir::AddressSpaceKind::Memory => {
-                if packed {
-                    format!("byte(0, mload({addr}))")
-                } else {
-                    format!("mload({addr})")
-                }
-            }
-            mir::ir::AddressSpaceKind::Calldata => format!("calldataload({addr})"),
-            mir::ir::AddressSpaceKind::Storage => format!("sload({addr})"),
-            mir::ir::AddressSpaceKind::TransientStorage => format!("tload({addr})"),
-            mir::ir::AddressSpaceKind::Code => {
-                return Err(YulError::Unsupported(
-                    "cannot lower code space load into a pure expression. intercept in emit_load_inst".into(),
-                ));
-            }
-        };
-
-        // Apply type-specific conversion (std::evm::word::WordRepr::from_word equivalent)
-        Ok(self.apply_from_word_conversion(&raw_load, loaded_ty))
-    }
-
-    pub(super) fn is_packed_scalar_array_access(
-        &self,
-        place: &Place<'db>,
-        scalar_ty: TyId<'db>,
-    ) -> Result<bool, YulError> {
-        layout::is_packed_scalar_array_access(self.db, &self.mir_func.body, place, scalar_ty)
-            .map_err(YulError::Unsupported)
-    }
-
-    /// Applies the `WordRepr::from_word` conversion for a given type.
-    ///
-    /// This mirrors the stdlib word-conversion semantics defined in:
-    /// - `ingots/std/src/evm/word.fe` (`WordRepr` trait)
-    ///
-    /// Conversion rules:
-    /// - bool: word != 0
-    /// - u8/u16/u32/u64/u128: mask to appropriate width
-    /// - u256: identity
-    /// - i8/i16/i32/i64/i128/i256: sign extension
-    ///
-    /// NOTE: This is a single source of truth for codegen. If the stdlib word
-    /// conversion semantics change, this function must be updated to match.
-    pub(super) fn apply_from_word_conversion(&self, raw_load: &str, ty: TyId<'db>) -> String {
-        let ty = mir::repr::word_conversion_leaf_ty(self.db, ty);
-        let base_ty = ty.base_ty(self.db);
-        if let TyData::TyBase(TyBase::Prim(prim)) = base_ty.data(self.db) {
-            match prim {
-                PrimTy::Bool => {
-                    // bool: iszero(eq(word, 0)) which is equivalent to word != 0
-                    format!("iszero(eq({raw_load}, 0))")
-                }
-                PrimTy::U8 => format!("and({raw_load}, 0xff)"),
-                PrimTy::U16 => format!("and({raw_load}, 0xffff)"),
-                PrimTy::U32 => format!("and({raw_load}, 0xffffffff)"),
-                PrimTy::U64 => format!("and({raw_load}, 0xffffffffffffffff)"),
-                PrimTy::U128 => {
-                    format!("and({raw_load}, 0xffffffffffffffffffffffffffffffff)")
-                }
-                PrimTy::U256 | PrimTy::Usize => {
-                    // No conversion needed for full-width unsigned
-                    raw_load.to_string()
-                }
-                PrimTy::I8 => {
-                    // Sign extension for i8
-                    format!("signextend(0, and({raw_load}, 0xff))")
-                }
-                PrimTy::I16 => {
-                    format!("signextend(1, and({raw_load}, 0xffff))")
-                }
-                PrimTy::I32 => {
-                    format!("signextend(3, and({raw_load}, 0xffffffff))")
-                }
-                PrimTy::I64 => {
-                    format!("signextend(7, and({raw_load}, 0xffffffffffffffff))")
-                }
-                PrimTy::I128 => {
-                    format!("signextend(15, and({raw_load}, 0xffffffffffffffffffffffffffffffff))")
-                }
-                PrimTy::I256 | PrimTy::Isize => {
-                    // Full-width signed doesn't need masking, sign is already there
-                    raw_load.to_string()
-                }
-                // Aggregate/pointer-like types - no conversion
-                PrimTy::String
-                | PrimTy::Array
-                | PrimTy::Tuple(_)
-                | PrimTy::Ptr
-                | PrimTy::View
-                | PrimTy::BorrowMut
-                | PrimTy::BorrowRef => raw_load.to_string(),
-            }
-        } else {
-            // Non-primitive types (aggregates, etc.) - no conversion
-            raw_load.to_string()
-        }
-    }
-
-    /// Applies the `WordRepr::to_word` conversion for a given type.
-    pub(super) fn apply_to_word_conversion(&self, raw_value: &str, ty: TyId<'db>) -> String {
-        let ty = mir::repr::word_conversion_leaf_ty(self.db, ty);
-        let base_ty = ty.base_ty(self.db);
-        if let TyData::TyBase(TyBase::Prim(prim)) = base_ty.data(self.db) {
-            match prim {
-                PrimTy::Bool => format!("iszero(iszero({raw_value}))"),
-                PrimTy::U8 => format!("and({raw_value}, 0xff)"),
-                PrimTy::U16 => format!("and({raw_value}, 0xffff)"),
-                PrimTy::U32 => format!("and({raw_value}, 0xffffffff)"),
-                PrimTy::U64 => format!("and({raw_value}, 0xffffffffffffffff)"),
-                PrimTy::U128 => {
-                    format!("and({raw_value}, 0xffffffffffffffffffffffffffffffff)")
-                }
-                PrimTy::U256 | PrimTy::Usize => raw_value.to_string(),
-                PrimTy::I8
-                | PrimTy::I16
-                | PrimTy::I32
-                | PrimTy::I64
-                | PrimTy::I128
-                | PrimTy::I256
-                | PrimTy::Isize => raw_value.to_string(),
-                PrimTy::String
-                | PrimTy::Array
-                | PrimTy::Tuple(_)
-                | PrimTy::Ptr
-                | PrimTy::View
-                | PrimTy::BorrowMut
-                | PrimTy::BorrowRef => raw_value.to_string(),
-            }
-        } else {
-            raw_value.to_string()
-        }
-    }
-
-    /// Lowers a PlaceRef (reference to a place with projection path).
-    ///
-    /// Walks the projection path to compute the byte offset from the base,
-    /// returning the pointer without loading.
-    pub(super) fn lower_place_ref(
-        &self,
-        place: &Place<'db>,
-        state: &BlockState,
-    ) -> Result<String, YulError> {
-        self.lower_place_address(place, state)
-    }
-
-    pub(super) fn lower_place_space(
-        &self,
-        place: &Place<'db>,
-    ) -> Result<mir::ir::AddressSpaceKind, YulError> {
-        let resolved = self.resolve_place(place)?;
-        resolved
-            .final_state()
-            .location_address_space()
-            .ok_or_else(|| YulError::Unsupported(format!("place is not a location: {place:?}")))
-    }
-
-    fn resolve_place(&self, place: &Place<'db>) -> Result<ResolvedPlace<'db>, YulError> {
-        let core = self.core_lib();
-        mir::repr::resolve_place(
-            self.db,
-            &core,
-            &self.mir_func.body.values,
-            &self.mir_func.body.locals,
-            place,
-        )
-        .ok_or_else(|| {
-            let base = self.mir_func.body.value(place.base);
-            YulError::Unsupported(format!(
-                "failed to resolve MIR place {place:?} (base ty={}, repr={:?}, origin={:?}, pointer_info={:?})",
-                base.ty.pretty_print(self.db),
-                base.repr,
-                base.origin,
-                base.pointer_info,
-            ))
-        })
-    }
-
-    pub(super) fn place_yields_location_value(
-        &self,
-        place: &Place<'db>,
-        value_ty: TyId<'db>,
-        pointer_info: Option<mir::ir::PointerInfo<'db>>,
-    ) -> Result<bool, YulError> {
-        mir::repr::place_yields_location_value(
-            self.db,
-            &self.core_lib(),
-            &self.mir_func.body.values,
-            &self.mir_func.body.locals,
-            place,
-            value_ty,
-            pointer_info,
-        )
-        .ok_or_else(|| YulError::Unsupported(format!("failed to resolve MIR place {place:?}")))
-    }
-
-    fn lower_place_segment_terminal(
-        &self,
-        segment_base_expr: String,
-        segment: &ResolvedPlaceSegment<'db>,
-        state: &BlockState,
-    ) -> Result<(String, PlaceState<'db>), YulError> {
-        if segment.projections.is_empty() {
-            return Ok((segment_base_expr, segment.terminal_state()));
-        }
-        let address_space = segment
-            .base
-            .location_address_space()
-            .ok_or_else(|| YulError::Unsupported("place segment is not a location".to_string()))?;
-
-        let mut base_expr = segment_base_expr;
-        let mut total_offset: usize = 0;
-        let is_slot_addressed = matches!(
-            address_space,
-            mir::ir::AddressSpaceKind::Storage | mir::ir::AddressSpaceKind::TransientStorage
-        );
-
-        for step in &segment.projections {
-            match &step.projection {
-                Projection::Field(field_idx) => {
-                    if mir::repr::transparent_field0_inner_ty(self.db, step.owner.ty, *field_idx)
-                        == Some(step.result.ty)
-                    {
-                        continue;
-                    }
-                    total_offset += if is_slot_addressed {
-                        layout::field_offset_slots(self.db, step.owner.ty, *field_idx)
-                    } else {
-                        layout::field_offset_memory_in(
-                            self.db,
-                            &self.layout,
-                            step.owner.ty,
-                            *field_idx,
-                        )
-                    };
-                }
-                Projection::VariantField {
-                    variant,
-                    enum_ty,
-                    field_idx,
-                } => {
-                    if is_slot_addressed {
-                        total_offset += 1;
-                        total_offset += layout::variant_field_offset_slots(
-                            self.db, *enum_ty, *variant, *field_idx,
-                        );
-                    } else {
-                        total_offset += self.layout.discriminant_size_bytes;
-                        total_offset += layout::variant_field_offset_memory_in(
-                            self.db,
-                            &self.layout,
-                            *enum_ty,
-                            *variant,
-                            *field_idx,
-                        );
-                    }
-                }
-                Projection::Discriminant => {}
-                Projection::Index(idx_source) => {
-                    let stride = if is_slot_addressed {
-                        layout::array_elem_stride_slots(self.db, step.owner.ty)
-                    } else {
-                        layout::array_elem_stride_memory_in(self.db, &self.layout, step.owner.ty)
-                    }
-                    .ok_or_else(|| {
-                        YulError::Unsupported(
-                            "place projection: array index access on non-array type".to_string(),
-                        )
-                    })?;
-
-                    match idx_source {
-                        IndexSource::Constant(idx) => {
-                            total_offset += idx * stride;
-                        }
-                        IndexSource::Dynamic(value_id) => {
-                            if total_offset != 0 {
-                                base_expr = format!("add({base_expr}, {total_offset})");
-                                total_offset = 0;
-                            }
-                            let idx_expr = self.lower_value(*value_id, state)?;
-                            let offset_expr = if stride == 1 {
-                                idx_expr
-                            } else {
-                                format!("mul({idx_expr}, {stride})")
-                            };
-                            base_expr = format!("add({base_expr}, {offset_expr})");
-                        }
-                    }
-                }
-                Projection::Deref => {
-                    return Err(YulError::Unsupported(
-                        "place projection: deref reached segment walker".to_string(),
-                    ));
-                }
-            }
-        }
-
-        if total_offset != 0 {
-            base_expr = format!("add({base_expr}, {total_offset})");
-        }
-
-        Ok((base_expr, segment.terminal_state()))
-    }
-
-    fn lower_place_terminal(
-        &self,
-        place: &Place<'db>,
-        state: &BlockState,
-    ) -> Result<(String, PlaceState<'db>), YulError> {
-        let resolved = self.resolve_place(place)?;
-        let root_expr = if let ValueOrigin::Local(local) =
-            &self.mir_func.body.value(place.base).origin
-            && let Some(spill) = self.mir_func.body.spill_slots.get(local)
-        {
-            state.resolve_local(*spill).ok_or_else(|| {
-                let local_data = self.mir_func.body.local(*spill);
-                YulError::Unsupported(format!(
-                    "unbound MIR spill slot local reached codegen (func={}, local=l{} `{}`, ty={})",
-                    self.mir_func.symbol_name,
-                    spill.index(),
-                    local_data.name,
-                    local_data.ty.pretty_print(self.db),
-                ))
-            })?
-        } else {
-            self.lower_value(place.base, state)?
-        };
-        let mut current_terminal: Option<(String, PlaceState<'db>)> = None;
-
-        for (idx, segment) in resolved.segments.iter().enumerate() {
-            let segment_base_expr = match (idx == 0, segment.start_kind, current_terminal.take()) {
-                (true, None, None)
-                | (true, Some(mir::repr::DerefStepKind::ReuseLocation), None)
-                | (true, Some(mir::repr::DerefStepKind::UseBaseValue), None) => root_expr.clone(),
-                (true, Some(mir::repr::DerefStepKind::LoadLocationValue), None) => self
-                    .apply_from_word_conversion(
-                        &Self::yul_load(
-                            segment.before.location_address_space().ok_or_else(|| {
-                                YulError::Unsupported(
-                                    "place terminal is not a location".to_string(),
-                                )
-                            })?,
-                            &root_expr,
-                        ),
-                        segment.before.ty,
-                    ),
-                (false, Some(mir::repr::DerefStepKind::ReuseLocation), Some((addr, _))) => addr,
+            YulPlaceRoot::Ptr {
+                local,
+                space,
+                class,
+            } => {
+                let value = self.local_value(*local)?;
                 (
-                    false,
-                    Some(mir::repr::DerefStepKind::LoadLocationValue),
-                    Some((addr, terminal_state)),
-                ) => self.apply_from_word_conversion(
-                    &Self::yul_load(
-                        terminal_state.location_address_space().ok_or_else(|| {
-                            YulError::Unsupported("place terminal is not a location".to_string())
-                        })?,
-                        &addr,
-                    ),
-                    segment.before.ty,
-                ),
-                (false, None, Some(_))
-                | (false, Some(mir::repr::DerefStepKind::UseBaseValue), Some(_))
-                | (true, None, Some(_))
-                | (true, Some(_), Some(_))
-                | (false, _, None) => {
-                    return Err(YulError::Unsupported(format!(
-                        "invalid resolved place segment sequence: {place:?}"
-                    )));
+                    value.setup,
+                    value.value,
+                    *space,
+                    self.class_layout(class).ok(),
+                )
+            }
+        };
+
+        for elem in place.path.iter() {
+            match elem {
+                YulPlaceElem::Field { field, class } => {
+                    let current_layout = layout.ok_or_else(|| {
+                        YulError::Layout("field projection requires a layout".to_string())
+                    })?;
+                    let offset = self.field_offset_bytes(current_layout, *field);
+                    addr = self.project_addr(space, addr, offset);
+                    layout = self.class_layout(class).ok();
                 }
-            };
-            current_terminal = Some(
-                self.lower_place_segment_terminal(segment_base_expr, segment, state)
-                    .map_err(|err| {
-                        YulError::Unsupported(format!(
-                            "{err}; place={place:?}, segment_index={idx}, segment={segment:?}"
-                        ))
-                    })?,
-            );
+                YulPlaceElem::Index { index, class } => {
+                    let current_layout = layout.ok_or_else(|| {
+                        YulError::Layout("index projection requires an array layout".to_string())
+                    })?;
+                    let stride = self.index_stride_bytes(current_layout);
+                    let index_expr = match index {
+                        hir::projection::IndexSource::Constant(idx) => idx.to_string(),
+                        hir::projection::IndexSource::Dynamic(local) => {
+                            self.scalar_word_expr(*local)?
+                        }
+                    };
+                    addr =
+                        self.project_addr_expr(space, addr, format!("mul({index_expr}, {stride})"));
+                    layout = self.class_layout(class).ok();
+                }
+                YulPlaceElem::VariantField {
+                    variant,
+                    field,
+                    class,
+                } => {
+                    let current_layout = layout.ok_or_else(|| {
+                        YulError::Layout("variant projection requires an enum layout".to_string())
+                    })?;
+                    let offset = self.variant_field_offset_bytes(current_layout, *variant, *field);
+                    addr = self.project_addr(space, addr, offset);
+                    layout = self.class_layout(class).ok();
+                }
+            }
         }
 
-        current_terminal.ok_or_else(|| {
-            YulError::Unsupported(format!("resolved place produced no segments: {place:?}"))
+        Ok((setup, addr, space))
+    }
+
+    fn project_addr(&self, space: YulAddressSpace, base: String, offset: usize) -> String {
+        if offset == 0 {
+            base
+        } else {
+            self.project_addr_expr(space, base, offset.to_string())
+        }
+    }
+
+    fn project_addr_expr(&self, space: YulAddressSpace, base: String, offset: String) -> String {
+        match space {
+            YulAddressSpace::Memory | YulAddressSpace::Code | YulAddressSpace::Calldata => {
+                format!("add({base}, {offset})")
+            }
+            YulAddressSpace::Storage | YulAddressSpace::Transient => {
+                let word_offset = format!(
+                    "div(add({offset}, {}), {})",
+                    self.index.package_layout().word_size_bytes - 1,
+                    self.index.package_layout().word_size_bytes
+                );
+                format!("add({base}, {word_offset})")
+            }
+        }
+    }
+
+    pub(super) fn read_scalar_from_addr(
+        &mut self,
+        class: &YulValueClass<'db>,
+        space: YulAddressSpace,
+        addr: String,
+        dst: &str,
+    ) -> Result<Vec<YulDoc>, YulError> {
+        let YulValueClass::Word(word_class) = class else {
+            return Err(YulError::InvalidYulPackage(format!(
+                "attempted scalar load with non-word class `{class:?}`"
+            )));
+        };
+        let value = match space {
+            YulAddressSpace::Memory => format!("mload({addr})"),
+            YulAddressSpace::Storage => format!("sload({addr})"),
+            YulAddressSpace::Transient => format!("tload({addr})"),
+            YulAddressSpace::Calldata => format!("calldataload({addr})"),
+            YulAddressSpace::Code => {
+                return Ok(vec![
+                    YulDoc::line(format!("let {dst} := {}", self.alloc_expr(32))),
+                    YulDoc::line(format!("datacopy({dst}, {addr}, 32)")),
+                    YulDoc::line(format!("{dst} := mload({dst})")),
+                ]);
+            }
+        };
+        Ok(vec![YulDoc::line(format!(
+            "let {dst} := {}",
+            self.canonicalize_scalar_expr(value, word_class)
+        ))])
+    }
+
+    pub(super) fn read_transport_word_from_addr(
+        &mut self,
+        space: YulAddressSpace,
+        addr: String,
+        dst: &str,
+    ) -> Result<Vec<YulDoc>, YulError> {
+        let value = match space {
+            YulAddressSpace::Memory => format!("mload({addr})"),
+            YulAddressSpace::Storage => format!("sload({addr})"),
+            YulAddressSpace::Transient => format!("tload({addr})"),
+            YulAddressSpace::Calldata => format!("calldataload({addr})"),
+            YulAddressSpace::Code => {
+                return Ok(vec![
+                    YulDoc::line(format!("let {dst} := {}", self.alloc_expr(32))),
+                    YulDoc::line(format!("datacopy({dst}, {addr}, 32)")),
+                    YulDoc::line(format!("{dst} := mload({dst})")),
+                ]);
+            }
+        };
+        Ok(vec![YulDoc::line(format!("let {dst} := {value}"))])
+    }
+
+    fn enum_tag_of_value(&mut self, value: YLocalId) -> Result<RenderedValue<'db>, YulError> {
+        let value = self.local_value(value)?;
+        let layout = self.class_layout(&value.class)?;
+        let tag_class = self.enum_tag_class(layout)?;
+        let mut setup = value.setup;
+        let temp = self.state.alloc_temp();
+        setup.extend(self.read_scalar_from_addr(
+            &YulValueClass::Word(tag_class.clone()),
+            Self::root_space_for_class(&value.class)?,
+            value.value,
+            &temp,
+        )?);
+        Ok(RenderedValue {
+            setup,
+            value: temp,
+            class: YulValueClass::Word(tag_class),
         })
     }
 
-    /// Computes the address for a place by walking the projection path.
-    ///
-    /// Returns a Yul expression representing the memory/storage address.
-    /// For memory, computes byte offsets. For storage, computes slot offsets.
-    pub(super) fn lower_place_address(
+    pub(super) fn enum_tag_class(
         &self,
-        place: &Place<'db>,
-        state: &BlockState,
+        layout: mir2::LayoutId<'db>,
+    ) -> Result<mir2::ScalarClass<'db>, YulError> {
+        let mir2::Layout::Enum(data) = layout.data(self.db) else {
+            return Err(YulError::Layout(format!(
+                "enum tag requested for non-enum layout `{layout:?}`"
+            )));
+        };
+        Ok(data.tag)
+    }
+
+    fn render_unary_expr(
+        &self,
+        op: UnOp,
+        value: &str,
+        class: &YulValueClass<'db>,
     ) -> Result<String, YulError> {
-        self.lower_place_terminal(place, state)
-            .map(|(addr, _)| addr)
+        let YulValueClass::Word(word) = class else {
+            return Err(YulError::Unsupported(format!(
+                "unary op `{op:?}` requires a word destination"
+            )));
+        };
+        let raw = match op {
+            UnOp::Plus => value.to_string(),
+            UnOp::Minus => format!("sub(0, {value})"),
+            UnOp::Not => format!("iszero({value})"),
+            UnOp::BitNot => format!("not({value})"),
+            UnOp::Mut | UnOp::Ref => {
+                return Err(YulError::Unsupported(format!(
+                    "unary op `{op:?}` is not supported in Yul emission"
+                )));
+            }
+        };
+        Ok(self.canonicalize_scalar_expr(raw, word))
+    }
+
+    fn render_binary_expr(
+        &self,
+        op: BinOp,
+        lhs: &str,
+        rhs: &str,
+        class: &YulValueClass<'db>,
+    ) -> Result<String, YulError> {
+        let raw = match op {
+            BinOp::Arith(ArithBinOp::Add) => format!("add({lhs}, {rhs})"),
+            BinOp::Arith(ArithBinOp::Sub) => format!("sub({lhs}, {rhs})"),
+            BinOp::Arith(ArithBinOp::Mul) => format!("mul({lhs}, {rhs})"),
+            BinOp::Arith(ArithBinOp::Div) => format!("div({lhs}, {rhs})"),
+            BinOp::Arith(ArithBinOp::Rem) => format!("mod({lhs}, {rhs})"),
+            BinOp::Arith(ArithBinOp::Pow) => format!("exp({lhs}, {rhs})"),
+            BinOp::Arith(ArithBinOp::LShift) => format!("shl({rhs}, {lhs})"),
+            BinOp::Arith(ArithBinOp::RShift) => format!("shr({rhs}, {lhs})"),
+            BinOp::Arith(ArithBinOp::BitAnd) => format!("and({lhs}, {rhs})"),
+            BinOp::Arith(ArithBinOp::BitOr) => format!("or({lhs}, {rhs})"),
+            BinOp::Arith(ArithBinOp::BitXor) => format!("xor({lhs}, {rhs})"),
+            BinOp::Comp(CompBinOp::Eq) => format!("eq({lhs}, {rhs})"),
+            BinOp::Comp(CompBinOp::NotEq) => format!("iszero(eq({lhs}, {rhs}))"),
+            BinOp::Comp(CompBinOp::Lt) => format!("lt({lhs}, {rhs})"),
+            BinOp::Comp(CompBinOp::LtEq) => format!("iszero(gt({lhs}, {rhs}))"),
+            BinOp::Comp(CompBinOp::Gt) => format!("gt({lhs}, {rhs})"),
+            BinOp::Comp(CompBinOp::GtEq) => format!("iszero(lt({lhs}, {rhs}))"),
+            BinOp::Logical(LogicalBinOp::And) => {
+                format!("and(iszero(iszero({lhs})), iszero(iszero({rhs})))")
+            }
+            BinOp::Logical(LogicalBinOp::Or) => {
+                format!("or(iszero(iszero({lhs})), iszero(iszero({rhs})))")
+            }
+            BinOp::Arith(ArithBinOp::Range) | BinOp::Index => {
+                return Err(YulError::Unsupported(format!(
+                    "binary op `{op:?}` is not supported in Yul emission"
+                )));
+            }
+        };
+        let YulValueClass::Word(word) = class else {
+            return Err(YulError::Unsupported(format!(
+                "binary op `{op:?}` requires a word destination"
+            )));
+        };
+        Ok(self.canonicalize_scalar_expr(raw, word))
+    }
+
+    fn cast_word_expr(&self, value: &str, to: &mir2::ScalarClass<'db>) -> String {
+        self.canonicalize_scalar_expr(value.to_string(), to)
+    }
+
+    fn canonicalize_scalar_expr(&self, value: String, class: &mir2::ScalarClass<'db>) -> String {
+        match class.repr {
+            mir2::ScalarRepr::Bool => format!("iszero(iszero({value}))"),
+            mir2::ScalarRepr::Int { bits, signed } => {
+                if bits == 256 {
+                    value
+                } else if signed {
+                    format!(
+                        "signextend({}, and({value}, {}))",
+                        bits.div_ceil(8) - 1,
+                        Self::raw_word_mask(class).unwrap_or_else(|| {
+                            "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                                .to_string()
+                        })
+                    )
+                } else if let Some(mask) = Self::raw_word_mask(class) {
+                    format!("and({value}, {mask})")
+                } else {
+                    value
+                }
+            }
+            mir2::ScalarRepr::FixedBytes { .. } | mir2::ScalarRepr::Address { .. } => {
+                if let Some(mask) = Self::raw_word_mask(class) {
+                    format!("and({value}, {mask})")
+                } else {
+                    value
+                }
+            }
+        }
+    }
+
+    pub(super) fn const_scalar_expr(&self, value: &mir2::ConstScalar) -> String {
+        match value {
+            mir2::ConstScalar::Bool(flag) => u8::from(*flag).to_string(),
+            mir2::ConstScalar::Int { words, .. } => {
+                if words.is_empty() {
+                    "0".to_string()
+                } else {
+                    format!("0x{}", hex::encode(words))
+                }
+            }
+            mir2::ConstScalar::FixedBytes(bytes) => format!("0x{}", hex::encode(bytes)),
+            mir2::ConstScalar::Address { bytes, .. } => format!("0x{}", hex::encode(bytes)),
+        }
+    }
+
+    fn scalar_repr_for_const(&self, value: &mir2::ConstScalar) -> mir2::ScalarRepr {
+        match value {
+            mir2::ConstScalar::Bool(_) => mir2::ScalarRepr::Bool,
+            mir2::ConstScalar::Int { bits, signed, .. } => mir2::ScalarRepr::Int {
+                bits: *bits,
+                signed: *signed,
+            },
+            mir2::ConstScalar::FixedBytes(bytes) => mir2::ScalarRepr::FixedBytes {
+                len: bytes.len() as u16,
+            },
+            mir2::ConstScalar::Address { bits, .. } => mir2::ScalarRepr::Address { bits: *bits },
+        }
+    }
+
+    pub(super) fn alloc_expr(&self, size: usize) -> String {
+        self.alloc_expr_dynamic(&size.to_string())
+    }
+
+    pub(super) fn alloc_expr_dynamic(&self, size: &str) -> String {
+        format!("allocate({size})")
+    }
+
+    fn word_u256_class(&self) -> YulValueClass<'db> {
+        YulValueClass::Word(mir2::ScalarClass {
+            repr: mir2::ScalarRepr::Int {
+                bits: 256,
+                signed: false,
+            },
+            role: mir2::ScalarRole::Plain,
+        })
     }
 }

@@ -2124,6 +2124,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe-mir2"
+version = "26.0.0-alpha.7"
+dependencies = [
+ "cranelift-entity 0.115.1",
+ "fe-common",
+ "fe-hir",
+ "num-bigint",
+ "num-traits",
+ "rustc-hash 2.1.1",
+ "salsa",
+]
+
+[[package]]
 name = "fe-parser"
 version = "26.0.0"
 dependencies = [

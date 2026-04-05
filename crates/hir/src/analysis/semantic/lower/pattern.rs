@@ -1,18 +1,25 @@
+use cranelift_entity::EntityRef;
 use num_bigint::BigInt;
 
 use crate::{
     analysis::{
+        HirAnalysisDb,
         semantic::{
             FieldIndex, SBlockId, SConst, SExpr, SStmtKind, STerminatorKind, SValueId,
             VariantIndex, bool_const, bytes_const, int_const,
         },
         ty::{
+            decision_tree::{
+                Case, DecisionTree, LeafNode, Projection, ProjectionPath, SwitchNode,
+                build_decision_tree,
+            },
+            pattern_analysis::PatternMatrix,
             pattern_ir::{ConstructorKind, ValidatedPatId, ValidatedPatKind},
-            ty_def::TyId,
+            ty_def::{PrimTy, TyBase, TyData, TyId, instantiate_adt_field_ty},
         },
     },
     hir_def::{
-        LitKind, PatId,
+        LitKind, MatchArm, PatId,
         expr::{BinOp, CompBinOp},
     },
 };
@@ -121,6 +128,29 @@ impl<'db> SmirLowerCtxt<'db> {
     pub(super) fn pattern_enum_ty(&self, pat: PatId) -> Option<TyId<'db>> {
         let root = self.typed_body.pattern_root(pat)?;
         self.pattern_enum_ty_from_root(root)
+    }
+
+    pub(super) fn lower_match_expr_with_decision_tree(
+        &mut self,
+        value: SValueId,
+        result: crate::analysis::semantic::SLocalId,
+        join_bb: SBlockId,
+        arms: &[MatchArm],
+    ) -> SValueId {
+        let roots = arms
+            .iter()
+            .map(|arm| self.typed_body.pattern_root(arm.pat))
+            .collect::<Option<Vec<_>>>()
+            .unwrap_or_else(|| panic!("decision-tree match lowering requires validated patterns"));
+        let tree = build_decision_tree(
+            self.db,
+            &PatternMatrix::from_roots(self.typed_body.pattern_store(), &roots),
+        );
+        if !self.lower_decision_tree(&tree, value, result, join_bb, arms) {
+            self.set_synthetic_terminator(join_bb, STerminatorKind::Goto(join_bb));
+        }
+        self.switch_to(join_bb);
+        result
     }
 
     fn arm_variants_from_root(&self, pat: ValidatedPatId) -> ArmVariants {
@@ -266,6 +296,193 @@ impl<'db> SmirLowerCtxt<'db> {
         }
     }
 
+    fn lower_decision_tree(
+        &mut self,
+        tree: &DecisionTree<'db>,
+        root_value: SValueId,
+        result: crate::analysis::semantic::SLocalId,
+        join_bb: SBlockId,
+        arms: &[MatchArm],
+    ) -> bool {
+        match tree {
+            DecisionTree::Leaf(leaf) => {
+                self.bind_decision_tree_leaf(leaf, root_value);
+                let arm = &arms[leaf.arm_index];
+                let arm_value = self.lower_expr(arm.body);
+                if self.is_terminated(self.current) {
+                    false
+                } else {
+                    self.push_synthetic_stmt(SStmtKind::Assign {
+                        dst: result,
+                        expr: SExpr::Use(arm_value),
+                    });
+                    self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
+                    true
+                }
+            }
+            DecisionTree::Switch(switch) => {
+                self.lower_decision_tree_switch(switch, root_value, result, join_bb, arms)
+            }
+        }
+    }
+
+    fn lower_decision_tree_switch(
+        &mut self,
+        switch: &SwitchNode<'db>,
+        root_value: SValueId,
+        result: crate::analysis::semantic::SLocalId,
+        join_bb: SBlockId,
+        arms: &[MatchArm],
+    ) -> bool {
+        let occurrence = self.project_decision_tree_path(root_value, &switch.occurrence);
+        let case_blocks = switch
+            .arms
+            .iter()
+            .map(|(case, tree)| (case, tree, self.new_block()))
+            .collect::<Vec<_>>();
+        let mut dispatch_bb = self.current;
+        for (idx, (case, _, case_bb)) in case_blocks.iter().enumerate() {
+            if idx > 0 {
+                self.switch_to(dispatch_bb);
+            }
+            let is_last = idx + 1 == case_blocks.len();
+            match case {
+                Case::Default | Case::Constructor(ConstructorKind::Type(_)) if is_last => {
+                    self.set_synthetic_terminator(self.current, STerminatorKind::Goto(*case_bb));
+                    break;
+                }
+                Case::Default | Case::Constructor(ConstructorKind::Type(_)) => {
+                    self.set_synthetic_terminator(self.current, STerminatorKind::Goto(*case_bb));
+                    break;
+                }
+                Case::Constructor(ctor) if is_last => {
+                    let _ = ctor;
+                    self.set_synthetic_terminator(self.current, STerminatorKind::Goto(*case_bb));
+                    break;
+                }
+                Case::Constructor(ctor) => {
+                    let test = match ctor {
+                        ConstructorKind::Literal(lit, ty) => {
+                            let rhs = self.literal_pattern_value(*ty, *lit);
+                            SExpr::Binary {
+                                op: BinOp::Comp(CompBinOp::Eq),
+                                lhs: occurrence,
+                                rhs,
+                            }
+                        }
+                        ConstructorKind::Variant(variant, _) => SExpr::IsEnumVariant {
+                            value: occurrence,
+                            variant: VariantIndex(variant.idx),
+                        },
+                        ConstructorKind::Type(_) => unreachable!(),
+                    };
+                    let next_bb = self.new_block();
+                    let cond = self.emit_expr(TyId::bool(self.db), test);
+                    self.set_synthetic_terminator(
+                        self.current,
+                        STerminatorKind::Branch {
+                            cond,
+                            then_bb: *case_bb,
+                            else_bb: next_bb,
+                        },
+                    );
+                    dispatch_bb = next_bb;
+                }
+            }
+        }
+
+        let mut join_reachable = false;
+        for (_, subtree, block) in case_blocks {
+            self.switch_to(block);
+            join_reachable |= self.lower_decision_tree(subtree, root_value, result, join_bb, arms);
+        }
+        join_reachable
+    }
+
+    fn bind_decision_tree_leaf(&mut self, leaf: &LeafNode<'db>, root_value: SValueId) {
+        for (binding_ref, path) in &leaf.bindings {
+            if let Some(binding) = self.typed_body.pat_binding(binding_ref.representative_pat) {
+                let dst = self.alloc_binding_local(binding);
+                let src = self.project_decision_tree_path(root_value, path);
+                self.push_synthetic_stmt(SStmtKind::Assign {
+                    dst,
+                    expr: SExpr::Use(src),
+                });
+            }
+        }
+    }
+
+    fn project_decision_tree_path(
+        &mut self,
+        root_value: SValueId,
+        path: &ProjectionPath<'db>,
+    ) -> SValueId {
+        let mut value = root_value;
+        for projection in path.iter() {
+            value = self.project_decision_tree_value(value, projection);
+        }
+        value
+    }
+
+    fn project_decision_tree_value(
+        &mut self,
+        base: SValueId,
+        projection: &Projection<'db>,
+    ) -> SValueId {
+        let base_ty = self.projectable_place_ty(self.locals[base.index()].ty);
+        match projection {
+            Projection::Field(field) => {
+                let field_ty = base_ty
+                    .field_types(self.db)
+                    .get(*field)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        TyId::invalid(self.db, crate::analysis::ty::ty_def::InvalidCause::Other)
+                    });
+                self.emit_expr(
+                    field_ty,
+                    SExpr::Field {
+                        base,
+                        field: FieldIndex(*field as u16),
+                    },
+                )
+            }
+            Projection::VariantField {
+                variant,
+                enum_ty,
+                field_idx,
+            } => {
+                let field_ty = instantiate_adt_field_ty(
+                    self.db,
+                    enum_ty
+                        .adt_def(self.db)
+                        .expect("enum variant projection should have an ADT definition"),
+                    variant.idx as usize,
+                    *field_idx,
+                    enum_ty.generic_args(self.db),
+                );
+                self.emit_expr(
+                    field_ty,
+                    SExpr::ExtractEnumField {
+                        value: base,
+                        variant: VariantIndex(variant.idx),
+                        field: FieldIndex(*field_idx as u16),
+                    },
+                )
+            }
+            Projection::Discriminant => self.emit_expr(
+                enum_tag_ty(self.db, base_ty),
+                SExpr::GetEnumTag { value: base },
+            ),
+            Projection::Deref => {
+                panic!("decision-tree lowering does not support deref projections yet")
+            }
+            Projection::Index(_) => {
+                panic!("decision-tree lowering does not support index projections yet")
+            }
+        }
+    }
+
     fn lower_field_branches(
         &mut self,
         value: SValueId,
@@ -343,5 +560,23 @@ impl<'db> SmirLowerCtxt<'db> {
             LitKind::Bool(value) => bool_const(self.db, value),
         };
         self.emit_expr(ty, SExpr::Const(SConst::Value(value)))
+    }
+}
+
+fn enum_tag_ty<'db>(db: &'db dyn HirAnalysisDb, enum_ty: TyId<'db>) -> TyId<'db> {
+    let variant_count = enum_ty
+        .as_enum(db)
+        .map(|enum_| enum_.len_variants(db))
+        .unwrap_or(0);
+    if variant_count <= u8::MAX as usize + 1 {
+        TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U8)))
+    } else if variant_count <= u16::MAX as usize + 1 {
+        TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U16)))
+    } else if variant_count <= u32::MAX as usize + 1 {
+        TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U32)))
+    } else if variant_count <= u64::MAX as usize {
+        TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U64)))
+    } else {
+        TyId::u256(db)
     }
 }

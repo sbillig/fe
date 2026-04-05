@@ -10,8 +10,8 @@ use super::{
     },
     diagnostics::{ImplDiag, TyDiagCollection},
     effects::{
-        EffectKeyKind, normalize_effect_identity_trait, normalize_effect_identity_ty,
-        place_effect_provider_param_index_map,
+        CanonicalEffectIdentity, EffectKeyCanonMode, EffectKeyKind,
+        canonical_effect_identity_for_binding, place_effect_provider_param_index_map,
     },
     fold::{AssocTySubst, TyFoldable, TyFolder},
     layout_holes::{
@@ -27,7 +27,8 @@ use super::{
     ty_def::{InvalidCause, TyData, TyId},
 };
 use crate::analysis::{HirAnalysisDb, semantic::instantiate_with_generic_args};
-use crate::hir_def::{CallableDef, Expr, Partial, PathId, PathKind, scope_graph::ScopeId};
+use crate::hir_def::{CallableDef, Expr, Partial, PathKind, scope_graph::ScopeId};
+use common::indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
 type ParamSubstMap<'db> = FxHashMap<(ScopeId<'db>, usize), TyId<'db>>;
@@ -85,7 +86,7 @@ pub(super) fn compare_impl_method<'db>(
         return;
     }
 
-    compare_constraints(db, impl_m, trait_m, &param_subst, sink);
+    compare_constraints(db, impl_m, trait_m, trait_inst, &param_subst, sink);
 }
 
 /// Checks if the number of generic parameters of the implemented method is the
@@ -446,19 +447,10 @@ fn trait_to_impl_param_subst<'db>(
 }
 
 #[derive(Clone, Copy)]
-struct EffectIdentity<'db> {
-    key_kind: EffectKeyKind,
-    key_ty: Option<TyId<'db>>,
-    key_trait: Option<TraitInstId<'db>>,
-    key_path: PathId<'db>,
-    is_mut: bool,
-}
-
-#[derive(Clone, Copy)]
 struct EffectProviderEntry<'db> {
     effect_idx: usize,
     provider_param: TyId<'db>,
-    identity: EffectIdentity<'db>,
+    identity: CanonicalEffectIdentity<'db>,
 }
 
 fn map_effect_provider_params_by_identity<'db>(
@@ -541,28 +533,35 @@ fn collect_effect_provider_entries<'db>(
                 .copied()
                 .flatten()?;
             let provider_param = *params.get(provider_param_idx)?;
-            let key_ty = binding.key.key_ty().map(|key_ty| {
-                let key_ty = param_subst.map_or(key_ty, |subst| {
-                    instantiate_with_partial_map(db, Binder::bind(key_ty), subst)
-                });
-                normalize_effect_identity_ty(db, key_ty, scope, assumptions, Some(trait_inst))
-            });
-            let key_trait = binding.key.key_trait().map(|key_trait| {
-                let key_trait = param_subst.map_or(key_trait, |subst| {
-                    instantiate_with_partial_map(db, Binder::bind(key_trait), subst)
-                });
-                normalize_effect_identity_trait(db, key_trait, scope, assumptions, Some(trait_inst))
-            });
+            let mut binding = binding.clone();
+            if let Some(subst) = param_subst {
+                binding.key = match binding.key {
+                    crate::core::semantic::EffectRequirementKey::Type(key_ty) => {
+                        crate::core::semantic::EffectRequirementKey::Type(
+                            instantiate_with_partial_map(db, Binder::bind(key_ty), subst),
+                        )
+                    }
+                    crate::core::semantic::EffectRequirementKey::Trait(key_trait) => {
+                        crate::core::semantic::EffectRequirementKey::Trait(
+                            instantiate_with_partial_map(db, Binder::bind(key_trait), subst),
+                        )
+                    }
+                    crate::core::semantic::EffectRequirementKey::Other => {
+                        crate::core::semantic::EffectRequirementKey::Other
+                    }
+                };
+            }
             Some(EffectProviderEntry {
                 effect_idx,
                 provider_param,
-                identity: EffectIdentity {
-                    key_kind: binding.key.kind(),
-                    key_ty,
-                    key_trait,
-                    key_path: binding.binding_path,
-                    is_mut: binding.is_mut,
-                },
+                identity: canonical_effect_identity_for_binding(
+                    db,
+                    &binding,
+                    scope,
+                    assumptions,
+                    Some(trait_inst),
+                    EffectKeyCanonMode::Compare,
+                ),
             })
         })
         .collect()
@@ -611,8 +610,8 @@ pub(crate) fn trait_effect_key_matches_with<'db>(
 
 fn effect_identity_matches<'db>(
     db: &'db dyn HirAnalysisDb,
-    trait_identity: EffectIdentity<'db>,
-    impl_identity: EffectIdentity<'db>,
+    trait_identity: CanonicalEffectIdentity<'db>,
+    impl_identity: CanonicalEffectIdentity<'db>,
 ) -> bool {
     if trait_identity.key_kind != impl_identity.key_kind
         || trait_identity.is_mut != impl_identity.is_mut
@@ -654,6 +653,85 @@ where
         };
         param_subst.get(&key).copied().unwrap_or(param_ty)
     })
+}
+
+fn normalize_predicate_for_comparison<'db>(
+    db: &'db dyn HirAnalysisDb,
+    pred: TraitInstId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    trait_inst: TraitInstId<'db>,
+    rebase_same_trait_uses: bool,
+) -> TraitInstId<'db> {
+    let args: Vec<_> = pred
+        .args(db)
+        .iter()
+        .copied()
+        .map(|ty| {
+            let ty = normalize_ty(db, ty, scope, assumptions);
+            normalize_compare_assoc_consts(
+                db,
+                ty,
+                scope,
+                assumptions,
+                trait_inst,
+                rebase_same_trait_uses,
+            )
+        })
+        .collect();
+    let mut assoc_type_bindings: Vec<_> = pred
+        .assoc_type_bindings(db)
+        .iter()
+        .map(|(name, &ty)| {
+            let ty = normalize_ty(db, ty, scope, assumptions);
+            (
+                *name,
+                normalize_compare_assoc_consts(
+                    db,
+                    ty,
+                    scope,
+                    assumptions,
+                    trait_inst,
+                    rebase_same_trait_uses,
+                ),
+            )
+        })
+        .collect();
+    assoc_type_bindings.sort_by(|(lhs, _), (rhs, _)| lhs.data(db).cmp(rhs.data(db)));
+    TraitInstId::new(
+        db,
+        pred.def(db),
+        args,
+        assoc_type_bindings.into_iter().collect::<IndexMap<_, _>>(),
+    )
+}
+
+fn normalize_predicates_for_comparison<'db>(
+    db: &'db dyn HirAnalysisDb,
+    preds: PredicateListId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    trait_inst: TraitInstId<'db>,
+    rebase_same_trait_uses: bool,
+) -> PredicateListId<'db> {
+    PredicateListId::new(
+        db,
+        preds
+            .list(db)
+            .iter()
+            .copied()
+            .map(|pred| {
+                normalize_predicate_for_comparison(
+                    db,
+                    pred,
+                    scope,
+                    assumptions,
+                    trait_inst,
+                    rebase_same_trait_uses,
+                )
+            })
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn normalize_compare_assoc_consts<'db>(
@@ -825,6 +903,7 @@ fn compare_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_m: CallableDef<'db>,
     trait_m: CallableDef<'db>,
+    trait_inst: TraitInstId<'db>,
     param_subst: &ParamSubstMap<'db>,
     sink: &mut Vec<TyDiagCollection<'db>>,
 ) -> bool {
@@ -833,6 +912,25 @@ fn compare_constraints<'db>(
         db,
         collect_func_def_constraints(db, trait_m, false),
         param_subst,
+    );
+    let compare_assumptions = impl_m_constraints
+        .merge(db, trait_m_constraints)
+        .extend_all_bounds(db);
+    let impl_m_constraints = normalize_predicates_for_comparison(
+        db,
+        impl_m_constraints,
+        trait_m.scope(),
+        compare_assumptions,
+        trait_inst,
+        false,
+    );
+    let trait_m_constraints = normalize_predicates_for_comparison(
+        db,
+        trait_m_constraints,
+        trait_m.scope(),
+        compare_assumptions,
+        trait_inst,
+        true,
     );
     let mut unsatisfied_goals = ThinVec::new();
     for &goal in impl_m_constraints.list(db) {

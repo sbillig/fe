@@ -493,6 +493,7 @@ pub fn effect_handle_metadata<'db>(
     assumptions: PredicateListId<'db>,
     ty: TyId<'db>,
 ) -> Option<EffectHandleMetadata<'db>> {
+    let ty = ty_def::strip_derived_adt_layout_args(db, ty);
     if ty.as_capability(db).is_some() || !ty_may_require_effect_handle_metadata(db, ty) {
         return None;
     }
@@ -530,7 +531,7 @@ pub fn effect_handle_metadata<'db>(
     }
 }
 
-fn instantiate_trait_self<'db>(
+pub(crate) fn instantiate_trait_self<'db>(
     db: &'db dyn HirAnalysisDb,
     inst: trait_def::TraitInstId<'db>,
     self_ty: TyId<'db>,

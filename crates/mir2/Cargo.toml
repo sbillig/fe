@@ -10,6 +10,7 @@ description = "Semantic/runtime MIR v2 architecture for Fe"
 doctest = false
 
 [dependencies]
+common.workspace = true
 hir.workspace = true
 cranelift-entity.workspace = true
 rustc-hash.workspace = true

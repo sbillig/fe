@@ -1,19 +1,20 @@
 use std::fmt;
 
-/// Errors that can happen while emitting Yul.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum YulError {
-    /// Raised when a function declaration lacks a body in HIR.
-    MissingBody(String),
-    /// Raised for features the Yul backend does not yet support.
     Unsupported(String),
+    InvalidYulPackage(String),
+    Layout(String),
+    ConstSerialization(String),
 }
 
 impl fmt::Display for YulError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            YulError::MissingBody(name) => write!(f, "function `{name}` does not have a body"),
-            YulError::Unsupported(msg) => write!(f, "{msg}"),
+            YulError::Unsupported(message)
+            | YulError::InvalidYulPackage(message)
+            | YulError::Layout(message)
+            | YulError::ConstSerialization(message) => write!(f, "{message}"),
         }
     }
 }

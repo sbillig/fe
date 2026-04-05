@@ -15,7 +15,7 @@ pub use self::contract::{
     resolve_variant_in_msg,
 };
 pub use self::path::RecordLike;
-use crate::analysis::name_resolution::resolve_path;
+use crate::analysis::name_resolution::{ResolvedVariant, resolve_path};
 pub use crate::analysis::ty::ProviderAddressSpace;
 use crate::analysis::ty::fold::TyFoldable;
 use crate::analysis::ty::provider::{address_space_from_ty, provider_semantics};
@@ -220,8 +220,8 @@ fn typed_body_for_bodyless_func<'db>(
         expr_ty: FxHashMap::default(),
         implicit_moves: FxHashSet::default(),
         const_refs: FxHashMap::default(),
-        code_region_refs: FxHashMap::default(),
-        callables: FxHashMap::default(),
+        value_path_refs: FxHashMap::default(),
+        semantic_expr_lowering: FxHashMap::default(),
         call_effect_args: FxHashMap::default(),
         return_borrow_provider: None,
         param_bindings,
@@ -1309,7 +1309,21 @@ impl<'db> TyChecker<'db> {
                                     pending.expr,
                                     call_span.method_name().into(),
                                 );
-                                self.env.register_callable(pending.expr, callable);
+                                if let Some(kind) =
+                                    self.code_region_method_kind(recv_ty, pending.method_name)
+                                    && call_args.len() == 1
+                                    && let Some(region) =
+                                        self.resolve_code_region_ref(call_args[0].expr)
+                                {
+                                    self.env.register_code_region_intrinsic(
+                                        pending.expr,
+                                        callable,
+                                        region,
+                                        kind,
+                                    );
+                                } else {
+                                    self.env.register_semantic_call(pending.expr, callable);
+                                }
                             }
 
                             progressed = true;
@@ -2244,8 +2258,8 @@ pub struct TypedBody<'db> {
     expr_ty: FxHashMap<ExprId, ExprProp<'db>>,
     implicit_moves: FxHashSet<ExprId>,
     const_refs: FxHashMap<ExprId, ConstRef<'db>>,
-    code_region_refs: FxHashMap<ExprId, SemanticCodeRegionRef<'db>>,
-    callables: FxHashMap<ExprId, Callable<'db>>,
+    value_path_refs: FxHashMap<ExprId, ValuePathRef<'db>>,
+    semantic_expr_lowering: FxHashMap<ExprId, SemanticExprLowering<'db>>,
     call_effect_args: FxHashMap<ExprId, Vec<ResolvedEffectArg<'db>>>,
     return_borrow_provider: Option<ProviderAddressSpace>,
     /// Bindings for function parameters (indexed by param position)
@@ -2273,6 +2287,105 @@ pub enum ReturnProvenance {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Update)]
+pub enum ValuePathRef<'db> {
+    UnitVariant(ResolvedVariant<'db>),
+    TypeConst(TyId<'db>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum CodeRegionIntrinsicKind {
+    Offset,
+    Len,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum ConstIntrinsicKind {
+    SizeOf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Update)]
+pub enum SemanticExprLowering<'db> {
+    Call {
+        callable: Callable<'db>,
+    },
+    CodeRegionIntrinsic {
+        callable: Callable<'db>,
+        region: SemanticCodeRegionRef<'db>,
+        kind: CodeRegionIntrinsicKind,
+    },
+    ConstIntrinsic {
+        callable: Callable<'db>,
+        kind: ConstIntrinsicKind,
+    },
+}
+
+impl<'db> TyVisitable<'db> for ValuePathRef<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: crate::analysis::ty::visitor::TyVisitor<'db> + ?Sized,
+    {
+        match self {
+            Self::UnitVariant(variant) => variant.ty.visit_with(visitor),
+            Self::TypeConst(ty) => ty.visit_with(visitor),
+        }
+    }
+}
+
+impl<'db> TyFoldable<'db> for ValuePathRef<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: crate::analysis::ty::fold::TyFolder<'db>,
+    {
+        match self {
+            Self::UnitVariant(variant) => Self::UnitVariant(ResolvedVariant {
+                ty: variant.ty.fold_with(db, folder),
+                ..variant
+            }),
+            Self::TypeConst(ty) => Self::TypeConst(ty.fold_with(db, folder)),
+        }
+    }
+}
+
+impl<'db> TyVisitable<'db> for SemanticExprLowering<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: crate::analysis::ty::visitor::TyVisitor<'db> + ?Sized,
+    {
+        match self {
+            Self::Call { callable }
+            | Self::CodeRegionIntrinsic { callable, .. }
+            | Self::ConstIntrinsic { callable, .. } => callable.visit_with(visitor),
+        }
+    }
+}
+
+impl<'db> TyFoldable<'db> for SemanticExprLowering<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: crate::analysis::ty::fold::TyFolder<'db>,
+    {
+        match self {
+            Self::Call { callable } => Self::Call {
+                callable: callable.fold_with(db, folder),
+            },
+            Self::CodeRegionIntrinsic {
+                callable,
+                region,
+                kind,
+            } => Self::CodeRegionIntrinsic {
+                callable: callable.fold_with(db, folder),
+                region,
+                kind,
+            },
+            Self::ConstIntrinsic { callable, kind } => Self::ConstIntrinsic {
+                callable: callable.fold_with(db, folder),
+                kind,
+            },
+        }
+    }
+}
+
 impl<'db> TyVisitable<'db> for TypedBody<'db> {
     fn visit_with<V>(&self, visitor: &mut V)
     where
@@ -2289,8 +2402,11 @@ impl<'db> TyVisitable<'db> for TypedBody<'db> {
         for cref in self.const_refs.values() {
             cref.visit_with(visitor);
         }
-        for callable in self.callables.values() {
-            callable.visit_with(visitor);
+        for value_path in self.value_path_refs.values() {
+            value_path.visit_with(visitor);
+        }
+        for lowering in self.semantic_expr_lowering.values() {
+            lowering.visit_with(visitor);
         }
         self.pattern_store.visit_with(visitor);
         for seq in self.for_loop_seq.values() {
@@ -2321,11 +2437,15 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             .into_iter()
             .map(|(expr, cref)| (expr, cref.fold_with(db, folder)))
             .collect();
-        let code_region_refs = self.code_region_refs;
-        let callables = self
-            .callables
+        let value_path_refs = self
+            .value_path_refs
             .into_iter()
-            .map(|(expr, callable)| (expr, callable.fold_with(db, folder)))
+            .map(|(expr, path)| (expr, path.fold_with(db, folder)))
+            .collect();
+        let semantic_expr_lowering = self
+            .semantic_expr_lowering
+            .into_iter()
+            .map(|(expr, lowering)| (expr, lowering.fold_with(db, folder)))
             .collect();
         let call_effect_args = self
             .call_effect_args
@@ -2364,8 +2484,8 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             expr_ty,
             implicit_moves: self.implicit_moves,
             const_refs,
-            code_region_refs,
-            callables,
+            value_path_refs,
+            semantic_expr_lowering,
             pat_binding_modes: self.pat_binding_modes,
             call_effect_args,
             return_borrow_provider: self.return_borrow_provider,
@@ -2410,8 +2530,12 @@ impl<'db> TypedBody<'db> {
         self.const_refs.get(&expr).copied()
     }
 
-    pub fn code_region_ref(&self, expr: ExprId) -> Option<&SemanticCodeRegionRef<'db>> {
-        self.code_region_refs.get(&expr)
+    pub fn value_path_ref(&self, expr: ExprId) -> Option<ValuePathRef<'db>> {
+        self.value_path_refs.get(&expr).copied()
+    }
+
+    pub fn semantic_expr_lowering(&self, expr: ExprId) -> Option<&SemanticExprLowering<'db>> {
+        self.semantic_expr_lowering.get(&expr)
     }
 
     pub fn pat_ty(&self, db: &'db dyn HirAnalysisDb, pat: PatId) -> TyId<'db> {
@@ -2422,7 +2546,18 @@ impl<'db> TypedBody<'db> {
     }
 
     pub fn callable_expr(&self, expr: ExprId) -> Option<&Callable<'db>> {
-        self.callables.get(&expr)
+        match self.semantic_expr_lowering(expr)? {
+            SemanticExprLowering::Call { callable }
+            | SemanticExprLowering::CodeRegionIntrinsic { callable, .. }
+            | SemanticExprLowering::ConstIntrinsic { callable, .. } => Some(callable),
+        }
+    }
+
+    pub fn code_region_ref(&self, expr: ExprId) -> Option<&SemanticCodeRegionRef<'db>> {
+        match self.semantic_expr_lowering(expr)? {
+            SemanticExprLowering::CodeRegionIntrinsic { region, .. } => Some(region),
+            SemanticExprLowering::Call { .. } | SemanticExprLowering::ConstIntrinsic { .. } => None,
+        }
     }
 
     pub fn call_effect_args(&self, call_expr: ExprId) -> Option<&[ResolvedEffectArg<'db>]> {
@@ -2457,7 +2592,7 @@ impl<'db> TypedBody<'db> {
                     .requirements(db)
                     .iter()
                     .find(|requirement| requirement.binding_idx as usize == idx)
-                    .and_then(|requirement| requirement.key.key_ty())
+                    .and_then(|requirement| requirement.key.binding_ty(db))
                     .or_else(|| {
                         let view = crate::core::semantic::EffectEnvView::new(site);
                         view.resolutions(db)
@@ -3378,8 +3513,8 @@ impl<'db> TypedBody<'db> {
             expr_ty: FxHashMap::default(),
             implicit_moves: FxHashSet::default(),
             const_refs: FxHashMap::default(),
-            code_region_refs: FxHashMap::default(),
-            callables: FxHashMap::default(),
+            value_path_refs: FxHashMap::default(),
+            semantic_expr_lowering: FxHashMap::default(),
             call_effect_args: FxHashMap::default(),
             return_borrow_provider: None,
             param_bindings: Vec::new(),

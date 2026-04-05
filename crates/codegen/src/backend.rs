@@ -127,9 +127,8 @@ impl From<crate::sonatina::LowerError> for BackendError {
 impl From<crate::EmitModuleError> for BackendError {
     fn from(err: crate::EmitModuleError) -> Self {
         match err {
-            crate::EmitModuleError::Unsupported(message) => {
-                BackendError::Yul(crate::yul::YulError::Unsupported(message))
-            }
+            crate::EmitModuleError::RuntimeLower(err) => BackendError::RuntimeLower(err),
+            crate::EmitModuleError::Yul(err) => BackendError::Yul(err),
         }
     }
 }

@@ -11,8 +11,8 @@ use crate::{
         HirAnalysisDb,
         diagnostics::SpannedHirAnalysisDb,
         semantic::{
-            GenericSubst, ImplEnv, NSLocal, SemOrigin, SemanticInstance, SemanticInstanceKey,
-            get_or_build_semantic_instance,
+            NSLocal, SemOrigin, SemanticInstance, get_or_build_semantic_instance,
+            identity_semantic_instance_key,
         },
         ty::{
             ty_check::{BodyOwner, ParamSite},
@@ -29,7 +29,7 @@ use super::{
         BorrowDiagnosticId, BorrowInputRef, BorrowSummary, BorrowSummaryId, BorrowTransform,
         NBorrowRoot, NBorrowRootId, NEffectArgValue, NExpr, NOperand, NSPlace, NSPlaceRoot,
         NSProjectionPath, NSStmtKind, NSTerminatorKind, NormalizedBindingLowering,
-        NormalizedSemanticBody, ReadMode, SemanticBorrowSummaryResult,
+        NormalizedSemanticBody, ReadMode, SemanticBorrowCheckResult, SemanticBorrowSummaryResult,
     },
     normalize::normalize_semantic_body,
 };
@@ -124,7 +124,21 @@ pub fn check_semantic_borrows<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> Result<(), CompleteDiagnostic> {
-    Borrowck::new(db, instance)?.check()
+    match semantic_borrow_check_query(db, instance) {
+        SemanticBorrowCheckResult::Ok => Ok(()),
+        SemanticBorrowCheckResult::Err(diag) => Err(diag.diag(db).clone()),
+    }
+}
+
+#[salsa::tracked]
+fn semantic_borrow_check_query<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> SemanticBorrowCheckResult<'db> {
+    match Borrowck::new(db, instance).and_then(Borrowck::check) {
+        Ok(()) => SemanticBorrowCheckResult::Ok,
+        Err(diag) => SemanticBorrowCheckResult::Err(BorrowDiagnosticId::new(db, diag)),
+    }
 }
 
 pub fn collect_semantic_borrow_diagnostics<'db>(
@@ -178,12 +192,7 @@ fn collect_owner<'db>(
     owner: BodyOwner<'db>,
     diags: &mut Vec<CompleteDiagnostic>,
 ) {
-    let key = SemanticInstanceKey::new(
-        db,
-        owner,
-        GenericSubst::empty(db),
-        ImplEnv::empty(db, owner.scope()),
-    );
+    let key = identity_semantic_instance_key(db, owner);
     let instance = get_or_build_semantic_instance(db, key);
     if let Err(diag) = check_semantic_borrows(db, instance) {
         diags.push(diag);
@@ -197,9 +206,19 @@ pub fn verify_normalized_semantic_body<'db>(
 ) -> Result<(), CompleteDiagnostic> {
     for (local_idx, local) in body.locals.iter().enumerate() {
         let local_id = crate::analysis::semantic::SLocalId::from_u32(local_idx as u32);
-        match local.lowering {
-            NormalizedBindingLowering::ValueLocal { root } => {
-                if body.root(root).is_none() {
+        match &local.lowering {
+            NormalizedBindingLowering::ValueLocal { place } => {
+                if let Some(root) = place.root.borrow_root() {
+                    if body.root(root).is_none() {
+                        return Err(normalized_body_internal_diag(
+                            db,
+                            instance,
+                            body,
+                            SemOrigin::Body(body.template_owner),
+                            format!("value local {} has missing borrow root", local_id.index()),
+                        ));
+                    }
+                } else if !matches!(place.root, super::ir::NSPlaceRoot::CarrierDerefLocal(_)) {
                     return Err(normalized_body_internal_diag(
                         db,
                         instance,
@@ -210,7 +229,7 @@ pub fn verify_normalized_semantic_body<'db>(
                 }
             }
             NormalizedBindingLowering::PlaceBoundValue { root, .. } => {
-                if !matches!(body.root(root), Some(NBorrowRoot::Provider { .. })) {
+                if !matches!(body.root(*root), Some(NBorrowRoot::Provider { .. })) {
                     return Err(normalized_body_internal_diag(
                         db,
                         instance,
@@ -225,7 +244,7 @@ pub fn verify_normalized_semantic_body<'db>(
             }
             NormalizedBindingLowering::CarrierLocal { root, .. } => {
                 if let Some(root) = root
-                    && body.root(root).is_none()
+                    && body.root(*root).is_none()
                 {
                     return Err(normalized_body_internal_diag(
                         db,
@@ -494,10 +513,11 @@ fn local_has_runtime_move_semantics_for_local<'db>(
     body: &NormalizedSemanticBody<'db>,
     local: &NSLocal<'db>,
 ) -> bool {
-    match local.lowering {
-        NormalizedBindingLowering::ValueLocal { root } => {
-            !matches!(body.root(root), Some(NBorrowRoot::Provider { .. }))
-        }
+    match &local.lowering {
+        NormalizedBindingLowering::ValueLocal { place } => !matches!(
+            place.root.borrow_root().and_then(|root| body.root(root)),
+            Some(NBorrowRoot::Provider { .. })
+        ),
         NormalizedBindingLowering::PlaceBoundValue { .. }
         | NormalizedBindingLowering::CarrierLocal { .. }
         | NormalizedBindingLowering::Erased => false,
@@ -585,6 +605,23 @@ fn normalize_error_to_diag<'db>(
                 span_for_origin_from_body(db, hir_body, origin),
             )
         }
+        super::ir::SemanticNormalizeError::LocalProvenanceCycle { local, .. } => (
+            SemOrigin::Body(owner),
+            format!(
+                "detected a cycle while normalizing derived-place provenance for `%{}`",
+                local.index()
+            ),
+            hir_body.and_then(|body| body.span().resolve(db)),
+        ),
+        super::ir::SemanticNormalizeError::NonPlaceDerivedValue { local, base, .. } => (
+            SemOrigin::Body(owner),
+            format!(
+                "cannot normalize derived-place provenance for `%{}` from non-place base `%{}`",
+                local.index(),
+                base.index()
+            ),
+            hir_body.and_then(|body| body.span().resolve(db)),
+        ),
     };
     let _ = origin;
     CompleteDiagnostic::new(
@@ -659,22 +696,21 @@ impl<'db> Borrowck<'db> {
             let Some(local) = body.local(local_id) else {
                 continue;
             };
-            if let Some(root) = match local.lowering {
-                NormalizedBindingLowering::ValueLocal { root }
-                | NormalizedBindingLowering::PlaceBoundValue { root, .. } => Some(root),
-                NormalizedBindingLowering::CarrierLocal { .. }
-                | NormalizedBindingLowering::Erased => None,
-            } && let Some(idx) = match local.source {
-                Some(crate::analysis::ty::ty_check::LocalBinding::EffectParam { idx, .. })
-                | Some(crate::analysis::ty::ty_check::LocalBinding::Param {
-                    site: ParamSite::EffectField(_),
-                    idx,
-                    ..
-                }) => Some(idx as u32),
-                Some(crate::analysis::ty::ty_check::LocalBinding::Param { .. })
-                | Some(crate::analysis::ty::ty_check::LocalBinding::Local { .. })
-                | None => None,
-            } {
+            if let Some(root) = local.lowering.root()
+                && let Some(idx) = match local.source {
+                    Some(crate::analysis::ty::ty_check::LocalBinding::EffectParam {
+                        idx, ..
+                    })
+                    | Some(crate::analysis::ty::ty_check::LocalBinding::Param {
+                        site: ParamSite::EffectField(_),
+                        idx,
+                        ..
+                    }) => Some(idx as u32),
+                    Some(crate::analysis::ty::ty_check::LocalBinding::Param { .. })
+                    | Some(crate::analysis::ty::ty_check::LocalBinding::Local { .. })
+                    | None => None,
+                }
+            {
                 effect_input_of_root.insert(root, idx);
             }
         }
@@ -1244,8 +1280,11 @@ impl<'db> Borrowck<'db> {
             return Ok(FxHashSet::default());
         };
         let root = match &local_data.lowering {
-            NormalizedBindingLowering::ValueLocal { root }
-            | NormalizedBindingLowering::PlaceBoundValue { root, .. } => {
+            NormalizedBindingLowering::ValueLocal { place } => place
+                .root
+                .borrow_root()
+                .and_then(|root| self.root_to_borrow_root(root)),
+            NormalizedBindingLowering::PlaceBoundValue { root, .. } => {
                 self.root_to_borrow_root(*root)
             }
             NormalizedBindingLowering::CarrierLocal { root, provider, .. } => provider
@@ -1753,12 +1792,7 @@ impl<'db> Borrowck<'db> {
     }
 
     fn local_root(&self, local: crate::analysis::semantic::SLocalId) -> Option<NBorrowRootId> {
-        match self.body.local(local)?.lowering {
-            NormalizedBindingLowering::ValueLocal { root }
-            | NormalizedBindingLowering::PlaceBoundValue { root, .. } => Some(root),
-            NormalizedBindingLowering::CarrierLocal { root, .. } => root,
-            NormalizedBindingLowering::Erased => None,
-        }
+        self.body.local(local)?.lowering.root()
     }
 
     fn root_to_borrow_root(&self, root: NBorrowRootId) -> Option<BorrowRoot<'db>> {

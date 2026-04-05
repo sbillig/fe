@@ -5,9 +5,10 @@ use fe_hir::{
     analysis::{
         diagnostics::format_diags,
         semantic::{
-            GenericSubst, ImplEnv, NBorrowRoot, NormalizedBindingLowering, SemanticInstance,
-            SemanticInstanceKey, check_semantic_borrows, collect_semantic_borrow_diagnostics,
-            get_or_build_semantic_instance, normalize_semantic_body,
+            FieldIndex, NBorrowRoot, NormalizedBindingLowering, SPlaceElem, SStmtKind,
+            SemanticInstance, check_semantic_borrows, collect_semantic_borrow_diagnostics,
+            get_or_build_semantic_instance, identity_semantic_instance_key,
+            normalize_semantic_body,
         },
         ty::{ty_check::BodyOwner, ty_def::TyData},
     },
@@ -37,38 +38,29 @@ fn for_each_fixture_instance(
         match item {
             ItemKind::Func(func) => pending.push_back(get_or_build_semantic_instance(
                 &db,
-                SemanticInstanceKey::new(
-                    &db,
-                    BodyOwner::Func(*func),
-                    GenericSubst::empty(&db),
-                    ImplEnv::empty(&db, func.scope()),
-                ),
+                identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
             )),
             ItemKind::Contract(contract) => {
                 pending.push_back(get_or_build_semantic_instance(
                     &db,
-                    SemanticInstanceKey::new(
+                    identity_semantic_instance_key(
                         &db,
                         BodyOwner::ContractInit {
                             contract: *contract,
                         },
-                        GenericSubst::empty(&db),
-                        ImplEnv::empty(&db, contract.scope()),
                     ),
                 ));
                 for (recv_idx, recv) in contract.recvs(&db).data(&db).iter().enumerate() {
                     for arm_idx in 0..recv.arms.data(&db).len() {
                         pending.push_back(get_or_build_semantic_instance(
                             &db,
-                            SemanticInstanceKey::new(
+                            identity_semantic_instance_key(
                                 &db,
                                 BodyOwner::ContractRecvArm {
                                     contract: *contract,
                                     recv_idx: recv_idx as u32,
                                     arm_idx: arm_idx as u32,
                                 },
-                                GenericSubst::empty(&db),
-                                ImplEnv::empty(&db, contract.scope()),
                             ),
                         ));
                     }
@@ -290,18 +282,15 @@ fn read_balance(addr: Address) -> u256 uses (store: TokenStore) {
             {
                 Some(get_or_build_semantic_instance(
                     &db,
-                    SemanticInstanceKey::new(
-                        &db,
-                        BodyOwner::Func(*func),
-                        GenericSubst::empty(&db),
-                        ImplEnv::empty(&db, func.scope()),
-                    ),
+                    identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
                 ))
             }
             _ => None,
         })
         .expect("read_balance instance");
-    check_semantic_borrows(&db, instance).expect("borrowck should succeed");
+    if let Err(diag) = check_semantic_borrows(&db, instance) {
+        panic!("{diag:?}");
+    }
     let normalized = normalize_semantic_body(&db, instance).expect("normalized body");
     let store_local = normalized
         .locals
@@ -314,13 +303,32 @@ fn read_balance(addr: Address) -> u256 uses (store: TokenStore) {
             _ => None,
         })
         .expect("store effect binding");
-    let root = match store_local.1.lowering {
-        NormalizedBindingLowering::ValueLocal { root } => root,
+    let root = match &store_local.1.lowering {
+        NormalizedBindingLowering::ValueLocal { place } => place
+            .root
+            .borrow_root()
+            .expect("store binding should preserve a borrow root"),
         ref lowering => panic!("unexpected lowering for store binding: {lowering:?}"),
     };
     assert!(
         matches!(normalized.root(root), Some(NBorrowRoot::Provider { .. })),
         "expected provider root for store binding, got {:?}",
+        normalized.root(root)
+    );
+    let field_local = normalized
+        .locals
+        .get(3)
+        .expect("field projection temp should exist");
+    let root = match &field_local.lowering {
+        NormalizedBindingLowering::ValueLocal { place } => place
+            .root
+            .borrow_root()
+            .expect("field projection should preserve a borrow root"),
+        ref lowering => panic!("unexpected lowering for provider field temp: {lowering:?}"),
+    };
+    assert!(
+        matches!(normalized.root(root), Some(NBorrowRoot::Provider { .. })),
+        "expected provider root for provider field temp, got {:?}",
         normalized.root(root)
     );
 }
@@ -388,12 +396,7 @@ fn erc20_has_role_self_ty_app_chain_is_acyclic() {
         .expect("has_role fixture function");
     let instance = get_or_build_semantic_instance(
         &db,
-        SemanticInstanceKey::new(
-            &db,
-            BodyOwner::Func(*has_role),
-            GenericSubst::empty(&db),
-            ImplEnv::empty(&db, has_role.scope()),
-        ),
+        identity_semantic_instance_key(&db, BodyOwner::Func(*has_role)),
     );
     let ty = instance.body(&db).locals[0].ty;
     let mut seen = rustc_hash::FxHashSet::default();
@@ -405,4 +408,61 @@ fn erc20_has_role_self_ty_app_chain_is_acyclic() {
             _ => break,
         }
     }
+}
+
+#[test]
+fn array_of_struct_place_lowers_with_resolved_index_then_field() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_borrowck.fe".into(),
+        r#"
+struct Subtree {
+    left: u256,
+    right: u256,
+}
+
+struct Tree {
+    last_subtrees: [Subtree; 8],
+}
+
+fn write(mut tree: Tree, i: usize, h: u256) -> Tree {
+    tree.last_subtrees[i].left = h
+    tree
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let instance = top_mod
+        .all_items(&db)
+        .iter()
+        .find_map(|item| match item {
+            ItemKind::Func(func)
+                if func
+                    .name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "write") =>
+            {
+                Some(get_or_build_semantic_instance(
+                    &db,
+                    identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
+                ))
+            }
+            _ => None,
+        })
+        .expect("write instance");
+    let body = instance.body(&db);
+    let dst = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.stmts.iter())
+        .find_map(|stmt| match &stmt.kind {
+            SStmtKind::Store { dst, .. } => Some(dst),
+            SStmtKind::Assign { .. } => None,
+        })
+        .expect("store statement");
+
+    assert_eq!(dst.path.len(), 3);
+    assert!(matches!(dst.path[0], SPlaceElem::Field(FieldIndex(0))));
+    assert!(matches!(dst.path[1], SPlaceElem::Index(_)));
+    assert!(matches!(dst.path[2], SPlaceElem::Field(FieldIndex(0))));
 }

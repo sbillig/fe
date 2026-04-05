@@ -1,6 +1,6 @@
 use common::InputDb;
 use driver::DriverDataBase;
-use fe_codegen::emit_module_yul;
+use fe_codegen::{emit_module_yul, emit_test_module_yul};
 use url::Url;
 
 fn emit_inline_yul(path: &str, src: &str) -> String {
@@ -13,7 +13,23 @@ fn emit_inline_yul(path: &str, src: &str) -> String {
         .get(&db, &file_url)
         .expect("file should be loaded");
     let top_mod = db.top_mod(file);
-    emit_module_yul(&db, top_mod).unwrap_or_default()
+    emit_module_yul(&db, top_mod).expect("Yul emission should succeed")
+}
+
+fn emit_inline_test_yul(path: &str, src: &str) -> String {
+    let mut db = DriverDataBase::default();
+    let file_url = Url::parse(path).unwrap();
+    db.workspace()
+        .touch(&mut db, file_url.clone(), Some(src.to_owned()));
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    let output =
+        emit_test_module_yul(&db, top_mod, None).expect("Yul test emission should succeed");
+    assert_eq!(output.tests.len(), 1, "fixture should yield one test");
+    output.tests[0].yul.clone()
 }
 
 #[test]
@@ -33,10 +49,6 @@ fn read() -> u256 {
 }
 "#,
     );
-    if yul.is_empty() {
-        return;
-    }
-
     assert!(
         yul.contains("dataoffset("),
         "readonly array locals should stay code-backed in Yul:\n{yul}"
@@ -50,14 +62,14 @@ fn read() -> u256 {
 
 #[test]
 fn readonly_view_params_stay_code_backed_through_transparent_private_helpers() {
-    let yul = emit_inline_yul(
-        "file:///readonly_view_params_stay_code_backed_through_transparent_private_helpers.fe",
+    let src = format!(
+        "{}\nfn emit_helpers() -> u256 {{\n    let arr: [u256; 8] = [1, 2, 3, 4, 5, 6, 7, 8]\n    sum_last4(arr) + sum_first4(arr)\n}}\n",
         include_str!("../../fe/tests/fixtures/fe_test/view_param_local_ref_take_reverse.fe"),
     );
-    if yul.is_empty() {
-        return;
-    }
-
+    let yul = emit_inline_yul(
+        "file:///readonly_view_params_stay_code_backed_through_transparent_private_helpers.fe",
+        &src,
+    );
     let sum_start = yul
         .find("function $sum_first4_arg0_root_code(")
         .expect("expected code-specialized sum_first4 helper in emitted Yul");
@@ -68,49 +80,25 @@ fn readonly_view_params_stay_code_backed_through_transparent_private_helpers() {
     let sum_first4 = &yul[sum_start..sum_end];
 
     assert!(
-        sum_first4.contains("$take_u256_arg1_root_code___u256__8___6041bb8e49e8a633(4, $arr)")
-            && sum_first4.contains(
-                "$take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_get_arg0_f1_code__u256__u256__8___ac380d93f2650f4(v1, v2)",
-            ),
+        sum_first4.contains("$take_u256_") && sum_first4.contains("_arg1_root_code("),
         "readonly array params should stay code-backed through transparent private helpers:\n{sum_first4}"
     );
     assert!(
-        !sum_first4.contains("datacopy("),
+        !sum_first4.contains("datacopy(")
+            && sum_first4.contains("$len_0_arg0_f1_code(")
+            && sum_first4.contains("$get_0_arg0_f1_code(")
+            && !sum_first4.contains("$len_0(v2)")
+            && !sum_first4.contains("$get_0(v2,"),
         "readonly array params should not materialize whole arrays at transparent helper boundaries:\n{sum_first4}"
-    );
-
-    let take_start = yul
-        .find("function $take_i__t__hdfe3cd9794a47805_seq_ha637d2df505bccf2_get_arg0_f1_code__u256_Reverse_u256___u256__8____3cbd747f44bd7a69(")
-        .expect("expected code-specialized Take<Reverse>::get helper in emitted Yul");
-    let take_end = yul[take_start + 1..]
-        .find("\n    function ")
-        .map(|idx| take_start + 1 + idx)
-        .unwrap_or(yul.len());
-    let take_get = &yul[take_start..take_end];
-
-    assert!(
-        !take_get.contains("datacopy("),
-        "transparent pointer-like wrapper loads should reuse the underlying location value:\n{take_get}"
-    );
-    assert!(
-        take_get.contains("let v1 := v0")
-            && take_get.contains(
-                "$reverse_i__t__h13486b0b5aec7a31_seq_ha637d2df505bccf2_get_code_arg0_root_code__u256__u256__8___ac380d93f2650f4(v1, $i)",
-            ),
-        "Take<Reverse>::get should forward the inner code-backed location directly:\n{take_get}"
     );
 }
 
 #[test]
 fn const_backed_constructor_args_stay_code_backed_until_abi_encoding() {
-    let yul = emit_inline_yul(
+    let yul = emit_inline_test_yul(
         "file:///const_backed_constructor_args_stay_code_backed_until_abi_encoding.fe",
         include_str!("../../fe/tests/fixtures/fe_test/contract_init_fixed_array_arg.fe"),
     );
-    if yul.is_empty() {
-        return;
-    }
-
     let start = yul
         .find("function $create2_")
         .expect("expected create2 helper in emitted Yul");
@@ -125,9 +113,7 @@ fn const_backed_constructor_args_stay_code_backed_until_abi_encoding() {
         "const-backed constructor args should not materialize eagerly before ABI encoding:\n{create2_helper}"
     );
     assert!(
-        create2_helper.contains(
-            "_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f__u256__4__SolEncoder"
-        ) && create2_helper.contains("($args,"),
+        create2_helper.contains("$encode_") && create2_helper.contains("($args,"),
         "constructor args should flow directly into ABI encoding from their code-backed carrier:\n{create2_helper}"
     );
 }

@@ -22,7 +22,17 @@ pub(super) fn project_field_class<'db>(
         }
     };
     match layout.data(db) {
-        crate::runtime::Layout::Struct(layout) => layout.fields[field.0 as usize].clone(),
+        crate::runtime::Layout::Struct(layout) => layout
+            .fields
+            .get(field.0 as usize)
+            .cloned()
+            .unwrap_or_else(|| {
+                panic!(
+                    "invalid field projection: field={field:?} source_ty={} fields={:?} class={class:?}",
+                    layout.source_ty.pretty_print(db),
+                    layout.fields,
+                )
+            }),
         _ => panic!("invalid field projection layout"),
     }
 }

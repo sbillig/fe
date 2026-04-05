@@ -1626,6 +1626,23 @@ fn test_cli_test_ingot_discovers_tests_in_non_root_modules() {
 }
 
 #[test]
+fn test_cli_test_default_project_path_discovers_tests_in_non_root_modules() {
+    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test_runner/ingot_tests_in_non_root_module");
+
+    let (output, exit_code) = run_fe_main_in_dir(&["test"], &fixture_dir);
+    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
+    assert!(
+        output.contains("PASS  [<time>] test_add"),
+        "expected test_add to be discovered, got:\n{output}"
+    );
+    assert!(
+        output.contains("1 passed"),
+        "expected 1 passed test, got:\n{output}"
+    );
+}
+
+#[test]
 fn test_cli_test_single_input_suite_setup_failure_surfaces_error_status() {
     let temp = tempdir().expect("tempdir");
     let invalid = temp.path().join("not_a_fe_input.txt");
