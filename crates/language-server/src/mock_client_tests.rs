@@ -908,51 +908,49 @@ pub contract C {
     client.shutdown().await;
 }
 
-/// Reproduction for the "goto def → freeze" bug observed in Zed.
+/// Regression test for the "goto def → freeze" bug observed in Zed.
 ///
-/// # Field observation
+/// # History
 ///
 /// Log `2061701.log`, 2026-04-06: a burst of ~14 concurrent
 /// `textDocument/definition` + `textDocument/typeDefinition` requests
-/// arrived at the LSP within ~400µs after a goto-def click navigated to
-/// another file. The LSP actor thread went to `futex_do_wait` and never
-/// came back. No panic, no response — a genuine deadlock.
+/// arrived at the LSP within ~400µs after a goto-def click. The LSP
+/// actor thread went to `futex_do_wait` and never came back. No panic,
+/// no response.
 ///
-/// # Root cause
+/// # Root cause (fixed)
 ///
-/// Located by gdb backtrace of the frozen actor thread (parked in
-/// `futures_lite::future::block_on`, NOT in salsa) combined with
-/// reproducer minimization showing the bug fires exactly when the burst
-/// exceeds `ConcurrencyLayer::default() == nproc == 16`.
+/// The bug was in `async-lsp::MainLoop::run`. When an incoming message
+/// arrived, the outer `select_biased!` entered the `incoming.next()` arm
+/// body, which ran a nested inner loop awaiting `dispatch_fut`.
+/// `dispatch_fut` awaited `service.poll_ready`. If `ConcurrencyLayer`'s
+/// semaphore was saturated, `poll_ready` returned `Pending`. The inner
+/// loop only selected on `dispatch_fut` and `flush_fut` — it did NOT
+/// poll `self.tasks`. For `poll_ready` to become ready a permit had to
+/// release, which required an in-flight task to complete, which required
+/// `self.tasks` to be polled, which the main loop couldn't do because it
+/// was stuck inside the arm body. Classic "waker trapped behind a nested
+/// await" deadlock.
 ///
-/// The bug is in `async-lsp` `MainLoop::run` (`src/lib.rs:554-568`).
-/// When an incoming message arrives, the outer `select_biased!` enters
-/// the `incoming.next()` arm body, which runs its own inner loop awaiting
-/// `dispatch_fut` (which internally `await`s `service.poll_ready`). The
-/// inner loop only selects on `dispatch_fut` and `flush_fut` — it does
-/// NOT poll `self.tasks`.
+/// The fix (in the local `async-lsp` checkout at
+/// `~/hacker-stuff-2023/async-lsp`): `dispatch_message` now drains
+/// `self.tasks` concurrently with `poll_ready` via disjoint field
+/// borrows. Drained responses flow back to the outer loop alongside the
+/// dispatch outcome as a `Vec<Message>`, and the outer loop feeds them
+/// all to the outgoing sink before the next iteration. Details in the
+/// `dispatch_message` doc comment in `async-lsp/src/lib.rs`.
 ///
-/// When `ConcurrencyLayer`'s semaphore is saturated (16 permits taken),
-/// `poll_ready` returns `Pending`. The inner loop parks waiting for
-/// `dispatch_fut` to become ready. For that to happen, a permit must
-/// release, which requires an in-flight task to complete, which requires
-/// `self.tasks` to be polled, which the main loop cannot do because it
-/// is inside the inner loop waiting for `dispatch_fut`. Classic
-/// "waker trapped behind a nested await" deadlock.
+/// # What this test does
 ///
-/// # Running this repro
-///
-/// `#[ignore]`d so CI stays green while the upstream async-lsp fix is
-/// being worked out. Run manually with:
-///
-///     cargo test -p fe-language-server repro_concurrent_goto -- --ignored
-///
-/// Threshold check: the repro fires 72 requests (24 positions × 3
-/// request types), well above the 16-slot semaphore. With `ConcurrencyLayer`
-/// removed from `MockLspClient::start` the exact same load passes in
-/// ~1 second, confirming the layer is the deadlock trigger.
+/// Fires 72 concurrent LSP requests (24 positions × 3 request types)
+/// against the mock client. `ConcurrencyLayer::default() == nproc`
+/// means 16 permits on a typical dev box, so the burst pegs the
+/// semaphore and forces `dispatch_message` down the drain-while-waiting
+/// code path. If a regression re-introduces the inner-loop deadlock,
+/// `tokio::time::timeout` catches it and the assertion fires with a
+/// pointer to the exact lines in `async-lsp/src/lib.rs` that need
+/// inspection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "known deadlock reproducer — run with --ignored while investigating"]
 async fn repro_concurrent_goto_burst_does_not_deadlock() {
     let mut client = MockLspClient::start().await;
     client.initialize().await;
