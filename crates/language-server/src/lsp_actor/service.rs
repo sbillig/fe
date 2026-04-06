@@ -43,10 +43,26 @@ impl<S: 'static> Service<AnyRequest> for LspActorService<S> {
 
     fn call(&mut self, req: AnyRequest) -> Self::Future {
         let method = req.method.clone();
+        let request_id = format!("{:?}", req.id);
         tracing::debug!("handling LSP request: {method:?}");
         let actor_ref = self.actor_ref.clone();
         let dispatcher = self.dispatcher.clone();
         Box::pin(async move {
+            // Push a panic context frame for the duration of the ask. If the
+            // main-loop-thread side of the request machinery (serialization,
+            // dispatcher, error mapping) panics, the panic hook will include
+            // this frame in panics-<pid>.log.
+            //
+            // LIMITATION: this frame lives in the main loop thread's
+            // thread-local stack. Panics in the actor handler itself run on
+            // the actor thread and won't see it. Covering actor-thread
+            // panics properly requires either a helper at each handler call
+            // site or an upstream patch to act-locally. See design notes in
+            // `panic_context.rs` and the follow-up tracked in the LSP
+            // observability work.
+            let _pctx = crate::panic_context::enter(format!(
+                "LSP request: {method} (id={request_id})"
+            ));
             actor_ref
                 .ask::<_, Value, _>(dispatcher.as_ref(), req)
                 .await
@@ -67,6 +83,8 @@ impl<S: 'static> Service<AnyRequest> for LspActorService<S> {
 impl<S: 'static> LspService for LspActorService<S> {
     fn notify(&mut self, notif: AnyNotification) -> ControlFlow<async_lsp::Result<()>> {
         let method = notif.method.clone();
+        let _pctx =
+            crate::panic_context::enter(format!("LSP notification: {method}"));
         let dispatcher = self.dispatcher.clone();
         match self.actor_ref.tell(dispatcher.as_ref(), notif) {
             Ok(()) => ControlFlow::Continue(()),
@@ -83,6 +101,8 @@ impl<S: 'static> LspService for LspActorService<S> {
 
     fn emit(&mut self, event: AnyEvent) -> ControlFlow<async_lsp::Result<()>> {
         let type_name = event.type_name();
+        let _pctx =
+            crate::panic_context::enter(format!("LSP event: {type_name:?}"));
         let dispatcher = self.dispatcher.clone();
         match self.actor_ref.tell(dispatcher.as_ref(), event) {
             Ok(()) => ControlFlow::Continue(()),

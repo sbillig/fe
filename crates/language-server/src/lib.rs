@@ -7,6 +7,7 @@ pub mod logging;
 mod lsp_actor;
 mod lsp_diagnostics;
 mod lsp_streams;
+pub(crate) mod panic_context;
 mod server;
 #[cfg(test)]
 mod test_utils;
