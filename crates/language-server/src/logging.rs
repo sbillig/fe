@@ -54,6 +54,13 @@ use tracing_subscriber::{
 /// explicitly opt our own crates into `info` so dependency noise doesn't
 /// drown out the signal. Override with `FE_LSP_LOG` using standard
 /// `EnvFilter` syntax, e.g. `FE_LSP_LOG="fe_language_server=debug,warn"`.
+///
+/// Note: `EnvFilter` matches target **prefixes**, where the target is
+/// normally the module path (like `fe_language_server::functionality::handlers`).
+/// We also emit some events with **custom** `target:` attributes
+/// (e.g. `target: "fe::lsp::startup"`) — those do NOT share a prefix with
+/// `fe_language_server`, so they need their own directive (`fe::lsp=info`)
+/// or they get dropped.
 const DEFAULT_FILE_FILTER: &str = "warn,\
     fe_language_server=info,\
     fe_driver=info,\
@@ -65,6 +72,11 @@ const DEFAULT_FILE_FILTER: &str = "warn,\
     fe_common=info,\
     fe_codegen=info,\
     fe_fmt=info,\
+    fe::lsp=info,\
+    fe::lsp::startup=info,\
+    fe::lsp::workspace=info,\
+    fe::lsp::request=info,\
+    fe::lsp::panic=error,\
     salsa=warn,\
     act_locally=warn,\
     tower=warn,\

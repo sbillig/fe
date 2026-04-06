@@ -44,7 +44,6 @@ impl<S: 'static> Service<AnyRequest> for LspActorService<S> {
     fn call(&mut self, req: AnyRequest) -> Self::Future {
         let method = req.method.clone();
         let request_id = format!("{:?}", req.id);
-        tracing::debug!("handling LSP request: {method:?}");
         let actor_ref = self.actor_ref.clone();
         let dispatcher = self.dispatcher.clone();
         Box::pin(async move {
@@ -63,7 +62,20 @@ impl<S: 'static> Service<AnyRequest> for LspActorService<S> {
             let _pctx = crate::panic_context::enter(format!(
                 "LSP request: {method} (id={request_id})"
             ));
-            actor_ref
+
+            // One info-level line per request + response pair so the file
+            // log shows a running trail of activity by default. Without
+            // this, the log has only startup lines and you can't tell what
+            // the LSP was doing when something went wrong.
+            let t_start = std::time::Instant::now();
+            tracing::info!(
+                target: "fe::lsp::request",
+                method = %method,
+                request_id = %request_id,
+                "→ request"
+            );
+
+            let result = actor_ref
                 .ask::<_, Value, _>(dispatcher.as_ref(), req)
                 .await
                 .map_err(|e| match e {
@@ -75,7 +87,32 @@ impl<S: 'static> Service<AnyRequest> for LspActorService<S> {
                         async_lsp::ErrorCode::INTERNAL_ERROR,
                         format!("There was an internal error... {e:?}"),
                     ),
-                })
+                });
+
+            let elapsed_ms = t_start.elapsed().as_millis() as u64;
+            match &result {
+                Ok(_) => {
+                    tracing::info!(
+                        target: "fe::lsp::request",
+                        method = %method,
+                        request_id = %request_id,
+                        elapsed_ms,
+                        "← response ok"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        target: "fe::lsp::request",
+                        method = %method,
+                        request_id = %request_id,
+                        elapsed_ms,
+                        error = %e.message,
+                        code = ?e.code,
+                        "← response error"
+                    );
+                }
+            }
+            result
         })
     }
 }
