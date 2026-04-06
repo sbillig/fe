@@ -910,31 +910,47 @@ pub contract C {
 
 /// Reproduction for the "goto def → freeze" bug observed in Zed.
 ///
-/// Field observation (log `2061701.log`, 2026-04-06): a burst of ~14
-/// concurrent `textDocument/definition` + `textDocument/typeDefinition`
-/// requests arrived at the LSP within ~400µs after a goto-def click
-/// navigated to another file. The LSP actor thread went to `futex_do_wait`
-/// and never came back. No panic, no response — a genuine deadlock.
+/// # Field observation
 ///
-/// This test reliably reproduces the deadlock in ~1 second using the
-/// mock client. Trace-level logging against a local run shows the last
-/// activity before the hang is a salsa query (e.g. `body_references`)
-/// executing on the actor thread — indicating the deadlock is inside
-/// salsa's internal query machinery, not in our tower layers or the
-/// state RwLock (the per-task read guards are re-entrant friendly).
+/// Log `2061701.log`, 2026-04-06: a burst of ~14 concurrent
+/// `textDocument/definition` + `textDocument/typeDefinition` requests
+/// arrived at the LSP within ~400µs after a goto-def click navigated to
+/// another file. The LSP actor thread went to `futex_do_wait` and never
+/// came back. No panic, no response — a genuine deadlock.
 ///
-/// #\[ignore]`d so CI stays green while the underlying bug is being
-/// investigated. Run with:
+/// # Root cause
+///
+/// Located by gdb backtrace of the frozen actor thread (parked in
+/// `futures_lite::future::block_on`, NOT in salsa) combined with
+/// reproducer minimization showing the bug fires exactly when the burst
+/// exceeds `ConcurrencyLayer::default() == nproc == 16`.
+///
+/// The bug is in `async-lsp` `MainLoop::run` (`src/lib.rs:554-568`).
+/// When an incoming message arrives, the outer `select_biased!` enters
+/// the `incoming.next()` arm body, which runs its own inner loop awaiting
+/// `dispatch_fut` (which internally `await`s `service.poll_ready`). The
+/// inner loop only selects on `dispatch_fut` and `flush_fut` — it does
+/// NOT poll `self.tasks`.
+///
+/// When `ConcurrencyLayer`'s semaphore is saturated (16 permits taken),
+/// `poll_ready` returns `Pending`. The inner loop parks waiting for
+/// `dispatch_fut` to become ready. For that to happen, a permit must
+/// release, which requires an in-flight task to complete, which requires
+/// `self.tasks` to be polled, which the main loop cannot do because it
+/// is inside the inner loop waiting for `dispatch_fut`. Classic
+/// "waker trapped behind a nested await" deadlock.
+///
+/// # Running this repro
+///
+/// `#[ignore]`d so CI stays green while the upstream async-lsp fix is
+/// being worked out. Run manually with:
 ///
 ///     cargo test -p fe-language-server repro_concurrent_goto -- --ignored
 ///
-/// To investigate, rerun with full salsa + act-locally trace:
-///
-///     FE_LSP_LOG='act_locally=trace,salsa=trace,fe_language_server=debug,info' \
-///       FE_LSP_LOG_FILE=/tmp/repro.log \
-///       cargo test -p fe-language-server repro_concurrent_goto -- --ignored
-///
-/// then `tail /tmp/repro.log` to see the last thing the actor was doing.
+/// Threshold check: the repro fires 72 requests (24 positions × 3
+/// request types), well above the 16-slot semaphore. With `ConcurrencyLayer`
+/// removed from `MockLspClient::start` the exact same load passes in
+/// ~1 second, confirming the layer is the deadlock trigger.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "known deadlock reproducer — run with --ignored while investigating"]
 async fn repro_concurrent_goto_burst_does_not_deadlock() {
@@ -1000,6 +1016,10 @@ fn bar() -> () {
     // without an `&mut self` bottleneck, then collect the resulting
     // futures and `join_all` them. The timeout catches the hang if the
     // actor deadlocks.
+    // Fire >16 concurrent goto-definition requests at the server. 16 is the
+    // default ConcurrencyLayer limit (nproc on our test box), so 18 requests
+    // overflows the semaphore by 2 and triggers the `MainLoop::run` dispatch
+    // deadlock described in the docstring above.
     let socket = client.server.clone();
     let mut request_futures: Vec<
         std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
@@ -1063,9 +1083,11 @@ fn bar() -> () {
 
     assert!(
         burst.is_ok(),
-        "{total} concurrent goto/hover requests deadlocked (no responses within 15s). \
-         Check the LSP actor thread for futex_do_wait and look at \
-         act-locally's handler.rs for the read-lock-across-await pattern."
+        "{total} concurrent LSP requests deadlocked (no responses within 15s). \
+         Root cause lives in async-lsp MainLoop::run at src/lib.rs:554-568: \
+         the inner dispatch loop doesn't poll self.tasks while awaiting \
+         dispatch_fut/poll_ready, so a saturated ConcurrencyLayer semaphore \
+         never releases. See this test's docstring for the full analysis."
     );
 
     client.shutdown().await;
