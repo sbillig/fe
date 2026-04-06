@@ -4,7 +4,7 @@
 //! request handling, verifying the server survives malformed edits.
 
 use async_lsp::concurrency::ConcurrencyLayer;
-use async_lsp::lsp_types::notification::PublishDiagnostics;
+use async_lsp::lsp_types::notification::{LogMessage, PublishDiagnostics};
 use async_lsp::lsp_types::*;
 use async_lsp::server::LifecycleLayer;
 use async_lsp::{LanguageServer, MainLoop};
@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio_util::compat::TokioAsyncReadCompatExt;
 use tower::ServiceBuilder;
+use tracing::instrument::WithSubscriber;
 
 use crate::server::setup;
 
@@ -52,18 +53,23 @@ pub struct PublishedDiagnostics {
 /// A mock LSP client connected to the real fe language server via duplex pipe.
 ///
 /// Use `MockLspClient::start()` to spin up, then call helper methods to drive
-/// the protocol. Diagnostics are collected automatically for inspection.
+/// the protocol. Diagnostics and server log messages are collected automatically
+/// for inspection.
 pub struct MockLspClient {
     server: async_lsp::ServerSocket,
     diagnostics: Arc<Mutex<Vec<PublishedDiagnostics>>>,
+    log_messages: Arc<Mutex<Vec<LogMessageParams>>>,
     _srv_handle: tokio::task::JoinHandle<()>,
     _cli_handle: tokio::task::JoinHandle<()>,
+    // Holds the tracing subscriber default-guard installed for this test. Dropped
+    // when the client is dropped, which resets the thread-local dispatch.
+    _logging_guard: Option<tracing::subscriber::DefaultGuard>,
 }
 
 impl MockLspClient {
     /// Spawn the real server and connect a mock client.
     pub async fn start() -> Self {
-        let (server_main, _client_socket) = MainLoop::new_server(|client| {
+        let (server_main, server_client_socket) = MainLoop::new_server(|client| {
             let lsp_service = setup(client.clone(), "test-actor".to_string());
             ServiceBuilder::new()
                 .layer(LifecycleLayer::default())
@@ -71,19 +77,37 @@ impl MockLspClient {
                 .service(lsp_service)
         });
 
+        // Install the production tracing subscriber on the current (test) thread
+        // using the server's ClientSocket. This routes `tracing::warn!` /
+        // `tracing::info!` calls from the LSP main loop (including
+        // `setup_unhandled`) through `ClientSocketWriter`, which emits them as
+        // `window/logMessage` notifications the mock client captures below.
+        //
+        // `set_default` is thread-local; `#[tokio::test]` uses a current-thread
+        // runtime by default, and we use `.with_current_subscriber()` on the
+        // spawned server task below to ensure the dispatch follows the future.
+        let logging_guard = crate::logging::setup_default_subscriber(server_client_socket);
+
         let (server_stream, client_stream) = tokio::io::duplex(DUPLEX_BUF);
         let (srv_rx, srv_tx) = server_stream.compat().split();
-        let srv_handle = tokio::spawn(async move {
-            if let Err(e) = server_main.run_buffered(srv_rx, srv_tx).await {
-                tracing::debug!("test server loop exited: {e:?}");
+        let srv_handle = tokio::spawn(
+            async move {
+                if let Err(e) = server_main.run_buffered(srv_rx, srv_tx).await {
+                    tracing::debug!("test server loop exited: {e:?}");
+                }
             }
-        });
+            .with_current_subscriber(),
+        );
 
         let diagnostics: Arc<Mutex<Vec<PublishedDiagnostics>>> = Arc::new(Mutex::new(Vec::new()));
         let diag_collector = diagnostics.clone();
 
+        let log_messages: Arc<Mutex<Vec<LogMessageParams>>> = Arc::new(Mutex::new(Vec::new()));
+        let log_collector = log_messages.clone();
+
         let (client_main, server_socket) = MainLoop::new_client(move |_| {
             let diags = diag_collector.clone();
+            let logs = log_collector.clone();
             let mut router = async_lsp::router::Router::new(());
             router
                 .notification::<PublishDiagnostics>(move |_, params| {
@@ -93,7 +117,13 @@ impl MockLspClient {
                     });
                     ControlFlow::Continue(())
                 })
-                // Silently absorb server log/show messages
+                // Capture server-side tracing output delivered via window/logMessage
+                // so tests can assert on the log levels and messages the server emits.
+                .notification::<LogMessage>(move |_, params| {
+                    logs.lock().unwrap().push(params);
+                    ControlFlow::Continue(())
+                })
+                // Silently absorb any other server notifications
                 .unhandled_notification(|_, _| ControlFlow::Continue(()));
             ServiceBuilder::new().service(router)
         });
@@ -105,8 +135,10 @@ impl MockLspClient {
         Self {
             server: server_socket,
             diagnostics,
+            log_messages,
             _srv_handle: srv_handle,
             _cli_handle: cli_handle,
+            _logging_guard: logging_guard,
         }
     }
 
@@ -201,6 +233,28 @@ impl MockLspClient {
     /// Clear collected diagnostics.
     pub fn clear_diagnostics(&self) {
         self.diagnostics.lock().unwrap().clear();
+    }
+
+    /// Return a snapshot of all `window/logMessage` notifications received so far.
+    #[allow(dead_code)]
+    pub fn log_messages(&self) -> Vec<LogMessageParams> {
+        self.log_messages.lock().unwrap().clone()
+    }
+
+    /// Return captured log messages filtered by MessageType.
+    pub fn log_messages_of_type(&self, typ: MessageType) -> Vec<LogMessageParams> {
+        self.log_messages
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|m| m.typ == typ)
+            .cloned()
+            .collect()
+    }
+
+    /// Clear captured log messages.
+    pub fn clear_log_messages(&self) {
+        self.log_messages.lock().unwrap().clear();
     }
 
     /// Wait for the server to settle (process queued events).
@@ -366,6 +420,7 @@ async fn mock_lsp_scenarios() {
     scenario_contract_analysis_reports_errors(&mut client, &uri).await;
     scenario_payable_attr_reports_errors(&mut client, &uri).await;
     scenario_errors_reported_after_panic_recovery(&mut client, &uri).await;
+    scenario_unhandled_notifications_do_not_warn(&mut client).await;
 
     client.shutdown().await;
 }
@@ -705,6 +760,47 @@ async fn scenario_errors_reported_after_panic_recovery(client: &mut MockLspClien
          the outer catch_unwind in handle_files_need_diagnostics must keep \
          the actor alive; got: {:?}",
         client.diagnostics_for_uri(uri),
+    );
+}
+
+/// Regression test: notifications for methods that Fe doesn't handle must not
+/// produce WARN-level log messages to the client. Editors (Zed, VS Code, …)
+/// routinely send `$/cancelRequest`, `$/setTrace`, `workspace/didChangeConfiguration`,
+/// custom `experimental/*` methods, etc. These arriving at the server is
+/// completely normal — it is not a warning condition and should not clutter the
+/// client log stream.
+///
+/// At the time of writing, `server.rs::setup_unhandled` logs these at WARN, which
+/// turns every editor session into a wall of noise that drowns out real errors.
+async fn scenario_unhandled_notifications_do_not_warn(client: &mut MockLspClient) {
+    // Custom notification type for a method no layer in the stack handles.
+    // Using `experimental/*` keeps us clear of reserved LSP namespace.
+    enum UnhandledTestNotification {}
+    impl async_lsp::lsp_types::notification::Notification for UnhandledTestNotification {
+        type Params = serde_json::Value;
+        const METHOD: &'static str = "experimental/fe_test_unhandled";
+    }
+
+    client.clear_log_messages();
+
+    client
+        .server
+        .notify::<UnhandledTestNotification>(serde_json::Value::Null)
+        .expect("notify failed");
+    client.settle(200).await;
+
+    let warns = client.log_messages_of_type(MessageType::WARNING);
+    let offending: Vec<&LogMessageParams> = warns
+        .iter()
+        .filter(|m| m.message.contains("Unhandled notification"))
+        .collect();
+
+    assert!(
+        offending.is_empty(),
+        "sending an unknown notification must not emit WARN-level log messages — \
+         `setup_unhandled` in server.rs should log at DEBUG so normal LSP traffic \
+         (e.g. $/cancelRequest, experimental/*) does not flood the editor log. \
+         got: {offending:?}"
     );
 }
 
