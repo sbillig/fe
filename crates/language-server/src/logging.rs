@@ -117,6 +117,74 @@ pub fn default_panic_file_path() -> Option<PathBuf> {
     Some(dir.join(format!("panics-{}.log", std::process::id())))
 }
 
+/// Return the parent process's pid, if it can be determined.
+///
+/// On Linux, reads `/proc/self/status` and parses the `PPid:` field.
+/// On other platforms, returns `None` (graceful degrade — we use this
+/// only for diagnostic logging, not for correctness).
+pub fn parent_pid() -> Option<u32> {
+    #[cfg(target_os = "linux")]
+    {
+        let status = std::fs::read_to_string("/proc/self/status").ok()?;
+        for line in status.lines() {
+            if let Some(rest) = line.strip_prefix("PPid:") {
+                return rest.trim().parse().ok();
+            }
+        }
+        None
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+/// Emit a single structured log line at `info` with everything needed to
+/// identify which process this is in a multi-instance forensic scenario.
+///
+/// Intended to be called exactly once, at server startup, before any other
+/// work. The line includes:
+///   * `pid` — our process id
+///   * `parent_pid` — the spawning process (the editor, typically Zed)
+///   * `argv` — our command-line arguments
+///   * `cwd` — current working directory at startup (often but not always
+///     the workspace root; the editor decides)
+///   * `binary` — path to the running executable (via `/proc/self/exe` on
+///     Linux, best-effort elsewhere)
+///   * `log_file` — the file log path we chose, so grepping the log line
+///     tells you where to `tail -F` the rest of the output
+///
+/// This is the line Grant would copy-paste when reporting "I've got three
+/// `fe` processes running and I don't know which one Zed is actually
+/// talking to." Every field is a join key.
+pub fn log_startup_info() {
+    let pid = std::process::id();
+    let ppid = parent_pid();
+    let argv: Vec<String> = std::env::args().collect();
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|e| format!("<error: {e}>"));
+    let binary = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|e| format!("<error: {e}>"));
+    let log_file = default_log_file_path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "<none>".to_owned());
+    let version = env!("CARGO_PKG_VERSION");
+
+    tracing::info!(
+        target: "fe::lsp::startup",
+        %pid,
+        ppid = ?ppid,
+        ?argv,
+        %cwd,
+        %binary,
+        %log_file,
+        %version,
+        "fe-language-server starting"
+    );
+}
+
 /// Open a log file for appending, creating the parent directory if needed.
 fn open_log_file(path: &Path) -> std::io::Result<File> {
     if let Some(parent) = path.parent() {

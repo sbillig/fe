@@ -75,6 +75,86 @@ impl LspServerInfo {
     }
 }
 
+/// Outcome of inspecting an existing `.fe-lsp.json` at a workspace root
+/// during startup of a new `fe lsp` instance.
+///
+/// This is purely diagnostic: a new instance should always proceed with
+/// writing its own `.fe-lsp.json` (clobbering whatever was there), because
+/// that file is an advisory discovery pointer, not a lock. But the
+/// outcome of this check is important enough to log: `StaleFound` means
+/// the previous process crashed without cleanup, `SiblingLive` means two
+/// `fe lsp` instances are running concurrently for the same workspace
+/// (possibly a Zed respawn-after-timeout), and `RootMismatch` is a
+/// smoking gun for a workspace-root detection bug — two LSP instances
+/// think they're serving different roots under the same directory.
+#[derive(Debug)]
+#[cfg_attr(not(feature = "lsp"), allow(dead_code))]
+pub(crate) enum ExistingInstanceCheck {
+    /// No `.fe-lsp.json` at the given workspace root. Normal first-launch state.
+    None,
+    /// A file existed but the recorded PID is not alive. Previous instance
+    /// crashed or was SIGKILLed without running the cleanup path. The
+    /// caller should remove the file before writing a fresh one.
+    StaleFound {
+        stale_pid: u32,
+        recorded_workspace_root: Option<String>,
+    },
+    /// A file exists and the recorded PID is alive, and the recorded
+    /// workspace_root matches ours. Two instances of `fe lsp` are running
+    /// against the same workspace — this is the Zed "respawned the LSP
+    /// before the old one finished" case.
+    SiblingLive {
+        sibling_pid: u32,
+        sibling_docs_url: Option<String>,
+    },
+    /// A file exists and the recorded PID is alive, but the recorded
+    /// workspace_root does NOT match ours. The two instances think
+    /// they're serving different roots from the same `.fe-lsp.json` path
+    /// — this is the smoking gun for a workspace-root detection bug, or
+    /// for a renamed/moved project where the old file is stale but the
+    /// PID happens to still be alive under an unrelated process (pid reuse).
+    RootMismatch {
+        other_pid: u32,
+        other_workspace_root: Option<String>,
+        our_workspace_root: String,
+    },
+    /// File exists but is malformed JSON or missing required fields. Treat
+    /// as stale — almost certainly a leftover from an incompatible version.
+    Malformed,
+}
+
+#[cfg_attr(not(feature = "lsp"), allow(dead_code))]
+impl ExistingInstanceCheck {
+    /// Inspect `<workspace_root>/.fe-lsp.json` and classify what we find.
+    pub(crate) fn inspect(workspace_root: &std::path::Path) -> Self {
+        let info_path = workspace_root.join(".fe-lsp.json");
+        if !info_path.exists() {
+            return Self::None;
+        }
+        let Some(info) = LspServerInfo::read_from_workspace(workspace_root) else {
+            return Self::Malformed;
+        };
+        if !info.is_alive() {
+            return Self::StaleFound {
+                stale_pid: info.pid,
+                recorded_workspace_root: info.workspace_root,
+            };
+        }
+        let our_root_str = workspace_root.display().to_string();
+        match info.workspace_root.as_deref() {
+            Some(recorded) if recorded == our_root_str => Self::SiblingLive {
+                sibling_pid: info.pid,
+                sibling_docs_url: info.docs_url,
+            },
+            other => Self::RootMismatch {
+                other_pid: info.pid,
+                other_workspace_root: other.map(str::to_owned),
+                our_workspace_root: our_root_str,
+            },
+        }
+    }
+}
+
 #[allow(unused_variables)]
 pub fn generate_docs(
     path: &Utf8PathBuf,
