@@ -89,22 +89,21 @@ pub async fn handle_references(
     let position = params.text_document_position.position;
 
     // Spawn heavy reference resolution on the worker pool with a db snapshot
-    let rx = backend.spawn_on_workers(move |db| {
-        let Some(file) = db.workspace().get(db, &internal_url) else {
-            return vec![];
-        };
-        let file_text = file.text(db);
-        let cursor: Cursor = to_offset_from_position(position, file_text.as_str());
-        let top_mod = map_file_to_mod(db, file);
-        find_references_at_cursor(db, top_mod, cursor)
-    });
-
-    let locations: Vec<async_lsp::lsp_types::Location> = rx.await.map_err(|_| {
-        ResponseError::new(
-            async_lsp::ErrorCode::INTERNAL_ERROR,
-            "Worker task cancelled".to_string(),
-        )
-    })?;
+    let locations: Vec<async_lsp::lsp_types::Location> = backend
+        .spawn_on_workers(move |db| {
+            let Some(file) = db.workspace().get(db, &internal_url) else {
+                return vec![];
+            };
+            let file_text = file.text(db);
+            let cursor: Cursor = to_offset_from_position(position, file_text.as_str());
+            let top_mod = map_file_to_mod(db, file);
+            find_references_at_cursor(db, top_mod, cursor)
+        })
+        .await
+        .map_err(|e| {
+            tracing::error!("references worker failed: {e}");
+            ResponseError::new(async_lsp::ErrorCode::INTERNAL_ERROR, e.to_string())
+        })?;
 
     // Map internal URIs to client URIs (lightweight, on actor thread)
     let locations: Vec<_> = locations

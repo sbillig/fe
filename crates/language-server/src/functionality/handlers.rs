@@ -689,12 +689,14 @@ pub async fn handle_doc_reload(
 
     // Run on the worker pool with a salsa snapshot — read-only, shares cached
     // query results with the Backend's db, no mutation needed.
-    let rx = backend.spawn_on_workers(move |db| {
-        let result = regen_fn(db);
-        (result, generation)
-    });
+    let outcome = backend
+        .spawn_on_workers(move |db| {
+            let result = regen_fn(db);
+            (result, generation)
+        })
+        .await;
 
-    match rx.await {
+    match outcome {
         Ok(((doc_json, scip_json), completed_gen)) => {
             if completed_gen == generation_ref.load(std::sync::atomic::Ordering::Relaxed) {
                 tracing::debug!(
@@ -706,8 +708,11 @@ pub async fn handle_doc_reload(
                 debug!("doc reload: discarding stale result");
             }
         }
-        Err(_) => {
-            warn!("doc reload: worker cancelled");
+        Err(crate::backend::WorkerError::Panicked(msg)) => {
+            error!("doc reload worker panicked: {msg}");
+        }
+        Err(crate::backend::WorkerError::Cancelled) => {
+            debug!("doc reload: worker cancelled");
         }
     }
     Ok(())
