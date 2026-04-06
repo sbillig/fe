@@ -907,3 +907,166 @@ pub contract C {
 
     client.shutdown().await;
 }
+
+/// Reproduction for the "goto def → freeze" bug observed in Zed.
+///
+/// Field observation (log `2061701.log`, 2026-04-06): a burst of ~14
+/// concurrent `textDocument/definition` + `textDocument/typeDefinition`
+/// requests arrived at the LSP within ~400µs after a goto-def click
+/// navigated to another file. The LSP actor thread went to `futex_do_wait`
+/// and never came back. No panic, no response — a genuine deadlock.
+///
+/// This test reliably reproduces the deadlock in ~1 second using the
+/// mock client. Trace-level logging against a local run shows the last
+/// activity before the hang is a salsa query (e.g. `body_references`)
+/// executing on the actor thread — indicating the deadlock is inside
+/// salsa's internal query machinery, not in our tower layers or the
+/// state RwLock (the per-task read guards are re-entrant friendly).
+///
+/// #\[ignore]`d so CI stays green while the underlying bug is being
+/// investigated. Run with:
+///
+///     cargo test -p fe-language-server repro_concurrent_goto -- --ignored
+///
+/// To investigate, rerun with full salsa + act-locally trace:
+///
+///     FE_LSP_LOG='act_locally=trace,salsa=trace,fe_language_server=debug,info' \
+///       FE_LSP_LOG_FILE=/tmp/repro.log \
+///       cargo test -p fe-language-server repro_concurrent_goto -- --ignored
+///
+/// then `tail /tmp/repro.log` to see the last thing the actor was doing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "known deadlock reproducer — run with --ignored while investigating"]
+async fn repro_concurrent_goto_burst_does_not_deadlock() {
+    let mut client = MockLspClient::start().await;
+    client.initialize().await;
+
+    let uri = lib_url();
+    // Seed lib.fe with content that has multiple cross-file references
+    // to `Why` defined in foo.fe — gives the LSP real cross-file targets
+    // to chase when we fire goto-def.
+    let lib_content = r#"use ingot::foo::Why
+
+mod who {
+  use super::Why
+  pub mod what {
+    pub fn how() {}
+    pub mod how {
+      use ingot::Why
+      pub struct When {
+        x: Why
+      }
+    }
+  }
+  pub struct Bar {
+    x: Why
+  }
+}
+
+fn bar() -> () {
+    let y: Why
+    let z = who::what::how
+    let z: who::what::how::When
+}"#;
+    client.did_open(&uri, lib_content);
+    client.settle(500).await;
+
+    // Fire a burst modeled on the Zed log: definition + hover + references
+    // across several cursor positions. Each position hits a `Why`
+    // identifier somewhere in lib.fe. The LSP should happily process all
+    // of them; if the actor deadlocks, the outer timeout catches it.
+    //
+    // Positions are (line, col) pairs landing on identifiers in
+    // `lib_content`. We re-use them multiple times to get 20+ requests
+    // without calibrating precise offsets.
+    let probe_positions = [
+        (0, 16),  // Why in the top-level `use`
+        (3, 13),  // Why in `use super::Why`
+        (7, 17),  // Why in `use ingot::Why`
+        (9, 11),  // Why in `x: Why` inside When
+        (14, 9),  // Why in `x: Why` inside Bar
+        (19, 11), // Why in `let y: Why`
+        (20, 15), // how in `let z = who::what::how`
+        (21, 20), // When in `let z: who::what::how::When`
+    ];
+
+    // Fire all the requests TRULY CONCURRENTLY, not sequentially. This
+    // is what Zed does on a goto-def click — the log shows 14 requests
+    // arriving within 400µs, well before any of them complete. Each
+    // request goes over the wire as its own JSON-RPC message and the
+    // actor's dispatch loop spawns one detached task per message.
+    //
+    // We clone the `ServerSocket` so we can issue multiple requests
+    // without an `&mut self` bottleneck, then collect the resulting
+    // futures and `join_all` them. The timeout catches the hang if the
+    // actor deadlocks.
+    let socket = client.server.clone();
+    let mut request_futures: Vec<
+        std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+    > = Vec::new();
+    for _ in 0..3 {
+        for &(line, col) in &probe_positions {
+            let s1 = socket.clone();
+            let uri1 = uri.clone();
+            request_futures.push(Box::pin(async move {
+                let _ = s1
+                    .request::<async_lsp::lsp_types::request::GotoDefinition>(
+                        GotoDefinitionParams {
+                            text_document_position_params: TextDocumentPositionParams {
+                                text_document: TextDocumentIdentifier { uri: uri1 },
+                                position: Position { line, character: col },
+                            },
+                            partial_result_params: PartialResultParams::default(),
+                            work_done_progress_params: WorkDoneProgressParams::default(),
+                        },
+                    )
+                    .await;
+            }));
+            let s2 = socket.clone();
+            let uri2 = uri.clone();
+            request_futures.push(Box::pin(async move {
+                let _ = s2
+                    .request::<async_lsp::lsp_types::request::GotoTypeDefinition>(
+                        async_lsp::lsp_types::request::GotoTypeDefinitionParams {
+                            text_document_position_params: TextDocumentPositionParams {
+                                text_document: TextDocumentIdentifier { uri: uri2 },
+                                position: Position { line, character: col },
+                            },
+                            partial_result_params: PartialResultParams::default(),
+                            work_done_progress_params: WorkDoneProgressParams::default(),
+                        },
+                    )
+                    .await;
+            }));
+            let s3 = socket.clone();
+            let uri3 = uri.clone();
+            request_futures.push(Box::pin(async move {
+                let _ = s3
+                    .request::<async_lsp::lsp_types::request::HoverRequest>(HoverParams {
+                        text_document_position_params: TextDocumentPositionParams {
+                            text_document: TextDocumentIdentifier { uri: uri3 },
+                            position: Position { line, character: col },
+                        },
+                        work_done_progress_params: WorkDoneProgressParams::default(),
+                    })
+                    .await;
+            }));
+        }
+    }
+
+    let total = request_futures.len();
+    let burst = tokio::time::timeout(
+        Duration::from_secs(15),
+        futures::future::join_all(request_futures),
+    )
+    .await;
+
+    assert!(
+        burst.is_ok(),
+        "{total} concurrent goto/hover requests deadlocked (no responses within 15s). \
+         Check the LSP actor thread for futex_do_wait and look at \
+         act-locally's handler.rs for the read-lock-across-await pattern."
+    );
+
+    client.shutdown().await;
+}
