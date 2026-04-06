@@ -156,7 +156,9 @@ fn normalize_file_uri(uri: Url) -> Url {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_file_uri;
+    use super::{normalize_file_uri, Backend};
+    use async_lsp::MainLoop;
+    use async_lsp::router::Router;
     use url::Url;
 
     #[test]
@@ -172,5 +174,66 @@ mod tests {
         let expected = Url::from_file_path(r"C:\Users\sean\Downloads\erc20\src\lib.fe").unwrap();
 
         assert_eq!(normalize_file_uri(client_uri), expected);
+    }
+
+    /// Construct a Backend wired to a dummy ClientSocket for unit testing.
+    /// The MainLoop is dropped immediately — we never run it. Backend only
+    /// stores the client socket; it doesn't send anything through it during
+    /// these tests.
+    fn test_backend() -> Backend {
+        let (_main_loop, client_socket) =
+            MainLoop::new_server(|_client| Router::<()>::new(()));
+        Backend::new(client_socket, None, None, None, None)
+    }
+
+    /// KNOWN BUG: `spawn_on_workers` currently swallows panics from worker
+    /// closures. When the closure panics:
+    ///
+    ///   1. The closure body `tx.send(result)` never runs (unreachable after
+    ///      panic).
+    ///   2. `tx` is dropped as the blocking task unwinds.
+    ///   3. The receiver sees `oneshot::Canceled`, indistinguishable from a
+    ///      legitimate cancellation (e.g. the future being dropped).
+    ///   4. The caller logs "worker cancelled" (see `handle_doc_reload` in
+    ///      `functionality/handlers.rs`) with no panic message, no backtrace,
+    ///      no ability to distinguish a real bug from normal cancellation.
+    ///
+    /// This test locks in the current buggy behavior as a forcing function.
+    /// The next commit fixes `spawn_on_workers` to `catch_unwind` inside the
+    /// blocking closure and surface panics to the caller. When the fix lands,
+    /// this test gets updated to assert that the panic message is carried
+    /// through to the awaited result.
+    ///
+    /// `multi_thread` flavor is required because `Backend` owns a nested
+    /// tokio runtime; see the closing `spawn_blocking(drop(backend))` below
+    /// for the other half of that accommodation — the runtime's Drop impl
+    /// blocks, so we move the drop off the async context.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn spawn_on_workers_currently_swallows_panics() {
+        let backend = test_backend();
+
+        let rx = backend.spawn_on_workers::<_, ()>(|_db| {
+            panic!("intentional test panic: __spawn_on_workers_panic_probe__");
+        });
+
+        let result = rx.await;
+
+        // Current (buggy) behavior: the receiver is cancelled, with no way
+        // to tell a panic from a legitimate cancel.
+        assert!(
+            result.is_err(),
+            "bug reproducer: panicking worker should currently appear as \
+             a cancelled receiver, but got a successful result: {result:?}. \
+             If you see this assertion fire, someone fixed the bug — \
+             update this test to assert the panic message surfaces."
+        );
+
+        // Backend owns a nested tokio::runtime::Runtime (`workers`) whose
+        // `Drop` performs a blocking shutdown. Dropping from within an async
+        // context triggers "Cannot drop a runtime in a context where blocking
+        // is not allowed", so move the drop onto a dedicated blocking thread.
+        tokio::task::spawn_blocking(move || drop(backend))
+            .await
+            .expect("backend drop task panicked");
     }
 }
