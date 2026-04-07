@@ -2728,7 +2728,7 @@ impl<'db> TyChecker<'db> {
         let mut canonical_r_ty = Canonicalized::new(self.db, selected_receiver_ty);
         let mut candidate = select_method_candidate(
             self.db,
-            canonical_r_ty.canonical(),
+            &canonical_r_ty,
             method_name,
             self.env.scope(),
             method_assumptions,
@@ -2742,7 +2742,7 @@ impl<'db> TyChecker<'db> {
                 let fallback_canonical = Canonicalized::new(self.db, receiver_ty);
                 let fallback = select_method_candidate(
                     self.db,
-                    fallback_canonical.canonical(),
+                    &fallback_canonical,
                     method_name,
                     self.env.scope(),
                     method_assumptions,
@@ -3817,7 +3817,7 @@ impl<'db> TyChecker<'db> {
         let mut c_lhs_ty = Canonicalized::new(self.db, selected_lhs_ty);
         let mut method_candidate = select_method_candidate(
             self.db,
-            c_lhs_ty.canonical(),
+            &c_lhs_ty,
             op.trait_method(self.db),
             self.env.scope(),
             method_assumptions,
@@ -3831,7 +3831,7 @@ impl<'db> TyChecker<'db> {
                 let c_candidate_ty = Canonicalized::new(self.db, candidate_ty);
                 let fallback = select_method_candidate(
                     self.db,
-                    c_candidate_ty.canonical(),
+                    &c_candidate_ty,
                     op.trait_method(self.db),
                     self.env.scope(),
                     method_assumptions,

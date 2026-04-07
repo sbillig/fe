@@ -144,6 +144,26 @@ where
         self.canonical
     }
 
+    pub fn extract_identity<S>(&self, table: &mut UnificationTableBase<'db, S>) -> T
+    where
+        S: UnificationStore<'db>,
+    {
+        self.canonical.extract_identity(table)
+    }
+
+    pub fn canonicalize_solution<S, U>(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        table: &mut UnificationTableBase<'db, S>,
+        solution: U,
+    ) -> Solution<U>
+    where
+        S: UnificationStore<'db>,
+        U: TyFoldable<'db> + Clone + Update,
+    {
+        self.canonical.canonicalize_solution(db, table, solution)
+    }
+
     /// Extracts the solution from the canonicalized query.
     ///
     /// This method takes a unification table and a solution, and returns the
