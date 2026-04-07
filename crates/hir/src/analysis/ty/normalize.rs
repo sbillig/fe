@@ -16,7 +16,7 @@ use super::{
     fold::{TyFoldable, TyFolder},
     trait_def::impls_for_ty_with_constraints,
     trait_resolution::{PredicateListId, TraitSolveCx},
-    ty_def::{AssocTy, TyData, TyId, TyParam, inference_keys},
+    ty_def::{AssocTy, TyData, TyId, TyParam},
     unify::UnificationTable,
     visitor::{TyVisitable, TyVisitor},
 };
@@ -166,15 +166,20 @@ impl<'db> TypeNormalizer<'db> {
             );
 
             let mut table = UnificationTable::new(self.db);
+            let materialized_input = canonical_input.extract_identity(&mut table);
             let AssumptionUnifyInput {
                 lhs_self,
                 rhs_self,
                 bound,
-            } = canonical_input.extract_identity(&mut table);
+            } = materialized_input;
 
             if table.unify(lhs_self, rhs_self).is_ok() {
                 let resolved = bound.fold_with(self.db, &mut table);
-                return Some(canonical_input.decanonicalize(self.db, resolved));
+                return canonical_input.extract_existing_solution(
+                    &mut table,
+                    materialized_input,
+                    resolved,
+                );
             }
         }
 
@@ -242,11 +247,9 @@ impl<'db> TypeNormalizer<'db> {
         // Canonicalize the target trait instance so we can unify against it in a
         // fresh table without mixing inference keys from other tables.
         let canonical_target = Canonicalized::new(self.db, trait_inst);
-        let canonical_inst = canonical_target.canonical();
 
         let mut table = UnificationTable::new(self.db);
-        let target_inst = canonical_inst.extract_identity(&mut table);
-        let target_keys = inference_keys(self.db, &target_inst);
+        let target_inst = canonical_target.extract_identity(&mut table);
 
         for ingot in search_ingots.into_iter().flatten() {
             for implementor in
@@ -274,20 +277,15 @@ impl<'db> TypeNormalizer<'db> {
                     continue;
                 };
 
-                // Apply substitutions, then decanonicalize back to the original
-                // inference vars before further normalization.
+                // Map scratch-table solutions back into the caller's inference
+                // environment before further normalization.
                 let folded = assoc_ty.fold_with(self.db, &mut table);
-                let folded_keys = inference_keys(self.db, &folded);
-                if !folded_keys.is_subset(&target_keys) {
-                    // This candidate left unconstrained snapshot-local vars in
-                    // the projected associated type. Skipping avoids leaking
-                    // rollback-invalid keys into later analysis.
-                    table.rollback_to(snapshot);
-                    continue;
+                if let Some(folded) =
+                    canonical_target.extract_existing_solution(&mut table, target_inst, folded)
+                {
+                    let norm = self.fold_ty(self.db, folded);
+                    dedup.entry(norm).or_insert(());
                 }
-                let folded = canonical_target.decanonicalize(self.db, folded);
-                let norm = self.fold_ty(self.db, folded);
-                dedup.entry(norm).or_insert(());
 
                 table.rollback_to(snapshot);
             }
