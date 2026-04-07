@@ -447,14 +447,51 @@ where
 
 #[cfg(test)]
 mod tests {
+    use salsa::Update;
+
     use super::Canonicalized;
+    use crate::analysis::ty::ty_def::TyId;
     use crate::{
+        analysis::HirAnalysisDb,
         analysis::ty::{
+            fold::{TyFoldable, TyFolder},
             ty_def::{Kind, TyVarSort},
             unify::UnificationTable,
+            visitor::{TyVisitable, TyVisitor},
         },
         test_db::HirAnalysisTestDb,
     };
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Update)]
+    struct RepeatedAndConstVars<'db> {
+        lhs: TyId<'db>,
+        rhs: TyId<'db>,
+        const_arg: TyId<'db>,
+    }
+
+    impl<'db> TyFoldable<'db> for RepeatedAndConstVars<'db> {
+        fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+        where
+            F: TyFolder<'db>,
+        {
+            Self {
+                lhs: self.lhs.fold_with(db, folder),
+                rhs: self.rhs.fold_with(db, folder),
+                const_arg: self.const_arg.fold_with(db, folder),
+            }
+        }
+    }
+
+    impl<'db> TyVisitable<'db> for RepeatedAndConstVars<'db> {
+        fn visit_with<V>(&self, visitor: &mut V)
+        where
+            V: TyVisitor<'db> + ?Sized,
+        {
+            self.lhs.visit_with(visitor);
+            self.rhs.visit_with(visitor);
+            self.const_arg.visit_with(visitor);
+        }
+    }
 
     #[test]
     fn extract_existing_solution_handles_preseeded_tables() {
@@ -487,6 +524,33 @@ mod tests {
         assert_eq!(
             canonicalized.extract_existing_solution(&mut scratch, extracted, extra),
             None
+        );
+    }
+
+    #[test]
+    fn extract_existing_solution_handles_repeated_and_const_vars() {
+        let db = HirAnalysisTestDb::default();
+        let mut original_table = UnificationTable::new(&db);
+        let repeated = original_table.new_var(TyVarSort::General, &Kind::Star);
+        let const_arg = TyId::const_ty_var(
+            &db,
+            TyId::u256(&db),
+            original_table.new_key(&Kind::Star, TyVarSort::General),
+        );
+        let original = RepeatedAndConstVars {
+            lhs: repeated,
+            rhs: repeated,
+            const_arg,
+        };
+        let canonicalized = Canonicalized::new(&db, original);
+
+        let mut scratch = UnificationTable::new(&db);
+        let _ = scratch.new_var(TyVarSort::General, &Kind::Star);
+        let extracted = canonicalized.extract_identity(&mut scratch);
+
+        assert_eq!(
+            canonicalized.extract_existing_solution(&mut scratch, extracted, extracted),
+            Some(original)
         );
     }
 }
