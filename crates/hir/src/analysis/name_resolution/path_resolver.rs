@@ -35,7 +35,7 @@ use crate::analysis::{
         trait_def::{TraitInstId, impls_for_ty_with_constraints},
         trait_lower::{TraitArgError, TraitRefLowerError, lower_trait_ref, lower_trait_ref_impl},
         trait_resolution::PredicateListId,
-        ty_def::{InvalidCause, Kind, TyData, TyId, inference_keys},
+        ty_def::{InvalidCause, Kind, TyData, TyId},
         ty_lower::{
             ConstDefaultCompletion, TyAlias, collect_generic_params, lower_generic_arg_list,
             lower_hir_ty, lower_type_alias,
@@ -1214,16 +1214,18 @@ pub(crate) fn find_associated_type<'db>(
     let canonical_ty = ty.canonical();
     let original_ty = ty.original();
     let mut table = UnificationTable::new(db);
-    let lhs_ty = canonical_ty.extract_identity(&mut table);
-    let lhs_keys = inference_keys(db, &lhs_ty);
+    let lhs_ty = ty.extract_identity(&mut table);
 
     // Qualified type: `<A as T>::B`. Always construct the associated type projection
     // against the qualified trait instance; bindings (if any) will be handled downstream.
     if let TyData::QualifiedTy(trait_inst) = lhs_ty.data(db) {
         let proj = TyId::assoc_ty(db, *trait_inst, name);
-        let proj = ty.decanonicalize(db, proj);
-        let inst = ty.decanonicalize(db, *trait_inst);
-        return Ok(smallvec![(inst, proj)]);
+        let inst = ty.extract_existing_solution(&mut table, lhs_ty, *trait_inst);
+        let proj = ty.extract_existing_solution(&mut table, lhs_ty, proj);
+        return Ok(match (inst, proj) {
+            (Some(inst), Some(proj)) => smallvec![(inst, proj)],
+            _ => smallvec![],
+        });
     }
 
     let scope_ingot = scope.ingot(db);
@@ -1262,13 +1264,11 @@ pub(crate) fn find_associated_type<'db>(
             {
                 let folded_inst = trait_inst.fold_with(db, &mut table);
                 let folded_ty = assoc_ty.fold_with(db, &mut table);
-                let folded_inst_keys = inference_keys(db, &folded_inst);
-                let folded_ty_keys = inference_keys(db, &folded_ty);
-                if folded_inst_keys.is_subset(&lhs_keys) && folded_ty_keys.is_subset(&lhs_keys) {
-                    candidates.push((
-                        ty.decanonicalize(db, folded_inst),
-                        ty.decanonicalize(db, folded_ty),
-                    ));
+                if let (Some(folded_inst), Some(folded_ty)) = (
+                    ty.extract_existing_solution(&mut table, lhs_ty, folded_inst),
+                    ty.extract_existing_solution(&mut table, lhs_ty, folded_ty),
+                ) {
+                    candidates.push((folded_inst, folded_ty));
                 }
             }
             table.rollback_to(snapshot);
@@ -1291,13 +1291,11 @@ pub(crate) fn find_associated_type<'db>(
             {
                 let folded_inst = impl_.trait_(db).fold_with(db, &mut table);
                 let folded_ty = assoc_ty.fold_with(db, &mut table);
-                let folded_inst_keys = inference_keys(db, &folded_inst);
-                let folded_ty_keys = inference_keys(db, &folded_ty);
-                if folded_inst_keys.is_subset(&lhs_keys) && folded_ty_keys.is_subset(&lhs_keys) {
-                    candidates.push((
-                        ty.decanonicalize(db, folded_inst),
-                        ty.decanonicalize(db, folded_ty),
-                    ));
+                if let (Some(folded_inst), Some(folded_ty)) = (
+                    ty.extract_existing_solution(&mut table, lhs_ty, folded_inst),
+                    ty.extract_existing_solution(&mut table, lhs_ty, folded_ty),
+                ) {
+                    candidates.push((folded_inst, folded_ty));
                 }
             }
             table.rollback_to(snapshot);
@@ -1311,8 +1309,7 @@ pub(crate) fn find_associated_type<'db>(
 
         // Extract the canonical type's substitutions into the unification table
         // This ensures we maintain any type parameter bindings from the outer context
-        let ty_with_subst = canonical_ty.extract_identity(&mut assoc_table);
-        let assoc_lhs_keys = inference_keys(db, &ty_with_subst);
+        let ty_with_subst = ty.extract_identity(&mut assoc_table);
 
         // First, check if there are trait bounds on this associated type in the assumptions
         // (e.g., from where clauses like `T::Assoc: Level1`).
@@ -1326,15 +1323,11 @@ pub(crate) fn find_associated_type<'db>(
             {
                 let folded_inst = trait_inst.fold_with(db, &mut assoc_table);
                 let folded_ty = assoc_ty.fold_with(db, &mut assoc_table);
-                let folded_inst_keys = inference_keys(db, &folded_inst);
-                let folded_ty_keys = inference_keys(db, &folded_ty);
-                if folded_inst_keys.is_subset(&assoc_lhs_keys)
-                    && folded_ty_keys.is_subset(&assoc_lhs_keys)
-                {
-                    candidates.push((
-                        ty.decanonicalize(db, folded_inst),
-                        ty.decanonicalize(db, folded_ty),
-                    ));
+                if let (Some(folded_inst), Some(folded_ty)) = (
+                    ty.extract_existing_solution(&mut assoc_table, ty_with_subst, folded_inst),
+                    ty.extract_existing_solution(&mut assoc_table, ty_with_subst, folded_ty),
+                ) {
+                    candidates.push((folded_inst, folded_ty));
                 }
             }
             assoc_table.rollback_to(snapshot);
@@ -1378,15 +1371,11 @@ pub(crate) fn find_associated_type<'db>(
                     let assoc_ty = TyId::assoc_ty(db, inst, name);
                     let folded_inst = inst.fold_with(db, &mut assoc_table);
                     let folded_ty = assoc_ty.fold_with(db, &mut assoc_table);
-                    let folded_inst_keys = inference_keys(db, &folded_inst);
-                    let folded_ty_keys = inference_keys(db, &folded_ty);
-                    if folded_inst_keys.is_subset(&assoc_lhs_keys)
-                        && folded_ty_keys.is_subset(&assoc_lhs_keys)
-                    {
-                        candidates.push((
-                            ty.decanonicalize(db, folded_inst),
-                            ty.decanonicalize(db, folded_ty),
-                        ));
+                    if let (Some(folded_inst), Some(folded_ty)) = (
+                        ty.extract_existing_solution(&mut assoc_table, ty_with_subst, folded_inst),
+                        ty.extract_existing_solution(&mut assoc_table, ty_with_subst, folded_ty),
+                    ) {
+                        candidates.push((folded_inst, folded_ty));
                     }
                 }
             }

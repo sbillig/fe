@@ -2208,7 +2208,7 @@ impl<'db> TyChecker<'db> {
             };
 
             Some(ProviderTargetResolution {
-                target_ty: Canonicalized::new(self.db, target_ty).original(),
+                target_ty,
                 target_seed_ty: target_assoc,
                 handle_proof: Some((effect_handle_inst, handle_solution)),
                 effect_ref_proof: Some((effect_ref_inst, effect_ref_solution)),

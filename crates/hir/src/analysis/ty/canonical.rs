@@ -6,7 +6,7 @@ use super::{
     fold::{TyFoldable, TyFolder},
     ty_def::{TyData, TyFlags, TyId, TyVar},
     unify::{InferenceKey, UnificationStore, UnificationTableBase},
-    visitor::{TyVisitable, collect_flags},
+    visitor::{TyVisitable, TyVisitor, collect_flags, walk_const_ty, walk_ty},
 };
 use crate::analysis::{HirAnalysisDb, ty::ty_def::collect_variables};
 
@@ -25,18 +25,16 @@ where
         Canonical { value }
     }
 
-    /// Extracts the identity from the canonical value.
-    ///
-    /// This method initializes the unification table with new variables
-    /// based on the canonical value and then returns the canonical value
-    /// itself.
+    /// Materializes the canonical value into the provided table's inference
+    /// universe.
     ///
     /// # Parameters
-    /// - `table`: The unification table to be initialized with new variables.
+    /// - `table`: The unification table that receives fresh vars corresponding
+    ///   to the canonical vars in `self`.
     ///
     /// # Returns
-    /// The canonical value after initializing the unification table.
-    ///
+    /// A copy of the canonical value where each canonical var has been
+    /// re-materialized as a fresh var in `table`.
     pub fn extract_identity<S>(self, table: &mut UnificationTableBase<'db, S>) -> T
     where
         S: UnificationStore<'db>,
@@ -190,30 +188,95 @@ where
         solution.value.fold_with(db, &mut extractor)
     }
 
-    /// Substitute canonical variables back to the original variables.
+    /// Extracts a value produced in a scratch table seeded from this
+    /// canonicalized input back into the original inference environment.
     ///
-    /// This is useful when you want to run unification in a canonicalized
-    /// environment (e.g. to avoid mixing inference keys from different tables)
-    /// but need to return a result in the original environment.
-    pub fn decanonicalize<U>(&self, db: &'db dyn HirAnalysisDb, value: U) -> U
+    /// `query` must be the materialized identity previously returned by
+    /// [`Canonicalized::extract_identity`] for this canonicalized input in the
+    /// same `table`.
+    ///
+    /// Returns `None` when `value` still contains scratch-local vars that do
+    /// not originate from this canonical query.
+    pub fn extract_existing_solution<U, S>(
+        &self,
+        table: &mut UnificationTableBase<'db, S>,
+        query: T,
+        value: U,
+    ) -> Option<U>
     where
-        U: TyFoldable<'db>,
+        S: UnificationStore<'db>,
+        T: TyVisitable<'db>,
+        U: TyFoldable<'db> + TyVisitable<'db> + Update,
     {
-        struct Decanonicalizer<'a, 'db> {
+        let db = table.db;
+        let value = value.fold_with(db, table);
+        let mut canonicalizer = Canonicalizer {
+            subst: collect_variable_tys(db, &query)
+                .into_iter()
+                .zip(collect_variable_tys(db, &self.canonical.value))
+                .collect(),
+        };
+        let solution = Solution {
+            value: value.fold_with(db, &mut canonicalizer),
+        };
+        self.solution_uses_only_original_canonical_vars(db, &solution.value)
+            .then(|| self.extract_solution(table, solution))
+    }
+
+    fn solution_uses_only_original_canonical_vars<U>(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        value: &U,
+    ) -> bool
+    where
+        U: TyVisitable<'db>,
+    {
+        struct QueryVarChecker<'a, 'db> {
+            db: &'db dyn HirAnalysisDb,
             subst: &'a FxHashMap<TyId<'db>, TyId<'db>>,
+            is_valid: bool,
         }
 
-        impl<'db> TyFolder<'db> for Decanonicalizer<'_, 'db> {
-            fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-                if let Some(&ty) = self.subst.get(&ty) {
-                    return ty;
+        impl<'db> TyVisitor<'db> for QueryVarChecker<'_, 'db> {
+            fn db(&self) -> &'db dyn HirAnalysisDb {
+                self.db
+            }
+
+            fn visit_ty(&mut self, ty: TyId<'db>) {
+                if !self.is_valid {
+                    return;
                 }
-                ty.super_fold_with(db, self)
+
+                match ty.data(self.db) {
+                    TyData::TyVar(_) => {
+                        self.is_valid &= self.subst.contains_key(&ty);
+                    }
+                    _ => walk_ty(self, ty),
+                }
+            }
+
+            fn visit_const_ty(&mut self, const_ty: &ConstTyId<'db>) {
+                if !self.is_valid {
+                    return;
+                }
+
+                match const_ty.data(self.db) {
+                    ConstTyData::TyVar(var, const_ty_ty) => {
+                        let ty = TyId::const_ty_var(self.db, *const_ty_ty, var.key);
+                        self.is_valid &= self.subst.contains_key(&ty);
+                    }
+                    _ => walk_const_ty(self, const_ty),
+                }
             }
         }
 
-        let mut folder = Decanonicalizer { subst: &self.subst };
-        value.fold_with(db, &mut folder)
+        let mut checker = QueryVarChecker {
+            db,
+            subst: &self.subst,
+            is_valid: true,
+        };
+        value.visit_with(&mut checker);
+        checker.is_valid
     }
 }
 
@@ -342,5 +405,88 @@ where
 
             _ => ty.super_fold_with(db, self),
         }
+    }
+}
+
+fn collect_variable_tys<'db, V>(db: &'db dyn HirAnalysisDb, value: &V) -> Vec<TyId<'db>>
+where
+    V: TyVisitable<'db>,
+{
+    struct VariableCollector<'db> {
+        db: &'db dyn HirAnalysisDb,
+        vars: Vec<TyId<'db>>,
+    }
+
+    impl<'db> TyVisitor<'db> for VariableCollector<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            match ty.data(self.db) {
+                TyData::TyVar(_) => self.vars.push(ty),
+                _ => walk_ty(self, ty),
+            }
+        }
+
+        fn visit_const_ty(&mut self, const_ty: &ConstTyId<'db>) {
+            match const_ty.data(self.db) {
+                ConstTyData::TyVar(var, const_ty_ty) => {
+                    self.vars
+                        .push(TyId::const_ty_var(self.db, *const_ty_ty, var.key));
+                }
+                _ => walk_const_ty(self, const_ty),
+            }
+        }
+    }
+
+    let mut collector = VariableCollector { db, vars: vec![] };
+    value.visit_with(&mut collector);
+    collector.vars
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Canonicalized;
+    use crate::{
+        analysis::ty::{
+            ty_def::{Kind, TyVarSort},
+            unify::UnificationTable,
+        },
+        test_db::HirAnalysisTestDb,
+    };
+
+    #[test]
+    fn extract_existing_solution_handles_preseeded_tables() {
+        let db = HirAnalysisTestDb::default();
+        let mut original_table = UnificationTable::new(&db);
+        let original = original_table.new_var(TyVarSort::General, &Kind::Star);
+        let canonicalized = Canonicalized::new(&db, original);
+
+        let mut scratch = UnificationTable::new(&db);
+        let _ = scratch.new_var(TyVarSort::General, &Kind::Star);
+        let extracted = canonicalized.extract_identity(&mut scratch);
+
+        assert_eq!(
+            canonicalized.extract_existing_solution(&mut scratch, extracted, extracted),
+            Some(original)
+        );
+    }
+
+    #[test]
+    fn extract_existing_solution_rejects_scratch_only_vars() {
+        let db = HirAnalysisTestDb::default();
+        let mut original_table = UnificationTable::new(&db);
+        let original = original_table.new_var(TyVarSort::General, &Kind::Star);
+        let canonicalized = Canonicalized::new(&db, original);
+
+        let mut scratch = UnificationTable::new(&db);
+        let extracted = canonicalized.extract_identity(&mut scratch);
+        let extra = scratch.new_var(TyVarSort::General, &Kind::Star);
+
+        assert_eq!(
+            canonicalized.extract_existing_solution(&mut scratch, extracted, extra),
+            None
+        );
     }
 }
