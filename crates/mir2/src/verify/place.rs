@@ -5,7 +5,7 @@ use hir::projection::IndexSource;
 use crate::{
     db::MirDb,
     runtime::{
-        ConstScalar, HandleView, Layout, LayoutId, PlaceElem, PlaceRoot, ResolvedPlaceElem,
+        ConstScalar, Layout, LayoutId, PlaceElem, PlaceRoot, RefView, ResolvedPlaceElem,
         ResolvedPlaceRootKind, ResolvedRuntimePlace, RuntimeBody, RuntimeClass, RuntimeLocalRoot,
         RuntimeProgramView, ScalarClass, ScalarRepr, ScalarRole, VariantId,
     },
@@ -24,7 +24,7 @@ pub fn resolve_runtime_place<'db>(
             .ok_or(VerifyError::MissingRuntimeLocal(*local))?
             .root
         {
-            RuntimeLocalRoot::None | RuntimeLocalRoot::Handle(_) | RuntimeLocalRoot::Ptr { .. } => {
+            RuntimeLocalRoot::None | RuntimeLocalRoot::Ref(_) | RuntimeLocalRoot::Ptr { .. } => {
                 return Err(VerifyError::InvalidPlace(RuntimeClass::RawAddr {
                     space: crate::runtime::AddressSpaceKind::Memory,
                     target: None,
@@ -32,10 +32,14 @@ pub fn resolve_runtime_place<'db>(
             }
             RuntimeLocalRoot::Slot(class) => class.clone(),
         },
-        PlaceRoot::Handle(value) => body
+        PlaceRoot::Ref(value) => match body
             .value_class(*value)
             .cloned()
-            .ok_or(VerifyError::ErasedRuntimeValue(*value))?,
+            .ok_or(VerifyError::ErasedRuntimeValue(*value))?
+        {
+            RuntimeClass::Ref { pointee, .. } => *pointee,
+            class => class,
+        },
         PlaceRoot::Provider(binding) => body
             .provider_bindings
             .get(binding.index())
@@ -53,9 +57,9 @@ pub fn resolve_runtime_place<'db>(
                     space: actual_space,
                     ..
                 } if *actual_space == *space => {}
-                RuntimeClass::Handle {
+                RuntimeClass::Ref {
                     kind:
-                        crate::runtime::HandleKind::Provider {
+                        crate::runtime::RefKind::Provider {
                             space: actual_space,
                             ..
                         },
@@ -72,7 +76,7 @@ pub fn resolve_runtime_place<'db>(
             local: *local,
             class: current.clone(),
         },
-        PlaceRoot::Handle(value) => ResolvedPlaceRootKind::Handle {
+        PlaceRoot::Ref(value) => ResolvedPlaceRootKind::Ref {
             value: *value,
             class: current.clone(),
         },
@@ -121,12 +125,12 @@ pub fn resolve_runtime_place<'db>(
                 });
             }
             PlaceElem::VariantField(field) => {
-                let RuntimeClass::Handle {
-                    view: HandleView::EnumVariant(variant),
-                    ..
-                } = current
-                else {
-                    return Err(VerifyError::InvalidVariantPlace(current));
+                let variant = match current {
+                    RuntimeClass::Ref {
+                        view: RefView::EnumVariant(variant),
+                        ..
+                    } => variant,
+                    _ => return Err(VerifyError::InvalidVariantPlace(current)),
                 };
                 current = project_variant_field(db, current, *field)?;
                 path.push(ResolvedPlaceElem::VariantField {
@@ -139,8 +143,9 @@ pub fn resolve_runtime_place<'db>(
     }
 
     if place.path.is_empty()
-        && let PlaceRoot::Handle(_) | PlaceRoot::Provider(_) = &place.root
-        && let RuntimeClass::Handle { layout, .. } = current
+        && let PlaceRoot::Ref(_) | PlaceRoot::Provider(_) = &place.root
+        && let RuntimeClass::Ref { ref pointee, .. } = current
+        && let RuntimeClass::AggregateValue { layout } = **pointee
     {
         current = RuntimeClass::AggregateValue { layout };
     }
@@ -210,20 +215,18 @@ pub(super) fn enum_tag_class_from_value<'db>(
     body: &RuntimeBody<'db>,
     value: crate::runtime::RValueId,
 ) -> Result<RuntimeClass<'db>, VerifyError<'db>> {
-    let enum_layout = match runtime_value_class(body, value)? {
-        RuntimeClass::AggregateValue { layout } | RuntimeClass::Handle { layout, .. } => layout,
-        class => return Err(VerifyError::InvalidPlace(class.clone())),
+    let class = runtime_value_class(body, value)?.clone();
+    let Some(enum_layout) = class.aggregate_layout() else {
+        return Err(VerifyError::InvalidPlace(class));
     };
     Ok(RuntimeClass::Scalar(ScalarClass {
         repr: match enum_layout.data(db) {
             Layout::Enum(layout) => layout.tag.repr,
             Layout::Struct(_) | Layout::Array(_) => {
-                return Err(VerifyError::InvalidEnumTag(*enum_layout));
+                return Err(VerifyError::InvalidEnumTag(enum_layout));
             }
         },
-        role: ScalarRole::EnumTag {
-            enum_layout: *enum_layout,
-        },
+        role: ScalarRole::EnumTag { enum_layout },
     }))
 }
 
@@ -234,22 +237,34 @@ pub(super) fn verify_enum_handle<'db>(
     program: &impl RuntimeProgramView<'db>,
 ) -> Result<RuntimeClass<'db>, VerifyError<'db>> {
     let class = runtime_value_class(body, root)?.clone();
-    let RuntimeClass::Handle {
-        layout,
-        kind,
-        view: HandleView::Whole,
-    } = class
-    else {
-        return Err(VerifyError::InvalidVariantPlace(class));
+    let (layout, result) = match class {
+        RuntimeClass::Ref {
+            pointee,
+            kind,
+            view: RefView::Whole,
+        } => {
+            let Some(layout) = pointee.aggregate_layout() else {
+                return Err(VerifyError::InvalidVariantPlace(RuntimeClass::Ref {
+                    pointee,
+                    kind,
+                    view: RefView::Whole,
+                }));
+            };
+            (
+                layout,
+                RuntimeClass::Ref {
+                    pointee,
+                    kind,
+                    view: RefView::Whole,
+                },
+            )
+        }
+        class => return Err(VerifyError::InvalidVariantPlace(class)),
     };
     if layout != variant.enum_layout || !matches!(program.layout(layout), Layout::Enum(_)) {
         return Err(VerifyError::InvalidVariant(layout, variant.index));
     }
-    Ok(RuntimeClass::Handle {
-        layout,
-        kind,
-        view: HandleView::Whole,
-    })
+    Ok(result)
 }
 
 pub(super) fn verify_enum_write_variant<'db>(
@@ -259,8 +274,11 @@ pub(super) fn verify_enum_write_variant<'db>(
     variant: VariantId<'db>,
     fields: &[crate::runtime::RValueId],
 ) -> Result<(), VerifyError<'db>> {
-    let RuntimeClass::Handle { layout, .. } = verify_enum_handle(body, root, variant, program)?
+    let RuntimeClass::Ref { pointee, .. } = verify_enum_handle(body, root, variant, program)?
     else {
+        unreachable!();
+    };
+    let RuntimeClass::AggregateValue { layout } = *pointee else {
         unreachable!();
     };
     let Layout::Enum(enum_layout) = program.layout(layout) else {
@@ -398,13 +416,17 @@ fn project_variant_field<'db>(
     current: RuntimeClass<'db>,
     field: FieldIndex,
 ) -> Result<RuntimeClass<'db>, VerifyError<'db>> {
-    let RuntimeClass::Handle {
-        layout,
-        view: HandleView::EnumVariant(variant),
+    let current_clone = current.clone();
+    let RuntimeClass::Ref {
+        pointee,
+        view: RefView::EnumVariant(variant),
         ..
     } = current
     else {
-        return Err(VerifyError::InvalidVariantPlace(current));
+        return Err(VerifyError::InvalidVariantPlace(current_clone));
+    };
+    let RuntimeClass::AggregateValue { layout } = *pointee else {
+        return Err(VerifyError::InvalidVariantPlace(current_clone));
     };
     let enum_layout = variant
         .layout(db)
@@ -421,13 +443,5 @@ fn project_variant_field<'db>(
 }
 
 fn layout_for_projection<'db>(class: RuntimeClass<'db>) -> Option<LayoutId<'db>> {
-    match class {
-        RuntimeClass::AggregateValue { layout }
-        | RuntimeClass::Handle { layout, .. }
-        | RuntimeClass::RawAddr {
-            target: Some(layout),
-            ..
-        } => Some(layout),
-        RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { target: None, .. } => None,
-    }
+    class.aggregate_layout()
 }

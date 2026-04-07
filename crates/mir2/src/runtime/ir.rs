@@ -27,15 +27,243 @@ pub enum RuntimeClass<'db> {
     AggregateValue {
         layout: LayoutId<'db>,
     },
-    Handle {
-        layout: LayoutId<'db>,
-        kind: HandleKind<'db>,
-        view: HandleView<'db>,
+    Ref {
+        pointee: Box<RuntimeClass<'db>>,
+        kind: RefKind<'db>,
+        view: RefView<'db>,
     },
     RawAddr {
         space: AddressSpaceKind,
         target: Option<LayoutId<'db>>,
     },
+}
+
+impl<'db> RuntimeClass<'db> {
+    pub fn const_ref(layout: LayoutId<'db>) -> Self {
+        Self::Ref {
+            pointee: Box::new(Self::AggregateValue { layout }),
+            kind: RefKind::Const,
+            view: RefView::Whole,
+        }
+    }
+
+    pub fn object_ref(layout: LayoutId<'db>) -> Self {
+        Self::Ref {
+            pointee: Box::new(Self::AggregateValue { layout }),
+            kind: RefKind::Object,
+            view: RefView::Whole,
+        }
+    }
+
+    pub fn provider_ref(
+        layout: LayoutId<'db>,
+        provider_ty: TyId<'db>,
+        space: AddressSpaceKind,
+    ) -> Self {
+        Self::Ref {
+            pointee: Box::new(Self::AggregateValue { layout }),
+            kind: RefKind::Provider { provider_ty, space },
+            view: RefView::Whole,
+        }
+    }
+
+    pub fn aggregate_layout(&self) -> Option<LayoutId<'db>> {
+        match self {
+            RuntimeClass::Scalar(_) => None,
+            RuntimeClass::AggregateValue { layout } => Some(*layout),
+            RuntimeClass::Ref { pointee, .. } => pointee.aggregate_layout(),
+            RuntimeClass::RawAddr { target, .. } => *target,
+        }
+    }
+
+    pub fn pointee(&self) -> Option<&RuntimeClass<'db>> {
+        match self {
+            RuntimeClass::Ref { pointee, .. } => Some(pointee),
+            RuntimeClass::Scalar(_)
+            | RuntimeClass::AggregateValue { .. }
+            | RuntimeClass::RawAddr { .. } => None,
+        }
+    }
+
+    pub fn as_ref_kind(&self) -> Option<&RefKind<'db>> {
+        match self {
+            RuntimeClass::Ref { kind, .. } => Some(kind),
+            RuntimeClass::Scalar(_)
+            | RuntimeClass::AggregateValue { .. }
+            | RuntimeClass::RawAddr { .. } => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum RefKind<'db> {
+    Const,
+    Object,
+    Provider {
+        provider_ty: TyId<'db>,
+        space: AddressSpaceKind,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum RefView<'db> {
+    Whole,
+    EnumVariant(VariantId<'db>),
+}
+
+pub(crate) fn runtime_classes_share_runtime_rep<'db>(
+    db: &'db dyn MirDb,
+    actual: &RuntimeClass<'db>,
+    desired: &RuntimeClass<'db>,
+) -> bool {
+    match (actual, desired) {
+        (RuntimeClass::Scalar(actual), RuntimeClass::Scalar(desired)) => actual == desired,
+        (
+            RuntimeClass::AggregateValue { layout: actual },
+            RuntimeClass::AggregateValue { layout: desired },
+        ) => layouts_share_runtime_rep(db, *actual, *desired),
+        (
+            RuntimeClass::Ref {
+                pointee: actual_pointee,
+                kind: actual_kind,
+                view: actual_view,
+            },
+            RuntimeClass::Ref {
+                pointee: desired_pointee,
+                kind: desired_kind,
+                view: desired_view,
+            },
+        ) => {
+            actual_view == desired_view
+                && ref_kinds_share_runtime_rep(actual_kind, desired_kind)
+                && runtime_classes_share_runtime_rep(db, actual_pointee, desired_pointee)
+        }
+        (
+            RuntimeClass::RawAddr {
+                space: actual_space,
+                target: actual_target,
+            },
+            RuntimeClass::RawAddr {
+                space: desired_space,
+                target: desired_target,
+            },
+        ) => {
+            actual_space == desired_space
+                && match (actual_target, desired_target) {
+                    (Some(actual), Some(desired)) => {
+                        layouts_share_runtime_rep(db, *actual, *desired)
+                    }
+                    (None, None) => true,
+                    (Some(_), None) | (None, Some(_)) => false,
+                }
+        }
+        (
+            RuntimeClass::Scalar(_),
+            RuntimeClass::AggregateValue { .. }
+            | RuntimeClass::Ref { .. }
+            | RuntimeClass::RawAddr { .. },
+        )
+        | (
+            RuntimeClass::AggregateValue { .. },
+            RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. },
+        )
+        | (
+            RuntimeClass::Ref { .. },
+            RuntimeClass::Scalar(_)
+            | RuntimeClass::AggregateValue { .. }
+            | RuntimeClass::RawAddr { .. },
+        )
+        | (
+            RuntimeClass::RawAddr { .. },
+            RuntimeClass::Scalar(_)
+            | RuntimeClass::AggregateValue { .. }
+            | RuntimeClass::Ref { .. },
+        ) => false,
+    }
+}
+
+fn layouts_share_runtime_rep<'db>(
+    db: &'db dyn MirDb,
+    actual: LayoutId<'db>,
+    desired: LayoutId<'db>,
+) -> bool {
+    match (actual.data(db), desired.data(db)) {
+        (Layout::Struct(actual), Layout::Struct(desired)) => {
+            actual.fields.len() == desired.fields.len()
+                && actual
+                    .fields
+                    .iter()
+                    .zip(desired.fields.iter())
+                    .all(|(actual, desired)| runtime_classes_share_runtime_rep(db, actual, desired))
+        }
+        (Layout::Array(actual), Layout::Array(desired)) => {
+            actual.len == desired.len
+                && runtime_classes_share_runtime_rep(db, &actual.elem, &desired.elem)
+        }
+        (Layout::Enum(actual), Layout::Enum(desired)) => {
+            actual.tag == desired.tag
+                && actual.variants.len() == desired.variants.len()
+                && actual
+                    .variants
+                    .iter()
+                    .zip(desired.variants.iter())
+                    .all(|(actual, desired)| {
+                        actual.fields.len() == desired.fields.len()
+                            && actual.fields.iter().zip(desired.fields.iter()).all(
+                                |(actual, desired)| {
+                                    runtime_classes_share_runtime_rep(db, actual, desired)
+                                },
+                            )
+                    })
+        }
+        (Layout::Struct(_), Layout::Array(_) | Layout::Enum(_))
+        | (Layout::Array(_), Layout::Struct(_) | Layout::Enum(_))
+        | (Layout::Enum(_), Layout::Struct(_) | Layout::Array(_)) => false,
+    }
+}
+
+fn ref_kinds_share_runtime_rep<'db>(actual: &RefKind<'db>, desired: &RefKind<'db>) -> bool {
+    match (actual, desired) {
+        (RefKind::Const, RefKind::Const) | (RefKind::Object, RefKind::Object) => true,
+        (
+            RefKind::Object,
+            RefKind::Provider {
+                space: AddressSpaceKind::Memory,
+                ..
+            },
+        )
+        | (
+            RefKind::Provider {
+                space: AddressSpaceKind::Memory,
+                ..
+            },
+            RefKind::Object,
+        )
+        | (
+            RefKind::Provider {
+                space: AddressSpaceKind::Memory,
+                ..
+            },
+            RefKind::Provider {
+                space: AddressSpaceKind::Memory,
+                ..
+            },
+        ) => true,
+        (
+            RefKind::Provider {
+                space: actual_space,
+                ..
+            },
+            RefKind::Provider {
+                space: desired_space,
+                ..
+            },
+        ) => actual_space == desired_space,
+        (RefKind::Const, RefKind::Object | RefKind::Provider { .. })
+        | (RefKind::Object | RefKind::Provider { .. }, RefKind::Const)
+        | (RefKind::Object, RefKind::Provider { .. })
+        | (RefKind::Provider { .. }, RefKind::Object) => false,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -62,22 +290,6 @@ pub enum ScalarRepr {
 pub enum ScalarRole<'db> {
     Plain,
     EnumTag { enum_layout: LayoutId<'db> },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub enum HandleKind<'db> {
-    ConstValue,
-    ObjectValue,
-    Provider {
-        provider_ty: TyId<'db>,
-        space: AddressSpaceKind,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub enum HandleView<'db> {
-    Whole,
-    EnumVariant(VariantId<'db>),
 }
 
 #[salsa::interned]
@@ -262,6 +474,15 @@ impl<'db> RuntimeBody<'db> {
     }
 }
 
+#[salsa::tracked]
+#[derive(Debug)]
+pub struct LoweredRuntimeBody<'db> {
+    pub body: RuntimeBody<'db>,
+    pub direct_callees: Vec<RuntimeCallEdge<'db>>,
+    pub referenced_const_regions: Vec<ConstRegionId<'db>>,
+    pub referenced_code_regions: Vec<RuntimeCodeRegion<'db>>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct RLocal<'db> {
     pub semantic_ty: TyId<'db>,
@@ -273,7 +494,7 @@ pub struct RLocal<'db> {
 pub enum RuntimeLocalRoot<'db> {
     None,
     Slot(RuntimeClass<'db>),
-    Handle(RuntimeClass<'db>),
+    Ref(RuntimeClass<'db>),
     Ptr {
         space: AddressSpaceKind,
         class: RuntimeClass<'db>,
@@ -491,7 +712,7 @@ pub enum ContractEffectArgPlan<'db> {
     ContractField(ContractFieldBinding<'db>),
     Placeholder {
         declared_ty: TyId<'db>,
-        class: RuntimeClass<'db>,
+        boundary: RuntimeBoundarySpec<'db>,
     },
 }
 
@@ -500,7 +721,31 @@ pub struct ContractFieldBinding<'db> {
     pub slot: u128,
     pub declared_ty: TyId<'db>,
     pub class: RuntimeClass<'db>,
-    pub kind: HandleKind<'db>,
+    pub kind: RefKind<'db>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum RuntimeBoundarySpec<'db> {
+    Exact(RuntimeClass<'db>),
+    BorrowLike {
+        pointee: RuntimeClass<'db>,
+        access: BorrowAccess,
+        allow: BorrowTransportSet,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum BorrowAccess {
+    ReadOnly,
+    ReadWrite,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct BorrowTransportSet {
+    pub allow_object: bool,
+    pub allow_const: bool,
+    pub provider_spaces: Box<[AddressSpaceKind]>,
+    pub allow_raw_addr: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -586,7 +831,7 @@ pub enum RuntimeSectionRef<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum PlaceRoot<'db> {
     Slot(RLocalId),
-    Handle(RValueId),
+    Ref(RValueId),
     Provider(RuntimeProviderBindingId),
     Ptr {
         addr: RValueId,
@@ -621,7 +866,7 @@ pub enum ResolvedPlaceRootKind<'db> {
         local: RLocalId,
         class: RuntimeClass<'db>,
     },
-    Handle {
+    Ref {
         value: RValueId,
         class: RuntimeClass<'db>,
     },
@@ -816,10 +1061,10 @@ pub enum RuntimeBuiltin<'db> {
         topic3: RValueId,
     },
     CallDataSelector,
-    MakeContractFieldHandle {
+    MakeContractFieldRef {
         slot: u128,
         class: RuntimeClass<'db>,
-        kind: HandleKind<'db>,
+        kind: RefKind<'db>,
     },
 }
 
@@ -860,7 +1105,7 @@ pub enum RExpr<'db> {
         value: RValueId,
         to: ScalarClass<'db>,
     },
-    ConstHandle {
+    ConstRef {
         region: ConstRegionId<'db>,
         layout: LayoutId<'db>,
     },
@@ -874,7 +1119,7 @@ pub enum RExpr<'db> {
         raw: RValueId,
         provider_ty: TyId<'db>,
         space: AddressSpaceKind,
-        layout: LayoutId<'db>,
+        target: Option<LayoutId<'db>>,
     },
     WordToRawAddr {
         value: RValueId,
@@ -882,6 +1127,9 @@ pub enum RExpr<'db> {
         target: Option<LayoutId<'db>>,
     },
     ProviderToRaw {
+        value: RValueId,
+    },
+    RetagRef {
         value: RValueId,
     },
     AddrOf {

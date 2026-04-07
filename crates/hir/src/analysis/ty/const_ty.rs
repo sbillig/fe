@@ -11,7 +11,9 @@ use super::const_expr::{ConstExpr, ConstExprId, pretty_print_un_op};
 use super::{
     assoc_const::AssocConstUse,
     diagnostics::{BodyDiag, FuncBodyDiag},
-    fold::{TyFoldable, TyFolder},
+    fold::{AssocTySubst, TyFoldable},
+    layout_holes::ty_contains_const_hole,
+    normalize::normalize_ty,
     trait_def::TraitInstId,
     trait_resolution::{
         TraitSolveCx,
@@ -19,19 +21,20 @@ use super::{
     },
     ty_check::{check_anon_const_body, check_const_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
+    ty_lower::{ConstDefaultCompletion, collect_generic_params},
     unify::UnificationTable,
 };
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{PathRes, resolve_path},
     semantic::{
-        CtfeError, SemConstId, SemConstValue, VariantIndex, eval_body_owner_const, int_ty_shape,
-        normalize_int_to_shape,
+        CtfeError, SemConstId, SemConstValue, VariantIndex, eval_body_owner_const,
+        eval_body_owner_const_with_args, int_ty_shape, normalize_int_to_shape, sem_const_from_ty,
     },
     ty::trait_resolution::PredicateListId,
     ty::ty_def::{Kind, PrimTy, TyBase, TyData, TyVarSort},
 };
-use crate::hir_def::ItemKind;
+use crate::hir_def::{CallableDef, ItemKind, scope_graph::ScopeId};
 use common::indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
@@ -39,6 +42,47 @@ use rustc_hash::FxHashMap;
 pub enum LayoutHoleArgSite<'db> {
     Path(PathId<'db>),
     GenericArgList(GenericArgListId<'db>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConstCanonMode {
+    Stored,
+    Identity,
+    Display,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TypePrintMode {
+    Symbolic,
+    Concrete,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ConstCanonEnv<'db> {
+    pub scope: ScopeId<'db>,
+    pub assumptions: PredicateListId<'db>,
+    pub assoc_ty_subst: Option<TraitInstId<'db>>,
+}
+
+impl<'db> ConstCanonEnv<'db> {
+    pub fn new(
+        scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+        assoc_ty_subst: Option<TraitInstId<'db>>,
+    ) -> Self {
+        Self {
+            scope,
+            assumptions,
+            assoc_ty_subst,
+        }
+    }
+
+    fn without_assoc_ty_subst(self) -> Self {
+        Self {
+            assoc_ty_subst: None,
+            ..self
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
@@ -399,10 +443,46 @@ pub(crate) fn evaluate_abstract_int_const_expr<'db>(
     expr: ConstExprId<'db>,
     expected_ty: TyId<'db>,
 ) -> Option<ConstTyId<'db>> {
+    evaluate_int_const_expr_impl(db, expr, expected_ty, false)
+}
+
+pub fn evaluate_type_level_int_const_expr<'db>(
+    db: &'db dyn HirAnalysisDb,
+    expr: ConstExprId<'db>,
+    expected_ty: TyId<'db>,
+) -> Option<ConstTyId<'db>> {
+    evaluate_int_const_expr_impl(db, expr, expected_ty, true)
+}
+
+fn evaluate_int_const_expr_impl<'db>(
+    db: &'db dyn HirAnalysisDb,
+    expr: ConstExprId<'db>,
+    expected_ty: TyId<'db>,
+    allow_numeric_calls: bool,
+) -> Option<ConstTyId<'db>> {
+    fn numeric_call_kind(name: &str) -> Option<&str> {
+        match name {
+            "add" | "sub" | "mul" | "div" | "rem" | "pow" | "shl" | "shr" | "bitand" | "bitor"
+            | "bitxor" => Some(name),
+            _ => {
+                let op = name
+                    .strip_prefix("__checked_")
+                    .or_else(|| name.strip_prefix("__"))?;
+                [
+                    "_u8", "_u16", "_u32", "_u64", "_u128", "_u256", "_usize", "_i8", "_i16",
+                    "_i32", "_i64", "_i128", "_i256", "_isize", "_bool",
+                ]
+                .iter()
+                .find_map(|suffix| op.strip_suffix(suffix))
+            }
+        }
+    }
+
     fn eval_int_value<'db>(
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
         expected_ty: TyId<'db>,
+        allow_numeric_calls: bool,
     ) -> Option<BigInt> {
         let TyData::ConstTy(const_ty) = ty.data(db) else {
             return None;
@@ -413,7 +493,7 @@ pub(crate) fn evaluate_abstract_int_const_expr<'db>(
                 let raw = BigInt::from_bytes_be(Sign::Plus, &int_id.data(db).to_bytes_be());
                 Some(normalize_int_to_shape(raw, bits, signed))
             }
-            ConstTyData::Abstract(expr, ty) => eval_expr(db, *expr, *ty),
+            ConstTyData::Abstract(expr, ty) => eval_expr(db, *expr, *ty, allow_numeric_calls),
             _ => None,
         }
     }
@@ -422,13 +502,14 @@ pub(crate) fn evaluate_abstract_int_const_expr<'db>(
         db: &'db dyn HirAnalysisDb,
         expr: ConstExprId<'db>,
         expected_ty: TyId<'db>,
+        allow_numeric_calls: bool,
     ) -> Option<BigInt> {
         let (bits, signed) = int_ty_shape(db, expected_ty)?;
         let normalize = |value| normalize_int_to_shape(value, bits, signed);
         match expr.data(db) {
             ConstExpr::ArithBinOp { op, lhs, rhs } => {
-                let lhs = eval_int_value(db, *lhs, expected_ty)?;
-                let rhs = eval_int_value(db, *rhs, expected_ty)?;
+                let lhs = eval_int_value(db, *lhs, expected_ty, allow_numeric_calls)?;
+                let rhs = eval_int_value(db, *rhs, expected_ty, allow_numeric_calls)?;
                 Some(match op {
                     crate::hir_def::ArithBinOp::Add => normalize(lhs + rhs),
                     crate::hir_def::ArithBinOp::Sub => normalize(lhs - rhs),
@@ -456,7 +537,7 @@ pub(crate) fn evaluate_abstract_int_const_expr<'db>(
                 })
             }
             ConstExpr::UnOp { op, expr } => {
-                let value = eval_int_value(db, *expr, expected_ty)?;
+                let value = eval_int_value(db, *expr, expected_ty, allow_numeric_calls)?;
                 Some(match op {
                     crate::hir_def::UnOp::Minus => normalize(-value),
                     crate::hir_def::UnOp::Plus => value,
@@ -464,60 +545,55 @@ pub(crate) fn evaluate_abstract_int_const_expr<'db>(
                 })
             }
             ConstExpr::Cast { expr, to } => {
-                let value = eval_int_value(db, *expr, expected_ty)?;
+                let value = eval_int_value(db, *expr, expected_ty, allow_numeric_calls)?;
                 let (bits, signed) = int_ty_shape(db, *to)?;
                 Some(normalize_int_to_shape(value, bits, signed))
             }
             ConstExpr::ExternConstFnCall { func, args, .. }
-            | ConstExpr::UserConstFnCall { func, args, .. } => {
-                let name = func.name(db).to_opt()?.data(db);
-                match (name.as_str(), args.as_slice()) {
-                    ("add", [lhs, rhs]) => Some(normalize(
-                        eval_int_value(db, *lhs, expected_ty)?
-                            + eval_int_value(db, *rhs, expected_ty)?,
-                    )),
-                    ("sub", [lhs, rhs]) => Some(normalize(
-                        eval_int_value(db, *lhs, expected_ty)?
-                            - eval_int_value(db, *rhs, expected_ty)?,
-                    )),
-                    ("mul", [lhs, rhs]) => Some(normalize(
-                        eval_int_value(db, *lhs, expected_ty)?
-                            * eval_int_value(db, *rhs, expected_ty)?,
-                    )),
+            | ConstExpr::UserConstFnCall { func, args, .. }
+                if allow_numeric_calls =>
+            {
+                let op = numeric_call_kind(func.name(db).to_opt()?.data(db))?;
+                let args = args
+                    .iter()
+                    .map(|arg| eval_int_value(db, *arg, expected_ty, true))
+                    .collect::<Option<Vec<_>>>()?;
+                Some(match (op, args.as_slice()) {
+                    ("add", [lhs, rhs]) => normalize(lhs.clone() + rhs),
+                    ("sub", [lhs, rhs]) => normalize(lhs.clone() - rhs),
+                    ("mul", [lhs, rhs]) => normalize(lhs.clone() * rhs),
                     ("div", [lhs, rhs]) => {
-                        let rhs = eval_int_value(db, *rhs, expected_ty)?;
                         if rhs.is_zero() {
-                            None
-                        } else {
-                            Some(normalize(eval_int_value(db, *lhs, expected_ty)? / rhs))
+                            return None;
                         }
+                        normalize(lhs.clone() / rhs)
                     }
                     ("rem", [lhs, rhs]) => {
-                        let rhs = eval_int_value(db, *rhs, expected_ty)?;
                         if rhs.is_zero() {
-                            None
-                        } else {
-                            Some(normalize(eval_int_value(db, *lhs, expected_ty)? % rhs))
+                            return None;
                         }
+                        normalize(lhs.clone() % rhs)
                     }
                     ("pow", [lhs, rhs]) => {
-                        let rhs = eval_int_value(db, *rhs, expected_ty)?;
                         if rhs.sign() == Sign::Minus {
-                            None
-                        } else {
-                            Some(normalize(
-                                eval_int_value(db, *lhs, expected_ty)?.pow(rhs.to_u32()?),
-                            ))
+                            return None;
                         }
+                        normalize(lhs.clone().pow(rhs.to_u32()?))
                     }
-                    _ => None,
-                }
+                    ("shl", [lhs, rhs]) => normalize(lhs.clone() << rhs.to_usize()?),
+                    ("shr", [lhs, rhs]) => normalize(lhs.clone() >> rhs.to_usize()?),
+                    ("bitand", [lhs, rhs]) => normalize(lhs & rhs),
+                    ("bitor", [lhs, rhs]) => normalize(lhs | rhs),
+                    ("bitxor", [lhs, rhs]) => normalize(lhs ^ rhs),
+                    _ => return None,
+                })
             }
+            ConstExpr::ExternConstFnCall { .. } | ConstExpr::UserConstFnCall { .. } => None,
             _ => None,
         }
     }
 
-    let value = eval_expr(db, expr, expected_ty)?;
+    let value = eval_expr(db, expr, expected_ty, allow_numeric_calls)?;
     let (bits, _) = int_ty_shape(db, expected_ty)?;
     let encoded = normalize_int_to_shape(value, bits, false);
     let (_, bytes) = encoded.to_bytes_be();
@@ -530,52 +606,501 @@ pub(crate) fn evaluate_abstract_int_const_expr<'db>(
     ))
 }
 
+fn ty_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    !ty.has_invalid(db)
+        && !ty.has_param(db)
+        && !ty.has_var(db)
+        && !ty_contains_const_hole(db, ty)
+        && !matches!(ty.data(db), TyData::AssocTy(_) | TyData::QualifiedTy(_))
+}
+
+fn const_expr_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, expr: ConstExprId<'db>) -> bool {
+    match expr.data(db) {
+        ConstExpr::ExternConstFnCall {
+            generic_args, args, ..
+        }
+        | ConstExpr::UserConstFnCall {
+            generic_args, args, ..
+        } => generic_args
+            .iter()
+            .chain(args.iter())
+            .copied()
+            .all(|arg| ty_is_fully_ground(db, arg)),
+        ConstExpr::ArithBinOp { lhs, rhs, .. } => {
+            ty_is_fully_ground(db, *lhs) && ty_is_fully_ground(db, *rhs)
+        }
+        ConstExpr::UnOp { expr, .. } | ConstExpr::Cast { expr, .. } => {
+            ty_is_fully_ground(db, *expr)
+        }
+        ConstExpr::TraitConst(assoc) => {
+            ty_is_fully_ground(db, assoc.inst().self_ty(db))
+                && assoc
+                    .inst()
+                    .args(db)
+                    .iter()
+                    .copied()
+                    .all(|arg| ty_is_fully_ground(db, arg))
+        }
+        ConstExpr::LocalBinding(_) => false,
+    }
+}
+
+fn canonicalize_const_expr_for_mode<'db>(
+    db: &'db dyn HirAnalysisDb,
+    expr: ConstExprId<'db>,
+    env: ConstCanonEnv<'db>,
+    mode: ConstCanonMode,
+) -> ConstExprId<'db> {
+    match expr.data(db) {
+        ConstExpr::ExternConstFnCall {
+            func,
+            generic_args,
+            args,
+        } => ConstExprId::new(
+            db,
+            ConstExpr::ExternConstFnCall {
+                func: *func,
+                generic_args: generic_args
+                    .iter()
+                    .copied()
+                    .map(|arg| canonicalize_ty_for_mode(db, arg, env, mode))
+                    .collect(),
+                args: args
+                    .iter()
+                    .copied()
+                    .map(|arg| canonicalize_ty_for_mode(db, arg, env, mode))
+                    .collect(),
+            },
+        ),
+        ConstExpr::UserConstFnCall {
+            func,
+            generic_args,
+            args,
+        } => ConstExprId::new(
+            db,
+            ConstExpr::UserConstFnCall {
+                func: *func,
+                generic_args: generic_args
+                    .iter()
+                    .copied()
+                    .map(|arg| canonicalize_ty_for_mode(db, arg, env, mode))
+                    .collect(),
+                args: args
+                    .iter()
+                    .copied()
+                    .map(|arg| canonicalize_ty_for_mode(db, arg, env, mode))
+                    .collect(),
+            },
+        ),
+        ConstExpr::ArithBinOp { op, lhs, rhs } => ConstExprId::new(
+            db,
+            ConstExpr::ArithBinOp {
+                op: *op,
+                lhs: canonicalize_ty_for_mode(db, *lhs, env, mode),
+                rhs: canonicalize_ty_for_mode(db, *rhs, env, mode),
+            },
+        ),
+        ConstExpr::UnOp { op, expr } => ConstExprId::new(
+            db,
+            ConstExpr::UnOp {
+                op: *op,
+                expr: canonicalize_ty_for_mode(db, *expr, env, mode),
+            },
+        ),
+        ConstExpr::Cast { expr, to } => ConstExprId::new(
+            db,
+            ConstExpr::Cast {
+                expr: canonicalize_ty_for_mode(db, *expr, env, mode),
+                to: canonicalize_ty_for_mode(db, *to, env, mode),
+            },
+        ),
+        ConstExpr::TraitConst(assoc) => ConstExprId::new(
+            db,
+            ConstExpr::TraitConst(if let Some(inst) = env.assoc_ty_subst {
+                assoc.fold_with(db, &mut AssocTySubst::new(inst))
+            } else {
+                *assoc
+            }),
+        ),
+        ConstExpr::LocalBinding(binding) => ConstExprId::new(db, ConstExpr::LocalBinding(*binding)),
+    }
+}
+
+pub fn evaluate_type_level_const_expr<'db>(
+    db: &'db dyn HirAnalysisDb,
+    expr: ConstExprId<'db>,
+    expected_ty: TyId<'db>,
+    env: ConstCanonEnv<'db>,
+) -> Option<ConstTyId<'db>> {
+    let expr = canonicalize_const_expr_for_mode(db, expr, env, ConstCanonMode::Identity);
+    evaluate_type_level_int_const_expr(db, expr, expected_ty).or_else(|| {
+        if !const_expr_is_fully_ground(db, expr) {
+            return None;
+        }
+
+        match expr.data(db) {
+            ConstExpr::UserConstFnCall {
+                func,
+                generic_args,
+                args,
+            } => {
+                let args = args
+                    .iter()
+                    .copied()
+                    .map(|arg| sem_const_from_ty(db, arg))
+                    .collect::<Option<Vec<_>>>()?;
+                eval_body_owner_const_with_args(
+                    db,
+                    crate::analysis::ty::ty_check::BodyOwner::Func(*func),
+                    generic_args.clone(),
+                    args,
+                )
+                .ok()
+                .map(|value| const_ty_from_sem_const(db, value).evaluate(db, Some(expected_ty)))
+            }
+            ConstExpr::TraitConst(assoc) => const_ty_from_assoc_const_use(db, *assoc)
+                .map(|const_ty| const_ty.evaluate(db, Some(expected_ty))),
+            ConstExpr::ExternConstFnCall { .. }
+            | ConstExpr::ArithBinOp { .. }
+            | ConstExpr::UnOp { .. }
+            | ConstExpr::Cast { .. }
+            | ConstExpr::LocalBinding(_) => None,
+        }
+    })
+}
+
+fn const_ty_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, const_ty: ConstTyId<'db>) -> bool {
+    ty_is_fully_ground(db, const_ty.ty(db))
+}
+
+pub fn concretize_const_ty_if_ground<'db>(
+    db: &'db dyn HirAnalysisDb,
+    const_ty: ConstTyId<'db>,
+    env: ConstCanonEnv<'db>,
+) -> Option<ConstTyId<'db>> {
+    if !const_ty_is_fully_ground(db, const_ty) {
+        return None;
+    }
+
+    match const_ty.data(db) {
+        ConstTyData::Evaluated(..) => Some(const_ty),
+        ConstTyData::UnEvaluated { ty, .. } => {
+            let expected_ty = (*ty).unwrap_or_else(|| const_ty.ty(db));
+            let evaluated = const_ty.evaluate(db, Some(expected_ty));
+            if let ConstTyData::Abstract(expr, expected_ty) = evaluated.data(db) {
+                evaluate_type_level_const_expr(db, *expr, *expected_ty, env).or(Some(evaluated))
+            } else {
+                Some(evaluated)
+            }
+        }
+        ConstTyData::Abstract(expr, expected_ty) => {
+            evaluate_type_level_const_expr(db, *expr, *expected_ty, env)
+        }
+        ConstTyData::TyVar(..) | ConstTyData::TyParam(..) | ConstTyData::Hole(..) => None,
+    }
+}
+
+pub fn complete_default_const_args_for_identity<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> TyId<'db> {
+    let (base, args) = ty.decompose_ty_app(db);
+    let TyData::TyBase(base_ty) = base.data(db) else {
+        return ty;
+    };
+    let (param_set, trait_self) = match base_ty {
+        TyBase::Adt(adt) => match adt.as_generic_param_owner(db) {
+            Some(owner) => (collect_generic_params(db, owner), None),
+            None => return ty,
+        },
+        TyBase::Func(func) => match *func {
+            CallableDef::Func(def) => (collect_generic_params(db, def.into()), None),
+            CallableDef::VariantCtor(_) => return ty,
+        },
+        _ => return ty,
+    };
+    let explicit_offset = param_set.offset_to_explicit_params_position(db);
+    if args.len() <= explicit_offset {
+        return ty;
+    }
+    let completed_args = param_set.complete_explicit_args(
+        db,
+        trait_self,
+        &args[explicit_offset..],
+        assumptions,
+        ConstDefaultCompletion::evaluate(None),
+    );
+    if completed_args.len() == args.len().saturating_sub(explicit_offset) {
+        return ty;
+    }
+    let mut full_args = args[..explicit_offset].to_vec();
+    full_args.extend(completed_args);
+    TyId::foldl(db, base, &full_args)
+}
+
+pub fn canonicalize_const_ty_for_mode<'db>(
+    db: &'db dyn HirAnalysisDb,
+    const_ty: ConstTyId<'db>,
+    env: ConstCanonEnv<'db>,
+    mode: ConstCanonMode,
+) -> ConstTyId<'db> {
+    let const_ty = if let Some(inst) = env.assoc_ty_subst {
+        let folded = TyId::const_ty(db, const_ty).fold_with(db, &mut AssocTySubst::new(inst));
+        let TyData::ConstTy(const_ty) = folded.data(db) else {
+            return const_ty;
+        };
+        *const_ty
+    } else {
+        const_ty
+    };
+    let env = env.without_assoc_ty_subst();
+
+    let canonicalized = match const_ty.data(db) {
+        ConstTyData::TyVar(var, ty) => ConstTyId::new(
+            db,
+            ConstTyData::TyVar(var.clone(), canonicalize_ty_for_mode(db, *ty, env, mode)),
+        ),
+        ConstTyData::TyParam(param, ty) => ConstTyId::new(
+            db,
+            ConstTyData::TyParam(param.clone(), canonicalize_ty_for_mode(db, *ty, env, mode)),
+        ),
+        ConstTyData::Hole(ty, hole_id) => ConstTyId::new(
+            db,
+            ConstTyData::Hole(canonicalize_ty_for_mode(db, *ty, env, mode), *hole_id),
+        ),
+        ConstTyData::Evaluated(value, ty) => ConstTyId::new(
+            db,
+            ConstTyData::Evaluated(
+                canonicalize_evaluated_const_ty_for_mode(db, value, env, mode),
+                canonicalize_ty_for_mode(db, *ty, env, mode),
+            ),
+        ),
+        ConstTyData::Abstract(expr, ty) => ConstTyId::new(
+            db,
+            ConstTyData::Abstract(
+                canonicalize_const_expr_for_mode(db, *expr, env, mode),
+                canonicalize_ty_for_mode(db, *ty, env, mode),
+            ),
+        ),
+        ConstTyData::UnEvaluated {
+            body,
+            ty,
+            const_def,
+            generic_args,
+            preserve_unevaluated,
+        } => ConstTyId::new(
+            db,
+            ConstTyData::UnEvaluated {
+                body: *body,
+                ty: ty.map(|ty| canonicalize_ty_for_mode(db, ty, env, mode)),
+                const_def: *const_def,
+                generic_args: generic_args
+                    .iter()
+                    .copied()
+                    .map(|arg| canonicalize_ty_for_mode(db, arg, env, mode))
+                    .collect(),
+                preserve_unevaluated: *preserve_unevaluated,
+            },
+        ),
+    };
+
+    if matches!(mode, ConstCanonMode::Identity | ConstCanonMode::Display) {
+        concretize_const_ty_if_ground(db, canonicalized, env).unwrap_or(canonicalized)
+    } else {
+        canonicalized
+    }
+}
+
+fn canonicalize_evaluated_const_ty_for_mode<'db>(
+    db: &'db dyn HirAnalysisDb,
+    value: &EvaluatedConstTy<'db>,
+    env: ConstCanonEnv<'db>,
+    mode: ConstCanonMode,
+) -> EvaluatedConstTy<'db> {
+    match value {
+        EvaluatedConstTy::Tuple(elems) => EvaluatedConstTy::Tuple(
+            elems
+                .iter()
+                .copied()
+                .map(|elem| canonicalize_ty_for_mode(db, elem, env, mode))
+                .collect(),
+        ),
+        EvaluatedConstTy::Array(elems) => EvaluatedConstTy::Array(
+            elems
+                .iter()
+                .copied()
+                .map(|elem| canonicalize_ty_for_mode(db, elem, env, mode))
+                .collect(),
+        ),
+        EvaluatedConstTy::Record(fields) => EvaluatedConstTy::Record(
+            fields
+                .iter()
+                .copied()
+                .map(|field| canonicalize_ty_for_mode(db, field, env, mode))
+                .collect(),
+        ),
+        _ => value.clone(),
+    }
+}
+
+pub fn canonicalize_ty_for_mode<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    env: ConstCanonEnv<'db>,
+    mode: ConstCanonMode,
+) -> TyId<'db> {
+    fn canonicalize_ty_impl<'db>(
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+        env: ConstCanonEnv<'db>,
+        mode: ConstCanonMode,
+        finalize_self: bool,
+    ) -> TyId<'db> {
+        let ty = if let Some(inst) = env.assoc_ty_subst {
+            ty.fold_with(db, &mut AssocTySubst::new(inst))
+        } else {
+            ty
+        };
+        let env = env.without_assoc_ty_subst();
+
+        let mut ty = match ty.data(db) {
+            TyData::TyApp(abs, arg) => TyId::app(
+                db,
+                canonicalize_ty_impl(db, *abs, env, mode, false),
+                canonicalize_ty_impl(db, *arg, env, mode, true),
+            ),
+            TyData::ConstTy(const_ty) => {
+                TyId::const_ty(db, canonicalize_const_ty_for_mode(db, *const_ty, env, mode))
+            }
+            TyData::AssocTy(assoc) => TyId::assoc_ty(
+                db,
+                canonicalize_trait_inst_for_mode(db, assoc.trait_, env, mode),
+                assoc.name,
+            ),
+            TyData::QualifiedTy(trait_inst) => TyId::qualified_ty(
+                db,
+                canonicalize_trait_inst_for_mode(db, *trait_inst, env, mode),
+            ),
+            TyData::TyVar(_)
+            | TyData::TyParam(_)
+            | TyData::TyBase(_)
+            | TyData::Never
+            | TyData::Invalid(_) => ty,
+        };
+
+        if finalize_self && !matches!(mode, ConstCanonMode::Stored) {
+            ty = complete_default_const_args_for_identity(db, ty, env.assumptions);
+            ty = normalize_ty(db, ty, env.scope, env.assumptions);
+        }
+
+        ty
+    }
+
+    canonicalize_ty_impl(db, ty, env, mode, true)
+}
+
+pub fn canonicalize_trait_inst_for_mode<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_inst: TraitInstId<'db>,
+    env: ConstCanonEnv<'db>,
+    mode: ConstCanonMode,
+) -> TraitInstId<'db> {
+    let trait_inst = if let Some(inst) = env.assoc_ty_subst {
+        trait_inst.fold_with(db, &mut AssocTySubst::new(inst))
+    } else {
+        trait_inst
+    };
+    let env = env.without_assoc_ty_subst();
+    let mut assoc_type_bindings: Vec<_> = trait_inst
+        .assoc_type_bindings(db)
+        .iter()
+        .map(|(name, &ty)| (*name, canonicalize_ty_for_mode(db, ty, env, mode)))
+        .collect();
+    assoc_type_bindings.sort_by(|(lhs, _), (rhs, _)| lhs.data(db).cmp(rhs.data(db)));
+    TraitInstId::new(
+        db,
+        trait_inst.def(db),
+        trait_inst
+            .args(db)
+            .iter()
+            .copied()
+            .map(|ty| canonicalize_ty_for_mode(db, ty, env, mode))
+            .collect::<Vec<_>>(),
+        assoc_type_bindings.into_iter().collect::<IndexMap<_, _>>(),
+    )
+}
+
+fn display_const_canon_env<'db>(
+    db: &'db dyn HirAnalysisDb,
+    const_ty: ConstTyId<'db>,
+) -> Option<ConstCanonEnv<'db>> {
+    match const_ty.data(db) {
+        ConstTyData::UnEvaluated { body, .. } => Some(ConstCanonEnv::new(
+            body.scope(),
+            assumptions_for_body(db, *body),
+            None,
+        )),
+        ConstTyData::Abstract(expr, _) => match expr.data(db) {
+            ConstExpr::UserConstFnCall { func, .. } | ConstExpr::ExternConstFnCall { func, .. } => {
+                Some(ConstCanonEnv::new(
+                    func.scope(),
+                    PredicateListId::empty_list(db),
+                    None,
+                ))
+            }
+            ConstExpr::TraitConst(assoc) => Some(ConstCanonEnv::new(
+                assoc.origin_scope(),
+                assoc.assumptions(),
+                None,
+            )),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 pub(crate) fn normalize_const_tys_for_comparison<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
 ) -> TyId<'db> {
-    struct ComparisonConstFolder;
-
-    impl<'db> TyFolder<'db> for ComparisonConstFolder {
-        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-            let ty = ty.super_fold_with(db, self);
-            let TyData::ConstTy(const_ty) = ty.data(db) else {
-                return ty;
-            };
-            match const_ty.data(db) {
-                ConstTyData::UnEvaluated {
-                    ty: Some(expected_ty),
-                    ..
-                } => {
-                    let normalized = const_ty.evaluate(db, Some(*expected_ty));
-                    if normalized.ty(db).invalid_cause(db).is_none()
-                        && matches!(
-                            normalized.data(db),
-                            ConstTyData::Evaluated(..) | ConstTyData::Abstract(..)
-                        )
-                    {
-                        if let ConstTyData::Abstract(expr, expected_ty) = normalized.data(db) {
-                            evaluate_abstract_int_const_expr(db, *expr, *expected_ty).map_or_else(
-                                || TyId::const_ty(db, normalized),
-                                |evaluated| TyId::const_ty(db, evaluated),
-                            )
-                        } else {
-                            TyId::const_ty(db, normalized)
-                        }
-                    } else {
-                        ty
-                    }
-                }
-                ConstTyData::Abstract(expr, expected_ty) => {
-                    evaluate_abstract_int_const_expr(db, *expr, *expected_ty)
-                        .map_or(ty, |evaluated| TyId::const_ty(db, evaluated))
-                }
-                _ => ty,
-            }
-        }
+    let TyData::ConstTy(const_ty) = ty.data(db) else {
+        return ty;
+    };
+    if let Some(env) = display_const_canon_env(db, *const_ty) {
+        return canonicalize_ty_for_mode(db, ty, env, ConstCanonMode::Identity);
     }
 
-    ty.fold_with(db, &mut ComparisonConstFolder)
+    match const_ty.data(db) {
+        ConstTyData::UnEvaluated {
+            ty: Some(expected_ty),
+            ..
+        } => {
+            let normalized = const_ty.evaluate(db, Some(*expected_ty));
+            if normalized.ty(db).invalid_cause(db).is_none()
+                && matches!(
+                    normalized.data(db),
+                    ConstTyData::Evaluated(..) | ConstTyData::Abstract(..)
+                )
+            {
+                if let ConstTyData::Abstract(expr, expected_ty) = normalized.data(db) {
+                    evaluate_abstract_int_const_expr(db, *expr, *expected_ty).map_or_else(
+                        || TyId::const_ty(db, normalized),
+                        |evaluated| TyId::const_ty(db, evaluated),
+                    )
+                } else {
+                    TyId::const_ty(db, normalized)
+                }
+            } else {
+                ty
+            }
+        }
+        ConstTyData::Abstract(expr, expected_ty) => {
+            evaluate_abstract_int_const_expr(db, *expr, *expected_ty)
+                .map_or(ty, |evaluated| TyId::const_ty(db, evaluated))
+        }
+        _ => ty,
+    }
 }
 
 pub(crate) struct ValidatedUnEvaluatedConst<'db> {
@@ -1520,7 +2045,24 @@ impl<'db> ConstTyId<'db> {
         }
     }
 
-    pub(super) fn pretty_print(self, db: &dyn HirAnalysisDb) -> String {
+    pub fn pretty_print_with_mode(self, db: &'db dyn HirAnalysisDb, mode: TypePrintMode) -> String {
+        if matches!(mode, TypePrintMode::Concrete)
+            && let Some(env) = display_const_canon_env(db, self)
+        {
+            let concretized =
+                canonicalize_const_ty_for_mode(db, self, env, ConstCanonMode::Display);
+            if concretized != self {
+                return concretized.pretty_print_with_mode(db, TypePrintMode::Symbolic);
+            }
+        }
+        self.pretty_print_symbolic(db)
+    }
+
+    pub fn pretty_print_concrete(self, db: &'db dyn HirAnalysisDb) -> String {
+        self.pretty_print_with_mode(db, TypePrintMode::Concrete)
+    }
+
+    fn pretty_print_symbolic(self, db: &'db dyn HirAnalysisDb) -> String {
         match &self.data(db) {
             ConstTyData::TyVar(var, _) => var.pretty_print(),
             ConstTyData::TyParam(param, ty) => {
@@ -1560,6 +2102,10 @@ impl<'db> ConstTyId<'db> {
                 "const value".into()
             }
         }
+    }
+
+    pub(super) fn pretty_print(self, db: &'db dyn HirAnalysisDb) -> String {
+        self.pretty_print_with_mode(db, TypePrintMode::Concrete)
     }
 
     pub fn evaluate(self, db: &'db dyn HirAnalysisDb, expected_ty: Option<TyId<'db>>) -> Self {

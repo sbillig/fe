@@ -13,13 +13,13 @@ use hir::{
     hir_def::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
     projection::IndexSource,
 };
+use mir2::runtime::RefKind;
 use mir2::{
-    AddressSpaceKind, ConstNode, ConstRegionId, ConstScalar, HandleKind, IntrinsicArithBinOp,
-    Layout, LayoutId, RBlockId, RExpr, RLocalId, RStmt, RTerminator, ResolvedPlaceElem,
-    ResolvedPlaceRootKind, RuntimeBody, RuntimeBuiltin, RuntimeClass, RuntimeFunction,
-    RuntimeInlineHint, RuntimeLinkage, RuntimeLocalRoot, RuntimePackage, RuntimePlace,
-    SaturatingBinOp, ScalarClass, ScalarRepr, VariantId, instance::RuntimeInstanceSource,
-    resolve_runtime_place,
+    AddressSpaceKind, ConstNode, ConstRegionId, ConstScalar, IntrinsicArithBinOp, Layout, LayoutId,
+    RBlockId, RExpr, RLocalId, RStmt, RTerminator, ResolvedPlaceElem, ResolvedPlaceRootKind,
+    RuntimeBody, RuntimeBuiltin, RuntimeClass, RuntimeFunction, RuntimeInlineHint, RuntimeInstance,
+    RuntimeLinkage, RuntimeLocalRoot, RuntimePackage, RuntimePlace, SaturatingBinOp, ScalarClass,
+    ScalarRepr, VariantId, instance::RuntimeInstanceSource, resolve_runtime_place,
 };
 use rustc_hash::FxHashMap;
 use smallvec1::{SmallVec, smallvec};
@@ -82,6 +82,7 @@ struct ModuleLowerer<'db, 'a> {
     isa: &'a sonatina_ir::isa::evm::Evm,
     package: &'a RuntimePackage<'db>,
     func_map: FxHashMap<mir2::RuntimeInstance<'db>, FuncRef>,
+    section_membership: FxHashMap<mir2::RuntimeInstance<'db>, Vec<mir2::RuntimeSectionRef<'db>>>,
     type_cache: FxHashMap<LayoutId<'db>, Type>,
     layout_names: FxHashMap<LayoutId<'db>, String>,
     const_globals: FxHashMap<ConstRegionId<'db>, GlobalVariableRef>,
@@ -101,6 +102,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             isa,
             package,
             func_map: FxHashMap::default(),
+            section_membership: compute_section_membership(db, package),
             type_cache: FxHashMap::default(),
             layout_names: FxHashMap::default(),
             const_globals: FxHashMap::default(),
@@ -114,6 +116,25 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
     fn inst_set(&self) -> &'static EvmInstSet {
         self.isa.inst_set()
+    }
+
+    fn function_symbol(&self, instance: RuntimeInstance<'db>) -> String {
+        self.package
+            .functions(self.db)
+            .into_iter()
+            .find(|function| function.instance(self.db) == instance)
+            .map(|function| function.symbol(self.db).clone())
+            .unwrap_or_else(|| format!("{:?}", instance.key(self.db)))
+    }
+
+    fn sections_for_function(
+        &self,
+        instance: RuntimeInstance<'db>,
+    ) -> &[mir2::RuntimeSectionRef<'db>] {
+        self.section_membership
+            .get(&instance)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     fn declare_functions(&mut self) -> Result<(), LowerError> {
@@ -204,7 +225,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     ) -> Result<sonatina_ir::global_variable::GvInitializer, LowerError> {
         Ok(match node {
             ConstNode::Scalar(scalar) => sonatina_ir::global_variable::GvInitializer::make_imm(
-                self.immediate_for_const(&scalar)?,
+                self.immediate_for_const(&scalar, None)?,
             ),
             ConstNode::Aggregate { layout, fields } => {
                 let ty = self.ty_for_layout(layout)?;
@@ -376,31 +397,69 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
     fn ty_for_class(&mut self, class: &RuntimeClass<'db>) -> Result<Type, LowerError> {
         Ok(match class {
-            RuntimeClass::Scalar(scalar) => scalar_ty(scalar),
+            RuntimeClass::Scalar(scalar) => self.scalar_ty(scalar)?,
             RuntimeClass::AggregateValue { layout } => self.ty_for_layout(*layout)?,
-            RuntimeClass::Handle { layout, kind, .. } => match kind {
-                HandleKind::ConstValue => {
-                    let layout_ty = self.ty_for_layout(*layout)?;
-                    self.builder.constref_type(layout_ty)
+            RuntimeClass::Ref { pointee, kind, .. } => match kind {
+                RefKind::Const => {
+                    let pointee_ty = self.ty_for_class(pointee)?;
+                    self.builder.constref_type(pointee_ty)
                 }
-                HandleKind::ObjectValue => {
-                    let layout_ty = self.ty_for_layout(*layout)?;
-                    self.builder.objref_type(layout_ty)
+                RefKind::Object => {
+                    let pointee_ty = self.ty_for_class(pointee)?;
+                    self.builder.objref_type(pointee_ty)
                 }
-                HandleKind::Provider {
+                RefKind::Provider {
                     space: AddressSpaceKind::Memory,
                     ..
                 } => {
-                    let layout_ty = self.ty_for_layout(*layout)?;
-                    self.builder.objref_type(layout_ty)
+                    let pointee_ty = self.ty_for_class(pointee)?;
+                    self.builder.objref_type(pointee_ty)
                 }
-                HandleKind::Provider { .. } => Type::I256,
+                RefKind::Provider { .. } => Type::I256,
             },
             RuntimeClass::RawAddr { .. } => Type::I256,
         })
     }
 
-    fn immediate_for_const(&self, scalar: &ConstScalar) -> Result<Immediate, LowerError> {
+    fn scalar_ty(&mut self, scalar: &ScalarClass<'db>) -> Result<Type, LowerError> {
+        Ok(match scalar.role {
+            mir2::ScalarRole::EnumTag { enum_layout } => self.enum_tag_ty(enum_layout)?,
+            _ => scalar_ty(scalar),
+        })
+    }
+
+    fn enum_tag_ty(&mut self, enum_layout: LayoutId<'db>) -> Result<Type, LowerError> {
+        let Type::Compound(enum_ty) = self.ty_for_layout(enum_layout)? else {
+            return Err(LowerError::Internal(format!(
+                "enum layout `{enum_layout:?}` should lower to a compound type"
+            )));
+        };
+        Ok(Type::EnumTag(enum_ty))
+    }
+
+    fn immediate_for_const(
+        &mut self,
+        scalar: &ConstScalar,
+        class: Option<&RuntimeClass<'db>>,
+    ) -> Result<Immediate, LowerError> {
+        if let Some(RuntimeClass::Scalar(ScalarClass {
+            role: mir2::ScalarRole::EnumTag { enum_layout },
+            ..
+        })) = class
+        {
+            let ConstScalar::Int { words, .. } = scalar else {
+                return Err(LowerError::Internal(format!(
+                    "enum tag constant should be integer-backed, found `{scalar:?}`"
+                )));
+            };
+            let Type::EnumTag(enum_ty) = self.enum_tag_ty(*enum_layout)? else {
+                unreachable!("enum tag layouts should lower to enum tag types");
+            };
+            return Ok(Immediate::EnumTag {
+                enum_ty,
+                value: bytes_to_i256(words, false),
+            });
+        }
         Ok(match scalar {
             ConstScalar::Bool(value) => Immediate::from(*value),
             ConstScalar::Int {
@@ -415,6 +474,20 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             ConstScalar::Address { bytes, .. } => {
                 Immediate::from_i256(bytes_to_i256(bytes, false), Type::I256)
             }
+        })
+    }
+
+    fn enum_tag_immediate(
+        &mut self,
+        enum_layout: LayoutId<'db>,
+        value: u16,
+    ) -> Result<Immediate, LowerError> {
+        let Type::EnumTag(enum_ty) = self.enum_tag_ty(enum_layout)? else {
+            unreachable!("enum tag layouts should lower to enum tag types");
+        };
+        Ok(Immediate::EnumTag {
+            enum_ty,
+            value: I256::from(value as u64),
         })
     }
 }
@@ -606,6 +679,7 @@ enum PlaceTerminal<'db> {
 struct FunctionLowerer<'ctx, 'db, 'a> {
     module: &'ctx mut ModuleLowerer<'db, 'a>,
     body: RuntimeBody<'db>,
+    current_sections: Vec<mir2::RuntimeSectionRef<'db>>,
     fb: FunctionBuilder<InstInserter>,
     block_map: Vec<BlockId>,
     reachable_blocks: Vec<bool>,
@@ -620,6 +694,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         body: RuntimeBody<'db>,
         func_ref: FuncRef,
     ) -> Result<Self, LowerError> {
+        let current_sections = module.sections_for_function(body.owner).to_vec();
         let mut fb = module.builder.func_builder::<InstInserter>(func_ref);
         let block_map = (0..body.blocks.len())
             .map(|_| fb.append_block())
@@ -631,7 +706,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             .filter_map(|(idx, local)| match local.root {
                 RuntimeLocalRoot::Slot(_) => None,
                 RuntimeLocalRoot::None
-                | RuntimeLocalRoot::Handle(_)
+                | RuntimeLocalRoot::Ref(_)
                 | RuntimeLocalRoot::Ptr { .. } => match &local.carrier {
                     mir2::RuntimeCarrier::Value(class) => Some(
                         module
@@ -645,6 +720,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         Ok(Self {
             module,
             body,
+            current_sections,
             fb,
             block_map,
             reachable_blocks: Vec::new(),
@@ -657,21 +733,66 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
     fn lower(mut self) -> Result<(), LowerError> {
         self.reachable_blocks = self.compute_reachable_blocks();
         self.fb.switch_to_block(self.block_map[0]);
-        self.initialize_locals()?;
+        self.initialize_locals().map_err(|err| {
+            self.with_body_context(
+                format!(
+                    "while initializing locals for `{}`",
+                    self.module.function_symbol(self.body.owner)
+                ),
+                None,
+                None,
+            )
+            .wrap(err)
+        })?;
         let blocks = self.body.blocks.clone();
         for (idx, block) in blocks.iter().enumerate() {
             if !self.reachable_blocks[idx] {
                 continue;
             }
             self.fb.switch_to_block(self.block_map[idx]);
-            for stmt in &block.stmts {
-                self.lower_stmt(stmt)?;
+            for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
+                self.lower_stmt(stmt).map_err(|err| {
+                    self.with_body_context(
+                        format!(
+                            "while lowering `{}` at bb{idx}[{stmt_idx}]",
+                            self.module.function_symbol(self.body.owner)
+                        ),
+                        Some(RBlockId::from_u32(idx as u32)),
+                        Some(stmt_idx),
+                    )
+                    .wrap(err)
+                })?;
             }
-            self.lower_terminator(&block.terminator)?;
+            self.lower_terminator(&block.terminator).map_err(|err| {
+                self.with_body_context(
+                    format!(
+                        "while lowering `{}` terminator at bb{idx}",
+                        self.module.function_symbol(self.body.owner)
+                    ),
+                    Some(RBlockId::from_u32(idx as u32)),
+                    None,
+                )
+                .wrap(err)
+            })?;
         }
         self.fb.seal_all();
         self.fb.finish();
         Ok(())
+    }
+
+    fn with_body_context(
+        &self,
+        context: String,
+        block: Option<RBlockId>,
+        stmt: Option<usize>,
+    ) -> LowerBodyContext<'_, 'db> {
+        LowerBodyContext {
+            db: self.module.db,
+            body: &self.body,
+            context,
+            block,
+            stmt,
+        }
     }
 
     fn compute_reachable_blocks(&self) -> Vec<bool> {
@@ -694,7 +815,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             let local_id = RLocalId::from_u32(idx as u32);
             match &local.root {
                 RuntimeLocalRoot::None
-                | RuntimeLocalRoot::Handle(_)
+                | RuntimeLocalRoot::Ref(_)
                 | RuntimeLocalRoot::Ptr { .. } => {}
                 RuntimeLocalRoot::Slot(class) => {
                     let class_ty = self.module.ty_for_class(class)?;
@@ -706,7 +827,9 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                             ),
                             class_ty,
                         ),
-                        RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => SlotRoot::Ptr(
+                        RuntimeClass::Scalar(_)
+                        | RuntimeClass::Ref { .. }
+                        | RuntimeClass::RawAddr { .. } => SlotRoot::Ptr(
                             {
                                 let ptr_ty = self.fb.ptr_type(class_ty);
                                 self.fb.insert_inst(
@@ -716,11 +839,6 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                             },
                             class_ty,
                         ),
-                        RuntimeClass::Handle { .. } => {
-                            return Err(LowerError::Internal(
-                                "slot-backed handle local is invalid".to_string(),
-                            ));
-                        }
                     };
                     self.slot_roots.insert(local_id, root);
                 }
@@ -798,9 +916,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
     ) -> Result<ValueId, LowerError> {
         Ok(match expr {
             RExpr::Use(value) => self.local_value(*value)?,
-            RExpr::ConstScalar(value) => self
-                .fb
-                .make_imm_value(self.module.immediate_for_const(value)?),
+            RExpr::ConstScalar(value) => self.fb.make_imm_value(
+                self.module
+                    .immediate_for_const(value, dst.and_then(|dst| self.body.value_class(dst)))?,
+            ),
             RExpr::Placeholder { class } => {
                 zero_for_type(&mut self.fb, self.module.ty_for_class(class)?)
             }
@@ -834,7 +953,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let value = self.local_value(*value)?;
                 self.cast_scalar(value, scalar_ty(to))?
             }
-            RExpr::ConstHandle { region, .. } => {
+            RExpr::ConstRef { region, .. } => {
                 let gv = self.module.lower_const_region(*region)?;
                 let gv_ty = gv.ty(&self.fb.module_builder.ctx);
                 self.fb.insert_inst(
@@ -859,19 +978,29 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                         "materialize-to-object missing destination class".to_string(),
                     )
                 })?;
-                let RuntimeClass::Handle { layout, .. } = class else {
+                let RuntimeClass::Ref {
+                    pointee,
+                    kind: RefKind::Object,
+                    ..
+                } = class
+                else {
                     return Err(LowerError::Internal(
-                        "materialize-to-object destination is not a handle".to_string(),
+                        "materialize-to-object destination is not an object ref".to_string(),
                     ));
                 };
-                let layout_ty = self.module.ty_for_layout(*layout)?;
+                let RuntimeClass::AggregateValue { layout } = **pointee else {
+                    return Err(LowerError::Internal(
+                        "materialize-to-object destination is not aggregate-backed".to_string(),
+                    ));
+                };
+                let layout_ty = self.module.ty_for_layout(layout)?;
                 let object = self.fb.insert_inst(
                     ObjAlloc::new(self.module.inst_set(), layout_ty),
                     self.fb.module_builder.objref_type(layout_ty),
                 );
                 match self.body.value_class(*src) {
-                    Some(RuntimeClass::Handle {
-                        kind: HandleKind::ConstValue,
+                    Some(RuntimeClass::Ref {
+                        kind: RefKind::Const,
                         ..
                     }) => self.fb.insert_inst_no_result(ObjInitConst::new(
                         self.module.inst_set(),
@@ -898,6 +1027,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             }
             RExpr::WordToRawAddr { value, .. } => self.local_value(*value)?,
             RExpr::ProviderToRaw { value } => self.local_value(*value)?,
+            RExpr::RetagRef { value } => self.local_value(*value)?,
             RExpr::AddrOf { place } => self.addr_of_place(place, dst)?,
             RExpr::Load { place } => self.load_from_place(place)?,
             RExpr::Call { callee, args } => {
@@ -1237,25 +1367,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 .fb
                 .insert_inst(EvmGas::new(self.module.inst_set()), Type::I256),
             RuntimeBuiltin::CodeRegionOffset { region } => self.fb.insert_inst(
-                SymAddr::new(
-                    self.module.inst_set(),
-                    SymbolRef::Embed(EmbedSymbol::from(code_region_symbol(
-                        self.module.db,
-                        self.module.package,
-                        *region,
-                    ))),
-                ),
+                SymAddr::new(self.module.inst_set(), self.code_region_symbol_ref(*region)),
                 Type::I256,
             ),
             RuntimeBuiltin::CodeRegionLen { region } => self.fb.insert_inst(
-                SymSize::new(
-                    self.module.inst_set(),
-                    SymbolRef::Embed(EmbedSymbol::from(code_region_symbol(
-                        self.module.db,
-                        self.module.package,
-                        *region,
-                    ))),
-                ),
+                SymSize::new(self.module.inst_set(), self.code_region_symbol_ref(*region)),
                 Type::I256,
             ),
             RuntimeBuiltin::Malloc { size } => {
@@ -1471,11 +1587,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 self.fb
                     .insert_inst(Shr::new(self.module.inst_set(), shift, word), Type::I256)
             }
-            RuntimeBuiltin::MakeContractFieldHandle { slot, class, .. } => {
+            RuntimeBuiltin::MakeContractFieldRef { slot, class, .. } => {
                 if matches!(
                     class,
-                    RuntimeClass::Handle {
-                        kind: HandleKind::Provider {
+                    RuntimeClass::Ref {
+                        kind: RefKind::Provider {
                             space: AddressSpaceKind::Memory,
                             ..
                         },
@@ -1489,6 +1605,34 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 self.fb.make_imm_value(I256::from(*slot))
             }
         })
+    }
+
+    fn code_region_symbol_ref(&self, region: mir2::RuntimeCodeRegion<'db>) -> SymbolRef {
+        if !self.current_sections.is_empty()
+            && self
+                .module
+                .package
+                .code_regions(self.module.db)
+                .iter()
+                .find(|resolved| resolved.region(self.module.db) == region)
+                .is_some_and(|resolved| {
+                    self.current_sections.iter().all(|current_section| {
+                        runtime_section_refs_match(
+                            self.module.db,
+                            &resolved.source(self.module.db),
+                            current_section,
+                        )
+                    })
+                })
+        {
+            SymbolRef::CurrentSection
+        } else {
+            SymbolRef::Embed(EmbedSymbol::from(code_region_symbol(
+                self.module.db,
+                self.module.package,
+                region,
+            )))
+        }
     }
 
     fn lower_intrinsic_call(
@@ -1738,7 +1882,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     .map(|(value, block)| {
                         Ok((
                             self.fb
-                                .make_imm_value(self.module.immediate_for_const(value)?),
+                                .make_imm_value(self.module.immediate_for_const(value, None)?),
                             self.block_map[block.as_u32() as usize],
                         ))
                     })
@@ -1751,15 +1895,19 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 ));
             }
             RTerminator::MatchEnumTag { cases, default, .. } => {
-                let tag = match terminator {
-                    RTerminator::MatchEnumTag { tag, .. } => self.local_value(*tag)?,
+                let (tag, enum_layout) = match terminator {
+                    RTerminator::MatchEnumTag {
+                        tag, enum_layout, ..
+                    } => (self.local_value(*tag)?, *enum_layout),
                     _ => unreachable!(),
                 };
                 let table = cases
                     .iter()
                     .map(|(variant, block)| {
                         Ok((
-                            self.fb.make_imm_value(I256::from(variant.index as u64)),
+                            self.fb.make_imm_value(
+                                self.module.enum_tag_immediate(enum_layout, variant.index)?,
+                            ),
                             self.block_map[block.as_u32() as usize],
                         ))
                     })
@@ -1914,20 +2062,25 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     },
                 }
             }
-            ResolvedPlaceRootKind::Handle { value, class } => match class {
-                RuntimeClass::Handle {
-                    kind: HandleKind::ConstValue,
+            ResolvedPlaceRootKind::Ref { value, class } => match self
+                .body
+                .value_class(value)
+                .cloned()
+                .ok_or_else(|| LowerError::Internal(format!("erased handle root {value:?}")))?
+            {
+                RuntimeClass::Ref {
+                    kind: RefKind::Const,
                     ..
                 } => PlaceTerminal::Const {
                     value: self.local_value(value)?,
                 },
-                RuntimeClass::Handle {
-                    kind: HandleKind::ObjectValue,
+                RuntimeClass::Ref {
+                    kind: RefKind::Object,
                     ..
                 }
-                | RuntimeClass::Handle {
+                | RuntimeClass::Ref {
                     kind:
-                        HandleKind::Provider {
+                        RefKind::Provider {
                             space: AddressSpaceKind::Memory,
                             ..
                         },
@@ -1936,8 +2089,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     value: self.local_value(value)?,
                     class,
                 },
-                RuntimeClass::Handle {
-                    kind: HandleKind::Provider { space, .. },
+                RuntimeClass::Ref {
+                    kind: RefKind::Provider { space, .. },
                     ..
                 } => PlaceTerminal::Ptr {
                     addr: self.local_value(value)?,
@@ -1948,7 +2101,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 | RuntimeClass::AggregateValue { .. }
                 | RuntimeClass::RawAddr { .. } => {
                     return Err(LowerError::Internal(
-                        "handle root did not lower to a handle".to_string(),
+                        "ref root did not lower to a reference".to_string(),
                     ));
                 }
             },
@@ -1958,13 +2111,9 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 class,
                 ..
             } => match provider_class {
-                RuntimeClass::AggregateValue { .. } => PlaceTerminal::Object {
-                    value: self.local_value(value)?,
-                    class,
-                },
-                RuntimeClass::Handle {
+                RuntimeClass::Ref {
                     kind:
-                        HandleKind::Provider {
+                        RefKind::Provider {
                             space: AddressSpaceKind::Memory,
                             ..
                         },
@@ -1973,12 +2122,16 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     value: self.local_value(value)?,
                     class,
                 },
-                RuntimeClass::Handle {
-                    kind: HandleKind::Provider { space, .. },
+                RuntimeClass::Ref {
+                    kind: RefKind::Provider { space, .. },
                     ..
                 } => PlaceTerminal::Ptr {
                     addr: self.local_value(value)?,
                     space,
+                    class,
+                },
+                RuntimeClass::AggregateValue { .. } => PlaceTerminal::Object {
+                    value: self.local_value(value)?,
                     class,
                 },
                 RuntimeClass::RawAddr { space, .. } => PlaceTerminal::Ptr {
@@ -1986,8 +2139,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     space,
                     class,
                 },
-                RuntimeClass::Handle {
-                    kind: HandleKind::ConstValue | HandleKind::ObjectValue,
+                RuntimeClass::Ref {
+                    kind: RefKind::Const | RefKind::Object,
                     ..
                 }
                 | RuntimeClass::Scalar(_) => {
@@ -2019,7 +2172,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     }
                 }
                 (
-                    PlaceTerminal::Object { value, .. },
+                    PlaceTerminal::Object {
+                        value,
+                        class: _base_class,
+                    },
                     ResolvedPlaceElem::Index { index, class },
                 ) => {
                     let index = match index {
@@ -2185,11 +2341,14 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 if let Some(dst) = dst
                     && matches!(
                         self.body.value_class(dst),
-                        Some(RuntimeClass::Handle {
-                            kind: HandleKind::Provider {
+                        Some(RuntimeClass::Ref {
+                            kind: RefKind::Provider {
                                 space: AddressSpaceKind::Memory,
                                 ..
                             },
+                            ..
+                        }) | Some(RuntimeClass::Ref {
+                            kind: RefKind::Object | RefKind::Const,
                             ..
                         })
                     )
@@ -2216,7 +2375,9 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             PlaceTerminal::Object { value, class } => {
                 if !matches!(
                     class,
-                    RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. }
+                    RuntimeClass::Scalar(_)
+                        | RuntimeClass::Ref { .. }
+                        | RuntimeClass::RawAddr { .. }
                 ) {
                     return Err(LowerError::Unsupported(
                         "object place store requires scalar/raw subobject".to_string(),
@@ -2250,8 +2411,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     .cloned()
                     .unwrap_or_else(|| dst_class.clone());
                 match src_local {
-                    RuntimeClass::Handle {
-                        kind: HandleKind::ConstValue,
+                    RuntimeClass::Ref {
+                        kind: RefKind::Const,
                         ..
                     } => self.fb.insert_inst_no_result(ObjInitConst::new(
                         self.module.inst_set(),
@@ -2283,7 +2444,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         src: ValueId,
     ) -> Result<(), LowerError> {
         match class {
-            RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => {
+            RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => {
                 self.store_to_ptr(addr, space, class, src)
             }
             RuntimeClass::AggregateValue { layout } => match layout.data(self.module.db) {
@@ -2315,9 +2476,6 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     "non-memory aggregate enum providers are not supported yet".to_string(),
                 )),
             },
-            RuntimeClass::Handle { .. } => Err(LowerError::Unsupported(
-                "copying handle values into raw-address places is not supported".to_string(),
-            )),
         }
     }
 
@@ -2329,6 +2487,17 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
     ) -> Result<ValueId, LowerError> {
         match class {
             RuntimeClass::Scalar(scalar) => self.load_scalar(addr, space, scalar),
+            RuntimeClass::Ref {
+                kind:
+                    RefKind::Provider {
+                        space:
+                            AddressSpaceKind::Storage
+                            | AddressSpaceKind::Transient
+                            | AddressSpaceKind::Calldata,
+                        ..
+                    },
+                ..
+            } => self.load_word(addr, space),
             RuntimeClass::RawAddr { .. } => self.load_word(addr, space),
             RuntimeClass::AggregateValue { layout } => match space {
                 AddressSpaceKind::Memory => Err(LowerError::Unsupported(
@@ -2338,7 +2507,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 | AddressSpaceKind::Transient
                 | AddressSpaceKind::Calldata => self.load_aggregate_from_ptr(addr, space, *layout),
             },
-            RuntimeClass::Handle { .. } => Err(LowerError::Unsupported(
+            RuntimeClass::Ref { .. } => Err(LowerError::Unsupported(
                 "loading handle values from raw-address places is not supported".to_string(),
             )),
         }
@@ -2441,8 +2610,19 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
     ) -> Result<(), LowerError> {
         let value = match class {
             RuntimeClass::Scalar(scalar) => self.cast_scalar(src, scalar_word_ty(scalar)),
+            RuntimeClass::Ref {
+                kind:
+                    RefKind::Provider {
+                        space:
+                            AddressSpaceKind::Storage
+                            | AddressSpaceKind::Transient
+                            | AddressSpaceKind::Calldata,
+                        ..
+                    },
+                ..
+            } => self.coerce_value_to_ty(src, Type::I256),
             RuntimeClass::RawAddr { .. } => self.coerce_value_to_ty(src, Type::I256),
-            RuntimeClass::AggregateValue { .. } | RuntimeClass::Handle { .. } => Err(
+            RuntimeClass::AggregateValue { .. } | RuntimeClass::Ref { .. } => Err(
                 LowerError::Unsupported("aggregate/handle ptr stores require CopyInto".to_string()),
             ),
         }?;
@@ -2866,6 +3046,34 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
     }
 }
 
+struct LowerBodyContext<'a, 'db> {
+    db: &'db DriverDataBase,
+    body: &'a RuntimeBody<'db>,
+    context: String,
+    block: Option<RBlockId>,
+    stmt: Option<usize>,
+}
+
+impl<'a, 'db> LowerBodyContext<'a, 'db> {
+    fn wrap(self, err: LowerError) -> LowerError {
+        let excerpt = self.block.map_or_else(
+            || mir2::format_runtime_body(self.db, self.body),
+            |block| mir2::format_runtime_body_excerpt(self.db, self.body, block, self.stmt),
+        );
+        match err {
+            LowerError::RuntimeLower(_) => err,
+            LowerError::Unsupported(message) => LowerError::Unsupported(format!(
+                "{}: {message}\n\nrMIR context:\n{}",
+                self.context, excerpt
+            )),
+            LowerError::Internal(message) => LowerError::Internal(format!(
+                "{}: {message}\n\nrMIR context:\n{}",
+                self.context, excerpt
+            )),
+        }
+    }
+}
+
 fn block_successors<'db>(terminator: &RTerminator<'db>) -> SmallVec<[RBlockId; 2]> {
     match terminator {
         RTerminator::Goto(block) => smallvec![*block],
@@ -3112,6 +3320,53 @@ fn stable_hash<T: Hash>(value: &T) -> u64 {
     hasher.finish()
 }
 
+fn runtime_section_refs_match<'db>(
+    db: &'db DriverDataBase,
+    lhs: &mir2::RuntimeSectionRef<'db>,
+    rhs: &mir2::RuntimeSectionRef<'db>,
+) -> bool {
+    let (lhs_object, lhs_section) = match lhs {
+        mir2::RuntimeSectionRef::Local { object, section }
+        | mir2::RuntimeSectionRef::External { object, section } => (object, section),
+    };
+    let (rhs_object, rhs_section) = match rhs {
+        mir2::RuntimeSectionRef::Local { object, section }
+        | mir2::RuntimeSectionRef::External { object, section } => (object, section),
+    };
+    lhs_object.name(db) == rhs_object.name(db) && lhs_section == rhs_section
+}
+
+fn compute_section_membership<'db>(
+    db: &'db DriverDataBase,
+    package: &RuntimePackage<'db>,
+) -> FxHashMap<mir2::RuntimeInstance<'db>, Vec<mir2::RuntimeSectionRef<'db>>> {
+    let mut membership =
+        FxHashMap::<mir2::RuntimeInstance<'db>, Vec<mir2::RuntimeSectionRef<'db>>>::default();
+    for object in package.objects(db) {
+        for section in object.sections(db) {
+            let section_ref = mir2::RuntimeSectionRef::Local {
+                object,
+                section: section.name.clone(),
+            };
+            let mut stack = vec![section.entry.instance(db)];
+            let mut seen = rustc_hash::FxHashSet::default();
+            while let Some(instance) = stack.pop() {
+                if !seen.insert(instance) {
+                    continue;
+                }
+                membership
+                    .entry(instance)
+                    .or_default()
+                    .push(section_ref.clone());
+                for call in instance.calls(db) {
+                    stack.push(call.callee);
+                }
+            }
+        }
+    }
+    membership
+}
+
 fn code_region_symbol<'db>(
     db: &'db DriverDataBase,
     package: &RuntimePackage<'db>,
@@ -3130,14 +3385,19 @@ fn field_offset<'db>(
     class: &RuntimeClass<'db>,
     field: FieldIndex,
 ) -> Result<u64, LowerError> {
-    let layout = match class {
-        RuntimeClass::Handle { layout, .. } | RuntimeClass::AggregateValue { layout } => *layout,
-        RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => {
-            return Err(LowerError::Internal(
-                "field projection on scalar/raw class".to_string(),
-            ));
-        }
+    let Some(layout) = class.aggregate_layout() else {
+        return Err(LowerError::Internal(
+            "field projection on scalar/raw class".to_string(),
+        ));
     };
+    if matches!(
+        class,
+        RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. }
+    ) {
+        return Err(LowerError::Internal(
+            "field projection on scalar/raw class".to_string(),
+        ));
+    }
     let Layout::Struct(data) = layout.data(db) else {
         return Err(LowerError::Internal(
             "field projection on non-struct layout".to_string(),
@@ -3176,14 +3436,13 @@ fn index_stride_for_class<'db>(
     db: &'db DriverDataBase,
 ) -> Result<u64, LowerError> {
     match class {
-        RuntimeClass::AggregateValue { layout } | RuntimeClass::Handle { layout, .. } => {
-            match layout.data(db) {
-                Layout::Array(data) => value_span_words(db, &data.elem),
-                _ => Err(LowerError::Internal(
-                    "index projection on non-array layout".to_string(),
-                )),
-            }
-        }
+        RuntimeClass::AggregateValue { layout } => match layout.data(db) {
+            Layout::Array(data) => value_span_words(db, &data.elem),
+            _ => Err(LowerError::Internal(
+                "index projection on non-array layout".to_string(),
+            )),
+        },
+        RuntimeClass::Ref { pointee, .. } => index_stride_for_class(pointee, db),
         RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => Err(LowerError::Internal(
             "index projection on scalar/raw class".to_string(),
         )),
@@ -3195,33 +3454,31 @@ fn value_span_words<'db>(
     class: &RuntimeClass<'db>,
 ) -> Result<u64, LowerError> {
     Ok(match class {
-        RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => 1,
-        RuntimeClass::Handle { layout, .. } | RuntimeClass::AggregateValue { layout } => {
-            match layout.data(db) {
-                Layout::Struct(data) => data
-                    .fields
-                    .iter()
-                    .map(|field| value_span_words(db, field))
-                    .collect::<Result<Vec<_>, _>>()?
-                    .into_iter()
-                    .sum(),
-                Layout::Array(data) => value_span_words(db, &data.elem)? * data.len,
-                Layout::Enum(data) => {
-                    let mut max_payload = 0;
-                    for variant in data.variants.iter() {
-                        let span = variant
-                            .fields
-                            .iter()
-                            .map(|field| value_span_words(db, field))
-                            .collect::<Result<Vec<_>, _>>()?
-                            .into_iter()
-                            .sum();
-                        max_payload = max_payload.max(span);
-                    }
-                    1 + max_payload
+        RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => 1,
+        RuntimeClass::AggregateValue { layout } => match layout.data(db) {
+            Layout::Struct(data) => data
+                .fields
+                .iter()
+                .map(|field| value_span_words(db, field))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .sum(),
+            Layout::Array(data) => value_span_words(db, &data.elem)? * data.len,
+            Layout::Enum(data) => {
+                let mut max_payload = 0;
+                for variant in data.variants.iter() {
+                    let span = variant
+                        .fields
+                        .iter()
+                        .map(|field| value_span_words(db, field))
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into_iter()
+                        .sum();
+                    max_payload = max_payload.max(span);
                 }
+                1 + max_payload
             }
-        }
+        },
     })
 }
 

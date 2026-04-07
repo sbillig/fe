@@ -2029,7 +2029,6 @@ impl<'db> TyChecker<'db> {
         let expected = expected.fold_with(self.db, &mut self.table);
         let actual = self.normalize_ty(actual);
         let expected = self.normalize_ty(expected);
-
         match self.table.unify(actual, expected) {
             Ok(()) => {
                 // FIXME: This is a temporary workaround, this should be removed when we
@@ -2117,7 +2116,7 @@ impl<'db> TyChecker<'db> {
         inst: TraitInstId<'db>,
     ) -> TyId<'db> {
         let ty = instantiate_trait_method(self.db, method, &mut self.table, receiver_ty, inst);
-        self.instantiate_to_term(ty)
+        self.instantiate_callable_to_term(ty, method.as_callable(self.db).unwrap())
     }
 
     fn instantiate_trait_assoc_fn_to_term(
@@ -2126,7 +2125,7 @@ impl<'db> TyChecker<'db> {
         inst: TraitInstId<'db>,
     ) -> TyId<'db> {
         let ty = instantiate_trait_assoc_fn(self.db, method, inst);
-        self.instantiate_to_term(ty)
+        self.instantiate_callable_to_term(ty, method)
     }
 
     fn instantiate_inherent_method_to_term(
@@ -2141,7 +2140,7 @@ impl<'db> TyChecker<'db> {
             }
             ty = TyId::app(self.db, ty, arg);
         }
-        self.instantiate_to_term(ty)
+        self.instantiate_callable_to_term(ty, method)
     }
 
     fn instantiate_callable_to_term(
@@ -2589,24 +2588,7 @@ impl<'db> TypedBody<'db> {
             LocalBinding::Param { ty, .. } => ty,
             LocalBinding::EffectParam { site, idx, .. } => {
                 crate::core::semantic::EffectEnvView::new(site)
-                    .requirements(db)
-                    .iter()
-                    .find(|requirement| requirement.binding_idx as usize == idx)
-                    .and_then(|requirement| requirement.key.binding_ty(db))
-                    .or_else(|| {
-                        let view = crate::core::semantic::EffectEnvView::new(site);
-                        view.resolutions(db)
-                            .iter()
-                            .find(|resolution| resolution.requirement_idx as usize == idx)
-                            .and_then(|resolution| {
-                                view.providers(db)
-                                    .iter()
-                                    .find(|provider| {
-                                        provider.provider_idx == resolution.provider_idx
-                                    })
-                                    .map(|provider| provider.provider_ty)
-                            })
-                    })
+                    .resolved_binding_ty(db, idx)
                     .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
             }
         }

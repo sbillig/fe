@@ -277,8 +277,10 @@ fn serialize_const_node_with_size<'db>(
             };
             serialize_const_scalar_with_size(repr_coerced_scalar(class.repr, scalar.clone())?, size)
         }
+        RuntimeClass::Ref { .. } => Err(LowerError::Unsupported(
+            "reference const nodes are not serializable runtime data".to_string(),
+        )),
         RuntimeClass::AggregateValue { layout }
-        | RuntimeClass::Handle { layout, .. }
         | RuntimeClass::RawAddr {
             target: Some(layout),
             ..
@@ -303,10 +305,8 @@ fn memory_size_bytes_for_class<'db>(
         RuntimeClass::Scalar(class) => {
             round_up_to_word(scalar_storage_size_bytes(class.repr), target)
         }
-        RuntimeClass::AggregateValue { layout } | RuntimeClass::Handle { layout, .. } => {
-            layout_size_bytes(db, *layout, target)
-        }
-        RuntimeClass::RawAddr { .. } => target.word_size_bytes,
+        RuntimeClass::AggregateValue { layout } => layout_size_bytes(db, *layout, target),
+        RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => target.word_size_bytes,
     }
 }
 
@@ -330,7 +330,7 @@ fn packed_array_scalar_stride(class: &RuntimeClass<'_>) -> Option<usize> {
         }) => Some(1),
         RuntimeClass::Scalar(_)
         | RuntimeClass::AggregateValue { .. }
-        | RuntimeClass::Handle { .. }
+        | RuntimeClass::Ref { .. }
         | RuntimeClass::RawAddr { .. } => None,
     }
 }

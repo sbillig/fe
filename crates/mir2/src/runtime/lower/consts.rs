@@ -1,10 +1,15 @@
-use hir::analysis::semantic::{
-    SemConstId, SemConstScalar, SemConstValue, VariantIndex, normalize_int_to_shape, sem_const_ty,
+use hir::analysis::{
+    semantic::{
+        SemConstId, SemConstScalar, SemConstValue, VariantIndex, normalize_int_to_shape,
+        sem_const_ty,
+    },
+    ty::const_ty::{ConstTyData, EvaluatedConstTy, evaluate_type_level_int_const_expr},
+    ty::ty_def::TyData,
 };
 
 use crate::{
     db::MirDb,
-    runtime::{ConstNode, ConstRegionId, ConstScalar, LayoutId, ScalarRepr},
+    runtime::{ConstNode, ConstRegionId, ConstScalar, LayoutId, ScalarClass, ScalarRepr},
 };
 
 use super::{
@@ -23,8 +28,7 @@ pub(super) fn const_scalar_from_value<'db>(
         | SemConstValue::Tuple { .. }
         | SemConstValue::Struct { .. }
         | SemConstValue::Array { .. }
-        | SemConstValue::Enum { .. }
-        | SemConstValue::TypeLevel { .. } => None,
+        | SemConstValue::Enum { .. } => None,
         SemConstValue::Scalar { value, .. } => match value {
             SemConstScalar::Bool(value) => Some(ConstScalar::Bool(value)),
             SemConstScalar::Int { value } => {
@@ -50,6 +54,85 @@ pub(super) fn const_scalar_from_value<'db>(
                 })
             }
         },
+        SemConstValue::TypeLevel { ty, const_ty } => {
+            let TyData::ConstTy(const_ty) = const_ty.data(db) else {
+                return None;
+            };
+            let evaluated = const_ty.evaluate(db, Some(ty));
+            let evaluated = if let ConstTyData::Abstract(expr, expected_ty) = evaluated.data(db) {
+                evaluate_type_level_int_const_expr(db, *expr, *expected_ty).unwrap_or(evaluated)
+            } else {
+                evaluated
+            };
+            match evaluated.data(db) {
+                ConstTyData::Evaluated(EvaluatedConstTy::LitBool(value), _) => {
+                    Some(ConstScalar::Bool(*value))
+                }
+                ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) => {
+                    let value = num_bigint::BigInt::from(int_id.data(db).clone());
+                    let scalar = scalar_class_for_ty_in_env(db, env, ty)?;
+                    match scalar.repr {
+                        ScalarRepr::Bool => None,
+                        ScalarRepr::Int { bits, signed } => Some(ConstScalar::Int {
+                            bits,
+                            signed,
+                            words: encode_int_words(&value, bits, signed),
+                        }),
+                        ScalarRepr::FixedBytes { .. } => None,
+                        ScalarRepr::Address { bits } => Some(ConstScalar::Address {
+                            bits,
+                            bytes: encode_int_words(&value, bits, false),
+                        }),
+                    }
+                }
+                ConstTyData::Evaluated(EvaluatedConstTy::Bytes(bytes), _) => {
+                    scalar_class_for_ty_in_env(db, env, ty).and_then(|scalar| {
+                        matches!(scalar.repr, ScalarRepr::FixedBytes { .. })
+                            .then(|| ConstScalar::FixedBytes(bytes.clone()))
+                    })
+                }
+                ConstTyData::Evaluated(
+                    EvaluatedConstTy::Unit
+                    | EvaluatedConstTy::Tuple(_)
+                    | EvaluatedConstTy::Array(_)
+                    | EvaluatedConstTy::Record(_)
+                    | EvaluatedConstTy::EnumVariant(_)
+                    | EvaluatedConstTy::Invalid,
+                    _,
+                )
+                | ConstTyData::TyVar(_, _)
+                | ConstTyData::TyParam(_, _)
+                | ConstTyData::Hole(_, _)
+                | ConstTyData::Abstract(_, _)
+                | ConstTyData::UnEvaluated { .. } => None,
+            }
+        }
+    }
+}
+
+pub(super) fn const_scalar_for_class(
+    value: &SemConstScalar,
+    class: &ScalarClass<'_>,
+) -> Option<ConstScalar> {
+    match value {
+        SemConstScalar::Bool(value) => {
+            matches!(class.repr, ScalarRepr::Bool).then_some(ConstScalar::Bool(*value))
+        }
+        SemConstScalar::Int { value } => match class.repr {
+            ScalarRepr::Bool => None,
+            ScalarRepr::Int { bits, signed } => Some(ConstScalar::Int {
+                bits,
+                signed,
+                words: encode_int_words(value, bits, signed),
+            }),
+            ScalarRepr::FixedBytes { .. } => None,
+            ScalarRepr::Address { bits } => Some(ConstScalar::Address {
+                bits,
+                bytes: encode_int_words(value, bits, false),
+            }),
+        },
+        SemConstScalar::Bytes(bytes) => matches!(class.repr, ScalarRepr::FixedBytes { .. })
+            .then(|| ConstScalar::FixedBytes(bytes.clone())),
     }
 }
 

@@ -6,14 +6,15 @@ use hir::analysis::{
 };
 use hir::hir_def::{BinOp, TopLevelMod, UnOp};
 use hir::projection::{IndexSource, Projection, ProjectionPath};
+use mir2::runtime::RefKind;
 use mir2::runtime::{ContractEffectArgPlan, InitArgsPlan};
 use mir2::{
-    AddressSpaceKind, ConstNode, ConstRegionId, ConstScalar, HandleKind, IntrinsicArithBinOp,
-    Layout, LayoutId, PlaceElem, PlaceRoot, RExpr, RLocalId, RStmt, RTerminator, RValueId,
-    ResolvedPlaceElem, ResolvedPlaceRootKind, RuntimeBuiltin, RuntimeClass, RuntimeCodeRegion,
-    RuntimeFunction, RuntimeFunctionOwner, RuntimeInlineHint, RuntimeLinkage, RuntimeObject,
-    RuntimePackage, RuntimeSection, RuntimeSectionName, RuntimeSectionRef, RuntimeSyntheticSpec,
-    SaturatingBinOp, ScalarClass, ScalarRepr, VariantId, layout_size_bytes, resolve_runtime_place,
+    AddressSpaceKind, ConstNode, ConstRegionId, ConstScalar, IntrinsicArithBinOp, Layout, LayoutId,
+    PlaceElem, PlaceRoot, RExpr, RLocalId, RStmt, RTerminator, RValueId, ResolvedPlaceElem,
+    ResolvedPlaceRootKind, RuntimeBuiltin, RuntimeClass, RuntimeCodeRegion, RuntimeFunction,
+    RuntimeFunctionOwner, RuntimeInlineHint, RuntimeLinkage, RuntimeObject, RuntimePackage,
+    RuntimeSection, RuntimeSectionName, RuntimeSectionRef, RuntimeSyntheticSpec, SaturatingBinOp,
+    ScalarClass, ScalarRepr, VariantId, layout_size_bytes, resolve_runtime_place,
     serialize_const_region_bytes,
 };
 use rustc_hash::FxHashMap;
@@ -368,10 +369,10 @@ pub enum YBuiltin<'db> {
         topic3: YLocalId,
     },
     CallDataSelector,
-    MakeContractFieldHandle {
+    MakeContractFieldRef {
         slot: u128,
         class: YulValueClass<'db>,
-        kind: HandleKind<'db>,
+        kind: RefKind<'db>,
     },
 }
 
@@ -396,7 +397,7 @@ pub enum YExpr<'db> {
         value: YLocalId,
         to: ScalarClass<'db>,
     },
-    ConstHandle {
+    ConstRef {
         region: ConstRegionId<'db>,
         layout: LayoutId<'db>,
     },
@@ -679,7 +680,7 @@ fn yul_space_for_class(class: &YulValueClass<'_>) -> Option<YulAddressSpace> {
 fn yul_storage_kind_for_runtime_class(class: &RuntimeClass<'_>) -> YulStorageKind {
     match class {
         RuntimeClass::AggregateValue { .. } => YulStorageKind::Bytes,
-        RuntimeClass::Scalar(_) | RuntimeClass::Handle { .. } | RuntimeClass::RawAddr { .. } => {
+        RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => {
             YulStorageKind::Cell
         }
     }
@@ -1046,7 +1047,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
         for block in &plan.blocks {
             for stmt in &block.stmts {
                 if let YStmt::Assign {
-                    expr: YExpr::ConstHandle { region, .. },
+                    expr: YExpr::ConstRef { region, .. },
                     ..
                 } = stmt
                     && seen.insert(*region)
@@ -1251,21 +1252,29 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
         };
         let normalized = normalize_semantic_body(self.db, semantic)
             .expect("semantic normalization should succeed before Yul legalization");
+        let semantic_len = normalized.locals.len();
         body.locals
             .iter()
-            .zip(normalized.locals.iter())
-            .map(|(local, normalized)| {
-                normalized.mutability == Mutability::Immutable
-                    && matches!(
-                        local.carrier,
-                        mir2::RuntimeCarrier::Value(
-                            RuntimeClass::AggregateValue { .. }
-                                | RuntimeClass::Handle {
-                                    kind: HandleKind::ConstValue,
-                                    ..
-                                }
-                        )
+            .enumerate()
+            .map(|(idx, local)| {
+                let aggregate_like = match &local.carrier {
+                    mir2::RuntimeCarrier::Value(class) => {
+                        Some(yul_class_for_runtime_class(self.db, class))
+                    }
+                    mir2::RuntimeCarrier::Erased => None,
+                }
+                .is_some_and(|class| {
+                    matches!(
+                        class,
+                        YulValueClass::MemoryPtr { .. } | YulValueClass::CodePtr { .. }
                     )
+                });
+                aggregate_like
+                    && if idx < semantic_len {
+                        normalized.locals[idx].mutability == Mutability::Immutable
+                    } else {
+                        true
+                    }
             })
             .collect()
     }
@@ -1317,14 +1326,14 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                     RExpr::Load {
                         place:
                             mir2::RuntimePlace {
-                                root: PlaceRoot::Handle(value),
+                                root: PlaceRoot::Ref(value),
                                 path,
                             },
                     },
                 ..
             } => *value == local && path.is_empty(),
             RStmt::Store { dst, .. } | RStmt::CopyInto { dst, .. } => {
-                matches!(dst.root, PlaceRoot::Handle(value) if value == local)
+                matches!(dst.root, PlaceRoot::Ref(value) if value == local)
             }
             RStmt::Assign { .. } | RStmt::EnumSetTag { .. } | RStmt::EnumWriteVariant { .. } => {
                 false
@@ -1483,7 +1492,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                     pending.remove(idx);
                     stmts.push(YStmt::Assign {
                         dst: YLocalId(dst.as_u32()),
-                        expr: YExpr::ConstHandle { region, layout },
+                        expr: YExpr::ConstRef { region, layout },
                     });
                     return Ok(true);
                 }
@@ -1512,7 +1521,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
 
     fn const_object_handle_root(&self, place: &mir2::RuntimePlace<'db>) -> Option<RLocalId> {
         match place.root {
-            PlaceRoot::Handle(local) => Some(local),
+            PlaceRoot::Ref(local) => Some(local),
             PlaceRoot::Slot(_) | PlaceRoot::Provider(_) | PlaceRoot::Ptr { .. } => None,
         }
     }
@@ -1585,10 +1594,12 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
             return Some(node.clone());
         }
         match class {
-            RuntimeClass::AggregateValue { layout } | RuntimeClass::Handle { layout, .. } => {
+            RuntimeClass::AggregateValue { layout } => {
                 self.build_const_node_for_layout(*layout, path, writes)
             }
-            RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => None,
+            RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => {
+                None
+            }
         }
     }
 
@@ -2016,10 +2027,10 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                     None,
                 )
             }
-            RExpr::ConstHandle { region, layout } => {
+            RExpr::ConstRef { region, layout } => {
                 let class = YulValueClass::CodePtr { layout: *layout };
                 (
-                    YExpr::ConstHandle {
+                    YExpr::ConstRef {
                         region: *region,
                         layout: *layout,
                     },
@@ -2065,9 +2076,11 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                 raw,
                 provider_ty: _,
                 space,
-                layout,
+                target,
             } => {
-                let class = yul_ptr_class(yul_space_from_runtime(*space), *layout);
+                let class = target.map_or_else(pointer_word_class, |layout| {
+                    yul_ptr_class(yul_space_from_runtime(*space), layout)
+                });
                 (
                     YExpr::ProviderFromRaw {
                         raw: YLocalId(raw.as_u32()),
@@ -2105,6 +2118,12 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                 default_dst_class,
                 YTransportInfo::empty(),
                 None,
+            ),
+            RExpr::RetagRef { value } => (
+                YExpr::Use(YLocalId(value.as_u32())),
+                local_values[value.as_u32() as usize].class.clone(),
+                local_values[value.as_u32() as usize].transport.clone(),
+                local_values[value.as_u32() as usize].const_value.clone(),
             ),
             RExpr::AddrOf { place } => {
                 let (place, transport) = self.legalize_place(body, local_values, place)?;
@@ -2318,7 +2337,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
             ResolvedPlaceRootKind::Slot { local, .. } => {
                 let info = &local_values[local.as_u32() as usize];
                 match (info.class.clone(), info.transport.root_alias) {
-                    (Some(class), Some(space)) if !matches!(class, YulValueClass::Word(_)) => (
+                    (Some(class), Some(space)) => (
                         YulPlaceRoot::Ptr {
                             local: YLocalId(local.as_u32()),
                             space,
@@ -2332,15 +2351,34 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                     ),
                 }
             }
-            ResolvedPlaceRootKind::Handle { value, class } => {
+            ResolvedPlaceRootKind::Ref { value, class } => {
                 let class = local_values[value.as_u32() as usize]
                     .class
                     .clone()
                     .unwrap_or_else(|| yul_class_for_runtime_class(self.db, &class));
+                let runtime_class = body.value_class(value).ok_or_else(|| {
+                    YulError::InvalidYulPackage(format!(
+                        "ref root {value:?} does not have a runtime class"
+                    ))
+                })?;
                 (
                     YulPlaceRoot::Ptr {
                         local: YLocalId(value.as_u32()),
-                        space: yul_space_for_root_class(&class)?,
+                        space: match runtime_class {
+                            RuntimeClass::Ref {
+                                kind: RefKind::Const,
+                                ..
+                            } => YulAddressSpace::Code,
+                            RuntimeClass::Ref {
+                                kind: RefKind::Object,
+                                ..
+                            } => YulAddressSpace::Memory,
+                            RuntimeClass::Ref {
+                                kind: RefKind::Provider { space, .. },
+                                ..
+                            } => yul_space_from_runtime(*space),
+                            _ => yul_space_for_root_class(&class)?,
+                        },
                         class: class.clone(),
                     },
                     local_values[value.as_u32() as usize].transport.clone(),
@@ -2357,8 +2395,8 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                     .unwrap_or_else(|| yul_class_for_runtime_class(self.db, &provider_class));
                 let space = match &provider_class {
                     RuntimeClass::RawAddr { space, .. } => yul_space_from_runtime(*space),
-                    RuntimeClass::Handle {
-                        kind: HandleKind::Provider { space, .. },
+                    RuntimeClass::Ref {
+                        kind: RefKind::Provider { space, .. },
                         ..
                     } => yul_space_from_runtime(*space),
                     _ => yul_space_for_root_class(&class)?,
@@ -2474,7 +2512,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
             mir2::RuntimeLocalRoot::Slot(class) => YulLocalRoot::MemorySlot {
                 class: class.clone(),
             },
-            mir2::RuntimeLocalRoot::Handle(class) => YulLocalRoot::PtrRoot {
+            mir2::RuntimeLocalRoot::Ref(class) => YulLocalRoot::PtrRoot {
                 class: yul_class_for_runtime_class(self.db, class),
             },
             mir2::RuntimeLocalRoot::Ptr { space, class } => YulLocalRoot::PtrRoot {
@@ -2493,16 +2531,23 @@ pub fn yul_class_for_runtime_class<'db>(
 ) -> YulValueClass<'db> {
     match class {
         RuntimeClass::Scalar(class) => YulValueClass::Word(class.clone()),
+        RuntimeClass::Ref { pointee, kind, .. } => match kind {
+            RefKind::Const => pointee
+                .aggregate_layout()
+                .map(|layout| YulValueClass::CodePtr { layout })
+                .unwrap_or_else(pointer_word_class),
+            RefKind::Object => pointee
+                .aggregate_layout()
+                .map(|layout| YulValueClass::MemoryPtr { layout })
+                .unwrap_or_else(pointer_word_class),
+            RefKind::Provider { space, .. } => pointee
+                .aggregate_layout()
+                .map(|layout| yul_ptr_class(yul_space_from_runtime(*space), layout))
+                .unwrap_or_else(pointer_word_class),
+        },
         RuntimeClass::RawAddr { space, target } => target
             .map(|layout| yul_ptr_class(yul_space_from_runtime(*space), layout))
             .unwrap_or_else(pointer_word_class),
-        RuntimeClass::Handle { layout, kind, .. } => match kind {
-            HandleKind::ConstValue => YulValueClass::CodePtr { layout: *layout },
-            HandleKind::ObjectValue => YulValueClass::MemoryPtr { layout: *layout },
-            HandleKind::Provider { space, .. } => {
-                yul_ptr_class(yul_space_from_runtime(*space), *layout)
-            }
-        },
         RuntimeClass::AggregateValue { layout } => layout_scalar_word_class(db, *layout)
             .map(YulValueClass::Word)
             .unwrap_or(YulValueClass::MemoryPtr { layout: *layout }),
@@ -2569,7 +2614,7 @@ fn class_scalar_word<'db>(
     match class {
         RuntimeClass::Scalar(class) => Some(class.clone()),
         RuntimeClass::AggregateValue { layout } => layout_scalar_word_class(db, *layout),
-        RuntimeClass::Handle { .. } | RuntimeClass::RawAddr { .. } => None,
+        RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => None,
     }
 }
 
@@ -2814,8 +2859,8 @@ fn legalize_builtin<'db>(
             topic3: YLocalId(topic3.as_u32()),
         },
         RuntimeBuiltin::CallDataSelector => YBuiltin::CallDataSelector,
-        RuntimeBuiltin::MakeContractFieldHandle { slot, class, kind } => {
-            YBuiltin::MakeContractFieldHandle {
+        RuntimeBuiltin::MakeContractFieldRef { slot, class, kind } => {
+            YBuiltin::MakeContractFieldRef {
                 slot: *slot,
                 class: yul_class_for_runtime_class(db, class),
                 kind: kind.clone(),

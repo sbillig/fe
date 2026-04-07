@@ -180,6 +180,11 @@ pub fn semantic_binding_ty<'db>(
                     crate::analysis::ty::ty_def::InvalidCause::Other,
                 );
             };
+            let requirement = env
+                .requirements(db)
+                .iter()
+                .find(|requirement| requirement.binding_idx as usize == idx)
+                .cloned();
             let provider = env
                 .resolutions(db)
                 .iter()
@@ -190,32 +195,24 @@ pub fn semantic_binding_ty<'db>(
                         .find(|provider| provider.provider_idx == resolution.provider_idx)
                         .cloned()
                 });
-            env.requirements(db)
-                .iter()
-                .find(|requirement| requirement.binding_idx as usize == idx)
-                .and_then(|requirement| match requirement.key {
-                    crate::core::semantic::EffectRequirementKey::Trait(_) => provider
-                        .as_ref()
-                        .filter(|binding| {
-                            matches!(
-                                binding.source,
-                                crate::core::semantic::ProviderSource::RootProvider { .. }
-                            )
-                        })
-                        .map(|binding| binding.provider_ty)
-                        .or_else(|| requirement.key.binding_ty(db)),
+            match requirement.as_ref().map(|requirement| &requirement.key) {
+                Some(crate::core::semantic::EffectRequirementKey::Trait(_)) => provider
+                    .map(|binding| binding.provider_ty)
+                    .or_else(|| requirement.and_then(|requirement| requirement.key.binding_ty(db))),
+                Some(
                     crate::core::semantic::EffectRequirementKey::Type(_)
-                    | crate::core::semantic::EffectRequirementKey::Other => requirement
-                        .key
-                        .binding_ty(db)
-                        .or_else(|| provider.as_ref().map(|binding| binding.provider_ty)),
-                })
-                .unwrap_or_else(|| {
-                    crate::analysis::ty::ty_def::TyId::invalid(
-                        db,
-                        crate::analysis::ty::ty_def::InvalidCause::Other,
-                    )
-                })
+                    | crate::core::semantic::EffectRequirementKey::Other,
+                ) => requirement
+                    .and_then(|requirement| requirement.key.binding_ty(db))
+                    .or_else(|| provider.map(|binding| binding.provider_ty)),
+                None => None,
+            }
+            .unwrap_or_else(|| {
+                crate::analysis::ty::ty_def::TyId::invalid(
+                    db,
+                    crate::analysis::ty::ty_def::InvalidCause::Other,
+                )
+            })
         }
         LocalBinding::Local { .. } | LocalBinding::Param { .. } => instance
             .key(db)
@@ -245,10 +242,26 @@ pub fn resolved_provider_binding_for_instance_effect<'db>(
         .iter()
         .find(|resolution| resolution.requirement_idx as usize == binding_idx)?
         .provider_idx;
+    let requirement = env
+        .requirements(db)
+        .iter()
+        .find(|requirement| requirement.binding_idx as usize == binding_idx)
+        .cloned();
     env.providers(db)
         .iter()
         .find(|provider| provider.provider_idx == provider_idx)
         .cloned()
+        .map(|mut provider| {
+            if matches!(
+                provider.semantics.kind,
+                crate::analysis::ty::provider::ProviderKind::RootObject
+            ) && let Some(target_ty) =
+                requirement.and_then(|requirement| requirement.key.binding_ty(db))
+            {
+                provider.semantics.target_ty = Some(target_ty);
+            }
+            provider
+        })
 }
 
 pub fn root_semantic_instance_key<'db>(

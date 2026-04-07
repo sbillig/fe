@@ -1,10 +1,61 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 30
 expression: output
 input_file: tests/fixtures/caller.fe
 ---
-function $who_called__Evm_hef0af3106e109414__3af54274b2985741() -> ret {
-  let v0 := caller()
-  ret := v0
-  leave
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let v0 := 0
+      let v1 := 0
+      v0 := 0
+      v1 := $who_called(v0)
+      stop()
+    }
+    function $caller($self) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 0))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let v3 := 0
+      let v4 := 0
+      let v5 := 0
+      v4 := caller()
+      mstore(r1, v4)
+      v5 := allocate(32)
+      mstore(v5, mload(r1))
+      mstore(r2, v5)
+      ret := mload(r2)
+      leave
+    }
+    function $who_called($Ctx) -> ret {
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let v2 := 0
+      let v3 := 0
+      let v4 := 0
+      v2 := $Ctx
+      v3 := $Ctx
+      v4 := $caller(v3)
+      mstore(r1, v4)
+      ret := mload(r1)
+      leave
+    }
+    $__fe_main_root()
+  }
 }

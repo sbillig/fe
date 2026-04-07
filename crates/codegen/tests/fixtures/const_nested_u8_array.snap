@@ -5,17 +5,66 @@ input_file: tests/fixtures/const_nested_u8_array.fe
 ---
 object "main" {
   code {
+    function $__fe_main_root() {
+      let v0 := 0
+      v0 := $const_nested_u8_array()
+      stop()
+    }
     function $const_nested_u8_array() -> ret {
-      let v0 := dataoffset("data_const_nested_u8_array_0")
-      let v1 := mload(0x40)
-      if iszero(v1) {
-        v1 := 0x80
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
       }
-      datacopy(v1, add(v0, 32), 1)
-      let v2 := and(byte(0, mload(v1)), 0xff)
-      ret := v2
+      mstore(0x40, add(r1, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 32))
+      let v0 := 0
+      let v2 := 0
+      let v4 := 0
+      let v5 := 0
+      let v6 := 0
+      let v7 := 0
+      let v8 := 0
+      let v9 := 0
+      let v10 := 0
+      let v11 := 0
+      let v12 := 0
+      let v13 := 0
+      let v14 := 0
+      let v15 := 0
+      let v16 := 0
+      let v17 := 0
+      let v18 := 0
+      let v19 := 0
+      let v20 := 0
+      let v21 := 0
+      v5 := 0x01
+      v6 := 0x02
+      v7 := dataoffset("const_0")
+      v9 := 0x03
+      v10 := 0x04
+      v11 := dataoffset("const_1")
+      v13 := dataoffset("const_2")
+      v0 := v13
+      v15 := 0x01
+      mstore(r1, v15)
+      v16 := 0x03
+      v17 := 0x04
+      v18 := dataoffset("const_1")
+      v2 := v18
+      v20 := 0x00
+      mstore(r3, v20)
+      v21 := 0x03
+      v4 := v21
+      ret := v4
       leave
     }
+    $__fe_main_root()
   }
-  data "data_const_nested_u8_array_0" hex"01020000000000000000000000000000000000000000000000000000000000000304000000000000000000000000000000000000000000000000000000000000"
+  data "const_0" hex"0102000000000000000000000000000000000000000000000000000000000000"
+  data "const_1" hex"0304000000000000000000000000000000000000000000000000000000000000"
+  data "const_2" hex"01020000000000000000000000000000000000000000000000000000000000000304000000000000000000000000000000000000000000000000000000000000"
 }

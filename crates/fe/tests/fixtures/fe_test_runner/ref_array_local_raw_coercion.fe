@@ -1,0 +1,12 @@
+fn first(xs: ref [u8; 32]) -> u8 {
+    xs[0]
+}
+
+#[test]
+fn local_ref_array_lowering() {
+    let xs: [u8; 32] = [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0,
+    ]
+    assert(first(ref xs) == 0)
+}

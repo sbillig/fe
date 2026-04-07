@@ -2,7 +2,7 @@ use rustc_hash::FxHashSet;
 
 use crate::{
     db::MirDb,
-    runtime::{HandleView, Layout, LayoutId, RuntimeClass, RuntimeProgramView, ScalarRole},
+    runtime::{Layout, LayoutId, RefView, RuntimeClass, RuntimeProgramView, ScalarRole},
     verify::VerifyError,
 };
 
@@ -15,11 +15,18 @@ pub(super) fn verify_class_layouts<'db>(
     match class {
         RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => Ok(()),
         RuntimeClass::AggregateValue { layout } => verify_layout(db, program, *layout, visited),
-        RuntimeClass::Handle { layout, view, .. } => {
-            if !matches!(view, HandleView::Whole | HandleView::EnumVariant(_)) {
-                return Err(VerifyError::InvalidLayoutHandleView(*layout));
+        RuntimeClass::Ref { pointee, view, .. } => {
+            if !matches!(view, RefView::Whole | RefView::EnumVariant(_)) {
+                return Err(VerifyError::InvalidLayoutRefView(
+                    pointee.aggregate_layout().unwrap_or_else(|| {
+                        panic!("ref view should only appear on aggregate pointees: {pointee:?}")
+                    }),
+                ));
             }
-            verify_layout(db, program, *layout, visited)
+            if let Some(layout) = pointee.aggregate_layout() {
+                verify_layout(db, program, layout, visited)?;
+            }
+            verify_class_layouts(db, program, pointee, visited)
         }
     }
 }
@@ -68,13 +75,22 @@ fn verify_stored_class<'db>(
     class: &RuntimeClass<'db>,
     visited: &mut FxHashSet<LayoutId<'db>>,
 ) -> Result<(), VerifyError<'db>> {
-    if let RuntimeClass::Handle {
-        layout,
-        view: HandleView::EnumVariant(_),
-        ..
-    } = class
-    {
-        return Err(VerifyError::InvalidLayoutHandleView(*layout));
+    match class {
+        RuntimeClass::Ref {
+            pointee,
+            view: RefView::EnumVariant(_),
+            ..
+        } => {
+            return Err(VerifyError::InvalidLayoutRefView(
+                pointee.aggregate_layout().unwrap_or_else(|| {
+                    panic!("variant ref view requires aggregate pointee: {pointee:?}")
+                }),
+            ));
+        }
+        RuntimeClass::Scalar(_)
+        | RuntimeClass::AggregateValue { .. }
+        | RuntimeClass::Ref { .. }
+        | RuntimeClass::RawAddr { .. } => {}
     }
     verify_class_layouts(db, program, class, visited)
 }

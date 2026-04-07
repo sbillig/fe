@@ -3,44 +3,87 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/function_call.fe
 ---
-function $add_one($x) -> ret {
-  let v0 := $checked_add_u64($x, 1)
-  ret := v0
-  leave
-}
-function $call_add_one() -> ret {
-  let v0 := $add_one(5)
-  ret := v0
-  leave
-}
-function $checked_add_u64($a, $b) -> ret {
-  let v0 := $checked_add_unsigned_impl__u64__aee7f05a097ffa16($a, $b)
-  ret := v0
-  leave
-}
-function $checked_add_unsigned_impl__u64__aee7f05a097ffa16($a, $b) -> ret {
-  let v0 := $u64_haee7f05a097ffa16_wrappingadd_h14afa79b3047617f_wrapping_add($a, $b)
-  let v1 := $u64_haee7f05a097ffa16_intword_h9a147c8c32b1323c_to_word(v0)
-  let v2 := $u64_haee7f05a097ffa16_intword_h9a147c8c32b1323c_to_word($a)
-  let v3 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v1, v2)
-  let v4 := v3
-  if v4 {
-    revert(0, 0)
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let v0 := 0
+      v0 := $call_add_one()
+      stop()
+    }
+    function $add($self, $other) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let v3 := 0
+      mstore(r0, $self)
+      mstore(r1, $other)
+      let t4 := and(add(and(mload(r0), 0xffffffffffffffff), and(mload(r1), 0xffffffffffffffff)), 0xffffffffffffffff)
+      if lt(t4, and(mload(r0), 0xffffffffffffffff)) {
+        revert(0, 0)
+      }
+      v3 := t4
+      mstore(r2, v3)
+      ret := and(mload(r2), 0xffffffffffffffff)
+      leave
+    }
+    function $add_one($x) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let v3 := 0
+      let v4 := 0
+      mstore(r0, $x)
+      v3 := 0x01
+      mstore(r1, v3)
+      v4 := $add(and(mload(r0), 0xffffffffffffffff), and(mload(r1), 0xffffffffffffffff))
+      mstore(r2, v4)
+      ret := and(mload(r2), 0xffffffffffffffff)
+      leave
+    }
+    function $call_add_one() -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let v2 := 0
+      let v3 := 0
+      v2 := 0x05
+      mstore(r0, v2)
+      v3 := $add_one(and(mload(r0), 0xffffffffffffffff))
+      mstore(r1, v3)
+      ret := and(mload(r1), 0xffffffffffffffff)
+      leave
+    }
+    $__fe_main_root()
   }
-  ret := v0
-  leave
-}
-function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt($self, $other) -> ret {
-  let v0 := lt($self, $other)
-  ret := v0
-  leave
-}
-function $u64_haee7f05a097ffa16_intword_h9a147c8c32b1323c_to_word($self) -> ret {
-  ret := $self
-  leave
-}
-function $u64_haee7f05a097ffa16_wrappingadd_h14afa79b3047617f_wrapping_add($self, $other) -> ret {
-  let v0 := and(add(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
-  ret := v0
-  leave
 }

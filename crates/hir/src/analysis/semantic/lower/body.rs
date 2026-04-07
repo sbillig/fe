@@ -12,8 +12,8 @@ use crate::{
         name_resolution::{PathRes, resolve_path},
         place::resolve_place_field_index,
         semantic::{
-            FieldIndex, Mutability, SBlock, SBlockId, SConst, SExpr, SLocal, SLocalId, SStmt,
-            SStmtKind, STerminator, STerminatorKind, SValueId, SemOrigin, SemanticBody,
+            FieldIndex, Mutability, SBlock, SBlockId, SConst, SExpr, SLocal, SLocalId, SPlace,
+            SStmt, SStmtKind, STerminator, STerminatorKind, SValueId, SemOrigin, SemanticBody,
             SemanticCalleeRef, SemanticLocalRole, ValueProvenance, VariantIndex, bool_const,
             bytes_const, int_const, runtime_size_bytes, sem_const_from_ty, unit_const,
         },
@@ -24,7 +24,7 @@ use crate::{
                 BodyOwner, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, LocalBinding,
                 RecordLike, SemanticExprLowering, TypedBody, ValuePathRef,
             },
-            ty_def::{BorrowKind, TyId},
+            ty_def::{BorrowKind, CapabilityKind, TyId},
         },
     },
     hir_def::{
@@ -760,7 +760,7 @@ impl<'db> SmirLowerCtxt<'db> {
     ) -> SValueId {
         let mut values = Vec::with_capacity(args.len() + usize::from(receiver.is_some()));
         if let Some(receiver) = receiver {
-            values.push(self.lower_expr(receiver));
+            values.push(self.lower_callable_receiver(expr, receiver, &callable));
         }
         for arg in args {
             values.push(self.lower_expr(*arg));
@@ -791,6 +791,71 @@ impl<'db> SmirLowerCtxt<'db> {
                 )
             }
         }
+    }
+
+    fn lower_callable_receiver(
+        &mut self,
+        call_expr: ExprId,
+        receiver: ExprId,
+        callable: &crate::analysis::ty::ty_check::Callable<'db>,
+    ) -> SValueId {
+        let Some(expected_ty) = callable.arg_ty(self.db, 0) else {
+            return self.lower_expr(receiver);
+        };
+        let expected_ty = normalize_ty(self.db, expected_ty, self.body.scope(), self.assumptions);
+        let receiver_prop = self.typed_body.expr_prop(self.db, receiver);
+        let receiver_ty = normalize_ty(
+            self.db,
+            receiver_prop.ty,
+            self.body.scope(),
+            self.assumptions,
+        );
+
+        if let Some((kind, _)) = expected_ty.as_capability(self.db)
+            && matches!(kind, CapabilityKind::Mut | CapabilityKind::Ref)
+            && receiver_ty.as_capability(self.db).is_none()
+        {
+            let place = if self.typed_body.expr_place(self.db, receiver).is_some() {
+                self.lower_place(receiver)
+            } else {
+                let value = self.lower_expr(receiver);
+                let local = self.alloc_local(
+                    receiver_ty,
+                    if matches!(kind, CapabilityKind::Mut) {
+                        Mutability::Mutable
+                    } else {
+                        Mutability::Immutable
+                    },
+                    None,
+                );
+                self.push_stmt(
+                    SemOrigin::Expr(receiver),
+                    SStmtKind::Assign {
+                        dst: local,
+                        expr: SExpr::Use(value),
+                    },
+                );
+                SPlace {
+                    local,
+                    path: Box::default(),
+                }
+            };
+            return self.emit_expr_with_origin(
+                SemOrigin::Expr(call_expr),
+                expected_ty,
+                SExpr::Borrow {
+                    place,
+                    kind: match kind {
+                        CapabilityKind::Mut => BorrowKind::Mut,
+                        CapabilityKind::Ref => BorrowKind::Ref,
+                        CapabilityKind::View => unreachable!(),
+                    },
+                    provider: receiver_prop.borrow_provider,
+                },
+            );
+        }
+
+        self.lower_expr(receiver)
     }
 
     fn lower_const_intrinsic(

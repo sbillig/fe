@@ -5,7 +5,8 @@ use super::{
     binder::Binder,
     const_expr::ConstExpr,
     const_ty::{
-        CallableInputLayoutHoleOrigin, ConstTyData, const_ty_from_assoc_const_use,
+        CallableInputLayoutHoleOrigin, ConstCanonEnv, ConstCanonMode, ConstTyData,
+        canonicalize_ty_for_mode, const_ty_from_assoc_const_use,
         normalize_const_tys_for_comparison,
     },
     diagnostics::{ImplDiag, TyDiagCollection},
@@ -891,7 +892,12 @@ fn normalize_compare_assoc_consts<'db>(
         trait_inst,
         rebase_same_trait_uses,
     };
-    ty.fold_with(db, &mut folder)
+    canonicalize_ty_for_mode(
+        db,
+        ty.fold_with(db, &mut folder),
+        ConstCanonEnv::new(scope, assumptions, None),
+        ConstCanonMode::Identity,
+    )
 }
 
 /// Checks if the method constraints are stricter than the trait constraints.

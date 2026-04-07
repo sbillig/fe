@@ -333,13 +333,17 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 src.class
             )));
         };
+        let YulValueClass::Word(word) = &src.class else {
+            unreachable!("checked above")
+        };
+        let value = self.canonicalize_scalar_expr(src.value, word);
         Ok(match space {
-            YulAddressSpace::Memory => vec![YulDoc::line(format!("mstore({addr}, {})", src.value))],
+            YulAddressSpace::Memory => vec![YulDoc::line(format!("mstore({addr}, {value})"))],
             YulAddressSpace::Storage => {
-                vec![YulDoc::line(format!("sstore({addr}, {})", src.value))]
+                vec![YulDoc::line(format!("sstore({addr}, {value})"))]
             }
             YulAddressSpace::Transient => {
-                vec![YulDoc::line(format!("tstore({addr}, {})", src.value))]
+                vec![YulDoc::line(format!("tstore({addr}, {value})"))]
             }
             YulAddressSpace::Calldata | YulAddressSpace::Code => {
                 return Err(YulError::Unsupported(format!(

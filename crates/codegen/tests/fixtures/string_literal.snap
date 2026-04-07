@@ -3,7 +3,25 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/string_literal.fe
 ---
-function $string_literal() -> ret {
-  ret := 0x0568656c6c6f0000000000000000000000000000000000000000000000000000
-  leave
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let v0 := 0
+      v0 := $string_literal()
+      stop()
+    }
+    function $string_literal() -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      let v1 := 0
+      v1 := 0x68656c6c6f
+      mstore(r0, v1)
+      ret := and(mload(r0), 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+      leave
+    }
+    $__fe_main_root()
+  }
 }

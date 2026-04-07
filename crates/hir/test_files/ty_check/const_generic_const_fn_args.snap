@@ -20,13 +20,13 @@ note:
    ┌─ const_generic_const_fn_args.fe:13:9
    │
 13 │     let x: Foo
-   │         ^ Foo<add(ONE, 2)>
+   │         ^ Foo<3>
 
 note: 
    ┌─ const_generic_const_fn_args.fe:14:9
    │
 14 │     let y: Foo<add(ONE, TWO)>
-   │         ^ Foo<add(1, 2)>
+   │         ^ Foo<3>
 
 note: 
    ┌─ const_generic_const_fn_args.fe:15:9

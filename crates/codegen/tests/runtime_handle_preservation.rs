@@ -1,6 +1,9 @@
 use common::InputDb;
 use driver::DriverDataBase;
-use mir2::{HandleKind, Layout, PlaceElem, PlaceRoot, RExpr, RStmt, build_runtime_package};
+use fe_codegen::emit_module_sonatina_ir;
+use hir::hir_def::{ArithBinOp, BinOp};
+use mir2::runtime::RefKind;
+use mir2::{Layout, PlaceElem, PlaceRoot, RExpr, RStmt, RuntimeClass, build_runtime_package};
 use url::Url;
 
 #[test]
@@ -20,6 +23,16 @@ fn transparent_wrapper_returns_preserve_handle_fields_in_rmir() {
         .expect("file should be loaded");
     let top_mod = db.top_mod(file);
     let package = build_runtime_package(&db, top_mod).expect("runtime package");
+    let take_debug = package
+        .functions(&db)
+        .iter()
+        .copied()
+        .filter(|function| function.symbol(&db).contains("take"))
+        .map(|function| {
+            let body = function.instance(&db).body(&db);
+            format!("{}:\n{body:#?}", function.symbol(&db))
+        })
+        .collect::<Vec<_>>();
     let take_u256 = package
         .functions(&db)
         .iter()
@@ -32,27 +45,82 @@ fn transparent_wrapper_returns_preserve_handle_fields_in_rmir() {
             let [_, param] = body.signature.params.as_slice() else {
                 return false;
             };
-            if !matches!(
-                param.class,
-                mir2::RuntimeClass::Handle {
-                    kind: HandleKind::Provider { .. },
-                    ..
-                }
-            ) {
+            if !matches!(param.class, RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. }) {
                 return false;
             }
+            let transported = body
+                .blocks
+                .iter()
+                .flat_map(|block| block.stmts.iter())
+                .find_map(|stmt| match stmt {
+                    RStmt::Assign {
+                        dst,
+                        expr: RExpr::AddrOf { place },
+                    } if matches!(
+                        place.root,
+                        PlaceRoot::Ptr { addr, .. } if addr == param.local && place.path.is_empty()
+                    ) => Some(*dst),
+                    RStmt::Assign {
+                        dst,
+                        expr: RExpr::RetagRef { value },
+                    } if *value == param.local => Some(*dst),
+                    RStmt::Assign {
+                        dst,
+                        expr: RExpr::Use(value),
+                    } if *value == param.local => Some(*dst),
+                    RStmt::Assign { .. }
+                    | RStmt::Store { .. }
+                    | RStmt::CopyInto { .. }
+                    | RStmt::EnumSetTag { .. }
+                    | RStmt::EnumWriteVariant { .. } => None,
+                });
             body.blocks.iter().flat_map(|block| block.stmts.iter()).any(|stmt| {
                 matches!(
                     stmt,
-                    RStmt::CopyInto { dst, src }
-                        if *src == param.local
+                    RStmt::Store { dst, src }
+                        if (matches!(transported, Some(local) if *src == local)
+                            || (transported.is_none() && *src == param.local))
+                            && matches!(dst.root, PlaceRoot::Ref(_))
                             && matches!(dst.path.as_ref(), [PlaceElem::Field(field)] if field.0 == 1)
                 )
             })
         })
-        .expect("generated take helper that preserves the incoming handle field");
+        .unwrap_or_else(|| panic!(
+            "generated take helper that preserves the incoming handle field\n\n{}",
+            take_debug.join("\n\n")
+        ));
     let body = take_u256.instance(&db).body(&db);
     let seq_param = body.signature.params[1].local;
+    let transported = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.stmts.iter())
+        .find_map(|stmt| match stmt {
+            RStmt::Assign {
+                dst,
+                expr: RExpr::AddrOf { place },
+            } if matches!(
+                place.root,
+                PlaceRoot::Ptr { addr, .. } if addr == seq_param && place.path.is_empty()
+            ) =>
+            {
+                Some(*dst)
+            }
+            RStmt::Assign {
+                dst,
+                expr: RExpr::RetagRef { value },
+            } if *value == seq_param => Some(*dst),
+            RStmt::Assign {
+                dst,
+                expr: RExpr::Use(value),
+            } if *value == seq_param => Some(*dst),
+            RStmt::Assign { .. }
+            | RStmt::Store { .. }
+            | RStmt::CopyInto { .. }
+            | RStmt::EnumSetTag { .. }
+            | RStmt::EnumWriteVariant { .. } => None,
+        })
+        .unwrap_or(seq_param);
 
     assert!(
         !body
@@ -72,12 +140,13 @@ fn transparent_wrapper_returns_preserve_handle_fields_in_rmir() {
         body.blocks.iter().flat_map(|block| block.stmts.iter()).any(|stmt| {
             matches!(
                 stmt,
-                RStmt::CopyInto { dst, src }
-                    if *src == seq_param
+                RStmt::Store { dst, src }
+                    if *src == transported
+                        && matches!(dst.root, PlaceRoot::Ref(_))
                         && matches!(dst.path.as_ref(), [PlaceElem::Field(field)] if field.0 == 1)
             )
         }),
-        "transparent wrapper returns should copy the incoming handle directly into the wrapper field:\n{body:#?}"
+        "transparent wrapper returns should store the incoming borrow transport directly into the wrapper field:\n{body:#?}"
     );
 }
 
@@ -115,14 +184,21 @@ fn provider_root_trait_receivers_preserve_concrete_runtime_layouts() {
             RStmt::Assign {
                 dst,
                 expr: RExpr::Load { place },
-            } if place.root == PlaceRoot::Handle(ctx_param) && place.path.is_empty() => Some(*dst),
+            } if place.path.is_empty()
+                && (place.root == PlaceRoot::Ref(ctx_param)
+                    || matches!(place.root, PlaceRoot::Provider(_))) =>
+            {
+                Some(*dst)
+            }
             RStmt::Assign { .. }
             | RStmt::Store { .. }
             | RStmt::CopyInto { .. }
             | RStmt::EnumSetTag { .. }
             | RStmt::EnumWriteVariant { .. } => None,
         })
-        .expect("use_ctx should load its provider-bound receiver handle");
+        .unwrap_or_else(|| {
+            panic!("use_ctx should load its provider-bound receiver handle:\n{body:#?}")
+        });
 
     let mir2::RuntimeCarrier::Value(mir2::RuntimeClass::AggregateValue { layout }) =
         &body.locals[load.as_u32() as usize].carrier
@@ -280,14 +356,14 @@ fn whole_handle_loads_materialize_values_before_rebinding_object_locals() {
                                 RExpr::Load {
                                     place:
                                         mir2::RuntimePlace {
-                                            root: PlaceRoot::Handle(_),
+                                            root: PlaceRoot::Ref(_),
                                             path,
                                         },
                                 },
                         } if path.is_empty()
                             && matches!(
                                 body.locals[dst.as_u32() as usize].carrier,
-                                mir2::RuntimeCarrier::Value(mir2::RuntimeClass::Handle { .. })
+                                mir2::RuntimeCarrier::Value(mir2::RuntimeClass::Ref { .. })
                             )
                     )
                 }),
@@ -342,7 +418,7 @@ fn entry() -> u8 {
                     matches!(
                         stmt,
                         RStmt::Assign {
-                            expr: RExpr::ConstHandle { .. },
+                            expr: RExpr::ConstRef { .. },
                             ..
                         }
                     )
@@ -359,7 +435,7 @@ fn entry() -> u8 {
     );
     assert!(
         const_handle_bodies.is_empty(),
-        "by-value enum constants should lower inline, not through ConstHandle:\n{}",
+        "by-value enum constants should lower inline, not through ConstRef:\n{}",
         const_handle_bodies.join("\n\n")
     );
     assert!(
@@ -418,7 +494,7 @@ fn entry() -> u256 {
                     matches!(
                         stmt,
                         RStmt::Assign {
-                            expr: RExpr::ConstHandle { .. },
+                            expr: RExpr::ConstRef { .. },
                             ..
                         }
                     )
@@ -435,7 +511,198 @@ fn entry() -> u256 {
     );
     assert!(
         const_handle_bodies.is_empty(),
-        "by-value aggregate constants should lower inline, not through ConstHandle:\n{}",
+        "by-value aggregate constants should lower inline, not through ConstRef:\n{}",
         const_handle_bodies.join("\n\n")
+    );
+}
+
+#[test]
+fn borrow_typed_aggregate_literals_lower_without_const_shape_mismatch() {
+    let mut db = DriverDataBase::default();
+    let file_url =
+        Url::parse("file:///borrow_typed_aggregate_literals_lower_without_const_shape_mismatch.fe")
+            .unwrap();
+    db.workspace().touch(
+        &mut db,
+        file_url.clone(),
+        Some(
+            r#"fn first(xs: ref [u256; 2]) -> u256 {
+    xs[0]
+}
+
+fn entry() -> u256 {
+    first([10, 20])
+}"#
+            .to_string(),
+        ),
+    );
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    let package = build_runtime_package(&db, top_mod).expect("runtime package");
+    let debug = package
+        .functions(&db)
+        .iter()
+        .map(|function| {
+            let body = function.instance(&db).body(&db);
+            format!("{}:\n{body:#?}", function.symbol(&db))
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        package.functions(&db).iter().any(|function| {
+            let body = function.instance(&db).body(&db);
+            body.blocks
+                .iter()
+                .flat_map(|block| block.stmts.iter())
+                .any(|stmt| {
+                    matches!(
+                        stmt,
+                        RStmt::Assign {
+                            expr: RExpr::MaterializeToObject { .. } | RExpr::AllocObject { .. },
+                            ..
+                        }
+                    )
+                })
+        }),
+        "borrow-typed aggregate literals should materialize through normal object/value lowering:\n{}",
+        debug.join("\n\n")
+    );
+}
+
+#[test]
+fn sonatina_enum_tag_matches_preserve_typed_tag_values() {
+    let mut db = DriverDataBase::default();
+    let file_url =
+        Url::parse("file:///sonatina_enum_tag_matches_preserve_typed_tag_values.fe").unwrap();
+    db.workspace().touch(
+        &mut db,
+        file_url.clone(),
+        Some(
+            r#"enum Maybe {
+    None,
+    Some(u256),
+}
+
+pub fn code(x: Maybe) -> u256 {
+    match x {
+        Maybe::None => 0,
+        Maybe::Some(v) => v,
+    }
+}"#
+            .to_string(),
+        ),
+    );
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    emit_module_sonatina_ir(&db, top_mod).expect("enum-tag matches should lower in Sonatina");
+}
+
+#[test]
+fn object_backed_scalar_field_borrows_lower_as_typed_refs() {
+    let mut db = DriverDataBase::default();
+    let file_url =
+        Url::parse("file:///object_backed_scalar_field_borrows_lower_as_typed_refs.fe").unwrap();
+    db.workspace().touch(
+        &mut db,
+        file_url.clone(),
+        Some(include_str!("fixtures/effect_handle_field_deref.fe").to_string()),
+    );
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    let package = build_runtime_package(&db, top_mod).expect("runtime package");
+
+    let mut saw_scalar_ref_borrow = false;
+    for function in package.functions(&db) {
+        let body = function.instance(&db).body(&db);
+        for stmt in body.blocks.iter().flat_map(|block| block.stmts.iter()) {
+            let RStmt::Assign {
+                dst,
+                expr: RExpr::AddrOf { place },
+            } = stmt
+            else {
+                continue;
+            };
+            if !matches!(place.root, PlaceRoot::Ref(_)) {
+                continue;
+            }
+            let Some(RuntimeClass::Ref { pointee, kind, .. }) = body.value_class(*dst) else {
+                continue;
+            };
+            if !matches!(**pointee, RuntimeClass::Scalar(_)) {
+                continue;
+            }
+            assert!(
+                matches!(
+                    kind,
+                    RefKind::Object | RefKind::Provider { .. } | RefKind::Const
+                ),
+                "scalar field borrow should lower as a typed ref, not a raw address:\n{body:#?}"
+            );
+            saw_scalar_ref_borrow = true;
+        }
+    }
+
+    assert!(
+        saw_scalar_ref_borrow,
+        "expected at least one object-backed scalar field borrow to lower as RuntimeClass::Ref"
+    );
+}
+
+#[test]
+fn checked_overflow_exprs_survive_into_rmir() {
+    let mut db = DriverDataBase::default();
+    let file_url = Url::parse("file:///debug_checked_add_unused_local_rmir.fe").unwrap();
+    db.workspace().touch(
+        &mut db,
+        file_url.clone(),
+        Some(
+            r#"
+fn test_add_overflow_u8() {
+    let x: u8 = 255
+    let y: u8 = x + 1
+}
+"#
+            .to_string(),
+        ),
+    );
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    let package = build_runtime_package(&db, top_mod).expect("runtime package");
+    let func = package
+        .functions(&db)
+        .iter()
+        .copied()
+        .find(|function| function.symbol(&db).contains("test_add_overflow_u8"))
+        .expect("generated runtime function");
+    let body = func.instance(&db).body(&db);
+    assert!(
+        body.blocks
+            .iter()
+            .flat_map(|block| block.stmts.iter())
+            .any(|stmt| {
+                matches!(
+                    stmt,
+                    RStmt::Assign {
+                        expr: RExpr::Binary {
+                            op: BinOp::Arith(ArithBinOp::Add),
+                            ..
+                        } | RExpr::Call { .. },
+                        ..
+                    }
+                )
+            }),
+        "checked overflow expression should survive semantic const canonicalization and lower to executable rMIR arithmetic:\n{body:#?}"
     );
 }

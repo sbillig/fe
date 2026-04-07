@@ -73,7 +73,7 @@ fn array_literals_store_each_constant_index_before_load() {
         .iter()
         .flat_map(|block| block.stmts.iter())
         .filter_map(|stmt| match stmt {
-            RStmt::Store { dst, .. } if dst.root == PlaceRoot::Handle(array_alloc) => {
+            RStmt::Store { dst, .. } if dst.root == PlaceRoot::Ref(array_alloc) => {
                 match dst.path.as_ref() {
                     [PlaceElem::Index(IndexSource::Constant(idx))] => Some(*idx),
                     _ => None,
@@ -99,7 +99,7 @@ fn array_literals_store_each_constant_index_before_load() {
                     RStmt::Assign {
                         expr: RExpr::Load { place },
                         ..
-                    } if place.root == PlaceRoot::Handle(array_alloc) && place.path.is_empty()
+                    } if place.root == PlaceRoot::Ref(array_alloc) && place.path.is_empty()
                 )
             }),
         "expected array aggregate lowering to load the populated object back into the value local",

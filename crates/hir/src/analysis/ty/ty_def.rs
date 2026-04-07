@@ -24,7 +24,7 @@ use smallvec::SmallVec;
 
 use super::{
     adt_def::{AdtDef, adt_layout_hole_plan_with_explicit_args, instantiated_adt_field_ty},
-    const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
+    const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy, TypePrintMode},
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     effects::place_effect_provider_param_index_map,
     fold::{TyFoldable, TyFolder},
@@ -205,23 +205,31 @@ impl<'db> TyId<'db> {
 
     #[salsa::tracked(return_ref)]
     pub fn pretty_print(self, db: &'db dyn HirAnalysisDb) -> String {
+        self.pretty_print_with_mode(db, TypePrintMode::Concrete)
+    }
+
+    pub fn pretty_print_with_mode(self, db: &'db dyn HirAnalysisDb, mode: TypePrintMode) -> String {
         match self.data(db) {
             TyData::TyVar(var) => var.pretty_print(),
             TyData::TyParam(param) => param.pretty_print(db),
             TyData::AssocTy(assoc_ty) => {
                 let self_ty = assoc_ty.trait_.self_ty(db);
-                format!("{}::{}", self_ty.pretty_print(db), assoc_ty.name.data(db))
+                format!(
+                    "{}::{}",
+                    self_ty.pretty_print_with_mode(db, mode),
+                    assoc_ty.name.data(db)
+                )
             }
             TyData::QualifiedTy(trait_inst) => {
                 format!(
                     "<{} as {}>",
-                    trait_inst.self_ty(db).pretty_print(db),
+                    trait_inst.self_ty(db).pretty_print_with_mode(db, mode),
                     trait_inst.pretty_print(db, false)
                 )
             }
-            TyData::TyApp(_, _) => pretty_print_ty_app(db, self),
+            TyData::TyApp(_, _) => pretty_print_ty_app(db, self, mode),
             TyData::TyBase(base) => base.pretty_print(db),
-            TyData::ConstTy(const_ty) => const_ty.pretty_print(db),
+            TyData::ConstTy(const_ty) => const_ty.pretty_print_with_mode(db, mode),
             TyData::Never => "!".to_string(),
             TyData::Invalid(cause) => format!("invalid({})", cause.pretty_print(db)),
         }
@@ -1946,7 +1954,11 @@ where
     collector.keys
 }
 
-fn pretty_print_ty_app<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
+fn pretty_print_ty_app<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    mode: TypePrintMode,
+) -> String {
     use PrimTy::*;
     use TyBase::*;
 
@@ -1956,26 +1968,26 @@ fn pretty_print_ty_app<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String
             let Some(inner) = args.first() else {
                 return "mut <missing>".to_string();
             };
-            format!("mut {}", inner.pretty_print(db))
+            format!("mut {}", inner.pretty_print_with_mode(db, mode))
         }
 
         TyData::TyBase(Prim(BorrowRef)) => {
             let Some(inner) = args.first() else {
                 return "ref <missing>".to_string();
             };
-            format!("ref {}", inner.pretty_print(db))
+            format!("ref {}", inner.pretty_print_with_mode(db, mode))
         }
 
         TyData::TyBase(Prim(View)) => {
             let Some(inner) = args.first() else {
                 return "<missing>".to_string();
             };
-            inner.pretty_print(db).to_string()
+            inner.pretty_print_with_mode(db, mode)
         }
 
         TyData::TyBase(Prim(Array)) => {
-            let elem_ty = args[0].pretty_print(db);
-            let len = args[1].pretty_print(db);
+            let elem_ty = args[0].pretty_print_with_mode(db, mode);
+            let len = args[1].pretty_print_with_mode(db, mode);
             format!("[{elem_ty}; {len}]")
         }
 
@@ -1983,10 +1995,10 @@ fn pretty_print_ty_app<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String
             let mut args = args.iter();
             let mut s = ("(").to_string();
             if let Some(first) = args.next() {
-                s.push_str(first.pretty_print(db));
+                s.push_str(&first.pretty_print_with_mode(db, mode));
                 for arg in args {
                     s.push_str(", ");
-                    s.push_str(arg.pretty_print(db));
+                    s.push_str(&arg.pretty_print_with_mode(db, mode));
                 }
             }
             s.push(')');
@@ -2023,10 +2035,10 @@ fn pretty_print_ty_app<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String
             let mut args_iter = args_to_print.iter();
             if let Some(first) = args_iter.next() {
                 s.push('<');
-                s.push_str(first.pretty_print(db));
+                s.push_str(&first.pretty_print_with_mode(db, mode));
                 for arg in args_iter {
                     s.push_str(", ");
-                    s.push_str(arg.pretty_print(db));
+                    s.push_str(&arg.pretty_print_with_mode(db, mode));
                 }
                 s.push('>');
             }

@@ -1941,28 +1941,11 @@ impl<'db> TyChecker<'db> {
                 }?;
 
                 let inferred = match binding {
-                    LocalBinding::EffectParam {
-                        site: EffectParamSite::Func(binding_func),
-                        idx,
-                        ..
-                    } => {
-                        let super::BodyOwner::Func(current_func) = self.env.owner() else {
-                            return Some(self.table.fold_ty(self.db, provider.ty));
-                        };
-                        if binding_func != current_func {
-                            return Some(self.table.fold_ty(self.db, provider.ty));
-                        }
-                        let provider_idx =
-                            place_effect_provider_param_index_map(self.db, current_func)
-                                .get(idx)
-                                .copied()
-                                .flatten()?;
-                        CallableDef::Func(current_func)
-                            .params(self.db)
-                            .get(provider_idx)
-                            .copied()?
-                    }
-                    LocalBinding::EffectParam { .. } => provider.ty,
+                    LocalBinding::EffectParam { site, idx, .. } => self
+                        .env
+                        .resolved_provider_binding(site, idx)
+                        .map(|binding| binding.provider_ty)
+                        .unwrap_or(provider.ty),
                     LocalBinding::Param {
                         site: ParamSite::EffectField(effect_site),
                         ..

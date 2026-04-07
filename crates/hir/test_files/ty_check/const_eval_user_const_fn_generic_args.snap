@@ -45,7 +45,7 @@ note:
   ┌─ const_eval_user_const_fn_generic_args.fe:8:9
   │
 8 │     let a: Foo
-  │         ^ Foo<add(1, 2)>
+  │         ^ Foo<3>
 
 note: 
   ┌─ const_eval_user_const_fn_generic_args.fe:9:9

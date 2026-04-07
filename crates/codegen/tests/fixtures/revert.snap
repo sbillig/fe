@@ -3,7 +3,120 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/revert.fe
 ---
-function $fail__Evm_hef0af3106e109414__3af54274b2985741() {
-  mstore(0, 42)
-  revert(0, 32)
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let v0 := 0
+      v0 := 0
+      $fail(v0)
+      stop()
+    }
+    function $fail($RawOps) {
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 0))
+      let r4 := mload(0x40)
+      if iszero(r4) {
+        r4 := 0x80
+      }
+      mstore(0x40, add(r4, 32))
+      let r5 := mload(0x40)
+      if iszero(r5) {
+        r5 := 0x80
+      }
+      mstore(0x40, add(r5, 32))
+      let r6 := mload(0x40)
+      if iszero(r6) {
+        r6 := 0x80
+      }
+      mstore(0x40, add(r6, 0))
+      let v7 := 0
+      let v8 := 0
+      let v10 := 0
+      let v11 := 0
+      let v13 := 0
+      let v14 := 0
+      let v16 := 0
+      let v17 := 0
+      v7 := 0x00
+      mstore(r1, v7)
+      v8 := 0x2a
+      mstore(r2, v8)
+      v10 := $RawOps
+      v11 := $RawOps
+      $mstore(v11, mload(r1), mload(r2))
+      v13 := 0x00
+      mstore(r4, v13)
+      v14 := 0x20
+      mstore(r5, v14)
+      v16 := $RawOps
+      v17 := $RawOps
+      $revert(v17, mload(r4), mload(r5))
+      invalid()
+    }
+    function $mstore($self, $addr, $value) {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 0))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 0))
+      mstore(r1, $addr)
+      mstore(r2, $value)
+      mstore(mload(r1), mload(r2))
+      leave
+    }
+    function $revert($self, $offset, $len) {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 0))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 0))
+      mstore(r1, $offset)
+      mstore(r2, $len)
+      revert(mload(r1), mload(r2))
+    }
+    $__fe_main_root()
+  }
 }

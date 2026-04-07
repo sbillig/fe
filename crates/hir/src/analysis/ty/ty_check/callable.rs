@@ -172,6 +172,19 @@ impl<'db> Callable<'db> {
         }
     }
 
+    pub fn arg_ty(&self, db: &'db dyn HirAnalysisDb, idx: usize) -> Option<TyId<'db>> {
+        let mut arg = self
+            .callable_def
+            .arg_tys(db)
+            .get(idx)?
+            .instantiate(db, &self.generic_args);
+        if let Some(inst) = self.trait_inst {
+            let mut subst = AssocTySubst::new(inst);
+            arg = arg.fold_with(db, &mut subst);
+        }
+        Some(arg)
+    }
+
     pub fn ty(&self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         let ty = TyId::foldl(db, self.base_ty, &self.generic_args);
         if let Some(inst) = self.trait_inst {

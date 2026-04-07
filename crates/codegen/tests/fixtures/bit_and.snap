@@ -3,7 +3,41 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/bit_and.fe
 ---
-function $bit_and() -> ret {
-  ret := and(and(and(1, 0xffffffffffffffff), and(2, 0xffffffffffffffff)), 0xffffffffffffffff)
-  leave
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let v0 := 0
+      v0 := $bit_and()
+      stop()
+    }
+    function $bit_and() -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let v3 := 0
+      let v4 := 0
+      let v5 := 0
+      v3 := 0x01
+      mstore(r0, v3)
+      v4 := 0x02
+      mstore(r1, v4)
+      v5 := 0x00
+      mstore(r2, v5)
+      ret := and(mload(r2), 0xffffffffffffffff)
+      leave
+    }
+    $__fe_main_root()
+  }
 }

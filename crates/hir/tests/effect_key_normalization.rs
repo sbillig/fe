@@ -593,6 +593,181 @@ fn caller(p: own Ptr<Console>) {
 }
 
 #[test]
+fn inherent_method_calls_keep_effect_provider_generic_slots() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("inherent_method_calls_keep_effect_provider_generic_slots.fe"),
+        r#"
+use std::evm::{Address, Ctx, Evm}
+
+struct Token {}
+
+impl Token {
+    fn mint(self) -> Address uses (ctx: Ctx) {
+        ctx.caller()
+    }
+}
+
+fn caller(token: Token) -> Address uses (evm: mut Evm) {
+    with (Ctx = evm) {
+        token.mint()
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let caller = find_func(&db, top_mod, "caller");
+    let call_expr = find_method_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    eprintln!(
+        "effect_args={:#?}",
+        typed_body
+            .call_effect_args(call_expr)
+            .expect("missing effect args")
+    );
+    let callable = typed_body
+        .callable_expr(call_expr)
+        .expect("missing method callable");
+    let CallableDef::Func(method) = callable.callable_def() else {
+        panic!("expected inherent method callable");
+    };
+    let provider_idx = place_effect_provider_param_index_map(&db, method)
+        .first()
+        .copied()
+        .flatten()
+        .expect("missing provider param slot for method effect");
+    assert_eq!(
+        callable
+            .generic_args()
+            .get(provider_idx)
+            .expect("method callable missing provider generic arg")
+            .pretty_print(&db)
+            .to_string(),
+        "Evm",
+    );
+}
+
+#[test]
+fn generic_inherent_method_calls_keep_effect_provider_generic_slots() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("generic_inherent_method_calls_keep_effect_provider_generic_slots.fe"),
+        r#"
+use std::evm::{Address, Ctx, Evm, StorageMap}
+
+struct Token<const BAL: u256, const ALLOW: u256> {
+    balances: StorageMap<Address, u256>,
+    allowances: StorageMap<(Address, Address), u256>,
+}
+
+impl<const BAL: u256, const ALLOW: u256> Token<BAL, ALLOW> {
+    fn mint(self) -> Address uses (ctx: Ctx) {
+        ctx.caller()
+    }
+}
+
+fn caller(token: Token<0, 1>) -> Address uses (evm: mut Evm) {
+    with (Ctx = evm) {
+        token.mint()
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let caller = find_func(&db, top_mod, "caller");
+    let call_expr = find_method_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    eprintln!(
+        "effect_args={:#?}",
+        typed_body
+            .call_effect_args(call_expr)
+            .expect("missing effect args")
+    );
+    let callable = typed_body
+        .callable_expr(call_expr)
+        .expect("missing method callable");
+    eprintln!(
+        "effect_args={:#?}",
+        typed_body
+            .call_effect_args(call_expr)
+            .expect("missing effect args")
+    );
+    let CallableDef::Func(method) = callable.callable_def() else {
+        panic!("expected inherent method callable");
+    };
+    let provider_idx = place_effect_provider_param_index_map(&db, method)
+        .first()
+        .copied()
+        .flatten()
+        .expect("missing provider param slot for method effect");
+    assert_eq!(
+        callable
+            .generic_args()
+            .get(provider_idx)
+            .expect("method callable missing provider generic arg")
+            .pretty_print(&db)
+            .to_string(),
+        "Evm",
+    );
+}
+
+#[test]
+fn forwarded_inherent_method_calls_keep_effect_provider_generic_slots() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("forwarded_inherent_method_calls_keep_effect_provider_generic_slots.fe"),
+        r#"
+use std::evm::{Address, Ctx, StorageMap}
+
+struct Token<const BAL: u256, const ALLOW: u256> {
+    balances: StorageMap<Address, u256>,
+    allowances: StorageMap<(Address, Address), u256>,
+}
+
+impl<const BAL: u256, const ALLOW: u256> Token<BAL, ALLOW> {
+    fn mint(self) -> Address uses (ctx: Ctx) {
+        ctx.caller()
+    }
+}
+
+fn caller(token: Token<0, 1>) -> Address uses (ctx: Ctx) {
+    token.mint()
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let caller = find_func(&db, top_mod, "caller");
+    let call_expr = find_method_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    let callable = typed_body
+        .callable_expr(call_expr)
+        .expect("missing method callable");
+    let CallableDef::Func(method) = callable.callable_def() else {
+        panic!("expected inherent method callable");
+    };
+    let provider_idx = place_effect_provider_param_index_map(&db, method)
+        .first()
+        .copied()
+        .flatten()
+        .expect("missing provider param slot for method effect");
+    let provider_arg = callable
+        .generic_args()
+        .get(provider_idx)
+        .expect("method callable missing provider generic arg");
+    assert_ne!(
+        provider_arg.pretty_print(&db).to_string(),
+        "Self",
+        "forwarded method call should not reuse the impl self slot for its effect provider",
+    );
+}
+
+#[test]
 fn keyed_trait_effects_do_not_accept_target_type_only_matches() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(

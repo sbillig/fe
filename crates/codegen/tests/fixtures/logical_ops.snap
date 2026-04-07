@@ -3,7 +3,39 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/logical_ops.fe
 ---
-function $logical_ops() -> ret {
-  ret := and(1, 0)
-  leave
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let v0 := 0
+      v0 := $logical_ops()
+      stop()
+    }
+    function $logical_ops() -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let v3 := 0
+      let v4 := 0
+      v3 := 1
+      mstore(r0, v3)
+      v4 := 0
+      mstore(r1, v4)
+      mstore(r2, iszero(iszero(and(iszero(iszero(iszero(iszero(mload(r0))))), iszero(iszero(iszero(iszero(mload(r1)))))))))
+      ret := iszero(iszero(mload(r2)))
+      leave
+    }
+    $__fe_main_root()
+  }
 }

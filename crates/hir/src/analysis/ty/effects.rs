@@ -1,23 +1,18 @@
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution::PathRes;
 use crate::analysis::ty::const_ty::{
-    ConstTyData, HoleId, LocalFrameId, StructuralHoleOrigin, const_ty_from_trait_const,
-    normalize_const_tys_for_comparison,
+    ConstCanonEnv, ConstCanonMode, ConstTyData, HoleId, LocalFrameId, StructuralHoleOrigin,
+    canonicalize_trait_inst_for_mode, canonicalize_ty_for_mode,
 };
 use crate::analysis::ty::fold::{AssocTySubst, TyFoldable, TyFolder};
 use crate::analysis::ty::layout_holes::layout_hole_with_fallback_ty;
-use crate::analysis::ty::normalize::normalize_ty;
 use crate::analysis::ty::trait_def::TraitInstId;
 use crate::analysis::ty::trait_resolution::PredicateListId;
-use crate::analysis::ty::trait_resolution::TraitSolveCx;
-use crate::analysis::ty::ty_def::{InvalidCause, TyBase, TyData, TyId};
-use crate::analysis::ty::ty_lower::{
-    ConstDefaultCompletion, collect_generic_params, func_implicit_param_plan,
-};
+use crate::analysis::ty::ty_def::{TyBase, TyData, TyId};
+use crate::analysis::ty::ty_lower::{collect_generic_params, func_implicit_param_plan};
 use crate::core::hir_def::GenericParamOwner;
 use crate::hir_def::scope_graph::ScopeId;
 use crate::hir_def::{CallableDef, Func, PathId};
-use common::indexmap::IndexMap;
 
 pub mod elaborate;
 pub mod match_;
@@ -75,45 +70,6 @@ impl<'db> ResolvedEffectKey<'db> {
     }
 }
 
-fn complete_effect_identity_default_args<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: TyId<'db>,
-    assumptions: PredicateListId<'db>,
-) -> TyId<'db> {
-    let (base, args) = ty.decompose_ty_app(db);
-    let TyData::TyBase(base_ty) = base.data(db) else {
-        return ty;
-    };
-    let (param_set, trait_self) = match base_ty {
-        TyBase::Adt(adt) => match adt.as_generic_param_owner(db) {
-            Some(owner) => (collect_generic_params(db, owner), None),
-            None => return ty,
-        },
-        TyBase::Func(func) => match *func {
-            CallableDef::Func(def) => (collect_generic_params(db, def.into()), None),
-            CallableDef::VariantCtor(_) => return ty,
-        },
-        _ => return ty,
-    };
-    let explicit_offset = param_set.offset_to_explicit_params_position(db);
-    if args.len() <= explicit_offset {
-        return ty;
-    }
-    let completed_args = param_set.complete_explicit_args(
-        db,
-        trait_self,
-        &args[explicit_offset..],
-        assumptions,
-        ConstDefaultCompletion::evaluate(None),
-    );
-    if completed_args.len() == args.len().saturating_sub(explicit_offset) {
-        return ty;
-    }
-    let mut full_args = args[..explicit_offset].to_vec();
-    full_args.extend(completed_args);
-    TyId::foldl(db, base, &full_args)
-}
-
 pub(crate) fn canonicalize_effect_type_key<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
@@ -123,18 +79,18 @@ pub(crate) fn canonicalize_effect_type_key<'db>(
     mode: EffectKeyCanonMode,
 ) -> TyId<'db> {
     match mode {
-        EffectKeyCanonMode::Stored => {
-            if let Some(inst) = assoc_ty_subst {
-                let mut substituter = AssocTySubst::new(inst);
-                ty.fold_with(db, &mut substituter)
-            } else {
-                ty
-            }
-        }
-        EffectKeyCanonMode::Solver | EffectKeyCanonMode::Compare => {
-            let ty = complete_effect_identity_default_args(db, ty, assumptions);
-            normalize_effect_identity_ty(db, ty, scope, assumptions, assoc_ty_subst)
-        }
+        EffectKeyCanonMode::Stored => canonicalize_ty_for_mode(
+            db,
+            ty,
+            ConstCanonEnv::new(scope, assumptions, assoc_ty_subst),
+            ConstCanonMode::Stored,
+        ),
+        EffectKeyCanonMode::Solver | EffectKeyCanonMode::Compare => canonicalize_ty_for_mode(
+            db,
+            ty,
+            ConstCanonEnv::new(scope, assumptions, assoc_ty_subst),
+            ConstCanonMode::Identity,
+        ),
     }
 }
 
@@ -147,50 +103,18 @@ pub(crate) fn canonicalize_effect_trait_key<'db>(
     mode: EffectKeyCanonMode,
 ) -> TraitInstId<'db> {
     match mode {
-        EffectKeyCanonMode::Stored => {
-            if let Some(inst) = assoc_ty_subst {
-                let mut substituter = AssocTySubst::new(inst);
-                trait_key.fold_with(db, &mut substituter)
-            } else {
-                trait_key
-            }
-        }
+        EffectKeyCanonMode::Stored => canonicalize_trait_inst_for_mode(
+            db,
+            trait_key,
+            ConstCanonEnv::new(scope, assumptions, assoc_ty_subst),
+            ConstCanonMode::Stored,
+        ),
         EffectKeyCanonMode::Solver | EffectKeyCanonMode::Compare => {
-            let original_self = trait_key.self_ty(db);
-            let preserve_self =
-                assoc_ty_subst.is_some_and(|inst| inst.def(db) == trait_key.def(db));
-            let trait_key = if let Some(inst) = assoc_ty_subst {
-                let mut substituter = AssocTySubst::new(inst);
-                trait_key.fold_with(db, &mut substituter)
-            } else {
-                trait_key
-            };
-            let mut args: Vec<TyId<'db>> = trait_key
-                .args(db)
-                .iter()
-                .copied()
-                .map(|ty| canonicalize_effect_type_key(db, ty, scope, assumptions, None, mode))
-                .collect();
-            if preserve_self && let Some(self_ty) = args.first_mut() {
-                *self_ty =
-                    canonicalize_effect_type_key(db, original_self, scope, assumptions, None, mode);
-            }
-            let mut assoc_type_bindings: Vec<_> = trait_key
-                .assoc_type_bindings(db)
-                .iter()
-                .map(|(name, &ty)| {
-                    (
-                        *name,
-                        canonicalize_effect_type_key(db, ty, scope, assumptions, None, mode),
-                    )
-                })
-                .collect();
-            assoc_type_bindings.sort_by(|(lhs, _), (rhs, _)| lhs.data(db).cmp(rhs.data(db)));
-            TraitInstId::new(
+            canonicalize_trait_inst_for_mode(
                 db,
-                trait_key.def(db),
-                args,
-                assoc_type_bindings.into_iter().collect::<IndexMap<_, _>>(),
+                trait_key,
+                ConstCanonEnv::new(scope, assumptions, assoc_ty_subst),
+                ConstCanonMode::Identity,
             )
         }
     }
@@ -442,17 +366,11 @@ pub(crate) fn normalize_effect_identity_ty<'db>(
     assumptions: PredicateListId<'db>,
     assoc_ty_subst: Option<TraitInstId<'db>>,
 ) -> TyId<'db> {
-    let ty = if let Some(inst) = assoc_ty_subst {
-        let mut substituter = AssocTySubst::new(inst);
-        ty.fold_with(db, &mut substituter)
-    } else {
-        ty
-    };
-    let ty = normalize_ty(db, ty, scope, assumptions);
-    normalize_effect_identity_const_tys(
+    canonicalize_ty_for_mode(
         db,
         ty,
-        TraitSolveCx::new(db, scope).with_assumptions(assumptions),
+        ConstCanonEnv::new(scope, assumptions, assoc_ty_subst),
+        ConstCanonMode::Identity,
     )
 }
 
@@ -463,83 +381,10 @@ pub(crate) fn normalize_effect_identity_trait<'db>(
     assumptions: PredicateListId<'db>,
     assoc_ty_subst: Option<TraitInstId<'db>>,
 ) -> TraitInstId<'db> {
-    let original_self = trait_key.self_ty(db);
-    let preserve_self = assoc_ty_subst.is_some_and(|inst| inst.def(db) == trait_key.def(db));
-    let trait_key = if let Some(inst) = assoc_ty_subst {
-        let mut substituter = AssocTySubst::new(inst);
-        trait_key.fold_with(db, &mut substituter)
-    } else {
-        trait_key
-    };
-    let mut args: Vec<TyId<'db>> = trait_key
-        .args(db)
-        .iter()
-        .copied()
-        .map(|ty| normalize_effect_identity_ty(db, ty, scope, assumptions, None))
-        .collect();
-    if preserve_self && let Some(self_ty) = args.first_mut() {
-        *self_ty = normalize_effect_identity_ty(db, original_self, scope, assumptions, None);
-    }
-    let mut assoc_type_bindings: Vec<_> = trait_key
-        .assoc_type_bindings(db)
-        .iter()
-        .map(|(name, &ty)| {
-            (
-                *name,
-                normalize_effect_identity_ty(db, ty, scope, assumptions, None),
-            )
-        })
-        .collect();
-    assoc_type_bindings.sort_by(|(lhs, _), (rhs, _)| lhs.data(db).cmp(rhs.data(db)));
-    let assoc_type_bindings: IndexMap<_, _> = assoc_type_bindings.into_iter().collect();
-    TraitInstId::new(db, trait_key.def(db), args, assoc_type_bindings)
-}
-
-fn normalize_effect_identity_const_tys<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: TyId<'db>,
-    solve_cx: TraitSolveCx<'db>,
-) -> TyId<'db> {
-    let ty = normalize_const_tys_for_comparison(db, ty);
-
-    struct ConstFolder<'db> {
-        solve_cx: TraitSolveCx<'db>,
-    }
-
-    impl<'db> TyFolder<'db> for ConstFolder<'db> {
-        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-            let TyData::ConstTy(const_ty) = ty.data(db) else {
-                return ty.super_fold_with(db, self);
-            };
-
-            match const_ty.data(db) {
-                ConstTyData::Abstract(expr, expected_ty) => {
-                    let crate::analysis::ty::const_expr::ConstExpr::TraitConst(assoc) =
-                        expr.data(db)
-                    else {
-                        return ty.super_fold_with(db, self);
-                    };
-
-                    let Some(const_ty) =
-                        const_ty_from_trait_const(db, self.solve_cx, assoc.inst(), assoc.name())
-                    else {
-                        return ty.super_fold_with(db, self);
-                    };
-
-                    let evaluated = const_ty.evaluate(db, Some(*expected_ty));
-                    if matches!(
-                        evaluated.ty(db).invalid_cause(db),
-                        Some(InvalidCause::ConstEvalUnsupported { .. })
-                    ) {
-                        ty.super_fold_with(db, self)
-                    } else {
-                        TyId::const_ty(db, evaluated)
-                    }
-                }
-                _ => ty.super_fold_with(db, self),
-            }
-        }
-    }
-
-    ty.fold_with(db, &mut ConstFolder { solve_cx })
+    canonicalize_trait_inst_for_mode(
+        db,
+        trait_key,
+        ConstCanonEnv::new(scope, assumptions, assoc_ty_subst),
+        ConstCanonMode::Identity,
+    )
 }

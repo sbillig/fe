@@ -5,8 +5,9 @@ use salsa::Update;
 
 use crate::analysis::{
     HirAnalysisDb,
+    semantic::{SemanticInstance, instantiate_with_generic_args},
     ty::{
-        const_ty::{ConstTyData, EvaluatedConstTy},
+        const_ty::{ConstTyData, EvaluatedConstTy, evaluate_type_level_int_const_expr},
         ty_def::{PrimTy, TyBase, TyData, TyId, prim_int_bits},
     },
 };
@@ -136,6 +137,177 @@ pub fn sem_const_from_ty<'db>(
         )),
         ConstTyData::UnEvaluated { ty: None, .. } => None,
     }
+}
+
+#[salsa::tracked]
+pub fn reify_runtime_const<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    value: SemConstId<'db>,
+) -> Option<SemConstId<'db>> {
+    reify_runtime_const_for_ty(db, instance, sem_const_ty(db, value), value)
+}
+
+#[salsa::tracked]
+pub fn reify_runtime_const_for_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    expected_ty: TyId<'db>,
+    value: SemConstId<'db>,
+) -> Option<SemConstId<'db>> {
+    reify_runtime_const_impl(db, instance, value, expected_ty)
+}
+
+fn reify_runtime_const_impl<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    value: SemConstId<'db>,
+    expected_ty: TyId<'db>,
+) -> Option<SemConstId<'db>> {
+    Some(match value.value(db) {
+        SemConstValue::Unit => unit_const(db),
+        SemConstValue::Scalar { ty, value } => {
+            let ty = if ty.pretty_print(db) == "{integer}" {
+                expected_ty
+            } else {
+                ty
+            };
+            match value {
+                SemConstScalar::Bool(value) => bool_const(db, value),
+                SemConstScalar::Int { value } => int_const(db, ty, value.clone()),
+                SemConstScalar::Bytes(bytes) => bytes_const(db, ty, bytes.clone()),
+            }
+        }
+        SemConstValue::TypeLevel { ty, const_ty } => {
+            let ty = if ty.pretty_print(db) == "{integer}" {
+                expected_ty
+            } else {
+                ty
+            };
+            let instantiated = instantiate_with_generic_args(
+                db,
+                const_ty,
+                instance.key(db).subst(db).generic_args(db),
+            );
+            let TyData::ConstTy(const_ty) = instantiated.data(db) else {
+                return None;
+            };
+            let mut evaluated = const_ty.evaluate(db, Some(ty));
+            if let ConstTyData::Abstract(expr, expected_ty) = evaluated.data(db)
+                && let Some(concrete) = evaluate_type_level_int_const_expr(db, *expr, *expected_ty)
+            {
+                evaluated = concrete;
+            }
+            if matches!(evaluated.data(db), ConstTyData::Abstract(..)) {
+                let instantiated = instantiate_with_generic_args(
+                    db,
+                    TyId::const_ty(db, evaluated),
+                    instance.key(db).subst(db).generic_args(db),
+                );
+                let TyData::ConstTy(instantiated) = instantiated.data(db) else {
+                    unreachable!("instantiating a const ty must yield a const ty");
+                };
+                evaluated = instantiated.evaluate(db, Some(ty));
+                if let ConstTyData::Abstract(expr, expected_ty) = evaluated.data(db)
+                    && let Some(concrete) =
+                        evaluate_type_level_int_const_expr(db, *expr, *expected_ty)
+                {
+                    evaluated = concrete;
+                }
+            }
+            let value = sem_const_from_ty(db, TyId::const_ty(db, evaluated))?;
+            if matches!(value.value(db), SemConstValue::TypeLevel { .. }) {
+                return None;
+            }
+            reify_runtime_const_impl(db, instance, value, ty)?
+        }
+        SemConstValue::Tuple { ty: _, elems } => {
+            let ty = expected_ty;
+            let field_tys = ty.field_types(db);
+            if field_tys.len() != elems.len() {
+                return None;
+            }
+            tuple_const(
+                db,
+                ty,
+                elems
+                    .iter()
+                    .copied()
+                    .zip(field_tys)
+                    .map(|(elem, field_ty)| reify_runtime_const_impl(db, instance, elem, field_ty))
+                    .collect::<Option<Vec<_>>>()?
+                    .into_boxed_slice(),
+            )
+        }
+        SemConstValue::Struct { ty: _, fields } => {
+            let ty = expected_ty;
+            let field_tys = ty.field_types(db);
+            if field_tys.len() != fields.len() {
+                return None;
+            }
+            struct_const(
+                db,
+                ty,
+                fields
+                    .iter()
+                    .copied()
+                    .zip(field_tys)
+                    .map(|(field, field_ty)| {
+                        reify_runtime_const_impl(db, instance, field, field_ty)
+                    })
+                    .collect::<Option<Vec<_>>>()?
+                    .into_boxed_slice(),
+            )
+        }
+        SemConstValue::Array { ty: _, elems } => {
+            let ty = expected_ty;
+            let (_, args) = ty.decompose_ty_app(db);
+            let elem_ty = args.first().copied()?;
+            array_const(
+                db,
+                ty,
+                elems
+                    .iter()
+                    .copied()
+                    .map(|elem| reify_runtime_const_impl(db, instance, elem, elem_ty))
+                    .collect::<Option<Vec<_>>>()?
+                    .into_boxed_slice(),
+            )
+        }
+        SemConstValue::Enum {
+            ty: _,
+            variant,
+            fields,
+        } => {
+            let ty = expected_ty;
+            let enum_ = ty.as_enum(db)?;
+            let args = ty.generic_args(db);
+            let field_tys = enum_
+                .variants(db)
+                .nth(variant.0 as usize)?
+                .field_tys(db)
+                .into_iter()
+                .map(|field| field.instantiate(db, args))
+                .collect::<Vec<_>>();
+            if field_tys.len() != fields.len() {
+                return None;
+            }
+            enum_const(
+                db,
+                ty,
+                variant,
+                fields
+                    .iter()
+                    .copied()
+                    .zip(field_tys)
+                    .map(|(field, field_ty)| {
+                        reify_runtime_const_impl(db, instance, field, field_ty)
+                    })
+                    .collect::<Option<Vec<_>>>()?
+                    .into_boxed_slice(),
+            )
+        }
+    })
 }
 
 pub fn unit_const<'db>(db: &'db dyn HirAnalysisDb) -> SemConstId<'db> {

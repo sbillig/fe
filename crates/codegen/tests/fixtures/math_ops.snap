@@ -3,105 +3,201 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/math_ops.fe
 ---
-function $math_ops() -> ret {
-  let v0 := $checked_sub_u64(10, 3)
-  let v1 := $checked_mul_u64(v0, 2)
-  let v2 := $checked_div_u64(v1, 7)
-  let v3 := $checked_rem_u64(v2, 3)
-  ret := v3
-  leave
-}
-function $checked_div_u64($a, $b) -> ret {
-  $ensure_nonzero_divisor__u64__aee7f05a097ffa16($b)
-  let v0 := and(div(and($a, 0xffffffffffffffff), and($b, 0xffffffffffffffff)), 0xffffffffffffffff)
-  ret := v0
-  leave
-}
-function $checked_mul_u64($a, $b) -> ret {
-  let v0 := $checked_mul_unsigned_impl__u64__aee7f05a097ffa16($a, $b)
-  ret := v0
-  leave
-}
-function $checked_mul_unsigned_impl__u64__aee7f05a097ffa16($a, $b) -> ret {
-  let v0 := $u64_haee7f05a097ffa16_wrappingmul_h64e6b83610cda761_wrapping_mul($a, $b)
-  let v1 := $u64_haee7f05a097ffa16_intword_h9a147c8c32b1323c_to_word($a)
-  let v2 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v1, 0)
-  let v3 := v2
-  if v3 {
-    let v4 := $checked_div_u64(v0, $a)
-    let v5 := $u64_haee7f05a097ffa16_intword_h9a147c8c32b1323c_to_word(v4)
-    let v6 := $u64_haee7f05a097ffa16_intword_h9a147c8c32b1323c_to_word($b)
-    let v7 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v5, v6)
-    let v8 := v7
-    if v8 {
-      revert(0, 0)
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let v0 := 0
+      v0 := $math_ops()
+      stop()
     }
-    ret := v0
-    leave
+    function $div($self, $other) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let v3 := 0
+      mstore(r0, $self)
+      mstore(r1, $other)
+      let t4 := and(div(and(mload(r0), 0xffffffffffffffff), and(mload(r1), 0xffffffffffffffff)), 0xffffffffffffffff)
+      if iszero(and(mload(r1), 0xffffffffffffffff)) {
+        revert(0, 0)
+      }
+      v3 := t4
+      mstore(r2, v3)
+      ret := and(mload(r2), 0xffffffffffffffff)
+      leave
+    }
+    function $math_ops() -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 32))
+      let r4 := mload(0x40)
+      if iszero(r4) {
+        r4 := 0x80
+      }
+      mstore(0x40, add(r4, 32))
+      let r5 := mload(0x40)
+      if iszero(r5) {
+        r5 := 0x80
+      }
+      mstore(0x40, add(r5, 32))
+      let r6 := mload(0x40)
+      if iszero(r6) {
+        r6 := 0x80
+      }
+      mstore(0x40, add(r6, 32))
+      let r7 := mload(0x40)
+      if iszero(r7) {
+        r7 := 0x80
+      }
+      mstore(0x40, add(r7, 32))
+      let r8 := mload(0x40)
+      if iszero(r8) {
+        r8 := 0x80
+      }
+      mstore(0x40, add(r8, 32))
+      let v9 := 0
+      let v10 := 0
+      let v11 := 0
+      let v12 := 0
+      let v13 := 0
+      let v14 := 0
+      let v15 := 0
+      let v16 := 0
+      let v17 := 0
+      v9 := 0x0a
+      mstore(r0, v9)
+      v10 := 0x03
+      mstore(r1, v10)
+      v11 := $sub(and(mload(r0), 0xffffffffffffffff), and(mload(r1), 0xffffffffffffffff))
+      mstore(r2, v11)
+      v12 := 0x02
+      mstore(r3, v12)
+      v13 := $mul(and(mload(r2), 0xffffffffffffffff), and(mload(r3), 0xffffffffffffffff))
+      mstore(r4, v13)
+      v14 := 0x07
+      mstore(r5, v14)
+      v15 := $div(and(mload(r4), 0xffffffffffffffff), and(mload(r5), 0xffffffffffffffff))
+      mstore(r6, v15)
+      v16 := 0x03
+      mstore(r7, v16)
+      v17 := $rem(and(mload(r6), 0xffffffffffffffff), and(mload(r7), 0xffffffffffffffff))
+      mstore(r8, v17)
+      ret := and(mload(r8), 0xffffffffffffffff)
+      leave
+    }
+    function $mul($self, $other) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let v3 := 0
+      mstore(r0, $self)
+      mstore(r1, $other)
+      let t4 := and(mul(and(mload(r0), 0xffffffffffffffff), and(mload(r1), 0xffffffffffffffff)), 0xffffffffffffffff)
+      if and(iszero(iszero(and(mload(r0), 0xffffffffffffffff))), iszero(eq(div(t4, and(mload(r0), 0xffffffffffffffff)), and(mload(r1), 0xffffffffffffffff)))) {
+        revert(0, 0)
+      }
+      v3 := t4
+      mstore(r2, v3)
+      ret := and(mload(r2), 0xffffffffffffffff)
+      leave
+    }
+    function $rem($self, $other) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let v3 := 0
+      mstore(r0, $self)
+      mstore(r1, $other)
+      let t4 := and(mod(and(mload(r0), 0xffffffffffffffff), and(mload(r1), 0xffffffffffffffff)), 0xffffffffffffffff)
+      if iszero(and(mload(r1), 0xffffffffffffffff)) {
+        revert(0, 0)
+      }
+      v3 := t4
+      mstore(r2, v3)
+      ret := and(mload(r2), 0xffffffffffffffff)
+      leave
+    }
+    function $sub($self, $other) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let v3 := 0
+      mstore(r0, $self)
+      mstore(r1, $other)
+      let t4 := and(sub(and(mload(r0), 0xffffffffffffffff), and(mload(r1), 0xffffffffffffffff)), 0xffffffffffffffff)
+      if gt(and(mload(r1), 0xffffffffffffffff), and(mload(r0), 0xffffffffffffffff)) {
+        revert(0, 0)
+      }
+      v3 := t4
+      mstore(r2, v3)
+      ret := and(mload(r2), 0xffffffffffffffff)
+      leave
+    }
+    $__fe_main_root()
   }
-  if iszero(v3) {
-    ret := v0
-    leave
-  }
-}
-function $checked_rem_u64($a, $b) -> ret {
-  $ensure_nonzero_divisor__u64__aee7f05a097ffa16($b)
-  let v0 := and(mod(and($a, 0xffffffffffffffff), and($b, 0xffffffffffffffff)), 0xffffffffffffffff)
-  ret := v0
-  leave
-}
-function $checked_sub_u64($a, $b) -> ret {
-  let v0 := $checked_sub_unsigned_impl__u64__aee7f05a097ffa16($a, $b)
-  ret := v0
-  leave
-}
-function $checked_sub_unsigned_impl__u64__aee7f05a097ffa16($a, $b) -> ret {
-  let v0 := $u64_haee7f05a097ffa16_intword_h9a147c8c32b1323c_to_word($b)
-  let v1 := $u64_haee7f05a097ffa16_intword_h9a147c8c32b1323c_to_word($a)
-  let v2 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v0, v1)
-  let v3 := v2
-  if v3 {
-    revert(0, 0)
-  }
-  let v4 := $u64_haee7f05a097ffa16_wrappingsub_h6880d1ff91f0a556_wrapping_sub($a, $b)
-  ret := v4
-  leave
-}
-function $ensure_nonzero_divisor__u64__aee7f05a097ffa16($b) {
-  let v0 := $u64_haee7f05a097ffa16_intword_h9a147c8c32b1323c_to_word($b)
-  let v1 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0, 0)
-  let v2 := v1
-  if v2 {
-    revert(0, 0)
-  }
-  leave
-}
-function $u256_h3271ca15373d4483_eq_he50383edd273619f_eq($self, $other) -> ret {
-  let v0 := eq($self, $other)
-  ret := v0
-  leave
-}
-function $u256_h3271ca15373d4483_eq_he50383edd273619f_ne($self, $other) -> ret {
-  let v0 := iszero(eq($self, $other))
-  ret := v0
-  leave
-}
-function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt($self, $other) -> ret {
-  let v0 := gt($self, $other)
-  ret := v0
-  leave
-}
-function $u64_haee7f05a097ffa16_intword_h9a147c8c32b1323c_to_word($self) -> ret {
-  ret := $self
-  leave
-}
-function $u64_haee7f05a097ffa16_wrappingmul_h64e6b83610cda761_wrapping_mul($self, $other) -> ret {
-  let v0 := and(mul(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
-  ret := v0
-  leave
-}
-function $u64_haee7f05a097ffa16_wrappingsub_h6880d1ff91f0a556_wrapping_sub($self, $other) -> ret {
-  let v0 := and(sub(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
-  ret := v0
-  leave
 }

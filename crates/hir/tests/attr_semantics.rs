@@ -437,3 +437,76 @@ fn array_repeat_lowering_preserves_array_arity() {
         .expect("expected an array aggregate in semantic lowering");
     assert_eq!(array_aggregate_arity, 4);
 }
+
+#[test]
+fn mut_self_aug_assign_receivers_lower_as_borrow_calls() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "mut_self_aug_assign_receivers_lower_as_borrow_calls.fe".into(),
+        r#"
+pub struct Tower {
+    counts: [u256; 24],
+}
+
+impl Tower {
+    pub fn add(mut self) -> u256 {
+        let mut scan: usize = 24
+        while scan != 0 {
+            scan -= 1
+            if self.counts[scan] != 0 {
+                return self.counts[scan]
+            }
+        }
+        0
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let add = top_mod
+        .all_funcs(&db)
+        .iter()
+        .copied()
+        .find(|func| matches!(func.name(&db), Partial::Present(name) if name.data(&db) == "add"))
+        .expect("expected add method");
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(add)),
+    );
+    let body = instance.body(&db);
+
+    let borrow_dsts = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.stmts.iter())
+        .filter_map(|stmt| match &stmt.kind {
+            SStmtKind::Assign {
+                dst,
+                expr:
+                    SExpr::Borrow {
+                        kind: fe_hir::analysis::ty::ty_def::BorrowKind::Mut,
+                        ..
+                    },
+            } => Some(*dst),
+            SStmtKind::Assign { .. } | SStmtKind::Store { .. } => None,
+        })
+        .collect::<std::collections::HashSet<_>>();
+
+    assert!(
+        body.blocks
+            .iter()
+            .flat_map(|block| block.stmts.iter())
+            .any(|stmt| {
+                matches!(
+                    &stmt.kind,
+                    SStmtKind::Assign {
+                        expr: SExpr::Call { args, .. },
+                        ..
+                    } if args.first().is_some_and(|receiver| borrow_dsts.contains(receiver))
+                )
+            }),
+        "augmented assignment receiver should lower through a synthesized mutable borrow:\n{body:#?}"
+    );
+}

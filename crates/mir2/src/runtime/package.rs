@@ -28,19 +28,19 @@ use crate::{
     },
     runtime::code_region::{code_region_symbol, runtime_code_region_for_manual_root},
     runtime::lower::class::{
-        provider_class_for_target_in_env, runtime_class_for_direct_value_provider_in_env,
+        owner_effect_binding_boundary, provider_class_for_target_in_env,
+        runtime_class_for_direct_value_provider_in_env,
         runtime_class_for_effect_binding_provider_in_env, runtime_param_class,
         runtime_visible_binding_class, top_level_class_for_ty_in_env,
     },
     runtime::lower::layout::RuntimeTypeEnv,
     runtime::{
         AddressSpaceKind, ConstRegionId, ContractEffectArgPlan, ContractFieldBinding,
-        ContractInitAbiPlan, ContractRecvAbiPlan, DispatchArm, DispatchDefault, HandleKind,
-        InitArgsPlan, RExpr, RStmt, ResolvedCodeRegion, RuntimeBuiltin, RuntimeCodeRegion,
-        RuntimeCodeRegionKey, RuntimeFunction, RuntimeFunctionOwner, RuntimeInlineHint,
-        RuntimeInputPlan, RuntimeLinkage, RuntimeObject, RuntimePackage, RuntimePackagePlan,
-        RuntimeReturnPlan, RuntimeSection, RuntimeSectionName, RuntimeSectionRef,
-        RuntimeSyntheticSpec,
+        ContractInitAbiPlan, ContractRecvAbiPlan, DispatchArm, DispatchDefault, InitArgsPlan,
+        RefKind, ResolvedCodeRegion, RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeFunction,
+        RuntimeFunctionOwner, RuntimeInlineHint, RuntimeInputPlan, RuntimeLinkage, RuntimeObject,
+        RuntimePackage, RuntimePackagePlan, RuntimeReturnPlan, RuntimeSection, RuntimeSectionName,
+        RuntimeSectionRef, RuntimeSyntheticSpec,
     },
     verify::verify_runtime_package,
 };
@@ -994,7 +994,12 @@ fn collect_region_embeds<'db>(
         let Some(function) = functions_by_instance.get(instance) else {
             continue;
         };
-        for region in referenced_code_regions(db, function.instance(db)) {
+        for region in function
+            .instance(db)
+            .referenced_code_regions(db)
+            .iter()
+            .copied()
+        {
             let Some(source) = section_refs.get(&region) else {
                 continue;
             };
@@ -1071,70 +1076,18 @@ fn collect_function_root_regions<'db>(
     let mut seen = FxHashSet::default();
     let mut regions = Vec::new();
     for function in functions {
-        for region in referenced_code_regions(db, function.instance(db)) {
+        for region in function
+            .instance(db)
+            .referenced_code_regions(db)
+            .iter()
+            .copied()
+        {
             if seen.insert(region) {
                 regions.push(region);
             }
         }
     }
     regions
-}
-
-fn referenced_code_regions<'db>(
-    db: &'db dyn MirDb,
-    instance: RuntimeInstance<'db>,
-) -> Vec<RuntimeCodeRegion<'db>> {
-    let mut seen = FxHashSet::default();
-    let mut regions = Vec::new();
-    let body = instance.body(db);
-    for block in &body.blocks {
-        for stmt in &block.stmts {
-            if let RStmt::Assign { expr, .. } = stmt {
-                collect_expr_code_regions(expr, &mut seen, &mut regions);
-            }
-        }
-        let _ = &block.terminator;
-    }
-    regions
-}
-
-fn collect_expr_code_regions<'db>(
-    expr: &RExpr<'db>,
-    seen: &mut FxHashSet<RuntimeCodeRegion<'db>>,
-    regions: &mut Vec<RuntimeCodeRegion<'db>>,
-) {
-    let region = match expr {
-        RExpr::Builtin(
-            RuntimeBuiltin::CodeRegionOffset { region } | RuntimeBuiltin::CodeRegionLen { region },
-        ) => Some(*region),
-        RExpr::Use(_)
-        | RExpr::ConstScalar(_)
-        | RExpr::Placeholder { .. }
-        | RExpr::Unary { .. }
-        | RExpr::Binary { .. }
-        | RExpr::Cast { .. }
-        | RExpr::ConstHandle { .. }
-        | RExpr::AllocObject { .. }
-        | RExpr::MaterializeToObject { .. }
-        | RExpr::ProviderFromRaw { .. }
-        | RExpr::WordToRawAddr { .. }
-        | RExpr::ProviderToRaw { .. }
-        | RExpr::AddrOf { .. }
-        | RExpr::Load { .. }
-        | RExpr::Call { .. }
-        | RExpr::EnumMake { .. }
-        | RExpr::EnumTagOfValue { .. }
-        | RExpr::EnumIsVariant { .. }
-        | RExpr::EnumExtract { .. }
-        | RExpr::EnumGetTag { .. }
-        | RExpr::EnumAssertVariantRef { .. }
-        | RExpr::Builtin(_) => None,
-    };
-    if let Some(region) = region
-        && seen.insert(region)
-    {
-        regions.push(region);
-    }
 }
 
 fn semantic_instance_for_root_owner<'db>(
@@ -1310,15 +1263,16 @@ fn contract_effect_arg_plans_for_site<'db>(
                         )?)
                     }
                     ProviderSource::UsesParam { .. } | ProviderSource::RootProvider { .. } => {
-                        let Some(class) = owner_effect_binding_class(db, semantic, binding) else {
+                        let Some(boundary) = owner_effect_binding_boundary(db, semantic, binding)
+                        else {
                             return Err(LowerError::Unsupported(format!(
-                                "missing runtime class for owner effect binding {binding:?} in `{}`",
+                                "missing runtime boundary for owner effect binding {binding:?} in `{}`",
                                 contract_name(db, contract)
                             )));
                         };
                         ContractEffectArgPlan::Placeholder {
                             declared_ty: semantic_binding_ty(db, semantic, binding),
-                            class,
+                            boundary,
                         }
                     }
                 })
@@ -1343,8 +1297,8 @@ pub(crate) fn contract_field_binding<'db>(
         space,
     );
     let kind = match &class {
-        crate::runtime::RuntimeClass::Handle { kind, .. } => kind.clone(),
-        crate::runtime::RuntimeClass::RawAddr { .. } => HandleKind::Provider {
+        crate::runtime::RuntimeClass::Ref { kind, .. } => kind.clone(),
+        crate::runtime::RuntimeClass::RawAddr { .. } => RefKind::Provider {
             provider_ty: TyId::borrow_ref_of(db, field.target_ty),
             space,
         },
@@ -1591,7 +1545,7 @@ fn runtime_function_for_instance<'db>(
             RuntimeLinkage::Private,
             inline_hint_for_semantic(db, semantic),
             RuntimeFunctionOwner::Semantic(semantic),
-            collect_referenced_const_regions(db, instance),
+            instance.referenced_const_regions(db).to_vec(),
         ),
         RuntimeInstanceSource::Synthetic(synthetic) => {
             let spec = synthetic.spec(db).clone();
@@ -1602,7 +1556,7 @@ fn runtime_function_for_instance<'db>(
                 RuntimeLinkage::Private,
                 RuntimeInlineHint::Auto,
                 RuntimeFunctionOwner::Synthetic(spec),
-                collect_referenced_const_regions(db, instance),
+                instance.referenced_const_regions(db).to_vec(),
             )
         }
     }
@@ -1757,35 +1711,6 @@ fn collect_const_regions<'db>(
         }
     }
     regions
-}
-
-fn collect_referenced_const_regions<'db>(
-    db: &'db dyn MirDb,
-    instance: RuntimeInstance<'db>,
-) -> Vec<ConstRegionId<'db>> {
-    let mut seen = FxHashSet::default();
-    let mut regions = Vec::new();
-    let body = instance.body(db);
-    for block in &body.blocks {
-        for stmt in &block.stmts {
-            if let RStmt::Assign { expr, .. } = stmt {
-                collect_expr_const_regions(expr, &mut seen, &mut regions);
-            }
-        }
-    }
-    regions
-}
-
-fn collect_expr_const_regions<'db>(
-    expr: &RExpr<'db>,
-    seen: &mut FxHashSet<ConstRegionId<'db>>,
-    regions: &mut Vec<ConstRegionId<'db>>,
-) {
-    if let RExpr::ConstHandle { region, .. } = expr
-        && seen.insert(*region)
-    {
-        regions.push(*region);
-    }
 }
 
 fn contract_name<'db>(db: &'db dyn MirDb, contract: hir::hir_def::Contract<'db>) -> String {

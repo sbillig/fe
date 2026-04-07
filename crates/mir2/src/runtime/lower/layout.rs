@@ -112,6 +112,15 @@ pub(crate) fn layout_for_ty_in_env<'db>(
     layout_for_ty_in_context(db, ty, env.scope, env.assumptions)
 }
 
+pub(crate) fn layout_for_aggregate_instance_in_env<'db>(
+    db: &'db dyn MirDb,
+    env: RuntimeTypeEnv<'db>,
+    ty: TyId<'db>,
+    field_classes: &[RuntimeClass<'db>],
+) -> LayoutId<'db> {
+    layout_for_aggregate_instance_in_context(db, ty, field_classes, env.scope, env.assumptions)
+}
+
 pub(crate) fn layout_for_ty_in_context<'db>(
     db: &'db dyn MirDb,
     ty: TyId<'db>,
@@ -146,6 +155,60 @@ pub(crate) fn layout_for_ty_in_context<'db>(
                 .into_iter()
                 .map(|field| stored_class_for_ty_in_context(db, field, scope, assumptions))
                 .collect(),
+        }),
+    )
+}
+
+pub(crate) fn layout_for_aggregate_instance_in_context<'db>(
+    db: &'db dyn MirDb,
+    ty: TyId<'db>,
+    field_classes: &[RuntimeClass<'db>],
+    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
+) -> LayoutId<'db> {
+    let ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
+    if ty.as_enum(db).is_some() {
+        panic!("aggregate instance layout requested for enum type");
+    }
+    if ty.is_array(db) {
+        let (_, args) = ty.decompose_ty_app(db);
+        let elem_ty = args.first().copied().expect("array element type");
+        let len = ty.array_len(db).expect("array length") as usize;
+        assert_eq!(
+            len,
+            field_classes.len(),
+            "aggregate instance arity mismatch for array type {}",
+            ty.pretty_print(db),
+        );
+        let elem = field_classes
+            .first()
+            .cloned()
+            .unwrap_or_else(|| stored_class_for_ty_in_context(db, elem_ty, scope, assumptions));
+        assert!(
+            field_classes.iter().all(|class| class == &elem),
+            "array aggregate instance requires homogeneous runtime element classes: ty={} field_classes={field_classes:?}",
+            ty.pretty_print(db),
+        );
+        return LayoutId::new(
+            db,
+            LayoutKey::Array(ArrayLayout {
+                source_ty: ty,
+                elem,
+                len: len as u64,
+            }),
+        );
+    }
+    assert_eq!(
+        ty.field_types(db).len(),
+        field_classes.len(),
+        "aggregate instance arity mismatch for struct/tuple type {}",
+        ty.pretty_print(db),
+    );
+    LayoutId::new(
+        db,
+        LayoutKey::Struct(StructLayout {
+            source_ty: ty,
+            fields: field_classes.to_vec().into_boxed_slice(),
         }),
     )
 }

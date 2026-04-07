@@ -222,11 +222,10 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         class: &mir2::RuntimeClass<'db>,
     ) -> Result<usize, YulError> {
         Ok(match class {
-            mir2::RuntimeClass::Scalar(_) | mir2::RuntimeClass::RawAddr { .. } => {
-                self.index.package_layout().word_size_bytes
-            }
-            mir2::RuntimeClass::AggregateValue { layout }
-            | mir2::RuntimeClass::Handle { layout, .. } => {
+            mir2::RuntimeClass::Scalar(_)
+            | mir2::RuntimeClass::Ref { .. }
+            | mir2::RuntimeClass::RawAddr { .. } => self.index.package_layout().word_size_bytes,
+            mir2::RuntimeClass::AggregateValue { layout } => {
                 layout_size_bytes(self.db, *layout, self.index.package_layout())
             }
         })
@@ -308,7 +307,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                     Ok(name.to_string())
                 } else {
                     let root = self.root_slot_name(local)?;
-                    Ok(format!("mload({root})"))
+                    Ok(self.render_word_slot_load(root, &class))
                 }
             }
             _ => Err(YulError::InvalidYulPackage(format!(
@@ -324,7 +323,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         } else {
             let root = self.root_slot_name(local)?;
             match class {
-                YulValueClass::Word(_) => format!("mload({root})"),
+                YulValueClass::Word(_) => self.render_word_slot_load(root, &class),
                 YulValueClass::MemoryPtr { .. } => root.to_string(),
                 YulValueClass::CodePtr { .. }
                 | YulValueClass::StoragePtr { .. }
@@ -337,6 +336,13 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
             value,
             class,
         })
+    }
+
+    fn render_word_slot_load(&self, root: &str, class: &YulValueClass<'db>) -> String {
+        let YulValueClass::Word(word) = class else {
+            unreachable!("word slot load requires a word class");
+        };
+        self.canonicalize_scalar_expr(format!("mload({root})"), word)
     }
 
     pub(super) fn root_space_for_class(
@@ -367,8 +373,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
             docs.push(YulDoc::line(format!("{name} := {}", src.value)));
             return Ok(docs);
         }
-        let mut docs = src.setup.clone();
-        docs.extend(self.write_place_from_value(
+        self.write_place_from_value(
             YulPlace {
                 root: YulPlaceRoot::Slot(local),
                 path: Box::default(),
@@ -378,7 +383,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                             crate::yul::legalize::YulStorageKind::Bytes
                         }
                         mir2::RuntimeClass::Scalar(_)
-                        | mir2::RuntimeClass::Handle { .. }
+                        | mir2::RuntimeClass::Ref { .. }
                         | mir2::RuntimeClass::RawAddr { .. } => {
                             crate::yul::legalize::YulStorageKind::Cell
                         }
@@ -403,7 +408,6 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 result_class: class.clone(),
             },
             src,
-        )?);
-        Ok(docs)
+        )
     }
 }

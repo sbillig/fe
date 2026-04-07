@@ -26,7 +26,7 @@ use crate::{
             ty_def::{PrimTy, TyBase, TyData, TyId},
         },
     },
-    hir_def::{ArithBinOp, BinOp, CompBinOp, UnOp},
+    hir_def::{ArithBinOp, BinOp, CompBinOp, UnOp, attr::ArithmeticMode},
 };
 
 use super::ops::{project_const, store_const};
@@ -62,6 +62,12 @@ pub enum CtfeError<'db> {
         origin: SemOrigin<'db>,
     },
     DivisionByZero {
+        origin: SemOrigin<'db>,
+    },
+    ArithmeticOverflow {
+        origin: SemOrigin<'db>,
+    },
+    NegativeExponent {
         origin: SemOrigin<'db>,
     },
     OutOfBounds {
@@ -124,6 +130,28 @@ pub fn eval_body_owner_const<'db>(
         ImplEnv::empty(db, owner.scope()),
     );
     eval_const_instance(db, get_or_build_semantic_instance(db, key))
+}
+
+#[salsa::tracked]
+pub fn eval_body_owner_const_with_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+    generic_args: Vec<crate::analysis::ty::ty_def::TyId<'db>>,
+    args: Vec<SemConstId<'db>>,
+) -> Result<SemConstId<'db>, CtfeError<'db>> {
+    let key = SemanticInstanceKey::new(
+        db,
+        owner,
+        GenericSubst::new(db, generic_args),
+        ImplEnv::empty(db, owner.scope()),
+    );
+    let instance = get_or_build_semantic_instance(db, key);
+    let mut machine = CtfeMachine::new(db, CtfeConfig::default());
+    machine.eval_root(
+        instance,
+        args.into_iter().map(CtfeValue::Value).collect(),
+        SemOrigin::Body(owner),
+    )
 }
 
 pub(super) fn try_eval_expr_to_const<'db>(
@@ -923,11 +951,24 @@ impl<'db> CtfeMachine<'db> {
     ) -> Result<CtfeValue<'db>, CtfeError<'db>> {
         match op {
             UnOp::Plus => Ok(CtfeValue::Value(value)),
-            UnOp::Minus => Ok(CtfeValue::Value(int_const(
-                self.db,
-                result_ty,
-                -self.expect_int(frame_idx, value, origin)?,
-            ))),
+            UnOp::Minus => {
+                let value = self.expect_int(frame_idx, value, origin)?;
+                let value = match self.frames[frame_idx]
+                    .body
+                    .template_owner
+                    .arithmetic_mode(self.db)
+                {
+                    ArithmeticMode::Checked => {
+                        let value = -value;
+                        if !self.int_in_range(result_ty, &value) {
+                            return Err(CtfeError::ArithmeticOverflow { origin });
+                        }
+                        value
+                    }
+                    ArithmeticMode::Unchecked => -value,
+                };
+                Ok(CtfeValue::Value(int_const(self.db, result_ty, value)))
+            }
             UnOp::Not => Ok(CtfeValue::Value(bool_const(
                 self.db,
                 !self.expect_bool(value, origin)?,
@@ -972,13 +1013,48 @@ impl<'db> CtfeMachine<'db> {
                 }
                 let lhs = self.expect_int(frame_idx, lhs, origin)?;
                 let rhs = self.expect_int(frame_idx, rhs, origin)?;
+                let arithmetic_mode = self.frames[frame_idx]
+                    .body
+                    .template_owner
+                    .arithmetic_mode(self.db);
                 let value = match arith {
-                    ArithBinOp::Add => lhs + rhs,
-                    ArithBinOp::Sub => lhs - rhs,
-                    ArithBinOp::Mul => lhs * rhs,
+                    ArithBinOp::Add => {
+                        let value = lhs + rhs;
+                        if arithmetic_mode == ArithmeticMode::Checked
+                            && !self.int_in_range(result_ty, &value)
+                        {
+                            return Err(CtfeError::ArithmeticOverflow { origin });
+                        }
+                        value
+                    }
+                    ArithBinOp::Sub => {
+                        let value = lhs - rhs;
+                        if arithmetic_mode == ArithmeticMode::Checked
+                            && !self.int_in_range(result_ty, &value)
+                        {
+                            return Err(CtfeError::ArithmeticOverflow { origin });
+                        }
+                        value
+                    }
+                    ArithBinOp::Mul => {
+                        let value = lhs * rhs;
+                        if arithmetic_mode == ArithmeticMode::Checked
+                            && !self.int_in_range(result_ty, &value)
+                        {
+                            return Err(CtfeError::ArithmeticOverflow { origin });
+                        }
+                        value
+                    }
                     ArithBinOp::Div => {
                         if rhs.is_zero() {
                             return Err(CtfeError::DivisionByZero { origin });
+                        }
+                        if arithmetic_mode == ArithmeticMode::Checked
+                            && let Some((bits, true)) = int_ty_shape(self.db, result_ty)
+                            && lhs == -(BigInt::one() << (usize::from(bits) - 1))
+                            && rhs == -BigInt::one()
+                        {
+                            return Err(CtfeError::ArithmeticOverflow { origin });
                         }
                         lhs / rhs
                     }
@@ -989,11 +1065,40 @@ impl<'db> CtfeMachine<'db> {
                         lhs % rhs
                     }
                     ArithBinOp::Pow => {
-                        let exp = rhs.to_u32().ok_or(CtfeError::InvalidOperation {
-                            origin,
-                            message: "invalid power exponent".into(),
-                        })?;
-                        lhs.pow(exp)
+                        if rhs.sign() == num_bigint::Sign::Minus {
+                            return Err(CtfeError::NegativeExponent { origin });
+                        }
+                        let Some(exp) = rhs.to_biguint() else {
+                            return Err(CtfeError::NegativeExponent { origin });
+                        };
+                        if arithmetic_mode == ArithmeticMode::Checked {
+                            let mut acc = BigInt::one();
+                            let mut base = lhs;
+                            let mut exp = exp;
+                            while !exp.is_zero() {
+                                if (&exp & num_bigint::BigUint::one()) == num_bigint::BigUint::one()
+                                {
+                                    acc *= base.clone();
+                                    if !self.int_in_range(result_ty, &acc) {
+                                        return Err(CtfeError::ArithmeticOverflow { origin });
+                                    }
+                                }
+                                exp >>= 1usize;
+                                if exp.is_zero() {
+                                    break;
+                                }
+                                base = base.clone() * base;
+                                if !self.int_in_range(result_ty, &base) {
+                                    return Err(CtfeError::ArithmeticOverflow { origin });
+                                }
+                            }
+                            acc
+                        } else {
+                            lhs.pow(exp.to_u32().ok_or(CtfeError::InvalidOperation {
+                                origin,
+                                message: "invalid power exponent".into(),
+                            })?)
+                        }
                     }
                     ArithBinOp::LShift => {
                         lhs << rhs.to_usize().ok_or(CtfeError::InvalidOperation {
@@ -1080,6 +1185,20 @@ impl<'db> CtfeMachine<'db> {
         let lhs = normalize_int_to_shape(lhs, bits, false);
         let rhs = normalize_int_to_shape(rhs, bits, false);
         Ok(normalize_int_to_shape(op(lhs, rhs), bits, signed))
+    }
+
+    fn int_in_range(&self, result_ty: TyId<'db>, value: &BigInt) -> bool {
+        let Some((bits, signed)) = int_ty_shape(self.db, result_ty) else {
+            return true;
+        };
+        if signed {
+            let half = BigInt::one() << (usize::from(bits) - 1);
+            let min = -half.clone();
+            let max = half - BigInt::one();
+            value >= &min && value <= &max
+        } else {
+            value >= &BigInt::zero() && value < &(BigInt::one() << usize::from(bits))
+        }
     }
 
     fn eval_cast(

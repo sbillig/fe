@@ -1,32 +1,70 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 33
 expression: output
 input_file: tests/fixtures/tuple_construction.fe
 ---
-function $make_tuple() -> ret {
-  let v0 := mload(0x40)
-  if iszero(v0) {
-    v0 := 0x80
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let v0 := 0
+      v0 := $access_tuple()
+      stop()
+    }
+    function $access_tuple() -> ret {
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 32))
+      let v0 := 0
+      let v4 := 0
+      let v5 := 0
+      let v6 := 0
+      let v7 := 0
+      let v8 := 0
+      let v9 := 0
+      let v10 := 0
+      let v11 := 0
+      let v12 := 0
+      let v13 := 0
+      let v14 := 0
+      let v15 := 0
+      let v16 := 0
+      let v17 := 0
+      let v18 := 0
+      let v19 := 0
+      v6 := 0x01
+      mstore(r1, v6)
+      v7 := 0x02
+      mstore(r2, v7)
+      v8 := 0x03
+      mstore(r3, v8)
+      v9 := 0x01
+      v10 := 0x02
+      v11 := 0x03
+      v12 := dataoffset("const_0")
+      v4 := v12
+      v14 := 0x01
+      v15 := 0x02
+      v16 := 0x03
+      v17 := dataoffset("const_0")
+      v0 := v17
+      v19 := 0x02
+      v5 := v19
+      ret := v5
+      leave
+    }
+    $__fe_main_root()
   }
-  mstore(0x40, add(v0, 64))
-  mstore(v0, and(42, 0xffffffffffffffff))
-  mstore(add(v0, 32), 99)
-  let v1 := v0
-  ret := v1
-  leave
-}
-function $access_tuple() -> ret {
-  let v0 := mload(0x40)
-  if iszero(v0) {
-    v0 := 0x80
-  }
-  mstore(0x40, add(v0, 96))
-  mstore(v0, 1)
-  mstore(add(v0, 32), 2)
-  mstore(add(v0, 64), 3)
-  let v1 := v0
-  let v2 := mload(add(v1, 32))
-  ret := v2
-  leave
+  data "const_0" hex"000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000003"
 }

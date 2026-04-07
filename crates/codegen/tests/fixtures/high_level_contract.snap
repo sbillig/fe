@@ -5,704 +5,1604 @@ input_file: tests/fixtures/high_level_contract.fe
 ---
 object "EchoContract" {
   code {
-    function $__EchoContract_init() {
-      let v0 := callvalue()
-      let v1 := iszero(eq(v0, 0))
-      if v1 {
-        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+    function $__EchoContract_init_eff0_stor($x, $y, $state) {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
       }
-      let v2 := dataoffset("EchoContract_deployed")
-      let v3 := datasize("EchoContract_deployed")
-      let v4 := $init_field__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d(0)
-      let v5 := datasize("EchoContract")
-      let v6 := codesize()
-      let v7 := lt(v6, v5)
-      if v7 {
-        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+      mstore(0x40, add(r0, 32))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
       }
-      let v8 := sub(v6, v5)
-      let v9 := mload(64)
-      if iszero(v9) {
-        v9 := 0x80
+      mstore(0x40, add(r1, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
       }
-      mstore(64, add(v9, v8))
-      codecopy(v9, v5, v8)
-      let v10 := mload(0x40)
-      if iszero(v10) {
-        v10 := 0x80
+      mstore(0x40, add(r3, 0))
+      let r4 := mload(0x40)
+      if iszero(r4) {
+        r4 := 0x80
       }
-      mstore(0x40, add(v10, 64))
-      mstore(v10, v9)
-      mstore(add(v10, 32), v8)
-      let v11 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v10)
-      let v12 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6(v11)
-      let v13 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6(v11)
-      $__EchoContract_init_contract(v12, v13, v4)
-      codecopy(0, v2, v3)
-      return(0, v3)
-    }
-    function $__EchoContract_init_contract($x, $y, $state) {
-      sstore($state, $x)
-      sstore(add($state, 1), $y)
+      mstore(0x40, add(r4, 0))
+      mstore(r0, $x)
+      mstore(r1, $y)
+      sstore($state, mload(r0))
+      sstore(add($state, div(add(32, 31), 32)), mload(r1))
       leave
     }
-    function $checked_add_u256($a, $b) -> ret {
-      let v0 := $checked_add_unsigned_impl__u256__3271ca15373d4483($a, $b)
-      ret := v0
-      leave
+    function $__fe_contract_init_abi_EchoContract() {
+      let r8 := mload(0x40)
+      if iszero(r8) {
+        r8 := 0x80
+      }
+      mstore(0x40, add(r8, 64))
+      let v0 := 0
+      let v1 := 0
+      let v2 := 0
+      let v3 := 0
+      let v4 := 0
+      let v5 := 0
+      let v6 := 0
+      let v9 := 0
+      let v10 := 0
+      let v11 := 0
+      let v12 := 0
+      let v13 := 0
+      let v14 := 0
+      let v15 := 0
+      let $pc := 0
+      for {} 1 {} {
+        switch $pc
+        case 0 {
+            v0 := 0
+            v1 := callvalue()
+            v2 := iszero(iszero(iszero(eq(v1, v0))))
+            if v2 {
+              $pc := 1
+              continue
+            }
+            $pc := 2
+            continue
+        }
+        case 1 {
+            revert(v0, v0)
+        }
+        case 2 {
+            v3 := datasize("EchoContract_init")
+            v4 := codesize()
+            let t17 := sub(v4, v3)
+            if gt(v3, v4) {
+              revert(0, 0)
+            }
+            v5 := t17
+            v6 := allocate(v5)
+            datacopy(v6, v3, v5)
+            mstore(r8, v6)
+            mstore(add(r8, 32), v5)
+            v9 := $decoder_new(r8)
+            v10 := v9
+            v11 := $decode_2(v10)
+            v12 := v11
+            let t18 := mload(v12)
+            v13 := t18
+            let t19 := mload(add(v12, 32))
+            v14 := t19
+            v15 := 0
+            $__EchoContract_init_eff0_stor(v13, v14, v15)
+            leave
+        }
+        default {
+            invalid()
+        }
+      }
     }
-    function $checked_add_unsigned_impl__u256__3271ca15373d4483($a, $b) -> ret {
-      let v0 := $u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add($a, $b)
-      let v1 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v0)
-      let v2 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($a)
-      let v3 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v1, v2)
-      let v4 := v3
-      if v4 {
+    function $__fe_contract_init_root_EchoContract() {
+      let v0 := 0
+      let v2 := 0
+      let v3 := 0
+      v0 := 0
+      $__fe_contract_init_abi_EchoContract()
+      v2 := dataoffset("EchoContract_runtime")
+      v3 := datasize("EchoContract_runtime")
+      datacopy(v0, v2, v3)
+      return(v0, v3)
+    }
+    function $add_4($self, $other) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let v3 := 0
+      mstore(r0, $self)
+      mstore(r1, $other)
+      let t4 := add(mload(r0), mload(r1))
+      if lt(t4, mload(r0)) {
         revert(0, 0)
       }
-      ret := v0
+      v3 := t4
+      mstore(r2, v3)
+      ret := mload(r2)
       leave
     }
-    function $cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
-      let v0 := mload(0x40)
-      if iszero(v0) {
-        v0 := 0x80
+    function $add_5($self, $other) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
       }
-      mstore(0x40, add(v0, 96))
-      let v1 := $input
-      mstore(v0, mload(v1))
-      mstore(add(v0, 32), mload(add(v1, 32)))
-      mstore(add(v0, 64), 0)
-      ret := v0
-      leave
-    }
-    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
-      revert(0, 0)
-    }
-    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field_arg0_root_mem__Foo_h6dbce71a6ea992b8__21493237fe9c2c26($slot) -> ret {
-      let v0 := $stor_ptr__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d($slot)
-      ret := v0
-      leave
-    }
-    function $init_field__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d($slot) -> ret {
-      let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field_arg0_root_mem__Foo_h6dbce71a6ea992b8__21493237fe9c2c26($slot)
-      ret := v0
-      leave
-    }
-    function $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_len($self) -> ret {
-      let v0 := mload(add($self, 32))
-      ret := v0
-      leave
-    }
-    function $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at($self, $byte_offset) -> ret {
-      let v0 := mload($self)
-      let v1 := add(v0, $byte_offset)
-      let v2 := mload(v1)
-      ret := v2
-      leave
-    }
-    function $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
-      let v0 := $soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input)
-      ret := v0
-      leave
-    }
-    function $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($self) -> ret {
-      let v0 := $self
-      let v1 := $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_len(v0)
-      let v2 := mload(add($self, 64))
-      let v3 := $checked_add_u256(v2, 32)
-      let v4 := v3
-      let v5 := mload(add($self, 64))
-      let v6 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v4, v5)
-      let v7 := v6
-      if v7 {
+      mstore(0x40, add(r0, 32))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let v3 := 0
+      mstore(r0, $self)
+      mstore(r1, $other)
+      let t4 := add(mload(r0), mload(r1))
+      if lt(t4, mload(r0)) {
         revert(0, 0)
       }
-      let v8 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v4, v1)
-      let v9 := v8
-      if v9 {
-        revert(0, 0)
-      }
-      let v10 := mload(add($self, 64))
-      let v11 := $self
-      let v12 := $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at(v11, v10)
-      mstore(add($self, 64), v4)
-      ret := v12
+      v3 := t4
+      mstore(r2, v3)
+      ret := mload(r2)
       leave
     }
-    function $soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
-      let v0 := $cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input)
-      let v1 := mload(0x40)
-      if iszero(v1) {
-        v1 := 0x80
+    function $decode_2($d) -> ret {
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
       }
-      mstore(0x40, add(v1, 128))
-      let v2 := v0
-      mstore(v1, mload(v2))
-      mstore(add(v1, 32), mload(add(v2, 32)))
-      mstore(add(v1, 64), mload(add(v2, 64)))
-      mstore(add(v1, 96), 0)
+      mstore(0x40, add(r2, 32))
+      let r4 := mload(0x40)
+      if iszero(r4) {
+        r4 := 0x80
+      }
+      mstore(0x40, add(r4, 32))
+      let v1 := 0
+      let v3 := 0
+      let v5 := 0
+      let v6 := 0
+      let v7 := 0
+      let v8 := 0
+      let v9 := 0
+      let v10 := 0
+      v6 := $d
+      v1 := v6
+      v7 := $decode_3(v1)
+      mstore(r2, v7)
+      v8 := $d
+      v3 := v8
+      v9 := $decode_3(v3)
+      mstore(r4, v9)
+      v10 := allocate(64)
+      mstore(v10, mload(r2))
+      mstore(add(v10, 32), mload(r4))
+      v5 := v10
+      ret := v5
+      leave
+    }
+    function $decode_3($d) -> ret {
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let v2 := 0
+      v2 := $read_word_1($d)
+      mstore(r1, v2)
+      ret := mload(r1)
+      leave
+    }
+    function $decoder_new($input) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 64))
+      let v1 := 0
+      let v2 := 0
+      mstore(r0, mload($input))
+      mstore(add(r0, 32), mload(add($input, 32)))
+      v2 := $new_1(r0)
+      v1 := v2
       ret := v1
       leave
     }
-    function $stor_ptr__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d($slot) -> ret {
-      let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26($slot)
-      ret := v0
+    function $gt_1($self, $other) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let v3 := 0
+      mstore(r0, $self)
+      mstore(r1, $other)
+      v3 := iszero(iszero(gt(mload(r0), mload(r1))))
+      mstore(r2, v3)
+      ret := iszero(iszero(mload(r2)))
       leave
     }
-    function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26($raw) -> ret {
-      ret := $raw
+    function $len_1($self) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 64))
+      let v1 := 0
+      mstore(r0, mload($self))
+      mstore(add(r0, 32), mload(add($self, 32)))
+      let t2 := mload(add(r0, 32))
+      v1 := t2
+      ret := v1
       leave
     }
-    function $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6($d) -> ret {
-      let v0 := $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($d)
-      ret := v0
+    function $new_1($input) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 64))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let v1 := 0
+      let v3 := 0
+      let v4 := 0
+      let v5 := 0
+      let v6 := 0
+      mstore(r0, mload($input))
+      mstore(add(r0, 32), mload(add($input, 32)))
+      v4 := $new_2(r0)
+      v1 := v4
+      v5 := 0x00
+      mstore(r2, v5)
+      v6 := allocate(128)
+      mstore(v6, mload(v1))
+      mstore(add(v6, 32), mload(add(v1, 32)))
+      mstore(add(v6, 64), mload(add(v1, 64)))
+      mstore(add(v6, 96), mload(r2))
+      v3 := v6
+      ret := v3
       leave
     }
-    function $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($self) -> ret {
-      ret := $self
+    function $new_2($input) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 64))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let v2 := 0
+      let v3 := 0
+      let v4 := 0
+      mstore(r0, mload($input))
+      mstore(add(r0, 32), mload(add($input, 32)))
+      v3 := 0x00
+      mstore(r1, v3)
+      v4 := allocate(96)
+      mstore(v4, mload(r0))
+      mstore(add(v4, 32), mload(add(r0, 32)))
+      mstore(add(v4, 64), mload(r1))
+      v2 := v4
+      ret := v2
       leave
     }
-    function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt($self, $other) -> ret {
-      let v0 := gt($self, $other)
-      ret := v0
+    function $read_word_1($self) -> ret {
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 32))
+      let r6 := mload(0x40)
+      if iszero(r6) {
+        r6 := 0x80
+      }
+      mstore(0x40, add(r6, 32))
+      let r9 := mload(0x40)
+      if iszero(r9) {
+        r9 := 0x80
+      }
+      mstore(0x40, add(r9, 32))
+      let r10 := mload(0x40)
+      if iszero(r10) {
+        r10 := 0x80
+      }
+      mstore(0x40, add(r10, 32))
+      let r11 := mload(0x40)
+      if iszero(r11) {
+        r11 := 0x80
+      }
+      mstore(0x40, add(r11, 0))
+      let r12 := mload(0x40)
+      if iszero(r12) {
+        r12 := 0x80
+      }
+      mstore(0x40, add(r12, 32))
+      let r13 := mload(0x40)
+      if iszero(r13) {
+        r13 := 0x80
+      }
+      mstore(0x40, add(r13, 32))
+      let r14 := mload(0x40)
+      if iszero(r14) {
+        r14 := 0x80
+      }
+      mstore(0x40, add(r14, 32))
+      let r15 := mload(0x40)
+      if iszero(r15) {
+        r15 := 0x80
+      }
+      mstore(0x40, add(r15, 0))
+      let r16 := mload(0x40)
+      if iszero(r16) {
+        r16 := 0x80
+      }
+      mstore(0x40, add(r16, 0))
+      let r21 := mload(0x40)
+      if iszero(r21) {
+        r21 := 0x80
+      }
+      mstore(0x40, add(r21, 32))
+      let r22 := mload(0x40)
+      if iszero(r22) {
+        r22 := 0x80
+      }
+      mstore(0x40, add(r22, 0))
+      let v4 := 0
+      let v5 := 0
+      let v7 := 0
+      let v8 := 0
+      let v17 := 0
+      let v18 := 0
+      let v19 := 0
+      let v20 := 0
+      let v23 := 0
+      let v24 := 0
+      let v25 := 0
+      let v26 := 0
+      let v27 := 0
+      let v28 := 0
+      let v31 := 0
+      let $pc := 0
+      for {} 1 {} {
+        switch $pc
+        case 0 {
+            v4 := $self
+            v5 := $self
+            v23 := $len_1(v5)
+            mstore(r6, v23)
+            mstore(r1, mload(r6))
+            v7 := $self
+            let t32 := mload(add($self, 64))
+            v8 := t32
+            v24 := 0x20
+            mstore(r9, v24)
+            v25 := $add_5(v8, mload(r9))
+            mstore(r10, v25)
+            mstore(r2, mload(r10))
+            v26 := $gt_1(mload(r2), mload(r1))
+            mstore(r12, v26)
+            if iszero(iszero(mload(r12))) {
+              $pc := 1
+              continue
+            }
+            $pc := 2
+            continue
+        }
+        case 1 {
+            v27 := 0x00
+            mstore(r13, v27)
+            v28 := 0x00
+            mstore(r14, v28)
+            revert(mload(r13), mload(r14))
+        }
+        case 2 {
+            $pc := 3
+            continue
+        }
+        case 3 {
+            v17 := $self
+            v18 := $self
+            v19 := $self
+            let t33 := mload(add($self, 64))
+            v20 := t33
+            v31 := $word_at_1(v18, v20)
+            mstore(r21, v31)
+            mstore(r3, mload(r21))
+            mstore(add($self, 64), mload(r2))
+            ret := mload(r3)
+            leave
+        }
+        default {
+            invalid()
+        }
+      }
+    }
+    function $word_at_1($self, $byte_offset) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 64))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 32))
+      let r4 := mload(0x40)
+      if iszero(r4) {
+        r4 := 0x80
+      }
+      mstore(0x40, add(r4, 32))
+      let v2 := 0
+      let v5 := 0
+      let v6 := 0
+      let v7 := 0
+      mstore(r0, mload($self))
+      mstore(add(r0, 32), mload(add($self, 32)))
+      mstore(r1, $byte_offset)
+      let t8 := mload(r0)
+      v2 := t8
+      v5 := $add_4(v2, mload(r1))
+      mstore(r3, v5)
+      v7 := mload(mload(r3))
+      mstore(r4, v7)
+      ret := mload(r4)
       leave
     }
-    function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt($self, $other) -> ret {
-      let v0 := lt($self, $other)
-      ret := v0
-      leave
-    }
-    function $u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add($self, $other) -> ret {
-      let v0 := add($self, $other)
-      ret := v0
-      leave
-    }
-    $__EchoContract_init()
+    $__fe_contract_init_root_EchoContract()
   }
-
-  object "EchoContract_deployed" {
+  object "EchoContract_runtime" {
     code {
       function $__EchoContract_recv_0_0() -> ret {
-        ret := 42
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 32))
+        let v1 := 0
+        v1 := 0x2a
+        mstore(r0, v1)
+        ret := mload(r0)
         leave
       }
-      function $__EchoContract_recv_0_1($args) -> ret {
-        let v0 := $args
-        ret := v0
+      function $__EchoContract_recv_0_1($arg0) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 32))
+        mstore(r0, $arg0)
+        ret := mload(r0)
         leave
       }
-      function $__EchoContract_recv_0_2($state) -> ret {
-        let v0 := sload($state)
-        ret := v0
+      function $__EchoContract_recv_0_2_eff0_stor($state) -> ret {
+        let v1 := 0
+        let t2 := sload($state)
+        v1 := t2
+        ret := v1
         leave
       }
-      function $__EchoContract_runtime() {
-        let v0 := $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
-        let v1 := eq(and(v0, 0xffffffff), and(1, 0xffffffff))
-        if v1 {
-          $__EchoContract_runtime_arm_0_0()
+      function $__fe_contract_recv_abi_EchoContract_1() {
+        let r8 := mload(0x40)
+        if iszero(r8) {
+          r8 := 0x80
         }
-        let v2 := eq(and(v0, 0xffffffff), and(2, 0xffffffff))
-        if v2 {
-          $__EchoContract_runtime_arm_0_1()
-        }
-        let v3 := eq(and(v0, 0xffffffff), and(3, 0xffffffff))
-        if v3 {
-          $__EchoContract_runtime_arm_0_2()
-        }
-        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-      }
-      function $__EchoContract_runtime_arm_0_0() {
-        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Foo_h6dbce71a6ea992b8__21493237fe9c2c26(0)
-        let v1 := callvalue()
-        let v2 := iszero(eq(v1, 0))
-        if v2 {
-          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-        }
-        let v3 := $__EchoContract_recv_0_0()
-        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63(v3)
-      }
-      function $__EchoContract_runtime_arm_0_1() {
-        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Foo_h6dbce71a6ea992b8__21493237fe9c2c26(0)
-        let v1 := callvalue()
-        let v2 := iszero(eq(v1, 0))
-        if v2 {
-          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-        }
-        let v3 := $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2()
-        let v4 := $echo_h9f932a87feb06bd2_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v3)
-        let v5 := $__EchoContract_recv_0_1(v4)
-        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63(v5)
-      }
-      function $__EchoContract_runtime_arm_0_2() {
-        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Foo_h6dbce71a6ea992b8__21493237fe9c2c26(0)
-        let v1 := callvalue()
-        let v2 := iszero(eq(v1, 0))
-        if v2 {
-          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-        }
-        let v3 := $__EchoContract_recv_0_2(v0)
-        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63(v3)
-      }
-      function $abi_root_head_size__u256__3271ca15373d4483() -> ret {
+        mstore(0x40, add(r8, 64))
         let v0 := 0
-        if v0 {
-          ret := 32
-          leave
-        }
-        if iszero(v0) {
-          ret := 32
-          leave
-        }
-      }
-      function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len($self) -> ret {
-        let v0 := calldatasize()
         let v1 := 0
-        let v2 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt($self, v0)
-        let v3 := v2
-        if v3 {
-          v1 := 0
+        let v2 := 0
+        let v3 := 0
+        let v4 := 0
+        let v5 := 0
+        let v6 := 0
+        let v9 := 0
+        let v10 := 0
+        let v11 := 0
+        let v12 := 0
+        let v13 := 0
+        let v14 := 0
+        let v16 := 0
+        let v18 := 0
+        let v19 := 0
+        let v20 := 0
+        let v21 := 0
+        let $pc := 0
+        for {} 1 {} {
+          switch $pc
+          case 0 {
+              v0 := 0
+              v1 := 0x04
+              v2 := callvalue()
+              v3 := iszero(iszero(iszero(eq(v2, v0))))
+              if v3 {
+                $pc := 1
+                continue
+              }
+              $pc := 2
+              continue
+          }
+          case 1 {
+              revert(v0, v0)
+          }
+          case 2 {
+              v4 := calldatasize()
+              let t22 := sub(v4, v1)
+              if gt(v1, v4) {
+                revert(0, 0)
+              }
+              v5 := t22
+              v6 := allocate(v5)
+              calldatacopy(v6, v1, v5)
+              mstore(r8, v6)
+              mstore(add(r8, 32), v5)
+              v9 := $decoder_new(r8)
+              v10 := v9
+              v11 := $__EchoContract_recv_0_0()
+              v12 := $encoder_new()
+              v13 := 0x20
+              let t23 := mload(0x40)
+              if iszero(t23) {
+                t23 := 0x80
+              }
+              mstore(0x40, add(t23, 96))
+              datacopy(t23, v12, 96)
+              v14 := t23
+              $reserve_head(v14, v13)
+              let t24 := mload(0x40)
+              if iszero(t24) {
+                t24 := 0x80
+              }
+              mstore(0x40, add(t24, 96))
+              datacopy(t24, v12, 96)
+              v16 := t24
+              $encode(v11, v16)
+              v18 := $finish_arg0_root_code(v12)
+              v19 := v18
+              let t25 := mload(v19)
+              v20 := t25
+              let t26 := mload(add(v19, 32))
+              v21 := t26
+              return(v20, v21)
+          }
+          default {
+              invalid()
+          }
         }
-        if iszero(v3) {
-          let v4 := $checked_sub_u256(v0, $self)
-          v1 := v4
+      }
+      function $__fe_contract_recv_abi_EchoContract_2() {
+        let r8 := mload(0x40)
+        if iszero(r8) {
+          r8 := 0x80
         }
-        ret := v1
-        leave
+        mstore(0x40, add(r8, 64))
+        let v0 := 0
+        let v1 := 0
+        let v2 := 0
+        let v3 := 0
+        let v4 := 0
+        let v5 := 0
+        let v6 := 0
+        let v9 := 0
+        let v10 := 0
+        let v11 := 0
+        let v12 := 0
+        let v13 := 0
+        let v14 := 0
+        let v15 := 0
+        let v16 := 0
+        let v17 := 0
+        let v19 := 0
+        let v21 := 0
+        let v22 := 0
+        let v23 := 0
+        let v24 := 0
+        let $pc := 0
+        for {} 1 {} {
+          switch $pc
+          case 0 {
+              v0 := 0
+              v1 := 0x04
+              v2 := callvalue()
+              v3 := iszero(iszero(iszero(eq(v2, v0))))
+              if v3 {
+                $pc := 1
+                continue
+              }
+              $pc := 2
+              continue
+          }
+          case 1 {
+              revert(v0, v0)
+          }
+          case 2 {
+              v4 := calldatasize()
+              let t25 := sub(v4, v1)
+              if gt(v1, v4) {
+                revert(0, 0)
+              }
+              v5 := t25
+              v6 := allocate(v5)
+              calldatacopy(v6, v1, v5)
+              mstore(r8, v6)
+              mstore(add(r8, 32), v5)
+              v9 := $decoder_new(r8)
+              v10 := v9
+              v11 := $decode_0(v10)
+              let t26 := mload(0x40)
+              if iszero(t26) {
+                t26 := 0x80
+              }
+              mstore(0x40, add(t26, 32))
+              mstore(t26, v11)
+              v12 := t26
+              let t27 := mload(v12)
+              v13 := t27
+              v14 := $__EchoContract_recv_0_1(v13)
+              v15 := $encoder_new()
+              v16 := 0x20
+              let t28 := mload(0x40)
+              if iszero(t28) {
+                t28 := 0x80
+              }
+              mstore(0x40, add(t28, 96))
+              datacopy(t28, v15, 96)
+              v17 := t28
+              $reserve_head(v17, v16)
+              let t29 := mload(0x40)
+              if iszero(t29) {
+                t29 := 0x80
+              }
+              mstore(0x40, add(t29, 96))
+              datacopy(t29, v15, 96)
+              v19 := t29
+              $encode(v14, v19)
+              v21 := $finish_arg0_root_code(v15)
+              v22 := v21
+              let t30 := mload(v22)
+              v23 := t30
+              let t31 := mload(add(v22, 32))
+              v24 := t31
+              return(v23, v24)
+          }
+          default {
+              invalid()
+          }
+        }
       }
-      function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at($self, $byte_offset) -> ret {
-        let v0 := add($self, $byte_offset)
-        let v1 := calldataload(v0)
-        ret := v1
-        leave
+      function $__fe_contract_recv_abi_EchoContract_3() {
+        let r8 := mload(0x40)
+        if iszero(r8) {
+          r8 := 0x80
+        }
+        mstore(0x40, add(r8, 64))
+        let v0 := 0
+        let v1 := 0
+        let v2 := 0
+        let v3 := 0
+        let v4 := 0
+        let v5 := 0
+        let v6 := 0
+        let v9 := 0
+        let v10 := 0
+        let v11 := 0
+        let v12 := 0
+        let v13 := 0
+        let v14 := 0
+        let v15 := 0
+        let v17 := 0
+        let v19 := 0
+        let v20 := 0
+        let v21 := 0
+        let v22 := 0
+        let $pc := 0
+        for {} 1 {} {
+          switch $pc
+          case 0 {
+              v0 := 0
+              v1 := 0x04
+              v2 := callvalue()
+              v3 := iszero(iszero(iszero(eq(v2, v0))))
+              if v3 {
+                $pc := 1
+                continue
+              }
+              $pc := 2
+              continue
+          }
+          case 1 {
+              revert(v0, v0)
+          }
+          case 2 {
+              v4 := calldatasize()
+              let t23 := sub(v4, v1)
+              if gt(v1, v4) {
+                revert(0, 0)
+              }
+              v5 := t23
+              v6 := allocate(v5)
+              calldatacopy(v6, v1, v5)
+              mstore(r8, v6)
+              mstore(add(r8, 32), v5)
+              v9 := $decoder_new(r8)
+              v10 := v9
+              v11 := 0
+              v12 := $__EchoContract_recv_0_2_eff0_stor(v11)
+              v13 := $encoder_new()
+              v14 := 0x20
+              let t24 := mload(0x40)
+              if iszero(t24) {
+                t24 := 0x80
+              }
+              mstore(0x40, add(t24, 96))
+              datacopy(t24, v13, 96)
+              v15 := t24
+              $reserve_head(v15, v14)
+              let t25 := mload(0x40)
+              if iszero(t25) {
+                t25 := 0x80
+              }
+              mstore(0x40, add(t25, 96))
+              datacopy(t25, v13, 96)
+              v17 := t25
+              $encode(v12, v17)
+              v19 := $finish_arg0_root_code(v13)
+              v20 := v19
+              let t26 := mload(v20)
+              v21 := t26
+              let t27 := mload(add(v20, 32))
+              v22 := t27
+              return(v21, v22)
+          }
+          default {
+              invalid()
+          }
+        }
       }
-      function $calldata_hf71d505b6ff5dc81_new() -> ret {
-        ret := 0
-        leave
+      function $__fe_contract_runtime_root_EchoContract() {
+        let v0 := 0
+        let v1 := 0
+        let $pc := 0
+        for {} 1 {} {
+          switch $pc
+          case 0 {
+              v0 := 0
+              v1 := shr(224, calldataload(0))
+              switch v1
+              case 0x01 {
+                  $pc := 2
+                  continue
+              }
+              case 0x02 {
+                  $pc := 3
+                  continue
+              }
+              case 0x03 {
+                  $pc := 4
+                  continue
+              }
+              default {
+                  $pc := 1
+                  continue
+              }
+          }
+          case 1 {
+              revert(v0, v0)
+          }
+          case 2 {
+              $__fe_contract_recv_abi_EchoContract_1()
+              invalid()
+          }
+          case 3 {
+              $__fe_contract_recv_abi_EchoContract_2()
+              invalid()
+          }
+          case 4 {
+              $__fe_contract_recv_abi_EchoContract_3()
+              invalid()
+          }
+          default {
+              invalid()
+          }
+        }
       }
-      function $checked_add_u256($a, $b) -> ret {
-        let v0 := $checked_add_unsigned_impl__u256__3271ca15373d4483($a, $b)
-        ret := v0
-        leave
-      }
-      function $checked_add_unsigned_impl__u256__3271ca15373d4483($a, $b) -> ret {
-        let v0 := $u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add($a, $b)
-        let v1 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v0)
-        let v2 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($a)
-        let v3 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v1, v2)
-        let v4 := v3
-        if v4 {
+      function $add_0($self, $other) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 32))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let v3 := 0
+        mstore(r0, $self)
+        mstore(r1, $other)
+        let t4 := add(mload(r0), mload(r1))
+        if lt(t4, mload(r0)) {
           revert(0, 0)
         }
-        ret := v0
+        v3 := t4
+        mstore(r2, v3)
+        ret := mload(r2)
         leave
       }
-      function $checked_sub_u256($a, $b) -> ret {
-        let v0 := $checked_sub_unsigned_impl__u256__3271ca15373d4483($a, $b)
-        ret := v0
-        leave
-      }
-      function $checked_sub_unsigned_impl__u256__3271ca15373d4483($a, $b) -> ret {
-        let v0 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($b)
-        let v1 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($a)
-        let v2 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v0, v1)
-        let v3 := v2
-        if v3 {
+      function $add_1($self, $other) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 32))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let v3 := 0
+        mstore(r0, $self)
+        mstore(r1, $other)
+        let t4 := add(mload(r0), mload(r1))
+        if lt(t4, mload(r0)) {
           revert(0, 0)
         }
-        let v4 := $u256_h3271ca15373d4483_wrappingsub_h6880d1ff91f0a556_wrapping_sub($a, $b)
-        ret := v4
+        v3 := t4
+        mstore(r2, v3)
+        ret := mload(r2)
         leave
       }
-      function $cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($self, $pos) -> ret {
-        let v0 := mload($self)
-        let v1 := mload(0x40)
-        if iszero(v1) {
-          v1 := 0x80
+      function $add_2($self, $other) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
         }
-        mstore(0x40, add(v1, 64))
-        mstore(v1, v0)
-        mstore(add(v1, 32), $pos)
+        mstore(0x40, add(r0, 32))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let v3 := 0
+        mstore(r0, $self)
+        mstore(r1, $other)
+        let t4 := add(mload(r0), mload(r1))
+        if lt(t4, mload(r0)) {
+          revert(0, 0)
+        }
+        v3 := t4
+        mstore(r2, v3)
+        ret := mload(r2)
+        leave
+      }
+      function $add_3($self, $other) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 32))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let v3 := 0
+        mstore(r0, $self)
+        mstore(r1, $other)
+        let t4 := add(mload(r0), mload(r1))
+        if lt(t4, mload(r0)) {
+          revert(0, 0)
+        }
+        v3 := t4
+        mstore(r2, v3)
+        ret := mload(r2)
+        leave
+      }
+      function $decode_0($d) -> ret {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let r3 := mload(0x40)
+        if iszero(r3) {
+          r3 := 0x80
+        }
+        mstore(0x40, add(r3, 32))
+        let r4 := mload(0x40)
+        if iszero(r4) {
+          r4 := 0x80
+        }
+        mstore(0x40, add(r4, 0))
+        let v5 := 0
+        let v6 := 0
+        v5 := $decode_1($d)
+        mstore(r2, v5)
+        mstore(r1, mload(r2))
+        v6 := allocate(32)
+        mstore(v6, mload(r1))
+        mstore(r3, v6)
+        ret := mload(r3)
+        leave
+      }
+      function $decode_1($d) -> ret {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let v2 := 0
+        v2 := $read_word_0($d)
+        mstore(r1, v2)
+        ret := mload(r1)
+        leave
+      }
+      function $decoder_new($input) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 64))
+        let v1 := 0
+        let v2 := 0
+        mstore(r0, mload($input))
+        mstore(add(r0, 32), mload(add($input, 32)))
+        v2 := $new_1(r0)
+        v1 := v2
         ret := v1
         leave
       }
-      function $cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input) -> ret {
-        let v0 := mload(0x40)
-        if iszero(v0) {
-          v0 := 0x80
+      function $encode($self, $e) {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
         }
-        mstore(0x40, add(v0, 64))
-        mstore(v0, $input)
-        mstore(add(v0, 32), 0)
-        ret := v0
+        mstore(0x40, add(r0, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 0))
+        mstore(r0, $self)
+        $write_word($e, mload(r0))
         leave
       }
-      function $decode_field__Sol_hfd482bb803ad8c5f_u256_SolDecoder_CallData___6480d5da5e36cc2c($d) -> ret {
-        let v0 := mload(0x40)
-        if iszero(v0) {
-          v0 := 0x80
-        }
-        mstore(0x40, add(v0, 32))
-        mstore(v0, $d)
+      function $encoder_new() -> ret {
+        let v0 := 0
         let v1 := 0
-        if v1 {
-          let v2 := $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d)
-          let v3 := $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d)
-          let v4 := $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_pos__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d)
-          let v5 := $checked_add_u256(v3, v2)
-          $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_set_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d, v5)
-          let v6 := $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d)
-          $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_set_pos__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d, v6)
-          let v7 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98(mload(v0))
-          $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_set_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d, v3)
-          $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_set_pos__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d, v4)
-          ret := v7
-          leave
-        }
-        if iszero(v1) {
-          let v8 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
-          ret := v8
-          leave
-        }
-      }
-      function $echo_h9f932a87feb06bd2_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) -> ret {
-        let v0 := $decode_field__Sol_hfd482bb803ad8c5f_u256_SolDecoder_CallData___6480d5da5e36cc2c($d)
+        v1 := $new_0()
+        v0 := v1
         ret := v0
         leave
       }
-      function $encode_field__Sol_hfd482bb803ad8c5f_u256_SolEncoder_h1b9228b90dad6928__636972f1f7e9ec11($value, $e) {
-        let v0 := mload(0x40)
-        if iszero(v0) {
-          v0 := 0x80
+      function $eq($self, $other) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
         }
-        mstore(0x40, add(v0, 32))
-        mstore(v0, $e)
-        let v1 := 0
-        if v1 {
-          let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_base($e)
-          let v3 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_append_tail($e, 32)
-          let v4 := $checked_sub_u256(v3, v2)
-          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($e, v4)
-          let v5 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_pos($e)
-          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_base($e, v3)
-          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_pos($e, v3)
-          $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($value, mload(v0))
-          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_base($e, v2)
-          $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_pos($e, v5)
-          leave
+        mstore(0x40, add(r0, 32))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
         }
-        if iszero(v1) {
-          $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($value, mload(v0))
-          leave
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
         }
-      }
-      function $encode_root__Sol_hfd482bb803ad8c5f_u256_SolEncoder_h1b9228b90dad6928__636972f1f7e9ec11($value, $e) {
-        let v0 := mload(0x40)
-        if iszero(v0) {
-          v0 := 0x80
-        }
-        mstore(0x40, add(v0, 32))
-        mstore(v0, $e)
-        let v1 := 0
-        if v1 {
-          $encode_field__Sol_hfd482bb803ad8c5f_u256_SolEncoder_h1b9228b90dad6928__636972f1f7e9ec11($value, mload(v0))
-          leave
-        }
-        if iszero(v1) {
-          $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($value, mload(v0))
-          leave
-        }
-      }
-      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
-        revert(0, 0)
-      }
-      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Foo_h6dbce71a6ea992b8__21493237fe9c2c26($slot) -> ret {
-        let v0 := $stor_ptr__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d($slot)
-        ret := v0
+        mstore(0x40, add(r2, 32))
+        let v3 := 0
+        mstore(r0, $self)
+        mstore(r1, $other)
+        v3 := iszero(iszero(eq(mload(r0), mload(r1))))
+        mstore(r2, v3)
+        ret := iszero(iszero(mload(r2)))
         leave
       }
-      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input() -> ret {
-        let v0 := $calldata_hf71d505b6ff5dc81_new()
-        ret := v0
-        leave
-      }
-      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes($ptr, $len) {
-        return($ptr, $len)
-      }
-      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_value__Sol_hfd482bb803ad8c5f_u256__851a35d37fea63($value) {
-        let v0 := iszero(0)
-        if iszero(v0) {
-          let v1 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new()
-          let v2 := $abi_root_head_size__u256__3271ca15373d4483()
-          let v3 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v1, v2)
-          $encode_root__Sol_hfd482bb803ad8c5f_u256_SolEncoder_h1b9228b90dad6928__636972f1f7e9ec11($value, v1)
-          let v4 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v1)
-          let v5 := mload(v4)
-          let v6 := v5
-          let v7 := mload(add(v4, 32))
-          let v8 := v7
-          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v6, v8)
+      function $finish_arg0_root_code($self) -> ret {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
         }
-        let v9 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_le(32, 64)
-        let v10 := v9
-        if v10 {
-          $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95($value, 0)
-          return(0, 32)
+        mstore(0x40, add(r1, 32))
+        let r4 := mload(0x40)
+        if iszero(r4) {
+          r4 := 0x80
         }
-        let v11 := mload(64)
-        if iszero(v11) {
-          v11 := 0x80
-        }
-        mstore(64, add(v11, 32))
-        $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95($value, v11)
-        return(v11, 32)
-      }
-      function $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2() -> ret {
-        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input()
-        let v1 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0, 4)
-        ret := v1
-        leave
-      }
-      function $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2() -> ret {
-        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input()
-        let v1 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0)
-        let v2 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v1, 4)
-        let v3 := v2
-        if v3 {
-          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-        }
-        let v4 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v0, 0)
-        let v5 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v4)
+        mstore(0x40, add(r4, 32))
+        let v2 := 0
+        let v3 := 0
+        let v5 := 0
+        let v6 := 0
+        let v7 := 0
+        let t8 := allocate(32)
+        datacopy(t8, $self, 32)
+        t8 := mload(t8)
+        v2 := t8
+        mstore(r1, v2)
+        let t9 := allocate(32)
+        datacopy(t9, add($self, 64), 32)
+        t9 := mload(t9)
+        v3 := t9
+        v6 := $sub(v3, mload(r1))
+        mstore(r4, v6)
+        v7 := allocate(64)
+        mstore(v7, mload(r1))
+        mstore(add(v7, 32), mload(r4))
+        v5 := v7
         ret := v5
         leave
       }
-      function $s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35($self) -> ret {
-        let v0 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($self)
-        let v1 := $u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_from_word(v0)
+      function $gt_0($self, $other) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 32))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let v3 := 0
+        mstore(r0, $self)
+        mstore(r1, $other)
+        v3 := iszero(iszero(gt(mload(r0), mload(r1))))
+        mstore(r2, v3)
+        ret := iszero(iszero(mload(r2)))
+        leave
+      }
+      function $len_0($self) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 64))
+        let v1 := 0
+        mstore(r0, mload($self))
+        mstore(add(r0, 32), mload(add($self, 32)))
+        let t2 := mload(add(r0, 32))
+        v1 := t2
         ret := v1
         leave
       }
-      function $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input, $base) -> ret {
-        let v0 := $soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input, $base)
-        ret := v0
-        leave
-      }
-      function $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new() -> ret {
-        let v0 := $solencoder_h1b9228b90dad6928_new()
-        ret := v0
-        leave
-      }
-      function $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix($prefix) -> ret {
-        let v0 := $s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35(shr(224, $prefix))
-        ret := v0
-        leave
-      }
-      function $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_store_word($ptr, $value) {
-        mstore($ptr, $value)
-        leave
-      }
-      function $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($self) -> ret {
-        let v0 := mload(add($self, 64))
-        ret := v0
-        leave
-      }
-      function $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_pos__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($self) -> ret {
-        let v0 := mload(add($self, 32))
-        ret := v0
-        leave
-      }
-      function $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($self) -> ret {
-        let v0 := mload($self)
-        let v1 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0)
-        let v2 := mload(add($self, 32))
-        let v3 := $checked_add_u256(v2, 32)
-        let v4 := v3
-        let v5 := mload(add($self, 32))
-        let v6 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v4, v5)
-        let v7 := v6
-        if v7 {
-          revert(0, 0)
+      function $new_0() -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
         }
-        let v8 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v4, v1)
-        let v9 := v8
-        if v9 {
-          revert(0, 0)
+        mstore(0x40, add(r0, 32))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
         }
-        let v10 := mload($self)
-        let v11 := mload(add($self, 32))
-        let v12 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v10, v11)
-        mstore(add($self, 32), v4)
-        ret := v12
-        leave
-      }
-      function $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_set_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($self, $new_base) {
-        mstore(add($self, 64), $new_base)
-        leave
-      }
-      function $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_set_pos__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($self, $new_pos) {
-        mstore(add($self, 32), $new_pos)
-        leave
-      }
-      function $soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input, $base) -> ret {
-        let v0 := $cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input)
-        let v1 := $cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0, $base)
-        let v2 := mload(0x40)
-        if iszero(v2) {
-          v2 := 0x80
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
         }
-        mstore(0x40, add(v2, 96))
-        let v3 := v1
-        mstore(v2, mload(v3))
-        mstore(add(v2, 32), mload(add(v3, 32)))
-        mstore(add(v2, 64), $base)
+        mstore(0x40, add(r2, 32))
+        let v3 := 0
+        let v4 := 0
+        let v5 := 0
+        let v6 := 0
+        let v7 := 0
+        let v8 := 0
+        let v9 := 0
+        let v10 := 0
+        let v11 := 0
+        v4 := 0x00
+        mstore(r0, v4)
+        v5 := 0x00
+        mstore(r1, v5)
+        v6 := 0x00
+        mstore(r2, v6)
+        v7 := 0x00
+        v8 := 0x00
+        v9 := 0x00
+        v10 := dataoffset("const_0")
+        v3 := v10
+        ret := v3
+        leave
+      }
+      function $new_1($input) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 64))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let v1 := 0
+        let v3 := 0
+        let v4 := 0
+        let v5 := 0
+        let v6 := 0
+        mstore(r0, mload($input))
+        mstore(add(r0, 32), mload(add($input, 32)))
+        v4 := $new_2(r0)
+        v1 := v4
+        v5 := 0x00
+        mstore(r2, v5)
+        v6 := allocate(128)
+        mstore(v6, mload(v1))
+        mstore(add(v6, 32), mload(add(v1, 32)))
+        mstore(add(v6, 64), mload(add(v1, 64)))
+        mstore(add(v6, 96), mload(r2))
+        v3 := v6
+        ret := v3
+        leave
+      }
+      function $new_2($input) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 64))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let v2 := 0
+        let v3 := 0
+        let v4 := 0
+        mstore(r0, mload($input))
+        mstore(add(r0, 32), mload(add($input, 32)))
+        v3 := 0x00
+        mstore(r1, v3)
+        v4 := allocate(96)
+        mstore(v4, mload(r0))
+        mstore(add(v4, 32), mload(add(r0, 32)))
+        mstore(add(v4, 64), mload(r1))
+        v2 := v4
         ret := v2
         leave
       }
-      function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_append_tail($self, $bytes) -> ret {
-        let v0 := mload(64)
-        if iszero(v0) {
-          v0 := 0x80
+      function $read_word_0($self) -> ret {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
         }
-        mstore(64, add(v0, $bytes))
-        mstore(add($self, 96), add(v0, $bytes))
-        ret := v0
-        leave
-      }
-      function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_base($self) -> ret {
-        let v0 := mload(add($self, 32))
-        ret := v0
-        leave
-      }
-      function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish($self) -> ret {
-        let v0 := mload($self)
-        let v1 := v0
-        let v2 := mload(add($self, 96))
-        let v3 := $checked_sub_u256(v2, v1)
-        let v4 := mload(0x40)
-        if iszero(v4) {
-          v4 := 0x80
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
         }
-        mstore(0x40, add(v4, 64))
-        mstore(v4, v1)
-        mstore(add(v4, 32), v3)
-        ret := v4
-        leave
-      }
-      function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_pos($self) -> ret {
-        let v0 := mload(add($self, 64))
-        ret := v0
-        leave
-      }
-      function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head($self, $bytes) -> ret {
-        let v0 := mload($self)
-        let v1 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0, 0)
-        let v2 := v1
-        if v2 {
-          let v3 := mload(64)
-          if iszero(v3) {
-            v3 := 0x80
+        mstore(0x40, add(r2, 32))
+        let r3 := mload(0x40)
+        if iszero(r3) {
+          r3 := 0x80
+        }
+        mstore(0x40, add(r3, 32))
+        let r6 := mload(0x40)
+        if iszero(r6) {
+          r6 := 0x80
+        }
+        mstore(0x40, add(r6, 32))
+        let r9 := mload(0x40)
+        if iszero(r9) {
+          r9 := 0x80
+        }
+        mstore(0x40, add(r9, 32))
+        let r10 := mload(0x40)
+        if iszero(r10) {
+          r10 := 0x80
+        }
+        mstore(0x40, add(r10, 32))
+        let r11 := mload(0x40)
+        if iszero(r11) {
+          r11 := 0x80
+        }
+        mstore(0x40, add(r11, 0))
+        let r12 := mload(0x40)
+        if iszero(r12) {
+          r12 := 0x80
+        }
+        mstore(0x40, add(r12, 32))
+        let r13 := mload(0x40)
+        if iszero(r13) {
+          r13 := 0x80
+        }
+        mstore(0x40, add(r13, 32))
+        let r14 := mload(0x40)
+        if iszero(r14) {
+          r14 := 0x80
+        }
+        mstore(0x40, add(r14, 32))
+        let r15 := mload(0x40)
+        if iszero(r15) {
+          r15 := 0x80
+        }
+        mstore(0x40, add(r15, 0))
+        let r16 := mload(0x40)
+        if iszero(r16) {
+          r16 := 0x80
+        }
+        mstore(0x40, add(r16, 0))
+        let r21 := mload(0x40)
+        if iszero(r21) {
+          r21 := 0x80
+        }
+        mstore(0x40, add(r21, 32))
+        let r22 := mload(0x40)
+        if iszero(r22) {
+          r22 := 0x80
+        }
+        mstore(0x40, add(r22, 0))
+        let v4 := 0
+        let v5 := 0
+        let v7 := 0
+        let v8 := 0
+        let v17 := 0
+        let v18 := 0
+        let v19 := 0
+        let v20 := 0
+        let v23 := 0
+        let v24 := 0
+        let v25 := 0
+        let v26 := 0
+        let v27 := 0
+        let v28 := 0
+        let v31 := 0
+        let $pc := 0
+        for {} 1 {} {
+          switch $pc
+          case 0 {
+              v4 := $self
+              v5 := $self
+              v23 := $len_0(v5)
+              mstore(r6, v23)
+              mstore(r1, mload(r6))
+              v7 := $self
+              let t32 := mload(add($self, 64))
+              v8 := t32
+              v24 := 0x20
+              mstore(r9, v24)
+              v25 := $add_3(v8, mload(r9))
+              mstore(r10, v25)
+              mstore(r2, mload(r10))
+              v26 := $gt_0(mload(r2), mload(r1))
+              mstore(r12, v26)
+              if iszero(iszero(mload(r12))) {
+                $pc := 1
+                continue
+              }
+              $pc := 2
+              continue
           }
-          mstore(64, add(v3, $bytes))
-          mstore($self, v3)
-          mstore(add($self, 32), v3)
-          mstore(add($self, 64), v3)
-          mstore(add($self, 96), add(v3, $bytes))
+          case 1 {
+              v27 := 0x00
+              mstore(r13, v27)
+              v28 := 0x00
+              mstore(r14, v28)
+              revert(mload(r13), mload(r14))
+          }
+          case 2 {
+              $pc := 3
+              continue
+          }
+          case 3 {
+              v17 := $self
+              v18 := $self
+              v19 := $self
+              let t33 := mload(add($self, 64))
+              v20 := t33
+              v31 := $word_at_0(v18, v20)
+              mstore(r21, v31)
+              mstore(r3, mload(r21))
+              mstore(add($self, 64), mload(r2))
+              ret := mload(r3)
+              leave
+          }
+          default {
+              invalid()
+          }
         }
-        let v4 := mload(add($self, 32))
-        ret := v4
-        leave
       }
-      function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_base($self, $new_base) {
-        mstore(add($self, 32), $new_base)
-        leave
-      }
-      function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_pos($self, $new_pos) {
-        mstore(add($self, 64), $new_pos)
-        leave
-      }
-      function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($self, $v) {
-        let v0 := mload(add($self, 64))
-        let v1 := v0
-        mstore(v1, $v)
-        mstore(add($self, 64), add(v1, 32))
-        leave
-      }
-      function $solencoder_h1b9228b90dad6928_new() -> ret {
-        let v0 := mload(0x40)
-        if iszero(v0) {
-          v0 := 0x80
+      function $reserve_head($self, $bytes) -> ret {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
         }
-        mstore(0x40, add(v0, 128))
-        mstore(v0, 0)
-        mstore(add(v0, 32), 0)
-        mstore(add(v0, 64), 0)
-        mstore(add(v0, 96), 0)
-        ret := v0
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let r3 := mload(0x40)
+        if iszero(r3) {
+          r3 := 0x80
+        }
+        mstore(0x40, add(r3, 0))
+        let r5 := mload(0x40)
+        if iszero(r5) {
+          r5 := 0x80
+        }
+        mstore(0x40, add(r5, 32))
+        let r6 := mload(0x40)
+        if iszero(r6) {
+          r6 := 0x80
+        }
+        mstore(0x40, add(r6, 32))
+        let r7 := mload(0x40)
+        if iszero(r7) {
+          r7 := 0x80
+        }
+        mstore(0x40, add(r7, 32))
+        let r8 := mload(0x40)
+        if iszero(r8) {
+          r8 := 0x80
+        }
+        mstore(0x40, add(r8, 0))
+        let r9 := mload(0x40)
+        if iszero(r9) {
+          r9 := 0x80
+        }
+        mstore(0x40, add(r9, 0))
+        let r10 := mload(0x40)
+        if iszero(r10) {
+          r10 := 0x80
+        }
+        mstore(0x40, add(r10, 32))
+        let r11 := mload(0x40)
+        if iszero(r11) {
+          r11 := 0x80
+        }
+        mstore(0x40, add(r11, 0))
+        let r12 := mload(0x40)
+        if iszero(r12) {
+          r12 := 0x80
+        }
+        mstore(0x40, add(r12, 0))
+        let v4 := 0
+        let v13 := 0
+        let v14 := 0
+        let v15 := 0
+        let v16 := 0
+        let v17 := 0
+        let v18 := 0
+        mstore(r1, $bytes)
+        let $pc := 0
+        for {} 1 {} {
+          switch $pc
+          case 0 {
+              let t19 := mload($self)
+              v4 := t19
+              v14 := 0x00
+              mstore(r5, v14)
+              v15 := $eq(v4, mload(r5))
+              mstore(r6, v15)
+              if iszero(iszero(mload(r6))) {
+                $pc := 1
+                continue
+              }
+              $pc := 2
+              continue
+          }
+          case 1 {
+              v17 := allocate(mload(r1))
+              mstore(r7, v17)
+              mstore(r2, mload(r7))
+              mstore($self, mload(r2))
+              mstore(add($self, 32), mload(r2))
+              v18 := $add_1(mload(r2), mload(r1))
+              mstore(r10, v18)
+              mstore(add($self, 64), mload(r10))
+              $pc := 3
+              continue
+          }
+          case 2 {
+              $pc := 3
+              continue
+          }
+          case 3 {
+              let t20 := mload($self)
+              v13 := t20
+              ret := v13
+              leave
+          }
+          default {
+              invalid()
+          }
+        }
+      }
+      function $sub($self, $other) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 32))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let v3 := 0
+        mstore(r0, $self)
+        mstore(r1, $other)
+        let t4 := sub(mload(r0), mload(r1))
+        if gt(mload(r1), mload(r0)) {
+          revert(0, 0)
+        }
+        v3 := t4
+        mstore(r2, v3)
+        ret := mload(r2)
         leave
       }
-      function $stor_ptr__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d($slot) -> ret {
-        let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26($slot)
-        ret := v0
+      function $word_at_0($self, $byte_offset) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 64))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r3 := mload(0x40)
+        if iszero(r3) {
+          r3 := 0x80
+        }
+        mstore(0x40, add(r3, 32))
+        let r4 := mload(0x40)
+        if iszero(r4) {
+          r4 := 0x80
+        }
+        mstore(0x40, add(r4, 32))
+        let v2 := 0
+        let v5 := 0
+        let v6 := 0
+        let v7 := 0
+        mstore(r0, mload($self))
+        mstore(add(r0, 32), mload(add($self, 32)))
+        mstore(r1, $byte_offset)
+        let t8 := mload(r0)
+        v2 := t8
+        v5 := $add_2(v2, mload(r1))
+        mstore(r3, v5)
+        v7 := mload(mload(r3))
+        mstore(r4, v7)
+        ret := mload(r4)
         leave
       }
-      function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26($raw) -> ret {
-        ret := $raw
+      function $write_word($self, $v) {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let r4 := mload(0x40)
+        if iszero(r4) {
+          r4 := 0x80
+        }
+        mstore(0x40, add(r4, 0))
+        let r5 := mload(0x40)
+        if iszero(r5) {
+          r5 := 0x80
+        }
+        mstore(0x40, add(r5, 32))
+        let r6 := mload(0x40)
+        if iszero(r6) {
+          r6 := 0x80
+        }
+        mstore(0x40, add(r6, 32))
+        let r7 := mload(0x40)
+        if iszero(r7) {
+          r7 := 0x80
+        }
+        mstore(0x40, add(r7, 0))
+        let v3 := 0
+        let v10 := 0
+        let v11 := 0
+        mstore(r1, $v)
+        let t12 := mload(add($self, 32))
+        v3 := t12
+        mstore(r2, v3)
+        mstore(mload(r2), mload(r1))
+        v10 := 0x20
+        mstore(r5, v10)
+        v11 := $add_0(mload(r2), mload(r5))
+        mstore(r6, v11)
+        mstore(add($self, 32), mload(r6))
         leave
       }
-      function $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d) -> ret {
-        let v0 := $soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($d)
-        ret := v0
-        leave
-      }
-      function $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($self, $e) {
-        $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($e, $self)
-        leave
-      }
-      function $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode_to_ptr__Sol_hfd482bb803ad8c5f__5bf6337811c3ce95($self, $ptr) {
-        $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_store_word($ptr, $self)
-        leave
-      }
-      function $u256_h3271ca15373d4483_eq_he50383edd273619f_eq($self, $other) -> ret {
-        let v0 := eq($self, $other)
-        ret := v0
-        leave
-      }
-      function $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($self) -> ret {
-        ret := $self
-        leave
-      }
-      function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt($self, $other) -> ret {
-        let v0 := gt($self, $other)
-        ret := v0
-        leave
-      }
-      function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_le($self, $other) -> ret {
-        let v0 := iszero(gt($self, $other))
-        ret := v0
-        leave
-      }
-      function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt($self, $other) -> ret {
-        let v0 := lt($self, $other)
-        ret := v0
-        leave
-      }
-      function $u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add($self, $other) -> ret {
-        let v0 := add($self, $other)
-        ret := v0
-        leave
-      }
-      function $u256_h3271ca15373d4483_wrappingsub_h6880d1ff91f0a556_wrapping_sub($self, $other) -> ret {
-        let v0 := sub($self, $other)
-        ret := v0
-        leave
-      }
-      function $u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_from_word($word) -> ret {
-        ret := $word
-        leave
-      }
-      $__EchoContract_runtime()
-      return(0, 0)
+      $__fe_contract_runtime_root_EchoContract()
     }
+    data "const_0" hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
   }
 }

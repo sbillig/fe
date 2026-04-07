@@ -15,7 +15,7 @@ pub enum VerifyError<'db> {
     MissingRuntimeBlock(RBlockId),
     ErasedRuntimeValue(crate::runtime::RValueId),
     SlotCarrierMismatch(RLocalId),
-    InvalidLayoutHandleView(LayoutId<'db>),
+    InvalidLayoutRefView(LayoutId<'db>),
     InvalidConstRegion(ConstRegionId<'db>),
     InvalidVariant(LayoutId<'db>, u16),
     InvalidPlace(RuntimeClass<'db>),
@@ -45,7 +45,7 @@ impl<'db> VerifyError<'db> {
             | VerifyError::InvalidExprClass(local) => Some(*local),
             VerifyError::MissingRuntimeBlock(_)
             | VerifyError::ErasedRuntimeValue(_)
-            | VerifyError::InvalidLayoutHandleView(_)
+            | VerifyError::InvalidLayoutRefView(_)
             | VerifyError::InvalidConstRegion(_)
             | VerifyError::InvalidVariant(_, _)
             | VerifyError::InvalidPlace(_)

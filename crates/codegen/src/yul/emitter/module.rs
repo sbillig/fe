@@ -158,14 +158,21 @@ pub fn emit_test_runtime_package_yul<'db>(
         }
         let mut rendered_sections = HashSet::default();
         let mut stack = Vec::new();
-        let doc = render_root_object(&index, object, &mut rendered_sections, &mut stack)?;
+        let wrapper_name = format!("test_{}", object.name);
+        let doc = render_test_root_object(
+            &index,
+            object,
+            &wrapper_name,
+            &mut rendered_sections,
+            &mut stack,
+        )?;
         let mut lines = Vec::new();
         render_docs(&[doc], 0, &mut lines);
         tests.push(TestMetadata {
             display_name: metadata.display_name,
             hir_name: metadata.hir_name,
             symbol_name: index.function(section.entry)?.symbol.clone(),
-            object_name: object.name.clone(),
+            object_name: wrapper_name,
             yul: lines.join("\n"),
             bytecode: Vec::new(),
             sonatina_observability_json: None,
@@ -207,6 +214,40 @@ fn render_root_object<'a, 'db>(
     rendered_sections: &mut HashSet<(String, mir2::RuntimeSectionName)>,
     stack: &mut Vec<(String, mir2::RuntimeSectionName)>,
 ) -> Result<YulDoc, YulError> {
+    let body = render_root_object_body(index, object, rendered_sections, stack)?;
+    Ok(YulDoc::block(format!("object \"{}\" ", object.name), body))
+}
+
+fn render_test_root_object<'a, 'db>(
+    index: &PackageIndex<'a, 'db>,
+    object: &'a YulObjectPlan<'db>,
+    wrapper_name: &str,
+    rendered_sections: &mut HashSet<(String, mir2::RuntimeSectionName)>,
+    stack: &mut Vec<(String, mir2::RuntimeSectionName)>,
+) -> Result<YulDoc, YulError> {
+    let runtime = YulDoc::block(
+        "object \"runtime\" ",
+        render_root_object_body(index, object, rendered_sections, stack)?,
+    );
+    let init = YulDoc::block(
+        "code ",
+        vec![
+            YulDoc::line("datacopy(0, dataoffset(\"runtime\"), datasize(\"runtime\"))"),
+            YulDoc::line("return(0, datasize(\"runtime\"))"),
+        ],
+    );
+    Ok(YulDoc::block(
+        format!("object \"{wrapper_name}\" "),
+        vec![init, runtime],
+    ))
+}
+
+fn render_root_object_body<'a, 'db>(
+    index: &PackageIndex<'a, 'db>,
+    object: &'a YulObjectPlan<'db>,
+    rendered_sections: &mut HashSet<(String, mir2::RuntimeSectionName)>,
+    stack: &mut Vec<(String, mir2::RuntimeSectionName)>,
+) -> Result<Vec<YulDoc>, YulError> {
     let primary = object.sections.first().ok_or_else(|| {
         YulError::InvalidYulPackage(format!("object `{}` has no sections", object.name))
     })?;
@@ -226,7 +267,7 @@ fn render_root_object<'a, 'db>(
             stack,
         )?);
     }
-    Ok(YulDoc::block(format!("object \"{}\" ", object.name), body))
+    Ok(body)
 }
 
 fn render_nested_section<'a, 'db>(

@@ -3,128 +3,1327 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/code_region.fe
 ---
-object "Foo" {
+object "Child" {
   code {
-    function $allocate__Evm_hef0af3106e109414__3af54274b2985741($bytes) -> ret {
-      let v0 := mload(64)
-      let v1 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0, 0)
-      let v2 := v1
-      if v2 {
-        v0 := 96
+    function $child_init($Evm) {
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
       }
-      let v3 := $checked_add_u256(v0, $bytes)
-      mstore(64, v3)
-      ret := v0
-      leave
-    }
-    function $checked_add_u256($a, $b) -> ret {
-      let v0 := $checked_add_unsigned_impl__u256__3271ca15373d4483($a, $b)
-      ret := v0
-      leave
-    }
-    function $checked_add_unsigned_impl__u256__3271ca15373d4483($a, $b) -> ret {
-      let v0 := $u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add($a, $b)
-      let v1 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v0)
-      let v2 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($a)
-      let v3 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v1, v2)
-      let v4 := v3
-      if v4 {
-        revert(0, 0)
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
       }
-      ret := v0
+      mstore(0x40, add(r2, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 32))
+      let r4 := mload(0x40)
+      if iszero(r4) {
+        r4 := 0x80
+      }
+      mstore(0x40, add(r4, 32))
+      let r5 := mload(0x40)
+      if iszero(r5) {
+        r5 := 0x80
+      }
+      mstore(0x40, add(r5, 32))
+      let r6 := mload(0x40)
+      if iszero(r6) {
+        r6 := 0x80
+      }
+      mstore(0x40, add(r6, 0))
+      let r7 := mload(0x40)
+      if iszero(r7) {
+        r7 := 0x80
+      }
+      mstore(0x40, add(r7, 32))
+      let r8 := mload(0x40)
+      if iszero(r8) {
+        r8 := 0x80
+      }
+      mstore(0x40, add(r8, 0))
+      let v9 := 0
+      let v11 := 0
+      let v12 := 0
+      let v14 := 0
+      let v16 := 0
+      let v17 := 0
+      mstore(r3, datasize("__Child_runtime"))
+      mstore(r1, mload(r3))
+      mstore(r4, dataoffset("__Child_runtime"))
+      mstore(r2, mload(r4))
+      v9 := 0x00
+      mstore(r5, v9)
+      v11 := $Evm
+      v12 := $Evm
+      $codecopy_1(v12, mload(r5), mload(r2), mload(r1))
+      v14 := 0x00
+      mstore(r7, v14)
+      v16 := $Evm
+      v17 := $Evm
+      $return_data_4(v17, mload(r7), mload(r1))
+      invalid()
+    }
+    function $codecopy_1($self, $dest, $offset, $len) {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 0))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 32))
+      let r4 := mload(0x40)
+      if iszero(r4) {
+        r4 := 0x80
+      }
+      mstore(0x40, add(r4, 0))
+      mstore(r1, $dest)
+      mstore(r2, $offset)
+      mstore(r3, $len)
+      datacopy(mload(r1), mload(r2), mload(r3))
       leave
     }
-    function $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw_stor_arg0_root_stor($value, $offset, $len, $salt) -> ret {
-      let v0 := create2($value, $offset, $len, $salt)
-      ret := v0
-      leave
+    function $return_data_4($self, $offset, $len) {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 0))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 0))
+      mstore(r1, $offset)
+      mstore(r2, $len)
+      return(mload(r1), mload(r2))
     }
-    function $init__Evm_hef0af3106e109414__3af54274b2985741() {
-      let v0 := datasize("Child")
-      let v1 := dataoffset("Child")
-      let v2 := $allocate__Evm_hef0af3106e109414__3af54274b2985741(v0)
-      let v3 := v2
-      codecopy(v3, v1, v0)
-      let v4 := $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw_stor_arg0_root_stor(0, v3, v0, 4660)
-      let v5 := datasize("Foo_deployed")
-      let v6 := dataoffset("Foo_deployed")
-      let v7 := $allocate__Evm_hef0af3106e109414__3af54274b2985741(v5)
-      let v8 := v7
-      codecopy(v8, v6, v5)
-      return(v8, v5)
-    }
-    function $u256_h3271ca15373d4483_eq_he50383edd273619f_eq($self, $other) -> ret {
-      let v0 := eq($self, $other)
-      ret := v0
-      leave
-    }
-    function $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($self) -> ret {
-      ret := $self
-      leave
-    }
-    function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt($self, $other) -> ret {
-      let v0 := lt($self, $other)
-      ret := v0
-      leave
-    }
-    function $u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add($self, $other) -> ret {
-      let v0 := add($self, $other)
-      ret := v0
-      leave
-    }
-    $init__Evm_hef0af3106e109414__3af54274b2985741()
+    $child_init()
   }
-
-  object "Foo_deployed" {
+  object "__Child_runtime" {
     code {
-      function $balance__Evm_hef0af3106e109414__3af54274b2985741() {
-        return(0, 0)
-      }
-      function $read_selector__Evm_hef0af3106e109414__3af54274b2985741() -> ret {
-        let v0 := calldataload(0)
-        ret := shr(224, v0)
+      function $calldatacopy($self, $dest, $offset, $len) {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 0))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let r3 := mload(0x40)
+        if iszero(r3) {
+          r3 := 0x80
+        }
+        mstore(0x40, add(r3, 32))
+        let r4 := mload(0x40)
+        if iszero(r4) {
+          r4 := 0x80
+        }
+        mstore(0x40, add(r4, 0))
+        mstore(r1, $dest)
+        mstore(r2, $offset)
+        mstore(r3, $len)
+        calldatacopy(mload(r1), mload(r2), mload(r3))
         leave
       }
-      function $runtime__Evm_hef0af3106e109414__3af54274b2985741() {
-        let v0 := $read_selector__Evm_hef0af3106e109414__3af54274b2985741()
-        switch v0
-          case 305419896 {
-            $transfer__Evm_hef0af3106e109414__3af54274b2985741()
-          }
-          case 591751049 {
-            $balance__Evm_hef0af3106e109414__3af54274b2985741()
-          }
-          default {
-          }
-        return(0, 0)
+      function $child_runtime($Evm) {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let r3 := mload(0x40)
+        if iszero(r3) {
+          r3 := 0x80
+        }
+        mstore(0x40, add(r3, 32))
+        let r4 := mload(0x40)
+        if iszero(r4) {
+          r4 := 0x80
+        }
+        mstore(0x40, add(r4, 0))
+        let r5 := mload(0x40)
+        if iszero(r5) {
+          r5 := 0x80
+        }
+        mstore(0x40, add(r5, 32))
+        let r6 := mload(0x40)
+        if iszero(r6) {
+          r6 := 0x80
+        }
+        mstore(0x40, add(r6, 32))
+        let r7 := mload(0x40)
+        if iszero(r7) {
+          r7 := 0x80
+        }
+        mstore(0x40, add(r7, 0))
+        let v8 := 0
+        let v9 := 0
+        let v10 := 0
+        let v12 := 0
+        let v13 := 0
+        let v15 := 0
+        let v16 := 0
+        let v18 := 0
+        let v19 := 0
+        v8 := 0x00
+        mstore(r1, v8)
+        v9 := 0x00
+        mstore(r2, v9)
+        v10 := 0x04
+        mstore(r3, v10)
+        v12 := $Evm
+        v13 := $Evm
+        $calldatacopy(v13, mload(r1), mload(r2), mload(r3))
+        v15 := 0x00
+        mstore(r5, v15)
+        v16 := 0x04
+        mstore(r6, v16)
+        v18 := $Evm
+        v19 := $Evm
+        $return_data_3(v19, mload(r5), mload(r6))
+        invalid()
       }
-      function $transfer__Evm_hef0af3106e109414__3af54274b2985741() {
-        return(0, 0)
+      function $return_data_3($self, $offset, $len) {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 0))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let r3 := mload(0x40)
+        if iszero(r3) {
+          r3 := 0x80
+        }
+        mstore(0x40, add(r3, 0))
+        mstore(r1, $offset)
+        mstore(r2, $len)
+        return(mload(r1), mload(r2))
       }
-      $runtime__Evm_hef0af3106e109414__3af54274b2985741()
-      return(0, 0)
+      $child_runtime()
     }
   }
-  object "Child" {
-    code {
-      function $child_init__Evm_hef0af3106e109414__3af54274b2985741() {
-        let v0 := datasize("Child_deployed")
-        let v1 := dataoffset("Child_deployed")
-        codecopy(0, v1, v0)
-        return(0, v0)
+}
+object "Foo" {
+  code {
+    function $add($self, $other) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
       }
-      $child_init__Evm_hef0af3106e109414__3af54274b2985741()
+      mstore(0x40, add(r0, 32))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let v3 := 0
+      mstore(r0, $self)
+      mstore(r1, $other)
+      let t4 := add(mload(r0), mload(r1))
+      if lt(t4, mload(r0)) {
+        revert(0, 0)
+      }
+      v3 := t4
+      mstore(r2, v3)
+      ret := mload(r2)
+      leave
     }
-
-    object "Child_deployed" {
-      code {
-        function $child_runtime__Evm_hef0af3106e109414__3af54274b2985741() {
-          calldatacopy(0, 0, 4)
-          return(0, 4)
-        }
-        $child_runtime__Evm_hef0af3106e109414__3af54274b2985741()
-        return(0, 0)
+    function $allocate($bytes, $RawMem) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
       }
+      mstore(0x40, add(r0, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 32))
+      let r4 := mload(0x40)
+      if iszero(r4) {
+        r4 := 0x80
+      }
+      mstore(0x40, add(r4, 32))
+      let r5 := mload(0x40)
+      if iszero(r5) {
+        r5 := 0x80
+      }
+      mstore(0x40, add(r5, 0))
+      let r6 := mload(0x40)
+      if iszero(r6) {
+        r6 := 0x80
+      }
+      mstore(0x40, add(r6, 32))
+      let r7 := mload(0x40)
+      if iszero(r7) {
+        r7 := 0x80
+      }
+      mstore(0x40, add(r7, 32))
+      let r8 := mload(0x40)
+      if iszero(r8) {
+        r8 := 0x80
+      }
+      mstore(0x40, add(r8, 32))
+      let r9 := mload(0x40)
+      if iszero(r9) {
+        r9 := 0x80
+      }
+      mstore(0x40, add(r9, 0))
+      let r10 := mload(0x40)
+      if iszero(r10) {
+        r10 := 0x80
+      }
+      mstore(0x40, add(r10, 0))
+      let r11 := mload(0x40)
+      if iszero(r11) {
+        r11 := 0x80
+      }
+      mstore(0x40, add(r11, 32))
+      let r12 := mload(0x40)
+      if iszero(r12) {
+        r12 := 0x80
+      }
+      mstore(0x40, add(r12, 32))
+      let r13 := mload(0x40)
+      if iszero(r13) {
+        r13 := 0x80
+      }
+      mstore(0x40, add(r13, 0))
+      let v14 := 0
+      let v15 := 0
+      let v16 := 0
+      let v17 := 0
+      let v18 := 0
+      let v19 := 0
+      let v20 := 0
+      let v21 := 0
+      let v22 := 0
+      let v23 := 0
+      let v25 := 0
+      let v26 := 0
+      mstore(r0, $bytes)
+      let $pc := 0
+      for {} 1 {} {
+        switch $pc
+        case 0 {
+            v14 := 0x40
+            mstore(r3, v14)
+            v15 := $RawMem
+            v16 := $RawMem
+            v17 := $mload(v16, mload(r3))
+            mstore(r4, v17)
+            mstore(r2, mload(r4))
+            v18 := 0x00
+            mstore(r6, v18)
+            v19 := $eq(mload(r2), mload(r6))
+            mstore(r7, v19)
+            if iszero(iszero(mload(r7))) {
+              $pc := 1
+              continue
+            }
+            $pc := 2
+            continue
+        }
+        case 1 {
+            v20 := 0x60
+            mstore(r8, v20)
+            v21 := 0x60
+            mstore(r2, v21)
+            $pc := 3
+            continue
+        }
+        case 2 {
+            $pc := 3
+            continue
+        }
+        case 3 {
+            v22 := 0x40
+            mstore(r11, v22)
+            v23 := $add(mload(r2), mload(r0))
+            mstore(r12, v23)
+            v25 := $RawMem
+            v26 := $RawMem
+            $mstore(v26, mload(r11), mload(r12))
+            ret := mload(r2)
+            leave
+        }
+        default {
+            invalid()
+        }
+      }
+    }
+    function $codecopy_0($self, $dest, $offset, $len) {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 0))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 32))
+      let r4 := mload(0x40)
+      if iszero(r4) {
+        r4 := 0x80
+      }
+      mstore(0x40, add(r4, 0))
+      mstore(r1, $dest)
+      mstore(r2, $offset)
+      mstore(r3, $len)
+      datacopy(mload(r1), mload(r2), mload(r3))
+      leave
+    }
+    function $create2_raw($self, $value, $offset, $len, $salt) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 0))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 32))
+      let r4 := mload(0x40)
+      if iszero(r4) {
+        r4 := 0x80
+      }
+      mstore(0x40, add(r4, 32))
+      let r5 := mload(0x40)
+      if iszero(r5) {
+        r5 := 0x80
+      }
+      mstore(0x40, add(r5, 32))
+      let r6 := mload(0x40)
+      if iszero(r6) {
+        r6 := 0x80
+      }
+      mstore(0x40, add(r6, 32))
+      let v7 := 0
+      let v8 := 0
+      let v9 := 0
+      mstore(r1, $value)
+      mstore(r2, $offset)
+      mstore(r3, $len)
+      mstore(r4, $salt)
+      v8 := create2(mload(r1), mload(r2), mload(r3), mload(r4))
+      mstore(r5, v8)
+      v9 := allocate(32)
+      mstore(v9, mload(r5))
+      mstore(r6, v9)
+      ret := mload(r6)
+      leave
+    }
+    function $eq($self, $other) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let v3 := 0
+      mstore(r0, $self)
+      mstore(r1, $other)
+      v3 := iszero(iszero(eq(mload(r0), mload(r1))))
+      mstore(r2, v3)
+      ret := iszero(iszero(mload(r2)))
+      leave
+    }
+    function $init($Evm) {
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 32))
+      let r4 := mload(0x40)
+      if iszero(r4) {
+        r4 := 0x80
+      }
+      mstore(0x40, add(r4, 32))
+      let r5 := mload(0x40)
+      if iszero(r5) {
+        r5 := 0x80
+      }
+      mstore(0x40, add(r5, 32))
+      let r6 := mload(0x40)
+      if iszero(r6) {
+        r6 := 0x80
+      }
+      mstore(0x40, add(r6, 32))
+      let r7 := mload(0x40)
+      if iszero(r7) {
+        r7 := 0x80
+      }
+      mstore(0x40, add(r7, 32))
+      let r8 := mload(0x40)
+      if iszero(r8) {
+        r8 := 0x80
+      }
+      mstore(0x40, add(r8, 32))
+      let r9 := mload(0x40)
+      if iszero(r9) {
+        r9 := 0x80
+      }
+      mstore(0x40, add(r9, 32))
+      let r10 := mload(0x40)
+      if iszero(r10) {
+        r10 := 0x80
+      }
+      mstore(0x40, add(r10, 0))
+      let r11 := mload(0x40)
+      if iszero(r11) {
+        r11 := 0x80
+      }
+      mstore(0x40, add(r11, 32))
+      let r12 := mload(0x40)
+      if iszero(r12) {
+        r12 := 0x80
+      }
+      mstore(0x40, add(r12, 32))
+      let r13 := mload(0x40)
+      if iszero(r13) {
+        r13 := 0x80
+      }
+      mstore(0x40, add(r13, 32))
+      let r14 := mload(0x40)
+      if iszero(r14) {
+        r14 := 0x80
+      }
+      mstore(0x40, add(r14, 32))
+      let r15 := mload(0x40)
+      if iszero(r15) {
+        r15 := 0x80
+      }
+      mstore(0x40, add(r15, 32))
+      let r16 := mload(0x40)
+      if iszero(r16) {
+        r16 := 0x80
+      }
+      mstore(0x40, add(r16, 32))
+      let r17 := mload(0x40)
+      if iszero(r17) {
+        r17 := 0x80
+      }
+      mstore(0x40, add(r17, 0))
+      let r18 := mload(0x40)
+      if iszero(r18) {
+        r18 := 0x80
+      }
+      mstore(0x40, add(r18, 0))
+      let v19 := 0
+      let v20 := 0
+      let v22 := 0
+      let v23 := 0
+      let v25 := 0
+      let v26 := 0
+      let v27 := 0
+      let v28 := 0
+      let v29 := 0
+      let v30 := 0
+      let v31 := 0
+      let v33 := 0
+      let v34 := 0
+      let v37 := 0
+      let v38 := 0
+      mstore(r7, datasize("__Child_init"))
+      mstore(r1, mload(r7))
+      mstore(r8, dataoffset("__Child_init"))
+      mstore(r2, mload(r8))
+      v19 := $Evm
+      v20 := $allocate(mload(r1), v19)
+      mstore(r9, v20)
+      mstore(r3, mload(r9))
+      v22 := $Evm
+      v23 := $Evm
+      $codecopy_0(v23, mload(r3), mload(r2), mload(r1))
+      v25 := 0x00
+      mstore(r11, v25)
+      v26 := 0x1234
+      mstore(r12, v26)
+      v27 := $Evm
+      v28 := $Evm
+      v29 := $create2_raw(v28, mload(r11), mload(r2), mload(r1), mload(r12))
+      mstore(r13, v29)
+      mstore(r14, datasize("__Foo_runtime"))
+      mstore(r4, mload(r14))
+      mstore(r15, dataoffset("__Foo_runtime"))
+      mstore(r5, mload(r15))
+      v30 := $Evm
+      v31 := $allocate(mload(r4), v30)
+      mstore(r16, v31)
+      mstore(r6, mload(r16))
+      v33 := $Evm
+      v34 := $Evm
+      $codecopy_0(v34, mload(r6), mload(r5), mload(r4))
+      v37 := $Evm
+      v38 := $Evm
+      $return_data_2(v38, mload(r6), mload(r4))
+      invalid()
+    }
+    function $mload($self, $addr) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 0))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let v3 := 0
+      let v4 := 0
+      mstore(r1, $addr)
+      v4 := mload(mload(r1))
+      mstore(r2, v4)
+      ret := mload(r2)
+      leave
+    }
+    function $mstore($self, $addr, $value) {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 0))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 0))
+      mstore(r1, $addr)
+      mstore(r2, $value)
+      mstore(mload(r1), mload(r2))
+      leave
+    }
+    function $return_data_2($self, $offset, $len) {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 0))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 0))
+      mstore(r1, $offset)
+      mstore(r2, $len)
+      return(mload(r1), mload(r2))
+    }
+    $init()
+  }
+  object "__Child_init" {
+    code {
+      function $child_init($Evm) {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let r3 := mload(0x40)
+        if iszero(r3) {
+          r3 := 0x80
+        }
+        mstore(0x40, add(r3, 32))
+        let r4 := mload(0x40)
+        if iszero(r4) {
+          r4 := 0x80
+        }
+        mstore(0x40, add(r4, 32))
+        let r5 := mload(0x40)
+        if iszero(r5) {
+          r5 := 0x80
+        }
+        mstore(0x40, add(r5, 32))
+        let r6 := mload(0x40)
+        if iszero(r6) {
+          r6 := 0x80
+        }
+        mstore(0x40, add(r6, 0))
+        let r7 := mload(0x40)
+        if iszero(r7) {
+          r7 := 0x80
+        }
+        mstore(0x40, add(r7, 32))
+        let r8 := mload(0x40)
+        if iszero(r8) {
+          r8 := 0x80
+        }
+        mstore(0x40, add(r8, 0))
+        let v9 := 0
+        let v11 := 0
+        let v12 := 0
+        let v14 := 0
+        let v16 := 0
+        let v17 := 0
+        mstore(r3, datasize("__Child_runtime"))
+        mstore(r1, mload(r3))
+        mstore(r4, dataoffset("__Child_runtime"))
+        mstore(r2, mload(r4))
+        v9 := 0x00
+        mstore(r5, v9)
+        v11 := $Evm
+        v12 := $Evm
+        $codecopy_1(v12, mload(r5), mload(r2), mload(r1))
+        v14 := 0x00
+        mstore(r7, v14)
+        v16 := $Evm
+        v17 := $Evm
+        $return_data_4(v17, mload(r7), mload(r1))
+        invalid()
+      }
+      function $codecopy_1($self, $dest, $offset, $len) {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 0))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let r3 := mload(0x40)
+        if iszero(r3) {
+          r3 := 0x80
+        }
+        mstore(0x40, add(r3, 32))
+        let r4 := mload(0x40)
+        if iszero(r4) {
+          r4 := 0x80
+        }
+        mstore(0x40, add(r4, 0))
+        mstore(r1, $dest)
+        mstore(r2, $offset)
+        mstore(r3, $len)
+        datacopy(mload(r1), mload(r2), mload(r3))
+        leave
+      }
+      function $return_data_4($self, $offset, $len) {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 0))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let r3 := mload(0x40)
+        if iszero(r3) {
+          r3 := 0x80
+        }
+        mstore(0x40, add(r3, 0))
+        mstore(r1, $offset)
+        mstore(r2, $len)
+        return(mload(r1), mload(r2))
+      }
+      $child_init()
+    }
+    object "__Child_runtime" {
+      code {
+        function $calldatacopy($self, $dest, $offset, $len) {
+          let r0 := mload(0x40)
+          if iszero(r0) {
+            r0 := 0x80
+          }
+          mstore(0x40, add(r0, 0))
+          let r1 := mload(0x40)
+          if iszero(r1) {
+            r1 := 0x80
+          }
+          mstore(0x40, add(r1, 32))
+          let r2 := mload(0x40)
+          if iszero(r2) {
+            r2 := 0x80
+          }
+          mstore(0x40, add(r2, 32))
+          let r3 := mload(0x40)
+          if iszero(r3) {
+            r3 := 0x80
+          }
+          mstore(0x40, add(r3, 32))
+          let r4 := mload(0x40)
+          if iszero(r4) {
+            r4 := 0x80
+          }
+          mstore(0x40, add(r4, 0))
+          mstore(r1, $dest)
+          mstore(r2, $offset)
+          mstore(r3, $len)
+          calldatacopy(mload(r1), mload(r2), mload(r3))
+          leave
+        }
+        function $child_runtime($Evm) {
+          let r1 := mload(0x40)
+          if iszero(r1) {
+            r1 := 0x80
+          }
+          mstore(0x40, add(r1, 32))
+          let r2 := mload(0x40)
+          if iszero(r2) {
+            r2 := 0x80
+          }
+          mstore(0x40, add(r2, 32))
+          let r3 := mload(0x40)
+          if iszero(r3) {
+            r3 := 0x80
+          }
+          mstore(0x40, add(r3, 32))
+          let r4 := mload(0x40)
+          if iszero(r4) {
+            r4 := 0x80
+          }
+          mstore(0x40, add(r4, 0))
+          let r5 := mload(0x40)
+          if iszero(r5) {
+            r5 := 0x80
+          }
+          mstore(0x40, add(r5, 32))
+          let r6 := mload(0x40)
+          if iszero(r6) {
+            r6 := 0x80
+          }
+          mstore(0x40, add(r6, 32))
+          let r7 := mload(0x40)
+          if iszero(r7) {
+            r7 := 0x80
+          }
+          mstore(0x40, add(r7, 0))
+          let v8 := 0
+          let v9 := 0
+          let v10 := 0
+          let v12 := 0
+          let v13 := 0
+          let v15 := 0
+          let v16 := 0
+          let v18 := 0
+          let v19 := 0
+          v8 := 0x00
+          mstore(r1, v8)
+          v9 := 0x00
+          mstore(r2, v9)
+          v10 := 0x04
+          mstore(r3, v10)
+          v12 := $Evm
+          v13 := $Evm
+          $calldatacopy(v13, mload(r1), mload(r2), mload(r3))
+          v15 := 0x00
+          mstore(r5, v15)
+          v16 := 0x04
+          mstore(r6, v16)
+          v18 := $Evm
+          v19 := $Evm
+          $return_data_3(v19, mload(r5), mload(r6))
+          invalid()
+        }
+        function $return_data_3($self, $offset, $len) {
+          let r0 := mload(0x40)
+          if iszero(r0) {
+            r0 := 0x80
+          }
+          mstore(0x40, add(r0, 0))
+          let r1 := mload(0x40)
+          if iszero(r1) {
+            r1 := 0x80
+          }
+          mstore(0x40, add(r1, 32))
+          let r2 := mload(0x40)
+          if iszero(r2) {
+            r2 := 0x80
+          }
+          mstore(0x40, add(r2, 32))
+          let r3 := mload(0x40)
+          if iszero(r3) {
+            r3 := 0x80
+          }
+          mstore(0x40, add(r3, 0))
+          mstore(r1, $offset)
+          mstore(r2, $len)
+          return(mload(r1), mload(r2))
+        }
+        $child_runtime()
+      }
+    }
+  }
+  object "__Foo_runtime" {
+    code {
+      function $balance($RawOps) {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let r3 := mload(0x40)
+        if iszero(r3) {
+          r3 := 0x80
+        }
+        mstore(0x40, add(r3, 0))
+        let v4 := 0
+        let v5 := 0
+        let v7 := 0
+        let v8 := 0
+        v4 := 0x00
+        mstore(r1, v4)
+        v5 := 0x00
+        mstore(r2, v5)
+        v7 := $RawOps
+        v8 := $RawOps
+        $return_data_0(v8, mload(r1), mload(r2))
+        invalid()
+      }
+      function $calldataload($self, $offset) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 0))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let v3 := 0
+        let v4 := 0
+        mstore(r1, $offset)
+        v4 := calldataload(mload(r1))
+        mstore(r2, v4)
+        ret := mload(r2)
+        leave
+      }
+      function $read_selector($RawOps) -> ret {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let r3 := mload(0x40)
+        if iszero(r3) {
+          r3 := 0x80
+        }
+        mstore(0x40, add(r3, 32))
+        let r4 := mload(0x40)
+        if iszero(r4) {
+          r4 := 0x80
+        }
+        mstore(0x40, add(r4, 32))
+        let r5 := mload(0x40)
+        if iszero(r5) {
+          r5 := 0x80
+        }
+        mstore(0x40, add(r5, 32))
+        let v6 := 0
+        let v7 := 0
+        let v8 := 0
+        let v9 := 0
+        let v10 := 0
+        let v11 := 0
+        v6 := 0x00
+        mstore(r2, v6)
+        v7 := $RawOps
+        v8 := $RawOps
+        v9 := $calldataload(v8, mload(r2))
+        mstore(r3, v9)
+        mstore(r1, mload(r3))
+        v10 := 0xe0
+        mstore(r4, v10)
+        v11 := $shr(mload(r1), mload(r4))
+        mstore(r5, v11)
+        ret := mload(r5)
+        leave
+      }
+      function $return_data_0($self, $offset, $len) {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 0))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let r3 := mload(0x40)
+        if iszero(r3) {
+          r3 := 0x80
+        }
+        mstore(0x40, add(r3, 0))
+        mstore(r1, $offset)
+        mstore(r2, $len)
+        return(mload(r1), mload(r2))
+      }
+      function $return_data_1($self, $offset, $len) {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 0))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let r3 := mload(0x40)
+        if iszero(r3) {
+          r3 := 0x80
+        }
+        mstore(0x40, add(r3, 0))
+        mstore(r1, $offset)
+        mstore(r2, $len)
+        return(mload(r1), mload(r2))
+      }
+      function $runtime($Evm) {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 0))
+        let r3 := mload(0x40)
+        if iszero(r3) {
+          r3 := 0x80
+        }
+        mstore(0x40, add(r3, 32))
+        let r4 := mload(0x40)
+        if iszero(r4) {
+          r4 := 0x80
+        }
+        mstore(0x40, add(r4, 32))
+        let r5 := mload(0x40)
+        if iszero(r5) {
+          r5 := 0x80
+        }
+        mstore(0x40, add(r5, 32))
+        let r6 := mload(0x40)
+        if iszero(r6) {
+          r6 := 0x80
+        }
+        mstore(0x40, add(r6, 32))
+        let r7 := mload(0x40)
+        if iszero(r7) {
+          r7 := 0x80
+        }
+        mstore(0x40, add(r7, 0))
+        let r8 := mload(0x40)
+        if iszero(r8) {
+          r8 := 0x80
+        }
+        mstore(0x40, add(r8, 0))
+        let r9 := mload(0x40)
+        if iszero(r9) {
+          r9 := 0x80
+        }
+        mstore(0x40, add(r9, 0))
+        let r10 := mload(0x40)
+        if iszero(r10) {
+          r10 := 0x80
+        }
+        mstore(0x40, add(r10, 32))
+        let r11 := mload(0x40)
+        if iszero(r11) {
+          r11 := 0x80
+        }
+        mstore(0x40, add(r11, 32))
+        let r12 := mload(0x40)
+        if iszero(r12) {
+          r12 := 0x80
+        }
+        mstore(0x40, add(r12, 0))
+        let v13 := 0
+        let v14 := 0
+        let v15 := 0
+        let v16 := 0
+        let v17 := 0
+        let v19 := 0
+        let v20 := 0
+        let v23 := 0
+        let v26 := 0
+        let v28 := 0
+        let $pc := 0
+        for {} 1 {} {
+          switch $pc
+          case 0 {
+              v13 := $Evm
+              v14 := $read_selector(v13)
+              mstore(r1, v14)
+              v15 := 0x12345678
+              mstore(r3, v15)
+              mstore(r4, iszero(iszero(eq(mload(r1), mload(r3)))))
+              if iszero(iszero(mload(r4))) {
+                $pc := 2
+                continue
+              }
+              $pc := 5
+              continue
+          }
+          case 1 {
+              v16 := 0x00
+              mstore(r10, v16)
+              v17 := 0x00
+              mstore(r11, v17)
+              v19 := $Evm
+              v20 := $Evm
+              $return_data_1(v20, mload(r10), mload(r11))
+              invalid()
+          }
+          case 2 {
+              v23 := $Evm
+              $transfer(v23)
+              invalid()
+          }
+          case 3 {
+              v26 := $Evm
+              $balance(v26)
+              invalid()
+          }
+          case 4 {
+              $pc := 1
+              continue
+          }
+          case 5 {
+              v28 := 0x23456789
+              mstore(r5, v28)
+              mstore(r6, iszero(iszero(eq(mload(r1), mload(r5)))))
+              if iszero(iszero(mload(r6))) {
+                $pc := 3
+                continue
+              }
+              $pc := 6
+              continue
+          }
+          case 6 {
+              $pc := 4
+              continue
+          }
+          default {
+              invalid()
+          }
+        }
+      }
+      function $shr($self, $other) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 32))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let v3 := 0
+        mstore(r0, $self)
+        mstore(r1, $other)
+        v3 := shr(mload(r1), mload(r0))
+        mstore(r2, v3)
+        ret := mload(r2)
+        leave
+      }
+      function $transfer($RawOps) {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let r3 := mload(0x40)
+        if iszero(r3) {
+          r3 := 0x80
+        }
+        mstore(0x40, add(r3, 0))
+        let v4 := 0
+        let v5 := 0
+        let v7 := 0
+        let v8 := 0
+        v4 := 0x00
+        mstore(r1, v4)
+        v5 := 0x00
+        mstore(r2, v5)
+        v7 := $RawOps
+        v8 := $RawOps
+        $return_data_0(v8, mload(r1), mload(r2))
+        invalid()
+      }
+      $runtime()
     }
   }
 }

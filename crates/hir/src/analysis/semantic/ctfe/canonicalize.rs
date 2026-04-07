@@ -7,10 +7,11 @@ use crate::analysis::{
     semantic::{
         SBlock, SBlockId, SConst, SExpr, SStmt, SStmtKind, STerminatorKind, SemConstId,
         SemConstValue, SemanticBody, array_const, enum_const, instance::SemanticInstance,
-        instantiate_with_generic_args, sem_const_from_ty, struct_const, tuple_const,
+        instantiate_with_generic_args, reify_runtime_const_for_ty, sem_const_from_ty, struct_const,
+        tuple_const,
     },
     ty::{
-        const_ty::{ConstTyData, evaluate_abstract_int_const_expr},
+        const_ty::{ConstTyData, evaluate_type_level_int_const_expr},
         ty_def::{TyData, TyId},
     },
 };
@@ -125,16 +126,16 @@ fn canonicalize_expr<'db>(
         let value = eval_const_ref(db, *cref)
             .unwrap_or_else(|err| panic!("CTFE failed for {cref:?}: {err:?}"));
         let value = canonicalize_const_value(db, instance, value);
-        return (
-            SExpr::Const(SConst::Value(value)),
-            runtime_const_value(db, value),
-        );
+        let runtime = reify_runtime_const_for_ty(db, instance, result_ty, value);
+        let value = runtime.unwrap_or(value);
+        return (SExpr::Const(SConst::Value(value)), runtime);
     }
 
     if let Some(value) = try_eval_expr_to_const(db, instance, result_ty, expr, locals, synthetic())
+        && !matches!(value.value(db), SemConstValue::TypeLevel { .. })
     {
         let value = canonicalize_const_value(db, instance, value);
-        if let Some(value) = runtime_const_value(db, value) {
+        if let Some(value) = reify_runtime_const_for_ty(db, instance, result_ty, value) {
             return (SExpr::Const(SConst::Value(value)), Some(value));
         }
     }
@@ -142,20 +143,12 @@ fn canonicalize_expr<'db>(
     match expr {
         SExpr::Const(SConst::Value(value)) => {
             let value = canonicalize_const_value(db, instance, *value);
-            (
-                SExpr::Const(SConst::Value(value)),
-                runtime_const_value(db, value),
-            )
+            let runtime = reify_runtime_const_for_ty(db, instance, result_ty, value);
+            let value = runtime.unwrap_or(value);
+            (SExpr::Const(SConst::Value(value)), runtime)
         }
         _ => (expr.clone(), None),
     }
-}
-
-fn runtime_const_value<'db>(
-    db: &'db dyn HirAnalysisDb,
-    value: SemConstId<'db>,
-) -> Option<SemConstId<'db>> {
-    (!matches!(value.value(db), SemConstValue::TypeLevel { .. })).then_some(value)
 }
 
 fn merge_local_consts<'db>(
@@ -220,7 +213,7 @@ fn canonicalize_const_value<'db>(
             };
             let mut evaluated = const_ty.evaluate(db, Some(ty));
             if let ConstTyData::Abstract(expr, expected_ty) = evaluated.data(db)
-                && let Some(concrete) = evaluate_abstract_int_const_expr(db, *expr, *expected_ty)
+                && let Some(concrete) = evaluate_type_level_int_const_expr(db, *expr, *expected_ty)
             {
                 evaluated = concrete;
             }
@@ -236,7 +229,7 @@ fn canonicalize_const_value<'db>(
                 evaluated = instantiated.evaluate(db, Some(ty));
                 if let ConstTyData::Abstract(expr, expected_ty) = evaluated.data(db)
                     && let Some(concrete) =
-                        evaluate_abstract_int_const_expr(db, *expr, *expected_ty)
+                        evaluate_type_level_int_const_expr(db, *expr, *expected_ty)
                 {
                     evaluated = concrete;
                 }

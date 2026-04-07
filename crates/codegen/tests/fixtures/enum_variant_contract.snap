@@ -5,115 +5,828 @@ input_file: tests/fixtures/enum_variant_contract.fe
 ---
 object "EnumContract" {
   code {
-    function $init__Evm_hef0af3106e109414__3af54274b2985741() {
-      let v0 := datasize("EnumContract_deployed")
-      let v1 := dataoffset("EnumContract_deployed")
-      codecopy(0, v1, v0)
-      return(0, v0)
+    function $codecopy($self, $dest, $offset, $len) {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 0))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 32))
+      let r4 := mload(0x40)
+      if iszero(r4) {
+        r4 := 0x80
+      }
+      mstore(0x40, add(r4, 0))
+      mstore(r1, $dest)
+      mstore(r2, $offset)
+      mstore(r3, $len)
+      datacopy(mload(r1), mload(r2), mload(r3))
+      leave
     }
-    $init__Evm_hef0af3106e109414__3af54274b2985741()
+    function $init($Evm) {
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 32))
+      let r4 := mload(0x40)
+      if iszero(r4) {
+        r4 := 0x80
+      }
+      mstore(0x40, add(r4, 32))
+      let r5 := mload(0x40)
+      if iszero(r5) {
+        r5 := 0x80
+      }
+      mstore(0x40, add(r5, 32))
+      let r6 := mload(0x40)
+      if iszero(r6) {
+        r6 := 0x80
+      }
+      mstore(0x40, add(r6, 0))
+      let r7 := mload(0x40)
+      if iszero(r7) {
+        r7 := 0x80
+      }
+      mstore(0x40, add(r7, 32))
+      let r8 := mload(0x40)
+      if iszero(r8) {
+        r8 := 0x80
+      }
+      mstore(0x40, add(r8, 0))
+      let v9 := 0
+      let v11 := 0
+      let v12 := 0
+      let v14 := 0
+      let v16 := 0
+      let v17 := 0
+      mstore(r3, datasize("__EnumContract_runtime"))
+      mstore(r1, mload(r3))
+      mstore(r4, dataoffset("__EnumContract_runtime"))
+      mstore(r2, mload(r4))
+      v9 := 0x00
+      mstore(r5, v9)
+      v11 := $Evm
+      v12 := $Evm
+      $codecopy(v12, mload(r5), mload(r2), mload(r1))
+      v14 := 0x00
+      mstore(r7, v14)
+      v16 := $Evm
+      v17 := $Evm
+      $return_data_2(v17, mload(r7), mload(r1))
+      invalid()
+    }
+    function $return_data_2($self, $offset, $len) {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 0))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 0))
+      mstore(r1, $offset)
+      mstore(r2, $len)
+      return(mload(r1), mload(r2))
+    }
+    $init()
   }
-
-  object "EnumContract_deployed" {
+  object "__EnumContract_runtime" {
     code {
-      function $abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741($value) {
-        let v0 := 0
-        mstore(v0, $value)
-        return(v0, 32)
-      }
-      function $runtime__Evm_hef0af3106e109414__3af54274b2985741() {
-        let v0 := calldataload(0)
-        let v1 := shr(224, v0)
-        let v2 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v1, 1817627404)
-        let v3 := v2
-        if v3 {
-          let v4 := calldataload(4)
-          let v5 := mload(0x40)
-          if iszero(v5) {
-            v5 := 0x80
-          }
-          mstore(0x40, add(v5, 64))
-          mstore(v5, 1)
-          mstore(add(v5, 32), v4)
-          let v6 := 0
-          let v7 := mload(v5)
-          switch v7
-            case 1 {
-              let v8 := mload(add(v5, 32))
-              let v9 := v8
-              v6 := v9
-            }
-            case 0 {
-              v6 := 0
-            }
-            default {
-            }
-          let v10 := v6
-          $abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741(v10)
+      function $abi_encode_u256($value, $RawOps) {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
         }
-        if iszero(v3) {
-          let v11 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v1, 1163776883)
-          let v12 := v11
-          if v12 {
-            let v13 := mload(0x40)
-            if iszero(v13) {
-              v13 := 0x80
-            }
-            mstore(0x40, add(v13, 64))
-            mstore(v13, 0)
-            let v14 := 0
-            let v15 := mload(v13)
-            switch v15
-              case 1 {
-                let v16 := mload(add(v13, 32))
-                let v17 := v16
-                v14 := v17
-              }
-              case 0 {
-                v14 := 0
-              }
-              default {
-              }
-            let v18 := v14
-            $abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741(v18)
-          }
-          if iszero(v12) {
-            let v19 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v1, 3572425762)
-            let v20 := v19
-            if iszero(v20) {
-              return(0, 0)
-            }
-            let v21 := calldataload(4)
-            let v22 := mload(0x40)
-            if iszero(v22) {
-              v22 := 0x80
-            }
-            mstore(0x40, add(v22, 64))
-            mstore(v22, 1)
-            mstore(add(v22, 32), v21)
-            let v23 := 0
-            let v24 := mload(v22)
-            switch v24
-              case 1 {
-                v23 := 1
-              }
-              case 0 {
-                v23 := 0
-              }
-              default {
-              }
-            let v25 := v23
-            $abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741(v25)
-          }
+        mstore(0x40, add(r0, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
         }
+        mstore(0x40, add(r2, 32))
+        let r3 := mload(0x40)
+        if iszero(r3) {
+          r3 := 0x80
+        }
+        mstore(0x40, add(r3, 32))
+        let r4 := mload(0x40)
+        if iszero(r4) {
+          r4 := 0x80
+        }
+        mstore(0x40, add(r4, 0))
+        let r5 := mload(0x40)
+        if iszero(r5) {
+          r5 := 0x80
+        }
+        mstore(0x40, add(r5, 32))
+        let r6 := mload(0x40)
+        if iszero(r6) {
+          r6 := 0x80
+        }
+        mstore(0x40, add(r6, 0))
+        let v7 := 0
+        let v8 := 0
+        let v10 := 0
+        let v11 := 0
+        let v13 := 0
+        let v15 := 0
+        let v16 := 0
+        mstore(r0, $value)
+        v7 := 0x00
+        mstore(r3, v7)
+        v8 := 0x00
+        mstore(r2, v8)
+        v10 := $RawOps
+        v11 := $RawOps
+        $mstore(v11, mload(r2), mload(r0))
+        v13 := 0x20
+        mstore(r5, v13)
+        v15 := $RawOps
+        v16 := $RawOps
+        $return_data_1(v16, mload(r2), mload(r5))
+        invalid()
       }
-      function $u256_h3271ca15373d4483_eq_he50383edd273619f_eq($self, $other) -> ret {
-        let v0 := eq($self, $other)
-        ret := v0
+      function $calldataload($self, $offset) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 0))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let v3 := 0
+        let v4 := 0
+        mstore(r1, $offset)
+        v4 := calldataload(mload(r1))
+        mstore(r2, v4)
+        ret := mload(r2)
         leave
       }
-      $runtime__Evm_hef0af3106e109414__3af54274b2985741()
-      return(0, 0)
+      function $eq($self, $other) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 32))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let v3 := 0
+        mstore(r0, $self)
+        mstore(r1, $other)
+        v3 := iszero(iszero(eq(mload(r0), mload(r1))))
+        mstore(r2, v3)
+        ret := iszero(iszero(mload(r2)))
+        leave
+      }
+      function $mstore($self, $addr, $value) {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 0))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let r3 := mload(0x40)
+        if iszero(r3) {
+          r3 := 0x80
+        }
+        mstore(0x40, add(r3, 0))
+        mstore(r1, $addr)
+        mstore(r2, $value)
+        mstore(mload(r1), mload(r2))
+        leave
+      }
+      function $return_data_0($self, $offset, $len) {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 0))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let r3 := mload(0x40)
+        if iszero(r3) {
+          r3 := 0x80
+        }
+        mstore(0x40, add(r3, 0))
+        mstore(r1, $offset)
+        mstore(r2, $len)
+        return(mload(r1), mload(r2))
+      }
+      function $return_data_1($self, $offset, $len) {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 0))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let r3 := mload(0x40)
+        if iszero(r3) {
+          r3 := 0x80
+        }
+        mstore(0x40, add(r3, 0))
+        mstore(r1, $offset)
+        mstore(r2, $len)
+        return(mload(r1), mload(r2))
+      }
+      function $runtime($Evm) {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let r4 := mload(0x40)
+        if iszero(r4) {
+          r4 := 0x80
+        }
+        mstore(0x40, add(r4, 32))
+        let r5 := mload(0x40)
+        if iszero(r5) {
+          r5 := 0x80
+        }
+        mstore(0x40, add(r5, 32))
+        let r7 := mload(0x40)
+        if iszero(r7) {
+          r7 := 0x80
+        }
+        mstore(0x40, add(r7, 32))
+        let r8 := mload(0x40)
+        if iszero(r8) {
+          r8 := 0x80
+        }
+        mstore(0x40, add(r8, 32))
+        let r9 := mload(0x40)
+        if iszero(r9) {
+          r9 := 0x80
+        }
+        mstore(0x40, add(r9, 32))
+        let r11 := mload(0x40)
+        if iszero(r11) {
+          r11 := 0x80
+        }
+        mstore(0x40, add(r11, 32))
+        let r12 := mload(0x40)
+        if iszero(r12) {
+          r12 := 0x80
+        }
+        mstore(0x40, add(r12, 32))
+        let r13 := mload(0x40)
+        if iszero(r13) {
+          r13 := 0x80
+        }
+        mstore(0x40, add(r13, 32))
+        let r14 := mload(0x40)
+        if iszero(r14) {
+          r14 := 0x80
+        }
+        mstore(0x40, add(r14, 32))
+        let r15 := mload(0x40)
+        if iszero(r15) {
+          r15 := 0x80
+        }
+        mstore(0x40, add(r15, 32))
+        let r16 := mload(0x40)
+        if iszero(r16) {
+          r16 := 0x80
+        }
+        mstore(0x40, add(r16, 0))
+        let r17 := mload(0x40)
+        if iszero(r17) {
+          r17 := 0x80
+        }
+        mstore(0x40, add(r17, 32))
+        let r18 := mload(0x40)
+        if iszero(r18) {
+          r18 := 0x80
+        }
+        mstore(0x40, add(r18, 32))
+        let r19 := mload(0x40)
+        if iszero(r19) {
+          r19 := 0x80
+        }
+        mstore(0x40, add(r19, 32))
+        let r20 := mload(0x40)
+        if iszero(r20) {
+          r20 := 0x80
+        }
+        mstore(0x40, add(r20, 32))
+        let r22 := mload(0x40)
+        if iszero(r22) {
+          r22 := 0x80
+        }
+        mstore(0x40, add(r22, 32))
+        let r24 := mload(0x40)
+        if iszero(r24) {
+          r24 := 0x80
+        }
+        mstore(0x40, add(r24, 32))
+        let r25 := mload(0x40)
+        if iszero(r25) {
+          r25 := 0x80
+        }
+        mstore(0x40, add(r25, 0))
+        let r26 := mload(0x40)
+        if iszero(r26) {
+          r26 := 0x80
+        }
+        mstore(0x40, add(r26, 0))
+        let r27 := mload(0x40)
+        if iszero(r27) {
+          r27 := 0x80
+        }
+        mstore(0x40, add(r27, 0))
+        let r28 := mload(0x40)
+        if iszero(r28) {
+          r28 := 0x80
+        }
+        mstore(0x40, add(r28, 32))
+        let r29 := mload(0x40)
+        if iszero(r29) {
+          r29 := 0x80
+        }
+        mstore(0x40, add(r29, 32))
+        let r31 := mload(0x40)
+        if iszero(r31) {
+          r31 := 0x80
+        }
+        mstore(0x40, add(r31, 32))
+        let r33 := mload(0x40)
+        if iszero(r33) {
+          r33 := 0x80
+        }
+        mstore(0x40, add(r33, 32))
+        let r34 := mload(0x40)
+        if iszero(r34) {
+          r34 := 0x80
+        }
+        mstore(0x40, add(r34, 0))
+        let r35 := mload(0x40)
+        if iszero(r35) {
+          r35 := 0x80
+        }
+        mstore(0x40, add(r35, 0))
+        let r36 := mload(0x40)
+        if iszero(r36) {
+          r36 := 0x80
+        }
+        mstore(0x40, add(r36, 0))
+        let r37 := mload(0x40)
+        if iszero(r37) {
+          r37 := 0x80
+        }
+        mstore(0x40, add(r37, 32))
+        let r38 := mload(0x40)
+        if iszero(r38) {
+          r38 := 0x80
+        }
+        mstore(0x40, add(r38, 32))
+        let r39 := mload(0x40)
+        if iszero(r39) {
+          r39 := 0x80
+        }
+        mstore(0x40, add(r39, 32))
+        let r40 := mload(0x40)
+        if iszero(r40) {
+          r40 := 0x80
+        }
+        mstore(0x40, add(r40, 32))
+        let r42 := mload(0x40)
+        if iszero(r42) {
+          r42 := 0x80
+        }
+        mstore(0x40, add(r42, 32))
+        let r44 := mload(0x40)
+        if iszero(r44) {
+          r44 := 0x80
+        }
+        mstore(0x40, add(r44, 32))
+        let r45 := mload(0x40)
+        if iszero(r45) {
+          r45 := 0x80
+        }
+        mstore(0x40, add(r45, 32))
+        let r46 := mload(0x40)
+        if iszero(r46) {
+          r46 := 0x80
+        }
+        mstore(0x40, add(r46, 0))
+        let r47 := mload(0x40)
+        if iszero(r47) {
+          r47 := 0x80
+        }
+        mstore(0x40, add(r47, 0))
+        let r48 := mload(0x40)
+        if iszero(r48) {
+          r48 := 0x80
+        }
+        mstore(0x40, add(r48, 32))
+        let r49 := mload(0x40)
+        if iszero(r49) {
+          r49 := 0x80
+        }
+        mstore(0x40, add(r49, 32))
+        let r50 := mload(0x40)
+        if iszero(r50) {
+          r50 := 0x80
+        }
+        mstore(0x40, add(r50, 0))
+        let v3 := 0
+        let v6 := 0
+        let v10 := 0
+        let v21 := 0
+        let v23 := 0
+        let v30 := 0
+        let v32 := 0
+        let v41 := 0
+        let v43 := 0
+        let v51 := 0
+        let v52 := 0
+        let v53 := 0
+        let v54 := 0
+        let v55 := 0
+        let v56 := 0
+        let v57 := 0
+        let v58 := 0
+        let v59 := 0
+        let v60 := 0
+        let v61 := 0
+        let v62 := 0
+        let v63 := 0
+        let v64 := 0
+        let v65 := 0
+        let v67 := 0
+        let v69 := 0
+        let v70 := 0
+        let v71 := 0
+        let v72 := 0
+        let v73 := 0
+        let v74 := 0
+        let v75 := 0
+        let v77 := 0
+        let v79 := 0
+        let v80 := 0
+        let v81 := 0
+        let v82 := 0
+        let v83 := 0
+        let v84 := 0
+        let v85 := 0
+        let v86 := 0
+        let v87 := 0
+        let v89 := 0
+        let v90 := 0
+        let v93 := 0
+        let v95 := 0
+        let v96 := 0
+        let v97 := 0
+        let v98 := 0
+        let $pc := 0
+        for {} 1 {} {
+          switch $pc
+          case 0 {
+              v51 := 0x00
+              mstore(r12, v51)
+              v52 := $Evm
+              v53 := $Evm
+              v54 := $calldataload(v53, mload(r12))
+              mstore(r13, v54)
+              v55 := 0xe0
+              mstore(r14, v55)
+              v56 := $shr(mload(r13), mload(r14))
+              mstore(r15, v56)
+              mstore(r1, mload(r15))
+              v57 := 0x6c56cb0c
+              mstore(r17, v57)
+              v58 := $eq(mload(r1), mload(r17))
+              mstore(r18, v58)
+              if iszero(iszero(mload(r18))) {
+                $pc := 1
+                continue
+              }
+              $pc := 2
+              continue
+          }
+          case 1 {
+              v59 := 0x04
+              mstore(r19, v59)
+              v60 := $Evm
+              v61 := $Evm
+              v62 := $calldataload(v61, mload(r19))
+              mstore(r20, v62)
+              mstore(r2, mload(r20))
+              let t99 := mload(0x40)
+              if iszero(t99) {
+                t99 := 0x80
+              }
+              mstore(0x40, add(t99, 33))
+              mstore(t99, and(1, 0xff))
+              mstore(add(t99, 1), mload(r2))
+              v21 := t99
+              v3 := v21
+              let t100 := and(mload(v3), 0xff)
+              v63 := t100
+              switch v63
+              case 1 {
+                  $pc := 5
+                  continue
+              }
+              case 0 {
+                  $pc := 6
+                  continue
+              }
+              default {
+                  invalid()
+              }
+          }
+          case 2 {
+              $pc := 3
+              continue
+          }
+          case 3 {
+              v64 := 0x455dd373
+              mstore(r28, v64)
+              v65 := $eq(mload(r1), mload(r28))
+              mstore(r29, v65)
+              if iszero(iszero(mload(r29))) {
+                $pc := 7
+                continue
+              }
+              $pc := 8
+              continue
+          }
+          case 4 {
+              mstore(r4, mload(r22))
+              v67 := $Evm
+              $abi_encode_u256(mload(r4), v67)
+              invalid()
+          }
+          case 5 {
+              let t101 := mload(add(v3, 1))
+              v23 := t101
+              mstore(r5, v23)
+              mstore(r22, mload(r5))
+              $pc := 4
+              continue
+          }
+          case 6 {
+              v69 := 0x00
+              mstore(r24, v69)
+              v70 := 0x00
+              mstore(r22, v70)
+              $pc := 4
+              continue
+          }
+          case 7 {
+              let t102 := mload(0x40)
+              if iszero(t102) {
+                t102 := 0x80
+              }
+              mstore(0x40, add(t102, 33))
+              mstore(t102, and(0, 0xff))
+              v71 := t102
+              v30 := v71
+              let t103 := mload(0x40)
+              if iszero(t103) {
+                t103 := 0x80
+              }
+              mstore(0x40, add(t103, 33))
+              mstore(t103, and(0, 0xff))
+              v72 := t103
+              v6 := v72
+              let t104 := and(mload(v6), 0xff)
+              v73 := t104
+              switch v73
+              case 1 {
+                  $pc := 11
+                  continue
+              }
+              case 0 {
+                  $pc := 12
+                  continue
+              }
+              default {
+                  invalid()
+              }
+          }
+          case 8 {
+              $pc := 9
+              continue
+          }
+          case 9 {
+              v74 := 0xd4eee422
+              mstore(r37, v74)
+              v75 := $eq(mload(r1), mload(r37))
+              mstore(r38, v75)
+              if iszero(iszero(mload(r38))) {
+                $pc := 13
+                continue
+              }
+              $pc := 14
+              continue
+          }
+          case 10 {
+              mstore(r7, mload(r31))
+              v77 := $Evm
+              $abi_encode_u256(mload(r7), v77)
+              invalid()
+          }
+          case 11 {
+              let t105 := mload(add(v6, 1))
+              v32 := t105
+              mstore(r8, v32)
+              mstore(r31, mload(r8))
+              $pc := 10
+              continue
+          }
+          case 12 {
+              v79 := 0x00
+              mstore(r33, v79)
+              v80 := 0x00
+              mstore(r31, v80)
+              $pc := 10
+              continue
+          }
+          case 13 {
+              v81 := 0x04
+              mstore(r39, v81)
+              v82 := $Evm
+              v83 := $Evm
+              v84 := $calldataload(v83, mload(r39))
+              mstore(r40, v84)
+              mstore(r9, mload(r40))
+              let t106 := mload(0x40)
+              if iszero(t106) {
+                t106 := 0x80
+              }
+              mstore(0x40, add(t106, 33))
+              mstore(t106, and(1, 0xff))
+              mstore(add(t106, 1), mload(r9))
+              v41 := t106
+              v10 := v41
+              let t107 := and(mload(v10), 0xff)
+              v85 := t107
+              switch v85
+              case 1 {
+                  $pc := 17
+                  continue
+              }
+              case 0 {
+                  $pc := 18
+                  continue
+              }
+              default {
+                  invalid()
+              }
+          }
+          case 14 {
+              $pc := 15
+              continue
+          }
+          case 15 {
+              v86 := 0x00
+              mstore(r48, v86)
+              v87 := 0x00
+              mstore(r49, v87)
+              v89 := $Evm
+              v90 := $Evm
+              $return_data_0(v90, mload(r48), mload(r49))
+              invalid()
+          }
+          case 16 {
+              mstore(r11, mload(r42))
+              v93 := $Evm
+              $abi_encode_u256(mload(r11), v93)
+              invalid()
+          }
+          case 17 {
+              let t108 := mload(add(v10, 1))
+              v43 := t108
+              v95 := 0x01
+              mstore(r44, v95)
+              v96 := 0x01
+              mstore(r42, v96)
+              $pc := 16
+              continue
+          }
+          case 18 {
+              v97 := 0x00
+              mstore(r45, v97)
+              v98 := 0x00
+              mstore(r42, v98)
+              $pc := 16
+              continue
+          }
+          default {
+              invalid()
+          }
+        }
+      }
+      function $shr($self, $other) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 32))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let v3 := 0
+        mstore(r0, $self)
+        mstore(r1, $other)
+        v3 := shr(mload(r1), mload(r0))
+        mstore(r2, v3)
+        ret := mload(r2)
+        leave
+      }
+      $runtime()
     }
   }
 }

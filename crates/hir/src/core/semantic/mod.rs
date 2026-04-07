@@ -632,6 +632,9 @@ impl<'db> TopLevelMod<'db> {
 impl<'db> Mod<'db> {
     // Note: semantic child iteration and module-scoped diagnostics can be
     // added here if direct `scope_graph` traversal in analysis becomes noisy.
+    pub fn arithmetic_mode(self, db: &'db dyn HirDb) -> Option<ArithmeticMode> {
+        self.attributes(db).arithmetic_mode(db)
+    }
 }
 
 // Function items ------------------------------------------------------------
@@ -1682,6 +1685,34 @@ impl<'db> EffectEnvView<'db> {
 
     pub fn requirements(self, db: &'db dyn HirAnalysisDb) -> Vec<EffectRequirement<'db>> {
         effect_requirements_for_site(db, self.site)
+    }
+
+    pub fn resolved_binding_ty(self, db: &'db dyn HirAnalysisDb, idx: usize) -> Option<TyId<'db>> {
+        let requirement = self
+            .requirements(db)
+            .iter()
+            .find(|binding| binding.binding_idx as usize == idx)?
+            .clone();
+        let provider = self
+            .resolutions(db)
+            .iter()
+            .find(|resolution| resolution.requirement_idx as usize == idx)
+            .and_then(|resolution| {
+                self.providers(db)
+                    .iter()
+                    .find(|provider| provider.provider_idx == resolution.provider_idx)
+                    .cloned()
+            });
+
+        match requirement.key {
+            EffectRequirementKey::Trait(_) => provider
+                .map(|binding| binding.provider_ty)
+                .or_else(|| requirement.key.binding_ty(db)),
+            EffectRequirementKey::Type(_) | EffectRequirementKey::Other => requirement
+                .key
+                .binding_ty(db)
+                .or_else(|| provider.map(|binding| binding.provider_ty)),
+        }
     }
 
     pub fn providers(self, db: &'db dyn HirAnalysisDb) -> Vec<ProviderBinding<'db>> {

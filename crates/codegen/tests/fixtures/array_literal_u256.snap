@@ -5,12 +5,74 @@ input_file: tests/fixtures/array_literal_u256.fe
 ---
 object "main" {
   code {
+    function $__fe_main_root() {
+      let v0 := 0
+      v0 := $fixed_u256_array_literal()
+      stop()
+    }
     function $fixed_u256_array_literal() -> ret {
-      let v0 := dataoffset("data_fixed_u256_array_literal_0")
-      let v1 := v0
-      ret := v1
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 32))
+      let r4 := mload(0x40)
+      if iszero(r4) {
+        r4 := 0x80
+      }
+      mstore(0x40, add(r4, 32))
+      let v0 := 0
+      let v5 := 0
+      let v6 := 0
+      let v7 := 0
+      let v8 := 0
+      let v9 := 0
+      let v10 := 0
+      let v11 := 0
+      let v12 := 0
+      let v13 := 0
+      let v14 := 0
+      let v15 := 0
+      let v16 := 0
+      let v17 := 0
+      let v18 := 0
+      let v19 := 0
+      let v20 := 0
+      let v21 := 0
+      v6 := 0x01
+      mstore(r1, v6)
+      v7 := 0x02
+      mstore(r2, v7)
+      v8 := 0x03
+      mstore(r3, v8)
+      v9 := 0x04
+      mstore(r4, v9)
+      v10 := 0x01
+      v11 := 0x02
+      v12 := 0x03
+      v13 := 0x04
+      v14 := dataoffset("const_0")
+      v5 := v14
+      v16 := 0x01
+      v17 := 0x02
+      v18 := 0x03
+      v19 := 0x04
+      v20 := dataoffset("const_0")
+      v0 := v20
+      ret := v0
       leave
     }
+    $__fe_main_root()
   }
-  data "data_fixed_u256_array_literal_0" hex"0000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000030000000000000000000000000000000000000000000000000000000000000004"
+  data "const_0" hex"0000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000030000000000000000000000000000000000000000000000000000000000000004"
 }

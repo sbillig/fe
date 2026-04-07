@@ -8,6 +8,7 @@ use super::function::FunctionEmitter;
 
 impl<'a, 'db> FunctionEmitter<'a, 'db> {
     pub(super) fn render_pc_dispatch(&mut self) -> Result<Vec<YulDoc>, YulError> {
+        const DISPATCH_PC: &str = "$pc";
         let mut cases = Vec::with_capacity(self.plan.blocks.len() + 1);
         for (idx, _) in self.plan.blocks.iter().enumerate() {
             cases.push(YulDoc::wide_block(
@@ -20,11 +21,13 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
             vec![YulDoc::line("invalid()")],
         ));
         Ok(vec![
-            YulDoc::line("let pc := 0"),
-            YulDoc::block(
-                "for {} 1 {} ",
-                vec![YulDoc::wide_block("switch pc ", cases)],
-            ),
+            YulDoc::line(format!("let {DISPATCH_PC} := 0")),
+            YulDoc::block("for {} 1 {} ", {
+                let mut docs = Vec::with_capacity(cases.len() + 1);
+                docs.push(YulDoc::line(format!("switch {DISPATCH_PC}")));
+                docs.extend(cases);
+                docs
+            }),
         ])
     }
 
@@ -35,7 +38,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         Ok(match terminator {
             YTerminator::Goto(target) => {
                 vec![
-                    YulDoc::line(format!("pc := {}", target.index())),
+                    YulDoc::line(format!("$pc := {}", target.index())),
                     YulDoc::line("continue"),
                 ]
             }
@@ -47,11 +50,11 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 YulDoc::block(
                     format!("if {} ", self.scalar_word_expr(*cond)?),
                     vec![
-                        YulDoc::line(format!("pc := {}", then_bb.index())),
+                        YulDoc::line(format!("$pc := {}", then_bb.index())),
                         YulDoc::line("continue"),
                     ],
                 ),
-                YulDoc::line(format!("pc := {}", else_bb.index())),
+                YulDoc::line(format!("$pc := {}", else_bb.index())),
                 YulDoc::line("continue"),
             ],
             YTerminator::SwitchWord {
@@ -64,7 +67,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                     docs.push(YulDoc::wide_block(
                         format!("case {} ", self.const_scalar_expr(value)),
                         vec![
-                            YulDoc::line(format!("pc := {}", block.index())),
+                            YulDoc::line(format!("$pc := {}", block.index())),
                             YulDoc::line("continue"),
                         ],
                     ));
@@ -72,14 +75,17 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 docs.push(YulDoc::wide_block(
                     "default ".to_string(),
                     vec![
-                        YulDoc::line(format!("pc := {}", default.index())),
+                        YulDoc::line(format!("$pc := {}", default.index())),
                         YulDoc::line("continue"),
                     ],
                 ));
-                vec![YulDoc::wide_block(
-                    format!("switch {} ", self.scalar_word_expr(*discr)?),
-                    docs,
-                )]
+                let mut out = Vec::with_capacity(docs.len() + 1);
+                out.push(YulDoc::line(format!(
+                    "switch {}",
+                    self.scalar_word_expr(*discr)?
+                )));
+                out.extend(docs);
+                out
             }
             YTerminator::MatchEnumTag {
                 tag,
@@ -92,7 +98,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                     docs.push(YulDoc::wide_block(
                         format!("case {} ", variant.index),
                         vec![
-                            YulDoc::line(format!("pc := {}", block.index())),
+                            YulDoc::line(format!("$pc := {}", block.index())),
                             YulDoc::line("continue"),
                         ],
                     ));
@@ -101,7 +107,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                     docs.push(YulDoc::wide_block(
                         "default ".to_string(),
                         vec![
-                            YulDoc::line(format!("pc := {}", default.index())),
+                            YulDoc::line(format!("$pc := {}", default.index())),
                             YulDoc::line("continue"),
                         ],
                     ));
@@ -111,10 +117,13 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                         vec![YulDoc::line("invalid()")],
                     ));
                 }
-                vec![YulDoc::wide_block(
-                    format!("switch {} ", self.scalar_word_expr(*tag)?),
-                    docs,
-                )]
+                let mut out = Vec::with_capacity(docs.len() + 1);
+                out.push(YulDoc::line(format!(
+                    "switch {}",
+                    self.scalar_word_expr(*tag)?
+                )));
+                out.extend(docs);
+                out
             }
             YTerminator::TerminalCall { callee, args } => {
                 let args = args

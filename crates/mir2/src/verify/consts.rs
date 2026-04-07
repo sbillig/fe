@@ -3,8 +3,7 @@ use rustc_hash::FxHashSet;
 use crate::{
     db::MirDb,
     runtime::{
-        ConstNode, ConstRegion, ConstRegionId, HandleKind, Layout, LayoutId, RuntimeClass,
-        RuntimeProgramView,
+        ConstNode, ConstRegion, ConstRegionId, Layout, LayoutId, RuntimeClass, RuntimeProgramView,
     },
     verify::{VerifyError, layout::verify_layout},
 };
@@ -142,13 +141,8 @@ fn verify_const_field<'db>(
                 )))
             }
         }
-        RuntimeClass::AggregateValue { layout }
-        | RuntimeClass::Handle {
-            layout,
-            kind: HandleKind::ConstValue,
-            ..
-        } => verify_const_node(db, program, *layout, value),
-        RuntimeClass::Handle { .. } | RuntimeClass::RawAddr { .. } => Err(
+        RuntimeClass::AggregateValue { layout } => verify_const_node(db, program, *layout, value),
+        RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => Err(
             VerifyError::InvalidConstRegion(ConstRegionId::new(db, expected_layout, node.clone())),
         ),
     }

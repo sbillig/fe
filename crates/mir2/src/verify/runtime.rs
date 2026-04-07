@@ -1,12 +1,15 @@
+use cranelift_entity::EntityRef;
 use rustc_hash::FxHashSet;
 
 use crate::{
     db::MirDb,
     instance::RuntimeInstance,
+    runtime::PlaceRoot,
+    runtime::lower::class::{ref_class_for_place_result, runtime_address_space},
     runtime::{
-        AddressSpaceKind, HandleKind, HandleView, Layout, RExpr, RStmt, RTerminator, RuntimeBody,
-        RuntimeBuiltin, RuntimeCarrier, RuntimeClass, RuntimeLocalRoot, RuntimeProgramView,
-        RuntimeSignature, ScalarClass, ScalarRepr, ScalarRole,
+        AddressSpaceKind, Layout, RExpr, RStmt, RTerminator, RuntimeBody, RuntimeBuiltin,
+        RuntimeCarrier, RuntimeClass, RuntimeLocalRoot, RuntimeProgramView, RuntimeSignature,
+        ScalarClass, ScalarRepr, ScalarRole, runtime_classes_share_runtime_rep,
     },
     verify::VerifyError,
 };
@@ -17,7 +20,7 @@ use super::{
     layout::verify_class_layouts,
     place::{
         enum_extract_class, enum_tag_class, enum_tag_class_from_value, project_place,
-        runtime_value_class, scalar_class_from_const, verify_enum_handle,
+        resolve_runtime_place, runtime_value_class, scalar_class_from_const, verify_enum_handle,
         verify_enum_write_variant, verify_value_enum_variant, verify_value_enum_variant_ref,
     },
 };
@@ -45,7 +48,7 @@ pub fn verify_runtime_body_detailed<'db>(
         let local_id = crate::runtime::RLocalId::from_u32(idx as u32);
         match &local.root {
             RuntimeLocalRoot::None => {}
-            RuntimeLocalRoot::Slot(class) | RuntimeLocalRoot::Handle(class) => {
+            RuntimeLocalRoot::Slot(class) | RuntimeLocalRoot::Ref(class) => {
                 verify_class_layouts(db, program, class, &mut visited_layouts).map_err(
                     |error| RuntimeVerifyFailure {
                         error,
@@ -205,41 +208,36 @@ fn verify_assign<'db>(
             let _ = runtime_value_class(body, *value)?;
             Some(RuntimeClass::Scalar(to.clone()))
         }
-        RExpr::ConstHandle { region, layout } => {
+        RExpr::ConstRef { region, layout } => {
             let region_id = *region;
             let region = program.const_region(region_id);
             verify_const_region(db, program, region.clone())?;
             if region.layout != *layout {
                 return Err(VerifyError::InvalidConstRegion(region_id));
             }
-            Some(RuntimeClass::Handle {
-                layout: *layout,
-                kind: HandleKind::ConstValue,
-                view: HandleView::Whole,
-            })
+            Some(RuntimeClass::const_ref(*layout))
         }
-        RExpr::AllocObject { layout } => Some(RuntimeClass::Handle {
-            layout: *layout,
-            kind: HandleKind::ObjectValue,
-            view: HandleView::Whole,
-        }),
+        RExpr::AllocObject { layout } => Some(RuntimeClass::object_ref(*layout)),
         RExpr::MaterializeToObject { src } => {
             let src_class = runtime_value_class(body, *src)?;
-            let Some(RuntimeClass::Handle {
-                layout,
-                kind: HandleKind::ObjectValue,
-                view: HandleView::Whole,
+            let Some(RuntimeClass::Ref {
+                pointee,
+                kind: crate::runtime::RefKind::Object,
+                view: crate::runtime::RefView::Whole,
             }) = &dst_class
             else {
                 return Err(VerifyError::InvalidExprClass(dst));
             };
+            let RuntimeClass::AggregateValue { layout } = &**pointee else {
+                return Err(VerifyError::InvalidExprClass(dst));
+            };
             match src_class {
                 RuntimeClass::AggregateValue { layout: src_layout } if *src_layout == *layout => {}
-                RuntimeClass::Handle {
-                    layout: src_layout,
-                    kind: HandleKind::ConstValue,
-                    view: HandleView::Whole,
-                } if *src_layout == *layout => {}
+                RuntimeClass::Ref {
+                    pointee: src_pointee,
+                    kind: crate::runtime::RefKind::Const,
+                    view: crate::runtime::RefView::Whole,
+                } if **src_pointee == RuntimeClass::AggregateValue { layout: *layout } => {}
                 _ => return Err(VerifyError::InvalidExprClass(dst)),
             }
             dst_class.clone()
@@ -248,7 +246,7 @@ fn verify_assign<'db>(
             raw,
             provider_ty,
             space,
-            layout,
+            target,
         } => {
             let RuntimeClass::RawAddr {
                 space: raw_space, ..
@@ -259,14 +257,23 @@ fn verify_assign<'db>(
             if *raw_space != *space {
                 return Err(VerifyError::InvalidExprClass(dst));
             }
-            Some(RuntimeClass::Handle {
-                layout: *layout,
-                kind: HandleKind::Provider {
-                    provider_ty: *provider_ty,
-                    space: *space,
-                },
-                view: HandleView::Whole,
-            })
+            match &dst_class {
+                Some(RuntimeClass::Ref {
+                    pointee,
+                    kind:
+                        crate::runtime::RefKind::Provider {
+                            provider_ty: actual_provider_ty,
+                            space: actual_space,
+                        },
+                    view: crate::runtime::RefView::Whole,
+                }) if pointee.aggregate_layout() == *target
+                    && actual_provider_ty == provider_ty
+                    && *actual_space == *space =>
+                {
+                    dst_class.clone()
+                }
+                _ => return Err(VerifyError::InvalidExprClass(dst)),
+            }
         }
         RExpr::WordToRawAddr {
             value,
@@ -290,19 +297,47 @@ fn verify_assign<'db>(
             })
         }
         RExpr::AddrOf { place } => {
-            let _ = project_place(db, program, body, place)?;
-            if !matches!(
-                &dst_class,
-                Some(
-                    RuntimeClass::Handle {
-                        kind: HandleKind::Provider { .. },
-                        ..
-                    } | RuntimeClass::RawAddr { .. }
-                )
-            ) {
+            let resolved = resolve_runtime_place(db, program, body, place)?;
+            let root_class = match &place.root {
+                PlaceRoot::Slot(local) => match &body
+                    .local(*local)
+                    .ok_or(VerifyError::MissingRuntimeLocal(*local))?
+                    .root
+                {
+                    RuntimeLocalRoot::Slot(class) => class.clone(),
+                    RuntimeLocalRoot::None
+                    | RuntimeLocalRoot::Ref(_)
+                    | RuntimeLocalRoot::Ptr { .. } => {
+                        return Err(VerifyError::InvalidExprClass(dst));
+                    }
+                },
+                PlaceRoot::Ref(value) => runtime_value_class(body, *value)?.clone(),
+                PlaceRoot::Provider(binding) => body
+                    .provider_bindings
+                    .get(binding.index())
+                    .map(|binding| binding.provider_class.clone())
+                    .ok_or(VerifyError::InvalidExprClass(dst))?,
+                PlaceRoot::Ptr { space, class, .. } => RuntimeClass::RawAddr {
+                    space: *space,
+                    target: class.aggregate_layout(),
+                },
+            };
+            let expected = ref_class_for_place_result(
+                &root_class,
+                &resolved.result_class,
+                match &place.root {
+                    PlaceRoot::Slot(_) | PlaceRoot::Ref(_) => AddressSpaceKind::Memory,
+                    PlaceRoot::Provider(_) => {
+                        runtime_address_space(&root_class).unwrap_or(AddressSpaceKind::Memory)
+                    }
+                    PlaceRoot::Ptr { space, .. } => *space,
+                },
+                matches!(place.root, PlaceRoot::Ptr { .. }),
+            );
+            if dst_class.as_ref() != Some(&expected) {
                 return Err(VerifyError::InvalidExprClass(dst));
             }
-            dst_class.clone()
+            Some(expected)
         }
         RExpr::Load { place } => Some(project_place(db, program, body, place)?),
         RExpr::Call { callee, args } => {
@@ -313,13 +348,49 @@ fn verify_assign<'db>(
             if !matches!(
                 (runtime_value_class(body, *value)?, &dst_class),
                 (
-                    RuntimeClass::Handle {
-                        kind: HandleKind::Provider { .. },
+                    RuntimeClass::Ref {
+                        kind: crate::runtime::RefKind::Provider { .. },
                         ..
                     },
                     Some(RuntimeClass::RawAddr { .. }),
                 )
             ) {
+                return Err(VerifyError::InvalidExprClass(dst));
+            }
+            dst_class.clone()
+        }
+        RExpr::RetagRef { value } => {
+            let Some(RuntimeClass::Ref {
+                pointee: dst_pointee,
+                kind: dst_kind,
+                view: dst_view,
+            }) = &dst_class
+            else {
+                return Err(VerifyError::InvalidExprClass(dst));
+            };
+            let RuntimeClass::Ref {
+                pointee: src_pointee,
+                kind: src_kind,
+                view: src_view,
+            } = runtime_value_class(body, *value)?.clone()
+            else {
+                return Err(VerifyError::InvalidExprClass(dst));
+            };
+            if src_view != *dst_view
+                || !runtime_classes_share_runtime_rep(
+                    db,
+                    &RuntimeClass::Ref {
+                        pointee: src_pointee,
+                        kind: src_kind,
+                        view: src_view,
+                    },
+                    &RuntimeClass::Ref {
+                        pointee: dst_pointee.clone(),
+                        kind: dst_kind.clone(),
+                        view: dst_view.clone(),
+                    },
+                )
+            {
                 return Err(VerifyError::InvalidExprClass(dst));
             }
             dst_class.clone()
@@ -351,8 +422,11 @@ fn verify_assign<'db>(
             field,
         } => Some(enum_extract_class(db, body, *value, *variant, *field)?),
         RExpr::EnumGetTag { root } => {
-            let RuntimeClass::Handle { layout, .. } = runtime_value_class(body, *root)?.clone()
+            let RuntimeClass::Ref { pointee, .. } = runtime_value_class(body, *root)?.clone()
             else {
+                return Err(VerifyError::InvalidExprClass(dst));
+            };
+            let RuntimeClass::AggregateValue { layout } = *pointee else {
                 return Err(VerifyError::InvalidExprClass(dst));
             };
             if !matches!(program.layout(layout), Layout::Enum(_)) {
@@ -362,13 +436,13 @@ fn verify_assign<'db>(
         }
         RExpr::EnumAssertVariantRef { root, variant } => {
             let class = verify_enum_handle(body, *root, *variant, program)?;
-            let RuntimeClass::Handle { layout, kind, .. } = class else {
+            let RuntimeClass::Ref { pointee, kind, .. } = class else {
                 unreachable!();
             };
-            Some(RuntimeClass::Handle {
-                layout,
+            Some(RuntimeClass::Ref {
+                pointee,
                 kind,
-                view: HandleView::EnumVariant(*variant),
+                view: crate::runtime::RefView::EnumVariant(*variant),
             })
         }
     };
@@ -634,10 +708,10 @@ fn verify_builtin<'db>(
             },
             role: ScalarRole::Plain,
         }))),
-        RuntimeBuiltin::MakeContractFieldHandle { class, kind, .. } => {
-            if let RuntimeClass::Handle {
+        RuntimeBuiltin::MakeContractFieldRef { class, kind, .. } => {
+            if let RuntimeClass::Ref {
                 kind: actual_kind,
-                view: HandleView::Whole,
+                view: crate::runtime::RefView::Whole,
                 ..
             } = class
                 && actual_kind != kind

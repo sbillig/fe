@@ -8,15 +8,15 @@ use crate::{
     db::MirDb,
     instance::RuntimeInstance,
     runtime::{
-        AddressSpaceKind, ConstScalar, HandleKind, HandleView, Layout, LayoutId, PlaceElem,
-        PlaceRoot, RBlockId, RExpr, RLocalId, RStmt, RTerminator, RuntimeBody, RuntimeBuiltin,
+        AddressSpaceKind, ConstScalar, Layout, LayoutId, PlaceElem, PlaceRoot, RBlockId, RExpr,
+        RLocalId, RStmt, RTerminator, RefKind, RefView, RuntimeBody, RuntimeBuiltin,
         RuntimeCarrier, RuntimeClass, RuntimeLocalRoot, RuntimePlace, ScalarClass, ScalarRepr,
         ScalarRole, VariantId,
     },
     verify::{RuntimeVerifyFailure, RuntimeVerifySite},
 };
 
-pub(crate) fn format_runtime_verify_failure<'db>(
+pub fn format_runtime_verify_failure<'db>(
     db: &'db dyn MirDb,
     body: &RuntimeBody<'db>,
     failure: &RuntimeVerifyFailure<'db>,
@@ -32,7 +32,7 @@ pub(crate) fn format_runtime_verify_failure<'db>(
     out
 }
 
-pub(crate) fn format_runtime_body<'db>(db: &'db dyn MirDb, body: &RuntimeBody<'db>) -> String {
+pub fn format_runtime_body<'db>(db: &'db dyn MirDb, body: &RuntimeBody<'db>) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "fn {}(", format_runtime_instance(db, body.owner));
     for (idx, param) in body.signature.params.iter().enumerate() {
@@ -90,6 +90,43 @@ pub(crate) fn format_runtime_body<'db>(db: &'db dyn MirDb, body: &RuntimeBody<'d
         let _ = writeln!(out, "    -> {}", format_terminator(db, &block.terminator));
         if block_id.index() + 1 != body.blocks.len() {
             let _ = writeln!(out);
+        }
+    }
+    out.push('}');
+    out
+}
+
+pub fn format_runtime_body_excerpt<'db>(
+    db: &'db dyn MirDb,
+    body: &RuntimeBody<'db>,
+    block: RBlockId,
+    stmt: Option<usize>,
+) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "fn {} {{", format_runtime_instance(db, body.owner));
+    match body.block(block) {
+        Some(block_data) => {
+            let center = stmt.unwrap_or(block_data.stmts.len());
+            let start = center.saturating_sub(3);
+            let end = if stmt.is_some() {
+                (center + 4).min(block_data.stmts.len())
+            } else {
+                block_data.stmts.len()
+            };
+            let _ = writeln!(out, "  bb{}:", block.index());
+            for (idx, stmt_data) in block_data.stmts.iter().enumerate().take(end).skip(start) {
+                let marker = if Some(idx) == stmt { ">>" } else { "  " };
+                let _ = writeln!(out, "  {marker} [{idx}] {};", format_stmt(db, stmt_data));
+            }
+            let term_marker = if stmt.is_none() { ">>" } else { "  " };
+            let _ = writeln!(
+                out,
+                "  {term_marker} -> {}",
+                format_terminator(db, &block_data.terminator)
+            );
+        }
+        None => {
+            let _ = writeln!(out, "  <missing block {}>", block.index());
         }
     }
     out.push('}');
@@ -164,7 +201,7 @@ fn format_local_root<'db>(db: &'db dyn MirDb, root: &RuntimeLocalRoot<'db>) -> S
     match root {
         RuntimeLocalRoot::None => "none".to_string(),
         RuntimeLocalRoot::Slot(class) => format!("slot {}", format_class(db, class)),
-        RuntimeLocalRoot::Handle(class) => format!("handle {}", format_class(db, class)),
+        RuntimeLocalRoot::Ref(class) => format!("ref {}", format_class(db, class)),
         RuntimeLocalRoot::Ptr { space, class } => {
             format!("ptr {} {}", format_space(*space), format_class(db, class))
         }
@@ -233,8 +270,8 @@ fn format_expr<'db>(db: &'db dyn MirDb, expr: &RExpr<'db>) -> String {
                 format_scalar_class(db, to)
             )
         }
-        RExpr::ConstHandle { region, layout } => {
-            format!("const_handle @{:?}:{}", region, format_layout(db, *layout))
+        RExpr::ConstRef { region, layout } => {
+            format!("const_ref @{:?}:{}", region, format_layout(db, *layout))
         }
         RExpr::AllocObject { layout } => format!("alloc {}", format_layout(db, *layout)),
         RExpr::MaterializeToObject { src } => {
@@ -244,13 +281,16 @@ fn format_expr<'db>(db: &'db dyn MirDb, expr: &RExpr<'db>) -> String {
             raw,
             provider_ty,
             space,
-            layout,
+            target,
         } => format!(
-            "provider_from_raw {} {} {} {}",
+            "provider_from_raw {} {} {}{}",
             format_local_id(*raw),
             provider_ty.pretty_print(db),
             format_space(*space),
-            format_layout(db, *layout)
+            target.map_or_else(String::new, |layout| format!(
+                " {}",
+                format_layout(db, layout)
+            ))
         ),
         RExpr::WordToRawAddr {
             value,
@@ -265,6 +305,7 @@ fn format_expr<'db>(db: &'db dyn MirDb, expr: &RExpr<'db>) -> String {
                 .unwrap_or_default()
         ),
         RExpr::ProviderToRaw { value } => format!("provider_to_raw {}", format_local_id(*value)),
+        RExpr::RetagRef { value } => format!("retag_ref {}", format_local_id(*value)),
         RExpr::AddrOf { place } => format!("addr_of {}", format_place(place)),
         RExpr::Load { place } => format!("load {}", format_place(place)),
         RExpr::Call { callee, args } => {
@@ -629,10 +670,10 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
             format_local_id(*topic3)
         ),
         RuntimeBuiltin::CallDataSelector => "calldata_selector".to_string(),
-        RuntimeBuiltin::MakeContractFieldHandle { slot, class, kind } => format!(
-            "make_contract_field_handle slot={slot} {} {}",
+        RuntimeBuiltin::MakeContractFieldRef { slot, class, kind } => format!(
+            "make_contract_field_ref slot={slot} {} {}",
             format_class(db, class),
-            format_handle_kind(db, kind)
+            format_ref_kind(db, kind)
         ),
     }
 }
@@ -640,7 +681,7 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
 fn format_place<'db>(place: &RuntimePlace<'db>) -> String {
     let mut out = match &place.root {
         PlaceRoot::Slot(local) => format_local_id(*local),
-        PlaceRoot::Handle(value) => format!("*{}", format_local_id(*value)),
+        PlaceRoot::Ref(value) => format!("*{}", format_local_id(*value)),
         PlaceRoot::Provider(binding) => format!("@{}", binding.index()),
         PlaceRoot::Ptr { addr, space, .. } => {
             format!("ptr({} {})", format_space(*space), format_local_id(*addr))
@@ -666,11 +707,15 @@ fn format_class<'db>(db: &'db dyn MirDb, class: &RuntimeClass<'db>) -> String {
     match class {
         RuntimeClass::Scalar(class) => format_scalar_class(db, class),
         RuntimeClass::AggregateValue { layout } => format!("agg {}", format_layout(db, *layout)),
-        RuntimeClass::Handle { layout, kind, view } => format!(
-            "handle {} {} {}",
-            format_handle_kind(db, kind),
-            format_handle_view(db, view),
-            format_layout(db, *layout)
+        RuntimeClass::Ref {
+            pointee,
+            kind,
+            view,
+        } => format!(
+            "ref {} {} {}",
+            format_ref_kind(db, kind),
+            format_ref_view(db, view),
+            format_class(db, pointee)
         ),
         RuntimeClass::RawAddr { space, target } => format!(
             "raw {}{}",
@@ -699,11 +744,11 @@ fn format_scalar_class<'db>(db: &'db dyn MirDb, class: &ScalarClass<'db>) -> Str
     }
 }
 
-fn format_handle_kind<'db>(db: &'db dyn MirDb, kind: &HandleKind<'db>) -> String {
+fn format_ref_kind<'db>(db: &'db dyn MirDb, kind: &RefKind<'db>) -> String {
     match kind {
-        HandleKind::ConstValue => "const".to_string(),
-        HandleKind::ObjectValue => "object".to_string(),
-        HandleKind::Provider { provider_ty, space } => {
+        RefKind::Const => "const".to_string(),
+        RefKind::Object => "object".to_string(),
+        RefKind::Provider { provider_ty, space } => {
             format!(
                 "provider {} {}",
                 provider_ty.pretty_print(db),
@@ -713,10 +758,10 @@ fn format_handle_kind<'db>(db: &'db dyn MirDb, kind: &HandleKind<'db>) -> String
     }
 }
 
-fn format_handle_view<'db>(db: &'db dyn MirDb, view: &HandleView<'db>) -> String {
+fn format_ref_view<'db>(db: &'db dyn MirDb, view: &RefView<'db>) -> String {
     match view {
-        HandleView::Whole => "whole".to_string(),
-        HandleView::EnumVariant(variant) => format!("variant {}", format_variant(db, *variant)),
+        RefView::Whole => "whole".to_string(),
+        RefView::EnumVariant(variant) => format!("variant {}", format_variant(db, *variant)),
     }
 }
 

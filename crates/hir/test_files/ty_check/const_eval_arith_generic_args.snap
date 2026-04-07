@@ -18,7 +18,7 @@ note:
   ┌─ const_eval_arith_generic_args.fe:4:9
   │
 4 │     let a: Foo
-  │         ^ Foo<(1 + 2)>
+  │         ^ Foo<3>
 
 note: 
   ┌─ const_eval_arith_generic_args.fe:5:9

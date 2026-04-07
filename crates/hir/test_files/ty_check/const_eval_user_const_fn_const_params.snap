@@ -44,13 +44,13 @@ note:
   ┌─ const_eval_user_const_fn_const_params.fe:9:9
   │
 9 │     let x: Foo<4>
-  │         ^ Foo<4, plus1(4)>
+  │         ^ Foo<4, 5>
 
 note: 
    ┌─ const_eval_user_const_fn_const_params.fe:10:9
    │
 10 │     let y: Bar<4>
-   │         ^ Bar<4, (4 + 1)>
+   │         ^ Bar<4, 5>
 
 note: 
    ┌─ const_eval_user_const_fn_const_params.fe:13:32
@@ -66,10 +66,10 @@ note:
    ┌─ const_eval_user_const_fn_const_params.fe:14:9
    │
 14 │     let a: Foo<{ N }>
-   │         ^ Foo<const N: usize, plus1(N)>
+   │         ^ Foo<const N: usize, add(const N: usize, 1)>
 
 note: 
    ┌─ const_eval_user_const_fn_const_params.fe:15:9
    │
 15 │     let b: Bar<{ N }>
-   │         ^ Bar<const N: usize, (N + 1)>
+   │         ^ Bar<const N: usize, add(const N: usize, 1)>

@@ -1,46 +1,101 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 33
 expression: output
 input_file: tests/fixtures/borrow_storage_field_handle.fe
 ---
-function $borrow_storage_field_handle__MemPtr_CoinStore___77aec55da16622e($store) -> ret {
-  let v0 := $store
-  let v1 := mload(v0)
-  let v2 := $checked_add_u256(v1, 1)
-  mstore(v0, v2)
-  let v3 := mload($store)
-  ret := v3
-  leave
-}
-function $checked_add_u256($a, $b) -> ret {
-  let v0 := $checked_add_unsigned_impl__u256__3271ca15373d4483($a, $b)
-  ret := v0
-  leave
-}
-function $checked_add_unsigned_impl__u256__3271ca15373d4483($a, $b) -> ret {
-  let v0 := $u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add($a, $b)
-  let v1 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v0)
-  let v2 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($a)
-  let v3 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v1, v2)
-  let v4 := v3
-  if v4 {
-    revert(0, 0)
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let v0 := 0
+      let v1 := 0
+      v0 := 0
+      v1 := $borrow_storage_field_handle(v0)
+      stop()
+    }
+    function $add($self, $other) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let v3 := 0
+      mstore(r0, $self)
+      mstore(r1, $other)
+      let t4 := add(mload(r0), mload(r1))
+      if lt(t4, mload(r0)) {
+        revert(0, 0)
+      }
+      v3 := t4
+      mstore(r2, v3)
+      ret := mload(r2)
+      leave
+    }
+    function $add_assign($self, $other) {
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 0))
+      let v4 := 0
+      let v5 := 0
+      let v6 := 0
+      mstore(r1, $other)
+      let t7 := mload($self)
+      v4 := t7
+      let t8 := mload($self)
+      v5 := t8
+      v6 := $add(v5, mload(r1))
+      mstore(r2, v6)
+      mstore($self, mload(r2))
+      leave
+    }
+    function $borrow_storage_field_handle($CoinStore) -> ret {
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 32))
+      let r4 := mload(0x40)
+      if iszero(r4) {
+        r4 := 0x80
+      }
+      mstore(0x40, add(r4, 0))
+      let v1 := 0
+      let v2 := 0
+      let v5 := 0
+      let v6 := 0
+      let v7 := 0
+      v6 := $CoinStore
+      v2 := v6
+      v1 := v2
+      v7 := 0x01
+      mstore(r3, v7)
+      $add_assign(v1, mload(r3))
+      let t10 := mload($CoinStore)
+      v5 := t10
+      ret := v5
+      leave
+    }
+    $__fe_main_root()
   }
-  ret := v0
-  leave
-}
-function $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($self) -> ret {
-  ret := $self
-  leave
-}
-function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt($self, $other) -> ret {
-  let v0 := lt($self, $other)
-  ret := v0
-  leave
-}
-function $u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add($self, $other) -> ret {
-  let v0 := add($self, $other)
-  ret := v0
-  leave
 }

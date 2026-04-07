@@ -1,24 +1,51 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 33
 expression: output
 input_file: tests/fixtures/generic_identity.fe
 ---
-function $call_identity_u32() -> ret {
-  let v0 := $identity__u32__20aa0c10687491ad(7)
-  ret := v0
-  leave
-}
-function $call_identity_bool() -> ret {
-  let v0 := $identity__bool__947c0c03c59c6f07(1)
-  ret := v0
-  leave
-}
-function $identity__u32__20aa0c10687491ad($value) -> ret {
-  ret := $value
-  leave
-}
-function $identity__bool__947c0c03c59c6f07($value) -> ret {
-  ret := $value
-  leave
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let v0 := 0
+      v0 := $call_identity_bool()
+      stop()
+    }
+    function $call_identity_bool() -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let v3 := 0
+      let v4 := 0
+      v3 := 1
+      mstore(r1, v3)
+      v4 := $identity_0(iszero(iszero(mload(r1))))
+      mstore(r2, v4)
+      mstore(r0, iszero(iszero(mload(r2))))
+      ret := iszero(iszero(mload(r0)))
+      leave
+    }
+    function $identity_0($value) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      mstore(r0, $value)
+      ret := iszero(iszero(mload(r0)))
+      leave
+    }
+    $__fe_main_root()
+  }
 }

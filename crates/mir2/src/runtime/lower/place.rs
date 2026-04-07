@@ -3,7 +3,7 @@ use hir::analysis::ty::ProviderAddressSpace;
 
 use crate::{
     db::MirDb,
-    runtime::{AddressSpaceKind, HandleView, RuntimeClass},
+    runtime::{AddressSpaceKind, RefView, RuntimeClass},
 };
 
 pub(super) fn project_field_class<'db>(
@@ -11,16 +11,9 @@ pub(super) fn project_field_class<'db>(
     class: RuntimeClass<'db>,
     field: FieldIndex,
 ) -> RuntimeClass<'db> {
-    let layout = match class {
-        RuntimeClass::AggregateValue { layout } | RuntimeClass::Handle { layout, .. } => layout,
-        RuntimeClass::RawAddr {
-            target: Some(layout),
-            ..
-        } => layout,
-        RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { target: None, .. } => {
-            panic!("invalid field projection class")
-        }
-    };
+    let layout = class
+        .aggregate_layout()
+        .unwrap_or_else(|| panic!("invalid field projection class"));
     match layout.data(db) {
         crate::runtime::Layout::Struct(layout) => layout
             .fields
@@ -41,16 +34,9 @@ pub(super) fn project_index_class<'db>(
     db: &'db dyn MirDb,
     class: RuntimeClass<'db>,
 ) -> RuntimeClass<'db> {
-    let layout = match class {
-        RuntimeClass::AggregateValue { layout } | RuntimeClass::Handle { layout, .. } => layout,
-        RuntimeClass::RawAddr {
-            target: Some(layout),
-            ..
-        } => layout,
-        RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { target: None, .. } => {
-            panic!("invalid index projection class")
-        }
-    };
+    let layout = class
+        .aggregate_layout()
+        .unwrap_or_else(|| panic!("invalid index projection class"));
     match layout.data(db) {
         crate::runtime::Layout::Array(layout) => layout.elem,
         _ => panic!("invalid index projection layout"),
@@ -62,12 +48,15 @@ pub(super) fn project_variant_field_class<'db>(
     class: RuntimeClass<'db>,
     field: FieldIndex,
 ) -> RuntimeClass<'db> {
-    let RuntimeClass::Handle {
-        view: HandleView::EnumVariant(variant),
-        ..
-    } = class
-    else {
-        panic!("invalid variant-field projection class");
+    let variant = match class {
+        RuntimeClass::Ref {
+            view: RefView::EnumVariant(variant),
+            ..
+        } => variant,
+        RuntimeClass::Scalar(_)
+        | RuntimeClass::AggregateValue { .. }
+        | RuntimeClass::Ref { .. }
+        | RuntimeClass::RawAddr { .. } => panic!("invalid variant-field projection class"),
     };
     variant.layout(db).expect("variant layout").variants[variant.index as usize].fields
         [field.0 as usize]

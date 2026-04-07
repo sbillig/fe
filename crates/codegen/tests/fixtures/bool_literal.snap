@@ -3,7 +3,25 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/bool_literal.fe
 ---
-function $bool_literal() -> ret {
-  ret := 1
-  leave
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let v0 := 0
+      v0 := $bool_literal()
+      stop()
+    }
+    function $bool_literal() -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      let v1 := 0
+      v1 := 1
+      mstore(r0, v1)
+      ret := iszero(iszero(mload(r0)))
+      leave
+    }
+    $__fe_main_root()
+  }
 }
