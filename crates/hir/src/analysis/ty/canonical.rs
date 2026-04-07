@@ -4,14 +4,15 @@ use salsa::Update;
 use super::{
     const_ty::{ConstTyData, ConstTyId},
     fold::{TyFoldable, TyFolder},
-    ty_def::{TyData, TyId, TyVar},
+    ty_def::{TyData, TyFlags, TyId, TyVar},
     unify::{InferenceKey, UnificationStore, UnificationTableBase},
+    visitor::{TyVisitable, collect_flags},
 };
 use crate::analysis::{HirAnalysisDb, ty::ty_def::collect_variables};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Canonical<T> {
-    pub value: T,
+    value: T,
 }
 
 impl<'db, T> Canonical<T>
@@ -45,6 +46,13 @@ where
         let db = table.db;
         let mut extractor = SolutionExtractor::new(table, FxHashMap::default());
         self.value.fold_with(db, &mut extractor)
+    }
+
+    pub fn flags(self, db: &'db dyn HirAnalysisDb) -> TyFlags
+    where
+        T: TyVisitable<'db>,
+    {
+        collect_flags(db, self.value)
     }
 
     /// Canonicalize a new solution that corresponds to the canonical query.
@@ -103,27 +111,37 @@ where
 /// [`Solution`] that corresponds to [`Canonical`] query.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Canonicalized<'db, T> {
-    pub value: Canonical<T>,
+    original: T,
+    canonical: Canonical<T>,
     // A substitution from canonical type variables to original type variables.
     subst: FxHashMap<TyId<'db>, TyId<'db>>,
 }
 
 impl<'db, T> Canonicalized<'db, T>
 where
-    T: TyFoldable<'db>,
+    T: TyFoldable<'db> + Copy,
 {
     pub fn new(db: &'db dyn HirAnalysisDb, value: T) -> Self {
         let mut canonicalizer = Canonicalizer::default();
-        let value = value.fold_with(db, &mut canonicalizer);
+        let canonical = value.fold_with(db, &mut canonicalizer);
         let map = canonicalizer
             .subst
             .into_iter()
             .map(|(orig_var, canonical_var)| (canonical_var, orig_var))
             .collect();
         Canonicalized {
-            value: Canonical { value },
+            original: value,
+            canonical: Canonical { value: canonical },
             subst: map,
         }
+    }
+
+    pub fn original(&self) -> T {
+        self.original
+    }
+
+    pub fn canonical(&self) -> Canonical<T> {
+        self.canonical
     }
 
     /// Extracts the solution from the canonicalized query.

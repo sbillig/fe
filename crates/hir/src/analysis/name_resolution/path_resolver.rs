@@ -919,7 +919,7 @@ where
                 let receiver_ty = Canonicalized::new(db, ty);
                 match select_method_candidate(
                     db,
-                    receiver_ty.value,
+                    receiver_ty.canonical(),
                     ident,
                     parent_scope,
                     assumptions,
@@ -1175,7 +1175,7 @@ fn select_assoc_const_candidate<'db>(
         };
     }
 
-    let canonical_receiver = Canonicalized::new(db, receiver_ty).value;
+    let canonical_receiver = Canonicalized::new(db, receiver_ty).canonical();
     let scope_ingot = scope.ingot(db);
 
     // Find trait impls for the receiver type that define the associated const, searching both:
@@ -1211,12 +1211,15 @@ pub(crate) fn find_associated_type<'db>(
     name: IdentId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Result<SmallVec<(TraitInstId<'db>, TyId<'db>), 4>, FindAssociatedTypeError> {
-    let canonical_ty = ty.value;
-    let original_ty = ty.decanonicalize(db, canonical_ty.value);
+    let canonical_ty = ty.canonical();
+    let original_ty = ty.original();
+    let mut table = UnificationTable::new(db);
+    let lhs_ty = canonical_ty.extract_identity(&mut table);
+    let lhs_keys = inference_keys(db, &lhs_ty);
 
     // Qualified type: `<A as T>::B`. Always construct the associated type projection
     // against the qualified trait instance; bindings (if any) will be handled downstream.
-    if let TyData::QualifiedTy(trait_inst) = canonical_ty.value.data(db) {
+    if let TyData::QualifiedTy(trait_inst) = lhs_ty.data(db) {
         let proj = TyId::assoc_ty(db, *trait_inst, name);
         let proj = ty.decanonicalize(db, proj);
         let inst = ty.decanonicalize(db, *trait_inst);
@@ -1224,13 +1227,8 @@ pub(crate) fn find_associated_type<'db>(
     }
 
     let scope_ingot = scope.ingot(db);
-    // Use a single unification table and snapshots to preserve outer
-    // substitutions while isolating per-candidate attempts.
-    let mut table = UnificationTable::new(db);
-    let lhs_ty = canonical_ty.extract_identity(&mut table);
-    let lhs_keys = inference_keys(db, &lhs_ty);
 
-    if let TyData::TyParam(param) = canonical_ty.value.data(db) {
+    if let TyData::TyParam(param) = lhs_ty.data(db) {
         // Trait self, in trait or impl trait. Associated type must be in this trait.
         if param.is_trait_self() {
             if let Some(trait_) = param.owner.resolve_to::<Trait>(db) {
@@ -1252,7 +1250,7 @@ pub(crate) fn find_associated_type<'db>(
     let mut candidates = SmallVec::new();
     // Check explicit bounds in assumptions that match `ty` only when `ty` is a type
     // parameter (to avoid spurious ambiguities for concrete types that already have impls).
-    if let TyData::TyParam(_) = canonical_ty.value.data(db) {
+    if let TyData::TyParam(_) = lhs_ty.data(db) {
         for &trait_inst in assumptions.list(db) {
             // `trait_inst` is a specific trait bound, e.g., `A: Abi` or `S<A>: SomeTrait`.
             let snapshot = table.snapshot();
@@ -1308,7 +1306,7 @@ pub(crate) fn find_associated_type<'db>(
 
     // Case 3: The LHS `ty` is an associated type (e.g., `T::Encoder` in `T::Encoder::Output`).
     // We need to look at the trait bound on the associated type.
-    if let TyData::AssocTy(assoc_ty) = canonical_ty.value.data(db) {
+    if let TyData::AssocTy(assoc_ty) = lhs_ty.data(db) {
         let mut assoc_table = UnificationTable::new(db);
 
         // Extract the canonical type's substitutions into the unification table

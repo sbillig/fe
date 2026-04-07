@@ -2208,7 +2208,7 @@ impl<'db> TyChecker<'db> {
             };
 
             Some(ProviderTargetResolution {
-                target_ty: Canonicalized::new(self.db, target_ty).value.value,
+                target_ty: Canonicalized::new(self.db, target_ty).original(),
                 target_seed_ty: target_assoc,
                 handle_proof: Some((effect_handle_inst, handle_solution)),
                 effect_ref_proof: Some((effect_ref_inst, effect_ref_solution)),
@@ -2728,7 +2728,7 @@ impl<'db> TyChecker<'db> {
         let mut canonical_r_ty = Canonicalized::new(self.db, selected_receiver_ty);
         let mut candidate = select_method_candidate(
             self.db,
-            canonical_r_ty.value,
+            canonical_r_ty.canonical(),
             method_name,
             self.env.scope(),
             method_assumptions,
@@ -2742,7 +2742,7 @@ impl<'db> TyChecker<'db> {
                 let fallback_canonical = Canonicalized::new(self.db, receiver_ty);
                 let fallback = select_method_candidate(
                     self.db,
-                    fallback_canonical.value,
+                    fallback_canonical.canonical(),
                     method_name,
                     self.env.scope(),
                     method_assumptions,
@@ -3817,7 +3817,7 @@ impl<'db> TyChecker<'db> {
         let mut c_lhs_ty = Canonicalized::new(self.db, selected_lhs_ty);
         let mut method_candidate = select_method_candidate(
             self.db,
-            c_lhs_ty.value,
+            c_lhs_ty.canonical(),
             op.trait_method(self.db),
             self.env.scope(),
             method_assumptions,
@@ -3831,7 +3831,7 @@ impl<'db> TyChecker<'db> {
                 let c_candidate_ty = Canonicalized::new(self.db, candidate_ty);
                 let fallback = select_method_candidate(
                     self.db,
-                    c_candidate_ty.value,
+                    c_candidate_ty.canonical(),
                     op.trait_method(self.db),
                     self.env.scope(),
                     method_assumptions,

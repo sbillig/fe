@@ -73,7 +73,8 @@ pub(crate) fn impls_for_trait_in_ingots<'db>(
     secondary: Option<Ingot<'db>>,
     trait_: Canonical<TraitInstId<'db>>,
 ) -> Vec<Binder<ImplementorId<'db>>> {
-    let trait_def = trait_.value.def(db);
+    let mut table = UnificationTable::new(db);
+    let trait_def = trait_.extract_identity(&mut table).def(db);
     let mut dedup: IndexSet<Binder<ImplementorId<'db>>> = IndexSet::default();
     dedup.extend(impls_for_trait_def(db, primary, trait_def).iter().copied());
     if let Some(secondary) = secondary {
