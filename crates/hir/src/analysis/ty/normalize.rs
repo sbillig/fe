@@ -170,7 +170,7 @@ impl<'db> TypeNormalizer<'db> {
                 lhs_self,
                 rhs_self,
                 bound,
-            } = canonical_input.value.extract_identity(&mut table);
+            } = canonical_input.canonical().extract_identity(&mut table);
 
             if table.unify(lhs_self, rhs_self).is_ok() {
                 let resolved = bound.fold_with(self.db, &mut table);
@@ -242,7 +242,7 @@ impl<'db> TypeNormalizer<'db> {
         // Canonicalize the target trait instance so we can unify against it in a
         // fresh table without mixing inference keys from other tables.
         let canonical_target = Canonicalized::new(self.db, trait_inst);
-        let canonical_inst = canonical_target.value;
+        let canonical_inst = canonical_target.canonical();
 
         let mut table = UnificationTable::new(self.db);
         let target_inst = canonical_inst.extract_identity(&mut table);

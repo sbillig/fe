@@ -63,16 +63,26 @@ pub(crate) fn select_method_candidate<'db>(
     assumptions: PredicateListId<'db>,
     trait_: Option<Trait<'db>>,
 ) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
-    if receiver.value.is_ty_var(db) {
+    let mut table = UnificationTable::new(db);
+    let receiver_ty = receiver.extract_identity(&mut table);
+    if receiver_ty.is_ty_var(db) {
         return Err(MethodSelectionError::ReceiverTypeMustBeKnown);
     }
 
-    let candidates =
-        assemble_method_candidates(db, receiver, method_name, scope, assumptions, trait_);
+    let candidates = assemble_method_candidates(
+        db,
+        receiver,
+        receiver_ty,
+        method_name,
+        scope,
+        assumptions,
+        trait_,
+    );
 
     let selector = MethodSelector {
         db,
         receiver,
+        receiver_ty,
         scope,
         candidates,
         assumptions,
@@ -84,6 +94,7 @@ pub(crate) fn select_method_candidate<'db>(
 fn assemble_method_candidates<'db>(
     db: &'db dyn HirAnalysisDb,
     receiver_ty: Canonical<TyId<'db>>,
+    raw_receiver_ty: TyId<'db>,
     method_name: IdentId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
@@ -92,6 +103,7 @@ fn assemble_method_candidates<'db>(
     CandidateAssembler {
         db,
         receiver_ty,
+        raw_receiver_ty,
         method_name,
         scope,
         assumptions,
@@ -105,6 +117,7 @@ struct CandidateAssembler<'db> {
     db: &'db dyn HirAnalysisDb,
     /// The type that method is being called on.
     receiver_ty: Canonical<TyId<'db>>,
+    raw_receiver_ty: TyId<'db>,
     /// The name of the method being called.
     method_name: IdentId<'db>,
     /// The scope that candidates are being assembled in.
@@ -147,8 +160,7 @@ impl<'db> CandidateAssembler<'db> {
 
     fn assemble_inherent_method_candidates(&mut self) {
         let ingot = self
-            .receiver_ty
-            .value
+            .raw_receiver_ty
             .ingot(self.db)
             .unwrap_or_else(|| self.scope.ingot(self.db));
         for &method in probe_method(self.db, ingot, self.receiver_ty, self.method_name) {
@@ -165,13 +177,12 @@ impl<'db> CandidateAssembler<'db> {
         //
         // In that case, rely on in-scope bounds (`assumptions`) to provide method
         // candidates.
-        let receiver_is_ty_param = receiver_is_ty_param_like(self.db, self.receiver_ty.value);
+        let receiver_is_ty_param = receiver_is_ty_param_like(self.db, self.raw_receiver_ty);
 
         if !receiver_is_ty_param {
             let search_ingots = [
                 Some(scope_ingot),
-                self.receiver_ty
-                    .value
+                self.raw_receiver_ty
                     .ingot(self.db)
                     .filter(|&ingot| ingot != scope_ingot),
             ];
@@ -224,6 +235,7 @@ impl<'db> CandidateAssembler<'db> {
 struct MethodSelector<'db> {
     db: &'db dyn HirAnalysisDb,
     receiver: Canonical<TyId<'db>>,
+    receiver_ty: TyId<'db>,
     scope: ScopeId<'db>,
     candidates: AssembledCandidates<'db>,
     assumptions: PredicateListId<'db>,
@@ -346,7 +358,7 @@ impl<'db> MethodSelector<'db> {
                     .filter_map(|(&cand, &is_confirmed)| is_confirmed.then_some(cand))
                     .collect();
                 if confirmed.len() == 1
-                    && (self.receiver.value.has_var(self.db)
+                    && (self.receiver_ty.has_var(self.db)
                         || selected
                             .iter()
                             .filter_map(|(&cand, &is_confirmed)| (!is_confirmed).then_some(cand))
@@ -367,7 +379,7 @@ impl<'db> MethodSelector<'db> {
         candidate: TraitMethodCand<'db>,
         confirmed: TraitMethodCand<'db>,
     ) -> bool {
-        let canonical_receiver = Canonicalized::new(self.db, self.receiver.value);
+        let canonical_receiver = Canonicalized::new(self.db, self.receiver_ty);
         let mut table = UnificationTable::new(self.db);
         let candidate_inst = canonical_receiver.extract_solution(&mut table, candidate.inst);
         let confirmed_inst = canonical_receiver.extract_solution(&mut table, confirmed.inst);
@@ -415,7 +427,7 @@ impl<'db> MethodSelector<'db> {
         // introducing fresh inference vars. Otherwise, unconstrained trait args
         // can trigger spurious "type annotation needed" diagnostics on method calls
         // whose signatures don't mention those args (e.g. `AbiDecoder<A>::read_word`).
-        let receiver_is_ty_param = receiver_is_ty_param_like(self.db, self.receiver.value);
+        let receiver_is_ty_param = receiver_is_ty_param_like(self.db, self.receiver_ty);
 
         let query = CanonicalGoalQuery::new(self.db, inst, self.assumptions);
         let inst = if receiver_is_ty_param {

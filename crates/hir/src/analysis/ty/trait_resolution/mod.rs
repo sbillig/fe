@@ -9,7 +9,6 @@ use crate::analysis::{
     ty::{
         trait_resolution::{constraint::ty_constraints, proof_forest::ProofForest},
         unify::UnificationTable,
-        visitor::collect_flags,
     },
 };
 use crate::{
@@ -56,7 +55,7 @@ impl<'db> CanonicalGoalQuery<'db> {
         let original = Canonicalized::new(db, raw);
         Self {
             raw,
-            canonical: original.value,
+            canonical: original.canonical(),
             original,
         }
     }
@@ -249,8 +248,7 @@ fn is_query_satisfiable<'db>(
     origin_ingot: Ingot<'db>,
     query: Canonical<TraitSolverQuery<'db>>,
 ) -> GoalSatisfiability<'db> {
-    let flags = collect_flags(db, query.value);
-    if flags.contains(TyFlags::HAS_INVALID) {
+    if query.flags(db).contains(TyFlags::HAS_INVALID) {
         return GoalSatisfiability::ContainsInvalid;
     };
 
