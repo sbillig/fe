@@ -94,13 +94,24 @@ const DEFAULT_CLIENT_FILTER: &str = "warn";
 ///
 /// Precedence:
 ///   1. `FE_LSP_LOG_DIR` env var (explicit override)
-///   2. `$XDG_CACHE_HOME/fe-language-server`
-///   3. `$HOME/.cache/fe-language-server`
+///   2. `<cwd>/.fe-lsp` — workspace-local (Zed spawns `fe lsp` with cwd
+///      set to the workspace root, so each workspace gets an isolated
+///      log budget rather than sharing a global cache directory)
+///   3. `$XDG_CACHE_HOME/fe-language-server` — fallback when cwd is
+///      unusable (e.g. read-only or doesn't exist)
+///   4. `$HOME/.cache/fe-language-server` — last-resort fallback
 ///
-/// Returns `None` if no usable base path exists (e.g. neither env var set).
+/// Returns `None` if no usable base path exists.
 fn resolve_log_dir() -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("FE_LSP_LOG_DIR") {
         return Some(PathBuf::from(dir));
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        // Workspace-local: each Fe project gets its own .fe-lsp/ dir
+        // alongside the existing .fe-lsp.json discovery file. Retention
+        // and rotation budgets apply per-workspace this way, instead of
+        // multiple workspaces sharing a single global cache budget.
+        return Some(cwd.join(".fe-lsp"));
     }
     let base = std::env::var("XDG_CACHE_HOME")
         .ok()
