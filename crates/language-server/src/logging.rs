@@ -129,6 +129,60 @@ pub fn default_panic_file_path() -> Option<PathBuf> {
     Some(dir.join(format!("panics-{}.log", std::process::id())))
 }
 
+/// Default number of `*.log` files to retain in the log directory.
+/// Override via `FE_LSP_LOG_RETENTION`.
+const DEFAULT_LOG_RETENTION: usize = 50;
+
+fn log_retention() -> usize {
+    std::env::var("FE_LSP_LOG_RETENTION")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_LOG_RETENTION)
+}
+
+/// Garbage-collect old log files in the log directory.
+///
+/// Called once at startup, before opening the new file. Scans the log
+/// directory for `*.log` files (both per-process session logs like
+/// `<pid>.log` and crash logs like `panics-<pid>.log`), sorts by mtime,
+/// and deletes everything older than the most recent `log_retention()`
+/// files.
+///
+/// This bounds disk usage to roughly retention × typical-session-size.
+/// At the default of 50 files and a heavy session of ~10 MB, that's
+/// ~500 MB worst case. Lighter sessions take far less. Override the
+/// retention with `FE_LSP_LOG_RETENTION=<n>`.
+///
+/// Best-effort: any IO error during scanning or deletion is silently
+/// ignored. Failing to GC must not break server startup.
+pub fn gc_old_log_files() {
+    let Some(dir) = resolve_log_dir() else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    let mut files: Vec<(PathBuf, std::time::SystemTime)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("log") {
+                return None;
+            }
+            let mtime = entry.metadata().ok()?.modified().ok()?;
+            Some((path, mtime))
+        })
+        .collect();
+    let retention = log_retention();
+    if files.len() <= retention {
+        return;
+    }
+    files.sort_by(|a, b| b.1.cmp(&a.1)); // newest first
+    for (path, _) in files.iter().skip(retention) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 /// Return the parent process's pid, if it can be determined.
 ///
 /// On Linux, reads `/proc/self/status` and parses the `PPid:` field.
@@ -211,6 +265,12 @@ fn open_log_file(path: &Path) -> std::io::Result<File> {
 /// resets the thread-local dispatch.
 pub fn setup_default_subscriber(client: ClientSocket) -> Option<DefaultGuard> {
     use tracing::subscriber::set_default;
+
+    // Bound disk usage by deleting older logs before opening this session's
+    // file. The verbose default per-request logging produces a few hundred
+    // KB to a few MB per session; retaining the last 50 by default keeps
+    // the cache directory under ~500 MB even for heavy debug runs.
+    gc_old_log_files();
 
     // Client layer: WARN+ only, forwarded to the LSP client as
     // `window/logMessage` notifications. This is what the editor sees.

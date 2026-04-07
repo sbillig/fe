@@ -864,10 +864,7 @@ pub async fn handle_formatting(
             }]))
         }
         Err(fmt::FormatError::ParseErrors(errs)) => {
-            // Mid-edit parse errors are the common case for format-on-save
-            // and format-on-type. Logging at info would flood the file log
-            // with one line per save during typing. Debug for forensic use.
-            debug!("formatting skipped: {} parse error(s)", errs.len());
+            info!("formatting skipped: {} parse error(s)", errs.len());
             Ok(None)
         }
         Err(fmt::FormatError::Io(_)) => Ok(None),
