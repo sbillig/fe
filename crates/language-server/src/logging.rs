@@ -38,7 +38,7 @@ use std::{
     fs::{File, OpenOptions},
     io::Write as _,
     path::{Path, PathBuf},
-    sync::{Arc, Once},
+    sync::{Arc, Mutex, Once},
 };
 use tracing::{Level, Metadata, subscriber::DefaultGuard};
 use tracing_subscriber::{
@@ -131,7 +131,18 @@ pub fn default_panic_file_path() -> Option<PathBuf> {
 
 /// Default number of `*.log` files to retain in the log directory.
 /// Override via `FE_LSP_LOG_RETENTION`.
-const DEFAULT_LOG_RETENTION: usize = 50;
+const DEFAULT_LOG_RETENTION: usize = 5;
+
+/// Default per-file size cap before the log rotates. Defaults to 50 MB.
+/// Override via `FE_LSP_LOG_MAX_BYTES`.
+const DEFAULT_LOG_MAX_BYTES: u64 = 50 * 1024 * 1024;
+
+fn log_max_bytes() -> u64 {
+    std::env::var("FE_LSP_LOG_MAX_BYTES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_LOG_MAX_BYTES)
+}
 
 fn log_retention() -> usize {
     std::env::var("FE_LSP_LOG_RETENTION")
@@ -149,8 +160,8 @@ fn log_retention() -> usize {
 /// files.
 ///
 /// This bounds disk usage to roughly retention × typical-session-size.
-/// At the default of 50 files and a heavy session of ~10 MB, that's
-/// ~500 MB worst case. Lighter sessions take far less. Override the
+/// At the default of 5 files and a heavy session of ~10 MB, that's
+/// ~50 MB worst case. Lighter sessions take far less. Override the
 /// retention with `FE_LSP_LOG_RETENTION=<n>`.
 ///
 /// Best-effort: any IO error during scanning or deletion is silently
@@ -259,6 +270,101 @@ fn open_log_file(path: &Path) -> std::io::Result<File> {
     OpenOptions::new().create(true).append(true).open(path)
 }
 
+/// A `MakeWriter` backed by a single file with a hard size cap and rotation
+/// on overflow.
+///
+/// When the cumulative bytes written exceed `cap_bytes`, the current file is
+/// renamed to `<name>.old.log` (replacing any prior `.old.log` for this pid)
+/// and a fresh log is opened at the original path. The byte counter resets
+/// and writing continues. This preserves both the events leading up to the
+/// runaway condition (in `.old.log`) and the events that followed (in the
+/// new file) — much better for forensics than dropping recent writes.
+///
+/// All writes go through a `Mutex<RotatingState>` so the byte counter and
+/// the file handle stay in sync. The lock is held for the duration of one
+/// `write` call only — short enough not to bottleneck verbose logging in
+/// practice.
+struct RotatingFileWriter {
+    inner: Arc<Mutex<RotatingState>>,
+}
+
+struct RotatingState {
+    path: PathBuf,
+    file: File,
+    bytes_written: u64,
+    cap_bytes: u64,
+}
+
+impl RotatingFileWriter {
+    fn new(path: PathBuf, cap_bytes: u64) -> std::io::Result<Self> {
+        let file = open_log_file(&path)?;
+        let bytes_written = file.metadata().map(|m| m.len()).unwrap_or(0);
+        Ok(Self {
+            inner: Arc::new(Mutex::new(RotatingState {
+                path,
+                file,
+                bytes_written,
+                cap_bytes,
+            })),
+        })
+    }
+}
+
+impl Clone for RotatingFileWriter {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl std::io::Write for RotatingFileWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if state.bytes_written.saturating_add(buf.len() as u64) > state.cap_bytes {
+            // Rotate: move current file to <name>.old.log and reopen.
+            // Best-effort: if rename or reopen fails, drop into discard
+            // mode for this write — we'd rather lose a log line than
+            // crash the server because the disk is full.
+            let old_path = state.path.with_extension("old.log");
+            let _ = std::fs::rename(&state.path, &old_path);
+            match open_log_file(&state.path) {
+                Ok(new_file) => {
+                    state.file = new_file;
+                    state.bytes_written = 0;
+                    let header = format!(
+                        "[fe-lsp] log rotated at {} bytes; previous content in {}\n",
+                        state.cap_bytes,
+                        old_path.display(),
+                    );
+                    let _ = state.file.write_all(header.as_bytes());
+                    state.bytes_written = header.len() as u64;
+                }
+                Err(_) => return Ok(buf.len()),
+            }
+        }
+        let n = state.file.write(buf)?;
+        state.bytes_written += n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .file
+            .flush()
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for RotatingFileWriter {
+    type Writer = RotatingFileWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
 /// Build the default tracing subscriber for the language server and install
 /// it as the thread-local default. The returned [`DefaultGuard`] must be
 /// held for as long as the subscriber should remain active — dropping it
@@ -267,9 +373,9 @@ pub fn setup_default_subscriber(client: ClientSocket) -> Option<DefaultGuard> {
     use tracing::subscriber::set_default;
 
     // Bound disk usage by deleting older logs before opening this session's
-    // file. The verbose default per-request logging produces a few hundred
-    // KB to a few MB per session; retaining the last 50 by default keeps
-    // the cache directory under ~500 MB even for heavy debug runs.
+    // file. Default retention is 5 files; even verbose debug sessions of
+    // ~10 MB each top out around 50 MB total. Override with
+    // `FE_LSP_LOG_RETENTION=<n>` if you want more history.
     gc_old_log_files();
 
     // Client layer: WARN+ only, forwarded to the LSP client as
@@ -295,13 +401,13 @@ pub fn setup_default_subscriber(client: ClientSocket) -> Option<DefaultGuard> {
         .unwrap_or_else(|| EnvFilter::new(DEFAULT_FILE_FILTER));
 
     let file_layer: Option<_> = default_log_file_path()
-        .and_then(|path| match open_log_file(&path) {
-            Ok(file) => {
+        .and_then(|path| match RotatingFileWriter::new(path.clone(), log_max_bytes()) {
+            Ok(writer) => {
                 // Write the path to stderr so a human watching the process
-                // knows where to find the log. This is one line at startup,
-                // not per-message.
+                // knows where to find the log. One line at startup, not
+                // per-message.
                 eprintln!("fe-language-server: log file at {}", path.display());
-                Some(file)
+                Some(writer)
             }
             Err(e) => {
                 eprintln!(
@@ -311,12 +417,11 @@ pub fn setup_default_subscriber(client: ClientSocket) -> Option<DefaultGuard> {
                 None
             }
         })
-        .map(|file| {
-            let writer = BoxMakeWriter::new(Arc::new(file));
+        .map(|writer| {
             tracing_subscriber::fmt::layer()
                 .with_ansi(false)
                 .with_target(true)
-                .with_writer(writer)
+                .with_writer(BoxMakeWriter::new(writer))
                 .with_filter(file_filter)
                 .boxed()
         });
