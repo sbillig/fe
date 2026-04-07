@@ -63,17 +63,19 @@ impl<S: 'static> Service<AnyRequest> for LspActorService<S> {
                 "LSP request: {method} (id={request_id})"
             ));
 
-            // One info-level line per request + response pair so the file
-            // log shows a running trail of activity by default. Without
-            // this, the log has only startup lines and you can't tell what
-            // the LSP was doing when something went wrong.
+            // Per-request observability is layered:
+            //   - Successful requests log at DEBUG (filtered out by the
+            //     default file filter, available via FE_LSP_LOG=debug for
+            //     forensic investigation).
+            //   - Anomalously slow successes (>1s) log at INFO so they
+            //     surface in the default log without spamming.
+            //   - Errors always log at WARN.
+            //
+            // The actual "in-flight" identification of a request is handled
+            // by the panic_context frame above — every panic backtrace
+            // already includes the request method/id, so a per-request
+            // "→ request" log line would just be log-spam.
             let t_start = std::time::Instant::now();
-            tracing::info!(
-                target: "fe::lsp::request",
-                method = %method,
-                request_id = %request_id,
-                "→ request"
-            );
 
             let result = actor_ref
                 .ask::<_, Value, _>(dispatcher.as_ref(), req)
@@ -91,13 +93,22 @@ impl<S: 'static> Service<AnyRequest> for LspActorService<S> {
 
             let elapsed_ms = t_start.elapsed().as_millis() as u64;
             match &result {
-                Ok(_) => {
+                Ok(_) if elapsed_ms > 1000 => {
                     tracing::info!(
                         target: "fe::lsp::request",
                         method = %method,
                         request_id = %request_id,
                         elapsed_ms,
-                        "← response ok"
+                        "slow response"
+                    );
+                }
+                Ok(_) => {
+                    tracing::debug!(
+                        target: "fe::lsp::request",
+                        method = %method,
+                        request_id = %request_id,
+                        elapsed_ms,
+                        "response"
                     );
                 }
                 Err(e) => {
@@ -108,7 +119,7 @@ impl<S: 'static> Service<AnyRequest> for LspActorService<S> {
                         elapsed_ms,
                         error = %e.message,
                         code = ?e.code,
-                        "← response error"
+                        "response error"
                     );
                 }
             }
