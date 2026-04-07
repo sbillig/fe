@@ -27,7 +27,7 @@ use crate::analysis::{
     ty::{
         adt_def::{AdtRef, adt_layout_hole_plan, adt_layout_hole_plan_with_explicit_args},
         binder::Binder,
-        canonical::{Canonical, Canonicalized},
+        canonical::Canonicalized,
         const_ty::{AppFrameId, HoleId, LayoutHoleArgSite, LocalFrameId, StructuralHoleOrigin},
         fold::TyFoldable,
         layout_holes::layout_hole_with_fallback_ty,
@@ -1111,7 +1111,7 @@ fn select_assoc_const_candidate<'db>(
         let mut matches: IndexSet<TraitInstId<'db>> = IndexSet::default();
 
         let mut table = UnificationTable::new(db);
-        let receiver = Canonical::new(db, receiver_ty);
+        let receiver = Canonicalized::new(db, receiver_ty);
         let extracted_receiver_ty = receiver.extract_identity(&mut table);
 
         for &pred in assumptions.list(db) {
@@ -1119,16 +1119,21 @@ fn select_assoc_const_candidate<'db>(
             let self_ty = table.instantiate_to_term(pred.self_ty(db));
 
             if table.unify(extracted_receiver_ty, self_ty).is_ok() {
-                if pred.def(db).const_(db, name).is_some() {
-                    matches.insert(pred);
-                }
+                let pred = pred.fold_with(db, &mut table);
+                if let Some(pred) =
+                    receiver.extract_existing_solution(&mut table, extracted_receiver_ty, pred)
+                {
+                    if pred.def(db).const_(db, name).is_some() {
+                        matches.insert(pred);
+                    }
 
-                // Include super-trait consts so `T::CONST` works through a `T: SubTrait` bound
-                // even when `assumptions` hasn't been transitively expanded.
-                for super_trait in pred.def(db).super_traits(db) {
-                    let super_inst = super_trait.instantiate(db, pred.args(db));
-                    if super_inst.def(db).const_(db, name).is_some() {
-                        matches.insert(super_inst);
+                    // Include super-trait consts so `T::CONST` works through a `T: SubTrait`
+                    // bound even when `assumptions` hasn't been transitively expanded.
+                    for super_trait in pred.def(db).super_traits(db) {
+                        let super_inst = super_trait.instantiate(db, pred.args(db));
+                        if super_inst.def(db).const_(db, name).is_some() {
+                            matches.insert(super_inst);
+                        }
                     }
                 }
             }
@@ -1153,6 +1158,15 @@ fn select_assoc_const_candidate<'db>(
                             Some(owner_self),
                         )
                     {
+                        let inst = inst.fold_with(db, &mut table);
+                        let Some(inst) = receiver.extract_existing_solution(
+                            &mut table,
+                            extracted_receiver_ty,
+                            inst,
+                        ) else {
+                            continue;
+                        };
+
                         if inst.def(db).const_(db, name).is_some() {
                             matches.insert(inst);
                         }
