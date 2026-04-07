@@ -919,7 +919,7 @@ where
                 let receiver_ty = Canonicalized::new(db, ty);
                 match select_method_candidate(
                     db,
-                    receiver_ty.canonical(),
+                    &receiver_ty,
                     ident,
                     parent_scope,
                     assumptions,

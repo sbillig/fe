@@ -170,7 +170,7 @@ impl<'db> TypeNormalizer<'db> {
                 lhs_self,
                 rhs_self,
                 bound,
-            } = canonical_input.canonical().extract_identity(&mut table);
+            } = canonical_input.extract_identity(&mut table);
 
             if table.unify(lhs_self, rhs_self).is_ok() {
                 let resolved = bound.fold_with(self.db, &mut table);
