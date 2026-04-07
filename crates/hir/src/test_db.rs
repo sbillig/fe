@@ -43,8 +43,6 @@ use common::{
     diagnostics::{LabelStyle, Severity, cmp_complete_diagnostics},
     file::File,
     indexmap::IndexMap,
-    paths::absolute_utf8,
-    stdlib::{HasBuiltinCore, HasBuiltinStd},
 };
 use derive_more::TryIntoError;
 use rustc_hash::FxHashMap;
@@ -175,17 +173,16 @@ define_input_db!(HirAnalysisTestDb);
 #[allow(dead_code)]
 impl HirAnalysisTestDb {
     pub fn new_stand_alone(&mut self, file_path: Utf8PathBuf, text: &str) -> File {
-        let file_path =
-            absolute_utf8(file_path.as_path()).expect("resolve absolute standalone path");
-        // Use the index from the database and reinitialize it with core files
+        let file_url = if file_path.is_absolute() {
+            <Url as UrlExt>::from_file_path_lossy(file_path.as_std_path())
+        } else {
+            Url::parse("file:///hir_test/")
+                .unwrap()
+                .join(file_path.as_str())
+                .expect("join synthetic standalone path")
+        };
         let index = self.workspace();
-        self.initialize_builtin_core();
-        self.initialize_builtin_std();
-        index.touch(
-            self,
-            <Url as UrlExt>::from_file_path_lossy(file_path.as_std_path()),
-            Some(text.to_string()),
-        )
+        index.touch(self, file_url, Some(text.to_string()))
     }
 
     pub fn top_mod(&self, input: File) -> (TopLevelMod<'_>, HirPropertyFormatter<'_>) {
