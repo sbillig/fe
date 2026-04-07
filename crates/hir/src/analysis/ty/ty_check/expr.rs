@@ -2724,7 +2724,8 @@ impl<'db> TyChecker<'db> {
         let receiver_tys = self.capability_fallback_candidates(receiver_prop.ty);
         let method_assumptions = self.env.assumptions();
 
-        let mut canonical_r_ty = Canonicalized::new(self.db, receiver_tys[0]);
+        let mut selected_receiver_ty = receiver_tys[0];
+        let mut canonical_r_ty = Canonicalized::new(self.db, selected_receiver_ty);
         let mut candidate = select_method_candidate(
             self.db,
             canonical_r_ty.value,
@@ -2749,14 +2750,13 @@ impl<'db> TyChecker<'db> {
                 );
 
                 if fallback.is_ok() || !matches!(fallback, Err(MethodSelectionError::NotFound)) {
+                    selected_receiver_ty = receiver_ty;
                     canonical_r_ty = fallback_canonical;
                     candidate = fallback;
                     break;
                 }
             }
         }
-
-        let selected_receiver_ty = canonical_r_ty.value.value;
         let candidate = match candidate {
             Ok(candidate) => candidate,
             Err(err) => {
@@ -2795,10 +2795,7 @@ impl<'db> TyChecker<'db> {
                         let diag = body_diag_from_method_selection_err(
                             self.db,
                             err,
-                            Spanned::new(
-                                canonical_r_ty.value.value,
-                                receiver.span(self.body()).into(),
-                            ),
+                            Spanned::new(selected_receiver_ty, receiver.span(self.body()).into()),
                             Spanned::new(method_name, call_span.method_name().into()),
                         );
                         self.push_diag(diag);
