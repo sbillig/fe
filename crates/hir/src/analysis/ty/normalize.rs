@@ -14,10 +14,9 @@ use super::{
     canonical::Canonical,
     canonical::Canonicalized,
     fold::{TyFoldable, TyFolder},
-    trait_def::impls_for_ty_with_constraints,
+    trait_def::{TraitInstId, impls_for_ty_with_constraints},
     trait_resolution::{PredicateListId, TraitSolveCx},
     ty_def::{AssocTy, TyData, TyId, TyParam},
-    unify::UnificationTable,
     visitor::{TyVisitable, TyVisitor},
 };
 use crate::analysis::{
@@ -51,13 +50,16 @@ pub struct TypeNormalizer<'db> {
 }
 
 #[derive(Clone, Copy)]
-struct AssumptionUnifyInput<'db> {
-    lhs_self: TyId<'db>,
-    rhs_self: TyId<'db>,
-    bound: TyId<'db>,
+pub(crate) struct AssumptionUnifyInput<T> {
+    pub(crate) lhs_self: T,
+    pub(crate) rhs_self: T,
+    pub(crate) bound: T,
 }
 
-impl<'db> TyFoldable<'db> for AssumptionUnifyInput<'db> {
+impl<'db, T> TyFoldable<'db> for AssumptionUnifyInput<T>
+where
+    T: TyFoldable<'db> + Copy,
+{
     fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
     where
         F: TyFolder<'db>,
@@ -70,7 +72,10 @@ impl<'db> TyFoldable<'db> for AssumptionUnifyInput<'db> {
     }
 }
 
-impl<'db> TyVisitable<'db> for AssumptionUnifyInput<'db> {
+impl<'db, T> TyVisitable<'db> for AssumptionUnifyInput<T>
+where
+    T: TyVisitable<'db> + Copy,
+{
     fn visit_with<V>(&self, visitor: &mut V)
     where
         V: TyVisitor<'db> + ?Sized,
@@ -165,21 +170,18 @@ impl<'db> TypeNormalizer<'db> {
                 },
             );
 
-            let mut table = UnificationTable::new(self.db);
-            let materialized_input = canonical_input.extract_identity(&mut table);
-            let AssumptionUnifyInput {
-                lhs_self,
-                rhs_self,
-                bound,
-            } = materialized_input;
-
-            if table.unify(lhs_self, rhs_self).is_ok() {
-                let resolved = bound.fold_with(self.db, &mut table);
-                return canonical_input.extract_existing_solution(
-                    &mut table,
-                    materialized_input,
-                    resolved,
-                );
+            if let Some(resolved) = canonical_input.with_materialized(self.db, |cx| {
+                let input = cx.query();
+                if cx
+                    .unify::<TyId<'db>>(input.lhs_self, input.rhs_self)
+                    .is_ok()
+                {
+                    let resolved = cx.resolve::<TyId<'db>>(input.bound);
+                    return cx.try_extract::<TyId<'db>>(resolved);
+                }
+                None
+            }) {
+                return Some(resolved);
             }
         }
 
@@ -247,49 +249,40 @@ impl<'db> TypeNormalizer<'db> {
         // Canonicalize the target trait instance so we can unify against it in a
         // fresh table without mixing inference keys from other tables.
         let canonical_target = Canonicalized::new(self.db, trait_inst);
+        canonical_target.with_materialized(self.db, |cx| {
+            let target_inst = cx.query();
+            for ingot in search_ingots.into_iter().flatten() {
+                for implementor in impls_for_ty_with_constraints(
+                    self.db,
+                    ingot,
+                    canonical_self_ty,
+                    self.assumptions,
+                ) {
+                    if implementor.skip_binder().trait_def(self.db) != trait_def {
+                        continue;
+                    }
 
-        let mut table = UnificationTable::new(self.db);
-        let target_inst = canonical_target.extract_identity(&mut table);
+                    let candidate = cx.with_impl_assoc_ty(
+                        implementor,
+                        target_inst.self_ty(self.db),
+                        assoc.name,
+                        |cx, inst, assoc_ty| {
+                            cx.unify::<TraitInstId<'db>>(inst, target_inst).ok()?;
+                            let assoc_ty = cx.resolve::<TyId<'db>>(assoc_ty);
+                            cx.try_extract::<TyId<'db>>(assoc_ty)
+                        },
+                    );
 
-        for ingot in search_ingots.into_iter().flatten() {
-            for implementor in
-                impls_for_ty_with_constraints(self.db, ingot, canonical_self_ty, self.assumptions)
-            {
-                let snapshot = table.snapshot();
-                let implementor = table.instantiate_with_fresh_vars(implementor);
-
-                // Filter by trait before unifying (cheap early out).
-                if implementor.trait_def(self.db) != trait_def {
-                    table.rollback_to(snapshot);
-                    continue;
+                    // Extract into the caller's inference environment before
+                    // continuing normalization, so scratch-local vars never
+                    // leak into the cache.
+                    if let Some(Some(folded)) = candidate {
+                        let norm = self.fold_ty(self.db, folded);
+                        dedup.entry(norm).or_insert(());
+                    }
                 }
-
-                if table
-                    .unify(implementor.trait_(self.db), target_inst)
-                    .is_err()
-                {
-                    table.rollback_to(snapshot);
-                    continue;
-                }
-
-                let Some(assoc_ty) = implementor.assoc_ty(self.db, assoc.name) else {
-                    table.rollback_to(snapshot);
-                    continue;
-                };
-
-                // Map scratch-table solutions back into the caller's inference
-                // environment before further normalization.
-                let folded = assoc_ty.fold_with(self.db, &mut table);
-                if let Some(folded) =
-                    canonical_target.extract_existing_solution(&mut table, target_inst, folded)
-                {
-                    let norm = self.fold_ty(self.db, folded);
-                    dedup.entry(norm).or_insert(());
-                }
-
-                table.rollback_to(snapshot);
             }
-        }
+        });
 
         match dedup.len() {
             0 => None,

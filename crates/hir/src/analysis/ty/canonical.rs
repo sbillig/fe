@@ -6,7 +6,7 @@ use super::{
     fold::{TyFoldable, TyFolder},
     ty_def::{TyData, TyFlags, TyId, TyVar},
     unify::{InferenceKey, UnificationStore, UnificationTableBase},
-    visitor::{TyVisitable, TyVisitor, collect_flags, walk_const_ty, walk_ty},
+    visitor::{TyVisitable, collect_flags},
 };
 use crate::analysis::{HirAnalysisDb, ty::ty_def::collect_variables};
 
@@ -51,6 +51,13 @@ where
         T: TyVisitable<'db>,
     {
         collect_flags(db, self.value)
+    }
+
+    pub(crate) fn value(self) -> T
+    where
+        T: Copy,
+    {
+        self.value
     }
 
     /// Canonicalize a new solution that corresponds to the canonical query.
@@ -142,13 +149,6 @@ where
         self.canonical
     }
 
-    pub fn extract_identity<S>(&self, table: &mut UnificationTableBase<'db, S>) -> T
-    where
-        S: UnificationStore<'db>,
-    {
-        self.canonical.extract_identity(table)
-    }
-
     pub fn canonicalize_solution<S, U>(
         &self,
         db: &'db dyn HirAnalysisDb,
@@ -160,6 +160,10 @@ where
         U: TyFoldable<'db> + Clone + Update,
     {
         self.canonical.canonicalize_solution(db, table, solution)
+    }
+
+    pub(crate) fn subst(&self) -> &FxHashMap<TyId<'db>, TyId<'db>> {
+        &self.subst
     }
 
     /// Extracts the solution from the canonicalized query.
@@ -186,97 +190,6 @@ where
         let db = table.db;
         let mut extractor = SolutionExtractor::new(table, map);
         solution.value.fold_with(db, &mut extractor)
-    }
-
-    /// Extracts a value produced in a scratch table seeded from this
-    /// canonicalized input back into the original inference environment.
-    ///
-    /// `query` must be the materialized identity previously returned by
-    /// [`Canonicalized::extract_identity`] for this canonicalized input in the
-    /// same `table`.
-    ///
-    /// Returns `None` when `value` still contains scratch-local vars that do
-    /// not originate from this canonical query.
-    pub fn extract_existing_solution<U, S>(
-        &self,
-        table: &mut UnificationTableBase<'db, S>,
-        query: T,
-        value: U,
-    ) -> Option<U>
-    where
-        S: UnificationStore<'db>,
-        T: TyVisitable<'db>,
-        U: TyFoldable<'db> + TyVisitable<'db> + Update,
-    {
-        let db = table.db;
-        let value = value.fold_with(db, table);
-        let mut canonicalizer = Canonicalizer {
-            subst: collect_variable_tys(db, &query)
-                .into_iter()
-                .zip(collect_variable_tys(db, &self.canonical.value))
-                .collect(),
-        };
-        let solution = Solution {
-            value: value.fold_with(db, &mut canonicalizer),
-        };
-        self.solution_uses_only_original_canonical_vars(db, &solution.value)
-            .then(|| self.extract_solution(table, solution))
-    }
-
-    fn solution_uses_only_original_canonical_vars<U>(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-        value: &U,
-    ) -> bool
-    where
-        U: TyVisitable<'db>,
-    {
-        struct QueryVarChecker<'a, 'db> {
-            db: &'db dyn HirAnalysisDb,
-            subst: &'a FxHashMap<TyId<'db>, TyId<'db>>,
-            is_valid: bool,
-        }
-
-        impl<'db> TyVisitor<'db> for QueryVarChecker<'_, 'db> {
-            fn db(&self) -> &'db dyn HirAnalysisDb {
-                self.db
-            }
-
-            fn visit_ty(&mut self, ty: TyId<'db>) {
-                if !self.is_valid {
-                    return;
-                }
-
-                match ty.data(self.db) {
-                    TyData::TyVar(_) => {
-                        self.is_valid &= self.subst.contains_key(&ty);
-                    }
-                    _ => walk_ty(self, ty),
-                }
-            }
-
-            fn visit_const_ty(&mut self, const_ty: &ConstTyId<'db>) {
-                if !self.is_valid {
-                    return;
-                }
-
-                match const_ty.data(self.db) {
-                    ConstTyData::TyVar(var, const_ty_ty) => {
-                        let ty = TyId::const_ty_var(self.db, *const_ty_ty, var.key);
-                        self.is_valid &= self.subst.contains_key(&ty);
-                    }
-                    _ => walk_const_ty(self, const_ty),
-                }
-            }
-        }
-
-        let mut checker = QueryVarChecker {
-            db,
-            subst: &self.subst,
-            is_valid: true,
-        };
-        value.visit_with(&mut checker);
-        checker.is_valid
     }
 }
 
@@ -354,7 +267,7 @@ impl<'db> TyFolder<'db> for Canonicalizer<'db> {
     }
 }
 
-struct SolutionExtractor<'a, 'db, S>
+pub(super) struct SolutionExtractor<'a, 'db, S>
 where
     S: UnificationStore<'db>,
 {
@@ -368,7 +281,7 @@ impl<'a, 'db, S> SolutionExtractor<'a, 'db, S>
 where
     S: UnificationStore<'db>,
 {
-    fn new(
+    pub(super) fn new(
         table: &'a mut UnificationTableBase<'db, S>,
         subst: FxHashMap<TyId<'db>, TyId<'db>>,
     ) -> Self {
@@ -408,149 +321,25 @@ where
     }
 }
 
-fn collect_variable_tys<'db, V>(db: &'db dyn HirAnalysisDb, value: &V) -> Vec<TyId<'db>>
-where
-    V: TyVisitable<'db>,
-{
-    struct VariableCollector<'db> {
-        db: &'db dyn HirAnalysisDb,
-        vars: Vec<TyId<'db>>,
-    }
-
-    impl<'db> TyVisitor<'db> for VariableCollector<'db> {
-        fn db(&self) -> &'db dyn HirAnalysisDb {
-            self.db
-        }
-
-        fn visit_ty(&mut self, ty: TyId<'db>) {
-            match ty.data(self.db) {
-                TyData::TyVar(_) => self.vars.push(ty),
-                _ => walk_ty(self, ty),
-            }
-        }
-
-        fn visit_const_ty(&mut self, const_ty: &ConstTyId<'db>) {
-            match const_ty.data(self.db) {
-                ConstTyData::TyVar(var, const_ty_ty) => {
-                    self.vars
-                        .push(TyId::const_ty_var(self.db, *const_ty_ty, var.key));
-                }
-                _ => walk_const_ty(self, const_ty),
-            }
-        }
-    }
-
-    let mut collector = VariableCollector { db, vars: vec![] };
-    value.visit_with(&mut collector);
-    collector.vars
-}
-
 #[cfg(test)]
 mod tests {
-    use salsa::Update;
-
-    use super::Canonicalized;
-    use crate::analysis::ty::ty_def::TyId;
-    use crate::{
-        analysis::HirAnalysisDb,
-        analysis::ty::{
-            fold::{TyFoldable, TyFolder},
-            ty_def::{Kind, TyVarSort},
-            unify::UnificationTable,
-            visitor::{TyVisitable, TyVisitor},
-        },
-        test_db::HirAnalysisTestDb,
+    use super::Canonical;
+    use crate::analysis::ty::{
+        ty_def::{Kind, TyVarSort},
+        unify::UnificationTable,
     };
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Update)]
-    struct RepeatedAndConstVars<'db> {
-        lhs: TyId<'db>,
-        rhs: TyId<'db>,
-        const_arg: TyId<'db>,
-    }
-
-    impl<'db> TyFoldable<'db> for RepeatedAndConstVars<'db> {
-        fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
-        where
-            F: TyFolder<'db>,
-        {
-            Self {
-                lhs: self.lhs.fold_with(db, folder),
-                rhs: self.rhs.fold_with(db, folder),
-                const_arg: self.const_arg.fold_with(db, folder),
-            }
-        }
-    }
-
-    impl<'db> TyVisitable<'db> for RepeatedAndConstVars<'db> {
-        fn visit_with<V>(&self, visitor: &mut V)
-        where
-            V: TyVisitor<'db> + ?Sized,
-        {
-            self.lhs.visit_with(visitor);
-            self.rhs.visit_with(visitor);
-            self.const_arg.visit_with(visitor);
-        }
-    }
+    use crate::test_db::HirAnalysisTestDb;
 
     #[test]
-    fn extract_existing_solution_handles_preseeded_tables() {
+    fn canonical_extract_identity_handles_preseeded_tables() {
         let db = HirAnalysisTestDb::default();
-        let mut original_table = UnificationTable::new(&db);
-        let original = original_table.new_var(TyVarSort::General, &Kind::Star);
-        let canonicalized = Canonicalized::new(&db, original);
+        let mut table = UnificationTable::new(&db);
+        let original = table.new_var(TyVarSort::General, &Kind::Star);
+        let canonical = Canonical::new(&db, original);
 
         let mut scratch = UnificationTable::new(&db);
         let _ = scratch.new_var(TyVarSort::General, &Kind::Star);
-        let extracted = canonicalized.extract_identity(&mut scratch);
 
-        assert_eq!(
-            canonicalized.extract_existing_solution(&mut scratch, extracted, extracted),
-            Some(original)
-        );
-    }
-
-    #[test]
-    fn extract_existing_solution_rejects_scratch_only_vars() {
-        let db = HirAnalysisTestDb::default();
-        let mut original_table = UnificationTable::new(&db);
-        let original = original_table.new_var(TyVarSort::General, &Kind::Star);
-        let canonicalized = Canonicalized::new(&db, original);
-
-        let mut scratch = UnificationTable::new(&db);
-        let extracted = canonicalized.extract_identity(&mut scratch);
-        let extra = scratch.new_var(TyVarSort::General, &Kind::Star);
-
-        assert_eq!(
-            canonicalized.extract_existing_solution(&mut scratch, extracted, extra),
-            None
-        );
-    }
-
-    #[test]
-    fn extract_existing_solution_handles_repeated_and_const_vars() {
-        let db = HirAnalysisTestDb::default();
-        let mut original_table = UnificationTable::new(&db);
-        let repeated = original_table.new_var(TyVarSort::General, &Kind::Star);
-        let const_arg = TyId::const_ty_var(
-            &db,
-            TyId::u256(&db),
-            original_table.new_key(&Kind::Star, TyVarSort::General),
-        );
-        let original = RepeatedAndConstVars {
-            lhs: repeated,
-            rhs: repeated,
-            const_arg,
-        };
-        let canonicalized = Canonicalized::new(&db, original);
-
-        let mut scratch = UnificationTable::new(&db);
-        let _ = scratch.new_var(TyVarSort::General, &Kind::Star);
-        let extracted = canonicalized.extract_identity(&mut scratch);
-
-        assert_eq!(
-            canonicalized.extract_existing_solution(&mut scratch, extracted, extracted),
-            Some(original)
-        );
+        assert!(canonical.extract_identity(&mut scratch).is_ty_var(&db));
     }
 }
