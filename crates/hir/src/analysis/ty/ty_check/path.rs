@@ -36,8 +36,6 @@ pub(super) enum ResolvedPathInBody<'db> {
     Reso(PathRes<'db>),
     Binding(LocalBinding<'db>),
     NewBinding(IdentId<'db>),
-
-    #[allow(dead_code)]
     Diag(FuncBodyDiag<'db>),
     Invalid,
 }

@@ -27,8 +27,6 @@ pub struct FieldPlan<'db> {
     pub index: usize,
     pub slot: BigUint,
     pub declared_ty: TyId<'db>,
-    #[allow(dead_code)]
-    pub target_ty: TyId<'db>,
     pub is_provider: bool,
 }
 
@@ -143,10 +141,6 @@ pub struct InitEntrypointPlan<'db> {
 
 #[derive(Clone)]
 pub struct RuntimeDispatchArmPlan<'db> {
-    #[allow(dead_code)]
-    pub recv_idx: u32,
-    #[allow(dead_code)]
-    pub arm_idx: u32,
     pub selector: u32,
     pub callee: SyntheticId<'db>,
 }
@@ -195,7 +189,6 @@ impl<'db> ContractPlan<'db> {
                 index: field.index as usize,
                 slot: BigUint::from(field.slot_offset),
                 declared_ty: field.declared_ty,
-                target_ty: field.target_ty,
                 is_provider: field.is_provider,
             })
             .collect::<Vec<_>>();
@@ -380,8 +373,6 @@ impl<'db> ContractPlan<'db> {
                     },
                 ));
                 arms.push(RuntimeDispatchArmPlan {
-                    recv_idx: recv.index(db),
-                    arm_idx: arm.index(db),
                     selector,
                     callee: helper_id,
                 });
