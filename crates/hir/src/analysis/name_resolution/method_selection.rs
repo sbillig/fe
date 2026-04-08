@@ -124,19 +124,6 @@ fn receiver_is_ty_param_like<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> 
     )
 }
 
-fn instantiate_to_receiver_kind<'db>(
-    db: &'db dyn HirAnalysisDb,
-    table: &mut UnificationTable<'db>,
-    candidate_self_ty: TyId<'db>,
-    receiver_ty: TyId<'db>,
-) -> TyId<'db> {
-    if receiver_ty.is_star_kind(db) {
-        table.instantiate_to_term(candidate_self_ty)
-    } else {
-        candidate_self_ty
-    }
-}
-
 impl<'db, 'a> CandidateAssembler<'db, 'a> {
     fn assemble(mut self) -> AssembledCandidates<'db> {
         if self.trait_.is_none() {
@@ -183,28 +170,30 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
             }
         }
 
-        let mut table = UnificationTable::new(self.db);
-        let extracted_receiver_ty = self.receiver.extract_identity(&mut table);
+        self.receiver.with_materialized(self.db, |cx| {
+            let receiver = cx.query();
+            for &pred in self.assumptions.list(self.db) {
+                let snapshot = cx.snapshot();
+                // `*`-kind receivers need a fully applied self type before
+                // bound unification, otherwise abstract constructors can never
+                // match the concrete receiver term.
+                let self_ty = if receiver.is_star_kind(self.db) {
+                    cx.materialize_to_term(pred.self_ty(self.db))
+                } else {
+                    cx.materialize(pred.self_ty(self.db))
+                };
 
-        for &pred in self.assumptions.list(self.db) {
-            let snapshot = table.snapshot();
-            let self_ty = instantiate_to_receiver_kind(
-                self.db,
-                &mut table,
-                pred.self_ty(self.db),
-                extracted_receiver_ty,
-            );
-
-            if table.unify(extracted_receiver_ty, self_ty).is_ok() {
-                self.insert_trait_method_cand(pred);
-                for super_trait in pred.def(self.db).super_traits(self.db) {
-                    let super_trait = super_trait.instantiate(self.db, pred.args(self.db));
-                    self.insert_trait_method_cand(super_trait);
+                if cx.unify::<TyId<'db>>(receiver, self_ty).is_ok() {
+                    self.insert_trait_method_cand(pred);
+                    for super_trait in pred.def(self.db).super_traits(self.db) {
+                        let super_trait = super_trait.instantiate(self.db, pred.args(self.db));
+                        self.insert_trait_method_cand(super_trait);
+                    }
                 }
-            }
 
-            table.rollback_to(snapshot);
-        }
+                cx.rollback_to(snapshot);
+            }
+        });
     }
 
     fn allow_trait(&self, trait_def: Trait<'db>) -> bool {
@@ -408,7 +397,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         let mut table = UnificationTable::new(self.db);
         // Seed the table with receiver's canonical variables so that subsequent
         // canonicalization can safely probe them.
-        let _ = self.receiver.extract_identity(&mut table);
+        let _ = self.receiver.canonical().extract_identity(&mut table);
 
         // If the receiver is a type parameter (e.g. `D` in `fn f<D: Trait>(d: D)`),
         // prefer preserving any trait arguments coming from bounds rather than

@@ -29,7 +29,6 @@ use crate::analysis::{
         binder::Binder,
         canonical::Canonicalized,
         const_ty::{AppFrameId, HoleId, LayoutHoleArgSite, LocalFrameId, StructuralHoleOrigin},
-        fold::TyFoldable,
         layout_holes::layout_hole_with_fallback_ty,
         normalize::normalize_ty,
         trait_def::{TraitInstId, impls_for_ty_with_constraints},
@@ -40,7 +39,6 @@ use crate::analysis::{
             ConstDefaultCompletion, TyAlias, collect_generic_params, lower_generic_arg_list,
             lower_hir_ty, lower_type_alias,
         },
-        unify::UnificationTable,
     },
 };
 
@@ -1109,26 +1107,23 @@ fn select_assoc_const_candidate<'db>(
     );
     if receiver_is_ty_param {
         let mut matches: IndexSet<TraitInstId<'db>> = IndexSet::default();
-
-        let mut table = UnificationTable::new(db);
         let receiver = Canonicalized::new(db, receiver_ty);
-        let extracted_receiver_ty = receiver.extract_identity(&mut table);
+        receiver.with_materialized(db, |cx| {
+            let receiver = cx.query();
+            for &pred in assumptions.list(db) {
+                let snapshot = cx.snapshot();
+                let self_ty = cx.materialize_to_term(pred.self_ty(db));
 
-        for &pred in assumptions.list(db) {
-            let snapshot = table.snapshot();
-            let self_ty = table.instantiate_to_term(pred.self_ty(db));
-
-            if table.unify(extracted_receiver_ty, self_ty).is_ok() {
-                let pred = pred.fold_with(db, &mut table);
-                if let Some(pred) =
-                    receiver.extract_existing_solution(&mut table, extracted_receiver_ty, pred)
+                let pred = cx.materialize(pred);
+                if cx.unify::<TyId<'db>>(receiver, self_ty).is_ok()
+                    && let Some(pred) = cx.try_extract::<TraitInstId<'db>>(pred)
                 {
                     if pred.def(db).const_(db, name).is_some() {
                         matches.insert(pred);
                     }
 
-                    // Include super-trait consts so `T::CONST` works through a `T: SubTrait`
-                    // bound even when `assumptions` hasn't been transitively expanded.
+                    // `T::CONST` should also see constants inherited through a
+                    // super-trait bound such as `T: SubTrait`.
                     for super_trait in pred.def(db).super_traits(db) {
                         let super_inst = super_trait.instantiate(db, pred.args(db));
                         if super_inst.def(db).const_(db, name).is_some() {
@@ -1136,51 +1131,43 @@ fn select_assoc_const_candidate<'db>(
                         }
                     }
                 }
+
+                cx.rollback_to(snapshot);
             }
 
-            table.rollback_to(snapshot);
-        }
+            if let TyData::AssocTy(assoc_ty) = receiver_ty.data(db) {
+                let trait_ = assoc_ty.trait_.def(db);
+                let assoc_name = assoc_ty.name;
+                if let Some(decl) = trait_.assoc_ty(db, assoc_name) {
+                    // Bounds on the associated type are interpreted in the
+                    // owner trait's `Self` context, not the projected subject.
+                    let owner_self = cx.materialize(assoc_ty.trait_.self_ty(db));
+                    for bound in &decl.bounds {
+                        if let TypeBound::Trait(trait_ref) = *bound
+                            && let Ok(inst) = cx.lower_trait_ref(
+                                receiver,
+                                trait_ref,
+                                scope,
+                                assumptions,
+                                Some(owner_self),
+                            )
+                            && let Some(inst) = cx.try_extract::<TraitInstId<'db>>(inst)
+                        {
+                            if inst.def(db).const_(db, name).is_some() {
+                                matches.insert(inst);
+                            }
 
-        if let TyData::AssocTy(assoc_ty) = receiver_ty.data(db) {
-            let trait_ = assoc_ty.trait_.def(db);
-            let assoc_name = assoc_ty.name;
-            if let Some(decl) = trait_.assoc_ty(db, assoc_name) {
-                let subject = extracted_receiver_ty.fold_with(db, &mut table);
-                let owner_self = assoc_ty.trait_.self_ty(db);
-                for bound in &decl.bounds {
-                    if let TypeBound::Trait(trait_ref) = *bound
-                        && let Ok(inst) = crate::analysis::ty::trait_lower::lower_trait_ref(
-                            db,
-                            subject,
-                            trait_ref,
-                            scope,
-                            assumptions,
-                            Some(owner_self),
-                        )
-                    {
-                        let inst = inst.fold_with(db, &mut table);
-                        let Some(inst) = receiver.extract_existing_solution(
-                            &mut table,
-                            extracted_receiver_ty,
-                            inst,
-                        ) else {
-                            continue;
-                        };
-
-                        if inst.def(db).const_(db, name).is_some() {
-                            matches.insert(inst);
-                        }
-
-                        for super_trait in inst.def(db).super_traits(db) {
-                            let super_inst = super_trait.instantiate(db, inst.args(db));
-                            if super_inst.def(db).const_(db, name).is_some() {
-                                matches.insert(super_inst);
+                            for super_trait in inst.def(db).super_traits(db) {
+                                let super_inst = super_trait.instantiate(db, inst.args(db));
+                                if super_inst.def(db).const_(db, name).is_some() {
+                                    matches.insert(super_inst);
+                                }
                             }
                         }
                     }
                 }
             }
-        }
+        });
 
         return match matches.len() {
             0 => AssocConstSelection::NotFound,
@@ -1227,24 +1214,19 @@ pub(crate) fn find_associated_type<'db>(
 ) -> Result<SmallVec<(TraitInstId<'db>, TyId<'db>), 4>, FindAssociatedTypeError> {
     let canonical_ty = ty.canonical();
     let original_ty = ty.original();
-    let mut table = UnificationTable::new(db);
-    let lhs_ty = ty.extract_identity(&mut table);
 
     // Qualified type: `<A as T>::B`. Always construct the associated type projection
     // against the qualified trait instance; bindings (if any) will be handled downstream.
-    if let TyData::QualifiedTy(trait_inst) = lhs_ty.data(db) {
-        let proj = TyId::assoc_ty(db, *trait_inst, name);
-        let inst = ty.extract_existing_solution(&mut table, lhs_ty, *trait_inst);
-        let proj = ty.extract_existing_solution(&mut table, lhs_ty, proj);
-        return Ok(match (inst, proj) {
-            (Some(inst), Some(proj)) => smallvec![(inst, proj)],
-            _ => smallvec![],
-        });
+    if let TyData::QualifiedTy(trait_inst) = original_ty.data(db) {
+        return Ok(smallvec![(
+            *trait_inst,
+            TyId::assoc_ty(db, *trait_inst, name)
+        )]);
     }
 
     let scope_ingot = scope.ingot(db);
 
-    if let TyData::TyParam(param) = lhs_ty.data(db) {
+    if let TyData::TyParam(param) = original_ty.data(db) {
         // Trait self, in trait or impl trait. Associated type must be in this trait.
         if param.is_trait_self() {
             if let Some(trait_) = param.owner.resolve_to::<Trait>(db) {
@@ -1264,137 +1246,117 @@ pub(crate) fn find_associated_type<'db>(
     }
 
     let mut candidates = SmallVec::new();
-    // Check explicit bounds in assumptions that match `ty` only when `ty` is a type
-    // parameter (to avoid spurious ambiguities for concrete types that already have impls).
-    if let TyData::TyParam(_) = lhs_ty.data(db) {
-        for &trait_inst in assumptions.list(db) {
-            // `trait_inst` is a specific trait bound, e.g., `A: Abi` or `S<A>: SomeTrait`.
-            let snapshot = table.snapshot();
-            let pred_self_ty =
-                table.instantiate_with_fresh_vars(Binder::bind(trait_inst.self_ty(db)));
-
-            if table.unify(lhs_ty, pred_self_ty).is_ok()
-                && let Some(assoc_ty) = trait_inst.assoc_ty(db, name)
-            {
-                let folded_inst = trait_inst.fold_with(db, &mut table);
-                let folded_ty = assoc_ty.fold_with(db, &mut table);
-                if let (Some(folded_inst), Some(folded_ty)) = (
-                    ty.extract_existing_solution(&mut table, lhs_ty, folded_inst),
-                    ty.extract_existing_solution(&mut table, lhs_ty, folded_ty),
-                ) {
-                    candidates.push((folded_inst, folded_ty));
-                }
-            }
-            table.rollback_to(snapshot);
-        }
-    }
-
     let search_ingots = [
         Some(scope_ingot),
         original_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
     ];
 
-    // Check impls for `ty` across both the call-site ingot and `ty`'s defining ingot.
-    for ingot in search_ingots.into_iter().flatten() {
-        for impl_ in impls_for_ty_with_constraints(db, ingot, canonical_ty, assumptions) {
-            let snapshot = table.snapshot();
-            let impl_ = table.instantiate_with_fresh_vars(impl_);
+    ty.with_materialized(db, |cx| -> Result<(), FindAssociatedTypeError> {
+        let lhs_ty = cx.query();
 
-            if table.unify(lhs_ty, impl_.self_ty(db)).is_ok()
-                && let Some(assoc_ty) = impl_.assoc_ty(db, name)
-            {
-                let folded_inst = impl_.trait_(db).fold_with(db, &mut table);
-                let folded_ty = assoc_ty.fold_with(db, &mut table);
-                if let (Some(folded_inst), Some(folded_ty)) = (
-                    ty.extract_existing_solution(&mut table, lhs_ty, folded_inst),
-                    ty.extract_existing_solution(&mut table, lhs_ty, folded_ty),
-                ) {
-                    candidates.push((folded_inst, folded_ty));
-                }
-            }
-            table.rollback_to(snapshot);
-        }
-    }
+        // Only consult explicit bounds for type-parameter receivers; concrete
+        // receivers get their candidates from impl lookup to avoid spurious
+        // ambiguity between bounds and implementations.
+        if let TyData::TyParam(_) = original_ty.data(db) {
+            for &trait_inst in assumptions.list(db) {
+                let snapshot = cx.snapshot();
+                let pred_self_ty =
+                    cx.instantiate_with_fresh_vars(Binder::bind(trait_inst.self_ty(db)));
 
-    // Case 3: The LHS `ty` is an associated type (e.g., `T::Encoder` in `T::Encoder::Output`).
-    // We need to look at the trait bound on the associated type.
-    if let TyData::AssocTy(assoc_ty) = lhs_ty.data(db) {
-        let mut assoc_table = UnificationTable::new(db);
-
-        // Extract the canonical type's substitutions into the unification table
-        // This ensures we maintain any type parameter bindings from the outer context
-        let ty_with_subst = ty.extract_identity(&mut assoc_table);
-
-        // First, check if there are trait bounds on this associated type in the assumptions
-        // (e.g., from where clauses like `T::Assoc: Level1`).
-        for &trait_inst in assumptions.list(db) {
-            let snapshot = assoc_table.snapshot();
-            // Allow unification to account for type variables in either side
-            if assoc_table
-                .unify(ty_with_subst, trait_inst.self_ty(db))
-                .is_ok()
-                && let Some(assoc_ty) = trait_inst.assoc_ty(db, name)
-            {
-                let folded_inst = trait_inst.fold_with(db, &mut assoc_table);
-                let folded_ty = assoc_ty.fold_with(db, &mut assoc_table);
-                if let (Some(folded_inst), Some(folded_ty)) = (
-                    ty.extract_existing_solution(&mut assoc_table, ty_with_subst, folded_inst),
-                    ty.extract_existing_solution(&mut assoc_table, ty_with_subst, folded_ty),
-                ) {
-                    candidates.push((folded_inst, folded_ty));
-                }
-            }
-            assoc_table.rollback_to(snapshot);
-        }
-
-        // Also check bounds defined on the associated type in the trait definition.
-        // We need to use the calling context's scope/assumptions (not the trait's) so that
-        // path resolution works correctly.
-        let trait_ = assoc_ty.trait_.def(db);
-        let assoc_name = assoc_ty.name;
-        if let Some(decl) = trait_.assoc_ty(db, assoc_name) {
-            let subject = ty_with_subst.fold_with(db, &mut assoc_table);
-            // owner_self is used to substitute `Self` in bounds like `type Assoc: Encode<Self>`
-            let owner_self = assoc_ty.trait_.self_ty(db);
-            for bound in &decl.bounds {
-                let TypeBound::Trait(trait_ref) = *bound else {
-                    continue;
-                };
-
-                let inst = match crate::analysis::ty::trait_lower::lower_trait_ref(
-                    db,
-                    subject,
-                    trait_ref,
-                    scope,
-                    assumptions,
-                    Some(owner_self),
-                ) {
-                    Ok(inst) => inst,
-                    Err(TraitRefLowerError::Cycle) => {
-                        return Err(FindAssociatedTypeError::InfiniteBoundRecursion);
-                    }
-                    Err(TraitRefLowerError::PathResError(err))
-                        if err.is_infinite_bound_recursion() =>
+                if cx.unify::<TyId<'db>>(lhs_ty, pred_self_ty).is_ok() {
+                    let trait_inst = cx.materialize(trait_inst);
+                    if let Some(assoc_ty) = trait_inst.assoc_ty(db, name)
+                        && let (Some(inst), Some(assoc_ty)) = (
+                            cx.try_extract::<TraitInstId<'db>>(trait_inst),
+                            cx.try_extract::<TyId<'db>>(assoc_ty),
+                        )
                     {
-                        return Err(FindAssociatedTypeError::InfiniteBoundRecursion);
+                        candidates.push((inst, assoc_ty));
                     }
-                    Err(_) => continue,
-                };
+                }
+                cx.rollback_to(snapshot);
+            }
+        }
 
-                if inst.def(db).assoc_ty(db, name).is_some() {
-                    let assoc_ty = TyId::assoc_ty(db, inst, name);
-                    let folded_inst = inst.fold_with(db, &mut assoc_table);
-                    let folded_ty = assoc_ty.fold_with(db, &mut assoc_table);
-                    if let (Some(folded_inst), Some(folded_ty)) = (
-                        ty.extract_existing_solution(&mut assoc_table, ty_with_subst, folded_inst),
-                        ty.extract_existing_solution(&mut assoc_table, ty_with_subst, folded_ty),
+        // Search both the call-site ingot and the receiver's ingot so local
+        // traits on external types and external traits on local types are both visible.
+        for ingot in search_ingots.into_iter().flatten() {
+            for impl_ in impls_for_ty_with_constraints(db, ingot, canonical_ty, assumptions) {
+                if let Some(Some((inst, assoc_ty))) =
+                    cx.with_impl_assoc_ty(impl_, lhs_ty, name, |cx, inst, assoc_ty| {
+                        Some((
+                            cx.try_extract::<TraitInstId<'db>>(inst)?,
+                            cx.try_extract::<TyId<'db>>(assoc_ty)?,
+                        ))
+                    })
+                {
+                    candidates.push((inst, assoc_ty));
+                }
+            }
+        }
+
+        // Projections such as `T::Assoc::Item` can be resolved either from an
+        // explicit bound on `T::Assoc` or from the bounds declared on the
+        // associated type itself.
+        if let TyData::AssocTy(assoc_ty) = original_ty.data(db) {
+            for &trait_inst in assumptions.list(db) {
+                let snapshot = cx.snapshot();
+                let trait_inst = cx.materialize(trait_inst);
+                if cx
+                    .unify::<TyId<'db>>(lhs_ty, trait_inst.self_ty(db))
+                    .is_ok()
+                    && let Some(assoc_ty) = trait_inst.assoc_ty(db, name)
+                    && let (Some(inst), Some(assoc_ty)) = (
+                        cx.try_extract::<TraitInstId<'db>>(trait_inst),
+                        cx.try_extract::<TyId<'db>>(assoc_ty),
+                    )
+                {
+                    candidates.push((inst, assoc_ty));
+                }
+                cx.rollback_to(snapshot);
+            }
+
+            let trait_ = assoc_ty.trait_.def(db);
+            let assoc_name = assoc_ty.name;
+            if let Some(decl) = trait_.assoc_ty(db, assoc_name) {
+                // Bounds like `type Assoc: Encode<Self>` are lowered in the
+                // owner trait's `Self` environment.
+                let owner_self = cx.materialize(assoc_ty.trait_.self_ty(db));
+                for bound in &decl.bounds {
+                    let TypeBound::Trait(trait_ref) = *bound else {
+                        continue;
+                    };
+
+                    let inst = match cx.lower_trait_ref(
+                        lhs_ty,
+                        trait_ref,
+                        scope,
+                        assumptions,
+                        Some(owner_self),
                     ) {
-                        candidates.push((folded_inst, folded_ty));
+                        Ok(inst) => inst,
+                        Err(TraitRefLowerError::Cycle) => {
+                            return Err(FindAssociatedTypeError::InfiniteBoundRecursion);
+                        }
+                        Err(TraitRefLowerError::PathResError(err))
+                            if err.is_infinite_bound_recursion() =>
+                        {
+                            return Err(FindAssociatedTypeError::InfiniteBoundRecursion);
+                        }
+                        Err(_) => continue,
+                    };
+
+                    if inst.def(db).assoc_ty(db, name).is_some()
+                        && let Some(inst) = cx.try_extract::<TraitInstId<'db>>(inst)
+                    {
+                        candidates.push((inst, TyId::assoc_ty(db, inst, name)));
                     }
                 }
             }
         }
-    }
+
+        Ok(())
+    })?;
 
     Ok(candidates)
 }
