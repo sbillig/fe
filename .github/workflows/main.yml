@@ -131,7 +131,7 @@ jobs:
             target: aarch64-unknown-linux-gnu
             BIN_FILE: fe_linux_arm64
             EXT: ""
-            EXTRA_FEATURES: "--features vendored-openssl"
+            EXTRA_FEATURES: ""
             STRIP: aarch64-linux-gnu-strip
           - os: macOS-latest
             target: aarch64-apple-darwin
@@ -143,7 +143,7 @@ jobs:
             target: x86_64-apple-darwin
             BIN_FILE: fe_mac_amd64
             EXT: ""
-            EXTRA_FEATURES: "--features vendored-openssl"
+            EXTRA_FEATURES: ""
             STRIP: strip
           - os: windows-latest
             target: x86_64-pc-windows-msvc
