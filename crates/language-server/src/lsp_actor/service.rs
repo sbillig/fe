@@ -179,7 +179,7 @@ impl<S> CanHandle<AnyEvent> for LspActorService<S> {
     fn can_handle(&self, event: &AnyEvent) -> bool {
         self.dispatcher
             .wrappers
-            .contains_key(&LspActorKey::from(event.inner_type_id()))
+            .contains_key(&LspActorKey::from(event.inner().type_id()))
     }
 }
 
