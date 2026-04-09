@@ -105,15 +105,17 @@ fn verify_code_region_refs<'db>(
             let RStmt::Assign { expr, .. } = stmt else {
                 continue;
             };
-            let RExpr::Builtin(
-                crate::runtime::RuntimeBuiltin::CodeRegionOffset { region }
-                | crate::runtime::RuntimeBuiltin::CodeRegionLen { region },
-            ) = expr
-            else {
-                continue;
-            };
-            if view.code_region(*region).is_none() {
-                return Err(VerifyError::InvalidCodeRegion(*region));
+            match expr {
+                RExpr::Builtin(crate::runtime::RuntimeBuiltin::CurrentCodeRegionLen) => {}
+                RExpr::Builtin(
+                    crate::runtime::RuntimeBuiltin::CodeRegionOffset { region }
+                    | crate::runtime::RuntimeBuiltin::CodeRegionLen { region },
+                ) => {
+                    if view.code_region(*region).is_none() {
+                        return Err(VerifyError::InvalidCodeRegion(*region));
+                    }
+                }
+                _ => {}
             }
         }
     }

@@ -4,8 +4,7 @@ use hir::{
         semantic::{
             GenericSubst, ImplEnv, SemConstScalar, SemConstValue, SemanticInstance,
             SemanticInstanceKey, check_semantic_borrows, eval_const_instance,
-            get_or_build_semantic_instance, owner_effect_bindings, semantic_binding_ty,
-            semantic_instance_assumptions,
+            get_or_build_semantic_instance,
         },
         ty::{
             corelib::{resolve_core_trait, resolve_lib_type_path},
@@ -22,16 +21,15 @@ use hir::{
         IdentId,
         expr::{ArithBinOp, BinOp, CompBinOp},
     },
-    semantic::RecvArmView,
 };
 use num_traits::ToPrimitive;
 use salsa::Update;
 
 use crate::runtime::lower::{
     class::{
-        desired_runtime_param_boundary, owner_effect_binding_boundary, ref_class_for_place_result,
-        runtime_address_space, runtime_class_satisfies_boundary, runtime_signature_for_key,
-        semantic_return_ty, top_level_class_for_ty_in_env,
+        ref_class_for_place_result, runtime_address_space, runtime_class_satisfies_boundary,
+        runtime_signature_for_key, runtime_visible_binding_plans, semantic_return_ty,
+        top_level_class_for_ty_in_env,
     },
     layout::RuntimeTypeEnv,
 };
@@ -42,8 +40,9 @@ use crate::{
         ContractRecvAbiPlan, DispatchDefault, InitArgsPlan, LoweredRuntimeBody, PlaceElem,
         PlaceRoot, RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView,
         RuntimeBody, RuntimeBoundarySpec, RuntimeBuiltin, RuntimeCallEdge, RuntimeCarrier,
-        RuntimeClass, RuntimeInputPlan, RuntimeLocalRoot, RuntimePlace, RuntimeReturnPlan,
-        RuntimeSignature, RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole,
+        RuntimeClass, RuntimeInputPlan, RuntimeLocalRoot, RuntimeParamPlan, RuntimePlace,
+        RuntimeReturnPlan, RuntimeSignature, RuntimeSyntheticSpec, ScalarClass, ScalarRepr,
+        ScalarRole,
         lower::{
             body::lower_to_rmir,
             call::{
@@ -302,7 +301,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
 
     fn build_contract_init_abi(&mut self, plan: ContractInitAbiPlan<'db>) {
         let zero = self.push_const_word(RBlockId::from_u32(0), 0);
-        let cont_bb = if plan.payable {
+        let mut cont_bb = if plan.payable {
             RBlockId::from_u32(0)
         } else {
             self.emit_nonpayable_guard(zero)
@@ -314,19 +313,11 @@ impl<'db> SyntheticBodyBuilder<'db> {
             decode_fn,
         } = plan.init_args
         {
-            let current_region = crate::runtime::RuntimeCodeRegion::new(
-                self.db,
-                crate::runtime::RuntimeCodeRegionKey::ContractInit {
-                    contract: plan.contract,
-                },
-            );
             let self_len = self.push_builtin_value(
                 cont_bb,
                 TyId::u256(self.db),
                 RuntimeClass::Scalar(word_scalar_class()),
-                RuntimeBuiltin::CodeRegionLen {
-                    region: current_region,
-                },
+                RuntimeBuiltin::CurrentCodeRegionLen,
             );
             let code_size = self.push_builtin_value(
                 cont_bb,
@@ -334,15 +325,28 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 RuntimeClass::Scalar(word_scalar_class()),
                 RuntimeBuiltin::CodeSize,
             );
-            let tail_len = self.push_binary_word(cont_bb, ArithBinOp::Sub, code_size, self_len);
+            let short_code = self.push_bool_binary(cont_bb, CompBinOp::Lt, code_size, self_len);
+            let revert_bb = self.new_block();
+            let decode_bb = self.new_block();
+            self.blocks[cont_bb.index()].terminator = RTerminator::Branch {
+                cond: short_code,
+                then_bb: revert_bb,
+                else_bb: decode_bb,
+            };
+            self.blocks[revert_bb.index()].terminator = RTerminator::Revert {
+                offset: zero,
+                len: zero,
+            };
+            cont_bb = decode_bb;
+            let tail_len = self.push_binary_word(decode_bb, ArithBinOp::Sub, code_size, self_len);
             let tail_ptr = self.push_builtin_value(
-                cont_bb,
+                decode_bb,
                 TyId::u256(self.db),
                 RuntimeClass::Scalar(word_scalar_class()),
                 RuntimeBuiltin::Malloc { size: tail_len },
             );
             self.push_side_effect_builtin(
-                cont_bb,
+                decode_bb,
                 RuntimeBuiltin::CodeCopy {
                     dst: tail_ptr,
                     offset: self_len,
@@ -350,13 +354,13 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 },
             );
             let input =
-                self.push_memory_bytes_value(cont_bb, plan.contract.scope(), tail_ptr, tail_len);
+                self.push_memory_bytes_value(decode_bb, plan.contract.scope(), tail_ptr, tail_len);
             let decoder_new =
                 resolve_sol_decoder_new(self.db, plan.contract.scope()).expect("decoder_new");
-            let decoder = self.push_call_result(cont_bb, decoder_new, vec![input]);
-            if let Some(decoded) = self.push_call(cont_bb, decode_fn, vec![decoder]) {
+            let decoder = self.push_call_result(decode_bb, decoder_new, vec![input]);
+            if let Some(decoded) = self.push_call(decode_bb, decode_fn, vec![decoder]) {
                 call_args.extend(self.extract_tuple_fields(
-                    cont_bb,
+                    decode_bb,
                     decoded,
                     tuple_ty,
                     plan.contract.scope(),
@@ -725,17 +729,19 @@ impl<'db> SyntheticBodyBuilder<'db> {
         let callee = self.specialize_callee_for_args(callee, &args);
         let sig = callee.body(self.db).signature.clone();
         let args = self.coerce_call_args(bb, callee, args);
-        sig.ret.map(|class| {
+        let dst = if let Some(class) = sig.ret {
             let semantic_ty = callee
                 .key(self.db)
                 .semantic(self.db)
                 .map(|semantic| semantic_return_ty(self.db, semantic))
                 .unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other));
-            let dst = self.push_local(
+            Some(self.push_local(
                 semantic_ty,
                 RuntimeCarrier::Value(class),
                 RuntimeLocalRoot::None,
-            );
+            ))
+        } else {
+            let dst = self.push_erased_local(TyId::unit(self.db));
             self.push_stmt(
                 bb,
                 RStmt::Assign {
@@ -746,8 +752,20 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     },
                 },
             );
-            dst
-        })
+            return None;
+        };
+        let dst = dst.expect("value-returning call should allocate a destination");
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst,
+                expr: RExpr::Call {
+                    callee,
+                    args: args.into_boxed_slice(),
+                },
+            },
+        );
+        Some(dst)
     }
 
     fn push_ignored_call(
@@ -795,10 +813,10 @@ impl<'db> SyntheticBodyBuilder<'db> {
             .iter()
             .zip(body.signature.params.iter().enumerate())
             .map(|(arg, (idx, param))| {
-                let boundary = self
-                    .runtime_param_boundary(callee, idx)
-                    .unwrap_or_else(|| RuntimeBoundarySpec::Exact(param.class.clone()));
-                self.runtime_class_for_boundary_arg(*arg, &boundary)
+                let plan = self.runtime_param_plan(callee, idx).unwrap_or_else(|| {
+                    RuntimeParamPlan::Boundary(RuntimeBoundarySpec::Exact(param.class.clone()))
+                });
+                self.runtime_class_for_param_arg(*arg, &plan)
             })
             .collect();
         let key =
@@ -829,10 +847,10 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     .local(param.local)
                     .map(|local| local.semantic_ty)
                     .unwrap_or_else(|| self.locals[arg.index()].semantic_ty);
-                let boundary = self
-                    .runtime_param_boundary(callee, idx)
-                    .unwrap_or_else(|| RuntimeBoundarySpec::Exact(param.class.clone()));
-                self.coerce_runtime_value_for_boundary(bb, arg, &boundary, semantic_ty)
+                let plan = self.runtime_param_plan(callee, idx).unwrap_or_else(|| {
+                    RuntimeParamPlan::Boundary(RuntimeBoundarySpec::Exact(param.class.clone()))
+                });
+                self.coerce_runtime_value_for_param_plan(bb, arg, &plan, semantic_ty)
             })
             .collect()
     }
@@ -906,72 +924,57 @@ impl<'db> SyntheticBodyBuilder<'db> {
             .unwrap_or_else(|| panic!("cannot specialize erased runtime arg {arg:?}"))
     }
 
-    fn runtime_param_boundary(
+    fn runtime_class_for_param_arg(
+        &self,
+        arg: RLocalId,
+        plan: &RuntimeParamPlan<'db>,
+    ) -> RuntimeClass<'db> {
+        match plan {
+            RuntimeParamPlan::Erased => {
+                panic!("erased runtime param should not have a runtime arg")
+            }
+            RuntimeParamPlan::Boundary(boundary) => {
+                self.runtime_class_for_boundary_arg(arg, boundary)
+            }
+            RuntimeParamPlan::PassActual => self.locals[arg.index()]
+                .carrier
+                .value_class()
+                .cloned()
+                .unwrap_or_else(|| panic!("cannot specialize erased runtime arg {arg:?}")),
+        }
+    }
+
+    fn runtime_param_plan(
         &self,
         callee: RuntimeInstance<'db>,
         idx: usize,
-    ) -> Option<RuntimeBoundarySpec<'db>> {
+    ) -> Option<RuntimeParamPlan<'db>> {
         let key = callee.key(self.db);
         match key.source(self.db) {
             RuntimeInstanceSource::Semantic(semantic) => {
-                let owner = semantic.key(self.db).owner(self.db);
-                let typed_body = semantic.key(self.db).instantiate_typed_body(self.db);
-                let mut next = 0;
-                let mut param_idx = 0;
-                while typed_body.param_binding(param_idx).is_some() {
-                    if let Some(boundary) =
-                        desired_runtime_param_boundary(self.db, &typed_body, param_idx)
-                    {
-                        if next == idx {
-                            return Some(boundary);
-                        }
-                        next += 1;
-                    }
-                    param_idx += 1;
-                }
-                if let BodyOwner::ContractRecvArm {
-                    contract,
-                    recv_idx,
-                    arm_idx,
-                } = owner
-                {
-                    let recv = hir::semantic::RecvView::new(self.db, contract, recv_idx);
-                    let arm = RecvArmView::new(self.db, recv, arm_idx);
-                    let env = RuntimeTypeEnv::new(
-                        Some(owner.scope()),
-                        semantic_instance_assumptions(self.db, semantic),
-                    );
-                    for arg_binding in arm.arg_bindings(self.db) {
-                        let Some(binding) = typed_body.pat_binding(arg_binding.pat) else {
-                            continue;
-                        };
-                        let ty = semantic_binding_ty(self.db, semantic, binding);
-                        if let Some(class) = top_level_class_for_ty_in_env(
-                            self.db,
-                            env,
-                            ty,
-                            AddressSpaceKind::Memory,
-                        ) {
-                            if next == idx {
-                                return Some(RuntimeBoundarySpec::Exact(class));
-                            }
-                            next += 1;
-                        }
-                    }
-                }
-                for binding in owner_effect_bindings(self.db, owner) {
-                    if let Some(boundary) =
-                        owner_effect_binding_boundary(self.db, semantic, binding)
-                    {
-                        if next == idx {
-                            return Some(boundary);
-                        }
-                        next += 1;
-                    }
-                }
-                None
+                runtime_visible_binding_plans(self.db, semantic)
+                    .get(idx)
+                    .map(|entry| entry.plan.clone())
             }
             RuntimeInstanceSource::Synthetic(_) => None,
+        }
+    }
+
+    fn coerce_runtime_value_for_param_plan(
+        &mut self,
+        bb: RBlockId,
+        src: RLocalId,
+        plan: &RuntimeParamPlan<'db>,
+        semantic_ty: TyId<'db>,
+    ) -> RLocalId {
+        match plan {
+            RuntimeParamPlan::Erased => {
+                panic!("erased runtime param should not have a runtime arg")
+            }
+            RuntimeParamPlan::Boundary(boundary) => {
+                self.coerce_runtime_value_for_boundary(bb, src, boundary, semantic_ty)
+            }
+            RuntimeParamPlan::PassActual => src,
         }
     }
 
@@ -997,6 +1000,42 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 if runtime_class_satisfies_boundary(&source, boundary) =>
             {
                 src
+            }
+            RuntimeBoundarySpec::BorrowLike {
+                access: crate::runtime::BorrowAccess::ReadWrite,
+                allow,
+                ..
+            } if allow.allow_object => {
+                if let Some((place, actual)) = self.promote_runtime_aggregate_local_place(src)
+                    && runtime_class_satisfies_boundary(&actual, boundary)
+                {
+                    return self.push_runtime_place_addr_of(bb, place, actual, semantic_ty);
+                }
+                if let Some(actual) = self.runtime_place_addr_class(src)
+                    && runtime_class_satisfies_boundary(&actual, boundary)
+                {
+                    return self.push_runtime_place_addr_of(
+                        bb,
+                        self.runtime_place_for_local(src)
+                            .expect("local with place address class should have a place"),
+                        actual,
+                        semantic_ty,
+                    );
+                }
+                let value =
+                    self.materialize_runtime_value_for_boundary(bb, src, boundary, semantic_ty);
+                let actual = self.locals[value.index()]
+                    .carrier
+                    .value_class()
+                    .cloned()
+                    .expect("coerced runtime value should not be erased");
+                if runtime_class_satisfies_boundary(&actual, boundary) {
+                    value
+                } else {
+                    panic!(
+                        "synthetic runtime coercion produced incompatible borrow-like transport: source={source:?} actual={actual:?} boundary={boundary:?}"
+                    );
+                }
             }
             RuntimeBoundarySpec::BorrowLike { .. } => {
                 if let Some(actual) = self.runtime_place_addr_class(src)
@@ -1026,6 +1065,35 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 }
             }
         }
+    }
+
+    fn promote_runtime_aggregate_local_place(
+        &mut self,
+        local: RLocalId,
+    ) -> Option<(RuntimePlace<'db>, RuntimeClass<'db>)> {
+        let class = self
+            .locals
+            .get(local.index())?
+            .carrier
+            .value_class()?
+            .clone();
+        let RuntimeClass::AggregateValue { .. } = class else {
+            return None;
+        };
+        match &self.locals[local.index()].root {
+            RuntimeLocalRoot::None => {
+                self.locals[local.index()].root = RuntimeLocalRoot::Slot(class.clone());
+            }
+            RuntimeLocalRoot::Slot(_) => {}
+            RuntimeLocalRoot::Ref(_) | RuntimeLocalRoot::Ptr { .. } => return None,
+        }
+        let place = self
+            .runtime_place_for_local(local)
+            .expect("promoted aggregate local should have a place root");
+        let addr_class = self
+            .runtime_place_addr_class(local)
+            .expect("promoted aggregate local should have a place address class");
+        Some((place, addr_class))
     }
 
     fn runtime_place_for_local(&self, local: RLocalId) -> Option<RuntimePlace<'db>> {
@@ -1062,7 +1130,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     | RuntimeLocalRoot::Ptr { .. } => unreachable!(),
                 },
                 AddressSpaceKind::Memory,
-                true,
+                false,
             ),
             PlaceRoot::Ref(_) => (
                 match &self.locals.get(local.index())?.root {

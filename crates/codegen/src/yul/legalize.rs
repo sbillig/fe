@@ -293,6 +293,7 @@ pub enum YBuiltin<'db> {
         block: YLocalId,
     },
     Gas,
+    CurrentCodeRegionLen,
     CodeRegionOffset {
         region: RuntimeCodeRegion<'db>,
     },
@@ -2736,6 +2737,7 @@ fn legalize_builtin<'db>(
             block: YLocalId(block.as_u32()),
         },
         RuntimeBuiltin::Gas => YBuiltin::Gas,
+        RuntimeBuiltin::CurrentCodeRegionLen => YBuiltin::CurrentCodeRegionLen,
         RuntimeBuiltin::CodeRegionOffset { region } => {
             YBuiltin::CodeRegionOffset { region: *region }
         }

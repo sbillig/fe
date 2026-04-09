@@ -942,12 +942,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 })?;
                 let lhs = self.local_value(*lhs)?;
                 let rhs = self.local_value(*rhs)?;
-                let dst_class = dst
-                    .and_then(|dst| self.body.value_class(dst).cloned())
-                    .ok_or_else(|| {
-                        LowerError::Internal("binary expr missing destination class".to_string())
-                    })?;
-                self.lower_binary(*op, lhs, rhs, &lhs_class, &dst_class)?
+                self.lower_binary(*op, lhs, rhs, &lhs_class)?
             }
             RExpr::Cast { value, to } => {
                 let value = self.local_value(*value)?;
@@ -1366,6 +1361,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             RuntimeBuiltin::Gas => self
                 .fb
                 .insert_inst(EvmGas::new(self.module.inst_set()), Type::I256),
+            RuntimeBuiltin::CurrentCodeRegionLen => self.fb.insert_inst(
+                SymSize::new(self.module.inst_set(), SymbolRef::CurrentSection),
+                Type::I256,
+            ),
             RuntimeBuiltin::CodeRegionOffset { region } => self.fb.insert_inst(
                 SymAddr::new(self.module.inst_set(), self.code_region_symbol_ref(*region)),
                 Type::I256,
@@ -2039,6 +2038,63 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         self.module.ty_for_class(class)
     }
 
+    fn place_terminal_for_carrier(
+        &mut self,
+        value: RLocalId,
+        carrier_class: RuntimeClass<'db>,
+        class: RuntimeClass<'db>,
+        allow_value_carrier: bool,
+        root_kind: &str,
+    ) -> Result<PlaceTerminal<'db>, LowerError> {
+        match carrier_class {
+            RuntimeClass::Ref {
+                kind: RefKind::Const,
+                ..
+            } => Ok(PlaceTerminal::Const {
+                value: self.local_value(value)?,
+            }),
+            RuntimeClass::Ref {
+                kind: RefKind::Object,
+                ..
+            }
+            | RuntimeClass::Ref {
+                kind:
+                    RefKind::Provider {
+                        space: AddressSpaceKind::Memory,
+                        ..
+                    },
+                ..
+            } => Ok(PlaceTerminal::Object {
+                value: self.local_value(value)?,
+                class,
+            }),
+            RuntimeClass::Ref {
+                kind: RefKind::Provider { space, .. },
+                ..
+            } => Ok(PlaceTerminal::Ptr {
+                addr: self.local_value(value)?,
+                space,
+                class,
+            }),
+            RuntimeClass::AggregateValue { .. } if allow_value_carrier => {
+                Ok(PlaceTerminal::Object {
+                    value: self.local_value(value)?,
+                    class,
+                })
+            }
+            RuntimeClass::RawAddr { space, .. } if allow_value_carrier => Ok(PlaceTerminal::Ptr {
+                addr: self.local_value(value)?,
+                space,
+                class,
+            }),
+            RuntimeClass::Scalar(_)
+            | RuntimeClass::AggregateValue { .. }
+            | RuntimeClass::RawAddr { .. } => Err(LowerError::Internal(format!(
+                "{root_kind} root did not lower to a supported place carrier"
+            ))),
+        }
+    }
+
     fn resolve_place(
         &mut self,
         place: &RuntimePlace<'db>,
@@ -2062,93 +2118,22 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     },
                 }
             }
-            ResolvedPlaceRootKind::Ref { value, class } => match self
-                .body
-                .value_class(value)
-                .cloned()
-                .ok_or_else(|| LowerError::Internal(format!("erased handle root {value:?}")))?
-            {
-                RuntimeClass::Ref {
-                    kind: RefKind::Const,
-                    ..
-                } => PlaceTerminal::Const {
-                    value: self.local_value(value)?,
-                },
-                RuntimeClass::Ref {
-                    kind: RefKind::Object,
-                    ..
-                }
-                | RuntimeClass::Ref {
-                    kind:
-                        RefKind::Provider {
-                            space: AddressSpaceKind::Memory,
-                            ..
-                        },
-                    ..
-                } => PlaceTerminal::Object {
-                    value: self.local_value(value)?,
-                    class,
-                },
-                RuntimeClass::Ref {
-                    kind: RefKind::Provider { space, .. },
-                    ..
-                } => PlaceTerminal::Ptr {
-                    addr: self.local_value(value)?,
-                    space,
-                    class,
-                },
-                RuntimeClass::Scalar(_)
-                | RuntimeClass::AggregateValue { .. }
-                | RuntimeClass::RawAddr { .. } => {
-                    return Err(LowerError::Internal(
-                        "ref root did not lower to a reference".to_string(),
-                    ));
-                }
-            },
+            ResolvedPlaceRootKind::Ref { value, class } => self.place_terminal_for_carrier(
+                value,
+                self.body
+                    .value_class(value)
+                    .cloned()
+                    .ok_or_else(|| LowerError::Internal(format!("erased handle root {value:?}")))?,
+                class,
+                false,
+                "ref",
+            )?,
             ResolvedPlaceRootKind::Provider {
                 value,
                 provider_class,
                 class,
                 ..
-            } => match provider_class {
-                RuntimeClass::Ref {
-                    kind:
-                        RefKind::Provider {
-                            space: AddressSpaceKind::Memory,
-                            ..
-                        },
-                    ..
-                } => PlaceTerminal::Object {
-                    value: self.local_value(value)?,
-                    class,
-                },
-                RuntimeClass::Ref {
-                    kind: RefKind::Provider { space, .. },
-                    ..
-                } => PlaceTerminal::Ptr {
-                    addr: self.local_value(value)?,
-                    space,
-                    class,
-                },
-                RuntimeClass::AggregateValue { .. } => PlaceTerminal::Object {
-                    value: self.local_value(value)?,
-                    class,
-                },
-                RuntimeClass::RawAddr { space, .. } => PlaceTerminal::Ptr {
-                    addr: self.local_value(value)?,
-                    space,
-                    class,
-                },
-                RuntimeClass::Ref {
-                    kind: RefKind::Const | RefKind::Object,
-                    ..
-                }
-                | RuntimeClass::Scalar(_) => {
-                    return Err(LowerError::Internal(
-                        "provider root did not lower to a provider carrier".to_string(),
-                    ));
-                }
-            },
+            } => self.place_terminal_for_carrier(value, provider_class, class, true, "provider")?,
             ResolvedPlaceRootKind::Ptr { addr, space, class } => PlaceTerminal::Ptr {
                 addr: self.local_value(addr)?,
                 space,
@@ -2785,12 +2770,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         lhs: ValueId,
         rhs: ValueId,
         operand: &RuntimeClass<'db>,
-        result: &RuntimeClass<'db>,
     ) -> Result<ValueId, LowerError> {
-        let ty = self.module.ty_for_class(result)?;
         Ok(match op {
-            BinOp::Arith(op) => self.lower_arith(op, lhs, rhs, operand, ty)?,
-            BinOp::Comp(op) => self.lower_comp(op, lhs, rhs, operand, ty)?,
+            BinOp::Arith(op) => self.lower_arith(op, lhs, rhs, operand)?,
+            BinOp::Comp(op) => self.lower_comp(op, lhs, rhs, operand)?,
             BinOp::Logical(op) => match op {
                 LogicalBinOp::And => {
                     let lhs = condition_to_i1(&mut self.fb, lhs, self.module.inst_set());
@@ -2819,8 +2802,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         lhs: ValueId,
         rhs: ValueId,
         operand: &RuntimeClass<'db>,
-        ty: Type,
     ) -> Result<ValueId, LowerError> {
+        let ty = self.module.ty_for_class(operand)?;
         let lhs = self.cast_scalar(lhs, ty)?;
         let rhs = self.cast_scalar(rhs, ty)?;
         let signed = scalar_is_signed(operand);
@@ -2908,8 +2891,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         lhs: ValueId,
         rhs: ValueId,
         operand: &RuntimeClass<'db>,
-        ty: Type,
     ) -> Result<ValueId, LowerError> {
+        let ty = self.module.ty_for_class(operand)?;
         let lhs = self.cast_scalar(lhs, ty)?;
         let rhs = self.cast_scalar(rhs, ty)?;
         let signed = scalar_is_signed(operand);

@@ -734,6 +734,13 @@ pub enum RuntimeBoundarySpec<'db> {
     },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum RuntimeParamPlan<'db> {
+    Erased,
+    Boundary(RuntimeBoundarySpec<'db>),
+    PassActual,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
 pub enum BorrowAccess {
     ReadOnly,
@@ -985,6 +992,7 @@ pub enum RuntimeBuiltin<'db> {
         block: RValueId,
     },
     Gas,
+    CurrentCodeRegionLen,
     CodeRegionOffset {
         region: RuntimeCodeRegion<'db>,
     },

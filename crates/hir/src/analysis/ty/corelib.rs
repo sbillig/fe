@@ -79,6 +79,33 @@ pub fn resolve_lib_func_path<'db>(
     resolve_lib_func(db, scope, path_id)
 }
 
+/// Returns `true` if `func` is the library function at the fully-qualified
+/// `core::...` or `std::...` path.
+///
+/// This resolves from the owning ingot root instead of an arbitrary caller or
+/// nested module scope, so backend consumers can classify already-resolved
+/// library callees without reintroducing lookup drift.
+pub fn lib_func_matches<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>, path: &str) -> bool {
+    let Some((root, target_suffix)) = path.split_once("::") else {
+        return false;
+    };
+    let expected_kind = match root {
+        "core" => IngotKind::Core,
+        "std" => IngotKind::Std,
+        _ => return false,
+    };
+    if func.top_mod(db).ingot(db).kind(db) != expected_kind {
+        return false;
+    }
+    let Some(actual_path) = func.scope().pretty_path(db) else {
+        return false;
+    };
+    let Some((_, actual_suffix)) = actual_path.split_once("::") else {
+        return false;
+    };
+    actual_suffix == target_suffix
+}
+
 pub struct CoreRangeTypes<'db> {
     pub range: TyId<'db>,
     pub known: TyId<'db>,

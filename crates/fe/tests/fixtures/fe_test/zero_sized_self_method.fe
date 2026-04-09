@@ -1,0 +1,13 @@
+struct Marker {}
+
+impl Marker {
+    fn add1(self, value: u256) -> u256 {
+        value + 1
+    }
+}
+
+#[test]
+fn test_zero_sized_self_method() {
+    let marker = Marker {}
+    assert(marker.add1(41) == 42)
+}

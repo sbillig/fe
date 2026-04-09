@@ -15,7 +15,7 @@ use hir::analysis::{
     },
     ty::{
         ProviderAddressSpace, ProviderKind,
-        corelib::resolve_lib_func_path,
+        corelib::lib_func_matches,
         normalize::normalize_ty,
         provider::{provider_semantics, registered_root_providers},
         trait_def::{TraitInstId, resolve_trait_method_instance},
@@ -38,9 +38,9 @@ use crate::{
     runtime::{
         AddressSpaceKind, BorrowAccess, BorrowTransportSet, Layout, RefKind, RefView,
         RuntimeBoundarySpec, RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeCodeRegionKey,
-        RuntimeLocalLowering, RuntimeLocalRoot, RuntimeParam, RuntimeProviderBinding,
-        RuntimeProviderBindingId, RuntimeSignature, SaturatingBinOp, ScalarClass, ScalarRepr,
-        ScalarRole,
+        RuntimeLocalLowering, RuntimeLocalRoot, RuntimeParam, RuntimeParamPlan,
+        RuntimeProviderBinding, RuntimeProviderBindingId, RuntimeSignature, SaturatingBinOp,
+        ScalarClass, ScalarRepr, ScalarRole,
     },
 };
 
@@ -59,6 +59,13 @@ use super::{
 pub(super) struct InferredRuntimeLocal<'db> {
     pub(super) carrier: RuntimeCarrier<'db>,
     pub(super) root: RuntimeLocalRoot<'db>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RuntimeVisibleBindingPlan<'db> {
+    pub(crate) binding: LocalBinding<'db>,
+    pub(crate) local: SLocalId,
+    pub(crate) plan: RuntimeParamPlan<'db>,
 }
 
 pub(crate) fn runtime_address_space(class: &RuntimeClass<'_>) -> Option<AddressSpaceKind> {
@@ -785,14 +792,57 @@ pub(crate) fn runtime_param_locals<'db>(
     semantic: SemanticInstance<'db>,
     params: &[RuntimeClass<'db>],
 ) -> Vec<SLocalId> {
+    let entries = runtime_visible_binding_plans(db, semantic);
+    if entries.len() != params.len() {
+        let owner = semantic.key(db).owner(db);
+        let binding_debug = entries
+            .iter()
+            .map(|entry| {
+                let ty = semantic_binding_ty(db, semantic, entry.binding)
+                    .pretty_print(db)
+                    .to_string();
+                format!(
+                    "{:?}:{ty}:plan={:?}:local={:?}",
+                    entry.binding, entry.plan, entry.local
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        panic!(
+            "failed to map runtime params to semantic locals for {:?} owner={:?}: expected {} runtime-visible params, got {}; params={params:?}; visible_bindings=[{}]",
+            semantic.key(db),
+            owner,
+            entries.len(),
+            params.len(),
+            binding_debug,
+        );
+    }
+    entries.into_iter().map(|entry| entry.local).collect()
+}
+
+pub(crate) fn runtime_visible_binding_plans<'db>(
+    db: &'db dyn MirDb,
+    semantic: SemanticInstance<'db>,
+) -> Vec<RuntimeVisibleBindingPlan<'db>> {
     let owner = semantic.key(db).owner(db);
     let typed_body = semantic.key(db).instantiate_typed_body(db);
-    let mut explicit_bindings = Vec::new();
+    let mut entries = Vec::new();
+    let mut push = |binding, plan| {
+        if !matches!(plan, RuntimeParamPlan::Erased) {
+            entries.push(RuntimeVisibleBindingPlan {
+                binding,
+                local: runtime_visible_binding_local(db, owner, &typed_body, binding),
+                plan,
+            });
+        }
+    };
+
     let mut idx = 0;
     while let Some(binding) = typed_body.param_binding(idx) {
-        explicit_bindings.push(binding);
+        push(binding, desired_runtime_param_plan(db, &typed_body, idx));
         idx += 1;
     }
+
     if let BodyOwner::ContractRecvArm {
         contract,
         recv_idx,
@@ -801,27 +851,31 @@ pub(crate) fn runtime_param_locals<'db>(
     {
         let recv = hir::semantic::RecvView::new(db, contract, recv_idx);
         let arm = hir::semantic::RecvArmView::new(db, recv, arm_idx);
+        let env = RuntimeTypeEnv::new(
+            Some(owner.scope()),
+            semantic_instance_assumptions(db, semantic),
+        );
         for arg_binding in arm.arg_bindings(db) {
             let Some(binding) = typed_body.pat_binding(arg_binding.pat) else {
                 continue;
             };
-            explicit_bindings.push(binding);
+            let ty = semantic_binding_ty(db, semantic, binding);
+            let plan = top_level_class_for_ty_in_env(db, env, ty, AddressSpaceKind::Memory)
+                .map(RuntimeBoundarySpec::Exact)
+                .map(RuntimeParamPlan::Boundary)
+                .unwrap_or(RuntimeParamPlan::Erased);
+            push(binding, plan);
         }
     }
-    explicit_bindings.extend(owner_effect_bindings(db, owner));
-    if explicit_bindings.len() < params.len() {
-        panic!(
-            "failed to map runtime params to semantic locals for {:?}: mapped {} of {}; params={params:?}",
-            semantic.key(db),
-            explicit_bindings.len(),
-            params.len(),
-        );
+
+    for binding in owner_effect_bindings(db, owner) {
+        let plan = owner_effect_binding_boundary(db, semantic, binding)
+            .map(RuntimeParamPlan::Boundary)
+            .unwrap_or(RuntimeParamPlan::Erased);
+        push(binding, plan);
     }
-    explicit_bindings.truncate(params.len());
-    explicit_bindings
-        .into_iter()
-        .map(|binding| runtime_visible_binding_local(db, owner, &typed_body, binding))
-        .collect()
+
+    entries
 }
 
 pub(crate) fn runtime_class_for_provider_binding<'db>(
@@ -1177,22 +1231,33 @@ pub(crate) fn expr_direct_class<'db>(
             );
             let mut param_classes = Vec::new();
             for (idx, arg) in args.iter().enumerate() {
-                let desired = desired_runtime_param_boundary(db, &typed_body, idx);
-                let actual = runtime_visible_arg_class(
-                    db,
-                    body,
-                    raw_body,
-                    arg.local,
-                    desired.as_ref(),
-                    carriers,
-                );
-                if let Some(actual) = actual {
-                    param_classes.push(match desired {
-                        Some(RuntimeBoundarySpec::Exact(desired)) => {
-                            preserve_provider_space(&actual, &desired)
+                match desired_runtime_param_plan(db, &typed_body, idx) {
+                    RuntimeParamPlan::Erased => {}
+                    RuntimeParamPlan::Boundary(desired) => {
+                        let actual = runtime_visible_arg_class(
+                            db,
+                            body,
+                            raw_body,
+                            arg.local,
+                            Some(&desired),
+                            carriers,
+                        );
+                        if let Some(actual) = actual {
+                            param_classes.push(match desired {
+                                RuntimeBoundarySpec::Exact(desired) => {
+                                    preserve_provider_space(&actual, &desired)
+                                }
+                                RuntimeBoundarySpec::BorrowLike { .. } => actual,
+                            });
                         }
-                        Some(RuntimeBoundarySpec::BorrowLike { .. }) | None => actual.clone(),
-                    });
+                    }
+                    RuntimeParamPlan::PassActual => {
+                        if let Some(actual) =
+                            runtime_visible_arg_class(db, body, raw_body, arg.local, None, carriers)
+                        {
+                            param_classes.push(actual);
+                        }
+                    }
                 }
             }
             for arg in effect_args {
@@ -1438,12 +1503,14 @@ fn semantic_local_allows_transport_addr_of(role: &SemanticLocalRole<'_>) -> bool
     }
 }
 
-pub(crate) fn desired_runtime_param_boundary<'db>(
+pub(crate) fn desired_runtime_param_plan<'db>(
     db: &'db dyn MirDb,
     typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
     idx: usize,
-) -> Option<RuntimeBoundarySpec<'db>> {
-    let binding = typed_body.param_binding(idx)?;
+) -> RuntimeParamPlan<'db> {
+    let Some(binding) = typed_body.param_binding(idx) else {
+        return RuntimeParamPlan::Erased;
+    };
     let binding_ty = typed_body.binding_ty(db, binding);
     let scope = typed_body.body().map(|body| body.scope());
     let assumptions = typed_body.assumptions();
@@ -1454,23 +1521,25 @@ pub(crate) fn desired_runtime_param_boundary<'db>(
             TyData::TyParam(param) if param.is_effect() || param.is_effect_provider()
         )
     {
-        return None;
+        return RuntimeParamPlan::PassActual;
     }
-    let boundary = boundary_spec_for_ty_in_context(
+    let Some(boundary) = boundary_spec_for_ty_in_context(
         db,
         binding_ty,
         AddressSpaceKind::Memory,
         scope,
         assumptions,
-    )?;
+    ) else {
+        return RuntimeParamPlan::Erased;
+    };
     if matches!(
         boundary,
         RuntimeBoundarySpec::Exact(RuntimeClass::AggregateValue { .. })
     ) && aggregate_transport_depends_on_runtime_source(db, binding_ty, scope, assumptions)
     {
-        return None;
+        return RuntimeParamPlan::PassActual;
     }
-    Some(runtime_param_boundary(db, typed_body, binding, boundary))
+    RuntimeParamPlan::Boundary(runtime_param_boundary(db, typed_body, binding, boundary))
 }
 
 pub(crate) fn resolve_runtime_call_key<'db>(
@@ -2219,7 +2288,7 @@ fn extern_builtin_return_class<'db>(
             AddressSpaceKind::Memory,
         ));
     }
-    let matches = |path: &str| resolve_lib_func_path(db, func.scope(), path) == Some(func);
+    let matches = |path: &str| lib_func_matches(db, func, path);
     if matches("std::evm::mem::alloc") {
         return Some(top_level_class_for_ty_in_env(
             db,

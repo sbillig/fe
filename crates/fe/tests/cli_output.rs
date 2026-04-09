@@ -1643,6 +1643,61 @@ fn test_cli_test_default_project_path_discovers_tests_in_non_root_modules() {
 }
 
 #[test]
+fn test_cli_test_single_file_zero_sized_self_method_passes() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/zero_sized_self_method.fe");
+    let fixture = fixture.to_str().expect("fixture path utf8");
+
+    let (output, exit_code) = run_fe_main(&["test", fixture]);
+    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
+    assert!(
+        output.contains("PASS  [<time>] test_zero_sized_self_method"),
+        "expected zero-sized self method test to pass, got:\n{output}"
+    );
+    assert!(
+        output.contains("1 passed"),
+        "expected 1 passed test, got:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_test_emit_ir_and_rmir_writes_artifacts() {
+    let temp = tempdir().expect("tempdir");
+    let fixture = temp.path().join("emit_test.fe");
+    fs::write(&fixture, "#[test]\nfn test_pass() {}\n").expect("write fixture");
+    let fixture = fixture.to_str().expect("fixture path utf8");
+
+    let (output, exit_code) =
+        run_fe_main(&["test", "--jobs", "1", "-O0", "--emit", "ir,rmir", fixture]);
+    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
+
+    let out_dir = temp.path().join("out");
+    let sona_path = out_dir.join("emit_test.test.sona");
+    let rmir_path = out_dir.join("emit_test.test.rmir");
+    assert!(
+        sona_path.is_file(),
+        "missing Sonatina IR artifact:\n{output}"
+    );
+    assert!(rmir_path.is_file(), "missing rMIR artifact:\n{output}");
+
+    let sona = fs::read_to_string(&sona_path).expect("read Sonatina IR");
+    let rmir = fs::read_to_string(&rmir_path).expect("read rMIR");
+    assert!(
+        sona.contains("target = \"evm-ethereum-osaka\""),
+        "unexpected Sonatina IR:\n{sona}"
+    );
+    assert!(
+        rmir.contains("package"),
+        "unexpected rMIR package dump:\n{rmir}"
+    );
+    assert!(rmir.contains("bb0:"), "unexpected rMIR body dump:\n{rmir}");
+    assert!(
+        output.contains("Wrote "),
+        "expected artifact output, got:\n{output}"
+    );
+}
+
+#[test]
 fn test_cli_test_single_input_suite_setup_failure_surfaces_error_status() {
     let temp = tempdir().expect("tempdir");
     let invalid = temp.path().join("not_a_fe_input.txt");

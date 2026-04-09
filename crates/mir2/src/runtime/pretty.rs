@@ -10,8 +10,9 @@ use crate::{
     runtime::{
         AddressSpaceKind, ConstScalar, Layout, LayoutId, PlaceElem, PlaceRoot, RBlockId, RExpr,
         RLocalId, RStmt, RTerminator, RefKind, RefView, RuntimeBody, RuntimeBuiltin,
-        RuntimeCarrier, RuntimeClass, RuntimeLocalRoot, RuntimePlace, ScalarClass, ScalarRepr,
-        ScalarRole, VariantId,
+        RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeFunction, RuntimeLinkage,
+        RuntimeLocalRoot, RuntimeObject, RuntimePackage, RuntimePlace, RuntimeSection,
+        RuntimeSectionName, RuntimeSectionRef, ScalarClass, ScalarRepr, ScalarRole, VariantId,
     },
     verify::{RuntimeVerifyFailure, RuntimeVerifySite},
 };
@@ -133,6 +134,121 @@ pub fn format_runtime_body_excerpt<'db>(
     out
 }
 
+pub fn format_runtime_package<'db>(db: &'db dyn MirDb, package: &RuntimePackage<'db>) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "package {:?} {{", package.top_mod(db).name(db));
+    if let Some(primary) = package.primary_object(db) {
+        let _ = writeln!(out, "  primary_object: {}", primary.name(db));
+    }
+    if !package.root_objects(db).is_empty() {
+        let names = package
+            .root_objects(db)
+            .iter()
+            .map(|object| object.name(db).clone())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(out, "  root_objects: [{names}]");
+    }
+    if !package.objects(db).is_empty() {
+        let _ = writeln!(out, "  objects:");
+        for object in package.objects(db) {
+            write_object_summary(db, &mut out, object);
+        }
+    }
+    if !package.code_regions(db).is_empty() {
+        let _ = writeln!(out, "  code_regions:");
+        for code_region in package.code_regions(db) {
+            let _ = writeln!(
+                out,
+                "    {} -> {} @ {} root={}",
+                code_region.symbol(db),
+                format_code_region(db, code_region.region(db)),
+                format_section_ref(db, &code_region.source(db)),
+                code_region.root(db).symbol(db)
+            );
+        }
+    }
+    if !package.const_regions(db).is_empty() {
+        let _ = writeln!(out, "  const_regions:");
+        for const_region in package.const_regions(db) {
+            let data = const_region.data(db);
+            let _ = writeln!(
+                out,
+                "    {:?}: layout={}, node={:?}",
+                const_region,
+                format_layout_id(db, data.layout),
+                data.value
+            );
+        }
+    }
+    if !package.functions(db).is_empty() {
+        let _ = writeln!(out, "  functions:");
+        for function in package.functions(db) {
+            write_function_summary(db, &mut out, function);
+        }
+    }
+    out.push('}');
+    out
+}
+
+fn write_object_summary<'db>(db: &'db dyn MirDb, out: &mut String, object: RuntimeObject<'db>) {
+    let _ = writeln!(out, "    object {}:", object.name(db));
+    for section in object.sections(db) {
+        write_section_summary(db, out, &section);
+    }
+}
+
+fn write_section_summary<'db>(db: &'db dyn MirDb, out: &mut String, section: &RuntimeSection<'db>) {
+    let _ = writeln!(
+        out,
+        "      {} entry={}",
+        format_section_name(&section.name),
+        section.entry.symbol(db)
+    );
+    for embed in &section.embeds {
+        let _ = writeln!(
+            out,
+            "        embed {} as {}",
+            format_section_ref(db, &embed.source),
+            embed.as_symbol
+        );
+    }
+    for const_region in &section.const_regions {
+        let _ = writeln!(out, "        const {:?}", const_region);
+    }
+}
+
+fn write_function_summary<'db>(
+    db: &'db dyn MirDb,
+    out: &mut String,
+    function: RuntimeFunction<'db>,
+) {
+    let linkage = match function.linkage(db) {
+        RuntimeLinkage::Private => "private",
+        RuntimeLinkage::Internal => "internal",
+    };
+    let _ = writeln!(
+        out,
+        "    {} ({linkage}, inline={:?}, owner={:?})",
+        function.symbol(db),
+        function.inline_hint(db),
+        function.owner(db)
+    );
+    if !function.referenced_const_regions(db).is_empty() {
+        let refs = function
+            .referenced_const_regions(db)
+            .iter()
+            .map(|region| format!("{region:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(out, "      const_refs: [{refs}]");
+    }
+    let body = function.instance(db).body(db);
+    for line in format_runtime_body(db, &body).lines() {
+        let _ = writeln!(out, "      {line}");
+    }
+}
+
 fn format_verify_site<'db>(
     db: &'db dyn MirDb,
     body: &RuntimeBody<'db>,
@@ -204,6 +320,59 @@ fn format_local_root<'db>(db: &'db dyn MirDb, root: &RuntimeLocalRoot<'db>) -> S
         RuntimeLocalRoot::Ref(class) => format!("ref {}", format_class(db, class)),
         RuntimeLocalRoot::Ptr { space, class } => {
             format!("ptr {} {}", format_space(*space), format_class(db, class))
+        }
+    }
+}
+
+fn format_layout_id<'db>(db: &'db dyn MirDb, layout: LayoutId<'db>) -> String {
+    format!("{layout:?} {}", format_layout(db, layout))
+}
+
+fn format_section_name(name: &RuntimeSectionName) -> String {
+    match name {
+        RuntimeSectionName::Init => "init".to_string(),
+        RuntimeSectionName::Runtime => "runtime".to_string(),
+        RuntimeSectionName::Main => "main".to_string(),
+        RuntimeSectionName::Test(name) => format!("test({name})"),
+        RuntimeSectionName::CodeRegion(name) => format!("code_region({name})"),
+    }
+}
+
+fn format_section_ref<'db>(db: &'db dyn MirDb, section: &RuntimeSectionRef<'db>) -> String {
+    match section {
+        RuntimeSectionRef::Local { object, section } => {
+            format!(
+                "local {}::{}",
+                object.name(db),
+                format_section_name(section)
+            )
+        }
+        RuntimeSectionRef::External { object, section } => {
+            format!(
+                "external {}::{}",
+                object.name(db),
+                format_section_name(section)
+            )
+        }
+    }
+}
+
+fn format_code_region<'db>(db: &'db dyn MirDb, region: RuntimeCodeRegion<'db>) -> String {
+    match region.key(db) {
+        crate::runtime::RuntimeCodeRegionKey::ContractInit { contract } => {
+            format!("contract_init({:?})", contract.name(db))
+        }
+        crate::runtime::RuntimeCodeRegionKey::ContractRuntime { contract } => {
+            format!("contract_runtime({:?})", contract.name(db))
+        }
+        crate::runtime::RuntimeCodeRegionKey::ManualContractRoot { func } => {
+            format!("manual_contract_root({:?})", func.name(db))
+        }
+        crate::runtime::RuntimeCodeRegionKey::FunctionRoot { symbol, callee } => {
+            format!(
+                "function_root({symbol}, {})",
+                format_runtime_instance(db, callee)
+            )
         }
     }
 }
@@ -539,6 +708,7 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
         RuntimeBuiltin::SelfBalance => "selfbalance".to_string(),
         RuntimeBuiltin::BlockHash { block } => format!("blockhash {}", format_local_id(*block)),
         RuntimeBuiltin::Gas => "gas".to_string(),
+        RuntimeBuiltin::CurrentCodeRegionLen => "current_code_region_len".to_string(),
         RuntimeBuiltin::CodeRegionOffset { region } => format!("code_region_offset {:?}", region),
         RuntimeBuiltin::CodeRegionLen { region } => format!("code_region_len {:?}", region),
         RuntimeBuiltin::Malloc { size } => format!("malloc {}", format_local_id(*size)),
@@ -819,7 +989,37 @@ fn format_const_scalar(value: &ConstScalar) -> String {
 
 fn format_runtime_instance<'db>(db: &'db dyn MirDb, instance: RuntimeInstance<'db>) -> String {
     let key = instance.key(db);
-    format!("{key:?}")
+    match key.source(db) {
+        crate::instance::RuntimeInstanceSource::Semantic(semantic) => {
+            let owner = semantic.key(db).owner(db);
+            let owner_summary = match owner {
+                hir::analysis::ty::ty_check::BodyOwner::Func(func) => format!(
+                    "func={} has_body={} trait={:?} impl_trait={:?} impl={:?} owner={owner:?}",
+                    func.name(db)
+                        .to_opt()
+                        .map(|name| name.data(db).to_string())
+                        .unwrap_or_else(|| "<unnamed>".to_string()),
+                    func.body(db).is_some(),
+                    func.containing_trait(db).and_then(|trait_| trait_
+                        .name(db)
+                        .to_opt()
+                        .map(|name| name.data(db).to_string())),
+                    func.containing_impl_trait(db)
+                        .map(|impl_trait| impl_trait.ty(db).pretty_print(db).to_string()),
+                    func.containing_impl(db)
+                        .map(|impl_| impl_.ty(db).pretty_print(db).to_string()),
+                ),
+                _ => format!("{owner:?}"),
+            };
+            format!(
+                "{key:?} [semantic {owner_summary} subst={:?}]",
+                semantic.key(db).subst(db).generic_args(db),
+            )
+        }
+        crate::instance::RuntimeInstanceSource::Synthetic(synthetic) => {
+            format!("{key:?} [synthetic spec={:?}]", synthetic.spec(db))
+        }
+    }
 }
 
 fn format_space(space: AddressSpaceKind) -> &'static str {

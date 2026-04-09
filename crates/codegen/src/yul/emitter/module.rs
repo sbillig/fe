@@ -324,7 +324,11 @@ fn render_section_code<'a, 'db>(
 ) -> Result<Vec<YulDoc>, YulError> {
     let mut docs = Vec::new();
     for function in &section.functions {
-        docs.push(render_function_doc(index, index.function(*function)?)?);
+        docs.push(render_function_doc(
+            index,
+            index.function(*function)?,
+            &section.name,
+        )?);
     }
     docs.extend(render_section_entry(index, section)?);
     Ok(docs)

@@ -466,6 +466,9 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 self.word_builtin(&format!("blockhash({})", self.scalar_word_expr(*block)?))
             }
             YBuiltin::Gas => self.word_builtin("gas()"),
+            YBuiltin::CurrentCodeRegionLen => {
+                self.word_builtin(&format!("datasize(\"{}\")", self.section_label))
+            }
             YBuiltin::CodeRegionOffset { region } => self.word_builtin(&format!(
                 "dataoffset(\"{}\")",
                 self.index.code_region_label(*region)?

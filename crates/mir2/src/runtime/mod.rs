@@ -9,4 +9,7 @@ pub use ir::*;
 pub use layout_utils::*;
 pub use lower::*;
 pub use package::{LowerError, build_runtime_package, build_test_runtime_package};
-pub use pretty::{format_runtime_body, format_runtime_body_excerpt, format_runtime_verify_failure};
+pub use pretty::{
+    format_runtime_body, format_runtime_body_excerpt, format_runtime_package,
+    format_runtime_verify_failure,
+};

@@ -13,7 +13,7 @@ use hir::analysis::{
         same_owner_effect_binding, sem_const_ty, semantic_may_return_normally,
     },
     ty::{
-        corelib::resolve_lib_func_path,
+        corelib::lib_func_matches,
         ty_check::{BodyOwner, EffectPassMode},
         ty_def::TyId,
     },
@@ -39,7 +39,7 @@ use super::{
         ContractMetadataBuiltin, GenericNumericIntrinsicKind, InferredRuntimeLocal,
         actual_aggregate_class_from_runtime_source,
         boundary_source_uses_transport_sensitive_aggregate, boundary_spec_for_ty_in_env,
-        contract_metadata_builtin, default_borrow_transport_set, desired_runtime_param_boundary,
+        contract_metadata_builtin, default_borrow_transport_set, desired_runtime_param_plan,
         expr_direct_class, generic_numeric_intrinsic_kind, infer_local_runtime_state,
         lower_semantic_locals, normalized_place_address_class, normalized_place_class,
         provider_class_for_target_in_env, ref_class_for_place_result, resolve_runtime_call_key,
@@ -1940,13 +1940,25 @@ impl<'db> RmirLowerCtxt<'db> {
         let mut runtime_args = Vec::with_capacity(args.len());
         let mut runtime_classes = Vec::with_capacity(args.len());
         for (idx, arg) in args.iter().enumerate() {
-            let desired = desired_runtime_param_boundary(self.db, typed_body, idx);
-            let value = self.runtime_visible_arg_value(bb, *arg, desired.as_ref());
-            let Some(class) = self.value_class(value).cloned() else {
-                continue;
-            };
-            runtime_classes.push(class);
-            runtime_args.push(value);
+            match desired_runtime_param_plan(self.db, typed_body, idx) {
+                crate::runtime::RuntimeParamPlan::Erased => {}
+                crate::runtime::RuntimeParamPlan::Boundary(desired) => {
+                    let value = self.runtime_visible_arg_value(bb, *arg, Some(&desired));
+                    let Some(class) = self.value_class(value).cloned() else {
+                        continue;
+                    };
+                    runtime_classes.push(class);
+                    runtime_args.push(value);
+                }
+                crate::runtime::RuntimeParamPlan::PassActual => {
+                    let value = self.runtime_visible_arg_value(bb, *arg, None);
+                    let Some(class) = self.value_class(value).cloned() else {
+                        continue;
+                    };
+                    runtime_classes.push(class);
+                    runtime_args.push(value);
+                }
+            }
         }
         (runtime_args, runtime_classes)
     }
@@ -2019,7 +2031,7 @@ impl<'db> RmirLowerCtxt<'db> {
             role: ScalarRole::Plain,
         });
         let builtin = |builtin, class| LoweredBuiltinCall::Expr { builtin, class };
-        let matches = |path: &str| resolve_lib_func_path(self.db, func.scope(), path) == Some(func);
+        let matches = |path: &str| lib_func_matches(self.db, func, path);
 
         Some(if matches("std::evm::mem::alloc") {
             let [size] = args else { return None };
@@ -2390,9 +2402,7 @@ impl<'db> RmirLowerCtxt<'db> {
         func: Func<'db>,
         args: &[NOperand],
     ) -> Option<RLocalId> {
-        if resolve_lib_func_path(self.db, func.scope(), "core::intrinsic::__keccak256")
-            != Some(func)
-        {
+        if !lib_func_matches(self.db, func, "core::intrinsic::__keccak256") {
             return None;
         }
 

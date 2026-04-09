@@ -209,17 +209,29 @@ pub fn resolve_trait_method_instance<'db>(
         Selection::Ambiguous(_ambiguous) => return None,
         Selection::NotFound => return None,
     };
-    let &func = implementor.methods(db).get(&method)?;
+    let explicit_method = implementor.methods(db).get(&method).copied();
+    let trait_method = implementor
+        .trait_def(db)
+        .method_defs(db)
+        .get(&method)
+        .copied()
+        .filter(|method| method.body(db).is_some());
 
     let mut table = UnificationTable::new(db);
     let implementor = table.instantiate_with_fresh_vars(Binder::bind(implementor));
     table.unify(implementor.trait_inst(db), inst).ok()?;
-    let impl_args = implementor
-        .params(db)
-        .iter()
-        .map(|&ty| ty.fold_with(db, &mut table))
-        .collect();
-    Some((func, impl_args))
+    if let Some(func) = explicit_method {
+        let impl_args = implementor
+            .params(db)
+            .iter()
+            .map(|&ty| ty.fold_with(db, &mut table))
+            .collect();
+        return Some((func, impl_args));
+    }
+
+    let func = trait_method?;
+    let trait_args = inst.args(db).to_vec();
+    Some((func, trait_args))
 }
 
 /// Returns all implementors for the given `ty` that satisfy the given assumptions.

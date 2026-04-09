@@ -222,17 +222,9 @@ fn build_contract_package<'db>(
     let mut objects = Vec::new();
     let contracts = top_mod.all_contracts(db);
     for &contract in contracts {
-        let runtime_root = contract_runtime_root(db, contract)?;
-        let init_root = contract_init_root(db, contract)?;
-        roots.push(init_root);
-        roots.push(runtime_root);
-        objects.push((
-            sanitize_object_name(&contract_name(db, contract)),
-            vec![
-                (RuntimeSectionName::Init, init_root),
-                (RuntimeSectionName::Runtime, runtime_root),
-            ],
-        ));
+        let (name, sections, section_roots) = contract_object_spec(db, contract)?;
+        roots.extend(section_roots);
+        objects.push((name, sections));
     }
     for (name, sections, section_roots) in manual_contract_objects(db, top_mod)? {
         roots.extend(section_roots);
@@ -255,17 +247,9 @@ fn build_contract_test_package<'db>(
     let mut objects = Vec::new();
     let contracts = top_mod.all_contracts(db);
     for &contract in contracts {
-        let runtime_root = contract_runtime_root(db, contract)?;
-        let init_root = contract_init_root(db, contract)?;
-        roots.push(init_root);
-        roots.push(runtime_root);
-        objects.push((
-            sanitize_object_name(&contract_name(db, contract)),
-            vec![
-                (RuntimeSectionName::Init, init_root),
-                (RuntimeSectionName::Runtime, runtime_root),
-            ],
-        ));
+        let (name, sections, section_roots) = contract_object_spec(db, contract)?;
+        roots.extend(section_roots);
+        objects.push((name, sections));
     }
     for (name, sections, section_roots) in manual_contract_objects(db, top_mod)? {
         roots.extend(section_roots);
@@ -625,11 +609,16 @@ fn build_sectioned_package<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,
     mut roots: Vec<RuntimeInstance<'db>>,
-    object_specs: Vec<(String, Vec<(RuntimeSectionName, RuntimeInstance<'db>)>)>,
+    mut object_specs: Vec<(String, Vec<(RuntimeSectionName, RuntimeInstance<'db>)>)>,
     primary_object_name: Option<&str>,
 ) -> Result<RuntimePackage<'db>, LowerError> {
+    let root_object_names = object_specs
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect::<FxHashSet<_>>();
     let mut code_region_roots = Vec::new();
     let mut seen_region_roots = FxHashSet::default();
+    let mut materialized_contracts = materialized_contracts_for_roots(db, &roots);
 
     loop {
         let functions = collect_runtime_functions(db, &roots);
@@ -650,6 +639,15 @@ fn build_sectioned_package<'db>(
             );
             code_region_roots.push((region, root));
             roots.push(root);
+            changed = true;
+        }
+        for contract in collect_referenced_contract_regions(db, &functions) {
+            if !materialized_contracts.insert(contract) {
+                continue;
+            }
+            let (name, sections, section_roots) = contract_object_spec(db, contract)?;
+            object_specs.push((name, sections));
+            roots.extend(section_roots);
             changed = true;
         }
         if !changed {
@@ -692,11 +690,6 @@ fn build_sectioned_package<'db>(
             )
         })
         .collect::<Vec<_>>();
-
-    let root_object_names = objects
-        .iter()
-        .map(|object| object.name(db).clone())
-        .collect::<FxHashSet<_>>();
 
     if !code_region_roots.is_empty() {
         let code_regions_object =
@@ -772,6 +765,34 @@ fn build_code_regions_object<'db>(
         })
         .collect();
     make_runtime_object(db, "CodeRegions".to_string(), sections)
+}
+
+fn collect_referenced_contract_regions<'db>(
+    db: &'db dyn MirDb,
+    functions: &[RuntimeFunction<'db>],
+) -> Vec<Contract<'db>> {
+    let mut seen = FxHashSet::default();
+    let mut contracts = Vec::new();
+    for function in functions {
+        for region in function
+            .instance(db)
+            .referenced_code_regions(db)
+            .iter()
+            .copied()
+        {
+            let contract = match region.key(db) {
+                RuntimeCodeRegionKey::ContractInit { contract }
+                | RuntimeCodeRegionKey::ContractRuntime { contract } => contract,
+                RuntimeCodeRegionKey::ManualContractRoot { .. }
+                | RuntimeCodeRegionKey::FunctionRoot { .. } => continue,
+            };
+            if seen.insert(contract) {
+                contracts.push(contract);
+            }
+        }
+    }
+    contracts.sort_by_key(|contract| contract_name(db, *contract));
+    contracts
 }
 
 fn rewrite_object_embeds<'db>(
@@ -1090,6 +1111,27 @@ fn collect_function_root_regions<'db>(
     regions
 }
 
+fn materialized_contracts_for_roots<'db>(
+    db: &'db dyn MirDb,
+    roots: &[RuntimeInstance<'db>],
+) -> FxHashSet<Contract<'db>> {
+    roots
+        .iter()
+        .filter_map(|root| match root.key(db).source(db) {
+            RuntimeInstanceSource::Synthetic(synthetic) => match synthetic.spec(db) {
+                RuntimeSyntheticSpec::ContractInitRoot { contract, .. }
+                | RuntimeSyntheticSpec::ContractRuntimeRoot { contract, .. } => Some(contract),
+                RuntimeSyntheticSpec::MainRoot { .. }
+                | RuntimeSyntheticSpec::TestRoot { .. }
+                | RuntimeSyntheticSpec::ContractInitAbi { .. }
+                | RuntimeSyntheticSpec::ContractRecvAbi { .. }
+                | RuntimeSyntheticSpec::CodeRegionRoot { .. } => None,
+            },
+            RuntimeInstanceSource::Semantic(_) => None,
+        })
+        .collect()
+}
+
 fn semantic_instance_for_root_owner<'db>(
     db: &'db dyn MirDb,
     owner: BodyOwner<'db>,
@@ -1117,6 +1159,22 @@ fn semantic_instance_for_root_owner<'db>(
         )),
     })?;
     Ok(get_or_build_semantic_instance(db, key))
+}
+
+fn contract_object_spec<'db>(
+    db: &'db dyn MirDb,
+    contract: Contract<'db>,
+) -> Result<ManualContractObjectSpec<'db>, LowerError> {
+    let runtime_root = contract_runtime_root(db, contract)?;
+    let init_root = contract_init_root(db, contract)?;
+    Ok((
+        sanitize_object_name(&contract_name(db, contract)),
+        vec![
+            (RuntimeSectionName::Init, init_root),
+            (RuntimeSectionName::Runtime, runtime_root),
+        ],
+        vec![init_root, runtime_root],
+    ))
 }
 
 fn is_test_func<'db>(db: &'db dyn MirDb, func: Func<'db>) -> bool {

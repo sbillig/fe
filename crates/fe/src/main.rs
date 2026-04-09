@@ -52,6 +52,12 @@ pub enum BuildEmit {
     Abi,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum TestEmit {
+    Ir,
+    Rmir,
+}
+
 #[derive(Debug, Clone, Parser)]
 #[command(version, about, long_about = None)]
 pub struct Options {
@@ -234,6 +240,9 @@ pub enum Command {
             require_equals = true
         )]
         debug: Option<TestDebug>,
+        /// Write test-module IR artifacts (`ir`, `rmir`) to the suite `out/` directory.
+        #[arg(long, value_enum, value_delimiter = ',')]
+        emit: Vec<TestEmit>,
         /// Backend to use for codegen (yul or sonatina).
         #[arg(long, default_value = "sonatina")]
         backend: String,
@@ -559,6 +568,7 @@ pub fn run(opts: &Options) {
             grouped,
             show_logs,
             debug: test_debug,
+            emit,
             backend,
             profile,
             solc,
@@ -623,6 +633,7 @@ pub fn run(opts: &Options) {
                 yul_optimize,
                 solc,
                 opt_level,
+                emit,
                 &debug,
                 (*report).then_some(report_out),
                 report_dir.as_ref(),

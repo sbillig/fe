@@ -1,3 +1,4 @@
+use common::ingot::IngotKind;
 use cranelift_entity::EntityRef;
 use num_bigint::BigInt;
 use num_traits::{One, ToPrimitive, Zero};
@@ -21,12 +22,14 @@ use crate::{
         ty::{
             const_expr::{ConstExpr, ConstExprId},
             const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy, const_ty_from_sem_const},
+            corelib::resolve_core_trait,
             normalize::normalize_ty,
             ty_check::BodyOwner,
             ty_def::{PrimTy, TyBase, TyData, TyId},
         },
     },
-    hir_def::{ArithBinOp, BinOp, CompBinOp, UnOp, attr::ArithmeticMode},
+    core::hir_def::expr::LogicalBinOp,
+    hir_def::{ArithBinOp, BinOp, CompBinOp, Func, ItemKind, UnOp, attr::ArithmeticMode},
 };
 
 use super::ops::{project_const, store_const};
@@ -204,6 +207,12 @@ struct CtfeRef {
 pub(super) enum CtfePathElem {
     Field(FieldIndex),
     Index(usize),
+}
+
+#[derive(Clone, Copy)]
+enum CtfePrimitiveCall {
+    Unary(UnOp),
+    Binary(BinOp),
 }
 
 impl<'db> CtfeMachine<'db> {
@@ -490,6 +499,11 @@ impl<'db> CtfeMachine<'db> {
                     .into_iter()
                     .collect::<Vec<_>>();
                 let instance = SemanticInstance::new(self.db, callee.key);
+                if let Some(value) =
+                    self.try_eval_primitive_call(frame_idx, instance, result_ty, &args, origin)?
+                {
+                    return Ok(CtfeValue::Value(value));
+                }
                 if let BodyOwner::Func(func) = instance.key(self.db).owner(self.db)
                     && func.is_extern(self.db)
                 {
@@ -576,6 +590,242 @@ impl<'db> CtfeMachine<'db> {
                 Err(CtfeError::NotConstEvaluable { origin })
             }
         }
+    }
+
+    fn try_eval_primitive_call(
+        &self,
+        frame_idx: usize,
+        instance: SemanticInstance<'db>,
+        result_ty: TyId<'db>,
+        args: &[CtfeValue<'db>],
+        origin: SemOrigin<'db>,
+    ) -> Result<Option<SemConstId<'db>>, CtfeError<'db>> {
+        let BodyOwner::Func(func) = instance.key(self.db).owner(self.db) else {
+            return Ok(None);
+        };
+        let Some(call) = self.primitive_call_kind(func, result_ty) else {
+            return Ok(None);
+        };
+        let value_args = self.materialize_args(args.to_vec(), origin)?;
+        if !value_args
+            .iter()
+            .all(|arg| matches!(arg.value(self.db), SemConstValue::Scalar { .. }))
+        {
+            return Ok(None);
+        }
+
+        let value = match call {
+            CtfePrimitiveCall::Unary(op) => {
+                let [value] = value_args.as_slice() else {
+                    return Ok(None);
+                };
+                let CtfeValue::Value(value) =
+                    self.eval_unary(frame_idx, result_ty, op, *value, origin)?
+                else {
+                    return Err(CtfeError::InvalidBorrow { origin });
+                };
+                value
+            }
+            CtfePrimitiveCall::Binary(op) => {
+                let [lhs, rhs] = value_args.as_slice() else {
+                    return Ok(None);
+                };
+                let CtfeValue::Value(value) =
+                    self.eval_binary(frame_idx, result_ty, op, *lhs, *rhs, origin)?
+                else {
+                    return Err(CtfeError::InvalidBorrow { origin });
+                };
+                value
+            }
+        };
+        Ok(Some(value))
+    }
+
+    fn primitive_call_kind(
+        &self,
+        func: Func<'db>,
+        result_ty: TyId<'db>,
+    ) -> Option<CtfePrimitiveCall> {
+        if func.is_extern(self.db) {
+            return self.extern_primitive_call_kind(func);
+        }
+        self.core_ops_wrapper_call_kind(func, result_ty)
+    }
+
+    fn extern_primitive_call_kind(&self, func: Func<'db>) -> Option<CtfePrimitiveCall> {
+        fn has_numeric_suffix(name: &str) -> bool {
+            matches!(
+                name,
+                "u8" | "u16"
+                    | "u32"
+                    | "u64"
+                    | "u128"
+                    | "u256"
+                    | "usize"
+                    | "i8"
+                    | "i16"
+                    | "i32"
+                    | "i64"
+                    | "i128"
+                    | "i256"
+                    | "isize"
+            )
+        }
+
+        let name = func.name(self.db).to_opt()?.data(self.db);
+        Some(match name.as_str() {
+            "__checked_add" => CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::Add)),
+            "__checked_sub" => CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::Sub)),
+            "__checked_mul" => CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::Mul)),
+            "__checked_div" => CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::Div)),
+            "__checked_rem" => CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::Rem)),
+            "__checked_pow" => CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::Pow)),
+            "__checked_neg" => CtfePrimitiveCall::Unary(UnOp::Minus),
+            "__not_bool" => CtfePrimitiveCall::Unary(UnOp::Not),
+            _ => {
+                let suffix = |prefix| {
+                    name.strip_prefix(prefix)
+                        .filter(|suffix| has_numeric_suffix(suffix))
+                };
+                if suffix("__shl_").is_some() {
+                    CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::LShift))
+                } else if suffix("__shr_").is_some() {
+                    CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::RShift))
+                } else if suffix("__bitand_").is_some() || name == "__bitand_bool" {
+                    CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::BitAnd))
+                } else if suffix("__bitor_").is_some() || name == "__bitor_bool" {
+                    CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::BitOr))
+                } else if suffix("__bitxor_").is_some() || name == "__bitxor_bool" {
+                    CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::BitXor))
+                } else if suffix("__eq_").is_some() || name == "__eq_bool" {
+                    CtfePrimitiveCall::Binary(BinOp::Comp(CompBinOp::Eq))
+                } else if suffix("__ne_").is_some() || name == "__ne_bool" {
+                    CtfePrimitiveCall::Binary(BinOp::Comp(CompBinOp::NotEq))
+                } else if suffix("__lt_").is_some() {
+                    CtfePrimitiveCall::Binary(BinOp::Comp(CompBinOp::Lt))
+                } else if suffix("__le_").is_some() {
+                    CtfePrimitiveCall::Binary(BinOp::Comp(CompBinOp::LtEq))
+                } else if suffix("__gt_").is_some() {
+                    CtfePrimitiveCall::Binary(BinOp::Comp(CompBinOp::Gt))
+                } else if suffix("__ge_").is_some() {
+                    CtfePrimitiveCall::Binary(BinOp::Comp(CompBinOp::GtEq))
+                } else if suffix("__bitnot_").is_some() {
+                    CtfePrimitiveCall::Unary(UnOp::BitNot)
+                } else {
+                    return None;
+                }
+            }
+        })
+    }
+
+    fn core_ops_wrapper_call_kind(
+        &self,
+        func: Func<'db>,
+        result_ty: TyId<'db>,
+    ) -> Option<CtfePrimitiveCall> {
+        if func.top_mod(self.db).ingot(self.db).kind(self.db) != IngotKind::Core {
+            return None;
+        }
+        let Some(ItemKind::ImplTrait(impl_trait)) = func.scope().parent_item(self.db) else {
+            return None;
+        };
+        let method = func.name(self.db).to_opt()?.data(self.db);
+        Some(
+            if method == "add" && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Add"]) {
+                CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::Add))
+            } else if method == "sub"
+                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Sub"])
+            {
+                CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::Sub))
+            } else if method == "mul"
+                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Mul"])
+            {
+                CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::Mul))
+            } else if method == "div"
+                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Div"])
+            {
+                CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::Div))
+            } else if method == "rem"
+                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Rem"])
+            {
+                CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::Rem))
+            } else if method == "pow"
+                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Pow"])
+            {
+                CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::Pow))
+            } else if method == "shl"
+                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Shl"])
+            {
+                CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::LShift))
+            } else if method == "shr"
+                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Shr"])
+            {
+                CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::RShift))
+            } else if method == "bitand"
+                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "BitAnd"])
+            {
+                CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::BitAnd))
+            } else if method == "bitor"
+                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "BitOr"])
+            {
+                CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::BitOr))
+            } else if method == "bitxor"
+                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "BitXor"])
+            {
+                CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::BitXor))
+            } else if method == "eq"
+                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Eq"])
+            {
+                CtfePrimitiveCall::Binary(BinOp::Comp(CompBinOp::Eq))
+            } else if method == "ne"
+                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Eq"])
+            {
+                CtfePrimitiveCall::Binary(BinOp::Comp(CompBinOp::NotEq))
+            } else if method == "lt"
+                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Ord"])
+            {
+                CtfePrimitiveCall::Binary(BinOp::Comp(CompBinOp::Lt))
+            } else if method == "le"
+                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Ord"])
+            {
+                CtfePrimitiveCall::Binary(BinOp::Comp(CompBinOp::LtEq))
+            } else if method == "gt"
+                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Ord"])
+            {
+                CtfePrimitiveCall::Binary(BinOp::Comp(CompBinOp::Gt))
+            } else if method == "ge"
+                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Ord"])
+            {
+                CtfePrimitiveCall::Binary(BinOp::Comp(CompBinOp::GtEq))
+            } else if method == "neg"
+                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Neg"])
+            {
+                CtfePrimitiveCall::Unary(UnOp::Minus)
+            } else if method == "bit_not"
+                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "BitNot"])
+            {
+                CtfePrimitiveCall::Unary(UnOp::BitNot)
+            } else if method == "not"
+                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Not"])
+            {
+                if result_ty == TyId::bool(self.db) {
+                    CtfePrimitiveCall::Unary(UnOp::Not)
+                } else {
+                    CtfePrimitiveCall::Unary(UnOp::BitNot)
+                }
+            } else {
+                return None;
+            },
+        )
+    }
+
+    fn is_core_ops_impl_method(
+        &self,
+        impl_trait: crate::hir_def::ImplTrait<'db>,
+        func: Func<'db>,
+        segments: &[&str],
+    ) -> bool {
+        impl_trait.trait_def(self.db) == resolve_core_trait(self.db, func.scope(), segments)
     }
 
     fn materialize_args(
@@ -999,7 +1249,16 @@ impl<'db> CtfeMachine<'db> {
     ) -> Result<CtfeValue<'db>, CtfeError<'db>> {
         match op {
             BinOp::Comp(comp) => self.eval_compare(frame_idx, comp, lhs, rhs, origin),
-            BinOp::Logical(_) | BinOp::Index => Err(CtfeError::InvalidOperation {
+            BinOp::Logical(logical) => {
+                let lhs = self.expect_bool(lhs, origin)?;
+                let rhs = self.expect_bool(rhs, origin)?;
+                let value = match logical {
+                    LogicalBinOp::And => lhs && rhs,
+                    LogicalBinOp::Or => lhs || rhs,
+                };
+                Ok(CtfeValue::Value(bool_const(self.db, value)))
+            }
+            BinOp::Index => Err(CtfeError::InvalidOperation {
                 origin,
                 message: "invalid binary op in CTFE expression".into(),
             }),
@@ -1010,6 +1269,38 @@ impl<'db> CtfeMachine<'db> {
                     && let Some(value) = self.eval_type_level_binary(result_ty, arith, lhs, rhs)
                 {
                     return Ok(CtfeValue::Value(value));
+                }
+                if matches!(
+                    (lhs.value(self.db), rhs.value(self.db)),
+                    (
+                        SemConstValue::Scalar {
+                            value: SemConstScalar::Bool(_),
+                            ..
+                        },
+                        SemConstValue::Scalar {
+                            value: SemConstScalar::Bool(_),
+                            ..
+                        }
+                    )
+                ) {
+                    return match arith {
+                        ArithBinOp::BitAnd => Ok(CtfeValue::Value(bool_const(
+                            self.db,
+                            self.expect_bool(lhs, origin)? & self.expect_bool(rhs, origin)?,
+                        ))),
+                        ArithBinOp::BitOr => Ok(CtfeValue::Value(bool_const(
+                            self.db,
+                            self.expect_bool(lhs, origin)? | self.expect_bool(rhs, origin)?,
+                        ))),
+                        ArithBinOp::BitXor => Ok(CtfeValue::Value(bool_const(
+                            self.db,
+                            self.expect_bool(lhs, origin)? ^ self.expect_bool(rhs, origin)?,
+                        ))),
+                        _ => Err(CtfeError::InvalidOperation {
+                            origin,
+                            message: "expected int".into(),
+                        }),
+                    };
                 }
                 let lhs = self.expect_int(frame_idx, lhs, origin)?;
                 let rhs = self.expect_int(frame_idx, rhs, origin)?;

@@ -60,6 +60,7 @@ pub fn collect_referenced_code_regions<'db>(
                     crate::runtime::RuntimeBuiltin::CodeRegionOffset { region }
                     | crate::runtime::RuntimeBuiltin::CodeRegionLen { region },
                 ) => Some(*region),
+                RExpr::Builtin(crate::runtime::RuntimeBuiltin::CurrentCodeRegionLen) => None,
                 RExpr::Use(_)
                 | RExpr::ConstScalar(_)
                 | RExpr::Placeholder { .. }

@@ -15,7 +15,10 @@ use crate::yul::{
     state::FunctionState,
 };
 
-use super::{module::PackageIndex, util::prefix_yul_name};
+use super::{
+    module::PackageIndex,
+    util::{prefix_yul_name, section_object_label},
+};
 
 #[derive(Clone)]
 pub(super) struct RenderedValue<'db> {
@@ -28,14 +31,16 @@ pub(super) struct FunctionEmitter<'a, 'db> {
     pub(super) db: &'db DriverDataBase,
     pub(super) index: &'a PackageIndex<'a, 'db>,
     pub(super) plan: &'a YulFunctionPlan<'db>,
+    pub(super) section_label: String,
     pub(super) state: FunctionState,
 }
 
 pub(super) fn render_function_doc<'a, 'db>(
     index: &'a PackageIndex<'a, 'db>,
     plan: &'a YulFunctionPlan<'db>,
+    section_name: &'a mir2::RuntimeSectionName,
 ) -> Result<YulDoc, YulError> {
-    FunctionEmitter::new(index.db, index, plan).render()
+    FunctionEmitter::new(index.db, index, plan, section_name).render()
 }
 
 impl<'a, 'db> FunctionEmitter<'a, 'db> {
@@ -43,11 +48,13 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         db: &'db DriverDataBase,
         index: &'a PackageIndex<'a, 'db>,
         plan: &'a YulFunctionPlan<'db>,
+        section_name: &'a mir2::RuntimeSectionName,
     ) -> Self {
         Self {
             db,
             index,
             plan,
+            section_label: section_object_label(section_name),
             state: FunctionState::new(plan),
         }
     }

@@ -576,6 +576,7 @@ fn verify_builtin<'db>(
             verify_word_value(body, *block)?;
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
         }
+        RuntimeBuiltin::CurrentCodeRegionLen => Ok(Some(RuntimeClass::Scalar(word_scalar_class()))),
         RuntimeBuiltin::CodeRegionOffset { region } | RuntimeBuiltin::CodeRegionLen { region } => {
             let _ = program.code_region(*region);
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
