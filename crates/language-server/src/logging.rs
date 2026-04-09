@@ -93,30 +93,72 @@ const DEFAULT_CLIENT_FILTER: &str = "warn";
 /// Resolve the directory file logs should be written to.
 ///
 /// Precedence:
-///   1. `FE_LSP_LOG_DIR` env var (explicit override)
-///   2. `<cwd>/.fe-lsp` — workspace-local (Zed spawns `fe lsp` with cwd
-///      set to the workspace root, so each workspace gets an isolated
-///      log budget rather than sharing a global cache directory)
-///   3. `$XDG_CACHE_HOME/fe-language-server` — fallback when cwd is
-///      unusable (e.g. read-only or doesn't exist)
-///   4. `$HOME/.cache/fe-language-server` — last-resort fallback
+///   1. `FE_LSP_LOG_DIR` env var (explicit override, honored as-is)
+///   2. `<cwd>/.fe-lsp` if writable (workspace-local: Zed spawns `fe lsp`
+///      with cwd set to the workspace root, so each workspace gets an
+///      isolated log budget rather than sharing a global cache directory)
+///   3. `$XDG_CACHE_HOME/fe-language-server` if writable
+///   4. `$HOME/.cache/fe-language-server` if writable
 ///
-/// Returns `None` if no usable base path exists.
+/// Candidates 2-4 are probed in order via [`try_prepare_log_dir`]; the
+/// first one that accepts a write is returned. This preserves the fallback
+/// chain in read-only or permission-restricted workspaces, where the
+/// previous implementation would silently drop logging by returning an
+/// unwritable workspace path.
+///
+/// Returns `None` if no candidate is usable.
 fn resolve_log_dir() -> Option<PathBuf> {
+    // Explicit override wins unconditionally; if the user set it and it
+    // fails, that's on them (and `open_log_file` will surface the error).
     if let Ok(dir) = std::env::var("FE_LSP_LOG_DIR") {
         return Some(PathBuf::from(dir));
     }
+
     if let Ok(cwd) = std::env::current_dir() {
-        // Workspace-local: each Fe project gets its own .fe-lsp/ dir
-        // alongside the existing .fe-lsp.json discovery file. Retention
-        // and rotation budgets apply per-workspace this way, instead of
-        // multiple workspaces sharing a single global cache budget.
-        return Some(cwd.join(".fe-lsp"));
+        let p = cwd.join(".fe-lsp");
+        if try_prepare_log_dir(&p) {
+            return Some(p);
+        }
     }
-    let base = std::env::var("XDG_CACHE_HOME")
-        .ok()
-        .or_else(|| std::env::var("HOME").ok().map(|h| format!("{h}/.cache")))?;
-    Some(PathBuf::from(base).join("fe-language-server"))
+
+    if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
+        let p = PathBuf::from(xdg).join("fe-language-server");
+        if try_prepare_log_dir(&p) {
+            return Some(p);
+        }
+    }
+
+    if let Ok(home) = std::env::var("HOME") {
+        let p = PathBuf::from(home)
+            .join(".cache")
+            .join("fe-language-server");
+        if try_prepare_log_dir(&p) {
+            return Some(p);
+        }
+    }
+
+    None
+}
+
+/// Create `dir` if needed and verify it accepts a test write. Returns
+/// `true` only if both the `create_dir_all` and a probe-file create
+/// succeed. The probe file is removed on success.
+///
+/// This is a best-effort writability check; TOCTOU races are possible but
+/// harmless here (we'd just fall back to a later candidate, which is the
+/// desired behavior anyway).
+fn try_prepare_log_dir(dir: &Path) -> bool {
+    if std::fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    let probe = dir.join(".fe-lsp-writable-probe");
+    match std::fs::File::create(&probe) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 /// Resolve the full path of the file log for this process.
