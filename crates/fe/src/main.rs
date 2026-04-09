@@ -740,30 +740,33 @@ async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: 
         .map(|r| r.as_std_path().to_path_buf())
         .unwrap_or_else(|| std::env::current_dir().unwrap());
 
-    // Inspect any existing .fe-lsp.json. This is purely diagnostic — we
+    // Inspect any existing .fe-lsp.json. This is purely diagnostic: we
     // always proceed with writing our own, since the file is a discovery
-    // pointer, not a lock. But the outcome is important to log: stale
-    // files mean a previous crash, sibling-live means Zed respawned us
-    // without shutting the old instance down, and a root-mismatch means
-    // we're fighting with another instance over workspace root detection.
+    // pointer, not a lock. The outcome is still important for triage:
+    // stale files mean a previous crash, sibling-live means Zed respawned
+    // us without shutting the old instance down, and a root-mismatch
+    // means we're fighting with another instance over workspace root
+    // detection.
+    //
+    // These diagnostics are emitted via `eprintln!` rather than `tracing`
+    // because the tracing subscriber isn't installed until later, inside
+    // `language_server::run_stdio_server` -> `setup_default_subscriber`.
+    // Zed captures stderr for its LSP log panel, so users still see the
+    // messages in the same place they'd see a `tracing::warn!`.
+    let workspace_root_display = workspace_root_path.display();
+    let our_pid = std::process::id();
     match doc::ExistingInstanceCheck::inspect(&workspace_root_path) {
         doc::ExistingInstanceCheck::None => {
-            tracing::debug!(
-                target: "fe::lsp::startup",
-                workspace_root = %workspace_root_path.display(),
-                "no existing .fe-lsp.json at workspace root"
-            );
+            // Nothing to report in the common case; keep startup quiet.
         }
         doc::ExistingInstanceCheck::StaleFound {
             stale_pid,
             recorded_workspace_root,
         } => {
-            tracing::warn!(
-                target: "fe::lsp::startup",
-                stale_pid,
-                recorded_workspace_root = ?recorded_workspace_root,
-                workspace_root = %workspace_root_path.display(),
-                "removing stale .fe-lsp.json (previous pid not alive — process crashed without cleanup)"
+            eprintln!(
+                "fe-language-server: removing stale .fe-lsp.json at {workspace_root_display} \
+                 (previous pid {stale_pid} not alive; recorded workspace_root={recorded_workspace_root:?}). \
+                 Previous instance likely crashed without cleanup."
             );
             doc::LspServerInfo::remove_from_workspace(&workspace_root_path);
         }
@@ -771,14 +774,10 @@ async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: 
             sibling_pid,
             sibling_docs_url,
         } => {
-            tracing::warn!(
-                target: "fe::lsp::startup",
-                sibling_pid,
-                sibling_docs_url = ?sibling_docs_url,
-                workspace_root = %workspace_root_path.display(),
-                our_pid = std::process::id(),
-                "another fe lsp instance is already running for this workspace — \
-                 overwriting .fe-lsp.json with our own info. Zed may have respawned \
+            eprintln!(
+                "fe-language-server: another fe lsp instance (pid {sibling_pid}) is already \
+                 running for workspace {workspace_root_display} (sibling_docs_url={sibling_docs_url:?}); \
+                 overwriting .fe-lsp.json with our info (pid {our_pid}). Zed may have respawned \
                  us before the previous instance finished shutting down."
             );
         }
@@ -787,48 +786,32 @@ async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: 
             other_workspace_root,
             our_workspace_root,
         } => {
-            tracing::warn!(
-                target: "fe::lsp::startup",
-                other_pid,
-                other_workspace_root = ?other_workspace_root,
-                %our_workspace_root,
-                our_pid = std::process::id(),
-                "ROOT MISMATCH: existing .fe-lsp.json refers to a different workspace root \
-                 than the one we detected. This usually means either a workspace-root \
-                 detection bug or a pid-reuse false positive in is_alive(). The next step \
-                 for triaging this is to check what the two processes think their \
-                 workspace_folders are in the initialize params."
+            eprintln!(
+                "fe-language-server: ROOT MISMATCH: existing .fe-lsp.json (pid {other_pid}) refers \
+                 to workspace_root={other_workspace_root:?}, but we detected {our_workspace_root}. \
+                 This usually means either a workspace-root detection bug or a pid-reuse false \
+                 positive in is_alive(). To triage, check what the two processes think their \
+                 workspace_folders are in the initialize params. Our pid is {our_pid}."
             );
         }
         doc::ExistingInstanceCheck::Malformed => {
-            tracing::warn!(
-                target: "fe::lsp::startup",
-                workspace_root = %workspace_root_path.display(),
-                "removing malformed .fe-lsp.json at workspace root (parse failed; probably a leftover from an older fe version)"
+            eprintln!(
+                "fe-language-server: removing malformed .fe-lsp.json at {workspace_root_display} \
+                 (parse failed; probably a leftover from an older fe version)."
             );
             doc::LspServerInfo::remove_from_workspace(&workspace_root_path);
         }
     }
 
     let server_info = doc::LspServerInfo {
-        pid: std::process::id(),
+        pid: our_pid,
         port: Some(actual_port),
         workspace_root: Some(workspace_root_path.display().to_string()),
         docs_url: Some(format!("http://127.0.0.1:{actual_port}")),
     };
     if let Err(e) = server_info.write_to_workspace(&workspace_root_path) {
-        tracing::warn!(
-            target: "fe::lsp::startup",
-            error = %e,
-            workspace_root = %workspace_root_path.display(),
-            "could not write .fe-lsp.json"
-        );
-    } else {
-        tracing::info!(
-            target: "fe::lsp::startup",
-            workspace_root = %workspace_root_path.display(),
-            docs_port = actual_port,
-            "wrote .fe-lsp.json"
+        eprintln!(
+            "fe-language-server: could not write .fe-lsp.json at {workspace_root_display}: {e}"
         );
     }
 
