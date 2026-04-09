@@ -135,8 +135,8 @@ mod tests {
 
     use super::*;
     use act_locally::builder::ActorBuilder;
-    use async_lsp::{AnyNotification, AnyRequest, LspService, ResponseError};
     use async_lsp::lsp_types::{InitializeParams, InitializeResult};
+    use async_lsp::{AnyNotification, AnyRequest, LspService, ResponseError};
     use serde_json::json;
     use service::LspActorService;
     use std::ops::ControlFlow;

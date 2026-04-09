@@ -1019,9 +1019,8 @@ fn bar() -> () {
     // overflows the semaphore by 2 and triggers the `MainLoop::run` dispatch
     // deadlock described in the docstring above.
     let socket = client.server.clone();
-    let mut request_futures: Vec<
-        std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
-    > = Vec::new();
+    let mut request_futures: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>> =
+        Vec::new();
     for _ in 0..3 {
         for &(line, col) in &probe_positions {
             let s1 = socket.clone();
@@ -1032,7 +1031,10 @@ fn bar() -> () {
                         GotoDefinitionParams {
                             text_document_position_params: TextDocumentPositionParams {
                                 text_document: TextDocumentIdentifier { uri: uri1 },
-                                position: Position { line, character: col },
+                                position: Position {
+                                    line,
+                                    character: col,
+                                },
                             },
                             partial_result_params: PartialResultParams::default(),
                             work_done_progress_params: WorkDoneProgressParams::default(),
@@ -1048,7 +1050,10 @@ fn bar() -> () {
                         async_lsp::lsp_types::request::GotoTypeDefinitionParams {
                             text_document_position_params: TextDocumentPositionParams {
                                 text_document: TextDocumentIdentifier { uri: uri2 },
-                                position: Position { line, character: col },
+                                position: Position {
+                                    line,
+                                    character: col,
+                                },
                             },
                             partial_result_params: PartialResultParams::default(),
                             work_done_progress_params: WorkDoneProgressParams::default(),
@@ -1063,7 +1068,10 @@ fn bar() -> () {
                     .request::<async_lsp::lsp_types::request::HoverRequest>(HoverParams {
                         text_document_position_params: TextDocumentPositionParams {
                             text_document: TextDocumentIdentifier { uri: uri3 },
-                            position: Position { line, character: col },
+                            position: Position {
+                                line,
+                                character: col,
+                            },
                         },
                         work_done_progress_params: WorkDoneProgressParams::default(),
                     })

@@ -59,9 +59,8 @@ impl<S: 'static> Service<AnyRequest> for LspActorService<S> {
             // site or an upstream patch to act-locally. See design notes in
             // `panic_context.rs` and the follow-up tracked in the LSP
             // observability work.
-            let _pctx = crate::panic_context::enter(format!(
-                "LSP request: {method} (id={request_id})"
-            ));
+            let _pctx =
+                crate::panic_context::enter(format!("LSP request: {method} (id={request_id})"));
 
             // Per-request observability — verbose by default. The point of
             // the file log is to be able to reconstruct the order of
@@ -122,8 +121,7 @@ impl<S: 'static> Service<AnyRequest> for LspActorService<S> {
 impl<S: 'static> LspService for LspActorService<S> {
     fn notify(&mut self, notif: AnyNotification) -> ControlFlow<async_lsp::Result<()>> {
         let method = notif.method.clone();
-        let _pctx =
-            crate::panic_context::enter(format!("LSP notification: {method}"));
+        let _pctx = crate::panic_context::enter(format!("LSP notification: {method}"));
         let dispatcher = self.dispatcher.clone();
         match self.actor_ref.tell(dispatcher.as_ref(), notif) {
             Ok(()) => ControlFlow::Continue(()),
@@ -140,8 +138,7 @@ impl<S: 'static> LspService for LspActorService<S> {
 
     fn emit(&mut self, event: AnyEvent) -> ControlFlow<async_lsp::Result<()>> {
         let type_name = event.type_name();
-        let _pctx =
-            crate::panic_context::enter(format!("LSP event: {type_name:?}"));
+        let _pctx = crate::panic_context::enter(format!("LSP event: {type_name:?}"));
         let dispatcher = self.dispatcher.clone();
         match self.actor_ref.tell(dispatcher.as_ref(), event) {
             Ok(()) => ControlFlow::Continue(()),

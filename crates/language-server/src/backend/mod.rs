@@ -222,7 +222,7 @@ fn normalize_file_uri(uri: Url) -> Url {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_file_uri, Backend, WorkerError};
+    use super::{Backend, WorkerError, normalize_file_uri};
     use async_lsp::MainLoop;
     use async_lsp::router::Router;
     use url::Url;
@@ -247,8 +247,7 @@ mod tests {
     /// stores the client socket; it doesn't send anything through it during
     /// these tests.
     fn test_backend() -> Backend {
-        let (_main_loop, client_socket) =
-            MainLoop::new_server(|_client| Router::<()>::new(()));
+        let (_main_loop, client_socket) = MainLoop::new_server(|_client| Router::<()>::new(()));
         Backend::new(client_socket, None, None, None, None)
     }
 
@@ -312,8 +311,7 @@ mod tests {
     async fn spawn_on_workers_returns_value_on_success() {
         let backend = test_backend();
 
-        let result: Result<u64, WorkerError> =
-            backend.spawn_on_workers(|_db| 42u64).await;
+        let result: Result<u64, WorkerError> = backend.spawn_on_workers(|_db| 42u64).await;
 
         assert!(matches!(result, Ok(42)), "expected Ok(42), got {result:?}");
 

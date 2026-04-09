@@ -412,22 +412,24 @@ pub fn setup_default_subscriber(client: ClientSocket) -> Option<DefaultGuard> {
         .unwrap_or_else(|| EnvFilter::new(DEFAULT_FILE_FILTER));
 
     let file_layer: Option<_> = default_log_file_path()
-        .and_then(|path| match RotatingFileWriter::new(path.clone(), log_max_bytes()) {
-            Ok(writer) => {
-                // Write the path to stderr so a human watching the process
-                // knows where to find the log. One line at startup, not
-                // per-message.
-                eprintln!("fe-language-server: log file at {}", path.display());
-                Some(writer)
-            }
-            Err(e) => {
-                eprintln!(
-                    "fe-language-server: failed to open log file at {}: {e}",
-                    path.display()
-                );
-                None
-            }
-        })
+        .and_then(
+            |path| match RotatingFileWriter::new(path.clone(), log_max_bytes()) {
+                Ok(writer) => {
+                    // Write the path to stderr so a human watching the process
+                    // knows where to find the log. One line at startup, not
+                    // per-message.
+                    eprintln!("fe-language-server: log file at {}", path.display());
+                    Some(writer)
+                }
+                Err(e) => {
+                    eprintln!(
+                        "fe-language-server: failed to open log file at {}: {e}",
+                        path.display()
+                    );
+                    None
+                }
+            },
+        )
         .map(|writer| {
             tracing_subscriber::fmt::layer()
                 .with_ansi(false)
