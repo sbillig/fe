@@ -5,9 +5,9 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            SBlockId, SExpr, SStmtKind, STerminatorKind, SemanticBindingLowering, SemanticBody,
-            SemanticCalleeRef, SemanticLocalRole, SemanticProjection, ValueProvenance,
-            effect_param_site, lower::lower_to_smir, verify_semantic_body,
+            PlaceProvenance, SBlockId, SExpr, SStmtKind, STerminatorKind, SemanticBindingLowering,
+            SemanticBody, SemanticCalleeRef, SemanticLocalRole, SemanticProjection,
+            ValueProvenance, effect_param_site, lower::lower_to_smir, verify_semantic_body,
         },
         ty::{
             corelib::resolve_lib_func_path,
@@ -453,7 +453,7 @@ fn classify_binding_lowering<'db>(
             },
             ProviderKind::Handle | ProviderKind::RawAddress => {
                 SemanticBindingLowering::PlaceBoundValue {
-                    provider,
+                    provenance: PlaceProvenance::RootProvider(provider),
                     value_ty: ty,
                 }
             }
@@ -522,9 +522,13 @@ fn binding_lowering_to_local_role<'db>(
         SemanticBindingLowering::PlaceCarrier { value_ty } => {
             SemanticLocalRole::PlaceCarrier { value_ty }
         }
-        SemanticBindingLowering::PlaceBoundValue { provider, value_ty } => {
-            SemanticLocalRole::PlaceBoundValue { provider, value_ty }
-        }
+        SemanticBindingLowering::PlaceBoundValue {
+            provenance,
+            value_ty,
+        } => SemanticLocalRole::PlaceBoundValue {
+            provenance,
+            value_ty,
+        },
         SemanticBindingLowering::DirectCarrier {
             provider,
             target_ty,
@@ -942,9 +946,13 @@ fn classify_expr_local_role<'db>(
             SemanticLocalRole::PlaceCarrier { value_ty } => {
                 SemanticLocalRole::PlaceCarrier { value_ty }
             }
-            SemanticLocalRole::PlaceBoundValue { provider, value_ty } => {
-                SemanticLocalRole::PlaceBoundValue { provider, value_ty }
-            }
+            SemanticLocalRole::PlaceBoundValue {
+                provenance,
+                value_ty,
+            } => SemanticLocalRole::PlaceBoundValue {
+                provenance,
+                value_ty,
+            },
             SemanticLocalRole::DirectCarrier {
                 provider,
                 target_ty,
@@ -1029,86 +1037,51 @@ fn classify_projection_local_role<'db>(
     locals: &[crate::analysis::semantic::SLocal<'db>],
 ) -> SemanticLocalRole<'db> {
     let fallback = fallback_local_role(db, scope, assumptions, dst_ty);
-    match (locals[base.index()].role.clone(), fallback) {
-        (
-            SemanticLocalRole::DirectValue { .. }
-            | SemanticLocalRole::PlaceCarrier { .. }
-            | SemanticLocalRole::PlaceBoundValue { .. }
-            | SemanticLocalRole::DirectCarrier { .. },
-            SemanticLocalRole::DirectValue { .. },
-        ) => SemanticLocalRole::DirectValue {
-            provenance: ValueProvenance::DerivedPlace { base, path },
-        },
-        (
+    let base_role = locals[base.index()].role.clone();
+    match fallback {
+        SemanticLocalRole::Erased => SemanticLocalRole::Erased,
+        SemanticLocalRole::DirectValue { .. }
+            if !matches!(base_role, SemanticLocalRole::Erased) =>
+        {
             SemanticLocalRole::DirectValue {
-                provenance: ValueProvenance::RootProvider(provider),
-            },
-            fallback,
-        ) => projection_role_from_root_provider(provider, fallback),
-        (
-            SemanticLocalRole::PlaceBoundValue { provider, .. }
-            | SemanticLocalRole::DirectCarrier {
-                provider: Some(provider),
-                ..
-            },
-            fallback,
-        ) => {
-            projection_role_from_provider_bound(db, scope, assumptions, provider, dst_ty, fallback)
-        }
-        (
-            SemanticLocalRole::Erased
-            | SemanticLocalRole::DirectValue {
-                provenance: ValueProvenance::Ordinary | ValueProvenance::DerivedPlace { .. },
+                provenance: ValueProvenance::DerivedPlace { base, path },
             }
-            | SemanticLocalRole::PlaceCarrier { .. }
-            | SemanticLocalRole::DirectCarrier { provider: None, .. },
-            fallback,
-        ) => fallback,
+        }
+        SemanticLocalRole::DirectValue { .. } => fallback,
+        SemanticLocalRole::PlaceCarrier { value_ty }
+        | SemanticLocalRole::PlaceBoundValue { value_ty, .. }
+            if local_role_supports_place_provenance(&base_role) =>
+        {
+            SemanticLocalRole::PlaceBoundValue {
+                provenance: PlaceProvenance::Derived { base, path },
+                value_ty,
+            }
+        }
+        SemanticLocalRole::PlaceCarrier { .. } | SemanticLocalRole::PlaceBoundValue { .. } => {
+            fallback
+        }
+        SemanticLocalRole::DirectCarrier { target_ty, .. } => base_role
+            .root_provider(locals)
+            .map_or(fallback, |provider| SemanticLocalRole::DirectCarrier {
+                provider: Some(provider),
+                target_ty,
+            }),
     }
 }
 
-fn projection_role_from_root_provider<'db>(
-    provider: ProviderBinding<'db>,
-    fallback: SemanticLocalRole<'db>,
-) -> SemanticLocalRole<'db> {
-    match fallback {
-        SemanticLocalRole::Erased => SemanticLocalRole::Erased,
-        SemanticLocalRole::DirectValue { .. } => SemanticLocalRole::DirectValue {
-            provenance: ValueProvenance::RootProvider(provider),
-        },
-        SemanticLocalRole::PlaceCarrier { value_ty }
-        | SemanticLocalRole::PlaceBoundValue { value_ty, .. } => {
-            SemanticLocalRole::PlaceBoundValue { provider, value_ty }
+fn local_role_supports_place_provenance(role: &SemanticLocalRole<'_>) -> bool {
+    match role {
+        SemanticLocalRole::Erased
+        | SemanticLocalRole::DirectValue {
+            provenance: ValueProvenance::Ordinary,
         }
-        SemanticLocalRole::DirectCarrier { target_ty, .. } => SemanticLocalRole::DirectCarrier {
-            provider: Some(provider),
-            target_ty,
-        },
-    }
-}
-
-fn projection_role_from_provider_bound<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: crate::hir_def::scope_graph::ScopeId<'db>,
-    assumptions: crate::analysis::ty::trait_resolution::PredicateListId<'db>,
-    provider: ProviderBinding<'db>,
-    dst_ty: crate::analysis::ty::ty_def::TyId<'db>,
-    fallback: SemanticLocalRole<'db>,
-) -> SemanticLocalRole<'db> {
-    let value_ty = normalize_ty(db, dst_ty, scope, assumptions);
-    match fallback {
-        SemanticLocalRole::Erased => SemanticLocalRole::Erased,
-        SemanticLocalRole::DirectValue { .. } => {
-            SemanticLocalRole::PlaceBoundValue { provider, value_ty }
-        }
-        SemanticLocalRole::PlaceCarrier { value_ty }
-        | SemanticLocalRole::PlaceBoundValue { value_ty, .. } => {
-            SemanticLocalRole::PlaceBoundValue { provider, value_ty }
-        }
-        SemanticLocalRole::DirectCarrier { target_ty, .. } => SemanticLocalRole::DirectCarrier {
-            provider: Some(provider),
-            target_ty,
-        },
+        | SemanticLocalRole::DirectCarrier { provider: None, .. } => false,
+        SemanticLocalRole::DirectValue { .. }
+        | SemanticLocalRole::PlaceCarrier { .. }
+        | SemanticLocalRole::PlaceBoundValue { .. }
+        | SemanticLocalRole::DirectCarrier {
+            provider: Some(_), ..
+        } => true,
     }
 }
 

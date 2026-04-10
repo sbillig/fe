@@ -4773,7 +4773,7 @@ fn function_effect_bindings_use_instantiated_provider_bindings() {
         })
         .expect("write_cell should have an effect binding local");
     let fe_hir::analysis::semantic::SemanticLocalRole::PlaceBoundValue {
-        provider: local_provider,
+        provenance: fe_hir::analysis::semantic::PlaceProvenance::RootProvider(local_provider),
         value_ty,
     } = &effect_local.role
     else {

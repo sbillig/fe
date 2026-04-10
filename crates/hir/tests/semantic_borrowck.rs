@@ -5,8 +5,9 @@ use fe_hir::{
     analysis::{
         diagnostics::format_diags,
         semantic::{
-            FieldIndex, NBorrowRoot, NormalizedBindingLowering, SPlaceElem, SStmtKind,
-            SemanticInstance, check_semantic_borrows, collect_semantic_borrow_diagnostics,
+            FieldIndex, NBorrowRoot, NLocalIdentityPolicy, NLocalInterface, NLocalOrigin,
+            NormalizedBindingLowering, SPlaceElem, SStmtKind, SemanticInstance,
+            check_semantic_borrows, collect_semantic_borrow_diagnostics,
             get_or_build_semantic_instance, identity_semantic_instance_key,
             normalize_semantic_body,
         },
@@ -315,6 +316,16 @@ fn read_balance(addr: Address) -> u256 uses (store: TokenStore) {
         "expected provider root for store binding, got {:?}",
         normalized.root(root)
     );
+    assert_eq!(store_local.1.facts.interface, NLocalInterface::DirectValue);
+    assert!(matches!(
+        store_local.1.facts.origin,
+        NLocalOrigin::RootProvider(_)
+    ));
+    assert!(store_local.1.transport_place().is_some());
+    assert_eq!(
+        store_local.1.facts.identity_policy,
+        NLocalIdentityPolicy::PlainValue
+    );
     let field_local = normalized
         .locals
         .get(3)
@@ -331,6 +342,13 @@ fn read_balance(addr: Address) -> u256 uses (store: TokenStore) {
         "expected provider root for provider field temp, got {:?}",
         normalized.root(root)
     );
+    assert_eq!(field_local.facts.interface, NLocalInterface::DirectValue);
+    assert!(matches!(
+        field_local.facts.origin,
+        NLocalOrigin::AliasedPlace
+    ));
+    assert!(field_local.transport_place().is_some());
+    assert!(!field_local.facts.root_demand.needs_runtime_root());
 }
 
 #[test]

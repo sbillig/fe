@@ -53,6 +53,7 @@ pub struct NSLocal<'db> {
     pub mutability: Mutability,
     pub source: Option<LocalBinding<'db>>,
     pub lowering: NormalizedBindingLowering<'db>,
+    pub facts: NLocalFacts<'db>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -62,7 +63,7 @@ pub enum NormalizedBindingLowering<'db> {
         place: NSPlace<'db>,
     },
     PlaceBoundValue {
-        root: NBorrowRootId,
+        place: NSPlace<'db>,
         value_ty: TyId<'db>,
     },
     CarrierLocal {
@@ -70,6 +71,67 @@ pub enum NormalizedBindingLowering<'db> {
         provider: Option<ProviderBinding<'db>>,
         target_ty: TyId<'db>,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NLocalInterface {
+    Erased,
+    DirectValue,
+    PlaceBoundValue,
+    PlaceCarrier,
+    DirectCarrier,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum NLocalOrigin<'db> {
+    SelfRooted,
+    AliasedPlace,
+    RootProvider(ProviderBinding<'db>),
+}
+
+impl<'db> NLocalOrigin<'db> {
+    pub fn root_provider(&self) -> Option<&ProviderBinding<'db>> {
+        match self {
+            Self::RootProvider(provider) => Some(provider),
+            Self::SelfRooted | Self::AliasedPlace => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct NLocalRootDemand {
+    pub read_by_place: bool,
+    pub written_by_place: bool,
+    pub borrowed_or_addr_taken: bool,
+    pub passed_by_place: bool,
+    pub nonself_backing_place: bool,
+    pub always_rooted: bool,
+}
+
+impl NLocalRootDemand {
+    pub fn needs_runtime_root(self) -> bool {
+        self.read_by_place
+            || self.written_by_place
+            || self.borrowed_or_addr_taken
+            || self.passed_by_place
+            || self.nonself_backing_place
+            || self.always_rooted
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NLocalIdentityPolicy {
+    PlainValue,
+    PreserveIdentityIfAggregate,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct NLocalFacts<'db> {
+    pub interface: NLocalInterface,
+    pub origin: NLocalOrigin<'db>,
+    pub transport_place: Option<NSPlace<'db>>,
+    pub root_demand: NLocalRootDemand,
+    pub identity_policy: NLocalIdentityPolicy,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -111,16 +173,26 @@ impl<'db> NormalizedBindingLowering<'db> {
         match self {
             Self::Erased => None,
             Self::ValueLocal { place } => place.root.borrow_root(),
-            Self::PlaceBoundValue { root, .. } => Some(*root),
+            Self::PlaceBoundValue { place, .. } => place.root.borrow_root(),
             Self::CarrierLocal { root, .. } => *root,
         }
     }
 
     pub fn place(&self) -> Option<&NSPlace<'db>> {
         match self {
-            Self::ValueLocal { place } => Some(place),
-            Self::Erased | Self::PlaceBoundValue { .. } | Self::CarrierLocal { .. } => None,
+            Self::ValueLocal { place } | Self::PlaceBoundValue { place, .. } => Some(place),
+            Self::Erased | Self::CarrierLocal { .. } => None,
         }
+    }
+}
+
+impl<'db> NSLocal<'db> {
+    pub fn backing_place(&self) -> Option<&NSPlace<'db>> {
+        self.lowering.place()
+    }
+
+    pub fn transport_place(&self) -> Option<&NSPlace<'db>> {
+        self.facts.transport_place.as_ref()
     }
 }
 

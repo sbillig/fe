@@ -27,8 +27,8 @@ use crate::{
 use super::{
     ir::{
         BorrowDiagnosticId, BorrowInputRef, BorrowSummary, BorrowSummaryId, BorrowTransform,
-        NBorrowRoot, NBorrowRootId, NEffectArgValue, NExpr, NOperand, NSPlace, NSPlaceRoot,
-        NSProjectionPath, NSStmtKind, NSTerminatorKind, NormalizedBindingLowering,
+        NBorrowRoot, NBorrowRootId, NEffectArgValue, NExpr, NLocalInterface, NOperand, NSPlace,
+        NSPlaceRoot, NSProjectionPath, NSStmtKind, NSTerminatorKind, NormalizedBindingLowering,
         NormalizedSemanticBody, ReadMode, SemanticBorrowCheckResult, SemanticBorrowSummaryResult,
     },
     normalize::normalize_semantic_body,
@@ -206,41 +206,60 @@ pub fn verify_normalized_semantic_body<'db>(
 ) -> Result<(), CompleteDiagnostic> {
     for (local_idx, local) in body.locals.iter().enumerate() {
         let local_id = crate::analysis::semantic::SLocalId::from_u32(local_idx as u32);
+        let verify_rooted_place = |place: &NSPlace<'db>, label: &str| {
+            if let Some(root) = place.root.borrow_root() {
+                if body.root(root).is_none() {
+                    return Err(normalized_body_internal_diag(
+                        db,
+                        instance,
+                        body,
+                        SemOrigin::Body(body.template_owner),
+                        format!("{label} {} has missing borrow root", local_id.index()),
+                    ));
+                }
+            } else if !matches!(place.root, super::ir::NSPlaceRoot::CarrierDerefLocal(_)) {
+                return Err(normalized_body_internal_diag(
+                    db,
+                    instance,
+                    body,
+                    SemOrigin::Body(body.template_owner),
+                    format!("{label} {} has missing borrow root", local_id.index()),
+                ));
+            }
+            Ok(())
+        };
+        match (&local.facts.interface, &local.lowering) {
+            (NLocalInterface::Erased, NormalizedBindingLowering::Erased)
+            | (NLocalInterface::DirectValue, NormalizedBindingLowering::ValueLocal { .. })
+            | (
+                NLocalInterface::PlaceBoundValue,
+                NormalizedBindingLowering::PlaceBoundValue { .. },
+            )
+            | (
+                NLocalInterface::PlaceCarrier | NLocalInterface::DirectCarrier,
+                NormalizedBindingLowering::CarrierLocal { .. },
+            ) => {}
+            _ => {
+                return Err(normalized_body_internal_diag(
+                    db,
+                    instance,
+                    body,
+                    SemOrigin::Body(body.template_owner),
+                    format!(
+                        "normalized local {} has mismatched interface/lowering: {:?} vs {:?}",
+                        local_id.index(),
+                        local.facts.interface,
+                        &local.lowering,
+                    ),
+                ));
+            }
+        }
         match &local.lowering {
             NormalizedBindingLowering::ValueLocal { place } => {
-                if let Some(root) = place.root.borrow_root() {
-                    if body.root(root).is_none() {
-                        return Err(normalized_body_internal_diag(
-                            db,
-                            instance,
-                            body,
-                            SemOrigin::Body(body.template_owner),
-                            format!("value local {} has missing borrow root", local_id.index()),
-                        ));
-                    }
-                } else if !matches!(place.root, super::ir::NSPlaceRoot::CarrierDerefLocal(_)) {
-                    return Err(normalized_body_internal_diag(
-                        db,
-                        instance,
-                        body,
-                        SemOrigin::Body(body.template_owner),
-                        format!("value local {} has missing borrow root", local_id.index()),
-                    ));
-                }
+                verify_rooted_place(place, "value local")?;
             }
-            NormalizedBindingLowering::PlaceBoundValue { root, .. } => {
-                if !matches!(body.root(*root), Some(NBorrowRoot::Provider { .. })) {
-                    return Err(normalized_body_internal_diag(
-                        db,
-                        instance,
-                        body,
-                        SemOrigin::Body(body.template_owner),
-                        format!(
-                            "place-bound local {} has invalid provider root",
-                            local_id.index()
-                        ),
-                    ));
-                }
+            NormalizedBindingLowering::PlaceBoundValue { place, .. } => {
+                verify_rooted_place(place, "place-bound local")?;
             }
             NormalizedBindingLowering::CarrierLocal { root, .. } => {
                 if let Some(root) = root
@@ -256,6 +275,9 @@ pub fn verify_normalized_semantic_body<'db>(
                 }
             }
             NormalizedBindingLowering::Erased => {}
+        }
+        if let Some(place) = local.transport_place() {
+            verify_rooted_place(place, "transport place for local")?;
         }
     }
 
@@ -1279,19 +1301,26 @@ impl<'db> Borrowck<'db> {
         let Some(local_data) = self.body.local(local) else {
             return Ok(FxHashSet::default());
         };
-        let root = match &local_data.lowering {
-            NormalizedBindingLowering::ValueLocal { place } => place
+        if let Some(place) = local_data.lowering.place() {
+            return Ok(place
                 .root
                 .borrow_root()
-                .and_then(|root| self.root_to_borrow_root(root)),
-            NormalizedBindingLowering::PlaceBoundValue { root, .. } => {
-                self.root_to_borrow_root(*root)
-            }
+                .and_then(|root| self.root_to_borrow_root(root))
+                .into_iter()
+                .map(|root| CanonPlace {
+                    root,
+                    proj: place.path.clone(),
+                })
+                .collect());
+        }
+        let root = match &local_data.lowering {
             NormalizedBindingLowering::CarrierLocal { root, provider, .. } => provider
                 .clone()
                 .map(BorrowRoot::Provider)
                 .or_else(|| root.and_then(|root| self.root_to_borrow_root(root))),
             NormalizedBindingLowering::Erased => None,
+            NormalizedBindingLowering::ValueLocal { .. }
+            | NormalizedBindingLowering::PlaceBoundValue { .. } => unreachable!(),
         };
         Ok(root
             .into_iter()

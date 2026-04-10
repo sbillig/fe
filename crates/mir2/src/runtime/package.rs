@@ -1276,9 +1276,14 @@ fn owner_effect_binding_class<'db>(
         hir::analysis::semantic::SemanticBindingLowering::PlaceCarrier { value_ty } => {
             top_level_class_for_ty_in_env(db, env, value_ty, AddressSpaceKind::Memory)
         }
-        hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue { provider, .. } => {
-            runtime_class_for_effect_binding_provider_in_env(db, env, &provider)
-        }
+        hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
+            provenance: hir::analysis::semantic::PlaceProvenance::RootProvider(provider),
+            ..
+        } => runtime_class_for_effect_binding_provider_in_env(db, env, &provider),
+        hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
+            provenance: hir::analysis::semantic::PlaceProvenance::Derived { .. },
+            ..
+        } => None,
     }
 }
 

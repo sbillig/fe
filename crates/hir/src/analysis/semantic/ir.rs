@@ -102,6 +102,26 @@ pub enum ValueProvenance<'db> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum PlaceProvenance<'db> {
+    RootProvider(ProviderBinding<'db>),
+    Derived {
+        base: SLocalId,
+        path: Box<[SemanticProjection<'db>]>,
+    },
+}
+
+impl<'db> PlaceProvenance<'db> {
+    pub fn root_provider(&self, locals: &[SLocal<'db>]) -> Option<ProviderBinding<'db>> {
+        match self {
+            Self::RootProvider(provider) => Some(provider.clone()),
+            Self::Derived { base, .. } => locals
+                .get(base.index())
+                .and_then(|local| local.role.root_provider(locals)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum SemanticBindingLowering<'db> {
     Erased,
     DirectValue {
@@ -111,7 +131,7 @@ pub enum SemanticBindingLowering<'db> {
         value_ty: TyId<'db>,
     },
     PlaceBoundValue {
-        provider: ProviderBinding<'db>,
+        provenance: PlaceProvenance<'db>,
         value_ty: TyId<'db>,
     },
     DirectCarrier {
@@ -130,13 +150,34 @@ pub enum SemanticLocalRole<'db> {
         value_ty: TyId<'db>,
     },
     PlaceBoundValue {
-        provider: ProviderBinding<'db>,
+        provenance: PlaceProvenance<'db>,
         value_ty: TyId<'db>,
     },
     DirectCarrier {
         provider: Option<ProviderBinding<'db>>,
         target_ty: TyId<'db>,
     },
+}
+
+impl<'db> SemanticLocalRole<'db> {
+    pub fn root_provider(&self, locals: &[SLocal<'db>]) -> Option<ProviderBinding<'db>> {
+        match self {
+            Self::DirectValue {
+                provenance: ValueProvenance::RootProvider(provider),
+            } => Some(provider.clone()),
+            Self::PlaceBoundValue { provenance, .. } => provenance.root_provider(locals),
+            Self::DirectCarrier {
+                provider: Some(provider),
+                ..
+            } => Some(provider.clone()),
+            Self::Erased
+            | Self::DirectValue {
+                provenance: ValueProvenance::Ordinary | ValueProvenance::DerivedPlace { .. },
+            }
+            | Self::PlaceCarrier { .. }
+            | Self::DirectCarrier { provider: None, .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]

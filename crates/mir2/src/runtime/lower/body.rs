@@ -8,7 +8,6 @@ use hir::analysis::{
             NSStmt, NSStmtKind, NSTerminator, NSTerminatorKind, NormalizedSemanticBody,
             normalize_semantic_body,
         },
-        ctfe::canonicalize_semantic_consts,
         get_or_build_semantic_instance, owner_effect_bindings, reify_runtime_const_for_ty,
         same_owner_effect_binding, sem_const_ty, semantic_may_return_normally,
     },
@@ -65,7 +64,6 @@ pub fn lower_to_rmir<'db>(db: &'db dyn MirDb, instance: RuntimeInstance<'db>) ->
     let semantic = key
         .semantic(db)
         .expect("semantic lowering only applies to semantic runtime instances");
-    let semantic_body = canonicalize_semantic_consts(db, semantic);
     let normalized_body = normalize_semantic_body(db, semantic).unwrap_or_else(|err| {
         panic!(
             "semantic normalization failed for {:?}: {err:?}",
@@ -74,7 +72,6 @@ pub fn lower_to_rmir<'db>(db: &'db dyn MirDb, instance: RuntimeInstance<'db>) ->
     });
     let local_state = infer_local_runtime_state(
         db,
-        &semantic_body,
         &normalized_body,
         key.params(db),
         &runtime_param_locals(db, semantic, key.params(db)),
@@ -83,7 +80,6 @@ pub fn lower_to_rmir<'db>(db: &'db dyn MirDb, instance: RuntimeInstance<'db>) ->
     );
     let (semantic_locals, provider_bindings) = lower_semantic_locals(
         db,
-        &semantic_body,
         &normalized_body,
         &local_state,
         semantic.key(db).owner(db).scope().into(),
@@ -94,7 +90,6 @@ pub fn lower_to_rmir<'db>(db: &'db dyn MirDb, instance: RuntimeInstance<'db>) ->
         db,
         instance,
         key,
-        semantic_body,
         normalized_body,
         LoweredSemanticLocals {
             semantic_locals,
@@ -146,7 +141,6 @@ pub(super) struct RmirLowerCtxt<'db> {
     pub(super) db: &'db dyn MirDb,
     pub(super) instance: RuntimeInstance<'db>,
     pub(super) key: RuntimeInstanceKey<'db>,
-    pub(super) raw_semantic_body: hir::analysis::semantic::SemanticBody<'db>,
     pub(super) semantic_body: NormalizedSemanticBody<'db>,
     pub(super) ret_class: Option<RuntimeClass<'db>>,
     pub(super) env: RuntimeTypeEnv<'db>,
@@ -181,7 +175,6 @@ impl<'db> RmirLowerCtxt<'db> {
         db: &'db dyn MirDb,
         instance: RuntimeInstance<'db>,
         key: RuntimeInstanceKey<'db>,
-        raw_semantic_body: hir::analysis::semantic::SemanticBody<'db>,
         semantic_body: NormalizedSemanticBody<'db>,
         lowered_locals: LoweredSemanticLocals<'db>,
         signature: RuntimeSignature<'db>,
@@ -225,7 +218,6 @@ impl<'db> RmirLowerCtxt<'db> {
             db,
             instance,
             key,
-            raw_semantic_body,
             semantic_body,
             ret_class: signature.ret.clone(),
             env,
@@ -324,7 +316,6 @@ impl<'db> RmirLowerCtxt<'db> {
                 let carrier = expr_direct_class(
                     self.db,
                     &self.semantic_body,
-                    &self.raw_semantic_body,
                     expr,
                     self.semantic_body.locals[dst.index()].ty,
                     &self.current_runtime_carriers(),
@@ -370,7 +361,6 @@ impl<'db> RmirLowerCtxt<'db> {
             NExpr::Borrow { place, .. } => normalized_place_address_class(
                 self.db,
                 &self.semantic_body,
-                &self.raw_semantic_body,
                 place,
                 &self.current_runtime_carriers(),
                 self.env.scope,
@@ -379,7 +369,6 @@ impl<'db> RmirLowerCtxt<'db> {
             NExpr::ReadPlace { place, .. } => normalized_place_class(
                 self.db,
                 &self.semantic_body,
-                &self.raw_semantic_body,
                 place,
                 &self.current_runtime_carriers(),
             ),
@@ -1521,7 +1510,7 @@ impl<'db> RmirLowerCtxt<'db> {
             self.db,
             caller_key,
             &caller_typed_body,
-            &self.raw_semantic_body,
+            &self.semantic_body,
             callee,
             args,
         )
@@ -1995,7 +1984,10 @@ impl<'db> RmirLowerCtxt<'db> {
                         let local = SLocalId::from_u32(idx as u32);
                         if let Some(value) = self.semantic_provider_value(local) {
                             return match self.semantic_local_lowering(local) {
-                                RuntimeLocalLowering::PlaceBoundValue { provider, .. }
+                                RuntimeLocalLowering::PlaceBoundValue {
+                                    provider: Some(provider),
+                                    ..
+                                }
                                 | RuntimeLocalLowering::DirectCarrier {
                                     provider: Some(provider),
                                     ..
@@ -2005,6 +1997,9 @@ impl<'db> RmirLowerCtxt<'db> {
                                 )),
                                 RuntimeLocalLowering::Erased
                                 | RuntimeLocalLowering::DirectValue
+                                | RuntimeLocalLowering::PlaceBoundValue {
+                                    provider: None, ..
+                                }
                                 | RuntimeLocalLowering::PlaceCarrier { .. }
                                 | RuntimeLocalLowering::DirectCarrier { provider: None, .. } => {
                                     None
@@ -3536,9 +3531,10 @@ impl<'db> RmirLowerCtxt<'db> {
 
     fn semantic_provider_value(&self, local: SLocalId) -> Option<RLocalId> {
         match self.semantic_local_lowering(local) {
-            RuntimeLocalLowering::PlaceBoundValue { provider, .. } => {
-                Some(self.provider_binding_value(*provider))
-            }
+            RuntimeLocalLowering::PlaceBoundValue {
+                provider: Some(provider),
+                ..
+            } => Some(self.provider_binding_value(*provider)),
             RuntimeLocalLowering::PlaceCarrier { .. } => Some(self.runtime_value(local)),
             RuntimeLocalLowering::DirectCarrier {
                 provider: Some(provider),
@@ -3546,13 +3542,16 @@ impl<'db> RmirLowerCtxt<'db> {
             } => Some(self.provider_binding_value(*provider)),
             RuntimeLocalLowering::Erased
             | RuntimeLocalLowering::DirectValue
+            | RuntimeLocalLowering::PlaceBoundValue { provider: None, .. }
             | RuntimeLocalLowering::DirectCarrier { provider: None, .. } => None,
         }
     }
 
     fn semantic_place_root(&self, local: SLocalId) -> Option<PlaceRoot<'db>> {
-        if let RuntimeLocalLowering::PlaceBoundValue { provider, .. } =
-            self.semantic_local_lowering(local)
+        if let RuntimeLocalLowering::PlaceBoundValue {
+            provider: Some(provider),
+            ..
+        } = self.semantic_local_lowering(local)
         {
             return Some(PlaceRoot::Provider(*provider));
         }
@@ -3567,7 +3566,7 @@ impl<'db> RmirLowerCtxt<'db> {
     }
 
     fn normalized_value_place(&self, local: SLocalId) -> Option<&NSPlace<'db>> {
-        self.semantic_body.local(local)?.lowering.place()
+        self.semantic_body.local(local)?.transport_place()
     }
 
     fn is_self_rooted_value_place(&self, local: SLocalId, place: &NSPlace<'db>) -> bool {
@@ -3763,7 +3762,6 @@ impl<'db> RmirLowerCtxt<'db> {
         specialize_boundary_for_runtime_source(
             self.db,
             &self.semantic_body,
-            &self.raw_semantic_body,
             local,
             boundary,
             &self
@@ -3824,16 +3822,9 @@ impl<'db> RmirLowerCtxt<'db> {
     }
 
     fn semantic_local_allows_transport_addr_of(&self, local: SLocalId) -> bool {
-        match &self.raw_semantic_body.locals[local.index()].role {
-            hir::analysis::semantic::SemanticLocalRole::DirectValue {
-                provenance: hir::analysis::semantic::ValueProvenance::Ordinary,
-            }
-            | hir::analysis::semantic::SemanticLocalRole::Erased => false,
-            hir::analysis::semantic::SemanticLocalRole::DirectValue { .. }
-            | hir::analysis::semantic::SemanticLocalRole::PlaceCarrier { .. }
-            | hir::analysis::semantic::SemanticLocalRole::PlaceBoundValue { .. }
-            | hir::analysis::semantic::SemanticLocalRole::DirectCarrier { .. } => true,
-        }
+        self.semantic_body
+            .local(local)
+            .is_some_and(|local| local.transport_place().is_some())
     }
 
     fn handle_like_semantic_value(&self, local: SLocalId) -> Option<RLocalId> {
@@ -3842,9 +3833,11 @@ impl<'db> RmirLowerCtxt<'db> {
             RuntimeLocalLowering::DirectValue | RuntimeLocalLowering::PlaceCarrier { .. } => {
                 Some(self.runtime_value(local))
             }
-            RuntimeLocalLowering::PlaceBoundValue { provider, .. } => {
-                Some(self.provider_binding_value(*provider))
-            }
+            RuntimeLocalLowering::PlaceBoundValue {
+                provider: Some(provider),
+                ..
+            } => Some(self.provider_binding_value(*provider)),
+            RuntimeLocalLowering::PlaceBoundValue { provider: None, .. } => None,
             RuntimeLocalLowering::DirectCarrier { provider, .. } => Some(provider.map_or_else(
                 || self.runtime_value(local),
                 |provider| self.provider_binding_value(provider),

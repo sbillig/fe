@@ -509,7 +509,7 @@ pub enum RuntimeLocalLowering<'db> {
         place_class: RuntimeClass<'db>,
     },
     PlaceBoundValue {
-        provider: RuntimeProviderBindingId,
+        provider: Option<RuntimeProviderBindingId>,
         place_class: RuntimeClass<'db>,
     },
     DirectCarrier {
