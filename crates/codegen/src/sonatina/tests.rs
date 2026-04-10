@@ -801,7 +801,7 @@ fn compile_all_objects_for_tests(
     let isa = super::create_evm_isa();
     let backend = EvmBackend::new(isa);
 
-    let mut opts: CompileOptions<_> = CompileOptions::default();
+    let mut opts = CompileOptions::default();
     let mut verifier_cfg = VerifierConfig::for_level(VerificationLevel::Full);
     verifier_cfg.allow_detached_entities = true;
     opts.verifier_cfg = verifier_cfg;

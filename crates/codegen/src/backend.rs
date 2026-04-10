@@ -334,7 +334,7 @@ impl Backend for SonatinaBackend {
         };
 
         // Compile all root objects so codegen errors in any root are caught.
-        let opts: CompileOptions<_> = CompileOptions::default();
+        let opts = CompileOptions::default();
         let mut primary_artifact = None;
         for root in &roots {
             let artifact =
