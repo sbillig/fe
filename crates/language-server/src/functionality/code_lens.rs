@@ -37,14 +37,13 @@ pub async fn handle_code_lens(
     }
 
     // Spawn heavy reference counting on the worker pool
-    let rx = backend.spawn_on_workers(move |db| compute_code_lens_data(db, &internal_url));
-
-    let raw_lenses: Vec<RawCodeLens> = rx.await.map_err(|_| {
-        ResponseError::new(
-            async_lsp::ErrorCode::INTERNAL_ERROR,
-            "Worker task cancelled".to_string(),
-        )
-    })?;
+    let raw_lenses: Vec<RawCodeLens> = backend
+        .spawn_on_workers(move |db| compute_code_lens_data(db, &internal_url))
+        .await
+        .map_err(|e| {
+            tracing::error!("code lens worker failed: {e}");
+            ResponseError::new(async_lsp::ErrorCode::INTERNAL_ERROR, e.to_string())
+        })?;
 
     // Build CodeLens objects on actor thread (lightweight URI mapping)
     let mut lenses = Vec::new();

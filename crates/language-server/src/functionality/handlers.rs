@@ -88,7 +88,41 @@ async fn discover_and_load_ingots(
         )
     })?;
 
-    driver::discover_and_init(&mut backend.db, &root_url);
+    // Wrap discovery in a timing + outcome log so that "slow initial load"
+    // reports have a single line to grep for. The DiscoveredProject return
+    // value exposes the ingot URLs and standalone files the discovery
+    // actually found — if the list looks wrong, you're looking at a
+    // workspace root detection bug.
+    let t_start = std::time::Instant::now();
+    let discovered = driver::discover_and_init(&mut backend.db, &root_url);
+    let elapsed = t_start.elapsed();
+
+    info!(
+        target: "fe::lsp::workspace",
+        workspace_root = %root_path.display(),
+        ingot_count = discovered.ingot_urls.len(),
+        standalone_files = discovered.standalone_files.len(),
+        elapsed_ms = elapsed.as_millis() as u64,
+        "workspace discovery complete"
+    );
+
+    // At debug level, dump the full ingot list. This is verbose enough
+    // that we don't want it at info by default, but it's the first thing
+    // to look at when a root-detection bug is suspected.
+    for url in &discovered.ingot_urls {
+        debug!(
+            target: "fe::lsp::workspace",
+            ingot = %url,
+            "discovered ingot"
+        );
+    }
+    for url in &discovered.standalone_files {
+        debug!(
+            target: "fe::lsp::workspace",
+            file = %url,
+            "discovered standalone file"
+        );
+    }
 
     Ok(())
 }
@@ -127,11 +161,52 @@ pub async fn initialize(
         .and_then(|def| def.link_support)
         .unwrap_or(false);
 
+    // Log the workspace folders and root URI the client actually sent
+    // us. When the "multiple fe lsp instances for the same workspace"
+    // problem hits, comparing these across processes is how you tell
+    // whether Zed is feeding them different workspace roots (a Zed bug)
+    // or identical ones (our workspace-root detection picking different
+    // answers from the same input — a Fe bug).
+    let workspace_folders_summary: Vec<String> = message
+        .workspace_folders
+        .as_ref()
+        .map(|folders| {
+            folders
+                .iter()
+                .map(|f| format!("{} ({})", f.name, f.uri))
+                .collect()
+        })
+        .unwrap_or_default();
+    // Capture the deprecated `root_uri` / `root_path` fields too — some
+    // older clients still send those and not `workspace_folders`, and
+    // knowing which shape the client used is load-bearing for workspace
+    // root bugs. Behind an `allow(deprecated)` because `lsp-types` warns.
+    #[allow(deprecated)]
+    let root_uri_summary = message.root_uri.as_ref().map(|u| u.to_string());
+    #[allow(deprecated)]
+    let root_path_summary = message.root_path.clone();
+    info!(
+        target: "fe::lsp::workspace",
+        process_id = ?message.process_id,
+        client_name = ?message.client_info.as_ref().map(|c| c.name.as_str()),
+        client_version = ?message.client_info.as_ref().and_then(|c| c.version.as_deref()),
+        workspace_folders = ?workspace_folders_summary,
+        root_uri = ?root_uri_summary,
+        root_path = ?root_path_summary,
+        "initialize params received"
+    );
+
     let root = message
         .workspace_folders
         .and_then(|folders| folders.first().cloned())
         .and_then(|folder| folder.uri.to_file_path().ok())
         .unwrap_or_else(|| std::env::current_dir().unwrap());
+
+    info!(
+        target: "fe::lsp::workspace",
+        chosen_root = %root.display(),
+        "chose workspace root"
+    );
 
     backend.lsp_workspace_root = Some(root.clone());
 
@@ -689,12 +764,14 @@ pub async fn handle_doc_reload(
 
     // Run on the worker pool with a salsa snapshot — read-only, shares cached
     // query results with the Backend's db, no mutation needed.
-    let rx = backend.spawn_on_workers(move |db| {
-        let result = regen_fn(db);
-        (result, generation)
-    });
+    let outcome = backend
+        .spawn_on_workers(move |db| {
+            let result = regen_fn(db);
+            (result, generation)
+        })
+        .await;
 
-    match rx.await {
+    match outcome {
         Ok(((doc_json, scip_json), completed_gen)) => {
             if completed_gen == generation_ref.load(std::sync::atomic::Ordering::Relaxed) {
                 tracing::debug!(
@@ -706,8 +783,11 @@ pub async fn handle_doc_reload(
                 debug!("doc reload: discarding stale result");
             }
         }
-        Err(_) => {
-            warn!("doc reload: worker cancelled");
+        Err(crate::backend::WorkerError::Panicked(msg)) => {
+            error!("doc reload worker panicked: {msg}");
+        }
+        Err(crate::backend::WorkerError::Cancelled) => {
+            debug!("doc reload: worker cancelled");
         }
     }
     Ok(())

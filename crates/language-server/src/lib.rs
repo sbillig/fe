@@ -7,6 +7,7 @@ pub mod logging;
 mod lsp_actor;
 mod lsp_diagnostics;
 mod lsp_streams;
+pub(crate) mod panic_context;
 mod server;
 #[cfg(test)]
 mod test_utils;
@@ -107,6 +108,11 @@ pub async fn run_stdio_server(combined: Option<CombinedServerConfig>) {
     let (stdin, stdout) = (stdin.compat(), stdout.compat());
 
     let logging = logging::setup_default_subscriber(client);
+    // Emit the startup diagnostic line to the freshly-installed subscriber.
+    // This is the first line in the file log and carries everything
+    // needed to identify which process this is (pid, parent_pid, argv,
+    // cwd, binary path, log file path, version).
+    logging::log_startup_info();
     match server.run_buffered(stdin, stdout).await {
         Ok(_) => info!("Server finished successfully"),
         Err(e) => error!("Server error: {:?}", e),

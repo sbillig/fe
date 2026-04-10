@@ -28,7 +28,7 @@ use async_std::stream::StreamExt;
 use futures_batch::ChunksTimeoutStreamExt;
 use tokio::sync::broadcast;
 use tracing::instrument::WithSubscriber;
-use tracing::{info, warn};
+use tracing::{debug, info};
 
 use crate::functionality::{
     call_hierarchy, code_actions, code_lens, codegen_view, completion, declaration,
@@ -241,13 +241,19 @@ fn setup_streams(client: ClientSocket, router: &mut Router<()>) {
 }
 
 fn setup_unhandled(router: &mut Router<()>) {
+    // These fire for any LSP notification/event that Fe doesn't explicitly
+    // handle — $/cancelRequest, $/setTrace, workspace/didChangeConfiguration,
+    // custom experimental/* methods editors send speculatively, etc. That
+    // traffic is completely normal and logging it at warn level floods the
+    // client log and drowns out real warnings. DEBUG so it's visible when
+    // debugging but invisible to end users.
     router
         .unhandled_notification(|_, params| {
-            warn!("Unhandled notification: {:?}", params);
+            debug!("Unhandled notification: {:?}", params);
             std::ops::ControlFlow::Continue(())
         })
         .unhandled_event(|_, params| {
-            warn!("Unhandled event: {:?}", params);
+            debug!("Unhandled event: {:?}", params);
             std::ops::ControlFlow::Continue(())
         });
 }

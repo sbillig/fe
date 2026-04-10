@@ -4,7 +4,7 @@
 //! request handling, verifying the server survives malformed edits.
 
 use async_lsp::concurrency::ConcurrencyLayer;
-use async_lsp::lsp_types::notification::PublishDiagnostics;
+use async_lsp::lsp_types::notification::{LogMessage, PublishDiagnostics};
 use async_lsp::lsp_types::*;
 use async_lsp::server::LifecycleLayer;
 use async_lsp::{LanguageServer, MainLoop};
@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio_util::compat::TokioAsyncReadCompatExt;
 use tower::ServiceBuilder;
+use tracing::instrument::WithSubscriber;
 
 use crate::server::setup;
 
@@ -52,18 +53,23 @@ pub struct PublishedDiagnostics {
 /// A mock LSP client connected to the real fe language server via duplex pipe.
 ///
 /// Use `MockLspClient::start()` to spin up, then call helper methods to drive
-/// the protocol. Diagnostics are collected automatically for inspection.
+/// the protocol. Diagnostics and server log messages are collected automatically
+/// for inspection.
 pub struct MockLspClient {
     server: async_lsp::ServerSocket,
     diagnostics: Arc<Mutex<Vec<PublishedDiagnostics>>>,
+    log_messages: Arc<Mutex<Vec<LogMessageParams>>>,
     _srv_handle: tokio::task::JoinHandle<()>,
     _cli_handle: tokio::task::JoinHandle<()>,
+    // Holds the tracing subscriber default-guard installed for this test. Dropped
+    // when the client is dropped, which resets the thread-local dispatch.
+    _logging_guard: Option<tracing::subscriber::DefaultGuard>,
 }
 
 impl MockLspClient {
     /// Spawn the real server and connect a mock client.
     pub async fn start() -> Self {
-        let (server_main, _client_socket) = MainLoop::new_server(|client| {
+        let (server_main, server_client_socket) = MainLoop::new_server(|client| {
             let lsp_service = setup(client.clone(), "test-actor".to_string());
             ServiceBuilder::new()
                 .layer(LifecycleLayer::default())
@@ -71,19 +77,37 @@ impl MockLspClient {
                 .service(lsp_service)
         });
 
+        // Install the production tracing subscriber on the current (test) thread
+        // using the server's ClientSocket. This routes `tracing::warn!` /
+        // `tracing::info!` calls from the LSP main loop (including
+        // `setup_unhandled`) through `ClientSocketWriter`, which emits them as
+        // `window/logMessage` notifications the mock client captures below.
+        //
+        // `set_default` is thread-local; `#[tokio::test]` uses a current-thread
+        // runtime by default, and we use `.with_current_subscriber()` on the
+        // spawned server task below to ensure the dispatch follows the future.
+        let logging_guard = crate::logging::setup_default_subscriber(server_client_socket);
+
         let (server_stream, client_stream) = tokio::io::duplex(DUPLEX_BUF);
         let (srv_rx, srv_tx) = server_stream.compat().split();
-        let srv_handle = tokio::spawn(async move {
-            if let Err(e) = server_main.run_buffered(srv_rx, srv_tx).await {
-                tracing::debug!("test server loop exited: {e:?}");
+        let srv_handle = tokio::spawn(
+            async move {
+                if let Err(e) = server_main.run_buffered(srv_rx, srv_tx).await {
+                    tracing::debug!("test server loop exited: {e:?}");
+                }
             }
-        });
+            .with_current_subscriber(),
+        );
 
         let diagnostics: Arc<Mutex<Vec<PublishedDiagnostics>>> = Arc::new(Mutex::new(Vec::new()));
         let diag_collector = diagnostics.clone();
 
+        let log_messages: Arc<Mutex<Vec<LogMessageParams>>> = Arc::new(Mutex::new(Vec::new()));
+        let log_collector = log_messages.clone();
+
         let (client_main, server_socket) = MainLoop::new_client(move |_| {
             let diags = diag_collector.clone();
+            let logs = log_collector.clone();
             let mut router = async_lsp::router::Router::new(());
             router
                 .notification::<PublishDiagnostics>(move |_, params| {
@@ -93,7 +117,13 @@ impl MockLspClient {
                     });
                     ControlFlow::Continue(())
                 })
-                // Silently absorb server log/show messages
+                // Capture server-side tracing output delivered via window/logMessage
+                // so tests can assert on the log levels and messages the server emits.
+                .notification::<LogMessage>(move |_, params| {
+                    logs.lock().unwrap().push(params);
+                    ControlFlow::Continue(())
+                })
+                // Silently absorb any other server notifications
                 .unhandled_notification(|_, _| ControlFlow::Continue(()));
             ServiceBuilder::new().service(router)
         });
@@ -105,8 +135,10 @@ impl MockLspClient {
         Self {
             server: server_socket,
             diagnostics,
+            log_messages,
             _srv_handle: srv_handle,
             _cli_handle: cli_handle,
+            _logging_guard: logging_guard,
         }
     }
 
@@ -201,6 +233,28 @@ impl MockLspClient {
     /// Clear collected diagnostics.
     pub fn clear_diagnostics(&self) {
         self.diagnostics.lock().unwrap().clear();
+    }
+
+    /// Return a snapshot of all `window/logMessage` notifications received so far.
+    #[allow(dead_code)]
+    pub fn log_messages(&self) -> Vec<LogMessageParams> {
+        self.log_messages.lock().unwrap().clone()
+    }
+
+    /// Return captured log messages filtered by MessageType.
+    pub fn log_messages_of_type(&self, typ: MessageType) -> Vec<LogMessageParams> {
+        self.log_messages
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|m| m.typ == typ)
+            .cloned()
+            .collect()
+    }
+
+    /// Clear captured log messages.
+    pub fn clear_log_messages(&self) {
+        self.log_messages.lock().unwrap().clear();
     }
 
     /// Wait for the server to settle (process queued events).
@@ -366,6 +420,7 @@ async fn mock_lsp_scenarios() {
     scenario_contract_analysis_reports_errors(&mut client, &uri).await;
     scenario_payable_attr_reports_errors(&mut client, &uri).await;
     scenario_errors_reported_after_panic_recovery(&mut client, &uri).await;
+    scenario_unhandled_notifications_do_not_warn(&mut client).await;
 
     client.shutdown().await;
 }
@@ -708,6 +763,47 @@ async fn scenario_errors_reported_after_panic_recovery(client: &mut MockLspClien
     );
 }
 
+/// Regression test: notifications for methods that Fe doesn't handle must not
+/// produce WARN-level log messages to the client. Editors (Zed, VS Code, …)
+/// routinely send `$/cancelRequest`, `$/setTrace`, `workspace/didChangeConfiguration`,
+/// custom `experimental/*` methods, etc. These arriving at the server is
+/// completely normal — it is not a warning condition and should not clutter the
+/// client log stream.
+///
+/// At the time of writing, `server.rs::setup_unhandled` logs these at WARN, which
+/// turns every editor session into a wall of noise that drowns out real errors.
+async fn scenario_unhandled_notifications_do_not_warn(client: &mut MockLspClient) {
+    // Custom notification type for a method no layer in the stack handles.
+    // Using `experimental/*` keeps us clear of reserved LSP namespace.
+    enum UnhandledTestNotification {}
+    impl async_lsp::lsp_types::notification::Notification for UnhandledTestNotification {
+        type Params = serde_json::Value;
+        const METHOD: &'static str = "experimental/fe_test_unhandled";
+    }
+
+    client.clear_log_messages();
+
+    client
+        .server
+        .notify::<UnhandledTestNotification>(serde_json::Value::Null)
+        .expect("notify failed");
+    client.settle(200).await;
+
+    let warns = client.log_messages_of_type(MessageType::WARNING);
+    let offending: Vec<&LogMessageParams> = warns
+        .iter()
+        .filter(|m| m.message.contains("Unhandled notification"))
+        .collect();
+
+    assert!(
+        offending.is_empty(),
+        "sending an unknown notification must not emit WARN-level log messages — \
+         `setup_unhandled` in server.rs should log at DEBUG so normal LSP traffic \
+         (e.g. $/cancelRequest, experimental/*) does not flood the editor log. \
+         got: {offending:?}"
+    );
+}
+
 /// Verify diagnostics are published via the async pipeline.
 async fn scenario_diagnostics_published_for_broken_code(client: &mut MockLspClient) {
     // The fixture's foo.fe produces diagnostics. Wait for them to arrive
@@ -807,6 +903,197 @@ pub contract C {
     assert!(
         alias_text.contains("slot:") && alias_text.contains("space:"),
         "expected alias hover to include layout info, got:\n{alias_text}"
+    );
+
+    client.shutdown().await;
+}
+
+/// Regression test for the "goto def → freeze" bug observed in Zed.
+///
+/// # History
+///
+/// Log `2061701.log`, 2026-04-06: a burst of ~14 concurrent
+/// `textDocument/definition` + `textDocument/typeDefinition` requests
+/// arrived at the LSP within ~400µs after a goto-def click. The LSP
+/// actor thread went to `futex_do_wait` and never came back. No panic,
+/// no response.
+///
+/// # Root cause (fixed)
+///
+/// The bug was in `async-lsp::MainLoop::run`. When an incoming message
+/// arrived, the outer `select_biased!` entered the `incoming.next()` arm
+/// body, which ran a nested inner loop awaiting `dispatch_fut`.
+/// `dispatch_fut` awaited `service.poll_ready`. If `ConcurrencyLayer`'s
+/// semaphore was saturated, `poll_ready` returned `Pending`. The inner
+/// loop only selected on `dispatch_fut` and `flush_fut` — it did NOT
+/// poll `self.tasks`. For `poll_ready` to become ready a permit had to
+/// release, which required an in-flight task to complete, which required
+/// `self.tasks` to be polled, which the main loop couldn't do because it
+/// was stuck inside the arm body. Classic "waker trapped behind a nested
+/// await" deadlock.
+///
+/// The fix (in the local `async-lsp` checkout at
+/// `~/hacker-stuff-2023/async-lsp`): `dispatch_message` now drains
+/// `self.tasks` concurrently with `poll_ready` via disjoint field
+/// borrows. Drained responses flow back to the outer loop alongside the
+/// dispatch outcome as a `Vec<Message>`, and the outer loop feeds them
+/// all to the outgoing sink before the next iteration. Details in the
+/// `dispatch_message` doc comment in `async-lsp/src/lib.rs`.
+///
+/// # What this test does
+///
+/// Fires 72 concurrent LSP requests (24 positions × 3 request types)
+/// against the mock client. `ConcurrencyLayer::default() == nproc`
+/// means 16 permits on a typical dev box, so the burst pegs the
+/// semaphore and forces `dispatch_message` down the drain-while-waiting
+/// code path. If a regression re-introduces the inner-loop deadlock,
+/// `tokio::time::timeout` catches it and the assertion fires with a
+/// pointer to the exact lines in `async-lsp/src/lib.rs` that need
+/// inspection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn repro_concurrent_goto_burst_does_not_deadlock() {
+    let mut client = MockLspClient::start().await;
+    client.initialize().await;
+
+    let uri = lib_url();
+    // Seed lib.fe with content that has multiple cross-file references
+    // to `Why` defined in foo.fe — gives the LSP real cross-file targets
+    // to chase when we fire goto-def.
+    let lib_content = r#"use ingot::foo::Why
+
+mod who {
+  use super::Why
+  pub mod what {
+    pub fn how() {}
+    pub mod how {
+      use ingot::Why
+      pub struct When {
+        x: Why
+      }
+    }
+  }
+  pub struct Bar {
+    x: Why
+  }
+}
+
+fn bar() -> () {
+    let y: Why
+    let z = who::what::how
+    let z: who::what::how::When
+}"#;
+    client.did_open(&uri, lib_content);
+    client.settle(500).await;
+
+    // Fire a burst modeled on the Zed log: definition + hover + references
+    // across several cursor positions. Each position hits a `Why`
+    // identifier somewhere in lib.fe. The LSP should happily process all
+    // of them; if the actor deadlocks, the outer timeout catches it.
+    //
+    // Positions are (line, col) pairs landing on identifiers in
+    // `lib_content`. We re-use them multiple times to get 20+ requests
+    // without calibrating precise offsets.
+    let probe_positions = [
+        (0, 16),  // Why in the top-level `use`
+        (3, 13),  // Why in `use super::Why`
+        (7, 17),  // Why in `use ingot::Why`
+        (9, 11),  // Why in `x: Why` inside When
+        (14, 9),  // Why in `x: Why` inside Bar
+        (19, 11), // Why in `let y: Why`
+        (20, 15), // how in `let z = who::what::how`
+        (21, 20), // When in `let z: who::what::how::When`
+    ];
+
+    // Fire all the requests TRULY CONCURRENTLY, not sequentially. This
+    // is what Zed does on a goto-def click — the log shows 14 requests
+    // arriving within 400µs, well before any of them complete. Each
+    // request goes over the wire as its own JSON-RPC message and the
+    // actor's dispatch loop spawns one detached task per message.
+    //
+    // We clone the `ServerSocket` so we can issue multiple requests
+    // without an `&mut self` bottleneck, then collect the resulting
+    // futures and `join_all` them. The timeout catches the hang if the
+    // actor deadlocks.
+    // Fire >16 concurrent goto-definition requests at the server. 16 is the
+    // default ConcurrencyLayer limit (nproc on our test box), so 18 requests
+    // overflows the semaphore by 2 and triggers the `MainLoop::run` dispatch
+    // deadlock described in the docstring above.
+    let socket = client.server.clone();
+    let mut request_futures: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>> =
+        Vec::new();
+    for _ in 0..3 {
+        for &(line, col) in &probe_positions {
+            let s1 = socket.clone();
+            let uri1 = uri.clone();
+            request_futures.push(Box::pin(async move {
+                let _ = s1
+                    .request::<async_lsp::lsp_types::request::GotoDefinition>(
+                        GotoDefinitionParams {
+                            text_document_position_params: TextDocumentPositionParams {
+                                text_document: TextDocumentIdentifier { uri: uri1 },
+                                position: Position {
+                                    line,
+                                    character: col,
+                                },
+                            },
+                            partial_result_params: PartialResultParams::default(),
+                            work_done_progress_params: WorkDoneProgressParams::default(),
+                        },
+                    )
+                    .await;
+            }));
+            let s2 = socket.clone();
+            let uri2 = uri.clone();
+            request_futures.push(Box::pin(async move {
+                let _ = s2
+                    .request::<async_lsp::lsp_types::request::GotoTypeDefinition>(
+                        async_lsp::lsp_types::request::GotoTypeDefinitionParams {
+                            text_document_position_params: TextDocumentPositionParams {
+                                text_document: TextDocumentIdentifier { uri: uri2 },
+                                position: Position {
+                                    line,
+                                    character: col,
+                                },
+                            },
+                            partial_result_params: PartialResultParams::default(),
+                            work_done_progress_params: WorkDoneProgressParams::default(),
+                        },
+                    )
+                    .await;
+            }));
+            let s3 = socket.clone();
+            let uri3 = uri.clone();
+            request_futures.push(Box::pin(async move {
+                let _ = s3
+                    .request::<async_lsp::lsp_types::request::HoverRequest>(HoverParams {
+                        text_document_position_params: TextDocumentPositionParams {
+                            text_document: TextDocumentIdentifier { uri: uri3 },
+                            position: Position {
+                                line,
+                                character: col,
+                            },
+                        },
+                        work_done_progress_params: WorkDoneProgressParams::default(),
+                    })
+                    .await;
+            }));
+        }
+    }
+
+    let total = request_futures.len();
+    let burst = tokio::time::timeout(
+        Duration::from_secs(15),
+        futures::future::join_all(request_futures),
+    )
+    .await;
+
+    assert!(
+        burst.is_ok(),
+        "{total} concurrent LSP requests deadlocked (no responses within 15s). \
+         Root cause lives in async-lsp MainLoop::run at src/lib.rs:554-568: \
+         the inner dispatch loop doesn't poll self.tasks while awaiting \
+         dispatch_fut/poll_ready, so a saturated ConcurrencyLayer semaphore \
+         never releases. See this test's docstring for the full analysis."
     );
 
     client.shutdown().await;

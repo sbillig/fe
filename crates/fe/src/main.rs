@@ -739,14 +739,80 @@ async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: 
         .as_ref()
         .map(|r| r.as_std_path().to_path_buf())
         .unwrap_or_else(|| std::env::current_dir().unwrap());
+
+    // Inspect any existing .fe-lsp.json. This is purely diagnostic: we
+    // always proceed with writing our own, since the file is a discovery
+    // pointer, not a lock. The outcome is still important for triage:
+    // stale files mean a previous crash, sibling-live means Zed respawned
+    // us without shutting the old instance down, and a root-mismatch
+    // means we're fighting with another instance over workspace root
+    // detection.
+    //
+    // These diagnostics are emitted via `eprintln!` rather than `tracing`
+    // because the tracing subscriber isn't installed until later, inside
+    // `language_server::run_stdio_server` -> `setup_default_subscriber`.
+    // Zed captures stderr for its LSP log panel, so users still see the
+    // messages in the same place they'd see a `tracing::warn!`.
+    let workspace_root_display = workspace_root_path.display();
+    let our_pid = std::process::id();
+    match doc::ExistingInstanceCheck::inspect(&workspace_root_path) {
+        doc::ExistingInstanceCheck::None => {
+            // Nothing to report in the common case; keep startup quiet.
+        }
+        doc::ExistingInstanceCheck::StaleFound {
+            stale_pid,
+            recorded_workspace_root,
+        } => {
+            eprintln!(
+                "fe-language-server: removing stale .fe-lsp.json at {workspace_root_display} \
+                 (previous pid {stale_pid} not alive; recorded workspace_root={recorded_workspace_root:?}). \
+                 Previous instance likely crashed without cleanup."
+            );
+            doc::LspServerInfo::remove_from_workspace(&workspace_root_path);
+        }
+        doc::ExistingInstanceCheck::SiblingLive {
+            sibling_pid,
+            sibling_docs_url,
+        } => {
+            eprintln!(
+                "fe-language-server: another fe lsp instance (pid {sibling_pid}) is already \
+                 running for workspace {workspace_root_display} (sibling_docs_url={sibling_docs_url:?}); \
+                 overwriting .fe-lsp.json with our info (pid {our_pid}). Zed may have respawned \
+                 us before the previous instance finished shutting down."
+            );
+        }
+        doc::ExistingInstanceCheck::RootMismatch {
+            other_pid,
+            other_workspace_root,
+            our_workspace_root,
+        } => {
+            eprintln!(
+                "fe-language-server: ROOT MISMATCH: existing .fe-lsp.json (pid {other_pid}) refers \
+                 to workspace_root={other_workspace_root:?}, but we detected {our_workspace_root}. \
+                 This usually means either a workspace-root detection bug or a pid-reuse false \
+                 positive in is_alive(). To triage, check what the two processes think their \
+                 workspace_folders are in the initialize params. Our pid is {our_pid}."
+            );
+        }
+        doc::ExistingInstanceCheck::Malformed => {
+            eprintln!(
+                "fe-language-server: removing malformed .fe-lsp.json at {workspace_root_display} \
+                 (parse failed; probably a leftover from an older fe version)."
+            );
+            doc::LspServerInfo::remove_from_workspace(&workspace_root_path);
+        }
+    }
+
     let server_info = doc::LspServerInfo {
-        pid: std::process::id(),
+        pid: our_pid,
         port: Some(actual_port),
         workspace_root: Some(workspace_root_path.display().to_string()),
         docs_url: Some(format!("http://127.0.0.1:{actual_port}")),
     };
     if let Err(e) = server_info.write_to_workspace(&workspace_root_path) {
-        eprintln!("Warning: could not write .fe-lsp.json: {e}");
+        eprintln!(
+            "fe-language-server: could not write .fe-lsp.json at {workspace_root_display}: {e}"
+        );
     }
 
     // Create the doc regeneration closure for live reload.

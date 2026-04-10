@@ -54,15 +54,13 @@ pub async fn handle_rename(
     let new_name = params.new_name.clone();
 
     // Spawn heavy rename computation on the worker pool
-    let rx = backend
-        .spawn_on_workers(move |db| compute_rename_edits(db, &internal_url, position, &new_name));
-
-    let outcome: RenameOutcome = rx.await.map_err(|_| {
-        ResponseError::new(
-            async_lsp::ErrorCode::INTERNAL_ERROR,
-            "Worker task cancelled".to_string(),
-        )
-    })?;
+    let outcome: RenameOutcome = backend
+        .spawn_on_workers(move |db| compute_rename_edits(db, &internal_url, position, &new_name))
+        .await
+        .map_err(|e| {
+            tracing::error!("rename worker failed: {e}");
+            ResponseError::new(async_lsp::ErrorCode::INTERNAL_ERROR, e.to_string())
+        })?;
 
     match outcome {
         RenameOutcome::NoTarget => Ok(None),

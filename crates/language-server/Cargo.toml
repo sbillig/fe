@@ -19,7 +19,7 @@ path = "src/main.rs"
 act-locally = "0.1.1"
 anyhow = "1.0.95"
 async-compat = "0.2.4"
-async-lsp = { git = "https://github.com/micahscopes/async-lsp", branch = "pub-inner-type-id" }
+async-lsp = { git = "https://github.com/fe-lang/async-lsp", branch = "main" }
 async-std = "1.13.0"
 camino.workspace = true
 clap.workspace = true
