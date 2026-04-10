@@ -260,7 +260,7 @@ fn emit_mir_module_sonatina_bytecode<'db>(
 
     let isa = create_evm_isa();
     let backend = EvmBackend::new(isa);
-    let opts: CompileOptions<_> = CompileOptions::default();
+    let opts = CompileOptions::default();
 
     let init_section_name = SectionName::from("init");
     let runtime_section_name = SectionName::from("runtime");
