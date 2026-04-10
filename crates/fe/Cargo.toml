@@ -7,7 +7,6 @@ edition.workspace = true
 default = ["doc-server", "lsp"]
 doc-server = ["dep:tokio", "dep:axum"]
 lsp = ["dep:language-server", "dep:tokio"]
-vendored-openssl = ["resolver/vendored-openssl"]
 
 [dependencies]
 clap.workspace = true

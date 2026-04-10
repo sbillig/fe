@@ -177,7 +177,7 @@ impl PartialOrd for IngotPriority {
 #[derive(Debug)]
 pub enum IngotResolutionError {
     Files(FilesResolutionError),
-    Git(GitResolutionError),
+    Git(Box<GitResolutionError>),
     Selection(Box<IngotSelectionError>),
 }
 
@@ -458,7 +458,7 @@ impl IngotResolverImpl {
         let git_resource = match self.git.ensure_checkout_resource(description) {
             Ok(resource) => resource,
             Err(err) => {
-                let wrapped = IngotResolutionError::Git(err);
+                let wrapped = IngotResolutionError::Git(Box::new(err));
                 self.progress.error(description, &wrapped);
                 return Err(wrapped);
             }
