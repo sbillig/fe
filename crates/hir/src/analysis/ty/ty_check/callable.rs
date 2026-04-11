@@ -300,9 +300,10 @@ impl<'db> Callable<'db> {
         };
 
         for (i, (given, expected)) in args.into_iter().zip(expected_arg_tys.iter()).enumerate() {
-            if let Some(expected_label) = self.callable_def.param_label(db, i)
+            if let Some(given_label) = given.label
+                && let Some(expected_label) = self.callable_def.param_label(db, i)
                 && !expected_label.is_self(db)
-                && Some(expected_label) != given.label
+                && given_label != expected_label
             {
                 let diag = BodyDiag::CallArgLabelMismatch {
                     primary: given.label_span.unwrap_or(given.expr_span.clone()),
@@ -611,7 +612,7 @@ impl<'db> CallArg<'db> {
             let ty = expected_hint.unwrap_or_else(|| tc.fresh_ty());
             tc.check_expr(arg.expr, ty)
         };
-        let label = arg.label_eagerly(tc.db, tc.body());
+        let label = arg.label;
         let label_span = arg.label.is_some().then(|| span.clone().label().into());
         let expr_span = span.expr().into();
 

@@ -2228,14 +2228,12 @@ impl<'db> TyChecker<'db> {
             return Some(ProviderTargetResolution::direct(inner_ty));
         }
 
-        let effect_ref_trait = resolve_core_trait(self.db, scope, &["effect_ref", "EffectRef"])
-            .expect("missing required core trait `core::effect_ref::EffectRef`");
-        let effect_ref_mut_trait =
-            resolve_core_trait(self.db, scope, &["effect_ref", "EffectRefMut"])
-                .expect("missing required core trait `core::effect_ref::EffectRefMut`");
-        let effect_handle_trait =
-            resolve_core_trait(self.db, scope, &["effect_ref", "EffectHandle"])
-                .expect("missing required core trait `core::effect_ref::EffectHandle`");
+        let effect_ref_trait = resolve_core_trait(self.db, scope, &["EffectRef"])
+            .expect("missing required core trait `core::EffectRef`");
+        let effect_ref_mut_trait = resolve_core_trait(self.db, scope, &["EffectRefMut"])
+            .expect("missing required core trait `core::EffectRefMut`");
+        let effect_handle_trait = resolve_core_trait(self.db, scope, &["EffectHandle"])
+            .expect("missing required core trait `core::EffectHandle`");
         let target_ident = IdentId::new(self.db, "Target".to_string());
         let effect_handle_inst = TraitInstId::new(
             self.db,
@@ -3646,6 +3644,7 @@ impl<'db> TyChecker<'db> {
                 self.push_diag(diag);
             }
 
+            let mut requires_known_const = false;
             if !array_ty.has_invalid(self.db)
                 && let (_, args) = array_ty.decompose_ty_app(self.db)
                 && let Some(len_ty) = args.get(1)
@@ -3656,10 +3655,15 @@ impl<'db> TyChecker<'db> {
                         | ConstTyData::TyParam(..)
                 )
             {
+                requires_known_const = true;
                 self.push_diag(BodyDiag::ConstValueMustBeKnown(len_body.span().into()));
             }
 
-            array_ty
+            if requires_known_const && expected.base_ty(self.db).is_array(self.db) {
+                expected
+            } else {
+                array_ty
+            }
         } else {
             let len_ty = ConstTyId::invalid(self.db, InvalidCause::ParseError);
             let len_ty = TyId::const_ty(self.db, len_ty);

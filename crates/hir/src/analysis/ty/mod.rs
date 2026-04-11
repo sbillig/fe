@@ -497,7 +497,7 @@ pub fn effect_handle_metadata<'db>(
     if ty.as_capability(db).is_some() || !ty_may_require_effect_handle_metadata(db, ty) {
         return None;
     }
-    let effect_handle = corelib::resolve_core_trait(db, scope, &["effect_ref", "EffectHandle"])?;
+    let effect_handle = corelib::resolve_core_trait(db, scope, &["EffectHandle"])?;
     let address_space_ident = IdentId::new(db, "AddressSpace".to_string());
     let target_ident = IdentId::new(db, "Target".to_string());
     let inst = trait_def::TraitInstId::new(db, effect_handle, vec![ty], IndexMap::new());

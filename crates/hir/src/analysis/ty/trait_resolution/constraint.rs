@@ -37,20 +37,8 @@ pub(crate) fn collect_effect_constraints_for_func<'db>(
         .instantiate_identity()
         .extend_all_bounds(db);
 
-    let Some(effect_ref_trait) = resolve_core_trait(db, func.scope(), &["effect_ref", "EffectRef"])
-    else {
-        // EffectRef is a required stdlib trait. If it can't be resolved the
-        // stdlib is broken — returning empty constraints here would silently
-        // skip effect-bound checking and allow incorrect code to compile.
-        panic!("missing required core trait EffectRef — stdlib is broken");
-    };
-    let Some(effect_ref_mut_trait) =
-        resolve_core_trait(db, func.scope(), &["effect_ref", "EffectRefMut"])
-    else {
-        panic!("missing required core trait EffectRefMut — stdlib is broken");
-    };
-
     let mut out = Vec::new();
+    let mut effect_ref_traits = None;
     for binding in func.effect_requirements(db) {
         if !matches!(
             binding.key.kind(),
@@ -106,6 +94,22 @@ pub(crate) fn collect_effect_constraints_for_func<'db>(
                     !ty_contains_const_hole(db, target_ty) || target_ty.has_invalid(db),
                     "effect constraint type key still contains unresolved layout holes"
                 );
+                let (effect_ref_trait, effect_ref_mut_trait) =
+                    effect_ref_traits.unwrap_or_else(|| {
+                        let Some(effect_ref_trait) =
+                            resolve_core_trait(db, func.scope(), &["EffectRef"])
+                        else {
+                            panic!("missing required core trait EffectRef — stdlib is broken");
+                        };
+                        let Some(effect_ref_mut_trait) =
+                            resolve_core_trait(db, func.scope(), &["EffectRefMut"])
+                        else {
+                            panic!("missing required core trait EffectRefMut — stdlib is broken");
+                        };
+                        let traits = (effect_ref_trait, effect_ref_mut_trait);
+                        effect_ref_traits = Some(traits);
+                        traits
+                    });
 
                 out.push(TraitInstId::new(
                     db,
@@ -513,8 +517,7 @@ fn f() uses (slots: Distinct) {}
         let (top_mod, _) = db.top_mod(file);
         db.assert_no_diags(top_mod);
         let func = find_func(&db, top_mod, "f");
-        let effect_ref_trait =
-            resolve_core_trait(&db, func.scope(), &["effect_ref", "EffectRef"]).unwrap();
+        let effect_ref_trait = resolve_core_trait(&db, func.scope(), &["EffectRef"]).unwrap();
         let constraints = collect_effect_constraints_for_func(&db, func);
         let effect_ref = constraints
             .into_iter()
@@ -544,8 +547,7 @@ fn f() uses (slots: Repeated) {}
         let (top_mod, _) = db.top_mod(file);
         db.assert_no_diags(top_mod);
         let func = find_func(&db, top_mod, "f");
-        let effect_ref_trait =
-            resolve_core_trait(&db, func.scope(), &["effect_ref", "EffectRef"]).unwrap();
+        let effect_ref_trait = resolve_core_trait(&db, func.scope(), &["EffectRef"]).unwrap();
         let constraints = collect_effect_constraints_for_func(&db, func);
         let effect_ref = constraints
             .into_iter()
@@ -659,8 +661,7 @@ where
         assert_eq!(args[0], TyId::u256(&db));
         assert!(matches!(args[1].data(&db), TyData::ConstTy(_)));
 
-        let effect_ref_trait =
-            resolve_core_trait(&db, func.scope(), &["effect_ref", "EffectRef"]).unwrap();
+        let effect_ref_trait = resolve_core_trait(&db, func.scope(), &["EffectRef"]).unwrap();
         let constraints = collect_constraints(&db, func.into()).instantiate_identity();
         let effect_ref = constraints
             .list(&db)

@@ -4,12 +4,6 @@ assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/effect_resolution.fe
 ---
-error[8-0000]: type mismatch
-  ┌─ effect_resolution.fe:5:17
-  │
-5 │         owner = foo.caller()
-  │                 ^^^^^^^^^^^^ expected `effect_resolution::Address`, but `lib::evm::effects::Address` is given
-
 error[8-0012]: undefined variable
    ┌─ effect_resolution.fe:39:5
    │
