@@ -64,6 +64,9 @@ pub enum CtfeError<'db> {
     InvalidProviderUse {
         origin: SemOrigin<'db>,
     },
+    NonConstCall {
+        origin: SemOrigin<'db>,
+    },
     DivisionByZero {
         origin: SemOrigin<'db>,
     },
@@ -91,6 +94,7 @@ pub enum CtfeError<'db> {
     CalleeError {
         origin: SemOrigin<'db>,
         callee: SemanticInstance<'db>,
+        source: Box<CtfeError<'db>>,
     },
 }
 
@@ -152,7 +156,7 @@ pub fn eval_body_owner_const_with_args<'db>(
     let mut machine = CtfeMachine::new(db, CtfeConfig::default());
     machine.eval_root(
         instance,
-        args.into_iter().map(CtfeValue::Value).collect(),
+        args.into_iter().map(CtfeValue::concrete).collect(),
         SemOrigin::Body(owner),
     )
 }
@@ -192,8 +196,47 @@ enum CtfeSlot<'db> {
 
 #[derive(Clone)]
 enum CtfeValue<'db> {
-    Value(SemConstId<'db>),
+    Value(CtfeConstValue<'db>),
     Ref(CtfeRef),
+}
+
+#[derive(Clone)]
+struct CtfeConstValue<'db> {
+    value: SemConstId<'db>,
+    deferred_origin: Option<SemOrigin<'db>>,
+}
+
+impl<'db> CtfeConstValue<'db> {
+    fn concrete(value: SemConstId<'db>) -> Self {
+        Self {
+            value,
+            deferred_origin: None,
+        }
+    }
+
+    fn with_deferred_origin(
+        value: SemConstId<'db>,
+        deferred_origin: Option<SemOrigin<'db>>,
+    ) -> Self {
+        Self {
+            value,
+            deferred_origin,
+        }
+    }
+
+    fn error_origin(&self, origin: SemOrigin<'db>) -> SemOrigin<'db> {
+        self.deferred_origin.unwrap_or(origin)
+    }
+}
+
+impl<'db> CtfeValue<'db> {
+    fn concrete(value: SemConstId<'db>) -> Self {
+        Self::Value(CtfeConstValue::concrete(value))
+    }
+
+    fn deferred(value: SemConstId<'db>, origin: SemOrigin<'db>) -> Self {
+        Self::Value(CtfeConstValue::with_deferred_origin(value, Some(origin)))
+    }
 }
 
 #[derive(Clone)]
@@ -235,7 +278,7 @@ impl<'db> CtfeMachine<'db> {
         let CtfeValue::Value(value) = value else {
             return Err(CtfeError::InvalidBorrow { origin });
         };
-        Ok(value)
+        Ok(value.value)
     }
 
     fn eval_expr_with_locals(
@@ -252,7 +295,7 @@ impl<'db> CtfeMachine<'db> {
             if let Some(value) = value
                 && let Some(slot) = frame_locals.get_mut(idx)
             {
-                *slot = CtfeSlot::Init(CtfeValue::Value(value));
+                *slot = CtfeSlot::Init(CtfeValue::concrete(value));
             }
         }
         let frame_idx = self.frames.len();
@@ -262,7 +305,7 @@ impl<'db> CtfeMachine<'db> {
             current: 0,
         });
         let result = match self.eval_expr(frame_idx, result_ty, expr, origin)? {
-            CtfeValue::Value(value) => Ok(value),
+            CtfeValue::Value(value) => Ok(value.value),
             CtfeValue::Ref(_) => Err(CtfeError::InvalidBorrow { origin }),
         };
         self.frames.pop();
@@ -297,7 +340,7 @@ impl<'db> CtfeMachine<'db> {
             locals,
             current: 0,
         });
-        let result = self.run_frame(frame_idx, origin);
+        let result = self.run_frame(frame_idx);
         self.frames.pop();
         result
     }
@@ -309,7 +352,7 @@ impl<'db> CtfeMachine<'db> {
     ) -> Result<(), CtfeError<'db>> {
         match instance.key(self.db).owner(self.db) {
             BodyOwner::Func(func) if !func.is_const(self.db) => {
-                Err(CtfeError::NotConstEvaluable { origin })
+                Err(CtfeError::NonConstCall { origin })
             }
             BodyOwner::Func(_) | BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => Ok(()),
             BodyOwner::ContractInit { .. } | BodyOwner::ContractRecvArm { .. } => {
@@ -318,18 +361,15 @@ impl<'db> CtfeMachine<'db> {
         }
     }
 
-    fn run_frame(
-        &mut self,
-        frame_idx: usize,
-        origin: SemOrigin<'db>,
-    ) -> Result<CtfeValue<'db>, CtfeError<'db>> {
+    fn run_frame(&mut self, frame_idx: usize) -> Result<CtfeValue<'db>, CtfeError<'db>> {
         loop {
             let block = self.frames[frame_idx].body.blocks[self.frames[frame_idx].current].clone();
             for stmt in block.stmts {
-                self.bump(origin)?;
-                self.exec_stmt(frame_idx, stmt, origin)?;
+                self.bump(stmt.origin)?;
+                self.exec_stmt(frame_idx, stmt)?;
             }
-            self.bump(origin)?;
+            let term_origin = block.terminator.origin;
+            self.bump(term_origin)?;
             match block.terminator.kind {
                 STerminatorKind::Goto(bb) => self.frames[frame_idx].current = bb.index(),
                 STerminatorKind::Branch {
@@ -337,8 +377,8 @@ impl<'db> CtfeMachine<'db> {
                     then_bb,
                     else_bb,
                 } => {
-                    let cond = self.load_value(frame_idx, cond, origin)?;
-                    let cond = self.expect_bool(cond, origin)?;
+                    let cond = self.load_value(frame_idx, cond, term_origin)?;
+                    let cond = self.expect_bool(cond, term_origin)?;
                     self.frames[frame_idx].current = if cond {
                         then_bb.index()
                     } else {
@@ -351,27 +391,25 @@ impl<'db> CtfeMachine<'db> {
                     default,
                     ..
                 } => {
-                    let value = self.load_value(frame_idx, value, origin)?;
-                    let tag = self.load_enum_variant(value, origin)?;
+                    let value = self.load_value(frame_idx, value, term_origin)?;
+                    let tag = self.load_enum_variant(value, term_origin)?;
                     self.frames[frame_idx].current = cases
                         .iter()
                         .find(|(variant, _)| *variant == tag)
                         .map_or_else(|| default.map_or(0, |bb| bb.index()), |(_, bb)| bb.index());
                 }
                 STerminatorKind::Return(Some(value)) => {
-                    return self.read_slot(frame_idx, value, origin);
+                    return self.read_slot(frame_idx, value, term_origin);
                 }
-                STerminatorKind::Return(None) => return Ok(CtfeValue::Value(unit_const(self.db))),
+                STerminatorKind::Return(None) => {
+                    return Ok(CtfeValue::concrete(unit_const(self.db)));
+                }
             }
         }
     }
 
-    fn exec_stmt(
-        &mut self,
-        frame_idx: usize,
-        stmt: SStmt<'db>,
-        origin: SemOrigin<'db>,
-    ) -> Result<(), CtfeError<'db>> {
+    fn exec_stmt(&mut self, frame_idx: usize, stmt: SStmt<'db>) -> Result<(), CtfeError<'db>> {
+        let origin = stmt.origin;
         match stmt.kind {
             SStmtKind::Assign { dst, expr } => {
                 let ty = self.frames[frame_idx].body.locals[dst.index()].ty;
@@ -399,12 +437,13 @@ impl<'db> CtfeMachine<'db> {
         self.bump(origin)?;
         match expr {
             SExpr::Use(value) => self.read_slot(frame_idx, value, origin),
-            SExpr::Const(SConst::Value(value)) => Ok(CtfeValue::Value(value)),
+            SExpr::Const(SConst::Value(value)) => Ok(CtfeValue::concrete(value)),
             SExpr::Const(SConst::Ref(cref)) => eval_const_ref(self.db, cref)
-                .map(CtfeValue::Value)
-                .map_err(|_| CtfeError::CalleeError {
+                .map(CtfeValue::concrete)
+                .map_err(|err| CtfeError::CalleeError {
                     origin: cref.origin(self.db),
                     callee: SemanticInstance::new(self.db, cref.instance(self.db)),
+                    source: Box::new(err),
                 }),
             SExpr::Unary { op, value } => {
                 let value = self.load_value(frame_idx, value, origin)?;
@@ -421,17 +460,21 @@ impl<'db> CtfeMachine<'db> {
             }
             SExpr::AggregateMake { fields, .. } => {
                 let fields = self.eval_value_args(frame_idx, &fields, origin)?;
-                Ok(CtfeValue::Value(self.make_aggregate(result_ty, fields)))
+                Ok(self.make_aggregate_value(result_ty, fields))
             }
             SExpr::EnumMake {
                 variant, fields, ..
             } => {
                 let fields = self.eval_value_args(frame_idx, &fields, origin)?;
-                Ok(CtfeValue::Value(enum_const(
+                Ok(CtfeValue::concrete(enum_const(
                     self.db,
                     result_ty,
                     variant,
-                    fields.into_boxed_slice(),
+                    fields
+                        .into_iter()
+                        .map(|field| field.value)
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
                 )))
             }
             SExpr::Field { base, field } => {
@@ -466,7 +509,7 @@ impl<'db> CtfeMachine<'db> {
             SExpr::GetEnumTag { value } => {
                 let value = self.load_value(frame_idx, value, origin)?;
                 let variant = self.load_enum_variant(value, origin)?;
-                Ok(CtfeValue::Value(int_const(
+                Ok(CtfeValue::concrete(int_const(
                     self.db,
                     result_ty,
                     BigInt::from(variant.0),
@@ -475,7 +518,7 @@ impl<'db> CtfeMachine<'db> {
             SExpr::IsEnumVariant { value, variant } => {
                 let value = self.load_value(frame_idx, value, origin)?;
                 let actual = self.load_enum_variant(value, origin)?;
-                Ok(CtfeValue::Value(bool_const(self.db, actual == variant)))
+                Ok(CtfeValue::concrete(bool_const(self.db, actual == variant)))
             }
             SExpr::ExtractEnumField {
                 value,
@@ -502,11 +545,15 @@ impl<'db> CtfeMachine<'db> {
                 if let Some(value) =
                     self.try_eval_primitive_call(frame_idx, instance, result_ty, &args, origin)?
                 {
-                    return Ok(CtfeValue::Value(value));
+                    return Ok(CtfeValue::concrete(value));
                 }
                 if let BodyOwner::Func(func) = instance.key(self.db).owner(self.db)
                     && func.is_extern(self.db)
                 {
+                    if !func.is_const(self.db) {
+                        return Err(CtfeError::NonConstCall { origin });
+                    }
+                    let deferred_origin = self.first_deferred_origin(&args).unwrap_or(origin);
                     let value_args = self.materialize_args(args, origin)?;
                     return match self.eval_extern_const_fn(
                         instance,
@@ -515,8 +562,8 @@ impl<'db> CtfeMachine<'db> {
                         &value_args,
                         origin,
                     ) {
-                        Ok(value) => Ok(CtfeValue::Value(value)),
-                        Err(CtfeError::NotConstEvaluable { .. }) => Ok(CtfeValue::Value(
+                        Ok(value) => Ok(CtfeValue::concrete(value)),
+                        Err(CtfeError::NotConstEvaluable { .. }) => Ok(CtfeValue::deferred(
                             self.abstract_const_call(
                                 ConstExpr::ExternConstFnCall {
                                     func,
@@ -538,20 +585,26 @@ impl<'db> CtfeMachine<'db> {
                                 },
                                 result_ty,
                             ),
+                            deferred_origin,
                         )),
                         Err(err) => Err(err),
                     };
                 }
+                if let BodyOwner::Func(func) = instance.key(self.db).owner(self.db)
+                    && !func.is_const(self.db)
+                {
+                    return Err(CtfeError::NonConstCall { origin });
+                }
                 match self.eval_instance(instance, args.clone(), origin) {
                     Ok(value) => Ok(value),
-                    Err(CtfeError::NotConstEvaluable { .. })
-                        if matches!(instance.key(self.db).owner(self.db), BodyOwner::Func(_)) =>
+                    Err(CtfeError::NotConstEvaluable { .. }) if matches!(instance.key(self.db).owner(self.db), BodyOwner::Func(func) if func.is_const(self.db)) =>
                     {
                         let BodyOwner::Func(func) = instance.key(self.db).owner(self.db) else {
                             unreachable!();
                         };
+                        let deferred_origin = self.first_deferred_origin(&args).unwrap_or(origin);
                         let value_args = self.materialize_args(args, origin)?;
-                        Ok(CtfeValue::Value(
+                        Ok(CtfeValue::deferred(
                             self.abstract_const_call(
                                 ConstExpr::UserConstFnCall {
                                     func,
@@ -573,6 +626,7 @@ impl<'db> CtfeMachine<'db> {
                                 },
                                 result_ty,
                             ),
+                            deferred_origin,
                         ))
                     }
                     Err(err) => Err(match err {
@@ -582,6 +636,7 @@ impl<'db> CtfeMachine<'db> {
                         _ => CtfeError::CalleeError {
                             origin,
                             callee: instance,
+                            source: Box::new(err),
                         },
                     }),
                 }
@@ -619,8 +674,13 @@ impl<'db> CtfeMachine<'db> {
                 let [value] = value_args.as_slice() else {
                     return Ok(None);
                 };
-                let CtfeValue::Value(value) =
-                    self.eval_unary(frame_idx, result_ty, op, *value, origin)?
+                let CtfeValue::Value(value) = self.eval_unary(
+                    frame_idx,
+                    result_ty,
+                    op,
+                    CtfeConstValue::concrete(*value),
+                    origin,
+                )?
                 else {
                     return Err(CtfeError::InvalidBorrow { origin });
                 };
@@ -630,15 +690,21 @@ impl<'db> CtfeMachine<'db> {
                 let [lhs, rhs] = value_args.as_slice() else {
                     return Ok(None);
                 };
-                let CtfeValue::Value(value) =
-                    self.eval_binary(frame_idx, result_ty, op, *lhs, *rhs, origin)?
+                let CtfeValue::Value(value) = self.eval_binary(
+                    frame_idx,
+                    result_ty,
+                    op,
+                    CtfeConstValue::concrete(*lhs),
+                    CtfeConstValue::concrete(*rhs),
+                    origin,
+                )?
                 else {
                     return Err(CtfeError::InvalidBorrow { origin });
                 };
                 value
             }
         };
-        Ok(Some(value))
+        Ok(Some(value.value))
     }
 
     fn primitive_call_kind(
@@ -835,10 +901,17 @@ impl<'db> CtfeMachine<'db> {
     ) -> Result<Vec<SemConstId<'db>>, CtfeError<'db>> {
         args.into_iter()
             .map(|arg| match arg {
-                CtfeValue::Value(value) => Ok(value),
+                CtfeValue::Value(value) => Ok(value.value),
                 CtfeValue::Ref(r#ref) => self.load_ref(&r#ref, origin),
             })
             .collect()
+    }
+
+    fn first_deferred_origin(&self, args: &[CtfeValue<'db>]) -> Option<SemOrigin<'db>> {
+        args.iter().find_map(|arg| match arg {
+            CtfeValue::Value(value) => value.deferred_origin,
+            CtfeValue::Ref(_) => None,
+        })
     }
 
     fn eval_extern_const_fn(
@@ -963,7 +1036,7 @@ impl<'db> CtfeMachine<'db> {
         frame_idx: usize,
         args: &[SLocalId],
         origin: SemOrigin<'db>,
-    ) -> Result<Vec<SemConstId<'db>>, CtfeError<'db>> {
+    ) -> Result<Vec<CtfeConstValue<'db>>, CtfeError<'db>> {
         args.iter()
             .map(|arg| {
                 let CtfeValue::Value(value) = self.read_slot(frame_idx, *arg, origin)? else {
@@ -991,10 +1064,10 @@ impl<'db> CtfeMachine<'db> {
         frame_idx: usize,
         local: SLocalId,
         origin: SemOrigin<'db>,
-    ) -> Result<SemConstId<'db>, CtfeError<'db>> {
+    ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
         match self.read_slot(frame_idx, local, origin)? {
             CtfeValue::Value(value) => Ok(value),
-            CtfeValue::Ref(r#ref) => self.load_ref(&r#ref, origin),
+            CtfeValue::Ref(r#ref) => self.load_ref_value(&r#ref, origin),
         }
     }
 
@@ -1033,96 +1106,114 @@ impl<'db> CtfeMachine<'db> {
         r#ref: &CtfeRef,
         origin: SemOrigin<'db>,
     ) -> Result<SemConstId<'db>, CtfeError<'db>> {
+        Ok(self.load_ref_value(r#ref, origin)?.value)
+    }
+
+    fn load_ref_value(
+        &self,
+        r#ref: &CtfeRef,
+        origin: SemOrigin<'db>,
+    ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
         let root = match self.frames[r#ref.frame].locals.get(r#ref.root.index()) {
-            Some(CtfeSlot::Init(CtfeValue::Value(value))) => *value,
+            Some(CtfeSlot::Init(CtfeValue::Value(value))) => value.clone(),
             Some(CtfeSlot::Init(CtfeValue::Ref(_))) | Some(CtfeSlot::Uninit) | None => {
                 return Err(CtfeError::InvalidBorrow { origin });
             }
         };
-        project_const(self.db, root, &r#ref.path, origin)
+        self.project_value(root, &r#ref.path, origin)
     }
 
     fn store_place(
         &mut self,
         place: ResolvedPlace,
-        value: SemConstId<'db>,
+        value: CtfeConstValue<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<(), CtfeError<'db>> {
         let root = match self.frames[place.frame].locals.get(place.root.index()) {
-            Some(CtfeSlot::Init(CtfeValue::Value(value))) => *value,
+            Some(CtfeSlot::Init(CtfeValue::Value(value))) => value.clone(),
             _ => return Err(CtfeError::InvalidBorrow { origin }),
         };
-        let updated = store_const(self.db, root, &place.path, value, origin)?;
-        self.frames[place.frame].locals[place.root.index()] =
-            CtfeSlot::Init(CtfeValue::Value(updated));
+        let updated = store_const(self.db, root.value, &place.path, value.value, origin)?;
+        self.frames[place.frame].locals[place.root.index()] = CtfeSlot::Init(CtfeValue::Value(
+            self.value_with_origin(updated, value.deferred_origin.or(root.deferred_origin)),
+        ));
         Ok(())
     }
 
     fn project_field(
         &self,
-        value: SemConstId<'db>,
+        value: CtfeConstValue<'db>,
         field: FieldIndex,
         origin: SemOrigin<'db>,
-    ) -> Result<SemConstId<'db>, CtfeError<'db>> {
-        project_const(self.db, value, &[CtfePathElem::Field(field)], origin)
+    ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
+        self.project_value(value, &[CtfePathElem::Field(field)], origin)
     }
 
     fn project_index(
         &self,
-        value: SemConstId<'db>,
+        value: CtfeConstValue<'db>,
         index: usize,
         origin: SemOrigin<'db>,
-    ) -> Result<SemConstId<'db>, CtfeError<'db>> {
-        project_const(self.db, value, &[CtfePathElem::Index(index)], origin)
+    ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
+        self.project_value(value, &[CtfePathElem::Index(index)], origin)
     }
 
     fn enum_extract(
         &self,
-        value: SemConstId<'db>,
+        value: CtfeConstValue<'db>,
         variant: VariantIndex,
         field: FieldIndex,
         origin: SemOrigin<'db>,
-    ) -> Result<SemConstId<'db>, CtfeError<'db>> {
+    ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
         let SemConstValue::Enum {
             variant: actual,
             fields,
             ..
-        } = value.value(self.db)
+        } = value.value.value(self.db)
         else {
-            return Err(CtfeError::VariantMismatch { origin });
+            return Err(CtfeError::VariantMismatch {
+                origin: value.error_origin(origin),
+            });
         };
         if actual != variant {
-            return Err(CtfeError::VariantMismatch { origin });
+            return Err(CtfeError::VariantMismatch {
+                origin: value.error_origin(origin),
+            });
         }
         fields
             .get(field.0 as usize)
             .copied()
-            .ok_or(CtfeError::OutOfBounds { origin })
+            .map(CtfeConstValue::concrete)
+            .ok_or(CtfeError::OutOfBounds {
+                origin: value.error_origin(origin),
+            })
     }
 
     fn load_enum_variant(
         &self,
-        value: SemConstId<'db>,
+        value: CtfeConstValue<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<VariantIndex, CtfeError<'db>> {
-        let SemConstValue::Enum { variant, .. } = value.value(self.db) else {
-            return Err(CtfeError::VariantMismatch { origin });
+        let SemConstValue::Enum { variant, .. } = value.value.value(self.db) else {
+            return Err(CtfeError::VariantMismatch {
+                origin: value.error_origin(origin),
+            });
         };
         Ok(variant)
     }
 
     fn expect_bool(
         &self,
-        value: SemConstId<'db>,
+        value: CtfeConstValue<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<bool, CtfeError<'db>> {
         let SemConstValue::Scalar {
             value: SemConstScalar::Bool(value),
             ..
-        } = value.value(self.db)
+        } = value.value.value(self.db)
         else {
             return Err(CtfeError::InvalidOperation {
-                origin,
+                origin: value.error_origin(origin),
                 message: "expected bool".into(),
             });
         };
@@ -1132,10 +1223,10 @@ impl<'db> CtfeMachine<'db> {
     fn expect_int(
         &self,
         frame_idx: usize,
-        value: SemConstId<'db>,
+        value: CtfeConstValue<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<BigInt, CtfeError<'db>> {
-        match value.value(self.db) {
+        match value.value.value(self.db) {
             SemConstValue::Scalar {
                 value: SemConstScalar::Int { value },
                 ..
@@ -1143,8 +1234,8 @@ impl<'db> CtfeMachine<'db> {
             SemConstValue::TypeLevel { ty, const_ty } => {
                 let TyData::ConstTy(const_ty) = const_ty.data(self.db) else {
                     return Err(CtfeError::InvalidOperation {
-                        origin,
-                        message: format!("expected int, got {:?}", value.value(self.db)),
+                        origin: value.error_origin(origin),
+                        message: format!("expected int, got {:?}", value.value.value(self.db)),
                     });
                 };
                 let mut const_ty = const_ty.evaluate(self.db, Some(ty));
@@ -1168,14 +1259,14 @@ impl<'db> CtfeMachine<'db> {
                     const_ty.data(self.db)
                 else {
                     return Err(CtfeError::InvalidOperation {
-                        origin,
+                        origin: value.error_origin(origin),
                         message: "expected int".into(),
                     });
                 };
                 Ok(BigInt::from(int_id.data(self.db).clone()))
             }
             _ => Err(CtfeError::InvalidOperation {
-                origin,
+                origin: value.error_origin(origin),
                 message: "expected int".into(),
             }),
         }
@@ -1184,11 +1275,14 @@ impl<'db> CtfeMachine<'db> {
     fn index_from_value(
         &self,
         frame_idx: usize,
-        value: SemConstId<'db>,
+        value: CtfeConstValue<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<usize, CtfeError<'db>> {
+        let error_origin = value.error_origin(origin);
         let index = self.expect_int(frame_idx, value, origin)?;
-        index.to_usize().ok_or(CtfeError::OutOfBounds { origin })
+        index.to_usize().ok_or(CtfeError::OutOfBounds {
+            origin: error_origin,
+        })
     }
 
     fn eval_unary(
@@ -1196,7 +1290,7 @@ impl<'db> CtfeMachine<'db> {
         frame_idx: usize,
         result_ty: TyId<'db>,
         op: UnOp,
-        value: SemConstId<'db>,
+        value: CtfeConstValue<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<CtfeValue<'db>, CtfeError<'db>> {
         match op {
@@ -1217,15 +1311,15 @@ impl<'db> CtfeMachine<'db> {
                     }
                     ArithmeticMode::Unchecked => -value,
                 };
-                Ok(CtfeValue::Value(int_const(self.db, result_ty, value)))
+                Ok(CtfeValue::concrete(int_const(self.db, result_ty, value)))
             }
-            UnOp::Not => Ok(CtfeValue::Value(bool_const(
+            UnOp::Not => Ok(CtfeValue::concrete(bool_const(
                 self.db,
                 !self.expect_bool(value, origin)?,
             ))),
             UnOp::BitNot => {
                 let int = self.expect_int(frame_idx, value, origin)?;
-                Ok(CtfeValue::Value(int_const(
+                Ok(CtfeValue::concrete(int_const(
                     self.db,
                     result_ty,
                     -int - BigInt::one(),
@@ -1243,8 +1337,8 @@ impl<'db> CtfeMachine<'db> {
         frame_idx: usize,
         result_ty: TyId<'db>,
         op: BinOp,
-        lhs: SemConstId<'db>,
-        rhs: SemConstId<'db>,
+        lhs: CtfeConstValue<'db>,
+        rhs: CtfeConstValue<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<CtfeValue<'db>, CtfeError<'db>> {
         match op {
@@ -1256,7 +1350,7 @@ impl<'db> CtfeMachine<'db> {
                     LogicalBinOp::And => lhs && rhs,
                     LogicalBinOp::Or => lhs || rhs,
                 };
-                Ok(CtfeValue::Value(bool_const(self.db, value)))
+                Ok(CtfeValue::concrete(bool_const(self.db, value)))
             }
             BinOp::Index => Err(CtfeError::InvalidOperation {
                 origin,
@@ -1264,14 +1358,20 @@ impl<'db> CtfeMachine<'db> {
             }),
             BinOp::Arith(ArithBinOp::Range) => Err(CtfeError::NotConstEvaluable { origin }),
             BinOp::Arith(arith) => {
-                if (matches!(lhs.value(self.db), SemConstValue::TypeLevel { .. })
-                    || matches!(rhs.value(self.db), SemConstValue::TypeLevel { .. }))
-                    && let Some(value) = self.eval_type_level_binary(result_ty, arith, lhs, rhs)
+                if (matches!(lhs.value.value(self.db), SemConstValue::TypeLevel { .. })
+                    || matches!(rhs.value.value(self.db), SemConstValue::TypeLevel { .. }))
+                    && let Some(value) = self.eval_type_level_binary(
+                        result_ty,
+                        arith,
+                        lhs.clone(),
+                        rhs.clone(),
+                        origin,
+                    )
                 {
                     return Ok(CtfeValue::Value(value));
                 }
                 if matches!(
-                    (lhs.value(self.db), rhs.value(self.db)),
+                    (lhs.value.value(self.db), rhs.value.value(self.db)),
                     (
                         SemConstValue::Scalar {
                             value: SemConstScalar::Bool(_),
@@ -1284,15 +1384,15 @@ impl<'db> CtfeMachine<'db> {
                     )
                 ) {
                     return match arith {
-                        ArithBinOp::BitAnd => Ok(CtfeValue::Value(bool_const(
+                        ArithBinOp::BitAnd => Ok(CtfeValue::concrete(bool_const(
                             self.db,
                             self.expect_bool(lhs, origin)? & self.expect_bool(rhs, origin)?,
                         ))),
-                        ArithBinOp::BitOr => Ok(CtfeValue::Value(bool_const(
+                        ArithBinOp::BitOr => Ok(CtfeValue::concrete(bool_const(
                             self.db,
                             self.expect_bool(lhs, origin)? | self.expect_bool(rhs, origin)?,
                         ))),
-                        ArithBinOp::BitXor => Ok(CtfeValue::Value(bool_const(
+                        ArithBinOp::BitXor => Ok(CtfeValue::concrete(bool_const(
                             self.db,
                             self.expect_bool(lhs, origin)? ^ self.expect_bool(rhs, origin)?,
                         ))),
@@ -1412,7 +1512,7 @@ impl<'db> CtfeMachine<'db> {
                     }
                     ArithBinOp::Range => unreachable!(),
                 };
-                Ok(CtfeValue::Value(int_const(self.db, result_ty, value)))
+                Ok(CtfeValue::concrete(int_const(self.db, result_ty, value)))
             }
         }
     }
@@ -1421,13 +1521,13 @@ impl<'db> CtfeMachine<'db> {
         &self,
         frame_idx: usize,
         op: CompBinOp,
-        lhs: SemConstId<'db>,
-        rhs: SemConstId<'db>,
+        lhs: CtfeConstValue<'db>,
+        rhs: CtfeConstValue<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<CtfeValue<'db>, CtfeError<'db>> {
         let result = match op {
-            CompBinOp::Eq => lhs == rhs,
-            CompBinOp::NotEq => lhs != rhs,
+            CompBinOp::Eq => lhs.value == rhs.value,
+            CompBinOp::NotEq => lhs.value != rhs.value,
             CompBinOp::Lt => {
                 self.expect_int(frame_idx, lhs, origin)?
                     < self.expect_int(frame_idx, rhs, origin)?
@@ -1445,22 +1545,35 @@ impl<'db> CtfeMachine<'db> {
                     >= self.expect_int(frame_idx, rhs, origin)?
             }
         };
-        Ok(CtfeValue::Value(bool_const(self.db, result)))
+        Ok(CtfeValue::concrete(bool_const(self.db, result)))
     }
 
     fn eval_type_level_binary(
         &self,
         result_ty: TyId<'db>,
         op: ArithBinOp,
-        lhs: SemConstId<'db>,
-        rhs: SemConstId<'db>,
-    ) -> Option<SemConstId<'db>> {
-        let lhs = TyId::const_ty(self.db, const_ty_from_sem_const(self.db, lhs));
-        let rhs = TyId::const_ty(self.db, const_ty_from_sem_const(self.db, rhs));
-        let expr = ConstExprId::new(self.db, ConstExpr::ArithBinOp { op, lhs, rhs });
+        lhs: CtfeConstValue<'db>,
+        rhs: CtfeConstValue<'db>,
+        origin: SemOrigin<'db>,
+    ) -> Option<CtfeConstValue<'db>> {
+        let lhs_ty = TyId::const_ty(self.db, const_ty_from_sem_const(self.db, lhs.value));
+        let rhs_ty = TyId::const_ty(self.db, const_ty_from_sem_const(self.db, rhs.value));
+        let expr = ConstExprId::new(
+            self.db,
+            ConstExpr::ArithBinOp {
+                op,
+                lhs: lhs_ty,
+                rhs: rhs_ty,
+            },
+        );
         let const_ty = ConstTyId::new(self.db, ConstTyData::Abstract(expr, result_ty))
             .evaluate(self.db, Some(result_ty));
-        sem_const_from_ty(self.db, TyId::const_ty(self.db, const_ty))
+        sem_const_from_ty(self.db, TyId::const_ty(self.db, const_ty)).map(|value| {
+            self.value_with_origin(
+                value,
+                lhs.deferred_origin.or(rhs.deferred_origin).or(Some(origin)),
+            )
+        })
     }
 
     fn bitwise(
@@ -1495,14 +1608,14 @@ impl<'db> CtfeMachine<'db> {
     fn eval_cast(
         &self,
         result_ty: TyId<'db>,
-        value: SemConstId<'db>,
+        value: CtfeConstValue<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<CtfeValue<'db>, CtfeError<'db>> {
-        match value.value(self.db) {
+        match value.value.value(self.db) {
             SemConstValue::Scalar {
                 value: SemConstScalar::Bool(value),
                 ..
-            } if int_ty_shape(self.db, result_ty).is_some() => Ok(CtfeValue::Value(int_const(
+            } if int_ty_shape(self.db, result_ty).is_some() => Ok(CtfeValue::concrete(int_const(
                 self.db,
                 result_ty,
                 if value { BigInt::one() } else { BigInt::zero() },
@@ -1511,12 +1624,12 @@ impl<'db> CtfeMachine<'db> {
                 value: SemConstScalar::Int { value },
                 ..
             } if result_ty == TyId::bool(self.db) => {
-                Ok(CtfeValue::Value(bool_const(self.db, !value.is_zero())))
+                Ok(CtfeValue::concrete(bool_const(self.db, !value.is_zero())))
             }
             SemConstValue::Scalar {
                 value: SemConstScalar::Int { value },
                 ..
-            } if int_ty_shape(self.db, result_ty).is_some() => Ok(CtfeValue::Value(int_const(
+            } if int_ty_shape(self.db, result_ty).is_some() => Ok(CtfeValue::concrete(int_const(
                 self.db,
                 result_ty,
                 value.clone(),
@@ -1524,29 +1637,79 @@ impl<'db> CtfeMachine<'db> {
             SemConstValue::Scalar {
                 value: SemConstScalar::Bytes(bytes),
                 ..
-            } => Ok(CtfeValue::Value(bytes_const(
+            } => Ok(CtfeValue::concrete(bytes_const(
                 self.db,
                 result_ty,
                 bytes.clone(),
             ))),
             _ => Err(CtfeError::InvalidOperation {
-                origin,
+                origin: value.error_origin(origin),
                 message: "unsupported cast in CTFE".into(),
             }),
         }
     }
 
-    fn make_aggregate(
+    fn make_aggregate_value(
         &self,
         result_ty: TyId<'db>,
-        fields: Vec<SemConstId<'db>>,
-    ) -> SemConstId<'db> {
-        if result_ty.is_tuple(self.db) {
-            tuple_const(self.db, result_ty, fields.into_boxed_slice())
+        fields: Vec<CtfeConstValue<'db>>,
+    ) -> CtfeValue<'db> {
+        let deferred_origin = fields.iter().find_map(|field| field.deferred_origin);
+        let fields = fields
+            .into_iter()
+            .map(|field| field.value)
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let value = if result_ty.is_tuple(self.db) {
+            tuple_const(self.db, result_ty, fields)
         } else if result_ty.is_array(self.db) {
-            array_const(self.db, result_ty, fields.into_boxed_slice())
+            array_const(self.db, result_ty, fields)
         } else {
-            struct_const(self.db, result_ty, fields.into_boxed_slice())
+            struct_const(self.db, result_ty, fields)
+        };
+        CtfeValue::Value(self.value_with_origin(value, deferred_origin))
+    }
+
+    fn project_value(
+        &self,
+        value: CtfeConstValue<'db>,
+        path: &[CtfePathElem],
+        origin: SemOrigin<'db>,
+    ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
+        if matches!(value.value.value(self.db), SemConstValue::TypeLevel { .. }) {
+            return Err(CtfeError::InvalidOperation {
+                origin: value.error_origin(origin),
+                message: "invalid const projection".into(),
+            });
+        }
+        project_const(self.db, value.value, path, origin)
+            .map(|projected| self.value_with_origin(projected, value.deferred_origin))
+    }
+
+    fn value_with_origin(
+        &self,
+        value: SemConstId<'db>,
+        deferred_origin: Option<SemOrigin<'db>>,
+    ) -> CtfeConstValue<'db> {
+        CtfeConstValue::with_deferred_origin(
+            value,
+            self.sem_const_contains_type_level(value)
+                .then_some(())
+                .and(deferred_origin),
+        )
+    }
+
+    fn sem_const_contains_type_level(&self, value: SemConstId<'db>) -> bool {
+        match value.value(self.db) {
+            SemConstValue::TypeLevel { .. } => true,
+            SemConstValue::Tuple { elems, .. }
+            | SemConstValue::Struct { fields: elems, .. }
+            | SemConstValue::Array { elems, .. }
+            | SemConstValue::Enum { fields: elems, .. } => elems
+                .iter()
+                .copied()
+                .any(|elem| self.sem_const_contains_type_level(elem)),
+            SemConstValue::Unit | SemConstValue::Scalar { .. } => false,
         }
     }
 

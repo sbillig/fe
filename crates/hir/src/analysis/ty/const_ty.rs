@@ -28,7 +28,7 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{PathRes, resolve_path},
     semantic::{
-        CtfeError, SemConstId, SemConstValue, VariantIndex, eval_body_owner_const,
+        CtfeError, SemConstId, SemConstValue, SemOrigin, VariantIndex, eval_body_owner_const,
         eval_body_owner_const_with_args, int_ty_shape, normalize_int_to_shape, sem_const_from_ty,
     },
     ty::trait_resolution::PredicateListId,
@@ -749,14 +749,24 @@ pub fn evaluate_type_level_const_expr<'db>(
                     .copied()
                     .map(|arg| sem_const_from_ty(db, arg))
                     .collect::<Option<Vec<_>>>()?;
-                eval_body_owner_const_with_args(
+                match eval_body_owner_const_with_args(
                     db,
                     crate::analysis::ty::ty_check::BodyOwner::Func(*func),
                     generic_args.clone(),
                     args,
-                )
-                .ok()
-                .map(|value| const_ty_from_sem_const(db, value).evaluate(db, Some(expected_ty)))
+                ) {
+                    Ok(value) => {
+                        Some(const_ty_from_sem_const(db, value).evaluate(db, Some(expected_ty)))
+                    }
+                    Err(err) => Some(ConstTyId::invalid(
+                        db,
+                        invalid_cause_from_ctfe_error(
+                            db,
+                            crate::analysis::ty::ty_check::BodyOwner::Func(*func),
+                            err,
+                        ),
+                    )),
+                }
             }
             ConstExpr::TraitConst(assoc) => const_ty_from_assoc_const_use(db, *assoc)
                 .map(|const_ty| const_ty.evaluate(db, Some(expected_ty))),
@@ -1142,14 +1152,14 @@ pub(crate) fn validate_unevaluated_const_ty<'db>(
     };
     let const_ty = const_ty.with_ty(db, expected_ty);
 
-    let diags = match const_def {
+    let (diags, typed_body) = match const_def {
         Some(const_def) => {
             let result = check_const_body(db, *const_def);
-            result.0.clone()
+            (result.0.clone(), result.1.clone())
         }
         None => {
             let result = check_anon_const_body(db, *body, check_ty);
-            result.0.clone()
+            (result.0.clone(), result.1.clone())
         }
     };
 
@@ -1166,6 +1176,13 @@ pub(crate) fn validate_unevaluated_const_ty<'db>(
     }
 
     if !diags.is_empty() {
+        if let Some(cause) = typed_body
+            .body()
+            .and_then(|body| typed_body.expr_ty(db, body.expr(db)).invalid_cause(db))
+            .or_else(|| typed_body.result_ty().invalid_cause(db))
+        {
+            return Err(cause);
+        }
         return Err(InvalidCause::InvalidConstTyExpr { body: *body });
     }
 
@@ -1208,11 +1225,7 @@ pub(crate) fn evaluate_const_ty<'db>(
         && let Some(resolved) = const_ty_from_assoc_const_use(db, *assoc)
     {
         let evaluated = resolved.evaluate(db, expected_ty.or(Some(*ty)));
-        if matches!(
-            evaluated.ty(db).invalid_cause(db),
-            Some(InvalidCause::ConstEvalUnsupported { .. })
-        ) && expected_ty.is_some()
-        {
+        if evaluated.ty(db).has_invalid(db) {
             return const_ty;
         }
         return evaluated;
@@ -1664,12 +1677,8 @@ pub(crate) fn evaluate_const_ty<'db>(
                         TraitSolveCx::new(db, body.scope()).with_assumptions(assumptions);
                     if let Some(const_ty) = const_ty_from_trait_const(db, solve_cx, inst, name) {
                         let evaluated = const_ty.evaluate(db, expected_ty);
-                        if matches!(
-                            evaluated.ty(db).invalid_cause(db),
-                            Some(InvalidCause::ConstEvalUnsupported { .. })
-                        ) && let Some(expected_ty) = expected_ty
-                        {
-                            return mk_abstract(expected_ty);
+                        if evaluated.ty(db).has_invalid(db) {
+                            return mk_abstract(expected_ty.unwrap_or_else(|| const_ty.ty(db)));
                         }
                         return evaluated;
                     }
@@ -1773,13 +1782,17 @@ pub(crate) fn evaluate_const_ty<'db>(
     {
         Ok(value) => value,
         Err(CtfeError::NotConstEvaluable { .. }) => validated.const_ty,
-        Err(_) => {
+        Err(err) => {
             return ConstTyId::invalid(
                 db,
-                InvalidCause::ConstEvalUnsupported {
-                    body,
-                    expr: body.expr(db),
-                },
+                invalid_cause_from_ctfe_error(
+                    db,
+                    super::ty_check::BodyOwner::AnonConstBody {
+                        body,
+                        expected: validated.expected_ty,
+                    },
+                    err,
+                ),
             );
         }
     };
@@ -1793,6 +1806,94 @@ pub(crate) fn evaluate_const_ty<'db>(
     ) {
         Ok(ty) => evaluated.swap_ty(db, ty),
         Err(cause) => evaluated.swap_ty(db, TyId::invalid(db, cause)),
+    }
+}
+
+pub(crate) fn invalid_cause_from_ctfe_error<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: crate::analysis::ty::ty_check::BodyOwner<'db>,
+    err: CtfeError<'db>,
+) -> InvalidCause<'db> {
+    let (owner, root_err, origin) = root_ctfe_error(db, owner, &err);
+    let Some(body) = owner.body(db) else {
+        return InvalidCause::Other;
+    };
+    let expr = origin_expr_for_const_eval_diag(db, body, origin);
+    match root_err {
+        CtfeError::DivisionByZero { .. } => InvalidCause::ConstEvalDivisionByZero { body, expr },
+        CtfeError::StepLimitExceeded { .. } => {
+            InvalidCause::ConstEvalStepLimitExceeded { body, expr }
+        }
+        CtfeError::RecursionLimitExceeded { .. } => {
+            InvalidCause::ConstEvalRecursionLimitExceeded { body, expr }
+        }
+        CtfeError::NonConstCall { .. } => InvalidCause::ConstEvalNonConstCall { body, expr },
+        CtfeError::NotConstEvaluable { .. }
+        | CtfeError::InvalidOperation { .. }
+        | CtfeError::InvalidBorrow { .. }
+        | CtfeError::InvalidProviderUse { .. }
+        | CtfeError::ArithmeticOverflow { .. }
+        | CtfeError::NegativeExponent { .. }
+        | CtfeError::OutOfBounds { .. }
+        | CtfeError::VariantMismatch { .. }
+        | CtfeError::UninitializedLocal { .. }
+        | CtfeError::CalleeError { .. } => InvalidCause::ConstEvalUnsupported { body, expr },
+    }
+}
+
+fn root_ctfe_error<'a, 'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: crate::analysis::ty::ty_check::BodyOwner<'db>,
+    err: &'a CtfeError<'db>,
+) -> (
+    crate::analysis::ty::ty_check::BodyOwner<'db>,
+    &'a CtfeError<'db>,
+    SemOrigin<'db>,
+) {
+    match err {
+        CtfeError::CalleeError { callee, source, .. } => {
+            root_ctfe_error(db, callee.key(db).owner(db), source)
+        }
+        CtfeError::NotConstEvaluable { origin }
+        | CtfeError::InvalidOperation { origin, .. }
+        | CtfeError::InvalidBorrow { origin }
+        | CtfeError::InvalidProviderUse { origin }
+        | CtfeError::NonConstCall { origin }
+        | CtfeError::DivisionByZero { origin }
+        | CtfeError::ArithmeticOverflow { origin }
+        | CtfeError::NegativeExponent { origin }
+        | CtfeError::OutOfBounds { origin }
+        | CtfeError::VariantMismatch { origin }
+        | CtfeError::UninitializedLocal { origin }
+        | CtfeError::StepLimitExceeded { origin }
+        | CtfeError::RecursionLimitExceeded { origin } => (owner, err, *origin),
+    }
+}
+
+fn origin_expr_for_const_eval_diag<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    origin: SemOrigin<'db>,
+) -> crate::hir_def::ExprId {
+    match origin {
+        SemOrigin::Expr(expr) => expr,
+        SemOrigin::Stmt(stmt) => {
+            stmt_primary_expr_for_const_eval_diag(db, body, stmt).unwrap_or_else(|| body.expr(db))
+        }
+        SemOrigin::Body(_) | SemOrigin::Synthetic => body.expr(db),
+    }
+}
+
+fn stmt_primary_expr_for_const_eval_diag<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    stmt: crate::hir_def::StmtId,
+) -> Option<crate::hir_def::ExprId> {
+    match stmt.data(db, body).clone().to_opt()? {
+        Stmt::Let(_, _, expr) | Stmt::Return(expr) => expr,
+        Stmt::Expr(expr) => Some(expr),
+        Stmt::For(_, expr, _, _) => Some(expr),
+        Stmt::While(_, _) | Stmt::Continue | Stmt::Break => None,
     }
 }
 
@@ -1959,10 +2060,7 @@ pub(crate) fn const_ty_or_abstract_from_assoc_const_use<'db>(
         return Some(make_abstract());
     };
     let evaluated = evaluated.evaluate(db, Some(expected_ty));
-    if matches!(
-        evaluated.ty(db).invalid_cause(db),
-        Some(InvalidCause::ConstEvalUnsupported { .. })
-    ) {
+    if evaluated.ty(db).has_invalid(db) {
         return Some(make_abstract());
     }
     Some(evaluated)
