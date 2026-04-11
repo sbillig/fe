@@ -34,10 +34,10 @@ use sonatina_ir::{
         cmp::{Eq, Gt, IsZero, Lt, Ne, Slt},
         control_flow::{Br, BrTable, Call, Jump, Return, Unreachable},
         data::{
-            Alloca, ConstIndex, ConstLoad, ConstProj, ConstRef, EnumAssertVariantRef, EnumExtract,
-            EnumGetTag, EnumIsVariant, EnumMake, EnumProj, EnumSetTag, EnumTag, EnumWriteVariant,
-            Mload, Mstore, ObjAlloc, ObjIndex, ObjInitConst, ObjLoad, ObjProj, ObjStore, SymAddr,
-            SymSize, SymbolRef,
+            Alloca, ConstIndex, ConstLoad, ConstProj, ConstRef, EnumAssertVariant,
+            EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant, EnumMake, EnumProj,
+            EnumSetTag, EnumTag, EnumWriteVariant, Mload, Mstore, ObjAlloc, ObjIndex, ObjInitConst,
+            ObjLoad, ObjProj, ObjStore, SymAddr, SymSize, SymbolRef,
         },
         evm::{
             EvmAddMod, EvmAddress, EvmBaseFee, EvmBlockHash, EvmCall, EvmCallValue,
@@ -685,7 +685,18 @@ struct FunctionLowerer<'ctx, 'db, 'a> {
     reachable_blocks: Vec<bool>,
     vars: FxHashMap<RLocalId, Variable>,
     slot_roots: FxHashMap<RLocalId, SlotRoot>,
+    pending_enum_proof: Option<PendingEnumProof<'db>>,
     overflow_revert_block: Option<BlockId>,
+}
+
+#[derive(Clone, Copy)]
+struct PendingEnumProof<'db> {
+    // Sonatina proves value-enum extracts on a specific SSA value, so when the
+    // runtime IR emits `EnumAssertVariant` as a standalone statement we must
+    // reuse that exact materialization for the immediately following extract.
+    local: RLocalId,
+    variant: VariantId<'db>,
+    value: ValueId,
 }
 
 impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
@@ -726,6 +737,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             reachable_blocks: Vec::new(),
             vars,
             slot_roots: FxHashMap::default(),
+            pending_enum_proof: None,
             overflow_revert_block: None,
         })
     }
@@ -763,6 +775,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     .wrap(err)
                 })?;
             }
+            self.pending_enum_proof = None;
             self.lower_terminator(&block.terminator).map_err(|err| {
                 self.with_body_context(
                     format!(
@@ -872,13 +885,29 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             RStmt::Assign { dst, expr } => {
                 let value = self.lower_expr(expr, Some(*dst))?;
                 self.assign_local(*dst, value)?;
+                self.pending_enum_proof = None;
+            }
+            RStmt::EnumAssertVariant { value, variant } => {
+                let materialized = self.local_value(*value)?;
+                self.fb.insert_inst_no_result(EnumAssertVariant::new(
+                    self.module.inst_set(),
+                    materialized,
+                    self.variant_ref(*variant)?,
+                ));
+                self.pending_enum_proof = Some(PendingEnumProof {
+                    local: *value,
+                    variant: *variant,
+                    value: materialized,
+                });
             }
             RStmt::Store { dst, src } => {
                 let src = self.local_value(*src)?;
                 self.store_to_place(dst, src)?;
+                self.pending_enum_proof = None;
             }
             RStmt::CopyInto { dst, src } => {
                 self.copy_into_place(dst, *src)?;
+                self.pending_enum_proof = None;
             }
             RStmt::EnumSetTag { root, variant } => {
                 let object = self.local_value(*root)?;
@@ -887,6 +916,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     object,
                     self.variant_ref(*variant)?,
                 ));
+                self.pending_enum_proof = None;
             }
             RStmt::EnumWriteVariant {
                 root,
@@ -904,6 +934,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     self.variant_ref(*variant)?,
                     values,
                 ));
+                self.pending_enum_proof = None;
             }
         }
         Ok(())
@@ -1096,7 +1127,13 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 variant,
                 field,
             } => {
-                let value = self.local_value(*value)?;
+                let value = self
+                    .pending_enum_proof
+                    .and_then(|proof| {
+                        (proof.local == *value && proof.variant == *variant).then_some(proof.value)
+                    })
+                    .map(Ok)
+                    .unwrap_or_else(|| self.local_value(*value))?;
                 let variant = self.variant_ref(*variant)?;
                 let field = self.index_value(field.0.into());
                 let dst = dst.ok_or_else(|| {

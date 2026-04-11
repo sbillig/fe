@@ -403,3 +403,60 @@ pub fn emit_test_ingot_sonatina(
     output.sort_tests();
     Ok(output)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::InputDb;
+    use driver::DriverDataBase;
+    use std::{fs, path::PathBuf};
+    use url::Url;
+
+    #[test]
+    fn result_map_chain_test_runtime_package_retains_value_enum_asserts() {
+        let mut db = DriverDataBase::default();
+        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../fe/tests/fixtures/fe_test/result_map_chain_infers_independently.fe");
+        let fixture_source = fs::read_to_string(&fixture_path)
+            .expect("result_map_chain_infers_independently fixture should be readable");
+        let file_url = Url::from_file_path(&fixture_path).expect("fixture path should be absolute");
+        db.workspace()
+            .touch(&mut db, file_url.clone(), Some(fixture_source));
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let package = build_test_runtime_package(&db, top_mod, None)
+            .expect("test runtime package should build");
+
+        let mut module = compile_runtime_package_sonatina(&db, &package, crate::EVM_LAYOUT)
+            .expect("test runtime package should lower to Sonatina IR");
+        let dumped = ModuleWriter::new(&module).dump_string();
+        assert!(
+            dumped.contains("func private %map_0"),
+            "expected map_0 helper in test runtime package:\n{dumped}"
+        );
+        assert!(
+            dumped.contains("func private %map_1"),
+            "expected map_1 helper in test runtime package:\n{dumped}"
+        );
+        assert!(
+            dumped.contains("func private %unwrap"),
+            "expected unwrap helper in test runtime package:\n{dumped}"
+        );
+        assert!(
+            dumped.contains("enum.assert_variant"),
+            "expected value enum proofs in test runtime package:\n{dumped}"
+        );
+
+        if let Err(err) = ensure_module_sonatina_ir_valid(&module) {
+            panic!("pre-opt test module should verify: {err}\n\n{dumped}");
+        }
+        run_sonatina_optimization_pipeline(&mut module, OptLevel::O0);
+        if let Err(err) = ensure_module_sonatina_ir_valid(&module) {
+            panic!("post-opt test module should verify: {err}\n\n{dumped}");
+        }
+        compile_all_runtime_objects(&module, false).expect("test runtime package should compile");
+    }
+}
