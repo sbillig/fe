@@ -679,7 +679,7 @@ pub enum RuntimeSyntheticSpec<'db> {
     ContractRuntimeRoot {
         contract: Contract<'db>,
         dispatch: Box<[DispatchArm<'db>]>,
-        default: DispatchDefault,
+        default: DispatchDefault<'db>,
     },
     CodeRegionRoot {
         symbol: String,
@@ -699,7 +699,7 @@ pub struct ContractInitAbiPlan<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct ContractRecvAbiPlan<'db> {
     pub contract: Contract<'db>,
-    pub selector: u32,
+    pub selector: Option<u32>,
     pub payable: bool,
     pub user_recv: RuntimeInstance<'db>,
     pub owner_effect_args: Box<[ContractEffectArgPlan<'db>]>,
@@ -789,8 +789,9 @@ pub struct DispatchArm<'db> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
-pub enum DispatchDefault {
+pub enum DispatchDefault<'db> {
     RevertEmpty,
+    Call { wrapper: RuntimeInstance<'db> },
 }
 
 #[salsa::interned]

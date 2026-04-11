@@ -3,8 +3,9 @@ use rustc_hash::FxHashSet;
 use crate::{
     db::MirDb,
     runtime::{
-        RExpr, RStmt, RTerminator, ResolvedCodeRegion, RuntimeCodeRegion, RuntimeFunctionOwner,
-        RuntimeObject, RuntimePackage, RuntimeProgramView, RuntimeSyntheticSpec,
+        DispatchDefault, RExpr, RStmt, RTerminator, ResolvedCodeRegion, RuntimeCodeRegion,
+        RuntimeFunctionOwner, RuntimeObject, RuntimePackage, RuntimeProgramView,
+        RuntimeSyntheticSpec,
         code_region::{code_region_runtime_entry, code_region_section_name, code_region_symbol},
     },
     verify::{VerifyError, verify_runtime_body},
@@ -129,23 +130,45 @@ fn verify_synthetic_function<'db>(
     match owner {
         RuntimeFunctionOwner::Semantic(_) => Ok(()),
         RuntimeFunctionOwner::Synthetic(spec) => match spec {
-            RuntimeSyntheticSpec::ContractRuntimeRoot { dispatch, .. } => {
+            RuntimeSyntheticSpec::ContractRuntimeRoot {
+                dispatch, default, ..
+            } => {
                 let Some(entry) = body.blocks.first() else {
                     return Err(VerifyError::InvalidReturnClass);
                 };
-                let RTerminator::SwitchScalar { cases, .. } = &entry.terminator else {
+                let RTerminator::SwitchScalar {
+                    cases,
+                    default: default_bb,
+                    ..
+                } = &entry.terminator
+                else {
                     return Err(VerifyError::InvalidReturnClass);
                 };
                 if cases.len() != dispatch.len() {
                     return Err(VerifyError::InvalidReturnClass);
                 }
-                for (_, block) in cases {
+                for ((_, block), arm) in cases.iter().zip(dispatch.iter()) {
                     let Some(target) = body.block(*block) else {
                         return Err(VerifyError::MissingRuntimeBlock(*block));
                     };
-                    if !matches!(target.terminator, RTerminator::TerminalCall { .. }) {
+                    let RTerminator::TerminalCall { callee, args } = &target.terminator else {
+                        return Err(VerifyError::InvalidReturnClass);
+                    };
+                    if *callee != arm.wrapper || !args.is_empty() {
                         return Err(VerifyError::InvalidReturnClass);
                     }
+                }
+
+                let Some(default_target) = body.block(*default_bb) else {
+                    return Err(VerifyError::MissingRuntimeBlock(*default_bb));
+                };
+                match (default, &default_target.terminator) {
+                    (DispatchDefault::RevertEmpty, RTerminator::Revert { .. }) => {}
+                    (
+                        DispatchDefault::Call { wrapper },
+                        RTerminator::TerminalCall { callee, args },
+                    ) if *callee == wrapper && args.is_empty() => {}
+                    _ => return Err(VerifyError::InvalidReturnClass),
                 }
                 Ok(())
             }

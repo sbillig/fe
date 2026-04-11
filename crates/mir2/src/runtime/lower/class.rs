@@ -52,7 +52,7 @@ use super::{
     },
     place::{
         address_space_from_provider, project_field_class, project_index_class,
-        resolved_address_space,
+        resolved_effect_arg_address_space,
     },
 };
 
@@ -1334,11 +1334,6 @@ pub(crate) fn expr_direct_class<'db>(
                     param_classes.push(class);
                 }
             }
-            for binding in owner_effect_bindings(db, semantic.key(db).owner(db)) {
-                if let Some(class) = owner_effect_arg_class(body, carriers, binding) {
-                    param_classes.push(class);
-                }
-            }
             runtime_return_class_for_key(
                 db,
                 RuntimeInstanceKey::new(
@@ -2174,19 +2169,6 @@ fn push_runtime_provider_binding<'db>(
     id
 }
 
-fn owner_effect_arg_class<'db>(
-    body: &NormalizedSemanticBody<'db>,
-    carriers: &[RuntimeCarrier<'db>],
-    binding: LocalBinding<'db>,
-) -> Option<RuntimeClass<'db>> {
-    let idx = body.locals.iter().position(|local| {
-        local
-            .source
-            .is_some_and(|source| same_owner_effect_binding(source, binding))
-    })?;
-    carrier_value_class(SLocalId::from_u32(idx as u32), carriers)
-}
-
 fn effect_arg_class<'db>(
     db: &'db dyn MirDb,
     body: &NormalizedSemanticBody<'db>,
@@ -2210,12 +2192,13 @@ fn effect_arg_class<'db>(
             ),
         };
     }
+    let effect_space = || resolved_effect_arg_address_space(db, body, arg);
     match arg.pass_mode {
         EffectPassMode::ByValue | EffectPassMode::Unknown => match arg.arg {
             NEffectArgValue::Place(_) => Some(provider_class_for_target_in_context(
                 db,
                 arg.target_ty,
-                resolved_address_space(arg.provider),
+                effect_space(),
                 env.scope,
                 env.assumptions,
             )),
@@ -2225,7 +2208,7 @@ fn effect_arg_class<'db>(
                 RuntimeCarrier::Erased => Some(provider_class_for_target_in_context(
                     db,
                     arg.target_ty,
-                    resolved_address_space(arg.provider),
+                    effect_space(),
                     env.scope,
                     env.assumptions,
                 )),
@@ -2236,7 +2219,7 @@ fn effect_arg_class<'db>(
                 return Some(provider_class_for_target_in_context(
                     db,
                     None,
-                    resolved_address_space(arg.provider),
+                    effect_space(),
                     env.scope,
                     env.assumptions,
                 ));
@@ -2244,10 +2227,7 @@ fn effect_arg_class<'db>(
             let boundary = RuntimeBoundarySpec::BorrowLike {
                 pointee: stored_class_for_ty_in_context(db, target_ty, env.scope, env.assumptions),
                 access: BorrowAccess::ReadWrite,
-                allow: default_borrow_transport_set(
-                    BorrowAccess::ReadWrite,
-                    resolved_address_space(arg.provider),
-                ),
+                allow: default_borrow_transport_set(BorrowAccess::ReadWrite, effect_space()),
             };
             match &arg.arg {
                 NEffectArgValue::Place(place) => {

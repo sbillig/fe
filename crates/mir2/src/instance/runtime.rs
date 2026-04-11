@@ -516,7 +516,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
     fn build_contract_runtime_root(
         &mut self,
         dispatch: &[crate::runtime::DispatchArm<'db>],
-        default: DispatchDefault,
+        default: DispatchDefault<'db>,
     ) {
         let zero = self.push_const_word(RBlockId::from_u32(0), 0);
         let selector = self.push_builtin_value(
@@ -539,6 +539,10 @@ impl<'db> SyntheticBodyBuilder<'db> {
             DispatchDefault::RevertEmpty => RTerminator::Revert {
                 offset: zero,
                 len: zero,
+            },
+            DispatchDefault::Call { wrapper } => RTerminator::TerminalCall {
+                callee: wrapper,
+                args: Box::default(),
             },
         };
         self.blocks[0].terminator = RTerminator::SwitchScalar {

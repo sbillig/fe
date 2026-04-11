@@ -8,8 +8,8 @@ use hir::analysis::{
             NSStmt, NSStmtKind, NSTerminator, NSTerminatorKind, NormalizedSemanticBody,
             normalize_semantic_body,
         },
-        get_or_build_semantic_instance, owner_effect_bindings, reify_runtime_const_for_ty,
-        same_owner_effect_binding, sem_const_ty, semantic_may_return_normally,
+        get_or_build_semantic_instance, reify_runtime_const_for_ty, sem_const_ty,
+        semantic_may_return_normally,
     },
     ty::{
         corelib::lib_func_matches,
@@ -55,7 +55,7 @@ use super::{
     },
     place::{
         project_field_class, project_index_class, project_variant_field_class,
-        resolved_address_space,
+        resolved_effect_arg_address_space,
     },
 };
 
@@ -1535,10 +1535,6 @@ impl<'db> RmirLowerCtxt<'db> {
                 runtime_classes.push(class);
             }
         }
-        for (value, class) in self.lower_owner_effect_args(semantic) {
-            runtime_args.push(value);
-            runtime_classes.push(class);
-        }
         let callee_key = RuntimeInstanceKey::new(
             self.db,
             crate::instance::RuntimeInstanceSource::Semantic(semantic),
@@ -1963,54 +1959,6 @@ impl<'db> RmirLowerCtxt<'db> {
         } else {
             self.read_semantic_operand(bb, arg)
         }
-    }
-
-    fn lower_owner_effect_args(
-        &self,
-        semantic: SemanticInstance<'db>,
-    ) -> Vec<(RLocalId, RuntimeClass<'db>)> {
-        owner_effect_bindings(self.db, semantic.key(self.db).owner(self.db))
-            .into_iter()
-            .filter_map(|binding| {
-                self.semantic_body
-                    .locals
-                    .iter()
-                    .position(|local| {
-                        local
-                            .source
-                            .is_some_and(|source| same_owner_effect_binding(source, binding))
-                    })
-                    .and_then(|idx| {
-                        let local = SLocalId::from_u32(idx as u32);
-                        if let Some(value) = self.semantic_provider_value(local) {
-                            return match self.semantic_local_lowering(local) {
-                                RuntimeLocalLowering::PlaceBoundValue {
-                                    provider: Some(provider),
-                                    ..
-                                }
-                                | RuntimeLocalLowering::DirectCarrier {
-                                    provider: Some(provider),
-                                    ..
-                                } => Some((
-                                    value,
-                                    self.provider_binding(*provider).provider_class.clone(),
-                                )),
-                                RuntimeLocalLowering::Erased
-                                | RuntimeLocalLowering::DirectValue
-                                | RuntimeLocalLowering::PlaceBoundValue {
-                                    provider: None, ..
-                                }
-                                | RuntimeLocalLowering::PlaceCarrier { .. }
-                                | RuntimeLocalLowering::DirectCarrier { provider: None, .. } => {
-                                    None
-                                }
-                            };
-                        }
-                        let local = RLocalId::from_u32(idx as u32);
-                        self.value_class(local).cloned().map(|class| (local, class))
-                    })
-            })
-            .collect()
     }
 
     fn lower_extern_builtin(
@@ -2517,7 +2465,7 @@ impl<'db> RmirLowerCtxt<'db> {
                 ),
             };
         }
-        let space = resolved_address_space(arg.provider);
+        let space = resolved_effect_arg_address_space(self.db, &self.semantic_body, arg);
         let boundary = arg.target_ty.map(|target_ty| match arg.pass_mode {
             EffectPassMode::ByPlace | EffectPassMode::ByTempPlace => {
                 crate::runtime::RuntimeBoundarySpec::BorrowLike {
@@ -3527,24 +3475,6 @@ impl<'db> RmirLowerCtxt<'db> {
     ) -> Option<PlaceRoot<'db>> {
         self.provider_binding_id_for_semantic(provider)
             .map(PlaceRoot::Provider)
-    }
-
-    fn semantic_provider_value(&self, local: SLocalId) -> Option<RLocalId> {
-        match self.semantic_local_lowering(local) {
-            RuntimeLocalLowering::PlaceBoundValue {
-                provider: Some(provider),
-                ..
-            } => Some(self.provider_binding_value(*provider)),
-            RuntimeLocalLowering::PlaceCarrier { .. } => Some(self.runtime_value(local)),
-            RuntimeLocalLowering::DirectCarrier {
-                provider: Some(provider),
-                ..
-            } => Some(self.provider_binding_value(*provider)),
-            RuntimeLocalLowering::Erased
-            | RuntimeLocalLowering::DirectValue
-            | RuntimeLocalLowering::PlaceBoundValue { provider: None, .. }
-            | RuntimeLocalLowering::DirectCarrier { provider: None, .. } => None,
-        }
     }
 
     fn semantic_place_root(&self, local: SLocalId) -> Option<PlaceRoot<'db>> {

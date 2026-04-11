@@ -1,4 +1,4 @@
-use hir::semantic::{ContractFieldLayoutInfo, ProviderSource, RecvArmView};
+use hir::semantic::{ContractFieldLayoutInfo, ProviderSource, RecvArmAbiInfo, RecvArmView};
 use hir::{
     analysis::{
         semantic::{
@@ -436,18 +436,36 @@ fn contract_runtime_root<'db>(
     contract: Contract<'db>,
 ) -> Result<RuntimeInstance<'db>, LowerError> {
     let abi_ty = sol_abi_ty(db, contract.scope())?;
-    let mut dispatch = contract
-        .recv_views(db)
-        .flat_map(|recv| recv.arms(db))
-        .map(|arm| contract_recv_dispatch_arm(db, arm, abi_ty))
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut dispatch = Vec::new();
+    let mut default = DispatchDefault::RevertEmpty;
+    for arm in contract.recv_views(db).flat_map(|recv| recv.arms(db)) {
+        let (abi_info, wrapper) = contract_recv_wrapper(db, arm, abi_ty)?;
+        if abi_info.is_fallback {
+            if matches!(default, DispatchDefault::Call { .. }) {
+                return Err(LowerError::Unsupported(format!(
+                    "contract `{}` has multiple fallback recv arms",
+                    contract_name(db, contract)
+                )));
+            }
+            default = DispatchDefault::Call { wrapper };
+            continue;
+        }
+
+        let selector = abi_info.selector_value.ok_or_else(|| {
+            LowerError::Unsupported(format!(
+                "recv arm in `{}` is missing a resolved selector",
+                contract_name(db, contract)
+            ))
+        })?;
+        dispatch.push(DispatchArm { selector, wrapper });
+    }
     dispatch.sort_by_key(|arm| arm.selector);
     Ok(synthetic_instance(
         db,
         RuntimeSyntheticSpec::ContractRuntimeRoot {
             contract,
             dispatch: dispatch.into_boxed_slice(),
-            default: DispatchDefault::RevertEmpty,
+            default,
         },
         Vec::new(),
     ))
@@ -512,19 +530,13 @@ fn contract_init_abi<'db>(
     )))
 }
 
-fn contract_recv_dispatch_arm<'db>(
+fn contract_recv_wrapper<'db>(
     db: &'db dyn MirDb,
     arm: RecvArmView<'db>,
     abi_ty: TyId<'db>,
-) -> Result<DispatchArm<'db>, LowerError> {
+) -> Result<(RecvArmAbiInfo<'db>, RuntimeInstance<'db>), LowerError> {
     let contract = arm.contract(db);
     let abi_info = arm.abi_info(db, abi_ty);
-    let selector = abi_info.selector_value.ok_or_else(|| {
-        LowerError::Unsupported(format!(
-            "recv arm in `{}` is missing a resolved selector",
-            contract_name(db, contract)
-        ))
-    })?;
     let recv = arm.recv(db);
     let user_recv = runtime_instance_for_semantic(
         db,
@@ -570,7 +582,7 @@ fn contract_recv_dispatch_arm<'db>(
         RuntimeSyntheticSpec::ContractRecvAbi {
             plan: ContractRecvAbiPlan {
                 contract,
-                selector,
+                selector: abi_info.selector_value,
                 payable: match arm.arm(db) {
                     Some(recv_arm) => recv_arm.is_payable(db),
                     None => false,
@@ -583,7 +595,7 @@ fn contract_recv_dispatch_arm<'db>(
         },
         Vec::new(),
     );
-    Ok(DispatchArm { selector, wrapper })
+    Ok((abi_info, wrapper))
 }
 
 fn build_non_contract_package<'db>(
@@ -1643,6 +1655,7 @@ fn runtime_instance_sort_key<'db>(db: &'db dyn MirDb, instance: RuntimeInstance<
                 "__synthetic:contract_recv_abi:{}:{}",
                 contract_name(db, plan.contract),
                 plan.selector
+                    .map_or_else(|| "fallback".to_string(), |selector| selector.to_string())
             ),
             RuntimeSyntheticSpec::ContractInitRoot { contract, .. } => format!(
                 "__synthetic:contract_init_root:{}",
@@ -1725,7 +1738,8 @@ fn symbol_base_for_runtime_instance<'db>(
         RuntimeSyntheticSpec::ContractRecvAbi { plan } => format!(
             "__fe_contract_recv_abi_{}_{}",
             contract_name(db, plan.contract),
-            plan.selector,
+            plan.selector
+                .map_or_else(|| "fallback".to_string(), |selector| selector.to_string()),
         ),
         RuntimeSyntheticSpec::ContractInitRoot { contract, .. } => {
             format!("__fe_contract_init_root_{}", contract_name(db, *contract))

@@ -130,7 +130,7 @@ pub fn provider_semantics<'db>(
     ProviderSemantics {
         provider_ty,
         kind: ProviderKind::RootObject,
-        address_space: None,
+        address_space: Some(ProviderAddressSpace::Memory),
         target_ty: None,
         transport: ProviderTransport::ByValue,
     }
