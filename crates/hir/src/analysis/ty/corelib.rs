@@ -18,33 +18,22 @@ pub fn resolve_core_trait<'db>(
     scope: ScopeId<'db>,
     segments: &[&str],
 ) -> Option<Trait<'db>> {
-    let ingot = scope.top_mod(db).ingot(db);
-    let root = if ingot.kind(db) == IngotKind::Core {
-        IdentId::make_ingot(db)
-    } else {
-        IdentId::make_core(db)
-    };
+    let (module_segments, [trait_name]) = segments.split_last_chunk::<1>()?;
+    let mut module_path = lib_root_path(db, scope, "core");
 
-    // Build the module path (all segments except the last)
-    let (module_segments, trait_name) = segments.split_at(segments.len() - 1);
-    let trait_name = IdentId::new(db, trait_name[0].to_string());
-
-    let mut module_path = PathId::from_ident(db, root);
-    for seg in module_segments {
-        module_path = module_path.push_ident(db, IdentId::new(db, seg.to_string()));
+    for segment in module_segments {
+        module_path = module_path.push_str(db, segment);
     }
 
-    // Resolve the module path
     let assumptions = PredicateListId::empty_list(db);
-    let Ok(PathRes::Mod(mod_scope)) = resolve_path(db, module_path, scope, assumptions, false)
+    let Ok(PathRes::Mod(module_scope)) = resolve_path(db, module_path, scope, assumptions, false)
     else {
         return None;
     };
 
-    // Resolve the trait name within the module
-    let bucket = resolve_ident_to_bucket(db, PathId::from_ident(db, trait_name), mod_scope);
-    let nameres = bucket.pick(NameDomain::TYPE).as_ref().ok()?;
-    nameres.trait_()
+    let trait_name = IdentId::new(db, trait_name.to_string());
+    let bucket = resolve_ident_to_bucket(db, PathId::from_ident(db, trait_name), module_scope);
+    bucket.pick(NameDomain::TYPE).as_ref().ok()?.trait_()
 }
 
 #[salsa::interned]
@@ -133,17 +122,7 @@ fn resolve_lib_path<'db>(
     path: LibPath<'db>,
 ) -> Option<TyId<'db>> {
     let mut segments = path.string(db).split("::");
-
-    let root = segments.next()?;
-
-    let ingot_kind = scope.top_mod(db).ingot(db).kind(db);
-    let mut path = if (ingot_kind == IngotKind::Core && root == "core")
-        || (ingot_kind == IngotKind::Std && root == "std")
-    {
-        PathId::from_ident(db, IdentId::make_ingot(db))
-    } else {
-        PathId::from_str(db, root)
-    };
+    let mut path = lib_root_path(db, scope, segments.next()?);
 
     for segment in segments {
         path = path.push_str(db, segment);
@@ -163,17 +142,7 @@ fn resolve_lib_func<'db>(
     path: LibPath<'db>,
 ) -> Option<Func<'db>> {
     let mut segments = path.string(db).split("::");
-
-    let root = segments.next()?;
-
-    let ingot_kind = scope.top_mod(db).ingot(db).kind(db);
-    let mut path = if (ingot_kind == IngotKind::Core && root == "core")
-        || (ingot_kind == IngotKind::Std && root == "std")
-    {
-        PathId::from_ident(db, IdentId::make_ingot(db))
-    } else {
-        PathId::from_str(db, root)
-    };
+    let mut path = lib_root_path(db, scope, segments.next()?);
 
     for segment in segments {
         path = path.push_str(db, segment);
@@ -188,5 +157,20 @@ fn resolve_lib_func<'db>(
             Some(*func)
         }
         _ => None,
+    }
+}
+
+pub(crate) fn lib_root_path<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    root: &str,
+) -> PathId<'db> {
+    let ingot_kind = scope.top_mod(db).ingot(db).kind(db);
+    if (ingot_kind == IngotKind::Core && root == "core")
+        || (ingot_kind == IngotKind::Std && root == "std")
+    {
+        PathId::from_ident(db, IdentId::make_ingot(db))
+    } else {
+        PathId::from_str(db, root)
     }
 }

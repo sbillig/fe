@@ -1,12 +1,10 @@
 use std::collections::HashSet;
 
-use common::ingot::IngotKind;
-
 use crate::{
     analysis::{
         HirAnalysisDb,
         name_resolution::{NameDomain, PathRes, resolve_ident_to_bucket, resolve_path},
-        ty::trait_resolution::PredicateListId,
+        ty::{corelib::lib_root_path, trait_resolution::PredicateListId},
     },
     hir_def::{IdentId, PathId, Trait, scope_graph::ScopeId},
 };
@@ -88,8 +86,8 @@ const CORE_OP_REQUIREMENTS: &[(&str, &str)] = &[
 ];
 
 const CORE_TRAIT_REQUIREMENTS: &[&str] = &[
-    "core::effect_ref::EffectRef",
-    "core::effect_ref::EffectRefMut",
+    "core::EffectRef",
+    "core::EffectRefMut",
     "core::message::MsgVariant",
     "core::abi::Decode",
 ];
@@ -103,13 +101,12 @@ const STD_TYPE_REQUIREMENTS: &[&str] = &[
 pub fn check_core_requirements<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
-    ingot_kind: IngotKind,
 ) -> Vec<MissingCoreRequirement> {
     let mut missing = Vec::new();
     let mut missing_traits = HashSet::new();
 
     for &path in CORE_TRAIT_REQUIREMENTS {
-        if resolve_trait_in_scope(db, scope, ingot_kind, path).is_none() {
+        if resolve_trait_in_scope(db, scope, path).is_none() {
             missing.push(MissingCoreRequirement {
                 path: path.to_string(),
                 kind: CoreRequirementKind::Trait,
@@ -119,7 +116,7 @@ pub fn check_core_requirements<'db>(
     }
 
     for &(path, method) in CORE_OP_REQUIREMENTS {
-        match resolve_trait_in_scope(db, scope, ingot_kind, path) {
+        match resolve_trait_in_scope(db, scope, path) {
             Some(trait_def) => {
                 let method_ident = IdentId::new(db, method.to_string());
                 if !trait_def.method_defs(db).contains_key(&method_ident) {
@@ -148,12 +145,11 @@ pub fn check_core_requirements<'db>(
 pub fn check_std_type_requirements<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
-    ingot_kind: IngotKind,
 ) -> Vec<MissingCoreRequirement> {
     let mut missing = Vec::new();
 
     for &path in STD_TYPE_REQUIREMENTS {
-        if resolve_type_in_scope(db, scope, ingot_kind, path).is_none() {
+        if resolve_type_in_scope(db, scope, path).is_none() {
             missing.push(MissingCoreRequirement {
                 path: path.to_string(),
                 kind: CoreRequirementKind::Type,
@@ -168,12 +164,11 @@ pub fn check_std_type_requirements<'db>(
 fn resolve_trait_in_scope<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
-    ingot_kind: IngotKind,
     path: &str,
 ) -> Option<Trait<'db>> {
     let segments: Vec<_> = path.split("::").collect();
     let (root, trait_name) = (segments.first()?, segments.last()?);
-    let (_, mut module_path) = build_root_path(db, ingot_kind, root)?;
+    let mut module_path = lib_root_path(db, scope, root);
 
     for segment in &segments[1..segments.len() - 1] {
         module_path = module_path.push_str(db, segment);
@@ -198,12 +193,11 @@ fn resolve_trait_in_scope<'db>(
 fn resolve_type_in_scope<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
-    ingot_kind: IngotKind,
     path: &str,
 ) -> Option<()> {
     let mut segments = path.split("::");
     let root = segments.next()?;
-    let (_, mut path_id) = build_root_path(db, ingot_kind, root)?;
+    let mut path_id = lib_root_path(db, scope, root);
 
     for segment in segments {
         path_id = path_id.push_str(db, segment);
@@ -214,20 +208,4 @@ fn resolve_type_in_scope<'db>(
         PathRes::Ty(_) | PathRes::TyAlias(_, _) => Some(()),
         _ => None,
     }
-}
-
-fn build_root_path<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ingot_kind: IngotKind,
-    root: &str,
-) -> Option<(IdentId<'db>, PathId<'db>)> {
-    let ingot_root = (ingot_kind == IngotKind::Core && root == "core")
-        || (ingot_kind == IngotKind::Std && root == "std");
-    let root_ident = if ingot_root {
-        IdentId::make_ingot(db)
-    } else {
-        IdentId::new(db, root.to_string())
-    };
-    let path = PathId::from_ident(db, root_ident);
-    Some((root_ident, path))
 }

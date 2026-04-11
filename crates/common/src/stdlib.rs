@@ -9,8 +9,11 @@ use crate::{
     ingot::{Ingot, IngotBaseUrl},
 };
 
-pub static BUILTIN_CORE_BASE_URL: &str = "builtin-core:///";
-pub static BUILTIN_STD_BASE_URL: &str = "builtin-std:///";
+// Use the canonical single-slash form for custom-scheme base URLs.
+// `Url::join` normalizes children under `builtin-core:/...`, so lookups must
+// use the same base form or builtin ingots appear empty.
+pub static BUILTIN_CORE_BASE_URL: &str = "builtin-core:/";
+pub static BUILTIN_STD_BASE_URL: &str = "builtin-std:/";
 
 fn is_library_file(path: &Utf8Path) -> bool {
     matches!(path.file_name(), Some("fe.toml")) || matches!(path.extension(), Some("fe"))
@@ -128,7 +131,10 @@ impl<T: InputDb> HasBuiltinStd for T {
 mod tests {
     use camino::Utf8Path;
 
-    use super::is_library_file;
+    use super::{HasBuiltinCore, HasBuiltinStd, is_library_file};
+    use crate::define_input_db;
+
+    define_input_db!(TestDb);
 
     #[test]
     fn library_loader_filters_non_fe_files() {
@@ -137,5 +143,21 @@ mod tests {
         assert!(!is_library_file(Utf8Path::new(".DS_Store")));
         assert!(!is_library_file(Utf8Path::new("src/lib.rs")));
         assert!(!is_library_file(Utf8Path::new("README.md")));
+    }
+
+    #[test]
+    fn builtin_ingots_are_indexed_under_their_lookup_urls() {
+        let db = TestDb::default();
+        let core = db.builtin_core();
+        let std = db.builtin_std();
+
+        assert!(
+            core.files(&db).iter().next().is_some(),
+            "builtin core ingot should contain indexed files"
+        );
+        assert!(
+            std.files(&db).iter().next().is_some(),
+            "builtin std ingot should contain indexed files"
+        );
     }
 }

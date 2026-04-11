@@ -244,7 +244,7 @@ pub fn check_library_requirements(db: &DriverDataBase) -> Vec<String> {
     if let Ok(core_file) = core.root_file(db) {
         let top_mod = db.top_mod(core_file);
         missing.extend(
-            core_requirements::check_core_requirements(db, top_mod.scope(), core.kind(db))
+            core_requirements::check_core_requirements(db, top_mod.scope())
                 .into_iter()
                 .map(|req| req.to_string()),
         );
@@ -256,7 +256,7 @@ pub fn check_library_requirements(db: &DriverDataBase) -> Vec<String> {
     if let Ok(std_file) = std_ingot.root_file(db) {
         let top_mod = db.top_mod(std_file);
         missing.extend(
-            core_requirements::check_std_type_requirements(db, top_mod.scope(), std_ingot.kind(db))
+            core_requirements::check_std_type_requirements(db, top_mod.scope())
                 .into_iter()
                 .map(|req| req.to_string()),
         );
