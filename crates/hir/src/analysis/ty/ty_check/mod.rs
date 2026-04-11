@@ -17,6 +17,7 @@ pub use self::contract::{
 pub use self::path::RecordLike;
 use crate::analysis::name_resolution::{ResolvedVariant, resolve_path};
 pub use crate::analysis::ty::ProviderAddressSpace;
+use crate::analysis::ty::corelib::resolve_lib_type_path;
 use crate::analysis::ty::fold::TyFoldable;
 use crate::analysis::ty::provider::{address_space_from_ty, provider_semantics};
 use crate::analysis::ty::visitor::TyVisitable;
@@ -70,10 +71,10 @@ use super::{
     unify::{InferenceKey, Snapshot, UnificationError, UnificationTable},
 };
 use crate::analysis::semantic::SemanticCodeRegionRef;
+use crate::analysis::semantic::{SemConstValue, eval_body_owner_const};
 use crate::analysis::ty::ty_def::{TyBase, TyData};
 use crate::analysis::ty::{
-    const_ty::ConstTyData,
-    ctfe::{CtfeConfig, CtfeInterpreter},
+    const_ty::{ConstTyData, invalid_cause_from_ctfe_error},
     fold::AssocTySubst,
     normalize::normalize_ty,
     pattern_ir::{PatternAnalysisStatus, PatternStore, ValidatedPatId},
@@ -150,15 +151,21 @@ pub(super) fn check_body<'db>(
         && let Some(body) = const_.body(db).to_opt()
         && !const_.ty(db).has_invalid(db)
     {
-        let mut interp = CtfeInterpreter::new(db, CtfeConfig::default());
-        match interp.eval_const_body(body, typed_body.clone()) {
-            Ok(const_ty) => {
-                if !matches!(const_ty.data(db), ConstTyData::Evaluated(..)) {
+        let const_owner = BodyOwner::AnonConstBody {
+            body,
+            expected: const_.ty(db),
+        };
+        match eval_body_owner_const(db, const_owner, Vec::new()) {
+            Ok(value) => {
+                if matches!(value.value(db), SemConstValue::TypeLevel { .. }) {
                     diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
                 }
             }
-            Err(cause) => {
-                let ty = TyId::invalid(db, cause);
+            Err(crate::analysis::semantic::CtfeError::NotConstEvaluable { .. }) => {
+                diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
+            }
+            Err(err) => {
+                let ty = TyId::invalid(db, invalid_cause_from_ctfe_error(db, const_owner, err));
                 if let Some(diag) = ty.emit_diag(db, body.span().into()) {
                     diags.push(diag.into());
                 }

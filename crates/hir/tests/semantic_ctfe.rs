@@ -1,16 +1,21 @@
 use std::collections::VecDeque;
 
+use fe_hir::diagnosable::Diagnosable;
 use fe_hir::test_db::HirAnalysisTestDb;
 use fe_hir::{
     analysis::{
         semantic::{
             SConst, SExpr, SStmtKind, SemConstId, SemConstValue, canonicalize_semantic_consts,
-            get_or_build_semantic_instance, identity_semantic_instance_key,
+            eval_body_owner_const, get_or_build_semantic_instance, identity_semantic_instance_key,
             reify_runtime_const_for_ty,
         },
-        ty::ty_check::BodyOwner,
+        ty::{
+            diagnostics::{TyDiagCollection, TyLowerDiag},
+            ty_check::BodyOwner,
+        },
     },
     hir_def::{ItemKind, Partial},
+    span::LazySpan,
 };
 
 #[test]
@@ -68,6 +73,68 @@ fn wrap() {
     assert!(
         found,
         "expected canonicalization to fold const call into tuple(array) semantic const"
+    );
+}
+
+#[test]
+fn semantic_ctfe_evaluates_as_bytes_const_fns() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_ctfe.fe".into(),
+        include_str!("../../uitest/fixtures/ty_check/const_eval/user_const_fn_ok.fe"),
+    );
+    let (top_mod, _) = db.top_mod(file);
+
+    for name in ["bytes_tail", "stor_code"] {
+        let func = top_mod
+            .all_funcs(&db)
+            .iter()
+            .find(
+                |func| matches!(func.name(&db), Partial::Present(found) if found.data(&db) == name),
+            )
+            .copied()
+            .unwrap_or_else(|| panic!("missing const fn `{name}`"));
+
+        let value = eval_body_owner_const(&db, BodyOwner::Func(func), Vec::new())
+            .unwrap_or_else(|err| panic!("semantic CTFE failed for `{name}`: {err:?}"));
+        let ty = fe_hir::analysis::semantic::sem_const_ty(&db, value);
+        assert!(
+            !matches!(value.value(&db), SemConstValue::TypeLevel { .. }),
+            "`{name}` should lower to a value const, got {:?} with ty {}",
+            value.value(&db),
+            ty.pretty_print(&db)
+        );
+    }
+}
+
+#[test]
+fn type_alias_len_reports_nested_const_eval_error() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_ctfe.fe".into(),
+        include_str!(
+            "../../uitest/fixtures/ty_check/const_eval/as_bytes_mixed_enum_unsupported.fe"
+        ),
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let alias = top_mod
+        .all_type_aliases(&db)
+        .iter()
+        .find(|alias| matches!(alias.name(&db), Partial::Present(name) if name.data(&db) == "Arr"))
+        .copied()
+        .expect("missing type alias `Arr`");
+    let diags = alias.diags(&db);
+    let [TyDiagCollection::Ty(TyLowerDiag::ConstEvalUnsupported(span))] = diags.as_slice() else {
+        panic!("expected one const-eval unsupported diagnostic, got {diags:#?}");
+    };
+    let resolved = span
+        .resolve(&db)
+        .expect("diagnostic should resolve to source");
+    let text = file.text(&db);
+
+    assert_eq!(
+        &text[resolved.range.start().into()..resolved.range.end().into()],
+        "intrinsic::__as_bytes(Mixed::B)"
     );
 }
 

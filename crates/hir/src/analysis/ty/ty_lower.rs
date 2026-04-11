@@ -10,7 +10,6 @@ use smallvec::smallvec;
 
 use super::{
     assoc_const::AssocConstUse,
-    const_expr::{ConstExpr, ConstExprId},
     const_ty::{
         AppFrameId, CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, EvaluatedConstTy,
         HoleId, LayoutHoleArgSite, LocalFrameId, LocalFrameSite, StructuralHoleOrigin,
@@ -25,7 +24,7 @@ use super::{
     },
     trait_def::TraitInstId,
     trait_resolution::{
-        PredicateListId, TraitSolveCx,
+        PredicateListId,
         constraint::{collect_constraints, collect_func_decl_constraints},
     },
     ty_def::{InvalidCause, Kind, TyData, TyId, TyParam},
@@ -172,29 +171,24 @@ fn lower_path_impl<'db>(
                             inst.assoc_type_bindings(db).clone(),
                         );
 
-                        let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
-                        if let Some(const_ty) =
-                            super::const_ty::const_ty_from_trait_const(db, solve_cx, inst, name)
-                        {
-                            TyId::const_ty(db, const_ty)
-                        } else if let Some(expected_ty) = inst
+                        if let Some(expected_ty) = inst
                             .def(db)
                             .const_(db, name)
                             .and_then(|v| v.ty_binder(db))
                             .map(|b| b.instantiate(db, inst.args(db)))
                         {
-                            let expr = ConstExprId::new(
-                                db,
-                                ConstExpr::TraitConst(AssocConstUse::new(
-                                    scope,
-                                    assumptions,
-                                    inst,
-                                    name,
-                                )),
-                            );
-                            let const_ty =
-                                ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty));
-                            TyId::const_ty(db, const_ty)
+                            let assoc = AssocConstUse::new(scope, assumptions, inst, name);
+                            if let Some(const_ty) =
+                                super::const_ty::const_ty_or_abstract_from_assoc_const_use(
+                                    db,
+                                    assoc,
+                                    expected_ty,
+                                )
+                            {
+                                TyId::const_ty(db, const_ty)
+                            } else {
+                                TyId::invalid(db, InvalidCause::Other)
+                            }
                         } else {
                             TyId::invalid(db, InvalidCause::Other)
                         }
@@ -836,31 +830,22 @@ pub(crate) fn lower_generic_arg_list<'db>(
                                 inst.assoc_type_bindings(db).clone(),
                             );
 
-                            let solve_cx =
-                                TraitSolveCx::new(db, scope).with_assumptions(assumptions);
-                            if let Some(const_ty) =
-                                super::const_ty::const_ty_from_trait_const(db, solve_cx, inst, name)
-                            {
-                                return TyId::const_ty(db, const_ty);
-                            }
                             if let Some(expected_ty) = inst
                                 .def(db)
                                 .const_(db, name)
                                 .and_then(|v| v.ty_binder(db))
                                 .map(|b| b.instantiate(db, inst.args(db)))
                             {
-                                let expr = ConstExprId::new(
-                                    db,
-                                    ConstExpr::TraitConst(AssocConstUse::new(
-                                        scope,
-                                        assumptions,
-                                        inst,
-                                        name,
-                                    )),
-                                );
-                                let const_ty =
-                                    ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty));
-                                return TyId::const_ty(db, const_ty);
+                                let assoc = AssocConstUse::new(scope, assumptions, inst, name);
+                                if let Some(const_ty) =
+                                    super::const_ty::const_ty_or_abstract_from_assoc_const_use(
+                                        db,
+                                        assoc,
+                                        expected_ty,
+                                    )
+                                {
+                                    return TyId::const_ty(db, const_ty);
+                                }
                             }
                         }
                         PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {

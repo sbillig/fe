@@ -362,11 +362,7 @@ pub fn get_or_build_semantic_instance<'db>(
     db: &'db dyn HirAnalysisDb,
     key: SemanticInstanceKey<'db>,
 ) -> SemanticInstance<'db> {
-    let instance = SemanticInstance::new(db, key);
-    for callee in instance.callees(db) {
-        get_or_build_semantic_instance(db, callee.key);
-    }
-    instance
+    SemanticInstance::new(db, key)
 }
 
 fn lower_semantic_body<'db>(

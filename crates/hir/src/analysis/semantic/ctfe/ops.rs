@@ -1,8 +1,10 @@
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        CtfeError, SemConstId, SemConstValue, SemOrigin, array_const, struct_const, tuple_const,
+        CtfeError, SemConstId, SemConstScalar, SemConstValue, SemOrigin, array_const, int_const,
+        struct_const, tuple_const,
     },
+    ty::ty_def::{PrimTy, TyBase, TyData, TyId},
 };
 
 use super::machine::CtfePathElem;
@@ -20,6 +22,20 @@ pub(super) fn project_const<'db>(
                 .get(field.0 as usize)
                 .copied()
                 .ok_or(CtfeError::OutOfBounds { origin })?,
+            (
+                SemConstValue::Scalar {
+                    value: SemConstScalar::Bytes(bytes),
+                    ..
+                },
+                CtfePathElem::Index(index),
+            ) => {
+                let byte = *bytes.get(*index).ok_or(CtfeError::OutOfBounds { origin })?;
+                int_const(
+                    db,
+                    TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U8))),
+                    byte.into(),
+                )
+            }
             (SemConstValue::Array { elems, .. }, CtfePathElem::Index(index)) => elems
                 .get(*index)
                 .copied()
