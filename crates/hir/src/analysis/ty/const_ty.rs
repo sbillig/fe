@@ -12,7 +12,6 @@ use super::{
     assoc_const::AssocConstUse,
     diagnostics::{BodyDiag, FuncBodyDiag},
     fold::{AssocTySubst, TyFoldable},
-    layout_holes::ty_contains_const_hole,
     normalize::normalize_ty,
     trait_def::TraitInstId,
     trait_resolution::{
@@ -607,11 +606,50 @@ fn evaluate_int_const_expr_impl<'db>(
 }
 
 fn ty_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
-    !ty.has_invalid(db)
-        && !ty.has_param(db)
-        && !ty.has_var(db)
-        && !ty_contains_const_hole(db, ty)
-        && !matches!(ty.data(db), TyData::AssocTy(_) | TyData::QualifiedTy(_))
+    match ty.data(db) {
+        TyData::TyVar(_)
+        | TyData::TyParam(_)
+        | TyData::AssocTy(_)
+        | TyData::QualifiedTy(_)
+        | TyData::Invalid(_) => false,
+        TyData::TyApp(abs, arg) => ty_is_fully_ground(db, *abs) && ty_is_fully_ground(db, *arg),
+        TyData::ConstTy(const_ty) => const_ty_is_fully_ground(db, *const_ty),
+        TyData::TyBase(_) | TyData::Never => true,
+    }
+}
+
+fn trait_inst_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, inst: TraitInstId<'db>) -> bool {
+    ty_is_fully_ground(db, inst.self_ty(db))
+        && inst
+            .args(db)
+            .iter()
+            .copied()
+            .all(|arg| ty_is_fully_ground(db, arg))
+        && inst
+            .assoc_type_bindings(db)
+            .values()
+            .copied()
+            .all(|ty| ty_is_fully_ground(db, ty))
+}
+
+fn evaluated_const_ty_is_fully_ground<'db>(
+    db: &'db dyn HirAnalysisDb,
+    value: &EvaluatedConstTy<'db>,
+) -> bool {
+    match value {
+        EvaluatedConstTy::Tuple(elems)
+        | EvaluatedConstTy::Array(elems)
+        | EvaluatedConstTy::Record(elems) => elems
+            .iter()
+            .copied()
+            .all(|elem| ty_is_fully_ground(db, elem)),
+        EvaluatedConstTy::LitInt(..)
+        | EvaluatedConstTy::LitBool(..)
+        | EvaluatedConstTy::Unit
+        | EvaluatedConstTy::Bytes(..)
+        | EvaluatedConstTy::EnumVariant(..) => true,
+        EvaluatedConstTy::Invalid => false,
+    }
 }
 
 fn const_expr_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, expr: ConstExprId<'db>) -> bool {
@@ -632,15 +670,7 @@ fn const_expr_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, expr: ConstExprId
         ConstExpr::UnOp { expr, .. } | ConstExpr::Cast { expr, .. } => {
             ty_is_fully_ground(db, *expr)
         }
-        ConstExpr::TraitConst(assoc) => {
-            ty_is_fully_ground(db, assoc.inst().self_ty(db))
-                && assoc
-                    .inst()
-                    .args(db)
-                    .iter()
-                    .copied()
-                    .all(|arg| ty_is_fully_ground(db, arg))
-        }
+        ConstExpr::TraitConst(assoc) => trait_inst_is_fully_ground(db, assoc.inst()),
         ConstExpr::LocalBinding(_) => false,
     }
 }
@@ -780,7 +810,24 @@ pub fn evaluate_type_level_const_expr<'db>(
 }
 
 fn const_ty_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, const_ty: ConstTyId<'db>) -> bool {
-    ty_is_fully_ground(db, const_ty.ty(db))
+    match const_ty.data(db) {
+        ConstTyData::TyVar(..) | ConstTyData::TyParam(..) | ConstTyData::Hole(..) => false,
+        ConstTyData::Evaluated(value, ty) => {
+            ty_is_fully_ground(db, *ty) && evaluated_const_ty_is_fully_ground(db, value)
+        }
+        ConstTyData::Abstract(expr, ty) => {
+            ty_is_fully_ground(db, *ty) && const_expr_is_fully_ground(db, *expr)
+        }
+        ConstTyData::UnEvaluated {
+            ty, generic_args, ..
+        } => {
+            ty.is_some_and(|ty| ty_is_fully_ground(db, ty))
+                && generic_args
+                    .iter()
+                    .copied()
+                    .all(|arg| ty_is_fully_ground(db, arg))
+        }
+    }
 }
 
 pub fn concretize_const_ty_if_ground<'db>(
@@ -808,6 +855,28 @@ pub fn concretize_const_ty_if_ground<'db>(
         }
         ConstTyData::TyVar(..) | ConstTyData::TyParam(..) | ConstTyData::Hole(..) => None,
     }
+}
+
+fn canonicalize_const_ty_for_display<'db>(
+    db: &'db dyn HirAnalysisDb,
+    const_ty: ConstTyId<'db>,
+    env: ConstCanonEnv<'db>,
+) -> Option<ConstTyId<'db>> {
+    let ConstTyData::UnEvaluated { ty, .. } = const_ty.data(db) else {
+        return None;
+    };
+    let expected_ty = (*ty).unwrap_or_else(|| const_ty.ty(db));
+    let evaluated = const_ty.evaluate(db, Some(expected_ty));
+    if evaluated == const_ty || evaluated.ty(db).has_invalid(db) {
+        return None;
+    }
+    Some(
+        if let ConstTyData::Abstract(expr, expected_ty) = evaluated.data(db) {
+            evaluate_type_level_const_expr(db, *expr, *expected_ty, env).unwrap_or(evaluated)
+        } else {
+            evaluated
+        },
+    )
 }
 
 pub fn complete_default_const_args_for_identity<'db>(
@@ -915,10 +984,14 @@ pub fn canonicalize_const_ty_for_mode<'db>(
         ),
     };
 
-    if matches!(mode, ConstCanonMode::Identity | ConstCanonMode::Display) {
-        concretize_const_ty_if_ground(db, canonicalized, env).unwrap_or(canonicalized)
-    } else {
-        canonicalized
+    match mode {
+        ConstCanonMode::Stored => canonicalized,
+        ConstCanonMode::Identity => {
+            concretize_const_ty_if_ground(db, canonicalized, env).unwrap_or(canonicalized)
+        }
+        ConstCanonMode::Display => concretize_const_ty_if_ground(db, canonicalized, env)
+            .or_else(|| canonicalize_const_ty_for_display(db, canonicalized, env))
+            .unwrap_or(canonicalized),
     }
 }
 

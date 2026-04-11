@@ -66,10 +66,10 @@ note:
    ┌─ const_eval_user_const_fn_const_params.fe:14:9
    │
 14 │     let a: Foo<{ N }>
-   │         ^ Foo<const N: usize, add(const N: usize, 1)>
+   │         ^ Foo<const N: usize, plus1(N)>
 
 note: 
    ┌─ const_eval_user_const_fn_const_params.fe:15:9
    │
 15 │     let b: Bar<{ N }>
-   │         ^ Bar<const N: usize, add(const N: usize, 1)>
+   │         ^ Bar<const N: usize, (N + 1)>
