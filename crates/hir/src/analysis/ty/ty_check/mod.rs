@@ -19,7 +19,7 @@ use crate::analysis::name_resolution::{ResolvedVariant, resolve_path};
 pub use crate::analysis::ty::ProviderAddressSpace;
 use crate::analysis::ty::corelib::resolve_lib_type_path;
 use crate::analysis::ty::fold::TyFoldable;
-use crate::analysis::ty::provider::{ProviderKind, address_space_from_ty, provider_semantics};
+use crate::analysis::ty::provider::{ProviderKind, provider_semantics};
 use crate::analysis::ty::visitor::TyVisitable;
 use crate::hir_def::CallableDef;
 use crate::{
