@@ -1,4 +1,0 @@
-fn example(p: std::evm::MemPtr<u256>) -> std::evm::MemPtr<u256> {
-    p
-}
-

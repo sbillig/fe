@@ -1,4 +1,0 @@
-struct Foo {}
-fn add(a: Foo, b: Foo) -> Foo {
-    a
-}

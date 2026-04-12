@@ -253,7 +253,6 @@ fn tree_sitter_parse_coverage() {
             manifest.join("../fe/tests/fixtures/cli_output"),
         ),
         // uitest fixtures (excluding parser/ which has intentional errors)
-        ("uitest_mir", manifest.join("../uitest/fixtures/mir_check")),
         (
             "uitest_names",
             manifest.join("../uitest/fixtures/name_resolution"),
