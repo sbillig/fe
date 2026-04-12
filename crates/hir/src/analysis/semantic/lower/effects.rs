@@ -1,8 +1,12 @@
 use crate::{
     analysis::{
         HirAnalysisDb,
-        semantic::{SEffectArg, SEffectArgValue, SPlace, SValueId},
+        semantic::{
+            SEffectArg, SEffectArgValue, SPlace, SValueId,
+            resolved_provider_binding_for_instance_effect,
+        },
         ty::{
+            ProviderAddressSpace,
             effects::EffectKeyKind,
             ty_check::{
                 BodyOwner, EffectArg, EffectParamSite, EffectPassMode, LocalBinding,
@@ -52,7 +56,7 @@ impl<'db> SmirLowerCtxt<'db> {
                 },
                 pass_mode: arg.pass_mode,
                 target_ty: arg.instantiated_target_ty,
-                provider: arg.provider,
+                provider: self.effect_arg_provider_space(&arg),
             })
             .collect()
     }
@@ -114,9 +118,28 @@ impl<'db> SmirLowerCtxt<'db> {
                 },
                 pass_mode: arg.pass_mode,
                 target_ty: arg.instantiated_target_ty,
-                provider: arg.provider,
+                provider: self.effect_arg_provider_space(arg),
             })
             .collect()
+    }
+
+    fn effect_arg_provider_space(
+        &self,
+        arg: &ResolvedEffectArg<'db>,
+    ) -> Option<ProviderAddressSpace> {
+        arg.provider.or_else(|| match &arg.arg {
+            EffectArg::Place(place) => {
+                let crate::analysis::place::PlaceBase::Binding(binding) = place.base;
+                self.binding_provider_space(binding)
+            }
+            EffectArg::Binding(binding) => self.binding_provider_space(*binding),
+            EffectArg::Value(_) | EffectArg::Unknown => None,
+        })
+    }
+
+    fn binding_provider_space(&self, binding: LocalBinding<'db>) -> Option<ProviderAddressSpace> {
+        resolved_provider_binding_for_instance_effect(self.db, self.instance, binding)
+            .and_then(|provider| provider.semantics.address_space)
     }
 }
 

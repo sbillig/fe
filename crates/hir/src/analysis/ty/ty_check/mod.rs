@@ -33,8 +33,8 @@ use crate::{
     },
     visitor::{Visitor, VisitorCtxt, walk_expr, walk_pat},
 };
-pub use callable::Callable;
 use callable::{CallGenericArgUnifyError, unify_explicit_call_generic_args};
+pub use callable::{Callable, EffectProviderProvenance, EffectProviderSpecialization};
 use common::indexmap::IndexMap;
 use ena::unify::InPlace;
 use env::TyCheckEnv;

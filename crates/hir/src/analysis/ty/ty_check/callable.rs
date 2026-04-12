@@ -11,7 +11,7 @@ use crate::{
 };
 use salsa::Update;
 
-use super::{ExprProp, TyChecker};
+use super::{BodyOwner, ExprProp, LocalBinding, TyChecker};
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
@@ -28,6 +28,7 @@ use crate::analysis::{
         visitor::{TyVisitable, TyVisitor, collect_flags},
     },
 };
+use crate::core::semantic::{ProviderBinding, ProviderSource};
 use crate::hir_def::Body;
 use crate::hir_def::CallableDef;
 use crate::hir_def::params::FuncParamMode;
@@ -35,6 +36,107 @@ use crate::hir_def::params::FuncParamMode;
 pub(super) enum CallGenericArgUnifyError {
     ArityMismatch { given: usize, expected: usize },
     UnificationFailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum EffectProviderProvenance<'db> {
+    Binding {
+        owner: BodyOwner<'db>,
+        binding: LocalBinding<'db>,
+    },
+    Expr {
+        owner: BodyOwner<'db>,
+        expr: ExprId,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct EffectProviderSpecialization<'db> {
+    pub provider: ProviderBinding<'db>,
+    pub provenance: EffectProviderProvenance<'db>,
+}
+
+impl<'db> TyVisitable<'db> for EffectProviderSpecialization<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.provider.provider_ty.visit_with(visitor);
+        self.provider.semantics.provider_ty.visit_with(visitor);
+        if let Some(target_ty) = self.provider.semantics.target_ty {
+            target_ty.visit_with(visitor);
+        }
+        match &self.provider.source {
+            ProviderSource::UsesParam { .. } | ProviderSource::ContractField { .. } => {}
+            ProviderSource::RootProvider { registration, .. } => {
+                registration.provider_ty.visit_with(visitor);
+            }
+        }
+        if let EffectProviderProvenance::Binding { binding, .. } = self.provenance {
+            binding.visit_with(visitor);
+        }
+    }
+}
+
+impl<'db> TyFoldable<'db> for EffectProviderSpecialization<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        let provider_ty = self.provider.provider_ty.fold_with(db, folder);
+        let semantics = crate::analysis::ty::provider::ProviderSemantics {
+            provider_ty: self.provider.semantics.provider_ty.fold_with(db, folder),
+            target_ty: self
+                .provider
+                .semantics
+                .target_ty
+                .map(|ty| ty.fold_with(db, folder)),
+            ..self.provider.semantics
+        };
+        let source = match self.provider.source {
+            ProviderSource::UsesParam {
+                site,
+                requirement_idx,
+            } => ProviderSource::UsesParam {
+                site,
+                requirement_idx,
+            },
+            ProviderSource::ContractField {
+                contract,
+                field_idx,
+            } => ProviderSource::ContractField {
+                contract,
+                field_idx,
+            },
+            ProviderSource::RootProvider { site, registration } => ProviderSource::RootProvider {
+                site,
+                registration: crate::analysis::ty::provider::RootProviderRegistration {
+                    provider_ty: registration.provider_ty.fold_with(db, folder),
+                    ..registration
+                },
+            },
+        };
+        let provenance = match self.provenance {
+            EffectProviderProvenance::Binding { owner, binding } => {
+                EffectProviderProvenance::Binding {
+                    owner,
+                    binding: binding.fold_with(db, folder),
+                }
+            }
+            EffectProviderProvenance::Expr { owner, expr } => {
+                EffectProviderProvenance::Expr { owner, expr }
+            }
+        };
+        Self {
+            provider: ProviderBinding {
+                provider_ty,
+                semantics,
+                source,
+                ..self.provider
+            },
+            provenance,
+        }
+    }
 }
 
 pub(super) fn unify_explicit_call_generic_args<'db>(
@@ -82,6 +184,7 @@ pub struct Callable<'db> {
     pub callable_def: CallableDef<'db>,
     base_ty: TyId<'db>,
     generic_args: Vec<TyId<'db>>,
+    effect_providers: Vec<EffectProviderSpecialization<'db>>,
     /// The originating trait instance if this callable comes from a trait method
     /// (e.g., operator overloading, method call, indexing). None for inherent functions.
     pub trait_inst: Option<TraitInstId<'db>>,
@@ -93,6 +196,7 @@ impl<'db> TyVisitable<'db> for Callable<'db> {
         V: TyVisitor<'db> + ?Sized,
     {
         self.generic_args.visit_with(visitor);
+        self.effect_providers.visit_with(visitor);
         if let Some(inst) = self.trait_inst {
             inst.visit_with(visitor);
         }
@@ -108,6 +212,7 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
             callable_def: self.callable_def,
             base_ty: self.base_ty,
             generic_args: self.generic_args.fold_with(db, folder),
+            effect_providers: self.effect_providers.fold_with(db, folder),
             trait_inst: self.trait_inst.map(|i| i.fold_with(db, folder)),
         }
     }
@@ -143,6 +248,7 @@ impl<'db> Callable<'db> {
             callable_def,
             base_ty: base,
             generic_args: args.to_vec(),
+            effect_providers: Vec::new(),
             trait_inst,
         })
     }
@@ -153,6 +259,14 @@ impl<'db> Callable<'db> {
 
     pub fn generic_args_mut(&mut self) -> &mut Vec<TyId<'db>> {
         &mut self.generic_args
+    }
+
+    pub fn effect_providers(&self) -> &[EffectProviderSpecialization<'db>] {
+        &self.effect_providers
+    }
+
+    pub fn effect_providers_mut(&mut self) -> &mut Vec<EffectProviderSpecialization<'db>> {
+        &mut self.effect_providers
     }
 
     pub fn trait_inst(&self) -> Option<TraitInstId<'db>> {

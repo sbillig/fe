@@ -1,5 +1,5 @@
 use cranelift_entity::EntityRef;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     analysis::{
@@ -16,9 +16,15 @@ use crate::{
             fold::TyFoldable,
             instantiate_trait_self,
             normalize::normalize_ty,
-            provider::{ProviderKind, provider_semantics},
+            provider::{
+                ProviderAddressSpace, ProviderKind, ProviderTransport, provider_semantics,
+                provider_semantics_for_specialized_call,
+            },
             trait_resolution::PredicateListId,
-            ty_check::{BodyOwner, LocalBinding, SemanticExprLowering, TypedBody},
+            ty_check::{
+                BodyOwner, EffectProviderProvenance, EffectProviderSpecialization, LocalBinding,
+                SemanticExprLowering, TypedBody,
+            },
         },
     },
     hir_def::FuncParamMode,
@@ -32,7 +38,8 @@ use common::indexmap::IndexMap;
 use indexmap::IndexSet;
 
 use super::{
-    GenericSubst, ImplEnv, instantiate_typed_body, semantic_callee_key, typed_body_template,
+    EffectProviderSubst, GenericSubst, ImplEnv, instantiate_typed_body, semantic_callee_key,
+    typed_body_template,
 };
 
 #[salsa::interned]
@@ -40,6 +47,7 @@ use super::{
 pub struct SemanticInstanceKey<'db> {
     pub owner: BodyOwner<'db>,
     pub subst: GenericSubst<'db>,
+    pub effect_providers: EffectProviderSubst<'db>,
     pub impl_env: ImplEnv<'db>,
 }
 
@@ -310,10 +318,12 @@ pub fn root_semantic_instance_key<'db>(
     owner: BodyOwner<'db>,
 ) -> Result<SemanticInstanceKey<'db>, RootSemanticInstanceError<'db>> {
     let generic_args = root_owner_generic_args(db, owner)?;
+    let effect_providers = root_owner_effect_providers(db, owner);
     let key = SemanticInstanceKey::new(
         db,
         owner,
         GenericSubst::new(db, generic_args),
+        EffectProviderSubst::new(db, effect_providers),
         ImplEnv::empty(db, owner.scope()),
     );
     validate_instantiated_effect_env_key(db, key)
@@ -329,6 +339,7 @@ pub fn identity_semantic_instance_key<'db>(
         db,
         owner,
         GenericSubst::new(db, owner_identity_generic_args(db, owner)),
+        EffectProviderSubst::empty(db),
         ImplEnv::empty(db, owner.scope()),
     )
 }
@@ -635,12 +646,9 @@ fn instantiate_effect_env_data_for_key<'db>(
         .into_iter()
         .map(|requirement| instantiate_effect_requirement(db, key, requirement))
         .collect::<Result<Vec<_>, _>>()?;
-    let providers = view
-        .providers(db)
-        .into_iter()
-        .map(|provider| instantiate_provider_binding(db, key, provider))
-        .collect::<Result<Vec<_>, _>>()?;
     let resolutions = view.resolutions(db);
+    let providers =
+        instantiate_provider_bindings_for_key(db, key, site, view.providers(db), &resolutions)?;
     let forwarded_witnesses =
         instantiated_effect_env_forwarded_witnesses(db, &requirements, &providers, &resolutions);
     let assumptions = if forwarded_witnesses.is_empty() {
@@ -658,6 +666,50 @@ fn instantiate_effect_env_data_for_key<'db>(
         forwarded_witnesses,
         assumptions,
     )))
+}
+
+fn instantiate_provider_bindings_for_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: SemanticInstanceKey<'db>,
+    site: crate::analysis::ty::ty_check::EffectParamSite<'db>,
+    canonical: Vec<ProviderBinding<'db>>,
+    resolutions: &[ResolvedEffectBinding],
+) -> Result<Vec<ProviderBinding<'db>>, SemanticEffectEnvInstantiationError<'db>> {
+    let specializations = key
+        .effect_providers(db)
+        .providers(db)
+        .iter()
+        .map(|specialization| {
+            (
+                specialization.provider.provider_idx,
+                specialization.provider.clone(),
+            )
+        })
+        .collect::<FxHashMap<_, _>>();
+    if matches!(
+        site,
+        crate::analysis::ty::ty_check::EffectParamSite::Func(_)
+    ) && !specializations.is_empty()
+    {
+        for resolution in resolutions {
+            assert!(
+                specializations.contains_key(&resolution.provider_idx),
+                "missing call-site provider specialization for function effect provider slot {} in {:?}",
+                resolution.provider_idx,
+                key.owner(db),
+            );
+        }
+    }
+    canonical
+        .into_iter()
+        .map(|provider| {
+            specializations
+                .get(&provider.provider_idx)
+                .cloned()
+                .map(Ok)
+                .unwrap_or_else(|| instantiate_provider_binding(db, key, provider))
+        })
+        .collect()
 }
 
 fn semantic_instance_base_assumptions_for_key<'db>(
@@ -729,6 +781,59 @@ fn owner_identity_generic_args<'db>(
     }
 }
 
+fn root_owner_effect_providers<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+) -> Vec<EffectProviderSpecialization<'db>> {
+    let BodyOwner::Func(func) = owner else {
+        return Vec::new();
+    };
+    let site = effect_param_site(owner).expect("function owners should always have an effect site");
+    let view = EffectEnvView::new(site);
+    let assumptions =
+        crate::analysis::ty::trait_resolution::constraint::collect_func_decl_constraints(
+            db,
+            func.into(),
+            true,
+        )
+        .instantiate_identity();
+    view.requirements(db)
+        .into_iter()
+        .filter_map(|requirement| {
+            let resolved = view.resolved_binding(db, requirement.binding_idx as usize)?;
+            let provider_ty = view
+                .resolved_binding_ty(db, requirement.binding_idx as usize)
+                .unwrap_or(resolved.provider.provider_ty);
+            let target_ty = requirement
+                .key
+                .binding_ty(db)
+                .or(resolved.provider.semantics.target_ty);
+            let provider = ProviderBinding {
+                provider_idx: resolved.provider.provider_idx,
+                provider_ty,
+                is_mut: resolved.provider.is_mut,
+                source: resolved.provider.source.clone(),
+                semantics: provider_semantics_for_specialized_call(
+                    db,
+                    func.scope(),
+                    assumptions,
+                    provider_ty,
+                    target_ty,
+                    Some(ProviderAddressSpace::Memory),
+                    ProviderTransport::ByValue,
+                ),
+            };
+            Some(EffectProviderSpecialization {
+                provider,
+                provenance: EffectProviderProvenance::Binding {
+                    owner,
+                    binding: LocalBinding::effect_param(&resolved),
+                },
+            })
+        })
+        .collect()
+}
+
 fn root_func_generic_args<'db>(
     db: &'db dyn HirAnalysisDb,
     func: crate::hir_def::Func<'db>,
@@ -752,6 +857,27 @@ fn root_func_generic_args<'db>(
         }
         return Ok(Vec::new());
     }
+    let site = effect_param_site(owner).expect("function owners should always have an effect site");
+    let provider_ty_by_idx = root_owner_effect_providers(db, owner)
+        .into_iter()
+        .map(|provider| {
+            (
+                provider.provider.provider_idx,
+                provider.provider.provider_ty,
+            )
+        })
+        .collect::<FxHashMap<_, _>>();
+    let resolved_provider_by_effect = EffectEnvView::new(site)
+        .resolutions(db)
+        .into_iter()
+        .map(|resolution| (resolution.requirement_idx as usize, resolution.provider_idx))
+        .collect::<FxHashMap<_, _>>();
+    let provider_param_by_effect = place_effect_provider_param_index_map(db, func);
+    let effect_idx_by_param = provider_param_by_effect
+        .iter()
+        .enumerate()
+        .filter_map(|(effect_idx, param_idx)| param_idx.map(|param_idx| (param_idx, effect_idx)))
+        .collect::<FxHashMap<_, _>>();
     for (param_idx, &param_ty) in params.iter().enumerate() {
         let is_effect_provider = matches!(
             param_ty.data(db),
@@ -767,16 +893,24 @@ fn root_func_generic_args<'db>(
             });
         }
     }
-    let site = effect_param_site(owner).expect("function owners should always have an effect site");
-    let root_provider_ty = EffectEnvView::new(site)
-        .providers(db)
+    params
         .iter()
-        .find_map(|provider| {
-            matches!(provider.source, ProviderSource::RootProvider { .. })
-                .then_some(provider.provider_ty)
+        .enumerate()
+        .map(|(param_idx, _)| {
+            let effect_idx = effect_idx_by_param
+                .get(&param_idx)
+                .copied()
+                .ok_or(RootSemanticInstanceError::MissingRootProvider { owner })?;
+            let provider_idx = resolved_provider_by_effect
+                .get(&effect_idx)
+                .copied()
+                .ok_or(RootSemanticInstanceError::MissingRootProvider { owner })?;
+            provider_ty_by_idx
+                .get(&provider_idx)
+                .copied()
+                .ok_or(RootSemanticInstanceError::MissingRootProvider { owner })
         })
-        .ok_or(RootSemanticInstanceError::MissingRootProvider { owner })?;
-    Ok(vec![root_provider_ty; params.len()])
+        .collect()
 }
 
 fn instantiate_effect_requirement<'db>(

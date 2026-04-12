@@ -13,6 +13,6 @@ pub use semantic::{
     validate_instantiated_effect_env_key,
 };
 pub use template::{
-    GenericSubst, ImplEnv, TypedBodyTemplate, instantiate_typed_body,
+    EffectProviderSubst, GenericSubst, ImplEnv, TypedBodyTemplate, instantiate_typed_body,
     instantiate_with_generic_args, typed_body_template,
 };

@@ -10,7 +10,7 @@ pub use borrowck::*;
 pub use consts::*;
 pub use ctfe::*;
 pub use instance::{
-    GenericSubst, ImplEnv, InstantiatedEffectEnv, RootSemanticInstanceError,
+    EffectProviderSubst, GenericSubst, ImplEnv, InstantiatedEffectEnv, RootSemanticInstanceError,
     SemanticEffectEnvInstantiationError, SemanticInstance, SemanticInstanceKey, TypedBodyTemplate,
     get_or_build_semantic_instance, identity_semantic_instance_key, instantiate_typed_body,
     instantiate_with_generic_args, instantiated_effect_env,

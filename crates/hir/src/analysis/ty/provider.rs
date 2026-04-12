@@ -136,6 +136,27 @@ pub fn provider_semantics<'db>(
     }
 }
 
+pub fn provider_semantics_for_specialized_call<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    provider_ty: TyId<'db>,
+    target_ty: Option<TyId<'db>>,
+    address_space: Option<ProviderAddressSpace>,
+    transport: ProviderTransport,
+) -> ProviderSemantics<'db> {
+    let mut semantics = provider_semantics(db, scope, assumptions, provider_ty);
+    if let Some(target_ty) = target_ty {
+        semantics.kind = provider_kind_for_target_ty(db, target_ty);
+        semantics.target_ty = Some(target_ty);
+    }
+    if let Some(address_space) = address_space {
+        semantics.address_space = Some(address_space);
+    }
+    semantics.transport = transport;
+    semantics
+}
+
 pub fn address_space_from_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,

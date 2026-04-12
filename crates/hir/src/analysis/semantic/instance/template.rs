@@ -7,8 +7,9 @@ use crate::{
             trait_def::TraitInstId,
             trait_resolution::PredicateListId,
             ty_check::{
-                BodyOwner, TypedBody, check_anon_const_body, check_const_body,
-                check_contract_init_body, check_contract_recv_arm_body, check_func_body,
+                BodyOwner, EffectProviderSpecialization, TypedBody, check_anon_const_body,
+                check_const_body, check_contract_init_body, check_contract_recv_arm_body,
+                check_func_body,
             },
             ty_def::{TyData, TyId},
         },
@@ -78,6 +79,19 @@ impl<'db> ImplEnv<'db> {
             PredicateListId::empty_list(db),
             Vec::new(),
         )
+    }
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct EffectProviderSubst<'db> {
+    #[return_ref]
+    pub providers: Vec<EffectProviderSpecialization<'db>>,
+}
+
+impl<'db> EffectProviderSubst<'db> {
+    pub fn empty(db: &'db dyn HirAnalysisDb) -> Self {
+        Self::new(db, Vec::new())
     }
 }
 

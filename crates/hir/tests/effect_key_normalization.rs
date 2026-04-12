@@ -4642,6 +4642,7 @@ fn impl_sum_semantic_body_uses_self_binding_directly() {
             &db,
             BodyOwner::Func(method),
             GenericSubst::new(&db, impl_args),
+            fe_hir::analysis::semantic::EffectProviderSubst::empty(&db),
             fe_hir::analysis::semantic::ImplEnv::empty(&db, impl_trait.scope()),
         ),
     );
@@ -4809,6 +4810,116 @@ fn function_effect_bindings_use_instantiated_provider_bindings() {
     assert_eq!(
         provider.provider_ty.pretty_print(&db).to_string(),
         "StorPtr<Cell>"
+    );
+}
+
+#[test]
+fn free_function_effect_calls_monomorphize_distinct_provider_bindings() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("free_function_effect_calls_monomorphize_distinct_provider_bindings.fe"),
+        r#"
+use std::evm::StorageMap
+
+fn needs(addr: u256) -> u256
+    uses (balances: StorageMap<u256, u256>)
+{
+    balances.get(key: addr)
+}
+
+fn caller() {
+    let mut left = StorageMap<u256, u256, 0>::new()
+    let mut right = StorageMap<u256, u256, 0>::new()
+    with (left) {
+        let _ = needs(1)
+    }
+    with (right) {
+        let _ = needs(2)
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let caller = find_func(&db, top_mod, "caller");
+    let instance = get_or_build_semantic_instance(
+        &db,
+        root_semantic_instance_key(&db, BodyOwner::Func(caller))
+            .expect("caller root instance should exist"),
+    );
+    let callees = instance
+        .body(&db)
+        .callees()
+        .into_iter()
+        .filter(|callee| {
+            matches!(
+                callee.key.owner(&db),
+                BodyOwner::Func(func)
+                    if func
+                        .name(&db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(&db) == "needs")
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        callees.len(),
+        2,
+        "different free-function effect providers should produce distinct callee instances",
+    );
+    assert_ne!(callees[0].key, callees[1].key);
+}
+
+#[test]
+fn free_function_effect_bindings_keep_explicit_memory_address_space() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("mutable_array_args_and_effects.fe"),
+        include_str!("../../fe/tests/fixtures/fe_test/mutable_array_args_and_effects.fe"),
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let caller = find_func(&db, top_mod, "test_mut_array_effect_param");
+    let instance = get_or_build_semantic_instance(
+        &db,
+        root_semantic_instance_key(&db, BodyOwner::Func(caller))
+            .expect("caller root instance should exist"),
+    );
+    let callee = instance
+        .body(&db)
+        .callees()
+        .into_iter()
+        .map(|callee| get_or_build_semantic_instance(&db, callee.key))
+        .find(|callee| {
+            matches!(
+                callee.key(&db).owner(&db),
+                BodyOwner::Func(func)
+                    if func
+                        .name(&db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(&db) == "write_effect")
+            )
+        })
+        .expect("expected write_effect callee");
+    let env = instantiated_effect_env(&db, callee).expect("write_effect effect env should exist");
+    let words_provider_idx = env
+        .resolutions(&db)
+        .iter()
+        .find(|resolution| resolution.requirement_idx == 0)
+        .expect("write_effect should resolve its first effect binding")
+        .provider_idx;
+    let provider = env
+        .providers(&db)
+        .iter()
+        .find(|provider| provider.provider_idx == words_provider_idx)
+        .expect("write_effect resolved provider should exist");
+    assert_eq!(
+        provider.semantics.address_space,
+        Some(fe_hir::analysis::ty::ProviderAddressSpace::Memory),
+        "free-function effect providers should keep explicit memory address spaces: {:#?}",
+        env.providers(&db),
     );
 }
 

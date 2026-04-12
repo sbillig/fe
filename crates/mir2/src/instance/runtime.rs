@@ -2112,6 +2112,7 @@ fn encoded_size_for_ty<'db>(
             expected: TyId::u256(db),
         },
         GenericSubst::new(db, impl_args),
+        hir::analysis::semantic::EffectProviderSubst::empty(db),
         ImplEnv::new(db, scope, assumptions, vec![inst]),
     );
     let value = eval_const_instance(db, get_or_build_semantic_instance(db, key)).ok()?;
@@ -2144,6 +2145,7 @@ fn resolve_trait_runtime_instance<'db>(
         db,
         BodyOwner::Func(func),
         GenericSubst::new(db, impl_args),
+        hir::analysis::semantic::EffectProviderSubst::empty(db),
         ImplEnv::new(db, scope, assumptions, vec![inst]),
     );
     Ok(runtime_instance_for_semantic(

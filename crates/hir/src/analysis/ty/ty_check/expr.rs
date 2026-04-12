@@ -52,9 +52,10 @@ use crate::analysis::ty::{
         stored_value_contains_out_of_scope_params,
     },
     fold::{AssocTySubst, TyFoldable as _, TyFolder},
+    provider::{ProviderTransport, provider_semantics_for_specialized_call},
     trait_def::TraitInstId,
     trait_resolution::{GoalSatisfiability, PredicateListId, TraitGoalSolution, TraitSolveCx},
-    ty_check::callable::Callable,
+    ty_check::callable::{Callable, EffectProviderProvenance, EffectProviderSpecialization},
     ty_def::{CapabilityKind, PrimTy, TyBase, TyData, prim_int_bits},
     unify::UnificationTable,
 };
@@ -78,6 +79,7 @@ use crate::analysis::{
     },
 };
 use crate::hir_def::{FieldParent, ItemKind, ManualContractRootAttr, scope_graph::ScopeId};
+use crate::semantic::ProviderBinding;
 use common::indexmap::IndexMap;
 
 #[derive(Debug, Clone, Copy)]
@@ -1264,10 +1266,14 @@ impl<'db> TyChecker<'db> {
         }
 
         let mut resolved_args: Vec<super::ResolvedEffectArg<'db>> = Vec::new();
+        let mut specialized_providers: FxHashMap<u32, EffectProviderSpecialization<'db>> =
+            FxHashMap::default();
 
         let body = self.body();
         let callee_provider_arg_idx_by_effect =
             place_effect_provider_param_index_map(self.db, func);
+        let callee_effect_env =
+            crate::core::semantic::EffectEnvView::new(EffectParamSite::Func(func));
 
         let provided_span = |provided: ProvidedEffect<'db>| match provided.origin {
             EffectOrigin::With { value_expr } => Some(value_expr.span(body).into()),
@@ -1431,6 +1437,28 @@ impl<'db> TyChecker<'db> {
                             "effect arg provider space must be explicit for {pass_mode:?} at {key_path:?}"
                         );
                     }
+                    if let Some(resolved_binding) =
+                        callee_effect_env.resolved_binding(self.db, req.binding_idx as usize)
+                    {
+                        let provider_idx = resolved_binding.provider.provider_idx;
+                        let specialization = self.specialize_effect_provider_binding(
+                            resolved_binding.provider,
+                            provider,
+                            &arg,
+                            pass_mode,
+                            instantiated_target_ty,
+                            provider_space,
+                        );
+                        if let Some(previous) =
+                            specialized_providers.insert(provider_idx, specialization.clone())
+                        {
+                            assert_eq!(
+                                previous, specialization,
+                                "conflicting call-site provider specialization for function effect provider slot {} at {:?}",
+                                provider_idx, key_path,
+                            );
+                        }
+                    }
                     resolved_args.push(super::ResolvedEffectArg {
                         param_idx,
                         key: key_path,
@@ -1458,6 +1486,9 @@ impl<'db> TyChecker<'db> {
                 }
             }
         }
+        let mut providers = specialized_providers.into_values().collect::<Vec<_>>();
+        providers.sort_by_key(|provider| provider.provider.provider_idx);
+        *callable.effect_providers_mut() = providers;
 
         resolved_args
     }
@@ -2038,6 +2069,120 @@ impl<'db> TyChecker<'db> {
         };
 
         matches!(binding, Some(LocalBinding::EffectParam { .. }))
+    }
+
+    fn specialize_effect_provider_binding(
+        &mut self,
+        slot: ProviderBinding<'db>,
+        provided: ProvidedEffect<'db>,
+        arg: &super::EffectArg<'db>,
+        pass_mode: super::EffectPassMode,
+        instantiated_target_ty: Option<TyId<'db>>,
+        provider_space: Option<super::ProviderAddressSpace>,
+    ) -> EffectProviderSpecialization<'db> {
+        let provenance = self
+            .effect_provider_provenance(provided, arg)
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing call-site provider provenance for {:?} in {:?}",
+                    slot.provider_idx,
+                    self.env.owner(),
+                )
+            });
+        let provider = self
+            .existing_provider_binding_for_effect_arg(provided, arg)
+            .map(|provider| ProviderBinding {
+                provider_idx: slot.provider_idx,
+                ..provider
+            })
+            .unwrap_or_else(|| {
+                let provider_ty = self
+                    .inferred_provider_ty_for_effect_arg(
+                        provided,
+                        arg,
+                        pass_mode,
+                        instantiated_target_ty,
+                    )
+                    .unwrap_or_else(|| self.table.fold_ty(self.db, provided.ty));
+                let target_ty = instantiated_target_ty.map(|ty| self.table.fold_ty(self.db, ty));
+                let semantics = provider_semantics_for_specialized_call(
+                    self.db,
+                    self.env.scope(),
+                    self.env.assumptions(),
+                    provider_ty,
+                    target_ty,
+                    provider_space,
+                    match pass_mode {
+                        super::EffectPassMode::ByPlace => ProviderTransport::ByPlace,
+                        super::EffectPassMode::ByTempPlace => ProviderTransport::ByTempPlace,
+                        super::EffectPassMode::ByValue | super::EffectPassMode::Unknown => {
+                            ProviderTransport::ByValue
+                        }
+                    },
+                );
+                ProviderBinding {
+                    provider_idx: slot.provider_idx,
+                    provider_ty,
+                    is_mut: provided.is_mut,
+                    source: slot.source,
+                    semantics,
+                }
+            });
+        EffectProviderSpecialization {
+            provider,
+            provenance,
+        }
+    }
+
+    fn existing_provider_binding_for_effect_arg(
+        &self,
+        provided: ProvidedEffect<'db>,
+        arg: &super::EffectArg<'db>,
+    ) -> Option<ProviderBinding<'db>> {
+        let binding = match arg {
+            super::EffectArg::Place(place) => {
+                let PlaceBase::Binding(binding) = place.base;
+                Some(binding)
+            }
+            super::EffectArg::Binding(binding) => Some(*binding),
+            super::EffectArg::Value(_) | super::EffectArg::Unknown => provided.binding,
+        }?;
+        match binding {
+            LocalBinding::EffectParam {
+                site, provider_idx, ..
+            } => self.env.provider_binding(site, provider_idx),
+            LocalBinding::Param {
+                site: ParamSite::EffectField(effect_site),
+                idx,
+                ..
+            } => self.env.resolved_provider_binding(effect_site, idx),
+            LocalBinding::Local { .. } | LocalBinding::Param { .. } => None,
+        }
+    }
+
+    fn effect_provider_provenance(
+        &self,
+        provided: ProvidedEffect<'db>,
+        arg: &super::EffectArg<'db>,
+    ) -> Option<EffectProviderProvenance<'db>> {
+        let owner = self.env.owner();
+        let binding = match arg {
+            super::EffectArg::Place(place) => {
+                let PlaceBase::Binding(binding) = place.base;
+                Some(binding)
+            }
+            super::EffectArg::Binding(binding) => Some(*binding),
+            super::EffectArg::Value(_) | super::EffectArg::Unknown => provided.binding,
+        };
+        binding
+            .map(|binding| EffectProviderProvenance::Binding { owner, binding })
+            .or(match provided.origin {
+                EffectOrigin::With { value_expr } => Some(EffectProviderProvenance::Expr {
+                    owner,
+                    expr: value_expr,
+                }),
+                EffectOrigin::Param { .. } => None,
+            })
     }
 
     fn query_type_key(&self, key: &EffectPatternKey<'db>) -> Option<TyId<'db>> {

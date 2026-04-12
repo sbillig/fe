@@ -92,6 +92,21 @@ pub(crate) fn runtime_address_space(class: &RuntimeClass<'_>) -> Option<AddressS
     }
 }
 
+fn provider_root_space<'db>(
+    binding: &ProviderBinding<'db>,
+    root_class: &RuntimeClass<'db>,
+) -> AddressSpaceKind {
+    runtime_address_space(root_class).unwrap_or_else(|| match binding.semantics.kind {
+        ProviderKind::RootObject => AddressSpaceKind::Memory,
+        ProviderKind::Handle | ProviderKind::RawAddress => address_space_from_provider(
+            binding
+                .semantics
+                .address_space
+                .unwrap_or_else(|| panic!("provider binding missing resolved space")),
+        ),
+    })
+}
+
 pub(crate) fn ref_class_for_place_result<'db>(
     root_class: &RuntimeClass<'db>,
     value_class: &RuntimeClass<'db>,
@@ -1712,6 +1727,7 @@ pub(crate) fn resolve_runtime_call_key<'db>(
         db,
         BodyOwner::Func(impl_func),
         GenericSubst::new(db, impl_args),
+        hir::analysis::semantic::EffectProviderSubst::empty(db),
         ImplEnv::new(
             db,
             caller_key.impl_env(db).normalization_scope(db),
@@ -1993,17 +2009,7 @@ pub(crate) fn normalized_place_address_class<'db>(
             NBorrowRoot::Param { .. } | NBorrowRoot::LocalSlot { .. } => {
                 (AddressSpaceKind::Memory, false)
             }
-            NBorrowRoot::Provider { binding } => (
-                runtime_address_space(&root_class).unwrap_or_else(|| {
-                    address_space_from_provider(
-                        binding
-                            .semantics
-                            .address_space
-                            .unwrap_or_else(|| panic!("provider binding missing resolved space")),
-                    )
-                }),
-                false,
-            ),
+            NBorrowRoot::Provider { binding } => (provider_root_space(binding, &root_class), false),
         },
     };
     Some(ref_class_for_place_result(

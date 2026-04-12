@@ -1446,6 +1446,7 @@ fn resolve_trait_runtime_instance<'db>(
         db,
         BodyOwner::Func(func),
         GenericSubst::new(db, impl_args),
+        hir::analysis::semantic::EffectProviderSubst::empty(db),
         ImplEnv::new(db, scope, assumptions, vec![inst]),
     );
     Ok(runtime_instance_for_semantic(

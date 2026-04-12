@@ -134,6 +134,7 @@ pub fn eval_body_owner_const<'db>(
         db,
         owner,
         GenericSubst::new(db, generic_args),
+        crate::analysis::semantic::EffectProviderSubst::empty(db),
         ImplEnv::empty(db, owner.scope()),
     );
     eval_const_instance(db, get_or_build_semantic_instance(db, key))
@@ -150,6 +151,7 @@ pub fn eval_body_owner_const_with_args<'db>(
         db,
         owner,
         GenericSubst::new(db, generic_args),
+        crate::analysis::semantic::EffectProviderSubst::empty(db),
         ImplEnv::empty(db, owner.scope()),
     );
     let instance = get_or_build_semantic_instance(db, key);
