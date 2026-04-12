@@ -19,7 +19,7 @@ use super::ir::{
     NSLocal, NSPlace, NSPlaceRoot, NSStmt, NSStmtKind, NSTerminator, NSTerminatorKind,
     NormalizedBindingLowering, NormalizedSemanticBody, NormalizedSemanticBodyId, ReadMode,
     SemanticNormalizeError, SemanticNormalizeErrorId, SemanticNormalizeResult,
-    empty_normalized_body,
+    empty_normalized_body, local_has_runtime_move_semantics,
 };
 
 pub fn normalize_semantic_body<'db>(
@@ -225,7 +225,6 @@ impl<'db> NormalizeCtxt<'db> {
                     ValueProvenance::RootProvider(provider) => {
                         NLocalOrigin::RootProvider(provider.clone())
                     }
-                    ValueProvenance::DerivedPlace { .. } => NLocalOrigin::AliasedPlace,
                 },
             ),
             SemanticLocalRole::PlaceBoundValue { provenance, .. } => (
@@ -444,9 +443,6 @@ impl<'db> NormalizeCtxt<'db> {
         match provenance {
             ValueProvenance::Ordinary => Ok(self.local_root_place(local, source)),
             ValueProvenance::RootProvider(binding) => Ok(self.provider_root_place(binding)),
-            ValueProvenance::DerivedPlace { base, path } => {
-                self.normalize_derived_place(local, base, &path)
-            }
         }
     }
 
@@ -647,7 +643,7 @@ impl<'db> NormalizeCtxt<'db> {
                 let place =
                     self.project_local_place(*base, Projection::Field(field.0 as usize), origin)?;
                 NExpr::ReadPlace {
-                    mode: self.read_mode_for_local(dst, origin, dst_ty),
+                    mode: self.read_mode_for_place(origin, dst_ty, &place),
                     place,
                 }
             }
@@ -658,7 +654,7 @@ impl<'db> NormalizeCtxt<'db> {
                     origin,
                 )?;
                 NExpr::ReadPlace {
-                    mode: self.read_mode_for_local(dst, origin, dst_ty),
+                    mode: self.read_mode_for_place(origin, dst_ty, &place),
                     place,
                 }
             }
@@ -672,10 +668,10 @@ impl<'db> NormalizeCtxt<'db> {
                 provider: *provider,
             },
             SExpr::GetEnumTag { value } => NExpr::GetEnumTag {
-                value: self.normalize_operand(*value, origin),
+                value: self.normalize_copy_operand(*value),
             },
             SExpr::IsEnumVariant { value, variant } => NExpr::IsEnumVariant {
-                value: self.normalize_operand(*value, origin),
+                value: self.normalize_copy_operand(*value),
                 variant: *variant,
             },
             SExpr::ExtractEnumField {
@@ -761,7 +757,14 @@ impl<'db> NormalizeCtxt<'db> {
             .ty;
         NOperand {
             local,
-            mode: self.read_mode_for_local(local, origin, ty),
+            mode: self.read_mode_for_operand(local, origin, ty),
+        }
+    }
+
+    fn normalize_copy_operand(&self, local: SLocalId) -> NOperand {
+        NOperand {
+            local,
+            mode: ReadMode::Copy,
         }
     }
 
@@ -783,8 +786,8 @@ impl<'db> NormalizeCtxt<'db> {
                 .map(|param| param.mode(self.db))
                 .filter(|mode| *mode == crate::hir_def::FuncParamMode::View)
                 .map(|_| ReadMode::Copy)
-                .unwrap_or_else(|| self.read_mode_for_local(local, origin, ty)),
-            _ => self.read_mode_for_local(local, origin, ty),
+                .unwrap_or_else(|| self.read_mode_for_operand(local, origin, ty)),
+            _ => self.read_mode_for_operand(local, origin, ty),
         };
         NOperand { local, mode }
     }
@@ -880,24 +883,41 @@ impl<'db> NormalizeCtxt<'db> {
         }
     }
 
-    fn read_mode_for_local(
+    fn read_mode_for_operand(
         &self,
         local: SLocalId,
         origin: crate::analysis::semantic::SemOrigin<'db>,
         ty: TyId<'db>,
     ) -> ReadMode {
-        match self
+        let Some(local) = self
             .locals
             .get(local.index())
             .and_then(|local| local.as_ref())
-            .map(|local| &local.lowering)
-        {
-            Some(NormalizedBindingLowering::ValueLocal { place })
-            | Some(NormalizedBindingLowering::PlaceBoundValue { place, .. }) => {
-                self.read_mode_for_place(origin, ty, place)
+        else {
+            return self.read_mode(origin, ty);
+        };
+        if !local_has_runtime_move_semantics(self.db, local, &self.borrow_roots) {
+            return ReadMode::Copy;
+        }
+        if !ty_is_copy(
+            self.db,
+            self.raw.template_owner.scope(),
+            ty,
+            self.assumptions,
+        ) {
+            return ReadMode::Move;
+        }
+        match origin {
+            crate::analysis::semantic::SemOrigin::Expr(expr)
+                if self
+                    .instance
+                    .key(self.db)
+                    .instantiate_typed_body(self.db)
+                    .is_implicit_move(expr) =>
+            {
+                ReadMode::Move
             }
-            Some(NormalizedBindingLowering::CarrierLocal { .. }) => ReadMode::Copy,
-            Some(NormalizedBindingLowering::Erased) | None => self.read_mode(origin, ty),
+            _ => ReadMode::Copy,
         }
     }
 

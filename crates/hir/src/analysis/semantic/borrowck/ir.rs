@@ -4,6 +4,7 @@ use salsa::Update;
 
 use crate::{
     analysis::{
+        HirAnalysisDb,
         semantic::{
             FieldIndex, Mutability, SConst, SLocalId, SemOrigin, SemanticBody, SemanticCalleeRef,
             SemanticCodeRegionRef, VariantIndex,
@@ -194,6 +195,29 @@ impl<'db> NSLocal<'db> {
     pub fn transport_place(&self) -> Option<&NSPlace<'db>> {
         self.facts.transport_place.as_ref()
     }
+}
+
+pub(crate) fn local_has_runtime_move_semantics<'db>(
+    db: &'db dyn HirAnalysisDb,
+    local: &NSLocal<'db>,
+    borrow_roots: &[NBorrowRoot<'db>],
+) -> bool {
+    !matches!(
+        local.lowering,
+        NormalizedBindingLowering::Erased | NormalizedBindingLowering::CarrierLocal { .. }
+    ) && local.ty.as_capability(db).is_none()
+        && match &local.lowering {
+            NormalizedBindingLowering::ValueLocal { place } => !matches!(
+                place
+                    .root
+                    .borrow_root()
+                    .and_then(|root| borrow_roots.get(root.index())),
+                Some(NBorrowRoot::Provider { .. })
+            ),
+            NormalizedBindingLowering::PlaceBoundValue { .. }
+            | NormalizedBindingLowering::CarrierLocal { .. }
+            | NormalizedBindingLowering::Erased => false,
+        }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

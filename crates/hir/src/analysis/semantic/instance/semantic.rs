@@ -1211,13 +1211,6 @@ fn classify_projection_local_role<'db>(
     let base_role = locals[base.index()].role.clone();
     match fallback {
         SemanticLocalRole::Erased => SemanticLocalRole::Erased,
-        SemanticLocalRole::DirectValue { .. }
-            if !matches!(base_role, SemanticLocalRole::Erased) =>
-        {
-            SemanticLocalRole::DirectValue {
-                provenance: ValueProvenance::DerivedPlace { base, path },
-            }
-        }
         SemanticLocalRole::DirectValue { .. } => fallback,
         SemanticLocalRole::PlaceCarrier { value_ty }
         | SemanticLocalRole::PlaceBoundValue { value_ty, .. }
@@ -1319,29 +1312,15 @@ fn merge_direct_value_role<'db>(
     right: ValueProvenance<'db>,
 ) -> Option<SemanticLocalRole<'db>> {
     let provenance = match (left, right) {
-        (ValueProvenance::Ordinary, other) | (other, ValueProvenance::Ordinary) => other,
+        (ValueProvenance::Ordinary, _) | (_, ValueProvenance::Ordinary) => {
+            ValueProvenance::Ordinary
+        }
         (ValueProvenance::RootProvider(left), ValueProvenance::RootProvider(right))
             if left == right =>
         {
             ValueProvenance::RootProvider(left)
         }
-        (
-            ValueProvenance::DerivedPlace {
-                base: left_base,
-                path: left_path,
-            },
-            ValueProvenance::DerivedPlace {
-                base: right_base,
-                path: right_path,
-            },
-        ) if left_base == right_base && left_path == right_path => ValueProvenance::DerivedPlace {
-            base: left_base,
-            path: left_path,
-        },
-        (ValueProvenance::RootProvider(_), ValueProvenance::RootProvider(_))
-        | (ValueProvenance::DerivedPlace { .. }, ValueProvenance::DerivedPlace { .. })
-        | (ValueProvenance::RootProvider(_), ValueProvenance::DerivedPlace { .. })
-        | (ValueProvenance::DerivedPlace { .. }, ValueProvenance::RootProvider(_)) => {
+        (ValueProvenance::RootProvider(_), ValueProvenance::RootProvider(_)) => {
             return None;
         }
     };

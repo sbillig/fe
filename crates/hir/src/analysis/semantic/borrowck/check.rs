@@ -30,6 +30,7 @@ use super::{
         NBorrowRoot, NBorrowRootId, NEffectArgValue, NExpr, NLocalInterface, NOperand, NSPlace,
         NSPlaceRoot, NSProjectionPath, NSStmtKind, NSTerminatorKind, NormalizedBindingLowering,
         NormalizedSemanticBody, ReadMode, SemanticBorrowCheckResult, SemanticBorrowSummaryResult,
+        local_has_runtime_move_semantics,
     },
     normalize::normalize_semantic_body,
 };
@@ -388,7 +389,7 @@ fn verify_expr<'db>(
         }
         NExpr::ReadPlace { place, mode } => {
             verify_place(db, instance, body, origin, place)?;
-            if *mode == ReadMode::Move && !place_move_is_valid(body, place) {
+            if *mode == ReadMode::Move && !place_move_is_valid(db, body, place) {
                 return Err(normalized_body_internal_diag(
                     db,
                     instance,
@@ -430,7 +431,9 @@ fn verify_operand<'db>(
     operand: NOperand,
 ) -> Result<(), CompleteDiagnostic> {
     let local = verify_local_exists(db, instance, body, origin, operand.local)?;
-    if operand.mode == ReadMode::Move && !local_has_runtime_move_semantics(db, body, local) {
+    if operand.mode == ReadMode::Move
+        && !local_has_runtime_move_semantics(db, local, &body.borrow_roots)
+    {
         return Err(normalized_body_internal_diag(
             db,
             instance,
@@ -506,43 +509,22 @@ fn verify_place<'db>(
     Ok(())
 }
 
-fn place_move_is_valid<'db>(body: &NormalizedSemanticBody<'db>, place: &NSPlace<'db>) -> bool {
+fn place_move_is_valid<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    body: &NormalizedSemanticBody<'db>,
+    place: &NSPlace<'db>,
+) -> bool {
     match place.root {
         NSPlaceRoot::Root(root) => match body.root(root) {
-            Some(NBorrowRoot::Param { local, .. }) | Some(NBorrowRoot::LocalSlot { local }) => body
-                .local(*local)
-                .is_some_and(|local| local_has_runtime_move_semantics_for_local(body, local)),
+            Some(NBorrowRoot::Param { local, .. }) | Some(NBorrowRoot::LocalSlot { local }) => {
+                body.local(*local).is_some_and(|local| {
+                    local_has_runtime_move_semantics(db, local, &body.borrow_roots)
+                })
+            }
             Some(NBorrowRoot::Provider { .. }) => false,
             None => false,
         },
         NSPlaceRoot::CarrierDerefLocal(_) => false,
-    }
-}
-
-fn local_has_runtime_move_semantics<'db>(
-    db: &'db dyn SpannedHirAnalysisDb,
-    body: &NormalizedSemanticBody<'db>,
-    local: &NSLocal<'db>,
-) -> bool {
-    !matches!(
-        local.lowering,
-        NormalizedBindingLowering::Erased | NormalizedBindingLowering::CarrierLocal { .. }
-    ) && local.ty.as_capability(db).is_none()
-        && local_has_runtime_move_semantics_for_local(body, local)
-}
-
-fn local_has_runtime_move_semantics_for_local<'db>(
-    body: &NormalizedSemanticBody<'db>,
-    local: &NSLocal<'db>,
-) -> bool {
-    match &local.lowering {
-        NormalizedBindingLowering::ValueLocal { place } => !matches!(
-            place.root.borrow_root().and_then(|root| body.root(root)),
-            Some(NBorrowRoot::Provider { .. })
-        ),
-        NormalizedBindingLowering::PlaceBoundValue { .. }
-        | NormalizedBindingLowering::CarrierLocal { .. }
-        | NormalizedBindingLowering::Erased => false,
     }
 }
 
@@ -1775,9 +1757,9 @@ impl<'db> Borrowck<'db> {
     }
 
     fn local_has_runtime_move_semantics(&self, local: crate::analysis::semantic::SLocalId) -> bool {
-        self.body
-            .local(local)
-            .is_some_and(|local| local_has_runtime_move_semantics(self.db, &self.body, local))
+        self.body.local(local).is_some_and(|local| {
+            local_has_runtime_move_semantics(self.db, local, &self.body.borrow_roots)
+        })
     }
 
     fn check_moved_overlap(

@@ -95,10 +95,6 @@ pub enum SemanticProjection<'db> {
 pub enum ValueProvenance<'db> {
     Ordinary,
     RootProvider(ProviderBinding<'db>),
-    DerivedPlace {
-        base: SLocalId,
-        path: Box<[SemanticProjection<'db>]>,
-    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -172,7 +168,7 @@ impl<'db> SemanticLocalRole<'db> {
             } => Some(provider.clone()),
             Self::Erased
             | Self::DirectValue {
-                provenance: ValueProvenance::Ordinary | ValueProvenance::DerivedPlace { .. },
+                provenance: ValueProvenance::Ordinary,
             }
             | Self::PlaceCarrier { .. }
             | Self::DirectCarrier { provider: None, .. } => None,

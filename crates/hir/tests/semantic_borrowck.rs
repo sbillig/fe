@@ -5,13 +5,16 @@ use fe_hir::{
     analysis::{
         diagnostics::format_diags,
         semantic::{
-            FieldIndex, NBorrowRoot, NLocalIdentityPolicy, NLocalInterface, NLocalOrigin,
-            NormalizedBindingLowering, SPlaceElem, SStmtKind, SemanticInstance,
+            FieldIndex, NBorrowRoot, NExpr, NLocalIdentityPolicy, NLocalInterface, NLocalOrigin,
+            NSStmtKind, NormalizedBindingLowering, SPlaceElem, SStmtKind, SemanticInstance,
             check_semantic_borrows, collect_semantic_borrow_diagnostics,
             get_or_build_semantic_instance, identity_semantic_instance_key,
             normalize_semantic_body,
         },
-        ty::{ty_check::BodyOwner, ty_def::TyData},
+        ty::{
+            ty_check::BodyOwner,
+            ty_def::{BorrowKind, TyData},
+        },
     },
     hir_def::{ItemKind, Partial},
 };
@@ -240,6 +243,96 @@ fn create_contract_fixture_does_not_report_top_level_semantic_borrow_errors() {
 }
 
 #[test]
+fn reports_move_conflict_for_reused_owned_binding() {
+    let diags = borrow_diags(
+        r#"
+struct Inner {}
+
+fn bad(x: own Inner) {
+    let y = x
+    let z = x
+}
+"#,
+    );
+
+    assert!(diags.contains("move conflict in `fn bad`"), "{diags:?}");
+}
+
+#[test]
+fn non_copy_projection_move_does_not_report_conflict() {
+    let diags = borrow_diags(
+        r#"
+struct E {}
+struct Inner {}
+struct Container {
+    value: Inner,
+}
+
+fn sink(_ value: own Inner, _ e: mut E) {}
+
+impl Container {
+    fn enc(own self, e: mut E) {
+        sink(self.value, mut e)
+    }
+}
+"#,
+    );
+
+    assert!(!diags.contains("move conflict"), "{diags:?}");
+    assert!(
+        !diags.contains("internal borrow checking error"),
+        "{diags:?}"
+    );
+}
+
+#[test]
+fn generic_tuple_projection_move_does_not_report_conflict() {
+    let diags = borrow_diags(
+        r#"
+struct E {}
+
+fn sink<T>(_ value: own T, _ e: mut E) {}
+
+trait Enc {
+    fn enc(own self, e: mut E)
+}
+
+impl<T0> Enc for (T0,) {
+    fn enc(own self, e: mut E) {
+        sink<T0>(self.0, mut e)
+    }
+}
+"#,
+    );
+
+    assert!(!diags.contains("move conflict"), "{diags:?}");
+    assert!(
+        !diags.contains("internal borrow checking error"),
+        "{diags:?}"
+    );
+}
+
+#[test]
+fn enum_variant_test_does_not_consume_owned_value() {
+    let diags = borrow_diags(
+        r#"
+fn decode(word: u256) -> u64 {
+    if let Option::Some(value) = word.downcast() {
+        return value
+    }
+    0
+}
+"#,
+    );
+
+    assert!(!diags.contains("move conflict"), "{diags:?}");
+    assert!(
+        !diags.contains("internal borrow checking error"),
+        "{diags:?}"
+    );
+}
+
+#[test]
 fn effect_handle_field_deref_fixture_does_not_report_semantic_borrow_errors() {
     let diags = borrow_diags(include_str!(
         "../../codegen/tests/fixtures/effect_handle_field_deref.fe"
@@ -334,21 +427,87 @@ fn read_balance(addr: Address) -> u256 uses (store: TokenStore) {
         NormalizedBindingLowering::ValueLocal { place } => place
             .root
             .borrow_root()
-            .expect("field projection should preserve a borrow root"),
+            .expect("field projection should preserve a local root"),
         ref lowering => panic!("unexpected lowering for provider field temp: {lowering:?}"),
     };
     assert!(
-        matches!(normalized.root(root), Some(NBorrowRoot::Provider { .. })),
-        "expected provider root for provider field temp, got {:?}",
+        matches!(
+            normalized.root(root),
+            Some(NBorrowRoot::LocalSlot { local }) if *local == fe_hir::analysis::semantic::SLocalId::from_u32(3)
+        ),
+        "expected self-rooted local slot for provider field temp, got {:?}",
         normalized.root(root)
     );
     assert_eq!(field_local.facts.interface, NLocalInterface::DirectValue);
-    assert!(matches!(
-        field_local.facts.origin,
-        NLocalOrigin::AliasedPlace
-    ));
-    assert!(field_local.transport_place().is_some());
+    assert!(matches!(field_local.facts.origin, NLocalOrigin::SelfRooted));
+    assert!(field_local.transport_place().is_none());
     assert!(!field_local.facts.root_demand.needs_runtime_root());
+}
+
+#[test]
+fn ref_projection_preserves_place_borrow_lowering() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_borrowck.fe".into(),
+        r#"
+struct Pair {
+    x: u256,
+}
+
+fn read(pair: Pair) -> u256 {
+    let r: ref u256 = ref pair.x
+    r
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let instance = top_mod
+        .all_items(&db)
+        .iter()
+        .find_map(|item| match item {
+            ItemKind::Func(func)
+                if func
+                    .name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "read") =>
+            {
+                Some(get_or_build_semantic_instance(
+                    &db,
+                    identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
+                ))
+            }
+            _ => None,
+        })
+        .expect("read instance");
+    let normalized = normalize_semantic_body(&db, instance).expect("normalized body");
+    let borrow = normalized
+        .blocks
+        .iter()
+        .flat_map(|block| block.stmts.iter())
+        .find_map(|stmt| match &stmt.kind {
+            NSStmtKind::Assign {
+                expr:
+                    NExpr::Borrow {
+                        place,
+                        kind: BorrowKind::Ref,
+                        ..
+                    },
+                ..
+            } => Some(place),
+            _ => None,
+        })
+        .expect("borrow expression");
+    let root = borrow.root.borrow_root().expect("borrow root");
+    assert!(
+        matches!(normalized.root(root), Some(NBorrowRoot::Param { .. })),
+        "expected param root for ref projection, got {:?}",
+        normalized.root(root)
+    );
+    assert_eq!(borrow.path.len(), 1);
+    assert_eq!(
+        borrow.path.iter().next(),
+        Some(&fe_hir::projection::Projection::Field(0))
+    );
 }
 
 #[test]
