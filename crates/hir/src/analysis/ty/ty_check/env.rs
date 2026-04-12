@@ -46,7 +46,9 @@ use crate::analysis::{
         unify::UnificationTable,
     },
 };
-use crate::core::semantic::{EffectEnvView, EffectRequirement, ProviderBinding};
+use crate::core::semantic::{
+    EffectEnvView, EffectRequirement, ProviderBinding, ResolvedEffectBindingInfo,
+};
 
 pub(crate) struct TyCheckEnv<'db> {
     db: &'db dyn HirAnalysisDb,
@@ -330,18 +332,18 @@ impl<'db> TyCheckEnv<'db> {
                 continue;
             }
             let idx = binding.binding_idx as usize;
-            let local_binding = LocalBinding::EffectParam {
-                site: EffectParamSite::Func(func),
-                idx,
-                key_path: binding.binding_path,
-                is_mut: binding.is_mut,
+            let Some(resolved_binding) =
+                self.resolved_effect_binding(EffectParamSite::Func(func), idx)
+            else {
+                continue;
             };
-            if let Some(ident) = Some(binding.binding_name) {
-                self.var_env
-                    .last_mut()
-                    .expect("function scope exists")
-                    .register_var(ident, local_binding);
-            }
+            self.var_env
+                .last_mut()
+                .expect("function scope exists")
+                .register_var(
+                    resolved_binding.requirement.binding_name,
+                    LocalBinding::effect_param(&resolved_binding),
+                );
         }
     }
 
@@ -377,11 +379,27 @@ impl<'db> TyCheckEnv<'db> {
         site: EffectParamSite<'db>,
         idx: usize,
     ) -> Option<EffectRequirement<'db>> {
+        self.resolved_effect_binding(site, idx)
+            .map(|binding| binding.requirement)
+    }
+
+    pub(super) fn resolved_effect_binding(
+        &self,
+        site: EffectParamSite<'db>,
+        idx: usize,
+    ) -> Option<ResolvedEffectBindingInfo<'db>> {
+        EffectEnvView::new(site).resolved_binding(self.db, idx)
+    }
+
+    pub(super) fn provider_binding(
+        &self,
+        site: EffectParamSite<'db>,
+        provider_idx: u32,
+    ) -> Option<ProviderBinding<'db>> {
         EffectEnvView::new(site)
-            .requirements(self.db)
-            .iter()
-            .find(|binding| binding.binding_idx as usize == idx)
-            .cloned()
+            .providers(self.db)
+            .into_iter()
+            .find(|provider| provider.provider_idx == provider_idx)
     }
 
     pub(super) fn resolved_provider_binding(
@@ -389,16 +407,8 @@ impl<'db> TyCheckEnv<'db> {
         site: EffectParamSite<'db>,
         idx: usize,
     ) -> Option<ProviderBinding<'db>> {
-        let view = EffectEnvView::new(site);
-        let provider_idx = view
-            .resolutions(self.db)
-            .iter()
-            .find(|resolution| resolution.requirement_idx as usize == idx)?
-            .provider_idx;
-        view.providers(self.db)
-            .iter()
-            .find(|provider| provider.provider_idx == provider_idx)
-            .cloned()
+        self.resolved_effect_binding(site, idx)
+            .map(|binding| binding.provider)
     }
 
     fn effect_binding_scope(&self, site: EffectParamSite<'db>) -> ScopeId<'db> {
@@ -443,16 +453,14 @@ impl<'db> TyCheckEnv<'db> {
             }
 
             let idx = binding.binding_idx as usize;
-            let local_binding = LocalBinding::EffectParam {
-                site: binding.binding_site,
-                idx,
-                key_path: binding.binding_path,
-                is_mut: binding.is_mut,
+            let Some(resolved_binding) = self.resolved_effect_binding(binding.binding_site, idx)
+            else {
+                continue;
             };
-            self.var_env
-                .last_mut()
-                .expect("scope exists")
-                .register_var(binding.binding_name, local_binding);
+            self.var_env.last_mut().expect("scope exists").register_var(
+                resolved_binding.requirement.binding_name,
+                LocalBinding::effect_param(&resolved_binding),
+            );
         }
     }
 
@@ -965,23 +973,16 @@ impl<'db> TyChecker<'db> {
             }
 
             let idx = binding.binding_idx as usize;
-            self.env
-                .resolved_provider_binding(EffectParamSite::Func(func), idx)
+            let resolved_binding = self
+                .env
+                .resolved_effect_binding(EffectParamSite::Func(func), idx)
                 .unwrap_or_else(|| panic!("missing provider binding for effect at index {idx}"));
-            let local_binding = LocalBinding::EffectParam {
-                site: EffectParamSite::Func(func),
-                idx,
-                key_path: binding.binding_path,
-                is_mut: binding.is_mut,
-            };
+            let local_binding = LocalBinding::effect_param(&resolved_binding);
             let provided = ProvidedEffect {
                 origin: EffectOrigin::Param {
                     site: EffectParamSite::Func(func),
                     index: idx,
-                    name: func
-                        .effect_params(self.db)
-                        .nth(idx)
-                        .and_then(|effect| effect.name(self.db)),
+                    name: Some(resolved_binding.requirement.binding_name),
                 },
                 ty: EffectEnvView::new(EffectParamSite::Func(func))
                     .resolved_binding_ty(self.db, idx)
@@ -1035,14 +1036,10 @@ impl<'db> TyChecker<'db> {
             name: Some(binding.binding_name),
         };
 
-        self.env
-            .resolved_provider_binding(binding.binding_site, idx)?;
-        let local_binding = LocalBinding::EffectParam {
-            site: binding.binding_site,
-            idx,
-            key_path: binding.binding_path,
-            is_mut: binding.is_mut,
-        };
+        let resolved_binding = self
+            .env
+            .resolved_effect_binding(binding.binding_site, idx)?;
+        let local_binding = LocalBinding::effect_param(&resolved_binding);
         Some(ProvidedEffect {
             origin,
             ty: EffectEnvView::new(binding.binding_site)
@@ -1296,6 +1293,8 @@ pub enum LocalBinding<'db> {
     EffectParam {
         site: EffectParamSite<'db>,
         idx: usize,
+        binding_name: IdentId<'db>,
+        provider_idx: u32,
         key_path: PathId<'db>,
         is_mut: bool,
     },
@@ -1317,6 +1316,17 @@ impl<'db> LocalBinding<'db> {
             LocalBinding::Local { is_mut, .. }
             | LocalBinding::Param { is_mut, .. }
             | LocalBinding::EffectParam { is_mut, .. } => *is_mut,
+        }
+    }
+
+    pub(crate) fn effect_param(binding: &ResolvedEffectBindingInfo<'db>) -> Self {
+        Self::EffectParam {
+            site: binding.requirement.binding_site,
+            idx: binding.requirement.binding_idx as usize,
+            binding_name: binding.requirement.binding_name,
+            provider_idx: binding.provider.provider_idx,
+            key_path: binding.requirement.binding_path,
+            is_mut: binding.requirement.is_mut,
         }
     }
 
@@ -1343,10 +1353,7 @@ impl<'db> LocalBinding<'db> {
                 .unwrap_or_else(|| IdentId::new(env.db, "_".to_string())),
             Self::Param { site, idx, .. } => param_name(env.db, *site, *idx)
                 .unwrap_or_else(|| IdentId::new(env.db, "_".to_string())),
-            Self::EffectParam { key_path, .. } => key_path
-                .ident(env.db)
-                .to_opt()
-                .unwrap_or_else(|| IdentId::new(env.db, "_".to_string())),
+            Self::EffectParam { binding_name, .. } => *binding_name,
         }
     }
 
@@ -1402,9 +1409,9 @@ impl<'db> LocalBinding<'db> {
             Self::Param { site, idx, .. } => param_name(db, *site, *idx)
                 .map(|ident| ident.data(db).to_string())
                 .unwrap_or_else(|| format!("%param{idx}")),
-            Self::EffectParam { key_path, idx, .. } => key_path
-                .ident(db)
-                .to_opt()
+            Self::EffectParam {
+                binding_name, idx, ..
+            } => Some(*binding_name)
                 .map(|ident| ident.data(db).to_string())
                 .unwrap_or_else(|| format!("%effect{idx}")),
         }

@@ -126,18 +126,20 @@ pub fn owner_effect_bindings<'db>(
 ) -> Vec<LocalBinding<'db>> {
     effect_param_site(owner)
         .into_iter()
-        .flat_map(|site| EffectEnvView::new(site).requirements(db))
-        .filter(|binding| {
-            matches!(
-                binding.key.kind(),
-                EffectKeyKind::Type | EffectKeyKind::Trait
-            )
-        })
-        .map(|binding| LocalBinding::EffectParam {
-            site: binding.binding_site,
-            idx: binding.binding_idx as usize,
-            key_path: binding.binding_path,
-            is_mut: binding.is_mut,
+        .flat_map(|site| {
+            let view = EffectEnvView::new(site);
+            view.requirements(db)
+                .into_iter()
+                .filter(|binding| {
+                    matches!(
+                        binding.key.kind(),
+                        EffectKeyKind::Type | EffectKeyKind::Trait
+                    )
+                })
+                .filter_map(move |binding| {
+                    view.resolved_binding(db, binding.binding_idx as usize)
+                        .map(|binding| LocalBinding::effect_param(&binding))
+                })
         })
         .collect()
 }
@@ -163,16 +165,16 @@ pub fn same_owner_effect_binding<'db>(lhs: LocalBinding<'db>, rhs: LocalBinding<
     match (lhs, rhs) {
         (
             LocalBinding::EffectParam {
+                site: lhs_site,
                 idx: lhs_idx,
-                key_path: lhs_key,
                 ..
             },
             LocalBinding::EffectParam {
+                site: rhs_site,
                 idx: rhs_idx,
-                key_path: rhs_key,
                 ..
             },
-        ) => lhs_idx == rhs_idx && lhs_key == rhs_key,
+        ) => lhs_site == rhs_site && lhs_idx == rhs_idx,
         (
             LocalBinding::Param {
                 site: crate::analysis::ty::ty_check::ParamSite::EffectField(_),

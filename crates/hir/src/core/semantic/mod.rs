@@ -1669,6 +1669,12 @@ pub struct ResolvedEffectBinding {
     pub provider_idx: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct ResolvedEffectBindingInfo<'db> {
+    pub requirement: EffectRequirement<'db>,
+    pub provider: ProviderBinding<'db>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub struct EffectEnvView<'db> {
     site: EffectParamSite<'db>,
@@ -1687,22 +1693,39 @@ impl<'db> EffectEnvView<'db> {
         effect_requirements_for_site(db, self.site)
     }
 
+    pub fn resolved_binding(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        idx: usize,
+    ) -> Option<ResolvedEffectBindingInfo<'db>> {
+        let requirement = self
+            .requirements(db)
+            .into_iter()
+            .find(|binding| binding.binding_idx as usize == idx)?;
+        let provider_idx = self
+            .resolutions(db)
+            .into_iter()
+            .find(|resolution| resolution.requirement_idx as usize == idx)?
+            .provider_idx;
+        let provider = self
+            .providers(db)
+            .into_iter()
+            .find(|provider| provider.provider_idx == provider_idx)?;
+
+        Some(ResolvedEffectBindingInfo {
+            requirement,
+            provider,
+        })
+    }
+
     pub fn resolved_binding_ty(self, db: &'db dyn HirAnalysisDb, idx: usize) -> Option<TyId<'db>> {
         let requirement = self
             .requirements(db)
-            .iter()
-            .find(|binding| binding.binding_idx as usize == idx)?
-            .clone();
+            .into_iter()
+            .find(|binding| binding.binding_idx as usize == idx)?;
         let provider = self
-            .resolutions(db)
-            .iter()
-            .find(|resolution| resolution.requirement_idx as usize == idx)
-            .and_then(|resolution| {
-                self.providers(db)
-                    .iter()
-                    .find(|provider| provider.provider_idx == resolution.provider_idx)
-                    .cloned()
-            });
+            .resolved_binding(db, idx)
+            .map(|binding| binding.provider);
 
         match requirement.key {
             EffectRequirementKey::Trait(_) => provider

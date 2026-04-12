@@ -412,30 +412,31 @@ impl<'db> TyChecker<'db> {
         contract: Contract<'db>,
         effects: crate::hir_def::EffectParamListId<'db>,
     ) {
-        let owner = match owner {
-            BodyOwner::Func(func) => EffectParamOwner::Func(func),
+        let (owner, site) = match owner {
+            BodyOwner::Func(func) => (EffectParamOwner::Func(func), EffectParamSite::Func(func)),
             BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => unreachable!(),
-            BodyOwner::ContractInit { contract } => EffectParamOwner::ContractInit { contract },
+            BodyOwner::ContractInit { contract } => (
+                EffectParamOwner::ContractInit { contract },
+                EffectParamSite::ContractInit { contract },
+            ),
             BodyOwner::ContractRecvArm {
                 contract,
                 recv_idx,
                 arm_idx,
-            } => EffectParamOwner::ContractRecvArm {
-                contract,
-                recv_idx,
-                arm_idx,
-            },
+            } => (
+                EffectParamOwner::ContractRecvArm {
+                    contract,
+                    recv_idx,
+                    arm_idx,
+                },
+                EffectParamSite::ContractRecvArm {
+                    contract,
+                    recv_idx,
+                    arm_idx,
+                },
+            ),
         };
-        let contract_effect_names: FxHashSet<_> = contract
-            .effects(self.db)
-            .data(self.db)
-            .iter()
-            .filter_map(|e| e.name)
-            .collect();
-        let contract_field_names: FxHashSet<_> = crate::hir_def::FieldParent::Contract(contract)
-            .fields(self.db)
-            .filter_map(|f| f.name(self.db))
-            .collect();
+        let view = crate::core::semantic::EffectEnvView::new(site);
 
         let assumptions = PredicateListId::empty_list(self.db);
         let root_effect_ty = crate::analysis::ty::registered_root_providers(
@@ -515,21 +516,15 @@ impl<'db> TyChecker<'db> {
                 continue;
             }
 
-            // Unlabeled contract-scoped effects refer to a contract field name or an
-            // existing named contract effect (e.g. `ctx`).
-            let Some(ident) = key_path.ident(self.db).to_opt() else {
-                self.push_diag(BodyDiag::InvalidEffectKey {
-                    owner,
-                    key: key_path,
-                    idx,
-                });
-                continue;
-            };
-
-            if key_path.len(self.db) != 1
-                || (!contract_effect_names.contains(&ident)
-                    && !contract_field_names.contains(&ident))
-            {
+            if !matches!(
+                view.resolved_binding(self.db, idx),
+                Some(binding)
+                    if matches!(
+                        binding.provider.source,
+                        crate::core::semantic::ProviderSource::ContractField { .. }
+                            | crate::core::semantic::ProviderSource::RootProvider { .. }
+                    )
+            ) {
                 self.push_diag(BodyDiag::InvalidEffectKey {
                     owner,
                     key: key_path,
@@ -559,13 +554,6 @@ impl<'db> TyChecker<'db> {
         self.table.commit(snapshot.table);
     }
 
-    fn concrete_borrow_provider_from_address_space(
-        &self,
-        address_space: TyId<'db>,
-    ) -> Option<ProviderAddressSpace> {
-        address_space_from_ty(self.db, self.env.scope(), address_space)
-    }
-
     fn concrete_borrow_provider_for_effect_handle_ty(
         &self,
         ty: TyId<'db>,
@@ -580,32 +568,8 @@ impl<'db> TyChecker<'db> {
         site: EffectParamSite<'db>,
         idx: usize,
     ) -> Option<ProviderAddressSpace> {
-        let contract = match site {
-            EffectParamSite::Func(_) => return None,
-            EffectParamSite::Contract(contract)
-            | EffectParamSite::ContractInit { contract }
-            | EffectParamSite::ContractRecvArm { contract, .. } => contract,
-        };
-        let name = self
-            .env
-            .semantic_effect_requirement(site, idx)?
-            .binding_name;
-        let field = contract.field_layout(self.db).get(&name)?;
-        self.concrete_borrow_provider_for_effect_handle_ty(field.address_space)
-            .or_else(|| self.concrete_borrow_provider_from_address_space(field.address_space))
-    }
-
-    fn concrete_borrow_provider_for_contract_name(
-        &self,
-        site: EffectParamSite<'db>,
-        name: crate::hir_def::IdentId<'db>,
-    ) -> Option<ProviderAddressSpace> {
-        let requirement = crate::core::semantic::EffectEnvView::new(site)
-            .requirements(self.db)
-            .into_iter()
-            .find(|binding| binding.binding_name == name)?;
         self.env
-            .resolved_provider_binding(site, requirement.binding_idx as usize)?
+            .resolved_provider_binding(site, idx)?
             .semantics
             .address_space
     }
@@ -615,32 +579,31 @@ impl<'db> TyChecker<'db> {
         binding: LocalBinding<'db>,
     ) -> Option<ProviderAddressSpace> {
         let binding_ty = self.env.lookup_binding_ty(&binding);
-        if let Some(provider) = self.concrete_borrow_provider_for_effect_handle_ty(binding_ty) {
-            return Some(provider);
-        }
-
         match binding {
             LocalBinding::Local { pat, .. } => self.env.local_borrow_provider(pat),
-            LocalBinding::EffectParam { site, .. } => self
-                .concrete_borrow_provider_for_contract_name(site, binding.binding_name(&self.env)),
+            LocalBinding::EffectParam {
+                site, provider_idx, ..
+            } => self
+                .env
+                .provider_binding(site, provider_idx)
+                .and_then(|provider| provider.semantics.address_space),
             LocalBinding::Param {
                 site: ParamSite::EffectField(site),
                 idx,
                 ..
-            } => self
-                .concrete_borrow_provider_for_effect_field(site, idx)
-                .or_else(|| {
-                    self.concrete_borrow_provider_for_contract_name(
-                        site,
-                        binding.binding_name(&self.env),
-                    )
-                }),
+            } => self.concrete_borrow_provider_for_effect_field(site, idx),
             _ => None,
         }
         .or_else(|| {
-            binding_ty
-                .as_capability(self.db)
-                .map(|_| ProviderAddressSpace::Memory)
+            matches!(
+                binding,
+                LocalBinding::Local { .. } | LocalBinding::Param { .. }
+            )
+            .then(|| {
+                binding_ty
+                    .as_capability(self.db)
+                    .map(|_| ProviderAddressSpace::Memory)
+            })?
         })
     }
 

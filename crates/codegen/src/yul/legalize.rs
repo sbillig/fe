@@ -1728,10 +1728,9 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                     .map(|ident| ident.data(self.db).to_string()),
                 ParamSite::EffectField(_) => None,
             },
-            LocalBinding::EffectParam { key_path, .. } => key_path
-                .ident(self.db)
-                .to_opt()
-                .map(|ident| ident.data(self.db).to_string()),
+            LocalBinding::EffectParam { binding_name, .. } => {
+                Some(binding_name.data(self.db).to_string())
+            }
         }
     }
 
