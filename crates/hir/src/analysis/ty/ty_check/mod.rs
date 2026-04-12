@@ -19,7 +19,7 @@ use crate::analysis::name_resolution::{ResolvedVariant, resolve_path};
 pub use crate::analysis::ty::ProviderAddressSpace;
 use crate::analysis::ty::corelib::resolve_lib_type_path;
 use crate::analysis::ty::fold::TyFoldable;
-use crate::analysis::ty::provider::{address_space_from_ty, provider_semantics};
+use crate::analysis::ty::provider::{ProviderKind, address_space_from_ty, provider_semantics};
 use crate::analysis::ty::visitor::TyVisitable;
 use crate::hir_def::CallableDef;
 use crate::{
@@ -570,7 +570,9 @@ impl<'db> TyChecker<'db> {
         &self,
         ty: TyId<'db>,
     ) -> Option<ProviderAddressSpace> {
-        provider_semantics(self.db, self.env.scope(), self.env.assumptions(), ty).address_space
+        let semantics = provider_semantics(self.db, self.env.scope(), self.env.assumptions(), ty);
+        // Root-object defaults are binding-site semantics, not type-implied address spaces.
+        (!matches!(semantics.kind, ProviderKind::RootObject)).then_some(semantics.address_space)?
     }
 
     fn concrete_borrow_provider_for_effect_field(

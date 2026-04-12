@@ -44,6 +44,10 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 let src = self.local_value(*src)?;
                 self.write_place_from_value(dst.clone(), src)
             }
+            YStmt::EnumAssertVariant {
+                value: _,
+                variant: _,
+            } => Ok(Vec::new()),
             YStmt::EnumSetTag { root, variant } => {
                 let root = self.local_value(*root)?;
                 let layout = self.class_layout(&root.class)?;

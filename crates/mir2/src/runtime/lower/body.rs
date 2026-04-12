@@ -1462,6 +1462,7 @@ impl<'db> RmirLowerCtxt<'db> {
         if self.semantic_local_is_place_bound(value.local) {
             let variant = self.enum_variant_for_local(value.local, variant);
             let value = self.read_semantic_operand(bb, value);
+            self.push_stmt(bb, RStmt::EnumAssertVariant { value, variant });
             self.push_stmt(
                 bb,
                 RStmt::Assign {
@@ -1482,6 +1483,13 @@ impl<'db> RmirLowerCtxt<'db> {
             }
             _ => {
                 let variant = self.enum_variant_for_local(value.local, variant);
+                self.push_stmt(
+                    bb,
+                    RStmt::EnumAssertVariant {
+                        value: self.runtime_value(value.local),
+                        variant,
+                    },
+                );
                 self.push_stmt(
                     bb,
                     RStmt::Assign {

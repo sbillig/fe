@@ -79,25 +79,14 @@ pub fn verify_runtime_body_detailed<'db>(
     for (block_idx, block) in body.blocks.iter().enumerate() {
         let block_id = crate::runtime::RBlockId::from_u32(block_idx as u32);
         for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
-            match stmt {
-                RStmt::Assign { dst, expr } => verify_assign(db, program, body, *dst, expr),
-                RStmt::Store { dst, src } => verify_store(db, program, body, dst, *src),
-                RStmt::CopyInto { dst, src } => verify_copy_into(db, program, body, dst, *src),
-                RStmt::EnumSetTag { root, variant } => {
-                    verify_enum_handle(body, *root, *variant, program).map(|_| ())
+            verify_stmt(db, program, body, block, stmt_idx, stmt).map_err(|error| {
+                RuntimeVerifyFailure {
+                    error,
+                    site: RuntimeVerifySite::Stmt {
+                        block: block_id,
+                        stmt: stmt_idx,
+                    },
                 }
-                RStmt::EnumWriteVariant {
-                    root,
-                    variant,
-                    fields,
-                } => verify_enum_write_variant(program, body, *root, *variant, fields),
-            }
-            .map_err(|error| RuntimeVerifyFailure {
-                error,
-                site: RuntimeVerifySite::Stmt {
-                    block: block_id,
-                    stmt: stmt_idx,
-                },
             })?;
         }
 
@@ -110,6 +99,39 @@ pub fn verify_runtime_body_detailed<'db>(
     }
 
     Ok(())
+}
+
+fn verify_stmt<'db>(
+    db: &'db dyn MirDb,
+    program: &impl RuntimeProgramView<'db>,
+    body: &RuntimeBody<'db>,
+    block: &crate::runtime::RBlock<'db>,
+    stmt_idx: usize,
+    stmt: &RStmt<'db>,
+) -> Result<(), VerifyError<'db>> {
+    match stmt {
+        RStmt::Assign { dst, expr } => {
+            verify_assign(db, program, body, block, stmt_idx, *dst, expr)
+        }
+        RStmt::EnumAssertVariant { value, variant } => {
+            verify_value_enum_variant_ref(
+                program,
+                runtime_value_class(body, *value)?.clone(),
+                *variant,
+            )?;
+            Ok(())
+        }
+        RStmt::Store { dst, src } => verify_store(db, program, body, dst, *src),
+        RStmt::CopyInto { dst, src } => verify_copy_into(db, program, body, dst, *src),
+        RStmt::EnumSetTag { root, variant } => {
+            verify_enum_handle(body, *root, *variant, program).map(|_| ())
+        }
+        RStmt::EnumWriteVariant {
+            root,
+            variant,
+            fields,
+        } => verify_enum_write_variant(program, body, *root, *variant, fields),
+    }
 }
 
 fn verify_signature<'db>(body: &RuntimeBody<'db>) -> Result<(), VerifyError<'db>> {
@@ -153,6 +175,8 @@ fn verify_assign<'db>(
     db: &'db dyn MirDb,
     program: &impl RuntimeProgramView<'db>,
     body: &RuntimeBody<'db>,
+    block: &crate::runtime::RBlock<'db>,
+    stmt_idx: usize,
     dst: crate::runtime::RLocalId,
     expr: &RExpr<'db>,
 ) -> Result<(), VerifyError<'db>> {
@@ -420,7 +444,13 @@ fn verify_assign<'db>(
             value,
             variant,
             field,
-        } => Some(enum_extract_class(db, body, *value, *variant, *field)?),
+        } => {
+            let class = enum_extract_class(db, body, *value, *variant, *field)?;
+            if !same_block_dominating_enum_assert(block, stmt_idx, *value, *variant) {
+                return Err(VerifyError::MissingEnumVariantProof(*value));
+            }
+            Some(class)
+        }
         RExpr::EnumGetTag { root } => {
             let RuntimeClass::Ref { pointee, .. } = runtime_value_class(body, *root)?.clone()
             else {
@@ -467,6 +497,41 @@ fn verify_assign<'db>(
         return Err(VerifyError::InvalidExprClass(dst));
     }
     Ok(())
+}
+
+fn same_block_dominating_enum_assert<'db>(
+    block: &crate::runtime::RBlock<'db>,
+    stmt_idx: usize,
+    value: crate::runtime::RValueId,
+    variant: crate::runtime::VariantId<'db>,
+) -> bool {
+    let mut proven = false;
+    for stmt in block.stmts.iter().take(stmt_idx) {
+        match stmt {
+            RStmt::Assign { dst, expr } if *dst == value => {
+                proven = matches!(
+                    expr,
+                    RExpr::EnumMake {
+                        variant: proven_variant,
+                        ..
+                    } if *proven_variant == variant
+                );
+            }
+            RStmt::EnumAssertVariant {
+                value: proven_value,
+                variant: proven_variant,
+            } if *proven_value == value => {
+                proven = *proven_variant == variant;
+            }
+            RStmt::EnumAssertVariant { .. }
+            | RStmt::Assign { .. }
+            | RStmt::Store { .. }
+            | RStmt::CopyInto { .. }
+            | RStmt::EnumSetTag { .. }
+            | RStmt::EnumWriteVariant { .. } => {}
+        }
+    }
+    proven
 }
 
 fn verify_builtin<'db>(

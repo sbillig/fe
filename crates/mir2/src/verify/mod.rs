@@ -21,6 +21,7 @@ pub enum VerifyError<'db> {
     InvalidPlace(RuntimeClass<'db>),
     InvalidVariantPlace(RuntimeClass<'db>),
     InvalidEnumTag(LayoutId<'db>),
+    MissingEnumVariantProof(RLocalId),
     InvalidReturnClass,
     InvalidExprClass(RLocalId),
     InvalidStoreClass,
@@ -42,6 +43,7 @@ impl<'db> VerifyError<'db> {
         match self {
             VerifyError::MissingRuntimeLocal(local)
             | VerifyError::SlotCarrierMismatch(local)
+            | VerifyError::MissingEnumVariantProof(local)
             | VerifyError::InvalidExprClass(local) => Some(*local),
             VerifyError::MissingRuntimeBlock(_)
             | VerifyError::ErasedRuntimeValue(_)
@@ -51,9 +53,9 @@ impl<'db> VerifyError<'db> {
             | VerifyError::InvalidPlace(_)
             | VerifyError::InvalidVariantPlace(_)
             | VerifyError::InvalidEnumTag(_)
-            | VerifyError::InvalidReturnClass
             | VerifyError::InvalidStoreClass
             | VerifyError::InvalidCopyClass
+            | VerifyError::InvalidReturnClass
             | VerifyError::CallArgCountMismatch(_)
             | VerifyError::CallArgClassMismatch(_, _)
             | VerifyError::InvalidCodeRegion(_)

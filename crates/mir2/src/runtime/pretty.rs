@@ -382,6 +382,11 @@ fn format_stmt<'db>(db: &'db dyn MirDb, stmt: &RStmt<'db>) -> String {
         RStmt::Assign { dst, expr } => {
             format!("{} = {}", format_local_id(*dst), format_expr(db, expr))
         }
+        RStmt::EnumAssertVariant { value, variant } => format!(
+            "enum_assert_variant {} := {}",
+            format_local_id(*value),
+            format_variant(db, *variant)
+        ),
         RStmt::Store { dst, src } => {
             format!("store {} <- {}", format_place(dst), format_local_id(*src))
         }

@@ -69,6 +69,7 @@ fn transparent_wrapper_returns_preserve_handle_fields_in_rmir() {
                         expr: RExpr::Use(value),
                     } if *value == param.local => Some(*dst),
                     RStmt::Assign { .. }
+                    | RStmt::EnumAssertVariant { .. }
                     | RStmt::Store { .. }
                     | RStmt::CopyInto { .. }
                     | RStmt::EnumSetTag { .. }
@@ -115,6 +116,7 @@ fn transparent_wrapper_returns_preserve_handle_fields_in_rmir() {
                 expr: RExpr::Use(value),
             } if *value == seq_param => Some(*dst),
             RStmt::Assign { .. }
+            | RStmt::EnumAssertVariant { .. }
             | RStmt::Store { .. }
             | RStmt::CopyInto { .. }
             | RStmt::EnumSetTag { .. }
@@ -191,6 +193,7 @@ fn provider_root_trait_receivers_preserve_concrete_runtime_layouts() {
                 Some(*dst)
             }
             RStmt::Assign { .. }
+            | RStmt::EnumAssertVariant { .. }
             | RStmt::Store { .. }
             | RStmt::CopyInto { .. }
             | RStmt::EnumSetTag { .. }

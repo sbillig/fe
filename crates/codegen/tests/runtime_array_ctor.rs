@@ -61,6 +61,7 @@ fn array_literals_store_each_constant_index_before_load() {
                 Layout::Struct(_) | Layout::Array(_) | Layout::Enum(_) => None,
             },
             RStmt::Assign { .. }
+            | RStmt::EnumAssertVariant { .. }
             | RStmt::Store { .. }
             | RStmt::CopyInto { .. }
             | RStmt::EnumSetTag { .. }
@@ -80,6 +81,7 @@ fn array_literals_store_each_constant_index_before_load() {
                 }
             }
             RStmt::Assign { .. }
+            | RStmt::EnumAssertVariant { .. }
             | RStmt::Store { .. }
             | RStmt::CopyInto { .. }
             | RStmt::EnumSetTag { .. }

@@ -1183,6 +1183,10 @@ pub enum RStmt<'db> {
         dst: RLocalId,
         expr: RExpr<'db>,
     },
+    EnumAssertVariant {
+        value: RValueId,
+        variant: VariantId<'db>,
+    },
     Store {
         dst: RuntimePlace<'db>,
         src: RValueId,

@@ -476,6 +476,10 @@ pub enum YStmt<'db> {
         dst: YulPlace<'db>,
         src: YLocalId,
     },
+    EnumAssertVariant {
+        value: YLocalId,
+        variant: VariantId<'db>,
+    },
     EnumSetTag {
         root: YLocalId,
         variant: VariantId<'db>,
@@ -982,6 +986,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                         | YStmt::Builtin(_)
                         | YStmt::Store { .. }
                         | YStmt::CopyInto { .. }
+                        | YStmt::EnumAssertVariant { .. }
                         | YStmt::EnumSetTag { .. }
                         | YStmt::EnumWriteVariant { .. } => {}
                     }
@@ -1336,9 +1341,10 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
             RStmt::Store { dst, .. } | RStmt::CopyInto { dst, .. } => {
                 matches!(dst.root, PlaceRoot::Ref(value) if value == local)
             }
-            RStmt::Assign { .. } | RStmt::EnumSetTag { .. } | RStmt::EnumWriteVariant { .. } => {
-                false
-            }
+            RStmt::Assign { .. }
+            | RStmt::EnumAssertVariant { .. }
+            | RStmt::EnumSetTag { .. }
+            | RStmt::EnumWriteVariant { .. } => false,
         }
     }
 
@@ -1514,9 +1520,10 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                 });
                 Ok(true)
             }
-            RStmt::Assign { .. } | RStmt::EnumSetTag { .. } | RStmt::EnumWriteVariant { .. } => {
-                Ok(false)
-            }
+            RStmt::Assign { .. }
+            | RStmt::EnumAssertVariant { .. }
+            | RStmt::EnumSetTag { .. }
+            | RStmt::EnumWriteVariant { .. } => Ok(false),
         }
     }
 
@@ -1927,6 +1934,10 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
             RStmt::CopyInto { dst, src } => YStmt::CopyInto {
                 dst: self.legalize_place(body, local_values, dst)?.0,
                 src: YLocalId(src.as_u32()),
+            },
+            RStmt::EnumAssertVariant { value, variant } => YStmt::EnumAssertVariant {
+                value: YLocalId(value.as_u32()),
+                variant: *variant,
             },
             RStmt::EnumSetTag { root, variant } => YStmt::EnumSetTag {
                 root: YLocalId(root.as_u32()),
