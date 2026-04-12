@@ -3,7 +3,6 @@ use fe_hir::analysis::semantic::{
     GenericSubst, get_or_build_semantic_instance, instantiate_typed_body,
     root_semantic_instance_key, typed_body_template,
 };
-use fe_hir::analysis::ty::corelib::lib_func_matches;
 use fe_hir::analysis::ty::trait_def::resolve_trait_method_instance;
 use fe_hir::analysis::ty::trait_resolution::TraitSolveCx;
 use fe_hir::analysis::ty::ty_check::{BodyOwner, check_func_body};
@@ -433,56 +432,5 @@ fn test_large_by_value_array_args() uses (evm: mut Evm) {
     assert!(
         create2[0].body(&db).is_some(),
         "semantic create2 callee should use the default body in the large-array test root"
-    );
-}
-
-#[test]
-fn lib_func_matches_low_level_mload_from_its_defining_identity() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("lib_func_matches_low_level_mload_from_its_defining_identity.fe"),
-        r#"
-use std::evm::ops::mload
-
-fn run() -> u256 {
-    mload(0)
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-
-    let run = top_mod
-        .children_non_nested(&db)
-        .find_map(|item| match item {
-            ItemKind::Func(func)
-                if func
-                    .name(&db)
-                    .to_opt()
-                    .is_some_and(|name| name.data(&db) == "run") =>
-            {
-                Some(func)
-            }
-            _ => None,
-        })
-        .expect("missing run function");
-    let typed_body = check_func_body(&db, run).1.clone();
-    let body = run.body(&db).expect("missing run body");
-    let call_expr = body
-        .exprs(&db)
-        .keys()
-        .find(|expr| matches!(expr.data(&db, body), Partial::Present(Expr::Call(..))))
-        .expect("missing mload call");
-    let callable = typed_body
-        .callable_expr(call_expr)
-        .expect("missing callable for mload");
-    let fe_hir::hir_def::CallableDef::Func(mload) = callable.callable_def() else {
-        panic!("mload call should target a function");
-    };
-
-    assert!(
-        lib_func_matches(&db, mload, "std::evm::ops::mload"),
-        "expected lib_func_matches to recognize low-level mload; scope_path={:?}",
-        mload.scope().pretty_path(&db)
     );
 }

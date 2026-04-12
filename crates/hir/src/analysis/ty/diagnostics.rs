@@ -161,6 +161,8 @@ pub enum TyLowerDiag<'db> {
     ConstEvalUnsupported(DynLazySpan<'db>),
     ConstEvalNonConstCall(DynLazySpan<'db>),
     ConstEvalDivisionByZero(DynLazySpan<'db>),
+    ConstEvalArithmeticOverflow(DynLazySpan<'db>),
+    ConstEvalNegativeExponent(DynLazySpan<'db>),
     ConstEvalStepLimitExceeded(DynLazySpan<'db>),
     ConstEvalRecursionLimitExceeded(DynLazySpan<'db>),
 
@@ -197,6 +199,8 @@ impl TyLowerDiag<'_> {
             Self::ConstEvalUnsupported(_) => 23,
             Self::ConstEvalNonConstCall(_) => 24,
             Self::ConstEvalDivisionByZero(_) => 25,
+            Self::ConstEvalArithmeticOverflow(_) => 34,
+            Self::ConstEvalNegativeExponent(_) => 35,
             Self::ConstEvalStepLimitExceeded(_) => 26,
             Self::ConstEvalRecursionLimitExceeded(_) => 27,
             Self::MixedRefSelfPrefixWithExplicitType { .. } => 28,

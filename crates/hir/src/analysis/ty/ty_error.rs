@@ -456,6 +456,14 @@ fn diag_from_invalid_cause<'db>(
             TyLowerDiag::ConstEvalDivisionByZero(expr.span(body).into()).into()
         }
 
+        InvalidCause::ConstEvalArithmeticOverflow { body, expr } => {
+            TyLowerDiag::ConstEvalArithmeticOverflow(expr.span(body).into()).into()
+        }
+
+        InvalidCause::ConstEvalNegativeExponent { body, expr } => {
+            TyLowerDiag::ConstEvalNegativeExponent(expr.span(body).into()).into()
+        }
+
         InvalidCause::ConstEvalStepLimitExceeded { body, expr } => {
             TyLowerDiag::ConstEvalStepLimitExceeded(expr.span(body).into()).into()
         }

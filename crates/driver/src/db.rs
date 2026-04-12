@@ -137,7 +137,7 @@ impl DiagnosticsCollection<'_> {
 
     fn finalize(&self, db: &DriverDataBase) -> Vec<CompleteDiagnostic> {
         let mut diags: Vec<_> = self.0.iter().map(|d| d.as_ref().to_complete(db)).collect();
-        sort_complete_diagnostics(&mut diags);
+        sort_and_dedup_complete_diagnostics(&mut diags);
         diags
     }
 }

@@ -2052,6 +2052,22 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             ),
 
+            Self::ConstEvalArithmeticOverflow(span) => primary_diag(
+                Severity::Error,
+                "arithmetic overflow in const context",
+                "checked arithmetic overflowed during const evaluation",
+                span.resolve(db),
+                error_code,
+            ),
+
+            Self::ConstEvalNegativeExponent(span) => primary_diag(
+                Severity::Error,
+                "negative exponent in const context",
+                "exponents in const evaluation must be non-negative",
+                span.resolve(db),
+                error_code,
+            ),
+
             Self::ConstEvalStepLimitExceeded(span) => primary_diag(
                 Severity::Error,
                 "const evaluation exceeded the step limit",

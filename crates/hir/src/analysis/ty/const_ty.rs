@@ -2,8 +2,9 @@ use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{One, ToPrimitive, Zero};
 
 use crate::core::hir_def::{
-    BinOp, Body, Const, EnumVariant, Expr, Func, GenericArgListId, GenericParamOwner, IdentId,
-    IntegerId, LitKind, Partial, PathId, Stmt, TypeAlias as HirTypeAlias, TypeId as HirTypeId,
+    BinOp, Body, Const, EnumVariant, Expr, ExprId, Func, GenericArgListId, GenericParamOwner,
+    IdentId, IntegerId, LitKind, Partial, PathId, Stmt, TypeAlias as HirTypeAlias,
+    TypeId as HirTypeId,
 };
 use salsa::Update;
 
@@ -1248,6 +1249,20 @@ pub(crate) fn validate_unevaluated_const_ty<'db>(
         return Err(InvalidCause::ConstTyMismatch { expected, given });
     }
 
+    if const_def.is_some()
+        && eval_body_owner_const(
+            db,
+            super::ty_check::BodyOwner::AnonConstBody {
+                body: *body,
+                expected: expected_ty,
+            },
+            generic_args.clone(),
+        )
+        .is_err()
+    {
+        return Err(InvalidCause::Other);
+    }
+
     if !diags.is_empty() {
         if let Some(cause) = typed_body
             .body()
@@ -1304,13 +1319,14 @@ pub(crate) fn evaluate_const_ty<'db>(
         return evaluated;
     }
 
-    let (body, const_ty_ty, generic_args) = match const_ty.data(db) {
+    let (body, const_ty_ty, generic_args, const_def) = match const_ty.data(db) {
         ConstTyData::UnEvaluated {
             body,
             ty,
             generic_args,
+            const_def,
             ..
-        } => (*body, *ty, generic_args.clone()),
+        } => (*body, *ty, generic_args.clone(), *const_def),
         _ => {
             let const_ty_ty = const_ty.ty(db);
             return match check_const_ty(
@@ -1487,6 +1503,25 @@ pub(crate) fn evaluate_const_ty<'db>(
         /// The expression is not a pure integer expression (e.g. contains
         /// function calls). Fall through to CTFE instead of reporting an error.
         NotIntExpr,
+    }
+
+    fn invalid_cause_from_const_int_error<'db>(
+        body: Body<'db>,
+        expr: ExprId,
+        err: ConstIntError,
+    ) -> Option<InvalidCause<'db>> {
+        match err {
+            ConstIntError::Overflow => {
+                Some(InvalidCause::ConstEvalArithmeticOverflow { body, expr })
+            }
+            ConstIntError::DivisionByZero => {
+                Some(InvalidCause::ConstEvalDivisionByZero { body, expr })
+            }
+            ConstIntError::NegativeExponent => {
+                Some(InvalidCause::ConstEvalNegativeExponent { body, expr })
+            }
+            ConstIntError::NotIntExpr => None,
+        }
     }
 
     fn eval_int_expr<'db>(
@@ -1810,17 +1845,17 @@ pub(crate) fn evaluate_const_ty<'db>(
                 // Expression contains constructs we can't evaluate with BigInt
                 // (e.g. function calls). Fall through to CTFE.
             }
-            Err(_) => {
+            Err(err) => {
                 // Genuine arithmetic error (overflow, division by zero, etc.).
                 // For Block/Un/Bin, report error. For plain int literals, fall through to CTFE.
-                if matches!(expr, Expr::Block(..) | Expr::Un(..) | Expr::Bin(..)) {
-                    return ConstTyId::new(
-                        db,
-                        ConstTyData::Evaluated(
-                            EvaluatedConstTy::Invalid,
-                            TyId::invalid(db, InvalidCause::InvalidConstTyExpr { body }),
-                        ),
-                    );
+                if const_def.is_some() {
+                    return ConstTyId::invalid(db, InvalidCause::Other);
+                }
+                if matches!(expr, Expr::Block(..) | Expr::Un(..) | Expr::Bin(..))
+                    && let Some(cause) =
+                        invalid_cause_from_const_int_error(body, body.expr(db), err)
+                {
+                    return ConstTyId::invalid(db, cause);
                 }
             }
         }
@@ -1856,6 +1891,9 @@ pub(crate) fn evaluate_const_ty<'db>(
         Ok(value) => value,
         Err(CtfeError::NotConstEvaluable { .. }) => validated.const_ty,
         Err(err) => {
+            if const_def.is_some() {
+                return ConstTyId::invalid(db, InvalidCause::Other);
+            }
             return ConstTyId::invalid(
                 db,
                 invalid_cause_from_ctfe_error(
@@ -1894,6 +1932,12 @@ pub(crate) fn invalid_cause_from_ctfe_error<'db>(
     let expr = origin_expr_for_const_eval_diag(db, body, origin);
     match root_err {
         CtfeError::DivisionByZero { .. } => InvalidCause::ConstEvalDivisionByZero { body, expr },
+        CtfeError::ArithmeticOverflow { .. } => {
+            InvalidCause::ConstEvalArithmeticOverflow { body, expr }
+        }
+        CtfeError::NegativeExponent { .. } => {
+            InvalidCause::ConstEvalNegativeExponent { body, expr }
+        }
         CtfeError::StepLimitExceeded { .. } => {
             InvalidCause::ConstEvalStepLimitExceeded { body, expr }
         }
@@ -1905,8 +1949,6 @@ pub(crate) fn invalid_cause_from_ctfe_error<'db>(
         | CtfeError::InvalidOperation { .. }
         | CtfeError::InvalidBorrow { .. }
         | CtfeError::InvalidProviderUse { .. }
-        | CtfeError::ArithmeticOverflow { .. }
-        | CtfeError::NegativeExponent { .. }
         | CtfeError::OutOfBounds { .. }
         | CtfeError::VariantMismatch { .. }
         | CtfeError::UninitializedLocal { .. }

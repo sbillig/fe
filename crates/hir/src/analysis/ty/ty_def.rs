@@ -1173,6 +1173,16 @@ pub enum InvalidCause<'db> {
         expr: ExprId,
     },
 
+    ConstEvalArithmeticOverflow {
+        body: Body<'db>,
+        expr: ExprId,
+    },
+
+    ConstEvalNegativeExponent {
+        body: Body<'db>,
+        expr: ExprId,
+    },
+
     ConstEvalStepLimitExceeded {
         body: Body<'db>,
         expr: ExprId,
@@ -1249,6 +1259,10 @@ impl InvalidCause<'_> {
             InvalidCause::ConstEvalUnsupported { .. } => "ConstEvalUnsupported".into(),
             InvalidCause::ConstEvalNonConstCall { .. } => "ConstEvalNonConstCall".into(),
             InvalidCause::ConstEvalDivisionByZero { .. } => "ConstEvalDivisionByZero".into(),
+            InvalidCause::ConstEvalArithmeticOverflow { .. } => {
+                "ConstEvalArithmeticOverflow".into()
+            }
+            InvalidCause::ConstEvalNegativeExponent { .. } => "ConstEvalNegativeExponent".into(),
             InvalidCause::ConstEvalStepLimitExceeded { .. } => "ConstEvalStepLimitExceeded".into(),
             InvalidCause::ConstEvalRecursionLimitExceeded { .. } => {
                 "ConstEvalRecursionLimitExceeded".into()
