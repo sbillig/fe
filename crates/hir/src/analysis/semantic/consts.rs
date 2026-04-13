@@ -69,6 +69,127 @@ pub fn sem_const_ty<'db>(db: &'db dyn HirAnalysisDb, value: SemConstId<'db>) -> 
     }
 }
 
+pub fn sem_const_eq<'db>(
+    db: &'db dyn HirAnalysisDb,
+    lhs: SemConstId<'db>,
+    rhs: SemConstId<'db>,
+) -> bool {
+    if lhs == rhs {
+        return true;
+    }
+    match (lhs.value(db), rhs.value(db)) {
+        (SemConstValue::Unit, SemConstValue::Unit) => true,
+        (
+            SemConstValue::Scalar {
+                ty: lhs_ty,
+                value: lhs_value,
+            },
+            SemConstValue::Scalar {
+                ty: rhs_ty,
+                value: rhs_value,
+            },
+        ) => lhs_ty == rhs_ty && lhs_value == rhs_value,
+        (
+            SemConstValue::TypeLevel {
+                ty: lhs_ty,
+                const_ty: lhs_const_ty,
+            },
+            SemConstValue::TypeLevel {
+                ty: rhs_ty,
+                const_ty: rhs_const_ty,
+            },
+        ) => {
+            lhs_ty == rhs_ty
+                && if lhs_const_ty == rhs_const_ty {
+                    true
+                } else {
+                    let lhs_value = sem_const_from_ty(db, lhs_const_ty);
+                    let rhs_value = sem_const_from_ty(db, rhs_const_ty);
+                    match (lhs_value, rhs_value) {
+                        (Some(lhs_value), Some(rhs_value))
+                            if !matches!(lhs_value.value(db), SemConstValue::TypeLevel { .. })
+                                && !matches!(
+                                    rhs_value.value(db),
+                                    SemConstValue::TypeLevel { .. }
+                                ) =>
+                        {
+                            sem_const_eq(db, lhs_value, rhs_value)
+                        }
+                        _ => false,
+                    }
+                }
+        }
+        (
+            SemConstValue::Tuple {
+                ty: lhs_ty,
+                elems: lhs_elems,
+            },
+            SemConstValue::Tuple {
+                ty: rhs_ty,
+                elems: rhs_elems,
+            },
+        ) => {
+            lhs_ty == rhs_ty
+                && lhs_elems.len() == rhs_elems.len()
+                && lhs_elems
+                    .iter()
+                    .copied()
+                    .zip(rhs_elems.iter().copied())
+                    .all(|(lhs, rhs)| sem_const_eq(db, lhs, rhs))
+        }
+        (
+            SemConstValue::Struct {
+                ty: lhs_ty,
+                fields: lhs_fields,
+            },
+            SemConstValue::Struct {
+                ty: rhs_ty,
+                fields: rhs_fields,
+            },
+        )
+        | (
+            SemConstValue::Array {
+                ty: lhs_ty,
+                elems: lhs_fields,
+            },
+            SemConstValue::Array {
+                ty: rhs_ty,
+                elems: rhs_fields,
+            },
+        ) => {
+            lhs_ty == rhs_ty
+                && lhs_fields.len() == rhs_fields.len()
+                && lhs_fields
+                    .iter()
+                    .copied()
+                    .zip(rhs_fields.iter().copied())
+                    .all(|(lhs, rhs)| sem_const_eq(db, lhs, rhs))
+        }
+        (
+            SemConstValue::Enum {
+                ty: lhs_ty,
+                variant: lhs_variant,
+                fields: lhs_fields,
+            },
+            SemConstValue::Enum {
+                ty: rhs_ty,
+                variant: rhs_variant,
+                fields: rhs_fields,
+            },
+        ) => {
+            lhs_ty == rhs_ty
+                && lhs_variant == rhs_variant
+                && lhs_fields.len() == rhs_fields.len()
+                && lhs_fields
+                    .iter()
+                    .copied()
+                    .zip(rhs_fields.iter().copied())
+                    .all(|(lhs, rhs)| sem_const_eq(db, lhs, rhs))
+        }
+        _ => false,
+    }
+}
+
 pub fn sem_const_from_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,

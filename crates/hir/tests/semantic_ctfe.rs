@@ -5,9 +5,9 @@ use fe_hir::test_db::HirAnalysisTestDb;
 use fe_hir::{
     analysis::{
         semantic::{
-            SConst, SExpr, SStmtKind, SemConstId, SemConstValue, canonicalize_semantic_consts,
-            eval_body_owner_const, get_or_build_semantic_instance, identity_semantic_instance_key,
-            reify_runtime_const_for_ty,
+            SConst, SExpr, SStmtKind, SemConstId, SemConstScalar, SemConstValue,
+            canonicalize_semantic_consts, eval_body_owner_const, get_or_build_semantic_instance,
+            identity_semantic_instance_key, reify_runtime_const_for_ty,
         },
         ty::{
             diagnostics::{TyDiagCollection, TyLowerDiag},
@@ -308,6 +308,57 @@ fn test_add_overflow_u8() {
                 )
             }),
         "checked runtime arithmetic should remain executable after semantic const canonicalization:\n{body:#?}"
+    );
+}
+
+#[test]
+fn canonicalize_compares_semantically_equal_consts_structurally() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_ctfe.fe".into(),
+        r#"
+fn signed_mul_no_overflow_i8_neg_neg() {
+    let a: i8 = -6
+    let b: i8 = -3
+    let ok: bool = a * b == 18
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let func = top_mod
+        .all_funcs(&db)
+        .iter()
+        .find(|func| {
+            matches!(func.name(&db), Partial::Present(name) if name.data(&db) == "signed_mul_no_overflow_i8_neg_neg")
+        })
+        .expect("expected signed_mul_no_overflow_i8_neg_neg function");
+
+    let semantic = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
+    );
+    let body = canonicalize_semantic_consts(&db, semantic);
+
+    assert!(
+        body.blocks
+            .iter()
+            .flat_map(|block| block.stmts.iter())
+            .any(|stmt| {
+                matches!(
+                    &stmt.kind,
+                    SStmtKind::Assign {
+                        expr: SExpr::Const(SConst::Value(value)),
+                        ..
+                    } if matches!(
+                        value.value(&db),
+                        SemConstValue::Scalar {
+                            value: SemConstScalar::Bool(true),
+                            ..
+                        }
+                    )
+                )
+            }),
+        "expected semantic CTFE to fold `a * b == 18` to `true`, got:\n{body:#?}"
     );
 }
 

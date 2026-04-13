@@ -16,8 +16,8 @@ use crate::{
             FieldIndex, SConst, SExpr, SLocalId, SPlace, SPlaceElem, SStmt, SStmtKind,
             STerminatorKind, SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticBody,
             SemanticConstRef, VariantIndex, array_const, bool_const, bytes_const, enum_const,
-            int_const, int_ty_shape, normalize_int_to_shape, runtime_size_bytes, sem_const_from_ty,
-            struct_const, tuple_const, unit_const,
+            int_const, int_ty_shape, normalize_int_to_shape, runtime_size_bytes, sem_const_eq,
+            sem_const_from_ty, struct_const, tuple_const, unit_const,
         },
         ty::{
             const_expr::{ConstExpr, ConstExprId},
@@ -380,7 +380,7 @@ impl<'db> CtfeMachine<'db> {
                     else_bb,
                 } => {
                     let cond = self.load_value(frame_idx, cond, term_origin)?;
-                    let cond = self.expect_bool(cond, term_origin)?;
+                    let cond = self.expect_bool(frame_idx, cond, term_origin)?;
                     self.frames[frame_idx].current = if cond {
                         then_bb.index()
                     } else {
@@ -1209,20 +1209,76 @@ impl<'db> CtfeMachine<'db> {
 
     fn expect_bool(
         &self,
+        frame_idx: usize,
         value: CtfeConstValue<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<bool, CtfeError<'db>> {
-        let SemConstValue::Scalar {
-            value: SemConstScalar::Bool(value),
-            ..
-        } = value.value.value(self.db)
-        else {
-            return Err(CtfeError::InvalidOperation {
+        match value.value.value(self.db) {
+            SemConstValue::Scalar {
+                value: SemConstScalar::Bool(value),
+                ..
+            } => Ok(value),
+            SemConstValue::TypeLevel { ty, const_ty } if ty == TyId::bool(self.db) => {
+                let TyData::ConstTy(const_ty) = const_ty.data(self.db) else {
+                    return Err(CtfeError::InvalidOperation {
+                        origin: value.error_origin(origin),
+                        message: format!("expected bool, got {:?}", value.value.value(self.db)),
+                    });
+                };
+                let mut const_ty = const_ty.evaluate(self.db, Some(ty));
+                if matches!(const_ty.data(self.db), ConstTyData::Abstract(..)) {
+                    let subst = self.frames[frame_idx]
+                        .body
+                        .owner
+                        .key(self.db)
+                        .subst(self.db);
+                    let instantiated = instantiate_with_generic_args(
+                        self.db,
+                        TyId::const_ty(self.db, const_ty),
+                        subst.generic_args(self.db),
+                    );
+                    let TyData::ConstTy(instantiated) = instantiated.data(self.db) else {
+                        unreachable!("instantiating a const ty must yield a const ty");
+                    };
+                    const_ty = instantiated.evaluate(self.db, Some(ty));
+                }
+                let ConstTyData::Evaluated(EvaluatedConstTy::LitBool(value), _) =
+                    const_ty.data(self.db)
+                else {
+                    return Err(CtfeError::InvalidOperation {
+                        origin: value.error_origin(origin),
+                        message: "expected bool".into(),
+                    });
+                };
+                Ok(*value)
+            }
+            _ => Err(CtfeError::InvalidOperation {
                 origin: value.error_origin(origin),
                 message: "expected bool".into(),
-            });
-        };
-        Ok(value)
+            }),
+        }
+    }
+
+    fn is_bool_like(&self, value: &CtfeConstValue<'db>) -> bool {
+        match value.value.value(self.db) {
+            SemConstValue::Scalar {
+                value: SemConstScalar::Bool(_),
+                ..
+            } => true,
+            SemConstValue::TypeLevel { ty, .. } => ty == TyId::bool(self.db),
+            _ => false,
+        }
+    }
+
+    fn is_int_like(&self, value: &CtfeConstValue<'db>) -> bool {
+        match value.value.value(self.db) {
+            SemConstValue::Scalar {
+                value: SemConstScalar::Int { .. },
+                ..
+            } => true,
+            SemConstValue::TypeLevel { ty, .. } => int_ty_shape(self.db, ty).is_some(),
+            _ => false,
+        }
     }
 
     fn expect_int(
@@ -1320,7 +1376,7 @@ impl<'db> CtfeMachine<'db> {
             }
             UnOp::Not => Ok(CtfeValue::concrete(bool_const(
                 self.db,
-                !self.expect_bool(value, origin)?,
+                !self.expect_bool(frame_idx, value, origin)?,
             ))),
             UnOp::BitNot => {
                 let int = self.expect_int(frame_idx, value, origin)?;
@@ -1349,8 +1405,8 @@ impl<'db> CtfeMachine<'db> {
         match op {
             BinOp::Comp(comp) => self.eval_compare(frame_idx, comp, lhs, rhs, origin),
             BinOp::Logical(logical) => {
-                let lhs = self.expect_bool(lhs, origin)?;
-                let rhs = self.expect_bool(rhs, origin)?;
+                let lhs = self.expect_bool(frame_idx, lhs, origin)?;
+                let rhs = self.expect_bool(frame_idx, rhs, origin)?;
                 let value = match logical {
                     LogicalBinOp::And => lhs && rhs,
                     LogicalBinOp::Or => lhs || rhs,
@@ -1375,31 +1431,22 @@ impl<'db> CtfeMachine<'db> {
                 {
                     return Ok(CtfeValue::Value(value));
                 }
-                if matches!(
-                    (lhs.value.value(self.db), rhs.value.value(self.db)),
-                    (
-                        SemConstValue::Scalar {
-                            value: SemConstScalar::Bool(_),
-                            ..
-                        },
-                        SemConstValue::Scalar {
-                            value: SemConstScalar::Bool(_),
-                            ..
-                        }
-                    )
-                ) {
+                if self.is_bool_like(&lhs) && self.is_bool_like(&rhs) {
                     return match arith {
                         ArithBinOp::BitAnd => Ok(CtfeValue::concrete(bool_const(
                             self.db,
-                            self.expect_bool(lhs, origin)? & self.expect_bool(rhs, origin)?,
+                            self.expect_bool(frame_idx, lhs, origin)?
+                                & self.expect_bool(frame_idx, rhs, origin)?,
                         ))),
                         ArithBinOp::BitOr => Ok(CtfeValue::concrete(bool_const(
                             self.db,
-                            self.expect_bool(lhs, origin)? | self.expect_bool(rhs, origin)?,
+                            self.expect_bool(frame_idx, lhs, origin)?
+                                | self.expect_bool(frame_idx, rhs, origin)?,
                         ))),
                         ArithBinOp::BitXor => Ok(CtfeValue::concrete(bool_const(
                             self.db,
-                            self.expect_bool(lhs, origin)? ^ self.expect_bool(rhs, origin)?,
+                            self.expect_bool(frame_idx, lhs, origin)?
+                                ^ self.expect_bool(frame_idx, rhs, origin)?,
                         ))),
                         _ => Err(CtfeError::InvalidOperation {
                             origin,
@@ -1530,24 +1577,48 @@ impl<'db> CtfeMachine<'db> {
         rhs: CtfeConstValue<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<CtfeValue<'db>, CtfeError<'db>> {
-        let result = match op {
-            CompBinOp::Eq => lhs.value == rhs.value,
-            CompBinOp::NotEq => lhs.value != rhs.value,
-            CompBinOp::Lt => {
-                self.expect_int(frame_idx, lhs, origin)?
-                    < self.expect_int(frame_idx, rhs, origin)?
+        let result = if self.is_bool_like(&lhs) && self.is_bool_like(&rhs) {
+            let lhs = self.expect_bool(frame_idx, lhs, origin)?;
+            let rhs = self.expect_bool(frame_idx, rhs, origin)?;
+            match op {
+                CompBinOp::Eq => lhs == rhs,
+                CompBinOp::NotEq => lhs != rhs,
+                CompBinOp::Lt => !lhs && rhs,
+                CompBinOp::LtEq => !lhs || rhs,
+                CompBinOp::Gt => lhs && !rhs,
+                CompBinOp::GtEq => lhs || !rhs,
             }
-            CompBinOp::LtEq => {
-                self.expect_int(frame_idx, lhs, origin)?
-                    <= self.expect_int(frame_idx, rhs, origin)?
+        } else if self.is_int_like(&lhs) && self.is_int_like(&rhs) {
+            let lhs = self.expect_int(frame_idx, lhs, origin)?;
+            let rhs = self.expect_int(frame_idx, rhs, origin)?;
+            match op {
+                CompBinOp::Eq => lhs == rhs,
+                CompBinOp::NotEq => lhs != rhs,
+                CompBinOp::Lt => lhs < rhs,
+                CompBinOp::LtEq => lhs <= rhs,
+                CompBinOp::Gt => lhs > rhs,
+                CompBinOp::GtEq => lhs >= rhs,
             }
-            CompBinOp::Gt => {
-                self.expect_int(frame_idx, lhs, origin)?
-                    > self.expect_int(frame_idx, rhs, origin)?
-            }
-            CompBinOp::GtEq => {
-                self.expect_int(frame_idx, lhs, origin)?
-                    >= self.expect_int(frame_idx, rhs, origin)?
+        } else {
+            match op {
+                CompBinOp::Eq => sem_const_eq(self.db, lhs.value, rhs.value),
+                CompBinOp::NotEq => !sem_const_eq(self.db, lhs.value, rhs.value),
+                CompBinOp::Lt => {
+                    self.expect_int(frame_idx, lhs, origin)?
+                        < self.expect_int(frame_idx, rhs, origin)?
+                }
+                CompBinOp::LtEq => {
+                    self.expect_int(frame_idx, lhs, origin)?
+                        <= self.expect_int(frame_idx, rhs, origin)?
+                }
+                CompBinOp::Gt => {
+                    self.expect_int(frame_idx, lhs, origin)?
+                        > self.expect_int(frame_idx, rhs, origin)?
+                }
+                CompBinOp::GtEq => {
+                    self.expect_int(frame_idx, lhs, origin)?
+                        >= self.expect_int(frame_idx, rhs, origin)?
+                }
             }
         };
         Ok(CtfeValue::concrete(bool_const(self.db, result)))
