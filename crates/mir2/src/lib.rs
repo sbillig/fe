@@ -23,6 +23,6 @@ pub use runtime::{
     serialize_const_region_bytes, struct_field_offset_bytes,
 };
 pub use verify::{
-    VerifyError, resolve_runtime_place, verify_const_region, verify_runtime_body,
-    verify_runtime_package,
+    VerifyError, resolve_runtime_place, resolve_runtime_place_address_class, verify_const_region,
+    verify_runtime_body, verify_runtime_package,
 };

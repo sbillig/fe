@@ -1,11 +1,8 @@
-use cranelift_entity::EntityRef;
 use rustc_hash::FxHashSet;
 
 use crate::{
     db::MirDb,
     instance::RuntimeInstance,
-    runtime::PlaceRoot,
-    runtime::lower::class::{ref_class_for_place_result, runtime_address_space},
     runtime::{
         AddressSpaceKind, Layout, RExpr, RStmt, RTerminator, RuntimeBody, RuntimeBuiltin,
         RuntimeCarrier, RuntimeClass, RuntimeLocalRoot, RuntimeProgramView, RuntimeSignature,
@@ -20,8 +17,9 @@ use super::{
     layout::verify_class_layouts,
     place::{
         enum_extract_class, enum_tag_class, enum_tag_class_from_value, project_place,
-        resolve_runtime_place, runtime_value_class, scalar_class_from_const, verify_enum_handle,
-        verify_enum_write_variant, verify_value_enum_variant, verify_value_enum_variant_ref,
+        resolve_runtime_place_address_class, runtime_value_class, scalar_class_from_const,
+        verify_enum_handle, verify_enum_write_variant, verify_value_enum_variant,
+        verify_value_enum_variant_ref,
     },
 };
 
@@ -321,43 +319,7 @@ fn verify_assign<'db>(
             })
         }
         RExpr::AddrOf { place } => {
-            let resolved = resolve_runtime_place(db, program, body, place)?;
-            let root_class = match &place.root {
-                PlaceRoot::Slot(local) => match &body
-                    .local(*local)
-                    .ok_or(VerifyError::MissingRuntimeLocal(*local))?
-                    .root
-                {
-                    RuntimeLocalRoot::Slot(class) => class.clone(),
-                    RuntimeLocalRoot::None
-                    | RuntimeLocalRoot::Ref(_)
-                    | RuntimeLocalRoot::Ptr { .. } => {
-                        return Err(VerifyError::InvalidExprClass(dst));
-                    }
-                },
-                PlaceRoot::Ref(value) => runtime_value_class(body, *value)?.clone(),
-                PlaceRoot::Provider(binding) => body
-                    .provider_bindings
-                    .get(binding.index())
-                    .map(|binding| binding.provider_class.clone())
-                    .ok_or(VerifyError::InvalidExprClass(dst))?,
-                PlaceRoot::Ptr { space, class, .. } => RuntimeClass::RawAddr {
-                    space: *space,
-                    target: class.aggregate_layout(),
-                },
-            };
-            let expected = ref_class_for_place_result(
-                &root_class,
-                &resolved.result_class,
-                match &place.root {
-                    PlaceRoot::Slot(_) | PlaceRoot::Ref(_) => AddressSpaceKind::Memory,
-                    PlaceRoot::Provider(_) => {
-                        runtime_address_space(&root_class).unwrap_or(AddressSpaceKind::Memory)
-                    }
-                    PlaceRoot::Ptr { space, .. } => *space,
-                },
-                matches!(place.root, PlaceRoot::Ptr { .. }),
-            );
+            let expected = resolve_runtime_place_address_class(db, program, body, place)?;
             if dst_class.as_ref() != Some(&expected) {
                 return Err(VerifyError::InvalidExprClass(dst));
             }

@@ -85,5 +85,5 @@ pub enum RuntimeVerifySite {
 
 pub use consts::verify_const_region;
 pub use package::verify_runtime_package;
-pub use place::resolve_runtime_place;
+pub use place::{resolve_runtime_place, resolve_runtime_place_address_class};
 pub use runtime::{verify_runtime_body, verify_runtime_body_detailed};

@@ -23,6 +23,7 @@ use hir::projection::{IndexSource, Projection};
 use crate::{
     db::MirDb,
     instance::{RuntimeInstance, RuntimeInstanceKey, get_or_build_runtime_instance},
+    resolve_runtime_place_address_class,
     runtime::{
         AddressSpaceKind, ConstScalar, IntrinsicArithBinOp, LayoutId, PlaceElem, PlaceRoot, RBlock,
         RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView, RuntimeBody,
@@ -41,11 +42,11 @@ use super::{
         contract_metadata_builtin, desired_runtime_effect_arg_boundary, desired_runtime_param_plan,
         expr_direct_class, generic_numeric_intrinsic_kind, infer_local_runtime_state,
         lower_semantic_locals, normalized_place_address_class, normalized_place_class,
-        provider_class_for_target_in_env, ref_class_for_place_result, resolve_runtime_call_key,
-        runtime_address_space, runtime_class_satisfies_boundary,
-        runtime_effect_binding_plan_for_binding_idx, runtime_param_locals,
-        runtime_signature_for_key, semantic_return_ty, specialize_boundary_for_runtime_source,
-        stored_class_for_ty_in_context, top_level_class_for_ty_in_env,
+        provider_class_for_target_in_env, resolve_runtime_call_key,
+        runtime_class_satisfies_boundary, runtime_effect_binding_plan_for_binding_idx,
+        runtime_param_locals, runtime_signature_for_key, semantic_return_ty,
+        specialize_boundary_for_runtime_source, stored_class_for_ty_in_context,
+        top_level_class_for_ty_in_env,
     },
     consts::{
         const_scalar_for_class, const_scalar_from_value, enum_tag_scalar, lower_const_region,
@@ -4017,33 +4018,21 @@ impl<'db> RmirLowerCtxt<'db> {
     }
 
     fn place_addr_class(&self, place: &RuntimePlace<'db>) -> RuntimeClass<'db> {
-        let place_class = self.project_place_class(place);
-        let root_class = match &place.root {
-            PlaceRoot::Slot(local) => self
-                .local_root_class_r(*local)
-                .expect("slot place root should have a runtime class"),
-            PlaceRoot::Ref(local) => self
-                .value_class(*local)
-                .cloned()
-                .expect("ref place root should have a runtime class"),
-            PlaceRoot::Provider(binding) => self.provider_binding(*binding).provider_class.clone(),
-            PlaceRoot::Ptr { space, class, .. } => RuntimeClass::RawAddr {
-                space: *space,
-                target: class.aggregate_layout(),
+        let program = self.db as &dyn MirDb;
+        let body = RuntimeBody {
+            owner: self.instance,
+            key: self.key,
+            signature: RuntimeSignature {
+                params: Vec::new(),
+                ret: None,
             },
+            semantic_locals: self.semantic_locals.clone(),
+            provider_bindings: self.provider_bindings.clone(),
+            locals: self.locals.clone(),
+            blocks: Vec::new(),
         };
-        ref_class_for_place_result(
-            &root_class,
-            &place_class,
-            match &place.root {
-                PlaceRoot::Slot(_) | PlaceRoot::Ref(_) => AddressSpaceKind::Memory,
-                PlaceRoot::Provider(_) => {
-                    runtime_address_space(&root_class).unwrap_or(AddressSpaceKind::Memory)
-                }
-                PlaceRoot::Ptr { space, .. } => *space,
-            },
-            matches!(place.root, PlaceRoot::Ptr { .. }),
-        )
+        resolve_runtime_place_address_class(self.db, &program, &body, place)
+            .unwrap_or_else(|err| panic!("invalid runtime place address class: {err:?}"))
     }
 
     fn write_semantic_value(&mut self, bb: RBlockId, local: SLocalId, src: RLocalId) {

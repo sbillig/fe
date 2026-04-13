@@ -381,6 +381,75 @@ fn storage_backed_nested_handle_fields_follow_carriers_before_projecting_childre
 }
 
 #[test]
+fn storage_backed_nested_handle_field_borrows_use_storage_transport() {
+    let mut db = DriverDataBase::default();
+    let file_url =
+        Url::parse("file:///storage_backed_nested_handle_field_borrows_use_storage_transport.fe")
+            .unwrap();
+    db.workspace().touch(
+        &mut db,
+        file_url.clone(),
+        Some(include_str!("fixtures/effect_handle_field_deref.fe").to_string()),
+    );
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    let package = build_runtime_package(&db, top_mod).expect("runtime package");
+    let bump = package
+        .functions(&db)
+        .iter()
+        .copied()
+        .find(|function| function.symbol(&db).contains("bump"))
+        .expect("generated bump runtime function");
+    let body = bump.instance(&db).body(&db);
+
+    let nested_field_borrow = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.stmts.iter())
+        .find_map(|stmt| match stmt {
+            RStmt::Assign {
+                dst,
+                expr: RExpr::AddrOf { place },
+            } if matches!(place.root, PlaceRoot::Ref(_))
+                && matches!(place.path.as_ref(), [PlaceElem::Field(field0), PlaceElem::Field(field1)] if field0.0 == 0 && field1.0 == 0) =>
+            {
+                Some(*dst)
+            }
+            RStmt::Assign { .. }
+            | RStmt::EnumAssertVariant { .. }
+            | RStmt::Store { .. }
+            | RStmt::CopyInto { .. }
+            | RStmt::EnumSetTag { .. }
+            | RStmt::EnumWriteVariant { .. } => None,
+        })
+        .unwrap_or_else(|| {
+            panic!("expected nested field borrow in bump runtime body:\n{body:#?}")
+        });
+
+    let Some(RuntimeClass::Ref { pointee, kind, .. }) = body.value_class(nested_field_borrow)
+    else {
+        panic!("nested storage-backed field borrow should lower as a typed ref:\n{body:#?}");
+    };
+    assert!(
+        matches!(**pointee, RuntimeClass::Scalar(_)),
+        "nested storage-backed field borrow should point at the scalar field:\n{body:#?}"
+    );
+    assert!(
+        matches!(
+            kind,
+            RefKind::Provider {
+                space: mir2::AddressSpaceKind::Storage,
+                ..
+            }
+        ),
+        "nested storage-backed field borrow should use storage transport, not object/memory transport:\n{body:#?}"
+    );
+}
+
+#[test]
 fn checked_extern_intrinsics_do_not_become_runtime_functions() {
     let mut db = DriverDataBase::default();
     let file_url =

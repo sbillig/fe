@@ -4,6 +4,7 @@ use hir::projection::IndexSource;
 
 use crate::{
     db::MirDb,
+    runtime::lower::class::{ref_class_for_place_result, runtime_address_space},
     runtime::{
         ConstScalar, Layout, LayoutId, PlaceElem, PlaceRoot, RefView, ResolvedPlaceElem,
         ResolvedPlaceRootKind, ResolvedRuntimePlace, RuntimeBody, RuntimeClass, RuntimeLocalRoot,
@@ -157,6 +158,45 @@ pub fn resolve_runtime_place<'db>(
     })
 }
 
+pub fn resolve_runtime_place_address_class<'db>(
+    db: &'db dyn MirDb,
+    program: &impl RuntimeProgramView<'db>,
+    body: &RuntimeBody<'db>,
+    place: &crate::runtime::RuntimePlace<'db>,
+) -> Result<RuntimeClass<'db>, VerifyError<'db>> {
+    let resolved = resolve_runtime_place(db, program, body, place)?;
+    let (mut root_class, mut root_space, mut force_raw) =
+        runtime_place_transport_root(body, place)?;
+    for (idx, elem) in resolved.path.iter().enumerate() {
+        if idx + 1 >= resolved.path.len() {
+            break;
+        }
+        let class = match elem {
+            ResolvedPlaceElem::Field { class, .. }
+            | ResolvedPlaceElem::Index { class, .. }
+            | ResolvedPlaceElem::VariantField { class, .. } => class,
+        };
+        if matches!(
+            class,
+            RuntimeClass::Ref { .. }
+                | RuntimeClass::RawAddr {
+                    target: Some(_),
+                    ..
+                }
+        ) {
+            root_class = class.clone();
+            root_space = runtime_address_space(&root_class).unwrap_or(root_space);
+            force_raw = matches!(root_class, RuntimeClass::RawAddr { .. });
+        }
+    }
+    Ok(ref_class_for_place_result(
+        &root_class,
+        &resolved.result_class,
+        root_space,
+        force_raw,
+    ))
+}
+
 pub(super) fn project_place<'db>(
     db: &'db dyn MirDb,
     program: &impl RuntimeProgramView<'db>,
@@ -164,6 +204,61 @@ pub(super) fn project_place<'db>(
     place: &crate::runtime::RuntimePlace<'db>,
 ) -> Result<RuntimeClass<'db>, VerifyError<'db>> {
     Ok(resolve_runtime_place(db, program, body, place)?.result_class)
+}
+
+fn runtime_place_transport_root<'db>(
+    body: &RuntimeBody<'db>,
+    place: &crate::runtime::RuntimePlace<'db>,
+) -> Result<(RuntimeClass<'db>, crate::runtime::AddressSpaceKind, bool), VerifyError<'db>> {
+    Ok(match &place.root {
+        PlaceRoot::Slot(local) => (
+            match &body
+                .local(*local)
+                .ok_or(VerifyError::MissingRuntimeLocal(*local))?
+                .root
+            {
+                RuntimeLocalRoot::Slot(class) => class.clone(),
+                RuntimeLocalRoot::None
+                | RuntimeLocalRoot::Ref(_)
+                | RuntimeLocalRoot::Ptr { .. } => {
+                    return Err(VerifyError::InvalidPlace(RuntimeClass::RawAddr {
+                        space: crate::runtime::AddressSpaceKind::Memory,
+                        target: None,
+                    }));
+                }
+            },
+            crate::runtime::AddressSpaceKind::Memory,
+            false,
+        ),
+        PlaceRoot::Ref(value) => (
+            runtime_value_class(body, *value)?.clone(),
+            crate::runtime::AddressSpaceKind::Memory,
+            false,
+        ),
+        PlaceRoot::Provider(binding) => {
+            let class = body
+                .provider_bindings
+                .get(binding.index())
+                .map(|binding| binding.provider_class.clone())
+                .ok_or(VerifyError::InvalidPlace(RuntimeClass::RawAddr {
+                    space: crate::runtime::AddressSpaceKind::Memory,
+                    target: None,
+                }))?;
+            (
+                class.clone(),
+                runtime_address_space(&class).unwrap_or(crate::runtime::AddressSpaceKind::Memory),
+                false,
+            )
+        }
+        PlaceRoot::Ptr { space, class, .. } => (
+            RuntimeClass::RawAddr {
+                space: *space,
+                target: class.aggregate_layout(),
+            },
+            *space,
+            true,
+        ),
+    })
 }
 
 pub(super) fn runtime_value_class<'a, 'db>(
