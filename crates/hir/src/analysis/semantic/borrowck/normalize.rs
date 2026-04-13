@@ -721,6 +721,7 @@ impl<'db> NormalizeCtxt<'db> {
         origin: crate::analysis::semantic::SemOrigin<'db>,
     ) -> Result<NEffectArg<'db>, SemanticNormalizeError<'db>> {
         Ok(NEffectArg {
+            binding_idx: arg.binding_idx,
             arg: match &arg.arg {
                 crate::analysis::semantic::SEffectArgValue::Place(place) => {
                     NEffectArgValue::Place(self.normalize_place(place, origin)?)

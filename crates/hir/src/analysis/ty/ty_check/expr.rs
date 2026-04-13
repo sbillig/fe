@@ -1433,6 +1433,7 @@ impl<'db> TyChecker<'db> {
                     }
                     resolved_args.push(super::ResolvedEffectArg {
                         param_idx,
+                        binding_idx: req.binding_idx,
                         key: key_path,
                         arg,
                         pass_mode,

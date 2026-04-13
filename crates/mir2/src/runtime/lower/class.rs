@@ -76,6 +76,12 @@ pub(crate) struct RuntimeVisibleBindingPlan<'db> {
     pub(crate) plan: RuntimeParamPlan<'db>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct RuntimeEffectBindingPlan<'db> {
+    pub(crate) class: RuntimeClass<'db>,
+    pub(crate) boundary: RuntimeBoundarySpec<'db>,
+}
+
 pub(crate) fn runtime_address_space(class: &RuntimeClass<'_>) -> Option<AddressSpaceKind> {
     match class {
         RuntimeClass::Ref {
@@ -1035,11 +1041,156 @@ pub(crate) fn runtime_class_for_direct_value_provider_in_env<'db>(
     runtime_class_for_direct_value_provider_in_context(db, provider, env.scope, env.assumptions)
 }
 
+fn effect_binding_borrow_boundary<'db>(
+    db: &'db dyn MirDb,
+    binding: LocalBinding<'db>,
+    pointee_ty: TyId<'db>,
+    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
+) -> RuntimeBoundarySpec<'db> {
+    let access = if binding.is_mut() {
+        BorrowAccess::ReadWrite
+    } else {
+        BorrowAccess::ReadOnly
+    };
+    RuntimeBoundarySpec::BorrowLike {
+        pointee: stored_class_for_ty_in_context(db, pointee_ty, scope, assumptions),
+        access,
+        allow: default_borrow_transport_set(access, AddressSpaceKind::Memory),
+    }
+}
+
+pub(crate) fn runtime_effect_binding_plan<'db>(
+    db: &'db dyn MirDb,
+    semantic: SemanticInstance<'db>,
+    binding: LocalBinding<'db>,
+) -> Option<RuntimeEffectBindingPlan<'db>> {
+    if !matches!(binding, LocalBinding::EffectParam { .. }) {
+        return None;
+    }
+    let owner = semantic.key(db).owner(db);
+    let env = RuntimeTypeEnv::new(
+        Some(owner.scope()),
+        semantic_instance_assumptions(db, semantic),
+    );
+    let binding_ty = semantic_binding_ty(db, semantic, binding);
+    match semantic_binding_lowering(db, semantic, binding) {
+        hir::analysis::semantic::SemanticBindingLowering::Erased => None,
+        hir::analysis::semantic::SemanticBindingLowering::DirectValue {
+            provenance: ValueProvenance::RootProvider(provider),
+        } => {
+            let class = runtime_class_for_direct_value_provider_in_env(db, env, &provider)?;
+            Some(RuntimeEffectBindingPlan {
+                class,
+                boundary: effect_binding_borrow_boundary(
+                    db,
+                    binding,
+                    binding_ty,
+                    env.scope,
+                    env.assumptions,
+                ),
+            })
+        }
+        hir::analysis::semantic::SemanticBindingLowering::DirectValue { .. } => {
+            let class = runtime_class_for_explicit_root_provider_param(db, env, binding, binding_ty)
+                .or_else(|| top_level_class_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory))?;
+            Some(RuntimeEffectBindingPlan {
+                class: class.clone(),
+                boundary: RuntimeBoundarySpec::Exact(class),
+            })
+        }
+        hir::analysis::semantic::SemanticBindingLowering::DirectCarrier {
+            provider: Some(provider),
+            ..
+        } => {
+            let class =
+                runtime_class_for_provider_binding(db, &provider, env.scope, env.assumptions)?;
+            Some(RuntimeEffectBindingPlan {
+                class: class.clone(),
+                boundary: RuntimeBoundarySpec::Exact(class),
+            })
+        }
+        hir::analysis::semantic::SemanticBindingLowering::DirectCarrier {
+            provider: None,
+            target_ty,
+        } => {
+            let class = top_level_class_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory)
+                .or_else(|| {
+                    Some(provider_class_for_target_in_env(
+                        db,
+                        env,
+                        Some(target_ty),
+                        AddressSpaceKind::Memory,
+                    ))
+                })?;
+            Some(RuntimeEffectBindingPlan {
+                class: class.clone(),
+                boundary: RuntimeBoundarySpec::Exact(class),
+            })
+        }
+        hir::analysis::semantic::SemanticBindingLowering::PlaceCarrier { value_ty } => {
+            let class =
+                provider_class_for_target_in_env(db, env, Some(value_ty), AddressSpaceKind::Memory);
+            Some(RuntimeEffectBindingPlan {
+                class: class.clone(),
+                boundary: RuntimeBoundarySpec::Exact(class),
+            })
+        }
+        hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
+            provenance: hir::analysis::semantic::PlaceProvenance::RootProvider(provider),
+            value_ty,
+        } => {
+            let class = runtime_class_for_effect_binding_provider_in_env(db, env, &provider)?;
+            Some(RuntimeEffectBindingPlan {
+                class,
+                boundary: effect_binding_borrow_boundary(
+                    db,
+                    binding,
+                    value_ty,
+                    env.scope,
+                    env.assumptions,
+                ),
+            })
+        }
+        hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
+            provenance: hir::analysis::semantic::PlaceProvenance::Derived { .. },
+            ..
+        } => None,
+    }
+}
+
+pub(crate) fn runtime_effect_binding_plan_for_binding_idx<'db>(
+    db: &'db dyn MirDb,
+    semantic: SemanticInstance<'db>,
+    binding_idx: u32,
+) -> Option<RuntimeEffectBindingPlan<'db>> {
+    let BodyOwner::Func(func) = semantic.key(db).owner(db) else {
+        return None;
+    };
+    let resolved = hir::semantic::EffectEnvView::new(EffectParamSite::Func(func))
+        .resolved_binding(db, binding_idx as usize)?;
+    runtime_effect_binding_plan(
+        db,
+        semantic,
+        LocalBinding::EffectParam {
+            site: resolved.requirement.binding_site,
+            idx: resolved.requirement.binding_idx as usize,
+            binding_name: resolved.requirement.binding_name,
+            provider_idx: resolved.provider.provider_idx,
+            key_path: resolved.requirement.binding_path,
+            is_mut: resolved.requirement.is_mut,
+        },
+    )
+}
+
 pub(crate) fn runtime_visible_binding_class<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
     binding: LocalBinding<'db>,
 ) -> Option<RuntimeClass<'db>> {
+    if let Some(plan) = runtime_effect_binding_plan(db, semantic, binding) {
+        return Some(plan.class);
+    }
     let owner = semantic.key(db).owner(db);
     let typed_body = semantic.key(db).instantiate_typed_body(db);
     let env = RuntimeTypeEnv::new(Some(owner.scope()), typed_body.assumptions());
@@ -1090,46 +1241,7 @@ pub(crate) fn owner_effect_binding_boundary<'db>(
     semantic: SemanticInstance<'db>,
     binding: LocalBinding<'db>,
 ) -> Option<RuntimeBoundarySpec<'db>> {
-    let owner = semantic.key(db).owner(db);
-    let env = RuntimeTypeEnv::new(
-        Some(owner.scope()),
-        semantic_instance_assumptions(db, semantic),
-    );
-    let access = if binding.is_mut() {
-        BorrowAccess::ReadWrite
-    } else {
-        BorrowAccess::ReadOnly
-    };
-    let borrow_like = |pointee| RuntimeBoundarySpec::BorrowLike {
-        pointee,
-        access,
-        allow: default_borrow_transport_set(access, AddressSpaceKind::Memory),
-    };
-    let binding_ty = semantic_binding_ty(db, semantic, binding);
-    match semantic_binding_lowering(db, semantic, binding) {
-        hir::analysis::semantic::SemanticBindingLowering::Erased => None,
-        hir::analysis::semantic::SemanticBindingLowering::DirectValue {
-            provenance: ValueProvenance::RootProvider(_),
-        } => Some(borrow_like(stored_class_for_ty_in_context(
-            db,
-            binding_ty,
-            env.scope,
-            env.assumptions,
-        ))),
-        hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue { value_ty, .. } => {
-            Some(borrow_like(stored_class_for_ty_in_context(
-                db,
-                value_ty,
-                env.scope,
-                env.assumptions,
-            )))
-        }
-        hir::analysis::semantic::SemanticBindingLowering::DirectValue { .. }
-        | hir::analysis::semantic::SemanticBindingLowering::DirectCarrier { .. }
-        | hir::analysis::semantic::SemanticBindingLowering::PlaceCarrier { .. } => {
-            runtime_visible_binding_class(db, semantic, binding).map(RuntimeBoundarySpec::Exact)
-        }
-    }
+    runtime_effect_binding_plan(db, semantic, binding).map(|plan| plan.boundary)
 }
 
 fn runtime_visible_binding_local<'db>(
@@ -1346,7 +1458,10 @@ pub(crate) fn expr_direct_class<'db>(
                 }
             }
             for arg in effect_args {
-                if let Some(class) = effect_arg_class(db, body, env, arg, carriers) {
+                let plan =
+                    runtime_effect_binding_plan_for_binding_idx(db, semantic, arg.binding_idx);
+                if let Some(class) = effect_arg_class(db, body, env, arg, plan.as_ref(), carriers)
+                {
                     param_classes.push(class);
                 }
             }
@@ -2181,9 +2296,10 @@ fn effect_arg_class<'db>(
     body: &NormalizedSemanticBody<'db>,
     env: RuntimeTypeEnv<'db>,
     arg: &NEffectArg<'db>,
+    plan: Option<&RuntimeEffectBindingPlan<'db>>,
     carriers: &[RuntimeCarrier<'db>],
 ) -> Option<RuntimeClass<'db>> {
-    if arg.provider.is_none() && arg.target_ty.is_none() {
+    if plan.is_none() && arg.provider.is_none() && arg.target_ty.is_none() {
         return match (&arg.pass_mode, &arg.arg) {
             (EffectPassMode::ByValue | EffectPassMode::Unknown, NEffectArgValue::Value(value)) => {
                 carrier_value_class(value.local, carriers)
@@ -2200,54 +2316,83 @@ fn effect_arg_class<'db>(
         };
     }
     let effect_space = || resolved_effect_arg_address_space(db, body, arg);
+    let boundary =
+        desired_runtime_effect_arg_boundary(db, env, arg, plan, effect_space());
     match arg.pass_mode {
-        EffectPassMode::ByValue | EffectPassMode::Unknown => match arg.arg {
-            NEffectArgValue::Place(_) => Some(provider_class_for_target_in_context(
-                db,
-                arg.target_ty,
-                effect_space(),
-                env.scope,
-                env.assumptions,
-            )),
-            NEffectArgValue::Value(value) => match carriers.get(value.local.index())? {
-                RuntimeCarrier::Value(class) => Some(class.clone()),
-                RuntimeCarrier::Erased if arg.provider.is_none() && arg.target_ty.is_none() => None,
-                RuntimeCarrier::Erased => Some(provider_class_for_target_in_context(
+        EffectPassMode::ByValue | EffectPassMode::Unknown => {
+            if let Some(boundary) = boundary.as_ref() {
+                return match &arg.arg {
+                    NEffectArgValue::Place(place) => runtime_visible_place_arg_class_for_boundary(
+                        db,
+                        body,
+                        place,
+                        boundary,
+                        carriers,
+                        env.scope,
+                        env.assumptions,
+                    ),
+                    NEffectArgValue::Value(value) => runtime_visible_arg_class(
+                        db,
+                        body,
+                        value.local,
+                        Some(boundary),
+                        carriers,
+                    ),
+                };
+            }
+            match arg.arg {
+                NEffectArgValue::Place(_) => Some(provider_class_for_target_in_context(
                     db,
                     arg.target_ty,
                     effect_space(),
                     env.scope,
                     env.assumptions,
                 )),
-            },
-        },
-        EffectPassMode::ByPlace | EffectPassMode::ByTempPlace => {
-            let Some(target_ty) = arg.target_ty else {
-                return Some(provider_class_for_target_in_context(
-                    db,
-                    None,
-                    effect_space(),
-                    env.scope,
-                    env.assumptions,
-                ));
-            };
-            let boundary = RuntimeBoundarySpec::BorrowLike {
-                pointee: stored_class_for_ty_in_context(db, target_ty, env.scope, env.assumptions),
-                access: BorrowAccess::ReadWrite,
-                allow: default_borrow_transport_set(BorrowAccess::ReadWrite, effect_space()),
-            };
-            match &arg.arg {
-                NEffectArgValue::Place(place) => {
-                    let class = normalized_place_address_class(
+                NEffectArgValue::Value(value) => match carriers.get(value.local.index())? {
+                    RuntimeCarrier::Value(class) => Some(class.clone()),
+                    RuntimeCarrier::Erased if arg.provider.is_none() && arg.target_ty.is_none() => None,
+                    RuntimeCarrier::Erased => Some(provider_class_for_target_in_context(
                         db,
-                        body,
-                        place,
-                        carriers,
+                        arg.target_ty,
+                        effect_space(),
                         env.scope,
                         env.assumptions,
-                    )?;
-                    runtime_class_satisfies_boundary(&class, &boundary).then_some(class)
+                    )),
+                },
+            }
+        }
+        EffectPassMode::ByPlace | EffectPassMode::ByTempPlace => {
+            let boundary = boundary.unwrap_or_else(|| {
+                let Some(target_ty) = arg.target_ty else {
+                    return RuntimeBoundarySpec::Exact(provider_class_for_target_in_context(
+                        db,
+                        None,
+                        effect_space(),
+                        env.scope,
+                        env.assumptions,
+                    ));
+                };
+                RuntimeBoundarySpec::BorrowLike {
+                    pointee: stored_class_for_ty_in_context(
+                        db,
+                        target_ty,
+                        env.scope,
+                        env.assumptions,
+                    ),
+                    access: BorrowAccess::ReadWrite,
+                    allow: default_borrow_transport_set(BorrowAccess::ReadWrite, effect_space()),
                 }
+            });
+            match &arg.arg {
+                NEffectArgValue::Place(place) => runtime_visible_place_arg_class_for_boundary(
+                    db,
+                    body,
+                    place,
+                    &boundary,
+                    carriers,
+                    env.scope,
+                    env.assumptions,
+                ),
                 NEffectArgValue::Value(value) => borrow_like_runtime_visible_arg_class(
                     db,
                     body,
@@ -2255,6 +2400,65 @@ fn effect_arg_class<'db>(
                     &boundary,
                     carriers,
                 ),
+            }
+        }
+    }
+}
+
+pub(crate) fn desired_runtime_effect_arg_boundary<'db>(
+    db: &'db dyn MirDb,
+    env: RuntimeTypeEnv<'db>,
+    arg: &NEffectArg<'db>,
+    plan: Option<&RuntimeEffectBindingPlan<'db>>,
+    effect_space: AddressSpaceKind,
+) -> Option<RuntimeBoundarySpec<'db>> {
+    if let Some(plan) = plan {
+        return Some(plan.boundary.clone());
+    }
+    arg.target_ty.map(|target_ty| match arg.pass_mode {
+        EffectPassMode::ByPlace | EffectPassMode::ByTempPlace => RuntimeBoundarySpec::BorrowLike {
+            pointee: stored_class_for_ty_in_context(db, target_ty, env.scope, env.assumptions),
+            access: BorrowAccess::ReadWrite,
+            allow: default_borrow_transport_set(BorrowAccess::ReadWrite, effect_space),
+        },
+        EffectPassMode::ByValue | EffectPassMode::Unknown => {
+            boundary_spec_for_ty_in_env(db, env, target_ty, effect_space).unwrap_or(
+                RuntimeBoundarySpec::Exact(provider_class_for_target_in_env(
+                    db,
+                    env,
+                    Some(target_ty),
+                    effect_space,
+                )),
+            )
+        }
+    })
+}
+
+fn runtime_visible_place_arg_class_for_boundary<'db>(
+    db: &'db dyn MirDb,
+    body: &NormalizedSemanticBody<'db>,
+    place: &NSPlace<'db>,
+    boundary: &RuntimeBoundarySpec<'db>,
+    carriers: &[RuntimeCarrier<'db>],
+    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
+) -> Option<RuntimeClass<'db>> {
+    match boundary {
+        RuntimeBoundarySpec::Exact(target) => Some(target.clone()),
+        RuntimeBoundarySpec::BorrowLike { pointee, allow, .. } => {
+            let class =
+                normalized_place_address_class(db, body, place, carriers, scope, assumptions)?;
+            if runtime_class_satisfies_boundary(&class, boundary) {
+                Some(class)
+            } else if let Some(layout) = pointee.aggregate_layout() && allow.allow_object {
+                Some(RuntimeClass::object_ref(layout))
+            } else if allow.allow_raw_addr {
+                Some(RuntimeClass::RawAddr {
+                    space: AddressSpaceKind::Memory,
+                    target: None,
+                })
+            } else {
+                None
             }
         }
     }

@@ -24,8 +24,8 @@ use crate::{
     db::MirDb,
     instance::{RuntimeInstance, RuntimeInstanceKey, get_or_build_runtime_instance},
     runtime::{
-        AddressSpaceKind, BorrowAccess, ConstScalar, IntrinsicArithBinOp, LayoutId, PlaceElem,
-        PlaceRoot, RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView,
+        AddressSpaceKind, ConstScalar, IntrinsicArithBinOp, LayoutId, PlaceElem, PlaceRoot,
+        RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView,
         RuntimeBody, RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeLocalLowering,
         RuntimeLocalRoot, RuntimePlace, RuntimeProviderBinding, RuntimeProviderBindingId,
         RuntimeSignature, ScalarClass, ScalarRepr, ScalarRole, VariantId,
@@ -38,13 +38,16 @@ use super::{
         ContractMetadataBuiltin, GenericNumericIntrinsicKind, InferredRuntimeLocal,
         actual_aggregate_class_from_runtime_source,
         boundary_source_uses_transport_sensitive_aggregate, boundary_spec_for_ty_in_env,
-        contract_metadata_builtin, default_borrow_transport_set, desired_runtime_param_plan,
-        expr_direct_class, generic_numeric_intrinsic_kind, infer_local_runtime_state,
-        lower_semantic_locals, normalized_place_address_class, normalized_place_class,
-        provider_class_for_target_in_env, ref_class_for_place_result, resolve_runtime_call_key,
-        runtime_address_space, runtime_class_satisfies_boundary, runtime_param_locals,
+        contract_metadata_builtin, desired_runtime_effect_arg_boundary,
+        desired_runtime_param_plan, expr_direct_class,
+        generic_numeric_intrinsic_kind, infer_local_runtime_state, lower_semantic_locals,
+        normalized_place_address_class, normalized_place_class, provider_class_for_target_in_env,
+        ref_class_for_place_result, resolve_runtime_call_key,
+        runtime_address_space, runtime_class_satisfies_boundary,
+        runtime_effect_binding_plan_for_binding_idx, runtime_param_locals,
         runtime_signature_for_key, semantic_return_ty, specialize_boundary_for_runtime_source,
         stored_class_for_ty_in_context, top_level_class_for_ty_in_env,
+        RuntimeEffectBindingPlan,
     },
     consts::{
         const_scalar_for_class, const_scalar_from_value, enum_tag_scalar, lower_const_region,
@@ -1546,7 +1549,9 @@ impl<'db> RmirLowerCtxt<'db> {
         let (mut runtime_args, mut runtime_classes) =
             self.lower_visible_call_args(bb, &typed_body, args);
         for effect_arg in effect_args {
-            if let Some((value, class)) = self.lower_effect_arg(bb, effect_arg) {
+            let plan =
+                runtime_effect_binding_plan_for_binding_idx(self.db, semantic, effect_arg.binding_idx);
+            if let Some((value, class)) = self.lower_effect_arg(bb, effect_arg, plan.as_ref()) {
                 runtime_args.push(value);
                 runtime_classes.push(class);
             }
@@ -2459,8 +2464,9 @@ impl<'db> RmirLowerCtxt<'db> {
         &mut self,
         bb: RBlockId,
         arg: &NEffectArg<'db>,
+        plan: Option<&RuntimeEffectBindingPlan<'db>>,
     ) -> Option<(RLocalId, RuntimeClass<'db>)> {
-        if arg.provider.is_none() && arg.target_ty.is_none() {
+        if plan.is_none() && arg.provider.is_none() && arg.target_ty.is_none() {
             return match (&arg.pass_mode, &arg.arg) {
                 (
                     EffectPassMode::ByValue | EffectPassMode::Unknown,
@@ -2482,26 +2488,7 @@ impl<'db> RmirLowerCtxt<'db> {
             };
         }
         let space = resolved_effect_arg_address_space(self.db, &self.semantic_body, arg);
-        let boundary = arg.target_ty.map(|target_ty| match arg.pass_mode {
-            EffectPassMode::ByPlace | EffectPassMode::ByTempPlace => {
-                crate::runtime::RuntimeBoundarySpec::BorrowLike {
-                    pointee: stored_class_for_ty_in_context(
-                        self.db,
-                        target_ty,
-                        self.env.scope,
-                        self.env.assumptions,
-                    ),
-                    access: BorrowAccess::ReadWrite,
-                    allow: default_borrow_transport_set(BorrowAccess::ReadWrite, space),
-                }
-            }
-            EffectPassMode::ByValue | EffectPassMode::Unknown => boundary_spec_for_ty_in_env(
-                self.db, self.env, target_ty, space,
-            )
-            .unwrap_or(crate::runtime::RuntimeBoundarySpec::Exact(
-                provider_class_for_target_in_env(self.db, self.env, Some(target_ty), space),
-            )),
-        });
+        let boundary = desired_runtime_effect_arg_boundary(self.db, self.env, arg, plan, space);
         match arg.pass_mode {
             EffectPassMode::ByValue | EffectPassMode::Unknown => match &arg.arg {
                 NEffectArgValue::Value(value) => {

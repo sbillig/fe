@@ -31,6 +31,7 @@ impl<'db> SmirLowerCtxt<'db> {
             .collect::<Vec<_>>();
         args.into_iter()
             .map(|arg| SEffectArg {
+                binding_idx: arg.binding_idx,
                 arg: match &arg.arg {
                     EffectArg::Place(place) => {
                         SEffectArgValue::Place(self.lower_place_data(place.clone()))
@@ -93,6 +94,7 @@ impl<'db> SmirLowerCtxt<'db> {
     ) -> Box<[SEffectArg<'db>]> {
         args.iter()
             .map(|arg| SEffectArg {
+                binding_idx: arg.binding_idx,
                 arg: match &arg.arg {
                     EffectArg::Place(place) => {
                         SEffectArgValue::Place(self.lower_place_data(place.clone()))

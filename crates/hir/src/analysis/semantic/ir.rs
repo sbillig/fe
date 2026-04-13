@@ -228,6 +228,7 @@ pub enum SPlaceElem {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct SEffectArg<'db> {
+    pub binding_idx: u32,
     pub arg: SEffectArgValue,
     pub pass_mode: EffectPassMode,
     pub target_ty: Option<TyId<'db>>,

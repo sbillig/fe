@@ -2257,6 +2257,7 @@ pub enum EffectPassMode {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct ResolvedEffectArg<'db> {
     pub param_idx: usize,
+    pub binding_idx: u32,
     pub key: PathId<'db>,
     pub arg: EffectArg<'db>,
     pub pass_mode: EffectPassMode,

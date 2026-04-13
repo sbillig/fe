@@ -3,10 +3,9 @@ use hir::{
     analysis::{
         semantic::{
             GenericSubst, ImplEnv, ManualContractSection, RootSemanticInstanceError,
-            SemanticInstance, SemanticInstanceKey, ValueProvenance, get_or_build_semantic_instance,
+            SemanticInstance, SemanticInstanceKey, get_or_build_semantic_instance,
             owner_effect_bindings, resolved_provider_binding_for_instance_effect,
-            root_semantic_instance_key, semantic_binding_lowering, semantic_binding_ty,
-            semantic_instance_assumptions,
+            root_semantic_instance_key, semantic_binding_ty, semantic_instance_assumptions,
         },
         ty::{
             corelib::{resolve_core_trait, resolve_lib_type_path},
@@ -29,9 +28,8 @@ use crate::{
     runtime::code_region::{code_region_symbol, runtime_code_region_for_manual_root},
     runtime::lower::class::{
         owner_effect_binding_boundary, provider_class_for_target_in_env,
-        runtime_class_for_direct_value_provider_in_env,
-        runtime_class_for_effect_binding_provider_in_env, runtime_param_class,
-        runtime_visible_binding_class, top_level_class_for_ty_in_env,
+        runtime_effect_binding_plan, runtime_param_class, runtime_visible_binding_class,
+        top_level_class_for_ty_in_env,
     },
     runtime::lower::layout::RuntimeTypeEnv,
     runtime::{
@@ -1270,33 +1268,7 @@ fn owner_effect_binding_class<'db>(
     semantic: SemanticInstance<'db>,
     binding: hir::analysis::ty::ty_check::LocalBinding<'db>,
 ) -> Option<crate::runtime::RuntimeClass<'db>> {
-    let owner = semantic.key(db).owner(db);
-    let env = RuntimeTypeEnv::new(
-        Some(owner.scope()),
-        semantic_instance_assumptions(db, semantic),
-    );
-    let binding_ty = semantic_binding_ty(db, semantic, binding);
-    match semantic_binding_lowering(db, semantic, binding) {
-        hir::analysis::semantic::SemanticBindingLowering::Erased => None,
-        hir::analysis::semantic::SemanticBindingLowering::DirectValue {
-            provenance: ValueProvenance::RootProvider(provider),
-        } => runtime_class_for_direct_value_provider_in_env(db, env, &provider),
-        hir::analysis::semantic::SemanticBindingLowering::DirectValue { .. }
-        | hir::analysis::semantic::SemanticBindingLowering::DirectCarrier { .. } => {
-            top_level_class_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory)
-        }
-        hir::analysis::semantic::SemanticBindingLowering::PlaceCarrier { value_ty } => {
-            top_level_class_for_ty_in_env(db, env, value_ty, AddressSpaceKind::Memory)
-        }
-        hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
-            provenance: hir::analysis::semantic::PlaceProvenance::RootProvider(provider),
-            ..
-        } => runtime_class_for_effect_binding_provider_in_env(db, env, &provider),
-        hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
-            provenance: hir::analysis::semantic::PlaceProvenance::Derived { .. },
-            ..
-        } => None,
-    }
+    runtime_effect_binding_plan(db, semantic, binding).map(|plan| plan.class)
 }
 
 fn synthetic_instance<'db>(
