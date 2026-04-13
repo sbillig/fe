@@ -919,7 +919,7 @@ impl<'db> TyChecker<'db> {
                 {
                     return PendingPrimitiveOpResolution::Pending;
                 }
-                self.check_ops_trait(*expr, lhs_ty, op, None)
+                self.check_ops_trait(*expr, lhs_ty, op, Some(*rhs))
             }
         };
 
@@ -4111,17 +4111,10 @@ impl<'db> TyChecker<'db> {
                 let func_ty =
                     self.instantiate_trait_method_to_term(cand.method, selected_lhs_ty, inst);
 
-                if let Some(rhs_expr) = rhs_expr {
-                    // Derive expected RHS type from the instantiated function type
-                    let (base, gen_args) = func_ty.decompose_ty_app(self.db);
-                    if let TyData::TyBase(TyBase::Func(func_def)) = base.data(self.db) {
-                        let mut expected_rhs =
-                            func_def.arg_tys(self.db)[1].instantiate(self.db, gen_args);
-                        let mut subst = AssocTySubst::new(inst);
-                        expected_rhs =
-                            self.normalize_ty(expected_rhs.fold_with(self.db, &mut subst));
-                        self.check_expr(rhs_expr, expected_rhs);
-                    }
+                if let Some(rhs_expr) = rhs_expr
+                    && let Some(expected_rhs) = self.instantiated_ops_rhs_ty(func_ty, inst)
+                {
+                    self.check_or_constrain_expr_to_expected(rhs_expr, expected_rhs);
                 }
 
                 (func_ty, inst)
@@ -4236,6 +4229,35 @@ impl<'db> TyChecker<'db> {
         let ret_ty = self.normalize_ty(callable.ret_ty(self.db));
         self.env.register_semantic_call(expr, callable);
         ExprProp::new(ret_ty, true)
+    }
+
+    fn instantiated_ops_rhs_ty(
+        &mut self,
+        func_ty: TyId<'db>,
+        inst: TraitInstId<'db>,
+    ) -> Option<TyId<'db>> {
+        let (base, gen_args) = func_ty.decompose_ty_app(self.db);
+        let TyData::TyBase(TyBase::Func(func_def)) = base.data(self.db) else {
+            return None;
+        };
+        let mut expected_rhs = func_def
+            .arg_tys(self.db)
+            .get(1)?
+            .instantiate(self.db, gen_args);
+        let mut subst = AssocTySubst::new(inst);
+        expected_rhs = self.normalize_ty(expected_rhs.fold_with(self.db, &mut subst));
+        Some(expected_rhs)
+    }
+
+    fn check_or_constrain_expr_to_expected(&mut self, expr: ExprId, expected: TyId<'db>) {
+        let Some(prop) = self.env.typed_expr(expr) else {
+            self.check_expr(expr, expected);
+            return;
+        };
+        let actual = self
+            .try_coerce_capability_for_expr_to_expected(expr, prop.ty, expected)
+            .unwrap_or(prop.ty);
+        self.unify_ty(Typeable::Expr(expr, prop), actual, expected);
     }
 
     fn check_assign_lhs(&mut self, lhs: ExprId, typed_lhs: &ExprProp<'db>) {

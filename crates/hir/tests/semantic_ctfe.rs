@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use cranelift_entity::EntityRef;
 use fe_hir::diagnosable::Diagnosable;
 use fe_hir::test_db::HirAnalysisTestDb;
 use fe_hir::{
@@ -456,5 +457,139 @@ fn entry() -> u256 {
         !sem_const_has_abstract_scalar_leaf(&db, reified),
         "reified runtime const should not contain nested abstract scalar leaves: {:?}",
         reified.value(&db)
+    );
+}
+
+#[test]
+fn canonicalize_invalidates_const_facts_for_mutating_calls() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_ctfe.fe".into(),
+        r#"
+#[arithmetic(unchecked)]
+fn wraps_after_aug_assign() -> bool {
+    let mut x: u8 = 255
+    x += 1
+    x == 0
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let func = top_mod
+        .all_funcs(&db)
+        .iter()
+        .find(|func| {
+            matches!(func.name(&db), Partial::Present(name) if name.data(&db) == "wraps_after_aug_assign")
+        })
+        .expect("expected wraps_after_aug_assign function");
+
+    let semantic = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
+    );
+    let body = canonicalize_semantic_consts(&db, semantic);
+
+    let mut saw_bool_call = false;
+    let mut saw_const_false = false;
+    for stmt in body.blocks.iter().flat_map(|block| block.stmts.iter()) {
+        let SStmtKind::Assign { dst, expr } = &stmt.kind else {
+            continue;
+        };
+        if !body.locals[dst.index()].ty.is_bool(&db) {
+            continue;
+        }
+        saw_bool_call |= matches!(expr, SExpr::Call { .. });
+        saw_const_false |= matches!(
+            expr,
+            SExpr::Const(SConst::Value(value))
+                if matches!(
+                    value.value(&db),
+                    SemConstValue::Scalar {
+                        value: SemConstScalar::Bool(false),
+                        ..
+                    }
+                )
+        );
+    }
+
+    assert!(
+        saw_bool_call,
+        "expected the post-call comparison to stay dynamic in canonicalized semantic body"
+    );
+    assert!(
+        !saw_const_false,
+        "mutating call should invalidate caller const facts instead of folding comparison to false"
+    );
+}
+
+#[test]
+fn canonicalize_concretizes_negated_min_literal_comparisons() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_ctfe.fe".into(),
+        r#"
+#[arithmetic(unchecked)]
+fn negated_min_i8_compares_equal() -> bool {
+    let x: i8 = -128
+    let y: i8 = -x
+    y == -128
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let func = top_mod
+        .all_funcs(&db)
+        .iter()
+        .find(|func| {
+            matches!(func.name(&db), Partial::Present(name) if name.data(&db) == "negated_min_i8_compares_equal")
+        })
+        .expect("expected negated_min_i8_compares_equal function");
+
+    let semantic = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
+    );
+    let body = canonicalize_semantic_consts(&db, semantic);
+
+    let mut saw_const_true = false;
+    let mut saw_const_false = false;
+    for stmt in body.blocks.iter().flat_map(|block| block.stmts.iter()) {
+        let SStmtKind::Assign { dst, expr } = &stmt.kind else {
+            continue;
+        };
+        if !body.locals[dst.index()].ty.is_bool(&db) {
+            continue;
+        }
+        saw_const_true |= matches!(
+            expr,
+            SExpr::Const(SConst::Value(value))
+                if matches!(
+                    value.value(&db),
+                    SemConstValue::Scalar {
+                        value: SemConstScalar::Bool(true),
+                        ..
+                    }
+                )
+        );
+        saw_const_false |= matches!(
+            expr,
+            SExpr::Const(SConst::Value(value))
+                if matches!(
+                    value.value(&db),
+                    SemConstValue::Scalar {
+                        value: SemConstScalar::Bool(false),
+                        ..
+                    }
+                )
+        );
+    }
+
+    assert!(
+        saw_const_true,
+        "expected the comparison against -128 to fold to true after deferred primitive resolution"
+    );
+    assert!(
+        !saw_const_false,
+        "negated minimum integer literal should not stay abstract and fold to false"
     );
 }

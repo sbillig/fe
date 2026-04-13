@@ -56,6 +56,7 @@ pub fn lower_to_smir<'db>(
                 role: SemanticLocalRole::DirectValue {
                     provenance: ValueProvenance::Ordinary,
                 },
+                snapshot_source: None,
             });
         };
         let mut idx = 0;
@@ -235,6 +236,7 @@ impl<'db> SmirLowerCtxt<'db> {
             role: SemanticLocalRole::DirectValue {
                 provenance: ValueProvenance::Ordinary,
             },
+            snapshot_source: None,
         });
         id
     }
@@ -388,6 +390,11 @@ impl<'db> SmirLowerCtxt<'db> {
                 if self.typed_body.semantic_expr_lowering(expr).is_some() {
                     return self.lower_call_like_expr(expr, Some(*inner), &[]);
                 }
+                if *op == UnOp::Minus
+                    && let Some(value) = self.lower_negated_int_literal(expr, *inner)
+                {
+                    return value;
+                }
                 let value = self.lower_expr(*inner);
                 self.emit_expr_with_origin(
                     origin,
@@ -526,6 +533,20 @@ impl<'db> SmirLowerCtxt<'db> {
             ty,
             SExpr::Const(SConst::Value(value)),
         )
+    }
+
+    fn lower_negated_int_literal(&mut self, expr: ExprId, inner: ExprId) -> Option<SValueId> {
+        let Partial::Present(Expr::Lit(LitKind::Int(int_id))) = inner.data(self.db, self.body)
+        else {
+            return None;
+        };
+        let ty = self.expr_ty(expr);
+        let value = int_const(self.db, ty, -BigInt::from(int_id.data(self.db).clone()));
+        Some(self.emit_expr_with_origin(
+            SemOrigin::Expr(expr),
+            ty,
+            SExpr::Const(SConst::Value(value)),
+        ))
     }
 
     fn lower_const_ref(&mut self, expr: ExprId, const_ref: ConstRef<'db>) -> SValueId {
