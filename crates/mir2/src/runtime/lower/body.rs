@@ -24,11 +24,11 @@ use crate::{
     db::MirDb,
     instance::{RuntimeInstance, RuntimeInstanceKey, get_or_build_runtime_instance},
     runtime::{
-        AddressSpaceKind, ConstScalar, IntrinsicArithBinOp, LayoutId, PlaceElem, PlaceRoot,
-        RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView,
-        RuntimeBody, RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeLocalLowering,
-        RuntimeLocalRoot, RuntimePlace, RuntimeProviderBinding, RuntimeProviderBindingId,
-        RuntimeSignature, ScalarClass, ScalarRepr, ScalarRole, VariantId,
+        AddressSpaceKind, ConstScalar, IntrinsicArithBinOp, LayoutId, PlaceElem, PlaceRoot, RBlock,
+        RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView, RuntimeBody,
+        RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeLocalLowering, RuntimeLocalRoot,
+        RuntimePlace, RuntimeProviderBinding, RuntimeProviderBindingId, RuntimeSignature,
+        ScalarClass, ScalarRepr, ScalarRole, VariantId,
         code_region::runtime_code_region_for_semantic_ref, runtime_classes_share_runtime_rep,
     },
 };
@@ -36,18 +36,16 @@ use crate::{
 use super::{
     class::{
         ContractMetadataBuiltin, GenericNumericIntrinsicKind, InferredRuntimeLocal,
-        actual_aggregate_class_from_runtime_source,
+        RuntimeEffectBindingPlan, actual_aggregate_class_from_runtime_source,
         boundary_source_uses_transport_sensitive_aggregate, boundary_spec_for_ty_in_env,
-        contract_metadata_builtin, desired_runtime_effect_arg_boundary,
-        desired_runtime_param_plan, expr_direct_class,
-        generic_numeric_intrinsic_kind, infer_local_runtime_state, lower_semantic_locals,
-        normalized_place_address_class, normalized_place_class, provider_class_for_target_in_env,
-        ref_class_for_place_result, resolve_runtime_call_key,
+        contract_metadata_builtin, desired_runtime_effect_arg_boundary, desired_runtime_param_plan,
+        expr_direct_class, generic_numeric_intrinsic_kind, infer_local_runtime_state,
+        lower_semantic_locals, normalized_place_address_class, normalized_place_class,
+        provider_class_for_target_in_env, ref_class_for_place_result, resolve_runtime_call_key,
         runtime_address_space, runtime_class_satisfies_boundary,
         runtime_effect_binding_plan_for_binding_idx, runtime_param_locals,
         runtime_signature_for_key, semantic_return_ty, specialize_boundary_for_runtime_source,
         stored_class_for_ty_in_context, top_level_class_for_ty_in_env,
-        RuntimeEffectBindingPlan,
     },
     consts::{
         const_scalar_for_class, const_scalar_from_value, enum_tag_scalar, lower_const_region,
@@ -1549,8 +1547,11 @@ impl<'db> RmirLowerCtxt<'db> {
         let (mut runtime_args, mut runtime_classes) =
             self.lower_visible_call_args(bb, &typed_body, args);
         for effect_arg in effect_args {
-            let plan =
-                runtime_effect_binding_plan_for_binding_idx(self.db, semantic, effect_arg.binding_idx);
+            let plan = runtime_effect_binding_plan_for_binding_idx(
+                self.db,
+                semantic,
+                effect_arg.binding_idx,
+            );
             if let Some((value, class)) = self.lower_effect_arg(bb, effect_arg, plan.as_ref()) {
                 runtime_args.push(value);
                 runtime_classes.push(class);

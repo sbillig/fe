@@ -6,6 +6,36 @@ use mir2::runtime::RefKind;
 use mir2::{Layout, PlaceElem, PlaceRoot, RExpr, RStmt, RuntimeClass, build_runtime_package};
 use url::Url;
 
+fn sonatina_function_body<'a>(ir: &'a str, name: &str) -> &'a str {
+    let marker = format!("func private %{name}");
+    let start = ir
+        .find(&marker)
+        .unwrap_or_else(|| panic!("missing function `{name}` in Sonatina IR:\n{ir}"));
+    let tail = &ir[start..];
+    let end = tail
+        .find("\n\nfunc ")
+        .or_else(|| tail.find("\n\nobject "))
+        .unwrap_or(tail.len());
+    &tail[..end]
+}
+
+fn sonatina_ops(body: &str) -> Vec<&str> {
+    body.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let rhs = line.split_once(" = ")?.1;
+            rhs.split_whitespace().next()
+        })
+        .collect()
+}
+
+fn contains_op_subsequence(body: &str, expected: &[&str]) -> bool {
+    let mut ops = sonatina_ops(body).into_iter();
+    expected
+        .iter()
+        .all(|expected| ops.any(|op| op == *expected))
+}
+
 #[test]
 fn transparent_wrapper_returns_preserve_handle_fields_in_rmir() {
     let src = format!(
@@ -276,6 +306,78 @@ fn effect_handle_from_raw_helpers_preserve_transport_in_rmir() {
             "from_raw helper should not materialize or take the address of the raw slot:\n{body:#?}"
         );
     }
+}
+
+#[test]
+fn object_backed_nested_handle_fields_follow_carriers_before_projecting_children() {
+    let mut db = DriverDataBase::default();
+    let file_url = Url::parse(
+        "file:///object_backed_nested_handle_fields_follow_carriers_before_projecting_children.fe",
+    )
+    .unwrap();
+    db.workspace().touch(
+        &mut db,
+        file_url.clone(),
+        Some(
+            r#"struct Data {
+    x: u256,
+}
+
+struct View {
+    d: ref Data,
+}
+
+fn read(v: own View) -> u256 {
+    v.d.x
+}
+
+fn entry() -> u256 {
+    let data = Data { x: 1 }
+    let view = View { d: ref data }
+    read(view)
+}
+"#
+            .to_string(),
+        ),
+    );
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    let output = emit_module_sonatina_ir(&db, top_mod).expect("Sonatina IR");
+    let read = sonatina_function_body(&output, "read");
+
+    assert!(
+        contains_op_subsequence(read, &["obj.proj", "obj.load", "obj.proj"]),
+        "nested object-backed handle field access should load/follow the carrier before projecting children:\n{read}"
+    );
+}
+
+#[test]
+fn storage_backed_nested_handle_fields_follow_carriers_before_projecting_children() {
+    let mut db = DriverDataBase::default();
+    let file_url = Url::parse(
+        "file:///storage_backed_nested_handle_fields_follow_carriers_before_projecting_children.fe",
+    )
+    .unwrap();
+    db.workspace().touch(
+        &mut db,
+        file_url.clone(),
+        Some(include_str!("fixtures/effect_handle_field_deref.fe").to_string()),
+    );
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    let output = emit_module_sonatina_ir(&db, top_mod).expect("Sonatina IR");
+    let bump = sonatina_function_body(&output, "bump");
+
+    assert!(
+        contains_op_subsequence(bump, &["obj.proj", "obj.load", "evm_sload"]),
+        "nested storage-backed handle field access should load/follow the carrier before loading children:\n{bump}"
+    );
 }
 
 #[test]

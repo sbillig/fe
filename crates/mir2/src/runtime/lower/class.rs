@@ -1092,8 +1092,11 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
             })
         }
         hir::analysis::semantic::SemanticBindingLowering::DirectValue { .. } => {
-            let class = runtime_class_for_explicit_root_provider_param(db, env, binding, binding_ty)
-                .or_else(|| top_level_class_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory))?;
+            let class =
+                runtime_class_for_explicit_root_provider_param(db, env, binding, binding_ty)
+                    .or_else(|| {
+                        top_level_class_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory)
+                    })?;
             Some(RuntimeEffectBindingPlan {
                 class: class.clone(),
                 boundary: RuntimeBoundarySpec::Exact(class),
@@ -1114,15 +1117,16 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
             provider: None,
             target_ty,
         } => {
-            let class = top_level_class_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory)
-                .or_else(|| {
-                    Some(provider_class_for_target_in_env(
-                        db,
-                        env,
-                        Some(target_ty),
-                        AddressSpaceKind::Memory,
-                    ))
-                })?;
+            let class =
+                top_level_class_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory)
+                    .or_else(|| {
+                        Some(provider_class_for_target_in_env(
+                            db,
+                            env,
+                            Some(target_ty),
+                            AddressSpaceKind::Memory,
+                        ))
+                    })?;
             Some(RuntimeEffectBindingPlan {
                 class: class.clone(),
                 boundary: RuntimeBoundarySpec::Exact(class),
@@ -1460,8 +1464,7 @@ pub(crate) fn expr_direct_class<'db>(
             for arg in effect_args {
                 let plan =
                     runtime_effect_binding_plan_for_binding_idx(db, semantic, arg.binding_idx);
-                if let Some(class) = effect_arg_class(db, body, env, arg, plan.as_ref(), carriers)
-                {
+                if let Some(class) = effect_arg_class(db, body, env, arg, plan.as_ref(), carriers) {
                     param_classes.push(class);
                 }
             }
@@ -2316,8 +2319,7 @@ fn effect_arg_class<'db>(
         };
     }
     let effect_space = || resolved_effect_arg_address_space(db, body, arg);
-    let boundary =
-        desired_runtime_effect_arg_boundary(db, env, arg, plan, effect_space());
+    let boundary = desired_runtime_effect_arg_boundary(db, env, arg, plan, effect_space());
     match arg.pass_mode {
         EffectPassMode::ByValue | EffectPassMode::Unknown => {
             if let Some(boundary) = boundary.as_ref() {
@@ -2331,13 +2333,9 @@ fn effect_arg_class<'db>(
                         env.scope,
                         env.assumptions,
                     ),
-                    NEffectArgValue::Value(value) => runtime_visible_arg_class(
-                        db,
-                        body,
-                        value.local,
-                        Some(boundary),
-                        carriers,
-                    ),
+                    NEffectArgValue::Value(value) => {
+                        runtime_visible_arg_class(db, body, value.local, Some(boundary), carriers)
+                    }
                 };
             }
             match arg.arg {
@@ -2350,7 +2348,9 @@ fn effect_arg_class<'db>(
                 )),
                 NEffectArgValue::Value(value) => match carriers.get(value.local.index())? {
                     RuntimeCarrier::Value(class) => Some(class.clone()),
-                    RuntimeCarrier::Erased if arg.provider.is_none() && arg.target_ty.is_none() => None,
+                    RuntimeCarrier::Erased if arg.provider.is_none() && arg.target_ty.is_none() => {
+                        None
+                    }
                     RuntimeCarrier::Erased => Some(provider_class_for_target_in_context(
                         db,
                         arg.target_ty,
@@ -2421,16 +2421,15 @@ pub(crate) fn desired_runtime_effect_arg_boundary<'db>(
             access: BorrowAccess::ReadWrite,
             allow: default_borrow_transport_set(BorrowAccess::ReadWrite, effect_space),
         },
-        EffectPassMode::ByValue | EffectPassMode::Unknown => {
-            boundary_spec_for_ty_in_env(db, env, target_ty, effect_space).unwrap_or(
-                RuntimeBoundarySpec::Exact(provider_class_for_target_in_env(
-                    db,
-                    env,
-                    Some(target_ty),
-                    effect_space,
-                )),
-            )
-        }
+        EffectPassMode::ByValue | EffectPassMode::Unknown => boundary_spec_for_ty_in_env(
+            db,
+            env,
+            target_ty,
+            effect_space,
+        )
+        .unwrap_or(RuntimeBoundarySpec::Exact(
+            provider_class_for_target_in_env(db, env, Some(target_ty), effect_space),
+        )),
     })
 }
 
@@ -2450,7 +2449,9 @@ fn runtime_visible_place_arg_class_for_boundary<'db>(
                 normalized_place_address_class(db, body, place, carriers, scope, assumptions)?;
             if runtime_class_satisfies_boundary(&class, boundary) {
                 Some(class)
-            } else if let Some(layout) = pointee.aggregate_layout() && allow.allow_object {
+            } else if let Some(layout) = pointee.aggregate_layout()
+                && allow.allow_object
+            {
                 Some(RuntimeClass::object_ref(layout))
             } else if allow.allow_raw_addr {
                 Some(RuntimeClass::RawAddr {

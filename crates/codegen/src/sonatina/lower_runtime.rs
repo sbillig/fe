@@ -2132,6 +2132,106 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         }
     }
 
+    fn place_terminal_from_loaded_carrier(
+        &mut self,
+        value: ValueId,
+        carrier_class: &RuntimeClass<'db>,
+    ) -> Result<PlaceTerminal<'db>, LowerError> {
+        match carrier_class {
+            RuntimeClass::Ref {
+                kind: RefKind::Const,
+                pointee,
+                ..
+            } => {
+                let RuntimeClass::AggregateValue { .. } = &**pointee else {
+                    return Err(LowerError::Internal(
+                        "const carrier follow requires aggregate pointee".to_string(),
+                    ));
+                };
+                Ok(PlaceTerminal::Const { value })
+            }
+            RuntimeClass::Ref {
+                kind: RefKind::Object,
+                pointee,
+                ..
+            }
+            | RuntimeClass::Ref {
+                kind:
+                    RefKind::Provider {
+                        space: AddressSpaceKind::Memory,
+                        ..
+                    },
+                pointee,
+                ..
+            } => Ok(PlaceTerminal::Object {
+                value,
+                class: (**pointee).clone(),
+            }),
+            RuntimeClass::Ref {
+                kind: RefKind::Provider { space, .. },
+                pointee,
+                ..
+            } => Ok(PlaceTerminal::Ptr {
+                addr: value,
+                space: *space,
+                class: (**pointee).clone(),
+            }),
+            RuntimeClass::RawAddr {
+                space,
+                target: Some(layout),
+            } => Ok(PlaceTerminal::Ptr {
+                addr: value,
+                space: *space,
+                class: RuntimeClass::AggregateValue { layout: *layout },
+            }),
+            RuntimeClass::RawAddr { target: None, .. } => Err(LowerError::Unsupported(
+                "cannot continue projection through an opaque raw-address carrier".to_string(),
+            )),
+            RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => {
+                Err(LowerError::Internal(
+                    "attempted to follow a non-carrier projected field".to_string(),
+                ))
+            }
+        }
+    }
+
+    fn load_terminal_value(
+        &mut self,
+        terminal: &PlaceTerminal<'db>,
+        class: &RuntimeClass<'db>,
+    ) -> Result<ValueId, LowerError> {
+        match terminal {
+            PlaceTerminal::Object { value, .. } => Ok(self.fb.insert_inst(
+                ObjLoad::new(self.module.inst_set(), *value),
+                self.module.ty_for_class(class)?,
+            )),
+            PlaceTerminal::Const { value } => Ok(self.fb.insert_inst(
+                ConstLoad::new(self.module.inst_set(), *value),
+                self.module.ty_for_class(class)?,
+            )),
+            PlaceTerminal::Ptr { addr, space, .. } => self.load_from_ptr(*addr, *space, class),
+        }
+    }
+
+    fn follow_projected_carrier(
+        &mut self,
+        terminal: PlaceTerminal<'db>,
+        carrier_class: &RuntimeClass<'db>,
+    ) -> Result<PlaceTerminal<'db>, LowerError> {
+        if !matches!(
+            carrier_class,
+            RuntimeClass::Ref { .. }
+                | RuntimeClass::RawAddr {
+                    target: Some(_),
+                    ..
+                }
+        ) {
+            return Ok(terminal);
+        }
+        let value = self.load_terminal_value(&terminal, carrier_class)?;
+        self.place_terminal_from_loaded_carrier(value, carrier_class)
+    }
+
     fn resolve_place(
         &mut self,
         place: &RuntimePlace<'db>,
@@ -2178,7 +2278,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             },
         };
 
-        for elem in resolved.path.iter() {
+        for (idx, elem) in resolved.path.iter().enumerate() {
             terminal = match (terminal, elem) {
                 (
                     PlaceTerminal::Object { value, .. },
@@ -2327,6 +2427,14 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     )));
                 }
             };
+            if idx + 1 < resolved.path.len() {
+                let class = match elem {
+                    ResolvedPlaceElem::Field { class, .. }
+                    | ResolvedPlaceElem::Index { class, .. }
+                    | ResolvedPlaceElem::VariantField { class, .. } => class,
+                };
+                terminal = self.follow_projected_carrier(terminal, class)?;
+            }
         }
         Ok(terminal)
     }
