@@ -602,6 +602,13 @@ impl<'db> SmirLowerCtxt<'db> {
         if let Some(const_ref) = self.typed_body.expr_const_ref(expr) {
             return self.lower_const_ref(expr, const_ref);
         }
+        if let Some(region) = self.typed_body.expr_code_region_ref(self.db, expr) {
+            return self.emit_expr_with_origin(
+                SemOrigin::Expr(expr),
+                self.expr_ty(expr),
+                SExpr::CodeRegionRef { region },
+            );
+        }
 
         match self.typed_body.value_path_ref(expr) {
             Some(ValuePathRef::UnitVariant(variant)) => self.emit_expr_with_origin(
@@ -629,7 +636,14 @@ impl<'db> SmirLowerCtxt<'db> {
                 }
             }
             None => panic!(
-                "typed path expression is missing semantic value-path classification: expr={expr:?}"
+                "typed path expression is missing semantic value-path classification: owner={:?} expr={expr:?} data={:?} ty={} ty_data={:?} binding={:?} const_ref={:?} code_region_ref={:?}",
+                self.template_owner,
+                self.body.exprs(self.db)[expr],
+                self.expr_ty(expr).pretty_print(self.db),
+                self.expr_ty(expr).data(self.db),
+                self.typed_body.expr_binding(expr),
+                self.typed_body.expr_const_ref(expr),
+                self.typed_body.expr_code_region_ref(self.db, expr),
             ),
         }
     }
@@ -723,7 +737,16 @@ impl<'db> SmirLowerCtxt<'db> {
             SemanticExprLowering::Call { callable } => {
                 self.lower_callable_expr(expr, receiver, args, callable)
             }
-            SemanticExprLowering::CodeRegionIntrinsic { region, kind, .. } => {
+            SemanticExprLowering::CodeRegionIntrinsic {
+                region_arg, kind, ..
+            } => {
+                let region = self.typed_body.expr_code_region_ref(self.db, region_arg).unwrap_or_else(
+                    || {
+                        panic!(
+                            "typed code-region intrinsic is missing instantiated code-region ref: call={expr:?} arg={region_arg:?}"
+                        )
+                    },
+                );
                 let lowered = match kind {
                     CodeRegionIntrinsicKind::Offset => SExpr::CodeRegionOffset { region },
                     CodeRegionIntrinsicKind::Len => SExpr::CodeRegionLen { region },

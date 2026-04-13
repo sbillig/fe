@@ -353,6 +353,7 @@ impl<'db> NormalizeCtxt<'db> {
             | NExpr::GetEnumTag { .. }
             | NExpr::IsEnumVariant { .. }
             | NExpr::ExtractEnumField { .. }
+            | NExpr::CodeRegionRef { .. }
             | NExpr::CodeRegionOffset { .. }
             | NExpr::CodeRegionLen { .. } => {}
             NExpr::ReadPlace { place, .. } => {
@@ -605,6 +606,9 @@ impl<'db> NormalizeCtxt<'db> {
             SExpr::UseValue(value) => self
                 .normalize_direct_read(origin, *value, dst_ty)?
                 .unwrap_or(NExpr::Use(self.normalize_operand(*value, origin))),
+            SExpr::CodeRegionRef { region } => NExpr::CodeRegionRef {
+                region: region.clone(),
+            },
             SExpr::Const(const_) => NExpr::Const(const_.clone()),
             SExpr::Unary { op, value } => NExpr::Unary {
                 op: *op,

@@ -25,8 +25,8 @@ use crate::hir_def::CallableDef;
 use crate::{
     hir_def::{
         Body, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParam,
-        GenericParamOwner, ItemKind, LitKind, Partial, Pat, PatId, PathId, StmtId, StringId,
-        TypeBound, TypeId as HirTyId, WhereClauseOwner,
+        GenericParamOwner, ItemKind, LitKind, ManualContractRootAttr, Partial, Pat, PatId, PathId,
+        StmtId, StringId, TypeBound, TypeId as HirTyId, WhereClauseOwner,
     },
     span::{
         DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan,
@@ -1299,13 +1299,21 @@ impl<'db> TyChecker<'db> {
                                 if let Some(kind) =
                                     self.code_region_method_kind(recv_ty, pending.method_name)
                                     && call_args.len() == 1
-                                    && let Some(region) =
-                                        self.resolve_code_region_ref(call_args[0].expr)
+                                    && self
+                                        .env
+                                        .typed_expr(call_args[0].expr)
+                                        .map(|prop| {
+                                            ty_may_be_code_region_token(
+                                                db,
+                                                normalize_ty(db, prop.ty, scope, assumptions),
+                                            )
+                                        })
+                                        .unwrap_or(false)
                                 {
                                     self.env.register_code_region_intrinsic(
                                         pending.expr,
                                         callable,
-                                        region,
+                                        call_args[0].expr,
                                         kind,
                                     );
                                 } else {
@@ -2350,7 +2358,7 @@ pub enum SemanticExprLowering<'db> {
     },
     CodeRegionIntrinsic {
         callable: Callable<'db>,
-        region: SemanticCodeRegionRef<'db>,
+        region_arg: ExprId,
         kind: CodeRegionIntrinsicKind,
     },
     ConstIntrinsic {
@@ -2410,11 +2418,11 @@ impl<'db> TyFoldable<'db> for SemanticExprLowering<'db> {
             },
             Self::CodeRegionIntrinsic {
                 callable,
-                region,
+                region_arg,
                 kind,
             } => Self::CodeRegionIntrinsic {
                 callable: callable.fold_with(db, folder),
-                region,
+                region_arg,
                 kind,
             },
             Self::ConstIntrinsic { callable, kind } => Self::ConstIntrinsic {
@@ -2573,6 +2581,16 @@ impl<'db> TypedBody<'db> {
         self.value_path_refs.get(&expr).copied()
     }
 
+    pub fn expr_code_region_ref(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        expr: ExprId,
+    ) -> Option<SemanticCodeRegionRef<'db>> {
+        self.expr_binding(expr)
+            .and_then(|binding| manual_contract_root_ref_from_ty(db, self.binding_ty(db, binding)))
+            .or_else(|| manual_contract_root_ref_from_ty(db, self.expr_ty(db, expr)))
+    }
+
     pub fn semantic_expr_lowering(&self, expr: ExprId) -> Option<&SemanticExprLowering<'db>> {
         self.semantic_expr_lowering.get(&expr)
     }
@@ -2594,9 +2612,15 @@ impl<'db> TypedBody<'db> {
         }
     }
 
-    pub fn code_region_ref(&self, expr: ExprId) -> Option<&SemanticCodeRegionRef<'db>> {
+    pub fn code_region_ref(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        expr: ExprId,
+    ) -> Option<SemanticCodeRegionRef<'db>> {
         match self.semantic_expr_lowering(expr)? {
-            SemanticExprLowering::CodeRegionIntrinsic { region, .. } => Some(region),
+            SemanticExprLowering::CodeRegionIntrinsic { region_arg, .. } => {
+                self.expr_code_region_ref(db, *region_arg)
+            }
             SemanticExprLowering::Call { .. } | SemanticExprLowering::ConstIntrinsic { .. } => None,
         }
     }
@@ -3552,6 +3576,41 @@ impl<'db> TypedBody<'db> {
             for_loop_seq: FxHashMap::default(),
         }
     }
+}
+
+pub(super) fn manual_contract_root_ref_from_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> Option<SemanticCodeRegionRef<'db>> {
+    let ty = strip_code_region_token_wrapper(db, ty);
+    let TyData::TyBase(TyBase::Func(CallableDef::Func(func))) = ty.base_ty(db).data(db) else {
+        return None;
+    };
+    match func.manual_contract_root_attr(db)? {
+        ManualContractRootAttr::Init { .. } | ManualContractRootAttr::Runtime { .. } => {
+            Some(SemanticCodeRegionRef::ManualContractRoot { func: *func })
+        }
+        ManualContractRootAttr::Error(_) => None,
+    }
+}
+
+pub(super) fn ty_may_be_code_region_token<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    let ty = strip_code_region_token_wrapper(db, ty);
+    manual_contract_root_ref_from_ty(db, ty).is_some()
+        || matches!(
+            ty.base_ty(db).data(db),
+            TyData::TyParam(_) | TyData::TyVar(_)
+        )
+}
+
+fn strip_code_region_token_wrapper<'db>(
+    db: &'db dyn HirAnalysisDb,
+    mut ty: TyId<'db>,
+) -> TyId<'db> {
+    while let Some((_, inner)) = ty.as_capability(db) {
+        ty = inner;
+    }
+    ty
 }
 
 fn merge_forwarded_param_sets(

@@ -1,6 +1,5 @@
 use crate::{
     analysis::place::Place,
-    analysis::semantic::SemanticCodeRegionRef,
     hir_def::{
         BinOp, Body, Contract, Expr, ExprId, Func, IdentId, ItemKind, Partial, Pat, PatId, PathId,
         Stmt, StmtId, UnOp, scope_graph::ScopeId,
@@ -530,7 +529,7 @@ impl<'db> TyCheckEnv<'db> {
         &mut self,
         expr: ExprId,
         callable: Callable<'db>,
-        region: SemanticCodeRegionRef<'db>,
+        region_arg: ExprId,
         kind: super::CodeRegionIntrinsicKind,
     ) {
         self.register_callable(expr, callable.clone());
@@ -538,7 +537,7 @@ impl<'db> TyCheckEnv<'db> {
             expr,
             SemanticExprLowering::CodeRegionIntrinsic {
                 callable,
-                region,
+                region_arg,
                 kind,
             },
         );

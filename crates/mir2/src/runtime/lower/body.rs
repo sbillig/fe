@@ -121,6 +121,7 @@ fn expr_requires_runtime_eval_when_erased(expr: &NExpr<'_>) -> bool {
         }
         | NExpr::Call { .. } => true,
         NExpr::Use(_)
+        | NExpr::CodeRegionRef { .. }
         | NExpr::ReadPlace { .. }
         | NExpr::Const(_)
         | NExpr::Unary { .. }
@@ -373,6 +374,7 @@ impl<'db> RmirLowerCtxt<'db> {
                 &self.current_runtime_carriers(),
             ),
             NExpr::Const(_)
+            | NExpr::CodeRegionRef { .. }
             | NExpr::Unary { .. }
             | NExpr::Binary { .. }
             | NExpr::Cast { .. }
@@ -568,6 +570,12 @@ impl<'db> RmirLowerCtxt<'db> {
                         dst,
                         expr: RExpr::Use(value),
                     },
+                );
+            }
+            NExpr::CodeRegionRef { .. } => {
+                panic!(
+                    "code-region ref reached runtime lowering as a runtime value: owner={:?}; dst={dst:?}; expr={expr:?}",
+                    self.current_semantic_key(),
                 );
             }
             NExpr::GetEnumTag { value } => self.lower_enum_tag(bb, dst, *value),

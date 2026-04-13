@@ -1165,7 +1165,8 @@ fn classify_expr_local_role<'db>(
                 }
             }
         }
-        SExpr::Const(_)
+        SExpr::CodeRegionRef { .. }
+        | SExpr::Const(_)
         | SExpr::Unary { .. }
         | SExpr::Binary { .. }
         | SExpr::Cast { .. }

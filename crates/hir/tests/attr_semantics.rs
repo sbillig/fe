@@ -312,8 +312,7 @@ fn runtime() uses (evm: mut Evm) {}"#,
     let refs = body
         .exprs(&db)
         .keys()
-        .filter_map(|expr| typed_body.code_region_ref(expr))
-        .cloned()
+        .filter_map(|expr| typed_body.code_region_ref(&db, expr))
         .collect::<Vec<_>>();
     assert_eq!(refs.len(), 2);
     assert!(refs.iter().all(|region| matches!(
@@ -393,14 +392,105 @@ fn runtime() uses (evm: mut Evm) {}"#,
     let refs = body
         .exprs(&db)
         .keys()
-        .filter_map(|expr| typed_body.code_region_ref(expr))
-        .cloned()
+        .filter_map(|expr| typed_body.code_region_ref(&db, expr))
         .collect::<Vec<_>>();
     assert_eq!(refs.len(), 2);
     assert!(refs.iter().all(|region| matches!(
         region,
         SemanticCodeRegionRef::ManualContractRoot { func } if *func == runtime
     )));
+}
+
+#[test]
+fn create_contract_generic_forwarding_preserves_manual_root_refs() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "manual_contract_create_contract_forwarding.fe".into(),
+        r#"use std::evm::Evm
+
+#[contract_init(Coin)]
+fn init() uses (evm: mut Evm) {
+    evm.create_contract(runtime)
+}
+
+#[contract_runtime(Coin)]
+fn runtime() uses (evm: mut Evm) {}"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let funcs = top_mod.all_funcs(&db);
+    let init = funcs
+        .iter()
+        .copied()
+        .find(|func| {
+            func.name(&db)
+                .to_opt()
+                .is_some_and(|name| name.data(&db) == "init")
+        })
+        .expect("missing init");
+    let runtime = funcs
+        .iter()
+        .copied()
+        .find(|func| {
+            func.name(&db)
+                .to_opt()
+                .is_some_and(|name| name.data(&db) == "runtime")
+        })
+        .expect("missing runtime");
+
+    let (diags, typed_body) = check_func_body(&db, init);
+    assert!(diags.is_empty(), "{diags:#?}");
+    let body = init.body(&db).expect("missing init body");
+    assert!(body.exprs(&db).keys().any(|expr| matches!(
+        typed_body.expr_code_region_ref(&db, expr),
+        Some(SemanticCodeRegionRef::ManualContractRoot { func }) if func == runtime
+    )));
+
+    let init_instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(init)),
+    );
+    let mut pending = vec![init_instance];
+    let mut seen = Vec::new();
+    let mut saw_len = false;
+    let mut saw_offset = false;
+    while let Some(instance) = pending.pop() {
+        let key = instance.key(&db);
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        let body = instance.body(&db);
+        for expr in body
+            .blocks
+            .iter()
+            .flat_map(|block| block.stmts.iter())
+            .filter_map(|stmt| match &stmt.kind {
+                SStmtKind::Assign { expr, .. } => Some(expr),
+                SStmtKind::Store { .. } => None,
+            })
+        {
+            saw_len |= matches!(
+                expr,
+                SExpr::CodeRegionLen { region: SemanticCodeRegionRef::ManualContractRoot { func } }
+                    if *func == runtime
+            );
+            saw_offset |= matches!(
+                expr,
+                SExpr::CodeRegionOffset { region: SemanticCodeRegionRef::ManualContractRoot { func } }
+                    if *func == runtime
+            );
+        }
+        pending.extend(
+            instance
+                .callees(&db)
+                .iter()
+                .map(|callee| get_or_build_semantic_instance(&db, callee.key)),
+        );
+    }
+    assert!(saw_len);
+    assert!(saw_offset);
 }
 
 #[test]

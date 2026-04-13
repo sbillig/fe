@@ -441,6 +441,7 @@ impl<'db> CtfeMachine<'db> {
             SExpr::Forward(value) | SExpr::UseValue(value) => {
                 self.read_slot(frame_idx, value, origin)
             }
+            SExpr::CodeRegionRef { .. } => Err(CtfeError::NotConstEvaluable { origin }),
             SExpr::Const(SConst::Value(value)) => Ok(CtfeValue::concrete(value)),
             SExpr::Const(SConst::Ref(cref)) => eval_const_ref(self.db, cref)
                 .map(CtfeValue::concrete)

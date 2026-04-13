@@ -244,6 +244,9 @@ pub enum SEffectArgValue {
 pub enum SExpr<'db> {
     Forward(SValueId),
     UseValue(SValueId),
+    CodeRegionRef {
+        region: SemanticCodeRegionRef<'db>,
+    },
     Const(SConst<'db>),
     Unary {
         op: UnOp,

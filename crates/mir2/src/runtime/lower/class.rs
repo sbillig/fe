@@ -1253,6 +1253,7 @@ pub(crate) fn expr_direct_class<'db>(
         | NExpr::GetEnumTag { .. } => {
             RuntimeClass::Scalar(scalar_class_for_ty_in_env(db, env, result_ty)?)
         }
+        NExpr::CodeRegionRef { .. } => return None,
         NExpr::AggregateMake { ty, fields } => {
             aggregate_make_class(db, body, *ty, fields, carriers, env)?
         }

@@ -4,7 +4,6 @@ use num_traits::ToPrimitive;
 use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 
-use crate::analysis::semantic::SemanticCodeRegionRef;
 use crate::core::hir_def::{
     ArithBinOp, BinOp, CallableDef, Cond, CondId, Expr, ExprId, FieldIndex, IdentId, IntegerId,
     LitKind, LogicalBinOp, Partial, PatId, PathId, Stmt, UnOp, VariantKind, WithBinding,
@@ -21,6 +20,7 @@ use super::{
         ProvidedEffect, TraitObligation, TraitObligationOrigin, TyCheckEnv,
     },
     path::ResolvedPathInBody,
+    ty_may_be_code_region_token,
 };
 use crate::analysis::place::{Place, PlaceBase};
 use crate::analysis::ty::{
@@ -78,7 +78,7 @@ use crate::analysis::{
         ty_lower::resolve_callable_input_effect_key,
     },
 };
-use crate::hir_def::{FieldParent, ItemKind, ManualContractRootAttr, scope_graph::ScopeId};
+use crate::hir_def::{FieldParent, ItemKind, scope_graph::ScopeId};
 use crate::semantic::ProviderBinding;
 use common::indexmap::IndexMap;
 
@@ -1191,7 +1191,6 @@ impl<'db> TyChecker<'db> {
         direct_callee: Option<ExprId>,
     ) -> Option<ExprProp<'db>> {
         let arg_expr = args[0].expr;
-        let code_region_ref = self.resolve_code_region_ref(arg_expr)?;
         callable.check_args(
             self,
             args,
@@ -1199,50 +1198,21 @@ impl<'db> TyChecker<'db> {
             receiver,
             false,
         );
+        let arg_ty = self
+            .env
+            .typed_expr(arg_expr)
+            .map(|prop| self.normalize_ty(prop.ty))
+            .unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other));
+        if !ty_may_be_code_region_token(self.db, arg_ty) {
+            return None;
+        }
         if let Some(callee) = direct_callee {
             self.env
                 .type_expr(callee, ExprProp::new(callable.ty(self.db), true));
         }
         self.env
-            .register_code_region_intrinsic(expr, callable.clone(), code_region_ref, kind);
+            .register_code_region_intrinsic(expr, callable.clone(), arg_expr, kind);
         Some(ExprProp::new(TyId::u256(self.db), true))
-    }
-
-    pub(super) fn resolve_code_region_ref(
-        &mut self,
-        expr: ExprId,
-    ) -> Option<SemanticCodeRegionRef<'db>> {
-        let Partial::Present(Expr::Path(Partial::Present(path))) = expr.data(self.db, self.body())
-        else {
-            return None;
-        };
-        let resolved = if path.is_bare_ident(self.db) {
-            match resolve_ident_expr(self.db, &self.env, *path, expr.span(self.body()).into()) {
-                ResolvedPathInBody::Reso(resolved) => resolved,
-                ResolvedPathInBody::Binding(_)
-                | ResolvedPathInBody::NewBinding(_)
-                | ResolvedPathInBody::Diag(_)
-                | ResolvedPathInBody::Invalid => return None,
-            }
-        } else {
-            self.resolve_path(*path, true, expr.span(self.body()).into_path_expr().path())
-                .ok()?
-        };
-        let PathRes::Func(func_ty) = resolved else {
-            return None;
-        };
-        let typed_func_ty = self.instantiate_to_term(func_ty);
-        self.env.type_expr(expr, ExprProp::new(typed_func_ty, true));
-        let (base, _) = func_ty.decompose_ty_app(self.db);
-        let TyData::TyBase(TyBase::Func(CallableDef::Func(func))) = base.data(self.db) else {
-            return None;
-        };
-        match func.manual_contract_root_attr(self.db)? {
-            ManualContractRootAttr::Init { .. } | ManualContractRootAttr::Runtime { .. } => {
-                Some(SemanticCodeRegionRef::ManualContractRoot { func: *func })
-            }
-            ManualContractRootAttr::Error(_) => None,
-        }
     }
 
     pub(super) fn check_callable_effects(&mut self, expr: ExprId, callable: &mut Callable<'db>) {

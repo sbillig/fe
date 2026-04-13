@@ -419,7 +419,10 @@ fn verify_expr<'db>(
             }
             Ok(())
         }
-        NExpr::Const(_) | NExpr::CodeRegionOffset { .. } | NExpr::CodeRegionLen { .. } => Ok(()),
+        NExpr::Const(_)
+        | NExpr::CodeRegionRef { .. }
+        | NExpr::CodeRegionOffset { .. }
+        | NExpr::CodeRegionLen { .. } => Ok(()),
     }
 }
 
@@ -1452,7 +1455,10 @@ impl<'db> Borrowck<'db> {
                     }
                 }
             }
-            NExpr::Const(_) | NExpr::CodeRegionOffset { .. } | NExpr::CodeRegionLen { .. } => {}
+            NExpr::Const(_)
+            | NExpr::CodeRegionRef { .. }
+            | NExpr::CodeRegionOffset { .. }
+            | NExpr::CodeRegionLen { .. } => {}
         }
         uses
     }
@@ -1674,6 +1680,7 @@ impl<'db> Borrowck<'db> {
             NExpr::ReadPlace { .. }
             | NExpr::Borrow { .. }
             | NExpr::Const(_)
+            | NExpr::CodeRegionRef { .. }
             | NExpr::CodeRegionOffset { .. }
             | NExpr::CodeRegionLen { .. } => Ok(()),
         }
@@ -1736,6 +1743,7 @@ impl<'db> Borrowck<'db> {
             NExpr::ReadPlace { .. }
             | NExpr::Borrow { .. }
             | NExpr::Const(_)
+            | NExpr::CodeRegionRef { .. }
             | NExpr::CodeRegionOffset { .. }
             | NExpr::CodeRegionLen { .. } => Ok(()),
         }

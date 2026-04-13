@@ -249,6 +249,9 @@ pub enum NEffectArgValue<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NExpr<'db> {
     Use(NOperand),
+    CodeRegionRef {
+        region: SemanticCodeRegionRef<'db>,
+    },
     ReadPlace {
         place: NSPlace<'db>,
         mode: ReadMode,
