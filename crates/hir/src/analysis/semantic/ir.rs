@@ -242,7 +242,8 @@ pub enum SEffectArgValue {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum SExpr<'db> {
-    Use(SValueId),
+    Forward(SValueId),
+    UseValue(SValueId),
     Const(SConst<'db>),
     Unary {
         op: UnOp,

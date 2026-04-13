@@ -601,7 +601,8 @@ impl<'db> NormalizeCtxt<'db> {
             .expect("all locals normalized before block lowering")
             .ty;
         Ok(match expr {
-            SExpr::Use(value) => self
+            SExpr::Forward(value) => NExpr::Use(self.normalize_operand(*value, origin)),
+            SExpr::UseValue(value) => self
                 .normalize_direct_read(origin, *value, dst_ty)?
                 .unwrap_or(NExpr::Use(self.normalize_operand(*value, origin))),
             SExpr::Const(const_) => NExpr::Const(const_.clone()),

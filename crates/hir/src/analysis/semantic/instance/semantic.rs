@@ -1110,29 +1110,10 @@ fn classify_expr_local_role<'db>(
     locals: &[crate::analysis::semantic::SLocal<'db>],
 ) -> SemanticLocalRole<'db> {
     match expr {
-        SExpr::Use(value) => match locals[value.index()].role.clone() {
-            SemanticLocalRole::DirectValue { provenance } => {
-                SemanticLocalRole::DirectValue { provenance }
-            }
-            SemanticLocalRole::PlaceCarrier { value_ty } => {
-                SemanticLocalRole::PlaceCarrier { value_ty }
-            }
-            SemanticLocalRole::PlaceBoundValue {
-                provenance,
-                value_ty,
-            } => SemanticLocalRole::PlaceBoundValue {
-                provenance,
-                value_ty,
-            },
-            SemanticLocalRole::DirectCarrier {
-                provider,
-                target_ty,
-            } => SemanticLocalRole::DirectCarrier {
-                provider,
-                target_ty,
-            },
-            SemanticLocalRole::Erased => SemanticLocalRole::Erased,
-        },
+        SExpr::Forward(value) => {
+            classify_forward_role(db, scope, assumptions, dst_ty, *value, locals)
+        }
+        SExpr::UseValue(_) => fallback_local_role(db, scope, assumptions, dst_ty),
         SExpr::Borrow { .. } => fallback_local_role(db, scope, assumptions, dst_ty),
         SExpr::Field { base, field } => classify_projection_local_role(
             db,
@@ -1195,6 +1176,60 @@ fn classify_expr_local_role<'db>(
         | SExpr::CodeRegionLen { .. } => SemanticLocalRole::DirectValue {
             provenance: ValueProvenance::Ordinary,
         },
+    }
+}
+
+fn classify_forward_role<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: crate::hir_def::scope_graph::ScopeId<'db>,
+    assumptions: crate::analysis::ty::trait_resolution::PredicateListId<'db>,
+    dst_ty: crate::analysis::ty::ty_def::TyId<'db>,
+    value: crate::analysis::semantic::SLocalId,
+    locals: &[crate::analysis::semantic::SLocal<'db>],
+) -> SemanticLocalRole<'db> {
+    let fallback = fallback_local_role(db, scope, assumptions, dst_ty);
+    match (locals[value.index()].role.clone(), &fallback) {
+        (SemanticLocalRole::Erased, _) => SemanticLocalRole::Erased,
+        (SemanticLocalRole::DirectValue { provenance }, SemanticLocalRole::DirectValue { .. }) => {
+            SemanticLocalRole::DirectValue { provenance }
+        }
+        (
+            SemanticLocalRole::PlaceCarrier {
+                value_ty: src_value_ty,
+            },
+            SemanticLocalRole::PlaceCarrier {
+                value_ty: dst_value_ty,
+            },
+        ) if src_value_ty == *dst_value_ty => SemanticLocalRole::PlaceCarrier {
+            value_ty: src_value_ty,
+        },
+        (
+            SemanticLocalRole::PlaceBoundValue {
+                provenance,
+                value_ty: src_value_ty,
+            },
+            SemanticLocalRole::PlaceBoundValue {
+                value_ty: dst_value_ty,
+                ..
+            },
+        ) if src_value_ty == *dst_value_ty => SemanticLocalRole::PlaceBoundValue {
+            provenance,
+            value_ty: src_value_ty,
+        },
+        (
+            SemanticLocalRole::DirectCarrier {
+                provider,
+                target_ty: src_target_ty,
+            },
+            SemanticLocalRole::DirectCarrier {
+                target_ty: dst_target_ty,
+                ..
+            },
+        ) if src_target_ty == *dst_target_ty => SemanticLocalRole::DirectCarrier {
+            provider,
+            target_ty: src_target_ty,
+        },
+        _ => fallback,
     }
 }
 

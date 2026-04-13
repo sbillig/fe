@@ -438,7 +438,9 @@ impl<'db> CtfeMachine<'db> {
     ) -> Result<CtfeValue<'db>, CtfeError<'db>> {
         self.bump(origin)?;
         match expr {
-            SExpr::Use(value) => self.read_slot(frame_idx, value, origin),
+            SExpr::Forward(value) | SExpr::UseValue(value) => {
+                self.read_slot(frame_idx, value, origin)
+            }
             SExpr::Const(SConst::Value(value)) => Ok(CtfeValue::concrete(value)),
             SExpr::Const(SConst::Ref(cref)) => eval_const_ref(self.db, cref)
                 .map(CtfeValue::concrete)

@@ -22,7 +22,7 @@ use crate::{
             normalize::normalize_ty,
             ty_check::{
                 BodyOwner, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, LocalBinding,
-                RecordLike, SemanticExprLowering, TypedBody, ValuePathRef,
+                PathReadSemantics, RecordLike, SemanticExprLowering, TypedBody, ValuePathRef,
             },
             ty_def::{BorrowKind, CapabilityKind, TyId},
         },
@@ -453,7 +453,7 @@ impl<'db> SmirLowerCtxt<'db> {
                         origin,
                         SStmtKind::Assign {
                             dst: dst_place.local,
-                            expr: SExpr::Use(src),
+                            expr: SExpr::UseValue(src),
                         },
                     );
                 } else {
@@ -489,7 +489,7 @@ impl<'db> SmirLowerCtxt<'db> {
                         origin,
                         SStmtKind::Assign {
                             dst: dst_place.local,
-                            expr: SExpr::Use(sum),
+                            expr: SExpr::UseValue(sum),
                         },
                     );
                 } else {
@@ -564,29 +564,40 @@ impl<'db> SmirLowerCtxt<'db> {
                 .binding_locals
                 .get(&binding)
                 .expect("binding local should be allocated");
-            if self.typed_body.path_expr_preserves_binding(expr) {
-                debug_assert_eq!(
-                    normalize_ty(
-                        self.db,
-                        self.expr_ty(expr),
-                        self.body.scope(),
-                        self.assumptions
-                    ),
-                    normalize_ty(
-                        self.db,
-                        semantic_binding_ty(self.db, self.instance, binding),
-                        self.body.scope(),
-                        self.assumptions,
-                    ),
-                    "path binding preservation drift for {expr:?}"
-                );
-                return local;
-            }
-            return self.emit_expr_with_origin(
-                SemOrigin::Expr(expr),
-                self.expr_ty(expr),
-                SExpr::Use(local),
-            );
+            return match self
+                .typed_body
+                .path_expr_read_semantics(expr)
+                .expect("binding path should have typed read semantics")
+            {
+                PathReadSemantics::ReuseLocal => {
+                    debug_assert_eq!(
+                        normalize_ty(
+                            self.db,
+                            self.expr_ty(expr),
+                            self.body.scope(),
+                            self.assumptions
+                        ),
+                        normalize_ty(
+                            self.db,
+                            semantic_binding_ty(self.db, self.instance, binding),
+                            self.body.scope(),
+                            self.assumptions,
+                        ),
+                        "path local reuse drift for {expr:?}"
+                    );
+                    local
+                }
+                PathReadSemantics::ForwardInterface => self.emit_expr_with_origin(
+                    SemOrigin::Expr(expr),
+                    self.expr_ty(expr),
+                    SExpr::Forward(local),
+                ),
+                PathReadSemantics::MaterializeValue => self.emit_expr_with_origin(
+                    SemOrigin::Expr(expr),
+                    self.expr_ty(expr),
+                    SExpr::UseValue(local),
+                ),
+            };
         }
         if let Some(const_ref) = self.typed_body.expr_const_ref(expr) {
             return self.lower_const_ref(expr, const_ref);
@@ -806,7 +817,7 @@ impl<'db> SmirLowerCtxt<'db> {
                     SemOrigin::Expr(receiver),
                     SStmtKind::Assign {
                         dst: local,
-                        expr: SExpr::Use(value),
+                        expr: SExpr::UseValue(value),
                     },
                 );
                 SPlace {
@@ -1048,7 +1059,7 @@ impl<'db> SmirLowerCtxt<'db> {
             );
             self.push_synthetic_stmt(SStmtKind::Assign {
                 dst: idx_local,
-                expr: SExpr::Use(next),
+                expr: SExpr::UseValue(next),
             });
             self.set_synthetic_terminator(self.current, STerminatorKind::Goto(cond_bb));
         }
@@ -1077,7 +1088,7 @@ impl<'db> SmirLowerCtxt<'db> {
             join_reachable = true;
             self.push_synthetic_stmt(SStmtKind::Assign {
                 dst: result,
-                expr: SExpr::Use(then_value),
+                expr: SExpr::Forward(then_value),
             });
             self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
         }
@@ -1092,7 +1103,7 @@ impl<'db> SmirLowerCtxt<'db> {
             join_reachable = true;
             self.push_synthetic_stmt(SStmtKind::Assign {
                 dst: result,
-                expr: SExpr::Use(else_value),
+                expr: SExpr::Forward(else_value),
             });
             self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
         }
@@ -1166,7 +1177,7 @@ impl<'db> SmirLowerCtxt<'db> {
                 join_reachable = true;
                 self.push_synthetic_stmt(SStmtKind::Assign {
                     dst: result,
-                    expr: SExpr::Use(arm_value),
+                    expr: SExpr::Forward(arm_value),
                 });
                 self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
             }

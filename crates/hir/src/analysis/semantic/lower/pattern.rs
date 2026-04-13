@@ -181,7 +181,7 @@ impl<'db> SmirLowerCtxt<'db> {
                     self.debug_assert_pattern_binding_ty_matches(dst, value);
                     self.push_synthetic_stmt(SStmtKind::Assign {
                         dst,
-                        expr: SExpr::Use(value.value),
+                        expr: SExpr::UseValue(value.value),
                     });
                 }
             }
@@ -401,7 +401,7 @@ impl<'db> SmirLowerCtxt<'db> {
                 } else {
                     self.push_synthetic_stmt(SStmtKind::Assign {
                         dst: result,
-                        expr: SExpr::Use(arm_value),
+                        expr: SExpr::Forward(arm_value),
                     });
                     self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
                     true
@@ -494,7 +494,7 @@ impl<'db> SmirLowerCtxt<'db> {
                 self.debug_assert_pattern_binding_ty_matches(dst, src);
                 self.push_synthetic_stmt(SStmtKind::Assign {
                     dst,
-                    expr: SExpr::Use(src.value),
+                    expr: SExpr::UseValue(src.value),
                 });
             }
         }

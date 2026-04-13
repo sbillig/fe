@@ -39,7 +39,7 @@ use common::indexmap::IndexMap;
 use ena::unify::InPlace;
 use env::TyCheckEnv;
 pub use env::{
-    EffectParamSite, ExprProp, LocalBinding, ParamSite, PatBindingMode, PathBindingReadMode,
+    EffectParamSite, ExprProp, LocalBinding, ParamSite, PatBindingMode, PathReadSemantics,
 };
 pub(super) use expr::TraitOps;
 pub use owner::BodyOwner;
@@ -77,6 +77,7 @@ use crate::analysis::semantic::{SemConstValue, eval_body_owner_const};
 use crate::analysis::ty::ty_def::{TyBase, TyData};
 use crate::analysis::ty::{
     const_ty::{ConstTyData, invalid_cause_from_ctfe_error},
+    effect_handle_metadata,
     fold::AssocTySubst,
     normalize::normalize_ty,
     pattern_ir::{PatternAnalysisStatus, PatternStore, ValidatedPatId},
@@ -243,6 +244,21 @@ fn typed_body_for_bodyless_func<'db>(
         pattern_status: FxHashMap::default(),
         for_loop_seq: FxHashMap::default(),
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BindingInterfaceShape<'db> {
+    OrdinaryValue,
+    ProviderValue {
+        kind: ProviderKind,
+        value_ty: TyId<'db>,
+    },
+    PlaceCarrier {
+        value_ty: TyId<'db>,
+    },
+    DirectCarrier {
+        target_ty: TyId<'db>,
+    },
 }
 
 pub struct TyChecker<'db> {
@@ -1497,15 +1513,63 @@ impl<'db> TyChecker<'db> {
         unifies
     }
 
-    fn path_binding_read_mode(
+    fn binding_interface_shape(
+        &mut self,
+        binding: LocalBinding<'db>,
+    ) -> BindingInterfaceShape<'db> {
+        let ty = self.normalize_ty(self.env.lookup_binding_ty(&binding));
+        if let Some((_, value_ty)) = ty.as_capability(self.db) {
+            return BindingInterfaceShape::PlaceCarrier {
+                value_ty: self.normalize_ty(value_ty),
+            };
+        }
+        if let Some(metadata) =
+            effect_handle_metadata(self.db, self.env.scope(), self.env.assumptions(), ty)
+        {
+            return BindingInterfaceShape::DirectCarrier {
+                target_ty: self.normalize_ty(metadata.target_ty),
+            };
+        }
+
+        let provider = match binding {
+            LocalBinding::EffectParam {
+                site, provider_idx, ..
+            } => self.env.provider_binding(site, provider_idx),
+            LocalBinding::Param {
+                site: ParamSite::EffectField(site),
+                idx,
+                ..
+            } => self.env.resolved_provider_binding(site, idx),
+            LocalBinding::Local { .. } | LocalBinding::Param { .. } => None,
+        };
+        provider.map_or(BindingInterfaceShape::OrdinaryValue, |provider| {
+            BindingInterfaceShape::ProviderValue {
+                kind: provider.semantics.kind,
+                value_ty: ty,
+            }
+        })
+    }
+
+    fn binding_path_read_semantics(
         &mut self,
         binding: LocalBinding<'db>,
         expr_ty: TyId<'db>,
-    ) -> PathBindingReadMode {
-        if self.normalize_ty(self.env.lookup_binding_ty(&binding)) == expr_ty {
-            PathBindingReadMode::PreserveBinding
-        } else {
-            PathBindingReadMode::MaterializeValue
+    ) -> PathReadSemantics {
+        let expr_ty = self.normalize_ty(expr_ty);
+        let binding_ty = self.normalize_ty(self.env.lookup_binding_ty(&binding));
+        if binding_ty == expr_ty {
+            return PathReadSemantics::ReuseLocal;
+        }
+
+        match self.binding_interface_shape(binding) {
+            BindingInterfaceShape::OrdinaryValue => PathReadSemantics::MaterializeValue,
+            BindingInterfaceShape::ProviderValue { .. }
+            | BindingInterfaceShape::DirectCarrier { .. } => PathReadSemantics::ForwardInterface,
+            BindingInterfaceShape::PlaceCarrier { .. } => expr_ty
+                .as_capability(self.db)
+                .map_or(PathReadSemantics::MaterializeValue, |_| {
+                    PathReadSemantics::ForwardInterface
+                }),
         }
     }
 
@@ -1969,9 +2033,9 @@ impl<'db> TyChecker<'db> {
         match t {
             Typeable::Expr(expr, mut typed_expr) => {
                 typed_expr.ty = actual;
-                typed_expr.path_binding_read_mode = typed_expr
+                typed_expr.path_read_semantics = typed_expr
                     .binding
-                    .map(|binding| self.path_binding_read_mode(binding, actual));
+                    .map(|binding| self.binding_path_read_semantics(binding, actual));
                 self.env.type_expr(expr, typed_expr)
             }
             Typeable::Pat(pat) => self.env.type_pat(pat, actual),
@@ -2572,16 +2636,16 @@ impl<'db> TypedBody<'db> {
         }
     }
 
-    pub fn path_expr_binding_read_mode(&self, expr: ExprId) -> Option<PathBindingReadMode> {
+    pub fn path_expr_read_semantics(&self, expr: ExprId) -> Option<PathReadSemantics> {
         self.expr_ty
             .get(&expr)
-            .and_then(|prop| prop.path_binding_read_mode)
+            .and_then(|prop| prop.path_read_semantics)
     }
 
-    pub fn path_expr_preserves_binding(&self, expr: ExprId) -> bool {
+    pub fn path_expr_reuses_local(&self, expr: ExprId) -> bool {
         matches!(
-            self.path_expr_binding_read_mode(expr),
-            Some(PathBindingReadMode::PreserveBinding)
+            self.path_expr_read_semantics(expr),
+            Some(PathReadSemantics::ReuseLocal)
         )
     }
 
@@ -2850,13 +2914,13 @@ impl<'db> TypedBody<'db> {
             }
             Expr::Path(_) => match self.expr_binding(expr)? {
                 LocalBinding::Param { idx, .. } => {
-                    self.path_expr_preserves_binding(expr).then_some(vec![idx])
+                    self.path_expr_reuses_local(expr).then_some(vec![idx])
                 }
                 binding @ LocalBinding::Local { pat, .. } => {
                     if !visited_locals.insert(pat) {
                         return None;
                     }
-                    if !self.path_expr_preserves_binding(expr) {
+                    if !self.path_expr_reuses_local(expr) {
                         visited_locals.remove(&pat);
                         return None;
                     }

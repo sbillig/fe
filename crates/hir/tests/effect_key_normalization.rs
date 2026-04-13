@@ -1,5 +1,6 @@
 use camino::Utf8PathBuf;
 use common::diagnostics::{CompleteDiagnostic, cmp_complete_diagnostics};
+use cranelift_entity::EntityRef;
 use fe_hir::analysis::diagnostics::DiagnosticVoucher;
 use fe_hir::analysis::place::PlaceBase;
 use fe_hir::analysis::semantic::{
@@ -4589,7 +4590,6 @@ fn use_ctx_semantic_body_keeps_receiver_as_effect_binding_local() {
         fe_hir::analysis::semantic::identity_semantic_instance_key(&db, BodyOwner::Func(use_ctx)),
     );
     let body = instance.body(&db);
-    assert_eq!(body.locals.len(), 2, "{body:#?}");
     let args = body
         .blocks
         .iter()
@@ -4604,7 +4604,18 @@ fn use_ctx_semantic_body_keeps_receiver_as_effect_binding_local() {
         })
         .unwrap_or_else(|| panic!("{body:#?}"));
     assert_eq!(args.len(), 1);
-    assert_eq!(args[0], fe_hir::analysis::semantic::SLocalId::from_u32(0));
+    let receiver = &body.locals[args[0].index()];
+    assert!(
+        matches!(
+            receiver.role,
+            fe_hir::analysis::semantic::SemanticLocalRole::DirectValue {
+                provenance:
+                    fe_hir::analysis::semantic::ValueProvenance::RootProvider(ref provider),
+            } if provider.semantics.kind
+                == fe_hir::analysis::ty::provider::ProviderKind::RootObject
+        ),
+        "{body:#?}"
+    );
 }
 
 #[test]
@@ -4653,7 +4664,9 @@ fn impl_sum_semantic_body_uses_self_binding_directly() {
             .flat_map(|block| block.stmts.iter())
             .all(|stmt| match &stmt.kind {
                 fe_hir::analysis::semantic::SStmtKind::Assign {
-                    expr: fe_hir::analysis::semantic::SExpr::Use(local),
+                    expr:
+                        fe_hir::analysis::semantic::SExpr::Forward(local)
+                        | fe_hir::analysis::semantic::SExpr::UseValue(local),
                     ..
                 } => *local != fe_hir::analysis::semantic::SLocalId::from_u32(0),
                 fe_hir::analysis::semantic::SStmtKind::Assign { .. }
@@ -4695,19 +4708,26 @@ fn effect_handle_constructors_preserve_direct_carrier_roles() {
     };
     let callee = get_or_build_semantic_instance(&db, callee.key);
     let callee_body = callee.body(&db);
-    let fe_hir::analysis::semantic::SStmtKind::Assign {
-        expr: fe_hir::analysis::semantic::SExpr::Call { callee, .. },
-        ..
-    } = &callee_body.blocks[0].stmts[0].kind
-    else {
-        panic!("expected nested call in helper body: {callee_body:#?}");
-    };
-    let nested = get_or_build_semantic_instance(&db, callee.key);
-    let nested_body = nested.body(&db);
-    assert!(matches!(
-        nested_body.locals[1].role,
-        fe_hir::analysis::semantic::SemanticLocalRole::DirectCarrier { .. }
-    ));
+    let carrier_local = callee_body
+        .blocks
+        .iter()
+        .flat_map(|block| block.stmts.iter())
+        .find_map(|stmt| match &stmt.kind {
+            fe_hir::analysis::semantic::SStmtKind::Assign {
+                dst,
+                expr: fe_hir::analysis::semantic::SExpr::Call { .. },
+            } => Some(*dst),
+            fe_hir::analysis::semantic::SStmtKind::Assign { .. }
+            | fe_hir::analysis::semantic::SStmtKind::Store { .. } => None,
+        })
+        .unwrap_or_else(|| panic!("expected helper call in lowered body: {callee_body:#?}"));
+    assert!(
+        matches!(
+            callee_body.locals[carrier_local.index()].role,
+            fe_hir::analysis::semantic::SemanticLocalRole::DirectCarrier { .. }
+        ),
+        "{callee_body:#?}"
+    );
 }
 
 #[test]

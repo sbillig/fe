@@ -406,7 +406,7 @@ impl<'db> TyChecker<'db> {
                     is_mut: false,
                     binding: None,
                     borrow_provider,
-                    path_binding_read_mode: None,
+                    path_read_semantics: None,
                 },
                 UnOp::Mut => {
                     if !prop.is_mut {
@@ -424,7 +424,7 @@ impl<'db> TyChecker<'db> {
                         is_mut: true,
                         binding: None,
                         borrow_provider,
-                        path_binding_read_mode: None,
+                        path_read_semantics: None,
                     }
                 }
                 _ => unreachable!(),
@@ -3214,7 +3214,7 @@ impl<'db> TyChecker<'db> {
                     is_mut,
                     binding: Some(binding),
                     borrow_provider: self.concrete_borrow_provider_for_binding(binding),
-                    path_binding_read_mode: None,
+                    path_read_semantics: None,
                 }
             }
             ResolvedPathInBody::NewBinding(ident) => {
@@ -3857,7 +3857,7 @@ impl<'db> TyChecker<'db> {
                     is_mut: true,
                     binding: None,
                     borrow_provider,
-                    path_binding_read_mode: None,
+                    path_read_semantics: None,
                 }
             }
 
@@ -3988,7 +3988,7 @@ impl<'db> TyChecker<'db> {
             } else {
                 first_provider.map(|(_, provider)| provider)
             },
-            path_binding_read_mode: None,
+            path_read_semantics: None,
         }
     }
 
