@@ -152,47 +152,6 @@ impl<'db> SmirLowerCtxt<'db> {
         cx
     }
 
-    fn path_expr_uses_binding_local(&self, expr: ExprId, binding: LocalBinding<'db>) -> bool {
-        if matches!(
-            binding,
-            LocalBinding::EffectParam { .. }
-                | LocalBinding::Param {
-                    site: crate::analysis::ty::ty_check::ParamSite::EffectField(_),
-                    ..
-                }
-        ) {
-            return true;
-        }
-        let mut expr_ty = normalize_ty(
-            self.db,
-            self.expr_ty(expr),
-            self.body.scope(),
-            self.assumptions,
-        );
-        let mut binding_ty = normalize_ty(
-            self.db,
-            semantic_binding_ty(self.db, self.instance, binding),
-            self.body.scope(),
-            self.assumptions,
-        );
-        if expr_ty == binding_ty {
-            return true;
-        }
-        while let Some((_, inner)) = expr_ty.as_capability(self.db) {
-            expr_ty = normalize_ty(self.db, inner, self.body.scope(), self.assumptions);
-            if expr_ty == binding_ty {
-                return true;
-            }
-        }
-        while let Some((_, inner)) = binding_ty.as_capability(self.db) {
-            binding_ty = normalize_ty(self.db, inner, self.body.scope(), self.assumptions);
-            if expr_ty == binding_ty {
-                return true;
-            }
-        }
-        expr_ty == binding_ty || expr_ty.base_ty(self.db) == binding_ty.base_ty(self.db)
-    }
-
     fn finish(self) -> SemanticBody<'db> {
         let blocks = self
             .blocks
@@ -605,7 +564,22 @@ impl<'db> SmirLowerCtxt<'db> {
                 .binding_locals
                 .get(&binding)
                 .expect("binding local should be allocated");
-            if self.path_expr_uses_binding_local(expr, binding) {
+            if self.typed_body.path_expr_preserves_binding(expr) {
+                debug_assert_eq!(
+                    normalize_ty(
+                        self.db,
+                        self.expr_ty(expr),
+                        self.body.scope(),
+                        self.assumptions
+                    ),
+                    normalize_ty(
+                        self.db,
+                        semantic_binding_ty(self.db, self.instance, binding),
+                        self.body.scope(),
+                        self.assumptions,
+                    ),
+                    "path binding preservation drift for {expr:?}"
+                );
                 return local;
             }
             return self.emit_expr_with_origin(

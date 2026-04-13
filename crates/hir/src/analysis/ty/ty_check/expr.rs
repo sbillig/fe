@@ -406,6 +406,7 @@ impl<'db> TyChecker<'db> {
                     is_mut: false,
                     binding: None,
                     borrow_provider,
+                    path_binding_read_mode: None,
                 },
                 UnOp::Mut => {
                     if !prop.is_mut {
@@ -423,6 +424,7 @@ impl<'db> TyChecker<'db> {
                         is_mut: true,
                         binding: None,
                         borrow_provider,
+                        path_binding_read_mode: None,
                     }
                 }
                 _ => unreachable!(),
@@ -933,7 +935,7 @@ impl<'db> TyChecker<'db> {
         let scrutinee_prop = self.check_expr(scrutinee, scrutinee_ty);
         let (pat_expected, mode) = self.destructure_source_mode(scrutinee_prop.ty);
         self.check_pat(pat, pat_expected);
-        if let super::DestructureSourceMode::Borrow(kind) = mode {
+        if let super::PatternDestructureMode::Borrow(kind) = mode {
             self.retype_pattern_bindings_for_borrow(pat, kind);
         }
 
@@ -3212,6 +3214,7 @@ impl<'db> TyChecker<'db> {
                     is_mut,
                     binding: Some(binding),
                     borrow_provider: self.concrete_borrow_provider_for_binding(binding),
+                    path_binding_read_mode: None,
                 }
             }
             ResolvedPathInBody::NewBinding(ident) => {
@@ -3854,6 +3857,7 @@ impl<'db> TyChecker<'db> {
                     is_mut: true,
                     binding: None,
                     borrow_provider,
+                    path_binding_read_mode: None,
                 }
             }
 
@@ -3897,7 +3901,7 @@ impl<'db> TyChecker<'db> {
 
         for arm in arms.iter() {
             let pat_result = self.check_pat(arm.pat, scrutinee_pat_ty);
-            if let super::DestructureSourceMode::Borrow(kind) = mode {
+            if let super::PatternDestructureMode::Borrow(kind) = mode {
                 self.retype_pattern_bindings_for_borrow(arm.pat, kind);
             }
             arm_statuses.push(pat_result.analysis);
@@ -3984,6 +3988,7 @@ impl<'db> TyChecker<'db> {
             } else {
                 first_provider.map(|(_, provider)| provider)
             },
+            path_binding_read_mode: None,
         }
     }
 

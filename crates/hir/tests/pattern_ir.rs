@@ -348,7 +348,7 @@ fn test(flag: bool) -> u8 {
 }
 
 #[test]
-fn borrowed_match_keeps_semantic_pattern_ty_separate_from_binding_ty() {
+fn borrowed_match_keeps_match_ty_separate_from_binding_ty() {
     with_func_body(
         r#"
 struct Pair {
@@ -380,8 +380,22 @@ fn test(x: ref Pair) -> u256 {
             let binding_root = typed_body.pattern_root(binding_pat).unwrap();
             let store = typed_body.pattern_store();
 
-            assert!(store.node(record_root).ty.as_capability(db).is_none());
-            assert!(store.node(binding_root).ty.as_capability(db).is_none());
+            assert!(
+                store
+                    .node(record_root)
+                    .match_ty()
+                    .raw()
+                    .as_capability(db)
+                    .is_none()
+            );
+            assert!(
+                store
+                    .node(binding_root)
+                    .match_ty()
+                    .raw()
+                    .as_capability(db)
+                    .is_none()
+            );
             assert!(
                 typed_body
                     .pat_ty(db, binding_pat)
@@ -420,8 +434,8 @@ fn test(x: Triple) -> u8 {
             let store = typed_body.pattern_store();
             let root = store.node(root);
 
-            let ValidatedPatKind::Constructor { fields, .. } = &root.kind else {
-                panic!("expected record constructor root, got {:?}", root.kind);
+            let ValidatedPatKind::Constructor { fields, .. } = root.kind() else {
+                panic!("expected record constructor root, got {:?}", root.kind());
             };
             assert_eq!(fields.len(), 3);
 
@@ -430,17 +444,17 @@ fn test(x: Triple) -> u8 {
             let third = store.node(fields[2]);
 
             assert!(matches!(
-                first.kind,
+                first.kind(),
                 ValidatedPatKind::Wildcard {
                     binding: Some(binding)
                 } if binding.name.data(db) == "a"
             ));
             assert!(matches!(
-                second.kind,
+                second.kind(),
                 ValidatedPatKind::Wildcard { binding: None }
             ));
             assert!(matches!(
-                third.kind,
+                third.kind(),
                 ValidatedPatKind::Wildcard {
                     binding: Some(binding)
                 } if binding.name.data(db) == "c"
@@ -471,27 +485,27 @@ fn test(x: (u8, u8, u8, u8)) -> u8 {
             let store = typed_body.pattern_store();
             let root = store.node(root);
 
-            let ValidatedPatKind::Constructor { fields, .. } = &root.kind else {
-                panic!("expected tuple constructor root, got {:?}", root.kind);
+            let ValidatedPatKind::Constructor { fields, .. } = root.kind() else {
+                panic!("expected tuple constructor root, got {:?}", root.kind());
             };
             assert_eq!(fields.len(), 4);
 
             assert!(matches!(
-                store.node(fields[0]).kind,
+                store.node(fields[0]).kind(),
                 ValidatedPatKind::Wildcard {
                     binding: Some(binding)
                 } if binding.name.data(db) == "a"
             ));
             assert!(matches!(
-                store.node(fields[1]).kind,
+                store.node(fields[1]).kind(),
                 ValidatedPatKind::Wildcard { binding: None }
             ));
             assert!(matches!(
-                store.node(fields[2]).kind,
+                store.node(fields[2]).kind(),
                 ValidatedPatKind::Wildcard { binding: None }
             ));
             assert!(matches!(
-                store.node(fields[3]).kind,
+                store.node(fields[3]).kind(),
                 ValidatedPatKind::Wildcard {
                     binding: Some(binding)
                 } if binding.name.data(db) == "d"
@@ -526,7 +540,7 @@ fn test(x: u8) -> u8 {
             let root = typed_body.pattern_root(binding_pat).unwrap();
 
             assert!(matches!(
-                typed_body.pattern_store().node(root).kind,
+                typed_body.pattern_store().node(root).kind(),
                 ValidatedPatKind::Wildcard {
                     binding: Some(binding)
                 } if binding.name.data(db) == "input"

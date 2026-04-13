@@ -1255,6 +1255,7 @@ pub struct ExprProp<'db> {
     pub is_mut: bool,
     pub binding: Option<LocalBinding<'db>>,
     pub borrow_provider: Option<ProviderAddressSpace>,
+    pub path_binding_read_mode: Option<PathBindingReadMode>,
 }
 
 impl<'db> ExprProp<'db> {
@@ -1264,6 +1265,7 @@ impl<'db> ExprProp<'db> {
             is_mut,
             binding: None,
             borrow_provider: None,
+            path_binding_read_mode: None,
         }
     }
 
@@ -1273,8 +1275,15 @@ impl<'db> ExprProp<'db> {
             is_mut: true,
             binding: None,
             borrow_provider: None,
+            path_binding_read_mode: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum PathBindingReadMode {
+    PreserveBinding,
+    MaterializeValue,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]

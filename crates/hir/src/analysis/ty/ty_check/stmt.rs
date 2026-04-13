@@ -106,12 +106,12 @@ impl<'db> TyChecker<'db> {
             }
 
             match mode {
-                super::DestructureSourceMode::Owned => {
+                super::PatternDestructureMode::Owned => {
                     if self.pattern_binds_any(*pat) {
                         self.record_implicit_move_for_owned_expr(*expr, prop.ty);
                     }
                 }
-                super::DestructureSourceMode::Borrow(kind) => {
+                super::PatternDestructureMode::Borrow(kind) => {
                     self.retype_pattern_bindings_for_borrow(*pat, kind);
                 }
             }

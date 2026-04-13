@@ -336,7 +336,7 @@ impl<'db> MatrixPat<'db> {
 
     pub(crate) fn from_root(store: &PatternStore<'db>, root: ValidatedPatId) -> Self {
         let node = store.node(root);
-        let kind = match &node.kind {
+        let kind = match node.kind() {
             ValidatedPatKind::Wildcard { binding } => MatrixPatKind::WildCard(*binding),
             ValidatedPatKind::Constructor { ctor, fields } => MatrixPatKind::Constructor {
                 kind: *ctor,
@@ -353,7 +353,7 @@ impl<'db> MatrixPat<'db> {
                     .collect(),
             ),
         };
-        Self::new(kind, node.ty)
+        Self::new(kind, node.match_ty().raw())
     }
 }
 

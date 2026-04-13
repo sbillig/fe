@@ -38,7 +38,9 @@ pub use callable::{Callable, EffectProviderProvenance, EffectProviderSpecializat
 use common::indexmap::IndexMap;
 use ena::unify::InPlace;
 use env::TyCheckEnv;
-pub use env::{EffectParamSite, ExprProp, LocalBinding, ParamSite, PatBindingMode};
+pub use env::{
+    EffectParamSite, ExprProp, LocalBinding, ParamSite, PatBindingMode, PathBindingReadMode,
+};
 pub(super) use expr::TraitOps;
 pub use owner::BodyOwner;
 pub use owner::EffectParamOwner;
@@ -78,6 +80,9 @@ use crate::analysis::ty::{
     fold::AssocTySubst,
     normalize::normalize_ty,
     pattern_ir::{PatternAnalysisStatus, PatternStore, ValidatedPatId},
+    pattern_types::{
+        PatternDestructureMode, apply_pattern_borrow_mode, destructure_pattern_source,
+    },
     ty_error::collect_ty_lower_errors,
 };
 use crate::analysis::{
@@ -253,12 +258,6 @@ pub struct TyChecker<'db> {
 pub(crate) struct TyCheckerSnapshot<'db> {
     table: Snapshot<InPlace<InferenceKey<'db>>>,
     deferred_len: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DestructureSourceMode {
-    Owned,
-    Borrow(BorrowKind),
 }
 
 enum TraitObligationOutcome<'db> {
@@ -1498,6 +1497,18 @@ impl<'db> TyChecker<'db> {
         unifies
     }
 
+    fn path_binding_read_mode(
+        &mut self,
+        binding: LocalBinding<'db>,
+        expr_ty: TyId<'db>,
+    ) -> PathBindingReadMode {
+        if self.normalize_ty(self.env.lookup_binding_ty(&binding)) == expr_ty {
+            PathBindingReadMode::PreserveBinding
+        } else {
+            PathBindingReadMode::MaterializeValue
+        }
+    }
+
     /// Contextual capability coercion:
     /// - `mut T -> ref T`
     /// - `mut/ref/view T -> view T`
@@ -1864,16 +1875,8 @@ impl<'db> TyChecker<'db> {
         }
     }
 
-    fn destructure_source_mode(&self, ty: TyId<'db>) -> (TyId<'db>, DestructureSourceMode) {
-        if let Some((kind, inner)) = ty.as_capability(self.db) {
-            let borrow_kind = match kind {
-                CapabilityKind::Mut => BorrowKind::Mut,
-                CapabilityKind::Ref | CapabilityKind::View => BorrowKind::Ref,
-            };
-            (inner, DestructureSourceMode::Borrow(borrow_kind))
-        } else {
-            (ty, DestructureSourceMode::Owned)
-        }
+    fn destructure_source_mode(&self, ty: TyId<'db>) -> (TyId<'db>, PatternDestructureMode) {
+        destructure_pattern_source(self.db, ty)
     }
 
     fn retype_pattern_bindings_for_borrow(&mut self, pat: PatId, kind: BorrowKind) {
@@ -1893,10 +1896,8 @@ impl<'db> TyChecker<'db> {
                 if inner.has_invalid(self.db) || inner.as_capability(self.db).is_some() {
                     return;
                 }
-                let borrow_ty = match kind {
-                    BorrowKind::Mut => TyId::borrow_mut_of(self.db, inner),
-                    BorrowKind::Ref => TyId::borrow_ref_of(self.db, inner),
-                };
+                let borrow_ty =
+                    apply_pattern_borrow_mode(self.db, PatternDestructureMode::Borrow(kind), inner);
                 self.env.type_pat(pat, borrow_ty);
             }
             Pat::Tuple(pats) | Pat::PathTuple(_, pats) => {
@@ -1968,6 +1969,9 @@ impl<'db> TyChecker<'db> {
         match t {
             Typeable::Expr(expr, mut typed_expr) => {
                 typed_expr.ty = actual;
+                typed_expr.path_binding_read_mode = typed_expr
+                    .binding
+                    .map(|binding| self.path_binding_read_mode(binding, actual));
                 self.env.type_expr(expr, typed_expr)
             }
             Typeable::Pat(pat) => self.env.type_pat(pat, actual),
@@ -2509,6 +2513,8 @@ impl<'db> TypedBody<'db> {
         self.semantic_expr_lowering.get(&expr)
     }
 
+    // Final typed pattern/binding view. This can intentionally differ from
+    // validated-pattern match types when destructuring borrowed carriers.
     pub fn pat_ty(&self, db: &'db dyn HirAnalysisDb, pat: PatId) -> TyId<'db> {
         self.pat_ty
             .get(&pat)
@@ -2566,14 +2572,17 @@ impl<'db> TypedBody<'db> {
         }
     }
 
-    pub fn path_expr_preserves_binding_ty(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-        expr: ExprId,
-        binding: LocalBinding<'db>,
-    ) -> bool {
-        !matches!(binding, LocalBinding::EffectParam { .. })
-            && self.expr_ty(db, expr) == self.binding_ty(db, binding)
+    pub fn path_expr_binding_read_mode(&self, expr: ExprId) -> Option<PathBindingReadMode> {
+        self.expr_ty
+            .get(&expr)
+            .and_then(|prop| prop.path_binding_read_mode)
+    }
+
+    pub fn path_expr_preserves_binding(&self, expr: ExprId) -> bool {
+        matches!(
+            self.path_expr_binding_read_mode(expr),
+            Some(PathBindingReadMode::PreserveBinding)
+        )
     }
 
     pub fn pattern_store(&self) -> &PatternStore<'db> {
@@ -2840,14 +2849,14 @@ impl<'db> TypedBody<'db> {
                 )
             }
             Expr::Path(_) => match self.expr_binding(expr)? {
-                binding @ LocalBinding::Param { idx, .. } => self
-                    .path_expr_preserves_binding_ty(db, expr, binding)
-                    .then_some(vec![idx]),
+                LocalBinding::Param { idx, .. } => {
+                    self.path_expr_preserves_binding(expr).then_some(vec![idx])
+                }
                 binding @ LocalBinding::Local { pat, .. } => {
                     if !visited_locals.insert(pat) {
                         return None;
                     }
-                    if !self.path_expr_preserves_binding_ty(db, expr, binding) {
+                    if !self.path_expr_preserves_binding(expr) {
                         visited_locals.remove(&pat);
                         return None;
                     }

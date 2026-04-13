@@ -16,10 +16,42 @@ pub struct BindingRef<'db> {
     pub representative_pat: PatId,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub struct PatternMatchTy<'db>(TyId<'db>);
+
+impl<'db> PatternMatchTy<'db> {
+    pub fn new(ty: TyId<'db>) -> Self {
+        Self(ty)
+    }
+
+    pub fn raw(self) -> TyId<'db> {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Update)]
 pub struct ValidatedPat<'db> {
-    pub ty: TyId<'db>,
-    pub kind: ValidatedPatKind<'db>,
+    // Match-analysis type only. This intentionally stays separate from the final
+    // binding type and from the carrier/source type used during semantic lowering.
+    match_ty: PatternMatchTy<'db>,
+    kind: ValidatedPatKind<'db>,
+}
+
+impl<'db> ValidatedPat<'db> {
+    pub fn new(match_ty: TyId<'db>, kind: ValidatedPatKind<'db>) -> Self {
+        Self {
+            match_ty: PatternMatchTy::new(match_ty),
+            kind,
+        }
+    }
+
+    pub fn match_ty(&self) -> PatternMatchTy<'db> {
+        self.match_ty
+    }
+
+    pub fn kind(&self) -> &ValidatedPatKind<'db> {
+        &self.kind
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Update)]
@@ -92,7 +124,7 @@ impl<'db> PatternStore<'db> {
     }
 
     pub fn is_irrefutable(&self, db: &'db dyn HirAnalysisDb, id: ValidatedPatId) -> bool {
-        match &self.node(id).kind {
+        match self.node(id).kind() {
             ValidatedPatKind::Wildcard { .. } => true,
             ValidatedPatKind::Constructor { ctor, fields } => match ctor {
                 ConstructorKind::Type(_) => {
@@ -109,7 +141,7 @@ impl<'db> PatternStore<'db> {
                         db,
                         self,
                         pats,
-                        self.node(id).ty,
+                        self.node(id).match_ty().raw(),
                     )
                     .is_ok()
             }
@@ -117,7 +149,7 @@ impl<'db> PatternStore<'db> {
     }
 
     pub fn mir_unsupported_reason(&self, id: ValidatedPatId) -> Option<&'static str> {
-        match &self.node(id).kind {
+        match self.node(id).kind() {
             ValidatedPatKind::Wildcard { .. } => None,
             ValidatedPatKind::Constructor { ctor, fields } => match ctor {
                 ConstructorKind::Variant(..) | ConstructorKind::Type(_) => fields
@@ -276,7 +308,7 @@ impl<'db> TyVisitable<'db> for ValidatedPat<'db> {
     where
         V: TyVisitor<'db> + ?Sized,
     {
-        self.ty.visit_with(visitor);
+        self.match_ty.visit_with(visitor);
         self.kind.visit_with(visitor);
     }
 }
@@ -287,9 +319,27 @@ impl<'db> TyFoldable<'db> for ValidatedPat<'db> {
         F: TyFolder<'db>,
     {
         Self {
-            ty: self.ty.fold_with(db, folder),
+            match_ty: self.match_ty.fold_with(db, folder),
             kind: self.kind.fold_with(db, folder),
         }
+    }
+}
+
+impl<'db> TyVisitable<'db> for PatternMatchTy<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.0.visit_with(visitor);
+    }
+}
+
+impl<'db> TyFoldable<'db> for PatternMatchTy<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        Self(self.0.fold_with(db, folder))
     }
 }
 

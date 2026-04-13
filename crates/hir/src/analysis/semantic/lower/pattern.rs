@@ -13,9 +13,13 @@ use crate::{
                 Case, DecisionTree, LeafNode, Projection, ProjectionPath, SwitchNode,
                 build_decision_tree,
             },
+            normalize::normalize_ty,
             pattern_analysis::PatternMatrix,
             pattern_ir::{ConstructorKind, ValidatedPatId, ValidatedPatKind},
-            ty_def::{PrimTy, TyBase, TyData, TyId, instantiate_adt_field_ty},
+            pattern_types::{
+                PatternProjectionStep, pattern_match_expected_ty, project_pattern_child_carrier_ty,
+            },
+            ty_def::{PrimTy, TyBase, TyData, TyId},
         },
     },
     hir_def::{
@@ -29,6 +33,17 @@ use super::body::SmirLowerCtxt;
 pub(super) enum ArmVariants {
     Variants(Vec<VariantIndex>),
     Default,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct PatternCarrierTy<'db>(pub(super) TyId<'db>);
+
+#[derive(Clone, Copy)]
+pub(super) struct PatternValue<'db> {
+    pub(super) value: SValueId,
+    // Runtime/source type threaded through pattern lowering. This intentionally
+    // stays separate from validated-pattern match types and final binding types.
+    pub(super) carrier_ty: PatternCarrierTy<'db>,
 }
 
 impl<'db> SmirLowerCtxt<'db> {
@@ -49,6 +64,7 @@ impl<'db> SmirLowerCtxt<'db> {
 
     pub(super) fn bind_pattern(&mut self, pat: PatId, value: SValueId) {
         if let Some(root) = self.typed_body.pattern_root(pat) {
+            let value = self.owned_pattern_value(value, self.locals[value.index()].ty);
             self.bind_validated_pattern(root, value);
         }
     }
@@ -64,47 +80,121 @@ impl<'db> SmirLowerCtxt<'db> {
             self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
             return;
         };
+        let value = self.owned_pattern_value(value, self.locals[value.index()].ty);
         self.lower_validated_pattern_branch(root, value, then_bb, else_bb);
     }
 
-    fn bind_validated_pattern(&mut self, pat: ValidatedPatId, value: SValueId) {
-        let node = self.typed_body.pattern_store().node(pat).clone();
-        match node.kind {
+    fn owned_pattern_value(&self, value: SValueId, carrier_ty: TyId<'db>) -> PatternValue<'db> {
+        PatternValue {
+            value,
+            carrier_ty: PatternCarrierTy(carrier_ty),
+        }
+    }
+
+    fn project_pattern_field(
+        &mut self,
+        base: PatternValue<'db>,
+        field_idx: usize,
+    ) -> PatternValue<'db> {
+        let ty = project_pattern_child_carrier_ty(
+            self.db,
+            base.carrier_ty.0,
+            PatternProjectionStep::Field(field_idx),
+        );
+        let value = self.emit_expr(
+            ty,
+            SExpr::Field {
+                base: base.value,
+                field: FieldIndex(field_idx as u16),
+            },
+        );
+        PatternValue {
+            value,
+            carrier_ty: PatternCarrierTy(ty),
+        }
+    }
+
+    fn project_pattern_variant_field(
+        &mut self,
+        base: PatternValue<'db>,
+        variant: crate::hir_def::EnumVariant<'db>,
+        field_idx: usize,
+    ) -> PatternValue<'db> {
+        let ty = project_pattern_child_carrier_ty(
+            self.db,
+            base.carrier_ty.0,
+            PatternProjectionStep::VariantField { variant, field_idx },
+        );
+        let value = self.emit_expr(
+            ty,
+            SExpr::ExtractEnumField {
+                value: base.value,
+                variant: VariantIndex(variant.idx),
+                field: FieldIndex(field_idx as u16),
+            },
+        );
+        PatternValue {
+            value,
+            carrier_ty: PatternCarrierTy(ty),
+        }
+    }
+
+    fn debug_assert_pattern_binding_ty_matches(
+        &self,
+        dst: crate::analysis::semantic::SLocalId,
+        src: PatternValue<'db>,
+    ) {
+        let scope = self.body.scope();
+        let src_ty = normalize_ty(self.db, src.carrier_ty.0, scope, self.assumptions);
+        let dst_ty = normalize_ty(
+            self.db,
+            self.locals[dst.index()].ty,
+            scope,
+            self.assumptions,
+        );
+        debug_assert_eq!(
+            src_ty,
+            dst_ty,
+            "pattern binding type drift: owner={:?} binding={:?} src_local={:?} src_local_source={:?} src_raw={:?} src_data={:?} dst_raw={:?} dst_data={:?} src={} dst={}",
+            self.template_owner,
+            self.locals[dst.index()].source,
+            src.value,
+            self.locals[src.value.index()].source,
+            src.carrier_ty.0,
+            src.carrier_ty.0.data(self.db),
+            self.locals[dst.index()].ty,
+            self.locals[dst.index()].ty.data(self.db),
+            src_ty.pretty_print(self.db),
+            dst_ty.pretty_print(self.db),
+        );
+    }
+
+    fn bind_validated_pattern(&mut self, pat: ValidatedPatId, value: PatternValue<'db>) {
+        let kind = self.typed_body.pattern_store().node(pat).kind().clone();
+        match kind {
             ValidatedPatKind::Wildcard { binding } => {
                 if let Some(binding) = binding
                     && let Some(local_binding) =
                         self.typed_body.pat_binding(binding.representative_pat)
                 {
                     let dst = self.alloc_binding_local(local_binding);
+                    self.debug_assert_pattern_binding_ty_matches(dst, value);
                     self.push_synthetic_stmt(SStmtKind::Assign {
                         dst,
-                        expr: SExpr::Use(value),
+                        expr: SExpr::Use(value.value),
                     });
                 }
             }
             ValidatedPatKind::Constructor { ctor, fields } => match ctor {
                 ConstructorKind::Variant(variant, _) => {
                     for (idx, field_pat) in fields.into_iter().enumerate() {
-                        let field = self.emit_expr(
-                            self.typed_body.pattern_store().node(field_pat).ty,
-                            SExpr::ExtractEnumField {
-                                value,
-                                variant: VariantIndex(variant.idx),
-                                field: FieldIndex(idx as u16),
-                            },
-                        );
+                        let field = self.project_pattern_variant_field(value, variant, idx);
                         self.bind_validated_pattern(field_pat, field);
                     }
                 }
                 ConstructorKind::Type(_) => {
                     for (idx, field_pat) in fields.into_iter().enumerate() {
-                        let field = self.emit_expr(
-                            self.typed_body.pattern_store().node(field_pat).ty,
-                            SExpr::Field {
-                                base: value,
-                                field: FieldIndex(idx as u16),
-                            },
-                        );
+                        let field = self.project_pattern_field(value, idx);
                         self.bind_validated_pattern(field_pat, field);
                     }
                 }
@@ -137,6 +227,7 @@ impl<'db> SmirLowerCtxt<'db> {
         join_bb: SBlockId,
         arms: &[MatchArm],
     ) -> SValueId {
+        let value = self.owned_pattern_value(value, self.locals[value.index()].ty);
         let roots = arms
             .iter()
             .map(|arm| self.typed_body.pattern_root(arm.pat))
@@ -154,7 +245,7 @@ impl<'db> SmirLowerCtxt<'db> {
     }
 
     fn arm_variants_from_root(&self, pat: ValidatedPatId) -> ArmVariants {
-        match &self.typed_body.pattern_store().node(pat).kind {
+        match self.typed_body.pattern_store().node(pat).kind() {
             ValidatedPatKind::Wildcard { .. } => ArmVariants::Default,
             ValidatedPatKind::Constructor {
                 ctor: ConstructorKind::Variant(variant, _),
@@ -180,7 +271,7 @@ impl<'db> SmirLowerCtxt<'db> {
     }
 
     fn pattern_enum_ty_from_root(&self, pat: ValidatedPatId) -> Option<TyId<'db>> {
-        match &self.typed_body.pattern_store().node(pat).kind {
+        match self.typed_body.pattern_store().node(pat).kind() {
             ValidatedPatKind::Wildcard { .. } => None,
             ValidatedPatKind::Constructor {
                 ctor: ConstructorKind::Variant(_, enum_ty),
@@ -197,7 +288,7 @@ impl<'db> SmirLowerCtxt<'db> {
     }
 
     fn is_enum_dispatchable_root(&self, pat: ValidatedPatId) -> bool {
-        match &self.typed_body.pattern_store().node(pat).kind {
+        match self.typed_body.pattern_store().node(pat).kind() {
             ValidatedPatKind::Wildcard { .. } => true,
             ValidatedPatKind::Constructor {
                 ctor: ConstructorKind::Variant(..),
@@ -216,12 +307,12 @@ impl<'db> SmirLowerCtxt<'db> {
     fn lower_validated_pattern_branch(
         &mut self,
         pat: ValidatedPatId,
-        value: SValueId,
+        value: PatternValue<'db>,
         then_bb: SBlockId,
         else_bb: SBlockId,
     ) {
         let node = self.typed_body.pattern_store().node(pat).clone();
-        match node.kind {
+        match node.kind().clone() {
             ValidatedPatKind::Wildcard { .. } => {
                 self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
             }
@@ -232,7 +323,7 @@ impl<'db> SmirLowerCtxt<'db> {
                         TyId::bool(self.db),
                         SExpr::Binary {
                             op: BinOp::Comp(CompBinOp::Eq),
-                            lhs: value,
+                            lhs: value.value,
                             rhs,
                         },
                     );
@@ -254,7 +345,7 @@ impl<'db> SmirLowerCtxt<'db> {
                     let cond = self.emit_expr(
                         TyId::bool(self.db),
                         SExpr::IsEnumVariant {
-                            value,
+                            value: value.value,
                             variant: VariantIndex(variant.idx),
                         },
                     );
@@ -269,11 +360,7 @@ impl<'db> SmirLowerCtxt<'db> {
                     if !fields.is_empty() {
                         self.switch_to(success_bb);
                         self.lower_variant_field_branches(
-                            value,
-                            VariantIndex(variant.idx),
-                            &fields,
-                            then_bb,
-                            else_bb,
+                            value, variant, &fields, then_bb, else_bb,
                         );
                     }
                 }
@@ -299,7 +386,7 @@ impl<'db> SmirLowerCtxt<'db> {
     fn lower_decision_tree(
         &mut self,
         tree: &DecisionTree<'db>,
-        root_value: SValueId,
+        root_value: PatternValue<'db>,
         result: crate::analysis::semantic::SLocalId,
         join_bb: SBlockId,
         arms: &[MatchArm],
@@ -329,7 +416,7 @@ impl<'db> SmirLowerCtxt<'db> {
     fn lower_decision_tree_switch(
         &mut self,
         switch: &SwitchNode<'db>,
-        root_value: SValueId,
+        root_value: PatternValue<'db>,
         result: crate::analysis::semantic::SLocalId,
         join_bb: SBlockId,
         arms: &[MatchArm],
@@ -366,12 +453,12 @@ impl<'db> SmirLowerCtxt<'db> {
                             let rhs = self.literal_pattern_value(*ty, *lit);
                             SExpr::Binary {
                                 op: BinOp::Comp(CompBinOp::Eq),
-                                lhs: occurrence,
+                                lhs: occurrence.value,
                                 rhs,
                             }
                         }
                         ConstructorKind::Variant(variant, _) => SExpr::IsEnumVariant {
-                            value: occurrence,
+                            value: occurrence.value,
                             variant: VariantIndex(variant.idx),
                         },
                         ConstructorKind::Type(_) => unreachable!(),
@@ -399,14 +486,15 @@ impl<'db> SmirLowerCtxt<'db> {
         join_reachable
     }
 
-    fn bind_decision_tree_leaf(&mut self, leaf: &LeafNode<'db>, root_value: SValueId) {
+    fn bind_decision_tree_leaf(&mut self, leaf: &LeafNode<'db>, root_value: PatternValue<'db>) {
         for (binding_ref, path) in &leaf.bindings {
             if let Some(binding) = self.typed_body.pat_binding(binding_ref.representative_pat) {
                 let dst = self.alloc_binding_local(binding);
                 let src = self.project_decision_tree_path(root_value, path);
+                self.debug_assert_pattern_binding_ty_matches(dst, src);
                 self.push_synthetic_stmt(SStmtKind::Assign {
                     dst,
-                    expr: SExpr::Use(src),
+                    expr: SExpr::Use(src.value),
                 });
             }
         }
@@ -414,9 +502,9 @@ impl<'db> SmirLowerCtxt<'db> {
 
     fn project_decision_tree_path(
         &mut self,
-        root_value: SValueId,
+        root_value: PatternValue<'db>,
         path: &ProjectionPath<'db>,
-    ) -> SValueId {
+    ) -> PatternValue<'db> {
         let mut value = root_value;
         for projection in path.iter() {
             value = self.project_decision_tree_value(value, projection);
@@ -426,54 +514,25 @@ impl<'db> SmirLowerCtxt<'db> {
 
     fn project_decision_tree_value(
         &mut self,
-        base: SValueId,
+        base: PatternValue<'db>,
         projection: &Projection<'db>,
-    ) -> SValueId {
-        let base_ty = self.projectable_place_ty(self.locals[base.index()].ty);
+    ) -> PatternValue<'db> {
         match projection {
-            Projection::Field(field) => {
-                let field_ty = base_ty
-                    .field_types(self.db)
-                    .get(*field)
-                    .copied()
-                    .unwrap_or_else(|| {
-                        TyId::invalid(self.db, crate::analysis::ty::ty_def::InvalidCause::Other)
-                    });
-                self.emit_expr(
-                    field_ty,
-                    SExpr::Field {
-                        base,
-                        field: FieldIndex(*field as u16),
-                    },
-                )
-            }
+            Projection::Field(field) => self.project_pattern_field(base, *field),
             Projection::VariantField {
-                variant,
-                enum_ty,
-                field_idx,
-            } => {
-                let field_ty = instantiate_adt_field_ty(
+                variant, field_idx, ..
+            } => self.project_pattern_variant_field(base, *variant, *field_idx),
+            Projection::Discriminant => {
+                let ty = enum_tag_ty(
                     self.db,
-                    enum_ty
-                        .adt_def(self.db)
-                        .expect("enum variant projection should have an ADT definition"),
-                    variant.idx as usize,
-                    *field_idx,
-                    enum_ty.generic_args(self.db),
+                    pattern_match_expected_ty(self.db, base.carrier_ty.0),
                 );
-                self.emit_expr(
-                    field_ty,
-                    SExpr::ExtractEnumField {
-                        value: base,
-                        variant: VariantIndex(variant.idx),
-                        field: FieldIndex(*field_idx as u16),
-                    },
-                )
+                let value = self.emit_expr(ty, SExpr::GetEnumTag { value: base.value });
+                PatternValue {
+                    value,
+                    carrier_ty: PatternCarrierTy(ty),
+                }
             }
-            Projection::Discriminant => self.emit_expr(
-                enum_tag_ty(self.db, base_ty),
-                SExpr::GetEnumTag { value: base },
-            ),
             Projection::Deref => {
                 panic!("decision-tree lowering does not support deref projections yet")
             }
@@ -485,7 +544,7 @@ impl<'db> SmirLowerCtxt<'db> {
 
     fn lower_field_branches(
         &mut self,
-        value: SValueId,
+        value: PatternValue<'db>,
         fields: &[ValidatedPatId],
         then_bb: SBlockId,
         else_bb: SBlockId,
@@ -496,13 +555,7 @@ impl<'db> SmirLowerCtxt<'db> {
         }
 
         for (idx, field_pat) in fields.iter().copied().enumerate() {
-            let field_value = self.emit_expr(
-                self.typed_body.pattern_store().node(field_pat).ty,
-                SExpr::Field {
-                    base: value,
-                    field: FieldIndex(idx as u16),
-                },
-            );
+            let field_value = self.project_pattern_field(value, idx);
             let next_then = if idx + 1 == fields.len() {
                 then_bb
             } else {
@@ -517,8 +570,8 @@ impl<'db> SmirLowerCtxt<'db> {
 
     fn lower_variant_field_branches(
         &mut self,
-        value: SValueId,
-        variant: VariantIndex,
+        value: PatternValue<'db>,
+        variant: crate::hir_def::EnumVariant<'db>,
         fields: &[ValidatedPatId],
         then_bb: SBlockId,
         else_bb: SBlockId,
@@ -529,14 +582,7 @@ impl<'db> SmirLowerCtxt<'db> {
         }
 
         for (idx, field_pat) in fields.iter().copied().enumerate() {
-            let field_value = self.emit_expr(
-                self.typed_body.pattern_store().node(field_pat).ty,
-                SExpr::ExtractEnumField {
-                    value,
-                    variant,
-                    field: FieldIndex(idx as u16),
-                },
-            );
+            let field_value = self.project_pattern_variant_field(value, variant, idx);
             let next_then = if idx + 1 == fields.len() {
                 then_bb
             } else {
