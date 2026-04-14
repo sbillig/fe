@@ -13,7 +13,7 @@ use hir::{
     hir_def::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
     projection::IndexSource,
 };
-use mir2::runtime::{RefKind, RefView};
+use mir2::runtime::RefKind;
 use mir2::{
     AddressSpaceKind, ConstNode, ConstRegionId, ConstScalar, IntrinsicArithBinOp, Layout, LayoutId,
     RBlockId, RExpr, RLocalId, RStmt, RTerminator, ResolvedPlaceElem, ResolvedPlaceRootKind,
@@ -676,6 +676,27 @@ enum PlaceTerminal<'db> {
     },
 }
 
+#[derive(Clone)]
+enum CopySource<'db> {
+    Value {
+        value: ValueId,
+        class: RuntimeClass<'db>,
+    },
+    Object {
+        value: ValueId,
+        class: RuntimeClass<'db>,
+    },
+    Const {
+        value: ValueId,
+        class: RuntimeClass<'db>,
+    },
+    Ptr {
+        addr: ValueId,
+        space: AddressSpaceKind,
+        class: RuntimeClass<'db>,
+    },
+}
+
 struct FunctionLowerer<'ctx, 'db, 'a> {
     module: &'ctx mut ModuleLowerer<'db, 'a>,
     body: RuntimeBody<'db>,
@@ -1024,47 +1045,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     ObjAlloc::new(self.module.inst_set(), layout_ty),
                     self.fb.module_builder.objref_type(layout_ty),
                 );
-                match self.body.value_class(*src) {
-                    Some(RuntimeClass::Ref {
-                        pointee,
-                        kind: RefKind::Object,
-                        view: RefView::Whole,
-                    }) if pointee.aggregate_layout().is_some()
-                        && self.fb.type_of(src_value) != self.fb.type_of(object) =>
-                    {
-                        self.copy_terminal_to_object(
-                            PlaceTerminal::Object {
-                                value: src_value,
-                                class: (**pointee).clone(),
-                            },
-                            &RuntimeClass::AggregateValue { layout },
-                            object,
-                        )?;
-                    }
-                    Some(RuntimeClass::Ref {
-                        kind: RefKind::Const,
-                        ..
-                    }) if self.fb.type_of(src_value) != self.fb.type_of(object) => {
-                        self.copy_terminal_to_object(
-                            PlaceTerminal::Const { value: src_value },
-                            &RuntimeClass::AggregateValue { layout },
-                            object,
-                        )?;
-                    }
-                    Some(RuntimeClass::Ref {
-                        kind: RefKind::Const,
-                        ..
-                    }) => self.fb.insert_inst_no_result(ObjInitConst::new(
-                        self.module.inst_set(),
-                        object,
-                        src_value,
-                    )),
-                    _ => self.fb.insert_inst_no_result(ObjStore::new(
-                        self.module.inst_set(),
-                        object,
-                        src_value,
-                    )),
-                }
+                let source = self.copy_source_for_local(*src, src_value)?;
+                self.copy_source_into_object(
+                    source,
+                    &RuntimeClass::AggregateValue { layout },
+                    object,
+                )?;
                 object
             }
             RExpr::MaterializePlaceToObject { place } => {
@@ -2035,9 +2021,17 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 Ok(())
             }
             Some(SlotRoot::Object(object, _)) => {
-                self.fb
-                    .insert_inst_no_result(ObjStore::new(self.module.inst_set(), object, value));
-                Ok(())
+                let class = self.body.value_class(local).cloned().ok_or_else(|| {
+                    LowerError::Internal(format!("missing runtime class for {local:?}"))
+                })?;
+                self.copy_source_into_object(
+                    CopySource::Value {
+                        value,
+                        class: class.clone(),
+                    },
+                    &class,
+                    object,
+                )
             }
             None => Err(LowerError::Internal(format!(
                 "missing slot root for {local:?}"
@@ -2488,97 +2482,152 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             self.fb.module_builder.objref_type(layout_ty),
         );
         let terminal = self.resolve_place(place)?;
-        self.copy_terminal_to_object(terminal, &RuntimeClass::AggregateValue { layout }, object)?;
+        let source =
+            self.copy_source_for_terminal(terminal, &RuntimeClass::AggregateValue { layout });
+        self.copy_source_into_object(source, &RuntimeClass::AggregateValue { layout }, object)?;
         Ok(object)
     }
 
-    fn copy_terminal_to_object(
-        &mut self,
+    fn copy_source_for_local(
+        &self,
+        local: RLocalId,
+        value: ValueId,
+    ) -> Result<CopySource<'db>, LowerError> {
+        let class = self.body.value_class(local).cloned().ok_or_else(|| {
+            LowerError::Internal(format!("missing runtime class for local {local:?}"))
+        })?;
+        Ok(match class {
+            RuntimeClass::Ref {
+                pointee,
+                kind: RefKind::Object,
+                ..
+            } => CopySource::Object {
+                value,
+                class: *pointee,
+            },
+            RuntimeClass::Ref {
+                pointee,
+                kind: RefKind::Const,
+                ..
+            } => CopySource::Const {
+                value,
+                class: *pointee,
+            },
+            RuntimeClass::RawAddr { space, .. } => CopySource::Ptr {
+                addr: value,
+                space,
+                class,
+            },
+            _ => CopySource::Value { value, class },
+        })
+    }
+
+    fn copy_source_for_terminal(
+        &self,
         terminal: PlaceTerminal<'db>,
         class: &RuntimeClass<'db>,
-        object: ValueId,
-    ) -> Result<(), LowerError> {
+    ) -> CopySource<'db> {
         match terminal {
-            PlaceTerminal::Object {
+            PlaceTerminal::Object { value, class } => CopySource::Object { value, class },
+            PlaceTerminal::Const { value } => CopySource::Const {
                 value,
-                class: source,
-            } => {
-                if self.fb.type_of(value) == self.fb.type_of(object)
-                    || !matches!(class, RuntimeClass::AggregateValue { .. })
-                {
-                    self.fb.insert_inst_no_result(ObjStore::new(
-                        self.module.inst_set(),
-                        object,
-                        value,
-                    ));
-                    Ok(())
-                } else {
-                    self.copy_aggregate_terminal_to_object(
-                        PlaceTerminal::Object {
-                            value,
-                            class: source,
-                        },
-                        class,
-                        object,
-                    )
-                }
-            }
-            PlaceTerminal::Const { value } => {
-                if self.fb.type_of(value) == self.fb.type_of(object)
-                    || !matches!(class, RuntimeClass::AggregateValue { .. })
-                {
-                    self.fb.insert_inst_no_result(ObjInitConst::new(
-                        self.module.inst_set(),
-                        object,
-                        value,
-                    ));
-                    Ok(())
-                } else {
-                    self.copy_aggregate_terminal_to_object(
-                        PlaceTerminal::Const { value },
-                        class,
-                        object,
-                    )
-                }
-            }
-            PlaceTerminal::Ptr {
-                addr,
-                space,
-                class: source,
-            } => match class {
-                RuntimeClass::AggregateValue { .. } => self.copy_aggregate_terminal_to_object(
-                    PlaceTerminal::Ptr {
-                        addr,
-                        space,
-                        class: source,
-                    },
-                    class,
-                    object,
-                ),
-                RuntimeClass::Scalar(_)
-                | RuntimeClass::Ref { .. }
-                | RuntimeClass::RawAddr { .. } => {
-                    let value = self.load_from_ptr(addr, space, class)?;
-                    self.fb.insert_inst_no_result(ObjStore::new(
-                        self.module.inst_set(),
-                        object,
-                        value,
-                    ));
-                    Ok(())
-                }
+                class: class.clone(),
             },
+            PlaceTerminal::Ptr { addr, space, class } => CopySource::Ptr { addr, space, class },
         }
     }
 
-    fn copy_aggregate_terminal_to_object(
+    fn copy_source_into_object(
         &mut self,
-        terminal: PlaceTerminal<'db>,
+        source: CopySource<'db>,
+        class: &RuntimeClass<'db>,
+        object: ValueId,
+    ) -> Result<(), LowerError> {
+        if let CopySource::Const {
+            value,
+            class: source_class,
+        } = &source
+            && source_class == class
+            && self.fb.type_of(*value) == self.fb.type_of(object)
+        {
+            self.fb.insert_inst_no_result(ObjInitConst::new(
+                self.module.inst_set(),
+                object,
+                *value,
+            ));
+            return Ok(());
+        }
+
+        if !matches!(class, RuntimeClass::AggregateValue { .. }) {
+            let value = self.load_copy_source_leaf(&source, class)?;
+            self.fb
+                .insert_inst_no_result(ObjStore::new(self.module.inst_set(), object, value));
+            return Ok(());
+        }
+
+        self.copy_aggregate_source_into_object(source, class, object)
+    }
+
+    fn load_copy_source_leaf(
+        &mut self,
+        source: &CopySource<'db>,
+        class: &RuntimeClass<'db>,
+    ) -> Result<ValueId, LowerError> {
+        Ok(match source {
+            CopySource::Value {
+                value,
+                class: source_class,
+            } => {
+                if matches!(source_class, RuntimeClass::AggregateValue { .. }) {
+                    return Err(LowerError::Internal(format!(
+                        "leaf copy source must not stay aggregate-valued: source={source_class:?} target={class:?}",
+                    )));
+                }
+                let ty = self.module.ty_for_class(class)?;
+                self.coerce_value_to_ty(*value, ty)?
+            }
+            CopySource::Object {
+                value,
+                class: source_class,
+            } => {
+                if matches!(source_class, RuntimeClass::AggregateValue { .. }) {
+                    return Err(LowerError::Internal(format!(
+                        "leaf object copy source must not stay aggregate-valued: source={source_class:?} target={class:?}",
+                    )));
+                }
+                self.fb.insert_inst(
+                    ObjLoad::new(self.module.inst_set(), *value),
+                    self.module.ty_for_class(class)?,
+                )
+            }
+            CopySource::Const { value, .. } => self.fb.insert_inst(
+                ConstLoad::new(self.module.inst_set(), *value),
+                self.module.ty_for_class(class)?,
+            ),
+            CopySource::Ptr {
+                addr,
+                space,
+                class: source_class,
+            } => {
+                if matches!(source_class, RuntimeClass::AggregateValue { .. }) {
+                    return Err(LowerError::Internal(format!(
+                        "leaf ptr copy source must not stay aggregate-valued: source={source_class:?} target={class:?}",
+                    )));
+                }
+                self.load_from_ptr(*addr, *space, class)?
+            }
+        })
+    }
+
+    fn copy_aggregate_source_into_object(
+        &mut self,
+        source: CopySource<'db>,
         class: &RuntimeClass<'db>,
         object: ValueId,
     ) -> Result<(), LowerError> {
         let RuntimeClass::AggregateValue { layout } = class else {
             return Err(LowerError::Internal(
-                "aggregate terminal copy requires aggregate class".to_string(),
+                "aggregate source copy requires aggregate class".to_string(),
             ));
         };
         match layout.data(self.module.db) {
@@ -2589,15 +2638,19 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                         ObjProj::new(self.module.inst_set(), smallvec![object, field_idx]),
                         self.module.ty_for_object_projection(field)?,
                     );
-                    let field_terminal = match &terminal {
-                        PlaceTerminal::Object { value, .. } => PlaceTerminal::Object {
+                    let field_source = match &source {
+                        CopySource::Value { value, .. } => CopySource::Value {
+                            value: self.extract_aggregate_field(*value, idx, field)?,
+                            class: field.clone(),
+                        },
+                        CopySource::Object { value, .. } => CopySource::Object {
                             value: self.fb.insert_inst(
                                 ObjProj::new(self.module.inst_set(), smallvec![*value, field_idx]),
                                 self.module.ty_for_object_projection(field)?,
                             ),
                             class: field.clone(),
                         },
-                        PlaceTerminal::Const { value } => PlaceTerminal::Const {
+                        CopySource::Const { value, .. } => CopySource::Const {
                             value: self.fb.insert_inst(
                                 ConstProj::new(
                                     self.module.inst_set(),
@@ -2605,8 +2658,9 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                                 ),
                                 self.module.ty_for_const_projection(field)?,
                             ),
+                            class: field.clone(),
                         },
-                        PlaceTerminal::Ptr { addr, space, .. } => PlaceTerminal::Ptr {
+                        CopySource::Ptr { addr, space, .. } => CopySource::Ptr {
                             addr: self.offset_address(
                                 *addr,
                                 field_offset_from_layout(self.module.db, &data.fields, idx)?,
@@ -2616,7 +2670,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                             class: field.clone(),
                         },
                     };
-                    self.copy_terminal_to_object(field_terminal, field, field_object)?;
+                    self.copy_source_into_object(field_source, field, field_object)?;
                 }
                 Ok(())
             }
@@ -2627,21 +2681,26 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                         ObjIndex::new(self.module.inst_set(), object, elem_idx),
                         self.module.ty_for_object_projection(&data.elem)?,
                     );
-                    let elem_terminal = match &terminal {
-                        PlaceTerminal::Object { value, .. } => PlaceTerminal::Object {
+                    let elem_source = match &source {
+                        CopySource::Value { value, .. } => CopySource::Value {
+                            value: self.extract_aggregate_field(*value, idx, &data.elem)?,
+                            class: data.elem.clone(),
+                        },
+                        CopySource::Object { value, .. } => CopySource::Object {
                             value: self.fb.insert_inst(
                                 ObjIndex::new(self.module.inst_set(), *value, elem_idx),
                                 self.module.ty_for_object_projection(&data.elem)?,
                             ),
                             class: data.elem.clone(),
                         },
-                        PlaceTerminal::Const { value } => PlaceTerminal::Const {
+                        CopySource::Const { value, .. } => CopySource::Const {
                             value: self.fb.insert_inst(
                                 ConstIndex::new(self.module.inst_set(), *value, elem_idx),
                                 self.module.ty_for_const_projection(&data.elem)?,
                             ),
+                            class: data.elem.clone(),
                         },
-                        PlaceTerminal::Ptr { addr, space, .. } => PlaceTerminal::Ptr {
+                        CopySource::Ptr { addr, space, .. } => CopySource::Ptr {
                             addr: self.offset_address(
                                 *addr,
                                 idx as u64 * value_span_words(self.module.db, &data.elem)?,
@@ -2651,7 +2710,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                             class: data.elem.clone(),
                         },
                     };
-                    self.copy_terminal_to_object(elem_terminal, &data.elem, elem_object)?;
+                    self.copy_source_into_object(elem_source, &data.elem, elem_object)?;
                 }
                 Ok(())
             }
@@ -2739,55 +2798,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             .result_class;
         match self.resolve_place(place)? {
             PlaceTerminal::Object { value, .. } => {
-                let src_local = self
-                    .body
-                    .value_class(src)
-                    .cloned()
-                    .unwrap_or_else(|| dst_class.clone());
-                match src_local {
-                    RuntimeClass::Ref {
-                        pointee,
-                        kind: RefKind::Object,
-                        view: RefView::Whole,
-                    } if pointee.aggregate_layout().is_some()
-                        && self.fb.type_of(src_value) != self.fb.type_of(value) =>
-                    {
-                        self.copy_terminal_to_object(
-                            PlaceTerminal::Object {
-                                value: src_value,
-                                class: (*pointee).clone(),
-                            },
-                            &dst_class,
-                            value,
-                        )?
-                    }
-                    RuntimeClass::Ref {
-                        pointee,
-                        kind: RefKind::Const,
-                        ..
-                    } if pointee.aggregate_layout().is_some()
-                        && self.fb.type_of(src_value) != self.fb.type_of(value) =>
-                    {
-                        self.copy_terminal_to_object(
-                            PlaceTerminal::Const { value: src_value },
-                            &dst_class,
-                            value,
-                        )?
-                    }
-                    RuntimeClass::Ref {
-                        kind: RefKind::Const,
-                        ..
-                    } => self.fb.insert_inst_no_result(ObjInitConst::new(
-                        self.module.inst_set(),
-                        value,
-                        src_value,
-                    )),
-                    _ => self.fb.insert_inst_no_result(ObjStore::new(
-                        self.module.inst_set(),
-                        value,
-                        src_value,
-                    )),
-                }
+                let source = self.copy_source_for_local(src, src_value)?;
+                self.copy_source_into_object(source, &dst_class, value)?;
                 Ok(())
             }
             PlaceTerminal::Const { .. } => Err(LowerError::Unsupported(

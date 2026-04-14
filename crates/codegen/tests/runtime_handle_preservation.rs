@@ -1,6 +1,6 @@
 use common::InputDb;
 use driver::DriverDataBase;
-use fe_codegen::emit_module_sonatina_ir;
+use fe_codegen::{OptLevel, emit_module_sonatina_ir, emit_module_sonatina_ir_optimized};
 use hir::hir_def::{ArithBinOp, BinOp};
 use mir2::runtime::RefKind;
 use mir2::{
@@ -1401,5 +1401,51 @@ fn use_returned_array() -> u8 {
             Some(RuntimeClass::AggregateValue { .. })
         )),
         "by-value aggregate call results should stay visible aggregate values in callers, not object refs:\n{body:#?}"
+    );
+}
+
+#[test]
+fn by_value_array_return_materialization_structurally_copies_into_object_storage() {
+    let mut db = DriverDataBase::default();
+    let file_url = Url::parse(
+        "file:///by_value_array_return_materialization_structurally_copies_into_object_storage.fe",
+    )
+    .unwrap();
+    db.workspace().touch(
+        &mut db,
+        file_url.clone(),
+        Some(
+            r#"
+fn return_array_after_projection(xs: [u256; 3]) -> [u256; 3] {
+    let ys = xs
+    let _ = ys[2]
+    ys
+}
+
+fn use_returned_array() -> u256 {
+    let mut xs: [u256; 3] = [1, 2, 3]
+    xs = return_array_after_projection(xs)
+    xs[0]
+}
+"#
+            .to_string(),
+        ),
+    );
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    let output =
+        emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O0, None).expect("Sonatina IR");
+    let body = sonatina_function_body(&output, "use_returned_array");
+
+    assert!(
+        body.contains("extract_value"),
+        "by-value aggregate materialization should structurally extract fields instead of whole-object obj.store:\n{body}"
+    );
+    assert!(
+        body.contains("obj.load"),
+        "object-backed aggregate copies should load leaf values from the source object before storing them:\n{body}"
     );
 }
