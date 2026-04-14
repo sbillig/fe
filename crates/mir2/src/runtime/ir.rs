@@ -967,6 +967,7 @@ pub enum RuntimeBuiltin<'db> {
     },
     IntrinsicArith {
         op: IntrinsicArithBinOp,
+        checked: bool,
         lhs: RValueId,
         rhs: RValueId,
         class: ScalarClass<'db>,
@@ -1091,6 +1092,7 @@ pub enum IntrinsicArithBinOp {
     Mul,
     Div,
     Rem,
+    Pow,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]

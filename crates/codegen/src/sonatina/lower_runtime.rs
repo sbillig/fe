@@ -32,7 +32,7 @@ use sonatina_ir::{
         arith::{Add, Mul, Neg, Sar, Shl, Shr, Sub},
         cast::{Bitcast, IntToPtr, PtrToInt, Sext, Trunc, Zext},
         cmp::{Eq, Gt, IsZero, Lt, Ne, Slt},
-        control_flow::{Br, BrTable, Call, Jump, Return, Unreachable},
+        control_flow::{Br, BrTable, Call, Jump, Phi, Return, Unreachable},
         data::{
             Alloca, ConstIndex, ConstLoad, ConstProj, ConstRef, EnumAssertVariant,
             EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant, EnumMake, EnumProj,
@@ -45,9 +45,9 @@ use sonatina_ir::{
             EvmCodeSize, EvmCoinBase, EvmCreate, EvmCreate2, EvmDelegateCall, EvmExp, EvmGas,
             EvmGasLimit, EvmInvalid, EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3, EvmLog4,
             EvmMalloc, EvmMsize, EvmMstore8, EvmMulMod, EvmNumber, EvmOrigin, EvmPrevRandao,
-            EvmReturn, EvmReturnDataCopy, EvmReturnDataSize, EvmRevert, EvmSelfBalance,
-            EvmSelfDestruct, EvmSload, EvmSstore, EvmStaticCall, EvmStop, EvmTimestamp, EvmTload,
-            EvmTstore, inst_set::EvmInstSet,
+            EvmReturn, EvmReturnDataCopy, EvmReturnDataSize, EvmRevert, EvmSdiv, EvmSelfBalance,
+            EvmSelfDestruct, EvmSload, EvmSmod, EvmSstore, EvmStaticCall, EvmStop, EvmTimestamp,
+            EvmTload, EvmTstore, EvmUdiv, EvmUmod, inst_set::EvmInstSet,
         },
         logic::{And, Not, Or, Xor},
     },
@@ -1295,43 +1295,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             }
             RuntimeBuiltin::IntrinsicArith {
                 op,
+                checked,
                 lhs,
                 rhs,
                 class,
-            } => {
-                let lhs = self.local_value(*lhs)?;
-                let rhs = self.local_value(*rhs)?;
-                let lhs = self.cast_scalar(lhs, scalar_ty(class))?;
-                let rhs = self.cast_scalar(rhs, scalar_ty(class))?;
-                let signed = matches!(class.repr, ScalarRepr::Int { signed: true, .. });
-                match op {
-                    IntrinsicArithBinOp::Add => self
-                        .fb
-                        .insert_inst(Add::new(self.module.inst_set(), lhs, rhs), scalar_ty(class)),
-                    IntrinsicArithBinOp::Sub => self
-                        .fb
-                        .insert_inst(Sub::new(self.module.inst_set(), lhs, rhs), scalar_ty(class)),
-                    IntrinsicArithBinOp::Mul => self
-                        .fb
-                        .insert_inst(Mul::new(self.module.inst_set(), lhs, rhs), scalar_ty(class)),
-                    IntrinsicArithBinOp::Div => {
-                        let [raw, _overflow] = if signed {
-                            self.fb.insert_evm_sdivo(lhs, rhs)
-                        } else {
-                            self.fb.insert_evm_udivo(lhs, rhs)
-                        };
-                        raw
-                    }
-                    IntrinsicArithBinOp::Rem => {
-                        let [raw, _overflow] = if signed {
-                            self.fb.insert_evm_smodo(lhs, rhs)
-                        } else {
-                            self.fb.insert_evm_umodo(lhs, rhs)
-                        };
-                        raw
-                    }
-                }
-            }
+            } => self.lower_intrinsic_arith_builtin(*op, *checked, *lhs, *rhs, class)?,
             RuntimeBuiltin::Saturating {
                 op,
                 lhs,
@@ -2581,6 +2549,14 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 Layout::Struct(data) => {
                     for (idx, field) in data.fields.iter().enumerate() {
                         let field_value = self.extract_aggregate_field(src, idx, field)?;
+                        let expected_ty = self.module.ty_for_class(field)?;
+                        let actual_ty = self.fb.type_of(field_value);
+                        if actual_ty != expected_ty {
+                            return Err(LowerError::Internal(format!(
+                                "copy-to-ptr struct field type mismatch: layout={layout:?} idx={idx} class={field:?} expected_ty={expected_ty:?} actual_ty={actual_ty:?} src_ty={:?}",
+                                self.fb.type_of(src)
+                            )));
+                        }
                         let field_addr = self.offset_address(
                             addr,
                             field_offset_from_layout(self.module.db, &data.fields, idx)?,
@@ -2593,6 +2569,15 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 Layout::Array(data) => {
                     for idx in 0..data.len as usize {
                         let field_value = self.extract_aggregate_field(src, idx, &data.elem)?;
+                        let expected_ty = self.module.ty_for_class(&data.elem)?;
+                        let actual_ty = self.fb.type_of(field_value);
+                        if actual_ty != expected_ty {
+                            return Err(LowerError::Internal(format!(
+                                "copy-to-ptr array elem type mismatch: layout={layout:?} idx={idx} class={:?} expected_ty={expected_ty:?} actual_ty={actual_ty:?} src_ty={:?}",
+                                data.elem,
+                                self.fb.type_of(src)
+                            )));
+                        }
                         let elem_addr = self.offset_address(
                             addr,
                             idx as u64 * value_span_words(self.module.db, &data.elem)?,
@@ -2660,6 +2645,13 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                         space,
                     )?;
                     let field_value = self.load_from_ptr(field_addr, space, field)?;
+                    let expected_ty = self.module.ty_for_class(field)?;
+                    let actual_ty = self.fb.type_of(field_value);
+                    if actual_ty != expected_ty {
+                        return Err(LowerError::Internal(format!(
+                            "aggregate ptr load field type mismatch: layout={layout:?} idx={idx} class={field:?} expected_ty={expected_ty:?} actual_ty={actual_ty:?}"
+                        )));
+                    }
                     let idx = self.index_value(idx as u64);
                     value = self.fb.insert_inst(
                         sonatina_ir::inst::data::InsertValue::new(
@@ -2683,6 +2675,14 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                         space,
                     )?;
                     let elem = self.load_from_ptr(elem_addr, space, &data.elem)?;
+                    let expected_ty = self.module.ty_for_class(&data.elem)?;
+                    let actual_ty = self.fb.type_of(elem);
+                    if actual_ty != expected_ty {
+                        return Err(LowerError::Internal(format!(
+                            "aggregate ptr load elem type mismatch: layout={layout:?} idx={idx} class={:?} expected_ty={expected_ty:?} actual_ty={actual_ty:?}",
+                            data.elem
+                        )));
+                    }
                     let idx = self.index_value(idx as u64);
                     value = self.fb.insert_inst(
                         sonatina_ir::inst::data::InsertValue::new(
@@ -3028,6 +3028,164 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 ));
             }
         })
+    }
+
+    fn lower_intrinsic_arith_builtin(
+        &mut self,
+        op: IntrinsicArithBinOp,
+        checked: bool,
+        lhs: RLocalId,
+        rhs: RLocalId,
+        class: &ScalarClass<'db>,
+    ) -> Result<ValueId, LowerError> {
+        let ty = scalar_ty(class);
+        let lhs = self.local_value(lhs)?;
+        let rhs = self.local_value(rhs)?;
+        let lhs = self.cast_scalar(lhs, ty)?;
+        let rhs = self.cast_scalar(rhs, ty)?;
+        let signed = matches!(class.repr, ScalarRepr::Int { signed: true, .. });
+        Ok(match (op, checked) {
+            (IntrinsicArithBinOp::Add, false) => self
+                .fb
+                .insert_inst(Add::new(self.module.inst_set(), lhs, rhs), ty),
+            (IntrinsicArithBinOp::Sub, false) => self
+                .fb
+                .insert_inst(Sub::new(self.module.inst_set(), lhs, rhs), ty),
+            (IntrinsicArithBinOp::Mul, false) => self
+                .fb
+                .insert_inst(Mul::new(self.module.inst_set(), lhs, rhs), ty),
+            (IntrinsicArithBinOp::Div, false) => {
+                if signed {
+                    self.fb
+                        .insert_inst(EvmSdiv::new(self.module.inst_set(), lhs, rhs), ty)
+                } else {
+                    self.fb
+                        .insert_inst(EvmUdiv::new(self.module.inst_set(), lhs, rhs), ty)
+                }
+            }
+            (IntrinsicArithBinOp::Rem, false) => {
+                if signed {
+                    self.fb
+                        .insert_inst(EvmSmod::new(self.module.inst_set(), lhs, rhs), ty)
+                } else {
+                    self.fb
+                        .insert_inst(EvmUmod::new(self.module.inst_set(), lhs, rhs), ty)
+                }
+            }
+            (IntrinsicArithBinOp::Pow, false) => self
+                .fb
+                .insert_inst(EvmExp::new(self.module.inst_set(), lhs, rhs), ty),
+            (IntrinsicArithBinOp::Add, true) => {
+                let [raw, overflow] = if signed {
+                    self.fb.insert_saddo(lhs, rhs)
+                } else {
+                    self.fb.insert_uaddo(lhs, rhs)
+                };
+                self.emit_overflow_revert(overflow)?;
+                raw
+            }
+            (IntrinsicArithBinOp::Sub, true) => {
+                let [raw, overflow] = if signed {
+                    self.fb.insert_ssubo(lhs, rhs)
+                } else {
+                    self.fb.insert_usubo(lhs, rhs)
+                };
+                self.emit_overflow_revert(overflow)?;
+                raw
+            }
+            (IntrinsicArithBinOp::Mul, true) => {
+                let [raw, overflow] = if signed {
+                    self.fb.insert_smulo(lhs, rhs)
+                } else {
+                    self.fb.insert_umulo(lhs, rhs)
+                };
+                self.emit_overflow_revert(overflow)?;
+                raw
+            }
+            (IntrinsicArithBinOp::Div, true) => {
+                let [raw, overflow] = if signed {
+                    self.fb.insert_evm_sdivo(lhs, rhs)
+                } else {
+                    self.fb.insert_evm_udivo(lhs, rhs)
+                };
+                self.emit_overflow_revert(overflow)?;
+                raw
+            }
+            (IntrinsicArithBinOp::Rem, true) => {
+                let [raw, overflow] = if signed {
+                    self.fb.insert_evm_smodo(lhs, rhs)
+                } else {
+                    self.fb.insert_evm_umodo(lhs, rhs)
+                };
+                self.emit_overflow_revert(overflow)?;
+                raw
+            }
+            (IntrinsicArithBinOp::Pow, true) => {
+                self.lower_checked_pow_builtin(lhs, rhs, ty, signed)?
+            }
+        })
+    }
+
+    fn lower_checked_pow_builtin(
+        &mut self,
+        base: ValueId,
+        exp: ValueId,
+        ty: Type,
+        signed: bool,
+    ) -> Result<ValueId, LowerError> {
+        let zero = self.fb.make_imm_value(Immediate::zero(ty));
+        let one = self.fb.make_imm_value(Immediate::one(ty));
+        if signed {
+            let negative = self
+                .fb
+                .insert_inst(Slt::new(self.module.inst_set(), exp, zero), Type::I1);
+            self.emit_overflow_revert(negative)?;
+        }
+
+        let entry = self
+            .fb
+            .current_block()
+            .expect("checked pow requires a current block");
+        let header = self.fb.append_block();
+        let body = self.fb.append_block();
+        let done = self.fb.append_block();
+        self.fb
+            .insert_inst_no_result(Jump::new(self.module.inst_set(), header));
+        self.fb.switch_to_block(header);
+        let result = self
+            .fb
+            .insert_inst(Phi::new(self.module.inst_set(), vec![(one, entry)]), ty);
+        let idx = self
+            .fb
+            .insert_inst(Phi::new(self.module.inst_set(), vec![(zero, entry)]), ty);
+        let done_cond = self
+            .fb
+            .insert_inst(Eq::new(self.module.inst_set(), idx, exp), Type::I1);
+        self.fb
+            .insert_inst_no_result(Br::new(self.module.inst_set(), done_cond, done, body));
+
+        self.fb.switch_to_block(body);
+        let [next_result, overflow] = if signed {
+            self.fb.insert_smulo(result, base)
+        } else {
+            self.fb.insert_umulo(result, base)
+        };
+        self.emit_overflow_revert(overflow)?;
+        let one_step = self.fb.make_imm_value(Immediate::one(ty));
+        let next_idx = self
+            .fb
+            .insert_inst(Add::new(self.module.inst_set(), idx, one_step), ty);
+        let loop_back = self
+            .fb
+            .current_block()
+            .expect("checked pow body should stay in a block");
+        self.fb.append_phi_arg(result, next_result, loop_back);
+        self.fb.append_phi_arg(idx, next_idx, loop_back);
+        self.fb
+            .insert_inst_no_result(Jump::new(self.module.inst_set(), header));
+
+        self.fb.switch_to_block(done);
+        Ok(result)
     }
 
     fn lower_comp(

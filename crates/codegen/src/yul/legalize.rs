@@ -267,6 +267,7 @@ pub enum YBuiltin<'db> {
     },
     IntrinsicArith {
         op: IntrinsicArithBinOp,
+        checked: bool,
         lhs: YLocalId,
         rhs: YLocalId,
         class: ScalarClass<'db>,
@@ -2711,11 +2712,13 @@ fn legalize_builtin<'db>(
         },
         RuntimeBuiltin::IntrinsicArith {
             op,
+            checked,
             lhs,
             rhs,
             class,
         } => YBuiltin::IntrinsicArith {
             op: *op,
+            checked: *checked,
             lhs: YLocalId(lhs.as_u32()),
             rhs: YLocalId(rhs.as_u32()),
             class: class.clone(),

@@ -1,4 +1,3 @@
-use common::ingot::IngotKind;
 use cranelift_entity::EntityRef;
 use num_bigint::BigInt;
 use num_traits::{One, ToPrimitive, Zero};
@@ -22,14 +21,14 @@ use crate::{
         ty::{
             const_expr::{ConstExpr, ConstExprId},
             const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy, const_ty_from_sem_const},
-            corelib::resolve_core_trait,
+            corelib::{PrimitiveWrapperCallKind, core_primitive_wrapper_call_kind},
             normalize::normalize_ty,
             ty_check::BodyOwner,
             ty_def::{PrimTy, TyBase, TyData, TyId},
         },
     },
     core::hir_def::expr::LogicalBinOp,
-    hir_def::{ArithBinOp, BinOp, CompBinOp, Func, ItemKind, UnOp, attr::ArithmeticMode},
+    hir_def::{ArithBinOp, BinOp, CompBinOp, Func, UnOp, attr::ArithmeticMode},
 };
 
 use super::ops::{project_const, store_const};
@@ -794,109 +793,11 @@ impl<'db> CtfeMachine<'db> {
         func: Func<'db>,
         result_ty: TyId<'db>,
     ) -> Option<CtfePrimitiveCall> {
-        if func.top_mod(self.db).ingot(self.db).kind(self.db) != IngotKind::Core {
-            return None;
+        match core_primitive_wrapper_call_kind(self.db, func, result_ty)? {
+            PrimitiveWrapperCallKind::Unary(op) => Some(CtfePrimitiveCall::Unary(op)),
+            PrimitiveWrapperCallKind::Binary(op) => Some(CtfePrimitiveCall::Binary(op)),
+            PrimitiveWrapperCallKind::Assign(_) => None,
         }
-        let Some(ItemKind::ImplTrait(impl_trait)) = func.scope().parent_item(self.db) else {
-            return None;
-        };
-        let method = func.name(self.db).to_opt()?.data(self.db);
-        Some(
-            if method == "add" && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Add"]) {
-                CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::Add))
-            } else if method == "sub"
-                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Sub"])
-            {
-                CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::Sub))
-            } else if method == "mul"
-                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Mul"])
-            {
-                CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::Mul))
-            } else if method == "div"
-                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Div"])
-            {
-                CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::Div))
-            } else if method == "rem"
-                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Rem"])
-            {
-                CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::Rem))
-            } else if method == "pow"
-                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Pow"])
-            {
-                CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::Pow))
-            } else if method == "shl"
-                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Shl"])
-            {
-                CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::LShift))
-            } else if method == "shr"
-                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Shr"])
-            {
-                CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::RShift))
-            } else if method == "bitand"
-                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "BitAnd"])
-            {
-                CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::BitAnd))
-            } else if method == "bitor"
-                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "BitOr"])
-            {
-                CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::BitOr))
-            } else if method == "bitxor"
-                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "BitXor"])
-            {
-                CtfePrimitiveCall::Binary(BinOp::Arith(ArithBinOp::BitXor))
-            } else if method == "eq"
-                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Eq"])
-            {
-                CtfePrimitiveCall::Binary(BinOp::Comp(CompBinOp::Eq))
-            } else if method == "ne"
-                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Eq"])
-            {
-                CtfePrimitiveCall::Binary(BinOp::Comp(CompBinOp::NotEq))
-            } else if method == "lt"
-                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Ord"])
-            {
-                CtfePrimitiveCall::Binary(BinOp::Comp(CompBinOp::Lt))
-            } else if method == "le"
-                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Ord"])
-            {
-                CtfePrimitiveCall::Binary(BinOp::Comp(CompBinOp::LtEq))
-            } else if method == "gt"
-                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Ord"])
-            {
-                CtfePrimitiveCall::Binary(BinOp::Comp(CompBinOp::Gt))
-            } else if method == "ge"
-                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Ord"])
-            {
-                CtfePrimitiveCall::Binary(BinOp::Comp(CompBinOp::GtEq))
-            } else if method == "neg"
-                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Neg"])
-            {
-                CtfePrimitiveCall::Unary(UnOp::Minus)
-            } else if method == "bit_not"
-                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "BitNot"])
-            {
-                CtfePrimitiveCall::Unary(UnOp::BitNot)
-            } else if method == "not"
-                && self.is_core_ops_impl_method(impl_trait, func, &["ops", "Not"])
-            {
-                if result_ty == TyId::bool(self.db) {
-                    CtfePrimitiveCall::Unary(UnOp::Not)
-                } else {
-                    CtfePrimitiveCall::Unary(UnOp::BitNot)
-                }
-            } else {
-                return None;
-            },
-        )
-    }
-
-    fn is_core_ops_impl_method(
-        &self,
-        impl_trait: crate::hir_def::ImplTrait<'db>,
-        func: Func<'db>,
-        segments: &[&str],
-    ) -> bool {
-        impl_trait.trait_def(self.db) == resolve_core_trait(self.db, func.scope(), segments)
     }
 
     fn materialize_args(

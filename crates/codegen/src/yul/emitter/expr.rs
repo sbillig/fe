@@ -440,10 +440,11 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
             },
             YBuiltin::IntrinsicArith {
                 op,
+                checked,
                 lhs,
                 rhs,
                 class,
-            } => self.render_intrinsic_arith(*op, *lhs, *rhs, class.clone())?,
+            } => self.render_intrinsic_arith(*op, *checked, *lhs, *rhs, class.clone())?,
             YBuiltin::Saturating {
                 op,
                 lhs,
@@ -1086,10 +1087,28 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
     fn render_intrinsic_arith(
         &mut self,
         op: mir2::IntrinsicArithBinOp,
+        checked: bool,
         lhs: YLocalId,
         rhs: YLocalId,
         class: mir2::ScalarClass<'db>,
     ) -> Result<RenderedValue<'db>, YulError> {
+        if checked {
+            let lhs = self.local_value(lhs)?;
+            let rhs = self.local_value(rhs)?;
+            return self.render_checked_binary_value(
+                BinOp::Arith(match op {
+                    mir2::IntrinsicArithBinOp::Add => ArithBinOp::Add,
+                    mir2::IntrinsicArithBinOp::Sub => ArithBinOp::Sub,
+                    mir2::IntrinsicArithBinOp::Mul => ArithBinOp::Mul,
+                    mir2::IntrinsicArithBinOp::Div => ArithBinOp::Div,
+                    mir2::IntrinsicArithBinOp::Rem => ArithBinOp::Rem,
+                    mir2::IntrinsicArithBinOp::Pow => ArithBinOp::Pow,
+                }),
+                lhs,
+                rhs,
+                YulValueClass::Word(class),
+            );
+        }
         let lhs = self.local_value(lhs)?;
         let rhs = self.local_value(rhs)?;
         let mut setup = lhs.setup;
@@ -1112,6 +1131,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                     format!("mod({}, {})", lhs.value, rhs.value)
                 }
             }
+            mir2::IntrinsicArithBinOp::Pow => format!("exp({}, {})", lhs.value, rhs.value),
         };
         Ok(RenderedValue {
             setup,

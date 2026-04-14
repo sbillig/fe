@@ -4,20 +4,20 @@ use hir::analysis::{
         FieldIndex, SBlockId, SConst, SLocalId, SemConstId, SemConstValue, SemanticCalleeRef,
         SemanticCodeRegionRef, SemanticInstance, SemanticInstanceKey, VariantIndex,
         borrowck::{
-            NBorrowRoot, NEffectArg, NEffectArgValue, NExpr, NOperand, NSPlace, NSPlaceRoot,
-            NSStmt, NSStmtKind, NSTerminator, NSTerminatorKind, NormalizedSemanticBody,
-            normalize_semantic_body,
+            NBorrowRoot, NEffectArg, NEffectArgValue, NExpr, NLocalInterface, NLocalOrigin,
+            NOperand, NSPlace, NSPlaceRoot, NSStmt, NSStmtKind, NSTerminator, NSTerminatorKind,
+            NormalizedSemanticBody, normalize_semantic_body,
         },
         get_or_build_semantic_instance, reify_runtime_const_for_ty, sem_const_ty,
         semantic_may_return_normally,
     },
     ty::{
-        corelib::lib_func_matches,
+        corelib::{PrimitiveWrapperCallKind, core_primitive_wrapper_call_kind, lib_func_matches},
         ty_check::{BodyOwner, EffectPassMode},
         ty_def::TyId,
     },
 };
-use hir::hir_def::{ArithBinOp, BinOp, CompBinOp, Func, UnOp};
+use hir::hir_def::{ArithBinOp, BinOp, CompBinOp, Func, UnOp, attr::ArithmeticMode};
 use hir::projection::{IndexSource, Projection};
 
 use crate::{
@@ -37,12 +37,13 @@ use crate::{
 use super::{
     class::{
         ContractMetadataBuiltin, GenericNumericIntrinsicKind, InferredRuntimeLocal,
-        RuntimeEffectBindingPlan, actual_aggregate_class_from_runtime_source,
+        RuntimeEffectBindingPlan, actual_aggregate_class_for_semantic_source,
+        actual_aggregate_class_from_runtime_source,
         boundary_source_uses_transport_sensitive_aggregate, boundary_spec_for_ty_in_env,
         contract_metadata_builtin, desired_runtime_effect_arg_boundary, desired_runtime_param_plan,
         expr_direct_class, generic_numeric_intrinsic_kind, infer_local_runtime_state,
-        lower_semantic_locals, normalized_place_address_class, normalized_place_class,
-        provider_class_for_target_in_env, resolve_runtime_call_key,
+        lower_semantic_locals, materialized_value_class, normalized_place_address_class,
+        normalized_place_class, provider_class_for_target_in_env, resolve_runtime_call_key,
         runtime_class_satisfies_boundary, runtime_effect_binding_plan_for_binding_idx,
         runtime_param_locals, runtime_signature_for_key, semantic_return_ty,
         specialize_boundary_for_runtime_source, stored_class_for_ty_in_context,
@@ -357,10 +358,12 @@ impl<'db> RmirLowerCtxt<'db> {
 
     fn direct_assign_source_class(&self, expr: &NExpr<'db>) -> Option<RuntimeClass<'db>> {
         match expr {
-            NExpr::Use(value) => self
-                .value_class(self.runtime_value(value.local))
-                .cloned()
-                .or_else(|| self.semantic_value_class(value.local)),
+            NExpr::Use(value) => materialized_value_class(
+                self.db,
+                &self.semantic_body,
+                value.local,
+                &self.current_runtime_carriers(),
+            ),
             NExpr::Borrow { place, .. } => normalized_place_address_class(
                 self.db,
                 &self.semantic_body,
@@ -419,13 +422,15 @@ impl<'db> RmirLowerCtxt<'db> {
             return;
         }
         let source = match expr {
-            NExpr::Use(value) => self.semantic_value_class(value.local),
+            NExpr::Use(value) => actual_aggregate_class_for_semantic_source(
+                self.db,
+                &self.semantic_body,
+                value.local,
+                &self.current_runtime_carriers(),
+            ),
             _ => None,
         };
-        let Some(actual) = source
-            .as_ref()
-            .and_then(actual_aggregate_class_from_runtime_source)
-        else {
+        let Some(actual) = source else {
             return;
         };
         let target = match target {
@@ -1515,6 +1520,239 @@ impl<'db> RmirLowerCtxt<'db> {
         }
     }
 
+    fn current_arithmetic_mode(&self) -> ArithmeticMode {
+        self.current_semantic_key()
+            .owner(self.db)
+            .arithmetic_mode(self.db)
+    }
+
+    fn alloc_zero_scalar(
+        &mut self,
+        bb: RBlockId,
+        semantic_ty: TyId<'db>,
+        class: &ScalarClass<'db>,
+    ) -> RLocalId {
+        let zero = self.alloc_runtime_temp(
+            semantic_ty,
+            RuntimeCarrier::Value(RuntimeClass::Scalar(class.clone())),
+        );
+        let ScalarRepr::Int { bits, signed } = class.repr else {
+            panic!("checked neg requires an integer scalar class");
+        };
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: zero,
+                expr: RExpr::ConstScalar(ConstScalar::Int {
+                    bits,
+                    signed,
+                    words: Vec::new(),
+                }),
+            },
+        );
+        zero
+    }
+
+    fn lower_intrinsic_arith_expr(
+        &mut self,
+        op: IntrinsicArithBinOp,
+        checked: bool,
+        lhs: RLocalId,
+        rhs: RLocalId,
+        class: &ScalarClass<'db>,
+    ) -> RExpr<'db> {
+        RExpr::Builtin(crate::runtime::RuntimeBuiltin::IntrinsicArith {
+            op,
+            checked,
+            lhs,
+            rhs,
+            class: class.clone(),
+        })
+    }
+
+    fn lower_arith_expr_for_mode(
+        &mut self,
+        bb: RBlockId,
+        op: ArithBinOp,
+        checked: bool,
+        lhs: RLocalId,
+        rhs: RLocalId,
+        class: &ScalarClass<'db>,
+    ) -> Option<RExpr<'db>> {
+        let _ = bb;
+        Some(match op {
+            ArithBinOp::Add => {
+                self.lower_intrinsic_arith_expr(IntrinsicArithBinOp::Add, checked, lhs, rhs, class)
+            }
+            ArithBinOp::Sub => {
+                self.lower_intrinsic_arith_expr(IntrinsicArithBinOp::Sub, checked, lhs, rhs, class)
+            }
+            ArithBinOp::Mul => {
+                self.lower_intrinsic_arith_expr(IntrinsicArithBinOp::Mul, checked, lhs, rhs, class)
+            }
+            ArithBinOp::Div => {
+                self.lower_intrinsic_arith_expr(IntrinsicArithBinOp::Div, checked, lhs, rhs, class)
+            }
+            ArithBinOp::Rem => {
+                self.lower_intrinsic_arith_expr(IntrinsicArithBinOp::Rem, checked, lhs, rhs, class)
+            }
+            ArithBinOp::Pow => {
+                self.lower_intrinsic_arith_expr(IntrinsicArithBinOp::Pow, checked, lhs, rhs, class)
+            }
+            ArithBinOp::BitAnd
+            | ArithBinOp::BitOr
+            | ArithBinOp::BitXor
+            | ArithBinOp::LShift
+            | ArithBinOp::RShift => RExpr::Binary {
+                op: BinOp::Arith(op),
+                lhs,
+                rhs,
+            },
+            ArithBinOp::Range => return None,
+        })
+    }
+
+    fn lower_unary_expr_for_mode(
+        &mut self,
+        bb: RBlockId,
+        op: UnOp,
+        checked: bool,
+        value: RLocalId,
+        semantic_ty: TyId<'db>,
+        class: &ScalarClass<'db>,
+    ) -> Option<RExpr<'db>> {
+        Some(match op {
+            UnOp::Minus if checked => {
+                let zero = self.alloc_zero_scalar(bb, semantic_ty, class);
+                self.lower_intrinsic_arith_expr(IntrinsicArithBinOp::Sub, true, zero, value, class)
+            }
+            UnOp::Minus | UnOp::BitNot | UnOp::Not => RExpr::Unary { op, value },
+            UnOp::Plus | UnOp::Mut | UnOp::Ref => return None,
+        })
+    }
+
+    fn runtime_place_from_addr_value(&self, value: RLocalId) -> Option<RuntimePlace<'db>> {
+        match self.value_class(value)? {
+            RuntimeClass::Ref { .. } => Some(RuntimePlace {
+                root: PlaceRoot::Ref(value),
+                path: Box::default(),
+            }),
+            RuntimeClass::RawAddr { space, target } => {
+                let pointee = if let Some(layout) = target {
+                    RuntimeClass::AggregateValue { layout: *layout }
+                } else {
+                    let (_, inner) = self.locals[value.index()].semantic_ty.as_borrow(self.db)?;
+                    self.top_level_class_for_ty(inner, *space)?
+                };
+                Some(RuntimePlace {
+                    root: PlaceRoot::Ptr {
+                        addr: value,
+                        space: *space,
+                        class: pointee,
+                    },
+                    path: Box::default(),
+                })
+            }
+            RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => None,
+        }
+    }
+
+    fn lower_core_primitive_wrapper_call(
+        &mut self,
+        bb: RBlockId,
+        semantic: SemanticInstance<'db>,
+        typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
+        args: &[NOperand],
+    ) -> Option<RLocalId> {
+        let BodyOwner::Func(func) = semantic.key(self.db).owner(self.db) else {
+            return None;
+        };
+        let ret_ty = semantic_return_ty(self.db, semantic);
+        let kind = core_primitive_wrapper_call_kind(self.db, func, ret_ty)?;
+        let checked = self.current_arithmetic_mode() == ArithmeticMode::Checked;
+        let (runtime_args, _) = self.lower_visible_call_args(bb, typed_body, args);
+
+        match kind {
+            PrimitiveWrapperCallKind::Unary(op) => {
+                let [value] = runtime_args.as_slice() else {
+                    return None;
+                };
+                let RuntimeClass::Scalar(class) =
+                    self.top_level_class_for_ty(ret_ty, AddressSpaceKind::Memory)?
+                else {
+                    return None;
+                };
+                let ret = self.alloc_runtime_temp(
+                    ret_ty,
+                    RuntimeCarrier::Value(RuntimeClass::Scalar(class.clone())),
+                );
+                let expr =
+                    self.lower_unary_expr_for_mode(bb, op, checked, *value, ret_ty, &class)?;
+                self.push_stmt(bb, RStmt::Assign { dst: ret, expr });
+                Some(ret)
+            }
+            PrimitiveWrapperCallKind::Binary(op) => {
+                let [lhs, rhs] = runtime_args.as_slice() else {
+                    return None;
+                };
+                let ret_class = self.top_level_class_for_ty(ret_ty, AddressSpaceKind::Memory)?;
+                let ret = self.alloc_runtime_temp(ret_ty, RuntimeCarrier::Value(ret_class.clone()));
+                let expr = match op {
+                    BinOp::Arith(op) => {
+                        let RuntimeClass::Scalar(class) = &ret_class else {
+                            return None;
+                        };
+                        self.lower_arith_expr_for_mode(bb, op, checked, *lhs, *rhs, class)?
+                    }
+                    BinOp::Comp(_) | BinOp::Logical(_) => RExpr::Binary {
+                        op,
+                        lhs: *lhs,
+                        rhs: *rhs,
+                    },
+                    BinOp::Index => return None,
+                };
+                self.push_stmt(bb, RStmt::Assign { dst: ret, expr });
+                Some(ret)
+            }
+            PrimitiveWrapperCallKind::Assign(op) => {
+                let [dst_addr, rhs] = runtime_args.as_slice() else {
+                    return None;
+                };
+                let place = self.runtime_place_from_addr_value(*dst_addr)?;
+                let target = self.project_place_class(&place);
+                let RuntimeClass::Scalar(class) = target.clone() else {
+                    return None;
+                };
+                let lhs = self.alloc_runtime_temp(
+                    self.locals[args[0].local.index()].semantic_ty,
+                    RuntimeCarrier::Value(target.clone()),
+                );
+                self.push_stmt(
+                    bb,
+                    RStmt::Assign {
+                        dst: lhs,
+                        expr: RExpr::Load {
+                            place: place.clone(),
+                        },
+                    },
+                );
+                let result = self.alloc_runtime_temp(
+                    self.locals[args[0].local.index()].semantic_ty,
+                    RuntimeCarrier::Value(target.clone()),
+                );
+                let expr = match op {
+                    BinOp::Arith(op) => {
+                        self.lower_arith_expr_for_mode(bb, op, checked, lhs, *rhs, &class)?
+                    }
+                    BinOp::Comp(_) | BinOp::Logical(_) | BinOp::Index => return None,
+                };
+                self.push_stmt(bb, RStmt::Assign { dst: result, expr });
+                self.write_value_to_place(bb, place, result, &target);
+                Some(self.alloc_runtime_temp(TyId::unit(self.db), RuntimeCarrier::Erased))
+            }
+        }
+    }
+
     fn lower_call(
         &mut self,
         bb: RBlockId,
@@ -1542,6 +1780,9 @@ impl<'db> RmirLowerCtxt<'db> {
         });
         let semantic = get_or_build_semantic_instance(self.db, callee_key);
         let typed_body = semantic.key(self.db).instantiate_typed_body(self.db);
+        if let Some(ret) = self.lower_core_primitive_wrapper_call(bb, semantic, &typed_body, args) {
+            return ret;
+        }
         if let Some(ret) = self.lower_extern_builtin_call(bb, semantic, args, effect_args) {
             return ret;
         }
@@ -1728,36 +1969,13 @@ impl<'db> RmirLowerCtxt<'db> {
                 let [lhs, rhs] = args.as_slice() else {
                     return None;
                 };
-                RExpr::Binary {
-                    op: BinOp::Arith(op),
-                    lhs: *lhs,
-                    rhs: *rhs,
-                }
+                self.lower_arith_expr_for_mode(bb, op, true, *lhs, *rhs, &scalar)?
             }
             Some(GenericNumericIntrinsicKind::CheckedNeg) => {
                 let [value] = args.as_slice() else {
                     return None;
                 };
-                let ScalarRepr::Int { bits, signed } = scalar.repr else {
-                    return None;
-                };
-                let zero = self.alloc_runtime_temp(ret_ty, RuntimeCarrier::Value(ret_class));
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: zero,
-                        expr: RExpr::ConstScalar(ConstScalar::Int {
-                            bits,
-                            signed,
-                            words: Vec::new(),
-                        }),
-                    },
-                );
-                RExpr::Binary {
-                    op: BinOp::Arith(ArithBinOp::Sub),
-                    lhs: zero,
-                    rhs: *value,
-                }
+                self.lower_unary_expr_for_mode(bb, UnOp::Minus, true, *value, ret_ty, &scalar)?
             }
             _ => self.lower_numeric_intrinsic_expr(name.as_str(), &args, &scalar)?,
         };
@@ -1777,6 +1995,7 @@ impl<'db> RmirLowerCtxt<'db> {
                 let [lhs, rhs] = args else { return None };
                 RExpr::Builtin(crate::runtime::RuntimeBuiltin::IntrinsicArith {
                     op: IntrinsicArithBinOp::Add,
+                    checked: false,
                     lhs: *lhs,
                     rhs: *rhs,
                     class: scalar.clone(),
@@ -1786,6 +2005,7 @@ impl<'db> RmirLowerCtxt<'db> {
                 let [lhs, rhs] = args else { return None };
                 RExpr::Builtin(crate::runtime::RuntimeBuiltin::IntrinsicArith {
                     op: IntrinsicArithBinOp::Sub,
+                    checked: false,
                     lhs: *lhs,
                     rhs: *rhs,
                     class: scalar.clone(),
@@ -1795,6 +2015,7 @@ impl<'db> RmirLowerCtxt<'db> {
                 let [lhs, rhs] = args else { return None };
                 RExpr::Builtin(crate::runtime::RuntimeBuiltin::IntrinsicArith {
                     op: IntrinsicArithBinOp::Mul,
+                    checked: false,
                     lhs: *lhs,
                     rhs: *rhs,
                     class: scalar.clone(),
@@ -1804,6 +2025,7 @@ impl<'db> RmirLowerCtxt<'db> {
                 let [lhs, rhs] = args else { return None };
                 RExpr::Builtin(crate::runtime::RuntimeBuiltin::IntrinsicArith {
                     op: IntrinsicArithBinOp::Div,
+                    checked: false,
                     lhs: *lhs,
                     rhs: *rhs,
                     class: scalar.clone(),
@@ -1813,6 +2035,7 @@ impl<'db> RmirLowerCtxt<'db> {
                 let [lhs, rhs] = args else { return None };
                 RExpr::Builtin(crate::runtime::RuntimeBuiltin::IntrinsicArith {
                     op: IntrinsicArithBinOp::Rem,
+                    checked: false,
                     lhs: *lhs,
                     rhs: *rhs,
                     class: scalar.clone(),
@@ -1820,11 +2043,13 @@ impl<'db> RmirLowerCtxt<'db> {
             }
             "pow" => {
                 let [lhs, rhs] = args else { return None };
-                RExpr::Binary {
-                    op: BinOp::Arith(ArithBinOp::Pow),
+                RExpr::Builtin(crate::runtime::RuntimeBuiltin::IntrinsicArith {
+                    op: IntrinsicArithBinOp::Pow,
+                    checked: false,
                     lhs: *lhs,
                     rhs: *rhs,
-                }
+                    class: scalar.clone(),
+                })
             }
             "shl" => {
                 let [lhs, rhs] = args else { return None };
@@ -3500,8 +3725,13 @@ impl<'db> RmirLowerCtxt<'db> {
         self.local_root(local)
     }
 
-    fn normalized_value_place(&self, local: SLocalId) -> Option<&NSPlace<'db>> {
-        self.semantic_body.local(local)?.transport_place()
+    fn nonself_backing_value_place(&self, local: SLocalId) -> Option<&NSPlace<'db>> {
+        let place = self.semantic_body.local(local)?.backing_place()?;
+        (!self.is_self_rooted_value_place(local, place)).then_some(place)
+    }
+
+    fn snapshot_source_place(&self, local: SLocalId) -> Option<&NSPlace<'db>> {
+        self.semantic_body.local(local)?.snapshot_source_place()
     }
 
     fn is_self_rooted_value_place(&self, local: SLocalId, place: &NSPlace<'db>) -> bool {
@@ -3519,9 +3749,7 @@ impl<'db> RmirLowerCtxt<'db> {
     }
 
     fn try_semantic_place(&mut self, bb: RBlockId, local: SLocalId) -> Option<RuntimePlace<'db>> {
-        if let Some(place) = self.normalized_value_place(local).cloned()
-            && !self.is_self_rooted_value_place(local, &place)
-        {
+        if let Some(place) = self.nonself_backing_value_place(local).cloned() {
             return self.try_lower_place(bb, &place);
         }
         let root = self.semantic_place_root(local)?;
@@ -3639,6 +3867,15 @@ impl<'db> RmirLowerCtxt<'db> {
         {
             return value;
         }
+        if !runtime_target_prefers_transport(target)
+            && let Some(value) = self.materialize_ordinary_direct_value(bb, operand.local)
+        {
+            return if self.value_class(value).is_none() || self.value_class(value) == Some(target) {
+                value
+            } else {
+                self.coerce_value(bb, value, target)
+            };
+        }
         if runtime_target_prefers_transport(target) {
             if let Some(value) = self.handle_like_semantic_value(operand.local) {
                 return if self.value_class(value) == Some(target) {
@@ -3664,6 +3901,28 @@ impl<'db> RmirLowerCtxt<'db> {
         bb: RBlockId,
         local: SLocalId,
     ) -> Option<RLocalId> {
+        if let Some(place) = self.snapshot_source_place(local).cloned()
+            && let Some(place) = self.try_lower_place(bb, &place)
+        {
+            let class = self.project_place_class(&place);
+            let actual = actual_aggregate_class_from_runtime_source(&class)?;
+            let value = self.alloc_runtime_temp(
+                self.locals[local.index()].semantic_ty,
+                RuntimeCarrier::Value(class.clone()),
+            );
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst: value,
+                    expr: RExpr::Load { place },
+                },
+            );
+            return Some(if class == actual {
+                value
+            } else {
+                self.coerce_value(bb, value, &actual)
+            });
+        }
         let value = self.read_semantic_value(bb, local);
         let class = self.value_class(value).cloned()?;
         let actual = actual_aggregate_class_from_runtime_source(&class)?;
@@ -3672,6 +3931,91 @@ impl<'db> RmirLowerCtxt<'db> {
         } else {
             self.coerce_value(bb, value, &actual)
         })
+    }
+
+    fn materialize_ordinary_direct_value(
+        &mut self,
+        bb: RBlockId,
+        local: SLocalId,
+    ) -> Option<RLocalId> {
+        let local_data = self.semantic_body.local(local)?;
+        if !matches!(
+            (&local_data.facts.interface, &local_data.facts.origin),
+            (
+                NLocalInterface::DirectValue,
+                NLocalOrigin::SelfRooted | NLocalOrigin::AliasedPlace
+            )
+        ) {
+            return None;
+        }
+        let current = self.semantic_value_class(local)?;
+        let target = materialized_value_class(
+            self.db,
+            &self.semantic_body,
+            local,
+            &self.current_runtime_carriers(),
+        )?;
+        if current == target {
+            return None;
+        }
+        let place = self
+            .try_semantic_place(bb, local)
+            .or_else(|| self.place_from_direct_value_transport(local, &target))?;
+        let place_class = self.project_place_class(&place);
+        let temp = self.alloc_runtime_temp(
+            self.locals[local.index()].semantic_ty,
+            RuntimeCarrier::Value(place_class.clone()),
+        );
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: temp,
+                expr: RExpr::Load { place },
+            },
+        );
+        Some(if place_class == target {
+            temp
+        } else {
+            self.coerce_value(bb, temp, &target)
+        })
+    }
+
+    fn place_from_direct_value_transport(
+        &self,
+        local: SLocalId,
+        target: &RuntimeClass<'db>,
+    ) -> Option<RuntimePlace<'db>> {
+        let value = self.runtime_value(local);
+        match self.value_class(value)? {
+            RuntimeClass::Ref { .. } => Some(RuntimePlace {
+                root: PlaceRoot::Ref(value),
+                path: Box::default(),
+            }),
+            RuntimeClass::RawAddr {
+                target: Some(layout),
+                space,
+            } => Some(RuntimePlace {
+                root: PlaceRoot::Ptr {
+                    addr: value,
+                    space: *space,
+                    class: RuntimeClass::AggregateValue { layout: *layout },
+                },
+                path: Box::default(),
+            }),
+            RuntimeClass::RawAddr {
+                target: None,
+                space,
+            } if matches!(target, RuntimeClass::Scalar(_)) => Some(RuntimePlace {
+                root: PlaceRoot::Ptr {
+                    addr: value,
+                    space: *space,
+                    class: target.clone(),
+                },
+                path: Box::default(),
+            }),
+            RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => None,
+            RuntimeClass::RawAddr { target: None, .. } => None,
+        }
     }
 
     fn lower_semantic_operand_for_boundary(
@@ -3718,11 +4062,7 @@ impl<'db> RmirLowerCtxt<'db> {
             return None;
         }
         let local = operand.local;
-        if !self.semantic_local_allows_transport_addr_of(local) {
-            return None;
-        }
-        if let Some(place) = self.normalized_value_place(local).cloned()
-            && !self.is_self_rooted_value_place(local, &place)
+        if let Some(place) = self.nonself_backing_value_place(local).cloned()
             && let Some(place) = self.try_lower_place(bb, &place)
         {
             return Some(self.lower_place_addr_of_for_class(
@@ -3754,12 +4094,6 @@ impl<'db> RmirLowerCtxt<'db> {
             ));
         }
         None
-    }
-
-    fn semantic_local_allows_transport_addr_of(&self, local: SLocalId) -> bool {
-        self.semantic_body
-            .local(local)
-            .is_some_and(|local| local.transport_place().is_some())
     }
 
     fn handle_like_semantic_value(&self, local: SLocalId) -> Option<RLocalId> {
@@ -3899,11 +4233,7 @@ impl<'db> RmirLowerCtxt<'db> {
             BoundarySource::RuntimePlace(place) => Some(place.clone()),
             BoundarySource::SemanticOperand(operand) => {
                 let local = operand.local;
-                if !self.semantic_local_allows_transport_addr_of(local) {
-                    return None;
-                }
-                if let Some(place) = self.normalized_value_place(local).cloned()
-                    && !self.is_self_rooted_value_place(local, &place)
+                if let Some(place) = self.nonself_backing_value_place(local).cloned()
                     && let Some(place) = self.try_lower_place(bb, &place)
                 {
                     Some(place)
@@ -4050,10 +4380,12 @@ impl<'db> RmirLowerCtxt<'db> {
                             kind: RefKind::Object,
                             ..
                         }
-                ) && let Some(actual) = self
-                    .value_class(src)
-                    .and_then(actual_aggregate_class_from_runtime_source)
-                {
+                ) && let Some(actual) = actual_aggregate_class_for_semantic_source(
+                    self.db,
+                    &self.semantic_body,
+                    local,
+                    &self.current_runtime_carriers(),
+                ) {
                     target = match target {
                         RuntimeClass::AggregateValue { .. } => actual,
                         RuntimeClass::Ref {
@@ -4117,11 +4449,12 @@ impl<'db> RmirLowerCtxt<'db> {
         ) {
             return target.clone();
         }
-        let Some(actual) = self
-            .semantic_value_class(src.local)
-            .as_ref()
-            .and_then(actual_aggregate_class_from_runtime_source)
-        else {
+        let Some(actual) = actual_aggregate_class_for_semantic_source(
+            self.db,
+            &self.semantic_body,
+            src.local,
+            &self.current_runtime_carriers(),
+        ) else {
             return target.clone();
         };
         let target = match target {

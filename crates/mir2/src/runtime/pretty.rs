@@ -689,8 +689,15 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
             format_local_id(*rhs),
             format_local_id(*modulus)
         ),
-        RuntimeBuiltin::IntrinsicArith { op, lhs, rhs, .. } => format!(
-            "{op:?} {}, {}",
+        RuntimeBuiltin::IntrinsicArith {
+            op,
+            checked,
+            lhs,
+            rhs,
+            ..
+        } => format!(
+            "{}_{op:?} {}, {}",
+            if *checked { "checked" } else { "unchecked" },
             format_local_id(*lhs),
             format_local_id(*rhs)
         ),
