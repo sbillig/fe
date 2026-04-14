@@ -5,6 +5,7 @@ use hir::hir_def::{ArithBinOp, BinOp};
 use mir2::runtime::RefKind;
 use mir2::{
     Layout, PlaceElem, PlaceRoot, RExpr, RLocalId, RStmt, RuntimeClass, build_runtime_package,
+    build_test_runtime_package,
 };
 use url::Url;
 
@@ -54,7 +55,7 @@ fn transparent_wrapper_returns_preserve_handle_fields_in_rmir() {
         .get(&db, &file_url)
         .expect("file should be loaded");
     let top_mod = db.top_mod(file);
-    let package = build_runtime_package(&db, top_mod).expect("runtime package");
+    let package = build_test_runtime_package(&db, top_mod, None).expect("runtime test package");
     let take_debug = package
         .functions(&db)
         .iter()
@@ -1257,4 +1258,148 @@ fn unit_branch_add_assign() {
             function.symbol(&db),
         );
     }
+}
+
+#[test]
+fn by_value_array_returns_keep_visible_aggregate_signatures() {
+    let mut db = DriverDataBase::default();
+    let file_url =
+        Url::parse("file:///by_value_array_returns_keep_visible_aggregate_signatures.fe").unwrap();
+    db.workspace().touch(
+        &mut db,
+        file_url.clone(),
+        Some(
+            r#"
+fn return_array_after_projection(xs: [u8; 4]) -> [u8; 4] {
+    let ys = xs
+    let _ = ys[2]
+    ys
+}
+
+fn use_returned_array() -> u8 {
+    let mut xs: [u8; 4] = [1, 2, 3, 4]
+    xs = return_array_after_projection(xs)
+    xs[0]
+}
+"#
+            .to_string(),
+        ),
+    );
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    let package = build_runtime_package(&db, top_mod).expect("runtime package");
+    let callee = package
+        .functions(&db)
+        .iter()
+        .copied()
+        .find(|function| {
+            function
+                .symbol(&db)
+                .contains("return_array_after_projection")
+        })
+        .expect("return_array_after_projection runtime function");
+    let body = callee.instance(&db).body(&db);
+
+    assert!(
+        matches!(
+            body.signature.ret,
+            Some(RuntimeClass::AggregateValue { .. })
+        ),
+        "by-value aggregate helper should keep a visible aggregate return signature:\n{body:#?}"
+    );
+    assert!(
+        body.locals
+            .iter()
+            .skip(body.signature.params.len())
+            .any(|local| matches!(
+                &local.carrier,
+                mir2::RuntimeCarrier::Value(RuntimeClass::Ref {
+                    kind: RefKind::Object,
+                    pointee,
+                    ..
+                }) if matches!(pointee.as_ref(), RuntimeClass::AggregateValue { layout } if matches!(layout.data(&db), Layout::Array(_)))
+            )),
+        "helper should still be free to use internal object-backed storage for projectable owned aggregates:\n{body:#?}"
+    );
+}
+
+#[test]
+fn callers_of_by_value_array_returns_do_not_receive_object_ref_results() {
+    let mut db = DriverDataBase::default();
+    let file_url = Url::parse(
+        "file:///callers_of_by_value_array_returns_do_not_receive_object_ref_results.fe",
+    )
+    .unwrap();
+    db.workspace().touch(
+        &mut db,
+        file_url.clone(),
+        Some(
+            r#"
+fn return_array_after_projection(xs: [u8; 4]) -> [u8; 4] {
+    let ys = xs
+    let _ = ys[2]
+    ys
+}
+
+fn use_returned_array() -> u8 {
+    let mut xs: [u8; 4] = [1, 2, 3, 4]
+    xs = return_array_after_projection(xs)
+    xs[0]
+}
+"#
+            .to_string(),
+        ),
+    );
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    let package = build_runtime_package(&db, top_mod).expect("runtime package");
+    let callee = package
+        .functions(&db)
+        .iter()
+        .copied()
+        .find(|function| {
+            function
+                .symbol(&db)
+                .contains("return_array_after_projection")
+        })
+        .expect("return_array_after_projection runtime function")
+        .instance(&db);
+    let caller = package
+        .functions(&db)
+        .iter()
+        .copied()
+        .find(|function| function.symbol(&db).contains("use_returned_array"))
+        .expect("use_returned_array runtime function");
+    let body = caller.instance(&db).body(&db);
+
+    let call_results = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.stmts.iter())
+        .filter_map(|stmt| match stmt {
+            RStmt::Assign {
+                dst,
+                expr: RExpr::Call { callee: target, .. },
+            } if *target == callee => Some(*dst),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        !call_results.is_empty(),
+        "caller should contain a direct call to the array-return helper:\n{body:#?}"
+    );
+    assert!(
+        call_results.iter().all(|result| matches!(
+            body.value_class(*result),
+            Some(RuntimeClass::AggregateValue { .. })
+        )),
+        "by-value aggregate call results should stay visible aggregate values in callers, not object refs:\n{body:#?}"
+    );
 }

@@ -82,6 +82,14 @@ pub(crate) struct RuntimeEffectBindingPlan<'db> {
     pub(crate) boundary: RuntimeBoundarySpec<'db>,
 }
 
+#[derive(Clone, Debug)]
+enum RuntimeVisibleReturnPlan<'db> {
+    Erased,
+    Exact(RuntimeClass<'db>),
+    Constrained(RuntimeBoundarySpec<'db>),
+    PassActual,
+}
+
 pub(crate) fn runtime_address_space(class: &RuntimeClass<'_>) -> Option<AddressSpaceKind> {
     match class {
         RuntimeClass::Ref {
@@ -179,13 +187,11 @@ pub fn runtime_return_class_for_key<'db>(
         .semantic(db)
         .expect("return-class inference only applies to semantic runtime instances");
     let typed_body = semantic.key(db).instantiate_typed_body(db);
-    if !return_ty_requires_runtime_body_inference(
-        db,
-        typed_body.result_ty(),
-        typed_body.body().map(|body| body.scope()),
-        typed_body.assumptions(),
-    ) {
-        return default_return_class(db, &typed_body);
+    let plan = desired_runtime_return_plan(db, &typed_body);
+    match &plan {
+        RuntimeVisibleReturnPlan::Erased => return None,
+        RuntimeVisibleReturnPlan::Exact(class) => return Some(class.clone()),
+        RuntimeVisibleReturnPlan::Constrained(_) | RuntimeVisibleReturnPlan::PassActual => {}
     }
     let semantic_body = normalize_semantic_body(db, semantic)
         .unwrap_or_else(|err| panic!("semantic normalization failed for {:?}: {err:?}", key));
@@ -197,22 +203,22 @@ pub fn runtime_return_class_for_key<'db>(
         typed_body.body().map(|body| body.scope()),
         typed_body.assumptions(),
     );
-    let mut returned = semantic_body
-        .blocks
+    let carriers = states
         .iter()
-        .filter_map(|block| match &block.terminator.kind {
-            NSTerminatorKind::Return(Some(value)) => {
-                match &states.get(value.local.index())?.carrier {
-                    RuntimeCarrier::Erased => None,
-                    RuntimeCarrier::Value(class) => Some(class.clone()),
-                }
-            }
-            NSTerminatorKind::Goto(_)
-            | NSTerminatorKind::Branch { .. }
-            | NSTerminatorKind::MatchEnum { .. }
-            | NSTerminatorKind::Return(None) => None,
-        })
+        .map(|state| state.carrier.clone())
         .collect::<Vec<_>>();
+    let mut returned = Vec::new();
+    for block in &semantic_body.blocks {
+        let NSTerminatorKind::Return(Some(value)) = &block.terminator.kind else {
+            continue;
+        };
+        let Some(class) =
+            visible_return_class_for_local(db, &semantic_body, value.local, &plan, &carriers)
+        else {
+            return default_return_class(db, &typed_body);
+        };
+        returned.push(class);
+    }
     let Some(first) = returned.pop() else {
         return default_return_class(db, &typed_body);
     };
@@ -1422,7 +1428,7 @@ pub(crate) fn expr_direct_class<'db>(
                 match desired_runtime_param_plan(db, &typed_body, idx) {
                     RuntimeParamPlan::Erased => {}
                     RuntimeParamPlan::Boundary(desired) => {
-                        let actual = runtime_visible_arg_class(
+                        let actual = runtime_visible_value_class(
                             db,
                             body,
                             arg.local,
@@ -1440,7 +1446,7 @@ pub(crate) fn expr_direct_class<'db>(
                     }
                     RuntimeParamPlan::PassActual => {
                         if let Some(actual) =
-                            runtime_visible_arg_class(db, body, arg.local, None, carriers)
+                            runtime_visible_value_class(db, body, arg.local, None, carriers)
                         {
                             param_classes.push(actual);
                         }
@@ -1494,14 +1500,13 @@ fn aggregate_make_class<'db>(
         let class =
             match boundary_spec_for_ty_in_env(db, env, field_ty, AddressSpaceKind::Memory) {
                 Some(boundary) => {
-                    runtime_visible_arg_class(db, body, field.local, Some(&boundary), carriers).map(
-                        |actual| match &boundary {
+                    runtime_visible_value_class(db, body, field.local, Some(&boundary), carriers)
+                        .map(|actual| match &boundary {
                             RuntimeBoundarySpec::Exact(desired) => {
                                 preserve_provider_space(&actual, desired)
                             }
                             RuntimeBoundarySpec::BorrowLike { .. } => actual,
-                        },
-                    )
+                        })
                 }
                 None => materialized_value_class(db, body, field.local, carriers),
             }
@@ -1521,7 +1526,7 @@ fn aggregate_make_class<'db>(
     })
 }
 
-fn runtime_visible_arg_class<'db>(
+fn runtime_visible_value_class<'db>(
     db: &'db dyn MirDb,
     body: &NormalizedSemanticBody<'db>,
     local: SLocalId,
@@ -1555,6 +1560,24 @@ fn runtime_visible_arg_class<'db>(
         Some(RuntimeBoundarySpec::Exact(_)) | None => {
             materialized_value_class(db, body, local, carriers)
         }
+    }
+}
+
+fn visible_return_class_for_local<'db>(
+    db: &'db dyn MirDb,
+    body: &NormalizedSemanticBody<'db>,
+    local: SLocalId,
+    plan: &RuntimeVisibleReturnPlan<'db>,
+    carriers: &[RuntimeCarrier<'db>],
+) -> Option<RuntimeClass<'db>> {
+    match plan {
+        RuntimeVisibleReturnPlan::Erased => None,
+        RuntimeVisibleReturnPlan::Exact(class) => Some(class.clone()),
+        RuntimeVisibleReturnPlan::Constrained(boundary) => {
+            runtime_visible_value_class(db, body, local, Some(boundary), carriers)
+        }
+        RuntimeVisibleReturnPlan::PassActual => carrier_value_class(local, carriers)
+            .or_else(|| semantic_value_class(db, body, local, carriers)),
     }
 }
 
@@ -2375,7 +2398,7 @@ fn effect_arg_class<'db>(
                         env.assumptions,
                     ),
                     NEffectArgValue::Value(value) => {
-                        runtime_visible_arg_class(db, body, value.local, Some(boundary), carriers)
+                        runtime_visible_value_class(db, body, value.local, Some(boundary), carriers)
                     }
                 };
             }
@@ -2826,17 +2849,43 @@ fn default_return_class<'db>(
     top_level_class_for_ty_in_env(db, env, typed_body.result_ty(), default_space)
 }
 
-fn return_ty_requires_runtime_body_inference<'db>(
+fn desired_runtime_return_plan<'db>(
     db: &'db dyn MirDb,
-    ty: TyId<'db>,
-    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
-    assumptions: PredicateListId<'db>,
-) -> bool {
-    runtime_abstract_param_ty(db, ty, scope, assumptions)
-        || !matches!(
-            top_level_class_for_ty_in_context(db, ty, AddressSpaceKind::Memory, scope, assumptions),
-            None | Some(RuntimeClass::Scalar(_))
-        )
+    typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
+) -> RuntimeVisibleReturnPlan<'db> {
+    let env = RuntimeTypeEnv::new(
+        typed_body.body().map(|body| body.scope()),
+        typed_body.assumptions(),
+    );
+    let default_space = typed_body
+        .return_borrow_provider()
+        .map_or(AddressSpaceKind::Memory, address_space_from_provider);
+    let ty = typed_body.result_ty();
+    let Some(boundary) = boundary_spec_for_ty_in_env(db, env, ty, default_space) else {
+        return RuntimeVisibleReturnPlan::Erased;
+    };
+    if runtime_abstract_param_ty(db, ty, env.scope, env.assumptions) {
+        return RuntimeVisibleReturnPlan::PassActual;
+    }
+    match &boundary {
+        RuntimeBoundarySpec::Exact(class @ RuntimeClass::Scalar(_))
+        | RuntimeBoundarySpec::Exact(class @ RuntimeClass::Ref { .. })
+        | RuntimeBoundarySpec::Exact(class @ RuntimeClass::RawAddr { .. }) => {
+            RuntimeVisibleReturnPlan::Exact(class.clone())
+        }
+        RuntimeBoundarySpec::Exact(class @ RuntimeClass::AggregateValue { .. })
+            if !aggregate_transport_depends_on_runtime_source(
+                db,
+                ty,
+                env.scope,
+                env.assumptions,
+            ) =>
+        {
+            RuntimeVisibleReturnPlan::Exact(class.clone())
+        }
+        RuntimeBoundarySpec::Exact(RuntimeClass::AggregateValue { .. })
+        | RuntimeBoundarySpec::BorrowLike { .. } => RuntimeVisibleReturnPlan::Constrained(boundary),
+    }
 }
 
 pub(crate) fn top_level_class_for_ty_in_env<'db>(
@@ -3270,5 +3319,127 @@ fn provider_address_space_to_runtime(space: ProviderAddressSpace) -> AddressSpac
         ProviderAddressSpace::Storage => AddressSpaceKind::Storage,
         ProviderAddressSpace::Transient => AddressSpaceKind::Transient,
         ProviderAddressSpace::Calldata => AddressSpaceKind::Calldata,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use common::InputDb;
+    use driver::DriverDataBase;
+    use hir::{
+        analysis::semantic::{get_or_build_semantic_instance, root_semantic_instance_key},
+        analysis::ty::ty_check::BodyOwner,
+    };
+    use url::Url;
+
+    use super::*;
+    use crate::runtime::package::runtime_instance_for_semantic;
+
+    fn runtime_signature_for_named_func<'db>(
+        db: &'db DriverDataBase,
+        top_mod: hir::hir_def::TopLevelMod<'db>,
+        name: &str,
+    ) -> RuntimeSignature<'db> {
+        let func = top_mod
+            .all_funcs(db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(db)
+                    .to_opt()
+                    .is_some_and(|func_name| func_name.data(db) == name)
+            })
+            .unwrap_or_else(|| panic!("missing function `{name}`"));
+        let key = root_semantic_instance_key(db, BodyOwner::Func(func)).unwrap_or_else(|err| {
+            panic!("failed to build root semantic key for `{name}`: {err:?}")
+        });
+        runtime_instance_for_semantic(db, get_or_build_semantic_instance(db, key)).signature(db)
+    }
+
+    #[test]
+    fn poseidon_helpers_keep_visible_by_value_array_returns() {
+        let mut db = DriverDataBase::default();
+        let file_url =
+            Url::parse("file:///poseidon_helpers_keep_visible_by_value_array_returns.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                include_str!("../../../../fe/tests/fixtures/fe_test/poseidon_mock.fe").to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let signatures = ["ark", "sigma_full", "mix"]
+            .into_iter()
+            .map(|name| (name, runtime_signature_for_named_func(&db, top_mod, name)))
+            .collect::<Vec<_>>();
+
+        assert!(
+            signatures.iter().all(|(_, signature)| matches!(
+                signature.ret,
+                Some(RuntimeClass::AggregateValue { .. })
+            )),
+            "Poseidon helpers should keep by-value aggregate return signatures:\n{}",
+            signatures
+                .iter()
+                .map(|(name, signature)| format!("{name}: {signature:#?}"))
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        );
+        assert!(
+            signatures.iter().all(|(_, signature)| !matches!(
+                signature.ret,
+                Some(RuntimeClass::Ref {
+                    kind: RefKind::Object,
+                    ..
+                })
+            )),
+            "Poseidon helpers must not leak internal object-backed carriers into visible return contracts:\n{}",
+            signatures
+                .iter()
+                .map(|(name, signature)| format!("{name}: {signature:#?}"))
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        );
+    }
+
+    #[test]
+    fn transport_shaped_returns_remain_visible_transport_returns() {
+        let mut db = DriverDataBase::default();
+        let file_url =
+            Url::parse("file:///transport_shaped_returns_remain_visible_transport_returns.fe")
+                .unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                include_str!(
+                    "../../../../fe/tests/fixtures/fe_test/mut_self_storage_receiver_regression.fe"
+                )
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let signature = runtime_signature_for_named_func(&db, top_mod, "value_mut");
+
+        assert!(
+            matches!(
+                signature.ret,
+                Some(RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. })
+            ),
+            "transport-shaped returns must remain visible transport returns, not be normalized to by-value aggregates:\n{signature:#?}"
+        );
+        assert!(
+            !matches!(signature.ret, Some(RuntimeClass::AggregateValue { .. })),
+            "transport-shaped returns must not be normalized to by-value aggregate contracts:\n{signature:#?}"
+        );
     }
 }
