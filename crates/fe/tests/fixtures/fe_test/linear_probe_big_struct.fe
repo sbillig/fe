@@ -1,0 +1,73 @@
+const CAP: usize = 256
+const CAP_U256: u256 = 256
+
+struct Table {
+    used: [u8; CAP],
+    keys: [u256; CAP],
+    values: [u256; CAP],
+}
+
+impl Table {
+    fn empty() -> Self {
+        Table {
+            used: [0; CAP],
+            keys: [0; CAP],
+            values: [0; CAP],
+        }
+    }
+
+    fn set(mut self, _ key: u256, _ value: u256) {
+        let mut slot = (key % CAP_U256) as usize
+        let mut i: usize = 0
+
+        while i < CAP {
+            if self.used[slot] == 0 {
+                self.used[slot] = 1
+                self.keys[slot] = key
+                self.values[slot] = value
+                return
+            }
+
+            if self.keys[slot] == key {
+                self.values[slot] = value
+                return
+            }
+
+            slot += 1
+            if slot == CAP {
+                slot = 0
+            }
+            i += 1
+        }
+    }
+
+    fn get(self, _ key: u256) -> u256 {
+        let mut slot = (key % CAP_U256) as usize
+        let mut i: usize = 0
+
+        while i < CAP {
+            if self.used[slot] == 0 {
+                return 0
+            }
+
+            if self.keys[slot] == key {
+                return self.values[slot]
+            }
+
+            slot += 1
+            if slot == CAP {
+                slot = 0
+            }
+            i += 1
+        }
+
+        0
+    }
+}
+
+#[test]
+fn linear_probe_big_struct_roundtrip() {
+    let mut table = Table::empty()
+    table.set(17, 99)
+    assert(table.get(17) == 99)
+}

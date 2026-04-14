@@ -94,6 +94,20 @@ impl DriverDataBase {
             .print(&buffer)
             .expect("Failed to write diagnostics to stderr");
     }
+
+    pub fn format_complete_diagnostics(&self, diagnostics: &[CompleteDiagnostic]) -> String {
+        let writer = BufferWriter::stderr(ColorChoice::Never);
+        let mut buffer = writer.buffer();
+        let config = term::Config::default();
+        let mut diagnostics = diagnostics.to_vec();
+        sort_and_dedup_complete_diagnostics(&mut diagnostics);
+
+        for diag in diagnostics {
+            term::emit(&mut buffer, &config, &CsDbWrapper(self), &diag.to_cs(self)).unwrap();
+        }
+
+        std::str::from_utf8(buffer.as_slice()).unwrap().to_string()
+    }
 }
 
 pub struct DiagnosticsCollection<'db>(Vec<Box<dyn DiagnosticVoucher + 'db>>);

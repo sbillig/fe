@@ -1589,6 +1589,55 @@ fn keep() {
     }
 
     #[test]
+    fn enum_tuple_returns_verify_in_test_modules() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("enum_tuple_returns_verify_in_test_modules.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"enum Err {
+    A,
+    B,
+    None,
+}
+
+fn helper(cond0: bool, cond1: bool) -> (u256, Err) {
+    if cond0 {
+        return (0, Err::A)
+    }
+    if cond1 {
+        return (0, Err::B)
+    }
+    (1, Err::None)
+}
+
+#[test]
+fn roundtrip() {
+    let ret = helper(true, false)
+    assert(ret.0 == 0)
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O0,
+            SonatinaTestOptions::default(),
+            None,
+        )
+        .expect("enum tuple returns should verify in Sonatina test modules");
+    }
+
+    #[test]
     fn transparent_scalar_newtype_borrows_verify_in_test_modules() {
         let mut db = DriverDataBase::default();
         let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

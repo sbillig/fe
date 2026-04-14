@@ -10,9 +10,16 @@ use sonatina_codegen::{
     isa::evm::EvmBackend,
     object::{CompileOptions, ObjectArtifact, compile_all_objects},
 };
-use sonatina_ir::{Module, ir_writer::ModuleWriter, isa::evm::Evm, module::ModuleCtx};
+use sonatina_ir::{
+    Module,
+    ir_writer::{FuncWriter, ModuleWriter},
+    isa::evm::Evm,
+    module::{FuncRef, ModuleCtx},
+};
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
-use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
+use sonatina_verifier::{
+    Location, VerificationLevel, VerificationReport, VerifierConfig, verify_module,
+};
 
 use crate::{
     OptLevel, TargetDataLayout, TestMetadata, TestModuleOutput,
@@ -70,9 +77,84 @@ fn create_module_ctx() -> ModuleCtx {
 fn ensure_module_sonatina_ir_valid(module: &Module) -> Result<(), LowerError> {
     let report = verify_module(module, &VerifierConfig::for_level(VerificationLevel::Full));
     if report.has_errors() {
-        return Err(LowerError::Internal(report.to_string()));
+        return Err(LowerError::Internal(format_verification_report(
+            module, &report,
+        )));
     }
     Ok(())
+}
+
+fn format_verification_report(module: &Module, report: &VerificationReport) -> String {
+    const MAX_FUNC_CONTEXTS: usize = 3;
+
+    let mut out = report.to_string();
+    let funcs = failing_function_contexts(module, report);
+    if funcs.is_empty() {
+        return out;
+    }
+
+    out.push_str("\n\nVerifier function IR context");
+    if funcs.len() > MAX_FUNC_CONTEXTS {
+        out.push_str(&format!(
+            " (showing first {MAX_FUNC_CONTEXTS} of {})",
+            funcs.len()
+        ));
+    }
+    out.push_str(":\n");
+
+    for (func_ref, func_name, func_ir) in funcs.into_iter().take(MAX_FUNC_CONTEXTS) {
+        out.push_str(&format!(
+            "\n---- func{} (%{func_name}) ----\n{func_ir}\n",
+            func_ref.as_u32()
+        ));
+    }
+
+    out
+}
+
+fn failing_function_contexts(
+    module: &Module,
+    report: &VerificationReport,
+) -> Vec<(FuncRef, String, String)> {
+    let mut funcs = Vec::new();
+    for diagnostic in report.errors() {
+        let Some(func_ref) = diagnostic_func_ref(&diagnostic.primary) else {
+            continue;
+        };
+        if funcs.iter().any(|(existing, _, _)| *existing == func_ref)
+            || !module.func_store.contains(func_ref)
+        {
+            continue;
+        }
+        let Some(func_name) = module
+            .ctx
+            .get_sig(func_ref)
+            .map(|sig| sig.name().to_string())
+        else {
+            continue;
+        };
+        let func_ir = module.func_store.view(func_ref, |func| {
+            FuncWriter::new(func_ref, func).dump_string()
+        });
+        funcs.push((func_ref, func_name, func_ir));
+    }
+    funcs
+}
+
+fn diagnostic_func_ref(location: &Location) -> Option<FuncRef> {
+    match location {
+        Location::Function(func)
+        | Location::Block { func, .. }
+        | Location::Inst { func, .. }
+        | Location::Value { func, .. } => Some(*func),
+        Location::Type {
+            func: Some(func), ..
+        } => Some(*func),
+        Location::Module
+        | Location::Global(_)
+        | Location::Object { .. }
+        | Location::Type { func: None, .. } => None,
+    }
 }
 
 fn run_sonatina_optimization_pipeline(module: &mut Module, opt_level: OptLevel) {

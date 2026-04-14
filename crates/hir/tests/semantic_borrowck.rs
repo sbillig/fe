@@ -259,6 +259,59 @@ fn bad(x: own Inner) {
 }
 
 #[test]
+fn reports_move_conflict_for_non_copy_projection_from_view_param() {
+    let diags = borrow_diags(
+        r#"
+struct Wrapper {
+    p: Pair,
+}
+
+struct Pair {
+    x: u32,
+    y: u32,
+}
+
+fn unwrap(w: Wrapper) -> Pair {
+    let p = w.p
+    p
+}
+"#,
+    );
+
+    assert!(diags.contains("move conflict in `fn unwrap`"), "{diags:?}");
+    assert!(
+        diags.contains("cannot move out of a view parameter"),
+        "{diags:?}"
+    );
+}
+
+#[test]
+fn nested_copy_projection_from_view_param_remains_allowed() {
+    let diags = borrow_diags(
+        r#"
+struct Wrapper {
+    p: Pair,
+}
+
+struct Pair {
+    x: u32,
+    y: u32,
+}
+
+fn read_x(w: Wrapper) -> u32 {
+    w.p.x
+}
+"#,
+    );
+
+    assert!(!diags.contains("move conflict"), "{diags:?}");
+    assert!(
+        !diags.contains("internal borrow checking error"),
+        "{diags:?}"
+    );
+}
+
+#[test]
 fn non_copy_projection_move_does_not_report_conflict() {
     let diags = borrow_diags(
         r#"
@@ -414,7 +467,7 @@ fn read_balance(addr: Address) -> u256 uses (store: TokenStore) {
         store_local.1.facts.origin,
         NLocalOrigin::RootProvider(_)
     ));
-    assert!(store_local.1.transport_place().is_some());
+    assert!(store_local.1.snapshot_source_place().is_some());
     assert_eq!(
         store_local.1.facts.identity_policy,
         NLocalIdentityPolicy::PlainValue
@@ -440,7 +493,41 @@ fn read_balance(addr: Address) -> u256 uses (store: TokenStore) {
     );
     assert_eq!(field_local.facts.interface, NLocalInterface::DirectValue);
     assert!(matches!(field_local.facts.origin, NLocalOrigin::SelfRooted));
-    assert!(field_local.transport_place().is_none());
+    let backing_place = field_local
+        .backing_place()
+        .expect("field projection temp should keep its own backing place");
+    let backing_root = backing_place
+        .root
+        .borrow_root()
+        .expect("field projection backing root");
+    assert!(
+        matches!(
+            normalized.root(backing_root),
+            Some(NBorrowRoot::LocalSlot { local }) if *local == fe_hir::analysis::semantic::SLocalId::from_u32(3)
+        ),
+        "expected self-rooted backing place for provider field temp, got {:?}",
+        normalized.root(backing_root)
+    );
+    assert!(backing_place.path.is_empty());
+    let snapshot_source = field_local
+        .snapshot_source_place()
+        .expect("field projection temp should preserve its source place");
+    let snapshot_root = snapshot_source
+        .root
+        .borrow_root()
+        .expect("field projection snapshot source root");
+    assert!(
+        matches!(
+            normalized.root(snapshot_root),
+            Some(NBorrowRoot::Provider { .. })
+        ),
+        "expected provider-root snapshot source for provider field temp, got {:?}",
+        normalized.root(snapshot_root)
+    );
+    assert_eq!(
+        snapshot_source.path.iter().next(),
+        Some(&fe_hir::projection::Projection::Field(0))
+    );
     assert!(!field_local.facts.root_demand.needs_runtime_root());
 }
 
@@ -508,6 +595,158 @@ fn read(pair: Pair) -> u256 {
         borrow.path.iter().next(),
         Some(&fe_hir::projection::Projection::Field(0))
     );
+}
+
+#[test]
+fn projected_direct_value_snapshots_keep_lineage_without_reviving_aliases() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_borrowck.fe".into(),
+        r#"
+struct Pair {
+    x: u256,
+}
+
+struct Wrapper {
+    pair: Pair,
+}
+
+fn read(wrapper: Wrapper) -> u256 {
+    let pair = wrapper.pair
+    let copy = pair
+    let r: ref Pair = ref copy
+    r.x
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let instance = top_mod
+        .all_items(&db)
+        .iter()
+        .find_map(|item| match item {
+            ItemKind::Func(func)
+                if func
+                    .name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "read") =>
+            {
+                Some(get_or_build_semantic_instance(
+                    &db,
+                    identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
+                ))
+            }
+            _ => None,
+        })
+        .expect("read instance");
+    let normalized = normalize_semantic_body(&db, instance).expect("normalized body");
+    let pair_ty = normalized
+        .locals
+        .iter()
+        .find(|local| {
+            matches!(
+                local.source,
+                Some(fe_hir::analysis::ty::ty_check::LocalBinding::Local { .. })
+            ) && local.ty.is_struct(&db)
+        })
+        .map(|local| local.ty)
+        .expect("pair locals should exist");
+    let locals = normalized
+        .locals
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, local)| match local.source {
+            Some(fe_hir::analysis::ty::ty_check::LocalBinding::Local { .. })
+                if local.ty == pair_ty =>
+            {
+                Some((
+                    fe_hir::analysis::semantic::SLocalId::from_u32(idx as u32),
+                    local,
+                ))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        locals.len(),
+        2,
+        "expected pair/copy locals, got {locals:#?}"
+    );
+    let (pair_local_id, pair_local) = locals[0];
+    let (copy_local_id, copy_local) = locals[1];
+
+    for (local_id, local) in [(pair_local_id, pair_local), (copy_local_id, copy_local)] {
+        assert_eq!(local.facts.interface, NLocalInterface::DirectValue);
+        assert!(matches!(local.facts.origin, NLocalOrigin::SelfRooted));
+        let backing_place = local
+            .backing_place()
+            .expect("projected snapshot should keep a backing place");
+        let backing_root = backing_place
+            .root
+            .borrow_root()
+            .expect("projected snapshot backing root");
+        assert!(
+            matches!(
+                normalized.root(backing_root),
+                Some(NBorrowRoot::LocalSlot { local: root_local }) if *root_local == local_id
+            ),
+            "expected self-rooted backing place for {local_id:?}, got {:?}",
+            normalized.root(backing_root)
+        );
+        assert!(backing_place.path.is_empty());
+    }
+
+    let pair_snapshot = pair_local
+        .snapshot_source_place()
+        .expect("projected snapshot should preserve source lineage");
+    let pair_snapshot_root = pair_snapshot
+        .root
+        .borrow_root()
+        .expect("projected snapshot source root");
+    assert!(
+        matches!(
+            normalized.root(pair_snapshot_root),
+            Some(NBorrowRoot::Param { .. })
+        ),
+        "expected param-root snapshot lineage for projected local, got {:?}",
+        normalized.root(pair_snapshot_root)
+    );
+    assert_eq!(
+        pair_snapshot.path.iter().next(),
+        Some(&fe_hir::projection::Projection::Field(0))
+    );
+
+    let copy_snapshot = copy_local
+        .snapshot_source_place()
+        .expect("forwarded snapshot should preserve source lineage");
+    assert_eq!(copy_snapshot, pair_snapshot);
+
+    let borrow = normalized
+        .blocks
+        .iter()
+        .flat_map(|block| block.stmts.iter())
+        .find_map(|stmt| match &stmt.kind {
+            NSStmtKind::Assign {
+                expr:
+                    NExpr::Borrow {
+                        place,
+                        kind: BorrowKind::Ref,
+                        ..
+                    },
+                ..
+            } => Some(place),
+            _ => None,
+        })
+        .expect("borrow expression");
+    let borrow_root = borrow.root.borrow_root().expect("borrow root");
+    assert!(
+        matches!(
+            normalized.root(borrow_root),
+            Some(NBorrowRoot::LocalSlot { local }) if *local == copy_local_id
+        ),
+        "expected borrow of copied snapshot to use its own local root, got {:?}",
+        normalized.root(borrow_root)
+    );
+    assert!(borrow.path.is_empty());
 }
 
 #[test]

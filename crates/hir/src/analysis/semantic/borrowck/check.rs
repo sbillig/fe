@@ -277,8 +277,8 @@ pub fn verify_normalized_semantic_body<'db>(
             }
             NormalizedBindingLowering::Erased => {}
         }
-        if let Some(place) = local.transport_place() {
-            verify_rooted_place(place, "transport place for local")?;
+        if let Some(place) = local.snapshot_source_place() {
+            verify_rooted_place(place, "snapshot source place for local")?;
         }
     }
 
@@ -389,7 +389,7 @@ fn verify_expr<'db>(
         }
         NExpr::ReadPlace { place, mode } => {
             verify_place(db, instance, body, origin, place)?;
-            if *mode == ReadMode::Move && !place_move_is_valid(db, body, place) {
+            if *mode == ReadMode::Move && !place_move_is_valid(body, place) {
                 return Err(normalized_body_internal_diag(
                     db,
                     instance,
@@ -512,16 +512,16 @@ fn verify_place<'db>(
     Ok(())
 }
 
-fn place_move_is_valid<'db>(
-    db: &'db dyn SpannedHirAnalysisDb,
-    body: &NormalizedSemanticBody<'db>,
-    place: &NSPlace<'db>,
-) -> bool {
+fn place_move_is_valid<'db>(body: &NormalizedSemanticBody<'db>, place: &NSPlace<'db>) -> bool {
     match place.root {
         NSPlaceRoot::Root(root) => match body.root(root) {
             Some(NBorrowRoot::Param { local, .. }) | Some(NBorrowRoot::LocalSlot { local }) => {
                 body.local(*local).is_some_and(|local| {
-                    local_has_runtime_move_semantics(db, local, &body.borrow_roots)
+                    matches!(
+                        local.lowering,
+                        NormalizedBindingLowering::ValueLocal { .. }
+                            | NormalizedBindingLowering::PlaceBoundValue { .. }
+                    )
                 })
             }
             Some(NBorrowRoot::Provider { .. }) => false,

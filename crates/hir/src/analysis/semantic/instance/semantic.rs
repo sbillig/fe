@@ -425,6 +425,7 @@ fn lower_semantic_body<'db>(
     let typed_body = key.instantiate_typed_body(db);
     let mut body = lower_to_smir(db, instance, key.owner(db), typed_body);
     assign_semantic_local_roles(db, instance, &mut body);
+    assign_semantic_snapshot_sources(&mut body);
     verify_semantic_body(&body).expect("invalid semantic MIR");
     body
 }
@@ -556,6 +557,45 @@ fn assign_semantic_local_roles<'db>(
         );
         body.locals[dst.index()].role =
             merge_local_roles(body.locals[dst.index()].role.clone(), role, fallback);
+    }
+}
+
+fn assign_semantic_snapshot_sources<'db>(body: &mut SemanticBody<'db>) {
+    let mut assigned = vec![false; body.locals.len()];
+    for (idx, local) in body.locals.iter_mut().enumerate() {
+        local.snapshot_source = match &local.role {
+            SemanticLocalRole::DirectValue {
+                provenance: ValueProvenance::RootProvider(provider),
+            } => Some(PlaceProvenance::RootProvider(provider.clone())),
+            SemanticLocalRole::Erased
+            | SemanticLocalRole::DirectValue {
+                provenance: ValueProvenance::Ordinary,
+            }
+            | SemanticLocalRole::PlaceCarrier { .. }
+            | SemanticLocalRole::PlaceBoundValue { .. }
+            | SemanticLocalRole::DirectCarrier { .. } => None,
+        };
+        assigned[idx] = local.snapshot_source.is_some();
+    }
+
+    let assignments = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.stmts.iter())
+        .filter_map(|stmt| match &stmt.kind {
+            SStmtKind::Assign { dst, expr } => Some((*dst, expr.clone())),
+            SStmtKind::Store { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    for (dst, expr) in assignments {
+        let next = classify_expr_snapshot_source(&expr, &body.locals);
+        if assigned[dst.index()] {
+            body.locals[dst.index()].snapshot_source =
+                merge_snapshot_sources(body.locals[dst.index()].snapshot_source.clone(), next);
+        } else {
+            body.locals[dst.index()].snapshot_source = next;
+            assigned[dst.index()] = true;
+        }
     }
 }
 
@@ -1180,6 +1220,63 @@ fn classify_expr_local_role<'db>(
     }
 }
 
+fn classify_expr_snapshot_source<'db>(
+    expr: &SExpr<'db>,
+    locals: &[crate::analysis::semantic::SLocal<'db>],
+) -> Option<PlaceProvenance<'db>> {
+    match expr {
+        SExpr::Forward(value) | SExpr::UseValue(value) => {
+            locals[value.index()].snapshot_source.clone()
+        }
+        SExpr::Field { base, field } => classify_projection_snapshot_source(
+            *base,
+            vec![SemanticProjection::Field(field.0 as usize)].into_boxed_slice(),
+            locals,
+        ),
+        SExpr::Index { base, index } => classify_projection_snapshot_source(
+            *base,
+            vec![SemanticProjection::Index(*index)].into_boxed_slice(),
+            locals,
+        ),
+        SExpr::ExtractEnumField {
+            value,
+            variant,
+            field,
+        } => classify_projection_snapshot_source(
+            *value,
+            vec![SemanticProjection::VariantField {
+                variant: *variant,
+                enum_ty: locals[value.index()].ty,
+                field_idx: field.0 as usize,
+            }]
+            .into_boxed_slice(),
+            locals,
+        ),
+        SExpr::Borrow { .. }
+        | SExpr::Call { .. }
+        | SExpr::AggregateMake { .. }
+        | SExpr::CodeRegionRef { .. }
+        | SExpr::Const(_)
+        | SExpr::Unary { .. }
+        | SExpr::Binary { .. }
+        | SExpr::Cast { .. }
+        | SExpr::EnumMake { .. }
+        | SExpr::GetEnumTag { .. }
+        | SExpr::IsEnumVariant { .. }
+        | SExpr::CodeRegionOffset { .. }
+        | SExpr::CodeRegionLen { .. } => None,
+    }
+}
+
+fn classify_projection_snapshot_source<'db>(
+    base: crate::analysis::semantic::SLocalId,
+    path: Box<[SemanticProjection<'db>]>,
+    locals: &[crate::analysis::semantic::SLocal<'db>],
+) -> Option<PlaceProvenance<'db>> {
+    (!matches!(locals[base.index()].role, SemanticLocalRole::Erased))
+        .then_some(PlaceProvenance::Derived { base, path })
+}
+
 fn classify_forward_role<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: crate::hir_def::scope_graph::ScopeId<'db>,
@@ -1361,6 +1458,13 @@ fn merge_direct_value_role<'db>(
         }
     };
     Some(SemanticLocalRole::DirectValue { provenance })
+}
+
+fn merge_snapshot_sources<'db>(
+    current: Option<PlaceProvenance<'db>>,
+    next: Option<PlaceProvenance<'db>>,
+) -> Option<PlaceProvenance<'db>> {
+    (current == next).then_some(current).flatten()
 }
 
 fn semantic_is_nonreturning_builtin<'db>(

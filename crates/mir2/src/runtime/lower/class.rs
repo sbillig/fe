@@ -1348,7 +1348,7 @@ pub(crate) fn expr_direct_class<'db>(
     let typed_body = body.owner.key(db).instantiate_typed_body(db);
     let env = RuntimeTypeEnv::new(Some(owner.scope()), typed_body.assumptions());
     Some(match expr {
-        NExpr::Use(value) => semantic_value_class(db, body, value.local, carriers)?,
+        NExpr::Use(value) => materialized_value_class(db, body, value.local, carriers)?,
         NExpr::Const(const_) => match const_ {
             SConst::Value(value) => {
                 let ty = sem_const_ty(db, *value);
@@ -1517,7 +1517,7 @@ fn aggregate_make_class<'db>(
                         },
                     )
                 }
-                None => semantic_value_class(db, body, field.local, carriers),
+                None => materialized_value_class(db, body, field.local, carriers),
             }
             .unwrap_or_else(|| {
                 stored_class_for_ty_in_context(db, field_ty, env.scope, env.assumptions)
@@ -1558,9 +1558,7 @@ fn runtime_visible_arg_class<'db>(
                 assumptions,
             ) =>
         {
-            let class = carrier_value_class(local, carriers)
-                .or_else(|| semantic_value_class(db, body, local, carriers))?;
-            actual_aggregate_class_from_runtime_source(&class)
+            actual_aggregate_class_for_semantic_source(db, body, local, carriers)
         }
         Some(RuntimeBoundarySpec::Exact(
             RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. },
@@ -1569,7 +1567,7 @@ fn runtime_visible_arg_class<'db>(
             borrow_like_runtime_visible_arg_class(db, body, local, &desired?, carriers)
         }
         Some(RuntimeBoundarySpec::Exact(_)) | None => {
-            semantic_value_class(db, body, local, carriers)
+            materialized_value_class(db, body, local, carriers)
         }
     }
 }
@@ -1593,7 +1591,8 @@ pub(crate) fn specialize_boundary_for_runtime_source<'db>(
                     return RuntimeBoundarySpec::Exact(preserved);
                 }
                 if matches!(desired, RuntimeClass::AggregateValue { .. })
-                    && let Some(actual) = actual_aggregate_class_from_runtime_source(&actual)
+                    && let Some(actual) =
+                        actual_aggregate_class_for_semantic_source(db, body, local, carriers)
                 {
                     return RuntimeBoundarySpec::Exact(actual);
                 }
@@ -1604,8 +1603,7 @@ pub(crate) fn specialize_boundary_for_runtime_source<'db>(
             pointee: RuntimeClass::AggregateValue { .. },
             access,
             allow,
-        } => actual()
-            .and_then(|class| actual_aggregate_class_from_runtime_source(&class))
+        } => actual_aggregate_class_for_semantic_source(db, body, local, carriers)
             .map(|pointee| RuntimeBoundarySpec::BorrowLike {
                 pointee,
                 access: *access,
@@ -1635,30 +1633,25 @@ fn borrow_like_runtime_visible_arg_class<'db>(
     };
     let local_data = body.locals.get(local.index())?;
 
-    if semantic_local_allows_transport_addr_of(local_data) {
-        if let Some(place) = normalized_value_place(body, local)
-            && !is_self_rooted_value_place(body, local, place)
-        {
-            let class =
-                normalized_place_address_class(db, body, place, carriers, scope, assumptions)?;
-            if runtime_class_satisfies_boundary(&class, boundary) {
-                return Some(class);
-            }
-        }
-
-        let value_class = semantic_value_class(db, body, local, carriers)?;
-        let root_class = local_place_root_class(
-            db,
-            &class_ctxt,
-            local,
-            local_data,
-            carriers.get(local.index())?,
-        )?;
-        let class =
-            ref_class_for_place_result(&root_class, &value_class, AddressSpaceKind::Memory, false);
+    if let Some(place) = nonself_backing_value_place(body, local) {
+        let class = normalized_place_address_class(db, body, place, carriers, scope, assumptions)?;
         if runtime_class_satisfies_boundary(&class, boundary) {
             return Some(class);
         }
+    }
+
+    let value_class = semantic_value_class(db, body, local, carriers)?;
+    let root_class = local_place_root_class(
+        db,
+        &class_ctxt,
+        local,
+        local_data,
+        carriers.get(local.index())?,
+    )?;
+    let class =
+        ref_class_for_place_result(&root_class, &value_class, AddressSpaceKind::Memory, false);
+    if runtime_class_satisfies_boundary(&class, boundary) {
+        return Some(class);
     }
 
     if let Some(class) = carrier_value_class(local, carriers)
@@ -1670,11 +1663,12 @@ fn borrow_like_runtime_visible_arg_class<'db>(
     None
 }
 
-fn normalized_value_place<'a, 'db>(
+fn nonself_backing_value_place<'a, 'db>(
     body: &'a NormalizedSemanticBody<'db>,
     local: SLocalId,
 ) -> Option<&'a NSPlace<'db>> {
-    body.local(local)?.transport_place()
+    let place = body.local(local)?.backing_place()?;
+    (!is_self_rooted_value_place(body, local, place)).then_some(place)
 }
 
 fn is_self_rooted_value_place<'db>(
@@ -1695,8 +1689,70 @@ fn is_self_rooted_value_place<'db>(
     }
 }
 
-fn semantic_local_allows_transport_addr_of(local: &NSLocal<'_>) -> bool {
-    local.transport_place().is_some()
+fn snapshot_source_place<'a, 'db>(
+    body: &'a NormalizedSemanticBody<'db>,
+    local: SLocalId,
+) -> Option<&'a NSPlace<'db>> {
+    body.local(local)?.snapshot_source_place()
+}
+
+fn snapshot_source_value_class<'db>(
+    db: &'db dyn MirDb,
+    body: &NormalizedSemanticBody<'db>,
+    local: SLocalId,
+    carriers: &[RuntimeCarrier<'db>],
+) -> Option<RuntimeClass<'db>> {
+    normalized_place_class(db, body, snapshot_source_place(body, local)?, carriers)
+}
+
+pub(crate) fn actual_aggregate_class_for_semantic_source<'db>(
+    db: &'db dyn MirDb,
+    body: &NormalizedSemanticBody<'db>,
+    local: SLocalId,
+    carriers: &[RuntimeCarrier<'db>],
+) -> Option<RuntimeClass<'db>> {
+    snapshot_source_value_class(db, body, local, carriers)
+        .and_then(|class| actual_aggregate_class_from_runtime_source(&class))
+        .or_else(|| {
+            semantic_value_class(db, body, local, carriers)
+                .and_then(|class| actual_aggregate_class_from_runtime_source(&class))
+        })
+}
+
+pub(crate) fn materialized_value_class<'db>(
+    db: &'db dyn MirDb,
+    body: &NormalizedSemanticBody<'db>,
+    local: SLocalId,
+    carriers: &[RuntimeCarrier<'db>],
+) -> Option<RuntimeClass<'db>> {
+    let owner = body.owner.key(db).owner(db);
+    let typed_body = body.owner.key(db).instantiate_typed_body(db);
+    let scope = Some(owner.scope());
+    let assumptions = typed_body.assumptions();
+    let local_data = body.locals.get(local.index())?;
+    match (&local_data.facts.interface, &local_data.facts.origin) {
+        (NLocalInterface::Erased, _) => None,
+        (NLocalInterface::DirectValue, NLocalOrigin::RootProvider(_)) => {
+            semantic_value_class(db, body, local, carriers)
+        }
+        (NLocalInterface::DirectValue, _) => {
+            actual_aggregate_class_for_semantic_source(db, body, local, carriers).or_else(|| {
+                top_level_class_for_ty_in_context(
+                    db,
+                    local_data.ty,
+                    AddressSpaceKind::Memory,
+                    scope,
+                    assumptions,
+                )
+            })
+        }
+        (
+            NLocalInterface::PlaceBoundValue
+            | NLocalInterface::PlaceCarrier
+            | NLocalInterface::DirectCarrier,
+            _,
+        ) => semantic_value_class(db, body, local, carriers),
+    }
 }
 
 pub(crate) fn desired_runtime_param_plan<'db>(
@@ -2305,8 +2361,7 @@ fn effect_arg_class<'db>(
     if plan.is_none() && arg.provider.is_none() && arg.target_ty.is_none() {
         return match (&arg.pass_mode, &arg.arg) {
             (EffectPassMode::ByValue | EffectPassMode::Unknown, NEffectArgValue::Value(value)) => {
-                carrier_value_class(value.local, carriers)
-                    .or_else(|| semantic_value_class(db, body, value.local, carriers))
+                materialized_value_class(db, body, value.local, carriers)
             }
             (EffectPassMode::ByValue | EffectPassMode::Unknown, NEffectArgValue::Place(_))
             | (

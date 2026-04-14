@@ -78,6 +78,7 @@ pub struct SLocal<'db> {
     pub mutability: Mutability,
     pub source: Option<LocalBinding<'db>>,
     pub role: SemanticLocalRole<'db>,
+    pub snapshot_source: Option<PlaceProvenance<'db>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]

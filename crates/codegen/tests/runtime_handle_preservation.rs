@@ -3,7 +3,9 @@ use driver::DriverDataBase;
 use fe_codegen::emit_module_sonatina_ir;
 use hir::hir_def::{ArithBinOp, BinOp};
 use mir2::runtime::RefKind;
-use mir2::{Layout, PlaceElem, PlaceRoot, RExpr, RStmt, RuntimeClass, build_runtime_package};
+use mir2::{
+    Layout, PlaceElem, PlaceRoot, RExpr, RLocalId, RStmt, RuntimeClass, build_runtime_package,
+};
 use url::Url;
 
 fn sonatina_function_body<'a>(ir: &'a str, name: &str) -> &'a str {
@@ -450,6 +452,161 @@ fn storage_backed_nested_handle_field_borrows_use_storage_transport() {
 }
 
 #[test]
+fn projected_enum_field_snapshots_preserve_full_enum_payloads() {
+    let mut db = DriverDataBase::default();
+    let file_url =
+        Url::parse("file:///projected_enum_field_snapshots_preserve_full_enum_payloads.fe")
+            .unwrap();
+    db.workspace().touch(
+        &mut db,
+        file_url.clone(),
+        Some(
+            r#"enum Flag {
+    A,
+    B,
+}
+
+struct Inner {
+    flag: Flag,
+}
+
+struct Wrapper {
+    inner: Inner,
+}
+
+fn repack(wrapper: Wrapper) -> Inner {
+    let flag = wrapper.inner.flag
+    let copy = flag
+    Inner { flag: copy }
+}
+
+fn entry() -> Inner {
+    repack(Wrapper {
+        inner: Inner { flag: Flag::A },
+    })
+}
+"#
+            .to_string(),
+        ),
+    );
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    let output = emit_module_sonatina_ir(&db, top_mod).expect("Sonatina IR");
+    let repack = sonatina_function_body(&output, "repack");
+
+    assert!(
+        repack.contains("obj.load") && repack.contains("obj.store"),
+        "repack should preserve the full enum payload through object loads/stores:\n{repack}"
+    );
+    assert!(
+        !sonatina_ops(repack)
+            .into_iter()
+            .any(|op| op == "enum_tag" || op == "enum_tag_of"),
+        "projected enum field payload should stay a full enum value, not an enum tag:\n{repack}"
+    );
+}
+
+#[test]
+fn materialized_scalar_uses_do_not_keep_rawaddr_runtime_carriers() {
+    let mut db = DriverDataBase::default();
+    let file_url =
+        Url::parse("file:///materialized_scalar_uses_do_not_keep_rawaddr_runtime_carriers.fe")
+            .unwrap();
+    db.workspace().touch(
+        &mut db,
+        file_url.clone(),
+        Some(
+            r#"fn bump(_ x: mut u8) -> u8 {
+    x += 1
+    x
+}
+
+fn entry() -> u8 {
+    let mut x: u8 = 2
+    bump(mut x)
+}
+"#
+            .to_string(),
+        ),
+    );
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    let package = build_runtime_package(&db, top_mod).expect("runtime package");
+    let bump = package
+        .functions(&db)
+        .iter()
+        .copied()
+        .find(|function| function.symbol(&db).contains("bump"))
+        .expect("generated bump runtime function");
+    let body = bump.instance(&db).body(&db);
+    let param_count = body.signature.params.len();
+    let rawaddr_temps = body
+        .locals
+        .iter()
+        .enumerate()
+        .skip(param_count)
+        .filter_map(|(idx, local)| {
+            matches!(
+                local.carrier,
+                mir2::RuntimeCarrier::Value(RuntimeClass::RawAddr { target: None, .. })
+            )
+            .then_some(RLocalId::from_u32(idx as u32))
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        body.blocks
+            .iter()
+            .flat_map(|block| block.stmts.iter())
+            .any(|stmt| {
+                matches!(
+                    stmt,
+                    RStmt::Assign {
+                        expr: RExpr::Load { .. },
+                        ..
+                    }
+                )
+            }),
+        "materializing a mutable scalar use should load from its place root:\n{body:#?}"
+    );
+    assert!(
+        rawaddr_temps.iter().all(|temp| {
+            body.blocks
+                .iter()
+                .flat_map(|block| block.stmts.iter())
+                .any(|stmt| {
+                    matches!(
+                        stmt,
+                        RStmt::Assign {
+                            expr:
+                                RExpr::Load {
+                                    place:
+                                        mir2::RuntimePlace {
+                                            root:
+                                                PlaceRoot::Ptr {
+                                                    addr,
+                                                    class: RuntimeClass::Scalar(_),
+                                                    ..
+                                                },
+                                            ..
+                                        },
+                                },
+                            ..
+                        } if addr == temp
+                    )
+                })
+        }),
+        "raw-address scalar temps must be materialized through scalar loads before use:\n{body:#?}"
+    );
+}
+
+#[test]
 fn checked_extern_intrinsics_do_not_become_runtime_functions() {
     let mut db = DriverDataBase::default();
     let file_url =
@@ -879,4 +1036,55 @@ fn test_add_overflow_u8() {
             }),
         "checked overflow expression should survive semantic const canonicalization and lower to executable rMIR arithmetic:\n{body:#?}"
     );
+}
+
+#[test]
+fn unit_branch_mutations_do_not_use_erased_call_results() {
+    let mut db = DriverDataBase::default();
+    let file_url =
+        Url::parse("file:///unit_branch_mutations_do_not_use_erased_call_results.fe").unwrap();
+    db.workspace().touch(
+        &mut db,
+        file_url.clone(),
+        Some(
+            r#"
+#[test]
+fn unit_branch_add_assign() {
+    let mut x: usize = 0
+    if true {
+        x += 1
+    } else {
+        x += 1
+    }
+}
+"#
+            .to_string(),
+        ),
+    );
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    let package = build_runtime_package(&db, top_mod).expect("runtime package");
+    for function in package.functions(&db) {
+        let body = function.instance(&db).body(&db);
+        assert!(
+            !body
+                .blocks
+                .iter()
+                .flat_map(|block| block.stmts.iter())
+                .any(|stmt| {
+                    matches!(
+                        stmt,
+                        RStmt::Assign {
+                            expr: RExpr::Use(value),
+                            ..
+                        } if body.value_class(*value).is_none()
+                    )
+                }),
+            "unit-valued mutation branches should not try to use erased call results:\n{}:\n{body:#?}",
+            function.symbol(&db),
+        );
+    }
 }

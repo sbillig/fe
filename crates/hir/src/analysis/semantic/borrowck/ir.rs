@@ -130,7 +130,7 @@ pub enum NLocalIdentityPolicy {
 pub struct NLocalFacts<'db> {
     pub interface: NLocalInterface,
     pub origin: NLocalOrigin<'db>,
-    pub transport_place: Option<NSPlace<'db>>,
+    pub snapshot_source_place: Option<NSPlace<'db>>,
     pub root_demand: NLocalRootDemand,
     pub identity_policy: NLocalIdentityPolicy,
 }
@@ -192,8 +192,8 @@ impl<'db> NSLocal<'db> {
         self.lowering.place()
     }
 
-    pub fn transport_place(&self) -> Option<&NSPlace<'db>> {
-        self.facts.transport_place.as_ref()
+    pub fn snapshot_source_place(&self) -> Option<&NSPlace<'db>> {
+        self.facts.snapshot_source_place.as_ref()
     }
 }
 

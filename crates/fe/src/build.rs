@@ -6,8 +6,8 @@ use std::{
 use camino::{Utf8Path, Utf8PathBuf};
 use codegen::{BackendKind, OptLevel, SonatinaContractBytecode};
 use common::{InputDb, config::Config, dependencies::WorkspaceMemberRecord, file::IngotFileKind};
-use driver::DriverDataBase;
 use driver::cli_target::{CliTarget, resolve_cli_target};
+use driver::{DriverDataBase, MirDiagnosticsMode};
 use hir::hir_def::{HirIngot, TopLevelMod};
 use mir2::build_runtime_package;
 use salsa::Setter;
@@ -357,9 +357,23 @@ fn build_file(
     };
 
     let top_mod = db.top_mod(file);
-    let diags = db.run_on_top_mod(top_mod);
-    if !diags.is_empty() {
-        diags.emit(db);
+    let hir_diags = db.run_on_top_mod(top_mod);
+    let mut has_errors = false;
+    let hir_has_errors = hir_diags.has_errors(db);
+    if !hir_diags.is_empty() {
+        hir_diags.emit(db);
+        has_errors = true;
+    }
+    let mir_diags = if hir_has_errors {
+        Vec::new()
+    } else {
+        db.mir_diagnostics_for_top_mod(top_mod, MirDiagnosticsMode::CompilerParity)
+    };
+    if !mir_diags.is_empty() {
+        db.emit_complete_diagnostics(&mir_diags);
+        has_errors = true;
+    }
+    if has_errors {
         return true;
     }
 
@@ -699,9 +713,23 @@ fn analyze_ingot_build_artifacts(
         return Err(());
     }
 
-    let diags = db.run_on_ingot(ingot);
-    if !diags.is_empty() {
-        diags.emit(db);
+    let hir_diags = db.run_on_ingot(ingot);
+    let mut has_errors = false;
+    let hir_has_errors = hir_diags.has_errors(db);
+    if !hir_diags.is_empty() {
+        hir_diags.emit(db);
+        has_errors = true;
+    }
+    let mir_diags = if hir_has_errors {
+        Vec::new()
+    } else {
+        db.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::CompilerParity)
+    };
+    if !mir_diags.is_empty() {
+        db.emit_complete_diagnostics(&mir_diags);
+        has_errors = true;
+    }
+    if has_errors {
         return Err(());
     }
 
@@ -872,9 +900,23 @@ fn build_ingot_url(
         return BuildSummary { had_errors: true };
     }
 
-    let diags = db.run_on_ingot(ingot);
-    if !diags.is_empty() {
-        diags.emit(db);
+    let hir_diags = db.run_on_ingot(ingot);
+    let mut has_errors = false;
+    let hir_has_errors = hir_diags.has_errors(db);
+    if !hir_diags.is_empty() {
+        hir_diags.emit(db);
+        has_errors = true;
+    }
+    let mir_diags = if hir_has_errors {
+        Vec::new()
+    } else {
+        db.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::CompilerParity)
+    };
+    if !mir_diags.is_empty() {
+        db.emit_complete_diagnostics(&mir_diags);
+        has_errors = true;
+    }
+    if has_errors {
         return BuildSummary { had_errors: true };
     }
 

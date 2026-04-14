@@ -27,7 +27,7 @@ use common::{
 };
 use contract_harness::{CallGasProfile, EvmTraceOptions, ExecutionOptions, RuntimeInstance, U256};
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
-use driver::DriverDataBase;
+use driver::{DriverDataBase, MirDiagnosticsMode};
 use hir::hir_def::{HirIngot, TopLevelMod, item::ItemKind};
 use mir2::{build_runtime_package, build_test_runtime_package, format_runtime_package};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -2047,9 +2047,24 @@ fn prepare_tests_single_file(
     };
     let top_mod = db.top_mod(file);
 
-    let diags = db.run_on_top_mod(top_mod);
-    if !diags.is_empty() {
-        let formatted = diags.format_diags(db);
+    let hir_diags = db.run_on_top_mod(top_mod);
+    let mut has_errors = false;
+    let hir_has_errors = hir_diags.has_errors(db);
+    let mut formatted = String::new();
+    if !hir_diags.is_empty() {
+        formatted.push_str(&hir_diags.format_diags(db));
+        has_errors = true;
+    }
+    let mir_diags = if hir_has_errors {
+        Vec::new()
+    } else {
+        db.mir_diagnostics_for_top_mod(top_mod, MirDiagnosticsMode::CompilerParity)
+    };
+    if !mir_diags.is_empty() {
+        formatted.push_str(&db.format_complete_diagnostics(&mir_diags));
+        has_errors = true;
+    }
+    if has_errors {
         let _ = writeln!(output, "Compilation errors in {file_url}");
         let _ = writeln!(output);
         let _ = writeln!(output, "{formatted}");
@@ -2206,9 +2221,24 @@ fn prepare_tests_ingot(
         };
     };
 
-    let diags = db.run_on_ingot(ingot);
-    if !diags.is_empty() {
-        let formatted = diags.format_diags(db);
+    let hir_diags = db.run_on_ingot(ingot);
+    let mut has_errors = false;
+    let hir_has_errors = hir_diags.has_errors(db);
+    let mut formatted = String::new();
+    if !hir_diags.is_empty() {
+        formatted.push_str(&hir_diags.format_diags(db));
+        has_errors = true;
+    }
+    let mir_diags = if hir_has_errors {
+        Vec::new()
+    } else {
+        db.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::CompilerParity)
+    };
+    if !mir_diags.is_empty() {
+        formatted.push_str(&db.format_complete_diagnostics(&mir_diags));
+        has_errors = true;
+    }
+    if has_errors {
         let _ = writeln!(output, "{formatted}");
         if let Some(report) = report {
             write_report_error(report, "compilation_errors.txt", &formatted);
