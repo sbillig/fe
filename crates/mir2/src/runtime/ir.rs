@@ -1126,6 +1126,9 @@ pub enum RExpr<'db> {
     MaterializeToObject {
         src: RValueId,
     },
+    MaterializePlaceToObject {
+        place: RuntimePlace<'db>,
+    },
     ProviderFromRaw {
         raw: RValueId,
         provider_ty: TyId<'db>,

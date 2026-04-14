@@ -14,12 +14,11 @@ use crate::{
 };
 
 use super::ir::{
-    NBorrowRoot, NBorrowRootId, NEffectArg, NEffectArgValue, NExpr, NLocalFacts,
-    NLocalIdentityPolicy, NLocalInterface, NLocalOrigin, NLocalRootDemand, NOperand, NSBlock,
-    NSLocal, NSPlace, NSPlaceRoot, NSStmt, NSStmtKind, NSTerminator, NSTerminatorKind,
-    NormalizedBindingLowering, NormalizedSemanticBody, NormalizedSemanticBodyId, ReadMode,
-    SemanticNormalizeError, SemanticNormalizeErrorId, SemanticNormalizeResult,
-    empty_normalized_body, local_has_runtime_move_semantics,
+    NBorrowRoot, NBorrowRootId, NEffectArg, NEffectArgValue, NExpr, NLocalFacts, NLocalInterface,
+    NLocalOrigin, NLocalRootDemand, NOperand, NSBlock, NSLocal, NSPlace, NSPlaceRoot, NSStmt,
+    NSStmtKind, NSTerminator, NSTerminatorKind, NormalizedBindingLowering, NormalizedSemanticBody,
+    NormalizedSemanticBodyId, ReadMode, SemanticNormalizeError, SemanticNormalizeErrorId,
+    SemanticNormalizeResult, empty_normalized_body, local_has_runtime_move_semantics,
 };
 
 pub fn normalize_semantic_body<'db>(
@@ -258,20 +257,11 @@ impl<'db> NormalizeCtxt<'db> {
         ) {
             root_demand.always_rooted = true;
         }
-        let identity_policy = if raw_local.mutability
-            == crate::analysis::semantic::Mutability::Mutable
-            && raw_local.source.is_some()
-        {
-            NLocalIdentityPolicy::PreserveIdentityIfAggregate
-        } else {
-            NLocalIdentityPolicy::PlainValue
-        };
         Ok(NLocalFacts {
             interface,
             origin,
             snapshot_source_place,
             root_demand,
-            identity_policy,
         })
     }
 
@@ -687,6 +677,13 @@ impl<'db> NormalizeCtxt<'db> {
                     .collect::<Vec<_>>()
                     .into_boxed_slice(),
             },
+            SExpr::ReadPlace { place } => {
+                let place = self.normalize_place(place, origin)?;
+                NExpr::ReadPlace {
+                    mode: self.read_mode_for_place(origin, dst_ty, &place),
+                    place,
+                }
+            }
             SExpr::Field { base, field } => {
                 let place =
                     self.project_local_place(*base, Projection::Field(field.0 as usize), origin)?;

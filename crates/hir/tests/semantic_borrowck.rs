@@ -1,12 +1,13 @@
 use std::collections::VecDeque;
 
+use cranelift_entity::EntityRef;
 use fe_hir::test_db::HirAnalysisTestDb;
 use fe_hir::{
     analysis::{
         diagnostics::format_diags,
         semantic::{
-            FieldIndex, NBorrowRoot, NExpr, NLocalIdentityPolicy, NLocalInterface, NLocalOrigin,
-            NSStmtKind, NormalizedBindingLowering, SPlaceElem, SStmtKind, SemanticInstance,
+            FieldIndex, NBorrowRoot, NExpr, NLocalInterface, NLocalOrigin, NSStmtKind,
+            NormalizedBindingLowering, SPlaceElem, SStmtKind, SemanticInstance,
             check_semantic_borrows, collect_semantic_borrow_diagnostics,
             get_or_build_semantic_instance, identity_semantic_instance_key,
             normalize_semantic_body,
@@ -17,6 +18,7 @@ use fe_hir::{
         },
     },
     hir_def::{ItemKind, Partial},
+    projection::{IndexSource, Projection},
 };
 
 fn borrow_diags(src: &str) -> String {
@@ -120,6 +122,32 @@ fn owner_name(db: &HirAnalysisTestDb, owner: BodyOwner<'_>) -> String {
             Partial::Absent => format!("<contract>::recv[{recv_idx}][{arm_idx}]"),
         },
     }
+}
+
+fn normalized_func_body<'db>(
+    db: &'db HirAnalysisTestDb,
+    top_mod: fe_hir::hir_def::TopLevelMod<'db>,
+    func_name: &str,
+) -> fe_hir::analysis::semantic::NormalizedSemanticBody<'db> {
+    let instance = top_mod
+        .all_items(db)
+        .iter()
+        .find_map(|item| match item {
+            ItemKind::Func(func)
+                if func
+                    .name(db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(db) == func_name) =>
+            {
+                Some(get_or_build_semantic_instance(
+                    db,
+                    identity_semantic_instance_key(db, BodyOwner::Func(*func)),
+                ))
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("missing function `{func_name}`"));
+    normalize_semantic_body(db, instance).expect("normalized body")
 }
 
 #[test]
@@ -468,10 +496,6 @@ fn read_balance(addr: Address) -> u256 uses (store: TokenStore) {
         NLocalOrigin::RootProvider(_)
     ));
     assert!(store_local.1.snapshot_source_place().is_some());
-    assert_eq!(
-        store_local.1.facts.identity_policy,
-        NLocalIdentityPolicy::PlainValue
-    );
     let field_local = normalized
         .locals
         .get(3)
@@ -747,6 +771,188 @@ fn read(wrapper: Wrapper) -> u256 {
         normalized.root(borrow_root)
     );
     assert!(borrow.path.is_empty());
+}
+
+#[test]
+fn nested_place_reads_normalize_as_one_composite_place() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_borrowck.fe".into(),
+        r#"
+struct Table {
+    used: [u8; 4],
+    keys: [u256; 4],
+    values: [u256; 4],
+}
+
+impl Table {
+    fn get_used(self, _ slot: usize) -> u8 {
+        self.used[slot]
+    }
+
+    fn get_keys(self, _ slot: usize) -> u256 {
+        self.keys[slot]
+    }
+
+    fn get_values(self, _ slot: usize) -> u256 {
+        self.values[slot]
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    for (name, field, elem_ty) in [
+        ("get_used", 0, "u8"),
+        ("get_keys", 1, "u256"),
+        ("get_values", 2, "u256"),
+    ] {
+        let normalized = normalized_func_body(&db, top_mod, name);
+        let mut saw_nested_read = false;
+        for stmt in normalized
+            .blocks
+            .iter()
+            .flat_map(|block| block.stmts.iter())
+        {
+            let NSStmtKind::Assign {
+                dst,
+                expr: NExpr::ReadPlace { place, .. },
+            } = &stmt.kind
+            else {
+                continue;
+            };
+            let local = &normalized.locals[dst.index()];
+            if local.ty.pretty_print(&db) == elem_ty {
+                assert!(
+                    matches!(
+                        place.path.iter().cloned().collect::<Vec<_>>().as_slice(),
+                        [
+                            Projection::Field(path_field),
+                            Projection::Index(IndexSource::Dynamic(_))
+                        ] if *path_field == field
+                    ),
+                    "unexpected nested place path in {name}: {:?}",
+                    place.path
+                );
+                saw_nested_read = true;
+            }
+            assert!(
+                !(local.ty.array_len(&db).is_some()
+                    && place.path.iter().cloned().collect::<Vec<_>>()
+                        == vec![Projection::Field(field)]),
+                "unexpected intermediate whole-array read in {name}: {stmt:?}"
+            );
+        }
+        assert!(
+            saw_nested_read,
+            "missing nested array element read in {name}"
+        );
+    }
+}
+
+#[test]
+fn owned_aggregate_value_boundaries_project_from_the_owned_local() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_borrowck.fe".into(),
+        r#"
+struct Table {
+    used: [u8; 4],
+}
+
+impl Table {
+    fn get(own self, _ slot: usize) -> u8 {
+        let used = self.used
+        used[slot]
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let normalized = normalized_func_body(&db, top_mod, "get");
+
+    let (used_local_id, used_local) = normalized
+        .locals
+        .iter()
+        .enumerate()
+        .find_map(|(idx, local)| match local.source {
+            Some(fe_hir::analysis::ty::ty_check::LocalBinding::Local { .. })
+                if local.ty.array_len(&db).is_some() =>
+            {
+                Some((
+                    fe_hir::analysis::semantic::SLocalId::from_u32(idx as u32),
+                    local,
+                ))
+            }
+            _ => None,
+        })
+        .expect("owned array local");
+
+    assert_eq!(used_local.facts.interface, NLocalInterface::DirectValue);
+    assert!(matches!(used_local.facts.origin, NLocalOrigin::SelfRooted));
+    let backing_place = used_local
+        .backing_place()
+        .expect("owned aggregate local should keep backing storage");
+    let backing_root = backing_place.root.borrow_root().expect("backing root");
+    assert!(
+        matches!(
+            normalized.root(backing_root),
+            Some(NBorrowRoot::LocalSlot { local }) if *local == used_local_id
+        ),
+        "expected owned aggregate backing root to be the local itself, got {:?}",
+        normalized.root(backing_root)
+    );
+    assert!(backing_place.path.is_empty());
+    let snapshot_source = used_local
+        .snapshot_source_place()
+        .expect("owned aggregate should preserve lineage");
+    let snapshot_root = snapshot_source.root.borrow_root().expect("snapshot root");
+    assert!(
+        matches!(
+            normalized.root(snapshot_root),
+            Some(NBorrowRoot::Param { .. })
+        ),
+        "expected source lineage to point at the parameter root, got {:?}",
+        normalized.root(snapshot_root)
+    );
+    assert_eq!(
+        snapshot_source.path.iter().cloned().collect::<Vec<_>>(),
+        vec![Projection::Field(0)]
+    );
+
+    let element_read = normalized
+        .blocks
+        .iter()
+        .flat_map(|block| block.stmts.iter())
+        .find_map(|stmt| match &stmt.kind {
+            NSStmtKind::Assign {
+                dst,
+                expr: NExpr::ReadPlace { place, .. },
+            } if normalized.locals[dst.index()].ty.pretty_print(&db) == "u8" => Some(place),
+            _ => None,
+        })
+        .expect("element read");
+    let read_root = element_read.root.borrow_root().expect("element read root");
+    assert!(
+        matches!(
+            normalized.root(read_root),
+            Some(NBorrowRoot::LocalSlot { local }) if *local == used_local_id
+        ),
+        "expected owned aggregate projection to read from the owned local, got {:?}",
+        normalized.root(read_root)
+    );
+    assert!(
+        matches!(
+            element_read
+                .path
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .as_slice(),
+            [Projection::Index(IndexSource::Dynamic(_))]
+        ),
+        "unexpected owned-local projection path: {:?}",
+        element_read.path
+    );
 }
 
 #[test]

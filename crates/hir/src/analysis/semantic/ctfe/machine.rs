@@ -481,6 +481,15 @@ impl<'db> CtfeMachine<'db> {
                         .into_boxed_slice(),
                 )))
             }
+            SExpr::ReadPlace { place } => {
+                let place = self.resolve_place(frame_idx, &place, origin)?;
+                let r#ref = CtfeRef {
+                    frame: place.frame,
+                    root: place.root,
+                    path: place.path.into_boxed_slice(),
+                };
+                self.load_ref_value(&r#ref, origin).map(CtfeValue::Value)
+            }
             SExpr::Field { base, field } => {
                 let value = self.load_value(frame_idx, base, origin)?;
                 self.project_field(value, field, origin)

@@ -71,6 +71,7 @@ pub fn collect_referenced_code_regions<'db>(
                 | RExpr::ConstRef { .. }
                 | RExpr::AllocObject { .. }
                 | RExpr::MaterializeToObject { .. }
+                | RExpr::MaterializePlaceToObject { .. }
                 | RExpr::ProviderFromRaw { .. }
                 | RExpr::WordToRawAddr { .. }
                 | RExpr::ProviderToRaw { .. }

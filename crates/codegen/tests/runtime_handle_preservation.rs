@@ -510,6 +510,176 @@ fn entry() -> Inner {
 }
 
 #[test]
+fn owned_aggregate_values_with_place_style_reads_get_object_backed_runtime_storage() {
+    let mut db = DriverDataBase::default();
+    let file_url = Url::parse(
+        "file:///owned_aggregate_values_with_place_style_reads_get_object_backed_runtime_storage.fe",
+    )
+    .unwrap();
+    db.workspace().touch(
+        &mut db,
+        file_url.clone(),
+        Some(
+            r#"struct Table {
+    used: [u8; 4],
+}
+
+impl Table {
+    fn get(self, _ slot: usize) -> u8 {
+        let used = self.used
+        used[slot]
+    }
+}
+
+fn entry() -> u8 {
+    Table { used: [1, 2, 3, 4] }.get(2)
+}
+"#
+            .to_string(),
+        ),
+    );
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    let package = build_runtime_package(&db, top_mod).expect("runtime package");
+    let get = package
+        .functions(&db)
+        .iter()
+        .copied()
+        .find(|function| function.symbol(&db).contains("get"))
+        .expect("generated get runtime function");
+    let body = get.instance(&db).body(&db);
+    let used_local = body
+        .locals
+        .iter()
+        .enumerate()
+        .find_map(|(idx, local)| {
+            (idx >= body.signature.params.len()
+                && local.semantic_ty.pretty_print(&db) == "[u8; 4]"
+                && matches!(
+                    local.carrier,
+                    mir2::RuntimeCarrier::Value(RuntimeClass::Ref {
+                        kind: RefKind::Object,
+                        ..
+                    })
+                ))
+            .then_some(RLocalId::from_u32(idx as u32))
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "owned aggregate local with later place-style reads should be object-backed:\n{body:#?}"
+            )
+        });
+
+    assert!(
+        body.blocks
+            .iter()
+            .flat_map(|block| block.stmts.iter())
+            .any(|stmt| {
+                matches!(
+                    stmt,
+                    RStmt::Assign {
+                        expr: RExpr::MaterializePlaceToObject { .. }
+                            | RExpr::MaterializeToObject { .. },
+                        ..
+                    }
+                )
+            }),
+        "owned aggregate local should materialize through object-backed lowering:\n{body:#?}"
+    );
+    assert!(
+        body.blocks
+            .iter()
+            .flat_map(|block| block.stmts.iter())
+            .any(|stmt| {
+                matches!(
+                    stmt,
+                    RStmt::Assign {
+                        expr: RExpr::Load { place },
+                        ..
+                    } if place.root == PlaceRoot::Ref(used_local)
+                        && matches!(place.path.as_ref(), [PlaceElem::Index(_)])
+                )
+            }),
+        "later projections should read from the owned aggregate local itself:\n{body:#?}"
+    );
+}
+
+#[test]
+fn linear_probe_big_struct_keeps_array_projection_reads_place_based() {
+    let mut db = DriverDataBase::default();
+    let file_url =
+        Url::parse("file:///linear_probe_big_struct_keeps_array_projection_reads_place_based.fe")
+            .unwrap();
+    db.workspace().touch(
+        &mut db,
+        file_url.clone(),
+        Some(
+            format!(
+                "{}\nfn entry() -> u256 {{\n    let mut table = Table::empty()\n    table.set(17, 99)\n    table.get(17)\n}}\n",
+                include_str!("../../fe/tests/fixtures/fe_test/linear_probe_big_struct.fe")
+            ),
+        ),
+    );
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    emit_module_sonatina_ir(&db, top_mod)
+        .expect("linear_probe_big_struct should lower through Sonatina");
+    let package = build_runtime_package(&db, top_mod).expect("runtime package");
+
+    for (name, expected_fields) in [("set", [true, true, false]), ("get", [true, true, true])] {
+        let function = package
+            .functions(&db)
+            .iter()
+            .copied()
+            .find(|function| function.symbol(&db).contains(name))
+            .unwrap_or_else(|| panic!("missing `{name}` runtime function"));
+        let body = function.instance(&db).body(&db);
+        let self_local = body.signature.params[0].local;
+        let mut saw_indexed_reads = [false; 3];
+        for stmt in body.blocks.iter().flat_map(|block| block.stmts.iter()) {
+            let RStmt::Assign {
+                expr: RExpr::Load { place },
+                ..
+            } = stmt
+            else {
+                continue;
+            };
+            if place.root != PlaceRoot::Ref(self_local) && place.root != PlaceRoot::Slot(self_local)
+            {
+                continue;
+            }
+            match place.path.as_ref() {
+                [PlaceElem::Field(field)] if field.0 < 3 => {
+                    panic!(
+                        "{name} should not load whole array field {} before indexing:\n{body:#?}",
+                        field.0
+                    );
+                }
+                [PlaceElem::Field(field), PlaceElem::Index(_)] if field.0 < 3 => {
+                    saw_indexed_reads[field.0 as usize] = true;
+                }
+                _ => {}
+            }
+        }
+        for (idx, expected) in expected_fields.into_iter().enumerate() {
+            assert_eq!(
+                saw_indexed_reads[idx],
+                expected,
+                "{name} should {}read field {} through a composite place:\n{body:#?}",
+                if expected { "" } else { "not " },
+                idx
+            );
+        }
+    }
+}
+
+#[test]
 fn materialized_scalar_uses_do_not_keep_rawaddr_runtime_carriers() {
     let mut db = DriverDataBase::default();
     let file_url =

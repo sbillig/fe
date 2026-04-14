@@ -411,6 +411,10 @@ pub enum YExpr<'db> {
         src: YLocalId,
         layout: LayoutId<'db>,
     },
+    MaterializePlaceToObject {
+        place: YulPlace<'db>,
+        layout: LayoutId<'db>,
+    },
     ProviderFromRaw {
         raw: YLocalId,
         class: YulValueClass<'db>,
@@ -2077,6 +2081,27 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                 (
                     YExpr::MaterializeToObject {
                         src: YLocalId(src.as_u32()),
+                        layout,
+                    },
+                    Some(class.clone()),
+                    runtime_class_transport(&class),
+                    None,
+                )
+            }
+            RExpr::MaterializePlaceToObject { place } => {
+                let layout = default_dst_class
+                    .as_ref()
+                    .and_then(layout_from_yul_class)
+                    .ok_or_else(|| {
+                        YulError::Layout(
+                            "materialize-place-to-object result is missing an aggregate layout"
+                                .to_string(),
+                        )
+                    })?;
+                let class = YulValueClass::MemoryPtr { layout };
+                (
+                    YExpr::MaterializePlaceToObject {
+                        place: self.legalize_place(body, local_values, place)?.0,
                         layout,
                     },
                     Some(class.clone()),

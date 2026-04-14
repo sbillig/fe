@@ -482,6 +482,25 @@ impl<'db> RmirLowerCtxt<'db> {
                 } else {
                     dst_class
                 };
+                if let (
+                    RuntimeClass::AggregateValue { layout },
+                    RuntimeClass::Ref {
+                        pointee,
+                        kind: RefKind::Object,
+                        view: RefView::Whole,
+                    },
+                ) = (&projected, &dst_class)
+                    && **pointee == (RuntimeClass::AggregateValue { layout: *layout })
+                {
+                    self.push_stmt(
+                        bb,
+                        RStmt::Assign {
+                            dst,
+                            expr: RExpr::MaterializePlaceToObject { place },
+                        },
+                    );
+                    return;
+                }
                 if projected == dst_class {
                     self.push_stmt(
                         bb,

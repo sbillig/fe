@@ -451,6 +451,9 @@ fn format_expr<'db>(db: &'db dyn MirDb, expr: &RExpr<'db>) -> String {
         RExpr::MaterializeToObject { src } => {
             format!("materialize_to_object {}", format_local_id(*src))
         }
+        RExpr::MaterializePlaceToObject { place } => {
+            format!("materialize_place_to_object {}", format_place(place))
+        }
         RExpr::ProviderFromRaw {
             raw,
             provider_ty,

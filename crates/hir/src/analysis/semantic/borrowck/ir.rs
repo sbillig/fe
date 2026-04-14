@@ -118,12 +118,13 @@ impl NLocalRootDemand {
             || self.nonself_backing_place
             || self.always_rooted
     }
-}
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum NLocalIdentityPolicy {
-    PlainValue,
-    PreserveIdentityIfAggregate,
+    pub fn needs_projectable_owned_storage(self) -> bool {
+        self.read_by_place
+            || self.written_by_place
+            || self.borrowed_or_addr_taken
+            || self.passed_by_place
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -132,7 +133,6 @@ pub struct NLocalFacts<'db> {
     pub origin: NLocalOrigin<'db>,
     pub snapshot_source_place: Option<NSPlace<'db>>,
     pub root_demand: NLocalRootDemand,
-    pub identity_policy: NLocalIdentityPolicy,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

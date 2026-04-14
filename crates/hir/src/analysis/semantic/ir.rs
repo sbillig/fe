@@ -246,6 +246,9 @@ pub enum SEffectArgValue {
 pub enum SExpr<'db> {
     Forward(SValueId),
     UseValue(SValueId),
+    ReadPlace {
+        place: SPlace,
+    },
     CodeRegionRef {
         region: SemanticCodeRegionRef<'db>,
     },

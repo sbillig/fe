@@ -264,6 +264,25 @@ fn verify_assign<'db>(
             }
             dst_class.clone()
         }
+        RExpr::MaterializePlaceToObject { place } => {
+            let Some(RuntimeClass::Ref {
+                pointee,
+                kind: crate::runtime::RefKind::Object,
+                view: crate::runtime::RefView::Whole,
+            }) = &dst_class
+            else {
+                return Err(VerifyError::InvalidExprClass(dst));
+            };
+            let RuntimeClass::AggregateValue { layout } = &**pointee else {
+                return Err(VerifyError::InvalidExprClass(dst));
+            };
+            if project_place(db, program, body, place)?
+                != (RuntimeClass::AggregateValue { layout: *layout })
+            {
+                return Err(VerifyError::InvalidExprClass(dst));
+            }
+            dst_class.clone()
+        }
         RExpr::ProviderFromRaw {
             raw,
             provider_ty,

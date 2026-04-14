@@ -194,6 +194,7 @@ fn writable_local_roots<'db>(
             SExpr::Forward(src) | SExpr::UseValue(src) => {
                 roots.extend(writable_local_roots(*src, local_defs, memo, visiting));
             }
+            SExpr::ReadPlace { .. } => {}
             SExpr::CodeRegionRef { .. }
             | SExpr::Const(_)
             | SExpr::Unary { .. }

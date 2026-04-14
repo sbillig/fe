@@ -5,9 +5,10 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            PlaceProvenance, SBlockId, SExpr, SStmtKind, STerminatorKind, SemanticBindingLowering,
-            SemanticBody, SemanticCalleeRef, SemanticLocalRole, SemanticProjection,
-            ValueProvenance, effect_param_site, lower::lower_to_smir, verify_semantic_body,
+            PlaceProvenance, SBlockId, SExpr, SPlace, SPlaceElem, SStmtKind, STerminatorKind,
+            SemanticBindingLowering, SemanticBody, SemanticCalleeRef, SemanticLocalRole,
+            SemanticProjection, ValueProvenance, effect_param_site, lower::lower_to_smir,
+            verify_semantic_body,
         },
         ty::{
             corelib::resolve_lib_func_path,
@@ -1154,6 +1155,15 @@ fn classify_expr_local_role<'db>(
             classify_forward_role(db, scope, assumptions, dst_ty, *value, locals)
         }
         SExpr::UseValue(_) => fallback_local_role(db, scope, assumptions, dst_ty),
+        SExpr::ReadPlace { place } => classify_projection_local_role(
+            db,
+            scope,
+            assumptions,
+            dst_ty,
+            place.local,
+            semantic_projection_path_from_place(place),
+            locals,
+        ),
         SExpr::Borrow { .. } => fallback_local_role(db, scope, assumptions, dst_ty),
         SExpr::Field { base, field } => classify_projection_local_role(
             db,
@@ -1228,6 +1238,11 @@ fn classify_expr_snapshot_source<'db>(
         SExpr::Forward(value) | SExpr::UseValue(value) => {
             locals[value.index()].snapshot_source.clone()
         }
+        SExpr::ReadPlace { place } => classify_projection_snapshot_source(
+            place.local,
+            semantic_projection_path_from_place(place),
+            locals,
+        ),
         SExpr::Field { base, field } => classify_projection_snapshot_source(
             *base,
             vec![SemanticProjection::Field(field.0 as usize)].into_boxed_slice(),
@@ -1266,6 +1281,17 @@ fn classify_expr_snapshot_source<'db>(
         | SExpr::CodeRegionOffset { .. }
         | SExpr::CodeRegionLen { .. } => None,
     }
+}
+
+fn semantic_projection_path_from_place<'db>(place: &SPlace) -> Box<[SemanticProjection<'db>]> {
+    place
+        .path
+        .iter()
+        .map(|elem| match elem {
+            SPlaceElem::Field(field) => SemanticProjection::Field(field.0 as usize),
+            SPlaceElem::Index(index) => SemanticProjection::Index(*index),
+        })
+        .collect()
 }
 
 fn classify_projection_snapshot_source<'db>(

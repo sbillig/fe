@@ -195,6 +195,27 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                     class: ptr_class,
                 })
             }
+            YExpr::MaterializePlaceToObject { place, layout } => {
+                let (mut setup, addr, _) = self.address_of_place(place)?;
+                let temp = self.state.alloc_temp();
+                let ptr_class = YulValueClass::MemoryPtr { layout: *layout };
+                setup.extend(self.alloc_memory_slot(&temp, &ptr_class)?);
+                setup.extend(self.copy_into_addr(
+                    ptr_class.clone(),
+                    YulAddressSpace::Memory,
+                    temp.clone(),
+                    RenderedValue {
+                        setup: Vec::new(),
+                        value: addr,
+                        class: place.result_class.clone(),
+                    },
+                )?);
+                Ok(RenderedValue {
+                    setup,
+                    value: temp,
+                    class: ptr_class,
+                })
+            }
             YExpr::ProviderFromRaw { raw, class } => {
                 let raw = self.local_value(*raw)?;
                 Ok(RenderedValue {

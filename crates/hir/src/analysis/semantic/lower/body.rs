@@ -352,6 +352,14 @@ impl<'db> SmirLowerCtxt<'db> {
             }
             Expr::RecordInit(path, fields) => self.lower_record_init(expr, *path, fields),
             Expr::Field(base, field) => {
+                if self.typed_body.expr_place(self.db, expr).is_some() {
+                    let place = self.lower_place(expr);
+                    return self.emit_expr_with_origin(
+                        origin,
+                        self.expr_ty(expr),
+                        SExpr::ReadPlace { place },
+                    );
+                }
                 let base_expr = *base;
                 let base = self.lower_expr(base_expr);
                 let field = FieldIndex(
@@ -365,6 +373,14 @@ impl<'db> SmirLowerCtxt<'db> {
                 self.emit_expr_with_origin(origin, self.expr_ty(expr), SExpr::Field { base, field })
             }
             Expr::Bin(base, index, BinOp::Index) => {
+                if self.typed_body.expr_place(self.db, expr).is_some() {
+                    let place = self.lower_place(expr);
+                    return self.emit_expr_with_origin(
+                        origin,
+                        self.expr_ty(expr),
+                        SExpr::ReadPlace { place },
+                    );
+                }
                 let base = self.lower_expr(*base);
                 let index = self.lower_expr(*index);
                 self.emit_expr_with_origin(origin, self.expr_ty(expr), SExpr::Index { base, index })

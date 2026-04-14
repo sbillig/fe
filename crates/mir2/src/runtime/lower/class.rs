@@ -2,9 +2,9 @@ use common::indexmap::IndexSet;
 use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
-        FieldIndex, GenericSubst, ImplEnv, Mutability, NEffectArg, NEffectArgValue, NSStmtKind,
-        SConst, SLocalId, SemanticCalleeRef, SemanticInstance, SemanticInstanceKey,
-        ValueProvenance, VariantIndex,
+        FieldIndex, GenericSubst, ImplEnv, NEffectArg, NEffectArgValue, NSStmtKind, SConst,
+        SLocalId, SemanticCalleeRef, SemanticInstance, SemanticInstanceKey, ValueProvenance,
+        VariantIndex,
         borrowck::{
             NBorrowRoot, NExpr, NLocalInterface, NLocalOrigin, NOperand, NSLocal, NSPlace,
             NSPlaceRoot, NSTerminatorKind, NormalizedBindingLowering, NormalizedSemanticBody,
@@ -273,30 +273,16 @@ pub(super) fn infer_local_runtime_state<'db>(
                 let NSStmtKind::Assign { dst, expr } = &stmt.kind else {
                     continue;
                 };
-                let desired = match &body.locals[dst.index()] {
-                    NSLocal {
-                        mutability: Mutability::Mutable,
-                        source: Some(_),
-                        ..
-                    } => {
-                        match expr_direct_class(
-                            db,
-                            body,
-                            expr,
-                            body.locals[dst.index()].ty,
-                            &carriers,
-                        ) {
-                            Some(RuntimeClass::AggregateValue { layout }) => {
-                                RuntimeCarrier::Value(RuntimeClass::object_ref(layout))
-                            }
-                            Some(class) => RuntimeCarrier::Value(class),
-                            None => continue,
-                        }
+                let local = &body.locals[dst.index()];
+                let desired = match expr_direct_class(db, body, expr, local.ty, &carriers) {
+                    Some(RuntimeClass::AggregateValue { layout })
+                        if matches!(local.facts.interface, NLocalInterface::DirectValue)
+                            && local.facts.root_demand.needs_projectable_owned_storage() =>
+                    {
+                        RuntimeCarrier::Value(RuntimeClass::object_ref(layout))
                     }
-                    local => match expr_direct_class(db, body, expr, local.ty, &carriers) {
-                        Some(class) => RuntimeCarrier::Value(class),
-                        None => continue,
-                    },
+                    Some(class) => RuntimeCarrier::Value(class),
+                    None => continue,
                 };
                 if carriers[dst.index()] != desired {
                     carriers[dst.index()] = desired;

@@ -13,7 +13,7 @@ use hir::{
     hir_def::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
     projection::IndexSource,
 };
-use mir2::runtime::RefKind;
+use mir2::runtime::{RefKind, RefView};
 use mir2::{
     AddressSpaceKind, ConstNode, ConstRegionId, ConstScalar, IntrinsicArithBinOp, Layout, LayoutId,
     RBlockId, RExpr, RLocalId, RStmt, RTerminator, ResolvedPlaceElem, ResolvedPlaceRootKind,
@@ -1026,6 +1026,32 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 );
                 match self.body.value_class(*src) {
                     Some(RuntimeClass::Ref {
+                        pointee,
+                        kind: RefKind::Object,
+                        view: RefView::Whole,
+                    }) if pointee.aggregate_layout().is_some()
+                        && self.fb.type_of(src_value) != self.fb.type_of(object) =>
+                    {
+                        self.copy_terminal_to_object(
+                            PlaceTerminal::Object {
+                                value: src_value,
+                                class: (**pointee).clone(),
+                            },
+                            &RuntimeClass::AggregateValue { layout },
+                            object,
+                        )?;
+                    }
+                    Some(RuntimeClass::Ref {
+                        kind: RefKind::Const,
+                        ..
+                    }) if self.fb.type_of(src_value) != self.fb.type_of(object) => {
+                        self.copy_terminal_to_object(
+                            PlaceTerminal::Const { value: src_value },
+                            &RuntimeClass::AggregateValue { layout },
+                            object,
+                        )?;
+                    }
+                    Some(RuntimeClass::Ref {
                         kind: RefKind::Const,
                         ..
                     }) => self.fb.insert_inst_no_result(ObjInitConst::new(
@@ -1040,6 +1066,9 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     )),
                 }
                 object
+            }
+            RExpr::MaterializePlaceToObject { place } => {
+                self.materialize_place_to_object(place, dst)?
             }
             RExpr::ProviderFromRaw { raw, space, .. } => {
                 let value = self.local_value(*raw)?;
@@ -2425,6 +2454,213 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         }
     }
 
+    fn materialize_place_to_object(
+        &mut self,
+        place: &RuntimePlace<'db>,
+        dst: Option<RLocalId>,
+    ) -> Result<ValueId, LowerError> {
+        let dst_local = dst.ok_or_else(|| {
+            LowerError::Internal("materialize-place-to-object missing destination".to_string())
+        })?;
+        let class = self.body.value_class(dst_local).ok_or_else(|| {
+            LowerError::Internal(
+                "materialize-place-to-object missing destination class".to_string(),
+            )
+        })?;
+        let RuntimeClass::Ref {
+            pointee,
+            kind: RefKind::Object,
+            ..
+        } = class
+        else {
+            return Err(LowerError::Internal(
+                "materialize-place-to-object destination is not an object ref".to_string(),
+            ));
+        };
+        let RuntimeClass::AggregateValue { layout } = **pointee else {
+            return Err(LowerError::Internal(
+                "materialize-place-to-object destination is not aggregate-backed".to_string(),
+            ));
+        };
+        let layout_ty = self.module.ty_for_layout(layout)?;
+        let object = self.fb.insert_inst(
+            ObjAlloc::new(self.module.inst_set(), layout_ty),
+            self.fb.module_builder.objref_type(layout_ty),
+        );
+        let terminal = self.resolve_place(place)?;
+        self.copy_terminal_to_object(terminal, &RuntimeClass::AggregateValue { layout }, object)?;
+        Ok(object)
+    }
+
+    fn copy_terminal_to_object(
+        &mut self,
+        terminal: PlaceTerminal<'db>,
+        class: &RuntimeClass<'db>,
+        object: ValueId,
+    ) -> Result<(), LowerError> {
+        match terminal {
+            PlaceTerminal::Object {
+                value,
+                class: source,
+            } => {
+                if self.fb.type_of(value) == self.fb.type_of(object)
+                    || !matches!(class, RuntimeClass::AggregateValue { .. })
+                {
+                    self.fb.insert_inst_no_result(ObjStore::new(
+                        self.module.inst_set(),
+                        object,
+                        value,
+                    ));
+                    Ok(())
+                } else {
+                    self.copy_aggregate_terminal_to_object(
+                        PlaceTerminal::Object {
+                            value,
+                            class: source,
+                        },
+                        class,
+                        object,
+                    )
+                }
+            }
+            PlaceTerminal::Const { value } => {
+                if self.fb.type_of(value) == self.fb.type_of(object)
+                    || !matches!(class, RuntimeClass::AggregateValue { .. })
+                {
+                    self.fb.insert_inst_no_result(ObjInitConst::new(
+                        self.module.inst_set(),
+                        object,
+                        value,
+                    ));
+                    Ok(())
+                } else {
+                    self.copy_aggregate_terminal_to_object(
+                        PlaceTerminal::Const { value },
+                        class,
+                        object,
+                    )
+                }
+            }
+            PlaceTerminal::Ptr {
+                addr,
+                space,
+                class: source,
+            } => match class {
+                RuntimeClass::AggregateValue { .. } => self.copy_aggregate_terminal_to_object(
+                    PlaceTerminal::Ptr {
+                        addr,
+                        space,
+                        class: source,
+                    },
+                    class,
+                    object,
+                ),
+                RuntimeClass::Scalar(_)
+                | RuntimeClass::Ref { .. }
+                | RuntimeClass::RawAddr { .. } => {
+                    let value = self.load_from_ptr(addr, space, class)?;
+                    self.fb.insert_inst_no_result(ObjStore::new(
+                        self.module.inst_set(),
+                        object,
+                        value,
+                    ));
+                    Ok(())
+                }
+            },
+        }
+    }
+
+    fn copy_aggregate_terminal_to_object(
+        &mut self,
+        terminal: PlaceTerminal<'db>,
+        class: &RuntimeClass<'db>,
+        object: ValueId,
+    ) -> Result<(), LowerError> {
+        let RuntimeClass::AggregateValue { layout } = class else {
+            return Err(LowerError::Internal(
+                "aggregate terminal copy requires aggregate class".to_string(),
+            ));
+        };
+        match layout.data(self.module.db) {
+            Layout::Struct(data) => {
+                for (idx, field) in data.fields.iter().enumerate() {
+                    let field_idx = self.index_value(idx as u64);
+                    let field_object = self.fb.insert_inst(
+                        ObjProj::new(self.module.inst_set(), smallvec![object, field_idx]),
+                        self.module.ty_for_object_projection(field)?,
+                    );
+                    let field_terminal = match &terminal {
+                        PlaceTerminal::Object { value, .. } => PlaceTerminal::Object {
+                            value: self.fb.insert_inst(
+                                ObjProj::new(self.module.inst_set(), smallvec![*value, field_idx]),
+                                self.module.ty_for_object_projection(field)?,
+                            ),
+                            class: field.clone(),
+                        },
+                        PlaceTerminal::Const { value } => PlaceTerminal::Const {
+                            value: self.fb.insert_inst(
+                                ConstProj::new(
+                                    self.module.inst_set(),
+                                    smallvec![*value, field_idx],
+                                ),
+                                self.module.ty_for_const_projection(field)?,
+                            ),
+                        },
+                        PlaceTerminal::Ptr { addr, space, .. } => PlaceTerminal::Ptr {
+                            addr: self.offset_address(
+                                *addr,
+                                field_offset_from_layout(self.module.db, &data.fields, idx)?,
+                                *space,
+                            )?,
+                            space: *space,
+                            class: field.clone(),
+                        },
+                    };
+                    self.copy_terminal_to_object(field_terminal, field, field_object)?;
+                }
+                Ok(())
+            }
+            Layout::Array(data) => {
+                for idx in 0..data.len as usize {
+                    let elem_idx = self.index_value(idx as u64);
+                    let elem_object = self.fb.insert_inst(
+                        ObjIndex::new(self.module.inst_set(), object, elem_idx),
+                        self.module.ty_for_object_projection(&data.elem)?,
+                    );
+                    let elem_terminal = match &terminal {
+                        PlaceTerminal::Object { value, .. } => PlaceTerminal::Object {
+                            value: self.fb.insert_inst(
+                                ObjIndex::new(self.module.inst_set(), *value, elem_idx),
+                                self.module.ty_for_object_projection(&data.elem)?,
+                            ),
+                            class: data.elem.clone(),
+                        },
+                        PlaceTerminal::Const { value } => PlaceTerminal::Const {
+                            value: self.fb.insert_inst(
+                                ConstIndex::new(self.module.inst_set(), *value, elem_idx),
+                                self.module.ty_for_const_projection(&data.elem)?,
+                            ),
+                        },
+                        PlaceTerminal::Ptr { addr, space, .. } => PlaceTerminal::Ptr {
+                            addr: self.offset_address(
+                                *addr,
+                                idx as u64 * value_span_words(self.module.db, &data.elem)?,
+                                *space,
+                            )?,
+                            space: *space,
+                            class: data.elem.clone(),
+                        },
+                    };
+                    self.copy_terminal_to_object(elem_terminal, &data.elem, elem_object)?;
+                }
+                Ok(())
+            }
+            Layout::Enum(_) => Err(LowerError::Unsupported(
+                "aggregate enum loads from non-memory providers are not supported".to_string(),
+            )),
+        }
+    }
+
     fn addr_of_place(
         &mut self,
         place: &RuntimePlace<'db>,
@@ -2509,6 +2745,35 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     .cloned()
                     .unwrap_or_else(|| dst_class.clone());
                 match src_local {
+                    RuntimeClass::Ref {
+                        pointee,
+                        kind: RefKind::Object,
+                        view: RefView::Whole,
+                    } if pointee.aggregate_layout().is_some()
+                        && self.fb.type_of(src_value) != self.fb.type_of(value) =>
+                    {
+                        self.copy_terminal_to_object(
+                            PlaceTerminal::Object {
+                                value: src_value,
+                                class: (*pointee).clone(),
+                            },
+                            &dst_class,
+                            value,
+                        )?
+                    }
+                    RuntimeClass::Ref {
+                        pointee,
+                        kind: RefKind::Const,
+                        ..
+                    } if pointee.aggregate_layout().is_some()
+                        && self.fb.type_of(src_value) != self.fb.type_of(value) =>
+                    {
+                        self.copy_terminal_to_object(
+                            PlaceTerminal::Const { value: src_value },
+                            &dst_class,
+                            value,
+                        )?
+                    }
                     RuntimeClass::Ref {
                         kind: RefKind::Const,
                         ..
