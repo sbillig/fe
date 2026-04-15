@@ -494,6 +494,11 @@ mod tests {
     use std::{fs, path::PathBuf};
     use url::Url;
 
+    fn temp_fixture_url(name: &str) -> Url {
+        let fixture_path = std::env::temp_dir().join(name);
+        Url::from_file_path(&fixture_path).expect("fixture path should be absolute")
+    }
+
     #[test]
     fn result_map_chain_test_runtime_package_retains_value_enum_asserts() {
         let mut db = DriverDataBase::default();
@@ -540,5 +545,49 @@ mod tests {
             panic!("post-opt test module should verify: {err}\n\n{dumped}");
         }
         compile_all_runtime_objects(&module, false).expect("test runtime package should compile");
+    }
+
+    #[test]
+    fn if_both_arms_return_test_runtime_package_has_no_empty_unreachable_blocks() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("if_both_arms_return_sonatina_runtime.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+fn f(x: u256) -> u256 {
+    if x == 0 {
+        return 1
+    } else {
+        return 2
+    }
+}
+
+#[test]
+fn roundtrip() {
+    assert(f(0) == 1)
+    assert(f(1) == 2)
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O0,
+            SonatinaTestOptions::default(),
+            None,
+        )
+        .expect(
+            "if branches that both return should lower without empty unreachable Sonatina blocks",
+        );
     }
 }

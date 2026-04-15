@@ -702,7 +702,7 @@ struct FunctionLowerer<'ctx, 'db, 'a> {
     body: RuntimeBody<'db>,
     current_sections: Vec<mir2::RuntimeSectionRef<'db>>,
     fb: FunctionBuilder<InstInserter>,
-    block_map: Vec<BlockId>,
+    block_map: Vec<Option<BlockId>>,
     reachable_blocks: Vec<bool>,
     vars: FxHashMap<RLocalId, Variable>,
     slot_roots: FxHashMap<RLocalId, SlotRoot>,
@@ -728,8 +728,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
     ) -> Result<Self, LowerError> {
         let current_sections = module.sections_for_function(body.owner).to_vec();
         let mut fb = module.builder.func_builder::<InstInserter>(func_ref);
-        let block_map = (0..body.blocks.len())
-            .map(|_| fb.append_block())
+        let reachable_blocks = compute_reachable_blocks(&body);
+        let block_map = reachable_blocks
+            .iter()
+            .map(|reachable| reachable.then(|| fb.append_block()))
             .collect::<Vec<_>>();
         let vars = body
             .locals
@@ -755,7 +757,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             current_sections,
             fb,
             block_map,
-            reachable_blocks: Vec::new(),
+            reachable_blocks,
             vars,
             slot_roots: FxHashMap::default(),
             pending_enum_proof: None,
@@ -764,8 +766,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
     }
 
     fn lower(mut self) -> Result<(), LowerError> {
-        self.reachable_blocks = self.compute_reachable_blocks();
-        self.fb.switch_to_block(self.block_map[0]);
+        self.fb
+            .switch_to_block(self.block_id(RBlockId::from_u32(0))?);
         self.initialize_locals().map_err(|err| {
             self.with_body_context(
                 format!(
@@ -782,7 +784,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             if !self.reachable_blocks[idx] {
                 continue;
             }
-            self.fb.switch_to_block(self.block_map[idx]);
+            self.fb
+                .switch_to_block(self.block_id(RBlockId::from_u32(idx as u32))?);
             for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
                 self.lower_stmt(stmt).map_err(|err| {
                     self.with_body_context(
@@ -814,6 +817,18 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         Ok(())
     }
 
+    fn block_id(&self, block: RBlockId) -> Result<BlockId, LowerError> {
+        self.block_map
+            .get(block.as_u32() as usize)
+            .copied()
+            .flatten()
+            .ok_or_else(|| {
+                LowerError::Internal(format!(
+                    "reachable runtime block {block:?} was not assigned a Sonatina block"
+                ))
+            })
+    }
+
     fn with_body_context(
         &self,
         context: String,
@@ -827,20 +842,6 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             block,
             stmt,
         }
-    }
-
-    fn compute_reachable_blocks(&self) -> Vec<bool> {
-        let mut reachable = vec![false; self.body.blocks.len()];
-        let mut worklist = vec![0usize];
-        while let Some(idx) = worklist.pop() {
-            if std::mem::replace(&mut reachable[idx], true) {
-                continue;
-            }
-            for succ in block_successors(&self.body.blocks[idx].terminator) {
-                worklist.push(succ.as_u32() as usize);
-            }
-        }
-        reachable
     }
 
     fn initialize_locals(&mut self) -> Result<(), LowerError> {
@@ -1873,7 +1874,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             RTerminator::Goto(block) => {
                 self.fb.insert_inst_no_result(Jump::new(
                     self.module.inst_set(),
-                    self.block_map[block.as_u32() as usize],
+                    self.block_id(*block)?,
                 ));
             }
             RTerminator::Branch {
@@ -1886,8 +1887,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 self.fb.insert_inst_no_result(Br::new(
                     self.module.inst_set(),
                     cond,
-                    self.block_map[then_bb.as_u32() as usize],
-                    self.block_map[else_bb.as_u32() as usize],
+                    self.block_id(*then_bb)?,
+                    self.block_id(*else_bb)?,
                 ));
             }
             RTerminator::SwitchScalar {
@@ -1902,14 +1903,14 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                         Ok((
                             self.fb
                                 .make_imm_value(self.module.immediate_for_const(value, None)?),
-                            self.block_map[block.as_u32() as usize],
+                            self.block_id(*block)?,
                         ))
                     })
                     .collect::<Result<Vec<_>, LowerError>>()?;
                 self.fb.insert_inst_no_result(BrTable::new(
                     self.module.inst_set(),
                     discr,
-                    Some(self.block_map[default.as_u32() as usize]),
+                    Some(self.block_id(*default)?),
                     table,
                 ));
             }
@@ -1927,14 +1928,14 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                             self.fb.make_imm_value(
                                 self.module.enum_tag_immediate(enum_layout, variant.index)?,
                             ),
-                            self.block_map[block.as_u32() as usize],
+                            self.block_id(*block)?,
                         ))
                     })
                     .collect::<Result<Vec<_>, LowerError>>()?;
                 self.fb.insert_inst_no_result(BrTable::new(
                     self.module.inst_set(),
                     tag,
-                    default.map(|block| self.block_map[block.as_u32() as usize]),
+                    default.map(|block| self.block_id(block)).transpose()?,
                     table,
                 ));
             }
@@ -3888,6 +3889,20 @@ fn block_successors<'db>(terminator: &RTerminator<'db>) -> SmallVec<[RBlockId; 2
         | RTerminator::Return(_)
         | RTerminator::Stop => SmallVec::new(),
     }
+}
+
+fn compute_reachable_blocks<'db>(body: &RuntimeBody<'db>) -> Vec<bool> {
+    let mut reachable = vec![false; body.blocks.len()];
+    let mut worklist = vec![0usize];
+    while let Some(idx) = worklist.pop() {
+        if std::mem::replace(&mut reachable[idx], true) {
+            continue;
+        }
+        for succ in block_successors(&body.blocks[idx].terminator) {
+            worklist.push(succ.as_u32() as usize);
+        }
+    }
+    reachable
 }
 
 trait Pipe: Sized {
