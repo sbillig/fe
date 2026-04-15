@@ -10,142 +10,33 @@ object "main" {
       v0 := $for_array_large_sum()
       stop()
     }
-    function $add($self, $other) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let v3 := 0
-      mstore(r0, $self)
-      mstore(r1, $other)
-      let t4 := and(add(and(mload(r0), 0xffffffffffffffff), and(mload(r1), 0xffffffffffffffff)), 0xffffffffffffffff)
-      if lt(t4, and(mload(r0), 0xffffffffffffffff)) {
-        revert(0, 0)
-      }
-      v3 := t4
-      mstore(r2, v3)
-      ret := and(mload(r2), 0xffffffffffffffff)
-      leave
-    }
     function $for_array_large_sum() -> ret {
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let r3 := mload(0x40)
-      if iszero(r3) {
-        r3 := 0x80
-      }
-      mstore(0x40, add(r3, 32))
-      let r4 := mload(0x40)
-      if iszero(r4) {
-        r4 := 0x80
-      }
-      mstore(0x40, add(r4, 32))
-      let r5 := mload(0x40)
-      if iszero(r5) {
-        r5 := 0x80
-      }
-      mstore(0x40, add(r5, 32))
-      let r6 := mload(0x40)
-      if iszero(r6) {
-        r6 := 0x80
-      }
-      mstore(0x40, add(r6, 32))
-      let r7 := mload(0x40)
-      if iszero(r7) {
-        r7 := 0x80
-      }
-      mstore(0x40, add(r7, 32))
-      let r8 := mload(0x40)
-      if iszero(r8) {
-        r8 := 0x80
-      }
-      mstore(0x40, add(r8, 32))
-      let r9 := mload(0x40)
-      if iszero(r9) {
-        r9 := 0x80
-      }
-      mstore(0x40, add(r9, 32))
-      let r10 := mload(0x40)
-      if iszero(r10) {
-        r10 := 0x80
-      }
-      mstore(0x40, add(r10, 32))
-      let r11 := mload(0x40)
-      if iszero(r11) {
-        r11 := 0x80
-      }
-      mstore(0x40, add(r11, 32))
-      let r12 := mload(0x40)
-      if iszero(r12) {
-        r12 := 0x80
-      }
-      mstore(0x40, add(r12, 32))
-      let r14 := mload(0x40)
-      if iszero(r14) {
-        r14 := 0x80
-      }
-      mstore(0x40, add(r14, 32))
-      let r15 := mload(0x40)
-      if iszero(r15) {
-        r15 := 0x80
-      }
-      mstore(0x40, add(r15, 32))
-      let r16 := mload(0x40)
-      if iszero(r16) {
-        r16 := 0x80
-      }
-      mstore(0x40, add(r16, 32))
-      let r17 := mload(0x40)
-      if iszero(r17) {
-        r17 := 0x80
-      }
-      mstore(0x40, add(r17, 32))
-      let r18 := mload(0x40)
-      if iszero(r18) {
-        r18 := 0x80
-      }
-      mstore(0x40, add(r18, 32))
       let r19 := mload(0x40)
       if iszero(r19) {
         r19 := 0x80
       }
       mstore(0x40, add(r19, 32))
-      let r20 := mload(0x40)
-      if iszero(r20) {
-        r20 := 0x80
-      }
-      mstore(0x40, add(r20, 0))
-      let r21 := mload(0x40)
-      if iszero(r21) {
-        r21 := 0x80
-      }
-      mstore(0x40, add(r21, 32))
-      let r22 := mload(0x40)
-      if iszero(r22) {
-        r22 := 0x80
-      }
-      mstore(0x40, add(r22, 32))
       let v0 := 0
+      let v1 := 0
+      let v2 := 0
+      let v3 := 0
+      let v4 := 0
+      let v5 := 0
+      let v6 := 0
+      let v7 := 0
+      let v8 := 0
+      let v9 := 0
+      let v10 := 0
+      let v11 := 0
+      let v12 := 0
       let v13 := 0
+      let v14 := 0
+      let v15 := 0
+      let v16 := 0
+      let v17 := 0
+      let v18 := 0
+      let v21 := 0
+      let v22 := 0
       let v23 := 0
       let v24 := 0
       let v25 := 0
@@ -192,25 +83,25 @@ object "main" {
         switch $pc
         case 0 {
             v23 := 0x01
-            mstore(r3, v23)
+            v3 := v23
             v24 := 0x02
-            mstore(r4, v24)
+            v4 := v24
             v25 := 0x03
-            mstore(r5, v25)
+            v5 := v25
             v26 := 0x04
-            mstore(r6, v26)
+            v6 := v26
             v27 := 0x05
-            mstore(r7, v27)
+            v7 := v27
             v28 := 0x06
-            mstore(r8, v28)
+            v8 := v28
             v29 := 0x07
-            mstore(r9, v29)
+            v9 := v29
             v30 := 0x08
-            mstore(r10, v30)
+            v10 := v30
             v31 := 0x09
-            mstore(r11, v31)
+            v11 := v31
             v32 := 0x0a
-            mstore(r12, v32)
+            v12 := v32
             v33 := 0x01
             v34 := 0x02
             v35 := 0x03
@@ -236,19 +127,19 @@ object "main" {
             v55 := dataoffset("const_0")
             v0 := v55
             v57 := 0x00
-            mstore(r14, v57)
+            v14 := v57
             v58 := 0x00
-            mstore(r1, v58)
+            v1 := v58
             v59 := 0x00
-            mstore(r15, v59)
+            v15 := v59
             v60 := $len_arg0_root_code(v0)
-            mstore(r16, v60)
+            v16 := v60
             $pc := 1
             continue
         }
         case 1 {
-            mstore(r17, iszero(iszero(lt(mload(r15), mload(r16)))))
-            if iszero(iszero(mload(r17))) {
+            v17 := iszero(iszero(lt(v15, v16)))
+            if v17 {
               $pc := 2
               continue
             }
@@ -256,26 +147,30 @@ object "main" {
             continue
         }
         case 2 {
-            v61 := $get_arg0_root_code(v0, mload(r15))
-            mstore(r18, v61)
-            mstore(r2, and(mload(r18), 0xffffffffffffffff))
-            v62 := $add(and(mload(r1), 0xffffffffffffffff), and(mload(r2), 0xffffffffffffffff))
-            mstore(r19, v62)
-            let t64 := mload(r19)
-            mstore(r1, t64)
-            v63 := 0x01
-            mstore(r21, v63)
-            let t65 := add(mload(r15), mload(r21))
-            if lt(t65, mload(r15)) {
+            v61 := $get_arg0_root_code(v0, v15)
+            v18 := v61
+            v2 := v18
+            let t64 := and(add(v1, v2), 0xffffffffffffffff)
+            if lt(t64, v1) {
               revert(0, 0)
             }
-            mstore(r22, t65)
-            mstore(r15, mload(r22))
+            v62 := t64
+            mstore(r19, v62)
+            let t65 := mload(r19)
+            v1 := t65
+            v63 := 0x01
+            v21 := v63
+            let t66 := add(v15, v21)
+            if lt(t66, v15) {
+              revert(0, 0)
+            }
+            v22 := t66
+            v15 := v22
             $pc := 1
             continue
         }
         case 3 {
-            ret := and(mload(r1), 0xffffffffffffffff)
+            ret := v1
             leave
         }
         default {
@@ -290,24 +185,23 @@ object "main" {
       }
       mstore(0x40, add(r1, 32))
       let v2 := 0
+      let v3 := 0
       mstore(r1, $i)
-      let t3 := allocate(32)
-      datacopy(t3, add($self, mul(mload(r1), 32)), 32)
-      t3 := mload(t3)
-      v2 := t3
-      ret := v2
+      let t4 := mload(r1)
+      v2 := t4
+      let t5 := allocate(32)
+      datacopy(t5, add($self, mul(v2, 32)), 32)
+      t5 := mload(t5)
+      v3 := t5
+      ret := v3
       leave
     }
     function $len_arg0_root_code($self) -> ret {
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
+      let v1 := 0
       let v2 := 0
       v2 := 0x0a
-      mstore(r1, v2)
-      ret := mload(r1)
+      v1 := v2
+      ret := v1
       leave
     }
     $__fe_main_root()

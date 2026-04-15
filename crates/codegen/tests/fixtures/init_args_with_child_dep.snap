@@ -6,31 +6,14 @@ input_file: tests/fixtures/init_args_with_child_dep.fe
 object "Child" {
   code {
     function $__Child_init($x, $y) {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 0))
-      mstore(r0, $x)
-      mstore(r1, $y)
       leave
     }
     function $__fe_contract_init_abi_Child() {
-      let r8 := mload(0x40)
-      if iszero(r8) {
-        r8 := 0x80
+      let r9 := mload(0x40)
+      if iszero(r9) {
+        r9 := 0x80
       }
-      mstore(0x40, add(r8, 64))
+      mstore(0x40, add(r9, 64))
       let v0 := 0
       let v1 := 0
       let v2 := 0
@@ -38,12 +21,13 @@ object "Child" {
       let v4 := 0
       let v5 := 0
       let v6 := 0
-      let v9 := 0
+      let v7 := 0
       let v10 := 0
       let v11 := 0
       let v12 := 0
       let v13 := 0
       let v14 := 0
+      let v15 := 0
       let $pc := 0
       for {} 1 {} {
         switch $pc
@@ -62,26 +46,38 @@ object "Child" {
             revert(v0, v0)
         }
         case 2 {
-            v3 := datasize("Child_init")
+            v3 := datasize("init")
             v4 := codesize()
-            let t16 := sub(v4, v3)
+            v5 := iszero(iszero(lt(v4, v3)))
+            if v5 {
+              $pc := 3
+              continue
+            }
+            $pc := 4
+            continue
+        }
+        case 3 {
+            revert(v0, v0)
+        }
+        case 4 {
+            let t17 := sub(v4, v3)
             if gt(v3, v4) {
               revert(0, 0)
             }
-            v5 := t16
-            v6 := allocate(v5)
-            datacopy(v6, v3, v5)
-            mstore(r8, v6)
-            mstore(add(r8, 32), v5)
-            v9 := $decoder_new_1(r8)
-            v10 := v9
-            v11 := $decode_2(v10)
-            v12 := v11
-            let t17 := mload(v12)
-            v13 := t17
-            let t18 := mload(add(v12, 32))
+            v6 := t17
+            v7 := allocate(v6)
+            datacopy(v7, v3, v6)
+            mstore(r9, v7)
+            mstore(add(r9, 32), v6)
+            v10 := $decoder_new_1(r9)
+            v11 := v10
+            v12 := $decode_2(v11)
+            v13 := v12
+            let t18 := mload(v13)
             v14 := t18
-            $__Child_init(v13, v14)
+            let t19 := mload(add(v13, 32))
+            v15 := t19
+            $__Child_init(v14, v15)
             leave
         }
         default {
@@ -100,148 +96,162 @@ object "Child" {
       datacopy(v0, v2, v3)
       return(v0, v3)
     }
-    function $add_4($self, $other) -> ret {
+    function $base_2($self) -> ret {
       let r0 := mload(0x40)
       if iszero(r0) {
         r0 := 0x80
       }
-      mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let v3 := 0
-      mstore(r0, $self)
-      mstore(r1, $other)
-      let t4 := add(mload(r0), mload(r1))
-      if lt(t4, mload(r0)) {
-        revert(0, 0)
-      }
-      v3 := t4
-      mstore(r2, v3)
-      ret := mload(r2)
-      leave
-    }
-    function $add_5($self, $other) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let v3 := 0
-      mstore(r0, $self)
-      mstore(r1, $other)
-      let t4 := add(mload(r0), mload(r1))
-      if lt(t4, mload(r0)) {
-        revert(0, 0)
-      }
-      v3 := t4
-      mstore(r2, v3)
-      ret := mload(r2)
+      mstore(0x40, add(r0, 128))
+      let v1 := 0
+      mstore(r0, mload($self))
+      mstore(add(r0, 32), mload(add($self, 32)))
+      mstore(add(r0, 64), mload(add($self, 64)))
+      mstore(add(r0, 96), mload(add($self, 96)))
+      let t2 := mload(add(r0, 96))
+      v1 := t2
+      ret := v1
       leave
     }
     function $decode_2($d) -> ret {
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let r4 := mload(0x40)
-      if iszero(r4) {
-        r4 := 0x80
-      }
-      mstore(0x40, add(r4, 32))
       let v1 := 0
+      let v2 := 0
       let v3 := 0
+      let v4 := 0
       let v5 := 0
       let v6 := 0
       let v7 := 0
       let v8 := 0
       let v9 := 0
       let v10 := 0
-      v6 := $d
-      v1 := v6
-      v7 := $decode_3(v1)
-      mstore(r2, v7)
+      let v11 := 0
+      let v12 := 0
       v8 := $d
       v3 := v8
-      v9 := $decode_3(v3)
-      mstore(r4, v9)
-      v10 := allocate(64)
-      mstore(v10, mload(r2))
-      mstore(add(v10, 32), mload(r4))
+      v9 := $decode_field_1(v3)
+      v4 := v9
+      v1 := v4
+      v10 := $d
       v5 := v10
-      ret := v5
+      v11 := $decode_field_1(v5)
+      v6 := v11
+      v2 := v6
+      v12 := allocate(64)
+      mstore(v12, v1)
+      mstore(add(v12, 32), v2)
+      v7 := v12
+      ret := v7
       leave
     }
     function $decode_3($d) -> ret {
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let v2 := 0
-      v2 := $read_word_1($d)
-      mstore(r1, v2)
-      ret := mload(r1)
-      leave
-    }
-    function $decoder_new_1($input) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 64))
       let v1 := 0
       let v2 := 0
-      mstore(r0, mload($input))
-      mstore(add(r0, 32), mload(add($input, 32)))
-      v2 := $new_2(r0)
+      v2 := $read_word_2($d)
       v1 := v2
       ret := v1
       leave
     }
-    function $gt_1($self, $other) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
+    function $decode_field_1($d) -> ret {
+      let v1 := 0
+      let v2 := 0
       let v3 := 0
-      mstore(r0, $self)
-      mstore(r1, $other)
-      v3 := iszero(iszero(gt(mload(r0), mload(r1))))
-      mstore(r2, v3)
-      ret := iszero(iszero(mload(r2)))
+      let v4 := 0
+      let v6 := 0
+      let v7 := 0
+      let v8 := 0
+      let v9 := 0
+      let v10 := 0
+      let v12 := 0
+      let v14 := 0
+      let v15 := 0
+      let v20 := 0
+      let v21 := 0
+      let v22 := 0
+      let v23 := 0
+      let v24 := 0
+      let v25 := 0
+      let v26 := 0
+      let v27 := 0
+      let v28 := 0
+      let v29 := 0
+      let v32 := 0
+      let v33 := 0
+      let v34 := 0
+      let v37 := 0
+      let v38 := 0
+      let v43 := 0
+      let $pc := 0
+      for {} 1 {} {
+        switch $pc
+        case 0 {
+            v21 := 0
+            v6 := v21
+            if v6 {
+              $pc := 1
+              continue
+            }
+            $pc := 2
+            continue
+        }
+        case 1 {
+            v22 := $read_word_3($d)
+            v7 := v22
+            v1 := v7
+            v23 := $d
+            v24 := $d
+            v25 := $base_2(v24)
+            v8 := v25
+            v2 := v8
+            v26 := $d
+            v27 := $d
+            v28 := $pos_2(v27)
+            v9 := v28
+            v3 := v9
+            let t44 := add(v2, v1)
+            if lt(t44, v2) {
+              revert(0, 0)
+            }
+            v29 := t44
+            v10 := v29
+            $set_base_2($d, v10)
+            v32 := $d
+            v33 := $d
+            v34 := $base_2(v33)
+            v12 := v34
+            $set_pos_2($d, v12)
+            v37 := $d
+            v14 := v37
+            v38 := $decode_3(v14)
+            v15 := v38
+            v4 := v15
+            $set_base_2($d, v2)
+            $set_pos_2($d, v3)
+            ret := v4
+            leave
+        }
+        case 2 {
+            $pc := 3
+            continue
+        }
+        case 3 {
+            v43 := $decode_3($d)
+            v20 := v43
+            ret := v20
+            leave
+        }
+        default {
+            invalid()
+        }
+      }
+    }
+    function $decoder_new_1($input) -> ret {
+      let v1 := 0
+      let v2 := 0
+      v2 := $new_3($input)
+      v1 := v2
+      ret := v1
       leave
     }
-    function $len_1($self) -> ret {
+    function $len_2($self) -> ret {
       let r0 := mload(0x40)
       if iszero(r0) {
         r0 := 0x80
@@ -255,205 +265,328 @@ object "Child" {
       ret := v1
       leave
     }
-    function $new_2($input) -> ret {
+    function $len_3($self) -> ret {
       let r0 := mload(0x40)
       if iszero(r0) {
         r0 := 0x80
       }
       mstore(0x40, add(r0, 64))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
       let v1 := 0
+      mstore(r0, mload($self))
+      mstore(add(r0, 32), mload(add($self, 32)))
+      let t2 := mload(add(r0, 32))
+      v1 := t2
+      ret := v1
+      leave
+    }
+    function $new_3($input) -> ret {
+      let v1 := 0
+      let v2 := 0
       let v3 := 0
       let v4 := 0
       let v5 := 0
       let v6 := 0
-      mstore(r0, mload($input))
-      mstore(add(r0, 32), mload(add($input, 32)))
-      v4 := $new_3(r0)
+      v4 := $new_4($input)
       v1 := v4
       v5 := 0x00
-      mstore(r2, v5)
+      v2 := v5
       v6 := allocate(128)
       mstore(v6, mload(v1))
       mstore(add(v6, 32), mload(add(v1, 32)))
       mstore(add(v6, 64), mload(add(v1, 64)))
-      mstore(add(v6, 96), mload(r2))
+      mstore(add(v6, 96), v2)
       v3 := v6
       ret := v3
       leave
     }
-    function $new_3($input) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 64))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
+    function $new_4($input) -> ret {
+      let v1 := 0
       let v2 := 0
       let v3 := 0
       let v4 := 0
-      mstore(r0, mload($input))
-      mstore(add(r0, 32), mload(add($input, 32)))
       v3 := 0x00
-      mstore(r1, v3)
+      v1 := v3
       v4 := allocate(96)
-      mstore(v4, mload(r0))
-      mstore(add(v4, 32), mload(add(r0, 32)))
-      mstore(add(v4, 64), mload(r1))
+      mstore(v4, mload($input))
+      mstore(add(v4, 32), mload(add($input, 32)))
+      mstore(add(v4, 64), v1)
       v2 := v4
       ret := v2
       leave
     }
-    function $read_word_1($self) -> ret {
+    function $pos_2($self) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 128))
+      let v1 := 0
+      mstore(r0, mload($self))
+      mstore(add(r0, 32), mload(add($self, 32)))
+      mstore(add(r0, 64), mload(add($self, 64)))
+      mstore(add(r0, 96), mload(add($self, 96)))
+      let t2 := mload(add(r0, 64))
+      v1 := t2
+      ret := v1
+      leave
+    }
+    function $read_word_2($self) -> ret {
       let r1 := mload(0x40)
       if iszero(r1) {
         r1 := 0x80
       }
       mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let r3 := mload(0x40)
-      if iszero(r3) {
-        r3 := 0x80
-      }
-      mstore(0x40, add(r3, 32))
-      let r6 := mload(0x40)
-      if iszero(r6) {
-        r6 := 0x80
-      }
-      mstore(0x40, add(r6, 32))
-      let r9 := mload(0x40)
-      if iszero(r9) {
-        r9 := 0x80
-      }
-      mstore(0x40, add(r9, 32))
       let r10 := mload(0x40)
       if iszero(r10) {
         r10 := 0x80
       }
       mstore(0x40, add(r10, 32))
-      let r11 := mload(0x40)
-      if iszero(r11) {
-        r11 := 0x80
-      }
-      mstore(0x40, add(r11, 0))
       let r12 := mload(0x40)
       if iszero(r12) {
         r12 := 0x80
       }
       mstore(0x40, add(r12, 32))
-      let r13 := mload(0x40)
-      if iszero(r13) {
-        r13 := 0x80
-      }
-      mstore(0x40, add(r13, 32))
-      let r14 := mload(0x40)
-      if iszero(r14) {
-        r14 := 0x80
-      }
-      mstore(0x40, add(r14, 32))
-      let r15 := mload(0x40)
-      if iszero(r15) {
-        r15 := 0x80
-      }
-      mstore(0x40, add(r15, 0))
-      let r16 := mload(0x40)
-      if iszero(r16) {
-        r16 := 0x80
-      }
-      mstore(0x40, add(r16, 0))
-      let r21 := mload(0x40)
-      if iszero(r21) {
-        r21 := 0x80
-      }
-      mstore(0x40, add(r21, 32))
-      let r22 := mload(0x40)
-      if iszero(r22) {
-        r22 := 0x80
-      }
-      mstore(0x40, add(r22, 0))
+      let v2 := 0
+      let v3 := 0
       let v4 := 0
       let v5 := 0
+      let v6 := 0
       let v7 := 0
       let v8 := 0
-      let v17 := 0
+      let v11 := 0
+      let v13 := 0
+      let v14 := 0
+      let v15 := 0
       let v18 := 0
       let v19 := 0
       let v20 := 0
+      let v22 := 0
       let v23 := 0
       let v24 := 0
       let v25 := 0
       let v26 := 0
       let v27 := 0
       let v28 := 0
-      let v31 := 0
+      let v29 := 0
+      let v32 := 0
+      let v33 := 0
+      let v34 := 0
       let $pc := 0
       for {} 1 {} {
         switch $pc
         case 0 {
             v4 := $self
-            v5 := $self
-            v23 := $len_1(v5)
-            mstore(r6, v23)
-            mstore(r1, mload(r6))
-            v7 := $self
-            let t32 := mload(add($self, 64))
-            v8 := t32
-            v24 := 0x20
-            mstore(r9, v24)
-            v25 := $add_5(v8, mload(r9))
-            mstore(r10, v25)
-            mstore(r2, mload(r10))
-            v26 := $gt_1(mload(r2), mload(r1))
-            mstore(r12, v26)
-            if iszero(iszero(mload(r12))) {
+            v22 := $len_2(v4)
+            v5 := v22
+            mstore(r1, v5)
+            let t35 := mload(add($self, 64))
+            v6 := t35
+            v23 := 0x20
+            v7 := v23
+            let t36 := add(v6, v7)
+            if lt(t36, v6) {
+              revert(0, 0)
+            }
+            v24 := t36
+            v8 := v24
+            v2 := v8
+            let t37 := mload(add($self, 64))
+            v25 := t37
+            mstore(add($self, 64), v25)
+            let t38 := mload(add($self, 64))
+            v26 := t38
+            v27 := iszero(iszero(lt(v2, v26)))
+            v11 := v27
+            if v11 {
               $pc := 1
               continue
             }
-            $pc := 2
+            $pc := 4
             continue
         }
         case 1 {
-            v27 := 0x00
-            mstore(r13, v27)
             v28 := 0x00
-            mstore(r14, v28)
-            revert(mload(r13), mload(r14))
+            v14 := v28
+            v29 := 0x00
+            v15 := v29
+            revert(v14, v15)
         }
         case 2 {
             $pc := 3
             continue
         }
         case 3 {
-            v17 := $self
             v18 := $self
-            v19 := $self
-            let t33 := mload(add($self, 64))
-            v20 := t33
-            v31 := $word_at_1(v18, v20)
-            mstore(r21, v31)
-            mstore(r3, mload(r21))
-            mstore(add($self, 64), mload(r2))
-            ret := mload(r3)
+            let t39 := mload(add($self, 64))
+            v19 := t39
+            v32 := $word_at_2(v18, v19)
+            v20 := v32
+            v3 := v20
+            mstore(add($self, 64), v2)
+            ret := v3
             leave
+        }
+        case 4 {
+            let t40 := mload(r1)
+            mstore(r12, t40)
+            let t41 := mload(r12)
+            v33 := t41
+            v34 := iszero(iszero(gt(v2, v33)))
+            v13 := v34
+            if v13 {
+              $pc := 1
+              continue
+            }
+            $pc := 2
+            continue
         }
         default {
             invalid()
         }
       }
     }
-    function $word_at_1($self, $byte_offset) -> ret {
+    function $read_word_3($self) -> ret {
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r10 := mload(0x40)
+      if iszero(r10) {
+        r10 := 0x80
+      }
+      mstore(0x40, add(r10, 32))
+      let r12 := mload(0x40)
+      if iszero(r12) {
+        r12 := 0x80
+      }
+      mstore(0x40, add(r12, 32))
+      let v2 := 0
+      let v3 := 0
+      let v4 := 0
+      let v5 := 0
+      let v6 := 0
+      let v7 := 0
+      let v8 := 0
+      let v11 := 0
+      let v13 := 0
+      let v14 := 0
+      let v15 := 0
+      let v18 := 0
+      let v19 := 0
+      let v20 := 0
+      let v22 := 0
+      let v23 := 0
+      let v24 := 0
+      let v25 := 0
+      let v26 := 0
+      let v27 := 0
+      let v28 := 0
+      let v29 := 0
+      let v32 := 0
+      let v33 := 0
+      let v34 := 0
+      let $pc := 0
+      for {} 1 {} {
+        switch $pc
+        case 0 {
+            v4 := $self
+            v22 := $len_3(v4)
+            v5 := v22
+            mstore(r1, v5)
+            let t35 := mload(add($self, 64))
+            v6 := t35
+            v23 := 0x20
+            v7 := v23
+            let t36 := add(v6, v7)
+            if lt(t36, v6) {
+              revert(0, 0)
+            }
+            v24 := t36
+            v8 := v24
+            v2 := v8
+            let t37 := mload(add($self, 64))
+            v25 := t37
+            mstore(add($self, 64), v25)
+            let t38 := mload(add($self, 64))
+            v26 := t38
+            v27 := iszero(iszero(lt(v2, v26)))
+            v11 := v27
+            if v11 {
+              $pc := 1
+              continue
+            }
+            $pc := 4
+            continue
+        }
+        case 1 {
+            v28 := 0x00
+            v14 := v28
+            v29 := 0x00
+            v15 := v29
+            revert(v14, v15)
+        }
+        case 2 {
+            $pc := 3
+            continue
+        }
+        case 3 {
+            v18 := $self
+            let t39 := mload(add($self, 64))
+            v19 := t39
+            v32 := $word_at_3(v18, v19)
+            v20 := v32
+            v3 := v20
+            mstore(add($self, 64), v2)
+            ret := v3
+            leave
+        }
+        case 4 {
+            let t40 := mload(r1)
+            mstore(r12, t40)
+            let t41 := mload(r12)
+            v33 := t41
+            v34 := iszero(iszero(gt(v2, v33)))
+            v13 := v34
+            if v13 {
+              $pc := 1
+              continue
+            }
+            $pc := 2
+            continue
+        }
+        default {
+            invalid()
+        }
+      }
+    }
+    function $set_base_2($self, $new_base) {
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let v2 := 0
+      mstore(r1, $new_base)
+      let t4 := mload(r1)
+      v2 := t4
+      mstore(add($self, 96), v2)
+      leave
+    }
+    function $set_pos_2($self, $new_pos) {
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let v2 := 0
+      mstore(r1, $new_pos)
+      let t4 := mload(r1)
+      v2 := t4
+      mstore(add($self, 64), v2)
+      leave
+    }
+    function $word_at_2($self, $byte_offset) -> ret {
       let r0 := mload(0x40)
       if iszero(r0) {
         r0 := 0x80
@@ -464,30 +597,57 @@ object "Child" {
         r1 := 0x80
       }
       mstore(0x40, add(r1, 32))
-      let r3 := mload(0x40)
-      if iszero(r3) {
-        r3 := 0x80
-      }
-      mstore(0x40, add(r3, 32))
-      let r4 := mload(0x40)
-      if iszero(r4) {
-        r4 := 0x80
-      }
-      mstore(0x40, add(r4, 32))
       let v2 := 0
+      let v3 := 0
+      let v4 := 0
       let v5 := 0
       let v6 := 0
       let v7 := 0
+      let v8 := 0
       mstore(r0, mload($self))
       mstore(add(r0, 32), mload(add($self, 32)))
       mstore(r1, $byte_offset)
-      let t8 := mload(r0)
-      v2 := t8
-      v5 := $add_4(v2, mload(r1))
-      mstore(r3, v5)
-      v7 := mload(mload(r3))
-      mstore(r4, v7)
-      ret := mload(r4)
+      let t9 := mload(r0)
+      v2 := t9
+      let t10 := mload(r1)
+      v3 := t10
+      v6 := add(v2, v3)
+      v4 := v6
+      v8 := mload(v4)
+      v5 := v8
+      ret := v5
+      leave
+    }
+    function $word_at_3($self, $byte_offset) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 64))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let v2 := 0
+      let v3 := 0
+      let v4 := 0
+      let v5 := 0
+      let v6 := 0
+      let v7 := 0
+      let v8 := 0
+      mstore(r0, mload($self))
+      mstore(add(r0, 32), mload(add($self, 32)))
+      mstore(r1, $byte_offset)
+      let t9 := mload(r0)
+      v2 := t9
+      let t10 := mload(r1)
+      v3 := t10
+      v6 := add(v2, v3)
+      v4 := v6
+      v8 := mload(v4)
+      v5 := v8
+      ret := v5
       leave
     }
     $__fe_contract_init_root_Child()
@@ -529,41 +689,39 @@ object "Parent" {
         r0 := 0x80
       }
       mstore(0x40, add(r0, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let r4 := mload(0x40)
-      if iszero(r4) {
-        r4 := 0x80
-      }
-      mstore(0x40, add(r4, 32))
+      let v2 := 0
       let v3 := 0
+      let v4 := 0
       let v5 := 0
       let v6 := 0
       let v7 := 0
       let v8 := 0
       let v9 := 0
+      let v10 := 0
+      let v11 := 0
       mstore(r0, $seed)
-      v5 := 0x00
-      mstore(r2, v5)
-      v6 := allocate(64)
-      mstore(v6, mload(r0))
-      mstore(add(v6, 32), mload(r0))
-      v3 := v6
-      v7 := $create
       v8 := $create
-      v9 := $create(v8, mload(r2), v3)
-      mstore(r4, v9)
+      v2 := v8
+      v9 := 0x00
+      v3 := v9
+      let t12 := mload(r0)
+      v4 := t12
+      let t13 := mload(r0)
+      v5 := t13
+      v10 := allocate(64)
+      mstore(v10, v4)
+      mstore(add(v10, 32), v5)
+      v6 := v10
+      v11 := $create(v3, v6)
+      v7 := v11
       leave
     }
     function $__fe_contract_init_abi_Parent() {
-      let r8 := mload(0x40)
-      if iszero(r8) {
-        r8 := 0x80
+      let r9 := mload(0x40)
+      if iszero(r9) {
+        r9 := 0x80
       }
-      mstore(0x40, add(r8, 64))
+      mstore(0x40, add(r9, 64))
       let v0 := 0
       let v1 := 0
       let v2 := 0
@@ -571,12 +729,13 @@ object "Parent" {
       let v4 := 0
       let v5 := 0
       let v6 := 0
-      let v9 := 0
+      let v7 := 0
       let v10 := 0
       let v11 := 0
       let v12 := 0
       let v13 := 0
       let v14 := 0
+      let v15 := 0
       let $pc := 0
       for {} 1 {} {
         switch $pc
@@ -595,31 +754,43 @@ object "Parent" {
             revert(v0, v0)
         }
         case 2 {
-            v3 := datasize("Parent_init")
+            v3 := datasize("init")
             v4 := codesize()
-            let t16 := sub(v4, v3)
+            v5 := iszero(iszero(lt(v4, v3)))
+            if v5 {
+              $pc := 3
+              continue
+            }
+            $pc := 4
+            continue
+        }
+        case 3 {
+            revert(v0, v0)
+        }
+        case 4 {
+            let t17 := sub(v4, v3)
             if gt(v3, v4) {
               revert(0, 0)
             }
-            v5 := t16
-            v6 := allocate(v5)
-            datacopy(v6, v3, v5)
-            mstore(r8, v6)
-            mstore(add(r8, 32), v5)
-            v9 := $decoder_new_0(r8)
-            v10 := v9
-            v11 := $decode_0(v10)
-            let t17 := mload(0x40)
-            if iszero(t17) {
-              t17 := 0x80
+            v6 := t17
+            v7 := allocate(v6)
+            datacopy(v7, v3, v6)
+            mstore(r9, v7)
+            mstore(add(r9, 32), v6)
+            v10 := $decoder_new_0(r9)
+            v11 := v10
+            v12 := $decode_0(v11)
+            let t18 := mload(0x40)
+            if iszero(t18) {
+              t18 := 0x80
             }
-            mstore(0x40, add(t17, 32))
-            mstore(t17, v11)
-            v12 := t17
-            let t18 := mload(v12)
+            mstore(0x40, add(t18, 32))
+            mstore(t18, v12)
             v13 := t18
-            v14 := 0
-            $__Parent_init(v13, v14)
+            let t19 := mload(v13)
+            v14 := t19
+            v15 := 0
+            $__Parent_init(v14, v15)
             leave
         }
         default {
@@ -638,7 +809,67 @@ object "Parent" {
       datacopy(v0, v2, v3)
       return(v0, v3)
     }
-    function $add_0($self, $other) -> ret {
+    function $append_tail($self, $bytes) -> ret {
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let v2 := 0
+      let v3 := 0
+      let v4 := 0
+      let v5 := 0
+      let v6 := 0
+      let v8 := 0
+      let v9 := 0
+      let v10 := 0
+      mstore(r1, $bytes)
+      let t11 := mload(r1)
+      v3 := t11
+      v9 := allocate(v3)
+      v4 := v9
+      v2 := v4
+      let t12 := mload(r1)
+      v5 := t12
+      v10 := add(v2, v5)
+      v6 := v10
+      mstore(add($self, 96), v6)
+      ret := v2
+      leave
+    }
+    function $base_0($self) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 128))
+      let v1 := 0
+      mstore(r0, mload($self))
+      mstore(add(r0, 32), mload(add($self, 32)))
+      mstore(add(r0, 64), mload(add($self, 64)))
+      mstore(add(r0, 96), mload(add($self, 96)))
+      let t2 := mload(add(r0, 32))
+      v1 := t2
+      ret := v1
+      leave
+    }
+    function $base_1($self) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 128))
+      let v1 := 0
+      mstore(r0, mload($self))
+      mstore(add(r0, 32), mload(add($self, 32)))
+      mstore(add(r0, 64), mload(add($self, 64)))
+      mstore(add(r0, 96), mload(add($self, 96)))
+      let t2 := mload(add(r0, 96))
+      v1 := t2
+      ret := v1
+      leave
+    }
+    function $copy_words($dest, $src, $len) {
       let r0 := mload(0x40)
       if iszero(r0) {
         r0 := 0x80
@@ -649,364 +880,90 @@ object "Parent" {
         r1 := 0x80
       }
       mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let v3 := 0
-      mstore(r0, $self)
-      mstore(r1, $other)
-      let t4 := add(mload(r0), mload(r1))
-      if lt(t4, mload(r0)) {
-        revert(0, 0)
-      }
-      v3 := t4
-      mstore(r2, v3)
-      ret := mload(r2)
-      leave
-    }
-    function $add_1($self, $other) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let v3 := 0
-      mstore(r0, $self)
-      mstore(r1, $other)
-      let t4 := add(mload(r0), mload(r1))
-      if lt(t4, mload(r0)) {
-        revert(0, 0)
-      }
-      v3 := t4
-      mstore(r2, v3)
-      ret := mload(r2)
-      leave
-    }
-    function $add_2($self, $other) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let v3 := 0
-      mstore(r0, $self)
-      mstore(r1, $other)
-      let t4 := add(mload(r0), mload(r1))
-      if lt(t4, mload(r0)) {
-        revert(0, 0)
-      }
-      v3 := t4
-      mstore(r2, v3)
-      ret := mload(r2)
-      leave
-    }
-    function $add_3($self, $other) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let v3 := 0
-      mstore(r0, $self)
-      mstore(r1, $other)
-      let t4 := add(mload(r0), mload(r1))
-      if lt(t4, mload(r0)) {
-        revert(0, 0)
-      }
-      v3 := t4
-      mstore(r2, v3)
-      ret := mload(r2)
-      leave
-    }
-    function $create($self, $value, $args) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 0))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 64))
       let r3 := mload(0x40)
       if iszero(r3) {
         r3 := 0x80
       }
       mstore(0x40, add(r3, 32))
-      let r4 := mload(0x40)
-      if iszero(r4) {
-        r4 := 0x80
-      }
-      mstore(0x40, add(r4, 32))
-      let r5 := mload(0x40)
-      if iszero(r5) {
-        r5 := 0x80
-      }
-      mstore(0x40, add(r5, 32))
-      let r6 := mload(0x40)
-      if iszero(r6) {
-        r6 := 0x80
-      }
-      mstore(0x40, add(r6, 32))
-      let r7 := mload(0x40)
-      if iszero(r7) {
-        r7 := 0x80
-      }
-      mstore(0x40, add(r7, 32))
-      let r8 := mload(0x40)
-      if iszero(r8) {
-        r8 := 0x80
-      }
-      mstore(0x40, add(r8, 32))
-      let r10 := mload(0x40)
-      if iszero(r10) {
-        r10 := 0x80
-      }
-      mstore(0x40, add(r10, 32))
-      let r11 := mload(0x40)
-      if iszero(r11) {
-        r11 := 0x80
-      }
-      mstore(0x40, add(r11, 32))
-      let r12 := mload(0x40)
-      if iszero(r12) {
-        r12 := 0x80
-      }
-      mstore(0x40, add(r12, 32))
-      let r13 := mload(0x40)
-      if iszero(r13) {
-        r13 := 0x80
-      }
-      mstore(0x40, add(r13, 32))
-      let r14 := mload(0x40)
-      if iszero(r14) {
-        r14 := 0x80
-      }
-      mstore(0x40, add(r14, 32))
-      let r15 := mload(0x40)
-      if iszero(r15) {
-        r15 := 0x80
-      }
-      mstore(0x40, add(r15, 32))
-      let r16 := mload(0x40)
-      if iszero(r16) {
-        r16 := 0x80
-      }
-      mstore(0x40, add(r16, 32))
-      let r17 := mload(0x40)
-      if iszero(r17) {
-        r17 := 0x80
-      }
-      mstore(0x40, add(r17, 32))
-      let r18 := mload(0x40)
-      if iszero(r18) {
-        r18 := 0x80
-      }
-      mstore(0x40, add(r18, 0))
-      let r19 := mload(0x40)
-      if iszero(r19) {
-        r19 := 0x80
-      }
-      mstore(0x40, add(r19, 32))
-      let r20 := mload(0x40)
-      if iszero(r20) {
-        r20 := 0x80
-      }
-      mstore(0x40, add(r20, 32))
-      let r23 := mload(0x40)
-      if iszero(r23) {
-        r23 := 0x80
-      }
-      mstore(0x40, add(r23, 0))
-      let r24 := mload(0x40)
-      if iszero(r24) {
-        r24 := 0x80
-      }
-      mstore(0x40, add(r24, 32))
-      let r25 := mload(0x40)
-      if iszero(r25) {
-        r25 := 0x80
-      }
-      mstore(0x40, add(r25, 0))
-      let r27 := mload(0x40)
-      if iszero(r27) {
-        r27 := 0x80
-      }
-      mstore(0x40, add(r27, 32))
-      let r28 := mload(0x40)
-      if iszero(r28) {
-        r28 := 0x80
-      }
-      mstore(0x40, add(r28, 32))
-      let r29 := mload(0x40)
-      if iszero(r29) {
-        r29 := 0x80
-      }
-      mstore(0x40, add(r29, 32))
-      let r30 := mload(0x40)
-      if iszero(r30) {
-        r30 := 0x80
-      }
-      mstore(0x40, add(r30, 32))
-      let r31 := mload(0x40)
-      if iszero(r31) {
-        r31 := 0x80
-      }
-      mstore(0x40, add(r31, 32))
-      let r32 := mload(0x40)
-      if iszero(r32) {
-        r32 := 0x80
-      }
-      mstore(0x40, add(r32, 0))
-      let r33 := mload(0x40)
-      if iszero(r33) {
-        r33 := 0x80
-      }
-      mstore(0x40, add(r33, 0))
-      let r34 := mload(0x40)
-      if iszero(r34) {
-        r34 := 0x80
-      }
-      mstore(0x40, add(r34, 0))
+      let v4 := 0
+      let v5 := 0
+      let v6 := 0
+      let v7 := 0
+      let v8 := 0
       let v9 := 0
+      let v10 := 0
+      let v12 := 0
+      let v13 := 0
+      let v16 := 0
+      let v17 := 0
+      let v18 := 0
+      let v19 := 0
+      let v20 := 0
       let v21 := 0
       let v22 := 0
+      let v25 := 0
       let v26 := 0
-      let v35 := 0
-      let v36 := 0
-      let v37 := 0
-      let v38 := 0
-      let v39 := 0
-      let v40 := 0
-      let v41 := 0
-      let v44 := 0
-      let v45 := 0
-      let v46 := 0
-      let v47 := 0
-      let v48 := 0
-      let v51 := 0
-      let v52 := 0
-      let v53 := 0
-      let v54 := 0
-      let v55 := 0
-      let v56 := 0
-      let v57 := 0
-      let v58 := 0
-      let v59 := 0
-      let v60 := 0
-      mstore(r1, $value)
-      mstore(r2, mload($args))
-      mstore(add(r2, 32), mload(add($args, 32)))
+      let v28 := 0
+      let v29 := 0
+      mstore(r0, $dest)
+      mstore(r1, $src)
       let $pc := 0
       for {} 1 {} {
         switch $pc
         case 0 {
-            v35 := datasize("Child_init")
-            mstore(r13, v35)
-            mstore(r3, mload(r13))
-            v36 := dataoffset("Child_init")
-            mstore(r14, v36)
-            mstore(r4, mload(r14))
-            v37 := 0x40
-            mstore(r15, v37)
-            v38 := 0x40
-            mstore(r5, v38)
-            v39 := $add_1(mload(r3), mload(r5))
-            mstore(r16, v39)
-            mstore(r6, mload(r16))
-            v41 := allocate(mload(r6))
-            mstore(r17, v41)
-            mstore(r7, mload(r17))
-            datacopy(mload(r7), mload(r4), mload(r3))
-            v44 := $add_1(mload(r7), mload(r3))
-            mstore(r19, v44)
-            mstore(r8, mload(r19))
-            v45 := $add_1(mload(r8), mload(r5))
-            mstore(r20, v45)
-            v46 := allocate(96)
-            mstore(v46, mload(r8))
-            mstore(add(v46, 32), mload(r8))
-            mstore(add(v46, 64), mload(r20))
-            v21 := v46
-            v47 := v21
-            v9 := v47
-            v48 := v9
-            v22 := v48
-            $encode_0(r2, v22)
-            v51 := r0
-            v52 := r0
-            v53 := $create_raw(v52, mload(r1), mload(r7), mload(r6))
-            mstore(r24, v53)
-            mstore(r10, mload(r24))
-            let t65 := mload(r10)
-            v26 := t65
-            v54 := 0x00
-            mstore(r27, v54)
-            v55 := $eq(v26, mload(r27))
-            mstore(r28, v55)
-            if iszero(iszero(mload(r28))) {
-              $pc := 1
-              continue
-            }
-            $pc := 2
+            v16 := 0x00
+            v4 := v16
+            v17 := 0x00
+            mstore(r3, v17)
+            $pc := 1
             continue
         }
         case 1 {
-            v57 := returndatasize()
-            mstore(r29, v57)
-            mstore(r11, mload(r29))
-            v59 := allocate(mload(r11))
-            mstore(r30, v59)
-            mstore(r12, mload(r30))
-            v60 := 0x00
-            mstore(r31, v60)
-            returndatacopy(mload(r12), mload(r31), mload(r11))
-            revert(mload(r12), mload(r11))
-        }
-        case 2 {
+            v18 := iszero(iszero(lt(mload(r3), $len)))
+            v5 := v18
+            if v5 {
+              $pc := 2
+              continue
+            }
             $pc := 3
             continue
         }
+        case 2 {
+            let t31 := mload(r0)
+            v6 := t31
+            let t32 := add(v6, mload(r3))
+            if lt(t32, v6) {
+              revert(0, 0)
+            }
+            v19 := t32
+            v7 := v19
+            let t33 := mload(r1)
+            v8 := t33
+            let t34 := add(v8, mload(r3))
+            if lt(t34, v8) {
+              revert(0, 0)
+            }
+            v20 := t34
+            v9 := v20
+            v22 := mload(v9)
+            v10 := v22
+            mstore(v7, v10)
+            v25 := r3
+            v12 := v25
+            v26 := 0x20
+            v13 := v26
+            let t35 := mload(v12)
+            v28 := t35
+            let t36 := add(v28, v13)
+            if lt(t36, v28) {
+              revert(0, 0)
+            }
+            v29 := t36
+            mstore(v12, v29)
+            $pc := 1
+            continue
+        }
         case 3 {
-            ret := mload(r10)
             leave
         }
         default {
@@ -1014,99 +971,403 @@ object "Parent" {
         }
       }
     }
-    function $create_raw($self, $value, $offset, $len) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 0))
+    function $create($value, $args) -> ret {
       let r1 := mload(0x40)
       if iszero(r1) {
         r1 := 0x80
       }
       mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let r3 := mload(0x40)
-      if iszero(r3) {
-        r3 := 0x80
-      }
-      mstore(0x40, add(r3, 32))
-      let r4 := mload(0x40)
-      if iszero(r4) {
-        r4 := 0x80
-      }
-      mstore(0x40, add(r4, 32))
-      let r5 := mload(0x40)
-      if iszero(r5) {
-        r5 := 0x80
-      }
-      mstore(0x40, add(r5, 32))
-      let v6 := 0
-      let v7 := 0
-      let v8 := 0
-      mstore(r1, $value)
-      mstore(r2, $offset)
-      mstore(r3, $len)
-      v7 := create(mload(r1), mload(r2), mload(r3))
-      mstore(r4, v7)
-      v8 := allocate(32)
-      mstore(v8, mload(r4))
-      mstore(r5, v8)
-      ret := mload(r5)
-      leave
-    }
-    function $decode_0($d) -> ret {
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let r3 := mload(0x40)
-      if iszero(r3) {
-        r3 := 0x80
-      }
-      mstore(0x40, add(r3, 32))
-      let v1 := 0
+      let v0 := 0
+      let v3 := 0
       let v4 := 0
       let v5 := 0
       let v6 := 0
-      v4 := $d
-      v1 := v4
-      v5 := $decode_1(v1)
-      mstore(r2, v5)
-      v6 := allocate(32)
-      mstore(v6, mload(r2))
-      mstore(r3, v6)
-      ret := mload(r3)
-      leave
+      let v7 := 0
+      let v8 := 0
+      let v9 := 0
+      let v10 := 0
+      let v11 := 0
+      let v12 := 0
+      let v13 := 0
+      let v15 := 0
+      let v16 := 0
+      let v17 := 0
+      let v18 := 0
+      let v19 := 0
+      let v20 := 0
+      let v22 := 0
+      let v23 := 0
+      let v25 := 0
+      let v26 := 0
+      let v27 := 0
+      let v28 := 0
+      let v30 := 0
+      let v31 := 0
+      let v32 := 0
+      let v34 := 0
+      let v35 := 0
+      let v36 := 0
+      let v37 := 0
+      let v40 := 0
+      let v41 := 0
+      let v42 := 0
+      let v43 := 0
+      let v44 := 0
+      let v45 := 0
+      let v49 := 0
+      let v50 := 0
+      let v51 := 0
+      let v52 := 0
+      let v53 := 0
+      let v54 := 0
+      let v57 := 0
+      let v58 := 0
+      let v59 := 0
+      let v60 := 0
+      let v61 := 0
+      let v62 := 0
+      let v63 := 0
+      let v66 := 0
+      let v69 := 0
+      let v70 := 0
+      let v71 := 0
+      let v72 := 0
+      let v73 := 0
+      let v74 := 0
+      let v75 := 0
+      let v76 := 0
+      let v77 := 0
+      let v78 := 0
+      let v79 := 0
+      let v80 := 0
+      let v81 := 0
+      let v86 := 0
+      mstore(r1, $value)
+      let $pc := 0
+      for {} 1 {} {
+        switch $pc
+        case 0 {
+            v49 := datasize("Child_init")
+            v12 := v49
+            v3 := v12
+            v50 := dataoffset("Child_init")
+            v13 := v50
+            v4 := v13
+            v51 := 0
+            v15 := v51
+            v52 := 1
+            v16 := v52
+            if v16 {
+              $pc := 4
+              continue
+            }
+            $pc := 2
+            continue
+        }
+        case 1 {
+            v54 := allocate(v3)
+            v20 := v54
+            v6 := v20
+            datacopy(v6, v4, v3)
+            let t87 := mload(r1)
+            v22 := t87
+            v57 := $create_raw(v22, v6, v3)
+            let t88 := mload(0x40)
+            if iszero(t88) {
+              t88 := 0x80
+            }
+            mstore(0x40, add(t88, 32))
+            mstore(t88, v57)
+            v58 := t88
+            v23 := v58
+            let t89 := mload(0x40)
+            if iszero(t89) {
+              t89 := 0x80
+            }
+            mstore(0x40, add(t89, 32))
+            mstore(t89, v23)
+            v5 := t89
+            $pc := 3
+            continue
+        }
+        case 2 {
+            v59 := $encode_abi_payload($args)
+            v25 := v59
+            v60 := v25
+            v7 := v60
+            let t90 := mload(add(v7, 32))
+            v26 := t90
+            let t91 := add(v3, v26)
+            if lt(t91, v3) {
+              revert(0, 0)
+            }
+            v61 := t91
+            v27 := v61
+            v63 := allocate(v27)
+            v28 := v63
+            v8 := v28
+            datacopy(v8, v4, v3)
+            let t92 := add(v8, v3)
+            if lt(t92, v8) {
+              revert(0, 0)
+            }
+            v66 := t92
+            v30 := v66
+            let t93 := mload(v7)
+            v31 := t93
+            let t94 := mload(add(v7, 32))
+            v32 := t94
+            $copy_words(v30, v31, v32)
+            let t95 := mload(add(v7, 32))
+            v34 := t95
+            let t96 := add(v3, v34)
+            if lt(t96, v3) {
+              revert(0, 0)
+            }
+            v69 := t96
+            v35 := v69
+            v9 := v35
+            let t97 := mload(r1)
+            v36 := t97
+            v70 := $create_raw(v36, v8, v9)
+            let t98 := mload(0x40)
+            if iszero(t98) {
+              t98 := 0x80
+            }
+            mstore(0x40, add(t98, 32))
+            mstore(t98, v70)
+            v71 := t98
+            v37 := v71
+            let t99 := mload(0x40)
+            if iszero(t99) {
+              t99 := 0x80
+            }
+            mstore(0x40, add(t99, 32))
+            mstore(t99, v37)
+            v5 := t99
+            $pc := 3
+            continue
+        }
+        case 3 {
+            let t100 := mload(v5)
+            v40 := t100
+            v72 := 0x00
+            v41 := v72
+            v73 := iszero(iszero(eq(v40, v41)))
+            v42 := v73
+            if v42 {
+              $pc := 5
+              continue
+            }
+            $pc := 6
+            continue
+        }
+        case 4 {
+            v74 := 0x40
+            v17 := v74
+            v75 := 0x00
+            v18 := v75
+            v76 := 0
+            v19 := v76
+            if v19 {
+              $pc := 1
+              continue
+            }
+            $pc := 2
+            continue
+        }
+        case 5 {
+            v78 := returndatasize()
+            v43 := v78
+            v10 := v43
+            v80 := allocate(v10)
+            v44 := v80
+            v11 := v44
+            v81 := 0x00
+            v45 := v81
+            returndatacopy(v11, v45, v10)
+            revert(v11, v10)
+        }
+        case 6 {
+            $pc := 7
+            continue
+        }
+        case 7 {
+            v86 := v5
+            ret := v86
+            leave
+        }
+        default {
+            invalid()
+        }
+      }
     }
-    function $decode_1($d) -> ret {
+    function $create_raw($value, $offset, $len) -> ret {
       let r1 := mload(0x40)
       if iszero(r1) {
         r1 := 0x80
       }
       mstore(0x40, add(r1, 32))
-      let v2 := 0
-      v2 := $read_word_0($d)
-      mstore(r1, v2)
-      ret := mload(r1)
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 32))
+      let v0 := 0
+      let v4 := 0
+      let v5 := 0
+      let v6 := 0
+      let v7 := 0
+      let v8 := 0
+      let v9 := 0
+      let v10 := 0
+      let v11 := 0
+      mstore(r1, $value)
+      mstore(r2, $offset)
+      mstore(r3, $len)
+      let t12 := mload(r1)
+      v4 := t12
+      let t13 := mload(r2)
+      v5 := t13
+      let t14 := mload(r3)
+      v6 := t14
+      v10 := create(v4, v5, v6)
+      v7 := v10
+      v11 := allocate(32)
+      mstore(v11, v7)
+      v8 := v11
+      ret := v8
       leave
     }
-    function $decoder_new_0($input) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 64))
+    function $decode_0($d) -> ret {
       let v1 := 0
       let v2 := 0
-      mstore(r0, mload($input))
-      mstore(add(r0, 32), mload(add($input, 32)))
-      v2 := $new_0(r0)
+      let v3 := 0
+      let v4 := 0
+      let v5 := 0
+      let v6 := 0
+      let v7 := 0
+      v5 := $d
+      v2 := v5
+      v6 := $decode_field_0(v2)
+      v3 := v6
+      v1 := v3
+      v7 := allocate(32)
+      mstore(v7, v1)
+      v4 := v7
+      ret := v4
+      leave
+    }
+    function $decode_1($d) -> ret {
+      let v1 := 0
+      let v2 := 0
+      v2 := $read_word_0($d)
+      v1 := v2
+      ret := v1
+      leave
+    }
+    function $decode_field_0($d) -> ret {
+      let v1 := 0
+      let v2 := 0
+      let v3 := 0
+      let v4 := 0
+      let v6 := 0
+      let v7 := 0
+      let v8 := 0
+      let v9 := 0
+      let v10 := 0
+      let v12 := 0
+      let v14 := 0
+      let v15 := 0
+      let v20 := 0
+      let v21 := 0
+      let v22 := 0
+      let v23 := 0
+      let v24 := 0
+      let v25 := 0
+      let v26 := 0
+      let v27 := 0
+      let v28 := 0
+      let v29 := 0
+      let v32 := 0
+      let v33 := 0
+      let v34 := 0
+      let v37 := 0
+      let v38 := 0
+      let v43 := 0
+      let $pc := 0
+      for {} 1 {} {
+        switch $pc
+        case 0 {
+            v21 := 0
+            v6 := v21
+            if v6 {
+              $pc := 1
+              continue
+            }
+            $pc := 2
+            continue
+        }
+        case 1 {
+            v22 := $read_word_1($d)
+            v7 := v22
+            v1 := v7
+            v23 := $d
+            v24 := $d
+            v25 := $base_1(v24)
+            v8 := v25
+            v2 := v8
+            v26 := $d
+            v27 := $d
+            v28 := $pos_1(v27)
+            v9 := v28
+            v3 := v9
+            let t44 := add(v2, v1)
+            if lt(t44, v2) {
+              revert(0, 0)
+            }
+            v29 := t44
+            v10 := v29
+            $set_base_1($d, v10)
+            v32 := $d
+            v33 := $d
+            v34 := $base_1(v33)
+            v12 := v34
+            $set_pos_1($d, v12)
+            v37 := $d
+            v14 := v37
+            v38 := $decode_1(v14)
+            v15 := v38
+            v4 := v15
+            $set_base_1($d, v2)
+            $set_pos_1($d, v3)
+            ret := v4
+            leave
+        }
+        case 2 {
+            $pc := 3
+            continue
+        }
+        case 3 {
+            v43 := $decode_1($d)
+            v20 := v43
+            ret := v20
+            leave
+        }
+        default {
+            invalid()
+        }
+      }
+    }
+    function $decoder_new_0($input) -> ret {
+      let v1 := 0
+      let v2 := 0
+      v2 := $new_1($input)
       v1 := v2
       ret := v1
       leave
@@ -1117,109 +1378,296 @@ object "Parent" {
         r0 := 0x80
       }
       mstore(0x40, add(r0, 64))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let r3 := mload(0x40)
-      if iszero(r3) {
-        r3 := 0x80
-      }
-      mstore(0x40, add(r3, 32))
-      let r7 := mload(0x40)
-      if iszero(r7) {
-        r7 := 0x80
-      }
-      mstore(0x40, add(r7, 0))
-      let r9 := mload(0x40)
-      if iszero(r9) {
-        r9 := 0x80
-      }
-      mstore(0x40, add(r9, 0))
-      let v4 := 0
+      let v2 := 0
+      let v3 := 0
       let v5 := 0
       let v6 := 0
       let v8 := 0
-      let v10 := 0
-      let v13 := 0
+      let v11 := 0
       mstore(r0, mload($self))
       mstore(add(r0, 32), mload(add($self, 32)))
-      let t16 := mload(r0)
-      v4 := t16
-      mstore(r2, v4)
-      let t17 := mload(add(r0, 32))
-      v5 := t17
-      mstore(r3, v5)
-      v10 := $e
-      v6 := v10
-      $encode_1(mload(r2), v6)
-      v13 := $e
-      v8 := v13
-      $encode_1(mload(r3), v8)
+      let t14 := mload(r0)
+      v2 := t14
+      v8 := $e
+      v3 := v8
+      $encode_field(v2, v3)
+      let t15 := mload(add(r0, 32))
+      v5 := t15
+      v11 := $e
+      v6 := v11
+      $encode_field(v5, v6)
       leave
     }
     function $encode_1($self, $e) {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 0))
-      mstore(r0, $self)
-      $write_word($e, mload(r0))
+      $write_word_0($e, $self)
       leave
     }
-    function $eq($self, $other) -> ret {
+    function $encode_abi_payload($value) -> ret {
+      let v1 := 0
+      let v2 := 0
+      let v3 := 0
+      let v5 := 0
+      let v6 := 0
+      let v7 := 0
+      let v8 := 0
+      let v10 := 0
+      let v13 := 0
+      let v14 := 0
+      let v15 := 0
+      let v16 := 0
+      let v17 := 0
+      let v19 := 0
+      let v20 := 0
+      let v21 := 0
+      let v22 := 0
+      let v23 := 0
+      let v24 := 0
+      let v25 := 0
+      let v28 := 0
+      let v29 := 0
+      let v30 := 0
+      let v31 := 0
+      let v32 := 0
+      let v33 := 0
+      let v34 := 0
+      let v37 := 0
+      let v38 := 0
+      let v39 := 0
+      let $pc := 0
+      for {} 1 {} {
+        switch $pc
+        case 0 {
+            v20 := 0
+            v5 := v20
+            v21 := 1
+            v6 := v21
+            if v6 {
+              $pc := 1
+              continue
+            }
+            $pc := 2
+            continue
+        }
+        case 1 {
+            v22 := 0x40
+            v7 := v22
+            v23 := 0x40
+            v1 := v23
+            v25 := allocate(v1)
+            v8 := v25
+            v2 := v8
+            $encode_to_ptr_0($value, v2)
+            v28 := allocate(64)
+            mstore(v28, v2)
+            mstore(add(v28, 32), v1)
+            v10 := v28
+            ret := v10
+            leave
+        }
+        case 2 {
+            $pc := 3
+            continue
+        }
+        case 3 {
+            v29 := $new_0()
+            v13 := v29
+            let t40 := mload(0x40)
+            if iszero(t40) {
+              t40 := 0x80
+            }
+            mstore(0x40, add(t40, 128))
+            datacopy(t40, v13, 128)
+            v30 := t40
+            v3 := v30
+            v31 := v3
+            v14 := v31
+            v32 := 0x40
+            v15 := v32
+            v33 := $reserve_head(v14, v15)
+            v16 := v33
+            v34 := v3
+            v17 := v34
+            $encode_0($value, v17)
+            v37 := v3
+            v38 := v3
+            v39 := $finish(v38)
+            v19 := v39
+            ret := v19
+            leave
+        }
+        default {
+            invalid()
+        }
+      }
+    }
+    function $encode_field($value, $e) {
+      let v2 := 0
+      let v3 := 0
+      let v4 := 0
+      let v6 := 0
+      let v7 := 0
+      let v8 := 0
+      let v9 := 0
+      let v10 := 0
+      let v12 := 0
+      let v15 := 0
+      let v21 := 0
+      let v23 := 0
+      let v24 := 0
+      let v25 := 0
+      let v26 := 0
+      let v27 := 0
+      let v28 := 0
+      let v29 := 0
+      let v32 := 0
+      let v33 := 0
+      let v34 := 0
+      let v39 := 0
+      let v46 := 0
+      let $pc := 0
+      for {} 1 {} {
+        switch $pc
+        case 0 {
+            v23 := 0
+            v6 := v23
+            if v6 {
+              $pc := 1
+              continue
+            }
+            $pc := 2
+            continue
+        }
+        case 1 {
+            v24 := $e
+            v25 := $e
+            v26 := $base_0(v25)
+            v7 := v26
+            v2 := v7
+            v27 := 0x20
+            v8 := v27
+            v28 := $append_tail($e, v8)
+            v9 := v28
+            v3 := v9
+            let t49 := sub(v3, v2)
+            if gt(v2, v3) {
+              revert(0, 0)
+            }
+            v29 := t49
+            v10 := v29
+            $write_word_1($e, v10)
+            v32 := $e
+            v33 := $e
+            v34 := $pos_0(v33)
+            v12 := v34
+            v4 := v12
+            $set_base_0($e, v3)
+            $set_pos_0($e, v3)
+            v39 := $e
+            v15 := v39
+            $encode_1($value, v15)
+            $set_base_0($e, v2)
+            $set_pos_0($e, v4)
+            leave
+        }
+        case 2 {
+            $pc := 3
+            continue
+        }
+        case 3 {
+            v46 := $e
+            v21 := v46
+            $encode_1($value, v21)
+            leave
+        }
+        default {
+            invalid()
+        }
+      }
+    }
+    function $encode_to_ptr_0($self, $ptr) {
       let r0 := mload(0x40)
       if iszero(r0) {
         r0 := 0x80
       }
-      mstore(0x40, add(r0, 32))
+      mstore(0x40, add(r0, 64))
       let r1 := mload(0x40)
       if iszero(r1) {
         r1 := 0x80
       }
       mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
+      let v2 := 0
       let v3 := 0
-      mstore(r0, $self)
-      mstore(r1, $other)
-      v3 := iszero(iszero(eq(mload(r0), mload(r1))))
-      mstore(r2, v3)
-      ret := iszero(iszero(mload(r2)))
+      let v5 := 0
+      let v6 := 0
+      let v7 := 0
+      let v8 := 0
+      let v12 := 0
+      let v13 := 0
+      mstore(r0, mload($self))
+      mstore(add(r0, 32), mload(add($self, 32)))
+      mstore(r1, $ptr)
+      let t16 := mload(r0)
+      v2 := t16
+      let t17 := mload(r1)
+      v3 := t17
+      $encode_to_ptr_1(v2, v3)
+      let t18 := mload(add(r0, 32))
+      v5 := t18
+      let t19 := mload(r1)
+      v6 := t19
+      v12 := 0x20
+      v7 := v12
+      v13 := add(v6, v7)
+      v8 := v13
+      $encode_to_ptr_1(v5, v8)
       leave
     }
-    function $gt_0($self, $other) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
+    function $encode_to_ptr_1($self, $ptr) {
       let r1 := mload(0x40)
       if iszero(r1) {
         r1 := 0x80
       }
       mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
+      let v2 := 0
+      mstore(r1, $ptr)
+      let t6 := mload(r1)
+      v2 := t6
+      $store_word(v2, $self)
+      leave
+    }
+    function $finish($self) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
       }
-      mstore(0x40, add(r2, 32))
+      mstore(0x40, add(r0, 128))
+      let v1 := 0
+      let v2 := 0
       let v3 := 0
-      mstore(r0, $self)
-      mstore(r1, $other)
-      v3 := iszero(iszero(gt(mload(r0), mload(r1))))
-      mstore(r2, v3)
-      ret := iszero(iszero(mload(r2)))
+      let v4 := 0
+      let v5 := 0
+      let v6 := 0
+      let v7 := 0
+      mstore(r0, mload($self))
+      mstore(add(r0, 32), mload(add($self, 32)))
+      mstore(add(r0, 64), mload(add($self, 64)))
+      mstore(add(r0, 96), mload(add($self, 96)))
+      let t8 := mload(r0)
+      v2 := t8
+      v1 := v2
+      let t9 := mload(add(r0, 96))
+      v3 := t9
+      let t10 := sub(v3, v1)
+      if gt(v1, v3) {
+        revert(0, 0)
+      }
+      v6 := t10
+      v4 := v6
+      v7 := allocate(64)
+      mstore(v7, v1)
+      mstore(add(v7, 32), v4)
+      v5 := v7
+      ret := v5
       leave
     }
     function $len_0($self) -> ret {
@@ -1236,61 +1684,118 @@ object "Parent" {
       ret := v1
       leave
     }
-    function $new_0($input) -> ret {
+    function $len_1($self) -> ret {
       let r0 := mload(0x40)
       if iszero(r0) {
         r0 := 0x80
       }
       mstore(0x40, add(r0, 64))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
       let v1 := 0
+      mstore(r0, mload($self))
+      mstore(add(r0, 32), mload(add($self, 32)))
+      let t2 := mload(add(r0, 32))
+      v1 := t2
+      ret := v1
+      leave
+    }
+    function $new_0() -> ret {
+      let v0 := 0
+      let v1 := 0
+      let v2 := 0
       let v3 := 0
       let v4 := 0
       let v5 := 0
       let v6 := 0
-      mstore(r0, mload($input))
-      mstore(add(r0, 32), mload(add($input, 32)))
-      v4 := $new_1(r0)
+      let v7 := 0
+      let v8 := 0
+      let v9 := 0
+      let v10 := 0
+      let v11 := 0
+      let v12 := 0
+      let v13 := 0
+      let v14 := 0
+      v5 := 0x00
+      v0 := v5
+      v6 := 0x00
+      v1 := v6
+      v7 := 0x00
+      v2 := v7
+      v8 := 0x00
+      v3 := v8
+      v9 := 0x00
+      v10 := 0x00
+      v11 := 0x00
+      v12 := 0x00
+      v13 := dataoffset("const_0")
+      v4 := v13
+      ret := v4
+      leave
+    }
+    function $new_1($input) -> ret {
+      let v1 := 0
+      let v2 := 0
+      let v3 := 0
+      let v4 := 0
+      let v5 := 0
+      let v6 := 0
+      v4 := $new_2($input)
       v1 := v4
       v5 := 0x00
-      mstore(r2, v5)
+      v2 := v5
       v6 := allocate(128)
       mstore(v6, mload(v1))
       mstore(add(v6, 32), mload(add(v1, 32)))
       mstore(add(v6, 64), mload(add(v1, 64)))
-      mstore(add(v6, 96), mload(r2))
+      mstore(add(v6, 96), v2)
       v3 := v6
       ret := v3
       leave
     }
-    function $new_1($input) -> ret {
+    function $new_2($input) -> ret {
+      let v1 := 0
+      let v2 := 0
+      let v3 := 0
+      let v4 := 0
+      v3 := 0x00
+      v1 := v3
+      v4 := allocate(96)
+      mstore(v4, mload($input))
+      mstore(add(v4, 32), mload(add($input, 32)))
+      mstore(add(v4, 64), v1)
+      v2 := v4
+      ret := v2
+      leave
+    }
+    function $pos_0($self) -> ret {
       let r0 := mload(0x40)
       if iszero(r0) {
         r0 := 0x80
       }
-      mstore(0x40, add(r0, 64))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
+      mstore(0x40, add(r0, 128))
+      let v1 := 0
+      mstore(r0, mload($self))
+      mstore(add(r0, 32), mload(add($self, 32)))
+      mstore(add(r0, 64), mload(add($self, 64)))
+      mstore(add(r0, 96), mload(add($self, 96)))
+      let t2 := mload(add(r0, 64))
+      v1 := t2
+      ret := v1
+      leave
+    }
+    function $pos_1($self) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
       }
-      mstore(0x40, add(r1, 32))
-      let v2 := 0
-      let v3 := 0
-      let v4 := 0
-      mstore(r0, mload($input))
-      mstore(add(r0, 32), mload(add($input, 32)))
-      v3 := 0x00
-      mstore(r1, v3)
-      v4 := allocate(96)
-      mstore(v4, mload(r0))
-      mstore(add(v4, 32), mload(add(r0, 32)))
-      mstore(add(v4, 64), mload(r1))
-      v2 := v4
-      ret := v2
+      mstore(0x40, add(r0, 128))
+      let v1 := 0
+      mstore(r0, mload($self))
+      mstore(add(r0, 32), mload(add($self, 32)))
+      mstore(add(r0, 64), mload(add($self, 64)))
+      mstore(add(r0, 96), mload(add($self, 96)))
+      let t2 := mload(add(r0, 64))
+      v1 := t2
+      ret := v1
       leave
     }
     function $read_word_0($self) -> ret {
@@ -1299,106 +1804,262 @@ object "Parent" {
         r1 := 0x80
       }
       mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let r3 := mload(0x40)
-      if iszero(r3) {
-        r3 := 0x80
-      }
-      mstore(0x40, add(r3, 32))
-      let r6 := mload(0x40)
-      if iszero(r6) {
-        r6 := 0x80
-      }
-      mstore(0x40, add(r6, 32))
-      let r9 := mload(0x40)
-      if iszero(r9) {
-        r9 := 0x80
-      }
-      mstore(0x40, add(r9, 32))
       let r10 := mload(0x40)
       if iszero(r10) {
         r10 := 0x80
       }
       mstore(0x40, add(r10, 32))
-      let r11 := mload(0x40)
-      if iszero(r11) {
-        r11 := 0x80
-      }
-      mstore(0x40, add(r11, 0))
       let r12 := mload(0x40)
       if iszero(r12) {
         r12 := 0x80
       }
       mstore(0x40, add(r12, 32))
-      let r13 := mload(0x40)
-      if iszero(r13) {
-        r13 := 0x80
-      }
-      mstore(0x40, add(r13, 32))
-      let r14 := mload(0x40)
-      if iszero(r14) {
-        r14 := 0x80
-      }
-      mstore(0x40, add(r14, 32))
-      let r15 := mload(0x40)
-      if iszero(r15) {
-        r15 := 0x80
-      }
-      mstore(0x40, add(r15, 0))
-      let r16 := mload(0x40)
-      if iszero(r16) {
-        r16 := 0x80
-      }
-      mstore(0x40, add(r16, 0))
-      let r21 := mload(0x40)
-      if iszero(r21) {
-        r21 := 0x80
-      }
-      mstore(0x40, add(r21, 32))
-      let r22 := mload(0x40)
-      if iszero(r22) {
-        r22 := 0x80
-      }
-      mstore(0x40, add(r22, 0))
+      let v2 := 0
+      let v3 := 0
       let v4 := 0
       let v5 := 0
+      let v6 := 0
       let v7 := 0
       let v8 := 0
-      let v17 := 0
+      let v11 := 0
+      let v13 := 0
+      let v14 := 0
+      let v15 := 0
       let v18 := 0
       let v19 := 0
       let v20 := 0
+      let v22 := 0
       let v23 := 0
       let v24 := 0
       let v25 := 0
       let v26 := 0
       let v27 := 0
       let v28 := 0
-      let v31 := 0
+      let v29 := 0
+      let v32 := 0
+      let v33 := 0
+      let v34 := 0
       let $pc := 0
       for {} 1 {} {
         switch $pc
         case 0 {
             v4 := $self
-            v5 := $self
-            v23 := $len_0(v5)
-            mstore(r6, v23)
-            mstore(r1, mload(r6))
-            v7 := $self
-            let t32 := mload(add($self, 64))
-            v8 := t32
-            v24 := 0x20
-            mstore(r9, v24)
-            v25 := $add_3(v8, mload(r9))
-            mstore(r10, v25)
-            mstore(r2, mload(r10))
-            v26 := $gt_0(mload(r2), mload(r1))
-            mstore(r12, v26)
-            if iszero(iszero(mload(r12))) {
+            v22 := $len_0(v4)
+            v5 := v22
+            mstore(r1, v5)
+            let t35 := mload(add($self, 64))
+            v6 := t35
+            v23 := 0x20
+            v7 := v23
+            let t36 := add(v6, v7)
+            if lt(t36, v6) {
+              revert(0, 0)
+            }
+            v24 := t36
+            v8 := v24
+            v2 := v8
+            let t37 := mload(add($self, 64))
+            v25 := t37
+            mstore(add($self, 64), v25)
+            let t38 := mload(add($self, 64))
+            v26 := t38
+            v27 := iszero(iszero(lt(v2, v26)))
+            v11 := v27
+            if v11 {
+              $pc := 1
+              continue
+            }
+            $pc := 4
+            continue
+        }
+        case 1 {
+            v28 := 0x00
+            v14 := v28
+            v29 := 0x00
+            v15 := v29
+            revert(v14, v15)
+        }
+        case 2 {
+            $pc := 3
+            continue
+        }
+        case 3 {
+            v18 := $self
+            let t39 := mload(add($self, 64))
+            v19 := t39
+            v32 := $word_at_0(v18, v19)
+            v20 := v32
+            v3 := v20
+            mstore(add($self, 64), v2)
+            ret := v3
+            leave
+        }
+        case 4 {
+            let t40 := mload(r1)
+            mstore(r12, t40)
+            let t41 := mload(r12)
+            v33 := t41
+            v34 := iszero(iszero(gt(v2, v33)))
+            v13 := v34
+            if v13 {
+              $pc := 1
+              continue
+            }
+            $pc := 2
+            continue
+        }
+        default {
+            invalid()
+        }
+      }
+    }
+    function $read_word_1($self) -> ret {
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r10 := mload(0x40)
+      if iszero(r10) {
+        r10 := 0x80
+      }
+      mstore(0x40, add(r10, 32))
+      let r12 := mload(0x40)
+      if iszero(r12) {
+        r12 := 0x80
+      }
+      mstore(0x40, add(r12, 32))
+      let v2 := 0
+      let v3 := 0
+      let v4 := 0
+      let v5 := 0
+      let v6 := 0
+      let v7 := 0
+      let v8 := 0
+      let v11 := 0
+      let v13 := 0
+      let v14 := 0
+      let v15 := 0
+      let v18 := 0
+      let v19 := 0
+      let v20 := 0
+      let v22 := 0
+      let v23 := 0
+      let v24 := 0
+      let v25 := 0
+      let v26 := 0
+      let v27 := 0
+      let v28 := 0
+      let v29 := 0
+      let v32 := 0
+      let v33 := 0
+      let v34 := 0
+      let $pc := 0
+      for {} 1 {} {
+        switch $pc
+        case 0 {
+            v4 := $self
+            v22 := $len_1(v4)
+            v5 := v22
+            mstore(r1, v5)
+            let t35 := mload(add($self, 64))
+            v6 := t35
+            v23 := 0x20
+            v7 := v23
+            let t36 := add(v6, v7)
+            if lt(t36, v6) {
+              revert(0, 0)
+            }
+            v24 := t36
+            v8 := v24
+            v2 := v8
+            let t37 := mload(add($self, 64))
+            v25 := t37
+            mstore(add($self, 64), v25)
+            let t38 := mload(add($self, 64))
+            v26 := t38
+            v27 := iszero(iszero(lt(v2, v26)))
+            v11 := v27
+            if v11 {
+              $pc := 1
+              continue
+            }
+            $pc := 4
+            continue
+        }
+        case 1 {
+            v28 := 0x00
+            v14 := v28
+            v29 := 0x00
+            v15 := v29
+            revert(v14, v15)
+        }
+        case 2 {
+            $pc := 3
+            continue
+        }
+        case 3 {
+            v18 := $self
+            let t39 := mload(add($self, 64))
+            v19 := t39
+            v32 := $word_at_1(v18, v19)
+            v20 := v32
+            v3 := v20
+            mstore(add($self, 64), v2)
+            ret := v3
+            leave
+        }
+        case 4 {
+            let t40 := mload(r1)
+            mstore(r12, t40)
+            let t41 := mload(r12)
+            v33 := t41
+            v34 := iszero(iszero(gt(v2, v33)))
+            v13 := v34
+            if v13 {
+              $pc := 1
+              continue
+            }
+            $pc := 2
+            continue
+        }
+        default {
+            invalid()
+        }
+      }
+    }
+    function $reserve_head($self, $bytes) -> ret {
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let v2 := 0
+      let v4 := 0
+      let v5 := 0
+      let v6 := 0
+      let v7 := 0
+      let v8 := 0
+      let v12 := 0
+      let v13 := 0
+      let v16 := 0
+      let v17 := 0
+      let v18 := 0
+      let v19 := 0
+      let v20 := 0
+      let v21 := 0
+      mstore(r1, $bytes)
+      let $pc := 0
+      for {} 1 {} {
+        switch $pc
+        case 0 {
+            let t22 := mload($self)
+            v4 := t22
+            v17 := 0x00
+            v5 := v17
+            v18 := iszero(iszero(eq(v4, v5)))
+            v6 := v18
+            if v6 {
               $pc := 1
               continue
             }
@@ -1406,33 +2067,110 @@ object "Parent" {
             continue
         }
         case 1 {
-            v27 := 0x00
-            mstore(r13, v27)
-            v28 := 0x00
-            mstore(r14, v28)
-            revert(mload(r13), mload(r14))
+            let t23 := mload(r1)
+            v7 := t23
+            v20 := allocate(v7)
+            v8 := v20
+            v2 := v8
+            mstore($self, v2)
+            mstore(add($self, 32), v2)
+            mstore(add($self, 64), v2)
+            let t24 := mload(r1)
+            v12 := t24
+            v21 := add(v2, v12)
+            v13 := v21
+            mstore(add($self, 96), v13)
+            $pc := 3
+            continue
         }
         case 2 {
             $pc := 3
             continue
         }
         case 3 {
-            v17 := $self
-            v18 := $self
-            v19 := $self
-            let t33 := mload(add($self, 64))
-            v20 := t33
-            v31 := $word_at_0(v18, v20)
-            mstore(r21, v31)
-            mstore(r3, mload(r21))
-            mstore(add($self, 64), mload(r2))
-            ret := mload(r3)
+            let t25 := mload(add($self, 32))
+            v16 := t25
+            ret := v16
             leave
         }
         default {
             invalid()
         }
       }
+    }
+    function $set_base_0($self, $new_base) {
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let v2 := 0
+      mstore(r1, $new_base)
+      let t4 := mload(r1)
+      v2 := t4
+      mstore(add($self, 32), v2)
+      leave
+    }
+    function $set_base_1($self, $new_base) {
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let v2 := 0
+      mstore(r1, $new_base)
+      let t4 := mload(r1)
+      v2 := t4
+      mstore(add($self, 96), v2)
+      leave
+    }
+    function $set_pos_0($self, $new_pos) {
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let v2 := 0
+      mstore(r1, $new_pos)
+      let t4 := mload(r1)
+      v2 := t4
+      mstore(add($self, 64), v2)
+      leave
+    }
+    function $set_pos_1($self, $new_pos) {
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let v2 := 0
+      mstore(r1, $new_pos)
+      let t4 := mload(r1)
+      v2 := t4
+      mstore(add($self, 64), v2)
+      leave
+    }
+    function $store_word($ptr, $value) {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let v2 := 0
+      let v3 := 0
+      mstore(r0, $ptr)
+      mstore(r1, $value)
+      let t7 := mload(r0)
+      v2 := t7
+      let t8 := mload(r1)
+      v3 := t8
+      mstore(v2, v3)
+      leave
     }
     function $word_at_0($self, $byte_offset) -> ret {
       let r0 := mload(0x40)
@@ -1445,76 +2183,111 @@ object "Parent" {
         r1 := 0x80
       }
       mstore(0x40, add(r1, 32))
-      let r3 := mload(0x40)
-      if iszero(r3) {
-        r3 := 0x80
-      }
-      mstore(0x40, add(r3, 32))
-      let r4 := mload(0x40)
-      if iszero(r4) {
-        r4 := 0x80
-      }
-      mstore(0x40, add(r4, 32))
       let v2 := 0
+      let v3 := 0
+      let v4 := 0
       let v5 := 0
       let v6 := 0
       let v7 := 0
+      let v8 := 0
       mstore(r0, mload($self))
       mstore(add(r0, 32), mload(add($self, 32)))
       mstore(r1, $byte_offset)
-      let t8 := mload(r0)
-      v2 := t8
-      v5 := $add_2(v2, mload(r1))
-      mstore(r3, v5)
-      v7 := mload(mload(r3))
-      mstore(r4, v7)
-      ret := mload(r4)
+      let t9 := mload(r0)
+      v2 := t9
+      let t10 := mload(r1)
+      v3 := t10
+      v6 := add(v2, v3)
+      v4 := v6
+      v8 := mload(v4)
+      v5 := v8
+      ret := v5
       leave
     }
-    function $write_word($self, $v) {
+    function $word_at_1($self, $byte_offset) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 64))
       let r1 := mload(0x40)
       if iszero(r1) {
         r1 := 0x80
       }
       mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let r4 := mload(0x40)
-      if iszero(r4) {
-        r4 := 0x80
-      }
-      mstore(0x40, add(r4, 0))
-      let r5 := mload(0x40)
-      if iszero(r5) {
-        r5 := 0x80
-      }
-      mstore(0x40, add(r5, 32))
-      let r6 := mload(0x40)
-      if iszero(r6) {
-        r6 := 0x80
-      }
-      mstore(0x40, add(r6, 32))
-      let r7 := mload(0x40)
-      if iszero(r7) {
-        r7 := 0x80
-      }
-      mstore(0x40, add(r7, 0))
+      let v2 := 0
       let v3 := 0
-      let v10 := 0
+      let v4 := 0
+      let v5 := 0
+      let v6 := 0
+      let v7 := 0
+      let v8 := 0
+      mstore(r0, mload($self))
+      mstore(add(r0, 32), mload(add($self, 32)))
+      mstore(r1, $byte_offset)
+      let t9 := mload(r0)
+      v2 := t9
+      let t10 := mload(r1)
+      v3 := t10
+      v6 := add(v2, v3)
+      v4 := v6
+      v8 := mload(v4)
+      v5 := v8
+      ret := v5
+      leave
+    }
+    function $write_word_0($self, $v) {
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let v2 := 0
+      let v3 := 0
+      let v4 := 0
+      let v6 := 0
+      let v7 := 0
       let v11 := 0
+      let v12 := 0
       mstore(r1, $v)
-      let t12 := mload(add($self, 32))
-      v3 := t12
-      mstore(r2, v3)
-      mstore(mload(r2), mload(r1))
-      v10 := 0x20
-      mstore(r5, v10)
-      v11 := $add_0(mload(r2), mload(r5))
-      mstore(r6, v11)
-      mstore(add($self, 32), mload(r6))
+      let t13 := mload(add($self, 64))
+      v3 := t13
+      v2 := v3
+      let t14 := mload(r1)
+      v4 := t14
+      mstore(v2, v4)
+      v11 := 0x20
+      v6 := v11
+      v12 := add(v2, v6)
+      v7 := v12
+      mstore(add($self, 64), v7)
+      leave
+    }
+    function $write_word_1($self, $v) {
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let v2 := 0
+      let v3 := 0
+      let v4 := 0
+      let v6 := 0
+      let v7 := 0
+      let v11 := 0
+      let v12 := 0
+      mstore(r1, $v)
+      let t13 := mload(add($self, 64))
+      v3 := t13
+      v2 := v3
+      let t14 := mload(r1)
+      v4 := t14
+      mstore(v2, v4)
+      v11 := 0x20
+      v6 := v11
+      v12 := add(v2, v6)
+      v7 := v12
+      mstore(add($self, 64), v7)
       leave
     }
     $__fe_contract_init_root_Parent()
@@ -1522,31 +2295,14 @@ object "Parent" {
   object "Child_init" {
     code {
       function $__Child_init($x, $y) {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 32))
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 0))
-        mstore(r0, $x)
-        mstore(r1, $y)
         leave
       }
       function $__fe_contract_init_abi_Child() {
-        let r8 := mload(0x40)
-        if iszero(r8) {
-          r8 := 0x80
+        let r9 := mload(0x40)
+        if iszero(r9) {
+          r9 := 0x80
         }
-        mstore(0x40, add(r8, 64))
+        mstore(0x40, add(r9, 64))
         let v0 := 0
         let v1 := 0
         let v2 := 0
@@ -1554,12 +2310,13 @@ object "Parent" {
         let v4 := 0
         let v5 := 0
         let v6 := 0
-        let v9 := 0
+        let v7 := 0
         let v10 := 0
         let v11 := 0
         let v12 := 0
         let v13 := 0
         let v14 := 0
+        let v15 := 0
         let $pc := 0
         for {} 1 {} {
           switch $pc
@@ -1578,26 +2335,38 @@ object "Parent" {
               revert(v0, v0)
           }
           case 2 {
-              v3 := datasize("Child_init")
+              v3 := datasize("init")
               v4 := codesize()
-              let t16 := sub(v4, v3)
+              v5 := iszero(iszero(lt(v4, v3)))
+              if v5 {
+                $pc := 3
+                continue
+              }
+              $pc := 4
+              continue
+          }
+          case 3 {
+              revert(v0, v0)
+          }
+          case 4 {
+              let t17 := sub(v4, v3)
               if gt(v3, v4) {
                 revert(0, 0)
               }
-              v5 := t16
-              v6 := allocate(v5)
-              datacopy(v6, v3, v5)
-              mstore(r8, v6)
-              mstore(add(r8, 32), v5)
-              v9 := $decoder_new_1(r8)
-              v10 := v9
-              v11 := $decode_2(v10)
-              v12 := v11
-              let t17 := mload(v12)
-              v13 := t17
-              let t18 := mload(add(v12, 32))
+              v6 := t17
+              v7 := allocate(v6)
+              datacopy(v7, v3, v6)
+              mstore(r9, v7)
+              mstore(add(r9, 32), v6)
+              v10 := $decoder_new_1(r9)
+              v11 := v10
+              v12 := $decode_2(v11)
+              v13 := v12
+              let t18 := mload(v13)
               v14 := t18
-              $__Child_init(v13, v14)
+              let t19 := mload(add(v13, 32))
+              v15 := t19
+              $__Child_init(v14, v15)
               leave
           }
           default {
@@ -1616,148 +2385,162 @@ object "Parent" {
         datacopy(v0, v2, v3)
         return(v0, v3)
       }
-      function $add_4($self, $other) -> ret {
+      function $base_2($self) -> ret {
         let r0 := mload(0x40)
         if iszero(r0) {
           r0 := 0x80
         }
-        mstore(0x40, add(r0, 32))
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let v3 := 0
-        mstore(r0, $self)
-        mstore(r1, $other)
-        let t4 := add(mload(r0), mload(r1))
-        if lt(t4, mload(r0)) {
-          revert(0, 0)
-        }
-        v3 := t4
-        mstore(r2, v3)
-        ret := mload(r2)
-        leave
-      }
-      function $add_5($self, $other) -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 32))
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let v3 := 0
-        mstore(r0, $self)
-        mstore(r1, $other)
-        let t4 := add(mload(r0), mload(r1))
-        if lt(t4, mload(r0)) {
-          revert(0, 0)
-        }
-        v3 := t4
-        mstore(r2, v3)
-        ret := mload(r2)
+        mstore(0x40, add(r0, 128))
+        let v1 := 0
+        mstore(r0, mload($self))
+        mstore(add(r0, 32), mload(add($self, 32)))
+        mstore(add(r0, 64), mload(add($self, 64)))
+        mstore(add(r0, 96), mload(add($self, 96)))
+        let t2 := mload(add(r0, 96))
+        v1 := t2
+        ret := v1
         leave
       }
       function $decode_2($d) -> ret {
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let r4 := mload(0x40)
-        if iszero(r4) {
-          r4 := 0x80
-        }
-        mstore(0x40, add(r4, 32))
         let v1 := 0
+        let v2 := 0
         let v3 := 0
+        let v4 := 0
         let v5 := 0
         let v6 := 0
         let v7 := 0
         let v8 := 0
         let v9 := 0
         let v10 := 0
-        v6 := $d
-        v1 := v6
-        v7 := $decode_3(v1)
-        mstore(r2, v7)
+        let v11 := 0
+        let v12 := 0
         v8 := $d
         v3 := v8
-        v9 := $decode_3(v3)
-        mstore(r4, v9)
-        v10 := allocate(64)
-        mstore(v10, mload(r2))
-        mstore(add(v10, 32), mload(r4))
+        v9 := $decode_field_1(v3)
+        v4 := v9
+        v1 := v4
+        v10 := $d
         v5 := v10
-        ret := v5
+        v11 := $decode_field_1(v5)
+        v6 := v11
+        v2 := v6
+        v12 := allocate(64)
+        mstore(v12, v1)
+        mstore(add(v12, 32), v2)
+        v7 := v12
+        ret := v7
         leave
       }
       function $decode_3($d) -> ret {
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let v2 := 0
-        v2 := $read_word_1($d)
-        mstore(r1, v2)
-        ret := mload(r1)
-        leave
-      }
-      function $decoder_new_1($input) -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 64))
         let v1 := 0
         let v2 := 0
-        mstore(r0, mload($input))
-        mstore(add(r0, 32), mload(add($input, 32)))
-        v2 := $new_2(r0)
+        v2 := $read_word_2($d)
         v1 := v2
         ret := v1
         leave
       }
-      function $gt_1($self, $other) -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 32))
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
+      function $decode_field_1($d) -> ret {
+        let v1 := 0
+        let v2 := 0
         let v3 := 0
-        mstore(r0, $self)
-        mstore(r1, $other)
-        v3 := iszero(iszero(gt(mload(r0), mload(r1))))
-        mstore(r2, v3)
-        ret := iszero(iszero(mload(r2)))
+        let v4 := 0
+        let v6 := 0
+        let v7 := 0
+        let v8 := 0
+        let v9 := 0
+        let v10 := 0
+        let v12 := 0
+        let v14 := 0
+        let v15 := 0
+        let v20 := 0
+        let v21 := 0
+        let v22 := 0
+        let v23 := 0
+        let v24 := 0
+        let v25 := 0
+        let v26 := 0
+        let v27 := 0
+        let v28 := 0
+        let v29 := 0
+        let v32 := 0
+        let v33 := 0
+        let v34 := 0
+        let v37 := 0
+        let v38 := 0
+        let v43 := 0
+        let $pc := 0
+        for {} 1 {} {
+          switch $pc
+          case 0 {
+              v21 := 0
+              v6 := v21
+              if v6 {
+                $pc := 1
+                continue
+              }
+              $pc := 2
+              continue
+          }
+          case 1 {
+              v22 := $read_word_3($d)
+              v7 := v22
+              v1 := v7
+              v23 := $d
+              v24 := $d
+              v25 := $base_2(v24)
+              v8 := v25
+              v2 := v8
+              v26 := $d
+              v27 := $d
+              v28 := $pos_2(v27)
+              v9 := v28
+              v3 := v9
+              let t44 := add(v2, v1)
+              if lt(t44, v2) {
+                revert(0, 0)
+              }
+              v29 := t44
+              v10 := v29
+              $set_base_2($d, v10)
+              v32 := $d
+              v33 := $d
+              v34 := $base_2(v33)
+              v12 := v34
+              $set_pos_2($d, v12)
+              v37 := $d
+              v14 := v37
+              v38 := $decode_3(v14)
+              v15 := v38
+              v4 := v15
+              $set_base_2($d, v2)
+              $set_pos_2($d, v3)
+              ret := v4
+              leave
+          }
+          case 2 {
+              $pc := 3
+              continue
+          }
+          case 3 {
+              v43 := $decode_3($d)
+              v20 := v43
+              ret := v20
+              leave
+          }
+          default {
+              invalid()
+          }
+        }
+      }
+      function $decoder_new_1($input) -> ret {
+        let v1 := 0
+        let v2 := 0
+        v2 := $new_3($input)
+        v1 := v2
+        ret := v1
         leave
       }
-      function $len_1($self) -> ret {
+      function $len_2($self) -> ret {
         let r0 := mload(0x40)
         if iszero(r0) {
           r0 := 0x80
@@ -1771,205 +2554,328 @@ object "Parent" {
         ret := v1
         leave
       }
-      function $new_2($input) -> ret {
+      function $len_3($self) -> ret {
         let r0 := mload(0x40)
         if iszero(r0) {
           r0 := 0x80
         }
         mstore(0x40, add(r0, 64))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
         let v1 := 0
+        mstore(r0, mload($self))
+        mstore(add(r0, 32), mload(add($self, 32)))
+        let t2 := mload(add(r0, 32))
+        v1 := t2
+        ret := v1
+        leave
+      }
+      function $new_3($input) -> ret {
+        let v1 := 0
+        let v2 := 0
         let v3 := 0
         let v4 := 0
         let v5 := 0
         let v6 := 0
-        mstore(r0, mload($input))
-        mstore(add(r0, 32), mload(add($input, 32)))
-        v4 := $new_3(r0)
+        v4 := $new_4($input)
         v1 := v4
         v5 := 0x00
-        mstore(r2, v5)
+        v2 := v5
         v6 := allocate(128)
         mstore(v6, mload(v1))
         mstore(add(v6, 32), mload(add(v1, 32)))
         mstore(add(v6, 64), mload(add(v1, 64)))
-        mstore(add(v6, 96), mload(r2))
+        mstore(add(v6, 96), v2)
         v3 := v6
         ret := v3
         leave
       }
-      function $new_3($input) -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 64))
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
+      function $new_4($input) -> ret {
+        let v1 := 0
         let v2 := 0
         let v3 := 0
         let v4 := 0
-        mstore(r0, mload($input))
-        mstore(add(r0, 32), mload(add($input, 32)))
         v3 := 0x00
-        mstore(r1, v3)
+        v1 := v3
         v4 := allocate(96)
-        mstore(v4, mload(r0))
-        mstore(add(v4, 32), mload(add(r0, 32)))
-        mstore(add(v4, 64), mload(r1))
+        mstore(v4, mload($input))
+        mstore(add(v4, 32), mload(add($input, 32)))
+        mstore(add(v4, 64), v1)
         v2 := v4
         ret := v2
         leave
       }
-      function $read_word_1($self) -> ret {
+      function $pos_2($self) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 128))
+        let v1 := 0
+        mstore(r0, mload($self))
+        mstore(add(r0, 32), mload(add($self, 32)))
+        mstore(add(r0, 64), mload(add($self, 64)))
+        mstore(add(r0, 96), mload(add($self, 96)))
+        let t2 := mload(add(r0, 64))
+        v1 := t2
+        ret := v1
+        leave
+      }
+      function $read_word_2($self) -> ret {
         let r1 := mload(0x40)
         if iszero(r1) {
           r1 := 0x80
         }
         mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let r3 := mload(0x40)
-        if iszero(r3) {
-          r3 := 0x80
-        }
-        mstore(0x40, add(r3, 32))
-        let r6 := mload(0x40)
-        if iszero(r6) {
-          r6 := 0x80
-        }
-        mstore(0x40, add(r6, 32))
-        let r9 := mload(0x40)
-        if iszero(r9) {
-          r9 := 0x80
-        }
-        mstore(0x40, add(r9, 32))
         let r10 := mload(0x40)
         if iszero(r10) {
           r10 := 0x80
         }
         mstore(0x40, add(r10, 32))
-        let r11 := mload(0x40)
-        if iszero(r11) {
-          r11 := 0x80
-        }
-        mstore(0x40, add(r11, 0))
         let r12 := mload(0x40)
         if iszero(r12) {
           r12 := 0x80
         }
         mstore(0x40, add(r12, 32))
-        let r13 := mload(0x40)
-        if iszero(r13) {
-          r13 := 0x80
-        }
-        mstore(0x40, add(r13, 32))
-        let r14 := mload(0x40)
-        if iszero(r14) {
-          r14 := 0x80
-        }
-        mstore(0x40, add(r14, 32))
-        let r15 := mload(0x40)
-        if iszero(r15) {
-          r15 := 0x80
-        }
-        mstore(0x40, add(r15, 0))
-        let r16 := mload(0x40)
-        if iszero(r16) {
-          r16 := 0x80
-        }
-        mstore(0x40, add(r16, 0))
-        let r21 := mload(0x40)
-        if iszero(r21) {
-          r21 := 0x80
-        }
-        mstore(0x40, add(r21, 32))
-        let r22 := mload(0x40)
-        if iszero(r22) {
-          r22 := 0x80
-        }
-        mstore(0x40, add(r22, 0))
+        let v2 := 0
+        let v3 := 0
         let v4 := 0
         let v5 := 0
+        let v6 := 0
         let v7 := 0
         let v8 := 0
-        let v17 := 0
+        let v11 := 0
+        let v13 := 0
+        let v14 := 0
+        let v15 := 0
         let v18 := 0
         let v19 := 0
         let v20 := 0
+        let v22 := 0
         let v23 := 0
         let v24 := 0
         let v25 := 0
         let v26 := 0
         let v27 := 0
         let v28 := 0
-        let v31 := 0
+        let v29 := 0
+        let v32 := 0
+        let v33 := 0
+        let v34 := 0
         let $pc := 0
         for {} 1 {} {
           switch $pc
           case 0 {
               v4 := $self
-              v5 := $self
-              v23 := $len_1(v5)
-              mstore(r6, v23)
-              mstore(r1, mload(r6))
-              v7 := $self
-              let t32 := mload(add($self, 64))
-              v8 := t32
-              v24 := 0x20
-              mstore(r9, v24)
-              v25 := $add_5(v8, mload(r9))
-              mstore(r10, v25)
-              mstore(r2, mload(r10))
-              v26 := $gt_1(mload(r2), mload(r1))
-              mstore(r12, v26)
-              if iszero(iszero(mload(r12))) {
+              v22 := $len_2(v4)
+              v5 := v22
+              mstore(r1, v5)
+              let t35 := mload(add($self, 64))
+              v6 := t35
+              v23 := 0x20
+              v7 := v23
+              let t36 := add(v6, v7)
+              if lt(t36, v6) {
+                revert(0, 0)
+              }
+              v24 := t36
+              v8 := v24
+              v2 := v8
+              let t37 := mload(add($self, 64))
+              v25 := t37
+              mstore(add($self, 64), v25)
+              let t38 := mload(add($self, 64))
+              v26 := t38
+              v27 := iszero(iszero(lt(v2, v26)))
+              v11 := v27
+              if v11 {
                 $pc := 1
                 continue
               }
-              $pc := 2
+              $pc := 4
               continue
           }
           case 1 {
-              v27 := 0x00
-              mstore(r13, v27)
               v28 := 0x00
-              mstore(r14, v28)
-              revert(mload(r13), mload(r14))
+              v14 := v28
+              v29 := 0x00
+              v15 := v29
+              revert(v14, v15)
           }
           case 2 {
               $pc := 3
               continue
           }
           case 3 {
-              v17 := $self
               v18 := $self
-              v19 := $self
-              let t33 := mload(add($self, 64))
-              v20 := t33
-              v31 := $word_at_1(v18, v20)
-              mstore(r21, v31)
-              mstore(r3, mload(r21))
-              mstore(add($self, 64), mload(r2))
-              ret := mload(r3)
+              let t39 := mload(add($self, 64))
+              v19 := t39
+              v32 := $word_at_2(v18, v19)
+              v20 := v32
+              v3 := v20
+              mstore(add($self, 64), v2)
+              ret := v3
               leave
+          }
+          case 4 {
+              let t40 := mload(r1)
+              mstore(r12, t40)
+              let t41 := mload(r12)
+              v33 := t41
+              v34 := iszero(iszero(gt(v2, v33)))
+              v13 := v34
+              if v13 {
+                $pc := 1
+                continue
+              }
+              $pc := 2
+              continue
           }
           default {
               invalid()
           }
         }
       }
-      function $word_at_1($self, $byte_offset) -> ret {
+      function $read_word_3($self) -> ret {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r10 := mload(0x40)
+        if iszero(r10) {
+          r10 := 0x80
+        }
+        mstore(0x40, add(r10, 32))
+        let r12 := mload(0x40)
+        if iszero(r12) {
+          r12 := 0x80
+        }
+        mstore(0x40, add(r12, 32))
+        let v2 := 0
+        let v3 := 0
+        let v4 := 0
+        let v5 := 0
+        let v6 := 0
+        let v7 := 0
+        let v8 := 0
+        let v11 := 0
+        let v13 := 0
+        let v14 := 0
+        let v15 := 0
+        let v18 := 0
+        let v19 := 0
+        let v20 := 0
+        let v22 := 0
+        let v23 := 0
+        let v24 := 0
+        let v25 := 0
+        let v26 := 0
+        let v27 := 0
+        let v28 := 0
+        let v29 := 0
+        let v32 := 0
+        let v33 := 0
+        let v34 := 0
+        let $pc := 0
+        for {} 1 {} {
+          switch $pc
+          case 0 {
+              v4 := $self
+              v22 := $len_3(v4)
+              v5 := v22
+              mstore(r1, v5)
+              let t35 := mload(add($self, 64))
+              v6 := t35
+              v23 := 0x20
+              v7 := v23
+              let t36 := add(v6, v7)
+              if lt(t36, v6) {
+                revert(0, 0)
+              }
+              v24 := t36
+              v8 := v24
+              v2 := v8
+              let t37 := mload(add($self, 64))
+              v25 := t37
+              mstore(add($self, 64), v25)
+              let t38 := mload(add($self, 64))
+              v26 := t38
+              v27 := iszero(iszero(lt(v2, v26)))
+              v11 := v27
+              if v11 {
+                $pc := 1
+                continue
+              }
+              $pc := 4
+              continue
+          }
+          case 1 {
+              v28 := 0x00
+              v14 := v28
+              v29 := 0x00
+              v15 := v29
+              revert(v14, v15)
+          }
+          case 2 {
+              $pc := 3
+              continue
+          }
+          case 3 {
+              v18 := $self
+              let t39 := mload(add($self, 64))
+              v19 := t39
+              v32 := $word_at_3(v18, v19)
+              v20 := v32
+              v3 := v20
+              mstore(add($self, 64), v2)
+              ret := v3
+              leave
+          }
+          case 4 {
+              let t40 := mload(r1)
+              mstore(r12, t40)
+              let t41 := mload(r12)
+              v33 := t41
+              v34 := iszero(iszero(gt(v2, v33)))
+              v13 := v34
+              if v13 {
+                $pc := 1
+                continue
+              }
+              $pc := 2
+              continue
+          }
+          default {
+              invalid()
+          }
+        }
+      }
+      function $set_base_2($self, $new_base) {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let v2 := 0
+        mstore(r1, $new_base)
+        let t4 := mload(r1)
+        v2 := t4
+        mstore(add($self, 96), v2)
+        leave
+      }
+      function $set_pos_2($self, $new_pos) {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let v2 := 0
+        mstore(r1, $new_pos)
+        let t4 := mload(r1)
+        v2 := t4
+        mstore(add($self, 64), v2)
+        leave
+      }
+      function $word_at_2($self, $byte_offset) -> ret {
         let r0 := mload(0x40)
         if iszero(r0) {
           r0 := 0x80
@@ -1980,30 +2886,57 @@ object "Parent" {
           r1 := 0x80
         }
         mstore(0x40, add(r1, 32))
-        let r3 := mload(0x40)
-        if iszero(r3) {
-          r3 := 0x80
-        }
-        mstore(0x40, add(r3, 32))
-        let r4 := mload(0x40)
-        if iszero(r4) {
-          r4 := 0x80
-        }
-        mstore(0x40, add(r4, 32))
         let v2 := 0
+        let v3 := 0
+        let v4 := 0
         let v5 := 0
         let v6 := 0
         let v7 := 0
+        let v8 := 0
         mstore(r0, mload($self))
         mstore(add(r0, 32), mload(add($self, 32)))
         mstore(r1, $byte_offset)
-        let t8 := mload(r0)
-        v2 := t8
-        v5 := $add_4(v2, mload(r1))
-        mstore(r3, v5)
-        v7 := mload(mload(r3))
-        mstore(r4, v7)
-        ret := mload(r4)
+        let t9 := mload(r0)
+        v2 := t9
+        let t10 := mload(r1)
+        v3 := t10
+        v6 := add(v2, v3)
+        v4 := v6
+        v8 := mload(v4)
+        v5 := v8
+        ret := v5
+        leave
+      }
+      function $word_at_3($self, $byte_offset) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 64))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let v2 := 0
+        let v3 := 0
+        let v4 := 0
+        let v5 := 0
+        let v6 := 0
+        let v7 := 0
+        let v8 := 0
+        mstore(r0, mload($self))
+        mstore(add(r0, 32), mload(add($self, 32)))
+        mstore(r1, $byte_offset)
+        let t9 := mload(r0)
+        v2 := t9
+        let t10 := mload(r1)
+        v3 := t10
+        v6 := add(v2, v3)
+        v4 := v6
+        v8 := mload(v4)
+        v5 := v8
+        ret := v5
         leave
       }
       $__fe_contract_init_root_Child()
@@ -2065,4 +2998,5 @@ object "Parent" {
       $__fe_contract_runtime_root_Parent()
     }
   }
+  data "const_0" hex"0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 }

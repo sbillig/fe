@@ -5,252 +5,945 @@ input_file: tests/fixtures/storage.fe
 ---
 object "Coin" {
   code {
-    function $init__Evm_hef0af3106e109414__3af54274b2985741() {
-      let v0 := datasize("Coin_deployed")
-      let v1 := dataoffset("Coin_deployed")
-      codecopy(0, v1, v0)
-      return(0, v0)
+    function $codecopy($dest, $offset, $len) {
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 32))
+      let v0 := 0
+      let v4 := 0
+      let v5 := 0
+      let v6 := 0
+      mstore(r1, $dest)
+      mstore(r2, $offset)
+      mstore(r3, $len)
+      let t10 := mload(r1)
+      v4 := t10
+      let t11 := mload(r2)
+      v5 := t11
+      let t12 := mload(r3)
+      v6 := t12
+      datacopy(v4, v5, v6)
+      leave
     }
-    $init__Evm_hef0af3106e109414__3af54274b2985741()
+    function $init($evm) {
+      let v1 := 0
+      let v2 := 0
+      let v3 := 0
+      let v4 := 0
+      let v5 := 0
+      let v6 := 0
+      let v8 := 0
+      let v10 := 0
+      let v11 := 0
+      let v14 := 0
+      v3 := datasize("__Coin_runtime")
+      v1 := v3
+      v4 := dataoffset("__Coin_runtime")
+      v2 := v4
+      v10 := $evm
+      v5 := v10
+      v11 := 0x00
+      v6 := v11
+      $codecopy(v6, v2, v1)
+      v14 := 0x00
+      v8 := v14
+      $return_data_2(v8, v1)
+      invalid()
+    }
+    function $return_data_2($offset, $len) {
+      let r1 := mload(0x40)
+      if iszero(r1) {
+        r1 := 0x80
+      }
+      mstore(0x40, add(r1, 32))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 32))
+      let v3 := 0
+      let v4 := 0
+      mstore(r1, $offset)
+      mstore(r2, $len)
+      let t8 := mload(r1)
+      v3 := t8
+      let t9 := mload(r2)
+      v4 := t9
+      return(v3, v4)
+    }
+    $init(0)
   }
-
-  object "Coin_deployed" {
+  object "__Coin_runtime" {
     code {
-      function $abi_encode__Evm_hef0af3106e109414__3af54274b2985741($value) {
-        let v0 := 0
-        mstore(v0, $value)
-        return(v0, 32)
+      function $abi_encode($value, $ops) {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 32))
+        let v2 := 0
+        let v3 := 0
+        let v4 := 0
+        let v5 := 0
+        let v7 := 0
+        let v9 := 0
+        let v10 := 0
+        let v11 := 0
+        let v14 := 0
+        mstore(r0, $value)
+        v9 := 0x00
+        v3 := v9
+        v10 := 0x00
+        v2 := v10
+        v11 := $ops
+        v4 := v11
+        let t17 := mload(r0)
+        v5 := t17
+        $mstore(v2, v5)
+        v14 := 0x20
+        v7 := v14
+        $return_data_1(v2, v7)
+        invalid()
       }
-      function $balance_of_raw__StorPtr_CoinStore___ba1c0d0726e89ba2($user, $store) -> ret {
-        let v0 := 0
-        switch $user
+      function $balance_of_raw_eff0_stor($user, $store) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 32))
+        let v2 := 0
+        let v3 := 0
+        let v4 := 0
+        let v5 := 0
+        let v6 := 0
+        let v7 := 0
+        let v8 := 0
+        mstore(r0, $user)
+        let $pc := 0
+        for {} 1 {} {
+          switch $pc
           case 0 {
-            let v1 := sload($store)
-            v0 := v1
+              let t9 := mload(r0)
+              v2 := t9
+              v8 := 0x00
+              v4 := v8
+              v5 := iszero(iszero(eq(v2, v4)))
+              if v5 {
+                $pc := 2
+                continue
+              }
+              $pc := 4
+              continue
+          }
+          case 1 {
+              ret := v3
+              leave
+          }
+          case 2 {
+              let t10 := sload($store)
+              v6 := t10
+              v3 := v6
+              $pc := 1
+              continue
+          }
+          case 3 {
+              let t11 := sload(add($store, div(add(32, 31), 32)))
+              v7 := t11
+              v3 := v7
+              $pc := 1
+              continue
+          }
+          case 4 {
+              $pc := 3
+              continue
           }
           default {
-            let v2 := sload(add($store, 1))
-            v0 := v2
+              invalid()
           }
-        ret := v0
+        }
+      }
+      function $calldataload($offset) -> ret {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let v2 := 0
+        let v3 := 0
+        let v4 := 0
+        let v5 := 0
+        mstore(r1, $offset)
+        let t6 := mload(r1)
+        v2 := t6
+        v5 := calldataload(v2)
+        v3 := v5
+        ret := v3
         leave
       }
-      function $checked_add_u256($a, $b) -> ret {
-        let v0 := $checked_add_unsigned_impl__u256__3271ca15373d4483($a, $b)
-        ret := v0
-        leave
-      }
-      function $checked_add_unsigned_impl__u256__3271ca15373d4483($a, $b) -> ret {
-        let v0 := $u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add($a, $b)
-        let v1 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v0)
-        let v2 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($a)
-        let v3 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v1, v2)
-        let v4 := v3
-        if v4 {
+      function $credit_alice_eff0_stor_eff1_stor($amount, $store, $supply) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 32))
+        let v3 := 0
+        let v4 := 0
+        let v5 := 0
+        let v7 := 0
+        let v8 := 0
+        let v9 := 0
+        let v11 := 0
+        let v12 := 0
+        let v13 := 0
+        mstore(r0, $amount)
+        let t14 := sload($store)
+        v3 := t14
+        let t15 := mload(r0)
+        v4 := t15
+        let t16 := add(v3, v4)
+        if lt(t16, v3) {
           revert(0, 0)
         }
-        ret := v0
-        leave
-      }
-      function $checked_sub_u256($a, $b) -> ret {
-        let v0 := $checked_sub_unsigned_impl__u256__3271ca15373d4483($a, $b)
-        ret := v0
-        leave
-      }
-      function $checked_sub_unsigned_impl__u256__3271ca15373d4483($a, $b) -> ret {
-        let v0 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($b)
-        let v1 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($a)
-        let v2 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v0, v1)
-        let v3 := v2
-        if v3 {
+        v12 := t16
+        v5 := v12
+        sstore($store, v5)
+        let t17 := sload($supply)
+        v7 := t17
+        let t18 := mload(r0)
+        v8 := t18
+        let t19 := add(v7, v8)
+        if lt(t19, v7) {
           revert(0, 0)
         }
-        let v4 := $u256_h3271ca15373d4483_wrappingsub_h6880d1ff91f0a556_wrapping_sub($a, $b)
-        ret := v4
+        v13 := t19
+        v9 := v13
+        sstore($supply, v9)
+        let t20 := sload($store)
+        v11 := t20
+        ret := v11
         leave
       }
-      function $credit_alice__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78($amount, $store, $supply) -> ret {
-        let v0 := sload($store)
-        let v1 := $checked_add_u256(v0, $amount)
-        sstore($store, v1)
-        let v2 := sload($supply)
-        let v3 := $checked_add_u256(v2, $amount)
-        sstore($supply, v3)
-        let v4 := sload($store)
-        ret := v4
+      function $credit_bob_eff0_stor_eff1_stor($amount, $store, $supply) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 32))
+        let v3 := 0
+        let v4 := 0
+        let v5 := 0
+        let v7 := 0
+        let v8 := 0
+        let v9 := 0
+        let v11 := 0
+        let v12 := 0
+        let v13 := 0
+        mstore(r0, $amount)
+        let t14 := sload(add($store, div(add(32, 31), 32)))
+        v3 := t14
+        let t15 := mload(r0)
+        v4 := t15
+        let t16 := add(v3, v4)
+        if lt(t16, v3) {
+          revert(0, 0)
+        }
+        v12 := t16
+        v5 := v12
+        sstore(add($store, div(add(32, 31), 32)), v5)
+        let t17 := sload($supply)
+        v7 := t17
+        let t18 := mload(r0)
+        v8 := t18
+        let t19 := add(v7, v8)
+        if lt(t19, v7) {
+          revert(0, 0)
+        }
+        v13 := t19
+        v9 := v13
+        sstore($supply, v9)
+        let t20 := sload(add($store, div(add(32, 31), 32)))
+        v11 := t20
+        ret := v11
         leave
       }
-      function $credit_bob__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78($amount, $store, $supply) -> ret {
-        let v0 := sload(add($store, 1))
-        let v1 := $checked_add_u256(v0, $amount)
-        sstore(add($store, 1), v1)
-        let v2 := sload($supply)
-        let v3 := $checked_add_u256(v2, $amount)
-        sstore($supply, v3)
-        let v4 := sload(add($store, 1))
-        ret := v4
+      function $from_raw_0($raw) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 32))
+        let v1 := 0
+        let v2 := 0
+        let v3 := 0
+        let v4 := 0
+        mstore(r0, $raw)
+        let t5 := mload(r0)
+        v1 := t5
+        v3 := v1
+        v4 := v3
+        v2 := v4
+        ret := v2
         leave
       }
-      function $runtime__Evm_hef0af3106e109414__3af54274b2985741() {
-        let v0 := $stor_ptr_stor__Evm_hef0af3106e109414_CoinStore_hd26a92ca525e0e79__b6feb5585dda62f1(0)
-        let v1 := $stor_ptr_stor__Evm_hef0af3106e109414_TotalSupply_hddb16bb19b5b088e__f5679b0709de743a(2)
-        let v2 := v0
-        let v3 := v1
-        let v4 := calldataload(0)
-        let v5 := shr(224, v4)
-        switch v5
-          case 2877082652 {
-            let v6 := calldataload(4)
-            let v7 := calldataload(36)
-            let v8 := 0
-            switch v6
-              case 0 {
-                let v9 := $credit_alice__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78(v7, v2, v3)
-                v8 := v9
+      function $from_raw_1($raw) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 32))
+        let v1 := 0
+        let v2 := 0
+        let v3 := 0
+        let v4 := 0
+        mstore(r0, $raw)
+        let t5 := mload(r0)
+        v1 := t5
+        v3 := v1
+        v4 := v3
+        v2 := v4
+        ret := v2
+        leave
+      }
+      function $mstore($addr, $value) {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let v0 := 0
+        let v3 := 0
+        let v4 := 0
+        mstore(r1, $addr)
+        mstore(r2, $value)
+        let t8 := mload(r1)
+        v3 := t8
+        let t9 := mload(r2)
+        v4 := t9
+        mstore(v3, v4)
+        leave
+      }
+      function $return_data_0($offset, $len) {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let v3 := 0
+        let v4 := 0
+        mstore(r1, $offset)
+        mstore(r2, $len)
+        let t8 := mload(r1)
+        v3 := t8
+        let t9 := mload(r2)
+        v4 := t9
+        return(v3, v4)
+      }
+      function $return_data_1($offset, $len) {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let v3 := 0
+        let v4 := 0
+        mstore(r1, $offset)
+        mstore(r2, $len)
+        let t8 := mload(r1)
+        v3 := t8
+        let t9 := mload(r2)
+        v4 := t9
+        return(v3, v4)
+      }
+      function $runtime($evm) {
+        let v1 := 0
+        let v2 := 0
+        let v3 := 0
+        let v4 := 0
+        let v5 := 0
+        let v6 := 0
+        let v7 := 0
+        let v8 := 0
+        let v9 := 0
+        let v10 := 0
+        let v11 := 0
+        let v12 := 0
+        let v13 := 0
+        let v14 := 0
+        let v15 := 0
+        let v16 := 0
+        let v17 := 0
+        let v18 := 0
+        let v19 := 0
+        let v20 := 0
+        let v21 := 0
+        let v23 := 0
+        let v24 := 0
+        let v25 := 0
+        let v26 := 0
+        let v27 := 0
+        let v28 := 0
+        let v29 := 0
+        let v30 := 0
+        let v31 := 0
+        let v32 := 0
+        let v33 := 0
+        let v34 := 0
+        let v35 := 0
+        let v36 := 0
+        let v37 := 0
+        let v38 := 0
+        let v39 := 0
+        let v41 := 0
+        let v42 := 0
+        let v43 := 0
+        let v45 := 0
+        let v46 := 0
+        let v47 := 0
+        let v48 := 0
+        let v49 := 0
+        let v50 := 0
+        let v51 := 0
+        let v52 := 0
+        let v53 := 0
+        let v54 := 0
+        let v56 := 0
+        let v58 := 0
+        let v59 := 0
+        let v61 := 0
+        let v62 := 0
+        let v63 := 0
+        let v64 := 0
+        let v65 := 0
+        let v66 := 0
+        let v67 := 0
+        let v68 := 0
+        let v69 := 0
+        let v70 := 0
+        let v71 := 0
+        let v72 := 0
+        let v73 := 0
+        let v74 := 0
+        let v75 := 0
+        let v76 := 0
+        let v77 := 0
+        let v80 := 0
+        let v81 := 0
+        let v82 := 0
+        let v83 := 0
+        let v84 := 0
+        let v85 := 0
+        let v88 := 0
+        let v89 := 0
+        let v92 := 0
+        let v93 := 0
+        let v94 := 0
+        let v97 := 0
+        let v98 := 0
+        let v99 := 0
+        let v102 := 0
+        let v103 := 0
+        let $pc := 0
+        for {} 1 {} {
+          switch $pc
+          case 0 {
+              v61 := 0x00
+              v14 := v61
+              v62 := $stor_ptr_1(v14)
+              v15 := v62
+              v1 := v15
+              v63 := 0x02
+              v16 := v63
+              v64 := $stor_ptr_0(v16)
+              v17 := v64
+              v2 := v17
+              v65 := 0x00
+              v18 := v65
+              v66 := $calldataload(v18)
+              v19 := v66
+              v67 := 0xe0
+              v20 := v67
+              v68 := shr(v20, v19)
+              v21 := v68
+              v3 := v21
+              v69 := 0xab7ccc1c
+              v23 := v69
+              v24 := iszero(iszero(eq(v3, v23)))
+              if v24 {
+                $pc := 2
+                continue
               }
-              default {
-                let v10 := $credit_bob__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78(v7, v2, v3)
-                v8 := v10
-              }
-            let v11 := v8
-            $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v11)
+              $pc := 7
+              continue
           }
-          case 1818602213 {
-            let v12 := calldataload(4)
-            let v13 := $balance_of_raw__StorPtr_CoinStore___ba1c0d0726e89ba2(v12, v2)
-            $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v13)
+          case 1 {
+              leave
           }
-          case 217554442 {
-            let v14 := calldataload(4)
-            let v15 := calldataload(36)
-            let v16 := 0
-            switch v14
-              case 0 {
-                let v17 := $transfer_from_alice__StorPtr_CoinStore___ba1c0d0726e89ba2(v15, v2)
-                v16 := v17
+          case 2 {
+              v70 := 0x04
+              v31 := v70
+              v71 := $calldataload(v31)
+              v32 := v71
+              v4 := v32
+              v72 := 0x24
+              v33 := v72
+              v73 := $calldataload(v33)
+              v34 := v73
+              v5 := v34
+              v74 := 0x00
+              v36 := v74
+              v37 := iszero(iszero(eq(v4, v36)))
+              if v37 {
+                $pc := 12
+                continue
               }
-              default {
-                let v18 := $transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2(v15, v2)
-                v16 := v18
-              }
-            let v19 := v16
-            let v20 := $transfer_result_code(v19)
-            $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v20)
+              $pc := 14
+              continue
           }
-          case 960555502 {
-            let v21 := $total_supply__StorPtr_TotalSupply___2e654c25952f42f9(v3)
-            $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v21)
+          case 3 {
+              v75 := 0x04
+              v41 := v75
+              v76 := $calldataload(v41)
+              v42 := v76
+              v7 := v42
+              v77 := $balance_of_raw_eff0_stor(v7, v1)
+              v43 := v77
+              v8 := v43
+              $abi_encode(v8, $evm)
+              invalid()
+          }
+          case 4 {
+              v80 := 0x04
+              v45 := v80
+              v81 := $calldataload(v45)
+              v46 := v81
+              v9 := v46
+              v82 := 0x24
+              v47 := v82
+              v83 := $calldataload(v47)
+              v48 := v83
+              v10 := v48
+              v84 := 0x00
+              v50 := v84
+              v51 := iszero(iszero(eq(v9, v50)))
+              if v51 {
+                $pc := 16
+                continue
+              }
+              $pc := 18
+              continue
+          }
+          case 5 {
+              v85 := $total_supply_eff0_stor(v2)
+              v56 := v85
+              v13 := v56
+              $abi_encode(v13, $evm)
+              invalid()
+          }
+          case 6 {
+              v88 := 0x00
+              v58 := v88
+              v89 := 0x00
+              v59 := v89
+              $return_data_0(v58, v59)
+              invalid()
+          }
+          case 7 {
+              v92 := 0x6c65aae5
+              v25 := v92
+              v26 := iszero(iszero(eq(v3, v25)))
+              if v26 {
+                $pc := 3
+                continue
+              }
+              $pc := 8
+              continue
+          }
+          case 8 {
+              v93 := 0x0cf79e0a
+              v27 := v93
+              v28 := iszero(iszero(eq(v3, v27)))
+              if v28 {
+                $pc := 4
+                continue
+              }
+              $pc := 9
+              continue
+          }
+          case 9 {
+              v94 := 0x3940e9ee
+              v29 := v94
+              v30 := iszero(iszero(eq(v3, v29)))
+              if v30 {
+                $pc := 5
+                continue
+              }
+              $pc := 10
+              continue
+          }
+          case 10 {
+              $pc := 6
+              continue
+          }
+          case 11 {
+              v6 := v35
+              $abi_encode(v6, $evm)
+              invalid()
+          }
+          case 12 {
+              v97 := $credit_alice_eff0_stor_eff1_stor(v5, v1, v2)
+              v38 := v97
+              v35 := v38
+              $pc := 11
+              continue
+          }
+          case 13 {
+              v98 := $credit_bob_eff0_stor_eff1_stor(v5, v1, v2)
+              v39 := v98
+              v35 := v39
+              $pc := 11
+              continue
+          }
+          case 14 {
+              $pc := 13
+              continue
+          }
+          case 15 {
+              v11 := v49
+              v99 := $transfer_result_code(v11)
+              v54 := v99
+              v12 := v54
+              $abi_encode(v12, $evm)
+              invalid()
+          }
+          case 16 {
+              v102 := $transfer_from_alice_eff0_stor(v10, v1)
+              v52 := v102
+              v49 := v52
+              $pc := 15
+              continue
+          }
+          case 17 {
+              v103 := $transfer_from_bob_eff0_stor(v10, v1)
+              v53 := v103
+              v49 := v53
+              $pc := 15
+              continue
+          }
+          case 18 {
+              $pc := 17
+              continue
           }
           default {
-            return(0, 0)
+              invalid()
           }
-      }
-      function $stor_ptr_stor__Evm_hef0af3106e109414_CoinStore_hd26a92ca525e0e79__b6feb5585dda62f1($slot) -> ret {
-        let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__CoinStore_hd26a92ca525e0e79__a9c0a742c4f0cede($slot)
-        ret := v0
-        leave
-      }
-      function $stor_ptr_stor__Evm_hef0af3106e109414_TotalSupply_hddb16bb19b5b088e__f5679b0709de743a($slot) -> ret {
-        let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__TotalSupply_hddb16bb19b5b088e__4092604729aa99eb($slot)
-        ret := v0
-        leave
-      }
-      function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__CoinStore_hd26a92ca525e0e79__a9c0a742c4f0cede($raw) -> ret {
-        ret := $raw
-        leave
-      }
-      function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__TotalSupply_hddb16bb19b5b088e__4092604729aa99eb($raw) -> ret {
-        ret := $raw
-        leave
-      }
-      function $total_supply__StorPtr_TotalSupply___2e654c25952f42f9($supply) -> ret {
-        let v0 := sload($supply)
-        ret := v0
-        leave
-      }
-      function $transfer_from_alice__StorPtr_CoinStore___ba1c0d0726e89ba2($amount, $store) -> ret {
-        let v0 := sload($store)
-        let v1 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt_stor(v0, $amount)
-        let v2 := v1
-        if v2 {
-          ret := 1
-          leave
-        }
-        if iszero(v2) {
-          let v3 := sload($store)
-          let v4 := $checked_sub_u256(v3, $amount)
-          sstore($store, v4)
-          let v5 := sload(add($store, 1))
-          let v6 := $checked_add_u256(v5, $amount)
-          sstore(add($store, 1), v6)
-          ret := 0
-          leave
         }
       }
-      function $transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2($amount, $store) -> ret {
-        let v0 := sload(add($store, 1))
-        let v1 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt_stor(v0, $amount)
-        let v2 := v1
-        if v2 {
-          ret := 1
-          leave
+      function $stor_ptr_0($slot) -> ret {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
         }
-        if iszero(v2) {
-          let v3 := sload(add($store, 1))
-          let v4 := $checked_sub_u256(v3, $amount)
-          sstore(add($store, 1), v4)
-          let v5 := sload($store)
-          let v6 := $checked_add_u256(v5, $amount)
-          sstore($store, v6)
-          ret := 0
-          leave
+        mstore(0x40, add(r1, 32))
+        let v2 := 0
+        let v3 := 0
+        let v4 := 0
+        mstore(r1, $slot)
+        let t5 := mload(r1)
+        v2 := t5
+        v4 := $from_raw_0(v2)
+        v3 := v4
+        ret := v3
+        leave
+      }
+      function $stor_ptr_1($slot) -> ret {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let v2 := 0
+        let v3 := 0
+        let v4 := 0
+        mstore(r1, $slot)
+        let t5 := mload(r1)
+        v2 := t5
+        v4 := $from_raw_1(v2)
+        v3 := v4
+        ret := v3
+        leave
+      }
+      function $total_supply_eff0_stor($supply) -> ret {
+        let v1 := 0
+        let t2 := sload($supply)
+        v1 := t2
+        ret := v1
+        leave
+      }
+      function $transfer_from_alice_eff0_stor($amount, $store) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 32))
+        let v3 := 0
+        let v4 := 0
+        let v5 := 0
+        let v8 := 0
+        let v9 := 0
+        let v10 := 0
+        let v12 := 0
+        let v13 := 0
+        let v14 := 0
+        let v16 := 0
+        let v17 := 0
+        let v18 := 0
+        let v19 := 0
+        let v20 := 0
+        let v21 := 0
+        mstore(r0, $amount)
+        let $pc := 0
+        for {} 1 {} {
+          switch $pc
+          case 0 {
+              let t22 := sload($store)
+              v3 := t22
+              v17 := iszero(iszero(lt(v3, mload(r0))))
+              v4 := v17
+              if v4 {
+                $pc := 1
+                continue
+              }
+              $pc := 2
+              continue
+          }
+          case 1 {
+              let t23 := mload(0x40)
+              if iszero(t23) {
+                t23 := 0x80
+              }
+              mstore(0x40, add(t23, 1))
+              mstore(t23, and(1, 0xff))
+              v18 := t23
+              v5 := v18
+              ret := v5
+              leave
+          }
+          case 2 {
+              $pc := 3
+              continue
+          }
+          case 3 {
+              let t24 := sload($store)
+              v8 := t24
+              let t25 := mload(r0)
+              v9 := t25
+              let t26 := sub(v8, v9)
+              if gt(v9, v8) {
+                revert(0, 0)
+              }
+              v19 := t26
+              v10 := v19
+              sstore($store, v10)
+              let t27 := sload(add($store, div(add(32, 31), 32)))
+              v12 := t27
+              let t28 := mload(r0)
+              v13 := t28
+              let t29 := add(v12, v13)
+              if lt(t29, v12) {
+                revert(0, 0)
+              }
+              v20 := t29
+              v14 := v20
+              sstore(add($store, div(add(32, 31), 32)), v14)
+              let t30 := mload(0x40)
+              if iszero(t30) {
+                t30 := 0x80
+              }
+              mstore(0x40, add(t30, 1))
+              mstore(t30, and(0, 0xff))
+              v21 := t30
+              v16 := v21
+              ret := v16
+              leave
+          }
+          default {
+              invalid()
+          }
+        }
+      }
+      function $transfer_from_bob_eff0_stor($amount, $store) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 32))
+        let v3 := 0
+        let v4 := 0
+        let v5 := 0
+        let v8 := 0
+        let v9 := 0
+        let v10 := 0
+        let v12 := 0
+        let v13 := 0
+        let v14 := 0
+        let v16 := 0
+        let v17 := 0
+        let v18 := 0
+        let v19 := 0
+        let v20 := 0
+        let v21 := 0
+        mstore(r0, $amount)
+        let $pc := 0
+        for {} 1 {} {
+          switch $pc
+          case 0 {
+              let t22 := sload(add($store, div(add(32, 31), 32)))
+              v3 := t22
+              v17 := iszero(iszero(lt(v3, mload(r0))))
+              v4 := v17
+              if v4 {
+                $pc := 1
+                continue
+              }
+              $pc := 2
+              continue
+          }
+          case 1 {
+              let t23 := mload(0x40)
+              if iszero(t23) {
+                t23 := 0x80
+              }
+              mstore(0x40, add(t23, 1))
+              mstore(t23, and(1, 0xff))
+              v18 := t23
+              v5 := v18
+              ret := v5
+              leave
+          }
+          case 2 {
+              $pc := 3
+              continue
+          }
+          case 3 {
+              let t24 := sload(add($store, div(add(32, 31), 32)))
+              v8 := t24
+              let t25 := mload(r0)
+              v9 := t25
+              let t26 := sub(v8, v9)
+              if gt(v9, v8) {
+                revert(0, 0)
+              }
+              v19 := t26
+              v10 := v19
+              sstore(add($store, div(add(32, 31), 32)), v10)
+              let t27 := sload($store)
+              v12 := t27
+              let t28 := mload(r0)
+              v13 := t28
+              let t29 := add(v12, v13)
+              if lt(t29, v12) {
+                revert(0, 0)
+              }
+              v20 := t29
+              v14 := v20
+              sstore($store, v14)
+              let t30 := mload(0x40)
+              if iszero(t30) {
+                t30 := 0x80
+              }
+              mstore(0x40, add(t30, 1))
+              mstore(t30, and(0, 0xff))
+              v21 := t30
+              v16 := v21
+              ret := v16
+              leave
+          }
+          default {
+              invalid()
+          }
         }
       }
       function $transfer_result_code($res) -> ret {
-        let v0 := 0
-        switch $res
+        let v1 := 0
+        let v2 := 0
+        let v3 := 0
+        let v4 := 0
+        let v5 := 0
+        let v6 := 0
+        let v7 := 0
+        let v8 := 0
+        let $pc := 0
+        for {} 1 {} {
+          switch $pc
           case 0 {
-            v0 := 0
+              let t9 := and(mload($res), 0xff)
+              v4 := t9
+              switch v4
+              case 0 {
+                  $pc := 2
+                  continue
+              }
+              case 1 {
+                  $pc := 3
+                  continue
+              }
+              default {
+                  invalid()
+              }
           }
           case 1 {
-            v0 := 1
+              ret := v1
+              leave
+          }
+          case 2 {
+              v5 := 0x00
+              v2 := v5
+              v6 := 0x00
+              v1 := v6
+              $pc := 1
+              continue
+          }
+          case 3 {
+              v7 := 0x01
+              v3 := v7
+              v8 := 0x01
+              v1 := v8
+              $pc := 1
+              continue
           }
           default {
+              invalid()
           }
-        ret := v0
-        leave
+        }
       }
-      function $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($self) -> ret {
-        ret := $self
-        leave
-      }
-      function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt($self, $other) -> ret {
-        let v0 := gt($self, $other)
-        ret := v0
-        leave
-      }
-      function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt($self, $other) -> ret {
-        let v0 := lt($self, $other)
-        ret := v0
-        leave
-      }
-      function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt_stor($self, $other) -> ret {
-        let v0 := lt($self, $other)
-        ret := v0
-        leave
-      }
-      function $u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add($self, $other) -> ret {
-        let v0 := add($self, $other)
-        ret := v0
-        leave
-      }
-      function $u256_h3271ca15373d4483_wrappingsub_h6880d1ff91f0a556_wrapping_sub($self, $other) -> ret {
-        let v0 := sub($self, $other)
-        ret := v0
-        leave
-      }
-      $runtime__Evm_hef0af3106e109414__3af54274b2985741()
-      return(0, 0)
+      $runtime(0)
     }
   }
 }

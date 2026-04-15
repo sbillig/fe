@@ -10,115 +10,37 @@ object "main" {
       v0 := $while_cond_call()
       stop()
     }
-    function $add($self, $other) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let v3 := 0
-      mstore(r0, $self)
-      mstore(r1, $other)
-      let t4 := and(add(and(mload(r0), 0xffffffffffffffff), and(mload(r1), 0xffffffffffffffff)), 0xffffffffffffffff)
-      if lt(t4, and(mload(r0), 0xffffffffffffffff)) {
-        revert(0, 0)
-      }
-      v3 := t4
-      mstore(r2, v3)
-      ret := and(mload(r2), 0xffffffffffffffff)
-      leave
-    }
-    function $lt($self, $other) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let v3 := 0
-      mstore(r0, $self)
-      mstore(r1, $other)
-      v3 := iszero(iszero(lt(and(mload(r0), 0xffffffffffffffff), and(mload(r1), 0xffffffffffffffff))))
-      mstore(r2, v3)
-      ret := iszero(iszero(mload(r2)))
-      leave
-    }
     function $lt_ten($value) -> ret {
       let r0 := mload(0x40)
       if iszero(r0) {
         r0 := 0x80
       }
       mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
+      let v1 := 0
+      let v2 := 0
       let v3 := 0
       let v4 := 0
+      let v5 := 0
       mstore(r0, $value)
-      v3 := 0x0a
-      mstore(r1, v3)
-      v4 := $lt(and(mload(r0), 0xffffffffffffffff), and(mload(r1), 0xffffffffffffffff))
-      mstore(r2, v4)
-      ret := iszero(iszero(mload(r2)))
+      let t6 := mload(r0)
+      v1 := t6
+      v4 := 0x0a
+      v2 := v4
+      v5 := iszero(iszero(lt(v1, v2)))
+      v3 := v5
+      ret := v3
       leave
     }
     function $while_cond_call() -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let r3 := mload(0x40)
-      if iszero(r3) {
-        r3 := 0x80
-      }
-      mstore(0x40, add(r3, 32))
       let r4 := mload(0x40)
       if iszero(r4) {
         r4 := 0x80
       }
       mstore(0x40, add(r4, 32))
-      let r5 := mload(0x40)
-      if iszero(r5) {
-        r5 := 0x80
-      }
-      mstore(0x40, add(r5, 0))
+      let v0 := 0
+      let v1 := 0
+      let v2 := 0
+      let v3 := 0
       let v6 := 0
       let v7 := 0
       let v8 := 0
@@ -129,16 +51,16 @@ object "main" {
         switch $pc
         case 0 {
             v6 := 0x00
-            mstore(r1, v6)
+            v1 := v6
             v7 := 0x00
-            mstore(r0, v7)
+            v0 := v7
             $pc := 1
             continue
         }
         case 1 {
-            v8 := $lt_ten(and(mload(r0), 0xffffffffffffffff))
-            mstore(r2, v8)
-            if iszero(iszero(mload(r2))) {
+            v8 := $lt_ten(v0)
+            v2 := v8
+            if v2 {
               $pc := 2
               continue
             }
@@ -147,16 +69,20 @@ object "main" {
         }
         case 2 {
             v9 := 0x01
-            mstore(r3, v9)
-            v10 := $add(and(mload(r0), 0xffffffffffffffff), and(mload(r3), 0xffffffffffffffff))
+            v3 := v9
+            let t11 := and(add(v0, v3), 0xffffffffffffffff)
+            if lt(t11, v0) {
+              revert(0, 0)
+            }
+            v10 := t11
             mstore(r4, v10)
-            let t11 := mload(r4)
-            mstore(r0, t11)
+            let t12 := mload(r4)
+            v0 := t12
             $pc := 1
             continue
         }
         case 3 {
-            ret := and(mload(r0), 0xffffffffffffffff)
+            ret := v0
             leave
         }
         default {

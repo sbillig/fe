@@ -6,37 +6,20 @@ input_file: tests/fixtures/contract_dispatch.fe
 object "MinimalDispatcher" {
   code {
     function $dispatch() {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 0))
+      let v0 := 0
+      let v1 := 0
       let v3 := 0
       v3 := $emit_code()
-      mstore(r1, v3)
-      mstore(r0, and(mload(r1), 0xffffffffffffffff))
+      v1 := v3
+      v0 := v1
       leave
     }
     function $emit_code() -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
+      let v0 := 0
       let v1 := 0
       v1 := 0x01
-      mstore(r0, v1)
-      ret := and(mload(r0), 0xffffffffffffffff)
+      v0 := v1
+      ret := v0
       leave
     }
     $dispatch()

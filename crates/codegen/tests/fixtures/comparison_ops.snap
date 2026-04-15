@@ -11,71 +11,47 @@ object "main" {
       stop()
     }
     function $comparison_ops() -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let r3 := mload(0x40)
-      if iszero(r3) {
-        r3 := 0x80
-      }
-      mstore(0x40, add(r3, 32))
-      let r4 := mload(0x40)
-      if iszero(r4) {
-        r4 := 0x80
-      }
-      mstore(0x40, add(r4, 32))
-      let r5 := mload(0x40)
-      if iszero(r5) {
-        r5 := 0x80
-      }
-      mstore(0x40, add(r5, 32))
       let r6 := mload(0x40)
       if iszero(r6) {
         r6 := 0x80
       }
       mstore(0x40, add(r6, 32))
-      let r7 := mload(0x40)
-      if iszero(r7) {
-        r7 := 0x80
-      }
-      mstore(0x40, add(r7, 32))
       let r8 := mload(0x40)
       if iszero(r8) {
         r8 := 0x80
       }
       mstore(0x40, add(r8, 32))
-      let r9 := mload(0x40)
-      if iszero(r9) {
-        r9 := 0x80
-      }
-      mstore(0x40, add(r9, 32))
       let r10 := mload(0x40)
       if iszero(r10) {
         r10 := 0x80
       }
       mstore(0x40, add(r10, 32))
-      let r11 := mload(0x40)
-      if iszero(r11) {
-        r11 := 0x80
+      let r12 := mload(0x40)
+      if iszero(r12) {
+        r12 := 0x80
       }
-      mstore(0x40, add(r11, 32))
-      let v12 := 0
+      mstore(0x40, add(r12, 32))
+      let r14 := mload(0x40)
+      if iszero(r14) {
+        r14 := 0x80
+      }
+      mstore(0x40, add(r14, 32))
+      let r16 := mload(0x40)
+      if iszero(r16) {
+        r16 := 0x80
+      }
+      mstore(0x40, add(r16, 32))
+      let v0 := 0
+      let v1 := 0
+      let v2 := 0
+      let v3 := 0
+      let v4 := 0
+      let v5 := 0
+      let v7 := 0
+      let v9 := 0
+      let v11 := 0
       let v13 := 0
-      let v14 := 0
       let v15 := 0
-      let v16 := 0
       let v17 := 0
       let v18 := 0
       let v19 := 0
@@ -85,185 +61,73 @@ object "main" {
       let v23 := 0
       let v24 := 0
       let v25 := 0
-      v13 := 0x01
-      mstore(r3, v13)
-      v14 := 0x01
-      mstore(r0, v14)
-      v15 := 0x02
-      mstore(r4, v15)
-      v16 := 0x02
-      mstore(r1, v16)
-      v17 := 0x03
-      mstore(r5, v17)
-      v18 := 0x03
-      mstore(r2, v18)
-      v19 := $eq(mload(r0), mload(r0))
-      mstore(r6, v19)
-      v20 := $ne(mload(r0), mload(r1))
-      mstore(r7, v20)
-      v21 := $lt(mload(r0), mload(r1))
-      mstore(r8, v21)
-      v22 := $le(mload(r1), mload(r1))
-      mstore(r9, v22)
-      v23 := $gt(mload(r2), mload(r1))
-      mstore(r10, v23)
-      v24 := $ge(mload(r2), mload(r2))
-      mstore(r11, v24)
-      v25 := allocate(192)
-      mstore(v25, iszero(iszero(mload(r6))))
-      mstore(add(v25, 32), iszero(iszero(mload(r7))))
-      mstore(add(v25, 64), iszero(iszero(mload(r8))))
-      mstore(add(v25, 96), iszero(iszero(mload(r9))))
-      mstore(add(v25, 128), iszero(iszero(mload(r10))))
-      mstore(add(v25, 160), iszero(iszero(mload(r11))))
-      v12 := v25
-      ret := v12
-      leave
-    }
-    function $eq($self, $other) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let v3 := 0
-      mstore(r0, $self)
-      mstore(r1, $other)
-      v3 := iszero(iszero(eq(mload(r0), mload(r1))))
-      mstore(r2, v3)
-      ret := iszero(iszero(mload(r2)))
-      leave
-    }
-    function $ge($self, $other) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let v3 := 0
-      mstore(r0, $self)
-      mstore(r1, $other)
-      v3 := iszero(iszero(iszero(lt(mload(r0), mload(r1)))))
-      mstore(r2, v3)
-      ret := iszero(iszero(mload(r2)))
-      leave
-    }
-    function $gt($self, $other) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let v3 := 0
-      mstore(r0, $self)
-      mstore(r1, $other)
-      v3 := iszero(iszero(gt(mload(r0), mload(r1))))
-      mstore(r2, v3)
-      ret := iszero(iszero(mload(r2)))
-      leave
-    }
-    function $le($self, $other) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let v3 := 0
-      mstore(r0, $self)
-      mstore(r1, $other)
-      v3 := iszero(iszero(iszero(gt(mload(r0), mload(r1)))))
-      mstore(r2, v3)
-      ret := iszero(iszero(mload(r2)))
-      leave
-    }
-    function $lt($self, $other) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let v3 := 0
-      mstore(r0, $self)
-      mstore(r1, $other)
-      v3 := iszero(iszero(lt(mload(r0), mload(r1))))
-      mstore(r2, v3)
-      ret := iszero(iszero(mload(r2)))
-      leave
-    }
-    function $ne($self, $other) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let v3 := 0
-      mstore(r0, $self)
-      mstore(r1, $other)
-      v3 := iszero(iszero(iszero(eq(mload(r0), mload(r1)))))
-      mstore(r2, v3)
-      ret := iszero(iszero(mload(r2)))
+      let v26 := 0
+      let v27 := 0
+      let v28 := 0
+      let v29 := 0
+      let v30 := 0
+      let v31 := 0
+      let v32 := 0
+      let v33 := 0
+      let v34 := 0
+      let v35 := 0
+      let v36 := 0
+      let v37 := 0
+      let v38 := 0
+      let v39 := 0
+      let v40 := 0
+      let v41 := 0
+      let v42 := 0
+      let v43 := 0
+      let v44 := 0
+      v19 := 0x01
+      v3 := v19
+      v20 := 0x01
+      v0 := v20
+      v21 := 0x02
+      v4 := v21
+      v22 := 0x02
+      v1 := v22
+      v23 := 0x03
+      v5 := v23
+      v24 := 0x03
+      v2 := v24
+      v25 := 0x01
+      mstore(r6, v25)
+      v26 := 1
+      v7 := v26
+      v27 := 0x02
+      mstore(r8, v27)
+      v28 := 1
+      v9 := v28
+      v29 := 0x02
+      mstore(r10, v29)
+      v30 := 1
+      v11 := v30
+      v31 := 0x02
+      mstore(r12, v31)
+      v32 := 1
+      v13 := v32
+      v33 := 0x02
+      mstore(r14, v33)
+      v34 := 1
+      v15 := v34
+      v35 := 0x03
+      mstore(r16, v35)
+      v36 := 1
+      v17 := v36
+      v37 := 1
+      v38 := 1
+      v39 := 1
+      v40 := 1
+      v41 := 1
+      v42 := 1
+      v43 := dataoffset("const_0")
+      v18 := v43
+      ret := v18
       leave
     }
     $__fe_main_root()
   }
+  data "const_0" hex"000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001"
 }

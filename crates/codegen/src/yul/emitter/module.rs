@@ -12,7 +12,10 @@ use crate::{
     },
 };
 
-use super::{function::render_function_doc, util::section_object_label};
+use super::{
+    function::{FunctionEmitter, render_function_doc},
+    util::section_object_label,
+};
 
 pub(super) struct PackageIndex<'a, 'db> {
     pub(super) db: &'db DriverDataBase,
@@ -340,7 +343,27 @@ fn render_section_entry<'a, 'db>(
 ) -> Result<Vec<YulDoc>, YulError> {
     let entry = index.function(section.entry)?;
     let mut docs = Vec::new();
-    let call = format!("{}()", super::util::prefix_yul_name(&entry.symbol));
+    let args = entry
+        .params
+        .iter()
+        .zip(&entry.param_kinds)
+        .map(|(class, kind)| match kind {
+            crate::yul::legalize::YulParamKind::Effect(_) => {
+                Ok(FunctionEmitter::zero_for_class(class))
+            }
+            crate::yul::legalize::YulParamKind::Visible(_) => {
+                Err(YulError::InvalidYulPackage(format!(
+                    "root section entry `{}` unexpectedly requires visible arguments",
+                    entry.symbol
+                )))
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let call = format!(
+        "{}({})",
+        super::util::prefix_yul_name(&entry.symbol),
+        args.join(", ")
+    );
     match section.name {
         mir2::RuntimeSectionName::Init
         | mir2::RuntimeSectionName::Runtime

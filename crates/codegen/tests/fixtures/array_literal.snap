@@ -11,327 +11,71 @@ object "main" {
       stop()
     }
     function $large_array_literal() -> ret {
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let r3 := mload(0x40)
-      if iszero(r3) {
-        r3 := 0x80
-      }
-      mstore(0x40, add(r3, 32))
-      let r4 := mload(0x40)
-      if iszero(r4) {
-        r4 := 0x80
-      }
-      mstore(0x40, add(r4, 32))
-      let r5 := mload(0x40)
-      if iszero(r5) {
-        r5 := 0x80
-      }
-      mstore(0x40, add(r5, 32))
-      let r6 := mload(0x40)
-      if iszero(r6) {
-        r6 := 0x80
-      }
-      mstore(0x40, add(r6, 32))
-      let r7 := mload(0x40)
-      if iszero(r7) {
-        r7 := 0x80
-      }
-      mstore(0x40, add(r7, 32))
-      let r8 := mload(0x40)
-      if iszero(r8) {
-        r8 := 0x80
-      }
-      mstore(0x40, add(r8, 32))
-      let r9 := mload(0x40)
-      if iszero(r9) {
-        r9 := 0x80
-      }
-      mstore(0x40, add(r9, 32))
-      let r10 := mload(0x40)
-      if iszero(r10) {
-        r10 := 0x80
-      }
-      mstore(0x40, add(r10, 32))
-      let r11 := mload(0x40)
-      if iszero(r11) {
-        r11 := 0x80
-      }
-      mstore(0x40, add(r11, 32))
-      let r12 := mload(0x40)
-      if iszero(r12) {
-        r12 := 0x80
-      }
-      mstore(0x40, add(r12, 32))
-      let r13 := mload(0x40)
-      if iszero(r13) {
-        r13 := 0x80
-      }
-      mstore(0x40, add(r13, 32))
-      let r14 := mload(0x40)
-      if iszero(r14) {
-        r14 := 0x80
-      }
-      mstore(0x40, add(r14, 32))
-      let r15 := mload(0x40)
-      if iszero(r15) {
-        r15 := 0x80
-      }
-      mstore(0x40, add(r15, 32))
-      let r16 := mload(0x40)
-      if iszero(r16) {
-        r16 := 0x80
-      }
-      mstore(0x40, add(r16, 32))
-      let r17 := mload(0x40)
-      if iszero(r17) {
-        r17 := 0x80
-      }
-      mstore(0x40, add(r17, 32))
-      let r18 := mload(0x40)
-      if iszero(r18) {
-        r18 := 0x80
-      }
-      mstore(0x40, add(r18, 32))
-      let r19 := mload(0x40)
-      if iszero(r19) {
-        r19 := 0x80
-      }
-      mstore(0x40, add(r19, 32))
-      let r20 := mload(0x40)
-      if iszero(r20) {
-        r20 := 0x80
-      }
-      mstore(0x40, add(r20, 32))
-      let r21 := mload(0x40)
-      if iszero(r21) {
-        r21 := 0x80
-      }
-      mstore(0x40, add(r21, 32))
-      let r22 := mload(0x40)
-      if iszero(r22) {
-        r22 := 0x80
-      }
-      mstore(0x40, add(r22, 32))
-      let r23 := mload(0x40)
-      if iszero(r23) {
-        r23 := 0x80
-      }
-      mstore(0x40, add(r23, 32))
-      let r24 := mload(0x40)
-      if iszero(r24) {
-        r24 := 0x80
-      }
-      mstore(0x40, add(r24, 32))
-      let r25 := mload(0x40)
-      if iszero(r25) {
-        r25 := 0x80
-      }
-      mstore(0x40, add(r25, 32))
-      let r26 := mload(0x40)
-      if iszero(r26) {
-        r26 := 0x80
-      }
-      mstore(0x40, add(r26, 32))
-      let r27 := mload(0x40)
-      if iszero(r27) {
-        r27 := 0x80
-      }
-      mstore(0x40, add(r27, 32))
-      let r28 := mload(0x40)
-      if iszero(r28) {
-        r28 := 0x80
-      }
-      mstore(0x40, add(r28, 32))
-      let r29 := mload(0x40)
-      if iszero(r29) {
-        r29 := 0x80
-      }
-      mstore(0x40, add(r29, 32))
-      let r30 := mload(0x40)
-      if iszero(r30) {
-        r30 := 0x80
-      }
-      mstore(0x40, add(r30, 32))
-      let r31 := mload(0x40)
-      if iszero(r31) {
-        r31 := 0x80
-      }
-      mstore(0x40, add(r31, 32))
-      let r32 := mload(0x40)
-      if iszero(r32) {
-        r32 := 0x80
-      }
-      mstore(0x40, add(r32, 32))
-      let r33 := mload(0x40)
-      if iszero(r33) {
-        r33 := 0x80
-      }
-      mstore(0x40, add(r33, 32))
-      let r34 := mload(0x40)
-      if iszero(r34) {
-        r34 := 0x80
-      }
-      mstore(0x40, add(r34, 32))
-      let r35 := mload(0x40)
-      if iszero(r35) {
-        r35 := 0x80
-      }
-      mstore(0x40, add(r35, 32))
-      let r36 := mload(0x40)
-      if iszero(r36) {
-        r36 := 0x80
-      }
-      mstore(0x40, add(r36, 32))
-      let r37 := mload(0x40)
-      if iszero(r37) {
-        r37 := 0x80
-      }
-      mstore(0x40, add(r37, 32))
-      let r38 := mload(0x40)
-      if iszero(r38) {
-        r38 := 0x80
-      }
-      mstore(0x40, add(r38, 32))
-      let r39 := mload(0x40)
-      if iszero(r39) {
-        r39 := 0x80
-      }
-      mstore(0x40, add(r39, 32))
-      let r40 := mload(0x40)
-      if iszero(r40) {
-        r40 := 0x80
-      }
-      mstore(0x40, add(r40, 32))
-      let r41 := mload(0x40)
-      if iszero(r41) {
-        r41 := 0x80
-      }
-      mstore(0x40, add(r41, 32))
-      let r42 := mload(0x40)
-      if iszero(r42) {
-        r42 := 0x80
-      }
-      mstore(0x40, add(r42, 32))
-      let r43 := mload(0x40)
-      if iszero(r43) {
-        r43 := 0x80
-      }
-      mstore(0x40, add(r43, 32))
-      let r44 := mload(0x40)
-      if iszero(r44) {
-        r44 := 0x80
-      }
-      mstore(0x40, add(r44, 32))
-      let r45 := mload(0x40)
-      if iszero(r45) {
-        r45 := 0x80
-      }
-      mstore(0x40, add(r45, 32))
-      let r46 := mload(0x40)
-      if iszero(r46) {
-        r46 := 0x80
-      }
-      mstore(0x40, add(r46, 32))
-      let r47 := mload(0x40)
-      if iszero(r47) {
-        r47 := 0x80
-      }
-      mstore(0x40, add(r47, 32))
-      let r48 := mload(0x40)
-      if iszero(r48) {
-        r48 := 0x80
-      }
-      mstore(0x40, add(r48, 32))
-      let r49 := mload(0x40)
-      if iszero(r49) {
-        r49 := 0x80
-      }
-      mstore(0x40, add(r49, 32))
-      let r50 := mload(0x40)
-      if iszero(r50) {
-        r50 := 0x80
-      }
-      mstore(0x40, add(r50, 32))
-      let r51 := mload(0x40)
-      if iszero(r51) {
-        r51 := 0x80
-      }
-      mstore(0x40, add(r51, 32))
-      let r52 := mload(0x40)
-      if iszero(r52) {
-        r52 := 0x80
-      }
-      mstore(0x40, add(r52, 32))
-      let r53 := mload(0x40)
-      if iszero(r53) {
-        r53 := 0x80
-      }
-      mstore(0x40, add(r53, 32))
-      let r54 := mload(0x40)
-      if iszero(r54) {
-        r54 := 0x80
-      }
-      mstore(0x40, add(r54, 32))
-      let r55 := mload(0x40)
-      if iszero(r55) {
-        r55 := 0x80
-      }
-      mstore(0x40, add(r55, 32))
-      let r56 := mload(0x40)
-      if iszero(r56) {
-        r56 := 0x80
-      }
-      mstore(0x40, add(r56, 32))
-      let r57 := mload(0x40)
-      if iszero(r57) {
-        r57 := 0x80
-      }
-      mstore(0x40, add(r57, 32))
-      let r58 := mload(0x40)
-      if iszero(r58) {
-        r58 := 0x80
-      }
-      mstore(0x40, add(r58, 32))
-      let r59 := mload(0x40)
-      if iszero(r59) {
-        r59 := 0x80
-      }
-      mstore(0x40, add(r59, 32))
-      let r60 := mload(0x40)
-      if iszero(r60) {
-        r60 := 0x80
-      }
-      mstore(0x40, add(r60, 32))
-      let r61 := mload(0x40)
-      if iszero(r61) {
-        r61 := 0x80
-      }
-      mstore(0x40, add(r61, 32))
-      let r62 := mload(0x40)
-      if iszero(r62) {
-        r62 := 0x80
-      }
-      mstore(0x40, add(r62, 32))
-      let r63 := mload(0x40)
-      if iszero(r63) {
-        r63 := 0x80
-      }
-      mstore(0x40, add(r63, 32))
-      let r64 := mload(0x40)
-      if iszero(r64) {
-        r64 := 0x80
-      }
-      mstore(0x40, add(r64, 32))
       let v0 := 0
+      let v1 := 0
+      let v2 := 0
+      let v3 := 0
+      let v4 := 0
+      let v5 := 0
+      let v6 := 0
+      let v7 := 0
+      let v8 := 0
+      let v9 := 0
+      let v10 := 0
+      let v11 := 0
+      let v12 := 0
+      let v13 := 0
+      let v14 := 0
+      let v15 := 0
+      let v16 := 0
+      let v17 := 0
+      let v18 := 0
+      let v19 := 0
+      let v20 := 0
+      let v21 := 0
+      let v22 := 0
+      let v23 := 0
+      let v24 := 0
+      let v25 := 0
+      let v26 := 0
+      let v27 := 0
+      let v28 := 0
+      let v29 := 0
+      let v30 := 0
+      let v31 := 0
+      let v32 := 0
+      let v33 := 0
+      let v34 := 0
+      let v35 := 0
+      let v36 := 0
+      let v37 := 0
+      let v38 := 0
+      let v39 := 0
+      let v40 := 0
+      let v41 := 0
+      let v42 := 0
+      let v43 := 0
+      let v44 := 0
+      let v45 := 0
+      let v46 := 0
+      let v47 := 0
+      let v48 := 0
+      let v49 := 0
+      let v50 := 0
+      let v51 := 0
+      let v52 := 0
+      let v53 := 0
+      let v54 := 0
+      let v55 := 0
+      let v56 := 0
+      let v57 := 0
+      let v58 := 0
+      let v59 := 0
+      let v60 := 0
+      let v61 := 0
+      let v62 := 0
+      let v63 := 0
+      let v64 := 0
       let v65 := 0
       let v66 := 0
       let v67 := 0
@@ -530,133 +274,133 @@ object "main" {
       let v260 := 0
       let v261 := 0
       v66 := 0x01
-      mstore(r1, v66)
+      v1 := v66
       v67 := 0x02
-      mstore(r2, v67)
+      v2 := v67
       v68 := 0x03
-      mstore(r3, v68)
+      v3 := v68
       v69 := 0x04
-      mstore(r4, v69)
+      v4 := v69
       v70 := 0x05
-      mstore(r5, v70)
+      v5 := v70
       v71 := 0x06
-      mstore(r6, v71)
+      v6 := v71
       v72 := 0x07
-      mstore(r7, v72)
+      v7 := v72
       v73 := 0x08
-      mstore(r8, v73)
+      v8 := v73
       v74 := 0x09
-      mstore(r9, v74)
+      v9 := v74
       v75 := 0x0a
-      mstore(r10, v75)
+      v10 := v75
       v76 := 0x0b
-      mstore(r11, v76)
+      v11 := v76
       v77 := 0x0c
-      mstore(r12, v77)
+      v12 := v77
       v78 := 0x0d
-      mstore(r13, v78)
+      v13 := v78
       v79 := 0x0e
-      mstore(r14, v79)
+      v14 := v79
       v80 := 0x0f
-      mstore(r15, v80)
+      v15 := v80
       v81 := 0x10
-      mstore(r16, v81)
+      v16 := v81
       v82 := 0x11
-      mstore(r17, v82)
+      v17 := v82
       v83 := 0x12
-      mstore(r18, v83)
+      v18 := v83
       v84 := 0x13
-      mstore(r19, v84)
+      v19 := v84
       v85 := 0x14
-      mstore(r20, v85)
+      v20 := v85
       v86 := 0x15
-      mstore(r21, v86)
+      v21 := v86
       v87 := 0x16
-      mstore(r22, v87)
+      v22 := v87
       v88 := 0x17
-      mstore(r23, v88)
+      v23 := v88
       v89 := 0x18
-      mstore(r24, v89)
+      v24 := v89
       v90 := 0x19
-      mstore(r25, v90)
+      v25 := v90
       v91 := 0x1a
-      mstore(r26, v91)
+      v26 := v91
       v92 := 0x1b
-      mstore(r27, v92)
+      v27 := v92
       v93 := 0x1c
-      mstore(r28, v93)
+      v28 := v93
       v94 := 0x1d
-      mstore(r29, v94)
+      v29 := v94
       v95 := 0x1e
-      mstore(r30, v95)
+      v30 := v95
       v96 := 0x1f
-      mstore(r31, v96)
+      v31 := v96
       v97 := 0x20
-      mstore(r32, v97)
+      v32 := v97
       v98 := 0x21
-      mstore(r33, v98)
+      v33 := v98
       v99 := 0x22
-      mstore(r34, v99)
+      v34 := v99
       v100 := 0x23
-      mstore(r35, v100)
+      v35 := v100
       v101 := 0x24
-      mstore(r36, v101)
+      v36 := v101
       v102 := 0x25
-      mstore(r37, v102)
+      v37 := v102
       v103 := 0x26
-      mstore(r38, v103)
+      v38 := v103
       v104 := 0x27
-      mstore(r39, v104)
+      v39 := v104
       v105 := 0x28
-      mstore(r40, v105)
+      v40 := v105
       v106 := 0x29
-      mstore(r41, v106)
+      v41 := v106
       v107 := 0x2a
-      mstore(r42, v107)
+      v42 := v107
       v108 := 0x2b
-      mstore(r43, v108)
+      v43 := v108
       v109 := 0x2c
-      mstore(r44, v109)
+      v44 := v109
       v110 := 0x2d
-      mstore(r45, v110)
+      v45 := v110
       v111 := 0x2e
-      mstore(r46, v111)
+      v46 := v111
       v112 := 0x2f
-      mstore(r47, v112)
+      v47 := v112
       v113 := 0x30
-      mstore(r48, v113)
+      v48 := v113
       v114 := 0x31
-      mstore(r49, v114)
+      v49 := v114
       v115 := 0x32
-      mstore(r50, v115)
+      v50 := v115
       v116 := 0x33
-      mstore(r51, v116)
+      v51 := v116
       v117 := 0x34
-      mstore(r52, v117)
+      v52 := v117
       v118 := 0x35
-      mstore(r53, v118)
+      v53 := v118
       v119 := 0x36
-      mstore(r54, v119)
+      v54 := v119
       v120 := 0x37
-      mstore(r55, v120)
+      v55 := v120
       v121 := 0x38
-      mstore(r56, v121)
+      v56 := v121
       v122 := 0x39
-      mstore(r57, v122)
+      v57 := v122
       v123 := 0x3a
-      mstore(r58, v123)
+      v58 := v123
       v124 := 0x3b
-      mstore(r59, v124)
+      v59 := v124
       v125 := 0x3c
-      mstore(r60, v125)
+      v60 := v125
       v126 := 0x3d
-      mstore(r61, v126)
+      v61 := v126
       v127 := 0x3e
-      mstore(r62, v127)
+      v62 := v127
       v128 := 0x3f
-      mstore(r63, v128)
+      v63 := v128
       v129 := 0x40
-      mstore(r64, v129)
+      v64 := v129
       v130 := 0x01
       v131 := 0x02
       v132 := 0x03

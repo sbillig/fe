@@ -11,18 +11,10 @@ object "main" {
       stop()
     }
     function $const_nested_u8_array() -> ret {
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r3 := mload(0x40)
-      if iszero(r3) {
-        r3 := 0x80
-      }
-      mstore(0x40, add(r3, 32))
       let v0 := 0
+      let v1 := 0
       let v2 := 0
+      let v3 := 0
       let v4 := 0
       let v5 := 0
       let v6 := 0
@@ -50,13 +42,13 @@ object "main" {
       v13 := dataoffset("const_2")
       v0 := v13
       v15 := 0x01
-      mstore(r1, v15)
+      v1 := v15
       v16 := 0x03
       v17 := 0x04
       v18 := dataoffset("const_1")
       v2 := v18
       v20 := 0x00
-      mstore(r3, v20)
+      v3 := v20
       v21 := 0x03
       v4 := v21
       ret := v4

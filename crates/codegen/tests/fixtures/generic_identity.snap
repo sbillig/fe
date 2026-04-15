@@ -11,39 +11,21 @@ object "main" {
       stop()
     }
     function $call_identity_bool() -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
+      let v0 := 0
+      let v1 := 0
+      let v2 := 0
       let v3 := 0
       let v4 := 0
       v3 := 1
-      mstore(r1, v3)
-      v4 := $identity_0(iszero(iszero(mload(r1))))
-      mstore(r2, v4)
-      mstore(r0, iszero(iszero(mload(r2))))
-      ret := iszero(iszero(mload(r0)))
+      v1 := v3
+      v4 := $identity_0(v1)
+      v2 := v4
+      v0 := v2
+      ret := v0
       leave
     }
     function $identity_0($value) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      mstore(r0, $value)
-      ret := iszero(iszero(mload(r0)))
+      ret := $value
       leave
     }
     $__fe_main_root()

@@ -11,13 +11,9 @@ object "main" {
       stop()
     }
     function $alias_then_index() -> ret {
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
       let v0 := 0
       let v1 := 0
+      let v2 := 0
       let v3 := 0
       let v4 := 0
       let v5 := 0
@@ -38,7 +34,7 @@ object "main" {
       v10 := dataoffset("const_0")
       v0 := v10
       v12 := 0x00
-      mstore(r2, v12)
+      v2 := v12
       v13 := 0x01
       v3 := v13
       ret := v3

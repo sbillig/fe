@@ -5,12 +5,7 @@ input_file: tests/fixtures/storage_map_contract.fe
 ---
 object "BalanceMap" {
   code {
-    function $codecopy($self, $dest, $offset, $len) {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 0))
+    function $codecopy($dest, $offset, $len) {
       let r1 := mload(0x40)
       if iszero(r1) {
         r1 := 0x80
@@ -26,86 +21,48 @@ object "BalanceMap" {
         r3 := 0x80
       }
       mstore(0x40, add(r3, 32))
-      let r4 := mload(0x40)
-      if iszero(r4) {
-        r4 := 0x80
-      }
-      mstore(0x40, add(r4, 0))
+      let v0 := 0
+      let v4 := 0
+      let v5 := 0
+      let v6 := 0
       mstore(r1, $dest)
       mstore(r2, $offset)
       mstore(r3, $len)
-      datacopy(mload(r1), mload(r2), mload(r3))
+      let t10 := mload(r1)
+      v4 := t10
+      let t11 := mload(r2)
+      v5 := t11
+      let t12 := mload(r3)
+      v6 := t12
+      datacopy(v4, v5, v6)
       leave
     }
-    function $init($Evm) {
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let r3 := mload(0x40)
-      if iszero(r3) {
-        r3 := 0x80
-      }
-      mstore(0x40, add(r3, 32))
-      let r4 := mload(0x40)
-      if iszero(r4) {
-        r4 := 0x80
-      }
-      mstore(0x40, add(r4, 32))
-      let r5 := mload(0x40)
-      if iszero(r5) {
-        r5 := 0x80
-      }
-      mstore(0x40, add(r5, 32))
-      let r6 := mload(0x40)
-      if iszero(r6) {
-        r6 := 0x80
-      }
-      mstore(0x40, add(r6, 0))
-      let r7 := mload(0x40)
-      if iszero(r7) {
-        r7 := 0x80
-      }
-      mstore(0x40, add(r7, 32))
-      let r8 := mload(0x40)
-      if iszero(r8) {
-        r8 := 0x80
-      }
-      mstore(0x40, add(r8, 0))
-      let v9 := 0
+    function $init($evm) {
+      let v1 := 0
+      let v2 := 0
+      let v3 := 0
+      let v4 := 0
+      let v5 := 0
+      let v6 := 0
+      let v8 := 0
+      let v10 := 0
       let v11 := 0
-      let v12 := 0
       let v14 := 0
-      let v16 := 0
-      let v17 := 0
-      mstore(r3, datasize("__BalanceMap_runtime"))
-      mstore(r1, mload(r3))
-      mstore(r4, dataoffset("__BalanceMap_runtime"))
-      mstore(r2, mload(r4))
-      v9 := 0x00
-      mstore(r5, v9)
-      v11 := $Evm
-      v12 := $Evm
-      $codecopy(v12, mload(r5), mload(r2), mload(r1))
+      v3 := datasize("__BalanceMap_runtime")
+      v1 := v3
+      v4 := dataoffset("__BalanceMap_runtime")
+      v2 := v4
+      v10 := $evm
+      v5 := v10
+      v11 := 0x00
+      v6 := v11
+      $codecopy(v6, v2, v1)
       v14 := 0x00
-      mstore(r7, v14)
-      v16 := $Evm
-      v17 := $Evm
-      $return_data_2(v17, mload(r7), mload(r1))
+      v8 := v14
+      $return_data_2(v8, v1)
       invalid()
     }
-    function $return_data_2($self, $offset, $len) {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 0))
+    function $return_data_2($offset, $len) {
       let r1 := mload(0x40)
       if iszero(r1) {
         r1 := 0x80
@@ -116,150 +73,66 @@ object "BalanceMap" {
         r2 := 0x80
       }
       mstore(0x40, add(r2, 32))
-      let r3 := mload(0x40)
-      if iszero(r3) {
-        r3 := 0x80
-      }
-      mstore(0x40, add(r3, 0))
+      let v3 := 0
+      let v4 := 0
       mstore(r1, $offset)
       mstore(r2, $len)
-      return(mload(r1), mload(r2))
+      let t8 := mload(r1)
+      v3 := t8
+      let t9 := mload(r2)
+      v4 := t9
+      return(v3, v4)
     }
-    $init()
+    $init(0)
   }
   object "__BalanceMap_runtime" {
     code {
-      function $abi_encode($value, $RawOps) {
+      function $abi_encode($value, $ops) {
         let r0 := mload(0x40)
         if iszero(r0) {
           r0 := 0x80
         }
         mstore(0x40, add(r0, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let r3 := mload(0x40)
-        if iszero(r3) {
-          r3 := 0x80
-        }
-        mstore(0x40, add(r3, 32))
-        let r4 := mload(0x40)
-        if iszero(r4) {
-          r4 := 0x80
-        }
-        mstore(0x40, add(r4, 0))
-        let r5 := mload(0x40)
-        if iszero(r5) {
-          r5 := 0x80
-        }
-        mstore(0x40, add(r5, 32))
-        let r6 := mload(0x40)
-        if iszero(r6) {
-          r6 := 0x80
-        }
-        mstore(0x40, add(r6, 0))
-        let v7 := 0
-        let v8 := 0
-        let v10 := 0
-        let v11 := 0
-        let v13 := 0
-        let v15 := 0
-        let v16 := 0
-        mstore(r0, $value)
-        v7 := 0x00
-        mstore(r3, v7)
-        v8 := 0x00
-        mstore(r2, v8)
-        v10 := $RawOps
-        v11 := $RawOps
-        $mstore(v11, mload(r2), mload(r0))
-        v13 := 0x20
-        mstore(r5, v13)
-        v15 := $RawOps
-        v16 := $RawOps
-        $return_data_1(v16, mload(r2), mload(r5))
-        invalid()
-      }
-      function $add_0($self, $other) -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 32))
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let v3 := 0
-        mstore(r0, $self)
-        mstore(r1, $other)
-        let t4 := add(mload(r0), mload(r1))
-        if lt(t4, mload(r0)) {
-          revert(0, 0)
-        }
-        v3 := t4
-        mstore(r2, v3)
-        ret := mload(r2)
-        leave
-      }
-      function $add_1($self, $other) -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 32))
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let v3 := 0
-        mstore(r0, $self)
-        mstore(r1, $other)
-        let t4 := add(mload(r0), mload(r1))
-        if lt(t4, mload(r0)) {
-          revert(0, 0)
-        }
-        v3 := t4
-        mstore(r2, v3)
-        ret := mload(r2)
-        leave
-      }
-      function $calldataload($self, $offset) -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 0))
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
+        let v2 := 0
         let v3 := 0
         let v4 := 0
+        let v5 := 0
+        let v7 := 0
+        let v9 := 0
+        let v10 := 0
+        let v11 := 0
+        let v14 := 0
+        mstore(r0, $value)
+        v9 := 0x00
+        v3 := v9
+        v10 := 0x00
+        v2 := v10
+        v11 := $ops
+        v4 := v11
+        let t17 := mload(r0)
+        v5 := t17
+        $mstore(v2, v5)
+        v14 := 0x20
+        v7 := v14
+        $return_data_1(v2, v7)
+        invalid()
+      }
+      function $calldataload($offset) -> ret {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let v2 := 0
+        let v3 := 0
+        let v4 := 0
+        let v5 := 0
         mstore(r1, $offset)
-        v4 := calldataload(mload(r1))
-        mstore(r2, v4)
-        ret := mload(r2)
+        let t6 := mload(r1)
+        v2 := t6
+        v5 := calldataload(v2)
+        v3 := v5
+        ret := v3
         leave
       }
       function $from_word($word) -> ret {
@@ -268,138 +141,80 @@ object "BalanceMap" {
           r0 := 0x80
         }
         mstore(0x40, add(r0, 32))
+        let v1 := 0
         mstore(r0, $word)
-        ret := mload(r0)
+        let t2 := mload(r0)
+        v1 := t2
+        ret := v1
         leave
       }
-      function $get_0($self, $key) -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 0))
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let r3 := mload(0x40)
-        if iszero(r3) {
-          r3 := 0x80
-        }
-        mstore(0x40, add(r3, 32))
-        let r4 := mload(0x40)
-        if iszero(r4) {
-          r4 := 0x80
-        }
-        mstore(0x40, add(r4, 32))
+      function $get_0($key) -> ret {
+        let v2 := 0
+        let v3 := 0
+        let v4 := 0
         let v5 := 0
         let v6 := 0
         let v7 := 0
-        mstore(r1, $key)
         v5 := 0x01
-        mstore(r2, v5)
-        v6 := $storagemap_get_word_with_salt(mload(r1), mload(r2))
-        mstore(r3, v6)
-        v7 := $from_word(mload(r3))
-        mstore(r4, v7)
-        ret := mload(r4)
+        v2 := v5
+        v6 := $storagemap_get_word_with_salt($key, v2)
+        v3 := v6
+        v7 := $from_word(v3)
+        v4 := v7
+        ret := v4
         leave
       }
-      function $get_1($self, $key) -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 0))
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let r3 := mload(0x40)
-        if iszero(r3) {
-          r3 := 0x80
-        }
-        mstore(0x40, add(r3, 32))
-        let r4 := mload(0x40)
-        if iszero(r4) {
-          r4 := 0x80
-        }
-        mstore(0x40, add(r4, 32))
+      function $get_1($key) -> ret {
+        let v2 := 0
+        let v3 := 0
+        let v4 := 0
         let v5 := 0
         let v6 := 0
         let v7 := 0
-        mstore(r1, $key)
         v5 := 0x00
-        mstore(r2, v5)
-        v6 := $storagemap_get_word_with_salt(mload(r1), mload(r2))
-        mstore(r3, v6)
-        v7 := $from_word(mload(r3))
-        mstore(r4, v7)
-        ret := mload(r4)
+        v2 := v5
+        v6 := $storagemap_get_word_with_salt($key, v2)
+        v3 := v6
+        v7 := $from_word(v3)
+        v4 := v7
+        ret := v4
         leave
       }
-      function $get_allowance($addr, $StorageMap) -> ret {
+      function $get_allowance($addr, $allowances) -> ret {
         let r0 := mload(0x40)
         if iszero(r0) {
           r0 := 0x80
         }
         mstore(0x40, add(r0, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
+        let v2 := 0
         let v3 := 0
         let v4 := 0
-        let v5 := 0
         mstore(r0, $addr)
-        v3 := $StorageMap
-        v4 := $StorageMap
-        v5 := $get_0(v4, mload(r0))
-        mstore(r2, v5)
-        ret := mload(r2)
+        let t5 := mload(r0)
+        v2 := t5
+        v4 := $get_0(v2)
+        v3 := v4
+        ret := v3
         leave
       }
-      function $get_balance($addr, $StorageMap) -> ret {
+      function $get_balance($addr, $balances) -> ret {
         let r0 := mload(0x40)
         if iszero(r0) {
           r0 := 0x80
         }
         mstore(0x40, add(r0, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
+        let v2 := 0
         let v3 := 0
         let v4 := 0
-        let v5 := 0
         mstore(r0, $addr)
-        v3 := $StorageMap
-        v4 := $StorageMap
-        v5 := $get_1(v4, mload(r0))
-        mstore(r2, v5)
-        ret := mload(r2)
+        let t5 := mload(r0)
+        v2 := t5
+        v4 := $get_1(v2)
+        v3 := v4
+        ret := v3
         leave
       }
-      function $lt($self, $other) -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 32))
+      function $mstore($addr, $value) {
         let r1 := mload(0x40)
         if iszero(r1) {
           r1 := 0x80
@@ -410,62 +225,25 @@ object "BalanceMap" {
           r2 := 0x80
         }
         mstore(0x40, add(r2, 32))
+        let v0 := 0
         let v3 := 0
-        mstore(r0, $self)
-        mstore(r1, $other)
-        v3 := iszero(iszero(lt(mload(r0), mload(r1))))
-        mstore(r2, v3)
-        ret := iszero(iszero(mload(r2)))
-        leave
-      }
-      function $mstore($self, $addr, $value) {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 0))
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let r3 := mload(0x40)
-        if iszero(r3) {
-          r3 := 0x80
-        }
-        mstore(0x40, add(r3, 0))
+        let v4 := 0
         mstore(r1, $addr)
         mstore(r2, $value)
-        mstore(mload(r1), mload(r2))
+        let t8 := mload(r1)
+        v3 := t8
+        let t9 := mload(r2)
+        v4 := t9
+        mstore(v3, v4)
         leave
       }
       function $new_0() {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 0))
         leave
       }
       function $new_1() {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 0))
         leave
       }
-      function $return_data_0($self, $offset, $len) {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 0))
+      function $return_data_0($offset, $len) {
         let r1 := mload(0x40)
         if iszero(r1) {
           r1 := 0x80
@@ -476,21 +254,17 @@ object "BalanceMap" {
           r2 := 0x80
         }
         mstore(0x40, add(r2, 32))
-        let r3 := mload(0x40)
-        if iszero(r3) {
-          r3 := 0x80
-        }
-        mstore(0x40, add(r3, 0))
+        let v3 := 0
+        let v4 := 0
         mstore(r1, $offset)
         mstore(r2, $len)
-        return(mload(r1), mload(r2))
+        let t8 := mload(r1)
+        v3 := t8
+        let t9 := mload(r2)
+        v4 := t9
+        return(v3, v4)
       }
-      function $return_data_1($self, $offset, $len) {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 0))
+      function $return_data_1($offset, $len) {
         let r1 := mload(0x40)
         if iszero(r1) {
           r1 := 0x80
@@ -501,16 +275,17 @@ object "BalanceMap" {
           r2 := 0x80
         }
         mstore(0x40, add(r2, 32))
-        let r3 := mload(0x40)
-        if iszero(r3) {
-          r3 := 0x80
-        }
-        mstore(0x40, add(r3, 0))
+        let v3 := 0
+        let v4 := 0
         mstore(r1, $offset)
         mstore(r2, $len)
-        return(mload(r1), mload(r2))
+        let t8 := mload(r1)
+        v3 := t8
+        let t9 := mload(r2)
+        v4 := t9
+        return(v3, v4)
       }
-      function $runtime($Evm) {
+      function $runtime($evm) {
         let r1 := mload(0x40)
         if iszero(r1) {
           r1 := 0x80
@@ -521,321 +296,58 @@ object "BalanceMap" {
           r2 := 0x80
         }
         mstore(0x40, add(r2, 0))
-        let r3 := mload(0x40)
-        if iszero(r3) {
-          r3 := 0x80
-        }
-        mstore(0x40, add(r3, 32))
-        let r4 := mload(0x40)
-        if iszero(r4) {
-          r4 := 0x80
-        }
-        mstore(0x40, add(r4, 32))
-        let r5 := mload(0x40)
-        if iszero(r5) {
-          r5 := 0x80
-        }
-        mstore(0x40, add(r5, 32))
-        let r6 := mload(0x40)
-        if iszero(r6) {
-          r6 := 0x80
-        }
-        mstore(0x40, add(r6, 32))
-        let r7 := mload(0x40)
-        if iszero(r7) {
-          r7 := 0x80
-        }
-        mstore(0x40, add(r7, 32))
-        let r8 := mload(0x40)
-        if iszero(r8) {
-          r8 := 0x80
-        }
-        mstore(0x40, add(r8, 32))
-        let r9 := mload(0x40)
-        if iszero(r9) {
-          r9 := 0x80
-        }
-        mstore(0x40, add(r9, 32))
-        let r10 := mload(0x40)
-        if iszero(r10) {
-          r10 := 0x80
-        }
-        mstore(0x40, add(r10, 32))
-        let r11 := mload(0x40)
-        if iszero(r11) {
-          r11 := 0x80
-        }
-        mstore(0x40, add(r11, 32))
-        let r12 := mload(0x40)
-        if iszero(r12) {
-          r12 := 0x80
-        }
-        mstore(0x40, add(r12, 32))
-        let r13 := mload(0x40)
-        if iszero(r13) {
-          r13 := 0x80
-        }
-        mstore(0x40, add(r13, 32))
-        let r14 := mload(0x40)
-        if iszero(r14) {
-          r14 := 0x80
-        }
-        mstore(0x40, add(r14, 32))
-        let r15 := mload(0x40)
-        if iszero(r15) {
-          r15 := 0x80
-        }
-        mstore(0x40, add(r15, 32))
-        let r16 := mload(0x40)
-        if iszero(r16) {
-          r16 := 0x80
-        }
-        mstore(0x40, add(r16, 0))
-        let r17 := mload(0x40)
-        if iszero(r17) {
-          r17 := 0x80
-        }
-        mstore(0x40, add(r17, 0))
-        let r18 := mload(0x40)
-        if iszero(r18) {
-          r18 := 0x80
-        }
-        mstore(0x40, add(r18, 32))
-        let r19 := mload(0x40)
-        if iszero(r19) {
-          r19 := 0x80
-        }
-        mstore(0x40, add(r19, 32))
-        let r20 := mload(0x40)
-        if iszero(r20) {
-          r20 := 0x80
-        }
-        mstore(0x40, add(r20, 32))
-        let r21 := mload(0x40)
-        if iszero(r21) {
-          r21 := 0x80
-        }
-        mstore(0x40, add(r21, 32))
-        let r22 := mload(0x40)
-        if iszero(r22) {
-          r22 := 0x80
-        }
-        mstore(0x40, add(r22, 0))
-        let r23 := mload(0x40)
-        if iszero(r23) {
-          r23 := 0x80
-        }
-        mstore(0x40, add(r23, 32))
-        let r24 := mload(0x40)
-        if iszero(r24) {
-          r24 := 0x80
-        }
-        mstore(0x40, add(r24, 32))
-        let r25 := mload(0x40)
-        if iszero(r25) {
-          r25 := 0x80
-        }
-        mstore(0x40, add(r25, 32))
-        let r26 := mload(0x40)
-        if iszero(r26) {
-          r26 := 0x80
-        }
-        mstore(0x40, add(r26, 32))
-        let r27 := mload(0x40)
-        if iszero(r27) {
-          r27 := 0x80
-        }
-        mstore(0x40, add(r27, 32))
-        let r28 := mload(0x40)
-        if iszero(r28) {
-          r28 := 0x80
-        }
-        mstore(0x40, add(r28, 32))
-        let r29 := mload(0x40)
-        if iszero(r29) {
-          r29 := 0x80
-        }
-        mstore(0x40, add(r29, 32))
-        let r30 := mload(0x40)
-        if iszero(r30) {
-          r30 := 0x80
-        }
-        mstore(0x40, add(r30, 32))
-        let r31 := mload(0x40)
-        if iszero(r31) {
-          r31 := 0x80
-        }
-        mstore(0x40, add(r31, 32))
-        let r32 := mload(0x40)
-        if iszero(r32) {
-          r32 := 0x80
-        }
-        mstore(0x40, add(r32, 32))
-        let r33 := mload(0x40)
-        if iszero(r33) {
-          r33 := 0x80
-        }
-        mstore(0x40, add(r33, 32))
-        let r34 := mload(0x40)
-        if iszero(r34) {
-          r34 := 0x80
-        }
-        mstore(0x40, add(r34, 32))
-        let r35 := mload(0x40)
-        if iszero(r35) {
-          r35 := 0x80
-        }
-        mstore(0x40, add(r35, 32))
-        let r36 := mload(0x40)
-        if iszero(r36) {
-          r36 := 0x80
-        }
-        mstore(0x40, add(r36, 0))
-        let r37 := mload(0x40)
-        if iszero(r37) {
-          r37 := 0x80
-        }
-        mstore(0x40, add(r37, 32))
-        let r38 := mload(0x40)
-        if iszero(r38) {
-          r38 := 0x80
-        }
-        mstore(0x40, add(r38, 32))
-        let r39 := mload(0x40)
-        if iszero(r39) {
-          r39 := 0x80
-        }
-        mstore(0x40, add(r39, 32))
-        let r40 := mload(0x40)
-        if iszero(r40) {
-          r40 := 0x80
-        }
-        mstore(0x40, add(r40, 32))
-        let r41 := mload(0x40)
-        if iszero(r41) {
-          r41 := 0x80
-        }
-        mstore(0x40, add(r41, 0))
-        let r42 := mload(0x40)
-        if iszero(r42) {
-          r42 := 0x80
-        }
-        mstore(0x40, add(r42, 32))
-        let r43 := mload(0x40)
-        if iszero(r43) {
-          r43 := 0x80
-        }
-        mstore(0x40, add(r43, 0))
-        let r44 := mload(0x40)
-        if iszero(r44) {
-          r44 := 0x80
-        }
-        mstore(0x40, add(r44, 32))
-        let r45 := mload(0x40)
-        if iszero(r45) {
-          r45 := 0x80
-        }
-        mstore(0x40, add(r45, 32))
-        let r46 := mload(0x40)
-        if iszero(r46) {
-          r46 := 0x80
-        }
-        mstore(0x40, add(r46, 32))
-        let r47 := mload(0x40)
-        if iszero(r47) {
-          r47 := 0x80
-        }
-        mstore(0x40, add(r47, 32))
-        let r48 := mload(0x40)
-        if iszero(r48) {
-          r48 := 0x80
-        }
-        mstore(0x40, add(r48, 32))
-        let r49 := mload(0x40)
-        if iszero(r49) {
-          r49 := 0x80
-        }
-        mstore(0x40, add(r49, 32))
-        let r50 := mload(0x40)
-        if iszero(r50) {
-          r50 := 0x80
-        }
-        mstore(0x40, add(r50, 32))
-        let r51 := mload(0x40)
-        if iszero(r51) {
-          r51 := 0x80
-        }
-        mstore(0x40, add(r51, 0))
-        let r52 := mload(0x40)
-        if iszero(r52) {
-          r52 := 0x80
-        }
-        mstore(0x40, add(r52, 32))
-        let r53 := mload(0x40)
-        if iszero(r53) {
-          r53 := 0x80
-        }
-        mstore(0x40, add(r53, 32))
-        let r54 := mload(0x40)
-        if iszero(r54) {
-          r54 := 0x80
-        }
-        mstore(0x40, add(r54, 32))
-        let r55 := mload(0x40)
-        if iszero(r55) {
-          r55 := 0x80
-        }
-        mstore(0x40, add(r55, 0))
-        let r56 := mload(0x40)
-        if iszero(r56) {
-          r56 := 0x80
-        }
-        mstore(0x40, add(r56, 32))
-        let r57 := mload(0x40)
-        if iszero(r57) {
-          r57 := 0x80
-        }
-        mstore(0x40, add(r57, 32))
-        let r58 := mload(0x40)
-        if iszero(r58) {
-          r58 := 0x80
-        }
-        mstore(0x40, add(r58, 32))
-        let r59 := mload(0x40)
-        if iszero(r59) {
-          r59 := 0x80
-        }
-        mstore(0x40, add(r59, 32))
-        let r60 := mload(0x40)
-        if iszero(r60) {
-          r60 := 0x80
-        }
-        mstore(0x40, add(r60, 0))
-        let r61 := mload(0x40)
-        if iszero(r61) {
-          r61 := 0x80
-        }
-        mstore(0x40, add(r61, 32))
-        let r62 := mload(0x40)
-        if iszero(r62) {
-          r62 := 0x80
-        }
-        mstore(0x40, add(r62, 0))
-        let r63 := mload(0x40)
-        if iszero(r63) {
-          r63 := 0x80
-        }
-        mstore(0x40, add(r63, 32))
-        let r64 := mload(0x40)
-        if iszero(r64) {
-          r64 := 0x80
-        }
-        mstore(0x40, add(r64, 32))
-        let r65 := mload(0x40)
-        if iszero(r65) {
-          r65 := 0x80
-        }
-        mstore(0x40, add(r65, 0))
+        let v3 := 0
+        let v4 := 0
+        let v5 := 0
+        let v6 := 0
+        let v7 := 0
+        let v8 := 0
+        let v9 := 0
+        let v10 := 0
+        let v11 := 0
+        let v12 := 0
+        let v13 := 0
+        let v14 := 0
+        let v15 := 0
+        let v18 := 0
+        let v19 := 0
+        let v20 := 0
+        let v21 := 0
+        let v23 := 0
+        let v24 := 0
+        let v25 := 0
+        let v26 := 0
+        let v27 := 0
+        let v28 := 0
+        let v29 := 0
+        let v30 := 0
+        let v31 := 0
+        let v32 := 0
+        let v33 := 0
+        let v34 := 0
+        let v35 := 0
+        let v37 := 0
+        let v38 := 0
+        let v39 := 0
+        let v40 := 0
+        let v42 := 0
+        let v44 := 0
+        let v45 := 0
+        let v46 := 0
+        let v47 := 0
+        let v48 := 0
+        let v49 := 0
+        let v50 := 0
+        let v52 := 0
+        let v53 := 0
+        let v54 := 0
+        let v56 := 0
+        let v57 := 0
+        let v58 := 0
+        let v59 := 0
+        let v61 := 0
+        let v63 := 0
+        let v64 := 0
         let v70 := 0
         let v71 := 0
         let v72 := 0
@@ -845,63 +357,36 @@ object "BalanceMap" {
         let v76 := 0
         let v77 := 0
         let v78 := 0
-        let v79 := 0
-        let v80 := 0
         let v81 := 0
         let v82 := 0
+        let v83 := 0
         let v84 := 0
         let v86 := 0
-        let v87 := 0
         let v88 := 0
-        let v89 := 0
-        let v90 := 0
         let v91 := 0
         let v92 := 0
         let v93 := 0
+        let v94 := 0
         let v95 := 0
+        let v96 := 0
         let v97 := 0
-        let v99 := 0
+        let v98 := 0
         let v101 := 0
         let v102 := 0
         let v103 := 0
         let v104 := 0
-        let v105 := 0
-        let v106 := 0
         let v107 := 0
         let v108 := 0
         let v109 := 0
         let v110 := 0
-        let v111 := 0
         let v112 := 0
-        let v113 := 0
         let v114 := 0
-        let v116 := 0
+        let v117 := 0
         let v118 := 0
-        let v119 := 0
-        let v120 := 0
         let v121 := 0
         let v122 := 0
         let v123 := 0
-        let v125 := 0
-        let v127 := 0
-        let v128 := 0
-        let v129 := 0
-        let v130 := 0
-        let v131 := 0
-        let v132 := 0
-        let v133 := 0
-        let v134 := 0
-        let v136 := 0
-        let v138 := 0
-        let v140 := 0
-        let v142 := 0
-        let v143 := 0
-        let v145 := 0
-        let v146 := 0
-        let v148 := 0
-        let v149 := 0
-        let v150 := 0
-        let v151 := 0
+        let v124 := 0
         let $pc := 0
         for {} 1 {} {
           switch $pc
@@ -909,20 +394,18 @@ object "BalanceMap" {
               $new_1()
               $new_0()
               v70 := 0x00
-              mstore(r18, v70)
-              v71 := $Evm
-              v72 := $Evm
-              v73 := $calldataload(v72, mload(r18))
-              mstore(r19, v73)
-              v74 := 0xe0
-              mstore(r20, v74)
-              v75 := $shr(mload(r19), mload(r20))
-              mstore(r21, v75)
-              mstore(r3, mload(r21))
-              v76 := 0x9cc7f708
-              mstore(r23, v76)
-              mstore(r24, iszero(iszero(eq(mload(r3), mload(r23)))))
-              if iszero(iszero(mload(r24))) {
+              v18 := v70
+              v71 := $calldataload(v18)
+              v19 := v71
+              v72 := 0xe0
+              v20 := v72
+              v73 := shr(v20, v19)
+              v21 := v73
+              v3 := v21
+              v74 := 0x9cc7f708
+              v23 := v74
+              v24 := iszero(iszero(eq(v3, v23)))
+              if v24 {
                 $pc := 2
                 continue
               }
@@ -933,128 +416,103 @@ object "BalanceMap" {
               leave
           }
           case 2 {
-              v77 := 0x04
-              mstore(r33, v77)
-              v78 := $Evm
-              v79 := $Evm
-              v80 := $calldataload(v79, mload(r33))
-              mstore(r34, v80)
-              mstore(r4, mload(r34))
-              v81 := r1
-              v82 := $get_balance(mload(r4), v81)
-              mstore(r35, v82)
-              mstore(r5, mload(r35))
-              v84 := $Evm
-              $abi_encode(mload(r5), v84)
+              v75 := 0x04
+              v33 := v75
+              v76 := $calldataload(v33)
+              v34 := v76
+              v4 := v34
+              v77 := r1
+              v78 := $get_balance(v4, v77)
+              v35 := v78
+              v5 := v35
+              $abi_encode(v5, $evm)
               invalid()
           }
           case 3 {
-              v86 := 0x04
-              mstore(r37, v86)
-              v87 := $Evm
-              v88 := $Evm
-              v89 := $calldataload(v88, mload(r37))
-              mstore(r38, v89)
-              mstore(r6, mload(r38))
-              v90 := 0x24
-              mstore(r39, v90)
-              v91 := $Evm
-              v92 := $Evm
-              v93 := $calldataload(v92, mload(r39))
-              mstore(r40, v93)
-              mstore(r7, mload(r40))
-              v95 := r1
-              $set_balance(mload(r6), mload(r7), v95)
-              v97 := 0x00
-              mstore(r42, v97)
-              v99 := $Evm
-              $abi_encode(mload(r42), v99)
+              v81 := 0x04
+              v37 := v81
+              v82 := $calldataload(v37)
+              v38 := v82
+              v6 := v38
+              v83 := 0x24
+              v39 := v83
+              v84 := $calldataload(v39)
+              v40 := v84
+              v7 := v40
+              v86 := r1
+              $set_balance(v6, v7, v86)
+              v88 := 0x00
+              v42 := v88
+              $abi_encode(v42, $evm)
               invalid()
           }
           case 4 {
-              v101 := 0x04
-              mstore(r44, v101)
-              v102 := $Evm
-              v103 := $Evm
-              v104 := $calldataload(v103, mload(r44))
-              mstore(r45, v104)
-              mstore(r8, mload(r45))
-              v105 := 0x24
-              mstore(r46, v105)
-              v106 := $Evm
-              v107 := $Evm
-              v108 := $calldataload(v107, mload(r46))
-              mstore(r47, v108)
-              mstore(r9, mload(r47))
-              v109 := 0x44
-              mstore(r48, v109)
-              v110 := $Evm
-              v111 := $Evm
-              v112 := $calldataload(v111, mload(r48))
-              mstore(r49, v112)
-              mstore(r10, mload(r49))
-              v113 := r1
-              v114 := $transfer(mload(r8), mload(r9), mload(r10), v113)
-              mstore(r50, v114)
-              mstore(r11, mload(r50))
-              v116 := $Evm
-              $abi_encode(mload(r11), v116)
+              v91 := 0x04
+              v44 := v91
+              v92 := $calldataload(v44)
+              v45 := v92
+              v8 := v45
+              v93 := 0x24
+              v46 := v93
+              v94 := $calldataload(v46)
+              v47 := v94
+              v9 := v47
+              v95 := 0x44
+              v48 := v95
+              v96 := $calldataload(v48)
+              v49 := v96
+              v10 := v49
+              v97 := r1
+              v98 := $transfer(v8, v9, v10, v97)
+              v50 := v98
+              v11 := v50
+              $abi_encode(v11, $evm)
               invalid()
           }
           case 5 {
-              v118 := 0x04
-              mstore(r52, v118)
-              v119 := $Evm
-              v120 := $Evm
-              v121 := $calldataload(v120, mload(r52))
-              mstore(r53, v121)
-              mstore(r12, mload(r53))
-              v122 := r2
-              v123 := $get_allowance(mload(r12), v122)
-              mstore(r54, v123)
-              mstore(r13, mload(r54))
-              v125 := $Evm
-              $abi_encode(mload(r13), v125)
+              v101 := 0x04
+              v52 := v101
+              v102 := $calldataload(v52)
+              v53 := v102
+              v12 := v53
+              v103 := r2
+              v104 := $get_allowance(v12, v103)
+              v54 := v104
+              v13 := v54
+              $abi_encode(v13, $evm)
               invalid()
           }
           case 6 {
-              v127 := 0x04
-              mstore(r56, v127)
-              v128 := $Evm
-              v129 := $Evm
-              v130 := $calldataload(v129, mload(r56))
-              mstore(r57, v130)
-              mstore(r14, mload(r57))
-              v131 := 0x24
-              mstore(r58, v131)
-              v132 := $Evm
-              v133 := $Evm
-              v134 := $calldataload(v133, mload(r58))
-              mstore(r59, v134)
-              mstore(r15, mload(r59))
-              v136 := r2
-              $set_allowance(mload(r14), mload(r15), v136)
-              v138 := 0x00
-              mstore(r61, v138)
-              v140 := $Evm
-              $abi_encode(mload(r61), v140)
+              v107 := 0x04
+              v56 := v107
+              v108 := $calldataload(v56)
+              v57 := v108
+              v14 := v57
+              v109 := 0x24
+              v58 := v109
+              v110 := $calldataload(v58)
+              v59 := v110
+              v15 := v59
+              v112 := r2
+              $set_allowance(v14, v15, v112)
+              v114 := 0x00
+              v61 := v114
+              $abi_encode(v61, $evm)
               invalid()
           }
           case 7 {
-              v142 := 0x00
-              mstore(r63, v142)
-              v143 := 0x00
-              mstore(r64, v143)
-              v145 := $Evm
-              v146 := $Evm
-              $return_data_0(v146, mload(r63), mload(r64))
+              v117 := 0x00
+              v63 := v117
+              v118 := 0x00
+              v64 := v118
+              $return_data_0(v63, v64)
               invalid()
           }
           case 8 {
-              v148 := 0x4a4b9feb
-              mstore(r25, v148)
-              mstore(r26, iszero(iszero(eq(mload(r3), mload(r25)))))
-              if iszero(iszero(mload(r26))) {
+              v121 := 0x4a4b9feb
+              v25 := v121
+              v26 := iszero(iszero(eq(v3, v25)))
+              if v26 {
                 $pc := 3
                 continue
               }
@@ -1062,10 +520,10 @@ object "BalanceMap" {
               continue
           }
           case 9 {
-              v149 := 0x90dd2627
-              mstore(r27, v149)
-              mstore(r28, iszero(iszero(eq(mload(r3), mload(r27)))))
-              if iszero(iszero(mload(r28))) {
+              v122 := 0x90dd2627
+              v27 := v122
+              v28 := iszero(iszero(eq(v3, v27)))
+              if v28 {
                 $pc := 4
                 continue
               }
@@ -1073,10 +531,10 @@ object "BalanceMap" {
               continue
           }
           case 10 {
-              v150 := 0xc960174e
-              mstore(r29, v150)
-              mstore(r30, iszero(iszero(eq(mload(r3), mload(r29)))))
-              if iszero(iszero(mload(r30))) {
+              v123 := 0xc960174e
+              v29 := v123
+              v30 := iszero(iszero(eq(v3, v29)))
+              if v30 {
                 $pc := 5
                 continue
               }
@@ -1084,10 +542,10 @@ object "BalanceMap" {
               continue
           }
           case 11 {
-              v151 := 0x0bca4841
-              mstore(r31, v151)
-              mstore(r32, iszero(iszero(eq(mload(r3), mload(r31)))))
-              if iszero(iszero(mload(r32))) {
+              v124 := 0x0bca4841
+              v31 := v124
+              v32 := iszero(iszero(eq(v3, v31)))
+              if v32 {
                 $pc := 6
                 continue
               }
@@ -1103,91 +561,31 @@ object "BalanceMap" {
           }
         }
       }
-      function $set_0($self, $key, $value) {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 0))
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let r3 := mload(0x40)
-        if iszero(r3) {
-          r3 := 0x80
-        }
-        mstore(0x40, add(r3, 32))
-        let r4 := mload(0x40)
-        if iszero(r4) {
-          r4 := 0x80
-        }
-        mstore(0x40, add(r4, 32))
-        let r5 := mload(0x40)
-        if iszero(r5) {
-          r5 := 0x80
-        }
-        mstore(0x40, add(r5, 0))
+      function $set_0($key, $value) {
+        let v3 := 0
+        let v4 := 0
         let v6 := 0
         let v7 := 0
-        mstore(r1, $key)
-        mstore(r2, $value)
         v6 := 0x01
-        mstore(r3, v6)
-        v7 := $to_word(mload(r2))
-        mstore(r4, v7)
-        $storagemap_set_word_with_salt(mload(r1), mload(r3), mload(r4))
+        v3 := v6
+        v7 := $to_word($value)
+        v4 := v7
+        $storagemap_set_word_with_salt($key, v3, v4)
         leave
       }
-      function $set_1($self, $key, $value) {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 0))
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let r3 := mload(0x40)
-        if iszero(r3) {
-          r3 := 0x80
-        }
-        mstore(0x40, add(r3, 32))
-        let r4 := mload(0x40)
-        if iszero(r4) {
-          r4 := 0x80
-        }
-        mstore(0x40, add(r4, 32))
-        let r5 := mload(0x40)
-        if iszero(r5) {
-          r5 := 0x80
-        }
-        mstore(0x40, add(r5, 0))
+      function $set_1($key, $value) {
+        let v3 := 0
+        let v4 := 0
         let v6 := 0
         let v7 := 0
-        mstore(r1, $key)
-        mstore(r2, $value)
         v6 := 0x00
-        mstore(r3, v6)
-        v7 := $to_word(mload(r2))
-        mstore(r4, v7)
-        $storagemap_set_word_with_salt(mload(r1), mload(r3), mload(r4))
+        v3 := v6
+        v7 := $to_word($value)
+        v4 := v7
+        $storagemap_set_word_with_salt($key, v3, v4)
         leave
       }
-      function $set_allowance($addr, $value, $StorageMap) {
+      function $set_allowance($addr, $value, $allowances) {
         let r0 := mload(0x40)
         if iszero(r0) {
           r0 := 0x80
@@ -1198,21 +596,18 @@ object "BalanceMap" {
           r1 := 0x80
         }
         mstore(0x40, add(r1, 32))
-        let r3 := mload(0x40)
-        if iszero(r3) {
-          r3 := 0x80
-        }
-        mstore(0x40, add(r3, 0))
-        let v5 := 0
-        let v6 := 0
+        let v3 := 0
+        let v4 := 0
         mstore(r0, $addr)
         mstore(r1, $value)
-        v5 := $StorageMap
-        v6 := $StorageMap
-        $set_0(v6, mload(r0), mload(r1))
+        let t8 := mload(r0)
+        v3 := t8
+        let t9 := mload(r1)
+        v4 := t9
+        $set_0(v3, v4)
         leave
       }
-      function $set_balance($addr, $value, $StorageMap) {
+      function $set_balance($addr, $value, $balances) {
         let r0 := mload(0x40)
         if iszero(r0) {
           r0 := 0x80
@@ -1223,26 +618,42 @@ object "BalanceMap" {
           r1 := 0x80
         }
         mstore(0x40, add(r1, 32))
-        let r3 := mload(0x40)
-        if iszero(r3) {
-          r3 := 0x80
-        }
-        mstore(0x40, add(r3, 0))
-        let v5 := 0
-        let v6 := 0
+        let v3 := 0
+        let v4 := 0
         mstore(r0, $addr)
         mstore(r1, $value)
-        v5 := $StorageMap
-        v6 := $StorageMap
-        $set_1(v6, mload(r0), mload(r1))
+        let t8 := mload(r0)
+        v3 := t8
+        let t9 := mload(r1)
+        v4 := t9
+        $set_1(v3, v4)
         leave
       }
-      function $shr($self, $other) -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
+      function $storagemap_get_word_with_salt($key, $salt) -> ret {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
         }
-        mstore(0x40, add(r0, 32))
+        mstore(0x40, add(r1, 32))
+        let v2 := 0
+        let v3 := 0
+        let v4 := 0
+        let v5 := 0
+        let v6 := 0
+        let v7 := 0
+        let v8 := 0
+        mstore(r1, $salt)
+        let t9 := mload(r1)
+        v3 := t9
+        v6 := $storagemap_storage_slot_with_salt($key, v3)
+        v4 := v6
+        v2 := v4
+        v8 := sload(v2)
+        v5 := v8
+        ret := v5
+        leave
+      }
+      function $storagemap_set_word_with_salt($key, $salt, $word) {
         let r1 := mload(0x40)
         if iszero(r1) {
           r1 := 0x80
@@ -1254,324 +665,120 @@ object "BalanceMap" {
         }
         mstore(0x40, add(r2, 32))
         let v3 := 0
-        mstore(r0, $self)
-        mstore(r1, $other)
-        v3 := shr(mload(r1), mload(r0))
-        mstore(r2, v3)
-        ret := mload(r2)
-        leave
-      }
-      function $storagemap_get_word_with_salt($key, $salt) -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 32))
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let r3 := mload(0x40)
-        if iszero(r3) {
-          r3 := 0x80
-        }
-        mstore(0x40, add(r3, 32))
-        let r4 := mload(0x40)
-        if iszero(r4) {
-          r4 := 0x80
-        }
-        mstore(0x40, add(r4, 32))
+        let v4 := 0
         let v5 := 0
         let v6 := 0
-        let v7 := 0
-        mstore(r0, $key)
-        mstore(r1, $salt)
-        v5 := $storagemap_storage_slot_with_salt(mload(r0), mload(r1))
-        mstore(r3, v5)
-        mstore(r2, mload(r3))
-        v7 := sload(mload(r2))
-        mstore(r4, v7)
-        ret := mload(r4)
-        leave
-      }
-      function $storagemap_set_word_with_salt($key, $salt, $word) {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 32))
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let r3 := mload(0x40)
-        if iszero(r3) {
-          r3 := 0x80
-        }
-        mstore(0x40, add(r3, 32))
-        let r4 := mload(0x40)
-        if iszero(r4) {
-          r4 := 0x80
-        }
-        mstore(0x40, add(r4, 32))
-        let r5 := mload(0x40)
-        if iszero(r5) {
-          r5 := 0x80
-        }
-        mstore(0x40, add(r5, 0))
-        let v6 := 0
-        mstore(r0, $key)
+        let v8 := 0
         mstore(r1, $salt)
         mstore(r2, $word)
-        v6 := $storagemap_storage_slot_with_salt(mload(r0), mload(r1))
-        mstore(r4, v6)
-        mstore(r3, mload(r4))
-        sstore(mload(r3), mload(r2))
+        let t11 := mload(r1)
+        v4 := t11
+        v8 := $storagemap_storage_slot_with_salt($key, v4)
+        v5 := v8
+        v3 := v5
+        let t12 := mload(r2)
+        v6 := t12
+        sstore(v3, v6)
         leave
       }
       function $storagemap_storage_slot_with_salt($key, $salt) -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 32))
         let r1 := mload(0x40)
         if iszero(r1) {
           r1 := 0x80
         }
         mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let r3 := mload(0x40)
-        if iszero(r3) {
-          r3 := 0x80
-        }
-        mstore(0x40, add(r3, 32))
-        let r4 := mload(0x40)
-        if iszero(r4) {
-          r4 := 0x80
-        }
-        mstore(0x40, add(r4, 32))
-        let r5 := mload(0x40)
-        if iszero(r5) {
-          r5 := 0x80
-        }
-        mstore(0x40, add(r5, 32))
-        let r6 := mload(0x40)
-        if iszero(r6) {
-          r6 := 0x80
-        }
-        mstore(0x40, add(r6, 32))
-        let r7 := mload(0x40)
-        if iszero(r7) {
-          r7 := 0x80
-        }
-        mstore(0x40, add(r7, 32))
-        let r8 := mload(0x40)
-        if iszero(r8) {
-          r8 := 0x80
-        }
-        mstore(0x40, add(r8, 0))
-        let r9 := mload(0x40)
-        if iszero(r9) {
-          r9 := 0x80
-        }
-        mstore(0x40, add(r9, 32))
-        let r10 := mload(0x40)
-        if iszero(r10) {
-          r10 := 0x80
-        }
-        mstore(0x40, add(r10, 32))
-        let r11 := mload(0x40)
-        if iszero(r11) {
-          r11 := 0x80
-        }
-        mstore(0x40, add(r11, 32))
+        let v2 := 0
+        let v3 := 0
+        let v4 := 0
+        let v5 := 0
+        let v6 := 0
+        let v7 := 0
+        let v8 := 0
+        let v10 := 0
+        let v11 := 0
         let v12 := 0
         let v13 := 0
         let v14 := 0
         let v15 := 0
         let v16 := 0
-        let v19 := 0
-        let v20 := 0
-        let v21 := 0
-        let v22 := 0
-        mstore(r0, $key)
-        mstore(r1, $salt)
-        v12 := 0x00
-        mstore(r4, v12)
-        v14 := allocate(mload(r4))
-        mstore(r5, v14)
-        mstore(r2, mload(r5))
-        v15 := $write_key(mload(r2), mload(r0))
-        mstore(r6, v15)
-        mstore(r3, mload(r6))
-        v16 := $add_0(mload(r2), mload(r3))
-        mstore(r7, v16)
-        mstore(mload(r7), mload(r1))
-        v19 := 0x20
-        mstore(r9, v19)
-        v20 := $add_0(mload(r3), mload(r9))
-        mstore(r10, v20)
-        v22 := keccak256(mload(r2), mload(r10))
-        mstore(r11, v22)
-        ret := mload(r11)
-        leave
-      }
-      function $sub($self, $other) -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 32))
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let v3 := 0
-        mstore(r0, $self)
-        mstore(r1, $other)
-        let t4 := sub(mload(r0), mload(r1))
-        if gt(mload(r1), mload(r0)) {
-          revert(0, 0)
-        }
-        v3 := t4
-        mstore(r2, v3)
-        ret := mload(r2)
-        leave
-      }
-      function $to_word($self) -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 32))
-        mstore(r0, $self)
-        ret := mload(r0)
-        leave
-      }
-      function $transfer($from, $to, $amount, $StorageMap) -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 32))
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let r4 := mload(0x40)
-        if iszero(r4) {
-          r4 := 0x80
-        }
-        mstore(0x40, add(r4, 32))
-        let r5 := mload(0x40)
-        if iszero(r5) {
-          r5 := 0x80
-        }
-        mstore(0x40, add(r5, 32))
-        let r6 := mload(0x40)
-        if iszero(r6) {
-          r6 := 0x80
-        }
-        mstore(0x40, add(r6, 32))
-        let r7 := mload(0x40)
-        if iszero(r7) {
-          r7 := 0x80
-        }
-        mstore(0x40, add(r7, 0))
-        let r8 := mload(0x40)
-        if iszero(r8) {
-          r8 := 0x80
-        }
-        mstore(0x40, add(r8, 32))
-        let r9 := mload(0x40)
-        if iszero(r9) {
-          r9 := 0x80
-        }
-        mstore(0x40, add(r9, 32))
-        let r10 := mload(0x40)
-        if iszero(r10) {
-          r10 := 0x80
-        }
-        mstore(0x40, add(r10, 0))
-        let r11 := mload(0x40)
-        if iszero(r11) {
-          r11 := 0x80
-        }
-        mstore(0x40, add(r11, 0))
-        let r12 := mload(0x40)
-        if iszero(r12) {
-          r12 := 0x80
-        }
-        mstore(0x40, add(r12, 32))
-        let r13 := mload(0x40)
-        if iszero(r13) {
-          r13 := 0x80
-        }
-        mstore(0x40, add(r13, 32))
-        let r14 := mload(0x40)
-        if iszero(r14) {
-          r14 := 0x80
-        }
-        mstore(0x40, add(r14, 0))
-        let r15 := mload(0x40)
-        if iszero(r15) {
-          r15 := 0x80
-        }
-        mstore(0x40, add(r15, 32))
-        let r16 := mload(0x40)
-        if iszero(r16) {
-          r16 := 0x80
-        }
-        mstore(0x40, add(r16, 0))
-        let r17 := mload(0x40)
-        if iszero(r17) {
-          r17 := 0x80
-        }
-        mstore(0x40, add(r17, 32))
-        let v18 := 0
-        let v19 := 0
+        let v17 := 0
         let v20 := 0
         let v21 := 0
         let v22 := 0
         let v23 := 0
+        mstore(r1, $salt)
+        v13 := 0x00
+        v4 := v13
+        v15 := allocate(v4)
+        v5 := v15
+        v2 := v5
+        v16 := $write_key(v2, $key)
+        v6 := v16
+        v3 := v6
+        let t24 := add(v2, v3)
+        if lt(t24, v2) {
+          revert(0, 0)
+        }
+        v17 := t24
+        v7 := v17
+        let t25 := mload(r1)
+        v8 := t25
+        mstore(v7, v8)
+        v20 := 0x20
+        v10 := v20
+        let t26 := add(v3, v10)
+        if lt(t26, v3) {
+          revert(0, 0)
+        }
+        v21 := t26
+        v11 := v21
+        v23 := keccak256(v2, v11)
+        v12 := v23
+        ret := v12
+        leave
+      }
+      function $to_word($self) -> ret {
+        ret := $self
+        leave
+      }
+      function $transfer($from, $to, $amount, $balances) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 32))
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        let v4 := 0
+        let v5 := 0
+        let v6 := 0
+        let v7 := 0
+        let v9 := 0
+        let v10 := 0
+        let v13 := 0
+        let v14 := 0
+        let v15 := 0
+        let v16 := 0
+        let v17 := 0
+        let v19 := 0
+        let v20 := 0
+        let v21 := 0
+        let v23 := 0
         let v24 := 0
         let v25 := 0
         let v26 := 0
+        let v27 := 0
         let v28 := 0
-        let v29 := 0
         let v31 := 0
-        let v33 := 0
         let v34 := 0
-        let v36 := 0
         mstore(r0, $from)
         mstore(r1, $to)
         mstore(r2, $amount)
@@ -1579,14 +786,14 @@ object "BalanceMap" {
         for {} 1 {} {
           switch $pc
           case 0 {
-              v18 := $StorageMap
-              v19 := $StorageMap
-              v20 := $get_1(v19, mload(r0))
-              mstore(r6, v20)
-              mstore(r4, mload(r6))
-              v21 := $lt(mload(r4), mload(r2))
-              mstore(r8, v21)
-              if iszero(iszero(mload(r8))) {
+              let t35 := mload(r0)
+              v6 := t35
+              v24 := $get_1(v6)
+              v7 := v24
+              v4 := v7
+              v25 := iszero(iszero(lt(v4, mload(r2))))
+              v9 := v25
+              if v9 {
                 $pc := 1
                 continue
               }
@@ -1594,9 +801,9 @@ object "BalanceMap" {
               continue
           }
           case 1 {
-              v22 := 0x01
-              mstore(r9, v22)
-              ret := mload(r9)
+              v26 := 0x01
+              v10 := v26
+              ret := v10
               leave
           }
           case 2 {
@@ -1604,24 +811,36 @@ object "BalanceMap" {
               continue
           }
           case 3 {
-              v23 := $StorageMap
-              v24 := $StorageMap
-              v25 := $get_1(v24, mload(r1))
-              mstore(r12, v25)
-              mstore(r5, mload(r12))
-              v26 := $sub(mload(r4), mload(r2))
-              mstore(r13, v26)
-              v28 := $StorageMap
-              v29 := $StorageMap
-              $set_1(v29, mload(r0), mload(r13))
-              v31 := $add_1(mload(r5), mload(r2))
-              mstore(r15, v31)
-              v33 := $StorageMap
-              v34 := $StorageMap
-              $set_1(v34, mload(r1), mload(r15))
-              v36 := 0x00
-              mstore(r17, v36)
-              ret := mload(r17)
+              let t36 := mload(r1)
+              v13 := t36
+              v27 := $get_1(v13)
+              v14 := v27
+              v5 := v14
+              let t37 := mload(r0)
+              v15 := t37
+              let t38 := mload(r2)
+              v16 := t38
+              let t39 := sub(v4, v16)
+              if gt(v16, v4) {
+                revert(0, 0)
+              }
+              v28 := t39
+              v17 := v28
+              $set_1(v15, v17)
+              let t40 := mload(r1)
+              v19 := t40
+              let t41 := mload(r2)
+              v20 := t41
+              let t42 := add(v5, v20)
+              if lt(t42, v5) {
+                revert(0, 0)
+              }
+              v31 := t42
+              v21 := v31
+              $set_1(v19, v21)
+              v34 := 0x00
+              v23 := v34
+              ret := v23
               leave
           }
           default {
@@ -1640,26 +859,23 @@ object "BalanceMap" {
           r1 := 0x80
         }
         mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 0))
-        let r3 := mload(0x40)
-        if iszero(r3) {
-          r3 := 0x80
-        }
-        mstore(0x40, add(r3, 32))
-        let v6 := 0
+        let v2 := 0
+        let v3 := 0
+        let v5 := 0
+        let v8 := 0
         mstore(r0, $ptr)
         mstore(r1, $self)
-        mstore(mload(r0), mload(r1))
-        v6 := 0x20
-        mstore(r3, v6)
-        ret := mload(r3)
+        let t9 := mload(r0)
+        v2 := t9
+        let t10 := mload(r1)
+        v3 := t10
+        mstore(v2, v3)
+        v8 := 0x20
+        v5 := v8
+        ret := v5
         leave
       }
-      $runtime()
+      $runtime(0)
     }
   }
 }

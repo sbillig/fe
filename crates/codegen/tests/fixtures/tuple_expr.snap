@@ -10,78 +10,12 @@ object "main" {
       v0 := $tuple_expr()
       stop()
     }
-    function $add($self, $other) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let v3 := 0
-      mstore(r0, $self)
-      mstore(r1, $other)
-      let t4 := and(add(and(mload(r0), 0xffffffffffffffff), and(mload(r1), 0xffffffffffffffff)), 0xffffffffffffffff)
-      if lt(t4, and(mload(r0), 0xffffffffffffffff)) {
-        revert(0, 0)
-      }
-      v3 := t4
-      mstore(r2, v3)
-      ret := and(mload(r2), 0xffffffffffffffff)
-      leave
-    }
-    function $not($self) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let v2 := 0
-      mstore(r0, $self)
-      v2 := iszero(iszero(iszero(iszero(iszero(mload(r0))))))
-      mstore(r1, v2)
-      ret := iszero(iszero(mload(r1)))
-      leave
-    }
     function $tuple_expr() -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let r3 := mload(0x40)
-      if iszero(r3) {
-        r3 := 0x80
-      }
-      mstore(0x40, add(r3, 32))
-      let r4 := mload(0x40)
-      if iszero(r4) {
-        r4 := 0x80
-      }
-      mstore(0x40, add(r4, 32))
+      let v0 := 0
+      let v1 := 0
+      let v2 := 0
+      let v3 := 0
+      let v4 := 0
       let v5 := 0
       let v6 := 0
       let v7 := 0
@@ -89,23 +23,27 @@ object "main" {
       let v9 := 0
       let v10 := 0
       let v11 := 0
+      let v12 := 0
+      let v13 := 0
+      let v14 := 0
       v6 := 0x01
-      mstore(r0, v6)
+      v0 := v6
       v7 := 0x02
-      mstore(r1, v7)
-      v8 := $add(and(mload(r0), 0xffffffffffffffff), and(mload(r1), 0xffffffffffffffff))
-      mstore(r2, v8)
+      v1 := v7
+      v8 := 0x03
+      v2 := v8
       v9 := 0
-      mstore(r3, v9)
-      v10 := $not(iszero(iszero(mload(r3))))
-      mstore(r4, v10)
-      v11 := allocate(64)
-      mstore(v11, and(mload(r2), 0xffffffffffffffff))
-      mstore(add(v11, 32), iszero(iszero(mload(r4))))
-      v5 := v11
+      v3 := v9
+      v10 := 1
+      v4 := v10
+      v11 := 0x03
+      v12 := 1
+      v13 := dataoffset("const_0")
+      v5 := v13
       ret := v5
       leave
     }
     $__fe_main_root()
   }
+  data "const_0" hex"00000000000000000000000000000000000000000000000000000000000000030000000000000000000000000000000000000000000000000000000000000001"
 }

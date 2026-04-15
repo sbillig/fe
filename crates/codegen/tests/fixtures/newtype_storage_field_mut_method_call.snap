@@ -6,11 +6,6 @@ input_file: tests/fixtures/newtype_storage_field_mut_method_call.fe
 object "NewtypeStorageFieldMutMethodCall" {
   code {
     function $__NewtypeStorageFieldMutMethodCall_init() {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 0))
       leave
     }
     function $__fe_contract_init_abi_NewtypeStorageFieldMutMethodCall() {
@@ -59,16 +54,15 @@ object "NewtypeStorageFieldMutMethodCall" {
   object "NewtypeStorageFieldMutMethodCall_runtime" {
     code {
       function $__NewtypeStorageFieldMutMethodCall_recv_0_0_eff0_stor($w) -> ret {
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 0))
-        let v2 := 0
-        $bump($w)
-        let t5 := sload($w)
-        v2 := t5
-        ret := v2
+        let v1 := 0
+        let v3 := 0
+        let v4 := 0
+        v4 := $w
+        v1 := v4
+        $bump(v1)
+        let t7 := sload($w)
+        v3 := t7
+        ret := v3
         leave
       }
       function $__fe_contract_recv_abi_NewtypeStorageFieldMutMethodCall_1() {
@@ -86,16 +80,16 @@ object "NewtypeStorageFieldMutMethodCall" {
         let v6 := 0
         let v9 := 0
         let v10 := 0
-        let v11 := 0
         let v12 := 0
         let v13 := 0
         let v14 := 0
         let v15 := 0
-        let v17 := 0
-        let v19 := 0
+        let v16 := 0
+        let v18 := 0
         let v20 := 0
         let v21 := 0
         let v22 := 0
+        let v23 := 0
         let $pc := 0
         for {} 1 {} {
           switch $pc
@@ -116,44 +110,33 @@ object "NewtypeStorageFieldMutMethodCall" {
           }
           case 2 {
               v4 := calldatasize()
-              let t23 := sub(v4, v1)
+              let t24 := sub(v4, v1)
               if gt(v1, v4) {
                 revert(0, 0)
               }
-              v5 := t23
+              v5 := t24
               v6 := allocate(v5)
               calldatacopy(v6, v1, v5)
               mstore(r8, v6)
               mstore(add(r8, 32), v5)
               v9 := $decoder_new(r8)
               v10 := v9
-              v11 := 1
-              v12 := $__NewtypeStorageFieldMutMethodCall_recv_0_0_eff0_stor(v11)
-              v13 := $encoder_new()
-              v14 := 0x20
-              let t24 := mload(0x40)
-              if iszero(t24) {
-                t24 := 0x80
-              }
-              mstore(0x40, add(t24, 96))
-              datacopy(t24, v13, 96)
-              v15 := t24
-              $reserve_head(v15, v14)
-              let t25 := mload(0x40)
-              if iszero(t25) {
-                t25 := 0x80
-              }
-              mstore(0x40, add(t25, 96))
-              datacopy(t25, v13, 96)
-              v17 := t25
-              $encode(v12, v17)
-              v19 := $finish_arg0_root_code(v13)
-              v20 := v19
-              let t26 := mload(v20)
-              v21 := t26
-              let t27 := mload(add(v20, 32))
-              v22 := t27
-              return(v21, v22)
+              $decode(v10)
+              v12 := 1
+              v13 := $__NewtypeStorageFieldMutMethodCall_recv_0_0_eff0_stor(v12)
+              v14 := $encoder_new()
+              v15 := 0x20
+              v16 := v14
+              $reserve_head_arg0_root_code(v16, v15)
+              v18 := v14
+              $encode_arg1_root_code(v13, v18)
+              v20 := $finish_arg0_root_code(v14)
+              v21 := v20
+              let t25 := mload(v21)
+              v22 := t25
+              let t26 := mload(add(v21, 32))
+              v23 := t26
+              return(v22, v23)
           }
           default {
               invalid()
@@ -191,171 +174,40 @@ object "NewtypeStorageFieldMutMethodCall" {
           }
         }
       }
-      function $add_0($self, $other) -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 32))
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let v3 := 0
-        mstore(r0, $self)
-        mstore(r1, $other)
-        let t4 := add(mload(r0), mload(r1))
-        if lt(t4, mload(r0)) {
-          revert(0, 0)
-        }
-        v3 := t4
-        mstore(r2, v3)
-        ret := mload(r2)
-        leave
-      }
-      function $add_1($self, $other) -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 32))
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let v3 := 0
-        mstore(r0, $self)
-        mstore(r1, $other)
-        let t4 := add(mload(r0), mload(r1))
-        if lt(t4, mload(r0)) {
-          revert(0, 0)
-        }
-        v3 := t4
-        mstore(r2, v3)
-        ret := mload(r2)
-        leave
-      }
-      function $add_2($self, $other) -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 32))
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let v3 := 0
-        mstore(r0, $self)
-        mstore(r1, $other)
-        let t4 := add(mload(r0), mload(r1))
-        if lt(t4, mload(r0)) {
-          revert(0, 0)
-        }
-        v3 := t4
-        mstore(r2, v3)
-        ret := mload(r2)
-        leave
-      }
-      function $add_assign($self, $other) {
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let r3 := mload(0x40)
-        if iszero(r3) {
-          r3 := 0x80
-        }
-        mstore(0x40, add(r3, 0))
+      function $bump($self) {
+        let v1 := 0
+        let v2 := 0
         let v4 := 0
         let v5 := 0
-        let v6 := 0
-        mstore(r1, $other)
-        let t7 := sload($self)
-        v4 := t7
-        let t8 := sload($self)
-        v5 := t8
-        v6 := $add_2(v5, mload(r1))
-        mstore(r2, v6)
-        sstore($self, mload(r2))
+        let v7 := 0
+        let v8 := 0
+        v4 := $self
+        v1 := v4
+        v5 := 0x01
+        v2 := v5
+        let t10 := sload(v1)
+        v7 := t10
+        let t11 := add(v7, v2)
+        if lt(t11, v7) {
+          revert(0, 0)
+        }
+        v8 := t11
+        sstore(v1, v8)
         leave
       }
-      function $bump($self) {
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let r3 := mload(0x40)
-        if iszero(r3) {
-          r3 := 0x80
-        }
-        mstore(0x40, add(r3, 0))
-        let v1 := 0
-        let v4 := 0
-        let v6 := 0
-        let v7 := 0
-        let t9 := sload($self)
-        v1 := t9
-        v4 := 0x01
-        mstore(r2, v4)
-        v6 := $self
-        v7 := $self
-        $add_assign(v7, mload(r2))
+      function $decode($d) {
         leave
       }
       function $decoder_new($input) -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 64))
         let v1 := 0
         let v2 := 0
-        mstore(r0, mload($input))
-        mstore(add(r0, 32), mload(add($input, 32)))
-        v2 := $new_1(r0)
+        v2 := $new_1($input)
         v1 := v2
         ret := v1
         leave
       }
-      function $encode($self, $e) {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 0))
-        mstore(r0, $self)
-        $write_word($e, mload(r0))
+      function $encode_arg1_root_code($self, $e) {
+        $write_word_arg0_root_code($e, $self)
         leave
       }
       function $encoder_new() -> ret {
@@ -366,43 +218,11 @@ object "NewtypeStorageFieldMutMethodCall" {
         ret := v0
         leave
       }
-      function $eq($self, $other) -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 32))
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let v3 := 0
-        mstore(r0, $self)
-        mstore(r1, $other)
-        v3 := iszero(iszero(eq(mload(r0), mload(r1))))
-        mstore(r2, v3)
-        ret := iszero(iszero(mload(r2)))
-        leave
-      }
       function $finish_arg0_root_code($self) -> ret {
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r4 := mload(0x40)
-        if iszero(r4) {
-          r4 := 0x80
-        }
-        mstore(0x40, add(r4, 32))
+        let v1 := 0
         let v2 := 0
         let v3 := 0
+        let v4 := 0
         let v5 := 0
         let v6 := 0
         let v7 := 0
@@ -410,36 +230,28 @@ object "NewtypeStorageFieldMutMethodCall" {
         datacopy(t8, $self, 32)
         t8 := mload(t8)
         v2 := t8
-        mstore(r1, v2)
+        v1 := v2
         let t9 := allocate(32)
-        datacopy(t9, add($self, 64), 32)
+        datacopy(t9, add($self, 96), 32)
         t9 := mload(t9)
         v3 := t9
-        v6 := $sub(v3, mload(r1))
-        mstore(r4, v6)
+        let t10 := sub(v3, v1)
+        if gt(v1, v3) {
+          revert(0, 0)
+        }
+        v6 := t10
+        v4 := v6
         v7 := allocate(64)
-        mstore(v7, mload(r1))
-        mstore(add(v7, 32), mload(r4))
+        mstore(v7, v1)
+        mstore(add(v7, 32), v4)
         v5 := v7
         ret := v5
         leave
       }
       function $new_0() -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 32))
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
+        let v0 := 0
+        let v1 := 0
+        let v2 := 0
         let v3 := 0
         let v4 := 0
         let v5 := 0
@@ -449,152 +261,93 @@ object "NewtypeStorageFieldMutMethodCall" {
         let v9 := 0
         let v10 := 0
         let v11 := 0
-        v4 := 0x00
-        mstore(r0, v4)
+        let v12 := 0
+        let v13 := 0
+        let v14 := 0
         v5 := 0x00
-        mstore(r1, v5)
+        v0 := v5
         v6 := 0x00
-        mstore(r2, v6)
+        v1 := v6
         v7 := 0x00
+        v2 := v7
         v8 := 0x00
+        v3 := v8
         v9 := 0x00
-        v10 := dataoffset("const_0")
-        v3 := v10
-        ret := v3
+        v10 := 0x00
+        v11 := 0x00
+        v12 := 0x00
+        v13 := dataoffset("const_0")
+        v4 := v13
+        ret := v4
         leave
       }
       function $new_1($input) -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 64))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
         let v1 := 0
+        let v2 := 0
         let v3 := 0
         let v4 := 0
         let v5 := 0
         let v6 := 0
-        mstore(r0, mload($input))
-        mstore(add(r0, 32), mload(add($input, 32)))
-        v4 := $new_2(r0)
+        v4 := $new_2($input)
         v1 := v4
         v5 := 0x00
-        mstore(r2, v5)
+        v2 := v5
         v6 := allocate(128)
         mstore(v6, mload(v1))
         mstore(add(v6, 32), mload(add(v1, 32)))
         mstore(add(v6, 64), mload(add(v1, 64)))
-        mstore(add(v6, 96), mload(r2))
+        mstore(add(v6, 96), v2)
         v3 := v6
         ret := v3
         leave
       }
       function $new_2($input) -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 64))
+        let v1 := 0
+        let v2 := 0
+        let v3 := 0
+        let v4 := 0
+        v3 := 0x00
+        v1 := v3
+        v4 := allocate(96)
+        mstore(v4, mload($input))
+        mstore(add(v4, 32), mload(add($input, 32)))
+        mstore(add(v4, 64), v1)
+        v2 := v4
+        ret := v2
+        leave
+      }
+      function $reserve_head_arg0_root_code($self, $bytes) -> ret {
         let r1 := mload(0x40)
         if iszero(r1) {
           r1 := 0x80
         }
         mstore(0x40, add(r1, 32))
         let v2 := 0
-        let v3 := 0
         let v4 := 0
-        mstore(r0, mload($input))
-        mstore(add(r0, 32), mload(add($input, 32)))
-        v3 := 0x00
-        mstore(r1, v3)
-        v4 := allocate(96)
-        mstore(v4, mload(r0))
-        mstore(add(v4, 32), mload(add(r0, 32)))
-        mstore(add(v4, 64), mload(r1))
-        v2 := v4
-        ret := v2
-        leave
-      }
-      function $reserve_head($self, $bytes) -> ret {
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let r3 := mload(0x40)
-        if iszero(r3) {
-          r3 := 0x80
-        }
-        mstore(0x40, add(r3, 0))
-        let r5 := mload(0x40)
-        if iszero(r5) {
-          r5 := 0x80
-        }
-        mstore(0x40, add(r5, 32))
-        let r6 := mload(0x40)
-        if iszero(r6) {
-          r6 := 0x80
-        }
-        mstore(0x40, add(r6, 32))
-        let r7 := mload(0x40)
-        if iszero(r7) {
-          r7 := 0x80
-        }
-        mstore(0x40, add(r7, 32))
-        let r8 := mload(0x40)
-        if iszero(r8) {
-          r8 := 0x80
-        }
-        mstore(0x40, add(r8, 0))
-        let r9 := mload(0x40)
-        if iszero(r9) {
-          r9 := 0x80
-        }
-        mstore(0x40, add(r9, 0))
-        let r10 := mload(0x40)
-        if iszero(r10) {
-          r10 := 0x80
-        }
-        mstore(0x40, add(r10, 32))
-        let r11 := mload(0x40)
-        if iszero(r11) {
-          r11 := 0x80
-        }
-        mstore(0x40, add(r11, 0))
-        let r12 := mload(0x40)
-        if iszero(r12) {
-          r12 := 0x80
-        }
-        mstore(0x40, add(r12, 0))
-        let v4 := 0
+        let v5 := 0
+        let v6 := 0
+        let v7 := 0
+        let v8 := 0
+        let v12 := 0
         let v13 := 0
-        let v14 := 0
-        let v15 := 0
         let v16 := 0
         let v17 := 0
         let v18 := 0
+        let v19 := 0
+        let v20 := 0
+        let v21 := 0
         mstore(r1, $bytes)
         let $pc := 0
         for {} 1 {} {
           switch $pc
           case 0 {
-              let t19 := mload($self)
-              v4 := t19
-              v14 := 0x00
-              mstore(r5, v14)
-              v15 := $eq(v4, mload(r5))
-              mstore(r6, v15)
-              if iszero(iszero(mload(r6))) {
+              let t22 := mload($self)
+              v4 := t22
+              v17 := 0x00
+              v5 := v17
+              v18 := iszero(iszero(eq(v4, v5)))
+              v6 := v18
+              if v6 {
                 $pc := 1
                 continue
               }
@@ -602,14 +355,19 @@ object "NewtypeStorageFieldMutMethodCall" {
               continue
           }
           case 1 {
-              v17 := allocate(mload(r1))
-              mstore(r7, v17)
-              mstore(r2, mload(r7))
-              mstore($self, mload(r2))
-              mstore(add($self, 32), mload(r2))
-              v18 := $add_1(mload(r2), mload(r1))
-              mstore(r10, v18)
-              mstore(add($self, 64), mload(r10))
+              let t23 := mload(r1)
+              v7 := t23
+              v20 := allocate(v7)
+              v8 := v20
+              v2 := v8
+              mstore($self, v2)
+              mstore(add($self, 32), v2)
+              mstore(add($self, 64), v2)
+              let t24 := mload(r1)
+              v12 := t24
+              v21 := add(v2, v12)
+              v13 := v21
+              mstore(add($self, 96), v13)
               $pc := 3
               continue
           }
@@ -618,9 +376,9 @@ object "NewtypeStorageFieldMutMethodCall" {
               continue
           }
           case 3 {
-              let t20 := mload($self)
-              v13 := t20
-              ret := v13
+              let t25 := mload(add($self, 32))
+              v16 := t25
+              ret := v16
               leave
           }
           default {
@@ -628,82 +386,35 @@ object "NewtypeStorageFieldMutMethodCall" {
           }
         }
       }
-      function $sub($self, $other) -> ret {
-        let r0 := mload(0x40)
-        if iszero(r0) {
-          r0 := 0x80
-        }
-        mstore(0x40, add(r0, 32))
+      function $write_word_arg0_root_code($self, $v) {
         let r1 := mload(0x40)
         if iszero(r1) {
           r1 := 0x80
         }
         mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
+        let v2 := 0
         let v3 := 0
-        mstore(r0, $self)
-        mstore(r1, $other)
-        let t4 := sub(mload(r0), mload(r1))
-        if gt(mload(r1), mload(r0)) {
-          revert(0, 0)
-        }
-        v3 := t4
-        mstore(r2, v3)
-        ret := mload(r2)
-        leave
-      }
-      function $write_word($self, $v) {
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        let r2 := mload(0x40)
-        if iszero(r2) {
-          r2 := 0x80
-        }
-        mstore(0x40, add(r2, 32))
-        let r4 := mload(0x40)
-        if iszero(r4) {
-          r4 := 0x80
-        }
-        mstore(0x40, add(r4, 0))
-        let r5 := mload(0x40)
-        if iszero(r5) {
-          r5 := 0x80
-        }
-        mstore(0x40, add(r5, 32))
-        let r6 := mload(0x40)
-        if iszero(r6) {
-          r6 := 0x80
-        }
-        mstore(0x40, add(r6, 32))
-        let r7 := mload(0x40)
-        if iszero(r7) {
-          r7 := 0x80
-        }
-        mstore(0x40, add(r7, 0))
-        let v3 := 0
-        let v10 := 0
+        let v4 := 0
+        let v6 := 0
+        let v7 := 0
         let v11 := 0
+        let v12 := 0
         mstore(r1, $v)
-        let t12 := mload(add($self, 32))
-        v3 := t12
-        mstore(r2, v3)
-        mstore(mload(r2), mload(r1))
-        v10 := 0x20
-        mstore(r5, v10)
-        v11 := $add_0(mload(r2), mload(r5))
-        mstore(r6, v11)
-        mstore(add($self, 32), mload(r6))
+        let t13 := mload(add($self, 64))
+        v3 := t13
+        v2 := v3
+        let t14 := mload(r1)
+        v4 := t14
+        mstore(v2, v4)
+        v11 := 0x20
+        v6 := v11
+        v12 := add(v2, v6)
+        v7 := v12
+        mstore(add($self, 64), v7)
         leave
       }
       $__fe_contract_runtime_root_NewtypeStorageFieldMutMethodCall()
     }
-    data "const_0" hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    data "const_0" hex"0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
   }
 }

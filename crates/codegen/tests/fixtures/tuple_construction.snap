@@ -11,22 +11,10 @@ object "main" {
       stop()
     }
     function $access_tuple() -> ret {
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let r3 := mload(0x40)
-      if iszero(r3) {
-        r3 := 0x80
-      }
-      mstore(0x40, add(r3, 32))
       let v0 := 0
+      let v1 := 0
+      let v2 := 0
+      let v3 := 0
       let v4 := 0
       let v5 := 0
       let v6 := 0
@@ -44,11 +32,11 @@ object "main" {
       let v18 := 0
       let v19 := 0
       v6 := 0x01
-      mstore(r1, v6)
+      v1 := v6
       v7 := 0x02
-      mstore(r2, v7)
+      v2 := v7
       v8 := 0x03
-      mstore(r3, v8)
+      v3 := v8
       v9 := 0x01
       v10 := 0x02
       v11 := 0x03

@@ -12,87 +12,30 @@ object "main" {
       v1 := $borrow_storage_field_handle(v0)
       stop()
     }
-    function $add($self, $other) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let v3 := 0
-      mstore(r0, $self)
-      mstore(r1, $other)
-      let t4 := add(mload(r0), mload(r1))
-      if lt(t4, mload(r0)) {
-        revert(0, 0)
-      }
-      v3 := t4
-      mstore(r2, v3)
-      ret := mload(r2)
-      leave
-    }
-    function $add_assign($self, $other) {
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let r3 := mload(0x40)
-      if iszero(r3) {
-        r3 := 0x80
-      }
-      mstore(0x40, add(r3, 0))
-      let v4 := 0
-      let v5 := 0
-      let v6 := 0
-      mstore(r1, $other)
-      let t7 := mload($self)
-      v4 := t7
-      let t8 := mload($self)
-      v5 := t8
-      v6 := $add(v5, mload(r1))
-      mstore(r2, v6)
-      mstore($self, mload(r2))
-      leave
-    }
-    function $borrow_storage_field_handle($CoinStore) -> ret {
-      let r3 := mload(0x40)
-      if iszero(r3) {
-        r3 := 0x80
-      }
-      mstore(0x40, add(r3, 32))
-      let r4 := mload(0x40)
-      if iszero(r4) {
-        r4 := 0x80
-      }
-      mstore(0x40, add(r4, 0))
+    function $borrow_storage_field_handle($store) -> ret {
       let v1 := 0
       let v2 := 0
+      let v3 := 0
       let v5 := 0
       let v6 := 0
       let v7 := 0
-      v6 := $CoinStore
+      let v9 := 0
+      let v10 := 0
+      v6 := $store
       v2 := v6
       v1 := v2
       v7 := 0x01
-      mstore(r3, v7)
-      $add_assign(v1, mload(r3))
-      let t10 := mload($CoinStore)
-      v5 := t10
+      v3 := v7
+      let t12 := mload(v1)
+      v9 := t12
+      let t13 := add(v9, v3)
+      if lt(t13, v9) {
+        revert(0, 0)
+      }
+      v10 := t13
+      mstore(v1, v10)
+      let t14 := mload($store)
+      v5 := t14
       ret := v5
       leave
     }

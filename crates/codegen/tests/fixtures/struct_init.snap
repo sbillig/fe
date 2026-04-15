@@ -11,17 +11,9 @@ object "main" {
       stop()
     }
     function $make_dummy() -> ret {
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
       let v0 := 0
+      let v1 := 0
+      let v2 := 0
       let v3 := 0
       let v4 := 0
       let v5 := 0
@@ -34,9 +26,9 @@ object "main" {
       let v12 := 0
       let v13 := 0
       v4 := 0x2a
-      mstore(r1, v4)
+      v1 := v4
       v5 := 0x63
-      mstore(r2, v5)
+      v2 := v5
       v6 := 0x2a
       v7 := 0x63
       v8 := dataoffset("const_0")

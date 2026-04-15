@@ -11,15 +11,11 @@ object "main" {
       stop()
     }
     function $string_literal() -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 32))
+      let v0 := 0
       let v1 := 0
       v1 := 0x68656c6c6f
-      mstore(r0, v1)
-      ret := and(mload(r0), 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+      v0 := v1
+      ret := v0
       leave
     }
     $__fe_main_root()
