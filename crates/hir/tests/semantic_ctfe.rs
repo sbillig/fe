@@ -11,8 +11,8 @@ use fe_hir::{
             identity_semantic_instance_key, reify_runtime_const_for_ty,
         },
         ty::{
-            diagnostics::{TyDiagCollection, TyLowerDiag},
-            ty_check::BodyOwner,
+            diagnostics::{BodyDiag, FuncBodyDiag, TyDiagCollection, TyLowerDiag},
+            ty_check::{BodyOwner, check_func_body},
         },
     },
     hir_def::{ItemKind, Partial},
@@ -106,6 +106,43 @@ fn semantic_ctfe_evaluates_as_bytes_const_fns() {
             ty.pretty_print(&db)
         );
     }
+}
+
+#[test]
+fn const_fn_match_has_no_const_body_diagnostic() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_ctfe.fe".into(),
+        include_str!("../test_files/ty_check/const_eval_const_fn_match.fe"),
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let func = top_mod
+        .all_funcs(&db)
+        .iter()
+        .find(
+            |func| matches!(func.name(&db), Partial::Present(found) if found.data(&db) == "choose"),
+        )
+        .copied()
+        .expect("missing const fn `choose`");
+
+    let (diags, _) = check_func_body(&db, func).clone();
+
+    assert!(
+        !diags.iter().any(|diag| matches!(
+            diag,
+            FuncBodyDiag::Body(
+                BodyDiag::ConstFnEffectsNotAllowed(_)
+                    | BodyDiag::ConstFnWithNotAllowed(_)
+                    | BodyDiag::ConstFnLoopNotAllowed(_)
+                    | BodyDiag::ConstFnAssignmentNotAllowed(_)
+                    | BodyDiag::ConstFnAggregateNotAllowed(_)
+                    | BodyDiag::ConstFnMutableBindingNotAllowed(_)
+                    | BodyDiag::ConstFnNonConstCall { .. }
+                    | BodyDiag::ConstFnEffectfulCall { .. }
+            )
+        )),
+        "{diags:#?}"
+    );
 }
 
 #[test]

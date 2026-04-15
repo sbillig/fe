@@ -4082,14 +4082,6 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             ),
 
-            BodyDiag::ConstFnMatchNotAllowed(primary) => primary_diag(
-                severity,
-                "`match` is not allowed in a `const fn`",
-                "`match` is not supported in const evaluation (MVP)",
-                primary.resolve(db),
-                error_code,
-            ),
-
             BodyDiag::ConstFnAssignmentNotAllowed(primary) => primary_diag(
                 severity,
                 "assignment is not allowed in a `const fn`",
