@@ -1,6 +1,6 @@
 use common::InputDb;
 use driver::DriverDataBase;
-use fe_codegen::{OptLevel, emit_module_sonatina_ir, emit_module_sonatina_ir_optimized};
+use fe_codegen::{OptLevel, emit_module_sonatina_ir, emit_runtime_package_sonatina_ir_optimized};
 use hir::hir_def::{ArithBinOp, BinOp};
 use mir2::runtime::RefKind;
 use mir2::{
@@ -1436,8 +1436,14 @@ fn use_returned_array() -> u256 {
         .get(&db, &file_url)
         .expect("file should be loaded");
     let top_mod = db.top_mod(file);
-    let output =
-        emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O0, None).expect("Sonatina IR");
+    let package = build_test_runtime_package(&db, top_mod, None).expect("runtime test package");
+    let output = emit_runtime_package_sonatina_ir_optimized(
+        &db,
+        &package,
+        fe_codegen::EVM_LAYOUT,
+        OptLevel::O0,
+    )
+    .expect("Sonatina IR");
     let body = sonatina_function_body(&output, "use_returned_array");
 
     assert!(
@@ -1447,5 +1453,60 @@ fn use_returned_array() -> u256 {
     assert!(
         body.contains("obj.load"),
         "object-backed aggregate copies should load leaf values from the source object before storing them:\n{body}"
+    );
+}
+
+#[test]
+fn fieldless_enum_fields_copy_into_object_storage_via_enum_ops() {
+    let mut db = DriverDataBase::default();
+    let file_url =
+        Url::parse("file:///fieldless_enum_fields_copy_into_object_storage_via_enum_ops.fe")
+            .unwrap();
+    db.workspace().touch(
+        &mut db,
+        file_url.clone(),
+        Some(
+            r#"
+enum E {
+    A,
+    B,
+}
+
+struct Pair {
+    xs: [u256; 3],
+    e: E,
+}
+
+fn build(flag: bool) -> Pair {
+    let xs: [u256; 3] = [1, 2, 3]
+    let e = if flag { E::A } else { E::B }
+    Pair { xs, e }
+}
+
+#[test]
+fn exercise() {
+    let pair = build(true)
+    assert(pair.xs[0] == 1)
+}
+"#
+            .to_string(),
+        ),
+    );
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    let package = build_test_runtime_package(&db, top_mod, None).expect("runtime test package");
+    let output = emit_runtime_package_sonatina_ir_optimized(
+        &db,
+        &package,
+        fe_codegen::EVM_LAYOUT,
+        OptLevel::O0,
+    )
+    .expect("Sonatina IR");
+    assert!(
+        output.contains("enum.set_tag"),
+        "fieldless enum object copies should set the destination enum tag explicitly:\n{output}"
     );
 }

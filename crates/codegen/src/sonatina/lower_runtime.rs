@@ -2619,6 +2619,15 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         })
     }
 
+    fn copy_source_class<'b>(&self, source: &'b CopySource<'db>) -> &'b RuntimeClass<'db> {
+        match source {
+            CopySource::Value { class, .. }
+            | CopySource::Object { class, .. }
+            | CopySource::Const { class, .. }
+            | CopySource::Ptr { class, .. } => class,
+        }
+    }
+
     fn copy_aggregate_source_into_object(
         &mut self,
         source: CopySource<'db>,
@@ -2714,10 +2723,228 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 }
                 Ok(())
             }
-            Layout::Enum(_) => Err(LowerError::Unsupported(
-                "aggregate enum loads from non-memory providers are not supported".to_string(),
-            )),
+            Layout::Enum(data) => {
+                self.copy_enum_source_into_object(source, *layout, data.variants.as_ref(), object)
+            }
         }
+    }
+
+    fn copy_enum_source_into_object(
+        &mut self,
+        source: CopySource<'db>,
+        dst_layout: LayoutId<'db>,
+        dst_variants: &[mir2::runtime::EnumVariantLayout<'db>],
+        object: ValueId,
+    ) -> Result<(), LowerError> {
+        let source_class = self.copy_source_class(&source).clone();
+        let RuntimeClass::AggregateValue { layout: src_layout } = source_class else {
+            return Err(LowerError::Internal(
+                "enum copy source must carry an enum aggregate class".to_string(),
+            ));
+        };
+        let Layout::Enum(src_enum) = src_layout.data(self.module.db) else {
+            return Err(LowerError::Internal(
+                "enum copy source layout must be an enum".to_string(),
+            ));
+        };
+        if src_enum.variants.len() != dst_variants.len() {
+            return Err(LowerError::Internal(format!(
+                "enum copy source/destination variant count mismatch: src={} dst={}",
+                src_enum.variants.len(),
+                dst_variants.len()
+            )));
+        }
+
+        let source = match source {
+            CopySource::Const { value, class } => CopySource::Value {
+                value: self.fb.insert_inst(
+                    ConstLoad::new(self.module.inst_set(), value),
+                    self.module.ty_for_class(&class)?,
+                ),
+                class,
+            },
+            source => source,
+        };
+
+        let tag = match &source {
+            CopySource::Value { value, .. } => self.fb.insert_inst(
+                EnumTag::new(self.module.inst_set(), *value),
+                self.module.enum_tag_ty(src_layout)?,
+            ),
+            CopySource::Object { value, .. } => self.fb.insert_inst(
+                EnumGetTag::new(self.module.inst_set(), *value),
+                self.module.enum_tag_ty(src_layout)?,
+            ),
+            CopySource::Ptr { .. } => {
+                return Err(LowerError::Unsupported(
+                    "copying enum aggregates from non-memory providers is not supported yet"
+                        .to_string(),
+                ));
+            }
+            CopySource::Const { .. } => unreachable!("const enum sources are normalized to values"),
+        };
+
+        let entry = self
+            .fb
+            .current_block()
+            .expect("enum copy requires a current block");
+        let done = self.fb.append_block();
+        let invalid = self.fb.append_block();
+        let mut cases = Vec::with_capacity(dst_variants.len());
+        let mut blocks = Vec::with_capacity(dst_variants.len());
+        for (idx, _) in dst_variants.iter().enumerate() {
+            let block = self.fb.append_block();
+            cases.push((
+                self.fb
+                    .make_imm_value(self.module.enum_tag_immediate(src_layout, idx as u16)?),
+                block,
+            ));
+            blocks.push(block);
+        }
+        self.fb.insert_inst_no_result(BrTable::new(
+            self.module.inst_set(),
+            tag,
+            Some(invalid),
+            cases,
+        ));
+
+        for (idx, block) in blocks.into_iter().enumerate() {
+            self.fb.switch_to_block(block);
+            self.copy_enum_variant_into_object(
+                &source,
+                src_layout,
+                src_enum.variants[idx].fields.as_ref(),
+                dst_layout,
+                dst_variants[idx].fields.as_ref(),
+                VariantId {
+                    enum_layout: src_layout,
+                    index: idx as u16,
+                },
+                VariantId {
+                    enum_layout: dst_layout,
+                    index: idx as u16,
+                },
+                object,
+            )?;
+            self.fb
+                .insert_inst_no_result(Jump::new(self.module.inst_set(), done));
+        }
+
+        self.fb.switch_to_block(invalid);
+        self.fb
+            .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
+
+        self.fb.switch_to_block(done);
+        let _ = entry;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn copy_enum_variant_into_object(
+        &mut self,
+        source: &CopySource<'db>,
+        src_layout: LayoutId<'db>,
+        src_fields: &[RuntimeClass<'db>],
+        dst_layout: LayoutId<'db>,
+        dst_fields: &[RuntimeClass<'db>],
+        src_variant: VariantId<'db>,
+        dst_variant: VariantId<'db>,
+        object: ValueId,
+    ) -> Result<(), LowerError> {
+        if src_fields.len() != dst_fields.len() {
+            return Err(LowerError::Internal(format!(
+                "enum variant payload arity mismatch: src_layout={src_layout:?} dst_layout={dst_layout:?} src_variant={} dst_variant={} src_fields={} dst_fields={}",
+                src_variant.index,
+                dst_variant.index,
+                src_fields.len(),
+                dst_fields.len()
+            )));
+        }
+
+        self.fb.insert_inst_no_result(EnumSetTag::new(
+            self.module.inst_set(),
+            object,
+            self.variant_ref(dst_variant)?,
+        ));
+        if src_fields.is_empty() {
+            return Ok(());
+        }
+
+        let asserted_object = match source {
+            CopySource::Object { value, .. } => Some(self.fb.insert_inst(
+                EnumAssertVariantRef::new(
+                    self.module.inst_set(),
+                    *value,
+                    self.variant_ref(src_variant)?,
+                ),
+                self.fb.type_of(*value),
+            )),
+            CopySource::Value { value, .. } => {
+                self.fb.insert_inst_no_result(EnumAssertVariant::new(
+                    self.module.inst_set(),
+                    *value,
+                    self.variant_ref(src_variant)?,
+                ));
+                None
+            }
+            CopySource::Const { .. } => unreachable!("const enum sources are normalized to values"),
+            CopySource::Ptr { .. } => {
+                return Err(LowerError::Unsupported(
+                    "copying enum aggregates from non-memory providers is not supported yet"
+                        .to_string(),
+                ));
+            }
+        };
+
+        for (idx, (src_field, dst_field)) in src_fields.iter().zip(dst_fields.iter()).enumerate() {
+            let field_idx = self.index_value(idx as u64);
+            let field_object = self.fb.insert_inst(
+                EnumProj::new(
+                    self.module.inst_set(),
+                    object,
+                    self.variant_ref(dst_variant)?,
+                    field_idx,
+                ),
+                self.module.ty_for_object_projection(dst_field)?,
+            );
+            let field_source = match source {
+                CopySource::Value { value, .. } => CopySource::Value {
+                    value: self.fb.insert_inst(
+                        EnumExtract::new(
+                            self.module.inst_set(),
+                            *value,
+                            self.variant_ref(src_variant)?,
+                            field_idx,
+                        ),
+                        self.module.ty_for_class(src_field)?,
+                    ),
+                    class: src_field.clone(),
+                },
+                CopySource::Object { .. } => CopySource::Object {
+                    value: self.fb.insert_inst(
+                        EnumProj::new(
+                            self.module.inst_set(),
+                            asserted_object.expect("object enum copy should assert variant once"),
+                            self.variant_ref(src_variant)?,
+                            field_idx,
+                        ),
+                        self.module.ty_for_object_projection(src_field)?,
+                    ),
+                    class: src_field.clone(),
+                },
+                CopySource::Const { .. } => {
+                    unreachable!("const enum sources are normalized to values")
+                }
+                CopySource::Ptr { .. } => {
+                    return Err(LowerError::Unsupported(
+                        "copying enum aggregates from non-memory providers is not supported yet"
+                            .to_string(),
+                    ));
+                }
+            };
+            self.copy_source_into_object(field_source, dst_field, field_object)?;
+        }
+        Ok(())
     }
 
     fn addr_of_place(
