@@ -879,8 +879,11 @@ impl<'db> TyCheckEnv<'db> {
 
         self.call_effect_args.values_mut().for_each(|args| {
             for arg in args {
-                arg.instantiated_target_ty = arg
-                    .instantiated_target_ty
+                arg.instantiated_key_ty = arg
+                    .instantiated_key_ty
+                    .map(|ty| ty.fold_with(self.db, &mut prober));
+                arg.provider_target_ty = arg
+                    .provider_target_ty
                     .map(|ty| ty.fold_with(self.db, &mut prober));
             }
         });

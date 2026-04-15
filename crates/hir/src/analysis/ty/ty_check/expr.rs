@@ -31,6 +31,7 @@ use crate::analysis::ty::{
         resolve_core_range_types, resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
     },
     diagnostics::{BodyDiag, FuncBodyDiag},
+    effect_handle_metadata,
     effects::{
         BarrierReason, EffectBarrier, EffectKeyKind, EffectPatternKey, EffectQuery,
         EffectRequirementDecl, EffectRequirementKey, EffectWitness, ForwardedEffectKey,
@@ -1266,7 +1267,7 @@ impl<'db> TyChecker<'db> {
 
             match self.resolve_effect_query(func, req.clone(), query.clone(), call_span.clone()) {
                 EffectResolution::Chosen(evidence) => {
-                    let (provider, arg_style, key_kind, instantiated_target_ty) = match *evidence {
+                    let (provider, arg_style, key_kind, instantiated_key_ty) = match *evidence {
                         EffectEvidence::Keyed {
                             provider,
                             key_kind,
@@ -1344,6 +1345,11 @@ impl<'db> TyChecker<'db> {
 
                     let (arg, pass_mode) =
                         self.effect_arg_for_provider(provider, arg_style, req.required_mut);
+                    let provider_target_ty = self.provider_target_ty_for_effect_arg(
+                        provider,
+                        instantiated_key_ty,
+                        req.required_mut,
+                    );
                     if req.required_mut && matches!(pass_mode, super::EffectPassMode::Unknown) {
                         let diag = BodyDiag::EffectMutabilityMismatch {
                             primary: call_span.clone(),
@@ -1370,7 +1376,7 @@ impl<'db> TyChecker<'db> {
                             provider,
                             &arg,
                             pass_mode,
-                            instantiated_target_ty,
+                            provider_target_ty,
                         )
                     {
                         let existing_provider = self.table.fold_ty(self.db, provider_var);
@@ -1387,7 +1393,7 @@ impl<'db> TyChecker<'db> {
                             });
                         }
                     }
-                    if let Some(target_ty) = instantiated_target_ty {
+                    if let Some(target_ty) = instantiated_key_ty {
                         self.instantiate_callable_effect_layout_args(
                             callable,
                             func,
@@ -1418,7 +1424,7 @@ impl<'db> TyChecker<'db> {
                             provider,
                             &arg,
                             pass_mode,
-                            instantiated_target_ty,
+                            provider_target_ty,
                             provider_space,
                         );
                         if let Some(previous) =
@@ -1438,7 +1444,8 @@ impl<'db> TyChecker<'db> {
                         arg,
                         pass_mode,
                         key_kind,
-                        instantiated_target_ty,
+                        instantiated_key_ty,
+                        provider_target_ty,
                         provider: provider_space,
                     });
                 }
@@ -1840,9 +1847,15 @@ impl<'db> TyChecker<'db> {
     fn direct_arg_style_for_provider(
         &self,
         provider: ProvidedEffect<'db>,
-        _: TyId<'db>,
+        target_ty: TyId<'db>,
         _: bool,
     ) -> Option<EffectArgStyle> {
+        let target_ty = normalize_ty(self.db, target_ty, self.env.scope(), self.env.assumptions());
+        if effect_handle_metadata(self.db, self.env.scope(), self.env.assumptions(), target_ty)
+            .is_some()
+        {
+            return Some(EffectArgStyle::Value);
+        }
         let place = match provider.origin {
             EffectOrigin::With { value_expr } => self.env.expr_place(value_expr),
             EffectOrigin::Param { .. } => provider
@@ -1924,12 +1937,12 @@ impl<'db> TyChecker<'db> {
         provider: ProvidedEffect<'db>,
         arg: &super::EffectArg<'db>,
         pass_mode: super::EffectPassMode,
-        instantiated_target_ty: Option<TyId<'db>>,
+        provider_target_ty: Option<TyId<'db>>,
     ) -> Option<TyId<'db>> {
         match pass_mode {
             super::EffectPassMode::ByValue => Some(self.table.fold_ty(self.db, provider.ty)),
             super::EffectPassMode::ByTempPlace => {
-                let target_ty = self.table.fold_ty(self.db, instantiated_target_ty?);
+                let target_ty = self.table.fold_ty(self.db, provider_target_ty?);
                 let mem_ptr_ctor =
                     resolve_lib_type_path(self.db, self.env.scope(), "core::effect_ref::MemPtr")?;
                 Some(TyId::app(self.db, mem_ptr_ctor, target_ty))
@@ -1979,6 +1992,25 @@ impl<'db> TyChecker<'db> {
         }
     }
 
+    fn provider_target_ty_for_effect_arg(
+        &mut self,
+        provider: ProvidedEffect<'db>,
+        instantiated_key_ty: Option<TyId<'db>>,
+        required_mut: bool,
+    ) -> Option<TyId<'db>> {
+        let instantiated_key_ty = instantiated_key_ty.map(|ty| self.table.fold_ty(self.db, ty));
+        if let Some(target_ty) = instantiated_key_ty
+            && let Some(metadata) =
+                effect_handle_metadata(self.db, self.env.scope(), self.env.assumptions(), target_ty)
+        {
+            return Some(self.table.fold_ty(self.db, metadata.target_ty));
+        }
+        let provider_ty = self.table.fold_ty(self.db, provider.ty);
+        self.effect_provider_target_resolution(provider_ty, required_mut)
+            .map(|resolution| self.table.fold_ty(self.db, resolution.target_ty))
+            .or(instantiated_key_ty)
+    }
+
     fn effect_arg_is_valid(
         &self,
         arg: &super::EffectArg<'db>,
@@ -2021,7 +2053,10 @@ impl<'db> TyChecker<'db> {
             },
             super::EffectPassMode::ByValue => match arg {
                 super::EffectArg::Place(place) => self.concrete_borrow_provider_for_place(place),
-                super::EffectArg::Value(expr) => self.env.typed_expr(*expr)?.borrow_provider,
+                super::EffectArg::Value(expr) => self.env.typed_expr(*expr).and_then(|prop| {
+                    prop.borrow_provider
+                        .or_else(|| self.concrete_borrow_provider_for_effect_handle_ty(prop.ty))
+                }),
                 super::EffectArg::Binding(binding) => {
                     self.concrete_borrow_provider_for_binding(*binding)
                 }
@@ -2050,7 +2085,7 @@ impl<'db> TyChecker<'db> {
         provided: ProvidedEffect<'db>,
         arg: &super::EffectArg<'db>,
         pass_mode: super::EffectPassMode,
-        instantiated_target_ty: Option<TyId<'db>>,
+        provider_target_ty: Option<TyId<'db>>,
         provider_space: Option<super::ProviderAddressSpace>,
     ) -> EffectProviderSpecialization<'db> {
         let provenance = self
@@ -2074,10 +2109,10 @@ impl<'db> TyChecker<'db> {
                         provided,
                         arg,
                         pass_mode,
-                        instantiated_target_ty,
+                        provider_target_ty,
                     )
                     .unwrap_or_else(|| self.table.fold_ty(self.db, provided.ty));
-                let target_ty = instantiated_target_ty.map(|ty| self.table.fold_ty(self.db, ty));
+                let target_ty = provider_target_ty.map(|ty| self.table.fold_ty(self.db, ty));
                 let semantics = provider_semantics_for_specialized_call(
                     self.db,
                     self.env.scope(),

@@ -334,7 +334,10 @@ impl<'db> TyVisitable<'db> for ResolvedEffectArg<'db> {
         V: TyVisitor<'db> + ?Sized,
     {
         self.arg.visit_with(visitor);
-        if let Some(ty) = self.instantiated_target_ty {
+        if let Some(ty) = self.instantiated_key_ty {
+            ty.visit_with(visitor);
+        }
+        if let Some(ty) = self.provider_target_ty {
             ty.visit_with(visitor);
         }
     }

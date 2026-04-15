@@ -56,7 +56,7 @@ impl<'db> SmirLowerCtxt<'db> {
                     EffectArg::Unknown => SEffectArgValue::Value(self.unit_value()),
                 },
                 pass_mode: arg.pass_mode,
-                target_ty: arg.instantiated_target_ty,
+                target_ty: arg.provider_target_ty,
                 provider: self.effect_arg_provider_space(&arg),
             })
             .collect()
@@ -119,7 +119,7 @@ impl<'db> SmirLowerCtxt<'db> {
                     EffectArg::Unknown => SEffectArgValue::Value(self.unit_value()),
                 },
                 pass_mode: arg.pass_mode,
-                target_ty: arg.instantiated_target_ty,
+                target_ty: arg.provider_target_ty,
                 provider: self.effect_arg_provider_space(arg),
             })
             .collect()

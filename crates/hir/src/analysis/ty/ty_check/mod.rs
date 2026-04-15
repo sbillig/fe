@@ -627,25 +627,42 @@ impl<'db> TyChecker<'db> {
         place: &Place<'db>,
     ) -> Option<ProviderAddressSpace> {
         let PlaceBase::Binding(binding) = place.base;
-        if self
-            .env
-            .lookup_binding_ty(&binding)
-            .as_capability(self.db)
-            .is_some()
-        {
+        let binding_ty = normalize_ty(
+            self.db,
+            self.env.lookup_binding_ty(&binding),
+            self.env.scope(),
+            self.env.assumptions(),
+        );
+        let place_result_ty = normalize_ty(
+            self.db,
+            place
+                .projections
+                .last()
+                .map(|projection| projection.result_ty())
+                .unwrap_or(binding_ty),
+            self.env.scope(),
+            self.env.assumptions(),
+        );
+        if binding_ty.as_capability(self.db).is_some() {
             return self.concrete_borrow_provider_for_binding(binding);
         }
-
-        match binding {
+        let binding_provider = match binding {
             LocalBinding::EffectParam { .. } => self.concrete_borrow_provider_for_binding(binding),
             LocalBinding::Param {
                 site: ParamSite::EffectField(..),
                 ..
             } => self.concrete_borrow_provider_for_binding(binding),
-            LocalBinding::Local { .. } | LocalBinding::Param { .. } => {
-                Some(ProviderAddressSpace::Memory)
-            }
-        }
+            LocalBinding::Local { .. } | LocalBinding::Param { .. } => None,
+        };
+        binding_provider
+            .or_else(|| self.concrete_borrow_provider_for_effect_handle_ty(place_result_ty))
+            .or_else(|| {
+                matches!(
+                    binding,
+                    LocalBinding::Local { .. } | LocalBinding::Param { .. }
+                )
+                .then_some(ProviderAddressSpace::Memory)
+            })
     }
 
     fn merge_concrete_borrow_providers(
@@ -2041,6 +2058,10 @@ impl<'db> TyChecker<'db> {
         match t {
             Typeable::Expr(expr, mut typed_expr) => {
                 typed_expr.ty = actual;
+                if typed_expr.borrow_provider.is_none() {
+                    typed_expr.borrow_provider =
+                        self.concrete_borrow_provider_for_effect_handle_ty(actual);
+                }
                 typed_expr.path_read_semantics = typed_expr
                     .binding
                     .map(|binding| self.binding_path_read_semantics(binding, actual));
@@ -2262,7 +2283,8 @@ pub struct ResolvedEffectArg<'db> {
     pub arg: EffectArg<'db>,
     pub pass_mode: EffectPassMode,
     pub key_kind: EffectKeyKind,
-    pub instantiated_target_ty: Option<TyId<'db>>,
+    pub instantiated_key_ty: Option<TyId<'db>>,
+    pub provider_target_ty: Option<TyId<'db>>,
     pub provider: Option<ProviderAddressSpace>,
 }
 

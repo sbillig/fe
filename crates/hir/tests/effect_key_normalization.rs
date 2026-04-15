@@ -5050,6 +5050,153 @@ fn free_function_effect_bindings_keep_explicit_memory_address_space() {
 }
 
 #[test]
+fn local_effect_handle_calls_preserve_concrete_provider_spaces() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("local_effect_handle_provider_spaces.fe"),
+        r#"
+use std::evm::{MemPtr, RawMem, RawStorage, StorPtr}
+
+struct Foo {
+    value: u256,
+}
+
+fn bump_mem() uses (foo: mut Foo) {
+    foo.value += 1
+}
+
+fn bump_stor() uses (foo: mut Foo) {
+    foo.value += 1
+}
+
+fn test_spaces() uses (st: mut RawStorage, mem: mut RawMem) {
+    let mp: MemPtr<Foo> = mem.mem_ptr(0x100)
+    with (mp) {
+        bump_mem()
+    }
+
+    let sp: StorPtr<Foo> = st.stor_ptr(0)
+    with (sp) {
+        bump_stor()
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let func = find_func(&db, top_mod, "test_spaces");
+    let typed_body = check_func_body(&db, func).1.clone();
+    let mem_call = find_named_call_expr(&db, func, "bump_mem");
+    let stor_call = find_named_call_expr(&db, func, "bump_stor");
+
+    let mem_args = typed_body
+        .call_effect_args(mem_call)
+        .expect("bump_mem should have a resolved effect arg");
+    assert_eq!(mem_args.len(), 1);
+    assert_eq!(mem_args[0].pass_mode, EffectPassMode::ByValue);
+    assert_eq!(
+        mem_args[0].provider,
+        Some(fe_hir::analysis::ty::ProviderAddressSpace::Memory)
+    );
+
+    let stor_args = typed_body
+        .call_effect_args(stor_call)
+        .expect("bump_stor should have a resolved effect arg");
+    assert_eq!(stor_args.len(), 1);
+    assert_eq!(stor_args[0].pass_mode, EffectPassMode::ByValue);
+    assert_eq!(
+        stor_args[0].provider,
+        Some(fe_hir::analysis::ty::ProviderAddressSpace::Storage)
+    );
+}
+
+#[test]
+fn projected_handle_places_use_projected_provider_spaces() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("projected_handle_provider_spaces.fe"),
+        r#"
+use std::evm::{Evm, StorPtr}
+
+struct Cell {
+    value: u256,
+}
+
+struct Holder {
+    ptr: StorPtr<Cell>,
+}
+
+fn write_cell(value: u256) uses (cell: mut Cell) {
+    cell.value = value
+}
+
+fn test_projected(slot: u256, value: u256) uses (evm: mut Evm) {
+    let holder = Holder { ptr: evm.stor_ptr(slot) }
+    with (holder.ptr) {
+        write_cell(value)
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let func = find_func(&db, top_mod, "test_projected");
+    let typed_body = check_func_body(&db, func).1.clone();
+    let call_expr = find_named_call_expr(&db, func, "write_cell");
+    let effect_args = typed_body
+        .call_effect_args(call_expr)
+        .expect("write_cell should have a resolved effect arg");
+    assert_eq!(effect_args.len(), 1);
+    assert_eq!(effect_args[0].pass_mode, EffectPassMode::ByValue);
+    assert_eq!(
+        effect_args[0].provider,
+        Some(fe_hir::analysis::ty::ProviderAddressSpace::Storage)
+    );
+}
+
+#[test]
+fn handle_typed_effect_bindings_use_by_value_transport() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("handle_typed_effect_bindings_use_by_value_transport.fe"),
+        include_str!("../../codegen/tests/fixtures/explicit_raw_boundaries.fe"),
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let func = find_func(&db, top_mod, "explicit_raw_boundaries");
+    let typed_body = check_func_body(&db, func).1.clone();
+    let call_expr = find_named_call_expr(&db, func, "raw_store");
+    let effect_args = typed_body
+        .call_effect_args(call_expr)
+        .expect("raw_store should have resolved effect args");
+    assert_eq!(effect_args.len(), 2);
+    assert_eq!(effect_args[0].pass_mode, EffectPassMode::ByValue);
+    assert_eq!(
+        effect_args[0]
+            .instantiated_key_ty
+            .expect("handle effect arg should retain its matched key carrier")
+            .pretty_print(&db)
+            .to_string(),
+        "MemPtr<Data>"
+    );
+    assert_eq!(
+        effect_args[0]
+            .provider_target_ty
+            .expect("handle effect arg should lower against its underlying provider target")
+            .pretty_print(&db)
+            .to_string(),
+        "Data"
+    );
+    assert_eq!(
+        effect_args[0].provider,
+        Some(fe_hir::analysis::ty::ProviderAddressSpace::Memory)
+    );
+}
+
+#[test]
 fn root_semantic_instance_keys_are_closed_under_root_provider_subst() {
     let mut db = HirAnalysisTestDb::default();
     let storage_map_file = db.new_stand_alone(
