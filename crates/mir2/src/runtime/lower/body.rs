@@ -1117,20 +1117,11 @@ impl<'db> RmirLowerCtxt<'db> {
                 kind: RefKind::Object,
                 ..
             } => RuntimeClass::object_ref(layout),
-            RuntimeClass::RawAddr { space, target } => RuntimeClass::RawAddr { space, target },
-            RuntimeClass::Ref {
-                kind: RefKind::Provider { provider_ty, space },
-                pointee,
+            class @ (RuntimeClass::Ref {
+                kind: RefKind::Provider { .. } | RefKind::Const,
                 ..
-            } => {
-                let target_layout = pointee.aggregate_layout().expect("provider ref layout");
-                RuntimeClass::provider_ref(target_layout, provider_ty, space)
             }
-            RuntimeClass::Ref {
-                kind: RefKind::Const,
-                pointee,
-                ..
-            } => RuntimeClass::const_ref(pointee.aggregate_layout().expect("const ref layout")),
+            | RuntimeClass::RawAddr { .. }) => class,
             RuntimeClass::Scalar(_) => panic!("aggregate destination must not be scalar"),
         };
         self.refine_local_runtime_class(dst, dst_class.clone());
@@ -1192,41 +1183,19 @@ impl<'db> RmirLowerCtxt<'db> {
                     self.write_value_to_place(bb, place, value, &elem.class);
                 }
             }
-            RuntimeClass::RawAddr { space, target } => {
-                let [value] = field_values else {
-                    panic!("raw-address aggregate construction requires exactly one field");
-                };
-                let value = self.coerce_value(bb, *value, &RuntimeClass::RawAddr { space, target });
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::Use(value),
-                    },
-                );
-            }
-            RuntimeClass::Ref {
-                pointee,
-                kind: RefKind::Provider { provider_ty, space },
+            provider @ RuntimeClass::Ref {
+                kind: RefKind::Provider { .. },
                 ..
             } => {
-                let target_layout = pointee.aggregate_layout().expect("provider ref layout");
-                let [value] = field_values else {
-                    panic!("provider aggregate construction requires exactly one field");
-                };
-                let value = self.coerce_value(
-                    bb,
-                    *value,
-                    &RuntimeClass::provider_ref(target_layout, provider_ty, space),
-                );
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::Use(value),
-                    },
-                );
+                self.lower_single_field_transport_ctor(bb, dst, provider, field_values, "provider")
             }
+            raw_addr @ RuntimeClass::RawAddr { .. } => self.lower_single_field_transport_ctor(
+                bb,
+                dst,
+                raw_addr,
+                field_values,
+                "raw-address",
+            ),
             RuntimeClass::Ref {
                 kind: RefKind::Const,
                 ..
@@ -1239,6 +1208,27 @@ impl<'db> RmirLowerCtxt<'db> {
                 )
             }
         }
+    }
+
+    fn lower_single_field_transport_ctor(
+        &mut self,
+        bb: RBlockId,
+        dst: RLocalId,
+        dst_class: RuntimeClass<'db>,
+        field_values: &[RLocalId],
+        kind_name: &str,
+    ) {
+        let [value] = field_values else {
+            panic!("{kind_name} aggregate construction requires exactly one field");
+        };
+        let value = self.coerce_value(bb, *value, &dst_class);
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst,
+                expr: RExpr::Use(value),
+            },
+        );
     }
 
     fn lower_enum_make(
