@@ -21,7 +21,9 @@ use crate::{
                 ProviderAddressSpace, ProviderKind, ProviderTransport, provider_semantics,
                 provider_semantics_for_specialized_call,
             },
-            trait_resolution::PredicateListId,
+            trait_resolution::{
+                GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
+            },
             ty_check::{
                 BodyOwner, EffectProviderProvenance, EffectProviderSpecialization, LocalBinding,
                 SemanticExprLowering, TypedBody,
@@ -838,27 +840,57 @@ fn root_owner_effect_providers<'db>(
             true,
         )
         .instantiate_identity();
+    let providers = view.providers(db);
+    let root_provider = providers.iter().find(|provider| {
+        matches!(
+            provider.source,
+            ProviderSource::RootProvider {
+                site: provider_site,
+                ..
+            } if provider_site == site
+        )
+    });
+    let provider_slots = providers
+        .iter()
+        .filter_map(|provider| match provider.source {
+            ProviderSource::UsesParam {
+                site: provider_site,
+                requirement_idx,
+            } if provider_site == site => Some((requirement_idx, provider.clone())),
+            ProviderSource::UsesParam { .. }
+            | ProviderSource::ContractField { .. }
+            | ProviderSource::RootProvider { .. } => None,
+        })
+        .collect::<FxHashMap<_, _>>();
     view.requirements(db)
         .into_iter()
         .filter_map(|requirement| {
-            let resolved = view.resolved_binding(db, requirement.binding_idx as usize)?;
-            let provider_ty = view
-                .resolved_binding_ty(db, requirement.binding_idx as usize)
-                .unwrap_or(resolved.provider.provider_ty);
+            let slot = provider_slots.get(&requirement.binding_idx)?;
+            let root_provider = root_provider
+                .filter(|provider| {
+                    root_provider_satisfies_effect_requirement(
+                        db,
+                        func,
+                        assumptions,
+                        provider,
+                        &requirement,
+                    )
+                })?
+                .clone();
             let target_ty = requirement
                 .key
                 .binding_ty(db)
-                .or(resolved.provider.semantics.target_ty);
+                .or(root_provider.semantics.target_ty);
             let provider = ProviderBinding {
-                provider_idx: resolved.provider.provider_idx,
-                provider_ty,
-                is_mut: resolved.provider.is_mut,
-                source: resolved.provider.source.clone(),
+                provider_idx: slot.provider_idx,
+                provider_ty: root_provider.provider_ty,
+                is_mut: slot.is_mut,
+                source: root_provider.source.clone(),
                 semantics: provider_semantics_for_specialized_call(
                     db,
                     func.scope(),
                     assumptions,
-                    provider_ty,
+                    root_provider.provider_ty,
                     target_ty,
                     Some(ProviderAddressSpace::Memory),
                     ProviderTransport::ByValue,
@@ -868,11 +900,45 @@ fn root_owner_effect_providers<'db>(
                 provider,
                 provenance: EffectProviderProvenance::Binding {
                     owner,
-                    binding: LocalBinding::effect_param(&resolved),
+                    binding: LocalBinding::EffectParam {
+                        site,
+                        idx: requirement.binding_idx as usize,
+                        binding_name: requirement.binding_name,
+                        provider_idx: slot.provider_idx,
+                        key_path: requirement.binding_path,
+                        is_mut: requirement.is_mut,
+                    },
                 },
             })
         })
         .collect()
+}
+
+fn root_provider_satisfies_effect_requirement<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: crate::hir_def::Func<'db>,
+    assumptions: PredicateListId<'db>,
+    root_provider: &ProviderBinding<'db>,
+    requirement: &EffectRequirement<'db>,
+) -> bool {
+    match requirement.key {
+        EffectRequirementKey::Type(provider_ty) => {
+            provider_ty == root_provider.provider_ty
+                || effect_handle_metadata(db, func.scope(), assumptions, provider_ty).is_some()
+        }
+        EffectRequirementKey::Trait(trait_inst) => {
+            let goal = instantiate_trait_self(db, trait_inst, root_provider.provider_ty);
+            matches!(
+                is_goal_satisfiable(
+                    db,
+                    TraitSolveCx::new(db, func.scope()).with_assumptions(assumptions),
+                    goal,
+                ),
+                GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation(_)
+            )
+        }
+        EffectRequirementKey::Other => false,
+    }
 }
 
 fn root_func_generic_args<'db>(

@@ -4834,6 +4834,112 @@ fn function_effect_bindings_use_instantiated_provider_bindings() {
 }
 
 #[test]
+fn root_effect_bindings_specialize_rawmem_to_evm() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("explicit_raw_boundaries.fe"),
+        include_str!("../../codegen/tests/fixtures/explicit_raw_boundaries.fe"),
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let entry = find_func(&db, top_mod, "explicit_raw_boundaries");
+    let root = get_or_build_semantic_instance(
+        &db,
+        root_semantic_instance_key(&db, BodyOwner::Func(entry))
+            .expect("root semantic instance should exist"),
+    );
+    let root_effect_binding = root
+        .body(&db)
+        .locals
+        .iter()
+        .find_map(|local| match local.source {
+            Some(
+                binding @ fe_hir::analysis::ty::ty_check::LocalBinding::EffectParam {
+                    binding_name,
+                    ..
+                },
+            ) if binding_name.data(&db) == "mem" => Some(binding),
+            Some(_) | None => None,
+        })
+        .expect("expected root mem effect binding");
+    assert_eq!(
+        semantic_binding_ty(&db, root, root_effect_binding)
+            .pretty_print(&db)
+            .to_string(),
+        "Evm"
+    );
+
+    let raw_store = root
+        .body(&db)
+        .callees()
+        .into_iter()
+        .map(|callee| get_or_build_semantic_instance(&db, callee.key))
+        .find(|callee| {
+            matches!(
+                callee.key(&db).owner(&db),
+                BodyOwner::Func(func)
+                    if func
+                        .name(&db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(&db) == "raw_store")
+            )
+        })
+        .expect("expected specialized raw_store callee");
+    let raw_store_effect_binding = raw_store
+        .body(&db)
+        .locals
+        .iter()
+        .find_map(|local| match local.source {
+            Some(
+                binding @ fe_hir::analysis::ty::ty_check::LocalBinding::EffectParam {
+                    binding_name,
+                    ..
+                },
+            ) if binding_name.data(&db) == "mem" => Some(binding),
+            Some(_) | None => None,
+        })
+        .expect("expected specialized raw_store mem effect binding");
+    assert_eq!(
+        semantic_binding_ty(&db, raw_store, raw_store_effect_binding)
+            .pretty_print(&db)
+            .to_string(),
+        "Evm"
+    );
+
+    let mstore = raw_store
+        .body(&db)
+        .blocks
+        .iter()
+        .flat_map(|block| block.stmts.iter())
+        .find_map(|stmt| {
+            let fe_hir::analysis::semantic::SStmtKind::Assign {
+                expr: fe_hir::analysis::semantic::SExpr::Call { callee, .. },
+                ..
+            } = &stmt.kind
+            else {
+                return None;
+            };
+            let instance = get_or_build_semantic_instance(&db, callee.key);
+            matches!(
+                instance.key(&db).owner(&db),
+                BodyOwner::Func(func)
+                    if func
+                        .name(&db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(&db) == "mstore")
+                        && func.body(&db).is_some()
+            )
+            .then_some(instance)
+        })
+        .expect("expected concrete mstore impl call");
+    assert!(matches!(
+        mstore.key(&db).owner(&db),
+        BodyOwner::Func(func) if func.body(&db).is_some()
+    ));
+}
+
+#[test]
 fn free_function_effect_calls_monomorphize_distinct_provider_bindings() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
