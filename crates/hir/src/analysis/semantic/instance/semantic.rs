@@ -217,11 +217,6 @@ pub fn resolved_provider_binding_for_instance_effect<'db>(
         } => (idx, None),
         LocalBinding::Local { .. } | LocalBinding::Param { .. } => return None,
     };
-    let requirement = env
-        .requirements(db)
-        .iter()
-        .find(|requirement| requirement.binding_idx as usize == binding_idx)
-        .cloned();
     provider_idx
         .and_then(|provider_idx| {
             env.providers(db)
@@ -231,17 +226,6 @@ pub fn resolved_provider_binding_for_instance_effect<'db>(
         })
         .or_else(|| {
             instantiated_resolved_binding(env, db, binding_idx).map(|binding| binding.provider)
-        })
-        .map(|mut provider| {
-            if matches!(
-                provider.semantics.kind,
-                crate::analysis::ty::provider::ProviderKind::RootObject
-            ) && let Some(target_ty) =
-                requirement.and_then(|requirement| requirement.key.binding_ty(db))
-            {
-                provider.semantics.target_ty = Some(target_ty);
-            }
-            provider
         })
 }
 
@@ -314,6 +298,19 @@ fn instantiated_resolved_binding<'db>(
         requirement,
         provider,
     })
+}
+
+fn requirement_provider_target_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    requirement: &EffectRequirement<'db>,
+) -> Option<crate::analysis::ty::ty_def::TyId<'db>> {
+    let target_ty = requirement.key.binding_ty(db)?;
+    Some(
+        effect_handle_metadata(db, scope, assumptions, target_ty)
+            .map_or(target_ty, |metadata| metadata.target_ty),
+    )
 }
 
 pub fn root_semantic_instance_key<'db>(
@@ -877,10 +874,9 @@ fn root_owner_effect_providers<'db>(
                     )
                 })?
                 .clone();
-            let target_ty = requirement
-                .key
-                .binding_ty(db)
-                .or(root_provider.semantics.target_ty);
+            let target_ty =
+                requirement_provider_target_ty(db, func.scope(), assumptions, &requirement)
+                    .or(root_provider.semantics.target_ty);
             let provider = ProviderBinding {
                 provider_idx: slot.provider_idx,
                 provider_ty: root_provider.provider_ty,

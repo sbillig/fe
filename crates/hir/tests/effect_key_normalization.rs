@@ -5,8 +5,8 @@ use fe_hir::analysis::diagnostics::DiagnosticVoucher;
 use fe_hir::analysis::place::PlaceBase;
 use fe_hir::analysis::semantic::{
     GenericSubst, get_or_build_semantic_instance, instantiate_typed_body, instantiated_effect_env,
-    root_semantic_instance_key, semantic_binding_ty, typed_body_template,
-    validate_instantiated_effect_env_key,
+    resolved_provider_binding_for_instance_effect, root_semantic_instance_key, semantic_binding_ty,
+    typed_body_template, validate_instantiated_effect_env_key,
 };
 use fe_hir::analysis::ty::effects::{EffectKeyKind, place_effect_provider_param_index_map};
 use fe_hir::analysis::ty::trait_def::resolve_trait_method_instance;
@@ -4937,6 +4937,69 @@ fn root_effect_bindings_specialize_rawmem_to_evm() {
         mstore.key(&db).owner(&db),
         BodyOwner::Func(func) if func.body(&db).is_some()
     ));
+}
+
+#[test]
+fn root_effect_handle_bindings_specialize_provider_targets_to_underlying_values() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("explicit_raw_boundaries.fe"),
+        include_str!("../../codegen/tests/fixtures/explicit_raw_boundaries.fe"),
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let entry = find_func(&db, top_mod, "explicit_raw_boundaries");
+    let root = get_or_build_semantic_instance(
+        &db,
+        root_semantic_instance_key(&db, BodyOwner::Func(entry))
+            .expect("root semantic instance should exist"),
+    );
+    let raw_store = root
+        .body(&db)
+        .callees()
+        .into_iter()
+        .map(|callee| get_or_build_semantic_instance(&db, callee.key))
+        .find(|callee| {
+            matches!(
+                callee.key(&db).owner(&db),
+                BodyOwner::Func(func)
+                    if func
+                        .name(&db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(&db) == "raw_store")
+            )
+        })
+        .expect("expected specialized raw_store callee");
+    let data_binding = raw_store
+        .body(&db)
+        .locals
+        .iter()
+        .find_map(|local| match local.source {
+            Some(
+                binding @ fe_hir::analysis::ty::ty_check::LocalBinding::EffectParam {
+                    binding_name,
+                    ..
+                },
+            ) if binding_name.data(&db) == "data" => Some(binding),
+            Some(_) | None => None,
+        })
+        .expect("expected specialized raw_store data effect binding");
+    let provider = resolved_provider_binding_for_instance_effect(&db, raw_store, data_binding)
+        .expect("specialized data effect binding should resolve a provider");
+    assert_eq!(
+        provider.semantics.kind,
+        fe_hir::analysis::ty::ProviderKind::Handle
+    );
+    assert_eq!(
+        provider
+            .semantics
+            .target_ty
+            .expect("specialized provider should keep its underlying target")
+            .pretty_print(&db)
+            .to_string(),
+        "Data"
+    );
 }
 
 #[test]
