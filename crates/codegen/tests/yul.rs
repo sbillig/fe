@@ -72,3 +72,90 @@ fn signed_lt() -> bool {
         "signed comparisons should canonicalize named narrow signed operands before comparison:\n{yul}"
     );
 }
+
+#[test]
+fn single_field_wrapper_slot_roots_keep_layout_for_field_projection() {
+    let yul = emit_inline_yul(
+        "file:///single_field_wrapper_slot_roots_keep_layout_for_field_projection.fe",
+        r#"
+use std::evm::CallData
+
+fn read_base() -> u256 {
+    let data = CallData::with_base(4)
+    data.base
+}
+"#,
+    );
+
+    assert!(
+        yul.contains("function $read_base()"),
+        "single-field wrapper field reads should lower to Yul without losing slot layout:\n{yul}"
+    );
+}
+
+#[test]
+fn generated_yul_param_names_do_not_collide_with_function_symbols() {
+    let yul = emit_inline_yul(
+        "file:///generated_yul_param_names_do_not_collide_with_function_symbols.fe",
+        r#"
+use std::abi::sol
+use std::abi::sol::{decode_bytes_view, decode_bytes_view_at, decode_string_view}
+use std::evm::{CallData, Evm}
+
+const BYTES_LEN_SELECTOR: u32 = sol("bytesLen(bytes)")
+const SECOND_BYTES_LEN_SELECTOR: u32 = sol("secondBytesLen(bytes,bytes)")
+const STRING_FIRST_SELECTOR: u32 = sol("stringFirst(string)")
+const STRING_LEN_SELECTOR: u32 = sol("stringLen(string)")
+
+#[contract_init(ViewHarness)]
+fn init() uses (evm: mut Evm) {
+    evm.create_contract(runtime)
+}
+
+#[contract_runtime(ViewHarness)]
+fn runtime() uses (evm: mut Evm) {
+    let sel = evm.selector()
+
+    if sel == BYTES_LEN_SELECTOR {
+        let view = decode_bytes_view(CallData::with_base(4))
+        evm.mstore(addr: 0, value: view.len())
+        evm.return_data(offset: 0, len: 32)
+    }
+
+    if sel == SECOND_BYTES_LEN_SELECTOR {
+        let view = decode_bytes_view_at(CallData::with_base(4), base: 0, head_pos: 32)
+        evm.mstore(addr: 0, value: view.len())
+        evm.return_data(offset: 0, len: 32)
+    }
+
+    if sel == STRING_FIRST_SELECTOR {
+        let view = decode_string_view(CallData::with_base(4))
+        let first: u256 = if view.is_empty() { 0 } else { view.byte_at(0) as u256 }
+        evm.mstore(addr: 0, value: first)
+        evm.return_data(offset: 0, len: 32)
+    }
+
+    if sel == STRING_LEN_SELECTOR {
+        let view = decode_string_view(CallData::with_base(4))
+        evm.mstore(addr: 0, value: view.len())
+        evm.return_data(offset: 0, len: 32)
+    }
+
+    evm.revert(offset: 0, len: 0)
+}
+"#,
+    );
+
+    assert!(
+        yul.contains("function $input()"),
+        "fixture should still emit the sibling $input helper that previously collided with $decode_bytes_view params:\n{yul}"
+    );
+    assert!(
+        yul.contains("function $decode_bytes_view(p0)"),
+        "generated Yul params should use the disjoint p{{idx}} namespace instead of semantic names:\n{yul}"
+    );
+    assert!(
+        !yul.contains("function $decode_bytes_view($input)"),
+        "generated Yul params must not reuse semantic names that can collide with function symbols:\n{yul}"
+    );
+}

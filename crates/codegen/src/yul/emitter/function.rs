@@ -75,7 +75,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
     fn bind_params(&mut self) -> Vec<String> {
         let mut out = Vec::with_capacity(self.plan.param_locals.len());
         for (idx, local) in self.plan.param_locals.iter().enumerate() {
-            let name = format!("${}", self.plan.param_names[idx]);
+            let name = format!("p{idx}");
             if !matches!(
                 self.plan.locals[local.index()].root,
                 YulLocalRoot::MemorySlot { .. }

@@ -7,7 +7,6 @@ use hir::analysis::{
 use hir::hir_def::{BinOp, TopLevelMod, UnOp};
 use hir::projection::{IndexSource, Projection, ProjectionPath};
 use mir2::runtime::RefKind;
-use mir2::runtime::{ContractEffectArgPlan, InitArgsPlan};
 use mir2::{
     AddressSpaceKind, ConstNode, ConstRegionId, ConstScalar, IntrinsicArithBinOp, Layout, LayoutId,
     PlaceElem, PlaceRoot, RExpr, RLocalId, RStmt, RTerminator, RValueId, ResolvedPlaceElem,
@@ -146,7 +145,6 @@ pub struct YulFunctionPlan<'db> {
     pub params: Vec<YulValueClass<'db>>,
     pub ret: Option<YulValueClass<'db>>,
     pub ret_transport: Option<YTransportInfo<'db>>,
-    pub param_names: Vec<String>,
     pub param_locals: Vec<YLocalId>,
     pub locals: Vec<YulLocal<'db>>,
     pub blocks: Vec<YulBlock<'db>>,
@@ -1128,7 +1126,6 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
         let code_backable_locals = self.code_backable_locals(runtime_function, &body);
 
         let mut param_locals = Vec::with_capacity(body.signature.params.len());
-        let mut param_names = Vec::with_capacity(body.signature.params.len());
         let mut params = Vec::with_capacity(body.signature.params.len());
         for (param, kind) in body.signature.params.iter().zip(&param_kinds) {
             let default_class = yul_class_for_runtime_class(self.db, &param.class);
@@ -1158,7 +1155,6 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
             };
             params.push(class);
             param_locals.push(YLocalId(param.local.as_u32()));
-            param_names.push(self.param_name_for_function(runtime_function, param.local, *kind));
         }
 
         let mut blocks = Vec::with_capacity(body.blocks.len());
@@ -1242,7 +1238,6 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
             params,
             ret,
             ret_transport,
-            param_names,
             param_locals,
             locals,
             blocks,
@@ -1661,81 +1656,6 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
             key.runtime_function.symbol(self.db).clone()
         } else {
             format!("{}_{}", key.runtime_function.symbol(self.db), suffix)
-        }
-    }
-
-    fn param_name_for_function(
-        &self,
-        function: RuntimeFunction<'db>,
-        local: RLocalId,
-        kind: YulParamKind,
-    ) -> String {
-        let fallback = match kind {
-            YulParamKind::Visible(idx) => format!("arg{idx}"),
-            YulParamKind::Effect(idx) => format!("eff{idx}"),
-        };
-        match function.owner(self.db) {
-            RuntimeFunctionOwner::Semantic(semantic) => semantic
-                .body(self.db)
-                .locals
-                .get(local.as_u32() as usize)
-                .and_then(|local| local.source)
-                .and_then(|source| self.param_name_for_binding(source))
-                .unwrap_or(fallback),
-            RuntimeFunctionOwner::Synthetic(RuntimeSyntheticSpec::ContractInitAbi { plan }) => {
-                match kind {
-                    YulParamKind::Visible(idx) => match &plan.init_args {
-                        InitArgsPlan::None => fallback,
-                        InitArgsPlan::DecodeInitTail { .. } => format!("arg{idx}"),
-                    },
-                    YulParamKind::Effect(idx) => match plan.owner_effect_args.get(idx) {
-                        Some(ContractEffectArgPlan::ContractField(_)) => "store".to_string(),
-                        Some(ContractEffectArgPlan::Placeholder { .. }) | None => fallback,
-                    },
-                }
-            }
-            RuntimeFunctionOwner::Synthetic(RuntimeSyntheticSpec::ContractRecvAbi { plan }) => {
-                match kind {
-                    YulParamKind::Visible(idx) => {
-                        if idx == 0 {
-                            "msg".to_string()
-                        } else {
-                            fallback
-                        }
-                    }
-                    YulParamKind::Effect(idx) => match plan.owner_effect_args.get(idx) {
-                        Some(ContractEffectArgPlan::ContractField(_)) => "store".to_string(),
-                        Some(ContractEffectArgPlan::Placeholder { .. }) | None => fallback,
-                    },
-                }
-            }
-            RuntimeFunctionOwner::Synthetic(_) => fallback,
-        }
-    }
-
-    fn param_name_for_binding(&self, binding: LocalBinding<'db>) -> Option<String> {
-        match binding {
-            LocalBinding::Local { .. } => None,
-            LocalBinding::Param { site, idx, .. } => match site {
-                ParamSite::Func(func) => func
-                    .params(self.db)
-                    .nth(idx)
-                    .and_then(|param| param.name(self.db))
-                    .map(|ident| ident.data(self.db).to_string()),
-                ParamSite::ContractInit(contract) => contract
-                    .init(self.db)
-                    .and_then(|init| {
-                        init.params(self.db)
-                            .data(self.db)
-                            .get(idx)
-                            .and_then(|param| param.name())
-                    })
-                    .map(|ident| ident.data(self.db).to_string()),
-                ParamSite::EffectField(_) => None,
-            },
-            LocalBinding::EffectParam { binding_name, .. } => {
-                Some(binding_name.data(self.db).to_string())
-            }
         }
     }
 
@@ -2374,7 +2294,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
             ResolvedPlaceRootKind::Slot { local, .. } => {
                 let info = &local_values[local.as_u32() as usize];
                 match (info.class.clone(), info.transport.root_alias) {
-                    (Some(class), Some(space)) => (
+                    (Some(class), Some(space)) if !matches!(class, YulValueClass::Word(_)) => (
                         YulPlaceRoot::Ptr {
                             local: YLocalId(local.as_u32()),
                             space,
