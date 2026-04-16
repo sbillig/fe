@@ -615,6 +615,15 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
             return self.local_value(local);
         }
         let (mut setup, addr, space) = self.address_of_place(place)?;
+        if matches!(place.result_class, YulValueClass::Word(_)) {
+            let temp = self.state.alloc_temp();
+            setup.extend(self.read_scalar_from_addr(&place.result_class, space, addr, &temp)?);
+            return Ok(RenderedValue {
+                setup,
+                value: temp,
+                class: place.result_class.clone(),
+            });
+        }
         match place.storage_kind {
             crate::yul::legalize::YulStorageKind::Cell => {
                 let temp = self.state.alloc_temp();

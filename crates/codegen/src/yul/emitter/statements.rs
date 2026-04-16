@@ -92,14 +92,14 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         }
         let (mut docs, addr, space) = self.address_of_place(&dst)?;
         docs.extend(src.setup.clone());
-        match dst.storage_kind {
-            crate::yul::legalize::YulStorageKind::Cell => {
-                docs.extend(self.write_transport_word_to_addr(space, addr, src)?);
-            }
-            crate::yul::legalize::YulStorageKind::Bytes => {
-                if matches!(dst.result_class, YulValueClass::Word(_)) {
-                    docs.extend(self.write_scalar_to_addr(space, addr, src)?);
-                } else {
+        if matches!(dst.result_class, YulValueClass::Word(_)) {
+            docs.extend(self.write_scalar_to_addr(space, addr, src)?);
+        } else {
+            match dst.storage_kind {
+                crate::yul::legalize::YulStorageKind::Cell => {
+                    docs.extend(self.write_transport_word_to_addr(space, addr, src)?);
+                }
+                crate::yul::legalize::YulStorageKind::Bytes => {
                     docs.extend(self.copy_into_addr(dst.result_class.clone(), space, addr, src)?);
                 }
             }

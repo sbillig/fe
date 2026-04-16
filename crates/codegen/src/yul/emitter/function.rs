@@ -20,8 +20,6 @@ use super::{
     module::PackageIndex,
     util::{prefix_yul_name, section_object_label},
 };
-use crate::yul::state::local_uses_value_name;
-
 #[derive(Clone)]
 pub(super) struct RenderedValue<'db> {
     pub(super) setup: Vec<YulDoc>,
@@ -90,7 +88,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         let mut out = Vec::with_capacity(self.plan.param_locals.len());
         for (idx, local) in self.plan.param_locals.iter().enumerate() {
             let name = format!("p{idx}");
-            if local_uses_value_name(&self.plan.locals[local.index()]) {
+            if self.state.uses_value_name(*local) {
                 self.state.assign_param_name(*local, name.clone());
             }
             out.push(name);
@@ -101,13 +99,13 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
     fn render_prologue(&mut self, param_inputs: &[String]) -> Result<Vec<YulDoc>, YulError> {
         let mut docs = Vec::new();
         for (idx, local) in self.plan.locals.iter().enumerate() {
+            let local_id = YLocalId(idx as u32);
             let YulLocalRoot::MemorySlot { class } = &local.root else {
                 continue;
             };
-            if local_uses_value_name(local) {
+            if self.state.uses_value_name(local_id) {
                 continue;
             }
-            let local_id = YLocalId(idx as u32);
             if !self.plan.param_locals.contains(&local_id) && !self.cross_block_values[idx] {
                 continue;
             }
@@ -143,7 +141,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
             let Some(class) = self.plan.locals[local.index()].class.as_ref() else {
                 continue;
             };
-            if local_uses_value_name(&self.plan.locals[local.index()]) {
+            if self.state.uses_value_name(*local) {
                 continue;
             }
             let input = param_inputs.get(param_idx).cloned().unwrap_or_default();

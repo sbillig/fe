@@ -1493,7 +1493,8 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                 let Some(idx) = Self::pending_aggregate_index(pending, local) else {
                     return Ok(false);
                 };
-                if pending[idx].const_writes.is_empty()
+                if pending[idx].value_writes.is_empty()
+                    && pending[idx].const_writes.is_empty()
                     && pending[idx].transport.to_transport().leaves.is_empty()
                 {
                     self.flush_pending_aggregate(pending, idx, local_values, stmts);
@@ -1518,6 +1519,21 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                     stmts.push(YStmt::Assign {
                         dst: YLocalId(dst.as_u32()),
                         expr: YExpr::ConstRef { region, layout },
+                    });
+                    return Ok(true);
+                }
+                if let Some((expr, class, const_value)) =
+                    self.try_build_pending_scalar_value(&pending[idx], local_values)
+                {
+                    self.flush_pending_aggregate(pending, idx, local_values, stmts);
+                    local_values[dst.as_u32() as usize] = LocalValueInfo {
+                        class: Some(class),
+                        transport: YTransportInfo::empty(),
+                        const_value,
+                    };
+                    stmts.push(YStmt::Assign {
+                        dst: YLocalId(dst.as_u32()),
+                        expr,
                     });
                     return Ok(true);
                 }

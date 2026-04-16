@@ -78,9 +78,6 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         ctx: EmitCtx<'_>,
         path: &mut Vec<YBlockId>,
     ) -> Result<Vec<YulDoc>, YulError> {
-        if ctx.stop_blocks.contains(&target) {
-            return Ok(Vec::new());
-        }
         if let Some(loop_ctx) = ctx.loop_ctx {
             if target == loop_ctx.header {
                 return Ok(vec![YulDoc::line("continue")]);
@@ -88,6 +85,9 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
             if target == loop_ctx.break_target {
                 return Ok(vec![YulDoc::line("break")]);
             }
+        }
+        if ctx.stop_blocks.contains(&target) {
+            return Ok(Vec::new());
         }
         self.emit_block_internal(target, ctx, path)
     }

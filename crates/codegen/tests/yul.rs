@@ -43,6 +43,16 @@ fn emit_inline_yul(path: &str, src: &str) -> String {
     emit_module_yul(&db, top_mod).expect("Yul emission should succeed")
 }
 
+fn yul_function_body<'a>(yul: &'a str, name: &str) -> &'a str {
+    let marker = format!("function ${name}(");
+    let start = yul
+        .find(&marker)
+        .unwrap_or_else(|| panic!("missing function `{name}` in emitted Yul:\n{yul}"));
+    let tail = &yul[start..];
+    let end = tail.find("\n      function $").unwrap_or(tail.len());
+    &tail[..end]
+}
+
 #[test]
 fn narrow_signed_named_locals_are_canonicalized_on_yul_reads() {
     let yul = emit_inline_yul(
@@ -113,6 +123,19 @@ fn ctor() -> CallData {
     assert!(
         !yul.contains("function $with_base(p0) -> ret {\n      let r0 := mload(0x40)\n      if iszero(r0) {\n        r0 := 0x80\n      }\n      mstore(0x40, add(r0, 32))\n      mstore(r0, p0)\n      let t4 := mload(r0)\n      let v1 := t4\n      let t5 := mload(0x40)"),
         "single-field wrapper ctors must not allocate and return a second object wrapper:\n{yul}"
+    );
+    let body = yul_function_body(&yul, "with_base");
+    assert!(
+        body.contains("ret := p0")
+            || body.contains("let v1 := p0\n      ret := v1")
+            || body.contains("let v1 := p0\n      let v2 := v1\n      ret := v2")
+            || body
+                .contains("let v1 := p0\n      let v3 := v1\n      let v2 := v1\n      ret := v2"),
+        "single-field wrapper ctor helpers should return the underlying word directly:\n{body}"
+    );
+    assert!(
+        !body.contains("mload(p0)") && !body.contains("mload(v1)") && !body.contains("mload(v3)"),
+        "single-field wrapper ctor helpers must not reinterpret the scalar arg as a memory pointer:\n{body}"
     );
 }
 
@@ -248,5 +271,31 @@ fn runtime() uses (evm: mut Evm) {
     assert!(
         !yul.contains("function $return_data_1(p0, p1) {\n      let r1 := mload(0x40)"),
         "create_contract return-data helpers must not allocate scalar root slots from mload(0x40):\n{yul}"
+    );
+}
+
+#[test]
+fn scalar_collapsible_field_loads_materialize_words_in_yul() {
+    let yul = emit_inline_yul(
+        "file:///scalar_collapsible_field_loads_materialize_words_in_yul.fe",
+        r#"
+use std::abi::sol::decode_bytes_view
+use std::evm::CallData
+
+fn read_word() -> u256 {
+    let view = decode_bytes_view(CallData::with_base(4))
+    view.word_at(0)
+}
+"#,
+    );
+
+    let body = yul_function_body(&yul, "word_at_0");
+    assert!(
+        body.contains("mload(r0)"),
+        "collapsed aggregate field loads should materialize the field word before forwarding it:\n{body}"
+    );
+    assert!(
+        !body.contains("let v2 := r0"),
+        "collapsed aggregate field loads must not forward the enclosing object root as a scalar receiver:\n{body}"
     );
 }
