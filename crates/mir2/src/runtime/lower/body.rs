@@ -1803,7 +1803,7 @@ impl<'db> RmirLowerCtxt<'db> {
         let ret_ty = semantic_return_ty(self.db, semantic);
         let kind = core_primitive_wrapper_call_kind(self.db, func, ret_ty)?;
         let checked = self.current_arithmetic_mode() == ArithmeticMode::Checked;
-        let (runtime_args, _) = self.lower_visible_call_args(bb, typed_body, args);
+        let (runtime_args, _) = self.lower_visible_call_args(bb, semantic, typed_body, args);
 
         match kind {
             PrimitiveWrapperCallKind::Unary(op) => {
@@ -1920,7 +1920,7 @@ impl<'db> RmirLowerCtxt<'db> {
             return ret;
         }
         let (mut runtime_args, mut runtime_classes) =
-            self.lower_visible_call_args(bb, &typed_body, args);
+            self.lower_visible_call_args(bb, semantic, &typed_body, args);
         for effect_arg in effect_args {
             let plan = runtime_effect_binding_plan_for_binding_idx(
                 self.db,
@@ -2026,7 +2026,7 @@ impl<'db> RmirLowerCtxt<'db> {
         }
 
         let typed_body = semantic.key(self.db).instantiate_typed_body(self.db);
-        let (args, _) = self.lower_visible_call_args(bb, &typed_body, args);
+        let (args, _) = self.lower_visible_call_args(bb, semantic, &typed_body, args);
         let lowered = self.lower_extern_builtin(func, &args)?;
         let ret_ty = semantic_return_ty(self.db, semantic);
         let _ = effect_args;
@@ -2068,7 +2068,7 @@ impl<'db> RmirLowerCtxt<'db> {
         }
         let name = func.name(self.db).to_opt()?.data(self.db);
         let typed_body = semantic.key(self.db).instantiate_typed_body(self.db);
-        let (args, _) = self.lower_visible_call_args(bb, &typed_body, args);
+        let (args, _) = self.lower_visible_call_args(bb, semantic, &typed_body, args);
         let ret_ty = semantic_return_ty(self.db, semantic);
         let ret_class = self.top_level_class_for_ty(ret_ty, AddressSpaceKind::Memory)?;
         let scalar = match &ret_class {
@@ -2300,13 +2300,14 @@ impl<'db> RmirLowerCtxt<'db> {
     fn lower_visible_call_args(
         &mut self,
         bb: RBlockId,
+        semantic: SemanticInstance<'db>,
         typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
         args: &[NOperand],
     ) -> (Vec<RLocalId>, Vec<RuntimeClass<'db>>) {
         let mut runtime_args = Vec::with_capacity(args.len());
         let mut runtime_classes = Vec::with_capacity(args.len());
         for (idx, arg) in args.iter().enumerate() {
-            match desired_runtime_param_plan(self.db, typed_body, idx) {
+            match desired_runtime_param_plan(self.db, semantic, typed_body, idx) {
                 crate::runtime::RuntimeParamPlan::Erased => {}
                 crate::runtime::RuntimeParamPlan::Boundary(desired) => {
                     let value = self.runtime_visible_arg_value(bb, *arg, Some(&desired));

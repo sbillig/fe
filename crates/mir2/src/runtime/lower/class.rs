@@ -931,7 +931,10 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
 
     let mut idx = 0;
     while let Some(binding) = typed_body.param_binding(idx) {
-        push(binding, desired_runtime_param_plan(db, &typed_body, idx));
+        push(
+            binding,
+            desired_runtime_param_plan(db, semantic, &typed_body, idx),
+        );
         idx += 1;
     }
 
@@ -1166,6 +1169,68 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
     }
 }
 
+fn runtime_exact_class_for_ordinary_binding_in_env<'db>(
+    db: &'db dyn MirDb,
+    env: RuntimeTypeEnv<'db>,
+    binding: LocalBinding<'db>,
+    binding_ty: TyId<'db>,
+) -> Option<RuntimeClass<'db>> {
+    runtime_class_for_explicit_root_provider_param(db, env, binding, binding_ty).or_else(|| {
+        match boundary_spec_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory) {
+            Some(RuntimeBoundarySpec::Exact(class)) => Some(class),
+            Some(RuntimeBoundarySpec::BorrowLike { .. }) | None => None,
+        }
+    })
+}
+
+fn runtime_exact_class_for_visible_binding_in_env<'db>(
+    db: &'db dyn MirDb,
+    semantic: SemanticInstance<'db>,
+    env: RuntimeTypeEnv<'db>,
+    binding: LocalBinding<'db>,
+    binding_ty: TyId<'db>,
+) -> Option<RuntimeClass<'db>> {
+    match semantic_binding_lowering(db, semantic, binding) {
+        hir::analysis::semantic::SemanticBindingLowering::Erased => None,
+        hir::analysis::semantic::SemanticBindingLowering::DirectValue {
+            provenance: ValueProvenance::RootProvider(provider),
+        } => runtime_class_for_direct_value_provider_in_env(db, env, &provider),
+        hir::analysis::semantic::SemanticBindingLowering::DirectValue { .. } => {
+            runtime_exact_class_for_ordinary_binding_in_env(db, env, binding, binding_ty).or_else(
+                || top_level_class_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory),
+            )
+        }
+        hir::analysis::semantic::SemanticBindingLowering::DirectCarrier {
+            provider: Some(provider),
+            ..
+        } => runtime_class_for_provider_binding(db, &provider, env.scope, env.assumptions),
+        hir::analysis::semantic::SemanticBindingLowering::DirectCarrier {
+            provider: None,
+            target_ty,
+        } => top_level_class_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory).or_else(
+            || {
+                Some(provider_class_for_target_in_env(
+                    db,
+                    env,
+                    Some(target_ty),
+                    AddressSpaceKind::Memory,
+                ))
+            },
+        ),
+        hir::analysis::semantic::SemanticBindingLowering::PlaceCarrier { value_ty } => Some(
+            provider_class_for_target_in_env(db, env, Some(value_ty), AddressSpaceKind::Memory),
+        ),
+        hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
+            provenance: hir::analysis::semantic::PlaceProvenance::RootProvider(provider),
+            ..
+        } => runtime_class_for_effect_binding_provider_in_env(db, env, &provider),
+        hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
+            provenance: hir::analysis::semantic::PlaceProvenance::Derived { .. },
+            ..
+        } => None,
+    }
+}
+
 pub(crate) fn runtime_effect_binding_plan_for_binding_idx<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
@@ -1202,45 +1267,7 @@ pub(crate) fn runtime_visible_binding_class<'db>(
     let typed_body = semantic.key(db).instantiate_typed_body(db);
     let env = RuntimeTypeEnv::new(Some(owner.scope()), typed_body.assumptions());
     let binding_ty = semantic_binding_ty(db, semantic, binding);
-    match semantic_binding_lowering(db, semantic, binding) {
-        hir::analysis::semantic::SemanticBindingLowering::Erased => None,
-        hir::analysis::semantic::SemanticBindingLowering::DirectValue {
-            provenance: ValueProvenance::RootProvider(provider),
-        } => runtime_class_for_direct_value_provider_in_env(db, env, &provider),
-        hir::analysis::semantic::SemanticBindingLowering::DirectValue { .. } => {
-            runtime_class_for_explicit_root_provider_param(db, env, binding, binding_ty).or_else(
-                || top_level_class_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory),
-            )
-        }
-        hir::analysis::semantic::SemanticBindingLowering::DirectCarrier {
-            provider: Some(provider),
-            ..
-        } => runtime_class_for_provider_binding(db, &provider, env.scope, env.assumptions),
-        hir::analysis::semantic::SemanticBindingLowering::DirectCarrier {
-            provider: None,
-            target_ty,
-        } => top_level_class_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory).or_else(
-            || {
-                Some(provider_class_for_target_in_env(
-                    db,
-                    env,
-                    Some(target_ty),
-                    AddressSpaceKind::Memory,
-                ))
-            },
-        ),
-        hir::analysis::semantic::SemanticBindingLowering::PlaceCarrier { value_ty } => Some(
-            provider_class_for_target_in_env(db, env, Some(value_ty), AddressSpaceKind::Memory),
-        ),
-        hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
-            provenance: hir::analysis::semantic::PlaceProvenance::RootProvider(provider),
-            ..
-        } => runtime_class_for_effect_binding_provider_in_env(db, env, &provider),
-        hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
-            provenance: hir::analysis::semantic::PlaceProvenance::Derived { .. },
-            ..
-        } => None,
-    }
+    runtime_exact_class_for_visible_binding_in_env(db, semantic, env, binding, binding_ty)
 }
 
 pub(crate) fn owner_effect_binding_boundary<'db>(
@@ -1327,6 +1354,9 @@ fn runtime_class_for_explicit_root_provider_param<'db>(
         )
     };
     let binding_ty = canonical(binding_ty);
+    let binding_ty = binding_ty
+        .as_capability(db)
+        .map_or(binding_ty, |(_, inner)| canonical(inner));
     registered_root_providers(db, EffectParamSite::Func(func))
         .into_iter()
         .find(|provider| canonical(provider.provider_ty) == binding_ty)
@@ -1436,7 +1466,7 @@ pub(crate) fn expr_direct_class<'db>(
             );
             let mut param_classes = Vec::new();
             for (idx, arg) in args.iter().enumerate() {
-                match desired_runtime_param_plan(db, &typed_body, idx) {
+                match desired_runtime_param_plan(db, semantic, &typed_body, idx) {
                     RuntimeParamPlan::Erased => {}
                     RuntimeParamPlan::Boundary(desired) => {
                         let actual = runtime_visible_value_class(
@@ -1777,6 +1807,7 @@ pub(crate) fn materialized_value_class<'db>(
 
 pub(crate) fn desired_runtime_param_plan<'db>(
     db: &'db dyn MirDb,
+    semantic: SemanticInstance<'db>,
     typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
     idx: usize,
 ) -> RuntimeParamPlan<'db> {
@@ -1786,6 +1817,7 @@ pub(crate) fn desired_runtime_param_plan<'db>(
     let binding_ty = typed_body.binding_ty(db, binding);
     let scope = typed_body.body().map(|body| body.scope());
     let assumptions = typed_body.assumptions();
+    let env = RuntimeTypeEnv::new(scope, assumptions);
     let repr_ty = runtime_repr_ty_in_context(db, binding_ty, scope, assumptions);
     if runtime_abstract_param_ty(db, binding_ty, scope, assumptions)
         || matches!(
@@ -1795,13 +1827,20 @@ pub(crate) fn desired_runtime_param_plan<'db>(
     {
         return RuntimeParamPlan::PassActual;
     }
-    let Some(boundary) = boundary_spec_for_ty_in_context(
-        db,
-        binding_ty,
-        AddressSpaceKind::Memory,
-        scope,
-        assumptions,
-    ) else {
+    if let Some(class) =
+        runtime_exact_class_for_visible_binding_in_env(db, semantic, env, binding, binding_ty)
+        && (!matches!(class, RuntimeClass::AggregateValue { .. })
+            || !aggregate_transport_depends_on_runtime_source(db, binding_ty, scope, assumptions))
+    {
+        return RuntimeParamPlan::Boundary(runtime_param_boundary(
+            db,
+            typed_body,
+            binding,
+            RuntimeBoundarySpec::Exact(class),
+        ));
+    }
+    let Some(boundary) = boundary_spec_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory)
+    else {
         return RuntimeParamPlan::Erased;
     };
     if matches!(
@@ -3338,7 +3377,9 @@ mod tests {
     use common::InputDb;
     use driver::DriverDataBase;
     use hir::{
-        analysis::semantic::{get_or_build_semantic_instance, root_semantic_instance_key},
+        analysis::semantic::{
+            SemanticInstance, get_or_build_semantic_instance, root_semantic_instance_key,
+        },
         analysis::ty::ty_check::BodyOwner,
     };
     use url::Url;
@@ -3351,7 +3392,16 @@ mod tests {
         top_mod: hir::hir_def::TopLevelMod<'db>,
         name: &str,
     ) -> RuntimeSignature<'db> {
-        let func = top_mod
+        runtime_instance_for_semantic(db, semantic_instance_for_named_func(db, top_mod, name))
+            .signature(db)
+    }
+
+    fn func_by_name<'db>(
+        db: &'db DriverDataBase,
+        top_mod: hir::hir_def::TopLevelMod<'db>,
+        name: &str,
+    ) -> hir::core::hir_def::item::Func<'db> {
+        top_mod
             .all_funcs(db)
             .iter()
             .copied()
@@ -3360,11 +3410,19 @@ mod tests {
                     .to_opt()
                     .is_some_and(|func_name| func_name.data(db) == name)
             })
-            .unwrap_or_else(|| panic!("missing function `{name}`"));
+            .unwrap_or_else(|| panic!("missing function `{name}`"))
+    }
+
+    fn semantic_instance_for_named_func<'db>(
+        db: &'db DriverDataBase,
+        top_mod: hir::hir_def::TopLevelMod<'db>,
+        name: &str,
+    ) -> SemanticInstance<'db> {
+        let func = func_by_name(db, top_mod, name);
         let key = root_semantic_instance_key(db, BodyOwner::Func(func)).unwrap_or_else(|err| {
             panic!("failed to build root semantic key for `{name}`: {err:?}")
         });
-        runtime_instance_for_semantic(db, get_or_build_semantic_instance(db, key)).signature(db)
+        get_or_build_semantic_instance(db, key)
     }
 
     #[test]
@@ -3451,6 +3509,79 @@ mod tests {
         assert!(
             !matches!(signature.ret, Some(RuntimeClass::AggregateValue { .. })),
             "transport-shaped returns must not be normalized to by-value aggregate contracts:\n{signature:#?}"
+        );
+    }
+
+    #[test]
+    fn specialized_grant_callee_keeps_self_runtime_visible() {
+        let mut db = DriverDataBase::default();
+        let file_url =
+            Url::parse("file:///specialized_grant_callee_keeps_self_runtime_visible.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(include_str!("../../../../codegen/tests/fixtures/erc20.fe").to_string()),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let contract = top_mod
+            .all_contracts(&db)
+            .first()
+            .copied()
+            .expect("erc20 fixture should define a contract");
+        let init_key = root_semantic_instance_key(&db, BodyOwner::ContractInit { contract })
+            .unwrap_or_else(|err| panic!("failed to build root init semantic key: {err:?}"));
+        let init =
+            runtime_instance_for_semantic(&db, get_or_build_semantic_instance(&db, init_key));
+        let grant = init
+            .calls(&db)
+            .iter()
+            .find_map(|call| {
+                let semantic = call.callee.key(&db).semantic(&db)?;
+                match semantic.key(&db).owner(&db) {
+                    BodyOwner::Func(func)
+                        if func
+                            .name(&db)
+                            .to_opt()
+                            .is_some_and(|name| name.data(&db) == "grant") =>
+                    {
+                        Some((semantic, call.callee))
+                    }
+                    _ => None,
+                }
+            })
+            .expect("init should call grant");
+        let (semantic, callee) = grant;
+        let typed_body = semantic.key(&db).instantiate_typed_body(&db);
+        let self_binding = typed_body
+            .param_binding(0)
+            .expect("grant typed body should keep self as the first param binding");
+        let self_lowering = semantic_binding_lowering(&db, semantic, self_binding);
+        let plans = runtime_visible_binding_plans(&db, semantic);
+        let signature = callee.signature(&db);
+
+        assert_eq!(
+            plans.len(),
+            3,
+            "specialized grant callee should keep self + 2 explicit args runtime-visible:\nself_lowering={self_lowering:#?}\nplans={plans:#?}\nsignature={signature:#?}"
+        );
+        assert!(
+            matches!(
+                plans[0].plan,
+                RuntimeParamPlan::Boundary(RuntimeBoundarySpec::Exact(RuntimeClass::Ref {
+                    kind: RefKind::Provider { .. },
+                    ..
+                }))
+            ),
+            "specialized grant receiver should remain a visible provider transport:\nself_lowering={self_lowering:#?}\nplans={plans:#?}\nsignature={signature:#?}"
+        );
+        assert_eq!(
+            signature.params.len(),
+            3,
+            "specialized grant runtime signature should keep self + 2 explicit args:\nself_lowering={self_lowering:#?}\nplans={plans:#?}\nsignature={signature:#?}"
         );
     }
 }
