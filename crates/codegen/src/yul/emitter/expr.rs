@@ -1,4 +1,5 @@
 use hir::hir_def::expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp};
+use mir2::RuntimeClass;
 
 use crate::yul::{
     doc::YulDoc,
@@ -199,9 +200,10 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 })
             }
             YExpr::MaterializePlaceToObject { place, layout } => {
-                let (mut setup, addr, _) = self.address_of_place(place)?;
+                let (mut setup, addr, space) = self.address_of_place(place)?;
                 let temp = self.state.alloc_temp();
                 let ptr_class = YulValueClass::MemoryPtr { layout: *layout };
+                let src_class = self.materialized_place_source_class(place, space, *layout)?;
                 setup.extend(self.alloc_memory_slot(&temp, &ptr_class)?);
                 setup.extend(self.copy_into_addr(
                     ptr_class.clone(),
@@ -210,7 +212,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                     RenderedValue {
                         setup: Vec::new(),
                         value: addr,
-                        class: place.result_class.clone(),
+                        class: src_class,
                     },
                 )?);
                 Ok(RenderedValue {
@@ -383,6 +385,34 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 })
             }
         }
+    }
+
+    fn materialized_place_source_class(
+        &self,
+        place: &YulPlace<'db>,
+        space: YulAddressSpace,
+        layout: mir2::LayoutId<'db>,
+    ) -> Result<YulValueClass<'db>, YulError> {
+        let RuntimeClass::AggregateValue {
+            layout: source_layout,
+        } = place.runtime_result_class
+        else {
+            return Err(YulError::InvalidYulPackage(
+                "materialize-place-to-object source is not aggregate-backed".to_string(),
+            ));
+        };
+        if source_layout != layout {
+            return Err(YulError::InvalidYulPackage(format!(
+                "materialize-place-to-object source layout `{source_layout:?}` does not match destination `{layout:?}`"
+            )));
+        }
+        Ok(match space {
+            YulAddressSpace::Memory => YulValueClass::MemoryPtr { layout },
+            YulAddressSpace::Storage => YulValueClass::StoragePtr { layout },
+            YulAddressSpace::Transient => YulValueClass::TransientPtr { layout },
+            YulAddressSpace::Calldata => YulValueClass::CalldataPtr { layout },
+            YulAddressSpace::Code => YulValueClass::CodePtr { layout },
+        })
     }
 
     fn render_builtin_expr(
