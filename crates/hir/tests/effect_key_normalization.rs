@@ -4940,6 +4940,70 @@ fn root_effect_bindings_specialize_rawmem_to_evm() {
 }
 
 #[test]
+fn root_trait_effect_bindings_specialize_call_to_concrete_evm() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("address_call_method.fe"),
+        include_str!("../../fe/tests/fixtures/fe_test/address_call_method.fe"),
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let entry = find_func(&db, top_mod, "test_address_call_method");
+    let root = get_or_build_semantic_instance(
+        &db,
+        root_semantic_instance_key(&db, BodyOwner::Func(entry))
+            .expect("root semantic instance should exist"),
+    );
+    let address_call = root
+        .callees(&db)
+        .iter()
+        .map(|callee| get_or_build_semantic_instance(&db, callee.key))
+        .find(|callee| {
+            matches!(
+                callee.key(&db).owner(&db),
+                BodyOwner::Func(func)
+                    if func
+                        .name(&db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(&db) == "call")
+                        && func.containing_trait(&db).is_none()
+            )
+        })
+        .expect("expected specialized Address::call callee");
+    let env = instantiated_effect_env(&db, address_call).expect("call effect env should exist");
+    let call_provider_idx = env
+        .requirements(&db)
+        .iter()
+        .find(|requirement| requirement.binding_name.data(&db) == "call")
+        .and_then(|requirement| {
+            env.resolutions(&db)
+                .iter()
+                .find(|resolution| resolution.requirement_idx == requirement.binding_idx)
+        })
+        .map(|resolution| resolution.provider_idx)
+        .expect("expected resolved call effect requirement");
+    let call_provider = env
+        .providers(&db)
+        .iter()
+        .find(|provider| provider.provider_idx == call_provider_idx)
+        .expect("expected specialized call provider binding");
+    assert_eq!(
+        call_provider.provider_ty.pretty_print(&db).to_string(),
+        "Evm"
+    );
+    assert_eq!(
+        call_provider
+            .semantics
+            .target_ty
+            .expect("call provider target should be specialized")
+            .pretty_print(&db)
+            .to_string(),
+        "Evm"
+    );
+}
+
+#[test]
 fn root_effect_handle_bindings_specialize_provider_targets_to_underlying_values() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(

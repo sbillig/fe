@@ -313,6 +313,22 @@ fn requirement_provider_target_ty<'db>(
     )
 }
 
+fn specialized_root_provider_target_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    requirement: &EffectRequirement<'db>,
+    root_provider: &ProviderBinding<'db>,
+) -> Option<crate::analysis::ty::ty_def::TyId<'db>> {
+    match requirement.key {
+        EffectRequirementKey::Trait(_) => Some(root_provider.provider_ty),
+        EffectRequirementKey::Type(_) | EffectRequirementKey::Other => {
+            requirement_provider_target_ty(db, scope, assumptions, requirement)
+                .or(root_provider.semantics.target_ty)
+        }
+    }
+}
+
 pub fn root_semantic_instance_key<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
@@ -874,9 +890,13 @@ fn root_owner_effect_providers<'db>(
                     )
                 })?
                 .clone();
-            let target_ty =
-                requirement_provider_target_ty(db, func.scope(), assumptions, &requirement)
-                    .or(root_provider.semantics.target_ty);
+            let target_ty = specialized_root_provider_target_ty(
+                db,
+                func.scope(),
+                assumptions,
+                &requirement,
+                &root_provider,
+            );
             let provider = ProviderBinding {
                 provider_idx: slot.provider_idx,
                 provider_ty: root_provider.provider_ty,
