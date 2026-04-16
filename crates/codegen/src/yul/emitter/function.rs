@@ -185,14 +185,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         class: &YulValueClass<'db>,
     ) -> Result<Vec<YulDoc>, YulError> {
         let bytes = self.class_size_bytes(class)?;
-        Ok(vec![
-            YulDoc::line(format!("let {root_name} := mload(0x40)")),
-            YulDoc::block(
-                format!("if iszero({root_name}) "),
-                vec![YulDoc::line(format!("{root_name} := 0x80"))],
-            ),
-            YulDoc::line(format!("mstore(0x40, add({root_name}, {bytes}))")),
-        ])
+        Ok(self.alloc_memory_name(root_name, &bytes.to_string()))
     }
 
     pub(super) fn alloc_memory_root_slot(
@@ -201,14 +194,23 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         class: &mir2::RuntimeClass<'db>,
     ) -> Result<Vec<YulDoc>, YulError> {
         let bytes = self.runtime_class_size_bytes(class)?;
-        Ok(vec![
-            YulDoc::line(format!("let {root_name} := mload(0x40)")),
+        Ok(self.alloc_memory_name(root_name, &bytes.to_string()))
+    }
+
+    pub(super) fn alloc_temp_memory(&mut self, size: &str) -> (Vec<YulDoc>, String) {
+        let temp = self.state.alloc_temp();
+        (self.alloc_memory_name(&temp, size), temp)
+    }
+
+    pub(super) fn alloc_memory_name(&self, name: &str, size: &str) -> Vec<YulDoc> {
+        vec![
+            YulDoc::line(format!("let {name} := mload(0x40)")),
             YulDoc::block(
-                format!("if iszero({root_name}) "),
-                vec![YulDoc::line(format!("{root_name} := 0x80"))],
+                format!("if iszero({name}) "),
+                vec![YulDoc::line(format!("{name} := 0x80"))],
             ),
-            YulDoc::line(format!("mstore(0x40, add({root_name}, {bytes}))")),
-        ])
+            YulDoc::line(format!("mstore(0x40, add({name}, {size}))")),
+        ]
     }
 
     pub(super) fn class_size_bytes(&self, class: &YulValueClass<'db>) -> Result<usize, YulError> {

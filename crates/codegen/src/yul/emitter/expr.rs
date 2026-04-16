@@ -163,13 +163,16 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 value: format!("dataoffset(\"{}\")", self.index.const_label(*region)?),
                 class: YulValueClass::CodePtr { layout: *layout },
             }),
-            YExpr::AllocObject { layout, .. } => Ok(RenderedValue {
-                setup: Vec::new(),
-                value: self.alloc_expr(
-                    self.class_size_bytes(&YulValueClass::MemoryPtr { layout: *layout })?,
-                ),
-                class: YulValueClass::MemoryPtr { layout: *layout },
-            }),
+            YExpr::AllocObject { layout, .. } => {
+                let ptr_class = YulValueClass::MemoryPtr { layout: *layout };
+                let (setup, value) =
+                    self.alloc_temp_memory(&self.class_size_bytes(&ptr_class)?.to_string());
+                Ok(RenderedValue {
+                    setup,
+                    value,
+                    class: ptr_class,
+                })
+            }
             YExpr::MaterializeToObject { src, layout } => {
                 let src = self.local_value(*src)?;
                 if matches!(src.class, YulValueClass::MemoryPtr { .. }) {
@@ -499,11 +502,14 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 "datasize(\"{}\")",
                 self.index.code_region_label(*region)?
             )),
-            YBuiltin::Malloc { size } => RenderedValue {
-                setup: Vec::new(),
-                value: self.alloc_expr_dynamic(&self.scalar_word_expr(*size)?),
-                class: expected.cloned().unwrap_or_else(|| self.word_u256_class()),
-            },
+            YBuiltin::Malloc { size } => {
+                let (setup, value) = self.alloc_temp_memory(&self.scalar_word_expr(*size)?);
+                RenderedValue {
+                    setup,
+                    value,
+                    class: expected.cloned().unwrap_or_else(|| self.word_u256_class()),
+                }
+            }
             YBuiltin::Call {
                 gas,
                 addr,
@@ -746,11 +752,10 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
             YulAddressSpace::Transient => format!("tload({addr})"),
             YulAddressSpace::Calldata => format!("calldataload({addr})"),
             YulAddressSpace::Code => {
-                return Ok(vec![
-                    YulDoc::line(format!("let {dst} := {}", self.alloc_expr(32))),
-                    YulDoc::line(format!("datacopy({dst}, {addr}, 32)")),
-                    YulDoc::line(format!("{dst} := mload({dst})")),
-                ]);
+                let mut docs = self.alloc_memory_name(dst, "32");
+                docs.push(YulDoc::line(format!("datacopy({dst}, {addr}, 32)")));
+                docs.push(YulDoc::line(format!("{dst} := mload({dst})")));
+                return Ok(docs);
             }
         };
         Ok(vec![YulDoc::line(format!(
@@ -771,11 +776,10 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
             YulAddressSpace::Transient => format!("tload({addr})"),
             YulAddressSpace::Calldata => format!("calldataload({addr})"),
             YulAddressSpace::Code => {
-                return Ok(vec![
-                    YulDoc::line(format!("let {dst} := {}", self.alloc_expr(32))),
-                    YulDoc::line(format!("datacopy({dst}, {addr}, 32)")),
-                    YulDoc::line(format!("{dst} := mload({dst})")),
-                ]);
+                let mut docs = self.alloc_memory_name(dst, "32");
+                docs.push(YulDoc::line(format!("datacopy({dst}, {addr}, 32)")));
+                docs.push(YulDoc::line(format!("{dst} := mload({dst})")));
+                return Ok(docs);
             }
         };
         Ok(vec![YulDoc::line(format!("let {dst} := {value}"))])
@@ -1416,14 +1420,6 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
             },
             mir2::ConstScalar::Address { bits, .. } => mir2::ScalarRepr::Address { bits: *bits },
         }
-    }
-
-    pub(super) fn alloc_expr(&self, size: usize) -> String {
-        self.alloc_expr_dynamic(&size.to_string())
-    }
-
-    pub(super) fn alloc_expr_dynamic(&self, size: &str) -> String {
-        format!("allocate({size})")
     }
 
     fn word_u256_class(&self) -> YulValueClass<'db> {

@@ -159,3 +159,42 @@ fn runtime() uses (evm: mut Evm) {
         "generated Yul params must not reuse semantic names that can collide with function symbols:\n{yul}"
     );
 }
+
+#[test]
+fn dynamic_view_lowering_does_not_reference_missing_allocate_helper() {
+    let yul = emit_inline_yul(
+        "file:///dynamic_view_lowering_does_not_reference_missing_allocate_helper.fe",
+        r#"
+use std::abi::sol
+use std::abi::sol::decode_bytes_view_at
+use std::evm::{CallData, Evm}
+
+const SECOND_BYTES_LEN_SELECTOR: u32 = sol("secondBytesLen(bytes,bytes)")
+
+#[contract_init(ViewHarness)]
+fn init() uses (evm: mut Evm) {
+    evm.create_contract(runtime)
+}
+
+#[contract_runtime(ViewHarness)]
+fn runtime() uses (evm: mut Evm) {
+    if evm.selector() == SECOND_BYTES_LEN_SELECTOR {
+        let view = decode_bytes_view_at(CallData::with_base(4), base: 0, head_pos: 32)
+        evm.mstore(addr: 0, value: view.len())
+        evm.return_data(offset: 0, len: 32)
+    }
+
+    evm.revert(offset: 0, len: 0)
+}
+"#,
+    );
+
+    assert!(
+        !yul.contains("allocate("),
+        "dynamic view lowering should inline free-memory-pointer allocation instead of calling a missing helper:\n{yul}"
+    );
+    assert!(
+        yul.contains("mstore(0x40, add("),
+        "dynamic view lowering should still advance the free-memory pointer for temporary allocations:\n{yul}"
+    );
+}
