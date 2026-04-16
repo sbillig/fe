@@ -761,6 +761,7 @@ pub enum InitArgsPlan<'db> {
     DecodeInitTail {
         tuple_ty: TyId<'db>,
         decode_fn: RuntimeInstance<'db>,
+        projected_fields: Box<[u32]>,
     },
 }
 
@@ -770,16 +771,14 @@ pub enum RuntimeInputPlan<'db> {
     DecodeCalldataPayload {
         msg_ty: TyId<'db>,
         decode_fn: RuntimeInstance<'db>,
+        projected_fields: Box<[u32]>,
     },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum RuntimeReturnPlan<'db> {
     Unit,
-    Value {
-        ty: TyId<'db>,
-        encode_fn: RuntimeInstance<'db>,
-    },
+    Value { ty: TyId<'db> },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]

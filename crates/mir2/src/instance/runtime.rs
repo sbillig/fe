@@ -2,16 +2,12 @@ use cranelift_entity::EntityRef;
 use hir::{
     analysis::{
         semantic::{
-            GenericSubst, ImplEnv, SemConstScalar, SemConstValue, SemanticInstance,
-            SemanticInstanceKey, check_semantic_borrows, eval_const_instance,
+            GenericSubst, ImplEnv, SemanticInstance, SemanticInstanceKey, check_semantic_borrows,
             get_or_build_semantic_instance,
         },
         ty::{
-            corelib::{resolve_core_trait, resolve_lib_type_path},
-            trait_def::{
-                TraitInstId, assoc_const_body_and_impl_args_for_trait_inst,
-                resolve_trait_method_instance,
-            },
+            corelib::{resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path},
+            trait_def::{TraitInstId, resolve_trait_method_instance},
             trait_resolution::{PredicateListId, TraitSolveCx},
             ty_check::BodyOwner,
             ty_def::{InvalidCause, TyId},
@@ -22,7 +18,6 @@ use hir::{
         expr::{ArithBinOp, BinOp, CompBinOp},
     },
 };
-use num_traits::ToPrimitive;
 use salsa::Update;
 
 use crate::runtime::lower::{
@@ -311,6 +306,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         if let InitArgsPlan::DecodeInitTail {
             tuple_ty,
             decode_fn,
+            projected_fields,
         } = plan.init_args
         {
             let self_len = self.push_builtin_value(
@@ -359,11 +355,12 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 resolve_sol_decoder_new(self.db, plan.contract.scope()).expect("decoder_new");
             let decoder = self.push_call_result(decode_bb, decoder_new, vec![input]);
             if let Some(decoded) = self.push_call(decode_bb, decode_fn, vec![decoder]) {
-                call_args.extend(self.extract_tuple_fields(
+                call_args.extend(self.extract_selected_tuple_fields(
                     decode_bb,
                     decoded,
                     tuple_ty,
                     plan.contract.scope(),
+                    &projected_fields,
                 ));
             }
         }
@@ -390,7 +387,12 @@ impl<'db> SyntheticBodyBuilder<'db> {
         };
 
         let mut call_args = Vec::new();
-        if let RuntimeInputPlan::DecodeCalldataPayload { msg_ty, decode_fn } = plan.input {
+        if let RuntimeInputPlan::DecodeCalldataPayload {
+            msg_ty,
+            decode_fn,
+            projected_fields,
+        } = plan.input
+        {
             let size = self.push_builtin_value(
                 cont_bb,
                 TyId::u256(self.db),
@@ -422,11 +424,12 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 resolve_sol_decoder_new(self.db, plan.contract.scope()).expect("decoder_new");
             let decoder = self.push_call_result(cont_bb, decoder_new, vec![input]);
             if let Some(decoded) = self.push_call(cont_bb, decode_fn, vec![decoder]) {
-                call_args.extend(self.extract_tuple_fields(
+                call_args.extend(self.extract_selected_tuple_fields(
                     cont_bb,
                     decoded,
                     msg_ty,
                     plan.contract.scope(),
+                    &projected_fields,
                 ));
             }
         }
@@ -445,21 +448,16 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     len: zero,
                 };
             }
-            RuntimeReturnPlan::Value { encode_fn, .. } => {
+            RuntimeReturnPlan::Value { .. } => {
                 let ret_value = ret.expect("value-returning recv wrapper should produce a value");
                 let scope = plan.contract.scope();
-                let encoder_new = resolve_sol_encoder_new(self.db, scope).expect("encoder_new");
-                let reserve_head =
-                    resolve_sol_encoder_reserve_head(self.db, scope).expect("reserve_head");
-                let finish = resolve_sol_encoder_finish(self.db, scope).expect("finish");
-                let encoded_size =
-                    encoded_size_for_ty(self.db, scope, self.locals[ret_value.index()].semantic_ty)
-                        .expect("encoded size");
-                let encoder = self.push_call_result(cont_bb, encoder_new, Vec::new());
-                let head_size = self.push_const_u256(cont_bb, encoded_size);
-                let _ = self.push_ignored_call(cont_bb, reserve_head, vec![encoder, head_size]);
-                let _ = self.push_ignored_call(cont_bb, encode_fn, vec![ret_value, encoder]);
-                let encoded = self.push_call_result(cont_bb, finish, vec![encoder]);
+                let encode_alloc = resolve_sol_encode_single_root_alloc(
+                    self.db,
+                    scope,
+                    self.locals[ret_value.index()].semantic_ty,
+                )
+                .expect("encode_single_root_alloc");
+                let encoded = self.push_call_result(cont_bb, encode_alloc, vec![ret_value]);
                 let fields = self.extract_tuple_fields(
                     cont_bb,
                     encoded,
@@ -653,12 +651,13 @@ impl<'db> SyntheticBodyBuilder<'db> {
         RuntimeTypeEnv::new(Some(scope), PredicateListId::empty_list(self.db))
     }
 
-    fn extract_tuple_fields(
+    fn extract_selected_tuple_fields(
         &mut self,
         bb: RBlockId,
         tuple: RLocalId,
         tuple_ty: TyId<'db>,
         scope: hir::hir_def::scope_graph::ScopeId<'db>,
+        field_indices: &[u32],
     ) -> Vec<RLocalId> {
         let Some(tuple_class) = self.locals[tuple.index()].carrier.value_class().cloned() else {
             return Vec::new();
@@ -689,11 +688,15 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 panic!("tuple extraction requires aggregate carrier")
             }
         };
-        tuple_ty
-            .field_types(self.db)
-            .into_iter()
-            .enumerate()
-            .map(|(idx, field_ty)| {
+        let field_tys = tuple_ty.field_types(self.db);
+        field_indices
+            .iter()
+            .map(|field_idx| {
+                let idx = *field_idx as usize;
+                let field_ty = field_tys
+                    .get(idx)
+                    .copied()
+                    .unwrap_or_else(|| panic!("tuple field index {idx} out of bounds"));
                 let class =
                     top_level_class_for_ty_in_env(self.db, env, field_ty, AddressSpaceKind::Memory)
                         .unwrap_or(RuntimeClass::RawAddr {
@@ -722,6 +725,19 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 dst
             })
             .collect()
+    }
+
+    fn extract_tuple_fields(
+        &mut self,
+        bb: RBlockId,
+        tuple: RLocalId,
+        tuple_ty: TyId<'db>,
+        scope: hir::hir_def::scope_graph::ScopeId<'db>,
+    ) -> Vec<RLocalId> {
+        let field_indices = (0..tuple_ty.field_types(self.db).len())
+            .map(|idx| idx as u32)
+            .collect::<Vec<_>>();
+        self.extract_selected_tuple_fields(bb, tuple, tuple_ty, scope, &field_indices)
     }
 
     fn push_call(
@@ -1798,25 +1814,6 @@ impl<'db> SyntheticBodyBuilder<'db> {
         )
     }
 
-    fn push_const_u256(&mut self, bb: RBlockId, value: u64) -> RLocalId {
-        self.push_const_scalar(
-            bb,
-            ConstScalar::Int {
-                bits: 256,
-                signed: false,
-                words: if value == 0 {
-                    Vec::new()
-                } else {
-                    value
-                        .to_be_bytes()
-                        .into_iter()
-                        .skip_while(|byte| *byte == 0)
-                        .collect()
-                },
-            },
-        )
-    }
-
     fn push_const_scalar(&mut self, bb: RBlockId, value: ConstScalar) -> RLocalId {
         let dst = self.push_local(
             TyId::u256(self.db),
@@ -2059,70 +2056,25 @@ fn resolve_sol_decoder_new<'db>(
     resolve_trait_runtime_instance(db, scope, inst, "decoder_new", vec![input_ty]).ok()
 }
 
-fn resolve_sol_encoder_new<'db>(
-    db: &'db dyn MirDb,
-    scope: hir::hir_def::scope_graph::ScopeId<'db>,
-) -> Option<RuntimeInstance<'db>> {
-    let abi_ty = sol_abi_ty(db, scope)?;
-    let abi_trait = resolve_core_trait(db, scope, &["abi", "Abi"])?;
-    let inst = TraitInstId::new_simple(db, abi_trait, vec![abi_ty]);
-    resolve_trait_runtime_instance(db, scope, inst, "encoder_new", Vec::new()).ok()
-}
-
-fn resolve_sol_encoder_reserve_head<'db>(
-    db: &'db dyn MirDb,
-    scope: hir::hir_def::scope_graph::ScopeId<'db>,
-) -> Option<RuntimeInstance<'db>> {
-    let abi_ty = sol_abi_ty(db, scope)?;
-    let encoder_ty = sol_encoder_ty(db, scope)?;
-    let encoder_trait = resolve_core_trait(db, scope, &["abi", "AbiEncoder"])?;
-    let inst = TraitInstId::new_simple(db, encoder_trait, vec![encoder_ty, abi_ty]);
-    resolve_trait_runtime_instance(db, scope, inst, "reserve_head", Vec::new()).ok()
-}
-
-fn resolve_sol_encoder_finish<'db>(
-    db: &'db dyn MirDb,
-    scope: hir::hir_def::scope_graph::ScopeId<'db>,
-) -> Option<RuntimeInstance<'db>> {
-    let abi_ty = sol_abi_ty(db, scope)?;
-    let encoder_ty = sol_encoder_ty(db, scope)?;
-    let encoder_trait = resolve_core_trait(db, scope, &["abi", "AbiEncoder"])?;
-    let inst = TraitInstId::new_simple(db, encoder_trait, vec![encoder_ty, abi_ty]);
-    resolve_trait_runtime_instance(db, scope, inst, "finish", Vec::new()).ok()
-}
-
-fn encoded_size_for_ty<'db>(
+fn resolve_sol_encode_single_root_alloc<'db>(
     db: &'db dyn MirDb,
     scope: hir::hir_def::scope_graph::ScopeId<'db>,
     ty: TyId<'db>,
-) -> Option<u64> {
-    let abi_size_trait = resolve_core_trait(db, scope, &["abi", "AbiSize"])?;
+) -> Option<RuntimeInstance<'db>> {
     let assumptions = hir::analysis::ty::trait_resolution::PredicateListId::empty_list(db);
-    let inst = TraitInstId::new_simple(db, abi_size_trait, vec![ty]);
-    let (body, impl_args) = assoc_const_body_and_impl_args_for_trait_inst(
-        db,
-        TraitSolveCx::new(db, scope).with_assumptions(assumptions),
-        inst,
-        IdentId::new(db, "ENCODED_SIZE".to_string()),
-    )?;
+    let func = resolve_lib_func_path(db, scope, "core::abi::encode_single_root_alloc")?;
+    let abi_ty = sol_abi_ty(db, scope)?;
     let key = SemanticInstanceKey::new(
         db,
-        BodyOwner::AnonConstBody {
-            body,
-            expected: TyId::u256(db),
-        },
-        GenericSubst::new(db, impl_args),
+        BodyOwner::Func(func),
+        GenericSubst::new(db, vec![abi_ty, ty]),
         hir::analysis::semantic::EffectProviderSubst::empty(db),
-        ImplEnv::new(db, scope, assumptions, vec![inst]),
+        ImplEnv::new(db, scope, assumptions, vec![]),
     );
-    let value = eval_const_instance(db, get_or_build_semantic_instance(db, key)).ok()?;
-    match value.value(db) {
-        SemConstValue::Scalar {
-            value: SemConstScalar::Int { value },
-            ..
-        } => value.to_u64(),
-        _ => None,
-    }
+    Some(runtime_instance_for_semantic(
+        db,
+        get_or_build_semantic_instance(db, key),
+    ))
 }
 
 fn resolve_trait_runtime_instance<'db>(
@@ -2207,11 +2159,4 @@ fn memory_bytes_ty<'db>(
     scope: hir::hir_def::scope_graph::ScopeId<'db>,
 ) -> Option<TyId<'db>> {
     resolve_lib_type_path(db, scope, "std::evm::memory_input::MemoryBytes")
-}
-
-fn sol_encoder_ty<'db>(
-    db: &'db dyn MirDb,
-    scope: hir::hir_def::scope_graph::ScopeId<'db>,
-) -> Option<TyId<'db>> {
-    resolve_lib_type_path(db, scope, "std::abi::sol::SolEncoder")
 }
