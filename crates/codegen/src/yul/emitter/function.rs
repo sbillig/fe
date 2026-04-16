@@ -309,14 +309,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
     pub(super) fn scalar_word_expr(&self, local: YLocalId) -> Result<String, YulError> {
         let class = self.local_class(local)?;
         match &class {
-            YulValueClass::Word(_) => {
-                if let Some(name) = self.state.value_name(local) {
-                    Ok(name.to_string())
-                } else {
-                    let root = self.root_slot_name(local)?;
-                    Ok(self.render_word_slot_load(root, &class))
-                }
-            }
+            YulValueClass::Word(word) => self.render_word_local_read(local, word),
             _ => Err(YulError::InvalidYulPackage(format!(
                 "local {local:?} is not word-valued: {class:?}"
             ))),
@@ -325,17 +318,18 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
 
     pub(super) fn local_value(&self, local: YLocalId) -> Result<RenderedValue<'db>, YulError> {
         let class = self.local_class(local)?;
-        let value = if let Some(name) = self.state.value_name(local) {
-            name.to_string()
-        } else {
-            let root = self.root_slot_name(local)?;
-            match class {
-                YulValueClass::Word(_) => self.render_word_slot_load(root, &class),
-                YulValueClass::MemoryPtr { .. } => root.to_string(),
-                YulValueClass::CodePtr { .. }
-                | YulValueClass::StoragePtr { .. }
-                | YulValueClass::TransientPtr { .. }
-                | YulValueClass::CalldataPtr { .. } => root.to_string(),
+        let value = match &class {
+            YulValueClass::Word(word) => self.render_word_local_read(local, word)?,
+            YulValueClass::MemoryPtr { .. }
+            | YulValueClass::CodePtr { .. }
+            | YulValueClass::StoragePtr { .. }
+            | YulValueClass::TransientPtr { .. }
+            | YulValueClass::CalldataPtr { .. } => {
+                if let Some(name) = self.state.value_name(local) {
+                    name.to_string()
+                } else {
+                    self.root_slot_name(local)?.to_string()
+                }
             }
         };
         Ok(RenderedValue {
@@ -345,10 +339,19 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         })
     }
 
-    fn render_word_slot_load(&self, root: &str, class: &YulValueClass<'db>) -> String {
-        let YulValueClass::Word(word) = class else {
-            unreachable!("word slot load requires a word class");
-        };
+    fn render_word_local_read(
+        &self,
+        local: YLocalId,
+        word: &ScalarClass<'db>,
+    ) -> Result<String, YulError> {
+        if let Some(name) = self.state.value_name(local) {
+            Ok(self.canonicalize_scalar_expr(name.to_string(), word))
+        } else {
+            Ok(self.render_word_slot_load(self.root_slot_name(local)?, word))
+        }
+    }
+
+    fn render_word_slot_load(&self, root: &str, word: &ScalarClass<'db>) -> String {
         self.canonicalize_scalar_expr(format!("mload({root})"), word)
     }
 
