@@ -1567,6 +1567,59 @@ fn aggregate_make_class<'db>(
     })
 }
 
+fn exact_boundary_class_for_runtime_source<'db>(
+    db: &'db dyn MirDb,
+    body: &NormalizedSemanticBody<'db>,
+    local: SLocalId,
+    desired: &RuntimeClass<'db>,
+    carriers: &[RuntimeCarrier<'db>],
+) -> RuntimeClass<'db> {
+    let actual = carrier_value_class(local, carriers)
+        .or_else(|| semantic_value_class(db, body, local, carriers));
+    let owner = body.owner.key(db).owner(db);
+    let typed_body = body.owner.key(db).instantiate_typed_body(db);
+    let scope = Some(owner.scope());
+    let assumptions = typed_body.assumptions();
+    let specialized = body
+        .locals
+        .get(local.index())
+        .filter(|local| {
+            boundary_source_uses_transport_sensitive_aggregate(db, local.ty, scope, assumptions)
+        })
+        .and_then(|_| actual_aggregate_class_for_semantic_source(db, body, local, carriers))
+        .map_or_else(
+            || desired.clone(),
+            |actual_aggregate| match desired {
+                RuntimeClass::AggregateValue { .. } => actual_aggregate,
+                RuntimeClass::Ref {
+                    pointee,
+                    kind,
+                    view,
+                } if pointee.aggregate_layout().is_some() => RuntimeClass::Ref {
+                    pointee: Box::new(actual_aggregate),
+                    kind: kind.clone(),
+                    view: view.clone(),
+                },
+                RuntimeClass::RawAddr {
+                    space,
+                    target: Some(..),
+                } => RuntimeClass::RawAddr {
+                    space: *space,
+                    target: actual_aggregate.aggregate_layout(),
+                },
+                RuntimeClass::Scalar(_)
+                | RuntimeClass::Ref { .. }
+                | RuntimeClass::RawAddr { target: None, .. } => desired.clone(),
+            },
+        );
+    if let Some(actual) = actual
+        && preserve_provider_space(&actual, &specialized) == actual
+    {
+        return actual;
+    }
+    specialized
+}
+
 fn runtime_visible_value_class<'db>(
     db: &'db dyn MirDb,
     body: &NormalizedSemanticBody<'db>,
@@ -1590,11 +1643,23 @@ fn runtime_visible_value_class<'db>(
                 assumptions,
             ) =>
         {
-            actual_aggregate_class_for_semantic_source(db, body, local, carriers)
+            actual_aggregate_class_for_semantic_source(db, body, local, carriers).or_else(|| {
+                desired.as_ref().and_then(|boundary| match boundary {
+                    RuntimeBoundarySpec::Exact(class) => Some(class.clone()),
+                    RuntimeBoundarySpec::BorrowLike { .. } => None,
+                })
+            })
         }
-        Some(RuntimeBoundarySpec::Exact(
-            RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. },
-        )) => carrier_value_class(local, carriers),
+        Some(boundary @ RuntimeBoundarySpec::Exact(target))
+            if matches!(
+                target,
+                RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. }
+            ) =>
+        {
+            carrier_value_class(local, carriers)
+                .filter(|class| runtime_class_satisfies_boundary(class, boundary))
+                .or_else(|| Some(target.clone()))
+        }
         Some(RuntimeBoundarySpec::BorrowLike { .. }) => {
             borrow_like_runtime_visible_arg_class(db, body, local, &desired?, carriers)
         }
@@ -1629,26 +1694,10 @@ pub(crate) fn specialize_boundary_for_runtime_source<'db>(
     boundary: &RuntimeBoundarySpec<'db>,
     carriers: &[RuntimeCarrier<'db>],
 ) -> RuntimeBoundarySpec<'db> {
-    let actual = || {
-        carrier_value_class(local, carriers)
-            .or_else(|| semantic_value_class(db, body, local, carriers))
-    };
     match boundary {
-        RuntimeBoundarySpec::Exact(desired) => {
-            if let Some(actual) = actual() {
-                let preserved = preserve_provider_space(&actual, desired);
-                if preserved == actual {
-                    return RuntimeBoundarySpec::Exact(preserved);
-                }
-                if matches!(desired, RuntimeClass::AggregateValue { .. })
-                    && let Some(actual) =
-                        actual_aggregate_class_for_semantic_source(db, body, local, carriers)
-                {
-                    return RuntimeBoundarySpec::Exact(actual);
-                }
-            }
-            boundary.clone()
-        }
+        RuntimeBoundarySpec::Exact(desired) => RuntimeBoundarySpec::Exact(
+            exact_boundary_class_for_runtime_source(db, body, local, desired, carriers),
+        ),
         RuntimeBoundarySpec::BorrowLike {
             pointee: RuntimeClass::AggregateValue { .. },
             access,
