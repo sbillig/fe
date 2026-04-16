@@ -636,13 +636,14 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
     ) -> Result<(Vec<YulDoc>, String, YulAddressSpace), YulError> {
         let (setup, mut addr, space, mut layout) = match &place.root {
             YulPlaceRoot::Slot(local) => {
+                let setup = self.ensure_root_slot(*local)?;
                 let root = self.root_slot_name(*local)?.to_string();
                 let class = match &self.local(*local)?.root {
                     crate::yul::legalize::YulLocalRoot::MemorySlot { class } => class,
                     _ => unreachable!(),
                 };
                 (
-                    Vec::new(),
+                    setup,
                     root,
                     YulAddressSpace::Memory,
                     match class {
