@@ -28,6 +28,7 @@ use crate::{
                 BodyOwner, EffectProviderProvenance, EffectProviderSpecialization, LocalBinding,
                 SemanticExprLowering, TypedBody,
             },
+            ty_def::TyId,
         },
     },
     hir_def::FuncParamMode,
@@ -879,7 +880,7 @@ fn root_owner_effect_providers<'db>(
         .into_iter()
         .filter_map(|requirement| {
             let slot = provider_slots.get(&requirement.binding_idx)?;
-            let root_provider = root_provider
+            let (provider_ty, source, target_ty) = if let Some(root_provider) = root_provider
                 .filter(|provider| {
                     root_provider_satisfies_effect_requirement(
                         db,
@@ -888,25 +889,38 @@ fn root_owner_effect_providers<'db>(
                         provider,
                         &requirement,
                     )
-                })?
-                .clone();
-            let target_ty = specialized_root_provider_target_ty(
-                db,
-                func.scope(),
-                assumptions,
-                &requirement,
-                &root_provider,
-            );
+                }) {
+                (
+                    root_provider.provider_ty,
+                    root_provider.source.clone(),
+                    specialized_root_provider_target_ty(
+                        db,
+                        func.scope(),
+                        assumptions,
+                        &requirement,
+                        root_provider,
+                    ),
+                )
+            } else {
+                let target_ty =
+                    requirement_provider_target_ty(db, func.scope(), assumptions, &requirement)?;
+                let provider_ty = if requirement.is_mut {
+                    TyId::borrow_mut_of(db, target_ty)
+                } else {
+                    TyId::borrow_ref_of(db, target_ty)
+                };
+                (provider_ty, slot.source.clone(), Some(target_ty))
+            };
             let provider = ProviderBinding {
                 provider_idx: slot.provider_idx,
-                provider_ty: root_provider.provider_ty,
+                provider_ty,
                 is_mut: slot.is_mut,
-                source: root_provider.source.clone(),
+                source,
                 semantics: provider_semantics_for_specialized_call(
                     db,
                     func.scope(),
                     assumptions,
-                    root_provider.provider_ty,
+                    provider_ty,
                     target_ty,
                     Some(ProviderAddressSpace::Memory),
                     ProviderTransport::ByValue,

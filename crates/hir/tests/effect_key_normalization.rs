@@ -5004,6 +5004,54 @@ fn root_trait_effect_bindings_specialize_call_to_concrete_evm() {
 }
 
 #[test]
+fn root_test_functions_specialize_plain_effect_params_to_memory_capabilities() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("effect_params.fe"),
+        include_str!("../../fe/tests/fixtures/fe_test/effect_params.fe"),
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let func = find_func(&db, top_mod, "test_non_evm_effect_param");
+    let root = get_or_build_semantic_instance(
+        &db,
+        root_semantic_instance_key(&db, BodyOwner::Func(func))
+            .expect("root semantic instance should exist"),
+    );
+    let env = instantiated_effect_env(&db, root).expect("root effect env should exist");
+    let value_provider_idx = env
+        .requirements(&db)
+        .iter()
+        .find(|requirement| requirement.binding_name.data(&db) == "value")
+        .and_then(|requirement| {
+            env.resolutions(&db)
+                .iter()
+                .find(|resolution| resolution.requirement_idx == requirement.binding_idx)
+        })
+        .map(|resolution| resolution.provider_idx)
+        .expect("expected resolved value effect requirement");
+    let value_provider = env
+        .providers(&db)
+        .iter()
+        .find(|provider| provider.provider_idx == value_provider_idx)
+        .expect("expected specialized value provider binding");
+    assert_eq!(
+        value_provider.provider_ty.pretty_print(&db).to_string(),
+        "mut u256"
+    );
+    assert_eq!(
+        value_provider
+            .semantics
+            .target_ty
+            .expect("plain effect param provider target should be specialized")
+            .pretty_print(&db)
+            .to_string(),
+        "u256"
+    );
+}
+
+#[test]
 fn root_effect_handle_bindings_specialize_provider_targets_to_underlying_values() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
