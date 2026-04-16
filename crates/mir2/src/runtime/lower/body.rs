@@ -1,8 +1,9 @@
 use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
-        FieldIndex, SBlockId, SConst, SLocalId, SemConstId, SemConstValue, SemanticCalleeRef,
-        SemanticCodeRegionRef, SemanticInstance, SemanticInstanceKey, VariantIndex,
+        FieldIndex, SBlockId, SConst, SLocalId, SemConstId, SemConstScalar, SemConstValue,
+        SemanticCalleeRef, SemanticCodeRegionRef, SemanticInstance, SemanticInstanceKey,
+        VariantIndex,
         borrowck::{
             NBorrowRoot, NEffectArg, NEffectArgValue, NExpr, NLocalInterface, NLocalOrigin,
             NOperand, NSPlace, NSPlaceRoot, NSStmt, NSStmtKind, NSTerminator, NSTerminatorKind,
@@ -729,6 +730,9 @@ impl<'db> RmirLowerCtxt<'db> {
         ) {
             return self.lower_sem_const_as_const_handle(bb, value, ty);
         }
+        if let Some(value) = self.try_lower_dyn_string_literal(bb, ty, value) {
+            return value;
+        }
         if let Some(scalar) = const_scalar_from_value(self.db, self.env, value) {
             return self.lower_sem_const_scalar(bb, ty, scalar);
         }
@@ -787,6 +791,9 @@ impl<'db> RmirLowerCtxt<'db> {
     ) -> RLocalId {
         let value = self.reify_runtime_const(expected_ty, value);
         let ty = expected_ty;
+        if let Some(value) = self.try_lower_dyn_string_literal(bb, ty, value) {
+            return value;
+        }
         if let Some(scalar) = const_scalar_from_value(self.db, self.env, value) {
             return self.lower_sem_const_scalar(bb, ty, scalar);
         }
@@ -816,6 +823,123 @@ impl<'db> RmirLowerCtxt<'db> {
                 panic!("semantic const should lower as a natural runtime value: {value:?}")
             }
         }
+    }
+
+    fn try_lower_dyn_string_literal(
+        &mut self,
+        bb: RBlockId,
+        ty: TyId<'db>,
+        value: SemConstId<'db>,
+    ) -> Option<RLocalId> {
+        let SemConstValue::Scalar {
+            value: SemConstScalar::Bytes(bytes),
+            ..
+        } = value.value(self.db)
+        else {
+            return None;
+        };
+        ty.is_core_dyn_string(self.db)
+            .then(|| self.lower_dyn_string_literal(bb, ty, &bytes))
+    }
+
+    fn lower_dyn_string_literal(&mut self, bb: RBlockId, ty: TyId<'db>, bytes: &[u8]) -> RLocalId {
+        let len = self.alloc_u256_const(bb, bytes.len());
+        let payload_size = 32 + bytes.len().next_multiple_of(32);
+        let size = self.alloc_u256_const(bb, payload_size);
+        let ptr = self.alloc_runtime_temp(
+            TyId::u256(self.db),
+            RuntimeCarrier::Value(RuntimeClass::Scalar(word_scalar_class())),
+        );
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: ptr,
+                expr: RExpr::Builtin(crate::runtime::RuntimeBuiltin::Malloc { size }),
+            },
+        );
+        self.push_ignored_builtin(
+            bb,
+            crate::runtime::RuntimeBuiltin::Mstore {
+                addr: ptr,
+                value: len,
+            },
+        );
+        for (idx, chunk) in bytes.chunks(32).enumerate() {
+            let addr = self.alloc_runtime_temp(
+                TyId::u256(self.db),
+                RuntimeCarrier::Value(RuntimeClass::Scalar(word_scalar_class())),
+            );
+            let offset = self.alloc_u256_const(bb, 32 * (idx + 1));
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst: addr,
+                    expr: RExpr::Binary {
+                        op: BinOp::Arith(ArithBinOp::Add),
+                        lhs: ptr,
+                        rhs: offset,
+                    },
+                },
+            );
+            let word = self.alloc_runtime_temp(
+                TyId::u256(self.db),
+                RuntimeCarrier::Value(RuntimeClass::Scalar(word_scalar_class())),
+            );
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst: word,
+                    expr: RExpr::ConstScalar(ConstScalar::Int {
+                        bits: 256,
+                        signed: false,
+                        words: padded_word_bytes(chunk),
+                    }),
+                },
+            );
+            self.push_ignored_builtin(
+                bb,
+                crate::runtime::RuntimeBuiltin::Mstore { addr, value: word },
+            );
+        }
+
+        let layout = self.layout_for_ty(ty);
+        let dst = self.alloc_runtime_temp(
+            ty,
+            RuntimeCarrier::Value(RuntimeClass::AggregateValue { layout }),
+        );
+        let ctor_elems = aggregate_ctor_elems_for_layout(self.db, layout, 3);
+        self.lower_aggregate_values(bb, dst, ty, layout, &ctor_elems, &[ptr, len, size]);
+        dst
+    }
+
+    fn alloc_u256_const(&mut self, bb: RBlockId, value: usize) -> RLocalId {
+        let local = self.alloc_runtime_temp(
+            TyId::u256(self.db),
+            RuntimeCarrier::Value(RuntimeClass::Scalar(word_scalar_class())),
+        );
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: local,
+                expr: RExpr::ConstScalar(ConstScalar::Int {
+                    bits: 256,
+                    signed: false,
+                    words: usize_word_bytes(value),
+                }),
+            },
+        );
+        local
+    }
+
+    fn push_ignored_builtin(&mut self, bb: RBlockId, builtin: crate::runtime::RuntimeBuiltin<'db>) {
+        let sink = self.alloc_runtime_temp(TyId::unit(self.db), RuntimeCarrier::Erased);
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: sink,
+                expr: RExpr::Builtin(builtin),
+            },
+        );
     }
 
     fn lower_sem_const_as_const_handle(
@@ -4776,6 +4900,24 @@ fn word_scalar_class<'db>() -> ScalarClass<'db> {
         },
         role: ScalarRole::Plain,
     }
+}
+
+fn padded_word_bytes(bytes: &[u8]) -> Vec<u8> {
+    let mut word = [0; 32];
+    word[..bytes.len()].copy_from_slice(bytes);
+    trim_leading_zero_bytes(&word)
+}
+
+fn usize_word_bytes(value: usize) -> Vec<u8> {
+    trim_leading_zero_bytes(&value.to_be_bytes())
+}
+
+fn trim_leading_zero_bytes(bytes: &[u8]) -> Vec<u8> {
+    bytes
+        .iter()
+        .copied()
+        .skip_while(|byte| *byte == 0)
+        .collect()
 }
 
 fn intrinsic_numeric_name_parts(name: &str) -> Option<(&str, &str)> {

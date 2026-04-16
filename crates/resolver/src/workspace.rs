@@ -237,11 +237,15 @@ pub fn discover_context(
                 }
                 return Ok(discovery);
             }
-            Some(DiscoveredConfig::Ingot) | Some(DiscoveredConfig::Invalid) => {
-                if first_ingot_root.is_none() {
+            Some(config) => match config {
+                DiscoveredConfig::Workspace(_) => unreachable!(),
+                DiscoveredConfig::Ingot | DiscoveredConfig::Invalid
+                    if first_ingot_root.is_none() =>
+                {
                     first_ingot_root = Some(dir_url);
                 }
-            }
+                DiscoveredConfig::Ingot | DiscoveredConfig::Invalid => {}
+            },
             None => {}
         }
 

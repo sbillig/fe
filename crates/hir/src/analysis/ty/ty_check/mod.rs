@@ -1810,28 +1810,15 @@ impl<'db> TyChecker<'db> {
         &mut self,
         string_id: StringId<'db>,
         expected: TyId<'db>,
-        primary: DynLazySpan<'db>,
     ) -> TyId<'db> {
         if self.string_literal_should_use_byte_array(expected) {
             return self.string_literal_byte_array_ty(string_id.len_bytes(self.db));
         }
-
-        let len_bytes = string_id.len_bytes(self.db);
-        if len_bytes > MAX_INLINE_STRING_BYTES {
-            self.push_diag(BodyDiag::StringLiteralTooLarge {
-                primary,
-                max: MAX_INLINE_STRING_BYTES,
-                given: len_bytes,
-            });
-            return TyId::invalid(
-                self.db,
-                InvalidCause::StringTooLarge {
-                    max: MAX_INLINE_STRING_BYTES,
-                    given: len_bytes,
-                },
-            );
+        if expected.is_core_dyn_string(self.db) {
+            return expected;
         }
 
+        let len_bytes = string_id.len_bytes(self.db);
         self.table.new_var(
             TyVarSort::String {
                 min_len: len_bytes,

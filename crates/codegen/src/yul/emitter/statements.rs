@@ -29,10 +29,15 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                     .collect::<Vec<_>>()
                     .join(", ");
                 let callee_plan = self.index.function(*callee)?;
-                docs.push(YulDoc::line(format!(
+                let call = format!(
                     "{}({rendered_args})",
                     super::util::prefix_yul_name(&callee_plan.symbol)
-                )));
+                );
+                docs.push(YulDoc::line(if callee_plan.ret.is_some() {
+                    format!("pop({call})")
+                } else {
+                    call
+                }));
                 Ok(docs)
             }
             YStmt::Builtin(builtin) => self.render_builtin_stmt(builtin),

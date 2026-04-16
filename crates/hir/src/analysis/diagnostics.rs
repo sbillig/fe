@@ -3019,27 +3019,6 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 notes: vec![],
                 error_code,
             },
-            Self::StringLiteralTooLarge {
-                primary,
-                max,
-                given,
-            } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "string literal exceeds inline capacity".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!(
-                        "this string literal is {given} bytes long, but the current limit is {max} bytes"
-                    ),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![
-                    format!(
-                        "strings currently use one word of storage: 1 length byte and {max} payload bytes"
-                    ),
-                ],
-                error_code,
-            },
             Self::AccessedFieldNotFound {
                 primary,
                 given_ty,

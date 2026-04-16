@@ -1260,7 +1260,8 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
         let normalized = normalize_semantic_body(self.db, semantic)
             .expect("semantic normalization should succeed before Yul legalization");
         let semantic_len = normalized.locals.len();
-        body.locals
+        let mut code_backable = body
+            .locals
             .iter()
             .enumerate()
             .map(|(idx, local)| {
@@ -1283,7 +1284,106 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                         true
                     }
             })
-            .collect()
+            .collect::<Vec<_>>();
+        let mut mark_escaped = |value: RValueId| {
+            if let Some(local) = code_backable.get_mut(value.as_u32() as usize) {
+                *local = false;
+            }
+        };
+        for block in &body.blocks {
+            for stmt in &block.stmts {
+                match stmt {
+                    RStmt::Assign {
+                        expr: RExpr::AddrOf { place },
+                        ..
+                    } => {
+                        if let PlaceRoot::Ref(value) = place.root {
+                            mark_escaped(value);
+                        }
+                    }
+                    RStmt::Assign {
+                        expr: RExpr::Call { args, .. },
+                        ..
+                    } => args.iter().copied().for_each(&mut mark_escaped),
+                    RStmt::Assign {
+                        expr: RExpr::MaterializeToObject { src },
+                        ..
+                    } => mark_escaped(*src),
+                    RStmt::Assign { .. } | RStmt::EnumAssertVariant { .. } => {}
+                    RStmt::Store { dst, .. } | RStmt::CopyInto { dst, .. } => {
+                        if let PlaceRoot::Ref(value) = dst.root {
+                            mark_escaped(value);
+                        }
+                    }
+                    RStmt::EnumSetTag { root, .. } | RStmt::EnumWriteVariant { root, .. } => {
+                        mark_escaped(*root);
+                    }
+                }
+            }
+            match &block.terminator {
+                RTerminator::TerminalCall { args, .. } => {
+                    args.iter().copied().for_each(&mut mark_escaped);
+                }
+                RTerminator::Return(Some(value)) => mark_escaped(*value),
+                RTerminator::Goto(_)
+                | RTerminator::Branch { .. }
+                | RTerminator::SwitchScalar { .. }
+                | RTerminator::MatchEnumTag { .. }
+                | RTerminator::ReturnData { .. }
+                | RTerminator::Revert { .. }
+                | RTerminator::SelfDestruct { .. }
+                | RTerminator::Trap
+                | RTerminator::Return(None)
+                | RTerminator::Stop => {}
+            }
+        }
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for block in &body.blocks {
+                for stmt in &block.stmts {
+                    let RStmt::Assign { dst, expr } = stmt else {
+                        continue;
+                    };
+                    let src = match expr {
+                        RExpr::Use(src) | RExpr::RetagRef { value: src } => *src,
+                        RExpr::ConstScalar(_)
+                        | RExpr::Placeholder { .. }
+                        | RExpr::Builtin(_)
+                        | RExpr::Unary { .. }
+                        | RExpr::Binary { .. }
+                        | RExpr::Cast { .. }
+                        | RExpr::ConstRef { .. }
+                        | RExpr::AllocObject { .. }
+                        | RExpr::MaterializeToObject { .. }
+                        | RExpr::MaterializePlaceToObject { .. }
+                        | RExpr::ProviderFromRaw { .. }
+                        | RExpr::WordToRawAddr { .. }
+                        | RExpr::ProviderToRaw { .. }
+                        | RExpr::AddrOf { .. }
+                        | RExpr::Load { .. }
+                        | RExpr::Call { .. }
+                        | RExpr::EnumMake { .. }
+                        | RExpr::EnumTagOfValue { .. }
+                        | RExpr::EnumIsVariant { .. }
+                        | RExpr::EnumExtract { .. }
+                        | RExpr::EnumGetTag { .. }
+                        | RExpr::EnumAssertVariantRef { .. } => continue,
+                    };
+                    if !code_backable
+                        .get(dst.as_u32() as usize)
+                        .copied()
+                        .unwrap_or(false)
+                        && let Some(src) = code_backable.get_mut(src.as_u32() as usize)
+                        && *src
+                    {
+                        *src = false;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        code_backable
     }
 
     fn flush_incompatible_pending_aggregates(

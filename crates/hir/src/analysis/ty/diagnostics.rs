@@ -418,12 +418,6 @@ pub enum BodyDiag<'db> {
         ty: TyId<'db>,
     },
 
-    StringLiteralTooLarge {
-        primary: DynLazySpan<'db>,
-        max: usize,
-        given: usize,
-    },
-
     BorrowFromNonPlace {
         primary: DynLazySpan<'db>,
     },
@@ -779,7 +773,6 @@ impl<'db> BodyDiag<'db> {
             Self::OpsTraitNotImplemented { .. } => 16,
             Self::UnsupportedUnaryPlus(..) => 52,
             Self::IntLiteralOutOfRange { .. } => 74,
-            Self::StringLiteralTooLarge { .. } => 78,
             Self::BorrowFromNonPlace { .. } => 65,
             Self::CannotBorrowMut { .. } => 66,
             Self::BorrowArgMustBePlace { .. } => 68,

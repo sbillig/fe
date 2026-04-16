@@ -695,8 +695,8 @@ fn compute_loop_headers<'db>(
     let mut loops = FxHashMap::default();
     for (header, latches) in backedges {
         let mut blocks = FxHashSet::default();
-        let mut stack = vec![header];
         blocks.insert(header);
+        let mut stack = Vec::new();
         for latch in latches {
             if blocks.insert(latch) {
                 stack.push(latch);
@@ -704,7 +704,7 @@ fn compute_loop_headers<'db>(
         }
         while let Some(block) = stack.pop() {
             for pred in &preds[block.index()] {
-                if blocks.insert(*pred) {
+                if blocks.insert(*pred) && *pred != header {
                     stack.push(*pred);
                 }
             }

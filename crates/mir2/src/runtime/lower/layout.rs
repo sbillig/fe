@@ -173,7 +173,7 @@ pub(crate) fn layout_for_aggregate_instance_in_context<'db>(
     if ty.is_array(db) {
         let (_, args) = ty.decompose_ty_app(db);
         let elem_ty = args.first().copied().expect("array element type");
-        let len = ty.array_len(db).expect("array length") as usize;
+        let len = ty.array_len(db).expect("array length");
         assert_eq!(
             len,
             field_classes.len(),

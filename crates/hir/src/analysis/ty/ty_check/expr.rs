@@ -256,10 +256,9 @@ impl<'db> TyChecker<'db> {
 
         self.env.enter_expr(expr);
         let mut actual = match expr_data {
-            Expr::Lit(LitKind::String(string_id)) => ExprProp::new(
-                self.string_literal_ty(*string_id, expected, expr.span(self.body()).into()),
-                true,
-            ),
+            Expr::Lit(LitKind::String(string_id)) => {
+                ExprProp::new(self.string_literal_ty(*string_id, expected), true)
+            }
             Expr::Lit(lit) => ExprProp::new(self.lit_ty_for_expected(lit, expected), true),
             Expr::Block(..) => self.check_block(expr, expr_data, expected),
             Expr::Un(..) => self.check_unary(expr, expr_data),

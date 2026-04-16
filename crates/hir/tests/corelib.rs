@@ -141,6 +141,46 @@ pub fn root() -> u8 {
 }
 
 #[test]
+fn long_string_literals_can_pick_up_dynstring_api_from_later_use() {
+    let mut db = DriverDataBase::default();
+    let url = Url::parse("file:///long_string_dynstring_api.fe").unwrap();
+    let src = r#"
+pub fn root() -> u8 {
+    let text = "hello-dynamic-api-abcdefghijklmnopqrstuvwxyz-ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789"
+    text.view().byte_at(0)
+}
+"#;
+
+    let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+    let top_mod = db.top_mod(file);
+    let diags = db.run_on_top_mod(top_mod);
+    assert!(
+        diags.is_empty(),
+        "unexpected diagnostics: {}",
+        diags.format_diags(&db)
+    );
+
+    let func = top_mod.all_funcs(&db)[0];
+    let body = func.body(&db).expect("root should have a body");
+    let typed_body = &check_func_body(&db, func).1;
+    let literal_expr = body
+        .exprs(&db)
+        .keys()
+        .find(|expr| {
+            matches!(
+                expr.data(&db, body),
+                Partial::Present(Expr::Lit(LitKind::String(_)))
+            )
+        })
+        .expect("string literal should be present");
+
+    assert_eq!(
+        typed_body.expr_ty(&db, literal_expr).pretty_print(&db),
+        "DynString"
+    );
+}
+
+#[test]
 fn runtime_string_literals_can_infer_dynstring_from_return_type() {
     let mut db = DriverDataBase::default();
     let url = Url::parse("file:///string_runtime_return_dynstring.fe").unwrap();
@@ -149,6 +189,48 @@ use std::abi::Text
 
 pub fn root() -> Text {
     let text = "hello-runtime-return"
+    text
+}
+"#;
+
+    let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+    let top_mod = db.top_mod(file);
+    let diags = db.run_on_top_mod(top_mod);
+    assert!(
+        diags.is_empty(),
+        "unexpected diagnostics: {}",
+        diags.format_diags(&db)
+    );
+
+    let func = top_mod.all_funcs(&db)[0];
+    let body = func.body(&db).expect("root should have a body");
+    let typed_body = &check_func_body(&db, func).1;
+    let literal_expr = body
+        .exprs(&db)
+        .keys()
+        .find(|expr| {
+            matches!(
+                expr.data(&db, body),
+                Partial::Present(Expr::Lit(LitKind::String(_)))
+            )
+        })
+        .expect("string literal should be present");
+
+    assert_eq!(
+        typed_body.expr_ty(&db, literal_expr).pretty_print(&db),
+        "DynString"
+    );
+}
+
+#[test]
+fn long_runtime_string_literals_can_infer_dynstring_from_return_type() {
+    let mut db = DriverDataBase::default();
+    let url = Url::parse("file:///long_string_runtime_return_dynstring.fe").unwrap();
+    let src = r#"
+use std::abi::Text
+
+pub fn root() -> Text {
+    let text = "hello-runtime-return-abcdefghijklmnopqrstuvwxyz-ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789"
     text
 }
 "#;

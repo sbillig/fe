@@ -111,10 +111,8 @@ fn verify_code_region_refs<'db>(
                 RExpr::Builtin(
                     crate::runtime::RuntimeBuiltin::CodeRegionOffset { region }
                     | crate::runtime::RuntimeBuiltin::CodeRegionLen { region },
-                ) => {
-                    if view.code_region(*region).is_none() {
-                        return Err(VerifyError::InvalidCodeRegion(*region));
-                    }
+                ) if view.code_region(*region).is_none() => {
+                    return Err(VerifyError::InvalidCodeRegion(*region));
                 }
                 _ => {}
             }
