@@ -15,7 +15,7 @@ use crate::{
         },
     },
     hir_def::ExprId,
-    semantic::EffectEnvView,
+    semantic::{EffectEnvSite, resolved_effect_binding_infos_for_site},
 };
 
 use super::body::SmirLowerCtxt;
@@ -152,19 +152,17 @@ pub fn owner_effect_bindings<'db>(
     effect_param_site(owner)
         .into_iter()
         .flat_map(|site| {
-            let view = EffectEnvView::new(site);
-            view.requirements(db)
-                .into_iter()
+            resolved_effect_binding_infos_for_site(db, EffectEnvSite::new(db, site))
+                .iter()
+                .filter_map(|binding| binding.as_ref())
                 .filter(|binding| {
                     matches!(
-                        binding.key.kind(),
+                        binding.requirement.key.kind(),
                         EffectKeyKind::Type | EffectKeyKind::Trait
                     )
                 })
-                .filter_map(move |binding| {
-                    view.resolved_binding(db, binding.binding_idx as usize)
-                        .map(|binding| LocalBinding::effect_param(&binding))
-                })
+                .map(LocalBinding::effect_param)
+                .collect::<Vec<_>>()
         })
         .collect()
 }

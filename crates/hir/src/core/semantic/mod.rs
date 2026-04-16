@@ -1675,6 +1675,11 @@ pub struct ResolvedEffectBindingInfo<'db> {
     pub provider: ProviderBinding<'db>,
 }
 
+#[salsa::interned]
+pub struct EffectEnvSite<'db> {
+    pub site: EffectParamSite<'db>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub struct EffectEnvView<'db> {
     site: EffectParamSite<'db>,
@@ -1698,24 +1703,9 @@ impl<'db> EffectEnvView<'db> {
         db: &'db dyn HirAnalysisDb,
         idx: usize,
     ) -> Option<ResolvedEffectBindingInfo<'db>> {
-        let requirement = self
-            .requirements(db)
-            .into_iter()
-            .find(|binding| binding.binding_idx as usize == idx)?;
-        let provider_idx = self
-            .resolutions(db)
-            .into_iter()
-            .find(|resolution| resolution.requirement_idx as usize == idx)?
-            .provider_idx;
-        let provider = self
-            .providers(db)
-            .into_iter()
-            .find(|provider| provider.provider_idx == provider_idx)?;
-
-        Some(ResolvedEffectBindingInfo {
-            requirement,
-            provider,
-        })
+        resolved_effect_binding_infos_for_site(db, EffectEnvSite::new(db, self.site))
+            .get(idx)
+            .and_then(|binding| binding.clone())
     }
 
     pub fn resolved_binding_ty(self, db: &'db dyn HirAnalysisDb, idx: usize) -> Option<TyId<'db>> {
@@ -2302,6 +2292,49 @@ pub fn effect_resolutions_for_site<'db>(
             contract_effect_resolutions_canonical(db, contract, site, arm.effects)
         }
     }
+}
+
+#[salsa::tracked(return_ref)]
+pub fn resolved_effect_binding_infos_for_site<'db>(
+    db: &'db dyn HirAnalysisDb,
+    site: EffectEnvSite<'db>,
+) -> Vec<Option<ResolvedEffectBindingInfo<'db>>> {
+    let site = site.site(db);
+    let requirements = effect_requirements_for_site(db, site);
+    let resolutions = effect_resolutions_for_site(db, site);
+    let providers = provider_bindings_for_site(db, site);
+    let max_idx = requirements
+        .iter()
+        .map(|requirement| requirement.binding_idx as usize)
+        .max()
+        .map_or(0, |idx| idx + 1);
+    let mut requirements_by_idx = vec![None; max_idx];
+    for requirement in requirements {
+        let idx = requirement.binding_idx as usize;
+        requirements_by_idx[idx] = Some(requirement);
+    }
+    let providers_by_idx = providers
+        .into_iter()
+        .map(|provider| (provider.provider_idx, provider))
+        .collect::<FxHashMap<_, _>>();
+    let mut resolved = vec![None; requirements_by_idx.len()];
+    for resolution in resolutions {
+        let idx = resolution.requirement_idx as usize;
+        let Some(requirement) = requirements_by_idx
+            .get(idx)
+            .and_then(|requirement| requirement.clone())
+        else {
+            continue;
+        };
+        let Some(provider) = providers_by_idx.get(&resolution.provider_idx).cloned() else {
+            continue;
+        };
+        resolved[idx] = Some(ResolvedEffectBindingInfo {
+            requirement,
+            provider,
+        });
+    }
+    resolved
 }
 
 fn contract_scoped_effect_requirements_canonical<'db>(

@@ -31,7 +31,7 @@ use hir::analysis::{
 use hir::hir_def::ArithBinOp;
 use hir::projection::Projection;
 use hir::semantic::ProviderBinding;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     db::MirDb,
@@ -592,19 +592,30 @@ fn root_provider_for_runtime_visible_binding<'db>(
     }
 }
 
+#[salsa::tracked(return_ref)]
+fn runtime_visible_root_provider_locals<'db>(
+    db: &'db dyn MirDb,
+    semantic: SemanticInstance<'db>,
+) -> FxHashMap<ProviderBinding<'db>, SLocalId> {
+    let mut locals = FxHashMap::default();
+    for entry in runtime_visible_binding_plans(db, semantic) {
+        let Some(provider) = root_provider_for_runtime_visible_binding(db, semantic, entry.binding)
+        else {
+            continue;
+        };
+        locals.entry(provider).or_insert(entry.local);
+    }
+    locals
+}
+
 fn actual_runtime_visible_root_provider_local<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
     provider: &ProviderBinding<'db>,
 ) -> Option<SLocalId> {
-    runtime_visible_binding_plans(db, semantic)
-        .into_iter()
-        .find(|entry| {
-            root_provider_for_runtime_visible_binding(db, semantic, entry.binding)
-                .as_ref()
-                .is_some_and(|candidate| candidate == provider)
-        })
-        .map(|entry| entry.local)
+    runtime_visible_root_provider_locals(db, semantic)
+        .get(provider)
+        .copied()
 }
 
 fn actual_runtime_visible_root_provider_class<'db>(
