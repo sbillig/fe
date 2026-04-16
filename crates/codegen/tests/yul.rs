@@ -2,6 +2,7 @@ use common::InputDb;
 use dir_test::{Fixture, dir_test};
 use driver::DriverDataBase;
 use fe_codegen::emit_module_yul;
+use std::fs;
 use test_utils::snap_test;
 use url::Url;
 
@@ -33,6 +34,22 @@ fn yul_snap(fixture: Fixture<&str>) {
 fn emit_inline_yul(path: &str, src: &str) -> String {
     let mut db = DriverDataBase::default();
     let file_url = Url::parse(path).expect("fixture path should be valid");
+    db.workspace()
+        .touch(&mut db, file_url.clone(), Some(src.to_owned()));
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    emit_module_yul(&db, top_mod).expect("Yul emission should succeed")
+}
+
+fn emit_fixture_yul(path: &str) -> String {
+    let abs_path = format!("{}/tests/fixtures/{path}", env!("CARGO_MANIFEST_DIR"));
+    let src = fs::read_to_string(&abs_path)
+        .unwrap_or_else(|err| panic!("failed to read fixture `{abs_path}`: {err}"));
+    let file_url = Url::from_file_path(&abs_path).expect("fixture path should be absolute");
+    let mut db = DriverDataBase::default();
     db.workspace()
         .touch(&mut db, file_url.clone(), Some(src.to_owned()));
     let file = db
@@ -203,6 +220,20 @@ fn runtime() uses (evm: mut Evm) {
     assert!(
         !yul.contains("function $decode_bytes_view($input)"),
         "generated Yul params must not reuse semantic names that can collide with function symbols:\n{yul}"
+    );
+}
+
+#[test]
+fn hidden_self_root_slots_can_project_fields_without_visible_value_classes() {
+    let yul = emit_fixture_yul("erc20.fe");
+
+    assert!(
+        yul.contains("function $grant("),
+        "erc20 fixture should still emit the AccessControl grant helper after Yul legalization:\n{yul}"
+    );
+    assert!(
+        yul.contains("function $require("),
+        "erc20 fixture should still emit the AccessControl require helper that uses the hidden self slot root:\n{yul}"
     );
 }
 

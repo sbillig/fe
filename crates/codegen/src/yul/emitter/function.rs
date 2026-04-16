@@ -16,10 +16,7 @@ use crate::yul::{
     state::FunctionState,
 };
 
-use super::{
-    module::PackageIndex,
-    util::{prefix_yul_name, section_object_label},
-};
+use super::{module::PackageIndex, util::prefix_yul_name};
 #[derive(Clone)]
 pub(super) struct RenderedValue<'db> {
     pub(super) setup: Vec<YulDoc>,
@@ -46,9 +43,9 @@ pub(super) struct YLoopInfo {
 pub(super) fn render_function_doc<'a, 'db>(
     index: &'a PackageIndex<'a, 'db>,
     plan: &'a YulFunctionPlan<'db>,
-    section_name: &'a mir2::RuntimeSectionName,
+    object_label: &str,
 ) -> Result<YulDoc, YulError> {
-    FunctionEmitter::new(index.db, index, plan, section_name).render()
+    FunctionEmitter::new(index.db, index, plan, object_label).render()
 }
 
 impl<'a, 'db> FunctionEmitter<'a, 'db> {
@@ -56,14 +53,14 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         db: &'db DriverDataBase,
         index: &'a PackageIndex<'a, 'db>,
         plan: &'a YulFunctionPlan<'db>,
-        section_name: &'a mir2::RuntimeSectionName,
+        object_label: &str,
     ) -> Self {
         let preds = compute_predecessors(plan);
         Self {
             db,
             index,
             plan,
-            section_label: section_object_label(section_name),
+            section_label: object_label.to_string(),
             state: FunctionState::new(plan),
             cross_block_values: compute_cross_block_values(plan),
             ipdom: compute_immediate_postdominators(plan),
@@ -234,7 +231,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         let root_name = self.root_slot_name(local)?.to_string();
         self.state.mark_root_declared(local);
         let mut docs = self.alloc_memory_root_slot(&root_name, &class)?;
-        if matches!(self.local_class(local)?, YulValueClass::Word(_))
+        if matches!(self.local(local)?.class, Some(YulValueClass::Word(_)))
             && let Some(name) = self.state.local_name(local)
             && self.state.is_declared(local)
         {
