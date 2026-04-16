@@ -814,6 +814,7 @@ struct PendingAggregateObject<'db> {
     layout: LayoutId<'db>,
     fallback_stmts: Vec<YStmt<'db>>,
     transport: PendingTransportTree<'db>,
+    value_writes: FxHashMap<Box<[PlaceElem]>, RLocalId>,
     const_writes: FxHashMap<Box<[PlaceElem]>, ConstNode<'db>>,
 }
 
@@ -1321,6 +1322,20 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
         stmts: &mut Vec<YStmt<'db>>,
     ) {
         let object = pending.remove(idx);
+        if let Some((expr, class, const_value)) =
+            self.try_build_pending_scalar_value(&object, local_values)
+        {
+            local_values[object.local.as_u32() as usize] = LocalValueInfo {
+                class: Some(class),
+                transport: YTransportInfo::empty(),
+                const_value,
+            };
+            stmts.push(YStmt::Assign {
+                dst: YLocalId(object.local.as_u32()),
+                expr,
+            });
+            return;
+        }
         local_values[object.local.as_u32() as usize].transport = object.transport.to_transport();
         stmts.extend(object.fallback_stmts);
     }
@@ -1390,6 +1405,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                     transport: PendingTransportTree::from_transport(&runtime_class_transport(
                         &YulValueClass::MemoryPtr { layout: *layout },
                     )),
+                    value_writes: FxHashMap::default(),
                     const_writes: FxHashMap::default(),
                 });
                 Ok(true)
@@ -1423,6 +1439,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                         .as_slice(),
                     &local_values[src.as_u32() as usize].transport,
                 );
+                pending[idx].value_writes.insert(const_path.clone(), *src);
                 if let Some(node) = local_values[src.as_u32() as usize].const_value.clone() {
                     pending[idx].const_writes.insert(const_path, node);
                 }
@@ -1457,6 +1474,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                         .as_slice(),
                     &local_values[src.as_u32() as usize].transport,
                 );
+                pending[idx].value_writes.insert(const_path.clone(), *src);
                 if let Some(node) = local_values[src.as_u32() as usize].const_value.clone() {
                     pending[idx].const_writes.insert(const_path, node);
                 }
@@ -1590,6 +1608,103 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
         let region = ConstRegionId::new(self.db, object.layout, value);
         self.ensure_const_region_label(region);
         Ok(Some(region))
+    }
+
+    fn try_build_pending_scalar_value(
+        &self,
+        object: &PendingAggregateObject<'db>,
+        local_values: &[LocalValueInfo<'db>],
+    ) -> Option<(YExpr<'db>, YulValueClass<'db>, Option<ConstNode<'db>>)> {
+        self.build_scalar_value_for_class(
+            &RuntimeClass::AggregateValue {
+                layout: object.layout,
+            },
+            &[],
+            local_values,
+            &object.value_writes,
+            &object.const_writes,
+        )
+    }
+
+    fn build_scalar_value_for_class(
+        &self,
+        class: &RuntimeClass<'db>,
+        path: &[PlaceElem],
+        local_values: &[LocalValueInfo<'db>],
+        value_writes: &FxHashMap<Box<[PlaceElem]>, RLocalId>,
+        const_writes: &FxHashMap<Box<[PlaceElem]>, ConstNode<'db>>,
+    ) -> Option<(YExpr<'db>, YulValueClass<'db>, Option<ConstNode<'db>>)> {
+        if let Some(src) = value_writes.get(path)
+            && let Some(class) = local_values[src.as_u32() as usize].class.clone()
+            && matches!(class, YulValueClass::Word(_))
+        {
+            return Some((
+                YExpr::Use(YLocalId(src.as_u32())),
+                class,
+                local_values[src.as_u32() as usize].const_value.clone(),
+            ));
+        }
+        if let Some(node) = const_writes.get(path) {
+            return self.build_scalar_value_from_const_node(class, node);
+        }
+        match class {
+            RuntimeClass::AggregateValue { layout } => match layout.data(self.db) {
+                Layout::Struct(data) if data.fields.len() == 1 => {
+                    let mut child = path.to_vec();
+                    child.push(PlaceElem::Field(FieldIndex(0)));
+                    self.build_scalar_value_for_class(
+                        &data.fields[0],
+                        &child,
+                        local_values,
+                        value_writes,
+                        const_writes,
+                    )
+                }
+                Layout::Array(data) if data.len == 1 => {
+                    let mut child = path.to_vec();
+                    child.push(PlaceElem::Index(IndexSource::Constant(0)));
+                    self.build_scalar_value_for_class(
+                        &data.elem,
+                        &child,
+                        local_values,
+                        value_writes,
+                        const_writes,
+                    )
+                }
+                Layout::Struct(_) | Layout::Array(_) | Layout::Enum(_) => None,
+            },
+            RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => {
+                None
+            }
+        }
+    }
+
+    fn build_scalar_value_from_const_node(
+        &self,
+        class: &RuntimeClass<'db>,
+        node: &ConstNode<'db>,
+    ) -> Option<(YExpr<'db>, YulValueClass<'db>, Option<ConstNode<'db>>)> {
+        match (class, node) {
+            (RuntimeClass::Scalar(class), ConstNode::Scalar(value)) => Some((
+                YExpr::ConstWord(value.clone()),
+                YulValueClass::Word(class.clone()),
+                Some(ConstNode::Scalar(value.clone())),
+            )),
+            (RuntimeClass::AggregateValue { layout }, ConstNode::Aggregate { fields, .. }) => {
+                match layout.data(self.db) {
+                    Layout::Struct(data) if data.fields.len() == 1 => {
+                        self.build_scalar_value_from_const_node(&data.fields[0], fields.first()?)
+                    }
+                    Layout::Array(data) if data.len == 1 => {
+                        self.build_scalar_value_from_const_node(&data.elem, fields.first()?)
+                    }
+                    Layout::Struct(_) | Layout::Array(_) | Layout::Enum(_) => None,
+                }
+            }
+            (RuntimeClass::AggregateValue { .. }, ConstNode::Scalar(_)) => None,
+            (RuntimeClass::Scalar(_), ConstNode::Aggregate { .. })
+            | (RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. }, _) => None,
+        }
     }
 
     fn build_const_node_for_class(

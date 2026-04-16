@@ -1,6 +1,6 @@
 use std::{cell::Cell, rc::Rc};
 
-use crate::yul::legalize::{YLocalId, YulFunctionPlan, YulLocalRoot};
+use super::legalize::{YLocalId, YulFunctionPlan, YulLocal, YulLocalRoot, YulValueClass};
 
 #[derive(Clone)]
 pub(super) struct FunctionState {
@@ -21,7 +21,8 @@ impl FunctionState {
             let local_id = YLocalId(idx as u32);
             if matches!(local.root, YulLocalRoot::MemorySlot { .. }) {
                 root_names[idx] = Some(format!("r{idx}"));
-            } else if local.class.is_some() && !func.param_locals.contains(&local_id) {
+            }
+            if local_uses_value_name(local) && !func.param_locals.contains(&local_id) {
                 value_names[idx] = Some(format!("v{idx}"));
             }
         }
@@ -75,4 +76,10 @@ impl FunctionState {
         self.next_temp.set(next + 1);
         temp
     }
+}
+
+pub(super) fn local_uses_value_name(local: &YulLocal<'_>) -> bool {
+    local.class.is_some()
+        && (!matches!(local.root, YulLocalRoot::MemorySlot { .. })
+            || matches!(local.class, Some(YulValueClass::Word(_))))
 }

@@ -94,6 +94,29 @@ fn read_base() -> u256 {
 }
 
 #[test]
+fn single_field_wrapper_ctors_return_words_in_yul() {
+    let yul = emit_inline_yul(
+        "file:///single_field_wrapper_ctors_return_words_in_yul.fe",
+        r#"
+use std::evm::CallData
+
+fn ctor() -> CallData {
+    CallData::with_base(4)
+}
+"#,
+    );
+
+    assert!(
+        yul.contains("function $ctor() -> ret {\n      let v2 := 0x04\n      let v0 := v2\n      let v3 := $with_base(v0)\n      let v1 := v3\n      ret := v1"),
+        "single-field wrapper ctor callsites should treat the result as a word, not re-materialize an object:\n{yul}"
+    );
+    assert!(
+        !yul.contains("function $with_base(p0) -> ret {\n      let r0 := mload(0x40)\n      if iszero(r0) {\n        r0 := 0x80\n      }\n      mstore(0x40, add(r0, 32))\n      mstore(r0, p0)\n      let t4 := mload(r0)\n      let v1 := t4\n      let t5 := mload(0x40)"),
+        "single-field wrapper ctors must not allocate and return a second object wrapper:\n{yul}"
+    );
+}
+
+#[test]
 fn generated_yul_param_names_do_not_collide_with_function_symbols() {
     let yul = emit_inline_yul(
         "file:///generated_yul_param_names_do_not_collide_with_function_symbols.fe",
@@ -196,5 +219,34 @@ fn runtime() uses (evm: mut Evm) {
     assert!(
         yul.contains("mstore(0x40, add("),
         "dynamic view lowering should still advance the free-memory pointer for temporary allocations:\n{yul}"
+    );
+}
+
+#[test]
+fn create_contract_helpers_keep_scalar_params_value_backed() {
+    let yul = emit_inline_yul(
+        "file:///create_contract_helpers_keep_scalar_params_value_backed.fe",
+        r#"
+use std::evm::Evm
+
+#[contract_init(CreateHarness)]
+fn init() uses (evm: mut Evm) {
+    evm.create_contract(runtime)
+}
+
+#[contract_runtime(CreateHarness)]
+fn runtime() uses (evm: mut Evm) {
+    evm.return_data(offset: 0, len: 0)
+}
+"#,
+    );
+
+    assert!(
+        yul.contains("function $return_data_1(p0, p1) {\n      let v3 := p0\n      let v4 := p1\n      return(v3, v4)"),
+        "create_contract return-data helpers should stay value-backed and forward scalar params without spilling through memory slots:\n{yul}"
+    );
+    assert!(
+        !yul.contains("function $return_data_1(p0, p1) {\n      let r1 := mload(0x40)"),
+        "create_contract return-data helpers must not allocate scalar root slots from mload(0x40):\n{yul}"
     );
 }

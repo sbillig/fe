@@ -87,6 +87,9 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         dst: YulPlace<'db>,
         src: RenderedValue<'db>,
     ) -> Result<Vec<YulDoc>, YulError> {
+        if let Some(local) = self.direct_word_slot_local(&dst) {
+            return self.write_local_storage(local, src);
+        }
         let (mut docs, addr, space) = self.address_of_place(&dst)?;
         docs.extend(src.setup.clone());
         match dst.storage_kind {

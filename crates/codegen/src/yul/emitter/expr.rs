@@ -611,6 +611,9 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
     }
 
     fn load_from_place(&mut self, place: &YulPlace<'db>) -> Result<RenderedValue<'db>, YulError> {
+        if let Some(local) = self.direct_word_slot_local(place) {
+            return self.local_value(local);
+        }
         let (mut setup, addr, space) = self.address_of_place(place)?;
         match place.storage_kind {
             crate::yul::legalize::YulStorageKind::Cell => {

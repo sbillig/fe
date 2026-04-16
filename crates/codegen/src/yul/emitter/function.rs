@@ -20,6 +20,7 @@ use super::{
     module::PackageIndex,
     util::{prefix_yul_name, section_object_label},
 };
+use crate::yul::state::local_uses_value_name;
 
 #[derive(Clone)]
 pub(super) struct RenderedValue<'db> {
@@ -89,11 +90,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         let mut out = Vec::with_capacity(self.plan.param_locals.len());
         for (idx, local) in self.plan.param_locals.iter().enumerate() {
             let name = format!("p{idx}");
-            if !matches!(
-                self.plan.locals[local.index()].root,
-                YulLocalRoot::MemorySlot { .. }
-            ) && self.plan.locals[local.index()].class.is_some()
-            {
+            if local_uses_value_name(&self.plan.locals[local.index()]) {
                 self.state.assign_param_name(*local, name.clone());
             }
             out.push(name);
@@ -107,6 +104,9 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
             let YulLocalRoot::MemorySlot { class } = &local.root else {
                 continue;
             };
+            if local_uses_value_name(local) {
+                continue;
+            }
             let local_id = YLocalId(idx as u32);
             if !self.plan.param_locals.contains(&local_id) && !self.cross_block_values[idx] {
                 continue;
@@ -143,6 +143,9 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
             let Some(class) = self.plan.locals[local.index()].class.as_ref() else {
                 continue;
             };
+            if local_uses_value_name(&self.plan.locals[local.index()]) {
+                continue;
+            }
             let input = param_inputs.get(param_idx).cloned().unwrap_or_default();
             let value = RenderedValue {
                 setup: Vec::new(),
@@ -232,7 +235,14 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         let class = class.clone();
         let root_name = self.root_slot_name(local)?.to_string();
         self.state.mark_root_declared(local);
-        self.alloc_memory_root_slot(&root_name, &class)
+        let mut docs = self.alloc_memory_root_slot(&root_name, &class)?;
+        if matches!(self.local_class(local)?, YulValueClass::Word(_))
+            && let Some(name) = self.state.local_name(local)
+            && self.state.is_declared(local)
+        {
+            docs.push(YulDoc::line(format!("mstore({root_name}, {name})")));
+        }
+        Ok(docs)
     }
 
     pub(super) fn alloc_temp_memory(&mut self, size: &str) -> (Vec<YulDoc>, String) {
@@ -392,10 +402,10 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         local: YLocalId,
         word: &ScalarClass<'db>,
     ) -> Result<String, YulError> {
-        if let Some(name) = self.state.value_name(local) {
-            Ok(self.canonicalize_scalar_expr(name.to_string(), word))
-        } else if self.state.root_name(local).is_some() && self.state.is_root_declared(local) {
+        if self.state.root_name(local).is_some() && self.state.is_root_declared(local) {
             Ok(self.render_word_slot_load(self.root_slot_name(local)?, word))
+        } else if let Some(name) = self.state.value_name(local) {
+            Ok(self.canonicalize_scalar_expr(name.to_string(), word))
         } else {
             Err(YulError::InvalidYulPackage(format!(
                 "word local {local:?} used before declaration in `{}`",
@@ -423,6 +433,16 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         }
     }
 
+    pub(super) fn direct_word_slot_local(&self, place: &YulPlace<'db>) -> Option<YLocalId> {
+        let YulPlaceRoot::Slot(local) = place.root else {
+            return None;
+        };
+        (place.path.is_empty()
+            && matches!(place.result_class, YulValueClass::Word(_))
+            && self.state.local_name(local).is_some())
+        .then_some(local)
+    }
+
     pub(super) fn write_local_storage(
         &mut self,
         local: YLocalId,
@@ -438,6 +458,15 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
             } else {
                 self.state.mark_declared(local);
                 docs.push(YulDoc::line(format!("let {name} := {}", src.value)));
+            }
+            if matches!(class, YulValueClass::Word(_))
+                && self.state.root_name(local).is_some()
+                && self.state.is_root_declared(local)
+            {
+                docs.push(YulDoc::line(format!(
+                    "mstore({}, {name})",
+                    self.root_slot_name(local)?
+                )));
             }
             return Ok(docs);
         }
