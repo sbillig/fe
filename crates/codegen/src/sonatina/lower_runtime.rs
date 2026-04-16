@@ -702,6 +702,7 @@ struct FunctionLowerer<'ctx, 'db, 'a> {
     body: RuntimeBody<'db>,
     current_sections: Vec<mir2::RuntimeSectionRef<'db>>,
     fb: FunctionBuilder<InstInserter>,
+    prologue_block: BlockId,
     block_map: Vec<Option<BlockId>>,
     reachable_blocks: Vec<bool>,
     vars: FxHashMap<RLocalId, Variable>,
@@ -728,6 +729,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
     ) -> Result<Self, LowerError> {
         let current_sections = module.sections_for_function(body.owner).to_vec();
         let mut fb = module.builder.func_builder::<InstInserter>(func_ref);
+        let prologue_block = fb.append_block();
         let reachable_blocks = compute_reachable_blocks(&body);
         let block_map = reachable_blocks
             .iter()
@@ -756,6 +758,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             body,
             current_sections,
             fb,
+            prologue_block,
             block_map,
             reachable_blocks,
             vars,
@@ -766,8 +769,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
     }
 
     fn lower(mut self) -> Result<(), LowerError> {
-        self.fb
-            .switch_to_block(self.block_id(RBlockId::from_u32(0))?);
+        let entry_block = self.block_id(RBlockId::from_u32(0))?;
+        self.fb.switch_to_block(self.prologue_block);
         self.initialize_locals().map_err(|err| {
             self.with_body_context(
                 format!(
@@ -779,6 +782,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             )
             .wrap(err)
         })?;
+        self.fb
+            .insert_inst_no_result(Jump::new(self.module.inst_set(), entry_block));
         let blocks = self.body.blocks.clone();
         for (idx, block) in blocks.iter().enumerate() {
             if !self.reachable_blocks[idx] {

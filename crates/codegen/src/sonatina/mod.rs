@@ -548,6 +548,38 @@ mod tests {
     }
 
     #[test]
+    fn int_downcast_test_runtime_package_verifies_with_enum_param_init_cfg() {
+        let mut db = DriverDataBase::default();
+        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../fe/tests/fixtures/fe_test/int_downcast.fe");
+        let fixture_source =
+            fs::read_to_string(&fixture_path).expect("int_downcast fixture should be readable");
+        let file_url = Url::from_file_path(&fixture_path).expect("fixture path should be absolute");
+        db.workspace()
+            .touch(&mut db, file_url.clone(), Some(fixture_source));
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let package = build_test_runtime_package(&db, top_mod, None)
+            .expect("test runtime package should build");
+
+        let mut module = compile_runtime_package_sonatina(&db, &package, crate::EVM_LAYOUT)
+            .expect("test runtime package should lower to Sonatina IR");
+        let dumped = ModuleWriter::new(&module).dump_string();
+
+        if let Err(err) = ensure_module_sonatina_ir_valid(&module) {
+            panic!("pre-opt test module should verify: {err}\n\n{dumped}");
+        }
+        run_sonatina_optimization_pipeline(&mut module, OptLevel::O0);
+        if let Err(err) = ensure_module_sonatina_ir_valid(&module) {
+            panic!("post-opt test module should verify: {err}\n\n{dumped}");
+        }
+        compile_all_runtime_objects(&module, false).expect("test runtime package should compile");
+    }
+
+    #[test]
     fn if_both_arms_return_test_runtime_package_has_no_empty_unreachable_blocks() {
         let mut db = DriverDataBase::default();
         let file_url = temp_fixture_url("if_both_arms_return_sonatina_runtime.fe");
