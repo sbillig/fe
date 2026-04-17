@@ -8,7 +8,7 @@ use codegen::{BackendKind, OptLevel, SonatinaContractBytecode};
 use common::{InputDb, config::Config, dependencies::WorkspaceMemberRecord, file::IngotFileKind};
 use driver::cli_target::{CliTarget, resolve_cli_target};
 use driver::{DriverDataBase, MirDiagnosticsMode};
-use hir::hir_def::{HirIngot, TopLevelMod};
+use hir::hir_def::{HirIngot, ManualContractRootAttr, TopLevelMod};
 use mir2::build_runtime_package;
 use salsa::Setter;
 use smol_str::SmolStr;
@@ -733,9 +733,7 @@ fn analyze_ingot_build_artifacts(
         return Err(());
     }
 
-    let contract_names = collect_ingot_contract_names(db, ingot).map_err(|err| {
-        eprintln!("Error: Failed to analyze contracts: {err}");
-    })?;
+    let contract_names = collect_workspace_contract_names(db, ingot);
 
     let abi_artifact_names = if include_abi_artifact_names {
         collect_ingot_abi_artifact_names(db, ingot).map_err(|err| {
@@ -1222,6 +1220,30 @@ fn collect_ingot_contract_names(
     let mut names: Vec<_> = names.into_iter().collect();
     names.sort();
     Ok(names)
+}
+
+fn collect_workspace_contract_names(db: &DriverDataBase, ingot: hir::Ingot<'_>) -> Vec<String> {
+    let mut names = BTreeSet::new();
+    for &top_mod in ingot.all_modules(db) {
+        for contract in top_mod.all_contracts(db) {
+            if let Some(name) = contract.name(db).to_opt() {
+                names.insert(name.data(db).to_string());
+            }
+        }
+        for &func in top_mod.all_funcs(db) {
+            if func.top_mod(db) != top_mod {
+                continue;
+            }
+            match func.manual_contract_root_attr(db) {
+                Some(ManualContractRootAttr::Init { contract_name })
+                | Some(ManualContractRootAttr::Runtime { contract_name }) => {
+                    names.insert(contract_name.data(db).to_string());
+                }
+                Some(ManualContractRootAttr::Error(_)) | None => {}
+            }
+        }
+    }
+    names.into_iter().collect()
 }
 
 fn format_runtime_package(db: &DriverDataBase, top_mod: TopLevelMod<'_>) -> String {
