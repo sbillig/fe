@@ -66,7 +66,7 @@ impl CoercionPlanner {
     ) -> bool {
         match boundary {
             RuntimeBoundarySpec::Exact(expected) => {
-                Self::preserve_provider_space(class, expected) == *class
+                Self::class_matches_exact_boundary(class, expected)
             }
             RuntimeBoundarySpec::BorrowLike { pointee, allow, .. } => match class {
                 RuntimeClass::Ref {
@@ -91,6 +91,44 @@ impl CoercionPlanner {
                 RuntimeClass::RawAddr { .. } => allow.allow_raw_addr,
                 RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => false,
             },
+        }
+    }
+
+    pub(crate) fn class_matches_exact_boundary<'db>(
+        actual: &RuntimeClass<'db>,
+        expected: &RuntimeClass<'db>,
+    ) -> bool {
+        match (actual, expected) {
+            (
+                RuntimeClass::Ref {
+                    pointee: actual_pointee,
+                    view: actual_view,
+                    ..
+                },
+                RuntimeClass::Ref {
+                    pointee: expected_pointee,
+                    view: expected_view,
+                    ..
+                },
+            ) => actual_pointee == expected_pointee && actual_view == expected_view,
+            (
+                RuntimeClass::RawAddr {
+                    target: actual_target,
+                    ..
+                },
+                RuntimeClass::Ref { pointee, .. },
+            ) => actual_target == &pointee.aggregate_layout(),
+            (
+                RuntimeClass::RawAddr {
+                    target: actual_target,
+                    ..
+                },
+                RuntimeClass::RawAddr {
+                    target: expected_target,
+                    ..
+                },
+            ) => actual_target == expected_target,
+            _ => actual == expected,
         }
     }
 

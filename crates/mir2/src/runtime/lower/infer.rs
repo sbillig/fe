@@ -23,7 +23,7 @@ use crate::{
 
 use super::{
     classify::{
-        BodyEnv, BodyStaticFacts, CallReturnClassCache, RuntimeBodyCx,
+        BodyEnv, BodyStaticFacts, InferClassCache, RuntimeBodyCx,
         actual_aggregate_class_from_runtime_source, carrier_value_class,
         runtime_class_for_direct_value_provider_in_context,
         runtime_class_for_effect_binding_provider_in_context, runtime_class_for_provider_binding,
@@ -45,7 +45,7 @@ pub(super) struct InferenceResult<'db> {
 pub(super) struct LocalStateInferer<'a, 'db> {
     env: BodyEnv<'a, 'db>,
     carriers: Vec<RuntimeCarrier<'db>>,
-    call_return_classes: CallReturnClassCache<'db>,
+    class_cache: InferClassCache<'db>,
 }
 
 impl<'a, 'db> LocalStateInferer<'a, 'db> {
@@ -61,7 +61,7 @@ impl<'a, 'db> LocalStateInferer<'a, 'db> {
         Self {
             env,
             carriers,
-            call_return_classes: CallReturnClassCache::default(),
+            class_cache: InferClassCache::default(),
         }
     }
 
@@ -133,7 +133,7 @@ impl<'a, 'db> LocalStateInferer<'a, 'db> {
                         stmt_idx,
                         expr,
                         local.ty,
-                        &mut self.call_return_classes,
+                        &mut self.class_cache,
                     ) {
                         Some(RuntimeClass::AggregateValue { layout })
                             if matches!(local.facts.interface, NLocalInterface::DirectValue)
