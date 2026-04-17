@@ -2,18 +2,16 @@ use cranelift_entity::EntityRef;
 use hir::{
     analysis::{
         semantic::{
-            SLocalId, SemanticInstance, ValueProvenance,
+            SLocalId,
             borrowck::{
                 NLocalInterface, NLocalOrigin, NSLocal, NormalizedBindingLowering,
                 NormalizedSemanticBody,
             },
-            semantic_binding_lowering,
         },
-        ty::{trait_resolution::PredicateListId, ty_check::LocalBinding},
+        ty::trait_resolution::PredicateListId,
     },
     semantic::ProviderBinding,
 };
-use rustc_hash::FxHashMap;
 
 use crate::{
     db::MirDb,
@@ -25,11 +23,11 @@ use crate::{
 
 use super::{
     classify::{
-        BodyEnv, RuntimeBodyCx, actual_aggregate_class_from_runtime_source, carrier_value_class,
-        normalized_place_class_in_context, runtime_class_for_direct_value_provider_in_context,
+        BodyEnv, BodyStaticFacts, CallReturnClassCache, RuntimeBodyCx,
+        actual_aggregate_class_from_runtime_source, carrier_value_class,
+        runtime_class_for_direct_value_provider_in_context,
         runtime_class_for_effect_binding_provider_in_context, runtime_class_for_provider_binding,
     },
-    interface::runtime_visible_binding_plans,
     type_info::{
         provider_class_for_target_in_context, stored_class_for_ty_in_context,
         top_level_class_for_ty_in_context,
@@ -47,6 +45,7 @@ pub(super) struct InferenceResult<'db> {
 pub(super) struct LocalStateInferer<'a, 'db> {
     env: BodyEnv<'a, 'db>,
     carriers: Vec<RuntimeCarrier<'db>>,
+    call_return_classes: CallReturnClassCache<'db>,
 }
 
 impl<'a, 'db> LocalStateInferer<'a, 'db> {
@@ -59,7 +58,11 @@ impl<'a, 'db> LocalStateInferer<'a, 'db> {
         for (class, local) in params.iter().zip(param_locals.iter().copied()) {
             carriers[local.index()] = RuntimeCarrier::Value(class.clone());
         }
-        Self { env, carriers }
+        Self {
+            env,
+            carriers,
+            call_return_classes: CallReturnClassCache::default(),
+        }
     }
 
     pub(super) fn run(mut self) -> InferenceResult<'db> {
@@ -82,13 +85,9 @@ impl<'a, 'db> LocalStateInferer<'a, 'db> {
                 continue;
             }
             let class = match (&local.facts.interface, &local.facts.origin) {
-                (NLocalInterface::DirectValue, NLocalOrigin::RootProvider(provider)) => {
-                    actual_runtime_visible_root_provider_class(
-                        self.env.db(),
-                        self.env.body(),
-                        &self.carriers,
-                        provider,
-                    )
+                (NLocalInterface::DirectValue, NLocalOrigin::RootProvider(provider)) => self
+                    .env
+                    .actual_runtime_visible_root_provider_class(&self.carriers, provider)
                     .map(|(_, class)| class)
                     .or_else(|| {
                         runtime_class_for_direct_value_provider_in_context(
@@ -97,15 +96,10 @@ impl<'a, 'db> LocalStateInferer<'a, 'db> {
                             self.env.scope(),
                             self.env.assumptions(),
                         )
-                    })
-                }
-                (NLocalInterface::DirectCarrier, NLocalOrigin::RootProvider(provider)) => {
-                    actual_runtime_visible_root_provider_class(
-                        self.env.db(),
-                        self.env.body(),
-                        &self.carriers,
-                        provider,
-                    )
+                    }),
+                (NLocalInterface::DirectCarrier, NLocalOrigin::RootProvider(provider)) => self
+                    .env
+                    .actual_runtime_visible_root_provider_class(&self.carriers, provider)
                     .map(|(_, class)| class)
                     .or_else(|| {
                         runtime_class_for_provider_binding(
@@ -114,8 +108,7 @@ impl<'a, 'db> LocalStateInferer<'a, 'db> {
                             self.env.scope(),
                             self.env.assumptions(),
                         )
-                    })
-                }
+                    }),
                 _ => None,
             };
             if let Some(class) = class {
@@ -127,14 +120,21 @@ impl<'a, 'db> LocalStateInferer<'a, 'db> {
     fn infer_carriers(&mut self) {
         loop {
             let mut changed = false;
-            for block in &self.env.body().blocks {
-                for stmt in &block.stmts {
+            for (block_idx, block) in self.env.body().blocks.iter().enumerate() {
+                for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
                     let hir::analysis::semantic::NSStmtKind::Assign { dst, expr } = &stmt.kind
                     else {
                         continue;
                     };
                     let local = &self.env.body().locals[dst.index()];
-                    let desired = match self.env.expr_direct_class(&self.carriers, expr, local.ty) {
+                    let desired = match self.env.expr_direct_class_with_cache(
+                        &self.carriers,
+                        block_idx,
+                        stmt_idx,
+                        expr,
+                        local.ty,
+                        &mut self.call_return_classes,
+                    ) {
                         Some(RuntimeClass::AggregateValue { layout })
                             if matches!(local.facts.interface, NLocalInterface::DirectValue)
                                 && local.facts.root_demand.needs_projectable_owned_storage() =>
@@ -186,12 +186,9 @@ fn lower_semantic_locals<'db>(
         let local_id = SLocalId::from_u32(idx as u32);
         let binding = match (&local.facts.interface, &local.facts.origin) {
             (NLocalInterface::DirectValue, NLocalOrigin::RootProvider(provider)) => {
-                let (provider_local, provider_class) = actual_runtime_visible_root_provider_class(
-                    cx.db(),
-                    cx.body(),
-                    cx.carriers(),
-                    provider,
-                )
+                let (provider_local, provider_class) = cx
+                    .env
+                    .actual_runtime_visible_root_provider_class(cx.carriers(), provider)
                 .or_else(|| {
                     runtime_class_for_direct_value_provider_in_context(
                         cx.db(),
@@ -220,12 +217,9 @@ fn lower_semantic_locals<'db>(
                 ))
             }
             (NLocalInterface::PlaceBoundValue, NLocalOrigin::RootProvider(provider)) => {
-                let (provider_local, provider_class) = actual_runtime_visible_root_provider_class(
-                    cx.db(),
-                    cx.body(),
-                    cx.carriers(),
-                    provider,
-                )
+                let (provider_local, provider_class) = cx
+                    .env
+                    .actual_runtime_visible_root_provider_class(cx.carriers(), provider)
                 .or_else(|| {
                     runtime_class_for_effect_binding_provider_in_context(
                         cx.db(),
@@ -264,27 +258,24 @@ fn lower_semantic_locals<'db>(
                 let NormalizedBindingLowering::CarrierLocal { .. } = &local.lowering else {
                     panic!("direct-carrier local missing carrier lowering: {idx}");
                 };
-                let (provider_local, provider_class) = actual_runtime_visible_root_provider_class(
-                    cx.db(),
-                    cx.body(),
-                    cx.carriers(),
-                    provider,
-                )
-                .or_else(|| {
-                    runtime_class_for_provider_binding(
-                        cx.db(),
-                        provider,
-                        cx.scope(),
-                        cx.assumptions(),
-                    )
-                    .map(|class| (local_id, class))
-                })
-                .unwrap_or_else(|| {
-                    panic!(
-                        "missing direct-carrier runtime class for semantic local {idx}: {}",
-                        local.ty.pretty_print(cx.db()),
-                    )
-                });
+                let (provider_local, provider_class) = cx
+                    .env
+                    .actual_runtime_visible_root_provider_class(cx.carriers(), provider)
+                    .or_else(|| {
+                        runtime_class_for_provider_binding(
+                            cx.db(),
+                            provider,
+                            cx.scope(),
+                            cx.assumptions(),
+                        )
+                        .map(|class| (local_id, class))
+                    })
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "missing direct-carrier runtime class for semantic local {idx}: {}",
+                            local.ty.pretty_print(cx.db()),
+                        )
+                    });
                 Some((
                     provider.clone(),
                     provider_class,
@@ -415,72 +406,6 @@ fn runtime_provider_binding_id<'db>(
         })
 }
 
-fn root_provider_for_runtime_visible_binding<'db>(
-    db: &'db dyn MirDb,
-    semantic: SemanticInstance<'db>,
-    binding: LocalBinding<'db>,
-) -> Option<ProviderBinding<'db>> {
-    match semantic_binding_lowering(db, semantic, binding) {
-        hir::analysis::semantic::SemanticBindingLowering::DirectValue {
-            provenance: ValueProvenance::RootProvider(provider),
-        }
-        | hir::analysis::semantic::SemanticBindingLowering::DirectCarrier {
-            provider: Some(provider),
-            ..
-        }
-        | hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
-            provenance: hir::analysis::semantic::PlaceProvenance::RootProvider(provider),
-            ..
-        } => Some(provider),
-        hir::analysis::semantic::SemanticBindingLowering::Erased
-        | hir::analysis::semantic::SemanticBindingLowering::DirectValue { .. }
-        | hir::analysis::semantic::SemanticBindingLowering::DirectCarrier {
-            provider: None, ..
-        }
-        | hir::analysis::semantic::SemanticBindingLowering::PlaceCarrier { .. }
-        | hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
-            provenance: hir::analysis::semantic::PlaceProvenance::Derived { .. },
-            ..
-        } => None,
-    }
-}
-
-#[salsa::tracked(return_ref)]
-fn runtime_visible_root_provider_locals<'db>(
-    db: &'db dyn MirDb,
-    semantic: SemanticInstance<'db>,
-) -> FxHashMap<ProviderBinding<'db>, SLocalId> {
-    let mut locals = FxHashMap::default();
-    for entry in runtime_visible_binding_plans(db, semantic) {
-        let Some(provider) = root_provider_for_runtime_visible_binding(db, semantic, entry.binding)
-        else {
-            continue;
-        };
-        locals.entry(provider).or_insert(entry.local);
-    }
-    locals
-}
-
-fn actual_runtime_visible_root_provider_local<'db>(
-    db: &'db dyn MirDb,
-    semantic: SemanticInstance<'db>,
-    provider: &ProviderBinding<'db>,
-) -> Option<SLocalId> {
-    runtime_visible_root_provider_locals(db, semantic)
-        .get(provider)
-        .copied()
-}
-
-pub(super) fn actual_runtime_visible_root_provider_class<'db>(
-    db: &'db dyn MirDb,
-    body: &NormalizedSemanticBody<'db>,
-    carriers: &[RuntimeCarrier<'db>],
-    provider: &ProviderBinding<'db>,
-) -> Option<(SLocalId, RuntimeClass<'db>)> {
-    let local = actual_runtime_visible_root_provider_local(db, body.owner, provider)?;
-    carrier_value_class(local, carriers).map(|class| (local, class))
-}
-
 fn carrier_local_place_class<'db>(
     db: &'db dyn MirDb,
     local: &NSLocal<'db>,
@@ -522,14 +447,11 @@ pub(super) fn normalized_local_place_class_in_context<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> Option<RuntimeClass<'db>> {
-    normalized_place_class_in_context(
-        db,
-        body,
-        body.locals.get(local.index())?.backing_place()?,
-        carriers,
-        scope,
-        assumptions,
-    )
+    let typed_body = body.owner.key(db).typed_body(db);
+    let type_env = super::type_info::RuntimeTypeEnv::new(scope, assumptions);
+    let facts = BodyStaticFacts::new_in_context(db, body, typed_body, type_env);
+    BodyEnv::from_parts(db, body, type_env, &facts)
+        .normalized_place_class(carriers, body.locals.get(local.index())?.backing_place()?)
 }
 
 fn infer_runtime_local_root<'db>(
@@ -545,9 +467,7 @@ fn infer_runtime_local_root<'db>(
     let place_class = local_place_root_class(cx, local, local_data, carrier);
     let transport_class = match carrier {
         RuntimeCarrier::Value(class) => Some(class.clone()),
-        RuntimeCarrier::Erased => {
-            fallback_root_transport_class(cx.db(), local_data, cx.scope(), cx.assumptions())
-        }
+        RuntimeCarrier::Erased => cx.env.root_transport_fallback_class(local),
     };
     let Some(place_class) = place_class else {
         return RuntimeLocalRoot::None;
@@ -600,12 +520,7 @@ pub(super) fn local_place_root_class<'db>(
                     return Some(carrier_class);
                 }
             }
-            Some(stored_class_for_ty_in_context(
-                cx.db(),
-                local_data.ty,
-                cx.scope(),
-                cx.assumptions(),
-            ))
+            cx.env.root_place_fallback_class(local)
         }
         NLocalInterface::PlaceCarrier => {
             if let Some(carrier_class) = carrier_value_class_for_runtime(carrier)
@@ -613,53 +528,22 @@ pub(super) fn local_place_root_class<'db>(
             {
                 return Some(actual);
             }
-            let NormalizedBindingLowering::CarrierLocal { target_ty, .. } = &local_data.lowering
-            else {
-                panic!("place-carrier local missing carrier lowering: {local:?}");
-            };
-            Some(stored_class_for_ty_in_context(
-                cx.db(),
-                *target_ty,
-                cx.scope(),
-                cx.assumptions(),
-            ))
+            cx.env.root_place_fallback_class(local)
         }
-        NLocalInterface::PlaceBoundValue => normalized_local_place_class_in_context(
-            cx.db(),
-            cx.body(),
-            local,
-            cx.carriers(),
-            cx.scope(),
-            cx.assumptions(),
-        )
-        .or_else(|| {
-            let NormalizedBindingLowering::PlaceBoundValue { value_ty, .. } = &local_data.lowering
-            else {
-                panic!("place-bound local missing place-bound lowering: {local:?}");
-            };
-            Some(stored_class_for_ty_in_context(
-                cx.db(),
-                *value_ty,
-                cx.scope(),
-                cx.assumptions(),
-            ))
-        }),
+        NLocalInterface::PlaceBoundValue => cx
+            .env
+            .normalized_place_class(
+                cx.carriers(),
+                cx.body().locals.get(local.index())?.backing_place()?,
+            )
+            .or_else(|| cx.env.root_place_fallback_class(local)),
         NLocalInterface::DirectCarrier => {
             if let Some(carrier_class) = carrier_value_class_for_runtime(carrier)
                 && let Some(actual) = actual_aggregate_class_from_runtime_source(&carrier_class)
             {
                 return Some(actual);
             }
-            let NormalizedBindingLowering::CarrierLocal { target_ty, .. } = &local_data.lowering
-            else {
-                panic!("direct-carrier local missing carrier lowering: {local:?}");
-            };
-            Some(stored_class_for_ty_in_context(
-                cx.db(),
-                *target_ty,
-                cx.scope(),
-                cx.assumptions(),
-            ))
+            cx.env.root_place_fallback_class(local)
         }
     }
 }

@@ -40,8 +40,8 @@ use crate::{
 
 use super::{
     classify::{
-        BodyEnv, ContractMetadataBuiltin, GenericNumericIntrinsicKind, RuntimeBodyCx,
-        RuntimeEffectBindingPlan, actual_aggregate_class_from_runtime_source,
+        BodyEnv, BodyStaticFacts, ContractMetadataBuiltin, GenericNumericIntrinsicKind,
+        RuntimeBodyCx, RuntimeEffectBindingPlan, actual_aggregate_class_from_runtime_source,
         contract_metadata_builtin, desired_runtime_effect_arg_boundary, desired_runtime_param_plan,
         generic_numeric_intrinsic_kind, resolve_runtime_call_key,
         runtime_effect_binding_plan_for_binding_idx, runtime_signature_for_key, semantic_return_ty,
@@ -61,8 +61,7 @@ use super::{
         resolved_effect_arg_address_space,
     },
     type_info::{
-        RuntimeTypeEnv, boundary_source_uses_transport_sensitive_aggregate,
-        boundary_spec_for_ty_in_env, provider_class_for_target_in_env,
+        RuntimeTypeEnv, boundary_spec_for_ty_in_env, provider_class_for_target_in_env,
         stored_class_for_ty_in_context, top_level_class_for_ty_in_env,
     },
 };
@@ -78,8 +77,10 @@ pub fn lower_to_rmir<'db>(db: &'db dyn MirDb, instance: RuntimeInstance<'db>) ->
             semantic.key(db)
         )
     });
+    let typed_body = semantic.key(db).typed_body(db);
+    let facts = BodyStaticFacts::new(db, &normalized_body);
     let inferred = LocalStateInferer::new(
-        BodyEnv::new(db, &normalized_body),
+        BodyEnv::new(db, &normalized_body, typed_body, &facts),
         key.params(db),
         &runtime_param_locals(db, semantic, key.params(db)),
     )
@@ -88,8 +89,9 @@ pub fn lower_to_rmir<'db>(db: &'db dyn MirDb, instance: RuntimeInstance<'db>) ->
     let mut emitter = RmirEmitter::new(
         db,
         instance,
-        key,
         normalized_body,
+        typed_body,
+        facts,
         inferred,
         signature.clone(),
     );
@@ -138,6 +140,8 @@ pub(super) struct RmirEmitter<'db> {
     pub(super) instance: RuntimeInstance<'db>,
     pub(super) key: RuntimeInstanceKey<'db>,
     pub(super) semantic_body: NormalizedSemanticBody<'db>,
+    pub(super) typed_body: &'db hir::analysis::ty::ty_check::TypedBody<'db>,
+    pub(super) facts: BodyStaticFacts<'db>,
     pub(super) ret_class: Option<RuntimeClass<'db>>,
     pub(super) env: RuntimeTypeEnv<'db>,
     pub(super) semantic_locals: Vec<RuntimeLocalLowering<'db>>,
@@ -171,11 +175,13 @@ impl<'db> RmirEmitter<'db> {
     fn new(
         db: &'db dyn MirDb,
         instance: RuntimeInstance<'db>,
-        key: RuntimeInstanceKey<'db>,
         semantic_body: NormalizedSemanticBody<'db>,
+        typed_body: &'db hir::analysis::ty::ty_check::TypedBody<'db>,
+        facts: BodyStaticFacts<'db>,
         inferred: InferenceResult<'db>,
         signature: RuntimeSignature<'db>,
     ) -> Self {
+        let key = instance.key(db);
         let LoweredSemanticLocals {
             carriers,
             roots,
@@ -187,11 +193,6 @@ impl<'db> RmirEmitter<'db> {
             semantic_locals: inferred.semantic_locals,
             provider_bindings: inferred.provider_bindings,
         };
-        let typed_body = key
-            .semantic(db)
-            .expect("runtime lowering requires a semantic instance")
-            .key(db)
-            .typed_body(db);
         let env = RuntimeTypeEnv::new(
             typed_body.body().map(|body| body.scope()),
             typed_body.assumptions(),
@@ -213,6 +214,8 @@ impl<'db> RmirEmitter<'db> {
             instance,
             key,
             semantic_body,
+            typed_body,
+            facts,
             ret_class: signature.ret.clone(),
             env,
             semantic_locals,
@@ -271,8 +274,8 @@ impl<'db> RmirEmitter<'db> {
         let blocks = self.semantic_body.blocks.clone();
         for (idx, block) in blocks.iter().enumerate() {
             let bb = RBlockId::from_u32(idx as u32);
-            for stmt in &block.stmts {
-                self.lower_stmt(bb, stmt);
+            for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
+                self.lower_stmt(bb, stmt_idx, stmt);
                 if self.terminated_blocks[bb.index()] {
                     break;
                 }
@@ -288,9 +291,9 @@ impl<'db> RmirEmitter<'db> {
         self.terminated_blocks[bb.index()] = true;
     }
 
-    fn lower_stmt(&mut self, bb: RBlockId, stmt: &NSStmt<'db>) {
+    fn lower_stmt(&mut self, bb: RBlockId, stmt_idx: usize, stmt: &NSStmt<'db>) {
         match &stmt.kind {
-            NSStmtKind::Assign { dst, expr } => self.lower_assign(bb, *dst, expr),
+            NSStmtKind::Assign { dst, expr } => self.lower_assign(bb, stmt_idx, *dst, expr),
             NSStmtKind::Store { dst, src } => {
                 let place = self.lower_place(bb, dst);
                 let target = self.project_place_class(&place);
@@ -300,7 +303,7 @@ impl<'db> RmirEmitter<'db> {
         }
     }
 
-    fn lower_assign(&mut self, bb: RBlockId, dst: SLocalId, expr: &NExpr<'db>) {
+    fn lower_assign(&mut self, bb: RBlockId, stmt_idx: usize, dst: SLocalId, expr: &NExpr<'db>) {
         let desired = self.semantic_value_class(dst);
         match desired {
             None => {
@@ -309,7 +312,12 @@ impl<'db> RmirEmitter<'db> {
                 }
                 let carrier = self
                     .with_current_body_cx(|cx| {
-                        cx.expr_direct_class(expr, self.semantic_body.locals[dst.index()].ty)
+                        cx.expr_direct_class(
+                            bb.index(),
+                            stmt_idx,
+                            expr,
+                            self.semantic_body.locals[dst.index()].ty,
+                        )
                     })
                     .map(RuntimeCarrier::Value)
                     .unwrap_or(RuntimeCarrier::Erased);
@@ -346,7 +354,10 @@ impl<'db> RmirEmitter<'db> {
 
     fn with_current_body_cx<T>(&self, f: impl FnOnce(RuntimeBodyCx<'_, '_, 'db>) -> T) -> T {
         let carriers = self.current_semantic_carriers();
-        f(BodyEnv::new(self.db, &self.semantic_body).with_carriers(&carriers))
+        f(
+            BodyEnv::new(self.db, &self.semantic_body, self.typed_body, &self.facts)
+                .with_carriers(&carriers),
+        )
     }
 
     fn direct_assign_source_class(&self, expr: &NExpr<'db>) -> Option<RuntimeClass<'db>> {
@@ -4096,12 +4107,9 @@ impl<'db> RmirEmitter<'db> {
         target: &RuntimeClass<'db>,
     ) -> RLocalId {
         if matches!(target, RuntimeClass::AggregateValue { .. })
-            && boundary_source_uses_transport_sensitive_aggregate(
-                self.db,
-                self.locals[operand.local.index()].semantic_ty,
-                self.env.scope,
-                self.env.assumptions,
-            )
+            && self.with_current_body_cx(|cx| {
+                cx.env.boundary_source_transport_sensitive(operand.local)
+            })
             && let Some(value) = self.actual_aggregate_value_from_runtime_source(bb, operand.local)
         {
             return value;
