@@ -1422,8 +1422,12 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
         stmts: &mut Vec<YStmt<'db>>,
     ) {
         let object = pending.remove(idx);
-        if let Some((expr, class, const_value)) =
-            self.try_build_pending_scalar_value(&object, local_values)
+        let info = &local_values[object.local.as_u32() as usize];
+        if matches!(info.class, Some(YulValueClass::Word(_)))
+            && info.transport.root_alias.is_none()
+            && info.transport.leaves.is_empty()
+            && let Some((expr, class, const_value)) =
+                self.try_build_pending_scalar_value(&object, local_values)
         {
             local_values[object.local.as_u32() as usize] = LocalValueInfo {
                 class: Some(class),
