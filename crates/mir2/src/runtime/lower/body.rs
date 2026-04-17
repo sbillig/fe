@@ -39,15 +39,13 @@ use crate::{
 };
 
 use super::{
-    class::{
+    classify::{
         BodyEnv, ContractMetadataBuiltin, GenericNumericIntrinsicKind, InferenceResult,
-        LocalStateInferer, RuntimeEffectBindingPlan, actual_aggregate_class_from_runtime_source,
-        boundary_source_uses_transport_sensitive_aggregate, boundary_spec_for_ty_in_env,
-        contract_metadata_builtin, desired_runtime_effect_arg_boundary, desired_runtime_param_plan,
-        expr_direct_class, generic_numeric_intrinsic_kind, provider_class_for_target_in_env,
-        resolve_runtime_call_key, runtime_class_satisfies_boundary,
+        LocalStateInferer, RuntimeBodyCx, RuntimeEffectBindingPlan,
+        actual_aggregate_class_from_runtime_source, contract_metadata_builtin,
+        desired_runtime_effect_arg_boundary, desired_runtime_param_plan,
+        generic_numeric_intrinsic_kind, resolve_runtime_call_key, runtime_class_satisfies_boundary,
         runtime_effect_binding_plan_for_binding_idx, runtime_signature_for_key, semantic_return_ty,
-        stored_class_for_ty_in_context, top_level_class_for_ty_in_env,
     },
     consts::{
         const_scalar_for_class, const_scalar_from_value, enum_tag_scalar, lower_const_region,
@@ -61,7 +59,11 @@ use super::{
         project_field_class, project_index_class, project_variant_field_class,
         resolved_effect_arg_address_space,
     },
-    type_info::RuntimeTypeEnv,
+    type_info::{
+        RuntimeTypeEnv, boundary_source_uses_transport_sensitive_aggregate,
+        boundary_spec_for_ty_in_env, provider_class_for_target_in_env,
+        stored_class_for_ty_in_context, top_level_class_for_ty_in_env,
+    },
 };
 
 pub fn lower_to_rmir<'db>(db: &'db dyn MirDb, instance: RuntimeInstance<'db>) -> RuntimeBody<'db> {
@@ -304,15 +306,12 @@ impl<'db> RmirEmitter<'db> {
                 if !expr_requires_runtime_eval_when_erased(expr) {
                     return;
                 }
-                let carrier = expr_direct_class(
-                    self.db,
-                    &self.semantic_body,
-                    expr,
-                    self.semantic_body.locals[dst.index()].ty,
-                    &self.current_semantic_carriers(),
-                )
-                .map(RuntimeCarrier::Value)
-                .unwrap_or(RuntimeCarrier::Erased);
+                let carrier = self
+                    .with_current_body_cx(|cx| {
+                        cx.expr_direct_class(expr, self.semantic_body.locals[dst.index()].ty)
+                    })
+                    .map(RuntimeCarrier::Value)
+                    .unwrap_or(RuntimeCarrier::Erased);
                 let sink = self.alloc_runtime_temp(
                     self.semantic_body.locals[dst.index()].ty,
                     RuntimeCarrier::Erased,
@@ -344,13 +343,16 @@ impl<'db> RmirEmitter<'db> {
             .collect()
     }
 
-    fn direct_assign_source_class(&self, expr: &NExpr<'db>) -> Option<RuntimeClass<'db>> {
+    fn with_current_body_cx<T>(&self, f: impl FnOnce(RuntimeBodyCx<'_, '_, 'db>) -> T) -> T {
         let carriers = self.current_semantic_carriers();
-        let env = BodyEnv::new(self.db, &self.semantic_body);
-        match expr {
-            NExpr::Use(value) => env.materialized_value_class(&carriers, value.local),
-            NExpr::Borrow { place, .. } => env.normalized_place_address_class(&carriers, place),
-            NExpr::ReadPlace { place, .. } => env.normalized_place_class(&carriers, place),
+        f(BodyEnv::new(self.db, &self.semantic_body).with_carriers(&carriers))
+    }
+
+    fn direct_assign_source_class(&self, expr: &NExpr<'db>) -> Option<RuntimeClass<'db>> {
+        self.with_current_body_cx(|cx| match expr {
+            NExpr::Use(value) => cx.materialized_value_class(value.local),
+            NExpr::Borrow { place, .. } => cx.normalized_place_address_class(place),
+            NExpr::ReadPlace { place, .. } => cx.normalized_place_class(place),
             NExpr::Const(_)
             | NExpr::CodeRegionRef { .. }
             | NExpr::Unary { .. }
@@ -364,7 +366,7 @@ impl<'db> RmirEmitter<'db> {
             | NExpr::CodeRegionOffset { .. }
             | NExpr::CodeRegionLen { .. }
             | NExpr::Call { .. } => None,
-        }
+        })
     }
 
     fn specialize_direct_assign_target_from_expr(&mut self, dst: SLocalId, expr: &NExpr<'db>) {
@@ -395,8 +397,9 @@ impl<'db> RmirEmitter<'db> {
             return;
         }
         let source = match expr {
-            NExpr::Use(value) => BodyEnv::new(self.db, &self.semantic_body)
-                .actual_aggregate_class_for_source(&self.current_semantic_carriers(), value.local),
+            NExpr::Use(value) => {
+                self.with_current_body_cx(|cx| cx.actual_aggregate_class_for_source(value.local))
+            }
             _ => None,
         };
         let Some(actual) = source else {
@@ -4184,8 +4187,7 @@ impl<'db> RmirEmitter<'db> {
             return None;
         }
         let current = self.semantic_value_class(local)?;
-        let target = BodyEnv::new(self.db, &self.semantic_body)
-            .materialized_value_class(&self.current_semantic_carriers(), local)?;
+        let target = self.with_current_body_cx(|cx| cx.materialized_value_class(local))?;
         if current == target {
             return None;
         }
@@ -4269,11 +4271,7 @@ impl<'db> RmirEmitter<'db> {
         local: SLocalId,
         boundary: &crate::runtime::RuntimeBoundarySpec<'db>,
     ) -> crate::runtime::RuntimeBoundarySpec<'db> {
-        BodyEnv::new(self.db, &self.semantic_body).specialize_boundary_for_source(
-            &self.current_semantic_carriers(),
-            local,
-            boundary,
-        )
+        self.with_current_body_cx(|cx| cx.specialize_boundary_for_source(local, boundary))
     }
 
     fn addr_of_semantic_operand_for_class(
@@ -4604,8 +4602,8 @@ impl<'db> RmirEmitter<'db> {
                             kind: RefKind::Object,
                             ..
                         }
-                ) && let Some(actual) = BodyEnv::new(self.db, &self.semantic_body)
-                    .actual_aggregate_class_for_source(&self.current_semantic_carriers(), local)
+                ) && let Some(actual) =
+                    self.with_current_body_cx(|cx| cx.actual_aggregate_class_for_source(local))
                 {
                     target = match target {
                         RuntimeClass::AggregateValue { .. } => actual,
@@ -4670,8 +4668,8 @@ impl<'db> RmirEmitter<'db> {
         ) {
             return target.clone();
         }
-        let Some(actual) = BodyEnv::new(self.db, &self.semantic_body)
-            .actual_aggregate_class_for_source(&self.current_semantic_carriers(), src.local)
+        let Some(actual) =
+            self.with_current_body_cx(|cx| cx.actual_aggregate_class_for_source(src.local))
         else {
             return target.clone();
         };

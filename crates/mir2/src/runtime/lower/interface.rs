@@ -13,11 +13,10 @@ use crate::{
 };
 
 use super::{
-    class::{
+    classify::{
         RuntimeVisibleBindingPlan, desired_runtime_param_plan, owner_effect_binding_boundary,
-        top_level_class_for_ty_in_env,
     },
-    type_info::RuntimeTypeEnv,
+    type_info::{RuntimeTypeEnv, top_level_class_for_ty_in_env},
 };
 
 pub(crate) fn runtime_param_locals<'db>(

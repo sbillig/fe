@@ -1,6 +1,6 @@
 pub mod body;
 pub(crate) mod call;
-pub(crate) mod class;
+pub(crate) mod classify;
 mod consts;
 pub(crate) mod interface;
 pub(crate) mod layout;

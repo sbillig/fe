@@ -13,7 +13,8 @@ use crate::{
 };
 
 use super::{
-    class::scalar_class_for_ty_in_env, layout::layout_for_ty_in_env, type_info::RuntimeTypeEnv,
+    layout::layout_for_ty_in_env,
+    type_info::{RuntimeTypeEnv, scalar_class_for_ty_in_env},
 };
 
 pub(super) fn const_scalar_from_value<'db>(

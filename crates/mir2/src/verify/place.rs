@@ -4,7 +4,7 @@ use hir::projection::IndexSource;
 
 use crate::{
     db::MirDb,
-    runtime::lower::class::{ref_class_for_place_result, runtime_address_space},
+    runtime::lower::classify::{ref_class_for_place_result, runtime_address_space},
     runtime::{
         ConstScalar, Layout, LayoutId, PlaceElem, PlaceRoot, RefView, ResolvedPlaceElem,
         ResolvedPlaceRootKind, ResolvedRuntimePlace, RuntimeBody, RuntimeClass, RuntimeLocalRoot,

@@ -26,13 +26,14 @@ use crate::{
         get_or_build_runtime_instance,
     },
     runtime::code_region::{code_region_symbol, runtime_code_region_for_manual_root},
-    runtime::lower::class::{
-        owner_effect_binding_boundary, provider_class_for_target_in_env,
-        runtime_effect_binding_plan, runtime_param_class, runtime_visible_binding_class,
-        top_level_class_for_ty_in_env,
+    runtime::lower::classify::{
+        owner_effect_binding_boundary, runtime_effect_binding_plan, runtime_param_class,
+        runtime_visible_binding_class,
     },
     runtime::lower::interface::runtime_visible_binding_plans,
-    runtime::lower::type_info::RuntimeTypeEnv,
+    runtime::lower::type_info::{
+        RuntimeTypeEnv, provider_class_for_target_in_env, top_level_class_for_ty_in_env,
+    },
     runtime::{
         AddressSpaceKind, ConstRegionId, ContractEffectArgPlan, ContractFieldBinding,
         ContractInitAbiPlan, ContractRecvAbiPlan, DispatchArm, DispatchDefault, InitArgsPlan,

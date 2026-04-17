@@ -14,9 +14,8 @@ use crate::{
     },
 };
 
-use super::{
-    class::stored_class_for_ty_in_context,
-    type_info::{RuntimeTypeEnv, runtime_repr_ty_in_context},
+use super::type_info::{
+    RuntimeTypeEnv, runtime_repr_ty_in_context, stored_class_for_ty_in_context,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
