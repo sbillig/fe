@@ -306,6 +306,35 @@ fn runtime() uses (evm: mut Evm) {
 }
 
 #[test]
+fn scalar_collapsible_struct_consts_stay_aggregate_in_yul_const_regions() {
+    let _yul = emit_inline_yul(
+        "file:///scalar_collapsible_struct_consts_stay_aggregate_in_yul_const_regions.fe",
+        r#"
+use std::evm::mem
+
+struct Pair {
+    a: Address,
+    b: Address,
+}
+
+#[test]
+fn test_alloc_after_struct() uses (evm: Evm) {
+    let p = Pair {
+        a: Address { inner: 0x1111111111111111111111111111111111111111 },
+        b: Address { inner: 0x2222222222222222222222222222222222222222 },
+    }
+
+    let ptr = mem::alloc(32)
+
+    assert(ptr < 0x100000)
+    assert(p.a.inner == 0x1111111111111111111111111111111111111111)
+    assert(p.b.inner == 0x2222222222222222222222222222222222222222)
+}
+"#,
+    );
+}
+
+#[test]
 fn scalar_collapsible_field_loads_materialize_words_in_yul() {
     let yul = emit_inline_yul(
         "file:///scalar_collapsible_field_loads_materialize_words_in_yul.fe",

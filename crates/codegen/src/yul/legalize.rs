@@ -1809,6 +1809,17 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                 YulValueClass::Word(class.clone()),
                 Some(ConstNode::Scalar(value.clone())),
             )),
+            (RuntimeClass::AggregateValue { layout }, ConstNode::Scalar(_)) => {
+                match layout.data(self.db) {
+                    Layout::Struct(data) if data.fields.len() == 1 => {
+                        self.build_scalar_value_from_const_node(&data.fields[0], node)
+                    }
+                    Layout::Array(data) if data.len == 1 => {
+                        self.build_scalar_value_from_const_node(&data.elem, node)
+                    }
+                    Layout::Struct(_) | Layout::Array(_) | Layout::Enum(_) => None,
+                }
+            }
             (RuntimeClass::AggregateValue { layout }, ConstNode::Aggregate { fields, .. }) => {
                 match layout.data(self.db) {
                     Layout::Struct(data) if data.fields.len() == 1 => {
@@ -1820,9 +1831,41 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                     Layout::Struct(_) | Layout::Array(_) | Layout::Enum(_) => None,
                 }
             }
-            (RuntimeClass::AggregateValue { .. }, ConstNode::Scalar(_)) => None,
             (RuntimeClass::Scalar(_), ConstNode::Aggregate { .. })
             | (RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. }, _) => None,
+        }
+    }
+
+    fn reify_const_node_for_class(
+        &self,
+        class: &RuntimeClass<'db>,
+        node: &ConstNode<'db>,
+    ) -> Option<ConstNode<'db>> {
+        match (class, node) {
+            (RuntimeClass::Scalar(_), ConstNode::Scalar(_))
+            | (RuntimeClass::AggregateValue { .. }, ConstNode::Aggregate { .. }) => {
+                Some(node.clone())
+            }
+            (RuntimeClass::AggregateValue { layout }, ConstNode::Scalar(_)) => {
+                match layout.data(self.db) {
+                    Layout::Struct(data) if data.fields.len() == 1 => Some(ConstNode::Aggregate {
+                        layout: *layout,
+                        fields: vec![self.reify_const_node_for_class(&data.fields[0], node)?]
+                            .into_boxed_slice(),
+                    }),
+                    Layout::Array(data) if data.len == 1 => Some(ConstNode::Aggregate {
+                        layout: *layout,
+                        fields: vec![self.reify_const_node_for_class(&data.elem, node)?]
+                            .into_boxed_slice(),
+                    }),
+                    Layout::Struct(_) | Layout::Array(_) | Layout::Enum(_) => None,
+                }
+            }
+            (
+                RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. },
+                ConstNode::Aggregate { .. },
+            ) => None,
+            (RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. }, ConstNode::Scalar(_)) => None,
         }
     }
 
@@ -1833,7 +1876,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
         writes: &FxHashMap<Box<[PlaceElem<'db>]>, ConstNode<'db>>,
     ) -> Option<ConstNode<'db>> {
         if let Some(node) = writes.get(path) {
-            return Some(node.clone());
+            return self.reify_const_node_for_class(class, node);
         }
         match class {
             RuntimeClass::AggregateValue { layout } => {
