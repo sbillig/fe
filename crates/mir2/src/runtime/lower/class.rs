@@ -991,24 +991,35 @@ fn runtime_visible_binding_semantic_ty<'db>(
 }
 
 #[salsa::tracked(return_ref)]
+fn runtime_param_plans<'db>(
+    db: &'db dyn MirDb,
+    semantic: SemanticInstance<'db>,
+) -> Vec<RuntimeParamPlan<'db>> {
+    let typed_body = semantic.key(db).typed_body(db);
+    let mut plans = Vec::new();
+    let mut idx = 0;
+    while typed_body.param_binding(idx).is_some() {
+        plans.push(desired_runtime_param_plan(db, semantic, typed_body, idx));
+        idx += 1;
+    }
+    plans
+}
+
+#[salsa::tracked(return_ref)]
 pub(crate) fn runtime_visible_binding_plans<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
 ) -> Vec<RuntimeVisibleBindingPlan<'db>> {
     let owner = semantic.key(db).owner(db);
     let typed_body = semantic.key(db).typed_body(db);
+    let param_plans = runtime_param_plans(db, semantic);
     let mut entries = Vec::new();
     let mut push = |binding, plan| {
         if !matches!(plan, RuntimeParamPlan::Erased) {
             entries.push(RuntimeVisibleBindingPlan {
                 binding,
                 local: runtime_visible_binding_local(db, owner, typed_body, binding),
-                semantic_ty: runtime_visible_binding_semantic_ty(
-                    db,
-                    semantic,
-                    typed_body,
-                    binding,
-                ),
+                semantic_ty: runtime_visible_binding_semantic_ty(db, semantic, typed_body, binding),
                 plan,
             });
         }
@@ -1018,7 +1029,10 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
     while let Some(binding) = typed_body.param_binding(idx) {
         push(
             binding,
-            desired_runtime_param_plan(db, semantic, typed_body, idx),
+            param_plans
+                .get(idx)
+                .cloned()
+                .unwrap_or(RuntimeParamPlan::Erased),
         );
         idx += 1;
     }
@@ -1584,23 +1598,31 @@ fn expr_direct_class_in_context<'db>(
                 typed_body.body().map(|body| body.scope()),
                 typed_body.assumptions(),
             );
+            let param_plans = runtime_param_plans(db, semantic);
+            assert_eq!(
+                args.len(),
+                param_plans.len(),
+                "runtime call arg count mismatch during class inference: caller={:?} callee={:?} args={args:?} plans={param_plans:?}",
+                body.owner.key(db),
+                callee_key,
+            );
             let mut param_classes = Vec::new();
-            for (idx, arg) in args.iter().enumerate() {
-                match desired_runtime_param_plan(db, semantic, typed_body, idx) {
+            for (arg, plan) in args.iter().zip(param_plans.iter()) {
+                match plan {
                     RuntimeParamPlan::Erased => {}
                     RuntimeParamPlan::Boundary(desired) => {
                         let actual = runtime_visible_value_class_in_context(
                             db,
                             body,
                             arg.local,
-                            Some(&desired),
+                            Some(desired),
                             carriers,
                             source_env,
                         );
                         if let Some(actual) = actual {
                             param_classes.push(match desired {
                                 RuntimeBoundarySpec::Exact(desired) => {
-                                    preserve_provider_space(&actual, &desired)
+                                    preserve_provider_space(&actual, desired)
                                 }
                                 RuntimeBoundarySpec::BorrowLike { .. } => actual,
                             });
