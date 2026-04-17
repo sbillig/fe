@@ -217,7 +217,7 @@ fn render_root_object<'a, 'db>(
     rendered_sections: &mut HashSet<(String, mir2::RuntimeSectionName)>,
     stack: &mut Vec<(String, mir2::RuntimeSectionName)>,
 ) -> Result<YulDoc, YulError> {
-    let body = render_root_object_body(index, object, rendered_sections, stack)?;
+    let body = render_root_object_body(index, object, &object.name, rendered_sections, stack)?;
     Ok(YulDoc::block(format!("object \"{}\" ", object.name), body))
 }
 
@@ -230,7 +230,7 @@ fn render_test_root_object<'a, 'db>(
 ) -> Result<YulDoc, YulError> {
     let runtime = YulDoc::block(
         "object \"runtime\" ",
-        render_root_object_body(index, object, rendered_sections, stack)?,
+        render_root_object_body(index, object, "runtime", rendered_sections, stack)?,
     );
     let init = YulDoc::block(
         "code ",
@@ -248,6 +248,7 @@ fn render_test_root_object<'a, 'db>(
 fn render_root_object_body<'a, 'db>(
     index: &PackageIndex<'a, 'db>,
     object: &'a YulObjectPlan<'db>,
+    object_label: &str,
     rendered_sections: &mut HashSet<(String, mir2::RuntimeSectionName)>,
     stack: &mut Vec<(String, mir2::RuntimeSectionName)>,
 ) -> Result<Vec<YulDoc>, YulError> {
@@ -255,7 +256,7 @@ fn render_root_object_body<'a, 'db>(
         YulError::InvalidYulPackage(format!("object `{}` has no sections", object.name))
     })?;
     rendered_sections.insert((object.name.clone(), primary.name.clone()));
-    let mut body = render_section_body(index, primary, rendered_sections, stack)?;
+    let mut body = render_section_body(index, primary, object_label, rendered_sections, stack)?;
     for section in &object.sections {
         let key = (object.name.clone(), section.name.clone());
         if rendered_sections.contains(&key) {
@@ -289,7 +290,7 @@ fn render_nested_section<'a, 'db>(
     }
     rendered_sections.insert(key.clone());
     stack.push(key);
-    let body = render_section_body(index, section, rendered_sections, stack)?;
+    let body = render_section_body(index, section, &label, rendered_sections, stack)?;
     let _ = stack.pop();
     Ok(YulDoc::block(format!("object \"{label}\" "), body))
 }
@@ -297,10 +298,14 @@ fn render_nested_section<'a, 'db>(
 fn render_section_body<'a, 'db>(
     index: &PackageIndex<'a, 'db>,
     section: &'a YulSectionPlan<'db>,
+    object_label: &str,
     rendered_sections: &mut HashSet<(String, mir2::RuntimeSectionName)>,
     stack: &mut Vec<(String, mir2::RuntimeSectionName)>,
 ) -> Result<Vec<YulDoc>, YulError> {
-    let mut body = vec![YulDoc::block("code ", render_section_code(index, section)?)];
+    let mut body = vec![YulDoc::block(
+        "code ",
+        render_section_code(index, section, object_label)?,
+    )];
     for embed in &section.embeds {
         let source = index.section(&embed.source_object, &embed.source_section)?;
         body.push(render_nested_section(
@@ -324,13 +329,14 @@ fn render_section_body<'a, 'db>(
 fn render_section_code<'a, 'db>(
     index: &PackageIndex<'a, 'db>,
     section: &'a YulSectionPlan<'db>,
+    object_label: &str,
 ) -> Result<Vec<YulDoc>, YulError> {
     let mut docs = Vec::new();
     for function in &section.functions {
         docs.push(render_function_doc(
             index,
             index.function(*function)?,
-            &section.name,
+            object_label,
         )?);
     }
     docs.extend(render_section_entry(index, section)?);
