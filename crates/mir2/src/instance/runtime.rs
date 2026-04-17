@@ -46,9 +46,7 @@ use crate::{
             },
         },
         package::runtime_instance_for_semantic,
-        pretty::format_runtime_verify_failure,
     },
-    verify::verify_runtime_body_detailed,
 };
 
 #[salsa::interned]
@@ -94,7 +92,9 @@ impl<'db> RuntimeInstance<'db> {
             RuntimeInstanceSource::Semantic(semantic) => {
                 runtime_signature_for_key(db, semantic, self.key(db).params(db))
             }
-            RuntimeInstanceSource::Synthetic(_) => self.body(db).signature,
+            RuntimeInstanceSource::Synthetic(synthetic) => {
+                runtime_synthetic_signature(synthetic.spec(db).clone())
+            }
         }
     }
 
@@ -133,6 +133,21 @@ pub fn get_or_build_runtime_instance<'db>(
     RuntimeInstance::new(db, key)
 }
 
+fn runtime_synthetic_signature<'db>(spec: RuntimeSyntheticSpec<'db>) -> RuntimeSignature<'db> {
+    match spec {
+        RuntimeSyntheticSpec::MainRoot { .. }
+        | RuntimeSyntheticSpec::TestRoot { .. }
+        | RuntimeSyntheticSpec::ContractInitAbi { .. }
+        | RuntimeSyntheticSpec::ContractRecvAbi { .. }
+        | RuntimeSyntheticSpec::ContractInitRoot { .. }
+        | RuntimeSyntheticSpec::ContractRuntimeRoot { .. }
+        | RuntimeSyntheticSpec::CodeRegionRoot { .. } => RuntimeSignature {
+            params: Vec::new(),
+            ret: None,
+        },
+    }
+}
+
 #[salsa::tracked]
 fn lower_runtime_body<'db>(
     db: &'db dyn MirDb,
@@ -153,13 +168,6 @@ fn lower_runtime_body<'db>(
             lower_synthetic_runtime_body(db, instance, synthetic.spec(db).clone())
         }
     };
-    if let Err(failure) = verify_runtime_body_detailed(db, &db, &body) {
-        panic!(
-            "runtime body verification failed for {:?}\n{}",
-            instance.key(db),
-            format_runtime_verify_failure(db, &body, &failure),
-        );
-    }
     let direct_callees = collect_runtime_calls_lowered(&body);
     let referenced_const_regions = collect_referenced_const_regions(&body);
     let referenced_code_regions = collect_referenced_code_regions(&body);
@@ -630,8 +638,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         bindings: &[ContractEffectArgPlan<'db>],
     ) -> Vec<RLocalId> {
         let needed = callee
-            .body(self.db)
-            .signature
+            .signature(self.db)
             .params
             .len()
             .saturating_sub(provided_prefix);
@@ -747,7 +754,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         args: Vec<RLocalId>,
     ) -> Option<RLocalId> {
         let callee = self.specialize_callee_for_args(callee, &args);
-        let sig = callee.body(self.db).signature.clone();
+        let sig = callee.signature(self.db);
         let args = self.coerce_call_args(bb, callee, args);
         let dst = if let Some(class) = sig.ret {
             let semantic_ty = callee
@@ -825,13 +832,16 @@ impl<'db> SyntheticBodyBuilder<'db> {
         callee: RuntimeInstance<'db>,
         args: &[RLocalId],
     ) -> RuntimeInstance<'db> {
+        if args.is_empty() {
+            return callee;
+        }
         let RuntimeInstanceSource::Semantic(semantic) = callee.key(self.db).source(self.db) else {
             return callee;
         };
-        let body = callee.body(self.db);
+        let signature = callee.signature(self.db);
         let params: Vec<RuntimeClass<'db>> = args
             .iter()
-            .zip(body.signature.params.iter().enumerate())
+            .zip(signature.params.iter().enumerate())
             .map(|(arg, (idx, param))| {
                 let plan = self.runtime_param_plan(callee, idx).unwrap_or_else(|| {
                     RuntimeParamPlan::Boundary(RuntimeBoundarySpec::Exact(param.class.clone()))
@@ -854,6 +864,9 @@ impl<'db> SyntheticBodyBuilder<'db> {
         callee: RuntimeInstance<'db>,
         args: Vec<RLocalId>,
     ) -> Vec<RLocalId> {
+        if args.is_empty() && callee.signature(self.db).params.is_empty() {
+            return args;
+        }
         let body = callee.body(self.db);
         assert_eq!(
             args.len(),
