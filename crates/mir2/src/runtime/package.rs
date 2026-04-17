@@ -1472,7 +1472,7 @@ fn sol_abi_ty<'db>(
 
 fn visible_init_arg_fields<'db>(db: &'db dyn MirDb, semantic: SemanticInstance<'db>) -> Box<[u32]> {
     runtime_visible_binding_plans(db, semantic)
-        .into_iter()
+        .iter()
         .filter_map(|entry| match entry.binding {
             LocalBinding::Param { idx, .. } => Some(idx as u32),
             LocalBinding::Local { .. } | LocalBinding::EffectParam { .. } => None,
@@ -1492,7 +1492,7 @@ fn visible_recv_arg_fields<'db>(
         .map(|binding| (binding.pat, binding.tuple_index))
         .collect::<FxHashMap<_, _>>();
     runtime_visible_binding_plans(db, semantic)
-        .into_iter()
+        .iter()
         .filter_map(|entry| match entry.binding {
             LocalBinding::Local { pat, .. } => tuple_indices_by_pat.get(&pat).copied(),
             LocalBinding::Param { .. } | LocalBinding::EffectParam { .. } => None,

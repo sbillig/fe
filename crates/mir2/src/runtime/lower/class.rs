@@ -32,6 +32,7 @@ use hir::hir_def::ArithBinOp;
 use hir::projection::Projection;
 use hir::semantic::ProviderBinding;
 use rustc_hash::{FxHashMap, FxHashSet};
+use salsa::Update;
 
 use crate::{
     db::MirDb,
@@ -69,10 +70,11 @@ struct LocalRuntimeClassCtxt<'a, 'db> {
     assumptions: PredicateListId<'db>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub(crate) struct RuntimeVisibleBindingPlan<'db> {
     pub(crate) binding: LocalBinding<'db>,
     pub(crate) local: SLocalId,
+    pub(crate) semantic_ty: TyId<'db>,
     pub(crate) plan: RuntimeParamPlan<'db>,
 }
 
@@ -909,9 +911,28 @@ pub(crate) fn runtime_param_locals<'db>(
             binding_debug,
         );
     }
-    entries.into_iter().map(|entry| entry.local).collect()
+    entries.iter().map(|entry| entry.local).collect()
 }
 
+fn runtime_visible_binding_semantic_ty<'db>(
+    db: &'db dyn MirDb,
+    semantic: SemanticInstance<'db>,
+    typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
+    binding: LocalBinding<'db>,
+) -> TyId<'db> {
+    match binding {
+        LocalBinding::EffectParam { .. }
+        | LocalBinding::Param {
+            site: ParamSite::EffectField(_),
+            ..
+        } => semantic_binding_ty(db, semantic, binding),
+        LocalBinding::Local { .. } | LocalBinding::Param { .. } => {
+            typed_body.binding_ty(db, binding)
+        }
+    }
+}
+
+#[salsa::tracked(return_ref)]
 pub(crate) fn runtime_visible_binding_plans<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
@@ -924,6 +945,12 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
             entries.push(RuntimeVisibleBindingPlan {
                 binding,
                 local: runtime_visible_binding_local(db, owner, &typed_body, binding),
+                semantic_ty: runtime_visible_binding_semantic_ty(
+                    db,
+                    semantic,
+                    &typed_body,
+                    binding,
+                ),
                 plan,
             });
         }

@@ -242,12 +242,22 @@ impl<'db> SyntheticBodyBuilder<'db> {
     }
 
     fn build_passthrough_root(&mut self, callee: RuntimeInstance<'db>) {
-        let callee_body = callee.body(self.db);
-        let mut args = Vec::with_capacity(callee_body.signature.params.len());
-        for param in &callee_body.signature.params {
-            let semantic_ty = callee_body
-                .local(param.local)
-                .map(|local| local.semantic_ty)
+        let signature = callee.signature(self.db);
+        let semantic = callee.key(self.db).semantic(self.db);
+        let param_entries =
+            semantic.map(|semantic| runtime_visible_binding_plans(self.db, semantic));
+        if let Some(entries) = param_entries {
+            assert_eq!(
+                entries.len(),
+                signature.params.len(),
+                "synthetic passthrough arg count mismatch for {callee:?}"
+            );
+        }
+        let mut args = Vec::with_capacity(signature.params.len());
+        for (idx, param) in signature.params.iter().enumerate() {
+            let semantic_ty = param_entries
+                .and_then(|entries| entries.get(idx))
+                .map(|entry| entry.semantic_ty)
                 .unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other));
             let local = self.push_local(
                 semantic_ty,
@@ -266,12 +276,10 @@ impl<'db> SyntheticBodyBuilder<'db> {
             args.push(local);
         }
 
-        if let Some(class) = callee_body.signature.ret.clone() {
+        if let Some(class) = signature.ret.clone() {
             let dst = self.push_local(
-                callee_body
-                    .locals
-                    .first()
-                    .map(|local| local.semantic_ty)
+                semantic
+                    .map(|semantic| semantic_return_ty(self.db, semantic))
                     .unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other)),
                 RuntimeCarrier::Value(class),
                 RuntimeLocalRoot::None,
@@ -839,13 +847,22 @@ impl<'db> SyntheticBodyBuilder<'db> {
             return callee;
         };
         let signature = callee.signature(self.db);
+        let param_entries = runtime_visible_binding_plans(self.db, semantic);
+        assert_eq!(
+            param_entries.len(),
+            signature.params.len(),
+            "synthetic specialized callee metadata mismatch for {callee:?}"
+        );
         let params: Vec<RuntimeClass<'db>> = args
             .iter()
             .zip(signature.params.iter().enumerate())
             .map(|(arg, (idx, param))| {
-                let plan = self.runtime_param_plan(callee, idx).unwrap_or_else(|| {
-                    RuntimeParamPlan::Boundary(RuntimeBoundarySpec::Exact(param.class.clone()))
-                });
+                let plan = param_entries
+                    .get(idx)
+                    .map(|entry| entry.plan.clone())
+                    .unwrap_or_else(|| {
+                        RuntimeParamPlan::Boundary(RuntimeBoundarySpec::Exact(param.class.clone()))
+                    });
                 self.runtime_class_for_param_arg(*arg, &plan)
             })
             .collect();
@@ -864,25 +881,40 @@ impl<'db> SyntheticBodyBuilder<'db> {
         callee: RuntimeInstance<'db>,
         args: Vec<RLocalId>,
     ) -> Vec<RLocalId> {
-        if args.is_empty() && callee.signature(self.db).params.is_empty() {
+        let signature = callee.signature(self.db);
+        if args.is_empty() && signature.params.is_empty() {
             return args;
         }
-        let body = callee.body(self.db);
+        let param_entries = callee
+            .key(self.db)
+            .semantic(self.db)
+            .map(|semantic| runtime_visible_binding_plans(self.db, semantic));
+        if let Some(entries) = param_entries {
+            assert_eq!(
+                entries.len(),
+                signature.params.len(),
+                "synthetic semantic/runtime param metadata mismatch for {callee:?}"
+            );
+        }
         assert_eq!(
             args.len(),
-            body.signature.params.len(),
+            signature.params.len(),
             "synthetic call arg count mismatch for {callee:?}"
         );
         args.into_iter()
-            .zip(body.signature.params.iter().enumerate())
+            .zip(signature.params.iter().enumerate())
             .map(|(arg, (idx, param))| {
-                let semantic_ty = body
-                    .local(param.local)
-                    .map(|local| local.semantic_ty)
-                    .unwrap_or_else(|| self.locals[arg.index()].semantic_ty);
-                let plan = self.runtime_param_plan(callee, idx).unwrap_or_else(|| {
-                    RuntimeParamPlan::Boundary(RuntimeBoundarySpec::Exact(param.class.clone()))
-                });
+                let (semantic_ty, plan) = param_entries
+                    .and_then(|entries| entries.get(idx))
+                    .map(|entry| (entry.semantic_ty, entry.plan.clone()))
+                    .unwrap_or_else(|| {
+                        (
+                            self.locals[arg.index()].semantic_ty,
+                            RuntimeParamPlan::Boundary(RuntimeBoundarySpec::Exact(
+                                param.class.clone(),
+                            )),
+                        )
+                    });
                 self.coerce_runtime_value_for_param_plan(bb, arg, &plan, semantic_ty)
             })
             .collect()
@@ -974,22 +1006,6 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 .value_class()
                 .cloned()
                 .unwrap_or_else(|| panic!("cannot specialize erased runtime arg {arg:?}")),
-        }
-    }
-
-    fn runtime_param_plan(
-        &self,
-        callee: RuntimeInstance<'db>,
-        idx: usize,
-    ) -> Option<RuntimeParamPlan<'db>> {
-        let key = callee.key(self.db);
-        match key.source(self.db) {
-            RuntimeInstanceSource::Semantic(semantic) => {
-                runtime_visible_binding_plans(self.db, semantic)
-                    .get(idx)
-                    .map(|entry| entry.plan.clone())
-            }
-            RuntimeInstanceSource::Synthetic(_) => None,
         }
     }
 
