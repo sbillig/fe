@@ -43,8 +43,9 @@ use super::{
         BodyEnv, BodyStaticFacts, ContractMetadataBuiltin, GenericNumericIntrinsicKind,
         RuntimeBodyCx, RuntimeEffectBindingPlan, actual_aggregate_class_from_runtime_source,
         contract_metadata_builtin, desired_runtime_effect_arg_boundary, desired_runtime_param_plan,
-        generic_numeric_intrinsic_kind, resolve_runtime_call_key,
+        generic_numeric_intrinsic_kind, nonself_backing_value_place, resolve_runtime_call_key,
         runtime_effect_binding_plan_for_binding_idx, runtime_signature_for_key, semantic_return_ty,
+        snapshot_source_place,
     },
     coerce::CoercionPlanner,
     consts::{
@@ -4027,31 +4028,8 @@ impl<'db> RmirEmitter<'db> {
         self.local_root(local)
     }
 
-    fn nonself_backing_value_place(&self, local: SLocalId) -> Option<&NSPlace<'db>> {
-        let place = self.semantic_body.local(local)?.backing_place()?;
-        (!self.is_self_rooted_value_place(local, place)).then_some(place)
-    }
-
-    fn snapshot_source_place(&self, local: SLocalId) -> Option<&NSPlace<'db>> {
-        self.semantic_body.local(local)?.snapshot_source_place()
-    }
-
-    fn is_self_rooted_value_place(&self, local: SLocalId, place: &NSPlace<'db>) -> bool {
-        if !place.path.is_empty() {
-            return false;
-        }
-        match place.root {
-            NSPlaceRoot::CarrierDerefLocal(root_local) => root_local == local,
-            NSPlaceRoot::Root(root) => matches!(
-                self.semantic_body.root(root),
-                Some(NBorrowRoot::Param { local: root_local, .. } | NBorrowRoot::LocalSlot { local: root_local })
-                    if *root_local == local
-            ),
-        }
-    }
-
     fn try_semantic_place(&mut self, bb: RBlockId, local: SLocalId) -> Option<RuntimePlace<'db>> {
-        if let Some(place) = self.nonself_backing_value_place(local).cloned() {
+        if let Some(place) = nonself_backing_value_place(&self.semantic_body, local).cloned() {
             return self.try_lower_place(bb, &place);
         }
         let root = self.semantic_place_root(local)?;
@@ -4168,6 +4146,19 @@ impl<'db> RmirEmitter<'db> {
         self.read_semantic_value(bb, operand.local)
     }
 
+    fn coerce_value_if_needed(
+        &mut self,
+        bb: RBlockId,
+        value: RLocalId,
+        target: &RuntimeClass<'db>,
+    ) -> RLocalId {
+        if self.value_class(value).is_none() || self.value_class(value) == Some(target) {
+            value
+        } else {
+            self.coerce_value(bb, value, target)
+        }
+    }
+
     fn lower_semantic_operand_for_class(
         &mut self,
         bb: RBlockId,
@@ -4180,39 +4171,23 @@ impl<'db> RmirEmitter<'db> {
             })
             && let Some(value) = self.actual_aggregate_value_from_runtime_source(bb, operand.local)
         {
-            return if self.value_class(value).is_none() || self.value_class(value) == Some(target) {
-                value
-            } else {
-                self.coerce_value(bb, value, target)
-            };
+            return self.coerce_value_if_needed(bb, value, target);
         }
         if !CoercionPlanner::target_prefers_transport(target)
             && let Some(value) = self.materialize_ordinary_direct_value(bb, operand.local)
         {
-            return if self.value_class(value).is_none() || self.value_class(value) == Some(target) {
-                value
-            } else {
-                self.coerce_value(bb, value, target)
-            };
+            return self.coerce_value_if_needed(bb, value, target);
         }
         if CoercionPlanner::target_prefers_transport(target) {
             if let Some(value) = self.handle_like_semantic_value(operand.local) {
-                return if self.value_class(value) == Some(target) {
-                    value
-                } else {
-                    self.coerce_value(bb, value, target)
-                };
+                return self.coerce_value_if_needed(bb, value, target);
             }
             if let Some(value) = self.addr_of_semantic_operand_for_class(bb, operand, target) {
                 return value;
             }
         }
         let value = self.read_semantic_operand(bb, operand);
-        if self.value_class(value).is_none() || self.value_class(value) == Some(target) {
-            value
-        } else {
-            self.coerce_value(bb, value, target)
-        }
+        self.coerce_value_if_needed(bb, value, target)
     }
 
     fn actual_aggregate_value_from_runtime_source(
@@ -4220,7 +4195,7 @@ impl<'db> RmirEmitter<'db> {
         bb: RBlockId,
         local: SLocalId,
     ) -> Option<RLocalId> {
-        if let Some(place) = self.snapshot_source_place(local).cloned()
+        if let Some(place) = snapshot_source_place(&self.semantic_body, local).cloned()
             && let Some(place) = self.try_lower_place(bb, &place)
         {
             let class = self.project_place_class(&place);
@@ -4236,20 +4211,12 @@ impl<'db> RmirEmitter<'db> {
                     expr: RExpr::Load { place },
                 },
             );
-            return Some(if class == actual {
-                value
-            } else {
-                self.coerce_value(bb, value, &actual)
-            });
+            return Some(self.coerce_value_if_needed(bb, value, &actual));
         }
         let value = self.read_semantic_value(bb, local);
         let class = self.value_class(value).cloned()?;
         let actual = actual_aggregate_class_from_runtime_source(&class)?;
-        Some(if class == actual {
-            value
-        } else {
-            self.coerce_value(bb, value, &actual)
-        })
+        Some(self.coerce_value_if_needed(bb, value, &actual))
     }
 
     fn materialize_ordinary_direct_value(
@@ -4287,11 +4254,7 @@ impl<'db> RmirEmitter<'db> {
                 expr: RExpr::Load { place },
             },
         );
-        Some(if place_class == target {
-            temp
-        } else {
-            self.coerce_value(bb, temp, &target)
-        })
+        Some(self.coerce_value_if_needed(bb, temp, &target))
     }
 
     fn place_from_direct_value_transport(
@@ -4358,7 +4321,7 @@ impl<'db> RmirEmitter<'db> {
             return None;
         }
         let local = operand.local;
-        if let Some(place) = self.nonself_backing_value_place(local).cloned()
+        if let Some(place) = nonself_backing_value_place(&self.semantic_body, local).cloned()
             && let Some(place) = self.try_lower_place(bb, &place)
         {
             return Some(self.lower_place_addr_of_for_class(
@@ -4369,11 +4332,7 @@ impl<'db> RmirEmitter<'db> {
             ));
         }
         if let Some(value) = self.handle_like_semantic_value(local) {
-            return Some(if self.value_class(value) == Some(target) {
-                value
-            } else {
-                self.coerce_value(bb, value, target)
-            });
+            return Some(self.coerce_value_if_needed(bb, value, target));
         }
         if matches!(
             self.semantic_local_lowering(local),
@@ -4531,7 +4490,8 @@ impl<'db> RmirEmitter<'db> {
             BoundarySource::RuntimePlace(place) => Some(place.clone()),
             BoundarySource::SemanticOperand(operand) => {
                 let local = operand.local;
-                if let Some(place) = self.nonself_backing_value_place(local).cloned()
+                if let Some(place) =
+                    nonself_backing_value_place(&self.semantic_body, local).cloned()
                     && let Some(place) = self.try_lower_place(bb, &place)
                 {
                     Some(place)

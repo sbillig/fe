@@ -206,8 +206,8 @@ impl<'a, 'db> LocalStateInferer<'a, 'db> {
     fn infer_roots(&mut self) -> Vec<RuntimeLocalRoot<'db>> {
         let carriers = self.carriers.clone();
         let cx = self.env.with_carriers(&carriers);
-        let mut roots = Vec::with_capacity(cx.body().locals.len());
-        for (idx, local) in cx.body().locals.iter().enumerate() {
+        let mut roots = Vec::with_capacity(cx.env.body().locals.len());
+        for (idx, local) in cx.env.body().locals.iter().enumerate() {
             let local_id = SLocalId::from_u32(idx as u32);
             let mut carrier = carriers[idx].clone();
             let root = if !local.facts.root_demand.needs_runtime_root() {
@@ -228,20 +228,25 @@ fn lower_semantic_locals<'db>(
     Vec<RuntimeLocalLowering<'db>>,
     Vec<RuntimeProviderBinding<'db>>,
 ) {
+    let db = cx.env.db();
+    let body = cx.env.body();
+    let carriers = cx.carriers;
+    let scope = cx.env.scope();
+    let assumptions = cx.env.assumptions();
     let mut provider_bindings = Vec::new();
-    for (idx, local) in cx.body().locals.iter().enumerate() {
+    for (idx, local) in body.locals.iter().enumerate() {
         let local_id = SLocalId::from_u32(idx as u32);
         let binding = match (&local.facts.interface, &local.facts.origin) {
             (NLocalInterface::DirectValue, NLocalOrigin::RootProvider(provider)) => {
                 let (provider_local, provider_class) = cx
                     .env
-                    .actual_runtime_visible_root_provider_class(cx.carriers(), provider)
+                    .actual_runtime_visible_root_provider_class(carriers, provider)
                 .or_else(|| {
-                    runtime_class_for_direct_value_provider_in_context(
-                        cx.db(),
+                        runtime_class_for_direct_value_provider_in_context(
+                        db,
                         provider,
-                        cx.scope(),
-                        cx.assumptions(),
+                        scope,
+                        assumptions,
                     )
                     .map(|class| (local_id, class))
                 })
@@ -254,7 +259,7 @@ fn lower_semantic_locals<'db>(
                 Some((
                     provider.clone(),
                     provider_class,
-                    normalized_local_place_class(cx.db(), cx.body(), local_id, cx.carriers())
+                    normalized_local_place_class(db, body, local_id, carriers)
                         .unwrap_or_else(|| {
                             panic!(
                                 "missing normalized place class for root-provider direct value local {idx}"
@@ -266,20 +271,20 @@ fn lower_semantic_locals<'db>(
             (NLocalInterface::PlaceBoundValue, NLocalOrigin::RootProvider(provider)) => {
                 let (provider_local, provider_class) = cx
                     .env
-                    .actual_runtime_visible_root_provider_class(cx.carriers(), provider)
+                    .actual_runtime_visible_root_provider_class(carriers, provider)
                 .or_else(|| {
                     runtime_class_for_effect_binding_provider_in_context(
-                        cx.db(),
+                        db,
                         provider,
-                        cx.scope(),
-                        cx.assumptions(),
+                        scope,
+                        assumptions,
                     )
                     .or_else(|| {
                         runtime_class_for_direct_value_provider_in_context(
-                            cx.db(),
+                            db,
                             provider,
-                            cx.scope(),
-                            cx.assumptions(),
+                            scope,
+                            assumptions,
                         )
                     })
                     .map(|class| (local_id, class))
@@ -292,7 +297,7 @@ fn lower_semantic_locals<'db>(
                 Some((
                     provider.clone(),
                     provider_class,
-                    normalized_local_place_class(cx.db(), cx.body(), local_id, cx.carriers())
+                    normalized_local_place_class(db, body, local_id, carriers)
                         .unwrap_or_else(|| {
                             panic!(
                                 "missing normalized place class for root-provider place-bound local {idx}"
@@ -307,33 +312,21 @@ fn lower_semantic_locals<'db>(
                 };
                 let (provider_local, provider_class) = cx
                     .env
-                    .actual_runtime_visible_root_provider_class(cx.carriers(), provider)
+                    .actual_runtime_visible_root_provider_class(carriers, provider)
                     .or_else(|| {
-                        runtime_class_for_provider_binding(
-                            cx.db(),
-                            provider,
-                            cx.scope(),
-                            cx.assumptions(),
-                        )
-                        .map(|class| (local_id, class))
+                        runtime_class_for_provider_binding(db, provider, scope, assumptions)
+                            .map(|class| (local_id, class))
                     })
                     .unwrap_or_else(|| {
                         panic!(
                             "missing direct-carrier runtime class for semantic local {idx}: {}",
-                            local.ty.pretty_print(cx.db()),
+                            local.ty.pretty_print(db),
                         )
                     });
                 Some((
                     provider.clone(),
                     provider_class,
-                    carrier_local_place_class(
-                        cx.db(),
-                        local,
-                        local_id,
-                        cx.carriers(),
-                        cx.scope(),
-                        cx.assumptions(),
-                    ),
+                    carrier_local_place_class(db, local, local_id, carriers, scope, assumptions),
                     provider_local,
                 ))
             }
@@ -354,6 +347,7 @@ fn lower_semantic_locals<'db>(
         );
     }
     let lowerings = cx
+        .env
         .body()
         .locals
         .iter()
@@ -375,22 +369,18 @@ fn lower_semantic_locals<'db>(
             (NLocalInterface::DirectValue, _) => RuntimeLocalLowering::DirectValue,
             (NLocalInterface::PlaceCarrier, _) => RuntimeLocalLowering::PlaceCarrier {
                 place_class: carrier_local_place_class(
-                    cx.db(),
+                    db,
                     local,
                     SLocalId::from_u32(idx as u32),
-                    cx.carriers(),
-                    cx.scope(),
-                    cx.assumptions(),
+                    carriers,
+                    scope,
+                    assumptions,
                 ),
             },
             (NLocalInterface::PlaceBoundValue, origin) => {
-                let place_class = normalized_local_place_class(
-                    cx.db(),
-                    cx.body(),
-                    SLocalId::from_u32(idx as u32),
-                    cx.carriers(),
-                )
-                .unwrap_or_else(|| {
+                let place_class =
+                    normalized_local_place_class(db, body, SLocalId::from_u32(idx as u32), carriers)
+                        .unwrap_or_else(|| {
                     panic!("missing normalized place class for place-bound semantic local {idx}")
                 });
                 let provider = origin.root_provider().map(|provider| {
@@ -407,20 +397,24 @@ fn lower_semantic_locals<'db>(
             }
             (NLocalInterface::DirectCarrier, origin) => {
                 let place_class = carrier_local_place_class(
-                    cx.db(),
+                    db,
                     local,
                     SLocalId::from_u32(idx as u32),
-                    cx.carriers(),
-                    cx.scope(),
-                    cx.assumptions(),
+                    carriers,
+                    scope,
+                    assumptions,
                 );
                 let provider = origin.root_provider().map(|provider| {
-                    let provider_class =
-                        runtime_class_for_provider_binding(cx.db(), provider, cx.scope(), cx.assumptions())
-                            .unwrap_or_else(|| {
+                    let provider_class = runtime_class_for_provider_binding(
+                        db,
+                        provider,
+                        scope,
+                        assumptions,
+                    )
+                    .unwrap_or_else(|| {
                                 panic!(
                                     "missing direct-carrier runtime class for semantic local {idx}: {}",
-                                    local.ty.pretty_print(cx.db()),
+                                    local.ty.pretty_print(db),
                                 )
                             });
                     push_runtime_provider_binding(
@@ -507,6 +501,7 @@ fn infer_runtime_local_root<'db>(
     carrier: &mut RuntimeCarrier<'db>,
 ) -> RuntimeLocalRoot<'db> {
     let local_data = cx
+        .env
         .body()
         .locals
         .get(local.index())
@@ -577,8 +572,8 @@ pub(super) fn local_place_root_class<'db>(
         NLocalInterface::PlaceBoundValue => cx
             .env
             .normalized_place_class(
-                cx.carriers(),
-                cx.body().locals.get(local.index())?.backing_place()?,
+                cx.carriers,
+                cx.env.body().locals.get(local.index())?.backing_place()?,
             )
             .or_else(|| cx.env.root_place_fallback_class(local)),
         NLocalInterface::DirectCarrier => {

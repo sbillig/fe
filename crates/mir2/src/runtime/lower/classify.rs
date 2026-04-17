@@ -1282,30 +1282,10 @@ fn build_local_static_facts<'db>(
 ) -> LocalStaticFacts<'db> {
     let scope = type_env.scope;
     let assumptions = type_env.assumptions;
+    let lowered_ty = lowered_place_like_ty(local, local_data);
     let semantic_fallback_class = match local_data.facts.interface {
-        NLocalInterface::PlaceCarrier => {
-            let NormalizedBindingLowering::CarrierLocal { target_ty, .. } = &local_data.lowering
-            else {
-                panic!("place-carrier local missing carrier lowering: {local:?}");
-            };
-            Some(stored_class_for_ty_in_context(
-                db,
-                *target_ty,
-                scope,
-                assumptions,
-            ))
-        }
-        NLocalInterface::PlaceBoundValue => {
-            let NormalizedBindingLowering::PlaceBoundValue { value_ty, .. } = &local_data.lowering
-            else {
-                panic!("place-bound local missing place-bound lowering: {local:?}");
-            };
-            Some(stored_class_for_ty_in_context(
-                db,
-                *value_ty,
-                scope,
-                assumptions,
-            ))
+        NLocalInterface::PlaceCarrier | NLocalInterface::PlaceBoundValue => {
+            lowered_ty.map(|ty| stored_class_for_ty_in_context(db, ty, scope, assumptions))
         }
         NLocalInterface::Erased | NLocalInterface::DirectValue | NLocalInterface::DirectCarrier => {
             None
@@ -1319,29 +1299,10 @@ fn build_local_static_facts<'db>(
             scope,
             assumptions,
         )),
-        NLocalInterface::PlaceCarrier | NLocalInterface::DirectCarrier => {
-            let NormalizedBindingLowering::CarrierLocal { target_ty, .. } = &local_data.lowering
-            else {
-                panic!("carrier local missing carrier lowering: {local:?}");
-            };
-            Some(stored_class_for_ty_in_context(
-                db,
-                *target_ty,
-                scope,
-                assumptions,
-            ))
-        }
-        NLocalInterface::PlaceBoundValue => {
-            let NormalizedBindingLowering::PlaceBoundValue { value_ty, .. } = &local_data.lowering
-            else {
-                panic!("place-bound local missing place-bound lowering: {local:?}");
-            };
-            Some(stored_class_for_ty_in_context(
-                db,
-                *value_ty,
-                scope,
-                assumptions,
-            ))
+        NLocalInterface::PlaceCarrier
+        | NLocalInterface::DirectCarrier
+        | NLocalInterface::PlaceBoundValue => {
+            lowered_ty.map(|ty| stored_class_for_ty_in_context(db, ty, scope, assumptions))
         }
     };
     LocalStaticFacts {
@@ -1367,6 +1328,29 @@ fn build_local_static_facts<'db>(
             assumptions,
         ),
         source_locals: local_source_locals(body, local_data),
+    }
+}
+
+fn lowered_place_like_ty<'db>(
+    local: SLocalId,
+    local_data: &hir::analysis::semantic::borrowck::NSLocal<'db>,
+) -> Option<TyId<'db>> {
+    match (&local_data.facts.interface, &local_data.lowering) {
+        (
+            NLocalInterface::PlaceCarrier | NLocalInterface::DirectCarrier,
+            NormalizedBindingLowering::CarrierLocal { target_ty, .. },
+        ) => Some(*target_ty),
+        (
+            NLocalInterface::PlaceBoundValue,
+            NormalizedBindingLowering::PlaceBoundValue { value_ty, .. },
+        ) => Some(*value_ty),
+        (NLocalInterface::PlaceCarrier | NLocalInterface::DirectCarrier, _) => {
+            panic!("carrier local missing carrier lowering: {local:?}")
+        }
+        (NLocalInterface::PlaceBoundValue, _) => {
+            panic!("place-bound local missing place-bound lowering: {local:?}")
+        }
+        (NLocalInterface::Erased | NLocalInterface::DirectValue, _) => None,
     }
 }
 
@@ -1646,30 +1630,10 @@ fn build_expr_static_facts<'db>(
 #[derive(Clone, Copy)]
 pub(crate) struct RuntimeBodyCx<'a, 'carriers, 'db> {
     pub(crate) env: BodyEnv<'a, 'db>,
-    carriers: &'carriers [RuntimeCarrier<'db>],
+    pub(crate) carriers: &'carriers [RuntimeCarrier<'db>],
 }
 
 impl<'a, 'carriers, 'db> RuntimeBodyCx<'a, 'carriers, 'db> {
-    pub(super) fn db(self) -> &'db dyn MirDb {
-        self.env.db()
-    }
-
-    pub(super) fn body(self) -> &'a NormalizedSemanticBody<'db> {
-        self.env.body()
-    }
-
-    pub(super) fn carriers(self) -> &'carriers [RuntimeCarrier<'db>] {
-        self.carriers
-    }
-
-    pub(super) fn scope(self) -> Option<hir::hir_def::scope_graph::ScopeId<'db>> {
-        self.env.scope()
-    }
-
-    pub(super) fn assumptions(self) -> PredicateListId<'db> {
-        self.env.assumptions()
-    }
-
     pub(crate) fn expr_direct_class(
         self,
         block_idx: usize,
@@ -2436,7 +2400,7 @@ fn specialize_boundary_for_runtime_source_in_context<'a, 'db>(
     )
 }
 
-fn nonself_backing_value_place<'a, 'db>(
+pub(super) fn nonself_backing_value_place<'a, 'db>(
     body: &'a NormalizedSemanticBody<'db>,
     local: SLocalId,
 ) -> Option<&'a NSPlace<'db>> {
@@ -2462,7 +2426,7 @@ fn is_self_rooted_value_place<'db>(
     }
 }
 
-fn snapshot_source_place<'a, 'db>(
+pub(super) fn snapshot_source_place<'a, 'db>(
     body: &'a NormalizedSemanticBody<'db>,
     local: SLocalId,
 ) -> Option<&'a NSPlace<'db>> {
