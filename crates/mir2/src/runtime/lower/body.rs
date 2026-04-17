@@ -80,14 +80,14 @@ pub fn lower_to_rmir<'db>(db: &'db dyn MirDb, instance: RuntimeInstance<'db>) ->
         key.params(db),
         &runtime_param_locals(db, semantic, key.params(db)),
         semantic.key(db).owner(db).scope().into(),
-        semantic.key(db).instantiate_typed_body(db).assumptions(),
+        semantic.key(db).typed_body(db).assumptions(),
     );
     let (semantic_locals, provider_bindings) = lower_semantic_locals(
         db,
         &normalized_body,
         &local_state,
         semantic.key(db).owner(db).scope().into(),
-        semantic.key(db).instantiate_typed_body(db).assumptions(),
+        semantic.key(db).typed_body(db).assumptions(),
     );
     let signature = runtime_signature_for_key(db, semantic, key.params(db));
     let mut cx = RmirLowerCtxt::new(
@@ -193,7 +193,7 @@ impl<'db> RmirLowerCtxt<'db> {
             .semantic(db)
             .expect("runtime lowering requires a semantic instance")
             .key(db)
-            .instantiate_typed_body(db);
+            .typed_body(db);
         let env = RuntimeTypeEnv::new(
             typed_body.body().map(|body| body.scope()),
             typed_body.assumptions(),

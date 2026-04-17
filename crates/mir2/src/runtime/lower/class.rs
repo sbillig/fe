@@ -70,6 +70,29 @@ struct LocalRuntimeClassCtxt<'a, 'db> {
     assumptions: PredicateListId<'db>,
 }
 
+#[derive(Clone, Copy)]
+struct RuntimeSourceEnv<'a, 'db> {
+    typed_body: &'a hir::analysis::ty::ty_check::TypedBody<'db>,
+    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
+    env: RuntimeTypeEnv<'db>,
+}
+
+impl<'a, 'db> RuntimeSourceEnv<'a, 'db> {
+    fn new(
+        typed_body: &'a hir::analysis::ty::ty_check::TypedBody<'db>,
+        scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+        assumptions: PredicateListId<'db>,
+    ) -> Self {
+        Self {
+            typed_body,
+            scope,
+            assumptions,
+            env: RuntimeTypeEnv::new(scope, assumptions),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub(crate) struct RuntimeVisibleBindingPlan<'db> {
     pub(crate) binding: LocalBinding<'db>,
@@ -188,8 +211,8 @@ pub fn runtime_return_class_for_key<'db>(
     let semantic = key
         .semantic(db)
         .expect("return-class inference only applies to semantic runtime instances");
-    let typed_body = semantic.key(db).instantiate_typed_body(db);
-    let plan = desired_runtime_return_plan(db, &typed_body);
+    let typed_body = semantic.key(db).typed_body(db);
+    let plan = desired_runtime_return_plan(db, typed_body);
     match &plan {
         RuntimeVisibleReturnPlan::Erased => return None,
         RuntimeVisibleReturnPlan::Exact(class) => return Some(class.clone()),
@@ -217,17 +240,17 @@ pub fn runtime_return_class_for_key<'db>(
         let Some(class) =
             visible_return_class_for_local(db, &semantic_body, value.local, &plan, &carriers)
         else {
-            return default_return_class(db, &typed_body);
+            return default_return_class(db, typed_body);
         };
         returned.push(class);
     }
     let Some(first) = returned.pop() else {
-        return default_return_class(db, &typed_body);
+        return default_return_class(db, typed_body);
     };
     if returned.iter().all(|class| class == &first) {
         Some(first)
     } else {
-        default_return_class(db, &typed_body)
+        default_return_class(db, typed_body)
     }
 }
 
@@ -239,6 +262,8 @@ pub(super) fn infer_local_runtime_state<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> Vec<InferredRuntimeLocal<'db>> {
+    let typed_body = body.owner.key(db).typed_body(db);
+    let source_env = RuntimeSourceEnv::new(typed_body, scope, assumptions);
     let mut carriers = vec![RuntimeCarrier::Erased; body.locals.len()];
     for (class, local) in params.iter().zip(param_locals.iter().copied()) {
         carriers[local.index()] = RuntimeCarrier::Value(class.clone());
@@ -282,7 +307,14 @@ pub(super) fn infer_local_runtime_state<'db>(
                     continue;
                 };
                 let local = &body.locals[dst.index()];
-                let desired = match expr_direct_class(db, body, expr, local.ty, &carriers) {
+                let desired = match expr_direct_class_in_context(
+                    db,
+                    body,
+                    expr,
+                    local.ty,
+                    &carriers,
+                    &source_env,
+                ) {
                     Some(RuntimeClass::AggregateValue { layout })
                         if matches!(local.facts.interface, NLocalInterface::DirectValue)
                             && local.facts.root_demand.needs_projectable_owned_storage() =>
@@ -652,11 +684,32 @@ fn normalized_local_place_class<'db>(
     local: SLocalId,
     carriers: &[RuntimeCarrier<'db>],
 ) -> Option<RuntimeClass<'db>> {
-    normalized_place_class(
+    let typed_body = body.owner.key(db).typed_body(db);
+    normalized_local_place_class_in_context(
+        db,
+        body,
+        local,
+        carriers,
+        typed_body.body().map(|body| body.scope()),
+        typed_body.assumptions(),
+    )
+}
+
+fn normalized_local_place_class_in_context<'db>(
+    db: &'db dyn MirDb,
+    body: &NormalizedSemanticBody<'db>,
+    local: SLocalId,
+    carriers: &[RuntimeCarrier<'db>],
+    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
+) -> Option<RuntimeClass<'db>> {
+    normalized_place_class_in_context(
         db,
         body,
         body.locals.get(local.index())?.backing_place()?,
         carriers,
+        scope,
+        assumptions,
     )
 }
 
@@ -754,21 +807,26 @@ fn local_place_root_class<'db>(
                 ctxt.assumptions,
             ))
         }
-        NLocalInterface::PlaceBoundValue => {
-            normalized_local_place_class(db, ctxt.body, local, ctxt.carriers).or_else(|| {
-                let NormalizedBindingLowering::PlaceBoundValue { value_ty, .. } =
-                    &local_data.lowering
-                else {
-                    panic!("place-bound local missing place-bound lowering: {local:?}");
-                };
-                Some(stored_class_for_ty_in_context(
-                    db,
-                    *value_ty,
-                    ctxt.scope,
-                    ctxt.assumptions,
-                ))
-            })
-        }
+        NLocalInterface::PlaceBoundValue => normalized_local_place_class_in_context(
+            db,
+            ctxt.body,
+            local,
+            ctxt.carriers,
+            ctxt.scope,
+            ctxt.assumptions,
+        )
+        .or_else(|| {
+            let NormalizedBindingLowering::PlaceBoundValue { value_ty, .. } = &local_data.lowering
+            else {
+                panic!("place-bound local missing place-bound lowering: {local:?}");
+            };
+            Some(stored_class_for_ty_in_context(
+                db,
+                *value_ty,
+                ctxt.scope,
+                ctxt.assumptions,
+            ))
+        }),
         NLocalInterface::DirectCarrier => {
             if let Some(carrier_class) = carrier_value_class_for_runtime(carrier)
                 && let Some(actual) = actual_aggregate_class_from_runtime_source(&carrier_class)
@@ -938,17 +996,17 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
     semantic: SemanticInstance<'db>,
 ) -> Vec<RuntimeVisibleBindingPlan<'db>> {
     let owner = semantic.key(db).owner(db);
-    let typed_body = semantic.key(db).instantiate_typed_body(db);
+    let typed_body = semantic.key(db).typed_body(db);
     let mut entries = Vec::new();
     let mut push = |binding, plan| {
         if !matches!(plan, RuntimeParamPlan::Erased) {
             entries.push(RuntimeVisibleBindingPlan {
                 binding,
-                local: runtime_visible_binding_local(db, owner, &typed_body, binding),
+                local: runtime_visible_binding_local(db, owner, typed_body, binding),
                 semantic_ty: runtime_visible_binding_semantic_ty(
                     db,
                     semantic,
-                    &typed_body,
+                    typed_body,
                     binding,
                 ),
                 plan,
@@ -960,7 +1018,7 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
     while let Some(binding) = typed_body.param_binding(idx) {
         push(
             binding,
-            desired_runtime_param_plan(db, semantic, &typed_body, idx),
+            desired_runtime_param_plan(db, semantic, typed_body, idx),
         );
         idx += 1;
     }
@@ -1291,7 +1349,7 @@ pub(crate) fn runtime_visible_binding_class<'db>(
         return Some(plan.class);
     }
     let owner = semantic.key(db).owner(db);
-    let typed_body = semantic.key(db).instantiate_typed_body(db);
+    let typed_body = semantic.key(db).typed_body(db);
     let env = RuntimeTypeEnv::new(Some(owner.scope()), typed_body.assumptions());
     let binding_ty = semantic_binding_ty(db, semantic, binding);
     runtime_exact_class_for_visible_binding_in_env(db, semantic, env, binding, binding_ty)
@@ -1404,18 +1462,45 @@ pub(crate) fn expr_direct_class<'db>(
     result_ty: TyId<'db>,
     carriers: &[RuntimeCarrier<'db>],
 ) -> Option<RuntimeClass<'db>> {
-    let owner = body.owner.key(db).owner(db);
-    let typed_body = body.owner.key(db).instantiate_typed_body(db);
-    let env = RuntimeTypeEnv::new(Some(owner.scope()), typed_body.assumptions());
+    let typed_body = body.owner.key(db).typed_body(db);
+    expr_direct_class_in_context(
+        db,
+        body,
+        expr,
+        result_ty,
+        carriers,
+        &RuntimeSourceEnv::new(
+            typed_body,
+            Some(body.owner.key(db).owner(db).scope()),
+            typed_body.assumptions(),
+        ),
+    )
+}
+
+fn expr_direct_class_in_context<'db>(
+    db: &'db dyn MirDb,
+    body: &NormalizedSemanticBody<'db>,
+    expr: &NExpr<'db>,
+    result_ty: TyId<'db>,
+    carriers: &[RuntimeCarrier<'db>],
+    source_env: &RuntimeSourceEnv<'_, 'db>,
+) -> Option<RuntimeClass<'db>> {
     Some(match expr {
-        NExpr::Use(value) => materialized_value_class(db, body, value.local, carriers)?,
+        NExpr::Use(value) => materialized_value_class_in_context(
+            db,
+            body,
+            value.local,
+            carriers,
+            source_env.scope,
+            source_env.assumptions,
+        )?,
         NExpr::Const(const_) => match const_ {
             SConst::Value(value) => {
                 let ty = sem_const_ty(db, *value);
                 if ty == TyId::unit(db) {
                     return None;
                 }
-                top_level_class_for_ty_in_env(db, env, ty, AddressSpaceKind::Memory)?
+                top_level_class_for_ty_in_env(db, source_env.env, ty, AddressSpaceKind::Memory)?
             }
             SConst::Ref(cref) => {
                 panic!("unresolved const ref reached runtime class inference: {cref:?}")
@@ -1427,21 +1512,28 @@ pub(crate) fn expr_direct_class<'db>(
         | NExpr::CodeRegionOffset { .. }
         | NExpr::CodeRegionLen { .. }
         | NExpr::GetEnumTag { .. } => {
-            RuntimeClass::Scalar(scalar_class_for_ty_in_env(db, env, result_ty)?)
+            RuntimeClass::Scalar(scalar_class_for_ty_in_env(db, source_env.env, result_ty)?)
         }
         NExpr::CodeRegionRef { .. } => return None,
         NExpr::AggregateMake { ty, fields } => {
-            aggregate_make_class(db, body, *ty, fields, carriers, env)?
+            aggregate_make_class(db, body, *ty, fields, carriers, source_env)?
         }
         NExpr::EnumMake { enum_ty, .. } => RuntimeClass::AggregateValue {
-            layout: layout_for_ty_in_env(db, env, *enum_ty),
+            layout: layout_for_ty_in_env(db, source_env.env, *enum_ty),
         },
-        NExpr::ReadPlace { place, .. } => normalized_place_class(db, body, place, carriers)
-            .or_else(|| {
-                top_level_class_for_ty_in_env(db, env, result_ty, AddressSpaceKind::Memory)
-            })?,
+        NExpr::ReadPlace { place, .. } => normalized_place_class_in_context(
+            db,
+            body,
+            place,
+            carriers,
+            source_env.scope,
+            source_env.assumptions,
+        )
+        .or_else(|| {
+            top_level_class_for_ty_in_env(db, source_env.env, result_ty, AddressSpaceKind::Memory)
+        })?,
         NExpr::ExtractEnumField { .. } => {
-            top_level_class_for_ty_in_env(db, env, result_ty, AddressSpaceKind::Memory)?
+            top_level_class_for_ty_in_env(db, source_env.env, result_ty, AddressSpaceKind::Memory)?
         }
         NExpr::Borrow {
             place, provider, ..
@@ -1450,8 +1542,8 @@ pub(crate) fn expr_direct_class<'db>(
             body,
             place,
             carriers,
-            Some(owner.scope()),
-            typed_body.assumptions(),
+            source_env.scope,
+            source_env.assumptions,
         )
         .or_else(|| {
             provider.map(|provider| RuntimeClass::RawAddr {
@@ -1471,7 +1563,7 @@ pub(crate) fn expr_direct_class<'db>(
             let callee_key = resolve_runtime_call_key(
                 db,
                 body.owner.key(db),
-                &typed_body,
+                source_env.typed_body,
                 body,
                 *callee,
                 args,
@@ -1486,22 +1578,24 @@ pub(crate) fn expr_direct_class<'db>(
             if let Some(class) = extern_builtin_return_class(db, semantic, result_ty) {
                 return class;
             }
-            let typed_body = semantic.key(db).instantiate_typed_body(db);
-            let env = RuntimeTypeEnv::new(
+            let typed_body = semantic.key(db).typed_body(db);
+            let callee_source_env = RuntimeSourceEnv::new(
+                typed_body,
                 typed_body.body().map(|body| body.scope()),
                 typed_body.assumptions(),
             );
             let mut param_classes = Vec::new();
             for (idx, arg) in args.iter().enumerate() {
-                match desired_runtime_param_plan(db, semantic, &typed_body, idx) {
+                match desired_runtime_param_plan(db, semantic, typed_body, idx) {
                     RuntimeParamPlan::Erased => {}
                     RuntimeParamPlan::Boundary(desired) => {
-                        let actual = runtime_visible_value_class(
+                        let actual = runtime_visible_value_class_in_context(
                             db,
                             body,
                             arg.local,
                             Some(&desired),
                             carriers,
+                            source_env,
                         );
                         if let Some(actual) = actual {
                             param_classes.push(match desired {
@@ -1513,9 +1607,9 @@ pub(crate) fn expr_direct_class<'db>(
                         }
                     }
                     RuntimeParamPlan::PassActual => {
-                        if let Some(actual) =
-                            runtime_visible_value_class(db, body, arg.local, None, carriers)
-                        {
+                        if let Some(actual) = runtime_visible_value_class_in_context(
+                            db, body, arg.local, None, carriers, source_env,
+                        ) {
                             param_classes.push(actual);
                         }
                     }
@@ -1524,7 +1618,14 @@ pub(crate) fn expr_direct_class<'db>(
             for arg in effect_args {
                 let plan =
                     runtime_effect_binding_plan_for_binding_idx(db, semantic, arg.binding_idx);
-                if let Some(class) = effect_arg_class(db, body, env, arg, plan.as_ref(), carriers) {
+                if let Some(class) = effect_arg_class(
+                    db,
+                    body,
+                    callee_source_env.env,
+                    arg,
+                    plan.as_ref(),
+                    carriers,
+                ) {
                     param_classes.push(class);
                 }
             }
@@ -1546,8 +1647,9 @@ fn aggregate_make_class<'db>(
     ty: TyId<'db>,
     fields: &[NOperand],
     carriers: &[RuntimeCarrier<'db>],
-    env: RuntimeTypeEnv<'db>,
+    source_env: &RuntimeSourceEnv<'_, 'db>,
 ) -> Option<RuntimeClass<'db>> {
+    let env = source_env.env;
     if let Some(class) = top_level_class_for_ty_in_env(db, env, ty, AddressSpaceKind::Memory)
         && !matches!(class, RuntimeClass::AggregateValue { .. })
     {
@@ -1567,16 +1669,28 @@ fn aggregate_make_class<'db>(
     for (field, field_ty) in fields.iter().copied().zip(field_tys.iter().copied()) {
         let class =
             match boundary_spec_for_ty_in_env(db, env, field_ty, AddressSpaceKind::Memory) {
-                Some(boundary) => {
-                    runtime_visible_value_class(db, body, field.local, Some(&boundary), carriers)
-                        .map(|actual| match &boundary {
-                            RuntimeBoundarySpec::Exact(desired) => {
-                                preserve_provider_space(&actual, desired)
-                            }
-                            RuntimeBoundarySpec::BorrowLike { .. } => actual,
-                        })
-                }
-                None => materialized_value_class(db, body, field.local, carriers),
+                Some(boundary) => runtime_visible_value_class_in_context(
+                    db,
+                    body,
+                    field.local,
+                    Some(&boundary),
+                    carriers,
+                    source_env,
+                )
+                .map(|actual| match &boundary {
+                    RuntimeBoundarySpec::Exact(desired) => {
+                        preserve_provider_space(&actual, desired)
+                    }
+                    RuntimeBoundarySpec::BorrowLike { .. } => actual,
+                }),
+                None => materialized_value_class_in_context(
+                    db,
+                    body,
+                    field.local,
+                    carriers,
+                    source_env.scope,
+                    source_env.assumptions,
+                ),
             }
             .unwrap_or_else(|| {
                 stored_class_for_ty_in_context(db, field_ty, env.scope, env.assumptions)
@@ -1594,26 +1708,45 @@ fn aggregate_make_class<'db>(
     })
 }
 
-fn exact_boundary_class_for_runtime_source<'db>(
+fn exact_boundary_class_for_runtime_source_in_context<'db>(
     db: &'db dyn MirDb,
     body: &NormalizedSemanticBody<'db>,
     local: SLocalId,
     desired: &RuntimeClass<'db>,
     carriers: &[RuntimeCarrier<'db>],
+    source_env: &RuntimeSourceEnv<'_, 'db>,
 ) -> RuntimeClass<'db> {
-    let actual = carrier_value_class(local, carriers)
-        .or_else(|| semantic_value_class(db, body, local, carriers));
-    let owner = body.owner.key(db).owner(db);
-    let typed_body = body.owner.key(db).instantiate_typed_body(db);
-    let scope = Some(owner.scope());
-    let assumptions = typed_body.assumptions();
+    let actual = carrier_value_class(local, carriers).or_else(|| {
+        semantic_value_class_in_context(
+            db,
+            body,
+            local,
+            carriers,
+            source_env.scope,
+            source_env.assumptions,
+        )
+    });
     let specialized = body
         .locals
         .get(local.index())
         .filter(|local| {
-            boundary_source_uses_transport_sensitive_aggregate(db, local.ty, scope, assumptions)
+            boundary_source_uses_transport_sensitive_aggregate(
+                db,
+                local.ty,
+                source_env.scope,
+                source_env.assumptions,
+            )
         })
-        .and_then(|_| actual_aggregate_class_for_semantic_source(db, body, local, carriers))
+        .and_then(|_| {
+            actual_aggregate_class_for_semantic_source_in_context(
+                db,
+                body,
+                local,
+                carriers,
+                source_env.scope,
+                source_env.assumptions,
+            )
+        })
         .map_or_else(
             || desired.clone(),
             |actual_aggregate| match desired {
@@ -1654,23 +1787,52 @@ fn runtime_visible_value_class<'db>(
     desired: Option<&RuntimeBoundarySpec<'db>>,
     carriers: &[RuntimeCarrier<'db>],
 ) -> Option<RuntimeClass<'db>> {
+    let typed_body = body.owner.key(db).typed_body(db);
+    runtime_visible_value_class_in_context(
+        db,
+        body,
+        local,
+        desired,
+        carriers,
+        &RuntimeSourceEnv::new(
+            typed_body,
+            Some(body.owner.key(db).owner(db).scope()),
+            typed_body.assumptions(),
+        ),
+    )
+}
+
+fn runtime_visible_value_class_in_context<'db>(
+    db: &'db dyn MirDb,
+    body: &NormalizedSemanticBody<'db>,
+    local: SLocalId,
+    desired: Option<&RuntimeBoundarySpec<'db>>,
+    carriers: &[RuntimeCarrier<'db>],
+    source_env: &RuntimeSourceEnv<'_, 'db>,
+) -> Option<RuntimeClass<'db>> {
     let desired = desired.map(|boundary| {
-        specialize_boundary_for_runtime_source(db, body, local, boundary, carriers)
+        specialize_boundary_for_runtime_source_in_context(
+            db, body, local, boundary, carriers, source_env,
+        )
     });
-    let owner = body.owner.key(db).owner(db);
-    let typed_body = body.owner.key(db).instantiate_typed_body(db);
-    let scope = Some(owner.scope());
-    let assumptions = typed_body.assumptions();
     match desired.as_ref() {
         Some(RuntimeBoundarySpec::Exact(RuntimeClass::AggregateValue { .. }))
             if boundary_source_uses_transport_sensitive_aggregate(
                 db,
                 body.locals.get(local.index())?.ty,
-                scope,
-                assumptions,
+                source_env.scope,
+                source_env.assumptions,
             ) =>
         {
-            actual_aggregate_class_for_semantic_source(db, body, local, carriers).or_else(|| {
+            actual_aggregate_class_for_semantic_source_in_context(
+                db,
+                body,
+                local,
+                carriers,
+                source_env.scope,
+                source_env.assumptions,
+            )
+            .or_else(|| {
                 desired.as_ref().and_then(|boundary| match boundary {
                     RuntimeBoundarySpec::Exact(class) => Some(class.clone()),
                     RuntimeBoundarySpec::BorrowLike { .. } => None,
@@ -1688,11 +1850,18 @@ fn runtime_visible_value_class<'db>(
                 .or_else(|| Some(target.clone()))
         }
         Some(RuntimeBoundarySpec::BorrowLike { .. }) => {
-            borrow_like_runtime_visible_arg_class(db, body, local, &desired?, carriers)
+            borrow_like_runtime_visible_arg_class_in_context(
+                db, body, local, &desired?, carriers, source_env,
+            )
         }
-        Some(RuntimeBoundarySpec::Exact(_)) | None => {
-            materialized_value_class(db, body, local, carriers)
-        }
+        Some(RuntimeBoundarySpec::Exact(_)) | None => materialized_value_class_in_context(
+            db,
+            body,
+            local,
+            carriers,
+            source_env.scope,
+            source_env.assumptions,
+        ),
     }
 }
 
@@ -1721,21 +1890,53 @@ pub(crate) fn specialize_boundary_for_runtime_source<'db>(
     boundary: &RuntimeBoundarySpec<'db>,
     carriers: &[RuntimeCarrier<'db>],
 ) -> RuntimeBoundarySpec<'db> {
-    match boundary {
-        RuntimeBoundarySpec::Exact(desired) => RuntimeBoundarySpec::Exact(
-            exact_boundary_class_for_runtime_source(db, body, local, desired, carriers),
+    let typed_body = body.owner.key(db).typed_body(db);
+    specialize_boundary_for_runtime_source_in_context(
+        db,
+        body,
+        local,
+        boundary,
+        carriers,
+        &RuntimeSourceEnv::new(
+            typed_body,
+            Some(body.owner.key(db).owner(db).scope()),
+            typed_body.assumptions(),
         ),
+    )
+}
+
+fn specialize_boundary_for_runtime_source_in_context<'db>(
+    db: &'db dyn MirDb,
+    body: &NormalizedSemanticBody<'db>,
+    local: SLocalId,
+    boundary: &RuntimeBoundarySpec<'db>,
+    carriers: &[RuntimeCarrier<'db>],
+    source_env: &RuntimeSourceEnv<'_, 'db>,
+) -> RuntimeBoundarySpec<'db> {
+    match boundary {
+        RuntimeBoundarySpec::Exact(desired) => {
+            RuntimeBoundarySpec::Exact(exact_boundary_class_for_runtime_source_in_context(
+                db, body, local, desired, carriers, source_env,
+            ))
+        }
         RuntimeBoundarySpec::BorrowLike {
             pointee: RuntimeClass::AggregateValue { .. },
             access,
             allow,
-        } => actual_aggregate_class_for_semantic_source(db, body, local, carriers)
-            .map(|pointee| RuntimeBoundarySpec::BorrowLike {
-                pointee,
-                access: *access,
-                allow: allow.clone(),
-            })
-            .unwrap_or_else(|| boundary.clone()),
+        } => actual_aggregate_class_for_semantic_source_in_context(
+            db,
+            body,
+            local,
+            carriers,
+            source_env.scope,
+            source_env.assumptions,
+        )
+        .map(|pointee| RuntimeBoundarySpec::BorrowLike {
+            pointee,
+            access: *access,
+            allow: allow.clone(),
+        })
+        .unwrap_or_else(|| boundary.clone()),
         _ => boundary.clone(),
     }
 }
@@ -1747,26 +1948,59 @@ fn borrow_like_runtime_visible_arg_class<'db>(
     boundary: &RuntimeBoundarySpec<'db>,
     carriers: &[RuntimeCarrier<'db>],
 ) -> Option<RuntimeClass<'db>> {
-    let owner = body.owner.key(db).owner(db);
-    let typed_body = body.owner.key(db).instantiate_typed_body(db);
-    let scope = Some(owner.scope());
-    let assumptions = typed_body.assumptions();
+    let typed_body = body.owner.key(db).typed_body(db);
+    borrow_like_runtime_visible_arg_class_in_context(
+        db,
+        body,
+        local,
+        boundary,
+        carriers,
+        &RuntimeSourceEnv::new(
+            typed_body,
+            Some(body.owner.key(db).owner(db).scope()),
+            typed_body.assumptions(),
+        ),
+    )
+}
+
+fn borrow_like_runtime_visible_arg_class_in_context<'db>(
+    db: &'db dyn MirDb,
+    body: &NormalizedSemanticBody<'db>,
+    local: SLocalId,
+    boundary: &RuntimeBoundarySpec<'db>,
+    carriers: &[RuntimeCarrier<'db>],
+    source_env: &RuntimeSourceEnv<'_, 'db>,
+) -> Option<RuntimeClass<'db>> {
     let class_ctxt = LocalRuntimeClassCtxt {
         body,
         carriers,
-        scope,
-        assumptions,
+        scope: source_env.scope,
+        assumptions: source_env.assumptions,
     };
     let local_data = body.locals.get(local.index())?;
 
     if let Some(place) = nonself_backing_value_place(body, local) {
-        let class = normalized_place_address_class(db, body, place, carriers, scope, assumptions)?;
+        let class = normalized_place_address_class(
+            db,
+            body,
+            place,
+            carriers,
+            source_env.scope,
+            source_env.assumptions,
+        )?;
         if runtime_class_satisfies_boundary(&class, boundary) {
             return Some(class);
         }
     }
 
-    let value_class = semantic_value_class(db, body, local, carriers)?;
+    let value_class = semantic_value_class_in_context(
+        db,
+        body,
+        local,
+        carriers,
+        source_env.scope,
+        source_env.assumptions,
+    )?;
     let root_class = local_place_root_class(
         db,
         &class_ctxt,
@@ -1822,13 +2056,22 @@ fn snapshot_source_place<'a, 'db>(
     body.local(local)?.snapshot_source_place()
 }
 
-fn snapshot_source_value_class<'db>(
+fn snapshot_source_value_class_in_context<'db>(
     db: &'db dyn MirDb,
     body: &NormalizedSemanticBody<'db>,
     local: SLocalId,
     carriers: &[RuntimeCarrier<'db>],
+    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
 ) -> Option<RuntimeClass<'db>> {
-    normalized_place_class(db, body, snapshot_source_place(body, local)?, carriers)
+    normalized_place_class_in_context(
+        db,
+        body,
+        snapshot_source_place(body, local)?,
+        carriers,
+        scope,
+        assumptions,
+    )
 }
 
 pub(crate) fn actual_aggregate_class_for_semantic_source<'db>(
@@ -1837,10 +2080,29 @@ pub(crate) fn actual_aggregate_class_for_semantic_source<'db>(
     local: SLocalId,
     carriers: &[RuntimeCarrier<'db>],
 ) -> Option<RuntimeClass<'db>> {
-    snapshot_source_value_class(db, body, local, carriers)
+    let typed_body = body.owner.key(db).typed_body(db);
+    actual_aggregate_class_for_semantic_source_in_context(
+        db,
+        body,
+        local,
+        carriers,
+        typed_body.body().map(|body| body.scope()),
+        typed_body.assumptions(),
+    )
+}
+
+fn actual_aggregate_class_for_semantic_source_in_context<'db>(
+    db: &'db dyn MirDb,
+    body: &NormalizedSemanticBody<'db>,
+    local: SLocalId,
+    carriers: &[RuntimeCarrier<'db>],
+    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
+) -> Option<RuntimeClass<'db>> {
+    snapshot_source_value_class_in_context(db, body, local, carriers, scope, assumptions)
         .and_then(|class| actual_aggregate_class_from_runtime_source(&class))
         .or_else(|| {
-            semantic_value_class(db, body, local, carriers)
+            semantic_value_class_in_context(db, body, local, carriers, scope, assumptions)
                 .and_then(|class| actual_aggregate_class_from_runtime_source(&class))
         })
 }
@@ -1851,33 +2113,54 @@ pub(crate) fn materialized_value_class<'db>(
     local: SLocalId,
     carriers: &[RuntimeCarrier<'db>],
 ) -> Option<RuntimeClass<'db>> {
-    let owner = body.owner.key(db).owner(db);
-    let typed_body = body.owner.key(db).instantiate_typed_body(db);
-    let scope = Some(owner.scope());
-    let assumptions = typed_body.assumptions();
+    let typed_body = body.owner.key(db).typed_body(db);
+    materialized_value_class_in_context(
+        db,
+        body,
+        local,
+        carriers,
+        Some(body.owner.key(db).owner(db).scope()),
+        typed_body.assumptions(),
+    )
+}
+
+fn materialized_value_class_in_context<'db>(
+    db: &'db dyn MirDb,
+    body: &NormalizedSemanticBody<'db>,
+    local: SLocalId,
+    carriers: &[RuntimeCarrier<'db>],
+    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
+) -> Option<RuntimeClass<'db>> {
     let local_data = body.locals.get(local.index())?;
     match (&local_data.facts.interface, &local_data.facts.origin) {
         (NLocalInterface::Erased, _) => None,
         (NLocalInterface::DirectValue, NLocalOrigin::RootProvider(_)) => {
-            semantic_value_class(db, body, local, carriers)
+            semantic_value_class_in_context(db, body, local, carriers, scope, assumptions)
         }
-        (NLocalInterface::DirectValue, _) => {
-            actual_aggregate_class_for_semantic_source(db, body, local, carriers).or_else(|| {
-                top_level_class_for_ty_in_context(
-                    db,
-                    local_data.ty,
-                    AddressSpaceKind::Memory,
-                    scope,
-                    assumptions,
-                )
-            })
-        }
+        (NLocalInterface::DirectValue, _) => actual_aggregate_class_for_semantic_source_in_context(
+            db,
+            body,
+            local,
+            carriers,
+            scope,
+            assumptions,
+        )
+        .or_else(|| {
+            top_level_class_for_ty_in_context(
+                db,
+                local_data.ty,
+                AddressSpaceKind::Memory,
+                scope,
+                assumptions,
+            )
+        }),
         (
             NLocalInterface::PlaceBoundValue
             | NLocalInterface::PlaceCarrier
             | NLocalInterface::DirectCarrier,
             _,
-        ) => semantic_value_class(db, body, local, carriers),
+        ) => semantic_value_class_in_context(db, body, local, carriers, scope, assumptions),
     }
 }
 
@@ -2178,10 +2461,25 @@ fn semantic_value_class<'db>(
     local: SLocalId,
     carriers: &[RuntimeCarrier<'db>],
 ) -> Option<RuntimeClass<'db>> {
-    let owner = body.owner.key(db).owner(db);
-    let typed_body = body.owner.key(db).instantiate_typed_body(db);
-    let scope = Some(owner.scope());
-    let assumptions = typed_body.assumptions();
+    let typed_body = body.owner.key(db).typed_body(db);
+    semantic_value_class_in_context(
+        db,
+        body,
+        local,
+        carriers,
+        Some(body.owner.key(db).owner(db).scope()),
+        typed_body.assumptions(),
+    )
+}
+
+fn semantic_value_class_in_context<'db>(
+    db: &'db dyn MirDb,
+    body: &NormalizedSemanticBody<'db>,
+    local: SLocalId,
+    carriers: &[RuntimeCarrier<'db>],
+    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
+) -> Option<RuntimeClass<'db>> {
     let local_data = body.locals.get(local.index())?;
     match local_data.facts.interface {
         NLocalInterface::Erased => None,
@@ -2200,20 +2498,22 @@ fn semantic_value_class<'db>(
                 assumptions,
             ))
         }),
-        NLocalInterface::PlaceBoundValue => normalized_local_place_class(db, body, local, carriers)
-            .or_else(|| {
-                let NormalizedBindingLowering::PlaceBoundValue { value_ty, .. } =
-                    &local_data.lowering
-                else {
-                    panic!("place-bound local missing place-bound lowering: {local:?}");
-                };
-                Some(stored_class_for_ty_in_context(
-                    db,
-                    *value_ty,
-                    scope,
-                    assumptions,
-                ))
-            }),
+        NLocalInterface::PlaceBoundValue => {
+            normalized_local_place_class_in_context(db, body, local, carriers, scope, assumptions)
+                .or_else(|| {
+                    let NormalizedBindingLowering::PlaceBoundValue { value_ty, .. } =
+                        &local_data.lowering
+                    else {
+                        panic!("place-bound local missing place-bound lowering: {local:?}");
+                    };
+                    Some(stored_class_for_ty_in_context(
+                        db,
+                        *value_ty,
+                        scope,
+                        assumptions,
+                    ))
+                })
+        }
     }
 }
 
@@ -2233,10 +2533,25 @@ pub(crate) fn normalized_place_class<'db>(
     place: &NSPlace<'db>,
     carriers: &[RuntimeCarrier<'db>],
 ) -> Option<RuntimeClass<'db>> {
-    let owner = body.owner.key(db).owner(db);
-    let typed_body = body.owner.key(db).instantiate_typed_body(db);
-    let scope = Some(owner.scope());
-    let assumptions = typed_body.assumptions();
+    let typed_body = body.owner.key(db).typed_body(db);
+    normalized_place_class_in_context(
+        db,
+        body,
+        place,
+        carriers,
+        Some(body.owner.key(db).owner(db).scope()),
+        typed_body.assumptions(),
+    )
+}
+
+fn normalized_place_class_in_context<'db>(
+    db: &'db dyn MirDb,
+    body: &NormalizedSemanticBody<'db>,
+    place: &NSPlace<'db>,
+    carriers: &[RuntimeCarrier<'db>],
+    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
+) -> Option<RuntimeClass<'db>> {
     let mut current =
         normalized_place_root_class(db, body, place.root.clone(), carriers, scope, assumptions)?;
     for projection in place.path.iter() {
@@ -2304,7 +2619,8 @@ pub(crate) fn normalized_place_address_class<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> Option<RuntimeClass<'db>> {
-    let value_class = normalized_place_class(db, body, place, carriers)?;
+    let value_class =
+        normalized_place_class_in_context(db, body, place, carriers, scope, assumptions)?;
     let root_class = normalized_place_root_transport_class(
         db,
         body,
@@ -2691,7 +3007,7 @@ fn extern_builtin_return_class<'db>(
     semantic: SemanticInstance<'db>,
     result_ty: TyId<'db>,
 ) -> Option<Option<RuntimeClass<'db>>> {
-    let typed_body = semantic.key(db).instantiate_typed_body(db);
+    let typed_body = semantic.key(db).typed_body(db);
     let env = RuntimeTypeEnv::new(
         typed_body.body().map(|body| body.scope()),
         typed_body.assumptions(),
@@ -2835,8 +3151,8 @@ fn runtime_return_class_cycle_initial<'db>(
         .semantic(db)
         .expect("cycle handling only applies to semantic runtime instances")
         .key(db)
-        .instantiate_typed_body(db);
-    default_return_class(db, &typed_body)
+        .typed_body(db);
+    default_return_class(db, typed_body)
 }
 
 fn runtime_return_class_cycle_recover<'db>(
@@ -2958,7 +3274,7 @@ pub(crate) fn semantic_return_ty<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
 ) -> TyId<'db> {
-    semantic.key(db).instantiate_typed_body(db).result_ty()
+    semantic.key(db).typed_body(db).result_ty()
 }
 
 fn default_return_class<'db>(

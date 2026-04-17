@@ -1225,7 +1225,7 @@ pub(crate) fn runtime_instance_for_semantic<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
 ) -> RuntimeInstance<'db> {
-    let typed_body = semantic.key(db).instantiate_typed_body(db);
+    let typed_body = semantic.key(db).typed_body(db);
     let owner = semantic.key(db).owner(db);
     if let BodyOwner::Func(func) = owner
         && func.body(db).is_none()
@@ -1243,7 +1243,7 @@ pub(crate) fn runtime_instance_for_semantic<'db>(
     let mut idx = 0;
     while let Some(binding) = typed_body.param_binding(idx) {
         if let Some(class) = runtime_visible_binding_class(db, semantic, binding)
-            .map(|class| runtime_param_class(db, &typed_body, binding, class))
+            .map(|class| runtime_param_class(db, typed_body, binding, class))
         {
             params.push(class);
         }

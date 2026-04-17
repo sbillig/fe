@@ -56,8 +56,12 @@ pub struct SemanticInstanceKey<'db> {
 }
 
 impl<'db> SemanticInstanceKey<'db> {
+    pub fn typed_body(self, db: &'db dyn HirAnalysisDb) -> &'db TypedBody<'db> {
+        instantiated_typed_body(db, self)
+    }
+
     pub fn instantiate_typed_body(self, db: &'db dyn HirAnalysisDb) -> TypedBody<'db> {
-        instantiate_typed_body(db, typed_body_template(db, self.owner(db)), self.subst(db))
+        self.typed_body(db).clone()
     }
 }
 
@@ -151,6 +155,14 @@ pub fn semantic_instance_assumptions<'db>(
         .unwrap_or_else(|| semantic_instance_base_assumptions_for_key(db, instance.key(db)))
 }
 
+#[salsa::tracked(return_ref)]
+pub fn instantiated_typed_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: SemanticInstanceKey<'db>,
+) -> TypedBody<'db> {
+    instantiate_typed_body(db, typed_body_template(db, key.owner(db)), key.subst(db))
+}
+
 #[salsa::tracked]
 impl<'db> SemanticInstance<'db> {
     #[salsa::tracked]
@@ -193,10 +205,9 @@ pub fn semantic_binding_ty<'db>(
             idx,
             ..
         } => effect_binding_ty_from_env(db, instantiated_effect_env(db, instance), idx, None),
-        LocalBinding::Local { .. } | LocalBinding::Param { .. } => instance
-            .key(db)
-            .instantiate_typed_body(db)
-            .binding_ty(db, binding),
+        LocalBinding::Local { .. } | LocalBinding::Param { .. } => {
+            instance.key(db).typed_body(db).binding_ty(db, binding)
+        }
     }
 }
 
@@ -439,7 +450,7 @@ fn lower_semantic_body<'db>(
     instance: SemanticInstance<'db>,
 ) -> SemanticBody<'db> {
     let key = instance.key(db);
-    let typed_body = key.instantiate_typed_body(db);
+    let typed_body = key.typed_body(db).clone();
     let mut body = lower_to_smir(db, instance, key.owner(db), typed_body);
     assign_semantic_local_roles(db, instance, &mut body);
     assign_semantic_snapshot_sources(&mut body);
@@ -452,7 +463,7 @@ fn collect_semantic_callees<'db>(
     instance: SemanticInstance<'db>,
 ) -> Vec<SemanticCalleeRef<'db>> {
     let key = instance.key(db);
-    let typed_body = key.instantiate_typed_body(db);
+    let typed_body = key.typed_body(db);
     let Some(body) = typed_body.body() else {
         return Vec::new();
     };
@@ -773,7 +784,7 @@ fn semantic_instance_base_assumptions_for_key<'db>(
     db: &'db dyn HirAnalysisDb,
     key: SemanticInstanceKey<'db>,
 ) -> PredicateListId<'db> {
-    let typed_body = key.instantiate_typed_body(db);
+    let typed_body = key.typed_body(db);
     let impl_env = key.impl_env(db);
     let mut predicates: IndexSet<_> = typed_body.assumptions().list(db).iter().copied().collect();
     predicates.extend(impl_env.assumptions(db).list(db).iter().copied());
