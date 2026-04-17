@@ -47,12 +47,14 @@ pub(super) struct PatternValue<'db> {
 }
 
 impl<'db> SmirLowerCtxt<'db> {
+    fn validated_pattern_is_irrefutable(&self, pat: ValidatedPatId) -> bool {
+        self.typed_body.pattern_store().is_irrefutable(self.db, pat)
+    }
+
     pub(super) fn pattern_is_irrefutable(&self, pat: PatId) -> bool {
-        self.typed_body.pattern_root(pat).is_none_or(|root| {
-            self.typed_body
-                .pattern_store()
-                .is_irrefutable(self.db, root)
-        })
+        self.typed_body
+            .pattern_root(pat)
+            .is_none_or(|root| self.validated_pattern_is_irrefutable(root))
     }
 
     pub(super) fn pattern_is_enum_dispatchable(&self, pat: PatId) -> bool {
@@ -549,20 +551,27 @@ impl<'db> SmirLowerCtxt<'db> {
         then_bb: SBlockId,
         else_bb: SBlockId,
     ) {
-        if fields.is_empty() {
+        let refutable_fields = fields
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, field_pat)| !self.validated_pattern_is_irrefutable(*field_pat))
+            .collect::<Vec<_>>();
+        if refutable_fields.is_empty() {
             self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
             return;
         }
 
-        for (idx, field_pat) in fields.iter().copied().enumerate() {
-            let field_value = self.project_pattern_field(value, idx);
-            let next_then = if idx + 1 == fields.len() {
+        let refutable_len = refutable_fields.len();
+        for (idx, (field_idx, field_pat)) in refutable_fields.into_iter().enumerate() {
+            let field_value = self.project_pattern_field(value, field_idx);
+            let next_then = if idx + 1 == refutable_len {
                 then_bb
             } else {
                 self.new_block()
             };
             self.lower_validated_pattern_branch(field_pat, field_value, next_then, else_bb);
-            if idx + 1 != fields.len() {
+            if idx + 1 != refutable_len {
                 self.switch_to(next_then);
             }
         }
@@ -576,20 +585,27 @@ impl<'db> SmirLowerCtxt<'db> {
         then_bb: SBlockId,
         else_bb: SBlockId,
     ) {
-        if fields.is_empty() {
+        let refutable_fields = fields
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, field_pat)| !self.validated_pattern_is_irrefutable(*field_pat))
+            .collect::<Vec<_>>();
+        if refutable_fields.is_empty() {
             self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
             return;
         }
 
-        for (idx, field_pat) in fields.iter().copied().enumerate() {
-            let field_value = self.project_pattern_variant_field(value, variant, idx);
-            let next_then = if idx + 1 == fields.len() {
+        let refutable_len = refutable_fields.len();
+        for (idx, (field_idx, field_pat)) in refutable_fields.into_iter().enumerate() {
+            let field_value = self.project_pattern_variant_field(value, variant, field_idx);
+            let next_then = if idx + 1 == refutable_len {
                 then_bb
             } else {
                 self.new_block()
             };
             self.lower_validated_pattern_branch(field_pat, field_value, next_then, else_bb);
-            if idx + 1 != fields.len() {
+            if idx + 1 != refutable_len {
                 self.switch_to(next_then);
             }
         }
