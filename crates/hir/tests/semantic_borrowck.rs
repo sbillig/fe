@@ -6,11 +6,11 @@ use fe_hir::{
     analysis::{
         diagnostics::format_diags,
         semantic::{
-            FieldIndex, NBorrowRoot, NExpr, NLocalInterface, NLocalOrigin, NSStmtKind,
-            NormalizedBindingLowering, SPlaceElem, SStmtKind, SemanticInstance,
+            BorrowInputRef, FieldIndex, NBorrowRoot, NExpr, NLocalInterface, NLocalOrigin,
+            NSStmtKind, NormalizedBindingLowering, SPlaceElem, SStmtKind, SemanticInstance,
             check_semantic_borrows, collect_semantic_borrow_diagnostics,
             get_or_build_semantic_instance, identity_semantic_instance_key,
-            normalize_semantic_body,
+            normalize_semantic_body, semantic_borrow_summary,
         },
         ty::{
             ty_check::BodyOwner,
@@ -148,6 +148,79 @@ fn normalized_func_body<'db>(
         })
         .unwrap_or_else(|| panic!("missing function `{func_name}`"));
     normalize_semantic_body(db, instance).expect("normalized body")
+}
+
+#[test]
+fn branch_return_borrow_summary_flows_through_empty_entry_blocks() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_borrowck.fe".into(),
+        r#"
+struct Ledger {
+    a: u256,
+    b: u256,
+    c: u256,
+}
+
+impl Ledger {
+    fn pick(mut self, _ pick_c: bool) -> mut u256 {
+        if pick_c {
+            mut self.c
+        } else {
+            mut self.a
+        }
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let instance = top_mod
+        .all_items(&db)
+        .iter()
+        .find_map(|item| match item {
+            ItemKind::Func(func)
+                if func
+                    .name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "pick") =>
+            {
+                Some(get_or_build_semantic_instance(
+                    &db,
+                    identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
+                ))
+            }
+            _ => None,
+        })
+        .expect("pick instance");
+    let summary = semantic_borrow_summary(&db, instance)
+        .expect("borrow summary")
+        .expect("borrow-returning function should produce a summary");
+    assert_eq!(summary.len(), 2, "unexpected summary: {summary:#?}");
+    assert!(summary.iter().any(|transform| {
+        matches!(transform.input, BorrowInputRef::Param(0))
+            && transform.proj.iter().cloned().collect::<Vec<_>>() == vec![Projection::Field(2)]
+    }));
+    assert!(summary.iter().any(|transform| {
+        matches!(transform.input, BorrowInputRef::Param(0))
+            && transform.proj.iter().cloned().collect::<Vec<_>>() == vec![Projection::Field(0)]
+    }));
+    check_semantic_borrows(&db, instance).expect("borrowck should accept branch-returned borrow");
+}
+
+#[test]
+fn contract_field_mut_borrow_matrix_fixture_borrowchecks() {
+    for_each_fixture_instance(
+        include_str!("../../fe/tests/fixtures/fe_test/contract_field_mut_borrow_matrix.fe"),
+        |db, instance| {
+            if let Err(diag) = check_semantic_borrows(db, instance) {
+                panic!(
+                    "borrowck failed for {} ({:?}): {diag:#?}",
+                    owner_name(db, instance.key(db).owner(db)),
+                    instance.key(db),
+                );
+            }
+        },
+    );
 }
 
 #[test]

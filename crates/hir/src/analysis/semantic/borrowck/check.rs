@@ -914,6 +914,7 @@ impl<'db> Borrowck<'db> {
         }
         let mut worklist = VecDeque::from([crate::analysis::semantic::SBlockId::from_u32(0)]);
         let mut queued = FxHashSet::from_iter([crate::analysis::semantic::SBlockId::from_u32(0)]);
+        let mut reached = FxHashSet::from_iter([crate::analysis::semantic::SBlockId::from_u32(0)]);
         while let Some(bb) = worklist.pop_front() {
             queued.remove(&bb);
             let mut state = self.entry_state[bb.index()].clone();
@@ -923,7 +924,7 @@ impl<'db> Borrowck<'db> {
             }
             for succ in self.successors(&block.terminator.kind) {
                 let changed = self.entry_state[succ.index()].join_from(&state);
-                if changed && queued.insert(succ) {
+                if (reached.insert(succ) || changed) && queued.insert(succ) {
                     worklist.push_back(succ);
                 }
             }
@@ -955,6 +956,7 @@ impl<'db> Borrowck<'db> {
         }
         let mut worklist = VecDeque::from([crate::analysis::semantic::SBlockId::from_u32(0)]);
         let mut queued = FxHashSet::from_iter([crate::analysis::semantic::SBlockId::from_u32(0)]);
+        let mut reached = FxHashSet::from_iter([crate::analysis::semantic::SBlockId::from_u32(0)]);
         while let Some(bb) = worklist.pop_front() {
             queued.remove(&bb);
             let mut state = self.entry_state[bb.index()].clone();
@@ -970,7 +972,7 @@ impl<'db> Borrowck<'db> {
                 for (place, origin) in &moved {
                     changed |= entry.insert(place.clone(), *origin).is_none();
                 }
-                if changed && queued.insert(succ) {
+                if (reached.insert(succ) || changed) && queued.insert(succ) {
                     worklist.push_back(succ);
                 }
             }
