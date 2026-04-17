@@ -182,14 +182,7 @@ pub(crate) fn boundary_source_uses_transport_sensitive_aggregate<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> bool {
-    if let Some((_, inner)) = ty.as_borrow(db) {
-        return aggregate_transport_depends_on_runtime_source(db, inner, scope, assumptions);
-    }
-    let repr = runtime_repr_ty_in_context(db, ty, scope, assumptions);
-    if let Some((_, inner)) = repr.as_borrow(db) {
-        return aggregate_transport_depends_on_runtime_source(db, inner, scope, assumptions);
-    }
-    aggregate_transport_depends_on_runtime_source(db, repr, scope, assumptions)
+    runtime_boundary_source_uses_transport_sensitive_aggregate(db, ty, scope, assumptions)
 }
 
 pub(crate) fn top_level_class_for_ty_in_context<'db>(
@@ -498,6 +491,23 @@ fn runtime_effect_handle_info<'db>(
         target_ty,
         space: provider_address_space_to_runtime(semantics.address_space?),
     })
+}
+
+#[salsa::tracked]
+fn runtime_boundary_source_uses_transport_sensitive_aggregate<'db>(
+    db: &'db dyn MirDb,
+    ty: TyId<'db>,
+    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
+) -> bool {
+    if let Some((_, inner)) = ty.as_borrow(db) {
+        return runtime_transport_sensitive_aggregate(db, inner, scope, assumptions);
+    }
+    let repr_ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
+    if let Some((_, inner)) = repr_ty.as_borrow(db) {
+        return runtime_transport_sensitive_aggregate(db, inner, scope, assumptions);
+    }
+    runtime_transport_sensitive_aggregate(db, repr_ty, scope, assumptions)
 }
 
 #[salsa::tracked(
