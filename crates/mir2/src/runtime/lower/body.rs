@@ -43,9 +43,10 @@ use super::{
         BodyEnv, ContractMetadataBuiltin, GenericNumericIntrinsicKind, RuntimeBodyCx,
         RuntimeEffectBindingPlan, actual_aggregate_class_from_runtime_source,
         contract_metadata_builtin, desired_runtime_effect_arg_boundary, desired_runtime_param_plan,
-        generic_numeric_intrinsic_kind, resolve_runtime_call_key, runtime_class_satisfies_boundary,
+        generic_numeric_intrinsic_kind, resolve_runtime_call_key,
         runtime_effect_binding_plan_for_binding_idx, runtime_signature_for_key, semantic_return_ty,
     },
+    coerce::CoercionPlanner,
     consts::{
         const_scalar_for_class, const_scalar_from_value, enum_tag_scalar, lower_const_region,
     },
@@ -380,7 +381,7 @@ impl<'db> RmirEmitter<'db> {
         ) {
             let actual = self.direct_assign_source_class(expr);
             if let Some(actual) = actual
-                && runtime_class_is_handle_like(&actual)
+                && CoercionPlanner::target_prefers_transport(&actual)
             {
                 self.refine_local_runtime_class(dst_value, actual);
                 return;
@@ -447,7 +448,7 @@ impl<'db> RmirEmitter<'db> {
                 let place = self.lower_place(bb, place);
                 let projected = self.project_place_class(&place);
                 let dst_class = if self.runtime_local_uses_source_transport(dst)
-                    && runtime_class_is_handle_like(&projected)
+                    && CoercionPlanner::target_prefers_transport(&projected)
                 {
                     self.refine_local_runtime_class(dst, projected.clone());
                     projected.clone()
@@ -549,7 +550,7 @@ impl<'db> RmirEmitter<'db> {
                 let place = self.lower_place(bb, place);
                 let actual = self.place_addr_class(&place);
                 let dst_class = if self.runtime_local_uses_source_transport(dst)
-                    && runtime_class_is_handle_like(&actual)
+                    && CoercionPlanner::target_prefers_transport(&actual)
                 {
                     self.refine_local_runtime_class(dst, actual.clone());
                     actual
@@ -3291,7 +3292,7 @@ impl<'db> RmirEmitter<'db> {
                 temp
             }
             (RuntimeClass::Ref { pointee, .. }, target)
-                if !runtime_target_prefers_transport(&target) =>
+                if !CoercionPlanner::target_prefers_transport(&target) =>
             {
                 let loaded = self.alloc_runtime_temp(
                     self.locals[src.index()].semantic_ty,
@@ -4105,7 +4106,7 @@ impl<'db> RmirEmitter<'db> {
         {
             return value;
         }
-        if !runtime_target_prefers_transport(target)
+        if !CoercionPlanner::target_prefers_transport(target)
             && let Some(value) = self.materialize_ordinary_direct_value(bb, operand.local)
         {
             return if self.value_class(value).is_none() || self.value_class(value) == Some(target) {
@@ -4114,7 +4115,7 @@ impl<'db> RmirEmitter<'db> {
                 self.coerce_value(bb, value, target)
             };
         }
-        if runtime_target_prefers_transport(target) {
+        if CoercionPlanner::target_prefers_transport(target) {
             if let Some(value) = self.handle_like_semantic_value(operand.local) {
                 return if self.value_class(value) == Some(target) {
                     value
@@ -4280,7 +4281,7 @@ impl<'db> RmirEmitter<'db> {
         operand: NOperand,
         target: &RuntimeClass<'db>,
     ) -> Option<RLocalId> {
-        if !runtime_target_prefers_transport(target) {
+        if !CoercionPlanner::target_prefers_transport(target) {
             return None;
         }
         let local = operand.local;
@@ -4334,7 +4335,7 @@ impl<'db> RmirEmitter<'db> {
                 |provider| self.provider_binding_value(provider),
             )),
         }?;
-        runtime_class_is_handle_like(self.value_class(value)?).then_some(value)
+        CoercionPlanner::target_prefers_transport(self.value_class(value)?).then_some(value)
     }
 
     fn lower_for_boundary(
@@ -4365,7 +4366,9 @@ impl<'db> RmirEmitter<'db> {
             BoundarySource::SemanticOperand(operand) => {
                 self.lower_semantic_operand_for_class(bb, operand, target)
             }
-            BoundarySource::RuntimePlace(place) if runtime_target_prefers_transport(target) => {
+            BoundarySource::RuntimePlace(place)
+                if CoercionPlanner::target_prefers_transport(target) =>
+            {
                 self.lower_place_addr_of_for_class(semantic_ty, bb, place, target.clone())
             }
             BoundarySource::RuntimePlace(place) => {
@@ -4426,21 +4429,21 @@ impl<'db> RmirEmitter<'db> {
         let value = match source {
             BoundarySource::SemanticOperand(operand) => {
                 if let Some(value) = self.handle_like_semantic_value(operand.local)
-                    && self
-                        .value_class(value)
-                        .is_some_and(|class| runtime_class_satisfies_boundary(class, boundary))
+                    && self.value_class(value).is_some_and(|class| {
+                        CoercionPlanner::class_satisfies_boundary(class, boundary)
+                    })
                 {
                     return Some(value);
                 }
                 let value = self.runtime_value(operand.local);
                 self.value_class(value)
-                    .is_some_and(|class| runtime_class_satisfies_boundary(class, boundary))
+                    .is_some_and(|class| CoercionPlanner::class_satisfies_boundary(class, boundary))
                     .then_some(value)
             }
             BoundarySource::RuntimePlace(_) => None,
         }?;
         self.value_class(value)
-            .is_some_and(|class| runtime_class_satisfies_boundary(class, boundary))
+            .is_some_and(|class| CoercionPlanner::class_satisfies_boundary(class, boundary))
             .then_some(value)
     }
 
@@ -4465,7 +4468,7 @@ impl<'db> RmirEmitter<'db> {
             }
         }?;
         let actual = self.place_addr_class(&place);
-        runtime_class_satisfies_boundary(&actual, boundary)
+        CoercionPlanner::class_satisfies_boundary(&actual, boundary)
             .then(|| self.lower_place_addr_of_for_class(semantic_ty, bb, place, actual))
     }
 
@@ -4484,7 +4487,7 @@ impl<'db> RmirEmitter<'db> {
                     .map(|semantic| semantic.key(self.db).owner(self.db)),
             );
         };
-        if runtime_class_satisfies_boundary(&source_class, boundary) {
+        if CoercionPlanner::class_satisfies_boundary(&source_class, boundary) {
             return value;
         }
         let crate::runtime::RuntimeBoundarySpec::BorrowLike { pointee, allow, .. } = boundary
@@ -4497,7 +4500,7 @@ impl<'db> RmirEmitter<'db> {
             let object = self.coerce_value(bb, value, &RuntimeClass::object_ref(layout));
             if self
                 .value_class(object)
-                .is_some_and(|class| runtime_class_satisfies_boundary(class, boundary))
+                .is_some_and(|class| CoercionPlanner::class_satisfies_boundary(class, boundary))
             {
                 return object;
             }
@@ -4532,7 +4535,7 @@ impl<'db> RmirEmitter<'db> {
             );
             if self
                 .value_class(raw)
-                .is_some_and(|class| runtime_class_satisfies_boundary(class, boundary))
+                .is_some_and(|class| CoercionPlanner::class_satisfies_boundary(class, boundary))
             {
                 return raw;
             }
@@ -4955,20 +4958,6 @@ impl<'db> RmirEmitter<'db> {
             crate::runtime::Layout::Enum(layout) => layout.source_ty,
         }
     }
-}
-
-fn runtime_target_prefers_transport(class: &RuntimeClass<'_>) -> bool {
-    matches!(
-        class,
-        RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. }
-    )
-}
-
-fn runtime_class_is_handle_like(class: &RuntimeClass<'_>) -> bool {
-    matches!(
-        class,
-        RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. }
-    )
 }
 
 fn word_scalar_class<'db>() -> ScalarClass<'db> {

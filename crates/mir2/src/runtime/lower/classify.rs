@@ -39,6 +39,7 @@ use crate::{
 };
 
 use super::{
+    coerce::CoercionPlanner,
     infer::{
         LocalStateInferer, actual_runtime_visible_root_provider_class,
         fallback_root_transport_class, local_place_root_class,
@@ -937,7 +938,7 @@ fn expr_direct_class_in_context<'db>(
                         if let Some(actual) = actual {
                             param_classes.push(match desired {
                                 RuntimeBoundarySpec::Exact(desired) => {
-                                    preserve_provider_space(&actual, desired)
+                                    CoercionPlanner::preserve_provider_space(&actual, desired)
                                 }
                                 RuntimeBoundarySpec::BorrowLike { .. } => actual,
                             });
@@ -1014,7 +1015,7 @@ fn aggregate_make_class<'db>(
                 )
                 .map(|actual| match &boundary {
                     RuntimeBoundarySpec::Exact(desired) => {
-                        preserve_provider_space(&actual, desired)
+                        CoercionPlanner::preserve_provider_space(&actual, desired)
                     }
                     RuntimeBoundarySpec::BorrowLike { .. } => actual,
                 }),
@@ -1112,7 +1113,7 @@ fn exact_boundary_class_for_runtime_source_in_context<'db>(
             },
         );
     if let Some(actual) = actual
-        && preserve_provider_space(&actual, &specialized) == actual
+        && CoercionPlanner::preserve_provider_space(&actual, &specialized) == actual
     {
         return actual;
     }
@@ -1169,7 +1170,7 @@ fn runtime_visible_value_class_in_context<'db>(
             ) =>
         {
             carrier_value_class(local, carriers)
-                .filter(|class| runtime_class_satisfies_boundary(class, boundary))
+                .filter(|class| CoercionPlanner::class_satisfies_boundary(class, boundary))
                 .or_else(|| Some(target.clone()))
         }
         Some(RuntimeBoundarySpec::BorrowLike { .. }) => {
@@ -1269,7 +1270,7 @@ fn borrow_like_runtime_visible_arg_class_in_context<'db>(
             env.scope(),
             env.assumptions(),
         )?;
-        if runtime_class_satisfies_boundary(&class, boundary) {
+        if CoercionPlanner::class_satisfies_boundary(&class, boundary) {
             return Some(class);
         }
     }
@@ -1285,12 +1286,12 @@ fn borrow_like_runtime_visible_arg_class_in_context<'db>(
     let root_class = local_place_root_class(cx, local, local_data, carriers.get(local.index())?)?;
     let class =
         ref_class_for_place_result(&root_class, &value_class, AddressSpaceKind::Memory, false);
-    if runtime_class_satisfies_boundary(&class, boundary) {
+    if CoercionPlanner::class_satisfies_boundary(&class, boundary) {
         return Some(class);
     }
 
     if let Some(class) = carrier_value_class(local, carriers)
-        && runtime_class_satisfies_boundary(&class, boundary)
+        && CoercionPlanner::class_satisfies_boundary(&class, boundary)
     {
         return Some(class);
     }
@@ -1667,50 +1668,6 @@ fn normalize_runtime_self_ty<'db>(
         return scope.map_or(inner, |scope| normalize_ty(db, inner, scope, assumptions));
     }
     scope.map_or(ty, |scope| normalize_ty(db, ty, scope, assumptions))
-}
-
-fn preserve_provider_space<'db>(
-    actual: &RuntimeClass<'db>,
-    desired: &RuntimeClass<'db>,
-) -> RuntimeClass<'db> {
-    match (actual, desired) {
-        (
-            RuntimeClass::Ref {
-                pointee: actual_pointee,
-                kind: actual_kind,
-                view: actual_view,
-            },
-            RuntimeClass::Ref {
-                pointee: desired_pointee,
-                view: desired_view,
-                ..
-            },
-        ) if actual_pointee == desired_pointee && actual_view == desired_view => actual.clone(),
-        (
-            RuntimeClass::RawAddr {
-                space: actual_space,
-                target: actual_target,
-            },
-            RuntimeClass::Ref { pointee, .. },
-        ) if actual_target == &pointee.aggregate_layout() => RuntimeClass::RawAddr {
-            space: *actual_space,
-            target: *actual_target,
-        },
-        (
-            RuntimeClass::RawAddr {
-                space: actual_space,
-                target: actual_target,
-            },
-            RuntimeClass::RawAddr {
-                target: desired_target,
-                ..
-            },
-        ) if actual_target == desired_target => RuntimeClass::RawAddr {
-            space: *actual_space,
-            target: *actual_target,
-        },
-        _ => desired.clone(),
-    }
 }
 
 fn semantic_value_class<'db>(
@@ -2165,7 +2122,7 @@ fn runtime_visible_place_arg_class_for_boundary<'db>(
         RuntimeBoundarySpec::BorrowLike { pointee, allow, .. } => {
             let class =
                 normalized_place_address_class(db, body, place, carriers, scope, assumptions)?;
-            if runtime_class_satisfies_boundary(&class, boundary) {
+            if CoercionPlanner::class_satisfies_boundary(&class, boundary) {
                 Some(class)
             } else if let Some(layout) = pointee.aggregate_layout()
                 && allow.allow_object
@@ -2379,38 +2336,6 @@ pub(crate) fn runtime_param_boundary<'db>(
                 allow,
             }
         }
-    }
-}
-
-pub(crate) fn runtime_class_satisfies_boundary<'db>(
-    class: &RuntimeClass<'db>,
-    boundary: &RuntimeBoundarySpec<'db>,
-) -> bool {
-    match boundary {
-        RuntimeBoundarySpec::Exact(expected) => preserve_provider_space(class, expected) == *class,
-        RuntimeBoundarySpec::BorrowLike { pointee, allow, .. } => match class {
-            RuntimeClass::Ref {
-                pointee: actual_pointee,
-                kind: RefKind::Object,
-                view: RefView::Whole,
-            } => allow.allow_object && **actual_pointee == *pointee,
-            RuntimeClass::Ref {
-                pointee: actual_pointee,
-                kind: RefKind::Const,
-                view: RefView::Whole,
-            } => allow.allow_const && **actual_pointee == *pointee,
-            RuntimeClass::Ref {
-                pointee: actual_pointee,
-                kind: RefKind::Provider { space, .. },
-                view: RefView::Whole,
-            } => allow.provider_spaces.contains(space) && **actual_pointee == *pointee,
-            RuntimeClass::Ref {
-                view: RefView::EnumVariant(_),
-                ..
-            } => false,
-            RuntimeClass::RawAddr { .. } => allow.allow_raw_addr,
-            RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => false,
-        },
     }
 }
 

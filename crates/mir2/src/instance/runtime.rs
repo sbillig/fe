@@ -22,9 +22,10 @@ use salsa::Update;
 
 use crate::runtime::lower::{
     classify::{
-        ref_class_for_place_result, runtime_address_space, runtime_class_satisfies_boundary,
-        runtime_signature_for_key, semantic_return_ty,
+        ref_class_for_place_result, runtime_address_space, runtime_signature_for_key,
+        semantic_return_ty,
     },
+    coerce::{BoundarySourceClass, CoercionPlanner},
     interface::runtime_visible_binding_plans,
     type_info::{RuntimeTypeEnv, top_level_class_for_ty_in_env},
 };
@@ -920,37 +921,10 @@ impl<'db> SyntheticBodyBuilder<'db> {
             .collect()
     }
 
-    fn realize_runtime_boundary_placeholder_class(
-        &self,
-        boundary: &RuntimeBoundarySpec<'db>,
-    ) -> Option<RuntimeClass<'db>> {
-        match boundary {
-            RuntimeBoundarySpec::Exact(class) => Some(class.clone()),
-            RuntimeBoundarySpec::BorrowLike { pointee, allow, .. }
-                if pointee.aggregate_layout().is_some() && allow.allow_object =>
-            {
-                Some(RuntimeClass::Ref {
-                    pointee: Box::new(pointee.clone()),
-                    kind: RefKind::Object,
-                    view: RefView::Whole,
-                })
-            }
-            RuntimeBoundarySpec::BorrowLike { pointee, allow, .. }
-                if pointee.aggregate_layout().is_some() && allow.allow_const =>
-            {
-                Some(RuntimeClass::Ref {
-                    pointee: Box::new(pointee.clone()),
-                    kind: RefKind::Const,
-                    view: RefView::Whole,
-                })
-            }
-            RuntimeBoundarySpec::BorrowLike { pointee, allow, .. } if allow.allow_raw_addr => {
-                Some(RuntimeClass::RawAddr {
-                    space: AddressSpaceKind::Memory,
-                    target: pointee.aggregate_layout(),
-                })
-            }
-            RuntimeBoundarySpec::BorrowLike { .. } => None,
+    fn boundary_source_class(&self, local: RLocalId) -> BoundarySourceClass<'db> {
+        BoundarySourceClass {
+            value: self.locals[local.index()].carrier.value_class().cloned(),
+            addr: self.runtime_place_addr_class(local),
         }
     }
 
@@ -959,34 +933,8 @@ impl<'db> SyntheticBodyBuilder<'db> {
         source: Option<RLocalId>,
         boundary: &RuntimeBoundarySpec<'db>,
     ) -> Option<RuntimeClass<'db>> {
-        match boundary {
-            RuntimeBoundarySpec::Exact(class) => Some(class.clone()),
-            RuntimeBoundarySpec::BorrowLike { .. } => {
-                if let Some(source) = source
-                    && let Some(source_class) =
-                        self.locals[source.index()].carrier.value_class().cloned()
-                {
-                    if runtime_class_satisfies_boundary(&source_class, boundary) {
-                        return Some(source_class);
-                    }
-                    if let Some(actual) = self.runtime_place_addr_class(source)
-                        && runtime_class_satisfies_boundary(&actual, boundary)
-                    {
-                        return Some(actual);
-                    }
-                }
-                self.realize_runtime_boundary_placeholder_class(boundary)
-            }
-        }
-    }
-
-    fn runtime_class_for_boundary_arg(
-        &self,
-        arg: RLocalId,
-        boundary: &RuntimeBoundarySpec<'db>,
-    ) -> RuntimeClass<'db> {
-        self.realize_runtime_boundary_class(Some(arg), boundary)
-            .unwrap_or_else(|| panic!("cannot specialize erased runtime arg {arg:?}"))
+        let source = source.map(|source| self.boundary_source_class(source));
+        CoercionPlanner::realize_boundary_class(source.as_ref(), boundary)
     }
 
     fn runtime_class_for_param_arg(
@@ -994,19 +942,8 @@ impl<'db> SyntheticBodyBuilder<'db> {
         arg: RLocalId,
         plan: &RuntimeParamPlan<'db>,
     ) -> RuntimeClass<'db> {
-        match plan {
-            RuntimeParamPlan::Erased => {
-                panic!("erased runtime param should not have a runtime arg")
-            }
-            RuntimeParamPlan::Boundary(boundary) => {
-                self.runtime_class_for_boundary_arg(arg, boundary)
-            }
-            RuntimeParamPlan::PassActual => self.locals[arg.index()]
-                .carrier
-                .value_class()
-                .cloned()
-                .unwrap_or_else(|| panic!("cannot specialize erased runtime arg {arg:?}")),
-        }
+        CoercionPlanner::param_arg_class(&self.boundary_source_class(arg), plan)
+            .unwrap_or_else(|| panic!("cannot specialize erased runtime arg {arg:?}"))
     }
 
     fn coerce_runtime_value_for_param_plan(
@@ -1046,7 +983,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 self.coerce_runtime_value(bb, src, target, semantic_ty)
             }
             RuntimeBoundarySpec::BorrowLike { .. }
-                if runtime_class_satisfies_boundary(&source, boundary) =>
+                if CoercionPlanner::class_satisfies_boundary(&source, boundary) =>
             {
                 src
             }
@@ -1056,12 +993,12 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 ..
             } if allow.allow_object => {
                 if let Some((place, actual)) = self.promote_runtime_aggregate_local_place(src)
-                    && runtime_class_satisfies_boundary(&actual, boundary)
+                    && CoercionPlanner::class_satisfies_boundary(&actual, boundary)
                 {
                     return self.push_runtime_place_addr_of(bb, place, actual, semantic_ty);
                 }
                 if let Some(actual) = self.runtime_place_addr_class(src)
-                    && runtime_class_satisfies_boundary(&actual, boundary)
+                    && CoercionPlanner::class_satisfies_boundary(&actual, boundary)
                 {
                     return self.push_runtime_place_addr_of(
                         bb,
@@ -1078,7 +1015,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     .value_class()
                     .cloned()
                     .expect("coerced runtime value should not be erased");
-                if runtime_class_satisfies_boundary(&actual, boundary) {
+                if CoercionPlanner::class_satisfies_boundary(&actual, boundary) {
                     value
                 } else {
                     panic!(
@@ -1088,7 +1025,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             }
             RuntimeBoundarySpec::BorrowLike { .. } => {
                 if let Some(actual) = self.runtime_place_addr_class(src)
-                    && runtime_class_satisfies_boundary(&actual, boundary)
+                    && CoercionPlanner::class_satisfies_boundary(&actual, boundary)
                 {
                     return self.push_runtime_place_addr_of(
                         bb,
@@ -1105,7 +1042,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     .value_class()
                     .cloned()
                     .expect("coerced runtime value should not be erased");
-                if runtime_class_satisfies_boundary(&actual, boundary) {
+                if CoercionPlanner::class_satisfies_boundary(&actual, boundary) {
                     value
                 } else {
                     panic!(

@@ -1,6 +1,7 @@
 pub mod body;
 pub(crate) mod call;
 pub(crate) mod classify;
+pub(crate) mod coerce;
 mod consts;
 pub(crate) mod infer;
 pub(crate) mod interface;
