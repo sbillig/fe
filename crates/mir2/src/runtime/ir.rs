@@ -850,14 +850,17 @@ pub enum PlaceRoot<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct RuntimePlace<'db> {
     pub root: PlaceRoot<'db>,
-    pub path: Box<[PlaceElem]>,
+    pub path: Box<[PlaceElem<'db>]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub enum PlaceElem {
+pub enum PlaceElem<'db> {
     Field(FieldIndex),
     Index(IndexSource<RValueId>),
-    VariantField(FieldIndex),
+    VariantField {
+        variant: VariantId<'db>,
+        field: FieldIndex,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]

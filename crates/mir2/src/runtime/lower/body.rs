@@ -1441,7 +1441,13 @@ impl<'db> RmirLowerCtxt<'db> {
         }
     }
 
-    fn lower_field_like(&mut self, bb: RBlockId, dst: RLocalId, base: SLocalId, elem: PlaceElem) {
+    fn lower_field_like(
+        &mut self,
+        bb: RBlockId,
+        dst: RLocalId,
+        base: SLocalId,
+        elem: PlaceElem<'db>,
+    ) {
         let mut place = self.semantic_place(bb, base);
         place.path = vec![elem].into_boxed_slice();
         let projected = self.project_place_class(&place);
@@ -1607,10 +1613,76 @@ impl<'db> RmirLowerCtxt<'db> {
         variant: VariantIndex,
         field: FieldIndex,
     ) {
+        let value_class = self
+            .semantic_value_class(value.local)
+            .expect("enum value should have a runtime class");
+        let variant_id = self.enum_variant_for_local(value.local, variant);
         if self.semantic_local_is_place_bound(value.local) {
-            let variant = self.enum_variant_for_local(value.local, variant);
             let value = self.read_semantic_operand(bb, value);
-            self.push_stmt(bb, RStmt::EnumAssertVariant { value, variant });
+            self.push_stmt(
+                bb,
+                RStmt::EnumAssertVariant {
+                    value,
+                    variant: variant_id,
+                },
+            );
+            self.lower_enum_extract_value(
+                bb,
+                dst,
+                value,
+                variant_id,
+                field,
+                project_variant_field_class(self.db, value_class.clone(), variant_id, field),
+            );
+            return;
+        }
+        match self.local_class(value.local) {
+            Some(RuntimeClass::Ref { .. }) => {
+                let refined = self.enum_variant_ref(bb, value.local, variant);
+                self.lower_field_like(
+                    bb,
+                    dst,
+                    refined,
+                    PlaceElem::VariantField {
+                        variant: variant_id,
+                        field,
+                    },
+                );
+            }
+            _ => {
+                self.push_stmt(
+                    bb,
+                    RStmt::EnumAssertVariant {
+                        value: self.runtime_value(value.local),
+                        variant: variant_id,
+                    },
+                );
+                self.lower_enum_extract_value(
+                    bb,
+                    dst,
+                    self.runtime_value(value.local),
+                    variant_id,
+                    field,
+                    project_variant_field_class(self.db, value_class, variant_id, field),
+                );
+            }
+        }
+    }
+
+    fn lower_enum_extract_value(
+        &mut self,
+        bb: RBlockId,
+        dst: RLocalId,
+        value: RLocalId,
+        variant: VariantId<'db>,
+        field: FieldIndex,
+        field_class: RuntimeClass<'db>,
+    ) {
+        let target = self
+            .value_class(dst)
+            .cloned()
+            .expect("enum extract result must have a runtime class");
+        if field_class == target {
             self.push_stmt(
                 bb,
                 RStmt::Assign {
@@ -1624,33 +1696,29 @@ impl<'db> RmirLowerCtxt<'db> {
             );
             return;
         }
-        match self.local_class(value.local) {
-            Some(RuntimeClass::Ref { .. }) => {
-                let refined = self.enum_variant_ref(bb, value.local, variant);
-                self.lower_field_like(bb, dst, refined, PlaceElem::VariantField(field));
-            }
-            _ => {
-                let variant = self.enum_variant_for_local(value.local, variant);
-                self.push_stmt(
-                    bb,
-                    RStmt::EnumAssertVariant {
-                        value: self.runtime_value(value.local),
-                        variant,
-                    },
-                );
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::EnumExtract {
-                            value: self.runtime_value(value.local),
-                            variant,
-                            field,
-                        },
-                    },
-                );
-            }
-        }
+        let source = self.alloc_runtime_temp(
+            self.locals[dst.index()].semantic_ty,
+            RuntimeCarrier::Value(field_class),
+        );
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: source,
+                expr: RExpr::EnumExtract {
+                    value,
+                    variant,
+                    field,
+                },
+            },
+        );
+        let copied = self.coerce_value(bb, source, &target);
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst,
+                expr: RExpr::Use(copied),
+            },
+        );
     }
 
     fn current_arithmetic_mode(&self) -> ArithmeticMode {
@@ -3923,25 +3991,41 @@ impl<'db> RmirLowerCtxt<'db> {
                 },
             },
         };
+        let mut current = self.project_place_class(&runtime_place);
         let mut projected = Vec::new();
         for elem in place.path.iter() {
             match elem {
                 Projection::Deref => {
                     panic!("unexpected deref in normalized runtime place: {place:?}")
                 }
-                Projection::Field(field) => projected.push(PlaceElem::Field(FieldIndex(
-                    (*field).try_into().expect("field index fits in u16"),
-                ))),
-                Projection::VariantField { field_idx, .. } => {
-                    projected.push(PlaceElem::VariantField(FieldIndex(
-                        (*field_idx).try_into().expect("field index fits in u16"),
-                    )));
+                Projection::Field(field) => {
+                    let field = FieldIndex((*field).try_into().expect("field index fits in u16"));
+                    projected.push(PlaceElem::Field(field));
+                    current = project_field_class(self.db, current, field);
                 }
-                Projection::Index(IndexSource::Dynamic(index)) => projected.push(PlaceElem::Index(
-                    IndexSource::Dynamic(self.read_semantic_value(bb, *index)),
-                )),
+                Projection::VariantField {
+                    variant, field_idx, ..
+                } => {
+                    let field =
+                        FieldIndex((*field_idx).try_into().expect("field index fits in u16"));
+                    let variant = VariantId {
+                        enum_layout: current
+                            .aggregate_layout()
+                            .expect("variant-field places should project from enum layouts"),
+                        index: variant.0,
+                    };
+                    projected.push(PlaceElem::VariantField { variant, field });
+                    current = project_variant_field_class(self.db, current, variant, field);
+                }
+                Projection::Index(IndexSource::Dynamic(index)) => {
+                    projected.push(PlaceElem::Index(IndexSource::Dynamic(
+                        self.read_semantic_value(bb, *index),
+                    )));
+                    current = project_index_class(self.db, current);
+                }
                 Projection::Index(IndexSource::Constant(index)) => {
                     projected.push(PlaceElem::Index(IndexSource::Constant(*index)));
+                    current = project_index_class(self.db, current);
                 }
                 Projection::Discriminant => {
                     panic!("discriminant projections are not valid runtime places: {place:?}");
@@ -4647,10 +4731,6 @@ impl<'db> RmirLowerCtxt<'db> {
                 .cloned()
                 .expect("projected ref places should have runtime classes")
             {
-                class @ RuntimeClass::Ref {
-                    view: RefView::EnumVariant(_),
-                    ..
-                } if matches!(place.path.first(), Some(PlaceElem::VariantField(_))) => class,
                 RuntimeClass::Ref { pointee, .. } => *pointee,
                 class => class,
             },
@@ -4661,8 +4741,8 @@ impl<'db> RmirLowerCtxt<'db> {
             current = match elem {
                 PlaceElem::Field(field) => project_field_class(self.db, current, *field),
                 PlaceElem::Index(_) => project_index_class(self.db, current),
-                PlaceElem::VariantField(field) => {
-                    project_variant_field_class(self.db, current, *field)
+                PlaceElem::VariantField { variant, field } => {
+                    project_variant_field_class(self.db, current, *variant, *field)
                 }
             };
         }

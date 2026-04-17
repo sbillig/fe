@@ -28,7 +28,7 @@ pub(crate) struct RuntimeTypeEnv<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateCtorElem<'db> {
-    pub(crate) elem: PlaceElem,
+    pub(crate) elem: PlaceElem<'db>,
     pub(crate) class: RuntimeClass<'db>,
 }
 

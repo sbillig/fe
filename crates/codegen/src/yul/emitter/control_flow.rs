@@ -85,6 +85,27 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
             if target == loop_ctx.break_target {
                 return Ok(vec![YulDoc::line("break")]);
             }
+            if !self
+                .loop_info(loop_ctx.header)
+                .expect("active loop header should have loop info")
+                .blocks
+                .contains(&target)
+            {
+                let mut exit_stops = ctx.stop_blocks.to_vec();
+                if !exit_stops.contains(&loop_ctx.break_target) {
+                    exit_stops.push(loop_ctx.break_target);
+                }
+                let mut docs = self.emit_block_internal(
+                    target,
+                    EmitCtx {
+                        loop_ctx: None,
+                        stop_blocks: &exit_stops,
+                    },
+                    path,
+                )?;
+                docs.push(YulDoc::line("break"));
+                return Ok(docs);
+            }
         }
         if ctx.stop_blocks.contains(&target) {
             return Ok(Vec::new());

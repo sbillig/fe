@@ -880,8 +880,8 @@ fn format_place<'db>(place: &RuntimePlace<'db>) -> String {
             PlaceElem::Index(index) => {
                 let _ = write!(out, "[{}]", format_index_source(*index));
             }
-            PlaceElem::VariantField(field) => {
-                let _ = write!(out, ".variant.{}", format_field(*field));
+            PlaceElem::VariantField { variant, field } => {
+                let _ = write!(out, ".variant{}.{}", variant.index, format_field(*field));
             }
         }
     }

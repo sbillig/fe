@@ -814,8 +814,8 @@ struct PendingAggregateObject<'db> {
     layout: LayoutId<'db>,
     fallback_stmts: Vec<YStmt<'db>>,
     transport: PendingTransportTree<'db>,
-    value_writes: FxHashMap<Box<[PlaceElem]>, RLocalId>,
-    const_writes: FxHashMap<Box<[PlaceElem]>, ConstNode<'db>>,
+    value_writes: FxHashMap<Box<[PlaceElem<'db>]>, RLocalId>,
+    const_writes: FxHashMap<Box<[PlaceElem<'db>]>, ConstNode<'db>>,
 }
 
 impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
@@ -1668,7 +1668,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
         }
     }
 
-    fn const_object_path(&self, place: &mir2::RuntimePlace<'db>) -> Option<Box<[PlaceElem]>> {
+    fn const_object_path(&self, place: &mir2::RuntimePlace<'db>) -> Option<Box<[PlaceElem<'db>]>> {
         let mut path = Vec::with_capacity(place.path.len());
         for elem in place.path.iter() {
             match elem {
@@ -1676,7 +1676,10 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                 PlaceElem::Index(IndexSource::Constant(value)) => {
                     path.push(PlaceElem::Index(IndexSource::Constant(*value)));
                 }
-                PlaceElem::VariantField(field) => path.push(PlaceElem::VariantField(*field)),
+                PlaceElem::VariantField { variant, field } => path.push(PlaceElem::VariantField {
+                    variant: *variant,
+                    field: *field,
+                }),
                 PlaceElem::Index(IndexSource::Dynamic(_)) => return None,
             }
         }
@@ -1745,10 +1748,10 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
     fn build_scalar_value_for_class(
         &self,
         class: &RuntimeClass<'db>,
-        path: &[PlaceElem],
+        path: &[PlaceElem<'db>],
         local_values: &[LocalValueInfo<'db>],
-        value_writes: &FxHashMap<Box<[PlaceElem]>, RLocalId>,
-        const_writes: &FxHashMap<Box<[PlaceElem]>, ConstNode<'db>>,
+        value_writes: &FxHashMap<Box<[PlaceElem<'db>]>, RLocalId>,
+        const_writes: &FxHashMap<Box<[PlaceElem<'db>]>, ConstNode<'db>>,
     ) -> Option<(YExpr<'db>, YulValueClass<'db>, Option<ConstNode<'db>>)> {
         if let Some(src) = value_writes.get(path)
             && let Some(class) = local_values[src.as_u32() as usize].class.clone()
@@ -1826,8 +1829,8 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
     fn build_const_node_for_class(
         &self,
         class: &RuntimeClass<'db>,
-        path: &[PlaceElem],
-        writes: &FxHashMap<Box<[PlaceElem]>, ConstNode<'db>>,
+        path: &[PlaceElem<'db>],
+        writes: &FxHashMap<Box<[PlaceElem<'db>]>, ConstNode<'db>>,
     ) -> Option<ConstNode<'db>> {
         if let Some(node) = writes.get(path) {
             return Some(node.clone());
@@ -1845,8 +1848,8 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
     fn build_const_node_for_layout(
         &self,
         layout: LayoutId<'db>,
-        path: &[PlaceElem],
-        writes: &FxHashMap<Box<[PlaceElem]>, ConstNode<'db>>,
+        path: &[PlaceElem<'db>],
+        writes: &FxHashMap<Box<[PlaceElem<'db>]>, ConstNode<'db>>,
     ) -> Option<ConstNode<'db>> {
         if let Some(node) = writes.get(path) {
             return Some(node.clone());

@@ -7,7 +7,7 @@ use hir::analysis::ty::ProviderAddressSpace;
 
 use crate::{
     db::MirDb,
-    runtime::{AddressSpaceKind, RefView, RuntimeClass},
+    runtime::{AddressSpaceKind, RuntimeClass, VariantId},
 };
 
 pub(super) fn project_field_class<'db>(
@@ -50,18 +50,15 @@ pub(super) fn project_index_class<'db>(
 pub(super) fn project_variant_field_class<'db>(
     db: &'db dyn MirDb,
     class: RuntimeClass<'db>,
+    variant: VariantId<'db>,
     field: FieldIndex,
 ) -> RuntimeClass<'db> {
-    let variant = match class {
-        RuntimeClass::Ref {
-            view: RefView::EnumVariant(variant),
-            ..
-        } => variant,
-        RuntimeClass::Scalar(_)
-        | RuntimeClass::AggregateValue { .. }
-        | RuntimeClass::Ref { .. }
-        | RuntimeClass::RawAddr { .. } => panic!("invalid variant-field projection class"),
-    };
+    let layout = class
+        .aggregate_layout()
+        .unwrap_or_else(|| panic!("invalid variant-field projection class"));
+    if layout != variant.enum_layout {
+        panic!("invalid variant-field projection class");
+    }
     variant.layout(db).expect("variant layout").variants[variant.index as usize].fields
         [field.0 as usize]
         .clone()

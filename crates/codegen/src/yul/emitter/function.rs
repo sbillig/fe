@@ -38,6 +38,7 @@ pub(super) struct FunctionEmitter<'a, 'db> {
 #[derive(Clone, Debug)]
 pub(super) struct YLoopInfo {
     pub(super) exit: YBlockId,
+    pub(super) blocks: FxHashSet<YBlockId>,
 }
 
 pub(super) fn render_function_doc<'a, 'db>(
@@ -56,6 +57,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         object_label: &str,
     ) -> Self {
         let preds = compute_predecessors(plan);
+        let ipdom = compute_immediate_postdominators(plan);
         Self {
             db,
             index,
@@ -63,8 +65,8 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
             section_label: object_label.to_string(),
             state: FunctionState::new(plan),
             cross_block_values: compute_cross_block_values(plan),
-            ipdom: compute_immediate_postdominators(plan),
-            loop_headers: compute_loop_headers(plan, &preds),
+            ipdom: ipdom.clone(),
+            loop_headers: compute_loop_headers(plan, &preds, &ipdom),
         }
     }
 
@@ -672,6 +674,7 @@ fn compute_immediate_postdominators<'db>(plan: &YulFunctionPlan<'db>) -> Vec<Opt
 fn compute_loop_headers<'db>(
     plan: &YulFunctionPlan<'db>,
     preds: &[Vec<YBlockId>],
+    ipdom: &[Option<YBlockId>],
 ) -> FxHashMap<YBlockId, YLoopInfo> {
     let reachable = compute_reachable(plan);
     let doms = compute_dominators(plan, preds, &reachable);
@@ -712,17 +715,24 @@ fn compute_loop_headers<'db>(
             .flat_map(|block| block_successors(&plan.blocks[block.index()].terminator))
             .filter(|succ| !blocks.contains(succ))
             .collect::<FxHashSet<_>>();
-        assert!(
-            exits.len() == 1,
-            "structured Yul emission requires a unique exit for loop header {:?}, found {:?}",
-            header,
+        let exit = if exits.len() == 1 {
             exits
-        );
-        let exit = exits
-            .into_iter()
-            .next()
-            .expect("loop exits.len() == 1 guarantees an exit");
-        loops.insert(header, YLoopInfo { exit });
+                .iter()
+                .copied()
+                .next()
+                .expect("loop exits.len() == 1 guarantees an exit")
+        } else {
+            ipdom[header.index()]
+                .filter(|candidate| !blocks.contains(candidate))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "structured Yul emission requires a unique loop continuation for header {:?}, found exits {:?}",
+                        header,
+                        exits
+                    )
+                })
+        };
+        loops.insert(header, YLoopInfo { exit, blocks });
     }
 
     loops

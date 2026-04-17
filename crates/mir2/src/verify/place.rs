@@ -125,17 +125,10 @@ pub fn resolve_runtime_place<'db>(
                     class: current.clone(),
                 });
             }
-            PlaceElem::VariantField(field) => {
-                let variant = match current {
-                    RuntimeClass::Ref {
-                        view: RefView::EnumVariant(variant),
-                        ..
-                    } => variant,
-                    _ => return Err(VerifyError::InvalidVariantPlace(current)),
-                };
-                current = project_variant_field(db, current, *field)?;
+            PlaceElem::VariantField { variant, field } => {
+                current = project_variant_field(db, current, *variant, *field)?;
                 path.push(ResolvedPlaceElem::VariantField {
-                    variant,
+                    variant: *variant,
                     field: *field,
                     class: current.clone(),
                 });
@@ -509,20 +502,16 @@ fn project_index<'db>(
 fn project_variant_field<'db>(
     db: &'db dyn MirDb,
     current: RuntimeClass<'db>,
+    variant: VariantId<'db>,
     field: FieldIndex,
 ) -> Result<RuntimeClass<'db>, VerifyError<'db>> {
     let current_clone = current.clone();
-    let RuntimeClass::Ref {
-        pointee,
-        view: RefView::EnumVariant(variant),
-        ..
-    } = current
-    else {
+    let Some(layout) = current.aggregate_layout() else {
         return Err(VerifyError::InvalidVariantPlace(current_clone));
     };
-    let RuntimeClass::AggregateValue { layout } = *pointee else {
+    if layout != variant.enum_layout {
         return Err(VerifyError::InvalidVariantPlace(current_clone));
-    };
+    }
     let enum_layout = variant
         .layout(db)
         .ok_or(VerifyError::InvalidVariant(layout, variant.index))?;
