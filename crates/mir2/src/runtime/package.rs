@@ -29,9 +29,10 @@ use crate::{
     runtime::lower::class::{
         owner_effect_binding_boundary, provider_class_for_target_in_env,
         runtime_effect_binding_plan, runtime_param_class, runtime_visible_binding_class,
-        runtime_visible_binding_plans, top_level_class_for_ty_in_env,
+        top_level_class_for_ty_in_env,
     },
-    runtime::lower::layout::RuntimeTypeEnv,
+    runtime::lower::interface::runtime_visible_binding_plans,
+    runtime::lower::type_info::RuntimeTypeEnv,
     runtime::{
         AddressSpaceKind, ConstRegionId, ContractEffectArgPlan, ContractFieldBinding,
         ContractInitAbiPlan, ContractRecvAbiPlan, DispatchArm, DispatchDefault, InitArgsPlan,

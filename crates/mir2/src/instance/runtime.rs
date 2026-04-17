@@ -23,10 +23,10 @@ use salsa::Update;
 use crate::runtime::lower::{
     class::{
         ref_class_for_place_result, runtime_address_space, runtime_class_satisfies_boundary,
-        runtime_signature_for_key, runtime_visible_binding_plans, semantic_return_ty,
-        top_level_class_for_ty_in_env,
+        runtime_signature_for_key, semantic_return_ty, top_level_class_for_ty_in_env,
     },
-    layout::RuntimeTypeEnv,
+    interface::runtime_visible_binding_plans,
+    type_info::RuntimeTypeEnv,
 };
 use crate::{
     db::MirDb,

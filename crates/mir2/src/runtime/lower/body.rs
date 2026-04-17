@@ -40,30 +40,28 @@ use crate::{
 
 use super::{
     class::{
-        ContractMetadataBuiltin, GenericNumericIntrinsicKind, InferredRuntimeLocal,
-        RuntimeEffectBindingPlan, actual_aggregate_class_for_semantic_source,
-        actual_aggregate_class_from_runtime_source,
+        BodyEnv, ContractMetadataBuiltin, GenericNumericIntrinsicKind, InferenceResult,
+        LocalStateInferer, RuntimeEffectBindingPlan, actual_aggregate_class_from_runtime_source,
         boundary_source_uses_transport_sensitive_aggregate, boundary_spec_for_ty_in_env,
         contract_metadata_builtin, desired_runtime_effect_arg_boundary, desired_runtime_param_plan,
-        expr_direct_class, generic_numeric_intrinsic_kind, infer_local_runtime_state,
-        lower_semantic_locals, materialized_value_class, normalized_place_address_class,
-        normalized_place_class, provider_class_for_target_in_env, resolve_runtime_call_key,
-        runtime_class_satisfies_boundary, runtime_effect_binding_plan_for_binding_idx,
-        runtime_param_locals, runtime_signature_for_key, semantic_return_ty,
-        specialize_boundary_for_runtime_source, stored_class_for_ty_in_context,
-        top_level_class_for_ty_in_env,
+        expr_direct_class, generic_numeric_intrinsic_kind, provider_class_for_target_in_env,
+        resolve_runtime_call_key, runtime_class_satisfies_boundary,
+        runtime_effect_binding_plan_for_binding_idx, runtime_signature_for_key, semantic_return_ty,
+        stored_class_for_ty_in_context, top_level_class_for_ty_in_env,
     },
     consts::{
         const_scalar_for_class, const_scalar_from_value, enum_tag_scalar, lower_const_region,
     },
+    interface::runtime_param_locals,
     layout::{
-        AggregateCtorElem, RuntimeTypeEnv, aggregate_ctor_elems_for_layout,
-        layout_for_aggregate_instance_in_env, layout_for_ty_in_env,
+        AggregateCtorElem, aggregate_ctor_elems_for_layout, layout_for_aggregate_instance_in_env,
+        layout_for_ty_in_env,
     },
     place::{
         project_field_class, project_index_class, project_variant_field_class,
         resolved_effect_arg_address_space,
     },
+    type_info::RuntimeTypeEnv,
 };
 
 pub fn lower_to_rmir<'db>(db: &'db dyn MirDb, instance: RuntimeInstance<'db>) -> RuntimeBody<'db> {
@@ -77,36 +75,23 @@ pub fn lower_to_rmir<'db>(db: &'db dyn MirDb, instance: RuntimeInstance<'db>) ->
             semantic.key(db)
         )
     });
-    let local_state = infer_local_runtime_state(
-        db,
-        &normalized_body,
+    let inferred = LocalStateInferer::new(
+        BodyEnv::new(db, &normalized_body),
         key.params(db),
         &runtime_param_locals(db, semantic, key.params(db)),
-        semantic.key(db).owner(db).scope().into(),
-        semantic.key(db).typed_body(db).assumptions(),
-    );
-    let (semantic_locals, provider_bindings) = lower_semantic_locals(
-        db,
-        &normalized_body,
-        &local_state,
-        semantic.key(db).owner(db).scope().into(),
-        semantic.key(db).typed_body(db).assumptions(),
-    );
+    )
+    .run();
     let signature = runtime_signature_for_key(db, semantic, key.params(db));
-    let mut cx = RmirLowerCtxt::new(
+    let mut emitter = RmirEmitter::new(
         db,
         instance,
         key,
         normalized_body,
-        LoweredSemanticLocals {
-            semantic_locals,
-            provider_bindings,
-            local_state,
-        },
+        inferred,
         signature.clone(),
     );
-    cx.lower_blocks();
-    cx.finish(signature)
+    emitter.lower_blocks();
+    emitter.finish(signature)
 }
 
 fn expr_requires_runtime_eval_when_erased(expr: &NExpr<'_>) -> bool {
@@ -145,7 +130,7 @@ fn expr_requires_runtime_eval_when_erased(expr: &NExpr<'_>) -> bool {
     }
 }
 
-pub(super) struct RmirLowerCtxt<'db> {
+pub(super) struct RmirEmitter<'db> {
     pub(super) db: &'db dyn MirDb,
     pub(super) instance: RuntimeInstance<'db>,
     pub(super) key: RuntimeInstanceKey<'db>,
@@ -168,9 +153,10 @@ enum LoweredBuiltinCall<'db> {
 }
 
 struct LoweredSemanticLocals<'db> {
+    carriers: Vec<RuntimeCarrier<'db>>,
+    roots: Vec<RuntimeLocalRoot<'db>>,
     semantic_locals: Vec<RuntimeLocalLowering<'db>>,
     provider_bindings: Vec<RuntimeProviderBinding<'db>>,
-    local_state: Vec<InferredRuntimeLocal<'db>>,
 }
 
 enum BoundarySource<'db> {
@@ -178,20 +164,26 @@ enum BoundarySource<'db> {
     RuntimePlace(RuntimePlace<'db>),
 }
 
-impl<'db> RmirLowerCtxt<'db> {
+impl<'db> RmirEmitter<'db> {
     fn new(
         db: &'db dyn MirDb,
         instance: RuntimeInstance<'db>,
         key: RuntimeInstanceKey<'db>,
         semantic_body: NormalizedSemanticBody<'db>,
-        lowered_locals: LoweredSemanticLocals<'db>,
+        inferred: InferenceResult<'db>,
         signature: RuntimeSignature<'db>,
     ) -> Self {
         let LoweredSemanticLocals {
+            carriers,
+            roots,
             semantic_locals,
             provider_bindings,
-            local_state,
-        } = lowered_locals;
+        } = LoweredSemanticLocals {
+            carriers: inferred.carriers,
+            roots: inferred.roots,
+            semantic_locals: inferred.semantic_locals,
+            provider_bindings: inferred.provider_bindings,
+        };
         let typed_body = key
             .semantic(db)
             .expect("runtime lowering requires a semantic instance")
@@ -206,19 +198,10 @@ impl<'db> RmirLowerCtxt<'db> {
             .locals
             .iter()
             .enumerate()
-            .map(|(idx, local)| {
-                let inferred = local_state
-                    .get(idx)
-                    .cloned()
-                    .unwrap_or(InferredRuntimeLocal {
-                        carrier: RuntimeCarrier::Erased,
-                        root: RuntimeLocalRoot::None,
-                    });
-                RLocal {
-                    semantic_ty: local.ty,
-                    carrier: inferred.carrier,
-                    root: inferred.root,
-                }
+            .map(|(idx, local)| RLocal {
+                semantic_ty: local.ty,
+                carrier: carriers.get(idx).cloned().unwrap_or(RuntimeCarrier::Erased),
+                root: roots.get(idx).cloned().unwrap_or(RuntimeLocalRoot::None),
             })
             .collect::<Vec<_>>();
         let blocks = Vec::with_capacity(semantic_body.blocks.len());
@@ -326,7 +309,7 @@ impl<'db> RmirLowerCtxt<'db> {
                     &self.semantic_body,
                     expr,
                     self.semantic_body.locals[dst.index()].ty,
-                    &self.current_runtime_carriers(),
+                    &self.current_semantic_carriers(),
                 )
                 .map(RuntimeCarrier::Value)
                 .unwrap_or(RuntimeCarrier::Erased);
@@ -353,35 +336,21 @@ impl<'db> RmirLowerCtxt<'db> {
         }
     }
 
-    fn current_runtime_carriers(&self) -> Vec<RuntimeCarrier<'db>> {
+    fn current_semantic_carriers(&self) -> Vec<RuntimeCarrier<'db>> {
         self.locals
             .iter()
+            .take(self.semantic_body.locals.len())
             .map(|local| local.carrier.clone())
             .collect()
     }
 
     fn direct_assign_source_class(&self, expr: &NExpr<'db>) -> Option<RuntimeClass<'db>> {
+        let carriers = self.current_semantic_carriers();
+        let env = BodyEnv::new(self.db, &self.semantic_body);
         match expr {
-            NExpr::Use(value) => materialized_value_class(
-                self.db,
-                &self.semantic_body,
-                value.local,
-                &self.current_runtime_carriers(),
-            ),
-            NExpr::Borrow { place, .. } => normalized_place_address_class(
-                self.db,
-                &self.semantic_body,
-                place,
-                &self.current_runtime_carriers(),
-                self.env.scope,
-                self.env.assumptions,
-            ),
-            NExpr::ReadPlace { place, .. } => normalized_place_class(
-                self.db,
-                &self.semantic_body,
-                place,
-                &self.current_runtime_carriers(),
-            ),
+            NExpr::Use(value) => env.materialized_value_class(&carriers, value.local),
+            NExpr::Borrow { place, .. } => env.normalized_place_address_class(&carriers, place),
+            NExpr::ReadPlace { place, .. } => env.normalized_place_class(&carriers, place),
             NExpr::Const(_)
             | NExpr::CodeRegionRef { .. }
             | NExpr::Unary { .. }
@@ -426,12 +395,8 @@ impl<'db> RmirLowerCtxt<'db> {
             return;
         }
         let source = match expr {
-            NExpr::Use(value) => actual_aggregate_class_for_semantic_source(
-                self.db,
-                &self.semantic_body,
-                value.local,
-                &self.current_runtime_carriers(),
-            ),
+            NExpr::Use(value) => BodyEnv::new(self.db, &self.semantic_body)
+                .actual_aggregate_class_for_source(&self.current_semantic_carriers(), value.local),
             _ => None,
         };
         let Some(actual) = source else {
@@ -4219,12 +4184,8 @@ impl<'db> RmirLowerCtxt<'db> {
             return None;
         }
         let current = self.semantic_value_class(local)?;
-        let target = materialized_value_class(
-            self.db,
-            &self.semantic_body,
-            local,
-            &self.current_runtime_carriers(),
-        )?;
+        let target = BodyEnv::new(self.db, &self.semantic_body)
+            .materialized_value_class(&self.current_semantic_carriers(), local)?;
         if current == target {
             return None;
         }
@@ -4308,17 +4269,10 @@ impl<'db> RmirLowerCtxt<'db> {
         local: SLocalId,
         boundary: &crate::runtime::RuntimeBoundarySpec<'db>,
     ) -> crate::runtime::RuntimeBoundarySpec<'db> {
-        specialize_boundary_for_runtime_source(
-            self.db,
-            &self.semantic_body,
+        BodyEnv::new(self.db, &self.semantic_body).specialize_boundary_for_source(
+            &self.current_semantic_carriers(),
             local,
             boundary,
-            &self
-                .locals
-                .iter()
-                .take(self.semantic_body.locals.len())
-                .map(|local| local.carrier.clone())
-                .collect::<Vec<_>>(),
         )
     }
 
@@ -4650,12 +4604,9 @@ impl<'db> RmirLowerCtxt<'db> {
                             kind: RefKind::Object,
                             ..
                         }
-                ) && let Some(actual) = actual_aggregate_class_for_semantic_source(
-                    self.db,
-                    &self.semantic_body,
-                    local,
-                    &self.current_runtime_carriers(),
-                ) {
+                ) && let Some(actual) = BodyEnv::new(self.db, &self.semantic_body)
+                    .actual_aggregate_class_for_source(&self.current_semantic_carriers(), local)
+                {
                     target = match target {
                         RuntimeClass::AggregateValue { .. } => actual,
                         RuntimeClass::Ref {
@@ -4719,12 +4670,9 @@ impl<'db> RmirLowerCtxt<'db> {
         ) {
             return target.clone();
         }
-        let Some(actual) = actual_aggregate_class_for_semantic_source(
-            self.db,
-            &self.semantic_body,
-            src.local,
-            &self.current_runtime_carriers(),
-        ) else {
+        let Some(actual) = BodyEnv::new(self.db, &self.semantic_body)
+            .actual_aggregate_class_for_source(&self.current_semantic_carriers(), src.local)
+        else {
             return target.clone();
         };
         let target = match target {
