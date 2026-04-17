@@ -121,6 +121,61 @@ fn read_base() -> u256 {
 }
 
 #[test]
+fn aggregate_ref_roots_keep_layout_for_field_projection() {
+    let yul = emit_inline_yul(
+        "file:///aggregate_ref_roots_keep_layout_for_field_projection.fe",
+        r#"
+use core::ops::{Add, AddAssign}
+
+struct OnlyAssign {
+    value: u8,
+}
+
+impl Copy for OnlyAssign {}
+
+impl AddAssign for OnlyAssign {
+    fn add_assign(mut self, _ other: own OnlyAssign) {
+        self.value = self.value + other.value + 1
+    }
+}
+
+struct Divergent {
+    value: u8,
+}
+
+impl Copy for Divergent {}
+
+impl Add for Divergent {
+    fn add(own self, _ other: own Divergent) -> Divergent {
+        Divergent { value: 99 }
+    }
+}
+
+impl AddAssign for Divergent {
+    fn add_assign(mut self, _ other: own Divergent) {
+        self.value = 7
+    }
+}
+
+fn use_add_assign() {
+    let mut x = OnlyAssign { value: 1 }
+    let y = OnlyAssign { value: 2 }
+    x += y
+
+    let mut a = Divergent { value: 1 }
+    let b = Divergent { value: 2 }
+    a += b
+}
+"#,
+    );
+
+    assert!(
+        yul.contains("function $add_assign_1(") && yul.contains("function $add_assign_0("),
+        "aggregate ref roots should keep pointer/layout shape through field projection lowering:\n{yul}"
+    );
+}
+
+#[test]
 fn single_field_wrapper_ctors_return_words_in_yul() {
     let yul = emit_inline_yul(
         "file:///single_field_wrapper_ctors_return_words_in_yul.fe",

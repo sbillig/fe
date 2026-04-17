@@ -2586,34 +2586,35 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                 }
             }
             ResolvedPlaceRootKind::Ref { value, class } => {
-                let class = local_values[value.as_u32() as usize]
-                    .class
-                    .clone()
-                    .unwrap_or_else(|| yul_class_for_runtime_class(self.db, &class));
                 let runtime_class = body.value_class(value).ok_or_else(|| {
                     YulError::InvalidYulPackage(format!(
                         "ref root {value:?} does not have a runtime class"
                     ))
                 })?;
+                let space = match runtime_class {
+                    RuntimeClass::Ref {
+                        kind: RefKind::Const,
+                        ..
+                    } => YulAddressSpace::Code,
+                    RuntimeClass::Ref {
+                        kind: RefKind::Object,
+                        ..
+                    } => YulAddressSpace::Memory,
+                    RuntimeClass::Ref {
+                        kind: RefKind::Provider { space, .. },
+                        ..
+                    }
+                    | RuntimeClass::RawAddr { space, .. } => yul_space_from_runtime(*space),
+                    _ => yul_space_for_root_class(&yul_class_for_runtime_class(
+                        self.db,
+                        runtime_class,
+                    ))?,
+                };
                 (
                     YulPlaceRoot::Ptr {
                         local: YLocalId(value.as_u32()),
-                        space: match runtime_class {
-                            RuntimeClass::Ref {
-                                kind: RefKind::Const,
-                                ..
-                            } => YulAddressSpace::Code,
-                            RuntimeClass::Ref {
-                                kind: RefKind::Object,
-                                ..
-                            } => YulAddressSpace::Memory,
-                            RuntimeClass::Ref {
-                                kind: RefKind::Provider { space, .. },
-                                ..
-                            } => yul_space_from_runtime(*space),
-                            _ => yul_space_for_root_class(&class)?,
-                        },
-                        class: class.clone(),
+                        space,
+                        class: yul_place_root_class(space, &class),
                     },
                     local_values[value.as_u32() as usize].transport.clone(),
                 )
@@ -2621,39 +2622,36 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
             ResolvedPlaceRootKind::Provider {
                 value,
                 provider_class,
+                class,
                 ..
             } => {
-                let class = local_values[value.as_u32() as usize]
-                    .class
-                    .clone()
-                    .unwrap_or_else(|| yul_class_for_runtime_class(self.db, &provider_class));
                 let space = match &provider_class {
                     RuntimeClass::RawAddr { space, .. } => yul_space_from_runtime(*space),
                     RuntimeClass::Ref {
                         kind: RefKind::Provider { space, .. },
                         ..
                     } => yul_space_from_runtime(*space),
-                    _ => yul_space_for_root_class(&class)?,
+                    _ => yul_space_for_root_class(&yul_class_for_runtime_class(
+                        self.db,
+                        &provider_class,
+                    ))?,
                 };
                 (
                     YulPlaceRoot::Ptr {
                         local: YLocalId(value.as_u32()),
                         space,
-                        class: class.clone(),
+                        class: yul_place_root_class(space, &class),
                     },
                     local_values[value.as_u32() as usize].transport.clone(),
                 )
             }
             ResolvedPlaceRootKind::Ptr { addr, space, class } => {
-                let class = local_values[addr.as_u32() as usize]
-                    .class
-                    .clone()
-                    .unwrap_or_else(|| yul_class_for_runtime_class(self.db, &class));
+                let space = yul_space_from_runtime(space);
                 (
                     YulPlaceRoot::Ptr {
                         local: YLocalId(addr.as_u32()),
-                        space: yul_space_from_runtime(space),
-                        class: class.clone(),
+                        space,
+                        class: yul_place_root_class(space, &class),
                     },
                     local_values[addr.as_u32() as usize].transport.clone(),
                 )
@@ -2828,6 +2826,16 @@ fn pointer_word_class<'db>() -> YulValueClass<'db> {
         },
         role: mir2::ScalarRole::Plain,
     })
+}
+
+fn yul_place_root_class<'db>(
+    space: YulAddressSpace,
+    class: &RuntimeClass<'db>,
+) -> YulValueClass<'db> {
+    class
+        .aggregate_layout()
+        .map(|layout| yul_ptr_class(space, layout))
+        .unwrap_or_else(pointer_word_class)
 }
 
 fn layout_scalar_word_class<'db>(
