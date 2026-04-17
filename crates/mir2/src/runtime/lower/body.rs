@@ -4032,6 +4032,13 @@ impl<'db> RmirEmitter<'db> {
         if let Some(place) = nonself_backing_value_place(&self.semantic_body, local).cloned() {
             return self.try_lower_place(bb, &place);
         }
+        if matches!(
+            self.semantic_local_lowering(local),
+            RuntimeLocalLowering::PlaceCarrier { .. }
+        ) && let Some(place) = self.runtime_place_from_addr_value(self.runtime_value(local))
+        {
+            return Some(place);
+        }
         let root = self.semantic_place_root(local)?;
         Some(RuntimePlace {
             root,
