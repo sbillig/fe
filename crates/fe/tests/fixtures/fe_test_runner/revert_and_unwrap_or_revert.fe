@@ -15,19 +15,18 @@ impl MyError {
 }
 
 impl AbiSize for MyError {
-    const ENCODED_SIZE: u256 = 32
+    const HEAD_SIZE: u256 = 32
     const IS_DYNAMIC: bool = false
-    const NEEDS_PARENT_WRAPPER: bool = false
 }
 
 impl<A: Abi> Encode<A> for MyError {
-    const DIRECT_ENCODE: bool = true
+    const CAN_ENCODE_TO_PTR: bool = true
 
-    fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
+    fn encode_payload<E: AbiEncoder<A>>(own self, _ e: mut E) {
         e.write_word(self.to_int())
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_payload_to_ptr(own self, _ ptr: u256) {
         A::store_word(ptr: ptr, value: self.to_int())
     }
 }
@@ -113,19 +112,18 @@ struct Inner {
 }
 
 impl AbiSize for Inner {
-    const ENCODED_SIZE: u256 = 32
+    const HEAD_SIZE: u256 = 32
     const IS_DYNAMIC: bool = false
-    const NEEDS_PARENT_WRAPPER: bool = false
 }
 
 impl<A: Abi> Encode<A> for Inner {
-    const DIRECT_ENCODE: bool = true
+    const CAN_ENCODE_TO_PTR: bool = true
 
-    fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
+    fn encode_payload<E: AbiEncoder<A>>(own self, _ e: mut E) {
         e.write_word(self.code)
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_payload_to_ptr(own self, _ ptr: u256) {
         A::store_word(ptr: ptr, value: self.code)
     }
 }
@@ -136,21 +134,20 @@ struct Outer {
 }
 
 impl AbiSize for Outer {
-    const ENCODED_SIZE: u256 = 64
+    const HEAD_SIZE: u256 = 64
     const IS_DYNAMIC: bool = false
-    const NEEDS_PARENT_WRAPPER: bool = false
 }
 
 impl<A: Abi> Encode<A> for Outer {
-    const DIRECT_ENCODE: bool = true
+    const CAN_ENCODE_TO_PTR: bool = true
 
-    fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
+    fn encode_payload<E: AbiEncoder<A>>(own self, _ e: mut E) {
         e.write_word(self.inner.code)
         e.write_word(self.extra)
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
-        self.inner.encode_to_ptr(ptr)
+    fn encode_payload_to_ptr(own self, _ ptr: u256) {
+        self.inner.encode_payload_to_ptr(ptr)
         A::store_word(ptr: ptr + 32, value: self.extra)
     }
 }

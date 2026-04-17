@@ -5,13 +5,13 @@ use parser::ast::prelude::AstNode;
 use crate::{
     HirDb,
     hir_def::{
-        AssocConstDef, AssocTyDef, AttrListId, Body, BodyKind, EffectParamListId, Expr, ExprId,
-        FieldDefListId, FieldIndex, Func, FuncModifiers, FuncParam, FuncParamListId, FuncParamMode,
-        FuncParamName, GenericArg, GenericArgListId, GenericParam, GenericParamListId, IdentId,
-        ImplTrait, ItemKind, Mod, Partial, Pat, PatId, PathId, PathKind, Stmt, StmtId, Struct,
-        TopLevelMod, TrackedItemId, TrackedItemVariant, TraitRefId, TypeBound, TypeGenericArg,
-        TypeGenericParam, TypeId, TypeKind, TypeMode, UnOp, Visibility, WhereClauseId,
-        expr::CallArg,
+        ArithBinOp, AssocConstDef, AssocTyDef, AttrListId, BinOp, Body, BodyKind,
+        EffectParamListId, Expr, ExprId, FieldDefListId, FieldIndex, Func, FuncModifiers,
+        FuncParam, FuncParamListId, FuncParamMode, FuncParamName, GenericArg, GenericArgListId,
+        GenericParam, GenericParamListId, IdentId, ImplTrait, ItemKind, Mod, Partial, Pat, PatId,
+        PathId, PathKind, Stmt, StmtId, Struct, TopLevelMod, TrackedItemId, TrackedItemVariant,
+        TraitRefId, TypeBound, TypeGenericArg, TypeGenericParam, TypeId, TypeKind, TypeMode, UnOp,
+        Visibility, WhereClauseId, expr::CallArg,
     },
     span::{DesugaredOrigin, HirOrigin},
 };
@@ -588,10 +588,6 @@ where
         self.path_expr(qualified.push_str(self.db(), assoc_name))
     }
 
-    pub(super) fn mut_expr(&mut self, expr: ExprId) -> ExprId {
-        self.push_expr(Expr::Un(expr, UnOp::Mut))
-    }
-
     pub(super) fn call_expr(&mut self, callee: ExprId, args: Vec<ExprId>) -> ExprId {
         self.call_expr_with_args(
             callee,
@@ -650,12 +646,38 @@ where
 
         let db = self.db();
         let self_expr = self.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
-        for (field, field_ty) in fields.iter().copied() {
+        let tail_ident = IdentId::new(db, "__tail".to_string());
+        let base_ident = IdentId::new(db, "base".to_string());
+        let dynamic_payload_size_path = PathId::from_ident(db, self.roots.core)
+            .push_str(db, "abi")
+            .push_str(db, "dynamic_payload_size");
+        let head_size = self.abi_size_assoc_expr(TypeId::fallback_self_ty(db), "HEAD_SIZE");
+        let encoder_expr = self.ident_expr(encoder_ident);
+        let base_expr = self.method_call_expr(encoder_expr, base_ident, vec![]);
+        let tail_init = self.push_expr(Expr::Bin(
+            base_expr,
+            head_size,
+            BinOp::Arith(ArithBinOp::Add),
+        ));
+        let tail_pat = self.push_pat(Pat::Path(
+            Partial::Present(PathId::from_ident(db, tail_ident)),
+            true,
+        ));
+        self.emit_stmt(Stmt::Let(tail_pat, None, Some(tail_init)));
+        for (index, (field, field_ty)) in fields.iter().copied().enumerate() {
+            let field_ident = IdentId::new(db, format!("__field_{index}"));
+            let field_pat = self.push_pat(Pat::Path(
+                Partial::Present(PathId::from_ident(db, field_ident)),
+                false,
+            ));
             let receiver = self.push_expr(Expr::Field(
                 self_expr,
                 Partial::Present(FieldIndex::Ident(field)),
             ));
-            let encoder_expr = self.ident_expr(encoder_ident);
+            self.emit_stmt(Stmt::Let(field_pat, None, Some(receiver)));
+            let field_expr = self.ident_expr(field_ident);
+            let dynamic_payload_size = self.path_expr(dynamic_payload_size_path);
+            let field_size = self.call_expr(dynamic_payload_size, vec![field_expr]);
             let encode_field_args = GenericArgListId::given(
                 db,
                 vec![
@@ -674,8 +696,24 @@ where
                 .push_str(db, "abi")
                 .push_str_args(db, "encode_field", encode_field_args);
             let encode_field_callee = self.path_expr(encode_field_path);
-            let call = self.call_expr(encode_field_callee, vec![receiver, encoder_expr]);
+            let field_value = self.ident_expr(field_ident);
+            let encoder_arg = self.ident_expr(encoder_ident);
+            let tail_value = self.ident_expr(tail_ident);
+            let tail_arg = self.push_expr(Expr::Un(tail_value, UnOp::Mut));
+            let call = self.call_expr(
+                encode_field_callee,
+                vec![field_value, encoder_arg, tail_arg],
+            );
             self.emit_expr_stmt(call);
+            let tail_value = self.ident_expr(tail_ident);
+            let tail_next = self.push_expr(Expr::Bin(
+                tail_value,
+                field_size,
+                BinOp::Arith(ArithBinOp::Add),
+            ));
+            let tail_place = self.ident_expr(tail_ident);
+            let assign = self.push_expr(Expr::Assign(tail_place, tail_next));
+            self.emit_expr_stmt(assign);
         }
     }
 

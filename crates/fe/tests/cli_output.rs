@@ -722,29 +722,28 @@ struct Weird {
 }
 
 impl core::abi::AbiSize for Weird {
-    const ENCODED_SIZE: u256 = 64
+    const HEAD_SIZE: u256 = 64
     const IS_DYNAMIC: bool = false
-    const NEEDS_PARENT_WRAPPER: bool = false
 }
 
 impl core::abi::Encode<std::abi::Sol> for Weird {
-    const DIRECT_ENCODE: bool = false
+    const CAN_ENCODE_TO_PTR: bool = false
 
-    fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
-        self.flag.encode(e)
-        self.amount.encode(e)
+    fn encode_payload<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
+        self.flag.encode_payload(e)
+        self.amount.encode_payload(e)
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_payload_to_ptr(own self, _ ptr: u256) {
         std::abi::Sol::store_word(ptr: ptr, value: if self.flag { 1 } else { 0 })
         std::abi::Sol::store_word(ptr: ptr + 32, value: self.amount as u256)
     }
 }
 
 impl core::abi::Decode<std::abi::Sol> for Weird {
-    fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
-        let flag = bool::decode(d)
-        let amount = u64::decode(d)
+    fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
+        let flag = bool::decode_payload(d)
+        let amount = u64::decode_payload(d)
         Self { amount, flag }
     }
 }

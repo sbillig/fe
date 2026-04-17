@@ -7,22 +7,25 @@ struct GenericMsg<T> {
 impl<T> core::abi::AbiSize for GenericMsg<T>
     where T: core::abi::AbiSize
 {
-    const ENCODED_SIZE: u256 = T::ENCODED_SIZE
+    const HEAD_SIZE: u256 = T::HEAD_SIZE
     const IS_DYNAMIC: bool = T::IS_DYNAMIC
-    const NEEDS_PARENT_WRAPPER: bool = T::IS_DYNAMIC
+
+    fn payload_size(self) -> u256 {
+        Self::HEAD_SIZE + core::abi::dynamic_payload_size(self.value)
+    }
 }
 
 impl<T> core::abi::Encode<std::abi::Sol> for GenericMsg<T>
     where T: core::abi::Encode<std::abi::Sol>
 {
-    const DIRECT_ENCODE: bool = false
+    const CAN_ENCODE_TO_PTR: bool = false
 
-    fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
+    fn encode_payload<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
         let Self { value } = self
-        value.encode(e)
+        value.encode_payload(e)
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_payload_to_ptr(own self, _ ptr: u256) {
         core::panic()
     }
 }
@@ -30,8 +33,8 @@ impl<T> core::abi::Encode<std::abi::Sol> for GenericMsg<T>
 impl<T> core::abi::Decode<std::abi::Sol> for GenericMsg<T>
     where T: core::abi::Decode<std::abi::Sol>
 {
-    fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
-        let value = T::decode(d)
+    fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
+        let value = T::decode_payload(d)
         Self { value }
     }
 }

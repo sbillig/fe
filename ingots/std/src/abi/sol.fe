@@ -1,7 +1,21 @@
 pub use ints::*
 pub use types::*
 
-use core::abi::{Abi, AbiDecoder, AbiEncoder, AbiSize, ByteInput, BytesView, Cursor, Decode, Encode, StringView, abi_root_head_size, decode_root}
+use core::abi::{
+    Abi,
+    AbiDecoder,
+    AbiEncoder,
+    AbiSize,
+    ByteInput,
+    BytesView,
+    Cursor,
+    Decode,
+    Encode,
+    StringView,
+    abi_single_root_head_size,
+    decode_payload_root,
+    decode_single_root,
+}
 use core::{AsBytes, keccak}
 use core::num::IntDowncast
 use ingot::evm::mem
@@ -38,7 +52,7 @@ pub const fn sol<T: AsBytes>(_ sig: T) -> u32 {
 pub const fn encoded_size<T>() -> u256
     where T: AbiSize
 {
-    abi_root_head_size<T>()
+    abi_single_root_head_size<T>()
 }
 
 impl Abi for Sol {
@@ -139,7 +153,7 @@ impl Abi for Sol {
         SolDecoder::with_base(input, base)
     }
 
-    fn encoder_new() -> Self::Encoder { SolEncoder::new() }
+    fn encoder_new(_ size: u256) -> Self::Encoder { SolEncoder::new(size) }
 
     fn store_word(ptr: u256, value: u256) {
         mstore(addr: ptr, value: value)
@@ -188,7 +202,7 @@ pub fn decode_input_at<T, I>(_ input: own I, _ base: u256) -> T
     }
 
     let mut d = SolDecoder<I>::with_base(input, base)
-    T::decode(mut d)
+    decode_payload_root<Sol, T, SolDecoder<I>>(mut d)
 }
 
 /// Decode a Solidity ABI return/output payload from an arbitrary byte input at byte 0.
@@ -210,7 +224,7 @@ pub fn decode_output_at<T, I>(_ input: own I, _ base: u256) -> T
     }
 
     let mut d = SolDecoder<I>::with_base(input, base)
-    decode_root<Sol, T, SolDecoder<I>>(mut d)
+    decode_single_root<Sol, T, SolDecoder<I>>(mut d)
 }
 
 /// Decode a Solidity ABI `bytes` payload view from `input` at byte 0.
@@ -350,30 +364,16 @@ impl<I> AbiDecoder<Sol> for SolDecoder<I>
 }
 
 pub struct SolEncoder {
-    pub start: u256,
     pub base: u256,
     pub pos: u256,
-    pub end: u256,
 }
 
 impl SolEncoder {
-    pub fn new() -> Self {
+    pub fn new(_ size: u256) -> Self {
+        let base = if size == 0 { 0 } else { mem::alloc(size) }
         SolEncoder {
-            start: 0,
-            base: 0,
-            pos: 0,
-            end: 0,
-        }
-    }
-
-    #[arithmetic(unchecked)]
-    fn ensure_init(mut self, _ bytes: u256) {
-        if self.start == 0 {
-            let ptr = mem::alloc(bytes)
-            self.start = ptr
-            self.base = ptr
-            self.pos = ptr
-            self.end = ptr + bytes
+            base,
+            pos: base,
         }
     }
 }
@@ -410,29 +410,5 @@ impl AbiEncoder<Sol> for SolEncoder {
 
     fn write_word_at(mut self, at: u256, value: u256) {
         mstore(addr: at, value: value)
-    }
-
-    #[arithmetic(unchecked)]
-    fn reserve_head(mut self, _ bytes: u256) -> u256 {
-        if self.start == 0 {
-            let ptr = mem::alloc(bytes)
-            self.start = ptr
-            self.base = ptr
-            self.pos = ptr
-            self.end = ptr + bytes
-        }
-        self.base
-    }
-
-    #[arithmetic(unchecked)]
-    fn append_tail(mut self, _ bytes: u256) -> u256 {
-        let ptr = mem::alloc(bytes)
-        self.end = ptr + bytes
-        ptr
-    }
-
-    fn finish(self) -> (u256, u256) {
-        let start = self.start
-        (start, self.end - start)
     }
 }

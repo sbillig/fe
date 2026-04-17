@@ -1,6 +1,7 @@
 use common::InputDb;
+use common::indexmap::IndexMap;
 use common::stdlib::{HasBuiltinCore, HasBuiltinStd};
-use driver::{DriverDataBase, db::DiagnosticsCollection};
+use driver::{DriverDataBase, MirDiagnosticsMode, db::DiagnosticsCollection};
 use fe_hir::analysis::ty::ty_check::ReturnProvenance;
 use fe_hir::analysis::ty::{
     corelib::{resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path},
@@ -9,6 +10,7 @@ use fe_hir::analysis::ty::{
 };
 use fe_hir::hir_def::{Expr, LitKind, Partial};
 use fe_hir::test_db::HirAnalysisTestDb;
+use salsa::Setter;
 use url::Url;
 
 #[cfg(target_arch = "wasm32")]
@@ -52,6 +54,30 @@ fn assert_builtin_clean(db: &DriverDataBase, diags: DiagnosticsCollection<'_>, n
     );
 }
 
+fn release_profile_db() -> DriverDataBase {
+    let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_profile(&mut db)
+        .to("release".into());
+    db
+}
+
+#[test]
+fn analyze_corelib_under_release_profile() {
+    let db = release_profile_db();
+    let core = db.builtin_core();
+    let core_diags = db.run_on_ingot(core);
+    assert_builtin_clean(&db, core_diags, "core (release profile)");
+}
+
+#[test]
+fn analyze_stdlib_under_release_profile() {
+    let db = release_profile_db();
+    let std_ingot = db.builtin_std();
+    let std_diags = db.run_on_ingot(std_ingot);
+    assert_builtin_clean(&db, std_diags, "std (release profile)");
+}
+
 #[test]
 fn solver_proves_encode_for_fixed_bool_arrays() {
     let mut db = DriverDataBase::default();
@@ -61,7 +87,7 @@ use core::abi::Encode
 use std::abi::Sol
 
 pub fn root(values: [bool; 5]) {
-    values.encode_to_ptr(0)
+    values.encode_payload_to_ptr(0)
 }
 "#;
 
@@ -83,12 +109,12 @@ pub fn root(values: [bool; 5]) {
         .find_map(|expr| {
             let callable = typed_body.callable_expr(expr)?;
             let name = callable.callable_def.name(&db)?;
-            (name.data(&db) == "encode_to_ptr").then_some(callable)
+            (name.data(&db) == "encode_payload_to_ptr").then_some(callable)
         })
-        .expect("encode_to_ptr callable should resolve during type checking");
+        .expect("encode_payload_to_ptr callable should resolve during type checking");
     let inst = callable
         .trait_inst()
-        .expect("encode_to_ptr should be a trait method");
+        .expect("encode_payload_to_ptr should be a trait method");
     let solve_cx = TraitSolveCx::new(&db, func.scope());
 
     match is_goal_satisfiable(&db, solve_cx, inst) {
@@ -98,6 +124,192 @@ pub fn root(values: [bool; 5]) {
             inst.pretty_print(&db, true)
         ),
     }
+}
+
+#[test]
+fn solver_proves_core_abi_traits_for_u256_and_sol() {
+    let mut db = release_profile_db();
+    let url = Url::parse("file:///solver_proves_core_abi_traits_for_u256_and_sol.fe").unwrap();
+    let src = "pub fn root() {}\n";
+
+    let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+    let top_mod = db.top_mod(file);
+    let diags = db.run_on_top_mod(top_mod);
+    assert!(
+        diags.is_empty(),
+        "unexpected diagnostics: {}",
+        diags.format_diags(&db)
+    );
+
+    let scope = top_mod.scope();
+    let solve_cx = TraitSolveCx::new(&db, scope);
+    let encode_trait = resolve_core_trait(&db, scope, &["abi", "Encode"]).unwrap();
+    let decode_trait = resolve_core_trait(&db, scope, &["abi", "Decode"]).unwrap();
+    let abi_trait = resolve_core_trait(&db, scope, &["abi", "Abi"]).unwrap();
+    let sol_ty = resolve_lib_type_path(&db, scope, "std::abi::Sol").unwrap();
+    let u256_ty = fe_hir::analysis::ty::ty_def::TyId::u256(&db);
+
+    for (label, inst) in [
+        (
+            "Sol: Abi",
+            fe_hir::analysis::ty::trait_def::TraitInstId::new(
+                &db,
+                abi_trait,
+                vec![sol_ty],
+                IndexMap::default(),
+            ),
+        ),
+        (
+            "u256: Encode<Sol>",
+            fe_hir::analysis::ty::trait_def::TraitInstId::new(
+                &db,
+                encode_trait,
+                vec![u256_ty, sol_ty],
+                IndexMap::default(),
+            ),
+        ),
+        (
+            "u256: Decode<Sol>",
+            fe_hir::analysis::ty::trait_def::TraitInstId::new(
+                &db,
+                decode_trait,
+                vec![u256_ty, sol_ty],
+                IndexMap::default(),
+            ),
+        ),
+    ] {
+        match is_goal_satisfiable(&db, solve_cx, inst) {
+            GoalSatisfiability::Satisfied(_) => {}
+            other => panic!("expected `{label}` to be satisfiable, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn generic_call_specializes_abi_trait_bounds_to_concrete_args() {
+    let mut db = release_profile_db();
+    let url = Url::parse("file:///generic_call_specializes_abi_trait_bounds_to_concrete_args.fe")
+        .unwrap();
+    let src = r#"
+use core::abi::{Decode, Encode}
+use std::abi::Sol
+
+pub fn require_encode<T>() where T: Encode<Sol> {}
+pub fn require_decode<T>() where T: Decode<Sol> {}
+
+pub fn root() {
+    require_encode<u256>()
+    require_decode<u256>()
+}
+"#;
+
+    let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+    let top_mod = db.top_mod(file);
+    let diags = db.run_on_top_mod(top_mod);
+    assert!(
+        diags.is_empty(),
+        "unexpected diagnostics: {}",
+        diags.format_diags(&db)
+    );
+
+    let root = top_mod
+        .all_funcs(&db)
+        .iter()
+        .copied()
+        .find(|func| {
+            func.name(&db)
+                .to_opt()
+                .is_some_and(|name| name.data(&db) == "root")
+        })
+        .expect("missing root function");
+    let body = root.body(&db).expect("root should have a body");
+    let typed_body = &check_func_body(&db, root).1;
+
+    let mut seen = 0;
+    for expr in body.exprs(&db).keys() {
+        let Some(callable) = typed_body.callable_expr(expr) else {
+            continue;
+        };
+        let Some(name) = callable.callable_def.name(&db) else {
+            continue;
+        };
+        if !matches!(name.data(&db).as_str(), "require_encode" | "require_decode") {
+            continue;
+        }
+        seen += 1;
+        assert_eq!(
+            callable
+                .generic_args()
+                .iter()
+                .map(|ty| ty.pretty_print(&db).to_string())
+                .collect::<Vec<_>>(),
+            vec!["u256".to_string()]
+        );
+    }
+    assert_eq!(seen, 2, "expected both generic calls to be present");
+}
+
+#[test]
+fn ingot_analysis_accepts_concrete_encode_decode_call_bounds() {
+    let mut db = release_profile_db();
+    let url =
+        Url::parse("file:///ingot_analysis_accepts_concrete_encode_decode_call_bounds.fe").unwrap();
+    let src = r#"
+use core::abi::{Decode, Encode}
+use std::abi::Sol
+
+pub fn require_encode<T>() where T: Encode<Sol> {}
+pub fn require_decode<T>() where T: Decode<Sol> {}
+
+pub fn root() {
+    require_encode<u256>()
+    require_decode<u256>()
+}
+"#;
+
+    let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+    let top_mod = db.top_mod(file);
+    let diags = db.run_on_ingot(top_mod.ingot(&db));
+    assert!(
+        diags.is_empty(),
+        "unexpected diagnostics: {}",
+        diags.format_diags(&db)
+    );
+}
+
+#[test]
+fn mir_analysis_accepts_concrete_encode_decode_call_bounds() {
+    let mut db = release_profile_db();
+    let url =
+        Url::parse("file:///mir_analysis_accepts_concrete_encode_decode_call_bounds.fe").unwrap();
+    let src = r#"
+use core::abi::{Decode, Encode}
+use std::abi::Sol
+
+pub fn require_encode<T>() where T: Encode<Sol> {}
+pub fn require_decode<T>() where T: Decode<Sol> {}
+
+pub fn root() {
+    require_encode<u256>()
+    require_decode<u256>()
+}
+"#;
+
+    let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+    let top_mod = db.top_mod(file);
+    let hir_diags = db.run_on_top_mod(top_mod);
+    assert!(
+        hir_diags.is_empty(),
+        "unexpected HIR diagnostics: {}",
+        hir_diags.format_diags(&db)
+    );
+
+    let mir_diags = db.mir_diagnostics_for_top_mod(top_mod, MirDiagnosticsMode::CompilerParity);
+    assert!(
+        mir_diags.is_empty(),
+        "unexpected MIR diagnostics: {}",
+        db.format_complete_diagnostics(&mir_diags)
+    );
 }
 
 #[test]

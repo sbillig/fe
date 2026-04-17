@@ -1,4 +1,4 @@
-use super::abi::{Abi, AbiEncoder, AbiSize, ByteInput, Encode}
+use super::abi::{Abi, AbiSize, ByteInput, Encode, encode_single_root_alloc}
 use super::effect_ref::StorPtr
 
 /// Host interface required by compiler-generated contract entrypoints.
@@ -42,10 +42,7 @@ pub trait ContractHost {
     fn return_value<A: Abi, T>(mut self, _ value: own T) -> !
         where T: Encode<A> + AbiSize
     {
-        let mut enc = A::encoder_new()
-        enc.reserve_head(T::ENCODED_SIZE)
-        value.encode(mut enc)
-        let out: (u256, u256) = enc.finish()
+        let out: (u256, u256) = encode_single_root_alloc<A, T>(value)
         self.return_bytes(ptr: out.0, len: out.1)
     }
 }

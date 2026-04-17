@@ -458,7 +458,9 @@ mod tests {
     use camino::Utf8PathBuf;
 
     use super::*;
-    use crate::analysis::ty::layout_holes::ty_contains_const_hole;
+    use crate::analysis::ty::{
+        GoalSatisfiability, TraitSolveCx, is_goal_satisfiable, layout_holes::ty_contains_const_hole,
+    };
     use crate::test_db::HirAnalysisTestDb;
 
     fn find_func<'db>(
@@ -682,5 +684,42 @@ where
             })
             .collect();
         assert_eq!(provider_names, vec!["cap".to_string(), "slot".to_string()]);
+    }
+
+    #[test]
+    fn function_decl_constraints_instantiate_concrete_abi_trait_args() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("function_decl_constraints_instantiate_concrete_abi_trait_args.fe"),
+            r#"
+use core::abi::{Decode, Encode}
+use std::abi::Sol
+
+fn require_encode<T>() where T: Encode<Sol> {}
+fn require_decode<T>() where T: Decode<Sol> {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let require_encode = find_func(&db, top_mod, "require_encode");
+        let require_decode = find_func(&db, top_mod, "require_decode");
+        let u256_ty = TyId::u256(&db);
+
+        for (label, func) in [("encode", require_encode), ("decode", require_decode)] {
+            let constraints =
+                collect_func_decl_constraints(&db, func.into(), true).instantiate(&db, &[u256_ty]);
+            let goal = *constraints
+                .list(&db)
+                .first()
+                .unwrap_or_else(|| panic!("missing {label} constraint"));
+            let solve_cx = TraitSolveCx::new(&db, func.scope());
+            match is_goal_satisfiable(&db, solve_cx, goal) {
+                GoalSatisfiability::Satisfied(_) => {}
+                other => panic!(
+                    "expected instantiated `{label}` goal `{}` to be satisfiable, got {other:?}",
+                    goal.pretty_print(&db, true)
+                ),
+            }
+        }
     }
 }

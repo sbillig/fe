@@ -8,10 +8,10 @@ use super::{
 };
 use crate::{
     hir_def::{
-        ArithBinOp, AssocConstDef, AttrListId, BinOp, Body, BodyKind, Expr, FieldDef,
-        FieldDefListId, FieldIndex, FuncModifiers, FuncParam, FuncParamMode, FuncParamName,
-        GenericParamListId, IdentId, IntegerId, LitKind, Partial, Pat, PathId, Stmt, Struct,
-        TrackedItemVariant, TraitRefId, TupleTypeId, TypeId, TypeKind, TypeMode, Visibility,
+        AssocConstDef, AttrListId, Body, BodyKind, Expr, FieldDef, FieldDefListId, FieldIndex,
+        FuncModifiers, FuncParam, FuncParamMode, FuncParamName, GenericParamListId, IdentId,
+        IntegerId, LitKind, Partial, Pat, PathId, Stmt, Struct, TrackedItemVariant, TraitRefId,
+        TupleTypeId, TypeId, TypeKind, TypeMode, Visibility,
     },
     span::{EventDesugared, HirOrigin},
 };
@@ -469,12 +469,8 @@ fn lower_emit_method<'db>(
     let log_provider_ident = builder.ident("log");
     let offset_ident = builder.ident("offset");
     let len_ident = builder.ident("len");
-    let enc_ident = builder.ident("enc");
-    let data_len_ident = builder.ident("data_len");
     let data_ptr_ident = builder.ident("data_ptr");
-    let reserve_head_ident = builder.ident("reserve_head");
-    let encode_ident = builder.ident("encode");
-    let finish_ident = builder.ident("finish");
+    let data_len_ident = builder.ident("data_len");
     let as_topic_ident = builder.ident("as_topic");
     let log_method_ident = builder.ident(&format!("log{}", indexed_fields.len() + 1));
 
@@ -526,59 +522,25 @@ fn lower_emit_method<'db>(
             let (data_ptr, data_len) = if data_fields.is_empty() {
                 (int_lit(body, 0), int_lit(body, 0))
             } else {
-                let enc_new_call = {
-                    let new_path = PathId::from_ident(db, roots.std)
-                        .push_str(db, "abi")
-                        .push_str(db, "SolEncoder")
-                        .push_str(db, "new");
-                    let callee = body.path_expr(new_path);
-                    body.call_expr(callee, vec![])
-                };
-                let enc_pat = body.push_pat(Pat::Path(
-                    Partial::Present(PathId::from_ident(db, enc_ident)),
-                    true,
-                ));
-                body.emit_stmt(Stmt::Let(enc_pat, None, Some(enc_new_call)));
-
-                let size_ty = if data_fields.len() == 1 {
-                    data_fields[0].1
+                let payload_expr = if data_fields.len() == 1 {
+                    self_field_expr(body, self_expr, data_fields[0].0)
                 } else {
                     let tuple_elems: Vec<Partial<TypeId<'db>>> = data_fields
                         .iter()
                         .map(|(_, ty)| Partial::Present(*ty))
                         .collect();
-                    TypeId::new(db, TypeKind::Tuple(TupleTypeId::new(db, tuple_elems)))
-                };
-                let encoded_size_expr = build_encoded_size_expr(body, size_ty);
-
-                let data_len_pat = body.push_pat(Pat::Path(
-                    Partial::Present(PathId::from_ident(db, data_len_ident)),
-                    false,
-                ));
-                body.emit_stmt(Stmt::Let(data_len_pat, None, Some(encoded_size_expr)));
-
-                let enc_expr = body.ident_expr(enc_ident);
-                let data_len_expr = body.ident_expr(data_len_ident);
-                let reserve_head =
-                    body.method_call_expr(enc_expr, reserve_head_ident, vec![data_len_expr]);
-                body.emit_expr_stmt(reserve_head);
-
-                let encode_receiver = if data_fields.len() == 1 {
-                    self_field_expr(body, self_expr, data_fields[0].0)
-                } else {
+                    let _ = TypeId::new(db, TypeKind::Tuple(TupleTypeId::new(db, tuple_elems)));
                     let mut elems = Vec::with_capacity(data_fields.len());
                     for (name, _) in data_fields.iter().copied() {
                         elems.push(self_field_expr(body, self_expr, name));
                     }
                     body.push_expr(Expr::Tuple(elems))
                 };
-                let enc_arg_base = body.ident_expr(enc_ident);
-                let enc_arg = body.mut_expr(enc_arg_base);
-                let encode = body.method_call_expr(encode_receiver, encode_ident, vec![enc_arg]);
-                body.emit_expr_stmt(encode);
-
-                let enc_expr = body.ident_expr(enc_ident);
-                let finish_call = body.method_call_expr(enc_expr, finish_ident, vec![]);
+                let encode_path = PathId::from_ident(db, roots.std)
+                    .push_str(db, "evm")
+                    .push_str(db, "encode_abi_payload");
+                let encode_expr = body.path_expr(encode_path);
+                let finish_call = body.call_expr(encode_expr, vec![payload_expr]);
                 let data_ptr_pat = body.push_pat(Pat::Path(
                     Partial::Present(PathId::from_ident(db, data_ptr_ident)),
                     false,
@@ -647,34 +609,4 @@ fn int_lit<'db>(
 ) -> crate::hir_def::ExprId {
     let db = body.db();
     body.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, v))))
-}
-
-fn build_encoded_size_expr<'db>(
-    body: &mut super::hir_builder::BodyBuilder<'_, 'db, EventDesugared>,
-    ty: TypeId<'db>,
-) -> crate::hir_def::ExprId {
-    let db = body.db();
-
-    match ty.data(db) {
-        TypeKind::Path(path) => path
-            .to_opt()
-            .map(|path| body.path_expr(path.push_str(db, "ENCODED_SIZE")))
-            .unwrap_or_else(|| int_lit(body, 0)),
-        TypeKind::Tuple(tuple) => {
-            let mut expr = int_lit(body, 0);
-            for elem_ty in tuple.data(db).iter().copied() {
-                let elem_expr = elem_ty
-                    .to_opt()
-                    .map(|elem_ty| build_encoded_size_expr(body, elem_ty))
-                    .unwrap_or_else(|| int_lit(body, 0));
-                expr = body.push_expr(Expr::Bin(expr, elem_expr, BinOp::Arith(ArithBinOp::Add)));
-            }
-            expr
-        }
-        TypeKind::Mode(_, inner) => inner
-            .to_opt()
-            .map(|inner| build_encoded_size_expr(body, inner))
-            .unwrap_or_else(|| int_lit(body, 0)),
-        TypeKind::Ptr(_) | TypeKind::Array(_, _) | TypeKind::Never => int_lit(body, 0),
-    }
 }

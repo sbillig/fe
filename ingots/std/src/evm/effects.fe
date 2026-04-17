@@ -1,6 +1,16 @@
 use core::effect_ref::{EffectHandle, EffectHandleMut, EffectRef, EffectRefMut}
 use core::{size_of}
-use core::abi::{Abi, AbiDecoder, AbiEncoder, AbiSize, AbiSpan, Decode, Encode, abi_root_head_size, encode_root}
+use core::abi::{
+    Abi,
+    AbiDecoder,
+    AbiEncoder,
+    AbiSize,
+    AbiSpan,
+    Decode,
+    Encode,
+    encode_payload_alloc,
+    encode_single_root_alloc,
+}
 use core::contracts::ContractHost
 use core::message::MsgVariant
 
@@ -9,7 +19,7 @@ use ingot::evm::intrinsic::{
     code_region_offset as intrinsic_code_region_offset,
 }
 use ingot::abi::Sol
-use ingot::abi::sol::{decode_input_at, decode_output, encoded_size, SolEncoder}
+use ingot::abi::sol::{decode_input_at, decode_output}
 use super::calldata::CallData
 use super::contract_field_slot
 use ingot::evm::mem
@@ -47,13 +57,12 @@ impl Default for Address {
 }
 
 impl AbiSize for Address {
-    const ENCODED_SIZE: u256 = 32
+    const HEAD_SIZE: u256 = 32
     const IS_DYNAMIC: bool = false
-    const NEEDS_PARENT_WRAPPER: bool = false
 }
 
 impl<A: Abi> Decode<A> for Address {
-    fn decode<D: AbiDecoder<A>>(_ d: mut D) -> Self {
+    fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         let word = d.read_word()
         if word >> 160 != 0 {
             ops::revert(offset: 0, len: 0)
@@ -63,19 +72,19 @@ impl<A: Abi> Decode<A> for Address {
 }
 
 impl<A: Abi> Encode<A> for Address {
-    const DIRECT_ENCODE: bool = true
+    const CAN_ENCODE_TO_PTR: bool = true
 
-    fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
+    fn encode_payload<E: AbiEncoder<A>>(own self, _ e: mut E) {
         e.write_word(self.inner)
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_payload_to_ptr(own self, _ ptr: u256) {
         A::store_word(ptr: ptr, value: self.inner)
     }
 }
 
 impl<A: Abi> AbiSpan<A> for Address {
-    fn abi_end<I: core::abi::ByteInput>(_: I, base: u256, pos: u256) -> u256 {
+    fn payload_end<I: core::abi::ByteInput>(_: I, base: u256, pos: u256) -> u256 {
         pos + 32
     }
 }
@@ -259,7 +268,7 @@ pub trait Create {
         let init_off = C::init_code_offset()
         let mut addr: Address
 
-        if !C::InitArgs::IS_DYNAMIC && C::InitArgs::ENCODED_SIZE == 0 {
+        if !C::InitArgs::IS_DYNAMIC && C::InitArgs::HEAD_SIZE == 0 {
             let init_ptr = mem::alloc(init_len)
             ops::codecopy(dest: init_ptr, offset: init_off, len: init_len)
             addr = self.create_raw(value: value, offset: init_ptr, len: init_len)
@@ -290,7 +299,7 @@ pub trait Create {
         let init_off = C::init_code_offset()
         let mut addr: Address
 
-        if !C::InitArgs::IS_DYNAMIC && C::InitArgs::ENCODED_SIZE == 0 {
+        if !C::InitArgs::IS_DYNAMIC && C::InitArgs::HEAD_SIZE == 0 {
             let init_ptr = mem::alloc(init_len)
             ops::codecopy(dest: init_ptr, offset: init_off, len: init_len)
             addr = self.create2_raw(value: value, offset: init_ptr, len: init_len, salt: salt)
@@ -324,20 +333,10 @@ fn copy_words(dest: u256, src: u256, len: u256) {
     }
 }
 
-fn encode_abi_payload<T>(_ value: own T) -> (u256, u256)
+pub fn encode_abi_payload<T>(_ value: own T) -> (u256, u256)
     where T: Encode<Sol> + AbiSize
 {
-    if !T::IS_DYNAMIC {
-        let size = encoded_size<T>()
-        let ptr = mem::alloc(size)
-        value.encode_to_ptr(ptr)
-        return (ptr, size)
-    }
-
-    let mut enc = SolEncoder::new()
-    enc.reserve_head(encoded_size<T>())
-    value.encode(mut enc)
-    enc.finish()
+    encode_payload_alloc<Sol, T>(value)
 }
 
 /// High-level contract calls with ABI encoding/decoding.
@@ -578,27 +577,11 @@ where M: Encode<Sol>
 {
     let selector_size = size_of<Sol::Selector>()
     let selector_word = (selector as u256) << 224
-
-    if !M::IS_DYNAMIC {
-        let size = selector_size + M::ENCODED_SIZE
-        let ptr = mem::alloc(size)
-        ops::mstore(addr: ptr, value: selector_word)
-        message.encode_to_ptr(ptr + selector_size)
-        return (ptr, size)
-    }
-
-    let head_size = selector_size + M::ENCODED_SIZE
-    let mut enc = SolEncoder::new()
-    let base = enc.reserve_head(head_size)
-
-    // Encode the 4-byte selector into the first word (big-endian),
-    // leaving the remaining 28 bytes as zeros.
-    ops::mstore(addr: base, value: selector_word)
-
-    enc.base = base + selector_size
-    enc.set_pos(base + selector_size)
-    message.encode(mut enc)
-    enc.finish()
+    let encoded = encode_abi_payload(message)
+    let ptr = mem::alloc(selector_size + encoded.1)
+    ops::mstore(addr: ptr, value: selector_word)
+    copy_words(dest: ptr + selector_size, src: encoded.0, len: encoded.1)
+    (ptr, selector_size + encoded.1)
 }
 
 fn copy_returndata() -> MemoryBytes {
@@ -701,10 +684,7 @@ pub fn assert(_ b: own bool) {
 pub fn revert<T>(_ value: own T) -> !
     where T: Encode<Sol> + AbiSize
 {
-    let mut enc = SolEncoder::new()
-    enc.reserve_head(abi_root_head_size<T>())
-    encode_root<Sol, T, SolEncoder>(value, mut enc)
-    let (result_ptr, result_len) = enc.finish()
+    let (result_ptr, result_len) = encode_single_root_alloc<Sol, T>(value)
     ops::revert(offset: result_ptr, len: result_len)
 }
 
@@ -773,20 +753,17 @@ impl ContractHost for Evm {
     fn return_value<A: Abi, T>(mut self, _ value: own T) -> !
         where T: Encode<A> + AbiSize
     {
-        if !T::IS_DYNAMIC {
-            if T::ENCODED_SIZE <= 64 {
-                value.encode_to_ptr(0)
-                self.return_data(offset: 0, len: T::ENCODED_SIZE)
+        if !T::IS_DYNAMIC && T::CAN_ENCODE_TO_PTR {
+            if T::HEAD_SIZE <= 64 {
+                value.encode_payload_to_ptr(0)
+                self.return_data(offset: 0, len: T::HEAD_SIZE)
             } else {
-                let ptr = mem::alloc(T::ENCODED_SIZE)
-                value.encode_to_ptr(ptr)
-                self.return_data(offset: ptr, len: T::ENCODED_SIZE)
+                let ptr = mem::alloc(T::HEAD_SIZE)
+                value.encode_payload_to_ptr(ptr)
+                self.return_data(offset: ptr, len: T::HEAD_SIZE)
             }
         } else {
-            let mut enc = A::encoder_new()
-            enc.reserve_head(abi_root_head_size<T>())
-            encode_root<A, T, A::Encoder>(value, mut enc)
-            let (out_ptr, out_len) = enc.finish()
+            let (out_ptr, out_len) = encode_single_root_alloc<A, T>(value)
             self.return_bytes(ptr: out_ptr, len: out_len)
         }
     }
