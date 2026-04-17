@@ -241,7 +241,7 @@ pub fn gc_old_log_files() {
     if files.len() <= retention {
         return;
     }
-    files.sort_by(|a, b| b.1.cmp(&a.1)); // newest first
+    files.sort_by_key(|entry| std::cmp::Reverse(entry.1)); // newest first
     for (path, _) in files.iter().skip(retention) {
         let _ = std::fs::remove_file(path);
     }

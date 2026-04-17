@@ -445,7 +445,7 @@ impl CallTrace {
         let mut result = hex_str.to_string();
         // Sort by longest hex representation first to avoid partial replacements
         let mut entries: Vec<_> = addr_map.iter().collect();
-        entries.sort_by(|a, b| b.0.to_string().len().cmp(&a.0.to_string().len()));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.0.to_string().len()));
 
         for (addr, id) in entries {
             let addr_hex = hex::encode(addr.as_slice()); // 40 hex chars

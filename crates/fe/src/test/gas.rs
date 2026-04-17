@@ -930,7 +930,7 @@ fn write_opcode_magnitude_csv(path: &Utf8PathBuf, totals: OpcodeMagnitudeTotals)
 
 fn write_gas_hotspots_csv(path: &Utf8PathBuf, rows: &[GasHotspotRow]) {
     let mut sorted = rows.to_vec();
-    sorted.sort_by(|a, b| b.delta_vs_yul_opt.cmp(&a.delta_vs_yul_opt));
+    sorted.sort_by_key(|entry| std::cmp::Reverse(entry.delta_vs_yul_opt));
 
     let total_delta: i128 = sorted.iter().map(|row| row.delta_vs_yul_opt).sum();
     let mut cumulative: i128 = 0;
@@ -1664,7 +1664,7 @@ fn append_hotspot_summary(
 ) {
     let total_delta: i128 = hotspots.iter().map(|row| row.delta_vs_yul_opt).sum();
     let mut sorted = hotspots.to_vec();
-    sorted.sort_by(|a, b| b.delta_vs_yul_opt.cmp(&a.delta_vs_yul_opt));
+    sorted.sort_by_key(|entry| std::cmp::Reverse(entry.delta_vs_yul_opt));
 
     out.push_str("## Top Gas Regressions (vs Yul optimized)\n\n");
     out.push_str(&format!("- rows_with_delta: {}\n", sorted.len()));
