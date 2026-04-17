@@ -98,7 +98,11 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         let (mut docs, addr, space) = self.address_of_place(&dst)?;
         docs.extend(src.setup.clone());
         if matches!(dst.result_class, YulValueClass::Word(_)) {
-            docs.extend(self.write_scalar_to_addr(space, addr, src)?);
+            docs.extend(if dst.packed_byte_access {
+                self.write_packed_byte_scalar_to_addr(space, addr, src)?
+            } else {
+                self.write_scalar_to_addr(space, addr, src)?
+            });
         } else {
             match dst.storage_kind {
                 crate::yul::legalize::YulStorageKind::Cell => {
@@ -360,6 +364,32 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
             YulAddressSpace::Calldata | YulAddressSpace::Code => {
                 return Err(YulError::Unsupported(format!(
                     "scalar store into {space:?} is not supported"
+                )));
+            }
+        })
+    }
+
+    fn write_packed_byte_scalar_to_addr(
+        &self,
+        space: YulAddressSpace,
+        addr: String,
+        src: RenderedValue<'db>,
+    ) -> Result<Vec<YulDoc>, YulError> {
+        let YulValueClass::Word(word) = &src.class else {
+            return Err(YulError::Unsupported(format!(
+                "packed scalar store requires a word source, found {:?}",
+                src.class
+            )));
+        };
+        let value = self.canonicalize_scalar_expr(src.value, word);
+        Ok(match space {
+            YulAddressSpace::Memory => vec![YulDoc::line(format!("mstore8({addr}, {value})"))],
+            YulAddressSpace::Storage
+            | YulAddressSpace::Transient
+            | YulAddressSpace::Calldata
+            | YulAddressSpace::Code => {
+                return Err(YulError::Unsupported(format!(
+                    "packed byte scalar store into {space:?} is not supported"
                 )));
             }
         })

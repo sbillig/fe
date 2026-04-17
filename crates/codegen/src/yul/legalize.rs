@@ -13,8 +13,8 @@ use mir2::{
     ResolvedPlaceRootKind, RuntimeBuiltin, RuntimeClass, RuntimeCodeRegion, RuntimeFunction,
     RuntimeFunctionOwner, RuntimeInlineHint, RuntimeLinkage, RuntimeObject, RuntimePackage,
     RuntimeSection, RuntimeSectionName, RuntimeSectionRef, RuntimeSyntheticSpec, SaturatingBinOp,
-    ScalarClass, ScalarRepr, VariantId, layout_size_bytes, resolve_runtime_place,
-    serialize_const_region_bytes,
+    ScalarClass, ScalarRepr, VariantId, array_elem_size_bytes, layout_size_bytes,
+    resolve_runtime_place, serialize_const_region_bytes,
 };
 use rustc_hash::FxHashMap;
 
@@ -175,6 +175,7 @@ pub struct YulPlace<'db> {
     pub root: YulPlaceRoot<'db>,
     pub path: Box<[YulPlaceElem<'db>]>,
     pub storage_kind: YulStorageKind,
+    pub packed_byte_access: bool,
     pub runtime_result_class: RuntimeClass<'db>,
     pub result_class: YulValueClass<'db>,
 }
@@ -2571,7 +2572,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
             ))
         })?;
 
-        let (root, mut transport) = match resolved.root_kind {
+        let (root, mut transport) = match &resolved.root_kind {
             ResolvedPlaceRootKind::Slot { local, .. } => {
                 let info = &local_values[local.as_u32() as usize];
                 match (info.class.clone(), info.transport.root_alias) {
@@ -2590,7 +2591,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                 }
             }
             ResolvedPlaceRootKind::Ref { value, class } => {
-                let runtime_class = body.value_class(value).ok_or_else(|| {
+                let runtime_class = body.value_class(*value).ok_or_else(|| {
                     YulError::InvalidYulPackage(format!(
                         "ref root {value:?} does not have a runtime class"
                     ))
@@ -2618,7 +2619,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                     YulPlaceRoot::Ptr {
                         local: YLocalId(value.as_u32()),
                         space,
-                        class: yul_place_root_class(space, &class),
+                        class: yul_place_root_class(space, class),
                     },
                     local_values[value.as_u32() as usize].transport.clone(),
                 )
@@ -2637,30 +2638,39 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                     } => yul_space_from_runtime(*space),
                     _ => yul_space_for_root_class(&yul_class_for_runtime_class(
                         self.db,
-                        &provider_class,
+                        provider_class,
                     ))?,
                 };
                 (
                     YulPlaceRoot::Ptr {
                         local: YLocalId(value.as_u32()),
                         space,
-                        class: yul_place_root_class(space, &class),
+                        class: yul_place_root_class(space, class),
                     },
                     local_values[value.as_u32() as usize].transport.clone(),
                 )
             }
             ResolvedPlaceRootKind::Ptr { addr, space, class } => {
-                let space = yul_space_from_runtime(space);
+                let space = yul_space_from_runtime(*space);
                 (
                     YulPlaceRoot::Ptr {
                         local: YLocalId(addr.as_u32()),
                         space,
-                        class: yul_place_root_class(space, &class),
+                        class: yul_place_root_class(space, class),
                     },
                     local_values[addr.as_u32() as usize].transport.clone(),
                 )
             }
         };
+        let packed_byte_access = yul_place_uses_packed_byte_access(
+            self.db,
+            &resolved,
+            match &root {
+                YulPlaceRoot::Slot(_) => YulAddressSpace::Memory,
+                YulPlaceRoot::Ptr { space, .. } => *space,
+            },
+            self.layout,
+        );
 
         let mut path = Vec::with_capacity(resolved.path.len());
         for elem in resolved.path.iter() {
@@ -2723,6 +2733,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                 root,
                 path: path.into_boxed_slice(),
                 storage_kind: yul_storage_kind_for_runtime_class(&resolved.result_class),
+                packed_byte_access,
                 runtime_result_class: resolved.result_class.clone(),
                 result_class,
             },
@@ -2840,6 +2851,38 @@ fn yul_place_root_class<'db>(
         .aggregate_layout()
         .map(|layout| yul_ptr_class(space, layout))
         .unwrap_or_else(pointer_word_class)
+}
+
+fn yul_place_uses_packed_byte_access<'db>(
+    db: &'db DriverDataBase,
+    resolved: &mir2::ResolvedRuntimePlace<'db>,
+    space: YulAddressSpace,
+    target: TargetDataLayout,
+) -> bool {
+    if !matches!(space, YulAddressSpace::Memory | YulAddressSpace::Code) {
+        return false;
+    }
+    let mut current_layout = match &resolved.root_kind {
+        ResolvedPlaceRootKind::Slot { class, .. }
+        | ResolvedPlaceRootKind::Ref { class, .. }
+        | ResolvedPlaceRootKind::Provider { class, .. }
+        | ResolvedPlaceRootKind::Ptr { class, .. } => class.aggregate_layout(),
+    };
+    for elem in resolved.path.iter() {
+        let class = match elem {
+            ResolvedPlaceElem::Field { class, .. }
+            | ResolvedPlaceElem::Index { class, .. }
+            | ResolvedPlaceElem::VariantField { class, .. } => class,
+        };
+        if matches!(elem, ResolvedPlaceElem::Index { .. })
+            && current_layout.is_some_and(|layout| array_elem_size_bytes(db, layout, target) == 1)
+            && matches!(class, RuntimeClass::Scalar(_))
+        {
+            return true;
+        }
+        current_layout = class.aggregate_layout();
+    }
+    false
 }
 
 fn layout_scalar_word_class<'db>(

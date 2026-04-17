@@ -486,6 +486,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                         crate::yul::legalize::YulStorageKind::Bytes
                     }
                 },
+                packed_byte_access: false,
                 runtime_result_class: match &self.plan.locals[local.index()].root {
                     YulLocalRoot::MemorySlot { class } => class.clone(),
                     YulLocalRoot::None | YulLocalRoot::PtrRoot { .. } => match class {

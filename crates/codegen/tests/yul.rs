@@ -176,6 +176,30 @@ fn use_add_assign() {
 }
 
 #[test]
+fn packed_byte_arrays_use_byte_loads_and_stores_in_yul() {
+    let yul = emit_inline_yul(
+        "file:///packed_byte_arrays_use_byte_loads_and_stores_in_yul.fe",
+        r#"
+fn mutate_u8() -> u8 {
+    let mut xs: [u8; 4] = [0, 1, 2, 3]
+    xs[1] = 9
+    xs[1]
+}
+"#,
+    );
+
+    let body = yul_function_body(&yul, "mutate_u8");
+    assert!(
+        body.contains("mstore8(add("),
+        "packed byte arrays should lower stores with mstore8:\n{body}"
+    );
+    assert!(
+        body.contains("byte(0, mload(add("),
+        "packed byte arrays should lower loads from the first byte of the loaded word:\n{body}"
+    );
+}
+
+#[test]
 fn single_field_wrapper_ctors_return_words_in_yul() {
     let yul = emit_inline_yul(
         "file:///single_field_wrapper_ctors_return_words_in_yul.fe",

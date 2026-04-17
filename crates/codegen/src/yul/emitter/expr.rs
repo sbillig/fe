@@ -647,7 +647,11 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         let (mut setup, addr, space) = self.address_of_place(place)?;
         if matches!(place.result_class, YulValueClass::Word(_)) {
             let temp = self.state.alloc_temp();
-            setup.extend(self.read_scalar_from_addr(&place.result_class, space, addr, &temp)?);
+            setup.extend(if place.packed_byte_access {
+                self.read_packed_byte_scalar_from_addr(&place.result_class, space, addr, &temp)?
+            } else {
+                self.read_scalar_from_addr(&place.result_class, space, addr, &temp)?
+            });
             return Ok(RenderedValue {
                 setup,
                 value: temp,
@@ -799,6 +803,41 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 docs.push(YulDoc::line(format!("datacopy({dst}, {addr}, 32)")));
                 docs.push(YulDoc::line(format!("{dst} := mload({dst})")));
                 return Ok(docs);
+            }
+        };
+        Ok(vec![YulDoc::line(format!(
+            "let {dst} := {}",
+            self.canonicalize_scalar_expr(value, word_class)
+        ))])
+    }
+
+    pub(super) fn read_packed_byte_scalar_from_addr(
+        &mut self,
+        class: &YulValueClass<'db>,
+        space: YulAddressSpace,
+        addr: String,
+        dst: &str,
+    ) -> Result<Vec<YulDoc>, YulError> {
+        let YulValueClass::Word(word_class) = class else {
+            return Err(YulError::InvalidYulPackage(format!(
+                "attempted packed scalar load with non-word class `{class:?}`"
+            )));
+        };
+        let value = match space {
+            YulAddressSpace::Memory => format!("byte(0, mload({addr}))"),
+            YulAddressSpace::Code => {
+                let mut docs = self.alloc_memory_name(dst, "32");
+                docs.push(YulDoc::line(format!("datacopy({dst}, {addr}, 1)")));
+                docs.push(YulDoc::line(format!(
+                    "{dst} := {}",
+                    self.canonicalize_scalar_expr(format!("byte(0, mload({dst}))"), word_class)
+                )));
+                return Ok(docs);
+            }
+            YulAddressSpace::Storage | YulAddressSpace::Transient | YulAddressSpace::Calldata => {
+                return Err(YulError::Unsupported(format!(
+                    "packed byte scalar load from {space:?} is not supported"
+                )));
             }
         };
         Ok(vec![YulDoc::line(format!(
