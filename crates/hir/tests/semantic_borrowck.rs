@@ -6,9 +6,9 @@ use fe_hir::{
     analysis::{
         diagnostics::format_diags,
         semantic::{
-            BorrowInputRef, FieldIndex, NBorrowRoot, NExpr, NLocalInterface, NLocalOrigin,
-            NSStmtKind, NormalizedBindingLowering, SPlaceElem, SStmtKind, SemanticInstance,
-            check_semantic_borrows, collect_semantic_borrow_diagnostics,
+            BorrowInputRef, BorrowTransform, FieldIndex, NBorrowRoot, NExpr, NLocalInterface,
+            NLocalOrigin, NSStmtKind, NormalizedBindingLowering, SPlaceElem, SStmtKind,
+            SemanticInstance, check_semantic_borrows, collect_semantic_borrow_diagnostics,
             get_or_build_semantic_instance, identity_semantic_instance_key,
             normalize_semantic_body, semantic_borrow_summary,
         },
@@ -18,7 +18,7 @@ use fe_hir::{
         },
     },
     hir_def::{ItemKind, Partial},
-    projection::{IndexSource, Projection},
+    projection::{IndexSource, Projection, ProjectionPath},
 };
 
 fn borrow_diags(src: &str) -> String {
@@ -205,6 +205,55 @@ impl Ledger {
             && transform.proj.iter().cloned().collect::<Vec<_>>() == vec![Projection::Field(0)]
     }));
     check_semantic_borrows(&db, instance).expect("borrowck should accept branch-returned borrow");
+}
+
+#[test]
+fn forwarded_memory_borrow_param_keeps_incoming_loan_targets() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_borrowck.fe".into(),
+        r#"
+struct Holder {
+    tag: u256,
+}
+
+impl Holder {
+    fn forward(mut self, _ value: mut u256) -> mut u256 {
+        value
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let instance = top_mod
+        .all_items(&db)
+        .iter()
+        .find_map(|item| match item {
+            ItemKind::Func(func)
+                if func
+                    .name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "forward") =>
+            {
+                Some(get_or_build_semantic_instance(
+                    &db,
+                    identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
+                ))
+            }
+            _ => None,
+        })
+        .expect("forward instance");
+    let summary = semantic_borrow_summary(&db, instance)
+        .expect("borrow summary")
+        .expect("forward should produce a borrow summary");
+    assert_eq!(
+        summary,
+        vec![BorrowTransform {
+            input: BorrowInputRef::Param(1),
+            proj: ProjectionPath::default(),
+        }]
+    );
+    check_semantic_borrows(&db, instance).expect("borrowck should accept forwarded borrows");
 }
 
 #[test]

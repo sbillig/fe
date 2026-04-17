@@ -1184,7 +1184,7 @@ impl<'db> Borrowck<'db> {
                 .body
                 .local(value.local)
                 .is_some_and(|local| local.ty.as_borrow(self.db).is_some())
-            && state.loans_in(value.local).is_empty()
+            && self.borrow_local_targets(state, value.local).is_empty()
         {
             return Err(self.internal_diag(
                 term.origin,
@@ -1204,50 +1204,48 @@ impl<'db> Borrowck<'db> {
             for stmt in &block.stmts {
                 self.apply_stmt_state(&mut state, stmt);
             }
-            for loan in state.loans_in(value.local) {
-                for target in &self.loans[loan.0 as usize].targets {
-                    for proj in target.proj.iter() {
-                        if matches!(proj, Projection::Index(IndexSource::Dynamic(_))) {
-                            return Err(self.invalid_return_diag(
-                                block.terminator.origin,
-                                "return borrows with dynamic indices are not supported".to_string(),
-                            ));
+            for target in self.borrow_local_targets(&state, value.local) {
+                for proj in target.proj.iter() {
+                    if matches!(proj, Projection::Index(IndexSource::Dynamic(_))) {
+                        return Err(self.invalid_return_diag(
+                            block.terminator.origin,
+                            "return borrows with dynamic indices are not supported".to_string(),
+                        ));
+                    }
+                }
+                match &target.root {
+                    BorrowRoot::Param(idx) => {
+                        let transform = BorrowTransform {
+                            input: BorrowInputRef::Param(*idx),
+                            proj: target.proj.clone(),
+                        };
+                        if !out.contains(&transform) {
+                            out.push(transform);
                         }
                     }
-                    match &target.root {
-                        BorrowRoot::Param(idx) => {
-                            let transform = BorrowTransform {
-                                input: BorrowInputRef::Param(*idx),
-                                proj: target.proj.clone(),
-                            };
-                            if !out.contains(&transform) {
-                                out.push(transform);
-                            }
-                        }
-                        BorrowRoot::Provider(binding) => {
-                            let Some(idx) = self.effect_input_index_for_provider(binding.clone())
-                            else {
-                                return Err(self.invalid_return_diag(
-                                    block.terminator.origin,
-                                    "return borrows must be derived from explicit borrow inputs"
-                                        .to_string(),
-                                ));
-                            };
-                            let transform = BorrowTransform {
-                                input: BorrowInputRef::EffectArg(idx),
-                                proj: target.proj.clone(),
-                            };
-                            if !out.contains(&transform) {
-                                out.push(transform);
-                            }
-                        }
-                        BorrowRoot::Local(local) => {
-                            let name = self.pretty_local_name(*local);
+                    BorrowRoot::Provider(binding) => {
+                        let Some(idx) = self.effect_input_index_for_provider(binding.clone())
+                        else {
                             return Err(self.invalid_return_diag(
                                 block.terminator.origin,
-                                format!("cannot return a borrow to local `{name}`"),
+                                "return borrows must be derived from explicit borrow inputs"
+                                    .to_string(),
                             ));
+                        };
+                        let transform = BorrowTransform {
+                            input: BorrowInputRef::EffectArg(idx),
+                            proj: target.proj.clone(),
+                        };
+                        if !out.contains(&transform) {
+                            out.push(transform);
                         }
+                    }
+                    BorrowRoot::Local(local) => {
+                        let name = self.pretty_local_name(*local);
+                        return Err(self.invalid_return_diag(
+                            block.terminator.origin,
+                            format!("cannot return a borrow to local `{name}`"),
+                        ));
                     }
                 }
             }
@@ -1278,11 +1276,7 @@ impl<'db> Borrowck<'db> {
             .local(local)
             .is_some_and(|local| local.ty.as_borrow(self.db).is_some())
         {
-            let mut out = FxHashSet::default();
-            for loan in state.loans_in(local) {
-                out.extend(self.loans[loan.0 as usize].targets.iter().cloned());
-            }
-            return Ok(out);
+            return Ok(self.borrow_local_targets(state, local));
         }
 
         let Some(local_data) = self.body.local(local) else {
@@ -1316,6 +1310,51 @@ impl<'db> Borrowck<'db> {
                 proj: NSProjectionPath::default(),
             })
             .collect())
+    }
+
+    fn borrow_local_targets(
+        &self,
+        state: &State,
+        local: crate::analysis::semantic::SLocalId,
+    ) -> FxHashSet<CanonPlace<'db>> {
+        let mut out = FxHashSet::default();
+        for loan in state.loans_in(local) {
+            out.extend(self.loans[loan.0 as usize].targets.iter().cloned());
+        }
+        if !out.is_empty() {
+            return out;
+        }
+
+        let Some(local_data) = self.body.local(local) else {
+            return FxHashSet::default();
+        };
+        if let Some(place) = local_data.lowering.place() {
+            return place
+                .root
+                .borrow_root()
+                .and_then(|root| self.root_to_borrow_root(root))
+                .into_iter()
+                .map(|root| CanonPlace {
+                    root,
+                    proj: place.path.clone(),
+                })
+                .collect();
+        }
+        match &local_data.lowering {
+            NormalizedBindingLowering::CarrierLocal { root, provider, .. } => provider
+                .clone()
+                .map(BorrowRoot::Provider)
+                .or_else(|| root.and_then(|root| self.root_to_borrow_root(root)))
+                .into_iter()
+                .map(|root| CanonPlace {
+                    root,
+                    proj: NSProjectionPath::default(),
+                })
+                .collect(),
+            NormalizedBindingLowering::Erased => FxHashSet::default(),
+            NormalizedBindingLowering::ValueLocal { .. }
+            | NormalizedBindingLowering::PlaceBoundValue { .. } => FxHashSet::default(),
+        }
     }
 
     fn canonicalize_place(
