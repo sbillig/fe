@@ -60,48 +60,68 @@ pub(crate) fn is_zero_sized_in_context<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> bool {
-    fn inner<'db>(
-        db: &'db dyn MirDb,
-        ty: TyId<'db>,
-        scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
-        assumptions: PredicateListId<'db>,
-        visiting: &mut rustc_hash::FxHashSet<TyId<'db>>,
-    ) -> bool {
-        let ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
-        if !visiting.insert(ty) {
-            return false;
-        }
-        let result = if ty.is_never(db)
-            || matches!(
-                ty.base_ty(db).data(db),
-                TyData::TyBase(hir::analysis::ty::ty_def::TyBase::Func(_))
-            ) {
-            true
-        } else if ty.is_array(db) {
-            let (_, args) = ty.decompose_ty_app(db);
-            let Some(elem) = args.first().copied() else {
-                return false;
-            };
-            ty.array_len(db)
-                .is_some_and(|len| len == 0 || inner(db, elem, scope, assumptions, visiting))
-        } else if ty.is_tuple(db) || ty.is_struct(db) {
-            ty.field_types(db)
-                .into_iter()
-                .all(|field| inner(db, field, scope, assumptions, visiting))
-        } else {
-            false
-        };
-        visiting.remove(&ty);
-        result
-    }
+    runtime_zero_sized_ty(db, ty, scope, assumptions)
+}
 
-    inner(
-        db,
-        ty,
-        scope,
-        assumptions,
-        &mut rustc_hash::FxHashSet::default(),
-    )
+#[salsa::tracked(
+    cycle_fn=runtime_zero_sized_ty_cycle_recover,
+    cycle_initial=runtime_zero_sized_ty_cycle_initial
+)]
+fn runtime_zero_sized_ty<'db>(
+    db: &'db dyn MirDb,
+    ty: TyId<'db>,
+    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
+) -> bool {
+    let repr_ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
+    if repr_ty != ty {
+        return runtime_zero_sized_ty(db, repr_ty, scope, assumptions);
+    }
+    if repr_ty.is_never(db)
+        || matches!(
+            repr_ty.base_ty(db).data(db),
+            TyData::TyBase(hir::analysis::ty::ty_def::TyBase::Func(_))
+        )
+    {
+        return true;
+    }
+    if repr_ty.is_array(db) {
+        let (_, args) = repr_ty.decompose_ty_app(db);
+        return repr_ty.array_len(db).is_some_and(|len| {
+            len == 0
+                || args
+                    .first()
+                    .copied()
+                    .is_some_and(|elem| runtime_zero_sized_ty(db, elem, scope, assumptions))
+        });
+    }
+    if repr_ty.is_tuple(db) || repr_ty.is_struct(db) {
+        return repr_ty
+            .field_types(db)
+            .into_iter()
+            .all(|field| runtime_zero_sized_ty(db, field, scope, assumptions));
+    }
+    false
+}
+
+fn runtime_zero_sized_ty_cycle_initial<'db>(
+    _db: &'db dyn MirDb,
+    _ty: TyId<'db>,
+    _scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    _assumptions: PredicateListId<'db>,
+) -> bool {
+    false
+}
+
+fn runtime_zero_sized_ty_cycle_recover<'db>(
+    _db: &'db dyn MirDb,
+    _value: &bool,
+    _count: u32,
+    _ty: TyId<'db>,
+    _scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    _assumptions: PredicateListId<'db>,
+) -> salsa::CycleRecoveryAction<bool> {
+    salsa::CycleRecoveryAction::Iterate
 }
 
 pub(crate) fn layout_for_ty_in_env<'db>(
