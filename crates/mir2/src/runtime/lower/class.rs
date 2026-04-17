@@ -31,7 +31,7 @@ use hir::analysis::{
 use hir::hir_def::ArithBinOp;
 use hir::projection::Projection;
 use hir::semantic::ProviderBinding;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use salsa::Update;
 
 use crate::{
@@ -113,6 +113,12 @@ enum RuntimeVisibleReturnPlan<'db> {
     Exact(RuntimeClass<'db>),
     Constrained(RuntimeBoundarySpec<'db>),
     PassActual,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+struct RuntimeEffectHandleInfo<'db> {
+    target_ty: TyId<'db>,
+    space: AddressSpaceKind,
 }
 
 pub(crate) fn runtime_address_space(class: &RuntimeClass<'_>) -> Option<AddressSpaceKind> {
@@ -3374,62 +3380,7 @@ fn aggregate_transport_depends_on_runtime_source<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> bool {
-    fn inner<'db>(
-        db: &'db dyn MirDb,
-        ty: TyId<'db>,
-        scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
-        assumptions: PredicateListId<'db>,
-        visiting: &mut FxHashSet<TyId<'db>>,
-    ) -> bool {
-        let ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
-        if !visiting.insert(ty) {
-            return false;
-        }
-
-        let result = if ty.as_borrow(db).is_some() {
-            true
-        } else if ty.as_capability(db).is_some()
-            || effect_handle_class_for_ty(db, ty, scope, assumptions).is_some()
-            || scalar_class_for_ty_in_context(db, ty, scope, assumptions).is_some()
-        {
-            false
-        } else if ty.is_array(db) {
-            let (_, args) = ty.decompose_ty_app(db);
-            args.first()
-                .copied()
-                .is_some_and(|elem| inner(db, elem, scope, assumptions, visiting))
-        } else if ty.is_tuple(db) || ty.is_struct(db) {
-            ty.field_types(db)
-                .into_iter()
-                .any(|field| inner(db, field, scope, assumptions, visiting))
-        } else if let Some(enum_) = ty.as_enum(db) {
-            let adt = enum_.as_adt(db);
-            let args = ty.generic_args(db);
-            adt.fields(db)
-                .iter()
-                .enumerate()
-                .any(|(variant_idx, variant)| {
-                    (0..variant.num_types()).any(|field_idx| {
-                        inner(
-                            db,
-                            adt.fields(db)[variant_idx]
-                                .ty(db, field_idx)
-                                .instantiate(db, args),
-                            scope,
-                            assumptions,
-                            visiting,
-                        )
-                    })
-                })
-        } else {
-            false
-        };
-
-        visiting.remove(&ty);
-        result
-    }
-
-    inner(db, ty, scope, assumptions, &mut FxHashSet::default())
+    runtime_transport_sensitive_aggregate(db, ty, scope, assumptions)
 }
 
 pub(crate) fn boundary_source_uses_transport_sensitive_aggregate<'db>(
@@ -3679,24 +3630,120 @@ fn effect_handle_class_for_ty<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> Option<RuntimeClass<'db>> {
+    let ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
     let scope = scope.or_else(|| ty.as_scope(db))?;
-    let semantics = provider_semantics(db, scope, assumptions, ty);
+    let info = runtime_effect_handle_info(db, ty, Some(scope), assumptions)?;
+    Some(provider_class_for_target_in_context(
+        db,
+        Some(info.target_ty),
+        info.space,
+        Some(scope),
+        assumptions,
+    ))
+}
+
+#[salsa::tracked]
+fn runtime_effect_handle_info<'db>(
+    db: &'db dyn MirDb,
+    ty: TyId<'db>,
+    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
+) -> Option<RuntimeEffectHandleInfo<'db>> {
+    let repr_ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
+    if repr_ty != ty {
+        return runtime_effect_handle_info(db, repr_ty, scope, assumptions);
+    }
+    let scope = scope.or_else(|| repr_ty.as_scope(db))?;
+    let semantics = provider_semantics(db, scope, assumptions, repr_ty);
     if matches!(semantics.kind, ProviderKind::RootObject) {
         return None;
     }
-    if let Some(target_ty) = semantics.target_ty {
-        if is_zero_sized_in_context(db, target_ty, Some(scope), assumptions) {
-            return None;
-        }
-        return Some(provider_class_for_target_in_context(
-            db,
-            Some(target_ty),
-            provider_address_space_to_runtime(semantics.address_space?),
-            Some(scope),
-            assumptions,
-        ));
+    let target_ty = semantics.target_ty?;
+    if is_zero_sized_in_context(db, target_ty, Some(scope), assumptions) {
+        return None;
     }
-    None
+    Some(RuntimeEffectHandleInfo {
+        target_ty,
+        space: provider_address_space_to_runtime(semantics.address_space?),
+    })
+}
+
+#[salsa::tracked(
+    cycle_fn=runtime_transport_sensitive_aggregate_cycle_recover,
+    cycle_initial=runtime_transport_sensitive_aggregate_cycle_initial
+)]
+fn runtime_transport_sensitive_aggregate<'db>(
+    db: &'db dyn MirDb,
+    ty: TyId<'db>,
+    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
+) -> bool {
+    let repr_ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
+    if repr_ty != ty {
+        return runtime_transport_sensitive_aggregate(db, repr_ty, scope, assumptions);
+    }
+    if repr_ty.as_borrow(db).is_some() {
+        return true;
+    }
+    if repr_ty.as_capability(db).is_some()
+        || runtime_effect_handle_info(db, repr_ty, scope, assumptions).is_some()
+        || scalar_class_from_repr_ty(db, repr_ty).is_some()
+    {
+        return false;
+    }
+    if repr_ty.is_array(db) {
+        let (_, args) = repr_ty.decompose_ty_app(db);
+        return args.first().copied().is_some_and(|elem| {
+            runtime_transport_sensitive_aggregate(db, elem, scope, assumptions)
+        });
+    }
+    if repr_ty.is_tuple(db) || repr_ty.is_struct(db) {
+        return repr_ty
+            .field_types(db)
+            .into_iter()
+            .any(|field| runtime_transport_sensitive_aggregate(db, field, scope, assumptions));
+    }
+    if let Some(enum_) = repr_ty.as_enum(db) {
+        let adt = enum_.as_adt(db);
+        let args = repr_ty.generic_args(db);
+        return adt
+            .fields(db)
+            .iter()
+            .enumerate()
+            .any(|(variant_idx, variant)| {
+                (0..variant.num_types()).any(|field_idx| {
+                    runtime_transport_sensitive_aggregate(
+                        db,
+                        adt.fields(db)[variant_idx]
+                            .ty(db, field_idx)
+                            .instantiate(db, args),
+                        scope,
+                        assumptions,
+                    )
+                })
+            });
+    }
+    false
+}
+
+fn runtime_transport_sensitive_aggregate_cycle_initial<'db>(
+    _db: &'db dyn MirDb,
+    _ty: TyId<'db>,
+    _scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    _assumptions: PredicateListId<'db>,
+) -> bool {
+    false
+}
+
+fn runtime_transport_sensitive_aggregate_cycle_recover<'db>(
+    _db: &'db dyn MirDb,
+    _value: &bool,
+    _count: u32,
+    _ty: TyId<'db>,
+    _scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    _assumptions: PredicateListId<'db>,
+) -> salsa::CycleRecoveryAction<bool> {
+    salsa::CycleRecoveryAction::Iterate
 }
 
 fn runtime_abstract_param_ty<'db>(
