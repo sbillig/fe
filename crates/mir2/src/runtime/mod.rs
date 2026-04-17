@@ -4,6 +4,7 @@ pub mod layout_utils;
 pub mod lower;
 pub(crate) mod package;
 pub mod pretty;
+pub(crate) mod synthetic;
 
 pub use ir::*;
 pub use layout_utils::*;
