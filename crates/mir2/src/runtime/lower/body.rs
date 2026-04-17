@@ -40,16 +40,16 @@ use crate::{
 
 use super::{
     classify::{
-        BodyEnv, ContractMetadataBuiltin, GenericNumericIntrinsicKind, InferenceResult,
-        LocalStateInferer, RuntimeBodyCx, RuntimeEffectBindingPlan,
-        actual_aggregate_class_from_runtime_source, contract_metadata_builtin,
-        desired_runtime_effect_arg_boundary, desired_runtime_param_plan,
+        BodyEnv, ContractMetadataBuiltin, GenericNumericIntrinsicKind, RuntimeBodyCx,
+        RuntimeEffectBindingPlan, actual_aggregate_class_from_runtime_source,
+        contract_metadata_builtin, desired_runtime_effect_arg_boundary, desired_runtime_param_plan,
         generic_numeric_intrinsic_kind, resolve_runtime_call_key, runtime_class_satisfies_boundary,
         runtime_effect_binding_plan_for_binding_idx, runtime_signature_for_key, semantic_return_ty,
     },
     consts::{
         const_scalar_for_class, const_scalar_from_value, enum_tag_scalar, lower_const_region,
     },
+    infer::{InferenceResult, LocalStateInferer},
     interface::runtime_param_locals,
     layout::{
         AggregateCtorElem, aggregate_ctor_elems_for_layout, layout_for_aggregate_instance_in_env,

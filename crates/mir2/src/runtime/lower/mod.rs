@@ -2,6 +2,7 @@ pub mod body;
 pub(crate) mod call;
 pub(crate) mod classify;
 mod consts;
+pub(crate) mod infer;
 pub(crate) mod interface;
 pub(crate) mod layout;
 mod place;
