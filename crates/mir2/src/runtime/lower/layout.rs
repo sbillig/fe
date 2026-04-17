@@ -41,6 +41,23 @@ pub(crate) fn layout_for_aggregate_instance_in_env<'db>(
     layout_for_aggregate_instance_in_context(db, ty, field_classes, env.scope, env.assumptions)
 }
 
+pub(crate) fn layout_for_enum_variant_instance_in_env<'db>(
+    db: &'db dyn MirDb,
+    env: RuntimeTypeEnv<'db>,
+    enum_ty: TyId<'db>,
+    variant: usize,
+    field_classes: &[RuntimeClass<'db>],
+) -> LayoutId<'db> {
+    layout_for_enum_variant_instance_in_context(
+        db,
+        enum_ty,
+        variant,
+        field_classes,
+        env.scope,
+        env.assumptions,
+    )
+}
+
 pub(crate) fn layout_for_ty_in_context<'db>(
     db: &'db dyn MirDb,
     ty: TyId<'db>,
@@ -129,6 +146,67 @@ pub(crate) fn layout_for_aggregate_instance_in_context<'db>(
         LayoutKey::Struct(StructLayout {
             source_ty: ty,
             fields: field_classes.to_vec().into_boxed_slice(),
+        }),
+    )
+}
+
+pub(crate) fn layout_for_enum_variant_instance_in_context<'db>(
+    db: &'db dyn MirDb,
+    enum_ty: TyId<'db>,
+    variant: usize,
+    field_classes: &[RuntimeClass<'db>],
+    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
+) -> LayoutId<'db> {
+    let enum_ty = runtime_repr_ty_in_context(db, enum_ty, scope, assumptions);
+    let enum_ = enum_ty
+        .as_enum(db)
+        .unwrap_or_else(|| panic!("enum instance layout requested for non-enum type"));
+    let args = enum_ty.generic_args(db);
+    LayoutId::new(
+        db,
+        LayoutKey::Enum(EnumLayoutKey {
+            source_ty: enum_ty,
+            variants: enum_
+                .variants(db)
+                .enumerate()
+                .map(|(idx, enum_variant)| {
+                    let default_fields = enum_variant
+                        .field_tys(db)
+                        .into_iter()
+                        .map(|field| {
+                            stored_class_for_ty_in_context(
+                                db,
+                                field.instantiate(db, args),
+                                scope,
+                                assumptions,
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    let fields = if idx == variant {
+                        assert_eq!(
+                            default_fields.len(),
+                            field_classes.len(),
+                            "enum variant layout arity mismatch for {}::{}",
+                            enum_ty.pretty_print(db),
+                            enum_variant
+                                .name(db)
+                                .map(|name| name.data(db).to_string())
+                                .unwrap_or_else(|| format!("variant_{idx}")),
+                        );
+                        field_classes.to_vec()
+                    } else {
+                        default_fields
+                    };
+                    EnumVariantLayout {
+                        name: enum_variant
+                            .name(db)
+                            .map(|name| name.data(db).to_string())
+                            .unwrap_or_else(|| format!("variant_{idx}")),
+                        fields: fields.into(),
+                    }
+                })
+                .collect(),
         }),
     )
 }

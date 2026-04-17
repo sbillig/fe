@@ -50,11 +50,11 @@ use super::{
     consts::{
         const_scalar_for_class, const_scalar_from_value, enum_tag_scalar, lower_const_region,
     },
-    infer::{InferenceResult, LocalStateInferer},
+    infer::{InferenceResult, LocalStateInferer, merge_runtime_class},
     interface::runtime_param_locals,
     layout::{
         AggregateCtorElem, aggregate_ctor_elems_for_layout, layout_for_aggregate_instance_in_env,
-        layout_for_ty_in_env,
+        layout_for_enum_variant_instance_in_env, layout_for_ty_in_env,
     },
     place::{
         project_field_class, project_index_class, project_variant_field_class,
@@ -398,6 +398,9 @@ impl<'db> RmirEmitter<'db> {
                 return;
             }
         }
+        if !self.runtime_local_uses_source_transport(dst_value) {
+            return;
+        }
         if !matches!(
             target,
             RuntimeClass::AggregateValue { .. }
@@ -563,8 +566,10 @@ impl<'db> RmirEmitter<'db> {
                 let dst_class = if self.runtime_local_uses_source_transport(dst)
                     && CoercionPlanner::target_prefers_transport(&actual)
                 {
-                    self.refine_local_runtime_class(dst, actual.clone());
-                    actual
+                    let target =
+                        merge_runtime_class(self.db, &dst_class, &actual).unwrap_or(actual);
+                    self.refine_local_runtime_class(dst, target.clone());
+                    target
                 } else {
                     dst_class
                 };
@@ -747,7 +752,11 @@ impl<'db> RmirEmitter<'db> {
                 )
             }
             RuntimeClass::AggregateValue { layout: _ } => {
-                let src = self.lower_sem_const_as_value(bb, value, expected_ty);
+                let RuntimeClass::AggregateValue { layout } = target else {
+                    unreachable!();
+                };
+                let src =
+                    self.lower_non_scalar_const_as_aggregate_value(bb, value, expected_ty, *layout);
                 let actual = self.value_class(src).cloned();
                 if self.value_class(src) == Some(target)
                     || actual.as_ref().is_some_and(|actual| {
@@ -1346,21 +1355,59 @@ impl<'db> RmirEmitter<'db> {
         variant: VariantIndex,
         fields: &[NOperand],
     ) {
-        let layout = self.layout_for_ty(enum_ty);
-        let crate::runtime::Layout::Enum(layout_data) = layout.data(self.db) else {
-            panic!("enum construction requires an enum layout");
+        let enum_ = enum_ty
+            .as_enum(self.db)
+            .unwrap_or_else(|| panic!("enum construction reached non-enum type"));
+        let args = enum_ty.generic_args(self.db);
+        let Some(enum_variant) = enum_.variants(self.db).nth(variant.0 as usize) else {
+            panic!("missing enum variant for {variant:?}");
         };
-        let field_classes = layout_data
-            .variants
-            .get(variant.0 as usize)
-            .unwrap_or_else(|| panic!("missing enum variant layout for {variant:?}"))
-            .fields
-            .to_vec();
-        let field_values = fields
-            .iter()
-            .zip(field_classes.iter())
-            .map(|(field, class)| self.lower_semantic_operand_for_class(bb, *field, class))
+        let field_tys = enum_variant
+            .field_tys(self.db)
+            .into_iter()
+            .map(|field| field.instantiate(self.db, args))
             .collect::<Vec<_>>();
+        assert_eq!(
+            field_tys.len(),
+            fields.len(),
+            "enum constructor arity mismatch for {}::{variant:?}",
+            enum_ty.pretty_print(self.db),
+        );
+        let mut field_values = Vec::with_capacity(fields.len());
+        let mut field_classes = Vec::with_capacity(fields.len());
+        for (field, field_ty) in fields.iter().copied().zip(field_tys.iter().copied()) {
+            let value = match boundary_spec_for_ty_in_env(
+                self.db,
+                self.env,
+                field_ty,
+                AddressSpaceKind::Memory,
+            ) {
+                Some(boundary) => self.lower_semantic_operand_for_boundary(bb, field, &boundary),
+                None => {
+                    let class = self
+                        .top_level_class_for_ty(field_ty, AddressSpaceKind::Memory)
+                        .expect("non-zst enum field should have a runtime class");
+                    self.lower_semantic_operand_for_class(bb, field, &class)
+                }
+            };
+            let class = self.value_class(value).cloned().unwrap_or_else(|| {
+                stored_class_for_ty_in_context(
+                    self.db,
+                    field_ty,
+                    self.env.scope,
+                    self.env.assumptions,
+                )
+            });
+            field_values.push(value);
+            field_classes.push(class);
+        }
+        let layout = layout_for_enum_variant_instance_in_env(
+            self.db,
+            self.env,
+            enum_ty,
+            variant.0 as usize,
+            &field_classes,
+        );
         self.lower_enum_values(bb, dst, layout, variant, &field_values);
     }
 
@@ -1368,19 +1415,47 @@ impl<'db> RmirEmitter<'db> {
         &mut self,
         bb: RBlockId,
         dst: RLocalId,
-        layout: LayoutId<'db>,
+        ctor_layout: LayoutId<'db>,
         variant: VariantIndex,
         field_values: &[RLocalId],
     ) {
+        let dst_class = self
+            .value_class(dst)
+            .cloned()
+            .expect("enum destination must have a runtime class");
+        let layout = match &dst_class {
+            RuntimeClass::AggregateValue { layout } => *layout,
+            RuntimeClass::Ref {
+                pointee,
+                kind: RefKind::Object,
+                ..
+            } => pointee
+                .aggregate_layout()
+                .expect("object enum destination must have aggregate layout"),
+            _ => ctor_layout,
+        };
         let variant = VariantId {
             enum_layout: layout,
             index: variant.0,
         };
-        match self
-            .value_class(dst)
-            .cloned()
-            .expect("enum destination must have a runtime class")
-        {
+        let field_values = match layout.data(self.db) {
+            crate::runtime::Layout::Enum(layout_data) => field_values
+                .iter()
+                .copied()
+                .zip(layout_data.variants[variant.index as usize].fields.iter())
+                .map(|(value, class)| {
+                    if self.value_class(value) == Some(class) {
+                        value
+                    } else {
+                        self.coerce_value(bb, value, class)
+                    }
+                })
+                .collect::<Vec<_>>(),
+            crate::runtime::Layout::Struct(_) | crate::runtime::Layout::Array(_) => {
+                panic!("enum destination must use an enum layout")
+            }
+        };
+        match dst_class {
             RuntimeClass::AggregateValue { .. } => {
                 self.push_stmt(
                     bb,
@@ -1389,7 +1464,7 @@ impl<'db> RmirEmitter<'db> {
                         expr: RExpr::EnumMake {
                             layout,
                             variant,
-                            fields: field_values.to_vec().into_boxed_slice(),
+                            fields: field_values.into_boxed_slice(),
                         },
                     },
                 );
@@ -1413,7 +1488,7 @@ impl<'db> RmirEmitter<'db> {
                         RStmt::EnumWriteVariant {
                             root: dst,
                             variant,
-                            fields: field_values.to_vec().into_boxed_slice(),
+                            fields: field_values.into_boxed_slice(),
                         }
                     },
                 );
@@ -3177,7 +3252,7 @@ impl<'db> RmirEmitter<'db> {
                 cases,
                 default,
             } => {
-                let enum_layout = self.layout_for_ty(*enum_ty);
+                let enum_layout = self.enum_layout_for_local(value.local);
                 let tag_class = RuntimeClass::Scalar(ScalarClass {
                     repr: match enum_layout.data(self.db) {
                         crate::runtime::Layout::Enum(layout) => layout.tag.repr,
@@ -4112,7 +4187,11 @@ impl<'db> RmirEmitter<'db> {
             })
             && let Some(value) = self.actual_aggregate_value_from_runtime_source(bb, operand.local)
         {
-            return value;
+            return if self.value_class(value).is_none() || self.value_class(value) == Some(target) {
+                value
+            } else {
+                self.coerce_value(bb, value, target)
+            };
         }
         if !CoercionPlanner::target_prefers_transport(target)
             && let Some(value) = self.materialize_ordinary_direct_value(bb, operand.local)
@@ -4606,15 +4685,17 @@ impl<'db> RmirEmitter<'db> {
                 let Some(mut target) = self.value_class(dst).cloned() else {
                     return;
                 };
-                if matches!(
-                    target,
-                    RuntimeClass::AggregateValue { .. }
-                        | RuntimeClass::Ref {
-                            kind: RefKind::Object,
-                            ..
-                        }
-                ) && let Some(actual) =
-                    self.with_current_body_cx(|cx| cx.actual_aggregate_class_for_source(local))
+                if self.runtime_local_uses_source_transport(dst)
+                    && matches!(
+                        target,
+                        RuntimeClass::AggregateValue { .. }
+                            | RuntimeClass::Ref {
+                                kind: RefKind::Object,
+                                ..
+                            }
+                    )
+                    && let Some(actual) =
+                        self.with_current_body_cx(|cx| cx.actual_aggregate_class_for_source(local))
                 {
                     target = match target {
                         RuntimeClass::AggregateValue { .. } => actual,
@@ -4669,14 +4750,16 @@ impl<'db> RmirEmitter<'db> {
         src: NOperand,
         target: &RuntimeClass<'db>,
     ) -> RuntimeClass<'db> {
-        if !matches!(
-            target,
-            RuntimeClass::AggregateValue { .. }
-                | RuntimeClass::Ref {
-                    kind: RefKind::Object,
-                    ..
-                }
-        ) {
+        if !self.runtime_local_uses_source_transport(dst)
+            || !matches!(
+                target,
+                RuntimeClass::AggregateValue { .. }
+                    | RuntimeClass::Ref {
+                        kind: RefKind::Object,
+                        ..
+                    }
+            )
+        {
             return target.clone();
         }
         let Some(actual) =
@@ -4914,6 +4997,10 @@ impl<'db> RmirEmitter<'db> {
     }
 
     fn refine_local_runtime_class(&mut self, local: RLocalId, class: RuntimeClass<'db>) {
+        let class = self
+            .value_class(local)
+            .and_then(|current| merge_runtime_class(self.db, current, &class))
+            .unwrap_or(class);
         self.locals[local.index()].carrier = RuntimeCarrier::Value(class.clone());
         match &mut self.locals[local.index()].root {
             RuntimeLocalRoot::Slot(root) => *root = class,
@@ -4951,20 +5038,7 @@ impl<'db> RmirEmitter<'db> {
         actual: &RuntimeClass<'db>,
         target: &RuntimeClass<'db>,
     ) -> bool {
-        match (actual.aggregate_layout(), target.aggregate_layout()) {
-            (Some(actual), Some(target)) => {
-                self.layout_source_ty(actual) == self.layout_source_ty(target)
-            }
-            _ => false,
-        }
-    }
-
-    fn layout_source_ty(&self, layout: LayoutId<'db>) -> TyId<'db> {
-        match layout.data(self.db) {
-            crate::runtime::Layout::Struct(layout) => layout.source_ty,
-            crate::runtime::Layout::Array(layout) => layout.source_ty,
-            crate::runtime::Layout::Enum(layout) => layout.source_ty,
-        }
+        merge_runtime_class(self.db, actual, target).is_some_and(|merged| &merged == actual)
     }
 }
 
