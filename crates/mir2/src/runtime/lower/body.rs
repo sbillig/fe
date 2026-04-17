@@ -13,7 +13,10 @@ use hir::analysis::{
         semantic_may_return_normally,
     },
     ty::{
-        corelib::{PrimitiveWrapperCallKind, core_primitive_wrapper_call_kind, lib_func_matches},
+        corelib::{
+            PrimitiveWrapperCallKind, RuntimeBuiltinFuncKind, core_primitive_wrapper_call_kind,
+            runtime_builtin_func_kind,
+        },
         ty_check::{BodyOwner, EffectPassMode},
         ty_def::TyId,
     },
@@ -2416,6 +2419,7 @@ impl<'db> RmirLowerCtxt<'db> {
         func: Func<'db>,
         args: &[RLocalId],
     ) -> Option<LoweredBuiltinCall<'db>> {
+        let kind = runtime_builtin_func_kind(self.db, func)?;
         let word = RuntimeClass::Scalar(ScalarClass {
             repr: ScalarRepr::Int {
                 bits: 256,
@@ -2424,368 +2428,414 @@ impl<'db> RmirLowerCtxt<'db> {
             role: ScalarRole::Plain,
         });
         let builtin = |builtin, class| LoweredBuiltinCall::Expr { builtin, class };
-        let matches = |path: &str| lib_func_matches(self.db, func, path);
-
-        Some(if matches("std::evm::mem::alloc") {
-            let [size] = args else { return None };
-            builtin(
-                crate::runtime::RuntimeBuiltin::Malloc { size: *size },
-                Some(word.clone()),
-            )
-        } else if matches("std::evm::ops::mload") {
-            let [addr] = args else { return None };
-            builtin(
-                crate::runtime::RuntimeBuiltin::Mload { addr: *addr },
-                Some(word.clone()),
-            )
-        } else if matches("std::evm::ops::mstore") {
-            let [addr, value] = args else { return None };
-            builtin(
-                crate::runtime::RuntimeBuiltin::Mstore {
-                    addr: *addr,
-                    value: *value,
-                },
-                None,
-            )
-        } else if matches("std::evm::ops::mstore8") {
-            let [addr, value] = args else { return None };
-            builtin(
-                crate::runtime::RuntimeBuiltin::Mstore8 {
-                    addr: *addr,
-                    value: *value,
-                },
-                None,
-            )
-        } else if matches("std::evm::ops::msize") {
-            let [] = args else { return None };
-            builtin(crate::runtime::RuntimeBuiltin::Msize, Some(word.clone()))
-        } else if matches("std::evm::ops::sload") {
-            let [slot] = args else { return None };
-            builtin(
-                crate::runtime::RuntimeBuiltin::Sload { slot: *slot },
-                Some(word.clone()),
-            )
-        } else if matches("std::evm::ops::sstore") {
-            let [slot, value] = args else { return None };
-            builtin(
-                crate::runtime::RuntimeBuiltin::Sstore {
-                    slot: *slot,
-                    value: *value,
-                },
-                None,
-            )
-        } else if matches("std::evm::ops::calldataload") {
-            let [offset] = args else { return None };
-            builtin(
-                crate::runtime::RuntimeBuiltin::CallDataLoad { offset: *offset },
-                Some(word.clone()),
-            )
-        } else if matches("std::evm::ops::calldatacopy") {
-            let [dst, offset, len] = args else {
-                return None;
-            };
-            builtin(
-                crate::runtime::RuntimeBuiltin::CallDataCopy {
-                    dst: *dst,
+        Some(match kind {
+            RuntimeBuiltinFuncKind::Malloc => {
+                let [size] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::Malloc { size: *size },
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::Mload => {
+                let [addr] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::Mload { addr: *addr },
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::Mstore => {
+                let [addr, value] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::Mstore {
+                        addr: *addr,
+                        value: *value,
+                    },
+                    None,
+                )
+            }
+            RuntimeBuiltinFuncKind::Mstore8 => {
+                let [addr, value] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::Mstore8 {
+                        addr: *addr,
+                        value: *value,
+                    },
+                    None,
+                )
+            }
+            RuntimeBuiltinFuncKind::Msize => {
+                let [] = args else { return None };
+                builtin(crate::runtime::RuntimeBuiltin::Msize, Some(word.clone()))
+            }
+            RuntimeBuiltinFuncKind::Sload => {
+                let [slot] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::Sload { slot: *slot },
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::Sstore => {
+                let [slot, value] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::Sstore {
+                        slot: *slot,
+                        value: *value,
+                    },
+                    None,
+                )
+            }
+            RuntimeBuiltinFuncKind::CallDataLoad => {
+                let [offset] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::CallDataLoad { offset: *offset },
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::CallDataCopy => {
+                let [dst, offset, len] = args else {
+                    return None;
+                };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::CallDataCopy {
+                        dst: *dst,
+                        offset: *offset,
+                        len: *len,
+                    },
+                    None,
+                )
+            }
+            RuntimeBuiltinFuncKind::CallDataSize => {
+                let [] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::CallDataSize,
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::ReturnDataCopy => {
+                let [dst, offset, len] = args else {
+                    return None;
+                };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::ReturnDataCopy {
+                        dst: *dst,
+                        offset: *offset,
+                        len: *len,
+                    },
+                    None,
+                )
+            }
+            RuntimeBuiltinFuncKind::ReturnDataSize => {
+                let [] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::ReturnDataSize,
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::CodeCopy => {
+                let [dst, offset, len] = args else {
+                    return None;
+                };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::CodeCopy {
+                        dst: *dst,
+                        offset: *offset,
+                        len: *len,
+                    },
+                    None,
+                )
+            }
+            RuntimeBuiltinFuncKind::CodeSize => {
+                let [] = args else { return None };
+                builtin(crate::runtime::RuntimeBuiltin::CodeSize, Some(word.clone()))
+            }
+            RuntimeBuiltinFuncKind::Keccak256 => {
+                let [offset, len] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::Keccak256 {
+                        offset: *offset,
+                        len: *len,
+                    },
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::AddMod => {
+                let [lhs, rhs, modulus] = args else {
+                    return None;
+                };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::AddMod {
+                        lhs: *lhs,
+                        rhs: *rhs,
+                        modulus: *modulus,
+                    },
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::MulMod => {
+                let [lhs, rhs, modulus] = args else {
+                    return None;
+                };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::MulMod {
+                        lhs: *lhs,
+                        rhs: *rhs,
+                        modulus: *modulus,
+                    },
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::Address => {
+                let [] = args else { return None };
+                builtin(crate::runtime::RuntimeBuiltin::Address, Some(word.clone()))
+            }
+            RuntimeBuiltinFuncKind::Caller => {
+                let [] = args else { return None };
+                builtin(crate::runtime::RuntimeBuiltin::Caller, Some(word.clone()))
+            }
+            RuntimeBuiltinFuncKind::CallValue => {
+                let [] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::CallValue,
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::Origin => {
+                let [] = args else { return None };
+                builtin(crate::runtime::RuntimeBuiltin::Origin, Some(word.clone()))
+            }
+            RuntimeBuiltinFuncKind::GasPrice => {
+                let [] = args else { return None };
+                builtin(crate::runtime::RuntimeBuiltin::GasPrice, Some(word.clone()))
+            }
+            RuntimeBuiltinFuncKind::CoinBase => {
+                let [] = args else { return None };
+                builtin(crate::runtime::RuntimeBuiltin::CoinBase, Some(word.clone()))
+            }
+            RuntimeBuiltinFuncKind::Timestamp => {
+                let [] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::Timestamp,
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::Number => {
+                let [] = args else { return None };
+                builtin(crate::runtime::RuntimeBuiltin::Number, Some(word.clone()))
+            }
+            RuntimeBuiltinFuncKind::PrevRandao => {
+                let [] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::PrevRandao,
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::GasLimit => {
+                let [] = args else { return None };
+                builtin(crate::runtime::RuntimeBuiltin::GasLimit, Some(word.clone()))
+            }
+            RuntimeBuiltinFuncKind::ChainId => {
+                let [] = args else { return None };
+                builtin(crate::runtime::RuntimeBuiltin::ChainId, Some(word.clone()))
+            }
+            RuntimeBuiltinFuncKind::BaseFee => {
+                let [] = args else { return None };
+                builtin(crate::runtime::RuntimeBuiltin::BaseFee, Some(word.clone()))
+            }
+            RuntimeBuiltinFuncKind::SelfBalance => {
+                let [] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::SelfBalance,
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::BlockHash => {
+                let [block] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::BlockHash { block: *block },
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::Gas => {
+                let [] = args else { return None };
+                builtin(crate::runtime::RuntimeBuiltin::Gas, Some(word.clone()))
+            }
+            RuntimeBuiltinFuncKind::Call => {
+                let [gas, addr, value, args_offset, args_len, ret_offset, ret_len] = args else {
+                    return None;
+                };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::Call {
+                        gas: *gas,
+                        addr: *addr,
+                        value: *value,
+                        args_offset: *args_offset,
+                        args_len: *args_len,
+                        ret_offset: *ret_offset,
+                        ret_len: *ret_len,
+                    },
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::StaticCall => {
+                let [gas, addr, args_offset, args_len, ret_offset, ret_len] = args else {
+                    return None;
+                };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::StaticCall {
+                        gas: *gas,
+                        addr: *addr,
+                        args_offset: *args_offset,
+                        args_len: *args_len,
+                        ret_offset: *ret_offset,
+                        ret_len: *ret_len,
+                    },
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::DelegateCall => {
+                let [gas, addr, args_offset, args_len, ret_offset, ret_len] = args else {
+                    return None;
+                };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::DelegateCall {
+                        gas: *gas,
+                        addr: *addr,
+                        args_offset: *args_offset,
+                        args_len: *args_len,
+                        ret_offset: *ret_offset,
+                        ret_len: *ret_len,
+                    },
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::Create => {
+                let [value, offset, len] = args else {
+                    return None;
+                };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::Create {
+                        value: *value,
+                        offset: *offset,
+                        len: *len,
+                    },
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::Create2 => {
+                let [value, offset, len, salt] = args else {
+                    return None;
+                };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::Create2 {
+                        value: *value,
+                        offset: *offset,
+                        len: *len,
+                        salt: *salt,
+                    },
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::Log0 => {
+                let [offset, len] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::Log0 {
+                        offset: *offset,
+                        len: *len,
+                    },
+                    None,
+                )
+            }
+            RuntimeBuiltinFuncKind::Log1 => {
+                let [offset, len, topic0] = args else {
+                    return None;
+                };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::Log1 {
+                        offset: *offset,
+                        len: *len,
+                        topic0: *topic0,
+                    },
+                    None,
+                )
+            }
+            RuntimeBuiltinFuncKind::Log2 => {
+                let [offset, len, topic0, topic1] = args else {
+                    return None;
+                };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::Log2 {
+                        offset: *offset,
+                        len: *len,
+                        topic0: *topic0,
+                        topic1: *topic1,
+                    },
+                    None,
+                )
+            }
+            RuntimeBuiltinFuncKind::Log3 => {
+                let [offset, len, topic0, topic1, topic2] = args else {
+                    return None;
+                };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::Log3 {
+                        offset: *offset,
+                        len: *len,
+                        topic0: *topic0,
+                        topic1: *topic1,
+                        topic2: *topic2,
+                    },
+                    None,
+                )
+            }
+            RuntimeBuiltinFuncKind::Log4 => {
+                let [offset, len, topic0, topic1, topic2, topic3] = args else {
+                    return None;
+                };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::Log4 {
+                        offset: *offset,
+                        len: *len,
+                        topic0: *topic0,
+                        topic1: *topic1,
+                        topic2: *topic2,
+                        topic3: *topic3,
+                    },
+                    None,
+                )
+            }
+            RuntimeBuiltinFuncKind::Revert => {
+                let [offset, len] = args else { return None };
+                LoweredBuiltinCall::Terminator(RTerminator::Revert {
                     offset: *offset,
                     len: *len,
-                },
-                None,
-            )
-        } else if matches("std::evm::ops::calldatasize") {
-            let [] = args else { return None };
-            builtin(
-                crate::runtime::RuntimeBuiltin::CallDataSize,
-                Some(word.clone()),
-            )
-        } else if matches("std::evm::ops::returndatacopy") {
-            let [dst, offset, len] = args else {
-                return None;
-            };
-            builtin(
-                crate::runtime::RuntimeBuiltin::ReturnDataCopy {
-                    dst: *dst,
+                })
+            }
+            RuntimeBuiltinFuncKind::ReturnData => {
+                let [offset, len] = args else { return None };
+                LoweredBuiltinCall::Terminator(RTerminator::ReturnData {
                     offset: *offset,
                     len: *len,
-                },
-                None,
-            )
-        } else if matches("std::evm::ops::returndatasize") {
-            let [] = args else { return None };
-            builtin(
-                crate::runtime::RuntimeBuiltin::ReturnDataSize,
-                Some(word.clone()),
-            )
-        } else if matches("std::evm::ops::codecopy") {
-            let [dst, offset, len] = args else {
-                return None;
-            };
-            builtin(
-                crate::runtime::RuntimeBuiltin::CodeCopy {
-                    dst: *dst,
-                    offset: *offset,
-                    len: *len,
-                },
-                None,
-            )
-        } else if matches("std::evm::ops::codesize") {
-            let [] = args else { return None };
-            builtin(crate::runtime::RuntimeBuiltin::CodeSize, Some(word.clone()))
-        } else if matches("std::evm::ops::keccak256") {
-            let [offset, len] = args else { return None };
-            builtin(
-                crate::runtime::RuntimeBuiltin::Keccak256 {
-                    offset: *offset,
-                    len: *len,
-                },
-                Some(word.clone()),
-            )
-        } else if matches("std::evm::ops::addmod") {
-            let [lhs, rhs, modulus] = args else {
-                return None;
-            };
-            builtin(
-                crate::runtime::RuntimeBuiltin::AddMod {
-                    lhs: *lhs,
-                    rhs: *rhs,
-                    modulus: *modulus,
-                },
-                Some(word.clone()),
-            )
-        } else if matches("std::evm::ops::mulmod") {
-            let [lhs, rhs, modulus] = args else {
-                return None;
-            };
-            builtin(
-                crate::runtime::RuntimeBuiltin::MulMod {
-                    lhs: *lhs,
-                    rhs: *rhs,
-                    modulus: *modulus,
-                },
-                Some(word.clone()),
-            )
-        } else if matches("std::evm::ops::address") {
-            let [] = args else { return None };
-            builtin(crate::runtime::RuntimeBuiltin::Address, Some(word.clone()))
-        } else if matches("std::evm::ops::caller") {
-            let [] = args else { return None };
-            builtin(crate::runtime::RuntimeBuiltin::Caller, Some(word.clone()))
-        } else if matches("std::evm::ops::callvalue") {
-            let [] = args else { return None };
-            builtin(
-                crate::runtime::RuntimeBuiltin::CallValue,
-                Some(word.clone()),
-            )
-        } else if matches("std::evm::ops::origin") {
-            let [] = args else { return None };
-            builtin(crate::runtime::RuntimeBuiltin::Origin, Some(word.clone()))
-        } else if matches("std::evm::ops::gasprice") {
-            let [] = args else { return None };
-            builtin(crate::runtime::RuntimeBuiltin::GasPrice, Some(word.clone()))
-        } else if matches("std::evm::ops::coinbase") {
-            let [] = args else { return None };
-            builtin(crate::runtime::RuntimeBuiltin::CoinBase, Some(word.clone()))
-        } else if matches("std::evm::ops::timestamp") {
-            let [] = args else { return None };
-            builtin(
-                crate::runtime::RuntimeBuiltin::Timestamp,
-                Some(word.clone()),
-            )
-        } else if matches("std::evm::ops::number") {
-            let [] = args else { return None };
-            builtin(crate::runtime::RuntimeBuiltin::Number, Some(word.clone()))
-        } else if matches("std::evm::ops::prevrandao") {
-            let [] = args else { return None };
-            builtin(
-                crate::runtime::RuntimeBuiltin::PrevRandao,
-                Some(word.clone()),
-            )
-        } else if matches("std::evm::ops::gaslimit") {
-            let [] = args else { return None };
-            builtin(crate::runtime::RuntimeBuiltin::GasLimit, Some(word.clone()))
-        } else if matches("std::evm::ops::chainid") {
-            let [] = args else { return None };
-            builtin(crate::runtime::RuntimeBuiltin::ChainId, Some(word.clone()))
-        } else if matches("std::evm::ops::basefee") {
-            let [] = args else { return None };
-            builtin(crate::runtime::RuntimeBuiltin::BaseFee, Some(word.clone()))
-        } else if matches("std::evm::ops::selfbalance") {
-            let [] = args else { return None };
-            builtin(
-                crate::runtime::RuntimeBuiltin::SelfBalance,
-                Some(word.clone()),
-            )
-        } else if matches("std::evm::ops::blockhash") {
-            let [block] = args else { return None };
-            builtin(
-                crate::runtime::RuntimeBuiltin::BlockHash { block: *block },
-                Some(word.clone()),
-            )
-        } else if matches("std::evm::ops::gas") {
-            let [] = args else { return None };
-            builtin(crate::runtime::RuntimeBuiltin::Gas, Some(word.clone()))
-        } else if matches("std::evm::ops::call") {
-            let [gas, addr, value, args_offset, args_len, ret_offset, ret_len] = args else {
-                return None;
-            };
-            builtin(
-                crate::runtime::RuntimeBuiltin::Call {
-                    gas: *gas,
-                    addr: *addr,
-                    value: *value,
-                    args_offset: *args_offset,
-                    args_len: *args_len,
-                    ret_offset: *ret_offset,
-                    ret_len: *ret_len,
-                },
-                Some(word.clone()),
-            )
-        } else if matches("std::evm::ops::staticcall") {
-            let [gas, addr, args_offset, args_len, ret_offset, ret_len] = args else {
-                return None;
-            };
-            builtin(
-                crate::runtime::RuntimeBuiltin::StaticCall {
-                    gas: *gas,
-                    addr: *addr,
-                    args_offset: *args_offset,
-                    args_len: *args_len,
-                    ret_offset: *ret_offset,
-                    ret_len: *ret_len,
-                },
-                Some(word.clone()),
-            )
-        } else if matches("std::evm::ops::delegatecall") {
-            let [gas, addr, args_offset, args_len, ret_offset, ret_len] = args else {
-                return None;
-            };
-            builtin(
-                crate::runtime::RuntimeBuiltin::DelegateCall {
-                    gas: *gas,
-                    addr: *addr,
-                    args_offset: *args_offset,
-                    args_len: *args_len,
-                    ret_offset: *ret_offset,
-                    ret_len: *ret_len,
-                },
-                Some(word.clone()),
-            )
-        } else if matches("std::evm::ops::create") {
-            let [value, offset, len] = args else {
-                return None;
-            };
-            builtin(
-                crate::runtime::RuntimeBuiltin::Create {
-                    value: *value,
-                    offset: *offset,
-                    len: *len,
-                },
-                Some(word.clone()),
-            )
-        } else if matches("std::evm::ops::create2") {
-            let [value, offset, len, salt] = args else {
-                return None;
-            };
-            builtin(
-                crate::runtime::RuntimeBuiltin::Create2 {
-                    value: *value,
-                    offset: *offset,
-                    len: *len,
-                    salt: *salt,
-                },
-                Some(word.clone()),
-            )
-        } else if matches("std::evm::ops::log0") {
-            let [offset, len] = args else { return None };
-            builtin(
-                crate::runtime::RuntimeBuiltin::Log0 {
-                    offset: *offset,
-                    len: *len,
-                },
-                None,
-            )
-        } else if matches("std::evm::ops::log1") {
-            let [offset, len, topic0] = args else {
-                return None;
-            };
-            builtin(
-                crate::runtime::RuntimeBuiltin::Log1 {
-                    offset: *offset,
-                    len: *len,
-                    topic0: *topic0,
-                },
-                None,
-            )
-        } else if matches("std::evm::ops::log2") {
-            let [offset, len, topic0, topic1] = args else {
-                return None;
-            };
-            builtin(
-                crate::runtime::RuntimeBuiltin::Log2 {
-                    offset: *offset,
-                    len: *len,
-                    topic0: *topic0,
-                    topic1: *topic1,
-                },
-                None,
-            )
-        } else if matches("std::evm::ops::log3") {
-            let [offset, len, topic0, topic1, topic2] = args else {
-                return None;
-            };
-            builtin(
-                crate::runtime::RuntimeBuiltin::Log3 {
-                    offset: *offset,
-                    len: *len,
-                    topic0: *topic0,
-                    topic1: *topic1,
-                    topic2: *topic2,
-                },
-                None,
-            )
-        } else if matches("std::evm::ops::log4") {
-            let [offset, len, topic0, topic1, topic2, topic3] = args else {
-                return None;
-            };
-            builtin(
-                crate::runtime::RuntimeBuiltin::Log4 {
-                    offset: *offset,
-                    len: *len,
-                    topic0: *topic0,
-                    topic1: *topic1,
-                    topic2: *topic2,
-                    topic3: *topic3,
-                },
-                None,
-            )
-        } else if matches("std::evm::ops::revert") {
-            let [offset, len] = args else { return None };
-            LoweredBuiltinCall::Terminator(RTerminator::Revert {
-                offset: *offset,
-                len: *len,
-            })
-        } else if matches("std::evm::ops::return_data") {
-            let [offset, len] = args else { return None };
-            LoweredBuiltinCall::Terminator(RTerminator::ReturnData {
-                offset: *offset,
-                len: *len,
-            })
-        } else if matches("std::evm::ops::selfdestruct") {
-            let [beneficiary] = args else { return None };
-            LoweredBuiltinCall::Terminator(RTerminator::SelfDestruct {
-                beneficiary: *beneficiary,
-            })
-        } else if matches("std::evm::ops::stop") {
-            let [] = args else { return None };
-            LoweredBuiltinCall::Terminator(RTerminator::Stop)
-        } else if matches("core::panic") || matches("core::todo") {
-            let [] = args else { return None };
-            LoweredBuiltinCall::Terminator(RTerminator::Trap)
-        } else if matches("core::panic_with_value") {
-            let [_value] = args else { return None };
-            LoweredBuiltinCall::Terminator(RTerminator::Trap)
-        } else {
-            return None;
+                })
+            }
+            RuntimeBuiltinFuncKind::SelfDestruct => {
+                let [beneficiary] = args else { return None };
+                LoweredBuiltinCall::Terminator(RTerminator::SelfDestruct {
+                    beneficiary: *beneficiary,
+                })
+            }
+            RuntimeBuiltinFuncKind::Stop => {
+                let [] = args else { return None };
+                LoweredBuiltinCall::Terminator(RTerminator::Stop)
+            }
+            RuntimeBuiltinFuncKind::Panic | RuntimeBuiltinFuncKind::Todo => {
+                let [] = args else { return None };
+                LoweredBuiltinCall::Terminator(RTerminator::Trap)
+            }
+            RuntimeBuiltinFuncKind::PanicWithValue => {
+                let [_value] = args else { return None };
+                LoweredBuiltinCall::Terminator(RTerminator::Trap)
+            }
+            RuntimeBuiltinFuncKind::IntrinsicKeccak256 => return None,
         })
     }
 
@@ -2795,7 +2845,9 @@ impl<'db> RmirLowerCtxt<'db> {
         func: Func<'db>,
         args: &[NOperand],
     ) -> Option<RLocalId> {
-        if !lib_func_matches(self.db, func, "core::intrinsic::__keccak256") {
+        if runtime_builtin_func_kind(self.db, func)
+            != Some(RuntimeBuiltinFuncKind::IntrinsicKeccak256)
+        {
             return None;
         }
 

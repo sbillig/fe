@@ -11,7 +11,7 @@ use crate::{
             verify_semantic_body,
         },
         ty::{
-            corelib::resolve_lib_func_path,
+            corelib::{RuntimeBuiltinFuncKind, runtime_builtin_func_kind},
             effect_handle_metadata,
             effects::place_effect_provider_param_index_map,
             fold::TyFoldable,
@@ -1607,20 +1607,18 @@ fn semantic_is_nonreturning_builtin<'db>(
     let BodyOwner::Func(func) = instance.key(db).owner(db) else {
         return false;
     };
-    let scope = func.scope();
-
-    resolve_lib_func_path(db, scope, "std::evm::ops::return_data")
-        .is_some_and(|builtin| builtin == func)
-        || resolve_lib_func_path(db, scope, "std::evm::ops::revert")
-            .is_some_and(|builtin| builtin == func)
-        || resolve_lib_func_path(db, scope, "std::evm::ops::selfdestruct")
-            .is_some_and(|builtin| builtin == func)
-        || resolve_lib_func_path(db, scope, "std::evm::ops::stop")
-            .is_some_and(|builtin| builtin == func)
-        || resolve_lib_func_path(db, scope, "core::panic").is_some_and(|builtin| builtin == func)
-        || resolve_lib_func_path(db, scope, "core::todo").is_some_and(|builtin| builtin == func)
-        || resolve_lib_func_path(db, scope, "core::panic_with_value")
-            .is_some_and(|builtin| builtin == func)
+    matches!(
+        runtime_builtin_func_kind(db, func),
+        Some(
+            RuntimeBuiltinFuncKind::ReturnData
+                | RuntimeBuiltinFuncKind::Revert
+                | RuntimeBuiltinFuncKind::SelfDestruct
+                | RuntimeBuiltinFuncKind::Stop
+                | RuntimeBuiltinFuncKind::Panic
+                | RuntimeBuiltinFuncKind::PanicWithValue
+                | RuntimeBuiltinFuncKind::Todo
+        )
+    )
 }
 
 fn semantic_may_return_normally_cycle_initial<'db>(

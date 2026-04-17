@@ -16,7 +16,7 @@ use hir::analysis::{
     },
     ty::{
         ProviderAddressSpace, ProviderKind,
-        corelib::lib_func_matches,
+        corelib::runtime_builtin_func_kind,
         normalize::normalize_ty,
         provider::{provider_semantics, registered_root_providers},
         trait_def::{TraitInstId, resolve_trait_method_instance},
@@ -3058,77 +3058,9 @@ fn extern_builtin_return_class<'db>(
             AddressSpaceKind::Memory,
         ));
     }
-    let matches = |path: &str| lib_func_matches(db, func, path);
-    if matches("std::evm::mem::alloc") {
-        return Some(top_level_class_for_ty_in_env(
-            db,
-            env,
-            result_ty,
-            AddressSpaceKind::Memory,
-        ));
-    }
-    if matches("core::intrinsic::__keccak256") {
-        return Some(top_level_class_for_ty_in_env(
-            db,
-            env,
-            result_ty,
-            AddressSpaceKind::Memory,
-        ));
-    }
-
-    let known = [
-        "std::evm::ops::mload",
-        "std::evm::ops::mstore",
-        "std::evm::ops::mstore8",
-        "std::evm::ops::msize",
-        "std::evm::ops::sload",
-        "std::evm::ops::sstore",
-        "std::evm::ops::calldataload",
-        "std::evm::ops::calldatacopy",
-        "std::evm::ops::calldatasize",
-        "std::evm::ops::returndatacopy",
-        "std::evm::ops::returndatasize",
-        "std::evm::ops::codecopy",
-        "std::evm::ops::codesize",
-        "std::evm::ops::keccak256",
-        "std::evm::ops::addmod",
-        "std::evm::ops::mulmod",
-        "std::evm::ops::address",
-        "std::evm::ops::caller",
-        "std::evm::ops::callvalue",
-        "std::evm::ops::origin",
-        "std::evm::ops::gasprice",
-        "std::evm::ops::coinbase",
-        "std::evm::ops::timestamp",
-        "std::evm::ops::number",
-        "std::evm::ops::prevrandao",
-        "std::evm::ops::gaslimit",
-        "std::evm::ops::chainid",
-        "std::evm::ops::basefee",
-        "std::evm::ops::selfbalance",
-        "std::evm::ops::blockhash",
-        "std::evm::ops::gas",
-        "std::evm::ops::call",
-        "std::evm::ops::staticcall",
-        "std::evm::ops::delegatecall",
-        "std::evm::ops::create",
-        "std::evm::ops::create2",
-        "std::evm::ops::log0",
-        "std::evm::ops::log1",
-        "std::evm::ops::log2",
-        "std::evm::ops::log3",
-        "std::evm::ops::log4",
-        "std::evm::ops::revert",
-        "std::evm::ops::return_data",
-        "std::evm::ops::selfdestruct",
-        "std::evm::ops::stop",
-        "core::panic",
-        "core::panic_with_value",
-        "core::todo",
-    ]
-    .iter()
-    .any(|path| matches(path));
-    known.then(|| top_level_class_for_ty_in_env(db, env, result_ty, AddressSpaceKind::Memory))
+    runtime_builtin_func_kind(db, func)
+        .is_some()
+        .then(|| top_level_class_for_ty_in_env(db, env, result_ty, AddressSpaceKind::Memory))
 }
 
 fn is_runtime_intrinsic_name(name: &str) -> bool {

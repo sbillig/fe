@@ -98,6 +98,146 @@ pub fn lib_func_matches<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>, path: 
     actual_suffix == target_suffix
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub enum RuntimeBuiltinFuncKind {
+    Malloc,
+    Mload,
+    Mstore,
+    Mstore8,
+    Msize,
+    Sload,
+    Sstore,
+    CallDataLoad,
+    CallDataCopy,
+    CallDataSize,
+    ReturnDataCopy,
+    ReturnDataSize,
+    CodeCopy,
+    CodeSize,
+    Keccak256,
+    AddMod,
+    MulMod,
+    Address,
+    Caller,
+    CallValue,
+    Origin,
+    GasPrice,
+    CoinBase,
+    Timestamp,
+    Number,
+    PrevRandao,
+    GasLimit,
+    ChainId,
+    BaseFee,
+    SelfBalance,
+    BlockHash,
+    Gas,
+    Call,
+    StaticCall,
+    DelegateCall,
+    Create,
+    Create2,
+    Log0,
+    Log1,
+    Log2,
+    Log3,
+    Log4,
+    Revert,
+    ReturnData,
+    SelfDestruct,
+    Stop,
+    Panic,
+    PanicWithValue,
+    Todo,
+    IntrinsicKeccak256,
+}
+
+#[salsa::tracked]
+pub fn runtime_builtin_func_kind<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+) -> Option<RuntimeBuiltinFuncKind> {
+    let kind = func.top_mod(db).ingot(db).kind(db);
+    let path = runtime_builtin_func_path(db, func)?;
+    Some(match (kind, path.as_slice()) {
+        (IngotKind::Std, ["evm", "mem", "alloc"]) => RuntimeBuiltinFuncKind::Malloc,
+        (IngotKind::Std, ["evm", "ops", "mload"]) => RuntimeBuiltinFuncKind::Mload,
+        (IngotKind::Std, ["evm", "ops", "mstore"]) => RuntimeBuiltinFuncKind::Mstore,
+        (IngotKind::Std, ["evm", "ops", "mstore8"]) => RuntimeBuiltinFuncKind::Mstore8,
+        (IngotKind::Std, ["evm", "ops", "msize"]) => RuntimeBuiltinFuncKind::Msize,
+        (IngotKind::Std, ["evm", "ops", "sload"]) => RuntimeBuiltinFuncKind::Sload,
+        (IngotKind::Std, ["evm", "ops", "sstore"]) => RuntimeBuiltinFuncKind::Sstore,
+        (IngotKind::Std, ["evm", "ops", "calldataload"]) => RuntimeBuiltinFuncKind::CallDataLoad,
+        (IngotKind::Std, ["evm", "ops", "calldatacopy"]) => RuntimeBuiltinFuncKind::CallDataCopy,
+        (IngotKind::Std, ["evm", "ops", "calldatasize"]) => RuntimeBuiltinFuncKind::CallDataSize,
+        (IngotKind::Std, ["evm", "ops", "returndatacopy"]) => {
+            RuntimeBuiltinFuncKind::ReturnDataCopy
+        }
+        (IngotKind::Std, ["evm", "ops", "returndatasize"]) => {
+            RuntimeBuiltinFuncKind::ReturnDataSize
+        }
+        (IngotKind::Std, ["evm", "ops", "codecopy"]) => RuntimeBuiltinFuncKind::CodeCopy,
+        (IngotKind::Std, ["evm", "ops", "codesize"]) => RuntimeBuiltinFuncKind::CodeSize,
+        (IngotKind::Std, ["evm", "ops", "keccak256"]) => RuntimeBuiltinFuncKind::Keccak256,
+        (IngotKind::Std, ["evm", "ops", "addmod"]) => RuntimeBuiltinFuncKind::AddMod,
+        (IngotKind::Std, ["evm", "ops", "mulmod"]) => RuntimeBuiltinFuncKind::MulMod,
+        (IngotKind::Std, ["evm", "ops", "address"]) => RuntimeBuiltinFuncKind::Address,
+        (IngotKind::Std, ["evm", "ops", "caller"]) => RuntimeBuiltinFuncKind::Caller,
+        (IngotKind::Std, ["evm", "ops", "callvalue"]) => RuntimeBuiltinFuncKind::CallValue,
+        (IngotKind::Std, ["evm", "ops", "origin"]) => RuntimeBuiltinFuncKind::Origin,
+        (IngotKind::Std, ["evm", "ops", "gasprice"]) => RuntimeBuiltinFuncKind::GasPrice,
+        (IngotKind::Std, ["evm", "ops", "coinbase"]) => RuntimeBuiltinFuncKind::CoinBase,
+        (IngotKind::Std, ["evm", "ops", "timestamp"]) => RuntimeBuiltinFuncKind::Timestamp,
+        (IngotKind::Std, ["evm", "ops", "number"]) => RuntimeBuiltinFuncKind::Number,
+        (IngotKind::Std, ["evm", "ops", "prevrandao"]) => RuntimeBuiltinFuncKind::PrevRandao,
+        (IngotKind::Std, ["evm", "ops", "gaslimit"]) => RuntimeBuiltinFuncKind::GasLimit,
+        (IngotKind::Std, ["evm", "ops", "chainid"]) => RuntimeBuiltinFuncKind::ChainId,
+        (IngotKind::Std, ["evm", "ops", "basefee"]) => RuntimeBuiltinFuncKind::BaseFee,
+        (IngotKind::Std, ["evm", "ops", "selfbalance"]) => RuntimeBuiltinFuncKind::SelfBalance,
+        (IngotKind::Std, ["evm", "ops", "blockhash"]) => RuntimeBuiltinFuncKind::BlockHash,
+        (IngotKind::Std, ["evm", "ops", "gas"]) => RuntimeBuiltinFuncKind::Gas,
+        (IngotKind::Std, ["evm", "ops", "call"]) => RuntimeBuiltinFuncKind::Call,
+        (IngotKind::Std, ["evm", "ops", "staticcall"]) => RuntimeBuiltinFuncKind::StaticCall,
+        (IngotKind::Std, ["evm", "ops", "delegatecall"]) => RuntimeBuiltinFuncKind::DelegateCall,
+        (IngotKind::Std, ["evm", "ops", "create"]) => RuntimeBuiltinFuncKind::Create,
+        (IngotKind::Std, ["evm", "ops", "create2"]) => RuntimeBuiltinFuncKind::Create2,
+        (IngotKind::Std, ["evm", "ops", "log0"]) => RuntimeBuiltinFuncKind::Log0,
+        (IngotKind::Std, ["evm", "ops", "log1"]) => RuntimeBuiltinFuncKind::Log1,
+        (IngotKind::Std, ["evm", "ops", "log2"]) => RuntimeBuiltinFuncKind::Log2,
+        (IngotKind::Std, ["evm", "ops", "log3"]) => RuntimeBuiltinFuncKind::Log3,
+        (IngotKind::Std, ["evm", "ops", "log4"]) => RuntimeBuiltinFuncKind::Log4,
+        (IngotKind::Std, ["evm", "ops", "revert"]) => RuntimeBuiltinFuncKind::Revert,
+        (IngotKind::Std, ["evm", "ops", "return_data"]) => RuntimeBuiltinFuncKind::ReturnData,
+        (IngotKind::Std, ["evm", "ops", "selfdestruct"]) => RuntimeBuiltinFuncKind::SelfDestruct,
+        (IngotKind::Std, ["evm", "ops", "stop"]) => RuntimeBuiltinFuncKind::Stop,
+        (IngotKind::Core, ["panic"]) => RuntimeBuiltinFuncKind::Panic,
+        (IngotKind::Core, ["panic_with_value"]) => RuntimeBuiltinFuncKind::PanicWithValue,
+        (IngotKind::Core, ["todo"]) => RuntimeBuiltinFuncKind::Todo,
+        (IngotKind::Core, ["intrinsic", "__keccak256"]) => {
+            RuntimeBuiltinFuncKind::IntrinsicKeccak256
+        }
+        _ => return None,
+    })
+}
+
+fn runtime_builtin_func_path<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+) -> Option<Vec<&'db str>> {
+    let mut segments = Vec::new();
+    let mut scope = Some(func.scope());
+    while let Some(current) = scope {
+        let name = current.name(db)?;
+        segments.push(name.data(db).as_str());
+        scope = current.parent(db);
+    }
+    segments.reverse();
+    if segments.first() == Some(&"lib") {
+        segments.remove(0);
+    }
+    Some(segments)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrimitiveWrapperCallKind {
     Unary(UnOp),
