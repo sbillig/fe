@@ -140,13 +140,13 @@ impl<'a, 'db> LocalStateInferer<'a, 'db> {
                 }
             };
             let local = &self.env.body().locals[assign.dst.index()];
-            let desired = match self.env.expr_direct_class_with_cache(
+            let desired = match self.env.expr_direct_class(
                 &self.carriers,
                 assign.block_idx,
                 assign.stmt_idx,
                 expr,
                 local.ty,
-                &mut self.class_cache,
+                Some(&mut self.class_cache),
             ) {
                 Some(RuntimeClass::AggregateValue { layout })
                     if matches!(local.facts.interface, NLocalInterface::DirectValue)

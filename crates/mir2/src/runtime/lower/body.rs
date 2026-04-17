@@ -344,41 +344,17 @@ impl<'db> RmirEmitter<'db> {
         }
     }
 
-    fn current_semantic_carriers(&self) -> Vec<RuntimeCarrier<'db>> {
-        self.locals
+    fn with_current_body_cx<T>(&self, f: impl FnOnce(RuntimeBodyCx<'_, '_, 'db>) -> T) -> T {
+        let carriers = self
+            .locals
             .iter()
             .take(self.semantic_body.locals.len())
             .map(|local| local.carrier.clone())
-            .collect()
-    }
-
-    fn with_current_body_cx<T>(&self, f: impl FnOnce(RuntimeBodyCx<'_, '_, 'db>) -> T) -> T {
-        let carriers = self.current_semantic_carriers();
+            .collect::<Vec<_>>();
         f(
             BodyEnv::new(self.db, &self.semantic_body, self.typed_body, &self.facts)
                 .with_carriers(&carriers),
         )
-    }
-
-    fn direct_assign_source_class(&self, expr: &NExpr<'db>) -> Option<RuntimeClass<'db>> {
-        self.with_current_body_cx(|cx| match expr {
-            NExpr::Use(value) => cx.materialized_value_class(value.local),
-            NExpr::Borrow { place, .. } => cx.normalized_place_address_class(place),
-            NExpr::ReadPlace { place, .. } => cx.normalized_place_class(place),
-            NExpr::Const(_)
-            | NExpr::CodeRegionRef { .. }
-            | NExpr::Unary { .. }
-            | NExpr::Binary { .. }
-            | NExpr::Cast { .. }
-            | NExpr::AggregateMake { .. }
-            | NExpr::EnumMake { .. }
-            | NExpr::GetEnumTag { .. }
-            | NExpr::IsEnumVariant { .. }
-            | NExpr::ExtractEnumField { .. }
-            | NExpr::CodeRegionOffset { .. }
-            | NExpr::CodeRegionLen { .. }
-            | NExpr::Call { .. } => None,
-        })
     }
 
     fn specialize_direct_assign_target_from_expr(&mut self, dst: SLocalId, expr: &NExpr<'db>) {
@@ -390,7 +366,24 @@ impl<'db> RmirEmitter<'db> {
             self.semantic_local_lowering(dst),
             RuntimeLocalLowering::PlaceCarrier { .. }
         ) {
-            let actual = self.direct_assign_source_class(expr);
+            let actual = self.with_current_body_cx(|cx| match expr {
+                NExpr::Use(value) => cx.materialized_value_class(value.local),
+                NExpr::Borrow { place, .. } => cx.normalized_place_address_class(place),
+                NExpr::ReadPlace { place, .. } => cx.normalized_place_class(place),
+                NExpr::Const(_)
+                | NExpr::CodeRegionRef { .. }
+                | NExpr::Unary { .. }
+                | NExpr::Binary { .. }
+                | NExpr::Cast { .. }
+                | NExpr::AggregateMake { .. }
+                | NExpr::EnumMake { .. }
+                | NExpr::GetEnumTag { .. }
+                | NExpr::IsEnumVariant { .. }
+                | NExpr::ExtractEnumField { .. }
+                | NExpr::CodeRegionOffset { .. }
+                | NExpr::CodeRegionLen { .. }
+                | NExpr::Call { .. } => None,
+            });
             if let Some(actual) = actual
                 && CoercionPlanner::target_prefers_transport(&actual)
             {
@@ -4345,21 +4338,14 @@ impl<'db> RmirEmitter<'db> {
         operand: NOperand,
         boundary: &crate::runtime::RuntimeBoundarySpec<'db>,
     ) -> RLocalId {
-        let boundary = self.specialize_runtime_boundary_for_source(operand.local, boundary);
+        let boundary = self
+            .with_current_body_cx(|cx| cx.specialize_boundary_for_source(operand.local, boundary));
         self.lower_for_boundary(
             bb,
             BoundarySource::SemanticOperand(operand),
             &boundary,
             self.locals[operand.local.index()].semantic_ty,
         )
-    }
-
-    fn specialize_runtime_boundary_for_source(
-        &self,
-        local: SLocalId,
-        boundary: &crate::runtime::RuntimeBoundarySpec<'db>,
-    ) -> crate::runtime::RuntimeBoundarySpec<'db> {
-        self.with_current_body_cx(|cx| cx.specialize_boundary_for_source(local, boundary))
     }
 
     fn addr_of_semantic_operand_for_class(
