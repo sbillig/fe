@@ -452,8 +452,7 @@ fn lower_semantic_body<'db>(
     let key = instance.key(db);
     let typed_body = key.typed_body(db);
     let mut body = lower_to_smir(db, instance, key.owner(db), typed_body);
-    assign_semantic_local_roles(db, instance, &mut body);
-    assign_semantic_snapshot_sources(&mut body);
+    assign_semantic_local_facts(db, instance, &mut body);
     verify_semantic_body(&body).expect("invalid semantic MIR");
     body
 }
@@ -541,7 +540,7 @@ fn classify_binding_lowering<'db>(
     }
 }
 
-fn assign_semantic_local_roles<'db>(
+fn assign_semantic_local_facts<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
     body: &mut SemanticBody<'db>,
@@ -549,8 +548,9 @@ fn assign_semantic_local_roles<'db>(
     let owner = instance.key(db).owner(db);
     let scope = owner.scope();
     let assumptions = semantic_instance_assumptions(db, instance);
+    let mut assigned_snapshots = vec![false; body.locals.len()];
 
-    for local in &mut body.locals {
+    for (idx, local) in body.locals.iter_mut().enumerate() {
         local.role = local.source.map_or_else(
             || SemanticLocalRole::DirectValue {
                 provenance: ValueProvenance::Ordinary,
@@ -559,38 +559,6 @@ fn assign_semantic_local_roles<'db>(
                 binding_lowering_to_local_role(semantic_binding_lowering(db, instance, binding))
             },
         );
-    }
-
-    let assignments = body
-        .blocks
-        .iter()
-        .flat_map(|block| block.stmts.iter())
-        .filter_map(|stmt| match &stmt.kind {
-            SStmtKind::Assign { dst, expr } => Some((*dst, expr.clone())),
-            SStmtKind::Store { .. } => None,
-        })
-        .collect::<Vec<_>>();
-    for (dst, expr) in assignments {
-        if body.locals[dst.index()].source.is_some() {
-            continue;
-        }
-        let fallback = fallback_local_role(db, scope, assumptions, body.locals[dst.index()].ty);
-        let role = classify_expr_local_role(
-            db,
-            scope,
-            assumptions,
-            body.locals[dst.index()].ty,
-            &expr,
-            &body.locals,
-        );
-        body.locals[dst.index()].role =
-            merge_local_roles(body.locals[dst.index()].role.clone(), role, fallback);
-    }
-}
-
-fn assign_semantic_snapshot_sources<'db>(body: &mut SemanticBody<'db>) {
-    let mut assigned = vec![false; body.locals.len()];
-    for (idx, local) in body.locals.iter_mut().enumerate() {
         local.snapshot_source = match &local.role {
             SemanticLocalRole::DirectValue {
                 provenance: ValueProvenance::RootProvider(provider),
@@ -603,26 +571,48 @@ fn assign_semantic_snapshot_sources<'db>(body: &mut SemanticBody<'db>) {
             | SemanticLocalRole::PlaceBoundValue { .. }
             | SemanticLocalRole::DirectCarrier { .. } => None,
         };
-        assigned[idx] = local.snapshot_source.is_some();
+        assigned_snapshots[idx] = local.snapshot_source.is_some();
     }
 
-    let assignments = body
-        .blocks
-        .iter()
-        .flat_map(|block| block.stmts.iter())
-        .filter_map(|stmt| match &stmt.kind {
-            SStmtKind::Assign { dst, expr } => Some((*dst, expr.clone())),
-            SStmtKind::Store { .. } => None,
-        })
-        .collect::<Vec<_>>();
-    for (dst, expr) in assignments {
-        let next = classify_expr_snapshot_source(&expr, &body.locals);
-        if assigned[dst.index()] {
-            body.locals[dst.index()].snapshot_source =
-                merge_snapshot_sources(body.locals[dst.index()].snapshot_source.clone(), next);
-        } else {
-            body.locals[dst.index()].snapshot_source = next;
-            assigned[dst.index()] = true;
+    let (blocks, locals) = (&body.blocks, &mut body.locals);
+    for block in blocks {
+        for stmt in &block.stmts {
+            let SStmtKind::Assign { dst, expr } = &stmt.kind else {
+                continue;
+            };
+            let dst_idx = dst.index();
+            let (next_role, fallback, next_snapshot, has_source) = {
+                let locals_ref: &[crate::analysis::semantic::SLocal<'db>] = locals;
+                let has_source = locals_ref[dst_idx].source.is_some();
+                let fallback = (!has_source)
+                    .then(|| fallback_local_role(db, scope, assumptions, locals_ref[dst_idx].ty));
+                let next_role = fallback.as_ref().map(|_| {
+                    classify_expr_local_role(
+                        db,
+                        scope,
+                        assumptions,
+                        locals_ref[dst_idx].ty,
+                        expr,
+                        locals_ref,
+                    )
+                });
+                let next_snapshot = classify_expr_snapshot_source(expr, locals_ref);
+                (next_role, fallback, next_snapshot, has_source)
+            };
+            if !has_source {
+                locals[dst_idx].role = merge_local_roles(
+                    locals[dst_idx].role.clone(),
+                    next_role.expect("locals without sources should compute a role"),
+                    fallback.expect("locals without sources should compute a fallback role"),
+                );
+            }
+            if assigned_snapshots[dst_idx] {
+                locals[dst_idx].snapshot_source =
+                    merge_snapshot_sources(locals[dst_idx].snapshot_source.clone(), next_snapshot);
+            } else {
+                locals[dst_idx].snapshot_source = next_snapshot;
+                assigned_snapshots[dst_idx] = true;
+            }
         }
     }
 }
