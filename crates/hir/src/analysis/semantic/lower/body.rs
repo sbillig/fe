@@ -40,7 +40,7 @@ pub fn lower_to_smir<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
     template_owner: BodyOwner<'db>,
-    typed_body: TypedBody<'db>,
+    typed_body: &'db TypedBody<'db>,
 ) -> SemanticBody<'db> {
     let Some(body) = typed_body.body() else {
         let mut locals = Vec::new();
@@ -101,7 +101,7 @@ pub(super) struct SmirLowerCtxt<'db> {
     pub(super) db: &'db dyn HirAnalysisDb,
     pub(super) instance: SemanticInstance<'db>,
     pub(super) template_owner: BodyOwner<'db>,
-    pub(super) typed_body: TypedBody<'db>,
+    pub(super) typed_body: &'db TypedBody<'db>,
     pub(super) body: Body<'db>,
     pub(super) assumptions: crate::analysis::ty::trait_resolution::PredicateListId<'db>,
     pub(super) owner_key: SemanticInstanceKey<'db>,
@@ -129,7 +129,7 @@ impl<'db> SmirLowerCtxt<'db> {
         db: &'db dyn HirAnalysisDb,
         instance: SemanticInstance<'db>,
         template_owner: BodyOwner<'db>,
-        typed_body: TypedBody<'db>,
+        typed_body: &'db TypedBody<'db>,
         body: Body<'db>,
     ) -> Self {
         let owner_key = instance.key(db);

@@ -450,7 +450,7 @@ fn lower_semantic_body<'db>(
     instance: SemanticInstance<'db>,
 ) -> SemanticBody<'db> {
     let key = instance.key(db);
-    let typed_body = key.typed_body(db).clone();
+    let typed_body = key.typed_body(db);
     let mut body = lower_to_smir(db, instance, key.owner(db), typed_body);
     assign_semantic_local_roles(db, instance, &mut body);
     assign_semantic_snapshot_sources(&mut body);
