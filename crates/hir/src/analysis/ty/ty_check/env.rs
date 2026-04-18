@@ -63,6 +63,8 @@ pub(crate) struct TyCheckEnv<'db> {
     value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
     callables: SecondaryMap<ExprId, Option<Callable<'db>>>,
     semantic_expr_lowering: SecondaryMap<ExprId, Option<SemanticExprLowering<'db>>>,
+    record_init_lowering: SecondaryMap<ExprId, Option<super::RecordInitLowering<'db>>>,
+    resolved_field_index: SecondaryMap<ExprId, Option<u16>>,
 
     deferred: Vec<DeferredTask<'db>>,
 
@@ -196,6 +198,8 @@ impl<'db> TyCheckEnv<'db> {
             value_path_refs: SecondaryMap::new(),
             callables: SecondaryMap::new(),
             semantic_expr_lowering: SecondaryMap::new(),
+            record_init_lowering: SecondaryMap::new(),
+            resolved_field_index: SecondaryMap::new(),
             deferred: Vec::new(),
             effect_env: keyed_effect_env::EffectEnv::new(),
             effect_bounds: ThinVec::new(),
@@ -521,6 +525,25 @@ impl<'db> TyCheckEnv<'db> {
             .is_some()
         {
             panic!("semantic expr lowering is already registered for the given expr")
+        }
+    }
+
+    pub(super) fn register_record_init_lowering(
+        &mut self,
+        expr: ExprId,
+        lowering: super::RecordInitLowering<'db>,
+    ) {
+        if self.record_init_lowering[expr].replace(lowering).is_some() {
+            panic!("record init lowering is already registered for the given expr")
+        }
+    }
+
+    pub(super) fn register_resolved_field_index(&mut self, expr: ExprId, field_index: u16) {
+        if self.resolved_field_index[expr]
+            .replace(field_index)
+            .is_some()
+        {
+            panic!("resolved field index is already registered for the given expr")
         }
     }
 
@@ -900,6 +923,10 @@ impl<'db> TyCheckEnv<'db> {
             .values_mut()
             .flatten()
             .for_each(|lowering| *lowering = lowering.clone().fold_with(self.db, &mut prober));
+        self.record_init_lowering
+            .values_mut()
+            .flatten()
+            .for_each(|lowering| *lowering = (*lowering).fold_with(self.db, &mut prober));
 
         self.for_loop_seq
             .values_mut()
@@ -939,6 +966,8 @@ impl<'db> TyCheckEnv<'db> {
             const_refs: self.const_refs,
             value_path_refs: self.value_path_refs,
             semantic_expr_lowering: self.semantic_expr_lowering,
+            record_init_lowering: self.record_init_lowering,
+            resolved_field_index: self.resolved_field_index,
             call_effect_args: self.call_effect_args,
             return_borrow_provider: None,
             param_bindings: self.param_bindings,

@@ -28,11 +28,11 @@ use crate::{
                 BodyOwner, EffectProviderProvenance, EffectProviderSpecialization, LocalBinding,
                 SemanticExprLowering, TypedBody,
             },
-            ty_def::TyId,
+            ty_def::{BorrowKind, CapabilityKind, TyId},
         },
     },
     hir_def::FuncParamMode,
-    hir_def::{CallableDef, Partial, scope_graph::ScopeId},
+    hir_def::{CallableDef, Expr, Partial, scope_graph::ScopeId},
     semantic::{
         EffectEnvView, EffectRequirement, EffectRequirementKey, ProviderBinding, ProviderSource,
         ResolvedEffectBinding,
@@ -40,6 +40,7 @@ use crate::{
 };
 use common::indexmap::IndexMap;
 use indexmap::IndexSet;
+use salsa::Update;
 
 use super::{
     EffectProviderSubst, GenericSubst, ImplEnv, instantiate_typed_body, semantic_callee_key,
@@ -78,6 +79,13 @@ pub struct SemanticEffectEnvInstantiationError<'db> {
     pub offending_ty: crate::analysis::ty::ty_def::TyId<'db>,
     pub param_idx: usize,
     pub args_len: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Update)]
+pub struct ReceiverLoweringPlan<'db> {
+    pub borrowed_ty: TyId<'db>,
+    pub receiver_ty: TyId<'db>,
+    pub kind: BorrowKind,
 }
 
 #[derive(Debug, Clone)]
@@ -161,6 +169,74 @@ pub fn instantiated_typed_body<'db>(
     key: SemanticInstanceKey<'db>,
 ) -> TypedBody<'db> {
     instantiate_typed_body(db, typed_body_template(db, key.owner(db)), key.subst(db))
+}
+
+#[salsa::tracked(return_ref)]
+pub fn semantic_receiver_lowering_plans<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Vec<Option<ReceiverLoweringPlan<'db>>> {
+    let typed_body = instance.key(db).typed_body(db);
+    let Some(body) = typed_body.body() else {
+        return Vec::new();
+    };
+    let assumptions = semantic_instance_assumptions(db, instance);
+    let scope = body.scope();
+    let mut plans = vec![None; body.exprs(db).len()];
+
+    for (expr, expr_data) in body.exprs(db).iter() {
+        let Partial::Present(expr_data) = expr_data else {
+            continue;
+        };
+        let Some(SemanticExprLowering::Call { callable }) = typed_body.semantic_expr_lowering(expr)
+        else {
+            continue;
+        };
+        let receiver = match expr_data {
+            Expr::MethodCall(receiver, ..)
+            | Expr::Un(receiver, ..)
+            | Expr::Bin(receiver, ..)
+            | Expr::AugAssign(receiver, ..) => Some(*receiver),
+            Expr::Call(..)
+            | Expr::Lit(..)
+            | Expr::Path(..)
+            | Expr::Tuple(..)
+            | Expr::Array(..)
+            | Expr::ArrayRep(..)
+            | Expr::RecordInit(..)
+            | Expr::Field(..)
+            | Expr::Cast(..)
+            | Expr::Assign(..)
+            | Expr::Block(..)
+            | Expr::If(..)
+            | Expr::Match(..)
+            | Expr::With(..) => None,
+        };
+        let Some(receiver) = receiver else {
+            continue;
+        };
+        let Some(borrowed_ty) = callable.arg_ty(db, 0) else {
+            continue;
+        };
+        let borrowed_ty = normalize_ty(db, borrowed_ty, scope, assumptions);
+        let receiver_ty = normalize_ty(db, typed_body.expr_ty(db, receiver), scope, assumptions);
+        if let Some((kind, _)) = borrowed_ty.as_capability(db)
+            && matches!(kind, CapabilityKind::Mut | CapabilityKind::Ref)
+            && receiver_ty.as_capability(db).is_none()
+        {
+            plans[expr.index()] = Some(ReceiverLoweringPlan {
+                borrowed_ty,
+                receiver_ty,
+                kind: match kind {
+                    CapabilityKind::Mut => BorrowKind::Mut,
+                    CapabilityKind::Ref => BorrowKind::Ref,
+                    CapabilityKind::View => unreachable!(),
+                },
+            });
+        }
+    }
+
+    plans
 }
 
 #[salsa::tracked]

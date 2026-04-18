@@ -70,11 +70,12 @@ use crate::analysis::{
         method_selection::{MethodCandidate, MethodSelectionError, select_method_candidate},
         resolve_name_res, resolve_query,
     },
+    place::resolve_place_field_index,
     ty::{
         const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
         layout_holes::callable_input_layout_bindings_by_origin,
         normalize::normalize_ty,
-        ty_check::{TyChecker, path::RecordInitChecker},
+        ty_check::{RecordInitLowering, TyChecker, path::RecordInitChecker},
         ty_def::{InvalidCause, TyId},
         ty_lower::resolve_callable_input_effect_key,
     },
@@ -3541,6 +3542,8 @@ impl<'db> TyChecker<'db> {
 
                 let record_like = RecordLike::from_ty(ty);
                 if record_like.is_record(self.db) {
+                    self.env
+                        .register_record_init_lowering(expr, RecordInitLowering::Struct);
                     self.check_record_init_fields(&record_like, expr);
                     ExprProp::new(ty, true)
                 } else {
@@ -3578,6 +3581,10 @@ impl<'db> TyChecker<'db> {
 
                 let record_like = RecordLike::from_variant(variant);
                 if record_like.is_record(self.db) {
+                    self.env.register_record_init_lowering(
+                        expr,
+                        RecordInitLowering::EnumVariant(variant),
+                    );
                     self.check_record_init_fields(&record_like, expr);
                     ExprProp::new(ty, true)
                 } else {
@@ -3686,6 +3693,11 @@ impl<'db> TyChecker<'db> {
                         self.push_diag(diag);
                         return ExprProp::invalid(self.db);
                     }
+                    if let Some(field_index) =
+                        resolve_place_field_index(self.db, lhs_place_ty, *field)
+                    {
+                        self.env.register_resolved_field_index(expr, field_index);
+                    }
                     return ExprProp::new(field_ty, typed_lhs.is_mut);
                 }
             }
@@ -3694,6 +3706,9 @@ impl<'db> TyChecker<'db> {
                 let arg_len = ty_args.len().into();
                 if ty_base.is_tuple(self.db) && i.data(self.db) < &arg_len {
                     let i: usize = i.data(self.db).try_into().unwrap();
+                    if let Ok(field_index) = u16::try_from(i) {
+                        self.env.register_resolved_field_index(expr, field_index);
+                    }
                     let ty = ty_args[i];
                     return ExprProp::new(ty, typed_lhs.is_mut);
                 }

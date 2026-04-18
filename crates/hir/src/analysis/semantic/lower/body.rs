@@ -4,13 +4,12 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     analysis::semantic::instance::{
-        SemanticInstance, SemanticInstanceKey, resolve_semantic_const_ref, semantic_binding_ty,
-        semantic_callee_key, semantic_instance_assumptions,
+        ReceiverLoweringPlan, SemanticInstance, SemanticInstanceKey, resolve_semantic_const_ref,
+        semantic_binding_ty, semantic_callee_key, semantic_instance_assumptions,
+        semantic_receiver_lowering_plans,
     },
     analysis::{
         HirAnalysisDb,
-        name_resolution::{PathRes, resolve_path},
-        place::resolve_place_field_index,
         semantic::{
             FieldIndex, Mutability, SBlock, SBlockId, SConst, SExpr, SLocal, SLocalId, SPlace,
             SStmt, SStmtKind, STerminator, STerminatorKind, SValueId, SemOrigin, SemanticBody,
@@ -22,9 +21,10 @@ use crate::{
             normalize::normalize_ty,
             ty_check::{
                 BodyOwner, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, LocalBinding,
-                PathReadSemantics, RecordLike, SemanticExprLowering, TypedBody, ValuePathRef,
+                PathReadSemantics, RecordInitLowering, RecordLike, SemanticExprLowering, TypedBody,
+                ValuePathRef,
             },
-            ty_def::{BorrowKind, CapabilityKind, TyId},
+            ty_def::{BorrowKind, TyId},
         },
     },
     hir_def::{
@@ -81,7 +81,14 @@ pub fn lower_to_smir<'db>(
         };
     };
 
-    let mut cx = SmirLowerCtxt::new(db, instance, template_owner, typed_body, body);
+    let mut cx = SmirLowerCtxt::new(
+        db,
+        instance,
+        template_owner,
+        typed_body,
+        body,
+        semantic_receiver_lowering_plans(db, instance),
+    );
     let result = cx.lower_expr(body.expr(db));
     if !cx.is_terminated(cx.current) {
         cx.set_terminator(
@@ -103,6 +110,7 @@ pub(super) struct SmirLowerCtxt<'db> {
     pub(super) template_owner: BodyOwner<'db>,
     pub(super) typed_body: &'db TypedBody<'db>,
     pub(super) body: Body<'db>,
+    pub(super) receiver_lowering_plans: &'db [Option<ReceiverLoweringPlan<'db>>],
     pub(super) assumptions: crate::analysis::ty::trait_resolution::PredicateListId<'db>,
     pub(super) owner_key: SemanticInstanceKey<'db>,
     pub(super) locals: Vec<SLocal<'db>>,
@@ -131,6 +139,7 @@ impl<'db> SmirLowerCtxt<'db> {
         template_owner: BodyOwner<'db>,
         typed_body: &'db TypedBody<'db>,
         body: Body<'db>,
+        receiver_lowering_plans: &'db [Option<ReceiverLoweringPlan<'db>>],
     ) -> Self {
         let owner_key = instance.key(db);
         let mut cx = Self {
@@ -139,6 +148,7 @@ impl<'db> SmirLowerCtxt<'db> {
             template_owner,
             typed_body,
             body,
+            receiver_lowering_plans,
             assumptions: semantic_instance_assumptions(db, instance),
             owner_key,
             locals: Vec::new(),
@@ -351,7 +361,7 @@ impl<'db> SmirLowerCtxt<'db> {
                 )
             }
             Expr::RecordInit(path, fields) => self.lower_record_init(expr, *path, fields),
-            Expr::Field(base, field) => {
+            Expr::Field(base, _) => {
                 if let Some(place) = self.typed_body.expr_place(expr) {
                     let place = self.lower_place_data(place);
                     return self.emit_expr_with_origin(
@@ -363,12 +373,9 @@ impl<'db> SmirLowerCtxt<'db> {
                 let base_expr = *base;
                 let base = self.lower_expr(base_expr);
                 let field = FieldIndex(
-                    resolve_place_field_index(
-                        self.db,
-                        self.expr_ty(base_expr),
-                        field.to_opt().expect("missing field index"),
-                    )
-                    .expect("record field should resolve"),
+                    self.typed_body
+                        .resolved_field_index(expr)
+                        .expect("field expression should have a resolved field index"),
                 );
                 self.emit_expr_with_origin(origin, self.expr_ty(expr), SExpr::Field { base, field })
             }
@@ -688,15 +695,15 @@ impl<'db> SmirLowerCtxt<'db> {
     fn lower_record_init(
         &mut self,
         expr: ExprId,
-        path: Partial<PathId<'db>>,
+        _: Partial<PathId<'db>>,
         fields: &[HirField<'db>],
     ) -> SValueId {
-        let Some(path) = path.to_opt() else {
-            panic!("record init path missing")
-        };
-        let path_res = resolve_path(self.db, path, self.body.scope(), self.assumptions, false).ok();
-        match path_res {
-            Some(PathRes::EnumVariant(variant)) => {
+        match self
+            .typed_body
+            .record_init_lowering(expr)
+            .unwrap_or_else(|| panic!("record init lowering missing for {expr:?}"))
+        {
+            RecordInitLowering::EnumVariant(variant) => {
                 let mut values = vec![None; fields.len()];
                 for field in fields {
                     let Some(label) = field.label_eagerly(self.db, self.body) else {
@@ -720,7 +727,7 @@ impl<'db> SmirLowerCtxt<'db> {
                     },
                 )
             }
-            _ => {
+            RecordInitLowering::Struct => {
                 let ty = self.expr_ty(expr);
                 let mut values = vec![None; fields.len()];
                 for field in fields {
@@ -805,7 +812,7 @@ impl<'db> SmirLowerCtxt<'db> {
     ) -> SValueId {
         let mut values = Vec::with_capacity(args.len() + usize::from(receiver.is_some()));
         if let Some(receiver) = receiver {
-            values.push(self.lower_callable_receiver(expr, receiver, &callable));
+            values.push(self.lower_callable_receiver(expr, receiver));
         }
         for arg in args {
             values.push(self.lower_expr(*arg));
@@ -838,35 +845,21 @@ impl<'db> SmirLowerCtxt<'db> {
         }
     }
 
-    fn lower_callable_receiver(
-        &mut self,
-        call_expr: ExprId,
-        receiver: ExprId,
-        callable: &crate::analysis::ty::ty_check::Callable<'db>,
-    ) -> SValueId {
-        let Some(expected_ty) = callable.arg_ty(self.db, 0) else {
-            return self.lower_expr(receiver);
-        };
-        let expected_ty = normalize_ty(self.db, expected_ty, self.body.scope(), self.assumptions);
-        let receiver_prop = self.typed_body.expr_prop(self.db, receiver);
-        let receiver_ty = normalize_ty(
-            self.db,
-            receiver_prop.ty,
-            self.body.scope(),
-            self.assumptions,
-        );
-
-        if let Some((kind, _)) = expected_ty.as_capability(self.db)
-            && matches!(kind, CapabilityKind::Mut | CapabilityKind::Ref)
-            && receiver_ty.as_capability(self.db).is_none()
+    fn lower_callable_receiver(&mut self, call_expr: ExprId, receiver: ExprId) -> SValueId {
+        if let Some(plan) = self
+            .receiver_lowering_plans
+            .get(call_expr.index())
+            .copied()
+            .flatten()
         {
+            let receiver_prop = self.typed_body.expr_prop(self.db, receiver);
             let place = if let Some(place) = self.typed_body.expr_place(receiver) {
                 self.lower_place_data(place)
             } else {
                 let value = self.lower_expr(receiver);
                 let local = self.alloc_local(
-                    receiver_ty,
-                    if matches!(kind, CapabilityKind::Mut) {
+                    plan.receiver_ty,
+                    if matches!(plan.kind, BorrowKind::Mut) {
                         Mutability::Mutable
                     } else {
                         Mutability::Immutable
@@ -887,14 +880,10 @@ impl<'db> SmirLowerCtxt<'db> {
             };
             return self.emit_expr_with_origin(
                 SemOrigin::Expr(call_expr),
-                expected_ty,
+                plan.borrowed_ty,
                 SExpr::Borrow {
                     place,
-                    kind: match kind {
-                        CapabilityKind::Mut => BorrowKind::Mut,
-                        CapabilityKind::Ref => BorrowKind::Ref,
-                        CapabilityKind::View => unreachable!(),
-                    },
+                    kind: plan.kind,
                     provider: receiver_prop.borrow_provider,
                 },
             );

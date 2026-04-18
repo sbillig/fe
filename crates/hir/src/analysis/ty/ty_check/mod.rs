@@ -236,6 +236,8 @@ fn typed_body_for_bodyless_func<'db>(
         const_refs: SecondaryMap::new(),
         value_path_refs: SecondaryMap::new(),
         semantic_expr_lowering: SecondaryMap::new(),
+        record_init_lowering: SecondaryMap::new(),
+        resolved_field_index: SecondaryMap::new(),
         call_effect_args: SecondaryMap::new(),
         return_borrow_provider: None,
         param_bindings,
@@ -2324,6 +2326,8 @@ pub struct TypedBody<'db> {
     const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
     value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
     semantic_expr_lowering: SecondaryMap<ExprId, Option<SemanticExprLowering<'db>>>,
+    record_init_lowering: SecondaryMap<ExprId, Option<RecordInitLowering<'db>>>,
+    resolved_field_index: SecondaryMap<ExprId, Option<u16>>,
     call_effect_args: SecondaryMap<ExprId, Option<Vec<ResolvedEffectArg<'db>>>>,
     return_borrow_provider: Option<ProviderAddressSpace>,
     /// Bindings for function parameters (indexed by param position)
@@ -2384,6 +2388,12 @@ pub enum SemanticExprLowering<'db> {
         callable: Callable<'db>,
         kind: ConstIntrinsicKind,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum RecordInitLowering<'db> {
+    Struct,
+    EnumVariant(ResolvedVariant<'db>),
 }
 
 impl<'db> TyVisitable<'db> for ValuePathRef<'db> {
@@ -2452,6 +2462,32 @@ impl<'db> TyFoldable<'db> for SemanticExprLowering<'db> {
     }
 }
 
+impl<'db> TyVisitable<'db> for RecordInitLowering<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: crate::analysis::ty::visitor::TyVisitor<'db> + ?Sized,
+    {
+        if let Self::EnumVariant(variant) = self {
+            variant.ty.visit_with(visitor);
+        }
+    }
+}
+
+impl<'db> TyFoldable<'db> for RecordInitLowering<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: crate::analysis::ty::fold::TyFolder<'db>,
+    {
+        match self {
+            Self::Struct => Self::Struct,
+            Self::EnumVariant(variant) => Self::EnumVariant(ResolvedVariant {
+                ty: variant.ty.fold_with(db, folder),
+                ..variant
+            }),
+        }
+    }
+}
+
 impl<'db> TyVisitable<'db> for TypedBody<'db> {
     fn visit_with<V>(&self, visitor: &mut V)
     where
@@ -2472,6 +2508,9 @@ impl<'db> TyVisitable<'db> for TypedBody<'db> {
             value_path.visit_with(visitor);
         }
         for lowering in self.semantic_expr_lowering.values().flatten() {
+            lowering.visit_with(visitor);
+        }
+        for lowering in self.record_init_lowering.values().flatten() {
             lowering.visit_with(visitor);
         }
         for place in self.expr_places.values() {
@@ -2512,6 +2551,10 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             .values_mut()
             .flatten()
             .for_each(|lowering| *lowering = lowering.clone().fold_with(db, folder));
+        this.record_init_lowering
+            .values_mut()
+            .flatten()
+            .for_each(|lowering| *lowering = (*lowering).fold_with(db, folder));
         for args in this.call_effect_args.values_mut().flatten() {
             for arg in args {
                 *arg = arg.clone().fold_with(db, folder);
@@ -2597,6 +2640,14 @@ impl<'db> TypedBody<'db> {
 
     pub fn semantic_expr_lowering(&self, expr: ExprId) -> Option<&SemanticExprLowering<'db>> {
         self.semantic_expr_lowering[expr].as_ref()
+    }
+
+    pub fn record_init_lowering(&self, expr: ExprId) -> Option<RecordInitLowering<'db>> {
+        self.record_init_lowering[expr]
+    }
+
+    pub fn resolved_field_index(&self, expr: ExprId) -> Option<u16> {
+        self.resolved_field_index[expr]
     }
 
     // Final typed pattern/binding view. This can intentionally differ from
@@ -3570,6 +3621,8 @@ impl<'db> TypedBody<'db> {
             const_refs: SecondaryMap::new(),
             value_path_refs: SecondaryMap::new(),
             semantic_expr_lowering: SecondaryMap::new(),
+            record_init_lowering: SecondaryMap::new(),
+            resolved_field_index: SecondaryMap::new(),
             call_effect_args: SecondaryMap::new(),
             return_borrow_provider: None,
             param_bindings: Vec::new(),
