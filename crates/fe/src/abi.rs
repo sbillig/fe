@@ -190,9 +190,7 @@ fn recv_arm_to_abi_entry(
     let arm = arm_view
         .arm(db)
         .ok_or_else(|| "missing recv arm during ABI generation".to_string())?;
-    let abi_info = arm_view.abi_info(db, sol_ty);
-
-    if abi_info.is_fallback {
+    if arm_view.is_fallback(db) {
         return Ok(RecvArmAbiEmission::Emit(AbiEntry {
             entry_type: "fallback".to_string(),
             name: None,
@@ -224,6 +222,7 @@ fn recv_arm_to_abi_entry(
             "skipping recv arm `{variant_name}`: ABI shape is not compiler-known for manual `MsgVariant` impls; only `msg`-generated variants are emitted"
         )));
     }
+    let abi_info = arm_view.abi_info(db, sol_ty);
     let Some(selector_signature) = abi_info.selector_signature.as_deref() else {
         return Ok(RecvArmAbiEmission::Skip(format!(
             "skipping recv arm `{variant_name}`: selector signature is unknown; \
@@ -1494,9 +1493,9 @@ pub contract Foo {
     #[test]
     fn manual_module_msg_variants_are_skipped_with_warning() {
         let code = r#"
-use std::abi::sol
-
 mod TokenMsg {
+    use std::abi::sol
+
     pub struct Transfer {
         pub to: u64,
         pub amount: u64,
