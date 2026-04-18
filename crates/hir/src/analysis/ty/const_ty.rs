@@ -1249,6 +1249,17 @@ pub(crate) fn validate_unevaluated_const_ty<'db>(
         return Err(InvalidCause::ConstTyMismatch { expected, given });
     }
 
+    if !diags.is_empty() {
+        if let Some(cause) = typed_body
+            .body()
+            .and_then(|body| typed_body.expr_ty(db, body.expr(db)).invalid_cause(db))
+            .or_else(|| typed_body.result_ty().invalid_cause(db))
+        {
+            return Err(cause);
+        }
+        return Err(InvalidCause::InvalidConstTyExpr { body: *body });
+    }
+
     if const_def.is_some()
         && eval_body_owner_const(
             db,
@@ -1261,17 +1272,6 @@ pub(crate) fn validate_unevaluated_const_ty<'db>(
         .is_err()
     {
         return Err(InvalidCause::Other);
-    }
-
-    if !diags.is_empty() {
-        if let Some(cause) = typed_body
-            .body()
-            .and_then(|body| typed_body.expr_ty(db, body.expr(db)).invalid_cause(db))
-            .or_else(|| typed_body.result_ty().invalid_cause(db))
-        {
-            return Err(cause);
-        }
-        return Err(InvalidCause::InvalidConstTyExpr { body: *body });
     }
 
     check_const_ty(

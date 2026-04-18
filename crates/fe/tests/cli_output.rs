@@ -179,6 +179,34 @@ fn run_fe_main_in_dir(args: &[&str], cwd: &Path) -> (String, i32) {
     (out.combined(), out.exit_code)
 }
 
+#[test]
+fn test_cli_check_invalid_named_const_used_in_type_position_reports_error_instead_of_panicking() {
+    let temp = tempdir().expect("tempdir");
+    let file = temp.path().join("invalid_const_ty_use.fe");
+    fs::write(
+        &file,
+        r#"
+const N: usize = nope()
+
+fn f() {
+    let _x: [u8; N] = [0; 1]
+}
+"#,
+    )
+    .expect("write fixture");
+
+    let (output, exit_code) = run_fe_check(file.to_str().expect("fixture path utf8"));
+    assert_eq!(exit_code, 1, "expected check failure:\n{output}");
+    assert!(
+        output.contains("undefined variable `nope`"),
+        "expected undefined variable diagnostic instead of panic:\n{output}"
+    );
+    assert!(
+        !output.contains("semantic lowering missing for call-like expression"),
+        "unexpected semantic lowering panic:\n{output}"
+    );
+}
+
 fn run_fe_main_in_dir_with_env(
     args: &[&str],
     cwd: &Path,
