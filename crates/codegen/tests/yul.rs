@@ -320,6 +320,46 @@ fn effect_handle_field_deref_loads_provider_words_before_storage_access() {
 }
 
 #[test]
+fn nested_object_ref_fields_are_followed_before_payload_projection_in_yul() {
+    let yul = emit_inline_yul(
+        "file:///nested_object_ref_fields_are_followed_before_payload_projection_in_yul.fe",
+        r#"
+struct Slot {
+    value: u256,
+}
+
+struct Reader {
+    source: ref Slot,
+    bias: u256,
+}
+
+fn sum_reader_once(_ r: ref Reader) -> u256 {
+    r.source.value + r.bias
+}
+
+fn call() -> u256 {
+    let slot = Slot { value: 7 }
+    let reader = Reader {
+        source: ref slot,
+        bias: 3,
+    }
+    sum_reader_once(ref reader)
+}
+"#,
+    );
+    let body = yul_function_body(&yul, "sum_reader_once");
+
+    assert!(
+        body.contains("mload(p0)"),
+        "nested object ref lowering should load the intermediate handle word from the outer object:\n{body}"
+    );
+    assert!(
+        body.contains("mload(t"),
+        "nested object ref lowering should follow the intermediate handle before reading its payload:\n{body}"
+    );
+}
+
+#[test]
 fn sol_decoder_keeps_byte_input_fields_aggregate_backed_in_yul() {
     let yul = emit_fixture_yul("effect_handle_field_deref.fe");
     let body = yul_function_body(&yul, "read_word_0");

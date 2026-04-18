@@ -749,13 +749,14 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                     })?;
                     let offset = self.field_offset_bytes(current_layout, *field);
                     addr = self.project_addr(space, addr, offset);
-                    if remaining_path && self.place_elem_requires_transport_deref(runtime_class) {
-                        let temp = self.state.alloc_temp();
-                        setup.extend(self.read_transport_word_from_addr(space, addr, &temp)?);
-                        addr = temp;
-                        space = Self::root_space_for_class(class)?;
-                    }
-                    layout = self.class_layout(class).ok();
+                    (addr, space, layout) = self.follow_intermediate_handle_if_needed(
+                        remaining_path,
+                        runtime_class,
+                        class,
+                        &mut setup,
+                        addr,
+                        space,
+                    )?;
                 }
                 YulPlaceElem::Index {
                     index,
@@ -774,13 +775,14 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                     };
                     addr =
                         self.project_addr_expr(space, addr, format!("mul({index_expr}, {stride})"));
-                    if remaining_path && self.place_elem_requires_transport_deref(runtime_class) {
-                        let temp = self.state.alloc_temp();
-                        setup.extend(self.read_transport_word_from_addr(space, addr, &temp)?);
-                        addr = temp;
-                        space = Self::root_space_for_class(class)?;
-                    }
-                    layout = self.class_layout(class).ok();
+                    (addr, space, layout) = self.follow_intermediate_handle_if_needed(
+                        remaining_path,
+                        runtime_class,
+                        class,
+                        &mut setup,
+                        addr,
+                        space,
+                    )?;
                 }
                 YulPlaceElem::VariantField {
                     variant,
@@ -793,13 +795,14 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                     })?;
                     let offset = self.variant_field_offset_bytes(current_layout, *variant, *field);
                     addr = self.project_addr(space, addr, offset);
-                    if remaining_path && self.place_elem_requires_transport_deref(runtime_class) {
-                        let temp = self.state.alloc_temp();
-                        setup.extend(self.read_transport_word_from_addr(space, addr, &temp)?);
-                        addr = temp;
-                        space = Self::root_space_for_class(class)?;
-                    }
-                    layout = self.class_layout(class).ok();
+                    (addr, space, layout) = self.follow_intermediate_handle_if_needed(
+                        remaining_path,
+                        runtime_class,
+                        class,
+                        &mut setup,
+                        addr,
+                        space,
+                    )?;
                 }
             }
         }
@@ -807,21 +810,35 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         Ok((setup, addr, space))
     }
 
-    fn place_elem_requires_transport_deref(&self, class: &RuntimeClass<'db>) -> bool {
-        matches!(
-            class,
-            RuntimeClass::Ref {
-                kind: RefKind::Provider { .. },
-                pointee,
-                ..
-            } if pointee.aggregate_layout().is_some()
-        ) || matches!(
-            class,
-            RuntimeClass::RawAddr {
-                target: Some(_),
-                ..
-            }
-        )
+    fn follow_intermediate_handle_if_needed(
+        &mut self,
+        remaining_path: bool,
+        runtime_class: &RuntimeClass<'db>,
+        class: &YulValueClass<'db>,
+        setup: &mut Vec<YulDoc>,
+        addr: String,
+        space: YulAddressSpace,
+    ) -> Result<(String, YulAddressSpace, Option<mir2::LayoutId<'db>>), YulError> {
+        let (addr, space) =
+            if remaining_path && self.place_elem_requires_handle_follow(runtime_class) {
+                let temp = self.state.alloc_temp();
+                setup.extend(self.read_transport_word_from_addr(space, addr, &temp)?);
+                (temp, Self::root_space_for_class(class)?)
+            } else {
+                (addr, space)
+            };
+        Ok((addr, space, self.class_layout(class).ok()))
+    }
+
+    fn place_elem_requires_handle_follow(&self, class: &RuntimeClass<'db>) -> bool {
+        matches!(class, RuntimeClass::Ref { .. })
+            || matches!(
+                class,
+                RuntimeClass::RawAddr {
+                    target: Some(_),
+                    ..
+                }
+            )
     }
 
     fn project_addr(&self, space: YulAddressSpace, base: String, offset: usize) -> String {
