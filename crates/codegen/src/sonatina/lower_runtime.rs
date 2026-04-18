@@ -2769,6 +2769,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 ),
                 class,
             },
+            CopySource::Ptr { addr, space, class } => CopySource::Value {
+                value: self.load_aggregate_from_ptr(addr, space, src_layout)?,
+                class,
+            },
             source => source,
         };
 
@@ -2781,13 +2785,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 EnumGetTag::new(self.module.inst_set(), *value),
                 self.module.enum_tag_ty(src_layout)?,
             ),
-            CopySource::Ptr { .. } => {
-                return Err(LowerError::Unsupported(
-                    "copying enum aggregates from non-memory providers is not supported yet"
-                        .to_string(),
-                ));
-            }
             CopySource::Const { .. } => unreachable!("const enum sources are normalized to values"),
+            CopySource::Ptr { .. } => unreachable!("ptr enum sources are normalized to values"),
         };
 
         let entry = self
@@ -2894,12 +2893,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 None
             }
             CopySource::Const { .. } => unreachable!("const enum sources are normalized to values"),
-            CopySource::Ptr { .. } => {
-                return Err(LowerError::Unsupported(
-                    "copying enum aggregates from non-memory providers is not supported yet"
-                        .to_string(),
-                ));
-            }
+            CopySource::Ptr { .. } => unreachable!("ptr enum sources are normalized to values"),
         };
 
         for (idx, (src_field, dst_field)) in src_fields.iter().zip(dst_fields.iter()).enumerate() {
@@ -3097,11 +3091,84 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     }
                     Ok(())
                 }
-                Layout::Enum(_) => Err(LowerError::Unsupported(
-                    "non-memory aggregate enum providers are not supported yet".to_string(),
-                )),
+                Layout::Enum(data) => self.copy_enum_to_ptr(addr, space, *layout, &data, src),
             },
         }
+    }
+
+    fn copy_enum_to_ptr(
+        &mut self,
+        addr: ValueId,
+        space: AddressSpaceKind,
+        layout: LayoutId<'db>,
+        data: &mir2::runtime::EnumLayout<'db>,
+        src: ValueId,
+    ) -> Result<(), LowerError> {
+        let tag = self.fb.insert_inst(
+            EnumTag::new(self.module.inst_set(), src),
+            self.module.enum_tag_ty(layout)?,
+        );
+        let done = self.fb.append_block();
+        let invalid = self.fb.append_block();
+        let mut cases = Vec::with_capacity(data.variants.len());
+        let mut blocks = Vec::with_capacity(data.variants.len());
+        for (idx, _) in data.variants.iter().enumerate() {
+            let block = self.fb.append_block();
+            cases.push((
+                self.fb
+                    .make_imm_value(self.module.enum_tag_immediate(layout, idx as u16)?),
+                block,
+            ));
+            blocks.push(block);
+        }
+        self.fb.insert_inst_no_result(BrTable::new(
+            self.module.inst_set(),
+            tag,
+            Some(invalid),
+            cases,
+        ));
+
+        for (idx, block) in blocks.into_iter().enumerate() {
+            self.fb.switch_to_block(block);
+            let variant = VariantId {
+                enum_layout: layout,
+                index: idx as u16,
+            };
+            let tag_word = self.index_value(idx as u64);
+            self.store_to_ptr(
+                addr,
+                space,
+                &RuntimeClass::Scalar(data.tag.clone()),
+                tag_word,
+            )?;
+            for (field_idx, field) in data.variants[idx].fields.iter().enumerate() {
+                let field_idx_value = self.index_value(field_idx as u64);
+                let field_value = self.fb.insert_inst(
+                    EnumExtract::new(
+                        self.module.inst_set(),
+                        src,
+                        self.variant_ref(variant)?,
+                        field_idx_value,
+                    ),
+                    self.module.ty_for_class(field)?,
+                );
+                let field_addr = self.offset_address(
+                    addr,
+                    variant_field_offset(self.module.db, variant, FieldIndex(field_idx as u16))?,
+                    space,
+                )?;
+                self.copy_to_ptr(field_addr, space, field, field_value)?;
+            }
+            self.fb
+                .insert_inst_no_result(Jump::new(self.module.inst_set(), done));
+        }
+
+        self.fb.switch_to_block(invalid);
+        self.fb
+            .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
+
+        self.fb.switch_to_block(done);
+        Ok(())
     }
 
     fn load_from_ptr(
@@ -3206,10 +3273,80 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 }
                 Ok(value)
             }
-            Layout::Enum(_) => Err(LowerError::Unsupported(
-                "aggregate enum loads from non-memory providers are not supported".to_string(),
-            )),
+            Layout::Enum(data) => self.load_enum_from_ptr(addr, space, layout, &data),
         }
+    }
+
+    fn load_enum_from_ptr(
+        &mut self,
+        addr: ValueId,
+        space: AddressSpaceKind,
+        layout: LayoutId<'db>,
+        data: &mir2::runtime::EnumLayout<'db>,
+    ) -> Result<ValueId, LowerError> {
+        let layout_ty = self.module.ty_for_layout(layout)?;
+        let object = self.fb.insert_inst(
+            ObjAlloc::new(self.module.inst_set(), layout_ty),
+            self.fb.module_builder.objref_type(layout_ty),
+        );
+        let tag = self.load_word(addr, space)?;
+        let done = self.fb.append_block();
+        let invalid = self.fb.append_block();
+        let mut cases = Vec::with_capacity(data.variants.len());
+        let mut blocks = Vec::with_capacity(data.variants.len());
+        for (idx, _) in data.variants.iter().enumerate() {
+            let block = self.fb.append_block();
+            cases.push((self.index_value(idx as u64), block));
+            blocks.push(block);
+        }
+        self.fb.insert_inst_no_result(BrTable::new(
+            self.module.inst_set(),
+            tag,
+            Some(invalid),
+            cases,
+        ));
+
+        for (idx, block) in blocks.into_iter().enumerate() {
+            self.fb.switch_to_block(block);
+            let variant = VariantId {
+                enum_layout: layout,
+                index: idx as u16,
+            };
+            let values = data.variants[idx]
+                .fields
+                .iter()
+                .enumerate()
+                .map(|(field_idx, field)| {
+                    let field_addr = self.offset_address(
+                        addr,
+                        variant_field_offset(
+                            self.module.db,
+                            variant,
+                            FieldIndex(field_idx as u16),
+                        )?,
+                        space,
+                    )?;
+                    self.load_from_ptr(field_addr, space, field)
+                })
+                .collect::<Result<SmallVec<[ValueId; 2]>, _>>()?;
+            self.fb.insert_inst_no_result(EnumWriteVariant::new(
+                self.module.inst_set(),
+                object,
+                self.variant_ref(variant)?,
+                values,
+            ));
+            self.fb
+                .insert_inst_no_result(Jump::new(self.module.inst_set(), done));
+        }
+
+        self.fb.switch_to_block(invalid);
+        self.fb
+            .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
+
+        self.fb.switch_to_block(done);
+        Ok(self
+            .fb
+            .insert_inst(ObjLoad::new(self.module.inst_set(), object), layout_ty))
     }
 
     fn load_word(&mut self, addr: ValueId, space: AddressSpaceKind) -> Result<ValueId, LowerError> {
