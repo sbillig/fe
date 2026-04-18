@@ -609,6 +609,23 @@ impl<'db> YTransportInfo<'db> {
             .collect();
         Self { root_alias, leaves }
     }
+
+    fn actualize_bytes_copy_to_memory(&self) -> Self {
+        let remap = |space| match space {
+            YulAddressSpace::Memory | YulAddressSpace::Code | YulAddressSpace::Calldata => {
+                YulAddressSpace::Memory
+            }
+            YulAddressSpace::Storage | YulAddressSpace::Transient => space,
+        };
+        Self {
+            root_alias: self.root_alias.map(remap),
+            leaves: self
+                .leaves
+                .iter()
+                .map(|(path, space)| (path.clone(), remap(*space)))
+                .collect(),
+        }
+    }
 }
 
 fn yul_space_suffix(space: YulAddressSpace) -> &'static str {
@@ -1180,8 +1197,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                 )? {
                     continue;
                 }
-                let legalized = self.legalize_runtime_stmt(&body, &mut local_values, stmt)?;
-                stmts.push(legalized);
+                stmts.push(self.legalize_runtime_stmt(&body, &mut local_values, stmt)?);
             }
             self.flush_all_pending_aggregates(
                 &mut pending_const_objects,
@@ -1535,6 +1551,12 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                     self.flush_pending_aggregate(pending, idx, local_values, stmts);
                     return Ok(false);
                 };
+                let src_transport = match dst_place.storage_kind {
+                    YulStorageKind::Bytes => local_values[src.as_u32() as usize]
+                        .transport
+                        .actualize_bytes_copy_to_memory(),
+                    YulStorageKind::Cell => local_values[src.as_u32() as usize].transport.clone(),
+                };
                 pending[idx].fallback_stmts.push(fallback);
                 pending[idx].transport.overlay_transport(
                     transport_path
@@ -1542,7 +1564,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                         .cloned()
                         .collect::<Vec<_>>()
                         .as_slice(),
-                    &local_values[src.as_u32() as usize].transport,
+                    &src_transport,
                 );
                 pending[idx].value_writes.insert(const_path.clone(), *src);
                 if let Some(node) = local_values[src.as_u32() as usize].const_value.clone() {
@@ -1570,6 +1592,12 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                     self.flush_pending_aggregate(pending, idx, local_values, stmts);
                     return Ok(false);
                 };
+                let src_transport = match dst_place.storage_kind {
+                    YulStorageKind::Bytes => local_values[src.as_u32() as usize]
+                        .transport
+                        .actualize_bytes_copy_to_memory(),
+                    YulStorageKind::Cell => local_values[src.as_u32() as usize].transport.clone(),
+                };
                 pending[idx].fallback_stmts.push(fallback);
                 pending[idx].transport.overlay_transport(
                     transport_path
@@ -1577,7 +1605,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                         .cloned()
                         .collect::<Vec<_>>()
                         .as_slice(),
-                    &local_values[src.as_u32() as usize].transport,
+                    &src_transport,
                 );
                 pending[idx].value_writes.insert(const_path.clone(), *src);
                 if let Some(node) = local_values[src.as_u32() as usize].const_value.clone() {

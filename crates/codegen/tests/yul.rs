@@ -231,6 +231,55 @@ fn unwrap_some() -> u256 {
 }
 
 #[test]
+fn materialized_fixed_array_init_args_do_not_keep_code_transport_in_yul() {
+    let yul = emit_inline_yul(
+        "file:///materialized_fixed_array_init_args_do_not_keep_code_transport_in_yul.fe",
+        r#"
+use std::evm::effects::assert
+
+msg ContractMsg {
+    #[selector = 0x01]
+    Sum -> u256,
+}
+
+struct Store {
+    sum: u256,
+}
+
+pub contract C {
+    mut store: Store
+
+    init(values: [u256; 4]) uses (mut store) {
+        store.sum = values[0] + values[1] + values[2] + values[3]
+    }
+
+    recv ContractMsg {
+        Sum -> u256 uses (store) {
+            store.sum
+        }
+    }
+}
+
+#[test]
+fn test_contract_init_fixed_array_arg() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: ([1, 2, 3, 4],), salt: 0)
+    let sum: u256 = evm.call(addr: c, gas: 100000, value: 0, message: ContractMsg::Sum {})
+    assert(sum == 10)
+}
+"#,
+    );
+
+    assert!(
+        !yul.contains("function $create2_arg2_f0_code("),
+        "fixed array init args copied into memory must not keep stale code transport on create2 specialization:\n{yul}"
+    );
+    assert!(
+        !yul.contains("function $encode_payload_2_arg0_root_code("),
+        "fixed array payload encoding after memory materialization must not keep stale code-root helpers:\n{yul}"
+    );
+}
+
+#[test]
 fn single_field_wrapper_ctors_return_words_in_yul() {
     let yul = emit_inline_yul(
         "file:///single_field_wrapper_ctors_return_words_in_yul.fe",
