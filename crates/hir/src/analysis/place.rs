@@ -59,27 +59,12 @@ impl<'db> Place<'db> {
         self.projections.push(proj);
     }
 
-    pub fn is_definitely_place_expr(
-        db: &'db dyn HirAnalysisDb,
-        typed_body: &TypedBody<'db>,
-        expr: ExprId,
-    ) -> bool {
-        Self::from_expr(db, typed_body, expr).is_some()
+    pub fn is_definitely_place_expr(typed_body: &TypedBody<'db>, expr: ExprId) -> bool {
+        typed_body.expr_place(expr).is_some()
     }
 
-    pub fn from_expr(
-        db: &'db dyn HirAnalysisDb,
-        typed_body: &TypedBody<'db>,
-        expr: ExprId,
-    ) -> Option<Self> {
-        let body = typed_body.body()?;
-        Self::from_expr_in_body(
-            db,
-            body,
-            expr,
-            |expr| typed_body.expr_binding(expr),
-            |expr| typed_body.expr_ty(db, expr),
-        )
+    pub fn from_expr(typed_body: &TypedBody<'db>, expr: ExprId) -> Option<Self> {
+        typed_body.expr_place(expr).cloned()
     }
 
     pub fn from_expr_in_body<F, G>(

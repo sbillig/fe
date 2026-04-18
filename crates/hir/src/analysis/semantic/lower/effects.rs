@@ -33,9 +33,7 @@ impl<'db> SmirLowerCtxt<'db> {
             .map(|arg| SEffectArg {
                 binding_idx: arg.binding_idx,
                 arg: match &arg.arg {
-                    EffectArg::Place(place) => {
-                        SEffectArgValue::Place(self.lower_place_data(place.clone()))
-                    }
+                    EffectArg::Place(place) => SEffectArgValue::Place(self.lower_place_data(place)),
                     EffectArg::Value(expr) => SEffectArgValue::Value(
                         self.with_binding_values
                             .get(expr)
@@ -96,9 +94,7 @@ impl<'db> SmirLowerCtxt<'db> {
             .map(|arg| SEffectArg {
                 binding_idx: arg.binding_idx,
                 arg: match &arg.arg {
-                    EffectArg::Place(place) => {
-                        SEffectArgValue::Place(self.lower_place_data(place.clone()))
-                    }
+                    EffectArg::Place(place) => SEffectArgValue::Place(self.lower_place_data(place)),
                     EffectArg::Value(expr) => SEffectArgValue::Value(
                         self.with_binding_values
                             .get(expr)

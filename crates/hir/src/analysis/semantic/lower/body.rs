@@ -352,8 +352,8 @@ impl<'db> SmirLowerCtxt<'db> {
             }
             Expr::RecordInit(path, fields) => self.lower_record_init(expr, *path, fields),
             Expr::Field(base, field) => {
-                if self.typed_body.expr_place(self.db, expr).is_some() {
-                    let place = self.lower_place(expr);
+                if let Some(place) = self.typed_body.expr_place(expr) {
+                    let place = self.lower_place_data(place);
                     return self.emit_expr_with_origin(
                         origin,
                         self.expr_ty(expr),
@@ -373,8 +373,8 @@ impl<'db> SmirLowerCtxt<'db> {
                 self.emit_expr_with_origin(origin, self.expr_ty(expr), SExpr::Field { base, field })
             }
             Expr::Bin(base, index, BinOp::Index) => {
-                if self.typed_body.expr_place(self.db, expr).is_some() {
-                    let place = self.lower_place(expr);
+                if let Some(place) = self.typed_body.expr_place(expr) {
+                    let place = self.lower_place_data(place);
                     return self.emit_expr_with_origin(
                         origin,
                         self.expr_ty(expr),
@@ -860,8 +860,8 @@ impl<'db> SmirLowerCtxt<'db> {
             && matches!(kind, CapabilityKind::Mut | CapabilityKind::Ref)
             && receiver_ty.as_capability(self.db).is_none()
         {
-            let place = if self.typed_body.expr_place(self.db, receiver).is_some() {
-                self.lower_place(receiver)
+            let place = if let Some(place) = self.typed_body.expr_place(receiver) {
+                self.lower_place_data(place)
             } else {
                 let value = self.lower_expr(receiver);
                 let local = self.alloc_local(

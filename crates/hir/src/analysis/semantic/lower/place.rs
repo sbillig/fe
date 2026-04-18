@@ -17,12 +17,12 @@ impl<'db> SmirLowerCtxt<'db> {
     pub(super) fn lower_place(&mut self, expr: ExprId) -> SPlace {
         let place = self
             .typed_body
-            .expr_place(self.db, expr)
+            .expr_place(expr)
             .unwrap_or_else(|| panic!("expected place expression: {expr:?}"));
         self.lower_place_data(place)
     }
 
-    pub(super) fn lower_place_data(&mut self, place: Place<'db>) -> SPlace {
+    pub(super) fn lower_place_data(&mut self, place: &Place<'db>) -> SPlace {
         let PlaceBase::Binding(binding) = place.base;
         let local = *self
             .binding_locals
@@ -30,8 +30,8 @@ impl<'db> SmirLowerCtxt<'db> {
             .expect("binding local should be allocated");
         let mut path = Vec::with_capacity(place.projections.len());
 
-        for projection in place.projections {
-            match projection {
+        for projection in &place.projections {
+            match *projection {
                 PlaceProjection::Field { index, .. } => {
                     path.push(SPlaceElem::Field(FieldIndex(index)));
                 }

@@ -10,6 +10,7 @@ use crate::{
 use crate::hir_def::CallableDef;
 use crate::hir_def::params::FuncParamMode;
 use common::indexmap::IndexMap;
+use cranelift_entity::{PrimaryMap, SecondaryMap};
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
 use thin_vec::ThinVec;
@@ -55,13 +56,13 @@ pub(crate) struct TyCheckEnv<'db> {
     owner_scope: ScopeId<'db>,
     body: Body<'db>,
 
-    pat_ty: FxHashMap<PatId, TyId<'db>>,
-    expr_ty: FxHashMap<ExprId, ExprProp<'db>>,
+    pat_ty: SecondaryMap<PatId, Option<TyId<'db>>>,
+    expr_ty: SecondaryMap<ExprId, Option<ExprProp<'db>>>,
     implicit_moves: FxHashSet<ExprId>,
-    const_refs: FxHashMap<ExprId, ConstRef<'db>>,
-    value_path_refs: FxHashMap<ExprId, ValuePathRef<'db>>,
-    callables: FxHashMap<ExprId, Callable<'db>>,
-    semantic_expr_lowering: FxHashMap<ExprId, SemanticExprLowering<'db>>,
+    const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
+    value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
+    callables: SecondaryMap<ExprId, Option<Callable<'db>>>,
+    semantic_expr_lowering: SecondaryMap<ExprId, Option<SemanticExprLowering<'db>>>,
 
     deferred: Vec<DeferredTask<'db>>,
 
@@ -77,18 +78,18 @@ pub(crate) struct TyCheckEnv<'db> {
     /// Param bindings for transfer to TypedBody
     param_bindings: Vec<LocalBinding<'db>>,
     /// Pat bindings for transfer to TypedBody
-    pat_bindings: FxHashMap<PatId, LocalBinding<'db>>,
-    local_borrow_providers: FxHashMap<PatId, ProviderAddressSpace>,
+    pat_bindings: SecondaryMap<PatId, Option<LocalBinding<'db>>>,
+    local_borrow_providers: SecondaryMap<PatId, Option<ProviderAddressSpace>>,
     /// Binding capture mode for local variables (keyed by the pattern that introduces them)
-    pat_binding_modes: FxHashMap<PatId, PatBindingMode>,
+    pat_binding_modes: SecondaryMap<PatId, Option<PatBindingMode>>,
     pattern_store: PatternStore<'db>,
-    pattern_status: FxHashMap<PatId, PatternAnalysisStatus>,
+    pattern_status: SecondaryMap<PatId, PatternAnalysisStatus>,
 
     /// Resolved effect arguments at call sites, keyed by the call expression.
-    call_effect_args: FxHashMap<ExprId, Vec<super::ResolvedEffectArg<'db>>>,
+    call_effect_args: SecondaryMap<ExprId, Option<Vec<super::ResolvedEffectArg<'db>>>>,
 
     /// Resolved Seq trait methods for for-loops, keyed by the for statement.
-    for_loop_seq: FxHashMap<StmtId, ForLoopSeq<'db>>,
+    for_loop_seq: SecondaryMap<StmtId, Option<ForLoopSeq<'db>>>,
 }
 
 impl<'db> TyCheckEnv<'db> {
@@ -188,13 +189,13 @@ impl<'db> TyCheckEnv<'db> {
             owner,
             owner_scope,
             body,
-            pat_ty: FxHashMap::default(),
-            expr_ty: FxHashMap::default(),
+            pat_ty: SecondaryMap::new(),
+            expr_ty: SecondaryMap::new(),
             implicit_moves: FxHashSet::default(),
-            const_refs: FxHashMap::default(),
-            value_path_refs: FxHashMap::default(),
-            callables: FxHashMap::default(),
-            semantic_expr_lowering: FxHashMap::default(),
+            const_refs: SecondaryMap::new(),
+            value_path_refs: SecondaryMap::new(),
+            callables: SecondaryMap::new(),
+            semantic_expr_lowering: SecondaryMap::new(),
             deferred: Vec::new(),
             effect_env: keyed_effect_env::EffectEnv::new(),
             effect_bounds: ThinVec::new(),
@@ -205,13 +206,13 @@ impl<'db> TyCheckEnv<'db> {
             loop_stack: Vec::new(),
             expr_stack: Vec::new(),
             param_bindings: Vec::new(),
-            pat_bindings: FxHashMap::default(),
-            local_borrow_providers: FxHashMap::default(),
-            pat_binding_modes: FxHashMap::default(),
+            pat_bindings: SecondaryMap::new(),
+            local_borrow_providers: SecondaryMap::new(),
+            pat_binding_modes: SecondaryMap::new(),
             pattern_store: PatternStore::default(),
-            pattern_status: FxHashMap::default(),
-            call_effect_args: FxHashMap::default(),
-            for_loop_seq: FxHashMap::default(),
+            pattern_status: SecondaryMap::with_default(PatternAnalysisStatus::Invalid),
+            call_effect_args: SecondaryMap::new(),
+            for_loop_seq: SecondaryMap::new(),
         };
 
         env.enter_scope(body.expr(db));
@@ -464,7 +465,7 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     pub(super) fn typed_expr(&self, expr: ExprId) -> Option<ExprProp<'db>> {
-        self.expr_ty.get(&expr).cloned()
+        self.expr_ty[expr].clone()
     }
 
     pub(super) fn expr_place(&self, expr: ExprId) -> Option<Place<'db>> {
@@ -483,31 +484,31 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     pub(super) fn register_callable(&mut self, expr: ExprId, callable: Callable<'db>) {
-        if self.callables.insert(expr, callable).is_some() {
+        if self.callables[expr].replace(callable).is_some() {
             panic!("callable is already registered for the given expr")
         }
     }
 
     pub(super) fn register_const_ref(&mut self, expr: ExprId, const_ref: ConstRef<'db>) {
-        if self.const_refs.insert(expr, const_ref).is_some() {
+        if self.const_refs[expr].replace(const_ref).is_some() {
             panic!("const ref is already registered for the given expr")
         }
     }
 
     pub(super) fn register_value_path_ref(&mut self, expr: ExprId, value_path: ValuePathRef<'db>) {
-        if self.value_path_refs.insert(expr, value_path).is_some() {
+        if self.value_path_refs[expr].replace(value_path).is_some() {
             panic!("value path ref is already registered for the given expr")
         }
     }
 
     pub(super) fn register_for_loop_seq(&mut self, stmt: StmtId, seq: ForLoopSeq<'db>) {
-        if self.for_loop_seq.insert(stmt, seq).is_some() {
+        if self.for_loop_seq[stmt].replace(seq).is_some() {
             panic!("for loop seq is already registered for the given stmt")
         }
     }
 
     pub(super) fn callable_expr(&self, expr: ExprId) -> Option<&Callable<'db>> {
-        self.callables.get(&expr)
+        self.callables[expr].as_ref()
     }
 
     pub(super) fn register_semantic_expr_lowering(
@@ -515,7 +516,10 @@ impl<'db> TyCheckEnv<'db> {
         expr: ExprId,
         lowering: SemanticExprLowering<'db>,
     ) {
-        if self.semantic_expr_lowering.insert(expr, lowering).is_some() {
+        if self.semantic_expr_lowering[expr]
+            .replace(lowering)
+            .is_some()
+        {
             panic!("semantic expr lowering is already registered for the given expr")
         }
     }
@@ -638,8 +642,9 @@ impl<'db> TyCheckEnv<'db> {
         match binding {
             LocalBinding::Local { pat, .. } => self
                 .pat_ty
-                .get(pat)
+                .get(*pat)
                 .copied()
+                .flatten()
                 .unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other)),
 
             LocalBinding::Param { ty, .. } => *ty,
@@ -651,11 +656,11 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     pub(super) fn pat_binding(&self, pat: PatId) -> Option<LocalBinding<'db>> {
-        self.pat_bindings.get(&pat).copied()
+        self.pat_bindings[pat]
     }
 
     pub(super) fn local_borrow_provider(&self, pat: PatId) -> Option<ProviderAddressSpace> {
-        self.local_borrow_providers.get(&pat).copied()
+        self.local_borrow_providers[pat]
     }
 
     pub(super) fn set_local_borrow_provider(
@@ -663,25 +668,21 @@ impl<'db> TyCheckEnv<'db> {
         pat: PatId,
         provider: Option<ProviderAddressSpace>,
     ) {
-        if let Some(provider) = provider {
-            self.local_borrow_providers.insert(pat, provider);
-        } else {
-            self.local_borrow_providers.remove(&pat);
-        }
+        self.local_borrow_providers[pat] = provider;
     }
 
     pub(super) fn set_pat_binding_mode(&mut self, pat: PatId, mode: PatBindingMode) {
-        if self.pat_bindings.contains_key(&pat) {
-            self.pat_binding_modes.insert(pat, mode);
+        if self.pat_bindings[pat].is_some() {
+            self.pat_binding_modes[pat] = Some(mode);
         }
     }
 
     pub(super) fn discard_pat_binding(&mut self, pat: PatId) {
-        let Some(binding) = self.pat_bindings.remove(&pat) else {
+        let Some(binding) = self.pat_bindings[pat].take() else {
             return;
         };
-        self.local_borrow_providers.remove(&pat);
-        self.pat_binding_modes.remove(&pat);
+        self.local_borrow_providers[pat] = None;
+        self.pat_binding_modes[pat] = None;
         self.pending_vars.retain(|_, pending| *pending != binding);
     }
 
@@ -698,9 +699,8 @@ impl<'db> TyCheckEnv<'db> {
         call_expr: ExprId,
         arg: super::ResolvedEffectArg<'db>,
     ) {
-        self.call_effect_args
-            .entry(call_expr)
-            .or_default()
+        self.call_effect_args[call_expr]
+            .get_or_insert_default()
             .push(arg);
     }
 
@@ -748,11 +748,11 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     pub(super) fn type_expr(&mut self, expr: ExprId, typed: ExprProp<'db>) {
-        self.expr_ty.insert(expr, typed);
+        self.expr_ty[expr] = Some(typed);
     }
 
     pub(super) fn type_pat(&mut self, pat: PatId, ty: TyId<'db>) {
-        self.pat_ty.insert(pat, ty);
+        self.pat_ty[pat] = Some(ty);
     }
 
     pub(super) fn alloc_validated_pat(&mut self, pat: ValidatedPat<'db>) -> ValidatedPatId {
@@ -766,7 +766,7 @@ impl<'db> TyCheckEnv<'db> {
                 self.pattern_store.clear_root(pat)
             }
         }
-        self.pattern_status.insert(pat, status);
+        self.pattern_status[pat] = status;
     }
 
     /// Registers a new pending binding.
@@ -794,10 +794,10 @@ impl<'db> TyCheckEnv<'db> {
     ) -> Option<LocalBinding<'db>> {
         // Also store in pat_bindings for transfer to TypedBody
         if let LocalBinding::Local { pat, .. } = binding {
-            self.pat_bindings.insert(pat, binding);
-            self.pat_binding_modes
-                .entry(pat)
-                .or_insert(PatBindingMode::ByValue);
+            self.pat_bindings[pat] = Some(binding);
+            if self.pat_binding_modes[pat].is_none() {
+                self.pat_binding_modes[pat] = Some(PatBindingMode::ByValue);
+            }
         }
         self.pending_vars.insert(name, binding)
     }
@@ -867,41 +867,64 @@ impl<'db> TyCheckEnv<'db> {
 
         self.expr_ty
             .values_mut()
+            .flatten()
             .for_each(|ty| *ty = ty.clone().fold_with(self.db, &mut prober));
 
         self.pat_ty
             .values_mut()
+            .flatten()
             .for_each(|ty| *ty = ty.fold_with(self.db, &mut prober));
 
         self.const_refs
             .values_mut()
+            .flatten()
             .for_each(|cref| *cref = (*cref).fold_with(self.db, &mut prober));
 
-        self.call_effect_args.values_mut().for_each(|args| {
-            for arg in args {
-                arg.instantiated_key_ty = arg
-                    .instantiated_key_ty
-                    .map(|ty| ty.fold_with(self.db, &mut prober));
-                arg.provider_target_ty = arg
-                    .provider_target_ty
-                    .map(|ty| ty.fold_with(self.db, &mut prober));
-            }
-        });
+        self.call_effect_args
+            .values_mut()
+            .flatten()
+            .for_each(|args| {
+                for arg in args {
+                    arg.instantiated_key_ty = arg
+                        .instantiated_key_ty
+                        .map(|ty| ty.fold_with(self.db, &mut prober));
+                    arg.provider_target_ty = arg
+                        .provider_target_ty
+                        .map(|ty| ty.fold_with(self.db, &mut prober));
+                }
+            });
         let assumptions = self.assumptions.fold_with(self.db, &mut prober);
         let pattern_store = self.pattern_store.fold_with(self.db, &mut prober);
 
-        let semantic_expr_lowering = self
-            .semantic_expr_lowering
-            .into_iter()
-            .map(|(expr, lowering)| (expr, lowering.fold_with(self.db, &mut prober)))
-            .collect();
+        self.semantic_expr_lowering
+            .values_mut()
+            .flatten()
+            .for_each(|lowering| *lowering = lowering.clone().fold_with(self.db, &mut prober));
 
-        let for_loop_seq = self
-            .for_loop_seq
-            .into_iter()
-            .map(|(stmt, seq)| (stmt, seq.fold_with(self.db, &mut prober)))
-            .collect();
-        let result_ty = self.expr_ty.get(&self.body.expr(self.db)).map_or_else(
+        self.for_loop_seq
+            .values_mut()
+            .flatten()
+            .for_each(|seq| *seq = seq.clone().fold_with(self.db, &mut prober));
+        let mut expr_place = SecondaryMap::new();
+        let mut expr_places: PrimaryMap<super::ExprPlaceId, Place<'db>> = PrimaryMap::new();
+        for expr in self.body.exprs(self.db).keys() {
+            if let Some(place) = Place::from_expr_in_body(
+                self.db,
+                self.body,
+                expr,
+                |expr| self.expr_ty[expr].as_ref().and_then(|prop| prop.binding),
+                |expr| {
+                    self.expr_ty[expr].as_ref().map_or_else(
+                        || TyId::invalid(self.db, InvalidCause::Other),
+                        |prop| prop.ty,
+                    )
+                },
+            ) {
+                let place_id = expr_places.push(place);
+                expr_place[expr] = place_id.into();
+            }
+        }
+        let result_ty = self.expr_ty[self.body.expr(self.db)].as_ref().map_or_else(
             || TyId::invalid(self.db, InvalidCause::Other),
             |prop| prop.ty,
         );
@@ -915,7 +938,7 @@ impl<'db> TyCheckEnv<'db> {
             implicit_moves: self.implicit_moves,
             const_refs: self.const_refs,
             value_path_refs: self.value_path_refs,
-            semantic_expr_lowering,
+            semantic_expr_lowering: self.semantic_expr_lowering,
             call_effect_args: self.call_effect_args,
             return_borrow_provider: None,
             param_bindings: self.param_bindings,
@@ -923,7 +946,9 @@ impl<'db> TyCheckEnv<'db> {
             pat_binding_modes: self.pat_binding_modes,
             pattern_store,
             pattern_status: self.pattern_status,
-            for_loop_seq,
+            for_loop_seq: self.for_loop_seq,
+            expr_place,
+            expr_places,
         }
     }
 

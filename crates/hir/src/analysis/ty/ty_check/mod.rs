@@ -36,6 +36,7 @@ use crate::{
 use callable::{CallGenericArgUnifyError, unify_explicit_call_generic_args};
 pub use callable::{Callable, EffectProviderProvenance, EffectProviderSpecialization};
 use common::indexmap::IndexMap;
+use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl, packed_option::PackedOption};
 use ena::unify::InPlace;
 use env::TyCheckEnv;
 pub use env::{
@@ -46,7 +47,7 @@ pub use owner::BodyOwner;
 pub use owner::EffectParamOwner;
 pub use stmt::ForLoopSeq;
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 use salsa::Update;
 
 use crate::analysis::place::{Place, PlaceBase};
@@ -229,20 +230,22 @@ fn typed_body_for_bodyless_func<'db>(
         body: None,
         result_ty,
         assumptions,
-        pat_ty: FxHashMap::default(),
-        expr_ty: FxHashMap::default(),
+        pat_ty: SecondaryMap::new(),
+        expr_ty: SecondaryMap::new(),
         implicit_moves: FxHashSet::default(),
-        const_refs: FxHashMap::default(),
-        value_path_refs: FxHashMap::default(),
-        semantic_expr_lowering: FxHashMap::default(),
-        call_effect_args: FxHashMap::default(),
+        const_refs: SecondaryMap::new(),
+        value_path_refs: SecondaryMap::new(),
+        semantic_expr_lowering: SecondaryMap::new(),
+        call_effect_args: SecondaryMap::new(),
         return_borrow_provider: None,
         param_bindings,
-        pat_bindings: FxHashMap::default(),
-        pat_binding_modes: FxHashMap::default(),
+        pat_bindings: SecondaryMap::new(),
+        pat_binding_modes: SecondaryMap::new(),
         pattern_store: PatternStore::default(),
-        pattern_status: FxHashMap::default(),
-        for_loop_seq: FxHashMap::default(),
+        pattern_status: SecondaryMap::with_default(PatternAnalysisStatus::Invalid),
+        for_loop_seq: SecondaryMap::new(),
+        expr_place: SecondaryMap::new(),
+        expr_places: PrimaryMap::new(),
     }
 }
 
@@ -2306,29 +2309,35 @@ impl<'db> TyFoldable<'db> for ConstRef<'db> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+struct ExprPlaceId(u32);
+entity_impl!(ExprPlaceId);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedBody<'db> {
     body: Option<Body<'db>>,
     result_ty: TyId<'db>,
     assumptions: PredicateListId<'db>,
-    pat_ty: FxHashMap<PatId, TyId<'db>>,
-    expr_ty: FxHashMap<ExprId, ExprProp<'db>>,
+    pat_ty: SecondaryMap<PatId, Option<TyId<'db>>>,
+    expr_ty: SecondaryMap<ExprId, Option<ExprProp<'db>>>,
     implicit_moves: FxHashSet<ExprId>,
-    const_refs: FxHashMap<ExprId, ConstRef<'db>>,
-    value_path_refs: FxHashMap<ExprId, ValuePathRef<'db>>,
-    semantic_expr_lowering: FxHashMap<ExprId, SemanticExprLowering<'db>>,
-    call_effect_args: FxHashMap<ExprId, Vec<ResolvedEffectArg<'db>>>,
+    const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
+    value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
+    semantic_expr_lowering: SecondaryMap<ExprId, Option<SemanticExprLowering<'db>>>,
+    call_effect_args: SecondaryMap<ExprId, Option<Vec<ResolvedEffectArg<'db>>>>,
     return_borrow_provider: Option<ProviderAddressSpace>,
     /// Bindings for function parameters (indexed by param position)
     param_bindings: Vec<LocalBinding<'db>>,
     /// Bindings for local variables (keyed by the pattern that introduces them)
-    pat_bindings: FxHashMap<PatId, LocalBinding<'db>>,
+    pat_bindings: SecondaryMap<PatId, Option<LocalBinding<'db>>>,
     /// Binding capture mode for local variables (keyed by the pattern that introduces them)
-    pat_binding_modes: FxHashMap<PatId, PatBindingMode>,
+    pat_binding_modes: SecondaryMap<PatId, Option<PatBindingMode>>,
     pattern_store: PatternStore<'db>,
-    pattern_status: FxHashMap<PatId, PatternAnalysisStatus>,
+    pattern_status: SecondaryMap<PatId, PatternAnalysisStatus>,
     /// Resolved Seq trait methods for for-loops
-    for_loop_seq: FxHashMap<StmtId, ForLoopSeq<'db>>,
+    for_loop_seq: SecondaryMap<StmtId, Option<ForLoopSeq<'db>>>,
+    expr_place: SecondaryMap<ExprId, PackedOption<ExprPlaceId>>,
+    expr_places: PrimaryMap<ExprPlaceId, Place<'db>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2450,23 +2459,26 @@ impl<'db> TyVisitable<'db> for TypedBody<'db> {
     {
         self.assumptions.visit_with(visitor);
         self.result_ty.visit_with(visitor);
-        for ty in self.pat_ty.values() {
+        for ty in self.pat_ty.values().flatten() {
             ty.visit_with(visitor);
         }
-        for prop in self.expr_ty.values() {
+        for prop in self.expr_ty.values().flatten() {
             prop.visit_with(visitor);
         }
-        for cref in self.const_refs.values() {
+        for cref in self.const_refs.values().flatten() {
             cref.visit_with(visitor);
         }
-        for value_path in self.value_path_refs.values() {
+        for value_path in self.value_path_refs.values().flatten() {
             value_path.visit_with(visitor);
         }
-        for lowering in self.semantic_expr_lowering.values() {
+        for lowering in self.semantic_expr_lowering.values().flatten() {
             lowering.visit_with(visitor);
         }
+        for place in self.expr_places.values() {
+            place.visit_with(visitor);
+        }
         self.pattern_store.visit_with(visitor);
-        for seq in self.for_loop_seq.values() {
+        for seq in self.for_loop_seq.values().flatten() {
             seq.visit_with(visitor);
         }
     }
@@ -2477,80 +2489,61 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
     where
         F: crate::analysis::ty::fold::TyFolder<'db>,
     {
-        let result_ty = self.result_ty.fold_with(db, folder);
-        let assumptions = self.assumptions.fold_with(db, folder);
-        let pat_ty = self
-            .pat_ty
-            .into_iter()
-            .map(|(pat, ty)| (pat, ty.fold_with(db, folder)))
-            .collect();
-        let expr_ty = self
-            .expr_ty
-            .into_iter()
-            .map(|(expr, prop)| (expr, prop.fold_with(db, folder)))
-            .collect();
-        let const_refs = self
-            .const_refs
-            .into_iter()
-            .map(|(expr, cref)| (expr, cref.fold_with(db, folder)))
-            .collect();
-        let value_path_refs = self
-            .value_path_refs
-            .into_iter()
-            .map(|(expr, path)| (expr, path.fold_with(db, folder)))
-            .collect();
-        let semantic_expr_lowering = self
-            .semantic_expr_lowering
-            .into_iter()
-            .map(|(expr, lowering)| (expr, lowering.fold_with(db, folder)))
-            .collect();
-        let call_effect_args = self
-            .call_effect_args
-            .into_iter()
-            .map(|(expr, args)| {
-                (
-                    expr,
-                    args.into_iter()
-                        .map(|arg| arg.fold_with(db, folder))
-                        .collect(),
-                )
-            })
-            .collect();
-        let param_bindings = self
-            .param_bindings
-            .into_iter()
-            .map(|binding| binding.fold_with(db, folder))
-            .collect();
-        let pat_bindings = self
-            .pat_bindings
-            .into_iter()
-            .map(|(pat, binding)| (pat, binding.fold_with(db, folder)))
-            .collect();
-        let pattern_store = self.pattern_store.fold_with(db, folder);
-        let for_loop_seq = self
-            .for_loop_seq
-            .into_iter()
-            .map(|(stmt, seq)| (stmt, seq.fold_with(db, folder)))
-            .collect();
+        let mut this = self;
+        this.result_ty = this.result_ty.fold_with(db, folder);
+        this.assumptions = this.assumptions.fold_with(db, folder);
+        this.pat_ty
+            .values_mut()
+            .flatten()
+            .for_each(|ty| *ty = ty.fold_with(db, folder));
+        this.expr_ty
+            .values_mut()
+            .flatten()
+            .for_each(|prop| *prop = prop.clone().fold_with(db, folder));
+        this.const_refs
+            .values_mut()
+            .flatten()
+            .for_each(|cref| *cref = (*cref).fold_with(db, folder));
+        this.value_path_refs
+            .values_mut()
+            .flatten()
+            .for_each(|path| *path = (*path).fold_with(db, folder));
+        this.semantic_expr_lowering
+            .values_mut()
+            .flatten()
+            .for_each(|lowering| *lowering = lowering.clone().fold_with(db, folder));
+        for args in this.call_effect_args.values_mut().flatten() {
+            for arg in args {
+                *arg = arg.clone().fold_with(db, folder);
+            }
+        }
+        this.param_bindings
+            .iter_mut()
+            .for_each(|binding| *binding = binding.fold_with(db, folder));
+        this.pat_bindings
+            .values_mut()
+            .flatten()
+            .for_each(|binding| *binding = binding.fold_with(db, folder));
+        this.pattern_store = this.pattern_store.fold_with(db, folder);
+        this.for_loop_seq
+            .values_mut()
+            .flatten()
+            .for_each(|seq| *seq = seq.clone().fold_with(db, folder));
+        this.expr_places
+            .values_mut()
+            .for_each(|place| *place = place.clone().fold_with(db, folder));
+        this
+    }
+}
 
-        Self {
-            body: self.body,
-            result_ty,
-            assumptions,
-            pat_ty,
-            expr_ty,
-            implicit_moves: self.implicit_moves,
-            const_refs,
-            value_path_refs,
-            semantic_expr_lowering,
-            pat_binding_modes: self.pat_binding_modes,
-            call_effect_args,
-            return_borrow_provider: self.return_borrow_provider,
-            param_bindings,
-            pat_bindings,
-            for_loop_seq,
-            pattern_store,
-            pattern_status: self.pattern_status,
+unsafe impl<'db> Update for TypedBody<'db> {
+    unsafe fn maybe_update(old_pointer: *mut Self, new_value: Self) -> bool {
+        let old_value = unsafe { &mut *old_pointer };
+        if *old_value == new_value {
+            false
+        } else {
+            *old_value = new_value;
+            true
         }
     }
 }
@@ -2574,8 +2567,9 @@ impl<'db> TypedBody<'db> {
 
     pub fn expr_prop(&self, db: &'db dyn HirAnalysisDb, expr: ExprId) -> ExprProp<'db> {
         self.expr_ty
-            .get(&expr)
+            .get(expr)
             .cloned()
+            .flatten()
             .unwrap_or_else(|| ExprProp::invalid(db))
     }
 
@@ -2584,11 +2578,11 @@ impl<'db> TypedBody<'db> {
     }
 
     pub fn expr_const_ref(&self, expr: ExprId) -> Option<ConstRef<'db>> {
-        self.const_refs.get(&expr).copied()
+        self.const_refs[expr]
     }
 
     pub fn value_path_ref(&self, expr: ExprId) -> Option<ValuePathRef<'db>> {
-        self.value_path_refs.get(&expr).copied()
+        self.value_path_refs[expr]
     }
 
     pub fn expr_code_region_ref(
@@ -2602,15 +2596,16 @@ impl<'db> TypedBody<'db> {
     }
 
     pub fn semantic_expr_lowering(&self, expr: ExprId) -> Option<&SemanticExprLowering<'db>> {
-        self.semantic_expr_lowering.get(&expr)
+        self.semantic_expr_lowering[expr].as_ref()
     }
 
     // Final typed pattern/binding view. This can intentionally differ from
     // validated-pattern match types when destructuring borrowed carriers.
     pub fn pat_ty(&self, db: &'db dyn HirAnalysisDb, pat: PatId) -> TyId<'db> {
         self.pat_ty
-            .get(&pat)
+            .get(pat)
             .copied()
+            .flatten()
             .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
     }
 
@@ -2636,7 +2631,7 @@ impl<'db> TypedBody<'db> {
     }
 
     pub fn call_effect_args(&self, call_expr: ExprId) -> Option<&[ResolvedEffectArg<'db>]> {
-        self.call_effect_args.get(&call_expr).map(|v| v.as_slice())
+        self.call_effect_args[call_expr].as_deref()
     }
 
     pub fn return_borrow_provider(&self) -> Option<ProviderAddressSpace> {
@@ -2650,12 +2645,12 @@ impl<'db> TypedBody<'db> {
 
     /// Get the binding for a local variable by its pattern.
     pub fn pat_binding(&self, pat: PatId) -> Option<LocalBinding<'db>> {
-        self.pat_bindings.get(&pat).copied()
+        self.pat_bindings[pat]
     }
 
     /// Get how this local binding is captured by its source pattern destructuring.
     pub fn pat_binding_mode(&self, pat: PatId) -> Option<PatBindingMode> {
-        self.pat_binding_modes.get(&pat).copied()
+        self.pat_binding_modes[pat]
     }
 
     pub fn binding_ty(&self, db: &'db dyn HirAnalysisDb, binding: LocalBinding<'db>) -> TyId<'db> {
@@ -2671,8 +2666,8 @@ impl<'db> TypedBody<'db> {
     }
 
     pub fn path_expr_read_semantics(&self, expr: ExprId) -> Option<PathReadSemantics> {
-        self.expr_ty
-            .get(&expr)
+        self.expr_ty[expr]
+            .as_ref()
             .and_then(|prop| prop.path_read_semantics)
     }
 
@@ -2688,10 +2683,7 @@ impl<'db> TypedBody<'db> {
     }
 
     pub fn pattern_status(&self, pat: PatId) -> PatternAnalysisStatus {
-        self.pattern_status
-            .get(&pat)
-            .copied()
-            .unwrap_or(PatternAnalysisStatus::Invalid)
+        self.pattern_status[pat]
     }
 
     pub fn pattern_root(&self, pat: PatId) -> Option<ValidatedPatId> {
@@ -2700,7 +2692,7 @@ impl<'db> TypedBody<'db> {
 
     /// Get the resolved Seq methods for a for-loop statement.
     pub fn for_loop_seq(&self, stmt: StmtId) -> Option<&ForLoopSeq<'db>> {
-        self.for_loop_seq.get(&stmt)
+        self.for_loop_seq[stmt].as_ref()
     }
 
     pub fn binding_source(
@@ -3517,12 +3509,14 @@ impl<'db> TypedBody<'db> {
     ///
     /// Returns the identity of the binding (param index, pattern id, or effect param ident).
     pub fn expr_binding(&self, expr: ExprId) -> Option<LocalBinding<'db>> {
-        self.expr_ty.get(&expr)?.binding
+        self.expr_ty[expr].as_ref().and_then(|prop| prop.binding)
     }
 
     /// Returns a place representation for `expr` if it denotes an assignable location.
-    pub fn expr_place(&self, db: &'db dyn HirAnalysisDb, expr: ExprId) -> Option<Place<'db>> {
-        Place::from_expr(db, self, expr)
+    pub fn expr_place(&self, expr: ExprId) -> Option<&Place<'db>> {
+        self.expr_place[expr]
+            .expand()
+            .and_then(|place_id| self.expr_places.get(place_id))
     }
 
     /// Find all expressions that reference the same local binding as the given expression.
@@ -3532,15 +3526,15 @@ impl<'db> TypedBody<'db> {
     ///
     /// This is used by the language server for find-all-references and rename on local variables.
     pub fn local_references(&self, expr: ExprId) -> Vec<ExprId> {
-        let Some(binding) = self.expr_ty.get(&expr).and_then(|p| p.binding) else {
+        let Some(binding) = self.expr_ty[expr].as_ref().and_then(|prop| prop.binding) else {
             return vec![];
         };
 
         self.expr_ty
             .iter()
-            .filter_map(|(id, p)| {
-                if p.binding == Some(binding) {
-                    Some(*id)
+            .filter_map(|(id, prop)| {
+                if prop.as_ref().and_then(|prop| prop.binding) == Some(binding) {
+                    Some(id)
                 } else {
                     None
                 }
@@ -3555,9 +3549,9 @@ impl<'db> TypedBody<'db> {
     pub fn references_by_binding(&self, binding: LocalBinding<'db>) -> Vec<ExprId> {
         self.expr_ty
             .iter()
-            .filter_map(|(id, p)| {
-                if p.binding == Some(binding) {
-                    Some(*id)
+            .filter_map(|(id, prop)| {
+                if prop.as_ref().and_then(|prop| prop.binding) == Some(binding) {
+                    Some(id)
                 } else {
                     None
                 }
@@ -3570,20 +3564,22 @@ impl<'db> TypedBody<'db> {
             body: None,
             result_ty: TyId::unit(db),
             assumptions: PredicateListId::empty_list(db),
-            pat_ty: FxHashMap::default(),
-            expr_ty: FxHashMap::default(),
+            pat_ty: SecondaryMap::new(),
+            expr_ty: SecondaryMap::new(),
             implicit_moves: FxHashSet::default(),
-            const_refs: FxHashMap::default(),
-            value_path_refs: FxHashMap::default(),
-            semantic_expr_lowering: FxHashMap::default(),
-            call_effect_args: FxHashMap::default(),
+            const_refs: SecondaryMap::new(),
+            value_path_refs: SecondaryMap::new(),
+            semantic_expr_lowering: SecondaryMap::new(),
+            call_effect_args: SecondaryMap::new(),
             return_borrow_provider: None,
             param_bindings: Vec::new(),
-            pat_bindings: FxHashMap::default(),
-            pat_binding_modes: FxHashMap::default(),
+            pat_bindings: SecondaryMap::new(),
+            pat_binding_modes: SecondaryMap::new(),
             pattern_store: PatternStore::default(),
-            pattern_status: FxHashMap::default(),
-            for_loop_seq: FxHashMap::default(),
+            pattern_status: SecondaryMap::with_default(PatternAnalysisStatus::Invalid),
+            for_loop_seq: SecondaryMap::new(),
+            expr_place: SecondaryMap::new(),
+            expr_places: PrimaryMap::new(),
         }
     }
 }
