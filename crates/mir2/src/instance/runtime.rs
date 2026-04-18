@@ -133,3 +133,10 @@ fn lower_runtime_body<'db>(
         referenced_code_regions,
     )
 }
+
+pub(crate) fn runtime_instance_lowered_body<'db>(
+    db: &'db dyn MirDb,
+    instance: RuntimeInstance<'db>,
+) -> LoweredRuntimeBody<'db> {
+    lower_runtime_body(db, instance)
+}

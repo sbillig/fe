@@ -21,6 +21,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     db::MirDb,
+    instance::runtime::runtime_instance_lowered_body,
     instance::{
         RuntimeInstance, RuntimeInstanceKey, RuntimeInstanceSource, RuntimeSyntheticInstance,
         get_or_build_runtime_instance,
@@ -73,6 +74,152 @@ type ManualContractObjectSpec<'db> = (
     Vec<(RuntimeSectionName, RuntimeInstance<'db>)>,
     Vec<RuntimeInstance<'db>>,
 );
+
+#[derive(Debug, Clone)]
+struct RuntimeGraphNode<'db> {
+    direct_callees: Vec<RuntimeInstance<'db>>,
+    referenced_const_regions: Vec<ConstRegionId<'db>>,
+    referenced_code_regions: Vec<RuntimeCodeRegion<'db>>,
+}
+
+struct RuntimeGraph<'db> {
+    nodes: FxHashMap<RuntimeInstance<'db>, RuntimeGraphNode<'db>>,
+    object_specs: Vec<(String, Vec<(RuntimeSectionName, RuntimeInstance<'db>)>)>,
+    code_region_roots: Vec<(RuntimeCodeRegion<'db>, RuntimeInstance<'db>)>,
+}
+
+struct RuntimeGraphBuilder<'db> {
+    db: &'db dyn MirDb,
+    queue: Vec<RuntimeInstance<'db>>,
+    queued: FxHashSet<RuntimeInstance<'db>>,
+    nodes: FxHashMap<RuntimeInstance<'db>, RuntimeGraphNode<'db>>,
+    object_specs: Vec<(String, Vec<(RuntimeSectionName, RuntimeInstance<'db>)>)>,
+    discovered_contract_specs: Vec<(String, Vec<(RuntimeSectionName, RuntimeInstance<'db>)>)>,
+    code_region_roots: Vec<(RuntimeCodeRegion<'db>, RuntimeInstance<'db>)>,
+    seen_region_roots: FxHashSet<RuntimeCodeRegion<'db>>,
+    materialized_contracts: FxHashSet<Contract<'db>>,
+}
+
+impl<'db> RuntimeGraphBuilder<'db> {
+    fn new(
+        db: &'db dyn MirDb,
+        roots: Vec<RuntimeInstance<'db>>,
+        object_specs: Vec<(String, Vec<(RuntimeSectionName, RuntimeInstance<'db>)>)>,
+    ) -> Self {
+        let materialized_contracts = materialized_contracts_for_roots(db, &roots);
+        let mut builder = Self {
+            db,
+            queue: Vec::new(),
+            queued: FxHashSet::default(),
+            nodes: FxHashMap::default(),
+            object_specs,
+            discovered_contract_specs: Vec::new(),
+            code_region_roots: Vec::new(),
+            seen_region_roots: FxHashSet::default(),
+            materialized_contracts,
+        };
+        for root in roots {
+            builder.enqueue(root);
+        }
+        builder
+    }
+
+    fn build(mut self) -> Result<RuntimeGraph<'db>, LowerError> {
+        while let Some(instance) = self.queue.pop() {
+            self.queued.remove(&instance);
+            if self.nodes.contains_key(&instance) {
+                continue;
+            }
+
+            let lowered = runtime_instance_lowered_body(self.db, instance);
+            let direct_callees = lowered
+                .direct_callees(self.db)
+                .into_iter()
+                .map(|edge| edge.callee)
+                .collect::<Vec<_>>();
+            let referenced_const_regions = lowered.referenced_const_regions(self.db);
+            let referenced_code_regions = lowered.referenced_code_regions(self.db);
+            for callee in direct_callees.iter().copied() {
+                self.enqueue(callee);
+            }
+            self.process_referenced_regions(&referenced_code_regions)?;
+            self.nodes.insert(
+                instance,
+                RuntimeGraphNode {
+                    direct_callees,
+                    referenced_const_regions,
+                    referenced_code_regions,
+                },
+            );
+        }
+
+        self.discovered_contract_specs
+            .sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
+        self.object_specs.extend(self.discovered_contract_specs);
+        self.code_region_roots
+            .sort_by_key(|(region, _)| code_region_symbol(self.db, *region));
+        Ok(RuntimeGraph {
+            nodes: self.nodes,
+            object_specs: self.object_specs,
+            code_region_roots: self.code_region_roots,
+        })
+    }
+
+    fn enqueue(&mut self, instance: RuntimeInstance<'db>) {
+        if !self.nodes.contains_key(&instance) && self.queued.insert(instance) {
+            self.queue.push(instance);
+        }
+    }
+
+    fn process_referenced_regions(
+        &mut self,
+        regions: &[RuntimeCodeRegion<'db>],
+    ) -> Result<(), LowerError> {
+        let mut function_roots = Vec::new();
+        let mut referenced_contracts = Vec::new();
+        for region in regions.iter().copied() {
+            match region.key(self.db) {
+                RuntimeCodeRegionKey::FunctionRoot { .. } => {
+                    if self.seen_region_roots.insert(region) {
+                        function_roots.push(region);
+                    }
+                }
+                RuntimeCodeRegionKey::ContractInit { contract }
+                | RuntimeCodeRegionKey::ContractRuntime { contract } => {
+                    if self.materialized_contracts.insert(contract) {
+                        referenced_contracts.push(contract);
+                    }
+                }
+                RuntimeCodeRegionKey::ManualContractRoot { .. } => {}
+            }
+        }
+
+        function_roots.sort_by_key(|region| code_region_symbol(self.db, *region));
+        for region in function_roots {
+            let RuntimeCodeRegionKey::FunctionRoot { symbol, callee } = region.key(self.db).clone()
+            else {
+                unreachable!();
+            };
+            let root = synthetic_instance(
+                self.db,
+                RuntimeSyntheticSpec::CodeRegionRoot { symbol, callee },
+                Vec::new(),
+            );
+            self.code_region_roots.push((region, root));
+            self.enqueue(root);
+        }
+
+        referenced_contracts.sort_by_key(|contract| contract_name(self.db, *contract));
+        for contract in referenced_contracts {
+            let (name, sections, section_roots) = contract_object_spec(self.db, contract)?;
+            self.discovered_contract_specs.push((name, sections));
+            for root in section_roots {
+                self.enqueue(root);
+            }
+        }
+        Ok(())
+    }
+}
 
 pub fn build_runtime_package<'db>(
     db: &'db dyn MirDb,
@@ -638,61 +785,24 @@ fn build_non_contract_package<'db>(
 fn build_sectioned_package<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,
-    mut roots: Vec<RuntimeInstance<'db>>,
-    mut object_specs: Vec<(String, Vec<(RuntimeSectionName, RuntimeInstance<'db>)>)>,
+    roots: Vec<RuntimeInstance<'db>>,
+    object_specs: Vec<(String, Vec<(RuntimeSectionName, RuntimeInstance<'db>)>)>,
     primary_object_name: Option<&str>,
 ) -> Result<RuntimePackage<'db>, LowerError> {
     let root_object_names = object_specs
         .iter()
         .map(|(name, _)| name.clone())
         .collect::<FxHashSet<_>>();
-    let mut code_region_roots = Vec::new();
-    let mut seen_region_roots = FxHashSet::default();
-    let mut materialized_contracts = materialized_contracts_for_roots(db, &roots);
-
-    loop {
-        let functions = collect_runtime_functions(db, &roots);
-        let region_specs = collect_function_root_regions(db, &functions);
-        let mut changed = false;
-        for region in region_specs {
-            if !seen_region_roots.insert(region) {
-                continue;
-            }
-            let RuntimeCodeRegionKey::FunctionRoot { symbol, callee } = region.key(db).clone()
-            else {
-                continue;
-            };
-            let root = synthetic_instance(
-                db,
-                RuntimeSyntheticSpec::CodeRegionRoot { symbol, callee },
-                Vec::new(),
-            );
-            code_region_roots.push((region, root));
-            roots.push(root);
-            changed = true;
-        }
-        for contract in collect_referenced_contract_regions(db, &functions) {
-            if !materialized_contracts.insert(contract) {
-                continue;
-            }
-            let (name, sections, section_roots) = contract_object_spec(db, contract)?;
-            object_specs.push((name, sections));
-            roots.extend(section_roots);
-            changed = true;
-        }
-        if !changed {
-            break;
-        }
-    }
-
-    let functions = collect_runtime_functions(db, &roots);
+    let mut graph = RuntimeGraphBuilder::new(db, roots, object_specs).build()?;
+    let functions = collect_runtime_functions(db, &graph);
     let functions_by_instance = functions
         .iter()
         .map(|function| (function.instance(db), *function))
         .collect::<FxHashMap<_, _>>();
-    let const_regions = collect_const_regions(db, &functions);
+    let const_regions = collect_const_regions(db, &graph);
+    let mut reachable_cache = FxHashMap::default();
 
-    let mut objects = object_specs
+    let mut objects = std::mem::take(&mut graph.object_specs)
         .into_iter()
         .map(|(name, sections)| {
             make_runtime_object(
@@ -704,15 +814,17 @@ fn build_sectioned_package<'db>(
                         let entry = *functions_by_instance
                             .get(&entry_instance)
                             .expect("section entry should be declared as a runtime function");
-                        let reachable = collect_reachable_from_entry(db, entry_instance);
+                        let reachable = collect_reachable_from_entry(
+                            &graph,
+                            entry_instance,
+                            &mut reachable_cache,
+                        );
                         RuntimeSection {
                             name: section_name,
                             entry,
                             embeds: Vec::new(),
                             const_regions: collect_const_regions_for_reachable(
-                                db,
-                                &functions_by_instance,
-                                &reachable,
+                                db, &graph, &reachable,
                             ),
                         }
                     })
@@ -721,21 +833,27 @@ fn build_sectioned_package<'db>(
         })
         .collect::<Vec<_>>();
 
-    if !code_region_roots.is_empty() {
+    if !graph.code_region_roots.is_empty() {
         let code_regions_object =
-            build_code_regions_object(db, &functions_by_instance, &code_region_roots);
+            build_code_regions_object(db, &graph, &functions_by_instance, &mut reachable_cache);
         objects.push(code_regions_object);
     }
 
-    let code_regions =
-        resolve_code_regions(db, &objects, &functions_by_instance, &code_region_roots);
+    let code_regions = resolve_code_regions(
+        db,
+        &objects,
+        &functions_by_instance,
+        &graph.code_region_roots,
+    );
     let code_region_map = code_regions
         .iter()
         .map(|region| (region.region(db), *region))
         .collect::<FxHashMap<_, _>>();
     objects = objects
         .into_iter()
-        .map(|object| rewrite_object_embeds(db, object, &functions_by_instance, &code_region_map))
+        .map(|object| {
+            rewrite_object_embeds(db, &graph, object, &code_region_map, &mut reachable_cache)
+        })
         .collect();
     objects = remap_object_section_refs(db, &objects);
     let code_regions = remap_resolved_code_regions(db, &objects, code_regions);
@@ -769,10 +887,12 @@ fn build_sectioned_package<'db>(
 
 fn build_code_regions_object<'db>(
     db: &'db dyn MirDb,
+    graph: &RuntimeGraph<'db>,
     functions_by_instance: &FxHashMap<RuntimeInstance<'db>, RuntimeFunction<'db>>,
-    roots: &[(RuntimeCodeRegion<'db>, RuntimeInstance<'db>)],
+    reachable_cache: &mut FxHashMap<RuntimeInstance<'db>, FxHashSet<RuntimeInstance<'db>>>,
 ) -> RuntimeObject<'db> {
-    let sections = roots
+    let sections = graph
+        .code_region_roots
         .iter()
         .map(|(region, instance)| {
             let RuntimeCodeRegionKey::FunctionRoot { symbol, .. } = region.key(db).clone() else {
@@ -781,55 +901,24 @@ fn build_code_regions_object<'db>(
             let entry = *functions_by_instance
                 .get(instance)
                 .expect("code-region root should be declared as a runtime function");
-            let reachable = collect_reachable_from_entry(db, *instance);
+            let reachable = collect_reachable_from_entry(graph, *instance, reachable_cache);
             RuntimeSection {
                 name: RuntimeSectionName::CodeRegion(symbol),
                 entry,
                 embeds: Vec::new(),
-                const_regions: collect_const_regions_for_reachable(
-                    db,
-                    functions_by_instance,
-                    &reachable,
-                ),
+                const_regions: collect_const_regions_for_reachable(db, graph, &reachable),
             }
         })
         .collect();
     make_runtime_object(db, "CodeRegions".to_string(), sections)
 }
 
-fn collect_referenced_contract_regions<'db>(
-    db: &'db dyn MirDb,
-    functions: &[RuntimeFunction<'db>],
-) -> Vec<Contract<'db>> {
-    let mut seen = FxHashSet::default();
-    let mut contracts = Vec::new();
-    for function in functions {
-        for region in function
-            .instance(db)
-            .referenced_code_regions(db)
-            .iter()
-            .copied()
-        {
-            let contract = match region.key(db) {
-                RuntimeCodeRegionKey::ContractInit { contract }
-                | RuntimeCodeRegionKey::ContractRuntime { contract } => contract,
-                RuntimeCodeRegionKey::ManualContractRoot { .. }
-                | RuntimeCodeRegionKey::FunctionRoot { .. } => continue,
-            };
-            if seen.insert(contract) {
-                contracts.push(contract);
-            }
-        }
-    }
-    contracts.sort_by_key(|contract| contract_name(db, *contract));
-    contracts
-}
-
 fn rewrite_object_embeds<'db>(
     db: &'db dyn MirDb,
+    graph: &RuntimeGraph<'db>,
     object: RuntimeObject<'db>,
-    functions_by_instance: &FxHashMap<RuntimeInstance<'db>, RuntimeFunction<'db>>,
     code_region_map: &FxHashMap<RuntimeCodeRegion<'db>, ResolvedCodeRegion<'db>>,
+    reachable_cache: &mut FxHashMap<RuntimeInstance<'db>, FxHashSet<RuntimeInstance<'db>>>,
 ) -> RuntimeObject<'db> {
     let section_refs = code_region_map
         .iter()
@@ -840,11 +929,12 @@ fn rewrite_object_embeds<'db>(
         .iter()
         .cloned()
         .map(|mut section| {
-            let reachable = collect_reachable_from_entry(db, section.entry.instance(db));
+            let reachable =
+                collect_reachable_from_entry(graph, section.entry.instance(db), reachable_cache);
             section.embeds = collect_region_embeds(
                 db,
+                graph,
                 &reachable,
-                functions_by_instance,
                 &section_refs,
                 RuntimeSectionRef::Local {
                     object,
@@ -1029,8 +1119,8 @@ fn resolved_section_region<'db>(
 
 fn collect_region_embeds<'db>(
     db: &'db dyn MirDb,
+    graph: &RuntimeGraph<'db>,
     reachable: &FxHashSet<RuntimeInstance<'db>>,
-    functions_by_instance: &FxHashMap<RuntimeInstance<'db>, RuntimeFunction<'db>>,
     section_refs: &FxHashMap<RuntimeCodeRegion<'db>, RuntimeSectionRef<'db>>,
     current_section: RuntimeSectionRef<'db>,
 ) -> Vec<crate::runtime::RuntimeEmbed<'db>> {
@@ -1041,16 +1131,13 @@ fn collect_region_embeds<'db>(
     };
     let mut seen = FxHashSet::default();
     let mut embeds = Vec::new();
-    for instance in reachable {
-        let Some(function) = functions_by_instance.get(instance) else {
+    let mut instances = reachable.iter().copied().collect::<Vec<_>>();
+    instances.sort_by_key(|instance| runtime_instance_sort_key(db, *instance));
+    for instance in instances {
+        let Some(node) = graph.nodes.get(&instance) else {
             continue;
         };
-        for region in function
-            .instance(db)
-            .referenced_code_regions(db)
-            .iter()
-            .copied()
-        {
+        for region in node.referenced_code_regions.iter().copied() {
             let Some(source) = section_refs.get(&region) else {
                 continue;
             };
@@ -1084,55 +1171,43 @@ fn collect_region_embeds<'db>(
 }
 
 fn collect_reachable_from_entry<'db>(
-    db: &'db dyn MirDb,
+    graph: &RuntimeGraph<'db>,
     entry: RuntimeInstance<'db>,
+    cache: &mut FxHashMap<RuntimeInstance<'db>, FxHashSet<RuntimeInstance<'db>>>,
 ) -> FxHashSet<RuntimeInstance<'db>> {
+    if let Some(reachable) = cache.get(&entry) {
+        return reachable.clone();
+    }
     let mut seen = FxHashSet::default();
     let mut stack = vec![entry];
     while let Some(instance) = stack.pop() {
         if !seen.insert(instance) {
             continue;
         }
-        for call in instance.calls(db) {
-            stack.push(call.callee);
+        if let Some(node) = graph.nodes.get(&instance) {
+            for callee in node.direct_callees.iter().copied() {
+                stack.push(callee);
+            }
         }
     }
+    cache.insert(entry, seen.clone());
     seen
 }
 
 fn collect_const_regions_for_reachable<'db>(
     db: &'db dyn MirDb,
-    functions_by_instance: &FxHashMap<RuntimeInstance<'db>, RuntimeFunction<'db>>,
+    graph: &RuntimeGraph<'db>,
     reachable: &FxHashSet<RuntimeInstance<'db>>,
 ) -> Vec<ConstRegionId<'db>> {
     let mut seen = FxHashSet::default();
     let mut regions = Vec::new();
-    for instance in reachable {
-        let Some(function) = functions_by_instance.get(instance) else {
+    let mut instances = reachable.iter().copied().collect::<Vec<_>>();
+    instances.sort_by_key(|instance| runtime_instance_sort_key(db, *instance));
+    for instance in instances {
+        let Some(node) = graph.nodes.get(&instance) else {
             continue;
         };
-        for region in function.referenced_const_regions(db) {
-            if seen.insert(region) {
-                regions.push(region);
-            }
-        }
-    }
-    regions
-}
-
-fn collect_function_root_regions<'db>(
-    db: &'db dyn MirDb,
-    functions: &[RuntimeFunction<'db>],
-) -> Vec<RuntimeCodeRegion<'db>> {
-    let mut seen = FxHashSet::default();
-    let mut regions = Vec::new();
-    for function in functions {
-        for region in function
-            .instance(db)
-            .referenced_code_regions(db)
-            .iter()
-            .copied()
-        {
+        for region in node.referenced_const_regions.iter().copied() {
             if seen.insert(region) {
                 regions.push(region);
             }
@@ -1564,22 +1639,9 @@ fn make_resolved_code_region<'db>(
 
 fn collect_runtime_functions<'db>(
     db: &'db dyn MirDb,
-    roots: &[RuntimeInstance<'db>],
+    graph: &RuntimeGraph<'db>,
 ) -> Vec<RuntimeFunction<'db>> {
-    let mut seen = FxHashSet::default();
-    let mut stack = roots.to_vec();
-    let mut instances = Vec::new();
-
-    while let Some(instance) = stack.pop() {
-        if !seen.insert(instance) {
-            continue;
-        }
-        for call in instance.calls(db) {
-            stack.push(call.callee);
-        }
-        instances.push(instance);
-    }
-
+    let mut instances = graph.nodes.keys().copied().collect::<Vec<_>>();
     instances.sort_by_key(|instance| runtime_instance_sort_key(db, *instance));
     let duplicate_counts = instances
         .iter()
@@ -1603,7 +1665,17 @@ fn collect_runtime_functions<'db>(
                     symbol
                 }
             };
-            runtime_function_for_instance(db, instance, symbol)
+            runtime_function_for_instance(
+                db,
+                instance,
+                symbol,
+                graph
+                    .nodes
+                    .get(&instance)
+                    .expect("runtime graph should contain every materialized instance")
+                    .referenced_const_regions
+                    .clone(),
+            )
         })
         .collect::<Vec<_>>();
     functions.sort_by_key(|function| function.symbol(db));
@@ -1614,6 +1686,7 @@ fn runtime_function_for_instance<'db>(
     db: &'db dyn MirDb,
     instance: RuntimeInstance<'db>,
     symbol: String,
+    referenced_const_regions: Vec<ConstRegionId<'db>>,
 ) -> RuntimeFunction<'db> {
     match instance.key(db).source(db) {
         RuntimeInstanceSource::Semantic(semantic) => make_runtime_function(
@@ -1623,7 +1696,7 @@ fn runtime_function_for_instance<'db>(
             RuntimeLinkage::Private,
             inline_hint_for_semantic(db, semantic),
             RuntimeFunctionOwner::Semantic(semantic),
-            instance.referenced_const_regions(db).to_vec(),
+            referenced_const_regions,
         ),
         RuntimeInstanceSource::Synthetic(synthetic) => {
             let spec = synthetic.spec(db).clone();
@@ -1634,7 +1707,7 @@ fn runtime_function_for_instance<'db>(
                 RuntimeLinkage::Private,
                 RuntimeInlineHint::Auto,
                 RuntimeFunctionOwner::Synthetic(spec),
-                instance.referenced_const_regions(db).to_vec(),
+                referenced_const_regions,
             )
         }
     }
@@ -1779,12 +1852,21 @@ fn inline_hint_for_semantic<'db>(
 
 fn collect_const_regions<'db>(
     db: &'db dyn MirDb,
-    functions: &[RuntimeFunction<'db>],
+    graph: &RuntimeGraph<'db>,
 ) -> Vec<ConstRegionId<'db>> {
     let mut seen = FxHashSet::default();
     let mut regions = Vec::new();
-    for function in functions {
-        for region in function.referenced_const_regions(db) {
+    let mut instances = graph.nodes.keys().copied().collect::<Vec<_>>();
+    instances.sort_by_key(|instance| runtime_instance_sort_key(db, *instance));
+    for instance in instances {
+        for region in graph
+            .nodes
+            .get(&instance)
+            .expect("runtime graph should contain every materialized instance")
+            .referenced_const_regions
+            .iter()
+            .copied()
+        {
             if seen.insert(region) {
                 regions.push(region);
             }
