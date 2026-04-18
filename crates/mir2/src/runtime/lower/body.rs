@@ -1004,20 +1004,12 @@ impl<'db> RmirEmitter<'db> {
                 } else {
                     ty.field_types(self.db)
                 };
-                let field_values = elems
+                let (field_values, field_classes): (Vec<_>, Vec<_>) = elems
                     .iter()
                     .copied()
                     .zip(field_tys)
-                    .map(|(field, field_ty)| self.lower_sem_const_as_value(bb, field, field_ty))
-                    .collect::<Vec<_>>();
-                let field_classes = field_values
-                    .iter()
-                    .map(|value| {
-                        self.value_class(*value)
-                            .cloned()
-                            .expect("aggregate const field should have a runtime class")
-                    })
-                    .collect::<Vec<_>>();
+                    .map(|(field, field_ty)| self.lower_const_value_field(bb, field, field_ty))
+                    .unzip();
                 let layout =
                     layout_for_aggregate_instance_in_env(self.db, self.env, ty, &field_classes);
                 let ctor_elems = aggregate_ctor_elems_for_layout(self.db, layout, elems.len());
@@ -1091,20 +1083,12 @@ impl<'db> RmirEmitter<'db> {
                 } else {
                     ty.field_types(self.db)
                 };
-                let field_values = elems
+                let (field_values, field_classes): (Vec<_>, Vec<_>) = elems
                     .iter()
                     .copied()
                     .zip(field_tys)
-                    .map(|(field, field_ty)| self.lower_sem_const_as_value(bb, field, field_ty))
-                    .collect::<Vec<_>>();
-                let field_classes = field_values
-                    .iter()
-                    .map(|value| {
-                        self.value_class(*value)
-                            .cloned()
-                            .expect("aggregate const field should have a runtime class")
-                    })
-                    .collect::<Vec<_>>();
+                    .map(|(field, field_ty)| self.lower_const_value_field(bb, field, field_ty))
+                    .unzip();
                 let layout =
                     layout_for_aggregate_instance_in_env(self.db, self.env, ty, &field_classes);
                 let ctor_elems = aggregate_ctor_elems_for_layout(self.db, layout, elems.len());
@@ -1391,6 +1375,25 @@ impl<'db> RmirEmitter<'db> {
                 self.lower_semantic_operand_for_class(bb, field, &class)
             }
         };
+        let class = self.value_class(value).cloned().unwrap_or(stored);
+        (value, class)
+    }
+
+    fn lower_const_value_field(
+        &mut self,
+        bb: RBlockId,
+        field: SemConstId<'db>,
+        field_ty: TyId<'db>,
+    ) -> (RLocalId, RuntimeClass<'db>) {
+        let stored =
+            stored_class_for_ty_in_context(self.db, field_ty, self.env.scope, self.env.assumptions);
+        if self.class_is_runtime_zst(&stored) {
+            return (
+                self.alloc_runtime_temp(field_ty, RuntimeCarrier::Erased),
+                stored,
+            );
+        }
+        let value = self.lower_sem_const_as_value(bb, field, field_ty);
         let class = self.value_class(value).cloned().unwrap_or(stored);
         (value, class)
     }
@@ -5021,4 +5024,39 @@ fn intrinsic_numeric_name_parts(name: &str) -> Option<(&str, &str)> {
     ]
     .iter()
     .find_map(|suffix| op.strip_suffix(suffix).map(|prefix| (prefix, *suffix)))
+}
+
+#[cfg(test)]
+mod tests {
+    use common::InputDb;
+    use driver::DriverDataBase;
+    use url::Url;
+
+    use crate::build_test_runtime_package;
+
+    #[test]
+    fn poseidon_mock_range_consts_with_zst_fields_lower_into_runtime_package() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::from_file_path(
+            std::env::temp_dir().join("poseidon_mock_range_const_runtime_lowering.fe"),
+        )
+        .expect("fixture path should be absolute");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                include_str!("../../../../fe/tests/fixtures/fe_test/poseidon_mock.fe").to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let package = build_test_runtime_package(&db, top_mod, Some("test_deterministic"));
+        assert!(
+            package.is_ok(),
+            "poseidon_mock should lower through range consts with runtime-zst fields: {package:#?}"
+        );
+    }
 }
