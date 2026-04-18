@@ -1178,28 +1178,7 @@ impl<'db> RmirEmitter<'db> {
         let mut field_values = Vec::with_capacity(fields.len());
         let mut field_classes = Vec::with_capacity(fields.len());
         for (field, field_ty) in fields.iter().copied().zip(field_tys.iter().copied()) {
-            let value = match boundary_spec_for_ty_in_env(
-                self.db,
-                self.env,
-                field_ty,
-                AddressSpaceKind::Memory,
-            ) {
-                Some(boundary) => self.lower_semantic_operand_for_boundary(bb, field, &boundary),
-                None => {
-                    let class = self
-                        .top_level_class_for_ty(field_ty, AddressSpaceKind::Memory)
-                        .expect("non-zst aggregate field should have a runtime class");
-                    self.lower_semantic_operand_for_class(bb, field, &class)
-                }
-            };
-            let class = self.value_class(value).cloned().unwrap_or_else(|| {
-                stored_class_for_ty_in_context(
-                    self.db,
-                    field_ty,
-                    self.env.scope,
-                    self.env.assumptions,
-                )
-            });
+            let (value, class) = self.lower_ctor_field(bb, field, field_ty);
             field_values.push(value);
             field_classes.push(class);
         }
@@ -1370,28 +1349,7 @@ impl<'db> RmirEmitter<'db> {
         let mut field_values = Vec::with_capacity(fields.len());
         let mut field_classes = Vec::with_capacity(fields.len());
         for (field, field_ty) in fields.iter().copied().zip(field_tys.iter().copied()) {
-            let value = match boundary_spec_for_ty_in_env(
-                self.db,
-                self.env,
-                field_ty,
-                AddressSpaceKind::Memory,
-            ) {
-                Some(boundary) => self.lower_semantic_operand_for_boundary(bb, field, &boundary),
-                None => {
-                    let class = self
-                        .top_level_class_for_ty(field_ty, AddressSpaceKind::Memory)
-                        .expect("non-zst enum field should have a runtime class");
-                    self.lower_semantic_operand_for_class(bb, field, &class)
-                }
-            };
-            let class = self.value_class(value).cloned().unwrap_or_else(|| {
-                stored_class_for_ty_in_context(
-                    self.db,
-                    field_ty,
-                    self.env.scope,
-                    self.env.assumptions,
-                )
-            });
+            let (value, class) = self.lower_ctor_field(bb, field, field_ty);
             field_values.push(value);
             field_classes.push(class);
         }
@@ -1403,6 +1361,38 @@ impl<'db> RmirEmitter<'db> {
             &field_classes,
         );
         self.lower_enum_values(bb, dst, layout, variant, &field_values);
+    }
+
+    fn lower_ctor_field(
+        &mut self,
+        bb: RBlockId,
+        field: NOperand,
+        field_ty: TyId<'db>,
+    ) -> (RLocalId, RuntimeClass<'db>) {
+        let stored =
+            stored_class_for_ty_in_context(self.db, field_ty, self.env.scope, self.env.assumptions);
+        if self.class_is_runtime_zst(&stored) {
+            return (
+                self.alloc_runtime_temp(field_ty, RuntimeCarrier::Erased),
+                stored,
+            );
+        }
+        let value = match boundary_spec_for_ty_in_env(
+            self.db,
+            self.env,
+            field_ty,
+            AddressSpaceKind::Memory,
+        ) {
+            Some(boundary) => self.lower_semantic_operand_for_boundary(bb, field, &boundary),
+            None => {
+                let class = self
+                    .top_level_class_for_ty(field_ty, AddressSpaceKind::Memory)
+                    .expect("non-zst constructor field should have a runtime class");
+                self.lower_semantic_operand_for_class(bb, field, &class)
+            }
+        };
+        let class = self.value_class(value).cloned().unwrap_or(stored);
+        (value, class)
     }
 
     fn lower_enum_values(
