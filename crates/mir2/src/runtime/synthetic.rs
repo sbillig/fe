@@ -1,3 +1,4 @@
+use common::layout::EVM_LAYOUT;
 use cranelift_entity::EntityRef;
 use hir::{
     analysis::{
@@ -21,6 +22,7 @@ use crate::{
     instance::{
         RuntimeInstance, RuntimeInstanceKey, RuntimeInstanceSource, get_or_build_runtime_instance,
     },
+    layout_size_bytes,
     runtime::{
         AddressSpaceKind, ConstScalar, ContractEffectArgPlan, ContractInitAbiPlan,
         ContractRecvAbiPlan, DispatchDefault, InitArgsPlan, PlaceElem, PlaceRoot, RBlock, RBlockId,
@@ -134,21 +136,11 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 .and_then(|entries| entries.get(idx))
                 .map(|entry| entry.semantic_ty)
                 .unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other));
-            let local = self.push_local(
-                semantic_ty,
-                RuntimeCarrier::Value(param.class.clone()),
-                RuntimeLocalRoot::None,
-            );
-            self.push_stmt(
+            args.push(self.push_synthetic_default_value(
                 RBlockId::from_u32(0),
-                RStmt::Assign {
-                    dst: local,
-                    expr: RExpr::Placeholder {
-                        class: param.class.clone(),
-                    },
-                },
-            );
-            args.push(local);
+                semantic_ty,
+                &param.class,
+            ));
         }
 
         if let Some(class) = signature.ret.clone() {
@@ -493,21 +485,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                                 "borrow-like boundary has no realizable synthetic placeholder class: {boundary:?}"
                             )
                         });
-                    let local = self.push_local(
-                        *declared_ty,
-                        RuntimeCarrier::Value(class.clone()),
-                        RuntimeLocalRoot::None,
-                    );
-                    self.push_stmt(
-                        bb,
-                        RStmt::Assign {
-                            dst: local,
-                            expr: RExpr::Placeholder {
-                                class: class.clone(),
-                            },
-                        },
-                    );
-                    local
+                    self.push_synthetic_default_value(bb, *declared_ty, &class)
                 }
             })
             .collect()
@@ -1744,6 +1722,129 @@ impl<'db> SyntheticBodyBuilder<'db> {
         local
     }
 
+    fn push_synthetic_default_value(
+        &mut self,
+        bb: RBlockId,
+        semantic_ty: TyId<'db>,
+        class: &RuntimeClass<'db>,
+    ) -> RLocalId {
+        match class {
+            RuntimeClass::RawAddr {
+                space: AddressSpaceKind::Memory,
+                target: Some(layout),
+            } => self.push_zeroed_memory_raw_root(bb, semantic_ty, *layout),
+            RuntimeClass::Ref {
+                pointee,
+                kind:
+                    RefKind::Object
+                    | RefKind::Provider {
+                        space: AddressSpaceKind::Memory,
+                        ..
+                    },
+                view: RefView::Whole,
+            } if pointee.aggregate_layout().is_some() => {
+                let object = self.push_zeroed_memory_object_ref(
+                    bb,
+                    semantic_ty,
+                    pointee.aggregate_layout().expect("aggregate ref layout"),
+                );
+                if self.locals[object.index()].carrier.value_class() == Some(class) {
+                    object
+                } else {
+                    self.coerce_runtime_value(bb, object, class, semantic_ty)
+                }
+            }
+            RuntimeClass::Scalar(_)
+            | RuntimeClass::AggregateValue { .. }
+            | RuntimeClass::RawAddr { .. }
+            | RuntimeClass::Ref { .. } => {
+                let local = self.push_local(
+                    semantic_ty,
+                    RuntimeCarrier::Value(class.clone()),
+                    RuntimeLocalRoot::None,
+                );
+                self.push_stmt(
+                    bb,
+                    RStmt::Assign {
+                        dst: local,
+                        expr: RExpr::Placeholder {
+                            class: class.clone(),
+                        },
+                    },
+                );
+                local
+            }
+        }
+    }
+
+    fn push_zeroed_memory_raw_root(
+        &mut self,
+        bb: RBlockId,
+        semantic_ty: TyId<'db>,
+        layout: crate::LayoutId<'db>,
+    ) -> RLocalId {
+        let size = self.push_const_scalar(
+            bb,
+            ConstScalar::Int {
+                bits: 256,
+                signed: false,
+                words: layout_size_bytes(self.db, layout, EVM_LAYOUT)
+                    .to_be_bytes()
+                    .into_iter()
+                    .skip_while(|byte| *byte == 0)
+                    .collect(),
+            },
+        );
+        let ptr = self.push_builtin_value(
+            bb,
+            TyId::u256(self.db),
+            RuntimeClass::Scalar(word_scalar_class()),
+            RuntimeBuiltin::Malloc { size },
+        );
+        let raw_class = RuntimeClass::RawAddr {
+            space: AddressSpaceKind::Memory,
+            target: Some(layout),
+        };
+        let raw = self.push_local(
+            semantic_ty,
+            RuntimeCarrier::Value(raw_class.clone()),
+            RuntimeLocalRoot::None,
+        );
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: raw,
+                expr: RExpr::WordToRawAddr {
+                    value: ptr,
+                    space: AddressSpaceKind::Memory,
+                    target: Some(layout),
+                },
+            },
+        );
+        raw
+    }
+
+    fn push_zeroed_memory_object_ref(
+        &mut self,
+        bb: RBlockId,
+        semantic_ty: TyId<'db>,
+        layout: crate::LayoutId<'db>,
+    ) -> RLocalId {
+        let dst = self.push_local(
+            semantic_ty,
+            RuntimeCarrier::Value(RuntimeClass::object_ref(layout)),
+            RuntimeLocalRoot::None,
+        );
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst,
+                expr: RExpr::AllocObject { layout },
+            },
+        );
+        dst
+    }
+
     fn push_binary_word(
         &mut self,
         bb: RBlockId,
@@ -1999,4 +2100,80 @@ fn memory_bytes_ty<'db>(
     scope: hir::hir_def::scope_graph::ScopeId<'db>,
 ) -> Option<TyId<'db>> {
     resolve_lib_type_path(db, scope, "std::evm::memory_input::MemoryBytes")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::InputDb;
+    use driver::DriverDataBase;
+    use url::Url;
+
+    use crate::{
+        build_test_runtime_package,
+        runtime::{RuntimeBuiltin, RuntimeFunctionOwner, RuntimeSyntheticSpec},
+    };
+
+    #[test]
+    fn test_roots_materialize_fresh_memory_for_mutable_aggregate_effect_params() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::from_file_path(
+            std::env::temp_dir().join("synthetic_mutable_array_args_and_effects_test_root.fe"),
+        )
+        .expect("fixture path should be absolute");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                include_str!(
+                    "../../../fe/tests/fixtures/fe_test/mutable_array_args_and_effects.fe"
+                )
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let package = build_test_runtime_package(&db, top_mod, Some("test_mut_array_effect_param"))
+            .expect("test runtime package should build");
+        let functions = package.functions(&db);
+        let root = functions
+            .iter()
+            .find(|function| {
+                matches!(
+                    function.owner(&db),
+                    RuntimeFunctionOwner::Synthetic(RuntimeSyntheticSpec::TestRoot { ref name, .. })
+                        if name == "test_mut_array_effect_param"
+                )
+            })
+            .expect("expected synthetic test root");
+        let body = root.instance(&db).body(&db);
+        assert!(
+            body.blocks[0].stmts.iter().any(|stmt| matches!(
+                stmt,
+                RStmt::Assign {
+                    expr: RExpr::Builtin(RuntimeBuiltin::Malloc { .. }) | RExpr::AllocObject { .. },
+                    ..
+                }
+            )),
+            "expected synthetic test root to materialize fresh ambient state for aggregate effect params: {body:#?}"
+        );
+        assert!(
+            !body.blocks[0].stmts.iter().any(|stmt| matches!(
+                stmt,
+                RStmt::Assign {
+                    expr: RExpr::Placeholder {
+                        class: RuntimeClass::RawAddr {
+                            space: AddressSpaceKind::Memory,
+                            target: Some(_),
+                        }
+                    },
+                    ..
+                }
+            )),
+            "synthetic test root should not seed aggregate memory effect params with a null raw pointer: {body:#?}"
+        );
+    }
 }
