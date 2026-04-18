@@ -176,6 +176,31 @@ fn use_add_assign() {
 }
 
 #[test]
+fn compound_if_let_pointer_roots_lower_to_yul() {
+    emit_inline_yul(
+        "file:///compound_if_let_pointer_roots_lower_to_yul.fe",
+        r#"
+use std::evm::effects::assert
+
+fn sum_compound_if_let(_ a: Option<Option<usize>>) -> usize {
+    if let Option::Some(b) = a && let Option::Some(c) = b {
+        c
+    } else {
+        0
+    }
+}
+
+#[test]
+fn test_sum_compound_if_let() {
+    assert(sum_compound_if_let(Option::Some(Option::Some(7))) == 7)
+    assert(sum_compound_if_let(Option::Some(Option::None)) == 0)
+    assert(sum_compound_if_let(Option::None) == 0)
+}
+"#,
+    );
+}
+
+#[test]
 fn packed_byte_arrays_use_byte_loads_and_stores_in_yul() {
     let yul = emit_inline_yul(
         "file:///packed_byte_arrays_use_byte_loads_and_stores_in_yul.fe",

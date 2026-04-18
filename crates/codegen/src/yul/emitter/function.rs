@@ -469,7 +469,20 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         }
         self.write_place_from_value(
             YulPlace {
-                root: YulPlaceRoot::Slot(local),
+                root: match &self.plan.locals[local.index()].root {
+                    YulLocalRoot::MemorySlot { .. } => YulPlaceRoot::Slot(local),
+                    YulLocalRoot::PtrRoot { class } => YulPlaceRoot::Ptr {
+                        local,
+                        space: Self::root_space_for_class(class)?,
+                        class: class.clone(),
+                    },
+                    YulLocalRoot::None => {
+                        return Err(YulError::InvalidYulPackage(format!(
+                            "local {local:?} has no storage root in `{}`",
+                            self.plan.symbol
+                        )));
+                    }
+                },
                 path: Box::default(),
                 storage_kind: match &self.plan.locals[local.index()].root {
                     YulLocalRoot::MemorySlot { class } => match class {

@@ -2774,16 +2774,19 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
         local: &mir2::RLocal<'db>,
         info: &LocalValueInfo<'db>,
     ) -> YulLocalRoot<'db> {
-        if let Some(class) = info.class.clone()
-            && let Some(space) = info.transport.root_alias
-            && !matches!(class, YulValueClass::Word(_))
-        {
-            return YulLocalRoot::PtrRoot {
-                class: specialize_yul_class_root(class, Some(space)),
-            };
-        }
         match &local.root {
-            mir2::RuntimeLocalRoot::None => YulLocalRoot::None,
+            mir2::RuntimeLocalRoot::None => {
+                if let Some(class) = info.class.clone()
+                    && let Some(space) = info.transport.root_alias
+                    && !matches!(class, YulValueClass::Word(_))
+                {
+                    YulLocalRoot::PtrRoot {
+                        class: specialize_yul_class_root(class, Some(space)),
+                    }
+                } else {
+                    YulLocalRoot::None
+                }
+            }
             mir2::RuntimeLocalRoot::Slot(class) => YulLocalRoot::MemorySlot {
                 class: class.clone(),
             },
