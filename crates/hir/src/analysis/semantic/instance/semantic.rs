@@ -32,7 +32,7 @@ use crate::{
         },
     },
     hir_def::FuncParamMode,
-    hir_def::{CallableDef, Expr, Partial, scope_graph::ScopeId},
+    hir_def::{CallableDef, Expr, ExprId, Partial, scope_graph::ScopeId},
     semantic::{
         EffectEnvView, EffectRequirement, EffectRequirementKey, ProviderBinding, ProviderSource,
         ResolvedEffectBinding,
@@ -86,6 +86,18 @@ pub struct ReceiverLoweringPlan<'db> {
     pub borrowed_ty: TyId<'db>,
     pub receiver_ty: TyId<'db>,
     pub kind: BorrowKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Update)]
+pub struct CallLoweringPlan<'db> {
+    pub callee: Option<SemanticCalleeRef<'db>>,
+    pub receiver: Option<ReceiverLoweringPlan<'db>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Update)]
+pub struct ForLoopCalleeRefs<'db> {
+    pub len_callee: SemanticCalleeRef<'db>,
+    pub get_callee: SemanticCalleeRef<'db>,
 }
 
 #[derive(Debug, Clone)]
@@ -172,10 +184,10 @@ pub fn instantiated_typed_body<'db>(
 }
 
 #[salsa::tracked(return_ref)]
-pub fn semantic_receiver_lowering_plans<'db>(
+pub fn semantic_call_lowering_plans<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-) -> Vec<Option<ReceiverLoweringPlan<'db>>> {
+) -> Vec<Option<CallLoweringPlan<'db>>> {
     let typed_body = instance.key(db).typed_body(db);
     let Some(body) = typed_body.body() else {
         return Vec::new();
@@ -192,51 +204,101 @@ pub fn semantic_receiver_lowering_plans<'db>(
         else {
             continue;
         };
-        let receiver = match expr_data {
-            Expr::MethodCall(receiver, ..)
-            | Expr::Un(receiver, ..)
-            | Expr::Bin(receiver, ..)
-            | Expr::AugAssign(receiver, ..) => Some(*receiver),
-            Expr::Call(..)
-            | Expr::Lit(..)
-            | Expr::Path(..)
-            | Expr::Tuple(..)
-            | Expr::Array(..)
-            | Expr::ArrayRep(..)
-            | Expr::RecordInit(..)
-            | Expr::Field(..)
-            | Expr::Cast(..)
-            | Expr::Assign(..)
-            | Expr::Block(..)
-            | Expr::If(..)
-            | Expr::Match(..)
-            | Expr::With(..) => None,
-        };
-        let Some(receiver) = receiver else {
-            continue;
-        };
-        let Some(borrowed_ty) = callable.arg_ty(db, 0) else {
-            continue;
-        };
-        let borrowed_ty = normalize_ty(db, borrowed_ty, scope, assumptions);
-        let receiver_ty = normalize_ty(db, typed_body.expr_ty(db, receiver), scope, assumptions);
-        if let Some((kind, _)) = borrowed_ty.as_capability(db)
-            && matches!(kind, CapabilityKind::Mut | CapabilityKind::Ref)
-            && receiver_ty.as_capability(db).is_none()
-        {
-            plans[expr.index()] = Some(ReceiverLoweringPlan {
-                borrowed_ty,
-                receiver_ty,
-                kind: match kind {
-                    CapabilityKind::Mut => BorrowKind::Mut,
-                    CapabilityKind::Ref => BorrowKind::Ref,
-                    CapabilityKind::View => unreachable!(),
-                },
-            });
-        }
+        plans[expr.index()] = Some(CallLoweringPlan {
+            callee: semantic_callee_key(db, instance.key(db), callable)
+                .map(|key| SemanticCalleeRef { key }),
+            receiver: receiver_lowering_plan(
+                db,
+                expr_data,
+                callable,
+                typed_body,
+                scope,
+                assumptions,
+            ),
+        });
     }
 
     plans
+}
+
+#[salsa::tracked(return_ref)]
+pub fn semantic_for_loop_callee_refs<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Vec<Option<ForLoopCalleeRefs<'db>>> {
+    let typed_body = instance.key(db).typed_body(db);
+    let Some(body) = typed_body.body() else {
+        return Vec::new();
+    };
+    let mut callees = vec![None; body.stmts(db).len()];
+    for (stmt, _) in body.stmts(db).iter() {
+        let Some(seq) = typed_body.for_loop_seq(stmt) else {
+            continue;
+        };
+        let len_callee = semantic_callee_key(db, instance.key(db), &seq.len_callable)
+            .map(|key| SemanticCalleeRef { key })
+            .expect("Seq::len should lower to a semantic callee");
+        let get_callee = semantic_callee_key(db, instance.key(db), &seq.get_callable)
+            .map(|key| SemanticCalleeRef { key })
+            .expect("Seq::get should lower to a semantic callee");
+        callees[stmt.index()] = Some(ForLoopCalleeRefs {
+            len_callee,
+            get_callee,
+        });
+    }
+    callees
+}
+
+fn receiver_lowering_plan<'db>(
+    db: &'db dyn HirAnalysisDb,
+    expr_data: &Expr<'db>,
+    callable: &crate::analysis::ty::ty_check::Callable<'db>,
+    typed_body: &TypedBody<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<ReceiverLoweringPlan<'db>> {
+    let receiver = call_like_receiver_expr(expr_data)?;
+    let borrowed_ty = callable.arg_ty(db, 0)?;
+    let borrowed_ty = normalize_ty(db, borrowed_ty, scope, assumptions);
+    let receiver_ty = normalize_ty(db, typed_body.expr_ty(db, receiver), scope, assumptions);
+    let (kind, _) = borrowed_ty.as_capability(db)?;
+    if !matches!(kind, CapabilityKind::Mut | CapabilityKind::Ref)
+        || receiver_ty.as_capability(db).is_some()
+    {
+        return None;
+    }
+    Some(ReceiverLoweringPlan {
+        borrowed_ty,
+        receiver_ty,
+        kind: match kind {
+            CapabilityKind::Mut => BorrowKind::Mut,
+            CapabilityKind::Ref => BorrowKind::Ref,
+            CapabilityKind::View => unreachable!(),
+        },
+    })
+}
+
+fn call_like_receiver_expr<'db>(expr_data: &Expr<'db>) -> Option<ExprId> {
+    match expr_data {
+        Expr::MethodCall(receiver, ..)
+        | Expr::Un(receiver, ..)
+        | Expr::Bin(receiver, ..)
+        | Expr::AugAssign(receiver, ..) => Some(*receiver),
+        Expr::Call(..)
+        | Expr::Lit(..)
+        | Expr::Path(..)
+        | Expr::Tuple(..)
+        | Expr::Array(..)
+        | Expr::ArrayRep(..)
+        | Expr::RecordInit(..)
+        | Expr::Field(..)
+        | Expr::Cast(..)
+        | Expr::Assign(..)
+        | Expr::Block(..)
+        | Expr::If(..)
+        | Expr::Match(..)
+        | Expr::With(..) => None,
+    }
 }
 
 #[salsa::tracked]
@@ -537,32 +599,23 @@ fn collect_semantic_callees<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> Vec<SemanticCalleeRef<'db>> {
-    let key = instance.key(db);
-    let typed_body = key.typed_body(db);
-    let Some(body) = typed_body.body() else {
-        return Vec::new();
-    };
-
     let mut seen = FxHashSet::default();
     let mut callees = Vec::new();
-    for (expr_id, expr) in body.exprs(db).iter() {
-        let Partial::Present(_) = expr else {
-            continue;
-        };
-        let Some(SemanticExprLowering::Call { callable }) =
-            typed_body.semantic_expr_lowering(expr_id)
-        else {
-            continue;
-        };
-        let Some(callee_key) = semantic_callee_key(db, key, callable) else {
-            continue;
-        };
-
-        if seen.insert(callee_key) {
-            callees.push(SemanticCalleeRef { key: callee_key });
+    for plan in semantic_call_lowering_plans(db, instance).iter().flatten() {
+        if let Some(callee) = plan.callee
+            && seen.insert(callee.key)
+        {
+            callees.push(callee);
         }
     }
-
+    for refs in semantic_for_loop_callee_refs(db, instance).iter().flatten() {
+        if seen.insert(refs.len_callee.key) {
+            callees.push(refs.len_callee);
+        }
+        if seen.insert(refs.get_callee.key) {
+            callees.push(refs.get_callee);
+        }
+    }
     callees
 }
 

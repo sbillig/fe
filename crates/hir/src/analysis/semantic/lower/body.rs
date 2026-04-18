@@ -4,17 +4,17 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     analysis::semantic::instance::{
-        ReceiverLoweringPlan, SemanticInstance, SemanticInstanceKey, resolve_semantic_const_ref,
-        semantic_binding_ty, semantic_callee_key, semantic_instance_assumptions,
-        semantic_receiver_lowering_plans,
+        CallLoweringPlan, ForLoopCalleeRefs, SemanticInstance, resolve_semantic_const_ref,
+        semantic_binding_ty, semantic_call_lowering_plans, semantic_for_loop_callee_refs,
+        semantic_instance_assumptions,
     },
     analysis::{
         HirAnalysisDb,
         semantic::{
             FieldIndex, Mutability, SBlock, SBlockId, SConst, SExpr, SLocal, SLocalId, SPlace,
             SStmt, SStmtKind, STerminator, STerminatorKind, SValueId, SemOrigin, SemanticBody,
-            SemanticCalleeRef, SemanticLocalRole, ValueProvenance, VariantIndex, bool_const,
-            bytes_const, int_const, runtime_size_bytes, sem_const_from_ty, unit_const,
+            SemanticLocalRole, ValueProvenance, VariantIndex, bool_const, bytes_const, int_const,
+            runtime_size_bytes, sem_const_from_ty, unit_const,
         },
         ty::{
             const_ty::const_ty_or_abstract_from_assoc_const_use,
@@ -87,7 +87,8 @@ pub fn lower_to_smir<'db>(
         template_owner,
         typed_body,
         body,
-        semantic_receiver_lowering_plans(db, instance),
+        semantic_call_lowering_plans(db, instance),
+        semantic_for_loop_callee_refs(db, instance),
     );
     let result = cx.lower_expr(body.expr(db));
     if !cx.is_terminated(cx.current) {
@@ -110,9 +111,9 @@ pub(super) struct SmirLowerCtxt<'db> {
     pub(super) template_owner: BodyOwner<'db>,
     pub(super) typed_body: &'db TypedBody<'db>,
     pub(super) body: Body<'db>,
-    pub(super) receiver_lowering_plans: &'db [Option<ReceiverLoweringPlan<'db>>],
+    pub(super) call_lowering_plans: &'db [Option<CallLoweringPlan<'db>>],
+    pub(super) for_loop_callee_refs: &'db [Option<ForLoopCalleeRefs<'db>>],
     pub(super) assumptions: crate::analysis::ty::trait_resolution::PredicateListId<'db>,
-    pub(super) owner_key: SemanticInstanceKey<'db>,
     pub(super) locals: Vec<SLocal<'db>>,
     pub(super) blocks: Vec<BlockState<'db>>,
     pub(super) binding_locals: FxHashMap<LocalBinding<'db>, SLocalId>,
@@ -139,18 +140,18 @@ impl<'db> SmirLowerCtxt<'db> {
         template_owner: BodyOwner<'db>,
         typed_body: &'db TypedBody<'db>,
         body: Body<'db>,
-        receiver_lowering_plans: &'db [Option<ReceiverLoweringPlan<'db>>],
+        call_lowering_plans: &'db [Option<CallLoweringPlan<'db>>],
+        for_loop_callee_refs: &'db [Option<ForLoopCalleeRefs<'db>>],
     ) -> Self {
-        let owner_key = instance.key(db);
         let mut cx = Self {
             db,
             instance,
             template_owner,
             typed_body,
             body,
-            receiver_lowering_plans,
+            call_lowering_plans,
+            for_loop_callee_refs,
             assumptions: semantic_instance_assumptions(db, instance),
-            owner_key,
             locals: Vec::new(),
             blocks: Vec::new(),
             binding_locals: FxHashMap::default(),
@@ -330,20 +331,14 @@ impl<'db> SmirLowerCtxt<'db> {
             panic!("cannot lower absent expression")
         };
         let origin = SemOrigin::Expr(expr);
+        let ty = self.expr_ty(expr);
 
         match expr_data {
             Expr::Lit(lit) => self.lower_leaf_literal(expr, lit),
             Expr::Path(_) => self.lower_path_expr(expr),
             Expr::Tuple(elems) | Expr::Array(elems) => {
                 let fields = elems.iter().map(|expr| self.lower_expr(*expr)).collect();
-                self.emit_expr_with_origin(
-                    origin,
-                    self.expr_ty(expr),
-                    SExpr::AggregateMake {
-                        ty: self.expr_ty(expr),
-                        fields,
-                    },
-                )
+                self.emit_expr_with_origin(origin, ty, SExpr::AggregateMake { ty, fields })
             }
             Expr::ArrayRep(elem, _) => {
                 let len = self
@@ -353,9 +348,9 @@ impl<'db> SmirLowerCtxt<'db> {
                 let value = self.lower_expr(*elem);
                 self.emit_expr_with_origin(
                     origin,
-                    self.expr_ty(expr),
+                    ty,
                     SExpr::AggregateMake {
-                        ty: self.expr_ty(expr),
+                        ty,
                         fields: vec![value; len].into_boxed_slice(),
                     },
                 )
@@ -364,11 +359,7 @@ impl<'db> SmirLowerCtxt<'db> {
             Expr::Field(base, _) => {
                 if let Some(place) = self.typed_body.expr_place(expr) {
                     let place = self.lower_place_data(place);
-                    return self.emit_expr_with_origin(
-                        origin,
-                        self.expr_ty(expr),
-                        SExpr::ReadPlace { place },
-                    );
+                    return self.emit_expr_with_origin(origin, ty, SExpr::ReadPlace { place });
                 }
                 let base_expr = *base;
                 let base = self.lower_expr(base_expr);
@@ -377,20 +368,16 @@ impl<'db> SmirLowerCtxt<'db> {
                         .resolved_field_index(expr)
                         .expect("field expression should have a resolved field index"),
                 );
-                self.emit_expr_with_origin(origin, self.expr_ty(expr), SExpr::Field { base, field })
+                self.emit_expr_with_origin(origin, ty, SExpr::Field { base, field })
             }
             Expr::Bin(base, index, BinOp::Index) => {
                 if let Some(place) = self.typed_body.expr_place(expr) {
                     let place = self.lower_place_data(place);
-                    return self.emit_expr_with_origin(
-                        origin,
-                        self.expr_ty(expr),
-                        SExpr::ReadPlace { place },
-                    );
+                    return self.emit_expr_with_origin(origin, ty, SExpr::ReadPlace { place });
                 }
                 let base = self.lower_expr(*base);
                 let index = self.lower_expr(*index);
-                self.emit_expr_with_origin(origin, self.expr_ty(expr), SExpr::Index { base, index })
+                self.emit_expr_with_origin(origin, ty, SExpr::Index { base, index })
             }
             Expr::Un(inner, UnOp::Mut | UnOp::Ref) => {
                 let kind = match expr_data {
@@ -401,7 +388,7 @@ impl<'db> SmirLowerCtxt<'db> {
                 let place = self.lower_place(*inner);
                 self.emit_expr_with_origin(
                     origin,
-                    self.expr_ty(expr),
+                    ty,
                     SExpr::Borrow {
                         place,
                         kind,
@@ -411,7 +398,7 @@ impl<'db> SmirLowerCtxt<'db> {
             }
             Expr::Un(inner, op) => {
                 if self.typed_body.semantic_expr_lowering(expr).is_some() {
-                    return self.lower_call_like_expr(expr, Some(*inner), &[]);
+                    return self.lower_call_like_expr(expr, ty, Some(*inner), &[]);
                 }
                 if *op == UnOp::Minus
                     && let Some(value) = self.lower_negated_int_literal(expr, *inner)
@@ -419,11 +406,7 @@ impl<'db> SmirLowerCtxt<'db> {
                     return value;
                 }
                 let value = self.lower_expr(*inner);
-                self.emit_expr_with_origin(
-                    origin,
-                    self.expr_ty(expr),
-                    SExpr::Unary { op: *op, value },
-                )
+                self.emit_expr_with_origin(origin, ty, SExpr::Unary { op: *op, value })
             }
             Expr::Bin(lhs, rhs, BinOp::Arith(ArithBinOp::Range)) => {
                 let ty = self.expr_ty(expr);
@@ -450,26 +433,20 @@ impl<'db> SmirLowerCtxt<'db> {
             }
             Expr::Bin(lhs, rhs, op) => {
                 if self.typed_body.semantic_expr_lowering(expr).is_some() {
-                    return self.lower_call_like_expr(expr, Some(*lhs), &[*rhs]);
+                    return self.lower_call_like_expr(expr, ty, Some(*lhs), &[*rhs]);
                 }
                 let lhs = self.lower_expr(*lhs);
                 let rhs = self.lower_expr(*rhs);
-                self.emit_expr_with_origin(
-                    origin,
-                    self.expr_ty(expr),
-                    SExpr::Binary { op: *op, lhs, rhs },
-                )
+                self.emit_expr_with_origin(origin, ty, SExpr::Binary { op: *op, lhs, rhs })
             }
             Expr::Cast(value, to) => {
                 let value = self.lower_expr(*value);
                 self.emit_expr_with_origin(
                     origin,
-                    self.expr_ty(expr),
+                    ty,
                     SExpr::Cast {
                         value,
-                        to: to
-                            .to_opt()
-                            .map_or_else(|| self.expr_ty(expr), |_| self.expr_ty(expr)),
+                        to: to.to_opt().map_or(ty, |_| ty),
                     },
                 )
             }
@@ -499,7 +476,7 @@ impl<'db> SmirLowerCtxt<'db> {
             }
             Expr::AugAssign(dst, src, op) => {
                 if self.typed_body.semantic_expr_lowering(expr).is_some() {
-                    return self.lower_call_like_expr(expr, Some(*dst), &[*src]);
+                    return self.lower_call_like_expr(expr, ty, Some(*dst), &[*src]);
                 }
                 let lhs = self.lower_expr(*dst);
                 let rhs = self.lower_expr(*src);
@@ -761,30 +738,30 @@ impl<'db> SmirLowerCtxt<'db> {
         args: &[CallArg<'db>],
     ) -> SValueId {
         let arg_exprs = args.iter().map(|arg| arg.expr).collect::<Vec<_>>();
-        self.lower_call_like_expr(expr, receiver, &arg_exprs)
+        self.lower_call_like_expr(expr, self.expr_ty(expr), receiver, &arg_exprs)
     }
 
     fn lower_call_like_expr(
         &mut self,
         expr: ExprId,
+        ty: TyId<'db>,
         receiver: Option<ExprId>,
         args: &[ExprId],
     ) -> SValueId {
         let lowering = self
             .typed_body
             .semantic_expr_lowering(expr)
-            .cloned()
             .unwrap_or_else(|| {
                 panic!("semantic lowering missing for call-like expression {expr:?}")
             });
         match lowering {
             SemanticExprLowering::Call { callable } => {
-                self.lower_callable_expr(expr, receiver, args, callable)
+                self.lower_callable_expr(expr, ty, receiver, args, callable)
             }
             SemanticExprLowering::CodeRegionIntrinsic {
                 region_arg, kind, ..
             } => {
-                let region = self.typed_body.expr_code_region_ref(self.db, region_arg).unwrap_or_else(
+                let region = self.typed_body.expr_code_region_ref(self.db, *region_arg).unwrap_or_else(
                     || {
                         panic!(
                             "typed code-region intrinsic is missing instantiated code-region ref: call={expr:?} arg={region_arg:?}"
@@ -795,10 +772,10 @@ impl<'db> SmirLowerCtxt<'db> {
                     CodeRegionIntrinsicKind::Offset => SExpr::CodeRegionOffset { region },
                     CodeRegionIntrinsicKind::Len => SExpr::CodeRegionLen { region },
                 };
-                self.emit_expr_with_origin(SemOrigin::Expr(expr), self.expr_ty(expr), lowered)
+                self.emit_expr_with_origin(SemOrigin::Expr(expr), ty, lowered)
             }
             SemanticExprLowering::ConstIntrinsic { callable, kind } => {
-                self.lower_const_intrinsic(expr, &callable, kind)
+                self.lower_const_intrinsic(expr, callable, *kind)
             }
         }
     }
@@ -806,9 +783,10 @@ impl<'db> SmirLowerCtxt<'db> {
     fn lower_callable_expr(
         &mut self,
         expr: ExprId,
+        ty: TyId<'db>,
         receiver: Option<ExprId>,
         args: &[ExprId],
-        callable: crate::analysis::ty::ty_check::Callable<'db>,
+        callable: &crate::analysis::ty::ty_check::Callable<'db>,
     ) -> SValueId {
         let mut values = Vec::with_capacity(args.len() + usize::from(receiver.is_some()));
         if let Some(receiver) = receiver {
@@ -821,22 +799,29 @@ impl<'db> SmirLowerCtxt<'db> {
         match callable.callable_def() {
             CallableDef::VariantCtor(variant) => self.emit_expr_with_origin(
                 SemOrigin::Expr(expr),
-                self.expr_ty(expr),
+                ty,
                 SExpr::EnumMake {
-                    enum_ty: self.expr_ty(expr),
+                    enum_ty: ty,
                     variant: VariantIndex(variant.idx),
                     fields: values.into_boxed_slice(),
                 },
             ),
             CallableDef::Func(_) => {
-                let callee_key = semantic_callee_key(self.db, self.owner_key, &callable)
-                    .expect("callable function should produce a semantic callee");
+                let callee = self
+                    .call_lowering_plans
+                    .get(expr.index())
+                    .copied()
+                    .flatten()
+                    .and_then(|plan| plan.callee)
+                    .unwrap_or_else(|| {
+                        panic!("call lowering plan missing semantic callee for {expr:?}")
+                    });
                 let effect_args = self.lower_effect_args(expr);
                 self.emit_expr_with_origin(
                     SemOrigin::Expr(expr),
-                    self.expr_ty(expr),
+                    ty,
                     SExpr::Call {
-                        callee: SemanticCalleeRef { key: callee_key },
+                        callee,
                         args: values.into_boxed_slice(),
                         effect_args,
                     },
@@ -847,10 +832,11 @@ impl<'db> SmirLowerCtxt<'db> {
 
     fn lower_callable_receiver(&mut self, call_expr: ExprId, receiver: ExprId) -> SValueId {
         if let Some(plan) = self
-            .receiver_lowering_plans
+            .call_lowering_plans
             .get(call_expr.index())
             .copied()
             .flatten()
+            .and_then(|plan| plan.receiver)
         {
             let receiver_prop = self.typed_body.expr_prop(self.db, receiver);
             let place = if let Some(place) = self.typed_body.expr_place(receiver) {
@@ -1020,17 +1006,19 @@ impl<'db> SmirLowerCtxt<'db> {
     }
 
     fn lower_for(&mut self, stmt: StmtId, pat: PatId, iter: ExprId, body_expr: ExprId) {
+        let for_loop_callee_refs = self
+            .for_loop_callee_refs
+            .get(stmt.index())
+            .copied()
+            .flatten()
+            .unwrap_or_else(|| panic!("missing staged callee refs for for-loop {stmt:?}"));
         let seq = self
             .typed_body
             .for_loop_seq(stmt)
-            .cloned()
             .unwrap_or_else(|| panic!("missing Seq resolution for for-loop {stmt:?}"));
         let iter_value = self.lower_expr(iter);
         let usize_ty = seq.len_callable.ret_ty(self.db);
-        let len_callee = semantic_callee_key(self.db, self.owner_key, &seq.len_callable)
-            .expect("Seq::len should lower to a semantic callee");
-        let get_callee = semantic_callee_key(self.db, self.owner_key, &seq.get_callable)
-            .expect("Seq::get should lower to a semantic callee");
+        let elem_ty = seq.elem_ty;
         let idx_local = self.alloc_temp(usize_ty);
         self.push_synthetic_stmt(SStmtKind::Assign {
             dst: idx_local,
@@ -1044,7 +1032,7 @@ impl<'db> SmirLowerCtxt<'db> {
         let len_value = self.emit_expr(
             usize_ty,
             SExpr::Call {
-                callee: SemanticCalleeRef { key: len_callee },
+                callee: for_loop_callee_refs.len_callee,
                 args: vec![iter_value].into_boxed_slice(),
                 effect_args: len_effect_args,
             },
@@ -1080,9 +1068,9 @@ impl<'db> SmirLowerCtxt<'db> {
         self.switch_to(body_bb);
         let get_effect_args = self.lower_seq_effect_args(&seq.get_effect_args);
         let elem = self.emit_expr(
-            seq.elem_ty,
+            elem_ty,
             SExpr::Call {
-                callee: SemanticCalleeRef { key: get_callee },
+                callee: for_loop_callee_refs.get_callee,
                 args: vec![iter_value, idx_local].into_boxed_slice(),
                 effect_args: get_effect_args,
             },

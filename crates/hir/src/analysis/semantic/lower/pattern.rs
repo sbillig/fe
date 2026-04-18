@@ -172,41 +172,40 @@ impl<'db> SmirLowerCtxt<'db> {
     }
 
     fn bind_validated_pattern(&mut self, pat: ValidatedPatId, value: PatternValue<'db>) {
-        let kind = self.typed_body.pattern_store().node(pat).kind().clone();
-        match kind {
-            ValidatedPatKind::Wildcard { binding } => {
-                if let Some(binding) = binding
-                    && let Some(local_binding) =
-                        self.typed_body.pat_binding(binding.representative_pat)
-                {
-                    let dst = self.alloc_binding_local(local_binding);
-                    self.debug_assert_pattern_binding_ty_matches(dst, value);
-                    self.push_synthetic_stmt(SStmtKind::Assign {
-                        dst,
-                        expr: SExpr::UseValue(value.value),
-                    });
-                }
+        let pattern_store = self.typed_body.pattern_store();
+        if let Some(binding) = pattern_store.wildcard_binding(pat).flatten() {
+            if let Some(local_binding) = self.typed_body.pat_binding(binding.representative_pat) {
+                let dst = self.alloc_binding_local(local_binding);
+                self.debug_assert_pattern_binding_ty_matches(dst, value);
+                self.push_synthetic_stmt(SStmtKind::Assign {
+                    dst,
+                    expr: SExpr::UseValue(value.value),
+                });
             }
-            ValidatedPatKind::Constructor { ctor, fields } => match ctor {
+        } else if let Some(ctor) = pattern_store.constructor_kind(pat) {
+            match ctor {
                 ConstructorKind::Variant(variant, _) => {
-                    for (idx, field_pat) in fields.into_iter().enumerate() {
+                    for idx in 0..pattern_store.child_count(pat) {
+                        let field_pat = pattern_store
+                            .child(pat, idx)
+                            .expect("pattern child should exist");
                         let field = self.project_pattern_variant_field(value, variant, idx);
                         self.bind_validated_pattern(field_pat, field);
                     }
                 }
                 ConstructorKind::Type(_) => {
-                    for (idx, field_pat) in fields.into_iter().enumerate() {
+                    for idx in 0..pattern_store.child_count(pat) {
+                        let field_pat = pattern_store
+                            .child(pat, idx)
+                            .expect("pattern child should exist");
                         let field = self.project_pattern_field(value, idx);
                         self.bind_validated_pattern(field_pat, field);
                     }
                 }
                 ConstructorKind::Literal(..) => {}
-            },
-            ValidatedPatKind::Or(pats) => {
-                if let Some(first) = pats.first().copied() {
-                    self.bind_validated_pattern(first, value);
-                }
             }
+        } else if let Some(first) = pattern_store.child(pat, 0) {
+            self.bind_validated_pattern(first, value);
         }
     }
 
@@ -313,12 +312,11 @@ impl<'db> SmirLowerCtxt<'db> {
         then_bb: SBlockId,
         else_bb: SBlockId,
     ) {
-        let node = self.typed_body.pattern_store().node(pat).clone();
-        match node.kind().clone() {
-            ValidatedPatKind::Wildcard { .. } => {
-                self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
-            }
-            ValidatedPatKind::Constructor { ctor, fields } => match ctor {
+        let pattern_store = self.typed_body.pattern_store();
+        if pattern_store.wildcard_binding(pat).is_some() {
+            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
+        } else if let Some(ctor) = pattern_store.constructor_kind(pat) {
+            match ctor {
                 ConstructorKind::Literal(lit, ty) => {
                     let rhs = self.literal_pattern_value(ty, lit);
                     let cond = self.emit_expr(
@@ -339,7 +337,7 @@ impl<'db> SmirLowerCtxt<'db> {
                     );
                 }
                 ConstructorKind::Variant(variant, _) => {
-                    let success_bb = if fields.is_empty() {
+                    let success_bb = if pattern_store.child_count(pat) == 0 {
                         then_bb
                     } else {
                         self.new_block()
@@ -359,29 +357,41 @@ impl<'db> SmirLowerCtxt<'db> {
                             else_bb,
                         },
                     );
-                    if !fields.is_empty() {
+                    if pattern_store.child_count(pat) != 0 {
                         self.switch_to(success_bb);
-                        self.lower_variant_field_branches(
-                            value, variant, &fields, then_bb, else_bb,
-                        );
+                        self.lower_variant_field_branches(value, variant, pat, then_bb, else_bb);
                     }
                 }
                 ConstructorKind::Type(_) => {
-                    self.lower_field_branches(value, &fields, then_bb, else_bb);
+                    self.lower_field_branches(value, pat, then_bb, else_bb);
                 }
-            },
-            ValidatedPatKind::Or(pats) => {
-                let Some((last, rest)) = pats.split_last() else {
-                    self.set_synthetic_terminator(self.current, STerminatorKind::Goto(else_bb));
-                    return;
-                };
-                for pat in rest {
-                    let next_else = self.new_block();
-                    self.lower_validated_pattern_branch(*pat, value, then_bb, next_else);
-                    self.switch_to(next_else);
-                }
-                self.lower_validated_pattern_branch(*last, value, then_bb, else_bb);
             }
+        } else {
+            let pat_count = pattern_store.child_count(pat);
+            if pat_count == 0 {
+                self.set_synthetic_terminator(self.current, STerminatorKind::Goto(else_bb));
+                return;
+            }
+            for idx in 0..pat_count - 1 {
+                let next_else = self.new_block();
+                self.lower_validated_pattern_branch(
+                    pattern_store
+                        .child(pat, idx)
+                        .expect("pattern alternative should exist"),
+                    value,
+                    then_bb,
+                    next_else,
+                );
+                self.switch_to(next_else);
+            }
+            self.lower_validated_pattern_branch(
+                pattern_store
+                    .child(pat, pat_count - 1)
+                    .expect("pattern alternative should exist"),
+                value,
+                then_bb,
+                else_bb,
+            );
         }
     }
 
@@ -547,15 +557,19 @@ impl<'db> SmirLowerCtxt<'db> {
     fn lower_field_branches(
         &mut self,
         value: PatternValue<'db>,
-        fields: &[ValidatedPatId],
+        pat: ValidatedPatId,
         then_bb: SBlockId,
         else_bb: SBlockId,
     ) {
-        let refutable_fields = fields
-            .iter()
-            .copied()
-            .enumerate()
-            .filter(|(_, field_pat)| !self.validated_pattern_is_irrefutable(*field_pat))
+        let pattern_store = self.typed_body.pattern_store();
+        let refutable_fields = (0..pattern_store.child_count(pat))
+            .filter_map(|field_idx| {
+                let field_pat = pattern_store
+                    .child(pat, field_idx)
+                    .expect("pattern child should exist");
+                (!self.validated_pattern_is_irrefutable(field_pat))
+                    .then_some((field_idx, field_pat))
+            })
             .collect::<Vec<_>>();
         if refutable_fields.is_empty() {
             self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
@@ -581,15 +595,19 @@ impl<'db> SmirLowerCtxt<'db> {
         &mut self,
         value: PatternValue<'db>,
         variant: crate::hir_def::EnumVariant<'db>,
-        fields: &[ValidatedPatId],
+        pat: ValidatedPatId,
         then_bb: SBlockId,
         else_bb: SBlockId,
     ) {
-        let refutable_fields = fields
-            .iter()
-            .copied()
-            .enumerate()
-            .filter(|(_, field_pat)| !self.validated_pattern_is_irrefutable(*field_pat))
+        let pattern_store = self.typed_body.pattern_store();
+        let refutable_fields = (0..pattern_store.child_count(pat))
+            .filter_map(|field_idx| {
+                let field_pat = pattern_store
+                    .child(pat, field_idx)
+                    .expect("pattern child should exist");
+                (!self.validated_pattern_is_irrefutable(field_pat))
+                    .then_some((field_idx, field_pat))
+            })
             .collect::<Vec<_>>();
         if refutable_fields.is_empty() {
             self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));

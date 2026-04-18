@@ -22,42 +22,7 @@ use super::body::SmirLowerCtxt;
 
 impl<'db> SmirLowerCtxt<'db> {
     pub(super) fn lower_effect_args(&mut self, call_expr: ExprId) -> Box<[SEffectArg<'db>]> {
-        let args = self
-            .typed_body
-            .call_effect_args(call_expr)
-            .into_iter()
-            .flatten()
-            .cloned()
-            .collect::<Vec<_>>();
-        args.into_iter()
-            .map(|arg| SEffectArg {
-                binding_idx: arg.binding_idx,
-                arg: match &arg.arg {
-                    EffectArg::Place(place) => SEffectArgValue::Place(self.lower_place_data(place)),
-                    EffectArg::Value(expr) => SEffectArgValue::Value(
-                        self.with_binding_values
-                            .get(expr)
-                            .copied()
-                            .unwrap_or_else(|| self.lower_expr(*expr)),
-                    ),
-                    EffectArg::Binding(binding) => {
-                        let local = self.alloc_binding_local(*binding);
-                        if matches!(arg.pass_mode, EffectPassMode::ByPlace) {
-                            SEffectArgValue::Place(SPlace {
-                                local,
-                                path: Box::default(),
-                            })
-                        } else {
-                            SEffectArgValue::Value(local)
-                        }
-                    }
-                    EffectArg::Unknown => SEffectArgValue::Value(self.unit_value()),
-                },
-                pass_mode: arg.pass_mode,
-                target_ty: arg.provider_target_ty,
-                provider: self.effect_arg_provider_space(&arg),
-            })
-            .collect()
+        self.lower_effect_arg_slice(self.typed_body.call_effect_args(call_expr).unwrap_or(&[]))
     }
 
     pub(super) fn lower_with_expr(
@@ -90,35 +55,7 @@ impl<'db> SmirLowerCtxt<'db> {
         &mut self,
         args: &[ResolvedEffectArg<'db>],
     ) -> Box<[SEffectArg<'db>]> {
-        args.iter()
-            .map(|arg| SEffectArg {
-                binding_idx: arg.binding_idx,
-                arg: match &arg.arg {
-                    EffectArg::Place(place) => SEffectArgValue::Place(self.lower_place_data(place)),
-                    EffectArg::Value(expr) => SEffectArgValue::Value(
-                        self.with_binding_values
-                            .get(expr)
-                            .copied()
-                            .unwrap_or_else(|| self.lower_expr(*expr)),
-                    ),
-                    EffectArg::Binding(binding) => {
-                        let local = self.alloc_binding_local(*binding);
-                        if matches!(arg.pass_mode, EffectPassMode::ByPlace) {
-                            SEffectArgValue::Place(SPlace {
-                                local,
-                                path: Box::default(),
-                            })
-                        } else {
-                            SEffectArgValue::Value(local)
-                        }
-                    }
-                    EffectArg::Unknown => SEffectArgValue::Value(self.unit_value()),
-                },
-                pass_mode: arg.pass_mode,
-                target_ty: arg.provider_target_ty,
-                provider: self.effect_arg_provider_space(arg),
-            })
-            .collect()
+        self.lower_effect_arg_slice(args)
     }
 
     fn effect_arg_provider_space(
@@ -138,6 +75,43 @@ impl<'db> SmirLowerCtxt<'db> {
     fn binding_provider_space(&self, binding: LocalBinding<'db>) -> Option<ProviderAddressSpace> {
         resolved_provider_binding_for_instance_effect(self.db, self.instance, binding)
             .and_then(|provider| provider.semantics.address_space)
+    }
+
+    fn lower_effect_arg_slice(
+        &mut self,
+        args: &[ResolvedEffectArg<'db>],
+    ) -> Box<[SEffectArg<'db>]> {
+        args.iter().map(|arg| self.lower_effect_arg(arg)).collect()
+    }
+
+    fn lower_effect_arg(&mut self, arg: &ResolvedEffectArg<'db>) -> SEffectArg<'db> {
+        SEffectArg {
+            binding_idx: arg.binding_idx,
+            arg: match &arg.arg {
+                EffectArg::Place(place) => SEffectArgValue::Place(self.lower_place_data(place)),
+                EffectArg::Value(expr) => SEffectArgValue::Value(
+                    self.with_binding_values
+                        .get(expr)
+                        .copied()
+                        .unwrap_or_else(|| self.lower_expr(*expr)),
+                ),
+                EffectArg::Binding(binding) => {
+                    let local = self.alloc_binding_local(*binding);
+                    if matches!(arg.pass_mode, EffectPassMode::ByPlace) {
+                        SEffectArgValue::Place(SPlace {
+                            local,
+                            path: Box::default(),
+                        })
+                    } else {
+                        SEffectArgValue::Value(local)
+                    }
+                }
+                EffectArg::Unknown => SEffectArgValue::Value(self.unit_value()),
+            },
+            pass_mode: arg.pass_mode,
+            target_ty: arg.provider_target_ty,
+            provider: self.effect_arg_provider_space(arg),
+        }
     }
 }
 
