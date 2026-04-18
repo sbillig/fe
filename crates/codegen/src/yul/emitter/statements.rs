@@ -57,7 +57,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 let root = self.local_value(*root)?;
                 let layout = self.class_layout(&root.class)?;
                 let tag_class = self.enum_tag_class(layout)?;
-                self.write_scalar_to_addr(
+                self.write_enum_tag_to_addr(
                     Self::root_space_for_class(&root.class)?,
                     root.value,
                     RenderedValue {
@@ -417,6 +417,23 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         })
     }
 
+    fn write_enum_tag_to_addr(
+        &self,
+        space: YulAddressSpace,
+        addr: String,
+        src: RenderedValue<'db>,
+    ) -> Result<Vec<YulDoc>, YulError> {
+        match space {
+            YulAddressSpace::Memory => self.write_packed_byte_scalar_to_addr(space, addr, src),
+            YulAddressSpace::Storage | YulAddressSpace::Transient => {
+                self.write_scalar_to_addr(space, addr, src)
+            }
+            YulAddressSpace::Code | YulAddressSpace::Calldata => Err(YulError::Unsupported(
+                format!("enum tag store into {space:?} is not supported"),
+            )),
+        }
+    }
+
     pub(super) fn write_enum_variant(
         &mut self,
         root: &str,
@@ -426,7 +443,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         fields: &[crate::yul::legalize::YLocalId],
     ) -> Result<Vec<YulDoc>, YulError> {
         let tag_class = self.enum_tag_class(layout)?;
-        let mut docs = self.write_scalar_to_addr(
+        let mut docs = self.write_enum_tag_to_addr(
             space,
             root.to_string(),
             RenderedValue {

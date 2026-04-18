@@ -825,6 +825,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         };
         let value = match space {
             YulAddressSpace::Memory => format!("byte(0, mload({addr}))"),
+            YulAddressSpace::Calldata => format!("byte(0, calldataload({addr}))"),
             YulAddressSpace::Code => {
                 let mut docs = self.alloc_memory_name(dst, "32");
                 docs.push(YulDoc::line(format!("datacopy({dst}, {addr}, 1)")));
@@ -834,7 +835,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 )));
                 return Ok(docs);
             }
-            YulAddressSpace::Storage | YulAddressSpace::Transient | YulAddressSpace::Calldata => {
+            YulAddressSpace::Storage | YulAddressSpace::Transient => {
                 return Err(YulError::Unsupported(format!(
                     "packed byte scalar load from {space:?} is not supported"
                 )));
@@ -873,12 +874,16 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         let tag_class = self.enum_tag_class(layout)?;
         let mut setup = value.setup;
         let temp = self.state.alloc_temp();
-        setup.extend(self.read_scalar_from_addr(
-            &YulValueClass::Word(tag_class.clone()),
-            Self::root_space_for_class(&value.class)?,
-            value.value,
-            &temp,
-        )?);
+        let tag = YulValueClass::Word(tag_class.clone());
+        let space = Self::root_space_for_class(&value.class)?;
+        setup.extend(match space {
+            YulAddressSpace::Memory | YulAddressSpace::Code | YulAddressSpace::Calldata => {
+                self.read_packed_byte_scalar_from_addr(&tag, space, value.value, &temp)?
+            }
+            YulAddressSpace::Storage | YulAddressSpace::Transient => {
+                self.read_scalar_from_addr(&tag, space, value.value, &temp)?
+            }
+        });
         Ok(RenderedValue {
             setup,
             value: temp,

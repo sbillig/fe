@@ -200,6 +200,37 @@ fn mutate_u8() -> u8 {
 }
 
 #[test]
+fn memory_enum_tags_use_packed_byte_ops_in_yul() {
+    let yul = emit_inline_yul(
+        "file:///memory_enum_tags_use_packed_byte_ops_in_yul.fe",
+        r#"
+enum MyOption {
+    None,
+    Some(u256),
+}
+
+fn unwrap_some() -> u256 {
+    let value = MyOption::Some(42)
+    match value {
+        MyOption::Some(inner) => inner,
+        MyOption::None => 0,
+    }
+}
+"#,
+    );
+
+    let body = yul_function_body(&yul, "unwrap_some");
+    assert!(
+        body.contains("mstore8("),
+        "memory enum tag writes should use packed byte stores:\n{body}"
+    );
+    assert!(
+        body.contains("byte(0, mload("),
+        "memory enum tag reads should use packed byte loads:\n{body}"
+    );
+}
+
+#[test]
 fn single_field_wrapper_ctors_return_words_in_yul() {
     let yul = emit_inline_yul(
         "file:///single_field_wrapper_ctors_return_words_in_yul.fe",
