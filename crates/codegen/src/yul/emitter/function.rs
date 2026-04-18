@@ -37,7 +37,7 @@ pub(super) struct FunctionEmitter<'a, 'db> {
 
 #[derive(Clone, Debug)]
 pub(super) struct YLoopInfo {
-    pub(super) exit: YBlockId,
+    pub(super) exit: Option<YBlockId>,
     pub(super) blocks: FxHashSet<YBlockId>,
 }
 
@@ -729,22 +729,50 @@ fn compute_loop_headers<'db>(
             .flat_map(|block| block_successors(&plan.blocks[block.index()].terminator))
             .filter(|succ| !blocks.contains(succ))
             .collect::<FxHashSet<_>>();
-        let exit = if exits.len() == 1 {
-            exits
-                .iter()
-                .copied()
-                .next()
-                .expect("loop exits.len() == 1 guarantees an exit")
+        let header_exits = block_successors(&plan.blocks[header.index()].terminator)
+            .into_iter()
+            .filter(|succ| !blocks.contains(succ))
+            .collect::<FxHashSet<_>>();
+        let nonterminal_exits = exits
+            .iter()
+            .copied()
+            .filter(|succ| !block_successors(&plan.blocks[succ.index()].terminator).is_empty())
+            .collect::<FxHashSet<_>>();
+        let exit = if header_exits.len() == 1 {
+            Some(
+                header_exits
+                    .iter()
+                    .copied()
+                    .next()
+                    .expect("header_exits.len() == 1 guarantees an exit"),
+            )
+        } else if nonterminal_exits.len() == 1 {
+            Some(
+                nonterminal_exits
+                    .iter()
+                    .copied()
+                    .next()
+                    .expect("nonterminal_exits.len() == 1 guarantees an exit"),
+            )
+        } else if let Some(candidate) =
+            ipdom[header.index()].filter(|candidate| !blocks.contains(candidate))
+        {
+            Some(candidate)
+        } else if exits.len() == 1 {
+            Some(
+                exits
+                    .iter()
+                    .copied()
+                    .next()
+                    .expect("exits.len() == 1 guarantees an exit"),
+            )
+        } else if nonterminal_exits.is_empty() {
+            None
         } else {
-            ipdom[header.index()]
-                .filter(|candidate| !blocks.contains(candidate))
-                .unwrap_or_else(|| {
-                    panic!(
-                        "structured Yul emission requires a unique loop continuation for header {:?}, found exits {:?}",
-                        header,
-                        exits
-                    )
-                })
+            panic!(
+                "structured Yul emission requires a unique loop continuation for header {:?}, found exits {:?}",
+                header, exits
+            )
         };
         loops.insert(header, YLoopInfo { exit, blocks });
     }

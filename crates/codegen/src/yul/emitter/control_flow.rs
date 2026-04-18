@@ -9,7 +9,7 @@ use super::function::{FunctionEmitter, YLoopInfo};
 #[derive(Clone, Copy, Debug)]
 pub(super) struct LoopEmitCtx {
     header: YBlockId,
-    break_target: YBlockId,
+    break_target: Option<YBlockId>,
 }
 
 #[derive(Clone, Copy)]
@@ -45,7 +45,9 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         {
             let (loop_doc, exit) = self.emit_loop(block, loop_info, ctx.stop_blocks, path)?;
             let mut docs = vec![loop_doc];
-            docs.extend(self.emit_edge(exit, ctx, path)?);
+            if let Some(exit) = exit {
+                docs.extend(self.emit_edge(exit, ctx, path)?);
+            }
             return Ok(docs);
         }
         if path.contains(&block) {
@@ -82,7 +84,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
             if target == loop_ctx.header {
                 return Ok(vec![YulDoc::line("continue")]);
             }
-            if target == loop_ctx.break_target {
+            if loop_ctx.break_target == Some(target) {
                 return Ok(vec![YulDoc::line("break")]);
             }
             if !self
@@ -92,8 +94,10 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 .contains(&target)
             {
                 let mut exit_stops = ctx.stop_blocks.to_vec();
-                if !exit_stops.contains(&loop_ctx.break_target) {
-                    exit_stops.push(loop_ctx.break_target);
+                if let Some(break_target) = loop_ctx.break_target
+                    && !exit_stops.contains(&break_target)
+                {
+                    exit_stops.push(break_target);
                 }
                 let mut docs = self.emit_block_internal(
                     target,
@@ -103,7 +107,9 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                     },
                     path,
                 )?;
-                docs.push(YulDoc::line("break"));
+                if loop_ctx.break_target.is_some() {
+                    docs.push(YulDoc::line("break"));
+                }
                 return Ok(docs);
             }
         }
@@ -325,7 +331,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
     ) -> Option<YBlockId> {
         let join = self.ipdom.get(block.index()).copied().flatten()?;
         if stop_blocks.contains(&join)
-            || matches!(loop_ctx, Some(LoopEmitCtx { header, break_target }) if join == header || join == break_target)
+            || matches!(loop_ctx, Some(LoopEmitCtx { header, break_target }) if join == header || break_target == Some(join))
         {
             None
         } else {
@@ -339,10 +345,12 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         loop_info: YLoopInfo,
         stop_blocks: &[YBlockId],
         path: &mut Vec<YBlockId>,
-    ) -> Result<(YulDoc, YBlockId), YulError> {
+    ) -> Result<(YulDoc, Option<YBlockId>), YulError> {
         let mut loop_stops = stop_blocks.to_vec();
-        if !loop_stops.contains(&loop_info.exit) {
-            loop_stops.push(loop_info.exit);
+        if let Some(exit) = loop_info.exit
+            && !loop_stops.contains(&exit)
+        {
+            loop_stops.push(exit);
         }
         let body_docs = self.emit_block_internal(
             header,

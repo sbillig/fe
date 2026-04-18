@@ -367,6 +367,29 @@ fn ctor() -> CallData {
 }
 
 #[test]
+fn structured_yul_loops_allow_early_returns_alongside_normal_exit() {
+    let _yul = emit_inline_yul(
+        "file:///structured_yul_loops_allow_early_returns_alongside_normal_exit.fe",
+        r#"
+fn iterate(_ max_iter: u256) -> u256 {
+    let mut i: u256 = 0
+    while i < max_iter {
+        if i == 3 {
+            return i
+        }
+        i += 1
+    }
+
+    if i == max_iter {
+        return i + 1
+    }
+    0
+}
+"#,
+    );
+}
+
+#[test]
 fn generated_yul_param_names_do_not_collide_with_function_symbols() {
     let yul = emit_inline_yul(
         "file:///generated_yul_param_names_do_not_collide_with_function_symbols.fe",
