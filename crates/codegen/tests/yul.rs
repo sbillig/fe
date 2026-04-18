@@ -305,6 +305,32 @@ fn test_contract_init_fixed_array_arg() uses (evm: mut Evm) {
 }
 
 #[test]
+fn effect_handle_field_deref_loads_provider_words_before_storage_access() {
+    let yul = emit_fixture_yul("effect_handle_field_deref.fe");
+    let body = yul_function_body(&yul, "bump");
+
+    assert!(
+        !body.contains("sload(p0)"),
+        "field deref through a stored effect handle should load the provider word before storage access:\n{body}"
+    );
+    assert!(
+        body.contains("mload(p0)"),
+        "field deref through a stored effect handle should read the handle out of the wrapper object:\n{body}"
+    );
+}
+
+#[test]
+fn sol_decoder_keeps_byte_input_fields_aggregate_backed_in_yul() {
+    let yul = emit_fixture_yul("effect_handle_field_deref.fe");
+    let body = yul_function_body(&yul, "read_word_0");
+
+    assert!(
+        !body.contains("mload(p0)"),
+        "decoder word reads should treat `self.cur.input` as an aggregate field reference, not load its first word:\n{body}"
+    );
+}
+
+#[test]
 fn single_field_wrapper_ctors_return_words_in_yul() {
     let yul = emit_inline_yul(
         "file:///single_field_wrapper_ctors_return_words_in_yul.fe",

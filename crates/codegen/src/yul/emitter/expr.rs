@@ -1,5 +1,5 @@
 use hir::hir_def::expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp};
-use mir2::RuntimeClass;
+use mir2::{RefKind, RuntimeClass};
 
 use crate::yul::{
     doc::YulDoc,
@@ -659,6 +659,15 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
             });
         }
         match place.storage_kind {
+            crate::yul::legalize::YulStorageKind::Cell
+                if self.place_load_uses_place_addr(place) =>
+            {
+                Ok(RenderedValue {
+                    setup,
+                    value: addr,
+                    class: place.result_class.clone(),
+                })
+            }
             crate::yul::legalize::YulStorageKind::Cell => {
                 let temp = self.state.alloc_temp();
                 setup.extend(self.read_transport_word_from_addr(space, addr, &temp)?);
@@ -674,6 +683,17 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 class: place.result_class.clone(),
             }),
         }
+    }
+
+    fn place_load_uses_place_addr(&self, place: &YulPlace<'db>) -> bool {
+        matches!(
+            &place.runtime_result_class,
+            RuntimeClass::Ref {
+                kind: RefKind::Object | RefKind::Const,
+                pointee,
+                ..
+            } if pointee.aggregate_layout().is_some()
+        )
     }
 
     pub(super) fn address_of_place(
@@ -713,18 +733,35 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 )
             }
         };
+        let mut setup = setup;
+        let mut space = space;
 
-        for elem in place.path.iter() {
+        for (idx, elem) in place.path.iter().enumerate() {
+            let remaining_path = idx + 1 < place.path.len();
             match elem {
-                YulPlaceElem::Field { field, class } => {
+                YulPlaceElem::Field {
+                    field,
+                    class,
+                    runtime_class,
+                } => {
                     let current_layout = layout.ok_or_else(|| {
                         YulError::Layout("field projection requires a layout".to_string())
                     })?;
                     let offset = self.field_offset_bytes(current_layout, *field);
                     addr = self.project_addr(space, addr, offset);
+                    if remaining_path && self.place_elem_requires_transport_deref(runtime_class) {
+                        let temp = self.state.alloc_temp();
+                        setup.extend(self.read_transport_word_from_addr(space, addr, &temp)?);
+                        addr = temp;
+                        space = Self::root_space_for_class(class)?;
+                    }
                     layout = self.class_layout(class).ok();
                 }
-                YulPlaceElem::Index { index, class } => {
+                YulPlaceElem::Index {
+                    index,
+                    class,
+                    runtime_class,
+                } => {
                     let current_layout = layout.ok_or_else(|| {
                         YulError::Layout("index projection requires an array layout".to_string())
                     })?;
@@ -737,24 +774,54 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                     };
                     addr =
                         self.project_addr_expr(space, addr, format!("mul({index_expr}, {stride})"));
+                    if remaining_path && self.place_elem_requires_transport_deref(runtime_class) {
+                        let temp = self.state.alloc_temp();
+                        setup.extend(self.read_transport_word_from_addr(space, addr, &temp)?);
+                        addr = temp;
+                        space = Self::root_space_for_class(class)?;
+                    }
                     layout = self.class_layout(class).ok();
                 }
                 YulPlaceElem::VariantField {
                     variant,
                     field,
                     class,
+                    runtime_class,
                 } => {
                     let current_layout = layout.ok_or_else(|| {
                         YulError::Layout("variant projection requires an enum layout".to_string())
                     })?;
                     let offset = self.variant_field_offset_bytes(current_layout, *variant, *field);
                     addr = self.project_addr(space, addr, offset);
+                    if remaining_path && self.place_elem_requires_transport_deref(runtime_class) {
+                        let temp = self.state.alloc_temp();
+                        setup.extend(self.read_transport_word_from_addr(space, addr, &temp)?);
+                        addr = temp;
+                        space = Self::root_space_for_class(class)?;
+                    }
                     layout = self.class_layout(class).ok();
                 }
             }
         }
 
         Ok((setup, addr, space))
+    }
+
+    fn place_elem_requires_transport_deref(&self, class: &RuntimeClass<'db>) -> bool {
+        matches!(
+            class,
+            RuntimeClass::Ref {
+                kind: RefKind::Provider { .. },
+                pointee,
+                ..
+            } if pointee.aggregate_layout().is_some()
+        ) || matches!(
+            class,
+            RuntimeClass::RawAddr {
+                target: Some(_),
+                ..
+            }
+        )
     }
 
     fn project_addr(&self, space: YulAddressSpace, base: String, offset: usize) -> String {

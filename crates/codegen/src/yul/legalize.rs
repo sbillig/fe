@@ -195,15 +195,18 @@ pub enum YulPlaceElem<'db> {
     Field {
         field: FieldIndex,
         class: YulValueClass<'db>,
+        runtime_class: RuntimeClass<'db>,
     },
     Index {
         index: IndexSource<YLocalId>,
         class: YulValueClass<'db>,
+        runtime_class: RuntimeClass<'db>,
     },
     VariantField {
         variant: VariantId<'db>,
         field: FieldIndex,
         class: YulValueClass<'db>,
+        runtime_class: RuntimeClass<'db>,
     },
 }
 
@@ -2725,6 +2728,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                         yul_class_for_runtime_class(self.db, class),
                         transport.root_alias,
                     ),
+                    runtime_class: class.clone(),
                 },
                 ResolvedPlaceElem::Index { index, class } => YulPlaceElem::Index {
                     index: match index {
@@ -2737,6 +2741,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                         yul_class_for_runtime_class(self.db, class),
                         transport.root_alias,
                     ),
+                    runtime_class: class.clone(),
                 },
                 ResolvedPlaceElem::VariantField {
                     variant,
@@ -2749,6 +2754,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                         yul_class_for_runtime_class(self.db, class),
                         transport.root_alias,
                     ),
+                    runtime_class: class.clone(),
                 },
             };
             path.push(class);
