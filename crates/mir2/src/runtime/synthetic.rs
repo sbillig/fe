@@ -357,13 +357,11 @@ impl<'db> SyntheticBodyBuilder<'db> {
 
     fn build_contract_init_root(
         &mut self,
-        init_abi: Option<RuntimeInstance<'db>>,
+        init_abi: RuntimeInstance<'db>,
         runtime_region: crate::runtime::RuntimeCodeRegion<'db>,
     ) {
         let zero = self.push_const_word(RBlockId::from_u32(0), 0);
-        if let Some(init_abi) = init_abi {
-            let _ = self.push_ignored_call(RBlockId::from_u32(0), init_abi, Vec::new());
-        }
+        let _ = self.push_ignored_call(RBlockId::from_u32(0), init_abi, Vec::new());
         let runtime_offset = self.push_builtin_value(
             RBlockId::from_u32(0),
             TyId::u256(self.db),

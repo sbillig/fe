@@ -673,7 +673,7 @@ pub enum RuntimeSyntheticSpec<'db> {
     },
     ContractInitRoot {
         contract: Contract<'db>,
-        init_abi: Option<RuntimeInstance<'db>>,
+        init_abi: RuntimeInstance<'db>,
         runtime_region: RuntimeCodeRegion<'db>,
     },
     ContractRuntimeRoot {

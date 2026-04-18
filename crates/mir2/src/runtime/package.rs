@@ -493,24 +493,33 @@ fn contract_init_root<'db>(
 fn contract_init_abi<'db>(
     db: &'db dyn MirDb,
     contract: Contract<'db>,
-) -> Result<Option<RuntimeInstance<'db>>, LowerError> {
+) -> Result<RuntimeInstance<'db>, LowerError> {
+    let plan = contract_init_abi_plan(db, contract)?;
+    Ok(synthetic_instance(
+        db,
+        RuntimeSyntheticSpec::ContractInitAbi { plan },
+        Vec::new(),
+    ))
+}
+
+fn contract_init_abi_plan<'db>(
+    db: &'db dyn MirDb,
+    contract: Contract<'db>,
+) -> Result<ContractInitAbiPlan<'db>, LowerError> {
     let Some(init) = contract.init(db) else {
-        return Ok(None);
+        return Ok(ContractInitAbiPlan {
+            contract,
+            payable: false,
+            user_init: None,
+            owner_effect_args: Box::new([]),
+            init_args: InitArgsPlan::None,
+        });
     };
 
-    let user_init = Some(runtime_instance_for_semantic(
-        db,
-        semantic_instance_for_root_owner(db, BodyOwner::ContractInit { contract })?,
-    ));
-    let owner_effect_args = contract_effect_arg_plans_for_site(
-        db,
-        contract,
-        semantic_instance_for_root_owner(db, BodyOwner::ContractInit { contract })?,
-    )?;
-    let projected_fields = visible_init_arg_fields(
-        db,
-        semantic_instance_for_root_owner(db, BodyOwner::ContractInit { contract })?,
-    );
+    let semantic = semantic_instance_for_root_owner(db, BodyOwner::ContractInit { contract })?;
+    let user_init = Some(runtime_instance_for_semantic(db, semantic));
+    let owner_effect_args = contract_effect_arg_plans_for_site(db, contract, semantic)?;
+    let projected_fields = visible_init_arg_fields(db, semantic);
     let init_args = if contract.init_args_ty(db) == TyId::unit(db) {
         InitArgsPlan::None
     } else {
@@ -520,19 +529,13 @@ fn contract_init_abi<'db>(
             projected_fields,
         }
     };
-    Ok(Some(synthetic_instance(
-        db,
-        RuntimeSyntheticSpec::ContractInitAbi {
-            plan: ContractInitAbiPlan {
-                contract,
-                payable: init.is_payable(db),
-                user_init,
-                owner_effect_args: owner_effect_args.into_boxed_slice(),
-                init_args,
-            },
-        },
-        Vec::new(),
-    )))
+    Ok(ContractInitAbiPlan {
+        contract,
+        payable: init.is_payable(db),
+        user_init,
+        owner_effect_args: owner_effect_args.into_boxed_slice(),
+        init_args,
+    })
 }
 
 fn contract_recv_wrapper<'db>(
@@ -1908,6 +1911,72 @@ pub contract DecodeHarness {
             projected_fields.as_ref(),
             &[1, 0],
             "recv wrapper must forward decoded fields in runtime-visible binding order, not tuple order"
+        );
+    }
+
+    #[test]
+    fn contract_init_wrapper_is_synthesized_for_no_init_contracts() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///contract_init_wrapper_is_synthesized.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+pub contract NoInitBox {}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let contract = top_mod
+            .all_contracts(&db)
+            .first()
+            .copied()
+            .expect("fixture should define a contract");
+
+        let init_abi = contract_init_abi(&db, contract).expect("init abi wrapper");
+        let RuntimeInstanceSource::Synthetic(synthetic) = init_abi.key(&db).source(&db) else {
+            panic!("init abi should be synthetic");
+        };
+        let RuntimeSyntheticSpec::ContractInitAbi { plan } = synthetic.spec(&db) else {
+            panic!("expected synthetic contract init abi");
+        };
+        assert!(
+            !plan.payable,
+            "implicit constructor wrapper must reject deployment value"
+        );
+        assert!(
+            plan.user_init.is_none(),
+            "implicit constructor wrapper should not call a user init"
+        );
+        assert!(
+            plan.owner_effect_args.is_empty(),
+            "implicit constructor wrapper should not synthesize owner effect args"
+        );
+        assert!(
+            matches!(plan.init_args, InitArgsPlan::None),
+            "implicit constructor wrapper should not decode init args"
+        );
+
+        let root = contract_init_root(&db, contract).expect("init root");
+        let RuntimeInstanceSource::Synthetic(synthetic) = root.key(&db).source(&db) else {
+            panic!("init root should be synthetic");
+        };
+        let RuntimeSyntheticSpec::ContractInitRoot {
+            init_abi: root_init_abi,
+            ..
+        } = synthetic.spec(&db)
+        else {
+            panic!("expected synthetic contract init root");
+        };
+        assert_eq!(
+            root_init_abi, init_abi,
+            "contract init root should always call the synthesized init abi wrapper"
         );
     }
 }
