@@ -686,14 +686,15 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
     }
 
     fn place_load_uses_place_addr(&self, place: &YulPlace<'db>) -> bool {
-        matches!(
-            &place.runtime_result_class,
-            RuntimeClass::Ref {
-                kind: RefKind::Object | RefKind::Const,
-                pointee,
-                ..
-            } if pointee.aggregate_layout().is_some()
-        )
+        place.path.is_empty()
+            && matches!(
+                &place.runtime_result_class,
+                RuntimeClass::Ref {
+                    kind: RefKind::Object | RefKind::Const,
+                    pointee,
+                    ..
+                } if pointee.aggregate_layout().is_some()
+            )
     }
 
     pub(super) fn address_of_place(

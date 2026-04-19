@@ -32,6 +32,18 @@ fn emit_inline_test_yul(path: &str, src: &str) -> String {
     output.tests[0].yul.clone()
 }
 
+fn function_body<'a>(yul: &'a str, signature: &str) -> &'a str {
+    let start = yul
+        .find(signature)
+        .unwrap_or_else(|| panic!("expected function `{signature}` in emitted Yul:\n{yul}"));
+    let tail = &yul[start..];
+    let end = tail
+        .find("\n      function ")
+        .or_else(|| tail.find("\n    function "))
+        .unwrap_or(tail.len());
+    &tail[..end]
+}
+
 #[test]
 fn readonly_call_results_keep_yul_locals_code_backed() {
     let yul = emit_inline_yul(
@@ -90,6 +102,24 @@ fn readonly_view_params_stay_code_backed_through_transparent_private_helpers() {
             && !sum_first4.contains("$len_0(v2)")
             && !sum_first4.contains("$get_0(v2,"),
         "readonly array params should not materialize whole arrays at transparent helper boundaries:\n{sum_first4}"
+    );
+}
+
+#[test]
+fn transparent_wrapper_get_loads_base_handle_before_inner_get() {
+    let src = format!(
+        "{}\nfn emit_helpers() -> u256 {{\n    let arr: [u256; 8] = [1, 2, 3, 4, 5, 6, 7, 8]\n    sum_last4(arr)\n}}\n",
+        include_str!("../../fe/tests/fixtures/fe_test/view_param_local_ref_take_reverse.fe"),
+    );
+    let yul = emit_inline_yul(
+        "file:///transparent_wrapper_get_loads_base_handle_before_inner_get.fe",
+        &src,
+    );
+    let get_reverse = function_body(&yul, "function $get_0(p0, p1) -> ret {");
+
+    assert!(
+        get_reverse.contains("mload(p0)") && get_reverse.contains("$get_"),
+        "transparent wrapper get should load the wrapper base handle before delegating to the inner sequence get:\n{get_reverse}"
     );
 }
 
