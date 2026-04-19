@@ -31,9 +31,13 @@ use crate::{
         RuntimeLocalRoot, RuntimeParamPlan, RuntimePlace, RuntimeReturnPlan, RuntimeSignature,
         RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole,
         lower::{
-            classify::{ref_class_for_place_result, runtime_address_space, semantic_return_ty},
+            classify::{
+                ref_class_for_place_result, runtime_address_space,
+                runtime_signature_for_key_with_returns, semantic_return_ty,
+            },
             coerce::{BoundarySourceClass, CoercionPlanner},
             interface::runtime_visible_binding_plans,
+            returns::RuntimeReturnAnalysisCx,
             type_info::{RuntimeTypeEnv, top_level_class_for_ty_in_env},
         },
         package::runtime_instance_for_semantic,
@@ -86,6 +90,7 @@ pub(crate) fn lower_synthetic_runtime_body<'db>(
 struct SyntheticBodyBuilder<'db> {
     db: &'db dyn MirDb,
     instance: RuntimeInstance<'db>,
+    returns: RuntimeReturnAnalysisCx<'db>,
     locals: Vec<RLocal<'db>>,
     blocks: Vec<RBlock<'db>>,
 }
@@ -95,6 +100,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         Self {
             db,
             instance,
+            returns: RuntimeReturnAnalysisCx::new(db),
             locals: Vec::new(),
             blocks: vec![RBlock {
                 stmts: Vec::new(),
@@ -118,8 +124,22 @@ impl<'db> SyntheticBodyBuilder<'db> {
         }
     }
 
+    fn runtime_signature(&mut self, callee: RuntimeInstance<'db>) -> RuntimeSignature<'db> {
+        match callee.key(self.db).source(self.db) {
+            RuntimeInstanceSource::Semantic(semantic) => runtime_signature_for_key_with_returns(
+                self.db,
+                semantic,
+                callee.key(self.db).params(self.db),
+                &mut self.returns,
+            ),
+            RuntimeInstanceSource::Synthetic(synthetic) => {
+                runtime_synthetic_signature(synthetic.spec(self.db).clone())
+            }
+        }
+    }
+
     fn build_passthrough_root(&mut self, callee: RuntimeInstance<'db>) {
-        let signature = callee.signature(self.db);
+        let signature = self.runtime_signature(callee);
         let semantic = callee.key(self.db).semantic(self.db);
         let param_entries =
             semantic.map(|semantic| runtime_visible_binding_plans(self.db, semantic));
@@ -496,8 +516,8 @@ impl<'db> SyntheticBodyBuilder<'db> {
         provided_prefix: usize,
         bindings: &[ContractEffectArgPlan<'db>],
     ) -> Vec<RLocalId> {
-        let needed = callee
-            .signature(self.db)
+        let needed = self
+            .runtime_signature(callee)
             .params
             .len()
             .saturating_sub(provided_prefix);
@@ -613,7 +633,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         args: Vec<RLocalId>,
     ) -> Option<RLocalId> {
         let callee = self.specialize_callee_for_args(callee, &args);
-        let sig = callee.signature(self.db);
+        let sig = self.runtime_signature(callee);
         let args = self.coerce_call_args(bb, callee, args);
         let dst = if let Some(class) = sig.ret {
             let semantic_ty = callee
@@ -687,7 +707,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
     }
 
     fn specialize_callee_for_args(
-        &self,
+        &mut self,
         callee: RuntimeInstance<'db>,
         args: &[RLocalId],
     ) -> RuntimeInstance<'db> {
@@ -697,7 +717,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         let RuntimeInstanceSource::Semantic(semantic) = callee.key(self.db).source(self.db) else {
             return callee;
         };
-        let signature = callee.signature(self.db);
+        let signature = self.runtime_signature(callee);
         let param_entries = runtime_visible_binding_plans(self.db, semantic);
         assert_eq!(
             param_entries.len(),
@@ -732,7 +752,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         callee: RuntimeInstance<'db>,
         args: Vec<RLocalId>,
     ) -> Vec<RLocalId> {
-        let signature = callee.signature(self.db);
+        let signature = self.runtime_signature(callee);
         if args.is_empty() && signature.params.is_empty() {
             return args;
         }

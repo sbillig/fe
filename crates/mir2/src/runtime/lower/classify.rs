@@ -1690,17 +1690,6 @@ pub(crate) struct RuntimeBodyCx<'a, 'carriers, 'db> {
 }
 
 impl<'a, 'carriers, 'db> RuntimeBodyCx<'a, 'carriers, 'db> {
-    pub(crate) fn expr_direct_class(
-        self,
-        block_idx: usize,
-        stmt_idx: usize,
-        expr: &NExpr<'db>,
-    ) -> Option<RuntimeClass<'db>> {
-        let mut returns = RuntimeReturnAnalysisCx::new(self.env.db());
-        self.env
-            .expr_direct_class(self.carriers, block_idx, stmt_idx, expr, None, &mut returns)
-    }
-
     pub(crate) fn materialized_value_class(self, local: SLocalId) -> Option<RuntimeClass<'db>> {
         self.env.materialized_value_class(self.carriers, local)
     }
@@ -1819,10 +1808,11 @@ pub(crate) fn ref_class_for_place_result<'db>(
     }
 }
 
-pub fn runtime_signature_for_key<'db>(
+pub(crate) fn runtime_signature_for_key_with_returns<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
     params: &[RuntimeClass<'db>],
+    returns: &mut RuntimeReturnAnalysisCx<'db>,
 ) -> RuntimeSignature<'db> {
     let key = RuntimeInstanceKey::new(
         db,
@@ -1838,8 +1828,17 @@ pub fn runtime_signature_for_key<'db>(
                 class: class.clone(),
             })
             .collect(),
-        ret: runtime_return_class_for_key(db, key),
+        ret: returns.return_class_for_key(key),
     }
+}
+
+pub fn runtime_signature_for_key<'db>(
+    db: &'db dyn MirDb,
+    semantic: SemanticInstance<'db>,
+    params: &[RuntimeClass<'db>],
+) -> RuntimeSignature<'db> {
+    let mut returns = RuntimeReturnAnalysisCx::new(db);
+    runtime_signature_for_key_with_returns(db, semantic, params, &mut returns)
 }
 
 #[salsa::tracked(
@@ -3252,6 +3251,7 @@ fn intrinsic_numeric_name_parts(name: &str) -> Option<(&str, &str)> {
     .find_map(|suffix| op.strip_suffix(suffix).map(|prefix| (prefix, *suffix)))
 }
 
+#[allow(dead_code)] // referenced by the salsa tracked attribute above
 fn runtime_return_class_cycle_initial<'db>(
     db: &'db dyn MirDb,
     key: RuntimeInstanceKey<'db>,
@@ -3264,6 +3264,7 @@ fn runtime_return_class_cycle_initial<'db>(
     default_return_class(db, typed_body)
 }
 
+#[allow(dead_code)] // referenced by the salsa tracked attribute above
 fn runtime_return_class_cycle_recover<'db>(
     _db: &'db dyn MirDb,
     _value: &Option<RuntimeClass<'db>>,

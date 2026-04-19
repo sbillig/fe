@@ -159,6 +159,7 @@ pub(super) struct RmirEmitter<'db> {
     pub(super) facts: BodyStaticFacts<'db>,
     pub(super) ret_class: Option<RuntimeClass<'db>>,
     pub(super) env: RuntimeTypeEnv<'db>,
+    pub(super) semantic_carriers: Vec<RuntimeCarrier<'db>>,
     pub(super) semantic_locals: Vec<RuntimeLocalLowering<'db>>,
     pub(super) provider_bindings: Vec<RuntimeProviderBinding<'db>>,
     pub(super) returns: RuntimeReturnAnalysisCx<'db>,
@@ -214,6 +215,7 @@ impl<'db> RmirEmitter<'db> {
             semantic_locals: inferred.semantic_locals,
             provider_bindings: inferred.provider_bindings,
         };
+        let semantic_carriers = carriers.clone();
         let env = RuntimeTypeEnv::new(
             typed_body.body().map(|body| body.scope()),
             typed_body.assumptions(),
@@ -239,6 +241,7 @@ impl<'db> RmirEmitter<'db> {
             facts,
             ret_class: signature.ret.clone(),
             env,
+            semantic_carriers,
             semantic_locals,
             provider_bindings,
             returns,
@@ -333,7 +336,7 @@ impl<'db> RmirEmitter<'db> {
                     return;
                 }
                 let carrier = self
-                    .with_current_body_cx(|cx| cx.expr_direct_class(bb.index(), stmt_idx, expr))
+                    .current_expr_direct_class(bb.index(), stmt_idx, expr)
                     .map(RuntimeCarrier::Value)
                     .unwrap_or(RuntimeCarrier::Erased);
                 let sink = self.alloc_runtime_temp(
@@ -360,15 +363,25 @@ impl<'db> RmirEmitter<'db> {
     }
 
     fn with_current_body_cx<T>(&self, f: impl FnOnce(RuntimeBodyCx<'_, '_, 'db>) -> T) -> T {
-        let carriers = self
-            .locals
-            .iter()
-            .take(self.semantic_body.locals.len())
-            .map(|local| local.carrier.clone())
-            .collect::<Vec<_>>();
         f(
             BodyEnv::new(self.db, &self.semantic_body, self.typed_body, &self.facts)
-                .with_carriers(&carriers),
+                .with_carriers(&self.semantic_carriers),
+        )
+    }
+
+    fn current_expr_direct_class(
+        &mut self,
+        block_idx: usize,
+        stmt_idx: usize,
+        expr: &NExpr<'db>,
+    ) -> Option<RuntimeClass<'db>> {
+        BodyEnv::new(self.db, &self.semantic_body, self.typed_body, &self.facts).expr_direct_class(
+            &self.semantic_carriers,
+            block_idx,
+            stmt_idx,
+            expr,
+            None,
+            &mut self.returns,
         )
     }
 
@@ -5009,6 +5022,9 @@ impl<'db> RmirEmitter<'db> {
             .and_then(|current| merge_runtime_class(self.db, current, &class))
             .unwrap_or(class);
         self.locals[local.index()].carrier = RuntimeCarrier::Value(class.clone());
+        if let Some(carrier) = self.semantic_carriers.get_mut(local.index()) {
+            *carrier = RuntimeCarrier::Value(class.clone());
+        }
         match &mut self.locals[local.index()].root {
             RuntimeLocalRoot::Slot(root) => *root = class,
             RuntimeLocalRoot::Ref(root) => *root = class,
