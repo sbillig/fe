@@ -40,11 +40,11 @@ use crate::{
 
 use super::{
     classify::{
-        BodyEnv, BodyStaticFacts, ContractMetadataBuiltin, GenericNumericIntrinsicKind,
-        InferClassCache, RuntimeBodyCx, RuntimeEffectBindingPlan,
-        actual_aggregate_class_from_runtime_source, classify_runtime_call_inputs_for_semantic,
-        contract_metadata_builtin, desired_runtime_effect_arg_boundary, desired_runtime_param_plan,
-        generic_numeric_intrinsic_kind, nonself_backing_value_place, resolve_runtime_call_key,
+        BodyEnv, BodyStaticFacts, BoundarySiteAllocator, ContractMetadataBuiltin,
+        GenericNumericIntrinsicKind, InferClassCache, RuntimeBodyCx, RuntimeEffectBindingPlan,
+        actual_aggregate_class_from_runtime_source, contract_metadata_builtin,
+        desired_runtime_effect_arg_boundary, generic_numeric_intrinsic_kind,
+        nonself_backing_value_place, resolve_runtime_call_key,
         runtime_effect_binding_plan_for_binding_idx, semantic_return_ty, snapshot_source_place,
     },
     coerce::CoercionPlanner,
@@ -65,6 +65,9 @@ use super::{
     type_info::{
         RuntimeTypeEnv, boundary_spec_for_ty_in_env, provider_class_for_target_in_env,
         stored_class_for_ty_in_context, top_level_class_for_ty_in_env,
+    },
+    value_eval::{
+        CompiledCallInputPlan, RuntimeValueEvaluator, compile_call_input_plan_for_semantic,
     },
 };
 
@@ -1947,7 +1950,6 @@ impl<'db> RmirEmitter<'db> {
         &mut self,
         bb: RBlockId,
         semantic: SemanticInstance<'db>,
-        typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
         args: &[NOperand],
     ) -> Option<RLocalId> {
         let BodyOwner::Func(func) = semantic.key(self.db).owner(self.db) else {
@@ -1956,7 +1958,16 @@ impl<'db> RmirEmitter<'db> {
         let ret_ty = semantic_return_ty(self.db, semantic);
         let kind = core_primitive_wrapper_call_kind(self.db, func, ret_ty)?;
         let checked = self.current_arithmetic_mode() == ArithmeticMode::Checked;
-        let (runtime_args, _) = self.lower_visible_call_args(bb, semantic, typed_body, args);
+        let mut boundary_sites = BoundarySiteAllocator::default();
+        let call_input_plan = compile_call_input_plan_for_semantic(
+            self.db,
+            &self.semantic_body,
+            semantic,
+            self.env,
+            &[],
+            &mut boundary_sites,
+        );
+        let (runtime_args, _) = self.lower_visible_call_args(bb, args, &call_input_plan);
 
         match kind {
             PrimitiveWrapperCallKind::Unary(op) => {
@@ -2065,15 +2076,23 @@ impl<'db> RmirEmitter<'db> {
             )
         });
         let semantic = get_or_build_semantic_instance(self.db, callee_key);
-        let typed_body = semantic.key(self.db).instantiate_typed_body(self.db);
-        if let Some(ret) = self.lower_core_primitive_wrapper_call(bb, semantic, &typed_body, args) {
+        if let Some(ret) = self.lower_core_primitive_wrapper_call(bb, semantic, args) {
             return ret;
         }
         if let Some(ret) = self.lower_extern_builtin_call(bb, semantic, args, effect_args) {
             return ret;
         }
+        let mut boundary_sites = BoundarySiteAllocator::default();
+        let call_input_plan = compile_call_input_plan_for_semantic(
+            self.db,
+            &self.semantic_body,
+            semantic,
+            self.env,
+            effect_args,
+            &mut boundary_sites,
+        );
         let (mut runtime_args, mut runtime_classes) =
-            self.lower_visible_call_args(bb, semantic, &typed_body, args);
+            self.lower_visible_call_args(bb, args, &call_input_plan);
         for effect_arg in effect_args {
             let plan = runtime_effect_binding_plan_for_binding_idx(
                 self.db,
@@ -2087,14 +2106,10 @@ impl<'db> RmirEmitter<'db> {
         }
         let expected_runtime_classes = self.with_current_body_cx(|cx| {
             let mut class_cache = InferClassCache::new(self.semantic_body.locals.len());
-            classify_runtime_call_inputs_for_semantic(
-                cx.env,
-                cx.carriers,
-                semantic,
-                &typed_body,
+            RuntimeValueEvaluator::new(cx.env, cx.carriers, Some(&mut class_cache)).call_inputs(
                 args,
                 effect_args,
-                Some(&mut class_cache),
+                &call_input_plan,
             )
         });
         assert_eq!(
@@ -2196,8 +2211,16 @@ impl<'db> RmirEmitter<'db> {
             return Some(ret);
         }
 
-        let typed_body = semantic.key(self.db).instantiate_typed_body(self.db);
-        let (args, _) = self.lower_visible_call_args(bb, semantic, &typed_body, args);
+        let mut boundary_sites = BoundarySiteAllocator::default();
+        let call_input_plan = compile_call_input_plan_for_semantic(
+            self.db,
+            &self.semantic_body,
+            semantic,
+            self.env,
+            &[],
+            &mut boundary_sites,
+        );
+        let (args, _) = self.lower_visible_call_args(bb, args, &call_input_plan);
         let lowered = self.lower_extern_builtin(func, &args)?;
         let ret_ty = semantic_return_ty(self.db, semantic);
         let _ = effect_args;
@@ -2238,8 +2261,16 @@ impl<'db> RmirEmitter<'db> {
             return None;
         }
         let name = func.name(self.db).to_opt()?.data(self.db);
-        let typed_body = semantic.key(self.db).instantiate_typed_body(self.db);
-        let (args, _) = self.lower_visible_call_args(bb, semantic, &typed_body, args);
+        let mut boundary_sites = BoundarySiteAllocator::default();
+        let call_input_plan = compile_call_input_plan_for_semantic(
+            self.db,
+            &self.semantic_body,
+            semantic,
+            self.env,
+            &[],
+            &mut boundary_sites,
+        );
+        let (args, _) = self.lower_visible_call_args(bb, args, &call_input_plan);
         let ret_ty = semantic_return_ty(self.db, semantic);
         let ret_class = self.top_level_class_for_ty(ret_ty, AddressSpaceKind::Memory)?;
         let scalar = match &ret_class {
@@ -2471,59 +2502,42 @@ impl<'db> RmirEmitter<'db> {
     fn lower_visible_call_args(
         &mut self,
         bb: RBlockId,
-        semantic: SemanticInstance<'db>,
-        typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
         args: &[NOperand],
+        plan: &CompiledCallInputPlan<'db>,
     ) -> (Vec<RLocalId>, Vec<RuntimeClass<'db>>) {
         let expected_runtime_classes = self.with_current_body_cx(|cx| {
             let mut class_cache = InferClassCache::new(self.semantic_body.locals.len());
-            classify_runtime_call_inputs_for_semantic(
-                cx.env,
-                cx.carriers,
-                semantic,
-                typed_body,
-                args,
-                &[],
-                Some(&mut class_cache),
-            )
+            RuntimeValueEvaluator::new(cx.env, cx.carriers, Some(&mut class_cache))
+                .param_inputs(args, &plan.param_plans)
         });
         let mut runtime_args = Vec::with_capacity(args.len());
         let mut runtime_classes = Vec::with_capacity(args.len());
         let mut expected_iter = expected_runtime_classes.iter();
-        for (idx, arg) in args.iter().enumerate() {
-            match desired_runtime_param_plan(self.db, semantic, typed_body, idx) {
-                crate::runtime::RuntimeParamPlan::Erased => {}
-                crate::runtime::RuntimeParamPlan::Boundary(_)
-                | crate::runtime::RuntimeParamPlan::PassActual => {
-                    let expected = expected_iter
-                        .next()
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "missing expected runtime arg class for {semantic:?} param {idx}"
-                            )
-                        })
-                        .clone();
-                    let value = self.lower_semantic_operand_for_class(bb, *arg, &expected);
-                    let Some(class) = self.value_class(value).cloned() else {
-                        continue;
-                    };
-                    assert_eq!(
-                        class,
-                        expected,
-                        "lowered runtime arg class mismatch: caller={:?} callee={:?} arg={arg:?} expected={expected:?}",
-                        self.current_semantic_key(),
-                        semantic.key(self.db),
-                    );
-                    runtime_classes.push(class);
-                    runtime_args.push(value);
-                }
+        for (idx, (arg, arg_plan)) in args.iter().zip(plan.param_plans.iter()).enumerate() {
+            if matches!(arg_plan, super::value_eval::CompiledValuePassPlan::Erased) {
+                continue;
             }
+            let expected = expected_iter
+                .next()
+                .unwrap_or_else(|| panic!("missing expected runtime arg class for param {idx}"))
+                .clone();
+            let value = self.lower_semantic_operand_for_class(bb, *arg, &expected);
+            let Some(class) = self.value_class(value).cloned() else {
+                continue;
+            };
+            assert_eq!(
+                class,
+                expected,
+                "lowered runtime arg class mismatch: caller={:?} arg={arg:?} expected={expected:?}",
+                self.current_semantic_key(),
+            );
+            runtime_classes.push(class);
+            runtime_args.push(value);
         }
         assert!(
             expected_iter.next().is_none(),
-            "unused expected runtime arg classes while lowering visible call args: caller={:?} callee={:?} args={args:?}",
+            "unused expected runtime arg classes while lowering visible call args: caller={:?} args={args:?}",
             self.current_semantic_key(),
-            semantic.key(self.db),
         );
         (runtime_args, runtime_classes)
     }

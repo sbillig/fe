@@ -19,7 +19,7 @@ use super::{
         BodyEnv, BodyStaticFacts, InferClassCache, RuntimeVisibleReturnPlan, default_return_class,
         desired_runtime_return_plan, visible_return_class_for_local,
     },
-    infer::merge_runtime_carrier,
+    infer::{desired_runtime_value_carrier, merge_runtime_carrier, seed_root_provider_carriers},
     interface::runtime_visible_binding_plans,
 };
 
@@ -68,9 +68,9 @@ impl<'db> RuntimeReturnSummary<'db> {
             .collect::<Vec<_>>()
             .into_boxed_slice();
 
-        let mut def_assignment_by_local = vec![None; semantic_body.locals.len()];
+        let mut def_assignments_by_local = vec![Vec::new(); semantic_body.locals.len()];
         for (assign_id, assignment) in facts.assignments().iter().enumerate() {
-            def_assignment_by_local[assignment.dst.index()] = Some(assign_id);
+            def_assignments_by_local[assignment.dst.index()].push(assign_id);
         }
 
         let mut needed_assignments = FxHashSet::default();
@@ -83,12 +83,13 @@ impl<'db> RuntimeReturnSummary<'db> {
             for dependency in facts.source_locals(local).iter().copied() {
                 pending.push_back(dependency);
             }
-            if let Some(assign_id) = def_assignment_by_local[local.index()]
-                && needed_assignments.insert(assign_id)
-                && let Some(assignment) = facts.assignment(assign_id)
-            {
-                for used in assignment.uses().iter().copied() {
-                    pending.push_back(used);
+            for assign_id in def_assignments_by_local[local.index()].iter().copied() {
+                if needed_assignments.insert(assign_id)
+                    && let Some(assignment) = facts.assignment(assign_id)
+                {
+                    for used in assignment.uses().iter().copied() {
+                        pending.push_back(used);
+                    }
                 }
             }
         }
@@ -322,6 +323,7 @@ impl<'summary, 'cx, 'db> ReturnSliceInferer<'summary, 'cx, 'db> {
     }
 
     fn run(mut self) -> Vec<RuntimeCarrier<'db>> {
+        seed_root_provider_carriers(self.summary.env(self.db), &mut self.carriers);
         self.infer_carriers();
         self.carriers
     }
@@ -335,6 +337,7 @@ impl<'summary, 'cx, 'db> ReturnSliceInferer<'summary, 'cx, 'db> {
             let assign = self.summary.facts.assignment(assign_id).unwrap_or_else(|| {
                 panic!("missing sliced assignment facts for statement {assign_id}")
             });
+            let local = &self.summary.semantic_body.locals[assign.dst.index()];
             let stmt = &self.summary.semantic_body.blocks[assign.block_idx].stmts[assign.stmt_idx];
             let expr = match &stmt.kind {
                 hir::analysis::semantic::NSStmtKind::Assign { expr, .. } => expr,
@@ -345,15 +348,16 @@ impl<'summary, 'cx, 'db> ReturnSliceInferer<'summary, 'cx, 'db> {
                     )
                 }
             };
-            let desired = match self.summary.env(self.db).expr_direct_class(
+            let class = self.summary.env(self.db).expr_direct_class(
                 &self.carriers,
                 assign.block_idx,
                 assign.stmt_idx,
                 expr,
                 Some(&mut self.class_cache),
                 self.returns,
-            ) {
-                Some(class) => RuntimeCarrier::Value(class),
+            );
+            let desired = match class {
+                Some(class) => desired_runtime_value_carrier(local, class),
                 None => continue,
             };
             if self.set_carrier(assign.dst, desired) {
@@ -406,5 +410,284 @@ impl<'summary, 'cx, 'db> ReturnSliceInferer<'summary, 'cx, 'db> {
                 pending.push_back(dependent);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use common::InputDb;
+    use driver::DriverDataBase;
+    use hir::{
+        analysis::{
+            semantic::{
+                borrowck::NLocalInterface, get_or_build_semantic_instance,
+                root_semantic_instance_key,
+            },
+            ty::ty_check::BodyOwner,
+        },
+        hir_def::TopLevelMod,
+    };
+    use url::Url;
+
+    use crate::{
+        build_runtime_package,
+        runtime::{RuntimeCarrier, RuntimeClass},
+    };
+
+    use super::*;
+    use crate::runtime::{
+        lower::{infer::LocalStateInferer, interface::runtime_param_locals},
+        package::runtime_instance_for_semantic,
+    };
+
+    fn semantic_instance_for_named_func<'db>(
+        db: &'db DriverDataBase,
+        top_mod: TopLevelMod<'db>,
+        name: &str,
+    ) -> SemanticInstance<'db> {
+        let func = top_mod
+            .all_funcs(db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(db)
+                    .to_opt()
+                    .is_some_and(|func_name| func_name.data(db) == name)
+            })
+            .unwrap_or_else(|| panic!("missing function `{name}`"));
+        let key = root_semantic_instance_key(db, BodyOwner::Func(func))
+            .unwrap_or_else(|err| panic!("failed to root semantic function instance: {err:?}"));
+        get_or_build_semantic_instance(db, key)
+    }
+
+    fn legacy_return_class_for_key<'db>(
+        db: &'db DriverDataBase,
+        key: RuntimeInstanceKey<'db>,
+    ) -> Option<RuntimeClass<'db>> {
+        let semantic = key
+            .semantic(db)
+            .expect("legacy return-class inference only applies to semantic runtime instances");
+        let summary = RuntimeReturnSummary::build(db, semantic);
+        let env = summary.env(db);
+        let mut returns = RuntimeReturnAnalysisCx::new(db);
+        let inferred = LocalStateInferer::new(
+            env,
+            key.params(db),
+            &runtime_param_locals(db, semantic, key.params(db)),
+            &mut returns,
+        )
+        .run();
+        let mut returned = Vec::new();
+        for local in summary.return_locals.iter().copied() {
+            let Some(class) = visible_return_class_for_local(
+                env,
+                local,
+                &summary.return_plan,
+                &inferred.carriers,
+            ) else {
+                return summary.default_return_class.clone();
+            };
+            returned.push(class);
+        }
+        let Some(first) = returned.pop() else {
+            return summary.default_return_class.clone();
+        };
+        if returned.iter().all(|class| class == &first) {
+            Some(first)
+        } else {
+            summary.default_return_class.clone()
+        }
+    }
+
+    #[test]
+    fn return_slice_includes_all_definitions_of_returned_local() {
+        let mut db = DriverDataBase::default();
+        let file_url =
+            Url::parse("file:///return_slice_includes_all_definitions_of_returned_local.fe")
+                .unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+fn choose(_ flag: bool) -> u256 {
+    let mut x = 1
+    if flag {
+        x = 2
+    }
+    x
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let semantic = semantic_instance_for_named_func(&db, top_mod, "choose");
+        let summary = RuntimeReturnSummary::build(&db, semantic);
+        let return_local = *summary
+            .return_locals
+            .first()
+            .expect("choose should return one local");
+        let return_defs = summary
+            .facts
+            .assignments()
+            .iter()
+            .enumerate()
+            .filter(|(_, assignment)| assignment.dst == return_local)
+            .count();
+        let sliced_return_defs = summary
+            .slice_assignment_ids
+            .iter()
+            .filter(|&&assign_id| {
+                summary
+                    .facts
+                    .assignment(assign_id)
+                    .is_some_and(|assignment| assignment.dst == return_local)
+            })
+            .count();
+
+        assert_eq!(
+            return_defs, 2,
+            "expected `choose` to define the returned local twice"
+        );
+        assert_eq!(
+            sliced_return_defs, return_defs,
+            "return slice should keep every definition of the returned local"
+        );
+    }
+
+    #[test]
+    fn provider_root_return_slice_matches_full_inference() {
+        let mut db = DriverDataBase::default();
+        let file_url =
+            Url::parse("file:///provider_root_return_slice_matches_full_inference.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+fn id_ctx() -> Pair uses (ctx: Pair) {
+    ctx
+}
+
+msg Msg {
+    #[selector = 1]
+    Go -> u256
+}
+
+pub contract C {
+    ctx: Pair
+
+    init() uses (mut ctx) {
+        ctx = Pair { a: 1, b: 2 }
+    }
+
+    recv Msg {
+        Go -> u256 uses (ctx) {
+            let pair = with (ctx) { id_ctx() }
+            pair.a + pair.b
+        }
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let package = build_runtime_package(&db, top_mod).expect("runtime package");
+        let function = package
+            .functions(&db)
+            .iter()
+            .copied()
+            .find(|function| function.symbol(&db).contains("id_ctx"))
+            .expect("missing specialized id_ctx runtime function");
+        let key = function.instance(&db).key(&db);
+
+        assert_eq!(
+            RuntimeReturnAnalysisCx::new(&db).return_class_for_key(key),
+            legacy_return_class_for_key(&db, key),
+            "provider-root return slice should match full-body carrier inference:\ninstance={key:#?}"
+        );
+    }
+
+    #[test]
+    fn owned_aggregate_temporaries_match_full_inference_in_return_slices() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse(
+            "file:///owned_aggregate_temporaries_match_full_inference_in_return_slices.fe",
+        )
+        .unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+fn first(_ arr: [u8; 4]) -> u8 {
+    let local = arr
+    local[0]
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let semantic = semantic_instance_for_named_func(&db, top_mod, "first");
+        let instance = runtime_instance_for_semantic(&db, semantic);
+        let key = instance.key(&db);
+        let summary = RuntimeReturnSummary::build(&db, semantic);
+        let env = summary.env(&db);
+
+        let mut legacy_returns = RuntimeReturnAnalysisCx::new(&db);
+        let legacy = LocalStateInferer::new(
+            env,
+            key.params(&db),
+            &runtime_param_locals(&db, semantic, key.params(&db)),
+            &mut legacy_returns,
+        )
+        .run();
+        let mut slice_returns = RuntimeReturnAnalysisCx::new(&db);
+        let sliced =
+            ReturnSliceInferer::new(&db, &summary, key.params(&db), &mut slice_returns).run();
+        let locals = summary
+            .semantic_body
+            .locals
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, local)| {
+                (idx >= summary.param_locals.len()
+                    && matches!(local.facts.interface, NLocalInterface::DirectValue)
+                    && local.facts.root_demand.needs_projectable_owned_storage())
+                .then_some(SLocalId::from_u32(idx as u32))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(locals.len(), 1, "expected one owned aggregate temporary");
+        let local = locals[0];
+
+        assert_eq!(
+            sliced[local.index()],
+            legacy.carriers[local.index()],
+            "return slice should infer the same owned aggregate temporary carrier as the full solver"
+        );
+        assert!(matches!(
+            sliced[local.index()],
+            RuntimeCarrier::Value(RuntimeClass::Ref { .. })
+        ));
     }
 }

@@ -73,7 +73,7 @@ impl<'a, 'returns, 'db> LocalStateInferer<'a, 'returns, 'db> {
     }
 
     pub(super) fn run(mut self) -> InferenceResult<'db> {
-        self.seed_root_provider_carriers();
+        seed_root_provider_carriers(self.env, &mut self.carriers);
         self.infer_carriers();
         let roots = self.infer_roots();
         let (semantic_locals, provider_bindings) =
@@ -83,44 +83,6 @@ impl<'a, 'returns, 'db> LocalStateInferer<'a, 'returns, 'db> {
             roots,
             semantic_locals,
             provider_bindings,
-        }
-    }
-
-    fn seed_root_provider_carriers(&mut self) {
-        for (idx, local) in self.env.body().locals.iter().enumerate() {
-            if !matches!(self.carriers[idx], RuntimeCarrier::Erased) {
-                continue;
-            }
-            let class = match (&local.facts.interface, &local.facts.origin) {
-                (NLocalInterface::DirectValue, NLocalOrigin::RootProvider(provider)) => self
-                    .env
-                    .actual_runtime_visible_root_provider_class(&self.carriers, provider)
-                    .map(|(_, class)| class)
-                    .or_else(|| {
-                        runtime_class_for_direct_value_provider_in_context(
-                            self.env.db(),
-                            provider,
-                            self.env.scope(),
-                            self.env.assumptions(),
-                        )
-                    }),
-                (NLocalInterface::DirectCarrier, NLocalOrigin::RootProvider(provider)) => self
-                    .env
-                    .actual_runtime_visible_root_provider_class(&self.carriers, provider)
-                    .map(|(_, class)| class)
-                    .or_else(|| {
-                        runtime_class_for_provider_binding(
-                            self.env.db(),
-                            provider,
-                            self.env.scope(),
-                            self.env.assumptions(),
-                        )
-                    }),
-                _ => None,
-            };
-            if let Some(class) = class {
-                self.set_carrier(SLocalId::from_u32(idx as u32), RuntimeCarrier::Value(class));
-            }
         }
     }
 
@@ -144,21 +106,16 @@ impl<'a, 'returns, 'db> LocalStateInferer<'a, 'returns, 'db> {
                 }
             };
             let local = &self.env.body().locals[assign.dst.index()];
-            let desired = match self.env.expr_direct_class(
+            let class = self.env.expr_direct_class(
                 &self.carriers,
                 assign.block_idx,
                 assign.stmt_idx,
                 expr,
                 Some(&mut self.class_cache),
                 self.returns,
-            ) {
-                Some(RuntimeClass::AggregateValue { layout })
-                    if matches!(local.facts.interface, NLocalInterface::DirectValue)
-                        && local.facts.root_demand.needs_projectable_owned_storage() =>
-                {
-                    RuntimeCarrier::Value(RuntimeClass::object_ref(layout))
-                }
-                Some(class) => RuntimeCarrier::Value(class),
+            );
+            let desired = match class {
+                Some(class) => desired_runtime_value_carrier(local, class),
                 None => continue,
             };
             if self.set_carrier(assign.dst, desired) {
@@ -223,6 +180,60 @@ impl<'a, 'returns, 'db> LocalStateInferer<'a, 'returns, 'db> {
             roots.push(root);
         }
         roots
+    }
+}
+
+pub(crate) fn seed_root_provider_carriers<'a, 'db>(
+    env: BodyEnv<'a, 'db>,
+    carriers: &mut [RuntimeCarrier<'db>],
+) {
+    for (idx, local) in env.body().locals.iter().enumerate() {
+        if !matches!(carriers[idx], RuntimeCarrier::Erased) {
+            continue;
+        }
+        let class = match (&local.facts.interface, &local.facts.origin) {
+            (NLocalInterface::DirectValue, NLocalOrigin::RootProvider(provider)) => env
+                .actual_runtime_visible_root_provider_class(carriers, provider)
+                .map(|(_, class)| class)
+                .or_else(|| {
+                    runtime_class_for_direct_value_provider_in_context(
+                        env.db(),
+                        provider,
+                        env.scope(),
+                        env.assumptions(),
+                    )
+                }),
+            (NLocalInterface::DirectCarrier, NLocalOrigin::RootProvider(provider)) => env
+                .actual_runtime_visible_root_provider_class(carriers, provider)
+                .map(|(_, class)| class)
+                .or_else(|| {
+                    runtime_class_for_provider_binding(
+                        env.db(),
+                        provider,
+                        env.scope(),
+                        env.assumptions(),
+                    )
+                }),
+            _ => None,
+        };
+        if let Some(class) = class {
+            carriers[idx] = RuntimeCarrier::Value(class);
+        }
+    }
+}
+
+pub(crate) fn desired_runtime_value_carrier<'db>(
+    local: &NSLocal<'db>,
+    class: RuntimeClass<'db>,
+) -> RuntimeCarrier<'db> {
+    match class {
+        RuntimeClass::AggregateValue { layout }
+            if matches!(local.facts.interface, NLocalInterface::DirectValue)
+                && local.facts.root_demand.needs_projectable_owned_storage() =>
+        {
+            RuntimeCarrier::Value(RuntimeClass::object_ref(layout))
+        }
+        class => RuntimeCarrier::Value(class),
     }
 }
 

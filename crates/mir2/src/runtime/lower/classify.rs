@@ -44,14 +44,14 @@ use crate::{
 use super::{
     coerce::CoercionPlanner,
     infer::{fallback_root_transport_class, local_place_root_class},
-    interface::{runtime_param_locals, runtime_param_plans, runtime_visible_binding_plans},
+    interface::{runtime_param_locals, runtime_visible_binding_plans},
     layout::{
         layout_for_aggregate_instance_in_context, layout_for_enum_variant_instance_in_context,
         layout_for_ty_in_context,
     },
     place::{
         address_space_from_provider, project_field_class, project_index_class,
-        project_variant_field_class, resolved_effect_arg_address_space,
+        project_variant_field_class,
     },
     returns::RuntimeReturnAnalysisCx,
     type_info::{
@@ -61,6 +61,10 @@ use super::{
         provider_class_for_target_in_context, provider_class_for_target_in_env,
         runtime_repr_ty_in_context, scalar_class_for_ty_in_env, stored_class_for_ty_in_context,
         top_level_class_for_ty_in_context, top_level_class_for_ty_in_env,
+    },
+    value_eval::{
+        CompiledCallInputPlan, CompiledMaterializationPlan, RuntimeValueEvaluator,
+        compile_call_input_plan_for_semantic, compile_value_pass_plan,
     },
 };
 
@@ -93,21 +97,21 @@ impl<'db> AssignStaticFacts<'db> {
 struct BoundarySiteId(u32);
 
 #[derive(Clone, Debug)]
-struct StagedBoundary<'db> {
+pub(super) struct StagedBoundary<'db> {
     site: BoundarySiteId,
-    boundary: RuntimeBoundarySpec<'db>,
+    pub(super) boundary: RuntimeBoundarySpec<'db>,
     matcher: CompiledBoundaryMatcher<'db>,
 }
 
 #[derive(Clone, Copy)]
-struct BoundaryRef<'a, 'db> {
+pub(super) struct BoundaryRef<'a, 'db> {
     site: Option<BoundarySiteId>,
     boundary: &'a RuntimeBoundarySpec<'db>,
     matcher: Option<&'a CompiledBoundaryMatcher<'db>>,
 }
 
 impl<'a, 'db> BoundaryRef<'a, 'db> {
-    fn unstaged(boundary: &'a RuntimeBoundarySpec<'db>) -> Self {
+    pub(super) fn unstaged(boundary: &'a RuntimeBoundarySpec<'db>) -> Self {
         Self {
             site: None,
             boundary,
@@ -115,7 +119,7 @@ impl<'a, 'db> BoundaryRef<'a, 'db> {
         }
     }
 
-    fn staged(boundary: &'a StagedBoundary<'db>) -> Self {
+    pub(super) fn staged(boundary: &'a StagedBoundary<'db>) -> Self {
         Self {
             site: Some(boundary.site),
             boundary: &boundary.boundary,
@@ -125,12 +129,12 @@ impl<'a, 'db> BoundaryRef<'a, 'db> {
 }
 
 #[derive(Default)]
-struct BoundarySiteAllocator {
+pub(super) struct BoundarySiteAllocator {
     next: u32,
 }
 
 impl BoundarySiteAllocator {
-    fn stage<'db>(&mut self, boundary: RuntimeBoundarySpec<'db>) -> StagedBoundary<'db> {
+    pub(super) fn stage<'db>(&mut self, boundary: RuntimeBoundarySpec<'db>) -> StagedBoundary<'db> {
         let site = BoundarySiteId(self.next);
         self.next += 1;
         let matcher = CompiledBoundaryMatcher::for_boundary(&boundary);
@@ -451,10 +455,10 @@ struct CachedLocalDynamicFacts<'db> {
 #[derive(Clone)]
 struct LocalStaticFacts<'db> {
     boundary_source_transport_sensitive: bool,
-    top_level_memory_class: Option<RuntimeClass<'db>>,
     semantic_fallback_class: Option<RuntimeClass<'db>>,
     root_place_fallback_class: Option<RuntimeClass<'db>>,
     root_transport_fallback_class: Option<RuntimeClass<'db>>,
+    pub(super) materialization_plan: CompiledMaterializationPlan<'db>,
     source_locals: Box<[SLocalId]>,
 }
 
@@ -491,26 +495,11 @@ struct AggregateMakeFieldStaticFacts<'db> {
     stored_class: RuntimeClass<'db>,
 }
 
-#[derive(Clone, Debug)]
-enum StagedRuntimeParamPlan<'db> {
-    Erased,
-    Boundary(StagedBoundary<'db>),
-    PassActual,
-}
-
 #[derive(Clone)]
 struct CallStaticFacts<'db> {
     semantic: SemanticInstance<'db>,
     builtin_return_class: Option<Option<RuntimeClass<'db>>>,
-    callee_type_env: RuntimeTypeEnv<'db>,
-    param_plans: Vec<StagedRuntimeParamPlan<'db>>,
-    effect_binding_plans: Vec<EffectArgStaticFacts<'db>>,
-}
-
-#[derive(Clone, Debug)]
-struct EffectArgStaticFacts<'db> {
-    binding_idx: usize,
-    boundary: Option<StagedBoundary<'db>>,
+    input_plan: CompiledCallInputPlan<'db>,
 }
 
 impl<'db> BodyStaticFacts<'db> {
@@ -705,16 +694,20 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         self.type_env.scope
     }
 
-    pub(crate) fn type_env(self) -> RuntimeTypeEnv<'db> {
-        self.type_env
-    }
-
     pub(super) fn assumptions(self) -> PredicateListId<'db> {
         self.type_env.assumptions
     }
 
     fn local_facts(self, local: SLocalId) -> Option<&'a LocalStaticFacts<'db>> {
         self.facts.local(local)
+    }
+
+    pub(super) fn materialization_plan(
+        self,
+        local: SLocalId,
+    ) -> Option<&'a CompiledMaterializationPlan<'db>> {
+        self.local_facts(local)
+            .map(|facts| &facts.materialization_plan)
     }
 
     fn expr_facts(self, block_idx: usize, stmt_idx: usize) -> Option<&'a ExprStaticFacts<'db>> {
@@ -792,7 +785,9 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
     ) -> Option<RuntimeClass<'db>> {
         let expr_facts = self.expr_facts(block_idx, stmt_idx);
         Some(match expr {
-            NExpr::Use(value) => self.materialized_value_class(carriers, value.local)?,
+            NExpr::Use(value) => {
+                RuntimeValueEvaluator::new(self, carriers, class_cache).materialize(value.local)?
+            }
             NExpr::Const(_)
             | NExpr::Unary { .. }
             | NExpr::Binary { .. }
@@ -879,14 +874,8 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                 if let Some(class) = facts.builtin_return_class.clone() {
                     return class;
                 }
-                let param_classes = classify_runtime_call_inputs_from_facts(
-                    self,
-                    carriers,
-                    args,
-                    effect_args,
-                    facts,
-                    class_cache,
-                );
+                let param_classes = RuntimeValueEvaluator::new(self, carriers, class_cache)
+                    .call_inputs(args, effect_args, &facts.input_plan);
                 return returns.return_class_for_key(RuntimeInstanceKey::new(
                     self.db,
                     RuntimeInstanceSource::Semantic(facts.semantic),
@@ -897,163 +886,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
     }
 }
 
-fn classify_runtime_call_inputs_from_facts<'db>(
-    env: BodyEnv<'_, 'db>,
-    carriers: &[RuntimeCarrier<'db>],
-    args: &[NOperand],
-    effect_args: &[NEffectArg<'db>],
-    facts: &CallStaticFacts<'db>,
-    mut class_cache: Option<&mut InferClassCache<'db>>,
-) -> Vec<RuntimeClass<'db>> {
-    assert_eq!(
-        args.len(),
-        facts.param_plans.len(),
-        "runtime call arg count mismatch during class inference: caller={:?} callee={:?} args={args:?} plans={:?}",
-        env.body().owner.key(env.db()),
-        facts.semantic.key(env.db()),
-        facts.param_plans,
-    );
-    let mut param_classes = Vec::new();
-    for (arg, plan) in args.iter().zip(facts.param_plans.iter()) {
-        match plan {
-            StagedRuntimeParamPlan::Erased => {}
-            StagedRuntimeParamPlan::Boundary(desired) => {
-                if let Some(actual) = env.runtime_visible_value_class(
-                    carriers,
-                    arg.local,
-                    Some(BoundaryRef::staged(desired)),
-                    class_cache.as_deref_mut(),
-                ) {
-                    param_classes.push(actual);
-                }
-            }
-            StagedRuntimeParamPlan::PassActual => {
-                if let Some(actual) = env.runtime_visible_value_class(
-                    carriers,
-                    arg.local,
-                    None,
-                    class_cache.as_deref_mut(),
-                ) {
-                    param_classes.push(actual);
-                }
-            }
-        }
-    }
-    assert_eq!(
-        effect_args.len(),
-        facts.effect_binding_plans.len(),
-        "runtime effect arg count mismatch during class inference: caller={:?} callee={:?} effect_args={effect_args:?} plans={:?}",
-        env.body().owner.key(env.db()),
-        facts.semantic.key(env.db()),
-        facts.effect_binding_plans,
-    );
-    for (arg, effect_facts) in effect_args.iter().zip(facts.effect_binding_plans.iter()) {
-        assert_eq!(
-            arg.binding_idx as usize,
-            effect_facts.binding_idx,
-            "runtime effect binding index mismatch during class inference: caller={:?} callee={:?} arg={arg:?} staged={effect_facts:?}",
-            env.body().owner.key(env.db()),
-            facts.semantic.key(env.db()),
-        );
-        if let Some(class) = effect_arg_class(
-            env,
-            facts.callee_type_env,
-            arg,
-            effect_facts.boundary.as_ref().map(BoundaryRef::staged),
-            carriers,
-            class_cache.as_deref_mut(),
-        ) {
-            param_classes.push(class);
-        }
-    }
-    param_classes
-}
-
-pub(super) fn classify_runtime_call_inputs_for_semantic<'db>(
-    env: BodyEnv<'_, 'db>,
-    carriers: &[RuntimeCarrier<'db>],
-    semantic: SemanticInstance<'db>,
-    typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
-    args: &[NOperand],
-    effect_args: &[NEffectArg<'db>],
-    mut class_cache: Option<&mut InferClassCache<'db>>,
-) -> Vec<RuntimeClass<'db>> {
-    let mut param_classes = Vec::new();
-    for (idx, arg) in args.iter().enumerate() {
-        match desired_runtime_param_plan(env.db(), semantic, typed_body, idx) {
-            RuntimeParamPlan::Erased => {}
-            RuntimeParamPlan::Boundary(desired) => {
-                let cache = class_cache.as_deref_mut();
-                if let Some(actual) = env.runtime_visible_value_class(
-                    carriers,
-                    arg.local,
-                    Some(BoundaryRef::unstaged(&desired)),
-                    cache,
-                ) {
-                    param_classes.push(actual);
-                }
-            }
-            RuntimeParamPlan::PassActual => {
-                let cache = class_cache.as_deref_mut();
-                if let Some(actual) =
-                    env.runtime_visible_value_class(carriers, arg.local, None, cache)
-                {
-                    param_classes.push(actual);
-                }
-            }
-        }
-    }
-    for effect_arg in effect_args {
-        let plan =
-            runtime_effect_binding_plan_for_binding_idx(env.db(), semantic, effect_arg.binding_idx);
-        let cache = class_cache.as_deref_mut();
-        if let Some(class) = effect_arg_class(
-            env,
-            env.type_env(),
-            effect_arg,
-            desired_runtime_effect_arg_boundary(
-                env.db(),
-                env.type_env(),
-                effect_arg,
-                plan.as_ref(),
-                resolved_effect_arg_address_space(env.db(), env.body(), effect_arg),
-            )
-            .as_ref()
-            .map(BoundaryRef::unstaged),
-            carriers,
-            cache,
-        ) {
-            param_classes.push(class);
-        }
-    }
-    param_classes
-}
-
 impl<'a, 'db> BodyEnv<'a, 'db> {
-    pub(crate) fn materialized_value_class(
-        self,
-        carriers: &[RuntimeCarrier<'db>],
-        local: SLocalId,
-    ) -> Option<RuntimeClass<'db>> {
-        let local_data = self.body.locals.get(local.index())?;
-        let local_facts = self.local_facts(local)?;
-        match (&local_data.facts.interface, &local_data.facts.origin) {
-            (NLocalInterface::Erased, _) => None,
-            (NLocalInterface::DirectValue, NLocalOrigin::RootProvider(_)) => {
-                self.semantic_value_class(carriers, local)
-            }
-            (NLocalInterface::DirectValue, _) => self
-                .actual_aggregate_class_for_source(carriers, local)
-                .or_else(|| local_facts.top_level_memory_class.clone()),
-            (
-                NLocalInterface::PlaceBoundValue
-                | NLocalInterface::PlaceCarrier
-                | NLocalInterface::DirectCarrier,
-                _,
-            ) => self.semantic_value_class(carriers, local),
-        }
-    }
-
     pub(crate) fn normalized_place_class(
         self,
         carriers: &[RuntimeCarrier<'db>],
@@ -1176,91 +1009,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
             })
     }
 
-    fn runtime_visible_value_class(
-        self,
-        carriers: &[RuntimeCarrier<'db>],
-        local: SLocalId,
-        desired: Option<BoundaryRef<'_, 'db>>,
-        class_cache: Option<&mut InferClassCache<'db>>,
-    ) -> Option<RuntimeClass<'db>> {
-        let desired = desired.map(|boundary| {
-            specialize_boundary_for_runtime_source_in_context(
-                self,
-                local,
-                boundary,
-                carriers,
-                class_cache,
-            )
-        });
-        match desired.as_ref() {
-            Some(desired) => {
-                let boundary = desired.boundary.as_ref();
-                match boundary {
-                    RuntimeBoundarySpec::Exact(RuntimeClass::AggregateValue { .. }) => {
-                        let RuntimeBoundarySpec::Exact(class) = boundary else {
-                            unreachable!();
-                        };
-                        Some(class.clone())
-                    }
-                    RuntimeBoundarySpec::Exact(target)
-                        if matches!(
-                            target,
-                            RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. }
-                        ) =>
-                    {
-                        carrier_value_class(local, carriers)
-                            .filter(|class| {
-                                desired
-                                    .matcher
-                                    .matches_shape(&RuntimeClassShape::from_class(class))
-                            })
-                            .or_else(|| Some(target.clone()))
-                    }
-                    RuntimeBoundarySpec::BorrowLike { .. } => {
-                        self.borrow_like_runtime_visible_arg_class(carriers, local, boundary)
-                    }
-                    RuntimeBoundarySpec::Exact(_) => self.materialized_value_class(carriers, local),
-                }
-            }
-            None => self.materialized_value_class(carriers, local),
-        }
-    }
-
-    fn borrow_like_runtime_visible_arg_class(
-        self,
-        carriers: &[RuntimeCarrier<'db>],
-        local: SLocalId,
-        boundary: &RuntimeBoundarySpec<'db>,
-    ) -> Option<RuntimeClass<'db>> {
-        let cx = self.with_carriers(carriers);
-        let local_data = self.body.locals.get(local.index())?;
-
-        if let Some(place) = nonself_backing_value_place(self.body, local) {
-            let class = self.normalized_place_address_class(carriers, place)?;
-            if CoercionPlanner::class_satisfies_boundary(&class, boundary) {
-                return Some(class);
-            }
-        }
-
-        let value_class = self.semantic_value_class(carriers, local)?;
-        let root_class =
-            local_place_root_class(cx, local, local_data, carriers.get(local.index())?)?;
-        let class =
-            ref_class_for_place_result(&root_class, &value_class, AddressSpaceKind::Memory, false);
-        if CoercionPlanner::class_satisfies_boundary(&class, boundary) {
-            return Some(class);
-        }
-
-        if let Some(class) = carrier_value_class(local, carriers)
-            && CoercionPlanner::class_satisfies_boundary(&class, boundary)
-        {
-            return Some(class);
-        }
-
-        None
-    }
-
-    fn semantic_value_class(
+    pub(super) fn semantic_value_class(
         self,
         carriers: &[RuntimeCarrier<'db>],
         local: SLocalId,
@@ -1368,13 +1117,6 @@ fn build_local_static_facts<'db>(
             scope,
             assumptions,
         ),
-        top_level_memory_class: top_level_class_for_ty_in_context(
-            db,
-            local_data.ty,
-            AddressSpaceKind::Memory,
-            scope,
-            assumptions,
-        ),
         semantic_fallback_class,
         root_place_fallback_class,
         root_transport_fallback_class: fallback_root_transport_class(
@@ -1383,6 +1125,29 @@ fn build_local_static_facts<'db>(
             scope,
             assumptions,
         ),
+        materialization_plan: if matches!(local_data.facts.interface, NLocalInterface::Erased) {
+            CompiledMaterializationPlan::Erased
+        } else {
+            match local_data.facts.interface {
+                NLocalInterface::DirectValue => top_level_class_for_ty_in_context(
+                    db,
+                    local_data.ty,
+                    AddressSpaceKind::Memory,
+                    scope,
+                    assumptions,
+                )
+                .map_or(
+                    CompiledMaterializationPlan::AggregateFromSource,
+                    |fallback| CompiledMaterializationPlan::AggregateFromSourceOrFallback {
+                        fallback,
+                    },
+                ),
+                NLocalInterface::PlaceCarrier
+                | NLocalInterface::DirectCarrier
+                | NLocalInterface::PlaceBoundValue => CompiledMaterializationPlan::SemanticValue,
+                NLocalInterface::Erased => unreachable!(),
+            }
+        },
         source_locals: local_source_locals(body, local_data),
     }
 }
@@ -1640,44 +1405,20 @@ fn build_expr_static_facts<'db>(
             });
             let semantic = get_or_build_semantic_instance(db, callee_key);
             let callee_typed_body = semantic.key(db).typed_body(db);
-            let callee_type_env = RuntimeTypeEnv::new(
-                callee_typed_body.body().map(|body| body.scope()),
-                callee_typed_body.assumptions(),
-            );
             ExprStaticFacts::Call(CallStaticFacts {
                 semantic,
                 builtin_return_class: extern_builtin_return_class(db, semantic, result_ty),
-                callee_type_env,
-                param_plans: runtime_param_plans(db, semantic)
-                    .iter()
-                    .cloned()
-                    .map(|plan| match plan {
-                        RuntimeParamPlan::Erased => StagedRuntimeParamPlan::Erased,
-                        RuntimeParamPlan::Boundary(boundary) => {
-                            StagedRuntimeParamPlan::Boundary(boundary_sites.stage(boundary))
-                        }
-                        RuntimeParamPlan::PassActual => StagedRuntimeParamPlan::PassActual,
-                    })
-                    .collect(),
-                effect_binding_plans: effect_args
-                    .iter()
-                    .map(|arg| EffectArgStaticFacts {
-                        binding_idx: arg.binding_idx as usize,
-                        boundary: desired_runtime_effect_arg_boundary(
-                            db,
-                            callee_type_env,
-                            arg,
-                            runtime_effect_binding_plan_for_binding_idx(
-                                db,
-                                semantic,
-                                arg.binding_idx,
-                            )
-                            .as_ref(),
-                            resolved_effect_arg_address_space(db, body, arg),
-                        )
-                        .map(|boundary| boundary_sites.stage(boundary)),
-                    })
-                    .collect(),
+                input_plan: compile_call_input_plan_for_semantic(
+                    db,
+                    body,
+                    semantic,
+                    RuntimeTypeEnv::new(
+                        callee_typed_body.body().map(|body| body.scope()),
+                        callee_typed_body.assumptions(),
+                    ),
+                    effect_args,
+                    boundary_sites,
+                ),
             })
         }
     })
@@ -1691,7 +1432,7 @@ pub(crate) struct RuntimeBodyCx<'a, 'carriers, 'db> {
 
 impl<'a, 'carriers, 'db> RuntimeBodyCx<'a, 'carriers, 'db> {
     pub(crate) fn materialized_value_class(self, local: SLocalId) -> Option<RuntimeClass<'db>> {
-        self.env.materialized_value_class(self.carriers, local)
+        RuntimeValueEvaluator::new(self.env, self.carriers, None).materialize(local)
     }
 
     pub(crate) fn normalized_place_class(self, place: &NSPlace<'db>) -> Option<RuntimeClass<'db>> {
@@ -1762,7 +1503,7 @@ pub(crate) fn runtime_address_space(class: &RuntimeClass<'_>) -> Option<AddressS
     }
 }
 
-fn provider_root_space<'db>(
+pub(super) fn provider_root_space<'db>(
     binding: &ProviderBinding<'db>,
     root_class: &RuntimeClass<'db>,
 ) -> AddressSpaceKind {
@@ -2210,7 +1951,7 @@ fn aggregate_make_class_from_facts<'db>(
     facts: &AggregateMakeStaticFacts<'db>,
     fields: &[NOperand],
     carriers: &[RuntimeCarrier<'db>],
-    mut class_cache: Option<&mut InferClassCache<'db>>,
+    class_cache: Option<&mut InferClassCache<'db>>,
 ) -> Option<RuntimeClass<'db>> {
     if let Some(class) = facts.direct_class.clone() {
         return Some(class);
@@ -2219,24 +1960,30 @@ fn aggregate_make_class_from_facts<'db>(
         return None;
     }
     let mut field_classes = Vec::with_capacity(fields.len());
+    let mut evaluator = RuntimeValueEvaluator::new(env, carriers, class_cache);
     for (field, field_facts) in fields.iter().copied().zip(facts.fields.iter()) {
-        let class = match field_facts.boundary.as_ref() {
-            Some(boundary) => env
-                .runtime_visible_value_class(
-                    carriers,
-                    field.local,
-                    Some(BoundaryRef::staged(boundary)),
-                    class_cache.as_deref_mut(),
-                )
-                .map(|actual| match &boundary.boundary {
-                    RuntimeBoundarySpec::Exact(desired) => {
-                        CoercionPlanner::preserve_provider_space(&actual, desired)
-                    }
-                    RuntimeBoundarySpec::BorrowLike { .. } => actual,
-                }),
-            None => env.materialized_value_class(carriers, field.local),
-        }
-        .unwrap_or_else(|| field_facts.stored_class.clone());
+        let class = field_facts
+            .boundary
+            .as_ref()
+            .and_then(|boundary| {
+                let mut boundary_sites = BoundarySiteAllocator::default();
+                evaluator
+                    .evaluate_value_pass_plan(
+                        field.local,
+                        &compile_value_pass_plan(
+                            RuntimeParamPlan::Boundary(boundary.boundary.clone()),
+                            &mut boundary_sites,
+                        ),
+                    )
+                    .map(|actual| match &boundary.boundary {
+                        RuntimeBoundarySpec::Exact(desired) => {
+                            CoercionPlanner::preserve_provider_space(&actual, desired)
+                        }
+                        RuntimeBoundarySpec::BorrowLike { .. } => actual,
+                    })
+            })
+            .or_else(|| evaluator.materialize(field.local))
+            .unwrap_or_else(|| field_facts.stored_class.clone());
         field_classes.push(class);
     }
     Some(RuntimeClass::AggregateValue {
@@ -2268,28 +2015,32 @@ pub(crate) fn visible_return_class_for_local<'db>(
     plan: &RuntimeVisibleReturnPlan<'db>,
     carriers: &[RuntimeCarrier<'db>],
 ) -> Option<RuntimeClass<'db>> {
+    let mut evaluator = RuntimeValueEvaluator::new(env, carriers, None);
     match plan {
         RuntimeVisibleReturnPlan::Erased => None,
-        RuntimeVisibleReturnPlan::Exact(class) => env
-            .runtime_visible_value_class(carriers, local, None, None)
-            .or_else(|| Some(class.clone())),
-        RuntimeVisibleReturnPlan::Constrained(boundary) => env.runtime_visible_value_class(
-            carriers,
-            local,
-            Some(BoundaryRef::unstaged(boundary)),
-            None,
-        ),
-        RuntimeVisibleReturnPlan::PassActual => carrier_value_class(local, carriers)
-            .or_else(|| env.semantic_value_class(carriers, local)),
+        RuntimeVisibleReturnPlan::Exact(class) => {
+            evaluator.materialize(local).or_else(|| Some(class.clone()))
+        }
+        RuntimeVisibleReturnPlan::Constrained(boundary) => {
+            let mut boundary_sites = BoundarySiteAllocator::default();
+            evaluator.evaluate_value_pass_plan(
+                local,
+                &compile_value_pass_plan(
+                    RuntimeParamPlan::Boundary(boundary.clone()),
+                    &mut boundary_sites,
+                ),
+            )
+        }
+        RuntimeVisibleReturnPlan::PassActual => evaluator.actual_value(local),
     }
 }
 
-struct SpecializedBoundary<'a, 'db> {
-    boundary: Cow<'a, RuntimeBoundarySpec<'db>>,
+pub(super) struct SpecializedBoundary<'a, 'db> {
+    pub(super) boundary: Cow<'a, RuntimeBoundarySpec<'db>>,
     matcher: CompiledBoundaryMatcher<'db>,
 }
 
-fn specialize_boundary_for_runtime_source_in_context<'a, 'db>(
+pub(super) fn specialize_boundary_for_runtime_source_in_context<'a, 'db>(
     env: BodyEnv<'_, 'db>,
     local: SLocalId,
     boundary: BoundaryRef<'a, 'db>,
@@ -2814,123 +2565,6 @@ fn project_variant_field_place_class<'db>(
     }
 }
 
-fn effect_arg_class<'db>(
-    body_env: BodyEnv<'_, 'db>,
-    type_env: RuntimeTypeEnv<'db>,
-    arg: &NEffectArg<'db>,
-    boundary: Option<BoundaryRef<'_, 'db>>,
-    carriers: &[RuntimeCarrier<'db>],
-    class_cache: Option<&mut InferClassCache<'db>>,
-) -> Option<RuntimeClass<'db>> {
-    if boundary.is_none() && arg.provider.is_none() && arg.target_ty.is_none() {
-        return match (&arg.pass_mode, &arg.arg) {
-            (EffectPassMode::ByValue | EffectPassMode::Unknown, NEffectArgValue::Value(value)) => {
-                body_env.materialized_value_class(carriers, value.local)
-            }
-            (EffectPassMode::ByValue | EffectPassMode::Unknown, NEffectArgValue::Place(_))
-            | (
-                EffectPassMode::ByPlace | EffectPassMode::ByTempPlace,
-                NEffectArgValue::Value(_) | NEffectArgValue::Place(_),
-            ) => panic!(
-                "effect arg without provider/target should infer as a plain value: owner={:?}; arg={arg:?}",
-                body_env.body.owner.key(body_env.db).owner(body_env.db),
-            ),
-        };
-    }
-    let effect_space = || resolved_effect_arg_address_space(body_env.db, body_env.body, arg);
-    match arg.pass_mode {
-        EffectPassMode::ByValue | EffectPassMode::Unknown => {
-            if let Some(boundary) = boundary.as_ref() {
-                return match &arg.arg {
-                    NEffectArgValue::Place(place) => runtime_visible_place_arg_class_for_boundary(
-                        body_env.db,
-                        body_env.body,
-                        place,
-                        boundary.boundary,
-                        carriers,
-                        type_env.scope,
-                        type_env.assumptions,
-                    ),
-                    NEffectArgValue::Value(value) => body_env.runtime_visible_value_class(
-                        carriers,
-                        value.local,
-                        Some(*boundary),
-                        class_cache,
-                    ),
-                };
-            }
-            match arg.arg {
-                NEffectArgValue::Place(_) => Some(provider_class_for_target_in_context(
-                    body_env.db,
-                    arg.target_ty,
-                    effect_space(),
-                    type_env.scope,
-                    type_env.assumptions,
-                )),
-                NEffectArgValue::Value(value) => match carriers.get(value.local.index())? {
-                    RuntimeCarrier::Value(class) => Some(class.clone()),
-                    RuntimeCarrier::Erased if arg.provider.is_none() && arg.target_ty.is_none() => {
-                        None
-                    }
-                    RuntimeCarrier::Erased => Some(provider_class_for_target_in_context(
-                        body_env.db,
-                        arg.target_ty,
-                        effect_space(),
-                        type_env.scope,
-                        type_env.assumptions,
-                    )),
-                },
-            }
-        }
-        EffectPassMode::ByPlace | EffectPassMode::ByTempPlace => {
-            let boundary = boundary
-                .map(|boundary| Cow::Borrowed(boundary.boundary))
-                .unwrap_or_else(|| {
-                    let Some(target_ty) = arg.target_ty else {
-                        return Cow::Owned(RuntimeBoundarySpec::Exact(
-                            provider_class_for_target_in_context(
-                                body_env.db,
-                                None,
-                                effect_space(),
-                                type_env.scope,
-                                type_env.assumptions,
-                            ),
-                        ));
-                    };
-                    Cow::Owned(RuntimeBoundarySpec::BorrowLike {
-                        pointee: stored_class_for_ty_in_context(
-                            body_env.db,
-                            target_ty,
-                            type_env.scope,
-                            type_env.assumptions,
-                        ),
-                        access: BorrowAccess::ReadWrite,
-                        allow: default_borrow_transport_set(
-                            BorrowAccess::ReadWrite,
-                            effect_space(),
-                        ),
-                    })
-                });
-            match &arg.arg {
-                NEffectArgValue::Place(place) => runtime_visible_place_arg_class_for_boundary(
-                    body_env.db,
-                    body_env.body,
-                    place,
-                    boundary.as_ref(),
-                    carriers,
-                    type_env.scope,
-                    type_env.assumptions,
-                ),
-                NEffectArgValue::Value(value) => body_env.borrow_like_runtime_visible_arg_class(
-                    carriers,
-                    value.local,
-                    boundary.as_ref(),
-                ),
-            }
-        }
-    }
-}
-
 fn specialize_boundary_for_aggregate_layout<'a, 'db>(
     boundary: &'a RuntimeBoundarySpec<'db>,
     aggregate_layout: Option<LayoutId<'db>>,
@@ -3086,7 +2720,7 @@ pub(crate) fn desired_runtime_effect_arg_boundary<'db>(
     })
 }
 
-fn runtime_visible_place_arg_class_for_boundary<'db>(
+pub(super) fn runtime_visible_place_arg_class_for_boundary<'db>(
     db: &'db dyn MirDb,
     body: &NormalizedSemanticBody<'db>,
     place: &NSPlace<'db>,
@@ -3404,6 +3038,7 @@ mod tests {
     };
     use url::Url;
 
+    use super::super::value_eval::RuntimeValueEvaluator;
     use super::*;
     use crate::runtime::lower::coerce::CoercionPlanner;
     use crate::runtime::{
@@ -3774,14 +3409,9 @@ mod tests {
             })
             .expect("specialized take_u256 should contain an inner call to take");
         let mut class_cache = InferClassCache::new(normalized.locals.len());
-        let inferred_param_classes = classify_runtime_call_inputs_from_facts(
-            env,
-            &inferred.carriers,
-            &args,
-            &effect_args,
-            &call_facts,
-            Some(&mut class_cache),
-        );
+        let inferred_param_classes =
+            RuntimeValueEvaluator::new(env, &inferred.carriers, Some(&mut class_cache))
+                .call_inputs(&args, &effect_args, &call_facts.input_plan);
         let lowered_take = instance
             .calls(&db)
             .iter()
@@ -3826,6 +3456,175 @@ mod tests {
         assert_eq!(
             inferred_dst_class, lowered_return_class,
             "infer-time dst carrier should match the specialized callee return class for take_u256 -> take:\ninferred_dst_class={inferred_dst_class:#?}\nlowered_return_class={lowered_return_class:#?}",
+        );
+    }
+
+    #[test]
+    fn own_scalar_call_inputs_materialize_provider_backed_direct_values() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse(
+            "file:///own_scalar_call_inputs_materialize_provider_backed_direct_values.fe",
+        )
+        .unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                include_str!(
+                    "../../../../fe/tests/fixtures/fe_test/contract_field_mut_borrow_matrix.fe"
+                )
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let contract = contract_by_name(&db, top_mod, "C");
+        let semantic = get_or_build_semantic_instance(
+            &db,
+            root_semantic_instance_key(
+                &db,
+                BodyOwner::ContractRecvArm {
+                    contract,
+                    recv_idx: 0,
+                    arm_idx: 2,
+                },
+            )
+            .unwrap_or_else(|err| panic!("failed to build recv-arm semantic key: {err:?}")),
+        );
+        let instance = runtime_instance_for_semantic(&db, semantic);
+        let typed_body = semantic.key(&db).typed_body(&db);
+        let normalized = normalize_semantic_body(&db, semantic)
+            .unwrap_or_else(|err| panic!("failed to normalize SelectAndMutate: {err:?}"));
+        let facts = BodyStaticFacts::new(&db, &normalized);
+        let env = BodyEnv::new(&db, &normalized, typed_body, &facts);
+        let params = instance.key(&db).params(&db);
+        let mut returns = RuntimeReturnAnalysisCx::new(&db);
+        let inferred = LocalStateInferer::new(
+            env,
+            params,
+            &runtime_param_locals(&db, semantic, params),
+            &mut returns,
+        )
+        .run();
+        let (args, effect_args, call_facts) = normalized
+            .blocks
+            .iter()
+            .enumerate()
+            .find_map(|(block_idx, block)| {
+                block.stmts.iter().enumerate().find_map(|(stmt_idx, stmt)| {
+                    let hir::analysis::semantic::NSStmtKind::Assign { expr, .. } = &stmt.kind
+                    else {
+                        return None;
+                    };
+                    let NExpr::Call {
+                        callee,
+                        args,
+                        effect_args,
+                    } = expr
+                    else {
+                        return None;
+                    };
+                    let BodyOwner::Func(func) = callee.key.owner(&db) else {
+                        return None;
+                    };
+                    if func
+                        .name(&db)
+                        .to_opt()
+                        .is_none_or(|name| name.data(&db) != "set_scaled")
+                    {
+                        return None;
+                    }
+                    let ExprStaticFacts::Call(call_facts) =
+                        facts.expr(block_idx, stmt_idx).unwrap_or_else(|| {
+                            panic!("missing staged call facts for {block_idx}:{stmt_idx}")
+                        })
+                    else {
+                        panic!("set_scaled expression should keep staged call facts");
+                    };
+                    Some((args.clone(), effect_args.clone(), call_facts.clone()))
+                })
+            })
+            .expect("SelectAndMutate should call set_scaled");
+        let mut class_cache = InferClassCache::new(normalized.locals.len());
+        let inferred_param_classes =
+            RuntimeValueEvaluator::new(env, &inferred.carriers, Some(&mut class_cache))
+                .call_inputs(&args, &effect_args, &call_facts.input_plan);
+        let lowered_set_scaled = instance
+            .calls(&db)
+            .iter()
+            .find_map(|call| {
+                let semantic = call.callee.key(&db).semantic(&db)?;
+                match semantic.key(&db).owner(&db) {
+                    BodyOwner::Func(func)
+                        if func
+                            .name(&db)
+                            .to_opt()
+                            .is_some_and(|name| name.data(&db) == "set_scaled") =>
+                    {
+                        Some(call.callee)
+                    }
+                    _ => None,
+                }
+            })
+            .expect("SelectAndMutate should lower a call to set_scaled");
+
+        assert!(
+            matches!(
+                inferred_param_classes.first(),
+                Some(RuntimeClass::Scalar(_))
+            ),
+            "provider-backed direct values passed to own u256 params must materialize by value:\nclasses={inferred_param_classes:#?}",
+        );
+        assert!(
+            matches!(
+                lowered_set_scaled.key(&db).params(&db).first(),
+                Some(RuntimeClass::Scalar(_))
+            ),
+            "specialized set_scaled runtime key must keep its first param by-value:\nkey={:#?}",
+            lowered_set_scaled.key(&db),
+        );
+    }
+
+    #[test]
+    fn transport_shaped_method_return_keeps_runtime_visible_signature() {
+        let mut db = DriverDataBase::default();
+        let file_url =
+            Url::parse("file:///transport_shaped_method_return_keeps_runtime_visible_signature.fe")
+                .unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                include_str!(
+                    "../../../../fe/tests/fixtures/fe_test/contract_field_mut_borrow_matrix.fe"
+                )
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let signature = runtime_signature_for_named_func(&db, top_mod, "pick_ac_mut");
+
+        assert!(
+            matches!(
+                signature.ret,
+                Some(
+                    RuntimeClass::Ref {
+                        kind: RefKind::Provider { .. },
+                        ..
+                    } | RuntimeClass::RawAddr {
+                        space: AddressSpaceKind::Storage,
+                        ..
+                    }
+                )
+            ),
+            "mut-returning method signatures must keep provider/storage transport, not degrade to object refs:\n{signature:#?}"
         );
     }
 }
