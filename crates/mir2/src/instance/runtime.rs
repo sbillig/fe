@@ -12,7 +12,6 @@ use crate::{
                 collect_referenced_code_regions, collect_referenced_const_regions,
                 collect_runtime_calls as collect_runtime_calls_lowered,
             },
-            classify::runtime_signature_for_key,
         },
         synthetic::{lower_synthetic_runtime_body, runtime_synthetic_signature},
     },
@@ -58,9 +57,7 @@ impl<'db> RuntimeInstance<'db> {
     #[salsa::tracked]
     pub fn signature(self, db: &'db dyn MirDb) -> RuntimeSignature<'db> {
         match self.key(db).source(db) {
-            RuntimeInstanceSource::Semantic(semantic) => {
-                runtime_signature_for_key(db, semantic, self.key(db).params(db))
-            }
+            RuntimeInstanceSource::Semantic(_) => self.body(db).signature.clone(),
             RuntimeInstanceSource::Synthetic(synthetic) => {
                 runtime_synthetic_signature(synthetic.spec(db).clone())
             }

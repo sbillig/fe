@@ -1832,26 +1832,6 @@ pub(crate) fn runtime_signature_for_key_with_returns<'db>(
     }
 }
 
-pub fn runtime_signature_for_key<'db>(
-    db: &'db dyn MirDb,
-    semantic: SemanticInstance<'db>,
-    params: &[RuntimeClass<'db>],
-) -> RuntimeSignature<'db> {
-    let mut returns = RuntimeReturnAnalysisCx::new(db);
-    runtime_signature_for_key_with_returns(db, semantic, params, &mut returns)
-}
-
-#[salsa::tracked(
-    cycle_fn=runtime_return_class_cycle_recover,
-    cycle_initial=runtime_return_class_cycle_initial
-)]
-pub fn runtime_return_class_for_key<'db>(
-    db: &'db dyn MirDb,
-    key: RuntimeInstanceKey<'db>,
-) -> Option<RuntimeClass<'db>> {
-    RuntimeReturnAnalysisCx::new(db).return_class_for_key(key)
-}
-
 fn provider_root_place_class<'db>(
     db: &'db dyn MirDb,
     value_ty: TyId<'db>,
@@ -3249,29 +3229,6 @@ fn intrinsic_numeric_name_parts(name: &str) -> Option<(&str, &str)> {
     ]
     .iter()
     .find_map(|suffix| op.strip_suffix(suffix).map(|prefix| (prefix, *suffix)))
-}
-
-#[allow(dead_code)] // referenced by the salsa tracked attribute above
-fn runtime_return_class_cycle_initial<'db>(
-    db: &'db dyn MirDb,
-    key: RuntimeInstanceKey<'db>,
-) -> Option<RuntimeClass<'db>> {
-    let typed_body = key
-        .semantic(db)
-        .expect("cycle handling only applies to semantic runtime instances")
-        .key(db)
-        .typed_body(db);
-    default_return_class(db, typed_body)
-}
-
-#[allow(dead_code)] // referenced by the salsa tracked attribute above
-fn runtime_return_class_cycle_recover<'db>(
-    _db: &'db dyn MirDb,
-    _value: &Option<RuntimeClass<'db>>,
-    _count: u32,
-    _key: RuntimeInstanceKey<'db>,
-) -> salsa::CycleRecoveryAction<Option<RuntimeClass<'db>>> {
-    salsa::CycleRecoveryAction::Iterate
 }
 
 pub(crate) fn runtime_param_class<'db>(
