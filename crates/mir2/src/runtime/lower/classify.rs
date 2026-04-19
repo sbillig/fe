@@ -8,8 +8,7 @@ use hir::analysis::{
         SemanticCalleeRef, SemanticInstance, SemanticInstanceKey, ValueProvenance, VariantIndex,
         borrowck::{
             NBorrowRoot, NExpr, NLocalInterface, NLocalOrigin, NOperand, NSPlace, NSPlaceRoot,
-            NSTerminatorKind, NormalizedBindingLowering, NormalizedSemanticBody,
-            normalize_semantic_body,
+            NormalizedBindingLowering, NormalizedSemanticBody,
         },
         get_or_build_semantic_instance, sem_const_ty, semantic_binding_lowering,
         semantic_binding_ty, semantic_instance_assumptions,
@@ -44,7 +43,7 @@ use crate::{
 
 use super::{
     coerce::CoercionPlanner,
-    infer::{LocalStateInferer, fallback_root_transport_class, local_place_root_class},
+    infer::{fallback_root_transport_class, local_place_root_class},
     interface::{runtime_param_locals, runtime_param_plans, runtime_visible_binding_plans},
     layout::{
         layout_for_aggregate_instance_in_context, layout_for_enum_variant_instance_in_context,
@@ -54,6 +53,7 @@ use super::{
         address_space_from_provider, project_field_class, project_index_class,
         project_variant_field_class, resolved_effect_arg_address_space,
     },
+    returns::RuntimeReturnAnalysisCx,
     type_info::{
         RuntimeTypeEnv, aggregate_transport_depends_on_runtime_source,
         boundary_source_uses_transport_sensitive_aggregate, boundary_spec_for_ty_in_env,
@@ -81,6 +81,12 @@ pub(super) struct AssignStaticFacts<'db> {
     pub(super) dst: SLocalId,
     uses: Box<[SLocalId]>,
     expr: Option<ExprStaticFacts<'db>>,
+}
+
+impl<'db> AssignStaticFacts<'db> {
+    pub(crate) fn uses(&self) -> &[SLocalId] {
+        &self.uses
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -137,16 +143,6 @@ impl BoundarySiteAllocator {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(super) struct CallReturnClassCacheKey<'db> {
-    block_idx: usize,
-    stmt_idx: usize,
-    param_classes: Vec<RuntimeClass<'db>>,
-}
-
-pub(super) type CallReturnClassCache<'db> =
-    FxHashMap<CallReturnClassCacheKey<'db>, Option<RuntimeClass<'db>>>;
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct BoundarySpecializationCacheKey<'db> {
     local: SLocalId,
     site: BoundarySiteId,
@@ -167,7 +163,6 @@ type BoundarySpecializationCache<'db> =
 
 #[derive(Default)]
 pub(super) struct InferClassCache<'db> {
-    call_return_classes: CallReturnClassCache<'db>,
     boundary_specializations: BoundarySpecializationCache<'db>,
     local_versions: Vec<u32>,
     local_dynamic_facts: Vec<CachedLocalDynamicFacts<'db>>,
@@ -176,7 +171,6 @@ pub(super) struct InferClassCache<'db> {
 impl<'db> InferClassCache<'db> {
     pub(super) fn new(local_count: usize) -> Self {
         Self {
-            call_return_classes: CallReturnClassCache::default(),
             boundary_specializations: BoundarySpecializationCache::default(),
             local_versions: vec![0; local_count],
             local_dynamic_facts: vec![CachedLocalDynamicFacts::default(); local_count],
@@ -625,8 +619,23 @@ impl<'db> BodyStaticFacts<'db> {
         self.assignments.get(*assign_id)?.expr.as_ref()
     }
 
-    fn assignment(&self, assign_id: usize) -> Option<&AssignStaticFacts<'db>> {
+    pub(super) fn assignment(&self, assign_id: usize) -> Option<&AssignStaticFacts<'db>> {
         self.assignments.get(assign_id)
+    }
+
+    pub(super) fn assignments(&self) -> &[AssignStaticFacts<'db>] {
+        &self.assignments
+    }
+
+    pub(super) fn source_locals(&self, local: SLocalId) -> &[SLocalId] {
+        self.local(local)
+            .map(|facts| facts.source_locals.as_ref())
+            .unwrap_or(&[])
+    }
+
+    pub(super) fn boundary_source_transport_sensitive(&self, local: SLocalId) -> bool {
+        self.local(local)
+            .is_some_and(|facts| facts.boundary_source_transport_sensitive)
     }
 
     fn assignments_using_local(&self, local: SLocalId) -> &[usize] {
@@ -694,6 +703,10 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
 
     pub(super) fn scope(self) -> Option<hir::hir_def::scope_graph::ScopeId<'db>> {
         self.type_env.scope
+    }
+
+    pub(crate) fn type_env(self) -> RuntimeTypeEnv<'db> {
+        self.type_env
     }
 
     pub(super) fn assumptions(self) -> PredicateListId<'db> {
@@ -774,8 +787,8 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         block_idx: usize,
         stmt_idx: usize,
         expr: &NExpr<'db>,
-        result_ty: TyId<'db>,
         mut class_cache: Option<&mut InferClassCache<'db>>,
+        returns: &mut RuntimeReturnAnalysisCx<'db>,
     ) -> Option<RuntimeClass<'db>> {
         let expr_facts = self.expr_facts(block_idx, stmt_idx);
         Some(match expr {
@@ -791,9 +804,8 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                     class.clone()?
                 }
                 _ => panic!(
-                    "missing staged runtime class facts: owner={:?}; expr={expr:?}; result_ty={}",
+                    "missing staged runtime class facts: owner={:?}; expr={expr:?}",
                     self.body.owner.key(self.db),
-                    result_ty.pretty_print(self.db),
                 ),
             },
             NExpr::CodeRegionRef { .. } => return None,
@@ -860,120 +872,164 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
             } => {
                 let Some(ExprStaticFacts::Call(facts)) = expr_facts else {
                     panic!(
-                        "missing staged runtime call facts: owner={:?}; expr={expr:?}; result_ty={}",
+                        "missing staged runtime call facts: owner={:?}; expr={expr:?}",
                         self.body.owner.key(self.db),
-                        result_ty.pretty_print(self.db),
                     );
                 };
                 if let Some(class) = facts.builtin_return_class.clone() {
                     return class;
                 }
-                assert_eq!(
-                    args.len(),
-                    facts.param_plans.len(),
-                    "runtime call arg count mismatch during class inference: caller={:?} callee={:?} args={args:?} plans={:?}",
-                    self.body.owner.key(self.db),
-                    facts.semantic.key(self.db),
-                    facts.param_plans,
+                let param_classes = classify_runtime_call_inputs_from_facts(
+                    self,
+                    carriers,
+                    args,
+                    effect_args,
+                    facts,
+                    class_cache,
                 );
-                let mut param_classes = Vec::new();
-                for (arg, plan) in args.iter().zip(facts.param_plans.iter()) {
-                    match plan {
-                        StagedRuntimeParamPlan::Erased => {}
-                        StagedRuntimeParamPlan::Boundary(desired) => {
-                            if let Some(actual) = self.runtime_visible_value_class(
-                                carriers,
-                                arg.local,
-                                Some(BoundaryRef::staged(desired)),
-                                class_cache.as_deref_mut(),
-                            ) {
-                                param_classes.push(match &desired.boundary {
-                                    RuntimeBoundarySpec::Exact(desired) => {
-                                        CoercionPlanner::preserve_provider_space(&actual, desired)
-                                    }
-                                    RuntimeBoundarySpec::BorrowLike { .. } => actual,
-                                });
-                            }
-                        }
-                        StagedRuntimeParamPlan::PassActual => {
-                            if let Some(actual) = self.runtime_visible_value_class(
-                                carriers,
-                                arg.local,
-                                None,
-                                class_cache.as_deref_mut(),
-                            ) {
-                                param_classes.push(actual);
-                            }
-                        }
-                    }
-                }
-                assert_eq!(
-                    effect_args.len(),
-                    facts.effect_binding_plans.len(),
-                    "runtime effect arg count mismatch during class inference: caller={:?} callee={:?} effect_args={effect_args:?} plans={:?}",
-                    self.body.owner.key(self.db),
-                    facts.semantic.key(self.db),
-                    facts.effect_binding_plans,
-                );
-                for (arg, effect_facts) in effect_args.iter().zip(facts.effect_binding_plans.iter())
-                {
-                    assert_eq!(
-                        arg.binding_idx as usize,
-                        effect_facts.binding_idx,
-                        "runtime effect binding index mismatch during class inference: caller={:?} callee={:?} arg={arg:?} staged={effect_facts:?}",
-                        self.body.owner.key(self.db),
-                        facts.semantic.key(self.db),
-                    );
-                    if let Some(class) = effect_arg_class(
-                        self,
-                        facts.callee_type_env,
-                        arg,
-                        effect_facts.boundary.as_ref().map(BoundaryRef::staged),
-                        carriers,
-                        class_cache.as_deref_mut(),
-                    ) {
-                        param_classes.push(class);
-                    }
-                }
-                return match class_cache {
-                    Some(class_cache) => {
-                        let cache_key = CallReturnClassCacheKey {
-                            block_idx,
-                            stmt_idx,
-                            param_classes,
-                        };
-                        if let Some(class) =
-                            class_cache.call_return_classes.get(&cache_key).cloned()
-                        {
-                            class
-                        } else {
-                            let class = runtime_return_class_for_key(
-                                self.db,
-                                RuntimeInstanceKey::new(
-                                    self.db,
-                                    RuntimeInstanceSource::Semantic(facts.semantic),
-                                    cache_key.param_classes.clone(),
-                                ),
-                            );
-                            class_cache
-                                .call_return_classes
-                                .insert(cache_key, class.clone());
-                            class
-                        }
-                    }
-                    None => runtime_return_class_for_key(
-                        self.db,
-                        RuntimeInstanceKey::new(
-                            self.db,
-                            RuntimeInstanceSource::Semantic(facts.semantic),
-                            param_classes,
-                        ),
-                    ),
-                };
+                return returns.return_class_for_key(RuntimeInstanceKey::new(
+                    self.db,
+                    RuntimeInstanceSource::Semantic(facts.semantic),
+                    param_classes,
+                ));
             }
         })
     }
+}
 
+fn classify_runtime_call_inputs_from_facts<'db>(
+    env: BodyEnv<'_, 'db>,
+    carriers: &[RuntimeCarrier<'db>],
+    args: &[NOperand],
+    effect_args: &[NEffectArg<'db>],
+    facts: &CallStaticFacts<'db>,
+    mut class_cache: Option<&mut InferClassCache<'db>>,
+) -> Vec<RuntimeClass<'db>> {
+    assert_eq!(
+        args.len(),
+        facts.param_plans.len(),
+        "runtime call arg count mismatch during class inference: caller={:?} callee={:?} args={args:?} plans={:?}",
+        env.body().owner.key(env.db()),
+        facts.semantic.key(env.db()),
+        facts.param_plans,
+    );
+    let mut param_classes = Vec::new();
+    for (arg, plan) in args.iter().zip(facts.param_plans.iter()) {
+        match plan {
+            StagedRuntimeParamPlan::Erased => {}
+            StagedRuntimeParamPlan::Boundary(desired) => {
+                if let Some(actual) = env.runtime_visible_value_class(
+                    carriers,
+                    arg.local,
+                    Some(BoundaryRef::staged(desired)),
+                    class_cache.as_deref_mut(),
+                ) {
+                    param_classes.push(actual);
+                }
+            }
+            StagedRuntimeParamPlan::PassActual => {
+                if let Some(actual) = env.runtime_visible_value_class(
+                    carriers,
+                    arg.local,
+                    None,
+                    class_cache.as_deref_mut(),
+                ) {
+                    param_classes.push(actual);
+                }
+            }
+        }
+    }
+    assert_eq!(
+        effect_args.len(),
+        facts.effect_binding_plans.len(),
+        "runtime effect arg count mismatch during class inference: caller={:?} callee={:?} effect_args={effect_args:?} plans={:?}",
+        env.body().owner.key(env.db()),
+        facts.semantic.key(env.db()),
+        facts.effect_binding_plans,
+    );
+    for (arg, effect_facts) in effect_args.iter().zip(facts.effect_binding_plans.iter()) {
+        assert_eq!(
+            arg.binding_idx as usize,
+            effect_facts.binding_idx,
+            "runtime effect binding index mismatch during class inference: caller={:?} callee={:?} arg={arg:?} staged={effect_facts:?}",
+            env.body().owner.key(env.db()),
+            facts.semantic.key(env.db()),
+        );
+        if let Some(class) = effect_arg_class(
+            env,
+            facts.callee_type_env,
+            arg,
+            effect_facts.boundary.as_ref().map(BoundaryRef::staged),
+            carriers,
+            class_cache.as_deref_mut(),
+        ) {
+            param_classes.push(class);
+        }
+    }
+    param_classes
+}
+
+pub(super) fn classify_runtime_call_inputs_for_semantic<'db>(
+    env: BodyEnv<'_, 'db>,
+    carriers: &[RuntimeCarrier<'db>],
+    semantic: SemanticInstance<'db>,
+    typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
+    args: &[NOperand],
+    effect_args: &[NEffectArg<'db>],
+    mut class_cache: Option<&mut InferClassCache<'db>>,
+) -> Vec<RuntimeClass<'db>> {
+    let mut param_classes = Vec::new();
+    for (idx, arg) in args.iter().enumerate() {
+        match desired_runtime_param_plan(env.db(), semantic, typed_body, idx) {
+            RuntimeParamPlan::Erased => {}
+            RuntimeParamPlan::Boundary(desired) => {
+                let cache = class_cache.as_deref_mut();
+                if let Some(actual) = env.runtime_visible_value_class(
+                    carriers,
+                    arg.local,
+                    Some(BoundaryRef::unstaged(&desired)),
+                    cache,
+                ) {
+                    param_classes.push(actual);
+                }
+            }
+            RuntimeParamPlan::PassActual => {
+                let cache = class_cache.as_deref_mut();
+                if let Some(actual) =
+                    env.runtime_visible_value_class(carriers, arg.local, None, cache)
+                {
+                    param_classes.push(actual);
+                }
+            }
+        }
+    }
+    for effect_arg in effect_args {
+        let plan =
+            runtime_effect_binding_plan_for_binding_idx(env.db(), semantic, effect_arg.binding_idx);
+        let cache = class_cache.as_deref_mut();
+        if let Some(class) = effect_arg_class(
+            env,
+            env.type_env(),
+            effect_arg,
+            desired_runtime_effect_arg_boundary(
+                env.db(),
+                env.type_env(),
+                effect_arg,
+                plan.as_ref(),
+                resolved_effect_arg_address_space(env.db(), env.body(), effect_arg),
+            )
+            .as_ref()
+            .map(BoundaryRef::unstaged),
+            carriers,
+            cache,
+        ) {
+            param_classes.push(class);
+        }
+    }
+    param_classes
+}
+
+impl<'a, 'db> BodyEnv<'a, 'db> {
     pub(crate) fn materialized_value_class(
         self,
         carriers: &[RuntimeCarrier<'db>],
@@ -1639,10 +1695,10 @@ impl<'a, 'carriers, 'db> RuntimeBodyCx<'a, 'carriers, 'db> {
         block_idx: usize,
         stmt_idx: usize,
         expr: &NExpr<'db>,
-        result_ty: TyId<'db>,
     ) -> Option<RuntimeClass<'db>> {
+        let mut returns = RuntimeReturnAnalysisCx::new(self.env.db());
         self.env
-            .expr_direct_class(self.carriers, block_idx, stmt_idx, expr, result_ty, None)
+            .expr_direct_class(self.carriers, block_idx, stmt_idx, expr, None, &mut returns)
     }
 
     pub(crate) fn materialized_value_class(self, local: SLocalId) -> Option<RuntimeClass<'db>> {
@@ -1694,7 +1750,7 @@ pub(crate) struct RuntimeEffectBindingPlan<'db> {
 }
 
 #[derive(Clone, Debug)]
-enum RuntimeVisibleReturnPlan<'db> {
+pub(crate) enum RuntimeVisibleReturnPlan<'db> {
     Erased,
     Exact(RuntimeClass<'db>),
     Constrained(RuntimeBoundarySpec<'db>),
@@ -1794,50 +1850,7 @@ pub fn runtime_return_class_for_key<'db>(
     db: &'db dyn MirDb,
     key: RuntimeInstanceKey<'db>,
 ) -> Option<RuntimeClass<'db>> {
-    let semantic = key
-        .semantic(db)
-        .expect("return-class inference only applies to semantic runtime instances");
-    let typed_body = semantic.key(db).typed_body(db);
-    let plan = desired_runtime_return_plan(db, typed_body);
-    match &plan {
-        RuntimeVisibleReturnPlan::Erased => return None,
-        RuntimeVisibleReturnPlan::Exact(_)
-        | RuntimeVisibleReturnPlan::Constrained(_)
-        | RuntimeVisibleReturnPlan::PassActual => {}
-    }
-    let semantic_body = normalize_semantic_body(db, semantic)
-        .unwrap_or_else(|err| panic!("semantic normalization failed for {:?}: {err:?}", key));
-    let facts = BodyStaticFacts::new(db, &semantic_body);
-    let inferred = LocalStateInferer::new(
-        BodyEnv::new(db, &semantic_body, typed_body, &facts),
-        key.params(db),
-        &runtime_param_locals(db, semantic, key.params(db)),
-    )
-    .run();
-    let mut returned = Vec::new();
-    for block in &semantic_body.blocks {
-        let NSTerminatorKind::Return(Some(value)) = &block.terminator.kind else {
-            continue;
-        };
-        let Some(class) = visible_return_class_for_local(
-            db,
-            &semantic_body,
-            value.local,
-            &plan,
-            &inferred.carriers,
-        ) else {
-            return default_return_class(db, typed_body);
-        };
-        returned.push(class);
-    }
-    let Some(first) = returned.pop() else {
-        return default_return_class(db, typed_body);
-    };
-    if returned.iter().all(|class| class == &first) {
-        Some(first)
-    } else {
-        default_return_class(db, typed_body)
-    }
+    RuntimeReturnAnalysisCx::new(db).return_class_for_key(key)
 }
 
 fn provider_root_place_class<'db>(
@@ -1954,6 +1967,13 @@ fn effect_binding_borrow_boundary<'db>(
     }
 }
 
+fn specialize_effect_binding_boundary_for_class<'db>(
+    boundary: RuntimeBoundarySpec<'db>,
+    class: &RuntimeClass<'db>,
+) -> RuntimeBoundarySpec<'db> {
+    specialize_boundary_for_aggregate_layout(&boundary, class.aggregate_layout()).into_owned()
+}
+
 pub(crate) fn runtime_effect_binding_plan<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
@@ -1974,16 +1994,11 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
             provenance: ValueProvenance::RootProvider(provider),
         } => {
             let class = runtime_class_for_direct_value_provider_in_env(db, env, &provider)?;
-            Some(RuntimeEffectBindingPlan {
-                class,
-                boundary: effect_binding_borrow_boundary(
-                    db,
-                    binding,
-                    binding_ty,
-                    env.scope,
-                    env.assumptions,
-                ),
-            })
+            let boundary = specialize_effect_binding_boundary_for_class(
+                effect_binding_borrow_boundary(db, binding, binding_ty, env.scope, env.assumptions),
+                &class,
+            );
+            Some(RuntimeEffectBindingPlan { class, boundary })
         }
         hir::analysis::semantic::SemanticBindingLowering::DirectValue { .. } => {
             let class =
@@ -2039,16 +2054,11 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
             value_ty,
         } => {
             let class = runtime_class_for_effect_binding_provider_in_env(db, env, &provider)?;
-            Some(RuntimeEffectBindingPlan {
-                class,
-                boundary: effect_binding_borrow_boundary(
-                    db,
-                    binding,
-                    value_ty,
-                    env.scope,
-                    env.assumptions,
-                ),
-            })
+            let boundary = specialize_effect_binding_boundary_for_class(
+                effect_binding_borrow_boundary(db, binding, value_ty, env.scope, env.assumptions),
+                &class,
+            );
+            Some(RuntimeEffectBindingPlan { class, boundary })
         }
         hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
             provenance: hir::analysis::semantic::PlaceProvenance::Derived { .. },
@@ -2273,16 +2283,12 @@ fn aggregate_make_class_from_facts<'db>(
     })
 }
 
-fn visible_return_class_for_local<'db>(
-    db: &'db dyn MirDb,
-    body: &NormalizedSemanticBody<'db>,
+pub(crate) fn visible_return_class_for_local<'db>(
+    env: BodyEnv<'_, 'db>,
     local: SLocalId,
     plan: &RuntimeVisibleReturnPlan<'db>,
     carriers: &[RuntimeCarrier<'db>],
 ) -> Option<RuntimeClass<'db>> {
-    let typed_body = body.owner.key(db).typed_body(db);
-    let facts = BodyStaticFacts::new(db, body);
-    let env = BodyEnv::new(db, body, typed_body, &facts);
     match plan {
         RuntimeVisibleReturnPlan::Erased => None,
         RuntimeVisibleReturnPlan::Exact(class) => env
@@ -3348,7 +3354,7 @@ pub(crate) fn semantic_return_ty<'db>(
     semantic.key(db).typed_body(db).result_ty()
 }
 
-fn default_return_class<'db>(
+pub(crate) fn default_return_class<'db>(
     db: &'db dyn MirDb,
     typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
 ) -> Option<RuntimeClass<'db>> {
@@ -3362,7 +3368,7 @@ fn default_return_class<'db>(
     top_level_class_for_ty_in_env(db, env, typed_body.result_ty(), default_space)
 }
 
-fn desired_runtime_return_plan<'db>(
+pub(crate) fn desired_runtime_return_plan<'db>(
     db: &'db dyn MirDb,
     typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
 ) -> RuntimeVisibleReturnPlan<'db> {
@@ -3433,15 +3439,22 @@ mod tests {
     use driver::DriverDataBase;
     use hir::{
         analysis::semantic::{
-            SemanticInstance, get_or_build_semantic_instance, root_semantic_instance_key,
+            SemanticInstance, borrowck::normalize_semantic_body, get_or_build_semantic_instance,
+            owner_effect_bindings, root_semantic_instance_key,
         },
         analysis::ty::ty_check::BodyOwner,
     };
     use url::Url;
 
     use super::*;
+    use crate::runtime::lower::coerce::CoercionPlanner;
     use crate::runtime::{
-        lower::interface::runtime_visible_binding_plans, package::runtime_instance_for_semantic,
+        lower::{
+            infer::LocalStateInferer,
+            interface::{runtime_param_locals, runtime_visible_binding_plans},
+            returns::RuntimeReturnAnalysisCx,
+        },
+        package::runtime_instance_for_semantic,
     };
 
     fn runtime_signature_for_named_func<'db>(
@@ -3480,6 +3493,24 @@ mod tests {
             panic!("failed to build root semantic key for `{name}`: {err:?}")
         });
         get_or_build_semantic_instance(db, key)
+    }
+
+    fn contract_by_name<'db>(
+        db: &'db DriverDataBase,
+        top_mod: hir::hir_def::TopLevelMod<'db>,
+        name: &str,
+    ) -> hir::hir_def::item::Contract<'db> {
+        top_mod
+            .all_contracts(db)
+            .iter()
+            .copied()
+            .find(|contract| {
+                contract
+                    .name(db)
+                    .to_opt()
+                    .is_some_and(|contract_name| contract_name.data(db) == name)
+            })
+            .unwrap_or_else(|| panic!("missing contract `{name}`"))
     }
 
     #[test]
@@ -3639,6 +3670,204 @@ mod tests {
             signature.params.len(),
             3,
             "specialized grant runtime signature should keep self + 2 explicit args:\nself_lowering={self_lowering:#?}\nplans={plans:#?}\nsignature={signature:#?}"
+        );
+    }
+
+    #[test]
+    fn provider_backed_effect_bindings_keep_actualized_borrow_boundaries() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse(
+            "file:///provider_backed_effect_bindings_keep_actualized_borrow_boundaries.fe",
+        )
+        .unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                include_str!(
+                    "../../../../fe/tests/fixtures/fe_test/reentrancy_mutex_storage_map.fe"
+                )
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let contract = contract_by_name(&db, top_mod, "B");
+        let semantic = get_or_build_semantic_instance(
+            &db,
+            root_semantic_instance_key(
+                &db,
+                BodyOwner::ContractRecvArm {
+                    contract,
+                    recv_idx: 0,
+                    arm_idx: 1,
+                },
+            )
+            .unwrap_or_else(|err| panic!("failed to build recv-arm semantic key: {err:?}")),
+        );
+        let binding = owner_effect_bindings(&db, semantic.key(&db).owner(&db))
+            .into_iter()
+            .next()
+            .expect("Protected arm should keep one owner effect binding");
+        let plan = runtime_effect_binding_plan(&db, semantic, binding)
+            .expect("guarded_balances should lower to a runtime effect binding plan");
+
+        assert!(
+            CoercionPlanner::class_satisfies_boundary(&plan.class, &plan.boundary),
+            "provider-backed effect binding plan should keep an actualized boundary matching its chosen runtime class:\nplan={plan:#?}"
+        );
+    }
+
+    #[test]
+    fn inner_take_call_uses_the_same_runtime_key_and_return_class_as_lowering() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse(
+            "file:///inner_take_call_uses_the_same_runtime_key_and_return_class_as_lowering.fe",
+        )
+        .unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                include_str!(
+                    "../../../../fe/tests/fixtures/fe_test/view_param_local_ref_take_reverse.fe"
+                )
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let sum_last4 = semantic_instance_for_named_func(&db, top_mod, "sum_last4");
+        let (semantic, instance) = runtime_instance_for_semantic(&db, sum_last4)
+            .calls(&db)
+            .iter()
+            .find_map(|call| {
+                let semantic = call.callee.key(&db).semantic(&db)?;
+                match semantic.key(&db).owner(&db) {
+                    BodyOwner::Func(func)
+                        if func
+                            .name(&db)
+                            .to_opt()
+                            .is_some_and(|name| name.data(&db) == "take_u256") =>
+                    {
+                        Some((semantic, call.callee))
+                    }
+                    _ => None,
+                }
+            })
+            .expect("sum_last4 should call specialized take_u256");
+        let typed_body = semantic.key(&db).typed_body(&db);
+        let normalized = normalize_semantic_body(&db, semantic)
+            .unwrap_or_else(|err| panic!("failed to normalize specialized take_u256: {err:?}"));
+        let facts = BodyStaticFacts::new(&db, &normalized);
+        let env = BodyEnv::new(&db, &normalized, typed_body, &facts);
+        let params = instance.key(&db).params(&db);
+        let mut returns = RuntimeReturnAnalysisCx::new(&db);
+        let inferred = LocalStateInferer::new(
+            env,
+            params,
+            &runtime_param_locals(&db, semantic, params),
+            &mut returns,
+        )
+        .run();
+        let (call_dst, args, effect_args, call_facts) = normalized
+            .blocks
+            .iter()
+            .enumerate()
+            .find_map(|(block_idx, block)| {
+                block.stmts.iter().enumerate().find_map(|(stmt_idx, stmt)| {
+                    let hir::analysis::semantic::NSStmtKind::Assign { dst, expr } = &stmt.kind
+                    else {
+                        return None;
+                    };
+                    let NExpr::Call {
+                        callee,
+                        args,
+                        effect_args,
+                    } = expr
+                    else {
+                        return None;
+                    };
+                    let BodyOwner::Func(func) = callee.key.owner(&db) else {
+                        return None;
+                    };
+                    if func
+                        .name(&db)
+                        .to_opt()
+                        .is_none_or(|name| name.data(&db) != "take")
+                    {
+                        return None;
+                    }
+                    let ExprStaticFacts::Call(call_facts) =
+                        facts.expr(block_idx, stmt_idx).unwrap_or_else(|| {
+                            panic!("missing staged call facts for {block_idx}:{stmt_idx}")
+                        })
+                    else {
+                        panic!("inner take expression should keep staged call facts");
+                    };
+                    Some((*dst, args.clone(), effect_args.clone(), call_facts.clone()))
+                })
+            })
+            .expect("specialized take_u256 should contain an inner call to take");
+        let mut class_cache = InferClassCache::new(normalized.locals.len());
+        let inferred_param_classes = classify_runtime_call_inputs_from_facts(
+            env,
+            &inferred.carriers,
+            &args,
+            &effect_args,
+            &call_facts,
+            Some(&mut class_cache),
+        );
+        let lowered_take = instance
+            .calls(&db)
+            .iter()
+            .find_map(|call| {
+                let semantic = call.callee.key(&db).semantic(&db)?;
+                match semantic.key(&db).owner(&db) {
+                    BodyOwner::Func(func)
+                        if func
+                            .name(&db)
+                            .to_opt()
+                            .is_some_and(|name| name.data(&db) == "take") =>
+                    {
+                        Some(call.callee)
+                    }
+                    _ => None,
+                }
+            })
+            .expect("specialized take_u256 should lower an inner call to take");
+        let inferred_dst_class = match inferred.carriers.get(call_dst.index()) {
+            Some(RuntimeCarrier::Value(class)) => Some(class.clone()),
+            Some(RuntimeCarrier::Erased) | None => None,
+        };
+        let lowered_dst_class = match instance.body(&db).locals.get(call_dst.index()) {
+            Some(local) => match &local.carrier {
+                RuntimeCarrier::Value(class) => Some(class.clone()),
+                RuntimeCarrier::Erased => None,
+            },
+            None => None,
+        };
+        let lowered_return_class = returns.return_class_for_key(lowered_take.key(&db));
+
+        assert_eq!(
+            inferred_param_classes,
+            *lowered_take.key(&db).params(&db),
+            "infer-time call classification should build the same runtime key as lowering for take_u256 -> take:\ninferred_param_classes={inferred_param_classes:#?}\nlowered_key={:#?}",
+            lowered_take.key(&db),
+        );
+        assert_eq!(
+            inferred_dst_class, lowered_dst_class,
+            "infer-time dst carrier should match the lowered call-result carrier for take_u256 -> take:\ninferred_dst_class={inferred_dst_class:#?}\nlowered_dst_class={lowered_dst_class:#?}",
+        );
+        assert_eq!(
+            inferred_dst_class, lowered_return_class,
+            "infer-time dst carrier should match the specialized callee return class for take_u256 -> take:\ninferred_dst_class={inferred_dst_class:#?}\nlowered_return_class={lowered_return_class:#?}",
         );
     }
 }

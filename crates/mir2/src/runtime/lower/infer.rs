@@ -31,6 +31,7 @@ use super::{
         runtime_class_for_direct_value_provider_in_context,
         runtime_class_for_effect_binding_provider_in_context, runtime_class_for_provider_binding,
     },
+    returns::RuntimeReturnAnalysisCx,
     type_info::{
         provider_class_for_target_in_context, stored_class_for_ty_in_context,
         top_level_class_for_ty_in_context,
@@ -45,17 +46,19 @@ pub(super) struct InferenceResult<'db> {
     pub(super) provider_bindings: Vec<RuntimeProviderBinding<'db>>,
 }
 
-pub(super) struct LocalStateInferer<'a, 'db> {
+pub(super) struct LocalStateInferer<'a, 'returns, 'db> {
     env: BodyEnv<'a, 'db>,
     carriers: Vec<RuntimeCarrier<'db>>,
     class_cache: InferClassCache<'db>,
+    returns: &'returns mut RuntimeReturnAnalysisCx<'db>,
 }
 
-impl<'a, 'db> LocalStateInferer<'a, 'db> {
+impl<'a, 'returns, 'db> LocalStateInferer<'a, 'returns, 'db> {
     pub(super) fn new(
         env: BodyEnv<'a, 'db>,
         params: &[RuntimeClass<'db>],
         param_locals: &[SLocalId],
+        returns: &'returns mut RuntimeReturnAnalysisCx<'db>,
     ) -> Self {
         let mut carriers = vec![RuntimeCarrier::Erased; env.body().locals.len()];
         for (class, local) in params.iter().zip(param_locals.iter().copied()) {
@@ -65,6 +68,7 @@ impl<'a, 'db> LocalStateInferer<'a, 'db> {
             env,
             carriers,
             class_cache: InferClassCache::new(env.body().locals.len()),
+            returns,
         }
     }
 
@@ -145,8 +149,8 @@ impl<'a, 'db> LocalStateInferer<'a, 'db> {
                 assign.block_idx,
                 assign.stmt_idx,
                 expr,
-                local.ty,
                 Some(&mut self.class_cache),
+                self.returns,
             ) {
                 Some(RuntimeClass::AggregateValue { layout })
                     if matches!(local.facts.interface, NLocalInterface::DirectValue)
@@ -671,7 +675,7 @@ fn materialized_place_class_from_runtime_source<'db>(
     }
 }
 
-fn merge_runtime_carrier<'db>(
+pub(crate) fn merge_runtime_carrier<'db>(
     db: &'db dyn MirDb,
     current: RuntimeCarrier<'db>,
     desired: RuntimeCarrier<'db>,
@@ -845,6 +849,11 @@ fn merge_ref_kind<'db>(current: &RefKind<'db>, desired: &RefKind<'db>) -> Option
     match (current, desired) {
         (RefKind::Object, RefKind::Object) => Some(RefKind::Object),
         (RefKind::Const, RefKind::Const) => Some(RefKind::Const),
+        (RefKind::Object, RefKind::Provider { provider_ty, space })
+        | (RefKind::Provider { provider_ty, space }, RefKind::Object) => Some(RefKind::Provider {
+            provider_ty: *provider_ty,
+            space: *space,
+        }),
         (
             RefKind::Provider {
                 provider_ty: current_provider_ty,
@@ -990,5 +999,36 @@ mod tests {
             merge_runtime_class(&db, &memory_class, &storage_class),
             Some(storage_class)
         );
+    }
+
+    #[test]
+    fn merge_runtime_class_prefers_provider_refs_over_object_refs() {
+        let db = DriverDataBase::default();
+        let pointee = RuntimeClass::Scalar(ScalarClass {
+            repr: ScalarRepr::Int {
+                bits: 256,
+                signed: false,
+            },
+            role: ScalarRole::Plain,
+        });
+        let object = RuntimeClass::Ref {
+            pointee: Box::new(pointee.clone()),
+            kind: RefKind::Object,
+            view: RefView::Whole,
+        };
+        let provider = RuntimeClass::Ref {
+            pointee: Box::new(pointee),
+            kind: RefKind::Provider {
+                provider_ty: TyId::u256(&db),
+                space: AddressSpaceKind::Storage,
+            },
+            view: RefView::Whole,
+        };
+
+        assert_eq!(
+            merge_runtime_class(&db, &object, &provider),
+            Some(provider.clone())
+        );
+        assert_eq!(merge_runtime_class(&db, &provider, &object), Some(provider));
     }
 }

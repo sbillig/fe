@@ -32,8 +32,8 @@ use crate::{
         AddressSpaceKind, ConstScalar, IntrinsicArithBinOp, LayoutId, PlaceElem, PlaceRoot, RBlock,
         RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView, RuntimeBody,
         RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeLocalLowering, RuntimeLocalRoot,
-        RuntimePlace, RuntimeProviderBinding, RuntimeProviderBindingId, RuntimeSignature,
-        ScalarClass, ScalarRepr, ScalarRole, VariantId,
+        RuntimeParam, RuntimePlace, RuntimeProviderBinding, RuntimeProviderBindingId,
+        RuntimeSignature, ScalarClass, ScalarRepr, ScalarRole, VariantId,
         code_region::runtime_code_region_for_semantic_ref, runtime_classes_share_runtime_rep,
     },
 };
@@ -41,11 +41,11 @@ use crate::{
 use super::{
     classify::{
         BodyEnv, BodyStaticFacts, ContractMetadataBuiltin, GenericNumericIntrinsicKind,
-        RuntimeBodyCx, RuntimeEffectBindingPlan, actual_aggregate_class_from_runtime_source,
+        InferClassCache, RuntimeBodyCx, RuntimeEffectBindingPlan,
+        actual_aggregate_class_from_runtime_source, classify_runtime_call_inputs_for_semantic,
         contract_metadata_builtin, desired_runtime_effect_arg_boundary, desired_runtime_param_plan,
         generic_numeric_intrinsic_kind, nonself_backing_value_place, resolve_runtime_call_key,
-        runtime_effect_binding_plan_for_binding_idx, runtime_signature_for_key, semantic_return_ty,
-        snapshot_source_place,
+        runtime_effect_binding_plan_for_binding_idx, semantic_return_ty, snapshot_source_place,
     },
     coerce::CoercionPlanner,
     consts::{
@@ -61,6 +61,7 @@ use super::{
         project_field_class, project_index_class, project_variant_field_class,
         resolved_effect_arg_address_space,
     },
+    returns::RuntimeReturnAnalysisCx,
     type_info::{
         RuntimeTypeEnv, boundary_spec_for_ty_in_env, provider_class_for_target_in_env,
         stored_class_for_ty_in_context, top_level_class_for_ty_in_env,
@@ -80,21 +81,34 @@ pub fn lower_to_rmir<'db>(db: &'db dyn MirDb, instance: RuntimeInstance<'db>) ->
     });
     let typed_body = semantic.key(db).typed_body(db);
     let facts = BodyStaticFacts::new(db, &normalized_body);
+    let mut returns = RuntimeReturnAnalysisCx::new(db);
     let inferred = LocalStateInferer::new(
         BodyEnv::new(db, &normalized_body, typed_body, &facts),
         key.params(db),
         &runtime_param_locals(db, semantic, key.params(db)),
+        &mut returns,
     )
     .run();
-    let signature = runtime_signature_for_key(db, semantic, key.params(db));
+    let signature = RuntimeSignature {
+        params: key
+            .params(db)
+            .iter()
+            .zip(runtime_param_locals(db, semantic, key.params(db)))
+            .map(|(class, local)| RuntimeParam {
+                local: RLocalId::from_u32(local.index() as u32),
+                class: class.clone(),
+            })
+            .collect(),
+        ret: returns.return_class_for_key(key),
+    };
     let mut emitter = RmirEmitter::new(
         db,
         instance,
         normalized_body,
-        typed_body,
         facts,
         inferred,
         signature.clone(),
+        returns,
     );
     emitter.lower_blocks();
     emitter.finish(signature)
@@ -147,6 +161,7 @@ pub(super) struct RmirEmitter<'db> {
     pub(super) env: RuntimeTypeEnv<'db>,
     pub(super) semantic_locals: Vec<RuntimeLocalLowering<'db>>,
     pub(super) provider_bindings: Vec<RuntimeProviderBinding<'db>>,
+    pub(super) returns: RuntimeReturnAnalysisCx<'db>,
     pub(super) locals: Vec<RLocal<'db>>,
     pub(super) blocks: Vec<RBlock<'db>>,
     pub(super) terminated_blocks: Vec<bool>,
@@ -177,12 +192,17 @@ impl<'db> RmirEmitter<'db> {
         db: &'db dyn MirDb,
         instance: RuntimeInstance<'db>,
         semantic_body: NormalizedSemanticBody<'db>,
-        typed_body: &'db hir::analysis::ty::ty_check::TypedBody<'db>,
         facts: BodyStaticFacts<'db>,
         inferred: InferenceResult<'db>,
         signature: RuntimeSignature<'db>,
+        returns: RuntimeReturnAnalysisCx<'db>,
     ) -> Self {
         let key = instance.key(db);
+        let typed_body = key
+            .semantic(db)
+            .expect("semantic lowering only applies to semantic runtime instances")
+            .key(db)
+            .typed_body(db);
         let LoweredSemanticLocals {
             carriers,
             roots,
@@ -221,6 +241,7 @@ impl<'db> RmirEmitter<'db> {
             env,
             semantic_locals,
             provider_bindings,
+            returns,
             locals,
             blocks,
             terminated_blocks,
@@ -312,14 +333,7 @@ impl<'db> RmirEmitter<'db> {
                     return;
                 }
                 let carrier = self
-                    .with_current_body_cx(|cx| {
-                        cx.expr_direct_class(
-                            bb.index(),
-                            stmt_idx,
-                            expr,
-                            self.semantic_body.locals[dst.index()].ty,
-                        )
-                    })
+                    .with_current_body_cx(|cx| cx.expr_direct_class(bb.index(), stmt_idx, expr))
                     .map(RuntimeCarrier::Value)
                     .unwrap_or(RuntimeCarrier::Erased);
                 let sink = self.alloc_runtime_temp(
@@ -625,7 +639,20 @@ impl<'db> RmirEmitter<'db> {
                 if self.terminated_blocks[bb.index()] {
                     return;
                 }
-                let value = self.coerce_value(bb, value, &dst_class);
+                let actual = self.value_class(value).cloned();
+                let value = if self.value_class(value) == Some(&dst_class) {
+                    value
+                } else if actual.as_ref().is_some_and(|actual| {
+                    self.should_preserve_const_source_class(actual, &dst_class)
+                }) {
+                    self.refine_local_runtime_class(
+                        dst,
+                        actual.expect("actual runtime class should be present"),
+                    );
+                    value
+                } else {
+                    self.coerce_value(bb, value, &dst_class)
+                };
                 self.push_stmt(
                     bb,
                     RStmt::Assign {
@@ -2045,6 +2072,25 @@ impl<'db> RmirEmitter<'db> {
                 runtime_classes.push(class);
             }
         }
+        let expected_runtime_classes = self.with_current_body_cx(|cx| {
+            let mut class_cache = InferClassCache::new(self.semantic_body.locals.len());
+            classify_runtime_call_inputs_for_semantic(
+                cx.env,
+                cx.carriers,
+                semantic,
+                &typed_body,
+                args,
+                effect_args,
+                Some(&mut class_cache),
+            )
+        });
+        assert_eq!(
+            runtime_classes,
+            expected_runtime_classes,
+            "runtime call class mismatch between lowering and classification: caller={:?} callee={:?} args={args:?} effect_args={effect_args:?}",
+            self.current_semantic_key(),
+            semantic.key(self.db),
+        );
         let callee_key = RuntimeInstanceKey::new(
             self.db,
             crate::instance::RuntimeInstanceSource::Semantic(semantic),
@@ -2052,8 +2098,7 @@ impl<'db> RmirEmitter<'db> {
         );
         let callee = get_or_build_runtime_instance(self.db, callee_key);
         let ret_ty = semantic_return_ty(self.db, semantic);
-        let ret_class =
-            runtime_signature_for_key(self.db, semantic, callee_key.params(self.db)).ret;
+        let ret_class = self.returns.return_class_for_key(callee_key);
         let Some(ret_class) = ret_class else {
             if !semantic_may_return_normally(self.db, semantic) {
                 self.set_terminator(
@@ -2417,43 +2462,57 @@ impl<'db> RmirEmitter<'db> {
         typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
         args: &[NOperand],
     ) -> (Vec<RLocalId>, Vec<RuntimeClass<'db>>) {
+        let expected_runtime_classes = self.with_current_body_cx(|cx| {
+            let mut class_cache = InferClassCache::new(self.semantic_body.locals.len());
+            classify_runtime_call_inputs_for_semantic(
+                cx.env,
+                cx.carriers,
+                semantic,
+                typed_body,
+                args,
+                &[],
+                Some(&mut class_cache),
+            )
+        });
         let mut runtime_args = Vec::with_capacity(args.len());
         let mut runtime_classes = Vec::with_capacity(args.len());
+        let mut expected_iter = expected_runtime_classes.iter();
         for (idx, arg) in args.iter().enumerate() {
             match desired_runtime_param_plan(self.db, semantic, typed_body, idx) {
                 crate::runtime::RuntimeParamPlan::Erased => {}
-                crate::runtime::RuntimeParamPlan::Boundary(desired) => {
-                    let value = self.runtime_visible_arg_value(bb, *arg, Some(&desired));
+                crate::runtime::RuntimeParamPlan::Boundary(_)
+                | crate::runtime::RuntimeParamPlan::PassActual => {
+                    let expected = expected_iter
+                        .next()
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "missing expected runtime arg class for {semantic:?} param {idx}"
+                            )
+                        })
+                        .clone();
+                    let value = self.lower_semantic_operand_for_class(bb, *arg, &expected);
                     let Some(class) = self.value_class(value).cloned() else {
                         continue;
                     };
-                    runtime_classes.push(class);
-                    runtime_args.push(value);
-                }
-                crate::runtime::RuntimeParamPlan::PassActual => {
-                    let value = self.runtime_visible_arg_value(bb, *arg, None);
-                    let Some(class) = self.value_class(value).cloned() else {
-                        continue;
-                    };
+                    assert_eq!(
+                        class,
+                        expected,
+                        "lowered runtime arg class mismatch: caller={:?} callee={:?} arg={arg:?} expected={expected:?}",
+                        self.current_semantic_key(),
+                        semantic.key(self.db),
+                    );
                     runtime_classes.push(class);
                     runtime_args.push(value);
                 }
             }
         }
+        assert!(
+            expected_iter.next().is_none(),
+            "unused expected runtime arg classes while lowering visible call args: caller={:?} callee={:?} args={args:?}",
+            self.current_semantic_key(),
+            semantic.key(self.db),
+        );
         (runtime_args, runtime_classes)
-    }
-
-    fn runtime_visible_arg_value(
-        &mut self,
-        bb: RBlockId,
-        arg: NOperand,
-        desired: Option<&crate::runtime::RuntimeBoundarySpec<'db>>,
-    ) -> RLocalId {
-        if let Some(desired) = desired {
-            self.lower_semantic_operand_for_boundary(bb, arg, desired)
-        } else {
-            self.read_semantic_operand(bb, arg)
-        }
     }
 
     fn lower_extern_builtin(
@@ -3972,10 +4031,12 @@ impl<'db> RmirEmitter<'db> {
 
     fn runtime_local_uses_source_transport(&self, local: RLocalId) -> bool {
         local.index() < self.semantic_locals.len()
-            && matches!(
+            && (matches!(
                 self.semantic_locals[local.index()],
                 RuntimeLocalLowering::PlaceCarrier { .. }
-            )
+            ) || self
+                .facts
+                .boundary_source_transport_sensitive(SLocalId::from_u32(local.index() as u32)))
     }
 
     fn provider_binding_value(&self, id: RuntimeProviderBindingId) -> RLocalId {
