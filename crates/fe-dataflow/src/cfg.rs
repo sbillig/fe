@@ -22,6 +22,22 @@ pub trait BackwardCfgAnalysis {
     fn predecessors(&self, block: usize) -> &[usize];
 }
 
+pub trait TryForwardCfgAnalysis {
+    type State: Clone + JoinSemiLattice;
+    type Error;
+
+    fn block_count(&self) -> usize;
+    fn seed_blocks(&self) -> Vec<usize>;
+    fn bottom(&self) -> Self::State;
+    fn initialize(&mut self, entry_states: &mut [Self::State]) -> Result<(), Self::Error>;
+    fn transfer(
+        &mut self,
+        block: usize,
+        in_state: &Self::State,
+    ) -> Result<Self::State, Self::Error>;
+    fn successors(&self, block: usize) -> &[usize];
+}
+
 pub fn solve_forward_cfg<A: ForwardCfgAnalysis>(analysis: &mut A) -> Vec<A::State> {
     let mut entry_states = vec![analysis.bottom(); analysis.block_count()];
     analysis.initialize(&mut entry_states);
@@ -70,6 +86,33 @@ pub fn solve_backward_cfg<A: BackwardCfgAnalysis>(analysis: &mut A) -> Vec<A::St
     }
 
     exit_states
+}
+
+pub fn try_solve_forward_cfg<A: TryForwardCfgAnalysis>(
+    analysis: &mut A,
+) -> Result<Vec<A::State>, A::Error> {
+    let mut entry_states = vec![analysis.bottom(); analysis.block_count()];
+    analysis.initialize(&mut entry_states)?;
+
+    let seed_blocks = analysis.seed_blocks();
+    let mut reached = vec![false; entry_states.len()];
+    for &block in &seed_blocks {
+        reached[block] = true;
+    }
+    let mut queue = WorkQueue::with_seed(entry_states.len(), seed_blocks);
+    while let Some(block) = queue.pop() {
+        let out_state = analysis.transfer(block, &entry_states[block])?;
+        for &succ in analysis.successors(block) {
+            let changed = entry_states[succ].join_into(&out_state);
+            let newly_reached = !reached[succ];
+            reached[succ] = true;
+            if newly_reached || changed {
+                queue.push(succ);
+            }
+        }
+    }
+
+    Ok(entry_states)
 }
 
 #[cfg(test)]

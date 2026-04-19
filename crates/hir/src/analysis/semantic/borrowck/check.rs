@@ -1,10 +1,11 @@
-use std::collections::VecDeque;
-
 use common::diagnostics::{
     CompleteDiagnostic, DiagnosticPass, GlobalErrorCode, LabelStyle, Severity, Span, SubDiagnostic,
 };
 use cranelift_entity::EntityRef;
-use dataflow::{ForwardCfgAnalysis, JoinSemiLattice, solve_forward_cfg};
+use dataflow::{
+    BackwardCfgAnalysis, ForwardCfgAnalysis, JoinSemiLattice, TryForwardCfgAnalysis,
+    solve_backward_cfg, solve_forward_cfg, try_solve_forward_cfg,
+};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
@@ -779,6 +780,7 @@ impl<'db> Borrowck<'db> {
     }
 
     fn compute_liveness(&mut self) {
+        let live_out = solve_backward_cfg(&mut BorrowLivenessAnalysis::new(self));
         self.live_before = self
             .body
             .blocks
@@ -786,49 +788,16 @@ impl<'db> Borrowck<'db> {
             .map(|block| vec![FxHashSet::default(); block.stmts.len()])
             .collect();
         self.live_before_term = vec![FxHashSet::default(); self.body.blocks.len()];
-        loop {
-            let mut changed = false;
-            for (bb_idx, block) in self.body.blocks.iter().enumerate().rev() {
-                let mut live = self.terminator_uses(&block.terminator);
-                for succ in self.successors(&block.terminator.kind) {
-                    live.extend(self.block_live_in(succ));
-                }
-                if self.live_before_term[bb_idx] != live {
-                    self.live_before_term[bb_idx] = live.clone();
-                    changed = true;
-                }
-                for (stmt_idx, stmt) in block.stmts.iter().enumerate().rev() {
-                    live = self.live_before_stmt(stmt, &live);
-                    if self.live_before[bb_idx][stmt_idx] != live {
-                        self.live_before[bb_idx][stmt_idx] = live.clone();
-                        changed = true;
-                    }
-                }
-            }
-            if !changed {
-                break;
+
+        for (bb_idx, block) in self.body.blocks.iter().enumerate() {
+            let mut live = live_out[bb_idx].0.clone();
+            live.extend(self.terminator_uses(&block.terminator));
+            self.live_before_term[bb_idx] = live.clone();
+            for (stmt_idx, stmt) in block.stmts.iter().enumerate().rev() {
+                live = self.live_before_stmt(stmt, &live);
+                self.live_before[bb_idx][stmt_idx] = live.clone();
             }
         }
-    }
-
-    fn block_live_in(
-        &self,
-        bb: crate::analysis::semantic::SBlockId,
-    ) -> FxHashSet<crate::analysis::semantic::SLocalId> {
-        self.body
-            .block(bb)
-            .and_then(|block| {
-                block
-                    .stmts
-                    .is_empty()
-                    .then(|| self.live_before_term[bb.index()].clone())
-            })
-            .or_else(|| {
-                self.live_before
-                    .get(bb.index())
-                    .and_then(|live| live.first().cloned())
-            })
-            .unwrap_or_default()
     }
 
     fn live_before_stmt(
@@ -930,33 +899,10 @@ impl<'db> Borrowck<'db> {
     }
 
     fn compute_moved_states(&mut self) -> Result<(), CompleteDiagnostic> {
-        self.moved_entry = vec![FxHashMap::default(); self.body.blocks.len()];
-        if self.body.blocks.is_empty() {
-            return Ok(());
-        }
-        let mut worklist = VecDeque::from([crate::analysis::semantic::SBlockId::from_u32(0)]);
-        let mut queued = FxHashSet::from_iter([crate::analysis::semantic::SBlockId::from_u32(0)]);
-        let mut reached = FxHashSet::from_iter([crate::analysis::semantic::SBlockId::from_u32(0)]);
-        while let Some(bb) = worklist.pop_front() {
-            queued.remove(&bb);
-            let mut state = self.entry_state[bb.index()].clone();
-            let mut moved = self.moved_entry[bb.index()].clone();
-            let block = &self.body.blocks[bb.index()];
-            for stmt in &block.stmts {
-                self.update_moved_for_stmt(&state, &mut moved, stmt)?;
-                self.apply_stmt_state(&mut state, stmt);
-            }
-            for succ in self.successors(&block.terminator.kind) {
-                let mut changed = false;
-                let entry = &mut self.moved_entry[succ.index()];
-                for (place, origin) in &moved {
-                    changed |= entry.insert(place.clone(), *origin).is_none();
-                }
-                if (reached.insert(succ) || changed) && queued.insert(succ) {
-                    worklist.push_back(succ);
-                }
-            }
-        }
+        self.moved_entry = try_solve_forward_cfg(&mut BorrowMovedStateAnalysis::new(self))?
+            .into_iter()
+            .map(|state| state.0)
+            .collect();
         Ok(())
     }
 
@@ -2057,6 +2003,151 @@ impl ForwardCfgAnalysis for BorrowEntryStateAnalysis<'_, '_> {
 
     fn successors(&self, block: usize) -> &[usize] {
         &self.successors[block]
+    }
+}
+
+#[derive(Clone, Default)]
+struct MovedState<'db>(FxHashMap<CanonPlace<'db>, crate::analysis::semantic::SemOrigin<'db>>);
+
+impl JoinSemiLattice for MovedState<'_> {
+    fn join_into(&mut self, other: &Self) -> bool {
+        let mut changed = false;
+        for (place, origin) in &other.0 {
+            changed |= self.0.insert(place.clone(), *origin).is_none();
+        }
+        changed
+    }
+}
+
+struct BorrowMovedStateAnalysis<'a, 'db> {
+    borrowck: &'a Borrowck<'db>,
+    successors: Vec<Vec<usize>>,
+}
+
+impl<'a, 'db> BorrowMovedStateAnalysis<'a, 'db> {
+    fn new(borrowck: &'a Borrowck<'db>) -> Self {
+        let successors = borrowck
+            .body
+            .blocks
+            .iter()
+            .map(|block| {
+                borrowck
+                    .successors(&block.terminator.kind)
+                    .into_iter()
+                    .map(|bb| bb.index())
+                    .collect()
+            })
+            .collect();
+        Self {
+            borrowck,
+            successors,
+        }
+    }
+}
+
+impl<'db> TryForwardCfgAnalysis for BorrowMovedStateAnalysis<'_, 'db> {
+    type State = MovedState<'db>;
+    type Error = CompleteDiagnostic;
+
+    fn block_count(&self) -> usize {
+        self.borrowck.body.blocks.len()
+    }
+
+    fn seed_blocks(&self) -> Vec<usize> {
+        (!self.borrowck.body.blocks.is_empty())
+            .then_some(0)
+            .into_iter()
+            .collect()
+    }
+
+    fn bottom(&self) -> Self::State {
+        MovedState::default()
+    }
+
+    fn initialize(&mut self, _entry_states: &mut [Self::State]) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn transfer(
+        &mut self,
+        block: usize,
+        in_state: &Self::State,
+    ) -> Result<Self::State, Self::Error> {
+        let mut state = self.borrowck.entry_state[block].clone();
+        let mut moved = in_state.0.clone();
+        for stmt in &self.borrowck.body.blocks[block].stmts {
+            self.borrowck
+                .update_moved_for_stmt(&state, &mut moved, stmt)?;
+            self.borrowck.apply_stmt_state(&mut state, stmt);
+        }
+        Ok(MovedState(moved))
+    }
+
+    fn successors(&self, block: usize) -> &[usize] {
+        &self.successors[block]
+    }
+}
+
+#[derive(Clone, Default)]
+struct LiveSet(FxHashSet<crate::analysis::semantic::SLocalId>);
+
+impl JoinSemiLattice for LiveSet {
+    fn join_into(&mut self, other: &Self) -> bool {
+        let before = self.0.len();
+        self.0.extend(other.0.iter().copied());
+        before != self.0.len()
+    }
+}
+
+struct BorrowLivenessAnalysis<'a, 'db> {
+    borrowck: &'a Borrowck<'db>,
+    predecessors: Vec<Vec<usize>>,
+}
+
+impl<'a, 'db> BorrowLivenessAnalysis<'a, 'db> {
+    fn new(borrowck: &'a Borrowck<'db>) -> Self {
+        let mut predecessors = vec![Vec::new(); borrowck.body.blocks.len()];
+        for (bb_idx, block) in borrowck.body.blocks.iter().enumerate() {
+            for succ in borrowck.successors(&block.terminator.kind) {
+                predecessors[succ.index()].push(bb_idx);
+            }
+        }
+        Self {
+            borrowck,
+            predecessors,
+        }
+    }
+}
+
+impl<'db> BackwardCfgAnalysis for BorrowLivenessAnalysis<'_, 'db> {
+    type State = LiveSet;
+
+    fn block_count(&self) -> usize {
+        self.borrowck.body.blocks.len()
+    }
+
+    fn seed_blocks(&self) -> Vec<usize> {
+        (0..self.borrowck.body.blocks.len()).collect()
+    }
+
+    fn bottom(&self) -> Self::State {
+        LiveSet::default()
+    }
+
+    fn initialize(&mut self, _exit_states: &mut [Self::State]) {}
+
+    fn transfer(&mut self, block: usize, out_state: &Self::State) -> Self::State {
+        let block_data = &self.borrowck.body.blocks[block];
+        let mut live = out_state.0.clone();
+        live.extend(self.borrowck.terminator_uses(&block_data.terminator));
+        for stmt in block_data.stmts.iter().rev() {
+            live = self.borrowck.live_before_stmt(stmt, &live);
+        }
+        LiveSet(live)
+    }
+
+    fn predecessors(&self, block: usize) -> &[usize] {
+        &self.predecessors[block]
     }
 }
 
