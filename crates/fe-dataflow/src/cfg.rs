@@ -4,6 +4,7 @@ pub trait ForwardCfgAnalysis {
     type State: Clone + JoinSemiLattice;
 
     fn block_count(&self) -> usize;
+    fn seed_blocks(&self) -> Vec<usize>;
     fn bottom(&self) -> Self::State;
     fn initialize(&mut self, entry_states: &mut [Self::State]);
     fn transfer(&mut self, block: usize, in_state: &Self::State) -> Self::State;
@@ -14,6 +15,7 @@ pub trait BackwardCfgAnalysis {
     type State: Clone + JoinSemiLattice;
 
     fn block_count(&self) -> usize;
+    fn seed_blocks(&self) -> Vec<usize>;
     fn bottom(&self) -> Self::State;
     fn initialize(&mut self, exit_states: &mut [Self::State]);
     fn transfer(&mut self, block: usize, out_state: &Self::State) -> Self::State;
@@ -24,11 +26,19 @@ pub fn solve_forward_cfg<A: ForwardCfgAnalysis>(analysis: &mut A) -> Vec<A::Stat
     let mut entry_states = vec![analysis.bottom(); analysis.block_count()];
     analysis.initialize(&mut entry_states);
 
-    let mut queue = WorkQueue::with_all(entry_states.len());
+    let seed_blocks = analysis.seed_blocks();
+    let mut reached = vec![false; entry_states.len()];
+    for &block in &seed_blocks {
+        reached[block] = true;
+    }
+    let mut queue = WorkQueue::with_seed(entry_states.len(), seed_blocks);
     while let Some(block) = queue.pop() {
         let out_state = analysis.transfer(block, &entry_states[block]);
         for &succ in analysis.successors(block) {
-            if entry_states[succ].join_into(&out_state) {
+            let changed = entry_states[succ].join_into(&out_state);
+            let newly_reached = !reached[succ];
+            reached[succ] = true;
+            if newly_reached || changed {
                 queue.push(succ);
             }
         }
@@ -41,11 +51,19 @@ pub fn solve_backward_cfg<A: BackwardCfgAnalysis>(analysis: &mut A) -> Vec<A::St
     let mut exit_states = vec![analysis.bottom(); analysis.block_count()];
     analysis.initialize(&mut exit_states);
 
-    let mut queue = WorkQueue::with_all(exit_states.len());
+    let seed_blocks = analysis.seed_blocks();
+    let mut reached = vec![false; exit_states.len()];
+    for &block in &seed_blocks {
+        reached[block] = true;
+    }
+    let mut queue = WorkQueue::with_seed(exit_states.len(), seed_blocks);
     while let Some(block) = queue.pop() {
         let in_state = analysis.transfer(block, &exit_states[block]);
         for &pred in analysis.predecessors(block) {
-            if exit_states[pred].join_into(&in_state) {
+            let changed = exit_states[pred].join_into(&in_state);
+            let newly_reached = !reached[pred];
+            reached[pred] = true;
+            if newly_reached || changed {
                 queue.push(pred);
             }
         }
@@ -83,6 +101,10 @@ mod tests {
             SUCCESSORS.len()
         }
 
+        fn seed_blocks(&self) -> Vec<usize> {
+            vec![0]
+        }
+
         fn bottom(&self) -> Self::State {
             Bits(0)
         }
@@ -107,6 +129,10 @@ mod tests {
 
         fn block_count(&self) -> usize {
             PREDECESSORS.len()
+        }
+
+        fn seed_blocks(&self) -> Vec<usize> {
+            vec![3]
         }
 
         fn bottom(&self) -> Self::State {
@@ -144,5 +170,91 @@ mod tests {
             states,
             vec![Bits(0b1110), Bits(0b1000), Bits(0b1000), Bits(0b1000)]
         );
+    }
+
+    struct ReachabilityAnalysis;
+
+    impl ForwardCfgAnalysis for ReachabilityAnalysis {
+        type State = Bits;
+
+        fn block_count(&self) -> usize {
+            3
+        }
+
+        fn seed_blocks(&self) -> Vec<usize> {
+            vec![0]
+        }
+
+        fn bottom(&self) -> Self::State {
+            Bits(0)
+        }
+
+        fn initialize(&mut self, entry_states: &mut [Self::State]) {
+            entry_states[0] = Bits(1);
+        }
+
+        fn transfer(&mut self, block: usize, in_state: &Self::State) -> Self::State {
+            Bits(in_state.0 | (1 << block))
+        }
+
+        fn successors(&self, block: usize) -> &[usize] {
+            match block {
+                0 => &[1],
+                1 | 2 => &[],
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn forward_cfg_solver_does_not_process_unreachable_blocks() {
+        let states = solve_forward_cfg(&mut ReachabilityAnalysis);
+
+        assert_eq!(states, vec![Bits(1), Bits(1), Bits(0)]);
+    }
+
+    struct ReachBottomThenGenerateAnalysis;
+
+    impl ForwardCfgAnalysis for ReachBottomThenGenerateAnalysis {
+        type State = Bits;
+
+        fn block_count(&self) -> usize {
+            3
+        }
+
+        fn seed_blocks(&self) -> Vec<usize> {
+            vec![0]
+        }
+
+        fn bottom(&self) -> Self::State {
+            Bits(0)
+        }
+
+        fn initialize(&mut self, _entry_states: &mut [Self::State]) {}
+
+        fn transfer(&mut self, block: usize, in_state: &Self::State) -> Self::State {
+            match block {
+                0 => *in_state,
+                1 => Bits(0b10),
+                2 => Bits(in_state.0 | 0b100),
+                _ => unreachable!(),
+            }
+        }
+
+        fn successors(&self, block: usize) -> &[usize] {
+            match block {
+                0 => &[1],
+                1 => &[2],
+                2 => &[],
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn forward_cfg_solver_processes_newly_reached_bottom_state_blocks() {
+        let states = solve_forward_cfg(&mut ReachBottomThenGenerateAnalysis);
+
+        assert_eq!(states, vec![Bits(0), Bits(0), Bits(0b10)]);
     }
 }

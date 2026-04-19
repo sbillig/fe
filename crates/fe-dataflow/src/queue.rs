@@ -6,14 +6,15 @@ pub(crate) struct WorkQueue {
 }
 
 impl WorkQueue {
-    pub(crate) fn with_all(count: usize) -> Self {
-        let mut pending = VecDeque::with_capacity(count);
-        pending.extend(0..count);
-
-        Self {
-            queued: vec![true; count],
-            pending,
+    pub(crate) fn with_seed(count: usize, seed: impl IntoIterator<Item = usize>) -> Self {
+        let mut queue = Self {
+            queued: vec![false; count],
+            pending: VecDeque::new(),
+        };
+        for node in seed {
+            queue.push(node);
         }
+        queue
     }
 
     pub(crate) fn push(&mut self, node: usize) {
@@ -36,7 +37,7 @@ mod tests {
 
     #[test]
     fn deduplicates_nodes() {
-        let mut queue = WorkQueue::with_all(3);
+        let mut queue = WorkQueue::with_seed(3, [0, 1, 2]);
 
         assert_eq!(queue.pop(), Some(0));
         queue.push(1);

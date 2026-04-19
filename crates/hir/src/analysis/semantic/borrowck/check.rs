@@ -4,6 +4,7 @@ use common::diagnostics::{
     CompleteDiagnostic, DiagnosticPass, GlobalErrorCode, LabelStyle, Severity, Span, SubDiagnostic,
 };
 use cranelift_entity::EntityRef;
+use dataflow::{ForwardCfgAnalysis, JoinSemiLattice, solve_forward_cfg};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
@@ -90,6 +91,12 @@ impl State {
             changed |= before != entry.len();
         }
         changed
+    }
+}
+
+impl JoinSemiLattice for State {
+    fn join_into(&mut self, other: &Self) -> bool {
+        self.join_from(other)
     }
 }
 
@@ -901,34 +908,7 @@ impl<'db> Borrowck<'db> {
     }
 
     fn compute_entry_states(&mut self) {
-        self.entry_state = vec![State::default(); self.body.blocks.len()];
-        if self.body.blocks.is_empty() {
-            return;
-        }
-        if let Some(entry) = self.entry_state.first_mut() {
-            for (&local, &loan) in &self.param_loan_for_local {
-                let mut set = FxHashSet::default();
-                set.insert(loan);
-                entry.assign_loans(local, set);
-            }
-        }
-        let mut worklist = VecDeque::from([crate::analysis::semantic::SBlockId::from_u32(0)]);
-        let mut queued = FxHashSet::from_iter([crate::analysis::semantic::SBlockId::from_u32(0)]);
-        let mut reached = FxHashSet::from_iter([crate::analysis::semantic::SBlockId::from_u32(0)]);
-        while let Some(bb) = worklist.pop_front() {
-            queued.remove(&bb);
-            let mut state = self.entry_state[bb.index()].clone();
-            let block = &self.body.blocks[bb.index()];
-            for stmt in &block.stmts {
-                self.apply_stmt_state(&mut state, stmt);
-            }
-            for succ in self.successors(&block.terminator.kind) {
-                let changed = self.entry_state[succ.index()].join_from(&state);
-                if (reached.insert(succ) || changed) && queued.insert(succ) {
-                    worklist.push_back(succ);
-                }
-            }
-        }
+        self.entry_state = solve_forward_cfg(&mut BorrowEntryStateAnalysis::new(self));
     }
 
     fn compute_loan_targets(&mut self) -> Result<(), CompleteDiagnostic> {
@@ -2012,6 +1992,71 @@ impl<'db> Borrowck<'db> {
             .zip(self.body.local(local).and_then(|local| local.source))
             .map(|(body, source)| source.pretty_name_in_body(self.db, body))
             .unwrap_or_else(|| format!("%{}", local.index()))
+    }
+}
+
+struct BorrowEntryStateAnalysis<'a, 'db> {
+    borrowck: &'a Borrowck<'db>,
+    successors: Vec<Vec<usize>>,
+}
+
+impl<'a, 'db> BorrowEntryStateAnalysis<'a, 'db> {
+    fn new(borrowck: &'a Borrowck<'db>) -> Self {
+        let successors = borrowck
+            .body
+            .blocks
+            .iter()
+            .map(|block| {
+                borrowck
+                    .successors(&block.terminator.kind)
+                    .into_iter()
+                    .map(|bb| bb.index())
+                    .collect()
+            })
+            .collect();
+        Self {
+            borrowck,
+            successors,
+        }
+    }
+}
+
+impl ForwardCfgAnalysis for BorrowEntryStateAnalysis<'_, '_> {
+    type State = State;
+
+    fn block_count(&self) -> usize {
+        self.borrowck.body.blocks.len()
+    }
+
+    fn seed_blocks(&self) -> Vec<usize> {
+        (!self.borrowck.body.blocks.is_empty())
+            .then_some(0)
+            .into_iter()
+            .collect()
+    }
+
+    fn bottom(&self) -> Self::State {
+        State::default()
+    }
+
+    fn initialize(&mut self, entry_states: &mut [Self::State]) {
+        if let Some(entry) = entry_states.first_mut() {
+            for (&local, &loan) in &self.borrowck.param_loan_for_local {
+                entry.assign_loans(local, FxHashSet::from_iter([loan]));
+            }
+        }
+    }
+
+    fn transfer(&mut self, block: usize, in_state: &Self::State) -> Self::State {
+        let mut state = in_state.clone();
+        for stmt in &self.borrowck.body.blocks[block].stmts {
+            self.borrowck.apply_stmt_state(&mut state, stmt);
+        }
+        state
+    }
+
+    fn successors(&self, block: usize) -> &[usize] {
+        &self.successors[block]
     }
 }
 
