@@ -82,8 +82,10 @@ impl State {
             self.local_loans.insert(local, loans);
         }
     }
+}
 
-    fn join_from(&mut self, other: &Self) -> bool {
+impl JoinSemiLattice for State {
+    fn join_into(&mut self, other: &Self) -> bool {
         let mut changed = false;
         for (local, loans) in &other.local_loans {
             let entry = self.local_loans.entry(*local).or_default();
@@ -92,12 +94,6 @@ impl State {
             changed |= before != entry.len();
         }
         changed
-    }
-}
-
-impl JoinSemiLattice for State {
-    fn join_into(&mut self, other: &Self) -> bool {
-        self.join_from(other)
     }
 }
 
@@ -1806,6 +1802,29 @@ impl<'db> Borrowck<'db> {
         }
     }
 
+    fn cfg_successor_indices(&self) -> Vec<Vec<usize>> {
+        self.body
+            .blocks
+            .iter()
+            .map(|block| {
+                self.successors(&block.terminator.kind)
+                    .into_iter()
+                    .map(|bb| bb.index())
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn cfg_predecessor_indices(&self) -> Vec<Vec<usize>> {
+        let mut predecessors = vec![Vec::new(); self.body.blocks.len()];
+        for (bb_idx, successors) in self.cfg_successor_indices().into_iter().enumerate() {
+            for succ in successors {
+                predecessors[succ].push(bb_idx);
+            }
+        }
+        predecessors
+    }
+
     fn borrow_conflict_diag(
         &self,
         origin: crate::analysis::semantic::SemOrigin<'db>,
@@ -1948,21 +1967,9 @@ struct BorrowEntryStateAnalysis<'a, 'db> {
 
 impl<'a, 'db> BorrowEntryStateAnalysis<'a, 'db> {
     fn new(borrowck: &'a Borrowck<'db>) -> Self {
-        let successors = borrowck
-            .body
-            .blocks
-            .iter()
-            .map(|block| {
-                borrowck
-                    .successors(&block.terminator.kind)
-                    .into_iter()
-                    .map(|bb| bb.index())
-                    .collect()
-            })
-            .collect();
         Self {
             borrowck,
-            successors,
+            successors: borrowck.cfg_successor_indices(),
         }
     }
 }
@@ -2026,21 +2033,9 @@ struct BorrowMovedStateAnalysis<'a, 'db> {
 
 impl<'a, 'db> BorrowMovedStateAnalysis<'a, 'db> {
     fn new(borrowck: &'a Borrowck<'db>) -> Self {
-        let successors = borrowck
-            .body
-            .blocks
-            .iter()
-            .map(|block| {
-                borrowck
-                    .successors(&block.terminator.kind)
-                    .into_iter()
-                    .map(|bb| bb.index())
-                    .collect()
-            })
-            .collect();
         Self {
             borrowck,
-            successors,
+            successors: borrowck.cfg_successor_indices(),
         }
     }
 }
@@ -2106,15 +2101,9 @@ struct BorrowLivenessAnalysis<'a, 'db> {
 
 impl<'a, 'db> BorrowLivenessAnalysis<'a, 'db> {
     fn new(borrowck: &'a Borrowck<'db>) -> Self {
-        let mut predecessors = vec![Vec::new(); borrowck.body.blocks.len()];
-        for (bb_idx, block) in borrowck.body.blocks.iter().enumerate() {
-            for succ in borrowck.successors(&block.terminator.kind) {
-                predecessors[succ.index()].push(bb_idx);
-            }
-        }
         Self {
             borrowck,
-            predecessors,
+            predecessors: borrowck.cfg_predecessor_indices(),
         }
     }
 }
