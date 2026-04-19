@@ -2006,6 +2006,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe-dataflow"
+version = "26.0.0"
+
+[[package]]
 name = "fe-driver"
 version = "26.0.0"
 dependencies = [
@@ -2048,6 +2052,7 @@ dependencies = [
  "either",
  "ena",
  "fe-common",
+ "fe-dataflow",
  "fe-driver",
  "fe-parser",
  "fe-test-utils",
