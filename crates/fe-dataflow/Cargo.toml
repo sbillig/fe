@@ -1,0 +1,10 @@
+[package]
+name = "fe-dataflow"
+version = "26.0.0"
+edition.workspace = true
+license = "Apache-2.0"
+repository = "https://github.com/argotorg/fe"
+description = "Shared dataflow solver kernels for Fe"
+
+[lib]
+doctest = false
