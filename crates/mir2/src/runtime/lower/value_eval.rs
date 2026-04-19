@@ -46,20 +46,12 @@ pub(super) enum CompiledValuePassPlan<'db> {
 #[derive(Clone, Debug)]
 pub(super) enum CompiledEffectArgPlan<'db> {
     ErasedPlainValue,
-    ByValueValue {
-        plan: CompiledValuePassPlan<'db>,
-        fallback: Option<RuntimeClass<'db>>,
-    },
-    ByValuePlace {
-        boundary: Option<StagedBoundary<'db>>,
-        fallback: RuntimeClass<'db>,
-    },
-    ByPlaceValue {
-        boundary: StagedBoundary<'db>,
-    },
-    ByPlacePlace {
-        boundary: StagedBoundary<'db>,
-    },
+    ByValueValue { plan: CompiledValuePassPlan<'db> },
+    ByValueValueFallback { fallback: RuntimeClass<'db> },
+    ByValuePlaceBoundary { boundary: StagedBoundary<'db> },
+    ByValuePlaceFallback { fallback: RuntimeClass<'db> },
+    ByPlaceValue { boundary: StagedBoundary<'db> },
+    ByPlacePlace { boundary: StagedBoundary<'db> },
 }
 
 #[derive(Clone, Debug)]
@@ -296,31 +288,38 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeValueEvaluator<'a, 'carriers, 'cache, 'd
                         .owner(self.env.db()),
                 ),
             },
-            CompiledEffectArgPlan::ByValueValue { plan, fallback } => {
+            CompiledEffectArgPlan::ByValueValue { plan } => {
                 let NEffectArgValue::Value(value) = &arg.arg else {
                     panic!("compiled value effect arg plan reached place arg: {arg:?}");
                 };
                 self.evaluate_value_pass_plan(value.local, plan)
-                    .or_else(|| fallback.clone())
             }
-            CompiledEffectArgPlan::ByValuePlace { boundary, fallback } => {
+            CompiledEffectArgPlan::ByValueValueFallback { fallback } => {
+                let NEffectArgValue::Value(value) = &arg.arg else {
+                    panic!("compiled value effect arg fallback reached place arg: {arg:?}");
+                };
+                self.actual_value(value.local)
+                    .or_else(|| Some(fallback.clone()))
+            }
+            CompiledEffectArgPlan::ByValuePlaceBoundary { boundary } => {
                 let NEffectArgValue::Place(place) = &arg.arg else {
                     panic!("compiled place effect arg plan reached value arg: {arg:?}");
                 };
-                boundary.as_ref().map_or_else(
-                    || Some(fallback.clone()),
-                    |boundary| {
-                        runtime_visible_place_arg_class_for_boundary(
-                            self.env.db(),
-                            self.env.body(),
-                            place,
-                            &boundary.boundary,
-                            self.carriers,
-                            self.env.scope(),
-                            self.env.assumptions(),
-                        )
-                    },
+                runtime_visible_place_arg_class_for_boundary(
+                    self.env.db(),
+                    self.env.body(),
+                    place,
+                    &boundary.boundary,
+                    self.carriers,
+                    self.env.scope(),
+                    self.env.assumptions(),
                 )
+            }
+            CompiledEffectArgPlan::ByValuePlaceFallback { fallback } => {
+                let NEffectArgValue::Place(_) = &arg.arg else {
+                    panic!("compiled place effect arg fallback reached value arg: {arg:?}");
+                };
+                Some(fallback.clone())
             }
             CompiledEffectArgPlan::ByPlaceValue { boundary } => {
                 let NEffectArgValue::Value(value) = &arg.arg else {
@@ -459,17 +458,25 @@ fn compile_effect_arg_plan<'db>(
                     boundary_sites,
                 )
             });
-            let fallback = (matches!(plan, CompiledValuePassPlan::ActualValue)
-                && (arg.provider.is_some() || arg.target_ty.is_some()))
-            .then(|| provider_class_for_target_in_env(db, type_env, arg.target_ty, space));
-            CompiledEffectArgPlan::ByValueValue { plan, fallback }
-        }
-        (EffectPassMode::ByValue | EffectPassMode::Unknown, NEffectArgValue::Place(_)) => {
-            CompiledEffectArgPlan::ByValuePlace {
-                boundary: boundary.map(|boundary| boundary_sites.stage(boundary)),
-                fallback: provider_class_for_target_in_env(db, type_env, arg.target_ty, space),
+            if matches!(plan, CompiledValuePassPlan::ActualValue)
+                && (arg.provider.is_some() || arg.target_ty.is_some())
+            {
+                CompiledEffectArgPlan::ByValueValueFallback {
+                    fallback: provider_class_for_target_in_env(db, type_env, arg.target_ty, space),
+                }
+            } else {
+                CompiledEffectArgPlan::ByValueValue { plan }
             }
         }
+        (EffectPassMode::ByValue | EffectPassMode::Unknown, NEffectArgValue::Place(_)) => boundary
+            .map_or_else(
+                || CompiledEffectArgPlan::ByValuePlaceFallback {
+                    fallback: provider_class_for_target_in_env(db, type_env, arg.target_ty, space),
+                },
+                |boundary| CompiledEffectArgPlan::ByValuePlaceBoundary {
+                    boundary: boundary_sites.stage(boundary),
+                },
+            ),
         (EffectPassMode::ByPlace | EffectPassMode::ByTempPlace, NEffectArgValue::Value(_)) => {
             let boundary = boundary.unwrap_or_else(|| {
                 let Some(target_ty) = arg.target_ty else {
