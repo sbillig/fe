@@ -1,13 +1,23 @@
+use std::convert::Infallible;
+
 use crate::{JoinSemiLattice, queue::WorkQueue};
 
 pub trait ForwardCfgAnalysis {
     type State: Clone + JoinSemiLattice;
+    type Error;
 
     fn block_count(&self) -> usize;
     fn seed_blocks(&self) -> Vec<usize>;
     fn bottom(&self) -> Self::State;
-    fn initialize(&mut self, entry_states: &mut [Self::State]);
-    fn transfer(&mut self, block: usize, in_state: &Self::State) -> Self::State;
+    fn initialize(&mut self, _entry_states: &mut [Self::State]) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn transfer(
+        &mut self,
+        block: usize,
+        in_state: &Self::State,
+    ) -> Result<Self::State, Self::Error>;
     fn successors(&self, block: usize) -> &[usize];
 }
 
@@ -22,45 +32,13 @@ pub trait BackwardCfgAnalysis {
     fn predecessors(&self, block: usize) -> &[usize];
 }
 
-pub trait TryForwardCfgAnalysis {
-    type State: Clone + JoinSemiLattice;
-    type Error;
-
-    fn block_count(&self) -> usize;
-    fn seed_blocks(&self) -> Vec<usize>;
-    fn bottom(&self) -> Self::State;
-    fn initialize(&mut self, entry_states: &mut [Self::State]) -> Result<(), Self::Error>;
-    fn transfer(
-        &mut self,
-        block: usize,
-        in_state: &Self::State,
-    ) -> Result<Self::State, Self::Error>;
-    fn successors(&self, block: usize) -> &[usize];
-}
-
-pub fn solve_forward_cfg<A: ForwardCfgAnalysis>(analysis: &mut A) -> Vec<A::State> {
-    let mut entry_states = vec![analysis.bottom(); analysis.block_count()];
-    analysis.initialize(&mut entry_states);
-
-    let seed_blocks = analysis.seed_blocks();
-    let mut reached = vec![false; entry_states.len()];
-    for &block in &seed_blocks {
-        reached[block] = true;
+pub fn solve_forward_cfg<A: ForwardCfgAnalysis<Error = Infallible>>(
+    analysis: &mut A,
+) -> Vec<A::State> {
+    match try_solve_forward_cfg(analysis) {
+        Ok(states) => states,
+        Err(err) => match err {},
     }
-    let mut queue = WorkQueue::with_seed(entry_states.len(), seed_blocks);
-    while let Some(block) = queue.pop() {
-        let out_state = analysis.transfer(block, &entry_states[block]);
-        for &succ in analysis.successors(block) {
-            let changed = entry_states[succ].join_into(&out_state);
-            let newly_reached = !reached[succ];
-            reached[succ] = true;
-            if newly_reached || changed {
-                queue.push(succ);
-            }
-        }
-    }
-
-    entry_states
 }
 
 pub fn solve_backward_cfg<A: BackwardCfgAnalysis>(analysis: &mut A) -> Vec<A::State> {
@@ -88,7 +66,7 @@ pub fn solve_backward_cfg<A: BackwardCfgAnalysis>(analysis: &mut A) -> Vec<A::St
     exit_states
 }
 
-pub fn try_solve_forward_cfg<A: TryForwardCfgAnalysis>(
+pub fn try_solve_forward_cfg<A: ForwardCfgAnalysis>(
     analysis: &mut A,
 ) -> Result<Vec<A::State>, A::Error> {
     let mut entry_states = vec![analysis.bottom(); analysis.block_count()];
@@ -117,6 +95,8 @@ pub fn try_solve_forward_cfg<A: TryForwardCfgAnalysis>(
 
 #[cfg(test)]
 mod tests {
+    use std::convert::Infallible;
+
     use super::{BackwardCfgAnalysis, ForwardCfgAnalysis, solve_backward_cfg, solve_forward_cfg};
     use crate::JoinSemiLattice;
 
@@ -139,6 +119,7 @@ mod tests {
 
     impl ForwardCfgAnalysis for ForwardBitsAnalysis {
         type State = Bits;
+        type Error = Infallible;
 
         fn block_count(&self) -> usize {
             SUCCESSORS.len()
@@ -152,12 +133,17 @@ mod tests {
             Bits(0)
         }
 
-        fn initialize(&mut self, entry_states: &mut [Self::State]) {
+        fn initialize(&mut self, entry_states: &mut [Self::State]) -> Result<(), Self::Error> {
             entry_states[0] = Bits(0b0001);
+            Ok(())
         }
 
-        fn transfer(&mut self, block: usize, in_state: &Self::State) -> Self::State {
-            Bits(in_state.0 | (1 << block))
+        fn transfer(
+            &mut self,
+            block: usize,
+            in_state: &Self::State,
+        ) -> Result<Self::State, Self::Error> {
+            Ok(Bits(in_state.0 | (1 << block)))
         }
 
         fn successors(&self, block: usize) -> &[usize] {
@@ -219,6 +205,7 @@ mod tests {
 
     impl ForwardCfgAnalysis for ReachabilityAnalysis {
         type State = Bits;
+        type Error = Infallible;
 
         fn block_count(&self) -> usize {
             3
@@ -232,12 +219,17 @@ mod tests {
             Bits(0)
         }
 
-        fn initialize(&mut self, entry_states: &mut [Self::State]) {
+        fn initialize(&mut self, entry_states: &mut [Self::State]) -> Result<(), Self::Error> {
             entry_states[0] = Bits(1);
+            Ok(())
         }
 
-        fn transfer(&mut self, block: usize, in_state: &Self::State) -> Self::State {
-            Bits(in_state.0 | (1 << block))
+        fn transfer(
+            &mut self,
+            block: usize,
+            in_state: &Self::State,
+        ) -> Result<Self::State, Self::Error> {
+            Ok(Bits(in_state.0 | (1 << block)))
         }
 
         fn successors(&self, block: usize) -> &[usize] {
@@ -260,6 +252,7 @@ mod tests {
 
     impl ForwardCfgAnalysis for ReachBottomThenGenerateAnalysis {
         type State = Bits;
+        type Error = Infallible;
 
         fn block_count(&self) -> usize {
             3
@@ -273,15 +266,17 @@ mod tests {
             Bits(0)
         }
 
-        fn initialize(&mut self, _entry_states: &mut [Self::State]) {}
-
-        fn transfer(&mut self, block: usize, in_state: &Self::State) -> Self::State {
-            match block {
+        fn transfer(
+            &mut self,
+            block: usize,
+            in_state: &Self::State,
+        ) -> Result<Self::State, Self::Error> {
+            Ok(match block {
                 0 => *in_state,
                 1 => Bits(0b10),
                 2 => Bits(in_state.0 | 0b100),
                 _ => unreachable!(),
-            }
+            })
         }
 
         fn successors(&self, block: usize) -> &[usize] {

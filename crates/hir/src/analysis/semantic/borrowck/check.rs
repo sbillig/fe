@@ -1,11 +1,12 @@
+use std::convert::Infallible;
+
 use common::diagnostics::{
     CompleteDiagnostic, DiagnosticPass, GlobalErrorCode, LabelStyle, Severity, Span, SubDiagnostic,
 };
 use cranelift_entity::EntityRef;
 use dataflow::{
-    BackwardCfgAnalysis, ForwardCfgAnalysis, JoinSemiLattice, SparseAnalysis,
-    TryForwardCfgAnalysis, solve_backward_cfg, solve_forward_cfg, try_solve_forward_cfg,
-    try_solve_sparse,
+    BackwardCfgAnalysis, ForwardCfgAnalysis, JoinSemiLattice, SparseAnalysis, solve_backward_cfg,
+    solve_forward_cfg, try_solve_forward_cfg, try_solve_sparse,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -2196,6 +2197,7 @@ impl<'a, 'db> BorrowEntryStateAnalysis<'a, 'db> {
 
 impl ForwardCfgAnalysis for BorrowEntryStateAnalysis<'_, '_> {
     type State = State;
+    type Error = Infallible;
 
     fn block_count(&self) -> usize {
         self.borrowck.body.blocks.len()
@@ -2212,20 +2214,25 @@ impl ForwardCfgAnalysis for BorrowEntryStateAnalysis<'_, '_> {
         State::default()
     }
 
-    fn initialize(&mut self, entry_states: &mut [Self::State]) {
+    fn initialize(&mut self, entry_states: &mut [Self::State]) -> Result<(), Self::Error> {
         if let Some(entry) = entry_states.first_mut() {
             for (&local, &loan) in &self.borrowck.param_loan_for_local {
                 entry.assign_loans(local, FxHashSet::from_iter([loan]));
             }
         }
+        Ok(())
     }
 
-    fn transfer(&mut self, block: usize, in_state: &Self::State) -> Self::State {
+    fn transfer(
+        &mut self,
+        block: usize,
+        in_state: &Self::State,
+    ) -> Result<Self::State, Self::Error> {
         let mut state = in_state.clone();
         for stmt in &self.borrowck.body.blocks[block].stmts {
             self.borrowck.apply_stmt_state(&mut state, stmt);
         }
-        state
+        Ok(state)
     }
 
     fn successors(&self, block: usize) -> &[usize] {
@@ -2260,7 +2267,7 @@ impl<'a, 'db> BorrowMovedStateAnalysis<'a, 'db> {
     }
 }
 
-impl<'db> TryForwardCfgAnalysis for BorrowMovedStateAnalysis<'_, 'db> {
+impl<'db> ForwardCfgAnalysis for BorrowMovedStateAnalysis<'_, 'db> {
     type State = MovedState<'db>;
     type Error = CompleteDiagnostic;
 
@@ -2277,10 +2284,6 @@ impl<'db> TryForwardCfgAnalysis for BorrowMovedStateAnalysis<'_, 'db> {
 
     fn bottom(&self) -> Self::State {
         MovedState::default()
-    }
-
-    fn initialize(&mut self, _entry_states: &mut [Self::State]) -> Result<(), Self::Error> {
-        Ok(())
     }
 
     fn transfer(
