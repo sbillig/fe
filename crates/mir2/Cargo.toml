@@ -11,6 +11,7 @@ doctest = false
 
 [dependencies]
 common.workspace = true
+dataflow.workspace = true
 hir.workspace = true
 cranelift-entity.workspace = true
 rustc-hash.workspace = true

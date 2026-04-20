@@ -1,7 +1,8 @@
-use std::collections::VecDeque;
 use std::sync::Arc;
+use std::{collections::VecDeque, convert::Infallible};
 
 use cranelift_entity::EntityRef;
+use dataflow::{SparseAnalysis, solve_sparse};
 use hir::analysis::semantic::{
     SLocalId, SemanticInstance,
     borrowck::{NSTerminatorKind, NormalizedSemanticBody, normalize_semantic_body},
@@ -299,6 +300,7 @@ struct ReturnSliceInferer<'summary, 'cx, 'db> {
     summary: &'summary RuntimeReturnSummary<'db>,
     carriers: Vec<RuntimeCarrier<'db>>,
     class_cache: InferClassCache<'db>,
+    pending_dependents: Vec<usize>,
     returns: &'cx mut RuntimeReturnAnalysisCx<'db>,
 }
 
@@ -318,52 +320,15 @@ impl<'summary, 'cx, 'db> ReturnSliceInferer<'summary, 'cx, 'db> {
             summary,
             carriers,
             class_cache: InferClassCache::new(summary.semantic_body.locals.len()),
+            pending_dependents: Vec::new(),
             returns,
         }
     }
 
     fn run(mut self) -> Vec<RuntimeCarrier<'db>> {
         seed_root_provider_carriers(self.summary.env(self.db), &mut self.carriers);
-        self.infer_carriers();
+        solve_sparse(&mut self, &mut ());
         self.carriers
-    }
-
-    fn infer_carriers(&mut self) {
-        let mut queued = vec![true; self.summary.slice_assignment_ids.len()];
-        let mut worklist = VecDeque::from_iter(0..self.summary.slice_assignment_ids.len());
-        while let Some(slice_idx) = worklist.pop_front() {
-            queued[slice_idx] = false;
-            let assign_id = self.summary.slice_assignment_ids[slice_idx];
-            let assign = self.summary.facts.assignment(assign_id).unwrap_or_else(|| {
-                panic!("missing sliced assignment facts for statement {assign_id}")
-            });
-            let local = &self.summary.semantic_body.locals[assign.dst.index()];
-            let stmt = &self.summary.semantic_body.blocks[assign.block_idx].stmts[assign.stmt_idx];
-            let expr = match &stmt.kind {
-                hir::analysis::semantic::NSStmtKind::Assign { expr, .. } => expr,
-                hir::analysis::semantic::NSStmtKind::Store { .. } => {
-                    panic!(
-                        "sliced assignment facts point to non-assignment statement: block={} stmt={}",
-                        assign.block_idx, assign.stmt_idx
-                    )
-                }
-            };
-            let class = self.summary.env(self.db).expr_direct_class(
-                &self.carriers,
-                assign.block_idx,
-                assign.stmt_idx,
-                expr,
-                Some(&mut self.class_cache),
-                self.returns,
-            );
-            let desired = match class {
-                Some(class) => desired_runtime_value_carrier(local, class),
-                None => continue,
-            };
-            if self.set_carrier(assign.dst, desired) {
-                self.propagate_local_change(assign.dst, &mut worklist, &mut queued);
-            }
-        }
     }
 
     fn set_carrier(&mut self, local: SLocalId, desired: RuntimeCarrier<'db>) -> bool {
@@ -381,15 +346,12 @@ impl<'summary, 'cx, 'db> ReturnSliceInferer<'summary, 'cx, 'db> {
         true
     }
 
-    fn propagate_local_change(
-        &mut self,
-        changed_local: SLocalId,
-        worklist: &mut VecDeque<usize>,
-        queued: &mut [bool],
-    ) {
-        let mut pending = VecDeque::from([changed_local]);
+    fn collect_local_change_dependents(&mut self, changed_local: SLocalId) {
+        let mut pending = vec![changed_local];
         let mut seen = vec![false; self.summary.semantic_body.locals.len()];
-        while let Some(local) = pending.pop_front() {
+        let mut queued = vec![false; self.summary.slice_assignment_ids.len()];
+        self.pending_dependents.clear();
+        while let Some(local) = pending.pop() {
             if std::mem::replace(&mut seen[local.index()], true) {
                 continue;
             }
@@ -400,16 +362,70 @@ impl<'summary, 'cx, 'db> ReturnSliceInferer<'summary, 'cx, 'db> {
                 };
                 if !queued[slice_idx] {
                     queued[slice_idx] = true;
-                    worklist.push_back(slice_idx);
+                    self.pending_dependents.push(slice_idx);
                 }
             }
             for dependent in self.summary.slice_dynamic_dependents_by_local[local.index()]
                 .iter()
                 .copied()
             {
-                pending.push_back(dependent);
+                pending.push(dependent);
             }
         }
+    }
+}
+
+impl<'summary, 'cx, 'db> SparseAnalysis for ReturnSliceInferer<'summary, 'cx, 'db> {
+    type State = ();
+    type Error = Infallible;
+
+    fn node_count(&self) -> usize {
+        self.summary.slice_assignment_ids.len()
+    }
+
+    fn seed_nodes(&self) -> Vec<usize> {
+        (0..self.summary.slice_assignment_ids.len()).collect()
+    }
+
+    fn step(&mut self, slice_idx: usize, _: &mut Self::State) -> Result<bool, Self::Error> {
+        self.pending_dependents.clear();
+        let assign_id = self.summary.slice_assignment_ids[slice_idx];
+        let assign =
+            self.summary.facts.assignment(assign_id).unwrap_or_else(|| {
+                panic!("missing sliced assignment facts for statement {assign_id}")
+            });
+        let local = &self.summary.semantic_body.locals[assign.dst.index()];
+        let stmt = &self.summary.semantic_body.blocks[assign.block_idx].stmts[assign.stmt_idx];
+        let expr = match &stmt.kind {
+            hir::analysis::semantic::NSStmtKind::Assign { expr, .. } => expr,
+            hir::analysis::semantic::NSStmtKind::Store { .. } => {
+                panic!(
+                    "sliced assignment facts point to non-assignment statement: block={} stmt={}",
+                    assign.block_idx, assign.stmt_idx
+                )
+            }
+        };
+        let class = self.summary.env(self.db).expr_direct_class(
+            &self.carriers,
+            assign.block_idx,
+            assign.stmt_idx,
+            expr,
+            Some(&mut self.class_cache),
+            self.returns,
+        );
+        let Some(class) = class else {
+            return Ok(false);
+        };
+        let desired = desired_runtime_value_carrier(local, class);
+        if !self.set_carrier(assign.dst, desired) {
+            return Ok(false);
+        }
+        self.collect_local_change_dependents(assign.dst);
+        Ok(true)
+    }
+
+    fn dependents(&self, _node: usize, out: &mut Vec<usize>) {
+        out.extend(self.pending_dependents.iter().copied());
     }
 }
 

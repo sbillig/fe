@@ -1,6 +1,7 @@
-use std::collections::VecDeque;
+use std::convert::Infallible;
 
 use cranelift_entity::EntityRef;
+use dataflow::{SparseAnalysis, solve_sparse};
 use hir::{
     analysis::{
         semantic::{
@@ -50,6 +51,7 @@ pub(super) struct LocalStateInferer<'a, 'returns, 'db> {
     env: BodyEnv<'a, 'db>,
     carriers: Vec<RuntimeCarrier<'db>>,
     class_cache: InferClassCache<'db>,
+    pending_dependents: Vec<usize>,
     returns: &'returns mut RuntimeReturnAnalysisCx<'db>,
 }
 
@@ -68,13 +70,14 @@ impl<'a, 'returns, 'db> LocalStateInferer<'a, 'returns, 'db> {
             env,
             carriers,
             class_cache: InferClassCache::new(env.body().locals.len()),
+            pending_dependents: Vec::new(),
             returns,
         }
     }
 
     pub(super) fn run(mut self) -> InferenceResult<'db> {
         seed_root_provider_carriers(self.env, &mut self.carriers);
-        self.infer_carriers();
+        solve_sparse(&mut self, &mut ());
         let roots = self.infer_roots();
         let (semantic_locals, provider_bindings) =
             lower_semantic_locals(self.env.with_carriers(&self.carriers));
@@ -83,44 +86,6 @@ impl<'a, 'returns, 'db> LocalStateInferer<'a, 'returns, 'db> {
             roots,
             semantic_locals,
             provider_bindings,
-        }
-    }
-
-    fn infer_carriers(&mut self) {
-        let mut queued = vec![true; self.env.assignment_count()];
-        let mut worklist = VecDeque::from_iter(0..self.env.assignment_count());
-        while let Some(assign_id) = worklist.pop_front() {
-            queued[assign_id] = false;
-            let assign = self
-                .env
-                .assignment(assign_id)
-                .unwrap_or_else(|| panic!("missing assignment facts for statement {assign_id}"));
-            let stmt = &self.env.body().blocks[assign.block_idx].stmts[assign.stmt_idx];
-            let expr = match &stmt.kind {
-                hir::analysis::semantic::NSStmtKind::Assign { expr, .. } => expr,
-                hir::analysis::semantic::NSStmtKind::Store { .. } => {
-                    panic!(
-                        "assignment facts point to non-assignment statement: block={} stmt={}",
-                        assign.block_idx, assign.stmt_idx
-                    )
-                }
-            };
-            let local = &self.env.body().locals[assign.dst.index()];
-            let class = self.env.expr_direct_class(
-                &self.carriers,
-                assign.block_idx,
-                assign.stmt_idx,
-                expr,
-                Some(&mut self.class_cache),
-                self.returns,
-            );
-            let desired = match class {
-                Some(class) => desired_runtime_value_carrier(local, class),
-                None => continue,
-            };
-            if self.set_carrier(assign.dst, desired) {
-                self.propagate_local_change(assign.dst, &mut worklist, &mut queued);
-            }
         }
     }
 
@@ -139,15 +104,12 @@ impl<'a, 'returns, 'db> LocalStateInferer<'a, 'returns, 'db> {
         true
     }
 
-    fn propagate_local_change(
-        &mut self,
-        changed_local: SLocalId,
-        worklist: &mut VecDeque<usize>,
-        queued: &mut [bool],
-    ) {
-        let mut pending = VecDeque::from([changed_local]);
+    fn collect_local_change_dependents(&mut self, changed_local: SLocalId) {
+        let mut pending = vec![changed_local];
         let mut seen = vec![false; self.env.body().locals.len()];
-        while let Some(local) = pending.pop_front() {
+        let mut queued = vec![false; self.env.assignment_count()];
+        self.pending_dependents.clear();
+        while let Some(local) = pending.pop() {
             if std::mem::replace(&mut seen[local.index()], true) {
                 continue;
             }
@@ -155,11 +117,11 @@ impl<'a, 'returns, 'db> LocalStateInferer<'a, 'returns, 'db> {
             for &assign_id in self.env.assignments_using_local(local) {
                 if !queued[assign_id] {
                     queued[assign_id] = true;
-                    worklist.push_back(assign_id);
+                    self.pending_dependents.push(assign_id);
                 }
             }
             for dependent in self.env.dynamic_dependents(local).iter().copied() {
-                pending.push_back(dependent);
+                pending.push(dependent);
             }
         }
     }
@@ -180,6 +142,59 @@ impl<'a, 'returns, 'db> LocalStateInferer<'a, 'returns, 'db> {
             roots.push(root);
         }
         roots
+    }
+}
+
+impl<'a, 'returns, 'db> SparseAnalysis for LocalStateInferer<'a, 'returns, 'db> {
+    type State = ();
+    type Error = Infallible;
+
+    fn node_count(&self) -> usize {
+        self.env.assignment_count()
+    }
+
+    fn seed_nodes(&self) -> Vec<usize> {
+        (0..self.env.assignment_count()).collect()
+    }
+
+    fn step(&mut self, assign_id: usize, _: &mut Self::State) -> Result<bool, Self::Error> {
+        self.pending_dependents.clear();
+        let assign = self
+            .env
+            .assignment(assign_id)
+            .unwrap_or_else(|| panic!("missing assignment facts for statement {assign_id}"));
+        let stmt = &self.env.body().blocks[assign.block_idx].stmts[assign.stmt_idx];
+        let expr = match &stmt.kind {
+            hir::analysis::semantic::NSStmtKind::Assign { expr, .. } => expr,
+            hir::analysis::semantic::NSStmtKind::Store { .. } => {
+                panic!(
+                    "assignment facts point to non-assignment statement: block={} stmt={}",
+                    assign.block_idx, assign.stmt_idx
+                )
+            }
+        };
+        let local = &self.env.body().locals[assign.dst.index()];
+        let class = self.env.expr_direct_class(
+            &self.carriers,
+            assign.block_idx,
+            assign.stmt_idx,
+            expr,
+            Some(&mut self.class_cache),
+            self.returns,
+        );
+        let Some(class) = class else {
+            return Ok(false);
+        };
+        let desired = desired_runtime_value_carrier(local, class);
+        if !self.set_carrier(assign.dst, desired) {
+            return Ok(false);
+        }
+        self.collect_local_change_dependents(assign.dst);
+        Ok(true)
+    }
+
+    fn dependents(&self, _node: usize, out: &mut Vec<usize>) {
+        out.extend(self.pending_dependents.iter().copied());
     }
 }
 
