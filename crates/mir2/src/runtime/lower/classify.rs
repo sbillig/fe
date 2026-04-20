@@ -1446,15 +1446,6 @@ impl<'a, 'carriers, 'db> RuntimeBodyCx<'a, 'carriers, 'db> {
             .normalized_place_address_class(self.carriers, place)
     }
 
-    pub(crate) fn specialize_boundary_for_source(
-        self,
-        local: SLocalId,
-        boundary: &RuntimeBoundarySpec<'db>,
-    ) -> RuntimeBoundarySpec<'db> {
-        self.env
-            .specialize_boundary_for_source(self.carriers, local, boundary)
-    }
-
     pub(crate) fn actual_aggregate_class_for_source(
         self,
         local: SLocalId,

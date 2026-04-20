@@ -2570,6 +2570,15 @@ impl<'db> RmirEmitter<'db> {
                 let value = self.materialize_runtime_value(bb, value, materialization, *semantic_ty);
                 self.coerce_value_if_needed(bb, value, &selected.class)
             }
+            RuntimeArgRealization::MaterializeSemanticValue {
+                operand,
+                materialization,
+                semantic_ty,
+            } => {
+                let value = self.read_semantic_operand(bb, *operand);
+                let value = self.materialize_runtime_value(bb, value, materialization, *semantic_ty);
+                self.coerce_value_if_needed(bb, value, &selected.class)
+            }
             RuntimeArgRealization::AggregateFromRuntimeSource { local } => self
                 .actual_aggregate_value_from_runtime_source(bb, *local)
                 .map(|value| self.coerce_value_if_needed(bb, value, &selected.class))
@@ -4292,14 +4301,24 @@ impl<'db> RmirEmitter<'db> {
         operand: NOperand,
         boundary: &crate::runtime::RuntimeBoundarySpec<'db>,
     ) -> RLocalId {
-        let boundary = self
-            .with_current_body_cx(|cx| cx.specialize_boundary_for_source(operand.local, boundary));
-        self.lower_for_boundary(
-            bb,
-            operand,
-            &boundary,
-            self.locals[operand.local.index()].semantic_ty,
-        )
+        let selected = self.with_current_body_cx(|cx| {
+            RuntimeValueEvaluator::new(cx.env, cx.carriers, None)
+                .selected_semantic_operand_for_boundary(operand, boundary)
+        });
+        let value = self.realize_selected_call_arg(bb, &selected);
+        let Some(class) = self.value_class(value).cloned() else {
+            panic!(
+                "selected boundary operand lowered without a runtime class: owner={:?}; operand={operand:?}; selected={selected:?}; value={value:?}",
+                self.current_semantic_key(),
+            );
+        };
+        assert_eq!(
+            class,
+            selected.class,
+            "selected boundary operand class mismatch: owner={:?}; operand={operand:?}; selected={selected:?}; value={value:?}",
+            self.current_semantic_key(),
+        );
+        value
     }
 
     fn addr_of_semantic_operand_for_class(
@@ -4359,114 +4378,6 @@ impl<'db> RmirEmitter<'db> {
             )),
         }?;
         CoercionPlanner::target_prefers_transport(self.value_class(value)?).then_some(value)
-    }
-
-    fn lower_for_boundary(
-        &mut self,
-        bb: RBlockId,
-        operand: NOperand,
-        boundary: &crate::runtime::RuntimeBoundarySpec<'db>,
-        semantic_ty: TyId<'db>,
-    ) -> RLocalId {
-        match boundary {
-            crate::runtime::RuntimeBoundarySpec::ExactTransport(target) => {
-                self.lower_semantic_operand_for_class(bb, operand, target)
-            }
-            crate::runtime::RuntimeBoundarySpec::ExactShape(target) => {
-                if let Some(value) = self.compatible_boundary_value(operand, boundary) {
-                    return value;
-                }
-                if let Some(value) =
-                    self.addr_of_boundary_source(bb, operand, boundary, semantic_ty)
-                {
-                    return value;
-                }
-                self.lower_semantic_operand_for_class(bb, operand, target)
-            }
-            crate::runtime::RuntimeBoundarySpec::BorrowLike { .. } => {
-                self.lower_borrow_like_source(bb, operand, boundary, semantic_ty)
-            }
-        }
-    }
-
-    fn lower_borrow_like_source(
-        &mut self,
-        bb: RBlockId,
-        operand: NOperand,
-        boundary: &crate::runtime::RuntimeBoundarySpec<'db>,
-        semantic_ty: TyId<'db>,
-    ) -> RLocalId {
-        if let Some(value) = self.compatible_boundary_value(operand, boundary) {
-            return value;
-        }
-        if let Some(value) = self.addr_of_boundary_source(bb, operand, boundary, semantic_ty) {
-            return value;
-        }
-        let value = self.read_semantic_operand(bb, operand);
-        let Some(materialization) = RuntimeBoundaryMaterialization::for_boundary(boundary) else {
-            let source = self.value_class(value).cloned();
-            panic!(
-                "borrow-like boundary source has no materialization plan: owner={:?}; source={source:?}; boundary={boundary:?}; semantic_ty={}",
-                self.key
-                    .semantic(self.db)
-                    .map(|semantic| semantic.key(self.db).owner(self.db)),
-                semantic_ty.pretty_print(self.db),
-            );
-        };
-        let value = self.materialize_runtime_value(bb, value, &materialization, semantic_ty);
-        if self
-            .value_class(value)
-            .is_some_and(|class| CoercionPlanner::class_satisfies_boundary(class, boundary))
-        {
-            return value;
-        }
-        let source = self.value_class(value).cloned();
-        panic!(
-            "borrow-like materialization produced incompatible transport: owner={:?}; source={source:?}; boundary={boundary:?}; semantic_ty={}",
-            self.key
-                .semantic(self.db)
-                .map(|semantic| semantic.key(self.db).owner(self.db)),
-            semantic_ty.pretty_print(self.db),
-        );
-    }
-
-    fn compatible_boundary_value(
-        &self,
-        operand: NOperand,
-        boundary: &crate::runtime::RuntimeBoundarySpec<'db>,
-    ) -> Option<RLocalId> {
-        if let Some(value) = self.handle_like_semantic_value(operand.local)
-            && self
-                .value_class(value)
-                .is_some_and(|class| CoercionPlanner::class_satisfies_boundary(class, boundary))
-        {
-            return Some(value);
-        }
-        let value = self.runtime_value(operand.local);
-        self.value_class(value)
-            .is_some_and(|class| CoercionPlanner::class_satisfies_boundary(class, boundary))
-            .then_some(value)
-    }
-
-    fn addr_of_boundary_source(
-        &mut self,
-        bb: RBlockId,
-        operand: NOperand,
-        boundary: &crate::runtime::RuntimeBoundarySpec<'db>,
-        semantic_ty: TyId<'db>,
-    ) -> Option<RLocalId> {
-        let local = operand.local;
-        let place = if let Some(place) =
-            nonself_backing_value_place(&self.semantic_body, local).cloned()
-            && let Some(place) = self.try_lower_place(bb, &place)
-        {
-            place
-        } else {
-            self.try_semantic_place(bb, local)?
-        };
-        let actual = self.place_addr_class(&place);
-        CoercionPlanner::class_satisfies_boundary(&actual, boundary)
-            .then(|| self.lower_place_addr_of_for_class(semantic_ty, bb, place, actual))
     }
 
     fn load_runtime_place_value(

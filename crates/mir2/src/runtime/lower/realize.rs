@@ -3,7 +3,7 @@ use hir::analysis::{
     ty::ty_def::TyId,
 };
 
-use crate::runtime::{AddressSpaceKind, LayoutId, RuntimeBoundarySpec, RuntimeClass};
+use crate::runtime::{AddressSpaceKind, LayoutId, RuntimeBoundarySpec, RuntimeClass, RuntimePlace};
 
 use super::coerce::CoercionPlanner;
 
@@ -35,6 +35,11 @@ pub(super) enum RuntimeArgRealization<'db> {
         materialization: RuntimeBoundaryMaterialization<'db>,
         semantic_ty: TyId<'db>,
     },
+    MaterializeSemanticValue {
+        operand: NOperand,
+        materialization: RuntimeBoundaryMaterialization<'db>,
+        semantic_ty: TyId<'db>,
+    },
     AggregateFromRuntimeSource {
         local: SLocalId,
     },
@@ -47,6 +52,21 @@ pub(super) enum RuntimeArgRealization<'db> {
 pub(crate) enum RuntimeBoundaryMaterialization<'db> {
     ObjectRef { layout: LayoutId<'db> },
     RawAddrSlot { pointee: RuntimeClass<'db> },
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum RuntimeBoundaryValueRealization<'db> {
+    UseValue,
+    AddrOfRuntimePlace {
+        place: RuntimePlace<'db>,
+        class: RuntimeClass<'db>,
+    },
+    CoerceValue {
+        target: RuntimeClass<'db>,
+    },
+    MaterializeValue {
+        materialization: RuntimeBoundaryMaterialization<'db>,
+    },
 }
 
 impl<'db> RuntimeBoundaryMaterialization<'db> {

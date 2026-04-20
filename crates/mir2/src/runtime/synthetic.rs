@@ -37,7 +37,10 @@ use crate::{
             },
             coerce::CoercionPlanner,
             interface::runtime_visible_binding_plans,
-            realize::{RuntimeBoundaryMaterialization, RuntimeBoundarySourceClasses},
+            realize::{
+                RuntimeBoundaryMaterialization, RuntimeBoundarySourceClasses,
+                RuntimeBoundaryValueRealization,
+            },
             returns::RuntimeReturnAnalysisCx,
             type_info::{RuntimeTypeEnv, top_level_class_for_ty_in_env},
         },
@@ -845,25 +848,34 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 panic!("erased runtime param should not have a runtime arg")
             }
             RuntimeParamPlan::Boundary(boundary) => {
-                self.coerce_runtime_value_for_boundary(bb, src, boundary, semantic_ty)
+                self.realize_runtime_value_for_boundary(bb, src, boundary, semantic_ty)
             }
             RuntimeParamPlan::PassActual => src,
         }
     }
 
-    fn coerce_runtime_value_for_boundary(
+    fn realize_runtime_value_for_boundary(
         &mut self,
         bb: RBlockId,
         src: RLocalId,
         boundary: &RuntimeBoundarySpec<'db>,
         semantic_ty: TyId<'db>,
     ) -> RLocalId {
+        let realization = self.select_runtime_value_for_boundary(src, boundary);
+        self.realize_runtime_boundary_value(bb, src, realization, semantic_ty)
+    }
+
+    fn select_runtime_value_for_boundary(
+        &mut self,
+        src: RLocalId,
+        boundary: &RuntimeBoundarySpec<'db>,
+    ) -> RuntimeBoundaryValueRealization<'db> {
         let source = self.locals[src.index()]
             .carrier
             .value_class()
             .cloned()
             .unwrap_or_else(|| {
-                panic!("cannot coerce erased runtime value {src:?} for boundary {boundary:?}")
+                panic!("cannot realize erased runtime value {src:?} for boundary {boundary:?}")
             });
         let source_classes = RuntimeBoundarySourceClasses {
             value: Some(source.clone()),
@@ -871,27 +883,30 @@ impl<'db> SyntheticBodyBuilder<'db> {
         };
         match boundary {
             RuntimeBoundarySpec::ExactTransport(target) => {
-                self.coerce_runtime_value(bb, src, target, semantic_ty)
+                RuntimeBoundaryValueRealization::CoerceValue {
+                    target: target.clone(),
+                }
             }
             RuntimeBoundarySpec::ExactShape(target) => {
                 if source_classes.compatible_value_class(boundary).is_some() {
-                    return src;
+                    return RuntimeBoundaryValueRealization::UseValue;
                 }
                 if let Some(actual) = source_classes.compatible_address_class(boundary) {
-                    return self.push_runtime_place_addr_of(
-                        bb,
-                        self.runtime_place_for_local(src)
+                    return RuntimeBoundaryValueRealization::AddrOfRuntimePlace {
+                        place: self
+                            .runtime_place_for_local(src)
                             .expect("local with place address class should have a place"),
-                        actual,
-                        semantic_ty,
-                    );
+                        class: actual,
+                    };
                 }
-                self.coerce_runtime_value(bb, src, target, semantic_ty)
+                RuntimeBoundaryValueRealization::CoerceValue {
+                    target: target.clone(),
+                }
             }
             RuntimeBoundarySpec::BorrowLike { .. }
                 if source_classes.compatible_value_class(boundary).is_some() =>
             {
-                src
+                RuntimeBoundaryValueRealization::UseValue
             }
             RuntimeBoundarySpec::BorrowLike {
                 access: crate::runtime::BorrowAccess::ReadWrite,
@@ -901,66 +916,68 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 if let Some((place, actual)) = self.promote_runtime_aggregate_local_place(src)
                     && CoercionPlanner::class_satisfies_boundary(&actual, boundary)
                 {
-                    return self.push_runtime_place_addr_of(bb, place, actual, semantic_ty);
+                    return RuntimeBoundaryValueRealization::AddrOfRuntimePlace {
+                        place,
+                        class: actual,
+                    };
                 }
                 if let Some(actual) = source_classes.compatible_address_class(boundary) {
-                    return self.push_runtime_place_addr_of(
-                        bb,
-                        self.runtime_place_for_local(src)
+                    return RuntimeBoundaryValueRealization::AddrOfRuntimePlace {
+                        place: self
+                            .runtime_place_for_local(src)
                             .expect("local with place address class should have a place"),
-                        actual,
-                        semantic_ty,
-                    );
+                        class: actual,
+                    };
                 }
-                let Some(materialization) = RuntimeBoundaryMaterialization::for_boundary(boundary)
-                else {
-                    panic!(
-                        "borrow-like boundary has no realizable synthetic materialization: source={source:?} boundary={boundary:?}"
-                    );
-                };
-                let value = self.materialize_runtime_value(bb, src, &materialization, semantic_ty);
-                let actual = self.locals[value.index()]
-                    .carrier
-                    .value_class()
-                    .cloned()
-                    .expect("coerced runtime value should not be erased");
-                if CoercionPlanner::class_satisfies_boundary(&actual, boundary) {
-                    value
-                } else {
-                    panic!(
-                        "synthetic runtime coercion produced incompatible borrow-like transport: source={source:?} actual={actual:?} boundary={boundary:?}"
-                    );
-                }
+                self.materialization_realization_for_boundary(boundary, &source)
             }
             RuntimeBoundarySpec::BorrowLike { .. } => {
                 if let Some(actual) = source_classes.compatible_address_class(boundary) {
-                    return self.push_runtime_place_addr_of(
-                        bb,
-                        self.runtime_place_for_local(src)
+                    return RuntimeBoundaryValueRealization::AddrOfRuntimePlace {
+                        place: self
+                            .runtime_place_for_local(src)
                             .expect("local with place address class should have a place"),
-                        actual,
-                        semantic_ty,
-                    );
+                        class: actual,
+                    };
                 }
-                let Some(materialization) = RuntimeBoundaryMaterialization::for_boundary(boundary)
-                else {
-                    panic!(
-                        "borrow-like boundary has no realizable synthetic materialization: source={source:?} boundary={boundary:?}"
-                    );
-                };
-                let value = self.materialize_runtime_value(bb, src, &materialization, semantic_ty);
-                let actual = self.locals[value.index()]
-                    .carrier
-                    .value_class()
-                    .cloned()
-                    .expect("coerced runtime value should not be erased");
-                if CoercionPlanner::class_satisfies_boundary(&actual, boundary) {
-                    value
-                } else {
-                    panic!(
-                        "synthetic runtime coercion produced incompatible borrow-like transport: source={source:?} actual={actual:?} boundary={boundary:?}"
-                    );
-                }
+                self.materialization_realization_for_boundary(boundary, &source)
+            }
+        }
+    }
+
+    fn materialization_realization_for_boundary(
+        &self,
+        boundary: &RuntimeBoundarySpec<'db>,
+        source: &RuntimeClass<'db>,
+    ) -> RuntimeBoundaryValueRealization<'db> {
+        RuntimeBoundaryMaterialization::for_boundary(boundary)
+            .map(|materialization| RuntimeBoundaryValueRealization::MaterializeValue {
+                materialization,
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "borrow-like boundary has no realizable synthetic materialization: source={source:?} boundary={boundary:?}"
+                )
+            })
+    }
+
+    fn realize_runtime_boundary_value(
+        &mut self,
+        bb: RBlockId,
+        src: RLocalId,
+        realization: RuntimeBoundaryValueRealization<'db>,
+        semantic_ty: TyId<'db>,
+    ) -> RLocalId {
+        match realization {
+            RuntimeBoundaryValueRealization::UseValue => src,
+            RuntimeBoundaryValueRealization::AddrOfRuntimePlace { place, class } => {
+                self.push_runtime_place_addr_of(bb, place, class, semantic_ty)
+            }
+            RuntimeBoundaryValueRealization::CoerceValue { target } => {
+                self.coerce_runtime_value(bb, src, &target, semantic_ty)
+            }
+            RuntimeBoundaryValueRealization::MaterializeValue { materialization } => {
+                self.materialize_runtime_value(bb, src, &materialization, semantic_ty)
             }
         }
     }

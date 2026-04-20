@@ -195,6 +195,50 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeValueEvaluator<'a, 'carriers, 'cache, 'd
         selected
     }
 
+    pub(super) fn selected_semantic_operand_for_boundary(
+        &mut self,
+        arg: NOperand,
+        boundary: &RuntimeBoundarySpec<'db>,
+    ) -> SelectedRuntimeArg<'db> {
+        let local = arg.local;
+        let semantic_ty = self.env.body().locals[local.index()].ty;
+        let boundary = self
+            .env
+            .specialize_boundary_for_source(self.carriers, local, boundary);
+        match &boundary {
+            RuntimeBoundarySpec::ExactTransport(target) => SelectedRuntimeArg {
+                class: target.clone(),
+                realization: RuntimeArgRealization::LowerSemanticOperand(arg),
+            },
+            RuntimeBoundarySpec::ExactShape(target) => self
+                .select_runtime_boundary_compatible_value(local, &boundary)
+                .unwrap_or_else(|| SelectedRuntimeArg {
+                    class: target.clone(),
+                    realization: RuntimeArgRealization::LowerSemanticOperand(arg),
+                }),
+            RuntimeBoundarySpec::BorrowLike { .. } => self
+                .select_runtime_boundary_compatible_value(local, &boundary)
+                .or_else(|| {
+                    RuntimeBoundaryMaterialization::for_boundary(&boundary).map(
+                        |materialization| SelectedRuntimeArg {
+                            class: materialization.class(),
+                            realization: RuntimeArgRealization::MaterializeSemanticValue {
+                                operand: arg,
+                                materialization,
+                                semantic_ty,
+                            },
+                        },
+                    )
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "semantic operand boundary has no runtime realization: owner={:?}; arg={arg:?}; boundary={boundary:?}",
+                        self.env.body().owner.key(self.env.db()).owner(self.env.db()),
+                    )
+                }),
+        }
+    }
+
     fn select_value_pass_plan(
         &mut self,
         arg: NOperand,
