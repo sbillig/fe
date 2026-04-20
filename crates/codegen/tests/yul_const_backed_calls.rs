@@ -97,10 +97,18 @@ fn readonly_view_params_stay_code_backed_through_transparent_private_helpers() {
     );
     assert!(
         !sum_first4.contains("datacopy(")
-            && sum_first4.contains("$len_0_arg0_f1_code(")
-            && sum_first4.contains("$get_0_arg0_f1_code(")
-            && !sum_first4.contains("$len_0(v2)")
-            && !sum_first4.contains("$get_0(v2,"),
+            && sum_first4
+                .lines()
+                .any(|line| line.contains("$len_") && line.contains("_arg0_f1_code("))
+            && sum_first4
+                .lines()
+                .any(|line| line.contains("$get_") && line.contains("_arg0_f1_code("))
+            && !sum_first4
+                .lines()
+                .any(|line| line.contains("$len_") && !line.contains("_arg0_f1_code("))
+            && !sum_first4.lines().any(|line| line.contains("$get_")
+                && line.contains("(v2,")
+                && !line.contains("_arg0_f1_code(")),
         "readonly array params should not materialize whole arrays at transparent helper boundaries:\n{sum_first4}"
     );
 }
@@ -129,21 +137,19 @@ fn const_backed_constructor_args_stay_code_backed_until_abi_encoding() {
         "file:///const_backed_constructor_args_stay_code_backed_until_abi_encoding.fe",
         include_str!("../../fe/tests/fixtures/fe_test/contract_init_fixed_array_arg.fe"),
     );
-    let start = yul
-        .find("function $create2_")
-        .expect("expected create2 helper in emitted Yul");
-    let end = yul[start + 1..]
-        .find("\n      function ")
-        .map(|idx| start + 1 + idx)
-        .unwrap_or(yul.len());
-    let create2_helper = &yul[start..end];
+    let create2_signature = if yul.contains("function $create2_arg") {
+        "function $create2_arg"
+    } else {
+        "function $create2("
+    };
+    let create2_helper = function_body(&yul, create2_signature);
 
     assert!(
         !(create2_helper.contains("datacopy(") && create2_helper.contains(", $args, 128)")),
         "const-backed constructor args should not materialize eagerly before ABI encoding:\n{create2_helper}"
     );
     assert!(
-        create2_helper.contains("$encode_") && create2_helper.contains("($args,"),
+        create2_helper.contains("$encode_") && create2_helper.contains("_arg0_root_code(p2)"),
         "constructor args should flow directly into ABI encoding from their code-backed carrier:\n{create2_helper}"
     );
 }

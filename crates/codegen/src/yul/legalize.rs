@@ -11,9 +11,9 @@ use mir2::{
     AddressSpaceKind, ConstNode, ConstRegionId, ConstScalar, IntrinsicArithBinOp, Layout, LayoutId,
     PlaceElem, PlaceRoot, RExpr, RLocalId, RStmt, RTerminator, RValueId, ResolvedPlaceElem,
     ResolvedPlaceRootKind, RuntimeBuiltin, RuntimeClass, RuntimeCodeRegion, RuntimeFunction,
-    RuntimeFunctionOwner, RuntimeInlineHint, RuntimeLinkage, RuntimeObject, RuntimePackage,
-    RuntimeSection, RuntimeSectionName, RuntimeSectionRef, RuntimeSyntheticSpec, SaturatingBinOp,
-    ScalarClass, ScalarRepr, VariantId, array_elem_size_bytes, layout_size_bytes,
+    RuntimeFunctionOwner, RuntimeInlineHint, RuntimeInstance, RuntimeLinkage, RuntimeObject,
+    RuntimePackage, RuntimeSection, RuntimeSectionName, RuntimeSectionRef, RuntimeSyntheticSpec,
+    SaturatingBinOp, ScalarClass, ScalarRepr, VariantId, array_elem_size_bytes, layout_size_bytes,
     resolve_runtime_place, serialize_const_region_bytes,
 };
 use rustc_hash::FxHashMap;
@@ -1200,7 +1200,12 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                 )? {
                     continue;
                 }
-                stmts.push(self.legalize_runtime_stmt(&body, &mut local_values, stmt)?);
+                stmts.push(self.legalize_runtime_stmt(
+                    &body,
+                    &mut local_values,
+                    &code_backable_locals,
+                    stmt,
+                )?);
             }
             self.flush_all_pending_aggregates(
                 &mut pending_const_objects,
@@ -1322,9 +1327,13 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                         }
                     }
                     RStmt::Assign {
-                        expr: RExpr::Call { args, .. },
+                        expr: RExpr::Call { callee, args },
                         ..
-                    } => args.iter().copied().for_each(&mut mark_escaped),
+                    } => {
+                        for arg in self.call_args_requiring_materialization(*callee, args) {
+                            mark_escaped(arg);
+                        }
+                    }
                     RStmt::Assign {
                         expr: RExpr::MaterializeToObject { src },
                         ..
@@ -1341,8 +1350,10 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                 }
             }
             match &block.terminator {
-                RTerminator::TerminalCall { args, .. } => {
-                    args.iter().copied().for_each(&mut mark_escaped);
+                RTerminator::TerminalCall { callee, args } => {
+                    for arg in self.call_args_requiring_materialization(*callee, args) {
+                        mark_escaped(arg);
+                    }
                 }
                 RTerminator::Return(Some(value)) => mark_escaped(*value),
                 RTerminator::Goto(_)
@@ -1404,6 +1415,59 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
             }
         }
         code_backable
+    }
+
+    fn call_args_requiring_materialization(
+        &self,
+        callee: RuntimeInstance<'db>,
+        args: &[RValueId],
+    ) -> Vec<RValueId> {
+        let Some(runtime_function) = self.function_by_instance.get(&callee).copied() else {
+            return args.to_vec();
+        };
+        let param_kinds = self.param_kinds_for_function(runtime_function);
+        let body = runtime_function.instance(self.db).body(self.db);
+        if args.len() != body.signature.params.len() || args.len() != param_kinds.len() {
+            return args.to_vec();
+        }
+        args.iter()
+            .zip(param_kinds)
+            .zip(body.signature.params.iter())
+            .filter_map(|((arg, kind), param)| match kind {
+                YulParamKind::Visible(_)
+                    if self.visible_param_preserves_code_backing(
+                        runtime_function,
+                        param.local,
+                        &param.class,
+                    ) =>
+                {
+                    None
+                }
+                YulParamKind::Visible(_) | YulParamKind::Effect(_) => Some(*arg),
+            })
+            .collect()
+    }
+
+    fn visible_param_preserves_code_backing(
+        &self,
+        runtime_function: RuntimeFunction<'db>,
+        local: RLocalId,
+        class: &RuntimeClass<'db>,
+    ) -> bool {
+        if !matches!(
+            yul_class_for_runtime_class(self.db, class),
+            YulValueClass::MemoryPtr { .. } | YulValueClass::CodePtr { .. }
+        ) {
+            return false;
+        }
+        match runtime_function.owner(self.db) {
+            RuntimeFunctionOwner::Semantic(semantic) => normalize_semantic_body(self.db, semantic)
+                .expect("semantic normalization should succeed before Yul legalization")
+                .locals
+                .get(local.as_u32() as usize)
+                .is_some_and(|local| local.mutability == Mutability::Immutable),
+            RuntimeFunctionOwner::Synthetic(_) => true,
+        }
     }
 
     fn flush_incompatible_pending_aggregates(
@@ -1511,6 +1575,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                 let (expr, class, transport, const_value) = self.legalize_runtime_expr(
                     body,
                     local_values,
+                    code_backable_locals,
                     Some(*dst),
                     &RExpr::AllocObject { layout: *layout },
                 )?;
@@ -1661,7 +1726,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                 if let Some((expr, class, const_value)) =
                     self.try_build_pending_scalar_value(&pending[idx], local_values)
                 {
-                    self.flush_pending_aggregate(pending, idx, local_values, stmts);
+                    pending.remove(idx);
                     local_values[dst.as_u32() as usize] = LocalValueInfo {
                         class: Some(class),
                         transport: YTransportInfo::empty(),
@@ -2116,6 +2181,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
         &mut self,
         body: &mir2::RuntimeBody<'db>,
         local_values: &mut [LocalValueInfo<'db>],
+        code_backable_locals: &[bool],
         stmt: &RStmt<'db>,
     ) -> Result<YStmt<'db>, YulError> {
         Ok(match stmt {
@@ -2152,8 +2218,13 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                         args: map_values(args),
                     });
                 }
-                let (expr, class, transport, const_value) =
-                    self.legalize_runtime_expr(body, local_values, Some(*dst), expr)?;
+                let (expr, class, transport, const_value) = self.legalize_runtime_expr(
+                    body,
+                    local_values,
+                    code_backable_locals,
+                    Some(*dst),
+                    expr,
+                )?;
                 local_values[dst.as_u32() as usize] = LocalValueInfo {
                     class,
                     transport,
@@ -2196,6 +2267,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
         &mut self,
         body: &mir2::RuntimeBody<'db>,
         local_values: &[LocalValueInfo<'db>],
+        code_backable_locals: &[bool],
         dst: Option<RLocalId>,
         expr: &RExpr<'db>,
     ) -> Result<
@@ -2301,6 +2373,23 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                 )
             }
             RExpr::MaterializeToObject { src } => {
+                let src_info = &local_values[src.as_u32() as usize];
+                if dst.is_some_and(|dst| {
+                    code_backable_locals
+                        .get(dst.as_u32() as usize)
+                        .copied()
+                        .unwrap_or(false)
+                }) && let Some(space) = src_info.transport.root_alias
+                    && !matches!(space, YulAddressSpace::Memory)
+                    && let Some(class) = src_info.class.clone().or(default_dst_class.clone())
+                {
+                    return Ok((
+                        YExpr::Use(YLocalId(src.as_u32())),
+                        Some(specialize_yul_class_root(class, Some(space))),
+                        src_info.transport.clone(),
+                        src_info.const_value.clone(),
+                    ));
+                }
                 let layout = default_dst_class
                     .as_ref()
                     .and_then(layout_from_yul_class)
@@ -2793,9 +2882,21 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                     YulLocalRoot::None
                 }
             }
-            mir2::RuntimeLocalRoot::Slot(class) => YulLocalRoot::MemorySlot {
-                class: class.clone(),
-            },
+            mir2::RuntimeLocalRoot::Slot(class) => {
+                if let Some(value_class) = info.class.clone()
+                    && let Some(space) = info.transport.root_alias
+                    && !matches!(space, YulAddressSpace::Memory)
+                    && !matches!(value_class, YulValueClass::Word(_))
+                {
+                    YulLocalRoot::PtrRoot {
+                        class: specialize_yul_class_root(value_class, Some(space)),
+                    }
+                } else {
+                    YulLocalRoot::MemorySlot {
+                        class: class.clone(),
+                    }
+                }
+            }
             mir2::RuntimeLocalRoot::Ref(class) => YulLocalRoot::PtrRoot {
                 class: yul_class_for_runtime_class(self.db, class),
             },
