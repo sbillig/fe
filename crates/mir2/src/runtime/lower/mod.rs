@@ -4,6 +4,7 @@ pub(crate) mod call;
 pub(crate) mod call_input;
 pub(crate) mod classify;
 mod consts;
+pub(crate) mod conversion;
 pub(crate) mod infer;
 pub(crate) mod interface;
 pub(crate) mod layout;

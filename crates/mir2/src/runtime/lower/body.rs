@@ -34,7 +34,7 @@ use crate::{
         RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeLocalLowering, RuntimeLocalRoot,
         RuntimeParam, RuntimePlace, RuntimeProviderBinding, RuntimeProviderBindingId,
         RuntimeSignature, ScalarClass, ScalarRepr, ScalarRole, VariantId,
-        code_region::runtime_code_region_for_semantic_ref, runtime_classes_share_runtime_rep,
+        code_region::runtime_code_region_for_semantic_ref,
     },
 };
 
@@ -50,6 +50,10 @@ use super::{
     },
     consts::{
         const_scalar_for_class, const_scalar_from_value, enum_tag_scalar, lower_const_region,
+    },
+    conversion::{
+        RuntimeConversionError, RuntimeConversionPlan, RuntimeConversionPlanner,
+        RuntimeConversionStep,
     },
     infer::{InferenceResult, LocalStateInferer, merge_runtime_class},
     interface::runtime_param_locals,
@@ -3127,684 +3131,218 @@ impl<'db> RmirEmitter<'db> {
                     self.locals,
                 )
             });
-        if &source == target {
-            return src;
-        }
+        let plan = RuntimeConversionPlanner::plan(self.db, source, target.clone())
+            .unwrap_or_else(|err| self.panic_unsupported_conversion(src, err));
+        self.emit_runtime_conversion_plan(bb, src, plan)
+    }
 
-        match (source, target.clone()) {
-            (
-                RuntimeClass::AggregateValue { layout },
-                RuntimeClass::AggregateValue {
-                    layout: target_layout,
-                },
-            ) if runtime_classes_share_runtime_rep(
-                self.db,
-                &RuntimeClass::AggregateValue { layout },
-                &RuntimeClass::AggregateValue {
-                    layout: target_layout,
-                },
-            ) =>
-            {
-                let temp = self.alloc_runtime_temp(
-                    self.locals[src.index()].semantic_ty,
-                    RuntimeCarrier::Value(RuntimeClass::AggregateValue {
-                        layout: target_layout,
-                    }),
-                );
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: temp,
-                        expr: RExpr::Use(src),
-                    },
-                );
-                temp
+    fn emit_runtime_conversion_plan(
+        &mut self,
+        bb: RBlockId,
+        mut value: RLocalId,
+        plan: RuntimeConversionPlan<'db>,
+    ) -> RLocalId {
+        let RuntimeConversionPlan { target, steps } = plan;
+        if steps.is_empty() {
+            debug_assert_eq!(self.value_class(value), Some(&target));
+            return value;
+        }
+        for step in steps {
+            value = self.emit_runtime_conversion_step(bb, value, step);
+        }
+        value
+    }
+
+    fn emit_runtime_conversion_step(
+        &mut self,
+        bb: RBlockId,
+        src: RLocalId,
+        step: RuntimeConversionStep<'db>,
+    ) -> RLocalId {
+        let semantic_ty = self.locals[src.index()].semantic_ty;
+        match step {
+            RuntimeConversionStep::UseAs { class } => {
+                self.assign_runtime_conversion_temp(bb, semantic_ty, class, RExpr::Use(src))
             }
-            (
-                RuntimeClass::Ref {
-                    pointee: actual_pointee,
-                    kind: actual_kind,
-                    view: actual_view,
-                },
-                RuntimeClass::Ref {
-                    pointee: desired_pointee,
-                    kind: desired_kind,
-                    view: desired_view,
-                },
-            ) if actual_view == desired_view
-                && runtime_classes_share_runtime_rep(
-                    self.db,
-                    &RuntimeClass::Ref {
-                        pointee: actual_pointee.clone(),
-                        kind: actual_kind.clone(),
-                        view: actual_view.clone(),
+            RuntimeConversionStep::RetagRef { class } => self.assign_runtime_conversion_temp(
+                bb,
+                semantic_ty,
+                class,
+                RExpr::RetagRef { value: src },
+            ),
+            RuntimeConversionStep::LoadRef { class } => self.assign_runtime_conversion_temp(
+                bb,
+                semantic_ty,
+                class,
+                RExpr::Load {
+                    place: RuntimePlace {
+                        root: PlaceRoot::Ref(src),
+                        path: Box::default(),
                     },
-                    &RuntimeClass::Ref {
-                        pointee: desired_pointee.clone(),
-                        kind: desired_kind.clone(),
-                        view: desired_view.clone(),
+                },
+            ),
+            RuntimeConversionStep::AddrOfRef { class } => self.assign_runtime_conversion_temp(
+                bb,
+                semantic_ty,
+                class,
+                RExpr::AddrOf {
+                    place: RuntimePlace {
+                        root: PlaceRoot::Ref(src),
+                        path: Box::default(),
                     },
-                ) =>
-            {
-                let temp = self.alloc_runtime_temp(
-                    self.locals[src.index()].semantic_ty,
-                    RuntimeCarrier::Value(target.clone()),
-                );
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: temp,
-                        expr: RExpr::RetagRef { value: src },
-                    },
-                );
-                temp
-            }
-            (RuntimeClass::Ref { pointee, .. }, target) if !target.is_transport() => {
-                let loaded = self.alloc_runtime_temp(
-                    self.locals[src.index()].semantic_ty,
-                    RuntimeCarrier::Value((*pointee).clone()),
-                );
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: loaded,
-                        expr: RExpr::Load {
-                            place: RuntimePlace {
-                                root: PlaceRoot::Ref(src),
-                                path: Box::default(),
-                            },
-                        },
-                    },
-                );
-                if *pointee == target {
-                    loaded
-                } else {
-                    self.coerce_value(bb, loaded, &target)
-                }
-            }
-            (
-                RuntimeClass::Ref {
-                    pointee,
-                    kind: RefKind::Object,
-                    view: RefView::Whole,
                 },
-                RuntimeClass::Ref {
-                    pointee: desired_pointee,
-                    view: RefView::Whole,
-                    ..
-                },
-            ) if pointee == desired_pointee => {
-                let actual = RuntimeClass::Ref {
-                    pointee,
-                    kind: RefKind::Object,
-                    view: RefView::Whole,
-                };
-                let temp = self.alloc_runtime_temp(
-                    self.locals[src.index()].semantic_ty,
-                    RuntimeCarrier::Value(actual.clone()),
-                );
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: temp,
-                        expr: RExpr::AddrOf {
-                            place: RuntimePlace {
-                                root: PlaceRoot::Ref(src),
-                                path: Box::default(),
-                            },
-                        },
-                    },
-                );
-                if actual == *target {
-                    temp
-                } else {
-                    self.coerce_value(bb, temp, target)
-                }
-            }
-            (
-                RuntimeClass::Ref {
-                    pointee,
-                    kind: RefKind::Const,
-                    view: RefView::Whole,
-                },
-                RuntimeClass::Ref {
-                    pointee: desired_pointee,
-                    view: RefView::Whole,
-                    ..
-                },
-            ) if pointee == desired_pointee => {
-                let actual = RuntimeClass::Ref {
-                    pointee,
-                    kind: RefKind::Const,
-                    view: RefView::Whole,
-                };
-                let temp = self.alloc_runtime_temp(
-                    self.locals[src.index()].semantic_ty,
-                    RuntimeCarrier::Value(actual.clone()),
-                );
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: temp,
-                        expr: RExpr::AddrOf {
-                            place: RuntimePlace {
-                                root: PlaceRoot::Ref(src),
-                                path: Box::default(),
-                            },
-                        },
-                    },
-                );
-                if actual == *target {
-                    temp
-                } else {
-                    self.coerce_value(bb, temp, target)
-                }
-            }
-            (
-                RuntimeClass::RawAddr {
-                    space,
-                    target: Some(layout),
-                },
-                RuntimeClass::Ref {
-                    pointee,
-                    kind:
-                        RefKind::Provider {
-                            provider_ty,
-                            space: provider_space,
-                        },
-                    view: crate::runtime::RefView::Whole,
-                },
-            ) if space == provider_space && *pointee == RuntimeClass::AggregateValue { layout } => {
-                let temp = self.alloc_runtime_temp(
-                    self.locals[src.index()].semantic_ty,
-                    RuntimeCarrier::Value(target.clone()),
-                );
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: temp,
-                        expr: RExpr::ProviderFromRaw {
-                            raw: src,
-                            provider_ty,
+            ),
+            RuntimeConversionStep::LoadRawAddr {
+                class,
+                space,
+                layout,
+            } => self.assign_runtime_conversion_temp(
+                bb,
+                semantic_ty,
+                class,
+                RExpr::Load {
+                    place: RuntimePlace {
+                        root: PlaceRoot::Ptr {
+                            addr: src,
                             space,
-                            target: Some(layout),
+                            class: RuntimeClass::AggregateValue { layout },
                         },
+                        path: Box::default(),
                     },
-                );
-                temp
-            }
-            (
-                RuntimeClass::Ref {
-                    pointee,
-                    kind: RefKind::Object | RefKind::Const,
-                    view: RefView::Whole,
                 },
-                RuntimeClass::Ref {
-                    pointee: target_pointee,
-                    kind: RefKind::Provider { provider_ty, space },
-                    view: RefView::Whole,
-                },
-            ) if pointee == target_pointee => {
-                let temp = self.alloc_runtime_temp(
-                    self.locals[src.index()].semantic_ty,
-                    RuntimeCarrier::Value(RuntimeClass::Ref {
-                        pointee: target_pointee,
-                        kind: RefKind::Provider { provider_ty, space },
-                        view: RefView::Whole,
-                    }),
-                );
-                self.push_stmt(
+            ),
+            RuntimeConversionStep::MaterializeToObject { class } => self
+                .assign_runtime_conversion_temp(
                     bb,
-                    RStmt::Assign {
-                        dst: temp,
-                        expr: RExpr::AddrOf {
-                            place: RuntimePlace {
-                                root: PlaceRoot::Ref(src),
-                                path: Box::default(),
-                            },
-                        },
-                    },
-                );
-                temp
-            }
-            (
-                RuntimeClass::Ref {
-                    pointee,
-                    kind: RefKind::Object | RefKind::Const,
-                    view: RefView::Whole,
-                },
-                RuntimeClass::RawAddr {
-                    space,
-                    target: target_layout,
-                },
-            ) if target_layout
-                .is_none_or(|target_layout| Some(target_layout) == pointee.aggregate_layout()) =>
-            {
-                let layout = pointee.aggregate_layout().expect("aggregate ref layout");
-                let temp = self.alloc_runtime_temp(
-                    self.locals[src.index()].semantic_ty,
-                    RuntimeCarrier::Value(RuntimeClass::RawAddr {
-                        space,
-                        target: Some(layout),
-                    }),
-                );
-                self.push_stmt(
+                    semantic_ty,
+                    class,
+                    RExpr::MaterializeToObject { src },
+                ),
+            RuntimeConversionStep::AllocObjectCopy { class, layout } => {
+                let dst = self.assign_runtime_conversion_temp(
                     bb,
-                    RStmt::Assign {
-                        dst: temp,
-                        expr: RExpr::AddrOf {
-                            place: RuntimePlace {
-                                root: PlaceRoot::Ref(src),
-                                path: Box::default(),
-                            },
-                        },
-                    },
-                );
-                temp
-            }
-            (
-                RuntimeClass::RawAddr {
-                    space,
-                    target: Some(layout),
-                },
-                RuntimeClass::AggregateValue {
-                    layout: target_layout,
-                },
-            ) if layout == target_layout => {
-                let temp = self.alloc_runtime_temp(
-                    self.locals[src.index()].semantic_ty,
-                    RuntimeCarrier::Value(RuntimeClass::AggregateValue {
-                        layout: target_layout,
-                    }),
-                );
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: temp,
-                        expr: RExpr::Load {
-                            place: RuntimePlace {
-                                root: PlaceRoot::Ptr {
-                                    addr: src,
-                                    space,
-                                    class: RuntimeClass::AggregateValue { layout },
-                                },
-                                path: Box::default(),
-                            },
-                        },
-                    },
-                );
-                temp
-            }
-            (
-                RuntimeClass::Ref { pointee, .. },
-                RuntimeClass::AggregateValue {
-                    layout: target_layout,
-                },
-            ) if *pointee
-                == RuntimeClass::AggregateValue {
-                    layout: target_layout,
-                } =>
-            {
-                let temp = self.alloc_runtime_temp(
-                    self.locals[src.index()].semantic_ty,
-                    RuntimeCarrier::Value(RuntimeClass::AggregateValue {
-                        layout: target_layout,
-                    }),
-                );
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: temp,
-                        expr: RExpr::Load {
-                            place: RuntimePlace {
-                                root: PlaceRoot::Ref(src),
-                                path: Box::default(),
-                            },
-                        },
-                    },
-                );
-                temp
-            }
-            (
-                RuntimeClass::AggregateValue { layout },
-                RuntimeClass::Ref {
-                    pointee,
-                    kind: RefKind::Object,
-                    view: RefView::Whole,
-                },
-            ) if *pointee == RuntimeClass::AggregateValue { layout } => {
-                let temp = self.alloc_runtime_temp(
-                    self.locals[src.index()].semantic_ty,
-                    RuntimeCarrier::Value(RuntimeClass::object_ref(layout)),
-                );
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: temp,
-                        expr: RExpr::MaterializeToObject { src },
-                    },
-                );
-                temp
-            }
-            (
-                RuntimeClass::Ref {
-                    pointee,
-                    kind: RefKind::Const,
-                    view: RefView::Whole,
-                },
-                RuntimeClass::Ref {
-                    pointee: target_pointee,
-                    kind: RefKind::Object,
-                    view: RefView::Whole,
-                },
-            ) if pointee == target_pointee => {
-                let layout = target_pointee
-                    .aggregate_layout()
-                    .expect("aggregate ref layout");
-                let temp = self.alloc_runtime_temp(
-                    self.locals[src.index()].semantic_ty,
-                    RuntimeCarrier::Value(RuntimeClass::object_ref(layout)),
-                );
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: temp,
-                        expr: RExpr::MaterializeToObject { src },
-                    },
-                );
-                temp
-            }
-            (
-                RuntimeClass::RawAddr { space, .. },
-                RuntimeClass::Ref {
-                    pointee,
-                    kind:
-                        RefKind::Provider {
-                            provider_ty,
-                            space: provider_space,
-                        },
-                    ..
-                },
-            ) if space == provider_space => {
-                let target = pointee.aggregate_layout();
-                let temp = self.alloc_runtime_temp(
-                    self.locals[src.index()].semantic_ty,
-                    RuntimeCarrier::Value(target.map_or(
-                        RuntimeClass::Ref {
-                            pointee,
-                            kind: RefKind::Provider { provider_ty, space },
-                            view: RefView::Whole,
-                        },
-                        |layout| RuntimeClass::provider_ref(layout, provider_ty, space),
-                    )),
-                );
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: temp,
-                        expr: RExpr::ProviderFromRaw {
-                            raw: src,
-                            provider_ty,
-                            space,
-                            target,
-                        },
-                    },
-                );
-                temp
-            }
-            (
-                RuntimeClass::Ref {
-                    kind:
-                        RefKind::Provider {
-                            space: source_space,
-                            ..
-                        },
-                    ..
-                },
-                RuntimeClass::Ref {
-                    pointee,
-                    kind:
-                        RefKind::Provider {
-                            provider_ty,
-                            space: target_space,
-                        },
-                    view: RefView::Whole,
-                },
-            ) if source_space == target_space && pointee.aggregate_layout().is_some() => {
-                let raw = self.coerce_value(
-                    bb,
-                    src,
-                    &RuntimeClass::RawAddr {
-                        space: target_space,
-                        target: pointee.aggregate_layout(),
-                    },
-                );
-                self.coerce_value(
-                    bb,
-                    raw,
-                    &RuntimeClass::Ref {
-                        pointee,
-                        kind: RefKind::Provider {
-                            provider_ty,
-                            space: target_space,
-                        },
-                        view: RefView::Whole,
-                    },
-                )
-            }
-            (
-                RuntimeClass::AggregateValue { layout },
-                RuntimeClass::Ref {
-                    pointee,
-                    kind: RefKind::Provider { provider_ty, space },
-                    view: RefView::Whole,
-                },
-            ) if runtime_classes_share_runtime_rep(
-                self.db,
-                &RuntimeClass::AggregateValue { layout },
-                &pointee,
-            ) =>
-            {
-                let target_layout = pointee
-                    .aggregate_layout()
-                    .expect("aggregate provider ref layout");
-                let value = self.coerce_value(bb, src, &pointee);
-                let object = self.coerce_value(bb, value, &RuntimeClass::object_ref(target_layout));
-                self.coerce_value(
-                    bb,
-                    object,
-                    &RuntimeClass::provider_ref(target_layout, provider_ty, space),
-                )
-            }
-            (
-                RuntimeClass::Scalar(ScalarClass {
-                    repr:
-                        ScalarRepr::Int {
-                            bits: 256,
-                            signed: false,
-                        },
-                    role: ScalarRole::Plain,
-                }),
-                RuntimeClass::Ref {
-                    pointee,
-                    kind:
-                        RefKind::Provider {
-                            provider_ty: _,
-                            space,
-                        },
-                    view: RefView::Whole,
-                },
-            ) => {
-                let target_layout = pointee.aggregate_layout();
-                let raw = self.coerce_scalar_word_to_raw(bb, src, space, target_layout);
-                self.coerce_value(bb, raw, &target.clone())
-            }
-            (
-                RuntimeClass::Ref {
-                    kind: RefKind::Provider { .. },
-                    ..
-                },
-                RuntimeClass::RawAddr { .. },
-            ) => {
-                let temp = self.alloc_runtime_temp(
-                    self.locals[src.index()].semantic_ty,
-                    RuntimeCarrier::Value(target.clone()),
-                );
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: temp,
-                        expr: RExpr::ProviderToRaw { value: src },
-                    },
-                );
-                temp
-            }
-            (
-                RuntimeClass::RawAddr { .. },
-                RuntimeClass::Scalar(ScalarClass {
-                    repr:
-                        ScalarRepr::Int {
-                            bits: 256,
-                            signed: false,
-                        },
-                    ..
-                }),
-            ) => {
-                let temp = self.alloc_runtime_temp(
-                    self.locals[src.index()].semantic_ty,
-                    RuntimeCarrier::Value(target.clone()),
-                );
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: temp,
-                        expr: RExpr::Cast {
-                            value: src,
-                            to: match target {
-                                RuntimeClass::Scalar(scalar) => scalar.clone(),
-                                _ => unreachable!(),
-                            },
-                        },
-                    },
-                );
-                temp
-            }
-            (
-                RuntimeClass::Scalar(ScalarClass {
-                    repr:
-                        ScalarRepr::Int {
-                            bits: 256,
-                            signed: false,
-                        },
-                    role: ScalarRole::Plain,
-                }),
-                RuntimeClass::RawAddr { space, target },
-            ) => self.coerce_scalar_word_to_raw(bb, src, space, target),
-            (
-                _,
-                RuntimeClass::Ref {
-                    pointee,
-                    kind: RefKind::Object,
-                    view: RefView::Whole,
-                },
-            ) if pointee.aggregate_layout().is_some() => {
-                let layout = pointee
-                    .aggregate_layout()
-                    .expect("aggregate object ref layout");
-                let value = self.coerce_value(bb, src, &pointee);
-                let temp = self.alloc_runtime_temp(
-                    self.locals[src.index()].semantic_ty,
-                    RuntimeCarrier::Value(RuntimeClass::object_ref(layout)),
-                );
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: temp,
-                        expr: RExpr::AllocObject { layout },
-                    },
+                    semantic_ty,
+                    class,
+                    RExpr::AllocObject { layout },
                 );
                 self.push_stmt(
                     bb,
                     RStmt::CopyInto {
                         dst: RuntimePlace {
-                            root: PlaceRoot::Ref(temp),
+                            root: PlaceRoot::Ref(dst),
                             path: Box::default(),
                         },
-                        src: value,
+                        src,
                     },
                 );
-                temp
+                dst
             }
-            (source, target) => {
-                let layout_source_ty = |layout: LayoutId<'db>| match layout.data(self.db) {
-                    crate::runtime::Layout::Struct(data) => {
-                        data.source_ty.pretty_print(self.db).to_string()
-                    }
-                    crate::runtime::Layout::Array(data) => {
-                        data.source_ty.pretty_print(self.db).to_string()
-                    }
-                    crate::runtime::Layout::Enum(data) => {
-                        data.source_ty.pretty_print(self.db).to_string()
-                    }
-                };
-                let source_layout = match source {
-                    RuntimeClass::Ref { .. } => source
-                        .aggregate_layout()
-                        .map(|layout| (layout, layout.data(self.db), layout_source_ty(layout))),
-                    RuntimeClass::AggregateValue { layout }
-                    | RuntimeClass::RawAddr {
-                        target: Some(layout),
-                        ..
-                    } => Some((layout, layout.data(self.db), layout_source_ty(layout))),
-                    RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { target: None, .. } => None,
-                };
-                let target_layout = match target {
-                    RuntimeClass::Ref { .. } => target
-                        .aggregate_layout()
-                        .map(|layout| (layout, layout.data(self.db), layout_source_ty(layout))),
-                    RuntimeClass::AggregateValue { layout }
-                    | RuntimeClass::RawAddr {
-                        target: Some(layout),
-                        ..
-                    } => Some((layout, layout.data(self.db), layout_source_ty(layout))),
-                    RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { target: None, .. } => None,
-                };
-                panic!(
-                    "unsupported runtime class coercion in {:?} owner={:?} from {source:?} to {target:?}; source_layout={source_layout:?}; target_layout={target_layout:?}; src={src:?}; src_ty={}; locals={:?}",
-                    self.key.source(self.db),
-                    self.key
-                        .semantic(self.db)
-                        .map(|semantic| semantic.key(self.db).owner(self.db)),
-                    self.locals[src.index()].semantic_ty.pretty_print(self.db),
-                    self.locals,
-                )
-            }
-        }
-    }
-
-    fn coerce_scalar_word_to_raw(
-        &mut self,
-        bb: RBlockId,
-        src: RLocalId,
-        space: crate::runtime::AddressSpaceKind,
-        target: Option<LayoutId<'db>>,
-    ) -> RLocalId {
-        let temp = self.alloc_runtime_temp(
-            self.locals[src.index()].semantic_ty,
-            RuntimeCarrier::Value(RuntimeClass::RawAddr { space, target }),
-        );
-        self.push_stmt(
-            bb,
-            RStmt::Assign {
-                dst: temp,
-                expr: RExpr::WordToRawAddr {
+            RuntimeConversionStep::ProviderFromRaw {
+                class,
+                provider_ty,
+                space,
+                target,
+            } => self.assign_runtime_conversion_temp(
+                bb,
+                semantic_ty,
+                class,
+                RExpr::ProviderFromRaw {
+                    raw: src,
+                    provider_ty,
+                    space,
+                    target,
+                },
+            ),
+            RuntimeConversionStep::ProviderToRaw { class } => self.assign_runtime_conversion_temp(
+                bb,
+                semantic_ty,
+                class,
+                RExpr::ProviderToRaw { value: src },
+            ),
+            RuntimeConversionStep::WordToRawAddr {
+                class,
+                space,
+                target,
+            } => self.assign_runtime_conversion_temp(
+                bb,
+                semantic_ty,
+                class,
+                RExpr::WordToRawAddr {
                     value: src,
                     space,
                     target,
                 },
-            },
-        );
+            ),
+            RuntimeConversionStep::RawAddrToWord { class, scalar } => self
+                .assign_runtime_conversion_temp(
+                    bb,
+                    semantic_ty,
+                    class,
+                    RExpr::Cast {
+                        value: src,
+                        to: scalar,
+                    },
+                ),
+        }
+    }
+
+    fn assign_runtime_conversion_temp(
+        &mut self,
+        bb: RBlockId,
+        semantic_ty: TyId<'db>,
+        class: RuntimeClass<'db>,
+        expr: RExpr<'db>,
+    ) -> RLocalId {
+        let temp = self.alloc_runtime_temp(semantic_ty, RuntimeCarrier::Value(class));
+        self.push_stmt(bb, RStmt::Assign { dst: temp, expr });
         temp
+    }
+
+    fn panic_unsupported_conversion(&self, src: RLocalId, err: RuntimeConversionError<'db>) -> ! {
+        let (kind, source, target) = match err {
+            RuntimeConversionError::Unsupported { source, target } => {
+                ("unsupported", source, target)
+            }
+            RuntimeConversionError::Cycle { source, target } => ("cyclic", source, target),
+        };
+        let layout_source_ty = |layout: LayoutId<'db>| match layout.data(self.db) {
+            crate::runtime::Layout::Struct(data) => {
+                data.source_ty.pretty_print(self.db).to_string()
+            }
+            crate::runtime::Layout::Array(data) => data.source_ty.pretty_print(self.db).to_string(),
+            crate::runtime::Layout::Enum(data) => data.source_ty.pretty_print(self.db).to_string(),
+        };
+        let source_layout = match &source {
+            RuntimeClass::Ref { .. } => source
+                .aggregate_layout()
+                .map(|layout| (layout, layout.data(self.db), layout_source_ty(layout))),
+            RuntimeClass::AggregateValue { layout }
+            | RuntimeClass::RawAddr {
+                target: Some(layout),
+                ..
+            } => Some((*layout, layout.data(self.db), layout_source_ty(*layout))),
+            RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { target: None, .. } => None,
+        };
+        let target_layout = match &target {
+            RuntimeClass::Ref { .. } => target
+                .aggregate_layout()
+                .map(|layout| (layout, layout.data(self.db), layout_source_ty(layout))),
+            RuntimeClass::AggregateValue { layout }
+            | RuntimeClass::RawAddr {
+                target: Some(layout),
+                ..
+            } => Some((*layout, layout.data(self.db), layout_source_ty(*layout))),
+            RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { target: None, .. } => None,
+        };
+        panic!(
+            "{kind} runtime class coercion in {:?} owner={:?} from {source:?} to {target:?}; source_layout={source_layout:?}; target_layout={target_layout:?}; src={src:?}; src_ty={}; locals={:?}",
+            self.key.source(self.db),
+            self.key
+                .semantic(self.db)
+                .map(|semantic| semantic.key(self.db).owner(self.db)),
+            self.locals[src.index()].semantic_ty.pretty_print(self.db),
+            self.locals,
+        )
     }
 
     fn semantic_local_lowering(&self, local: SLocalId) -> &RuntimeLocalLowering<'db> {
