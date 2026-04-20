@@ -1,11 +1,10 @@
 use common::InputDb;
 use driver::DriverDataBase;
 use fe_codegen::{OptLevel, emit_module_sonatina_ir, emit_runtime_package_sonatina_ir_optimized};
-use hir::hir_def::{ArithBinOp, BinOp};
 use mir2::runtime::RefKind;
 use mir2::{
-    Layout, PlaceElem, PlaceRoot, RExpr, RLocalId, RStmt, RuntimeClass, build_runtime_package,
-    build_test_runtime_package,
+    IntrinsicArithBinOp, Layout, PlaceElem, PlaceRoot, RExpr, RLocalId, RStmt, RuntimeBuiltin,
+    RuntimeClass, build_runtime_package, build_test_runtime_package,
 };
 use url::Url;
 
@@ -463,9 +462,11 @@ fn projected_enum_field_snapshots_preserve_full_enum_payloads() {
         file_url.clone(),
         Some(
             r#"enum Flag {
-    A,
-    B,
+    A(u256),
+    B(u256),
 }
+
+impl Copy for Flag {}
 
 struct Inner {
     flag: Flag,
@@ -483,7 +484,7 @@ fn repack(wrapper: Wrapper) -> Inner {
 
 fn entry() -> Inner {
     repack(Wrapper {
-        inner: Inner { flag: Flag::A },
+        inner: Inner { flag: Flag::A(42) },
     })
 }
 "#
@@ -1197,10 +1198,12 @@ fn test_add_overflow_u8() {
                 matches!(
                     stmt,
                     RStmt::Assign {
-                        expr: RExpr::Binary {
-                            op: BinOp::Arith(ArithBinOp::Add),
-                            ..
-                        } | RExpr::Call { .. },
+                        expr: RExpr::Call { .. }
+                            | RExpr::Builtin(RuntimeBuiltin::IntrinsicArith {
+                                op: IntrinsicArithBinOp::Add,
+                                checked: true,
+                                ..
+                            }),
                         ..
                     }
                 )
@@ -1436,7 +1439,7 @@ fn use_returned_array() -> u256 {
         .get(&db, &file_url)
         .expect("file should be loaded");
     let top_mod = db.top_mod(file);
-    let package = build_test_runtime_package(&db, top_mod, None).expect("runtime test package");
+    let package = build_runtime_package(&db, top_mod).expect("runtime package");
     let output = emit_runtime_package_sonatina_ir_optimized(
         &db,
         &package,
