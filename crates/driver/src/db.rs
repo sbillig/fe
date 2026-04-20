@@ -6,7 +6,9 @@ use codespan_reporting::term::{
 use common::file::File;
 use common::{
     define_input_db,
-    diagnostics::{CompleteDiagnostic, Severity, cmp_complete_diagnostics},
+    diagnostics::{
+        CompleteDiagnostic, Severity, cmp_complete_diagnostics, trim_trailing_line_whitespace,
+    },
 };
 use hir::analysis::{
     diagnostics::DiagnosticVoucher, initialize_analysis_pass,
@@ -106,7 +108,7 @@ impl DriverDataBase {
             term::emit(&mut buffer, &config, &CsDbWrapper(self), &diag.to_cs(self)).unwrap();
         }
 
-        std::str::from_utf8(buffer.as_slice()).unwrap().to_string()
+        trim_trailing_line_whitespace(std::str::from_utf8(buffer.as_slice()).unwrap())
     }
 }
 
@@ -146,7 +148,7 @@ impl DiagnosticsCollection<'_> {
             term::emit(&mut buffer, &config, &CsDbWrapper(db), &diag.to_cs(db)).unwrap();
         }
 
-        std::str::from_utf8(buffer.as_slice()).unwrap().to_string()
+        trim_trailing_line_whitespace(std::str::from_utf8(buffer.as_slice()).unwrap())
     }
 
     fn finalize(&self, db: &DriverDataBase) -> Vec<CompleteDiagnostic> {

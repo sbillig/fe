@@ -137,56 +137,66 @@ fn lower_msg_variant_abi_size_impl<'db>(
     let trait_path = PathId::from_ident(db, roots.core)
         .push_str(db, "abi")
         .push_str(db, "AbiSize");
-    let trait_ref = TraitRefId::new(db, Partial::Present(trait_path));
-    let ty = variant_struct_ty(db, struct_);
-    let consts = vec![
-        create_head_size_assoc_const(builder, &field_specs),
-        create_is_dynamic_assoc_const(builder, &field_specs),
-    ];
+    let trait_ref = Partial::Present(TraitRefId::new(db, Partial::Present(trait_path)));
+    let ty = Partial::Present(variant_struct_ty(db, struct_));
+    let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
+    builder.with_item_scope(
+        TrackedItemVariant::ImplTrait(impl_trait_idx),
+        |builder, id| {
+            let consts = vec![
+                create_head_size_assoc_const(builder, &field_specs),
+                create_is_dynamic_assoc_const(builder, &field_specs),
+            ];
+            let impl_trait =
+                builder.new_impl_trait(id, trait_ref, ty, vec![], consts, builder.origin());
+            let payload_size_ident = builder.ident("payload_size");
+            let params = builder.params([FuncParam {
+                mode: FuncParamMode::View,
+                is_mut: false,
+                has_ref_prefix: false,
+                has_own_prefix: false,
+                is_label_suppressed: false,
+                name: Partial::Present(FuncParamName::Ident(IdentId::make_self(builder.db()))),
+                ty: Partial::Present(builder.self_ty()),
+                self_ty_fallback: true,
+            }]);
+            let ret_ty = builder.ty_ident(builder.ident("u256"));
+            let roots = builder.roots();
+            builder.func_with_body(
+                payload_size_ident,
+                builder.empty_generic_params(),
+                params,
+                Some(ret_ty),
+                FuncModifiers::new(Visibility::Private, false, false, false),
+                |body| {
+                    let db = body.db();
+                    let self_expr = body.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
+                    let dynamic_payload_size_path = PathId::from_ident(db, roots.core)
+                        .push_str(db, "abi")
+                        .push_str(db, "dynamic_payload_size");
+                    let mut expr =
+                        body.abi_size_assoc_expr(TypeId::fallback_self_ty(db), "HEAD_SIZE");
 
-    builder.impl_trait_with_children(trait_ref, ty, vec![], consts, |builder| {
-        let payload_size_ident = builder.ident("payload_size");
-        let params = builder.params([FuncParam {
-            mode: FuncParamMode::View,
-            is_mut: false,
-            has_ref_prefix: false,
-            has_own_prefix: false,
-            is_label_suppressed: false,
-            name: Partial::Present(FuncParamName::Ident(IdentId::make_self(builder.db()))),
-            ty: Partial::Present(builder.self_ty()),
-            self_ty_fallback: true,
-        }]);
-        let ret_ty = builder.ty_ident(builder.ident("u256"));
-        let roots = builder.roots();
-        builder.func_with_body(
-            payload_size_ident,
-            builder.empty_generic_params(),
-            params,
-            Some(ret_ty),
-            FuncModifiers::new(Visibility::Private, false, false, false),
-            |body| {
-                let db = body.db();
-                let self_expr = body.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
-                let dynamic_payload_size_path = PathId::from_ident(db, roots.core)
-                    .push_str(db, "abi")
-                    .push_str(db, "dynamic_payload_size");
-                let mut expr = body.abi_size_assoc_expr(TypeId::fallback_self_ty(db), "HEAD_SIZE");
+                    for (field_name, _) in field_specs.iter().copied() {
+                        let field_expr = body.push_expr(Expr::Field(
+                            self_expr,
+                            Partial::Present(FieldIndex::Ident(field_name)),
+                        ));
+                        let dynamic_payload_size = body.path_expr(dynamic_payload_size_path);
+                        let field_size = body.call_expr(dynamic_payload_size, vec![field_expr]);
+                        expr = body.push_expr(Expr::Bin(
+                            expr,
+                            field_size,
+                            BinOp::Arith(ArithBinOp::Add),
+                        ));
+                    }
 
-                for (field_name, _) in field_specs.iter().copied() {
-                    let field_expr = body.push_expr(Expr::Field(
-                        self_expr,
-                        Partial::Present(FieldIndex::Ident(field_name)),
-                    ));
-                    let dynamic_payload_size = body.path_expr(dynamic_payload_size_path);
-                    let field_size = body.call_expr(dynamic_payload_size, vec![field_expr]);
-                    expr =
-                        body.push_expr(Expr::Bin(expr, field_size, BinOp::Arith(ArithBinOp::Add)));
-                }
-
-                body.emit_return(Some(expr));
-            },
-        );
-    })
+                    body.emit_return(Some(expr));
+                },
+            );
+            impl_trait
+        },
+    )
 }
 
 fn lower_msg_variant_encode_impl<'db>(

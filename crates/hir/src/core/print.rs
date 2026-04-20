@@ -49,7 +49,9 @@ fn unwrap_partial_ref<'a, T>(partial: &'a Partial<T>, context: &str) -> &'a T {
 /// Indents each line of text and appends to result.
 fn indent_lines(result: &mut String, text: &str, indent_level: usize) {
     for line in text.lines() {
-        result.push_str(&indent_str(indent_level));
+        if !line.is_empty() {
+            result.push_str(&indent_str(indent_level));
+        }
         result.push_str(line);
         result.push('\n');
     }
@@ -58,7 +60,13 @@ fn indent_lines(result: &mut String, text: &str, indent_level: usize) {
 /// Indents each line of text and returns the indented string.
 fn indent_text(text: &str, indent_level: usize) -> String {
     text.lines()
-        .map(|line| format!("{}{}", indent_str(indent_level), line))
+        .map(|line| {
+            if line.is_empty() {
+                String::new()
+            } else {
+                format!("{}{}", indent_str(indent_level), line)
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -97,7 +105,9 @@ fn indent_continuation(text: &str, indent_level: usize) -> String {
 
     for line in lines {
         result.push('\n');
-        result.push_str(&indent_str(indent_level));
+        if !line.is_empty() {
+            result.push_str(&indent_str(indent_level));
+        }
         result.push_str(line);
     }
 

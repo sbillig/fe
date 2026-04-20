@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/const_checked_arithmetic_overflow.fe
 ---
@@ -34,16 +35,16 @@ error[3-0034]: arithmetic overflow in const context
   │                          ^^^^^^ checked arithmetic overflowed during const evaluation
 
 error[3-0034]: arithmetic overflow in const context
-  ┌─ const_checked_arithmetic_overflow.fe:9:28
+  ┌─ const_checked_arithmetic_overflow.fe:9:26
   │
 9 │ const NEG_OVERFLOW: i8 = -(-128)
-  │                            ^^^^ checked arithmetic overflowed during const evaluation
+  │                          ^^^^^^^ checked arithmetic overflowed during const evaluation
 
 error[3-0034]: arithmetic overflow in const context
-   ┌─ const_checked_arithmetic_overflow.fe:10:27
+   ┌─ const_checked_arithmetic_overflow.fe:10:26
    │
 10 │ const DIV_OVERFLOW: i8 = (-128) / (-1)
-   │                           ^^^^ checked arithmetic overflowed during const evaluation
+   │                          ^^^^^^^^^^^^^ checked arithmetic overflowed during const evaluation
 
 error[3-0035]: negative exponent in const context
   ┌─ const_checked_arithmetic_overflow.fe:8:30

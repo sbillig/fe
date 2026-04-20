@@ -40,7 +40,7 @@ use codespan_reporting::{
 };
 use common::{
     InputDb, define_input_db,
-    diagnostics::{LabelStyle, Severity, cmp_complete_diagnostics},
+    diagnostics::{LabelStyle, Severity, cmp_complete_diagnostics, trim_trailing_line_whitespace},
     file::File,
     indexmap::IndexMap,
     paths::absolute_utf8,
@@ -201,7 +201,7 @@ where
         term::emit(&mut buffer, &config, &CsDbWrapper(db), &diag.to_cs(db)).unwrap();
     }
 
-    std::str::from_utf8(buffer.as_slice()).unwrap().to_string()
+    trim_trailing_line_whitespace(std::str::from_utf8(buffer.as_slice()).unwrap())
 }
 
 fn finalized_diags<'db, DB>(
@@ -333,7 +333,7 @@ impl<'db> HirPropertyFormatter<'db> {
             }
         }
 
-        std::str::from_utf8(buffer.as_slice()).unwrap().to_string()
+        trim_trailing_line_whitespace(std::str::from_utf8(buffer.as_slice()).unwrap())
     }
 
     fn property_to_diag(

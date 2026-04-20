@@ -44,7 +44,7 @@ use crate::{
     verify::verify_runtime_package,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub enum LowerError {
     Unsupported(String),
 }
@@ -135,7 +135,8 @@ impl<'db> RuntimeGraphBuilder<'db> {
                 continue;
             }
 
-            let lowered = runtime_instance_lowered_body(self.db, instance);
+            let lowered = runtime_instance_lowered_body(self.db, instance)
+                .map_err(|err| wrap_runtime_lowering_error(self.db, instance, err))?;
             let direct_callees = lowered
                 .direct_callees(self.db)
                 .into_iter()
@@ -1780,6 +1781,19 @@ fn runtime_instance_symbol_base<'db>(db: &'db dyn MirDb, instance: RuntimeInstan
         RuntimeInstanceSource::Synthetic(synthetic) => {
             symbol_base_for_runtime_instance(db, &synthetic.spec(db))
         }
+    }
+}
+
+fn wrap_runtime_lowering_error<'db>(
+    db: &'db dyn MirDb,
+    instance: RuntimeInstance<'db>,
+    err: LowerError,
+) -> LowerError {
+    match err {
+        LowerError::Unsupported(message) => LowerError::Unsupported(format!(
+            "MIR lowering failed: unsupported while lowering `{}`: {message}",
+            runtime_instance_symbol_base(db, instance)
+        )),
     }
 }
 

@@ -4,8 +4,8 @@ use salsa::Update;
 use crate::{
     db::MirDb,
     runtime::{
-        LoweredRuntimeBody, RuntimeBody, RuntimeCallEdge, RuntimeClass, RuntimeSignature,
-        RuntimeSyntheticSpec,
+        LowerError, LoweredRuntimeBody, RuntimeBody, RuntimeCallEdge, RuntimeClass,
+        RuntimeSignature, RuntimeSyntheticSpec,
         lower::{
             body::lower_to_rmir,
             call::{
@@ -66,12 +66,12 @@ impl<'db> RuntimeInstance<'db> {
 
     #[salsa::tracked]
     pub fn body(self, db: &'db dyn MirDb) -> RuntimeBody<'db> {
-        lower_runtime_body(db, self).body(db)
+        expect_lowered_runtime_body(db, self).body(db)
     }
 
     #[salsa::tracked(return_ref)]
     pub fn calls(self, db: &'db dyn MirDb) -> Vec<RuntimeCallEdge<'db>> {
-        lower_runtime_body(db, self).direct_callees(db)
+        expect_lowered_runtime_body(db, self).direct_callees(db)
     }
 
     #[salsa::tracked(return_ref)]
@@ -79,7 +79,7 @@ impl<'db> RuntimeInstance<'db> {
         self,
         db: &'db dyn MirDb,
     ) -> Vec<crate::runtime::ConstRegionId<'db>> {
-        lower_runtime_body(db, self).referenced_const_regions(db)
+        expect_lowered_runtime_body(db, self).referenced_const_regions(db)
     }
 
     #[salsa::tracked(return_ref)]
@@ -87,7 +87,7 @@ impl<'db> RuntimeInstance<'db> {
         self,
         db: &'db dyn MirDb,
     ) -> Vec<crate::runtime::RuntimeCodeRegion<'db>> {
-        lower_runtime_body(db, self).referenced_code_regions(db)
+        expect_lowered_runtime_body(db, self).referenced_code_regions(db)
     }
 }
 
@@ -103,17 +103,17 @@ pub fn get_or_build_runtime_instance<'db>(
 fn lower_runtime_body<'db>(
     db: &'db dyn MirDb,
     instance: RuntimeInstance<'db>,
-) -> LoweredRuntimeBody<'db> {
+) -> Result<LoweredRuntimeBody<'db>, LowerError> {
     let body = match instance.key(db).source(db) {
         RuntimeInstanceSource::Semantic(semantic) => {
             if let Err(diag) = check_semantic_borrows(db, semantic) {
-                panic!(
+                return Err(LowerError::Unsupported(format!(
                     "semantic borrow checking failed for {:?}: {}",
                     semantic.key(db),
-                    diag.message,
-                );
+                    diag.message
+                )));
             }
-            lower_to_rmir(db, instance)
+            lower_to_rmir(db, instance)?
         }
         RuntimeInstanceSource::Synthetic(synthetic) => {
             lower_synthetic_runtime_body(db, instance, synthetic.spec(db).clone())
@@ -122,18 +122,30 @@ fn lower_runtime_body<'db>(
     let direct_callees = collect_runtime_calls_lowered(&body);
     let referenced_const_regions = collect_referenced_const_regions(&body);
     let referenced_code_regions = collect_referenced_code_regions(&body);
-    LoweredRuntimeBody::new(
+    Ok(LoweredRuntimeBody::new(
         db,
         body,
         direct_callees,
         referenced_const_regions,
         referenced_code_regions,
-    )
+    ))
 }
 
 pub(crate) fn runtime_instance_lowered_body<'db>(
     db: &'db dyn MirDb,
     instance: RuntimeInstance<'db>,
-) -> LoweredRuntimeBody<'db> {
+) -> Result<LoweredRuntimeBody<'db>, LowerError> {
     lower_runtime_body(db, instance)
+}
+
+fn expect_lowered_runtime_body<'db>(
+    db: &'db dyn MirDb,
+    instance: RuntimeInstance<'db>,
+) -> LoweredRuntimeBody<'db> {
+    lower_runtime_body(db, instance).unwrap_or_else(|err| {
+        panic!(
+            "runtime lowering failed for {:?}: {err}",
+            instance.key(db).source(db)
+        )
+    })
 }
