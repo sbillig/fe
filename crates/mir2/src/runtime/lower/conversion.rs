@@ -5,7 +5,6 @@ use crate::{
     runtime::{
         AddressSpaceKind, LayoutId, PlaceRoot, RBlockId, RExpr, RLocalId, RStmt, RefKind, RefView,
         RuntimeClass, RuntimePlace, ScalarClass, ScalarRepr, ScalarRole,
-        runtime_classes_share_runtime_rep,
     },
 };
 
@@ -300,7 +299,7 @@ impl<'db> RuntimeConversionPlanner<'db> {
     ) -> Result<(), RuntimeConversionError<'db>> {
         match (&source, &target) {
             (RuntimeClass::AggregateValue { .. }, RuntimeClass::AggregateValue { .. })
-                if runtime_classes_share_runtime_rep(self.db, &source, &target) =>
+                if source.shares_runtime_rep_with(self.db, &target) =>
             {
                 steps.push(RuntimeConversionStep::UseAs { class: target });
                 Ok(())
@@ -313,7 +312,7 @@ impl<'db> RuntimeConversionPlanner<'db> {
                     view: desired_view, ..
                 },
             ) if actual_view == desired_view
-                && runtime_classes_share_runtime_rep(self.db, &source, &target) =>
+                && source.shares_runtime_rep_with(self.db, &target) =>
             {
                 steps.push(RuntimeConversionStep::RetagRef { class: target });
                 Ok(())
@@ -507,11 +506,8 @@ impl<'db> RuntimeConversionPlanner<'db> {
                     kind: RefKind::Provider { provider_ty, space },
                     view: RefView::Whole,
                 },
-            ) if runtime_classes_share_runtime_rep(
-                self.db,
-                &(RuntimeClass::AggregateValue { layout: *layout }),
-                pointee,
-            ) =>
+            ) if (RuntimeClass::AggregateValue { layout: *layout })
+                .shares_runtime_rep_with(self.db, pointee) =>
             {
                 let target_layout = pointee
                     .aggregate_layout()

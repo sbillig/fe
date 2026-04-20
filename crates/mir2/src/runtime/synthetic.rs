@@ -32,8 +32,8 @@ use crate::{
         RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole,
         lower::{
             classify::{
-                ref_class_for_place_result, runtime_address_space,
-                runtime_signature_for_key_with_returns, semantic_return_ty,
+                ref_class_for_place_result, runtime_signature_for_key_with_returns,
+                semantic_return_ty,
             },
             conversion::{
                 RuntimeConversionEmitter, RuntimeConversionPlanner, emit_runtime_conversion_plan,
@@ -1087,7 +1087,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         Some(ref_class_for_place_result(
             &root_class,
             &value_class,
-            runtime_address_space(&root_class).unwrap_or(root_space),
+            root_class.address_space().unwrap_or(root_space),
             force_raw,
         ))
     }

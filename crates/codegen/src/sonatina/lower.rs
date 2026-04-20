@@ -4385,28 +4385,33 @@ fn lower_place_address_gep<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 // Bounds check: revert if index >= array length
                 let arr_len = layout::array_len(ctx.db, step.owner.ty);
                 let idx_val = match idx_source {
-                    IndexSource::Constant(idx) => {
-                        if let Some(len) = arr_len
-                            && *idx >= len
-                        {
-                            let revert_block = ensure_overflow_revert_block(ctx)?;
-                            ctx.fb
-                                .insert_inst_no_result(Jump::new(ctx.is, revert_block));
-                            let unreachable_block = ctx.fb.append_block();
-                            ctx.fb.switch_to_block(unreachable_block);
+                    IndexSource::Constant(idx) => match arr_len {
+                        Some(len) => {
+                            checked_constant_array_index_value(ctx, Some(*idx as u64), len as u64)?
                         }
-                        ctx.fb.make_imm_value(I256::from(*idx as u64))
-                    }
+                        None => ctx.fb.make_imm_value(I256::from(*idx as u64)),
+                    },
                     IndexSource::Dynamic(value_id) => {
                         let val = lower_value(ctx, *value_id)?;
                         if let Some(len) = arr_len {
-                            let len_val = ctx.fb.make_imm_value(I256::from(len as u64));
-                            let in_bounds =
-                                ctx.fb.insert_inst(Lt::new(ctx.is, val, len_val), Type::I1);
-                            let oob = ctx.fb.insert_inst(IsZero::new(ctx.is, in_bounds), Type::I1);
-                            emit_overflow_revert(ctx, oob)?;
+                            if let Value::Immediate { imm, .. } = ctx.fb.func.dfg.value(val) {
+                                checked_constant_array_index_value(
+                                    ctx,
+                                    immediate_to_u64_index(*imm),
+                                    len as u64,
+                                )?
+                            } else {
+                                let len_val = ctx.fb.make_imm_value(I256::from(len as u64));
+                                let in_bounds =
+                                    ctx.fb.insert_inst(Lt::new(ctx.is, val, len_val), Type::I1);
+                                let oob =
+                                    ctx.fb.insert_inst(IsZero::new(ctx.is, in_bounds), Type::I1);
+                                emit_overflow_revert(ctx, oob)?;
+                                val
+                            }
+                        } else {
+                            val
                         }
-                        val
                     }
                 };
                 gep_values.push(idx_val);
@@ -4523,17 +4528,17 @@ fn lower_array_index_with_bounds_check<'db, C: sonatina_ir::func_cursor::FuncCur
 
     match idx_source {
         IndexSource::Constant(idx) => {
-            if *idx >= arr_len {
-                let revert_block = ensure_overflow_revert_block(ctx)?;
-                ctx.fb
-                    .insert_inst_no_result(Jump::new(ctx.is, revert_block));
-                let unreachable_block = ctx.fb.append_block();
-                ctx.fb.switch_to_block(unreachable_block);
-            }
-            Ok(ctx.fb.make_imm_value(I256::from(*idx as u64)))
+            checked_constant_array_index_value(ctx, Some(*idx as u64), arr_len as u64)
         }
         IndexSource::Dynamic(value_id) => {
             let idx = lower_value(ctx, *value_id)?;
+            if let Value::Immediate { imm, .. } = ctx.fb.func.dfg.value(idx) {
+                return checked_constant_array_index_value(
+                    ctx,
+                    immediate_to_u64_index(*imm),
+                    arr_len as u64,
+                );
+            }
             let len_val = ctx.fb.make_imm_value(I256::from(arr_len as u64));
             let in_bounds = ctx.fb.insert_inst(Lt::new(ctx.is, idx, len_val), Type::I1);
             let oob = ctx.fb.insert_inst(IsZero::new(ctx.is, in_bounds), Type::I1);
@@ -4541,6 +4546,39 @@ fn lower_array_index_with_bounds_check<'db, C: sonatina_ir::func_cursor::FuncCur
             Ok(idx)
         }
     }
+}
+
+fn checked_constant_array_index_value<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    index: Option<u64>,
+    arr_len: u64,
+) -> Result<ValueId, LowerError> {
+    let checked_idx = checked_constant_array_index(ctx, index, arr_len)?;
+    Ok(ctx.fb.make_imm_value(I256::from(checked_idx)))
+}
+
+fn checked_constant_array_index<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    index: Option<u64>,
+    arr_len: u64,
+) -> Result<u64, LowerError> {
+    if let Some(index) = index
+        && index < arr_len
+    {
+        return Ok(index);
+    }
+
+    let out_of_bounds = ctx.fb.make_imm_value(true);
+    emit_overflow_revert(ctx, out_of_bounds)?;
+    Ok(0)
+}
+
+fn immediate_to_u64_index(imm: Immediate) -> Option<u64> {
+    let value = imm.as_i256();
+    if value.is_negative() || value > I256::from(u64::MAX) {
+        return None;
+    }
+    Some(value.to_u256().low_u64())
 }
 
 /// Manual offset arithmetic path for place address computation.
@@ -4616,16 +4654,12 @@ fn lower_place_address_arithmetic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 match idx_source {
                     IndexSource::Constant(idx) => {
                         // Compile-time bounds check for constant indices
-                        if let Some(len) = arr_len
-                            && *idx >= len
-                        {
-                            let revert_block = ensure_overflow_revert_block(ctx)?;
-                            ctx.fb
-                                .insert_inst_no_result(Jump::new(ctx.is, revert_block));
-                            let unreachable_block = ctx.fb.append_block();
-                            ctx.fb.switch_to_block(unreachable_block);
-                        }
-                        total_offset += idx * stride;
+                        let checked_idx = if let Some(len) = arr_len {
+                            checked_constant_array_index(ctx, Some(*idx as u64), len as u64)?
+                        } else {
+                            *idx as u64
+                        };
+                        total_offset += checked_idx as usize * stride;
                     }
                     IndexSource::Dynamic(value_id) => {
                         // Flush accumulated offset first

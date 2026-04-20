@@ -4,7 +4,7 @@ use hir::projection::IndexSource;
 
 use crate::{
     db::MirDb,
-    runtime::lower::classify::{ref_class_for_place_result, runtime_address_space},
+    runtime::lower::classify::ref_class_for_place_result,
     runtime::{
         ConstScalar, Layout, LayoutId, PlaceElem, PlaceRoot, RefView, ResolvedPlaceElem,
         ResolvedPlaceRootKind, ResolvedRuntimePlace, RuntimeBody, RuntimeClass, RuntimeLocalRoot,
@@ -178,7 +178,7 @@ pub fn resolve_runtime_place_address_class<'db>(
                 }
         ) {
             root_class = class.clone();
-            root_space = runtime_address_space(&root_class).unwrap_or(root_space);
+            root_space = root_class.address_space().unwrap_or(root_space);
             force_raw = matches!(root_class, RuntimeClass::RawAddr { .. });
         }
     }
@@ -239,7 +239,9 @@ fn runtime_place_transport_root<'db>(
                 }))?;
             (
                 class.clone(),
-                runtime_address_space(&class).unwrap_or(crate::runtime::AddressSpaceKind::Memory),
+                class
+                    .address_space()
+                    .unwrap_or(crate::runtime::AddressSpaceKind::Memory),
                 false,
             )
         }

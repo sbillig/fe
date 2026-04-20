@@ -25,7 +25,7 @@ use rustc_hash::FxHashMap;
 use smallvec1::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, GlobalVariableData, GlobalVariableRef, I256, Immediate, Linkage, Module, Signature,
-    Type, ValueId,
+    Type, Value, ValueId,
     builder::{FunctionBuilder, ModuleBuilder, ObjectBuilder, Variable},
     func_cursor::InstInserter,
     inst::{
@@ -673,6 +673,7 @@ enum PlaceTerminal<'db> {
     },
     Const {
         value: ValueId,
+        class: RuntimeClass<'db>,
     },
 }
 
@@ -2086,6 +2087,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 ..
             } => Ok(PlaceTerminal::Const {
                 value: self.local_value(value)?,
+                class,
             }),
             RuntimeClass::Ref {
                 kind: RefKind::Object,
@@ -2145,7 +2147,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                         "const carrier follow requires aggregate pointee".to_string(),
                     ));
                 };
-                Ok(PlaceTerminal::Const { value })
+                Ok(PlaceTerminal::Const {
+                    value,
+                    class: (**pointee).clone(),
+                })
             }
             RuntimeClass::Ref {
                 kind: RefKind::Object,
@@ -2202,7 +2207,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 ObjLoad::new(self.module.inst_set(), *value),
                 self.module.ty_for_class(class)?,
             )),
-            PlaceTerminal::Const { value } => Ok(self.fb.insert_inst(
+            PlaceTerminal::Const { value, .. } => Ok(self.fb.insert_inst(
                 ConstLoad::new(self.module.inst_set(), *value),
                 self.module.ty_for_class(class)?,
             )),
@@ -2293,14 +2298,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 (
                     PlaceTerminal::Object {
                         value,
-                        class: _base_class,
+                        class: base_class,
                     },
                     ResolvedPlaceElem::Index { index, class },
                 ) => {
-                    let index = match index {
-                        IndexSource::Constant(index) => self.index_value(*index as u64),
-                        IndexSource::Dynamic(index) => self.local_value(*index)?,
-                    };
+                    let index = self.checked_index_value(&base_class, index)?;
                     PlaceTerminal::Object {
                         value: self.fb.insert_inst(
                             ObjIndex::new(self.module.inst_set(), value, index),
@@ -2338,18 +2340,23 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                             ConstProj::new(self.module.inst_set(), smallvec![value, idx]),
                             self.module.ty_for_const_projection(class)?,
                         ),
+                        class: class.clone(),
                     }
                 }
-                (PlaceTerminal::Const { value, .. }, ResolvedPlaceElem::Index { index, class }) => {
-                    let index = match index {
-                        IndexSource::Constant(index) => self.index_value(*index as u64),
-                        IndexSource::Dynamic(index) => self.local_value(*index)?,
-                    };
+                (
+                    PlaceTerminal::Const {
+                        value,
+                        class: base_class,
+                    },
+                    ResolvedPlaceElem::Index { index, class },
+                ) => {
+                    let index = self.checked_index_value(&base_class, index)?;
                     PlaceTerminal::Const {
                         value: self.fb.insert_inst(
                             ConstIndex::new(self.module.inst_set(), value, index),
                             self.module.ty_for_const_projection(class)?,
                         ),
+                        class: class.clone(),
                     }
                 }
                 (
@@ -2360,7 +2367,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     },
                     ResolvedPlaceElem::Field { field, class },
                 ) => {
-                    let offset = field_offset(self.module.db, &base_class, *field)?;
+                    let offset = base_class
+                        .field_offset_words(self.module.db, *field)
+                        .ok_or_else(|| {
+                            LowerError::Internal("field projection on non-struct class".to_string())
+                        })?;
                     PlaceTerminal::Ptr {
                         addr: self.offset_address(addr, offset, space)?,
                         space,
@@ -2375,11 +2386,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     },
                     ResolvedPlaceElem::Index { index, class },
                 ) => {
-                    let span = index_stride_for_class(&base_class, self.module.db)?;
-                    let idx = match index {
-                        IndexSource::Constant(index) => self.index_value(*index as u64),
-                        IndexSource::Dynamic(index) => self.local_value(*index)?,
-                    };
+                    let span = base_class
+                        .index_stride_words(self.module.db)
+                        .ok_or_else(|| {
+                            LowerError::Internal("index projection on non-array class".to_string())
+                        })?;
+                    let idx = self.checked_index_value(&base_class, index)?;
                     let scale = self.scale_for_space(space, span);
                     let scaled = if scale == 1 {
                         idx
@@ -2407,7 +2419,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 ) => PlaceTerminal::Ptr {
                     addr: self.offset_address(
                         addr,
-                        variant_field_offset(self.module.db, *variant, *field)?,
+                        variant
+                            .field_offset_words(self.module.db, *field)
+                            .ok_or_else(|| {
+                                LowerError::Internal("variant field layout missing".to_string())
+                            })?,
                         space,
                     )?,
                     space,
@@ -2488,8 +2504,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             self.fb.module_builder.objref_type(layout_ty),
         );
         let terminal = self.resolve_place(place)?;
-        let source =
-            self.copy_source_for_terminal(terminal, &RuntimeClass::AggregateValue { layout });
+        let source = self.copy_source_for_terminal(terminal);
         self.copy_source_into_object(source, &RuntimeClass::AggregateValue { layout }, object)?;
         Ok(object)
     }
@@ -2528,17 +2543,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         })
     }
 
-    fn copy_source_for_terminal(
-        &self,
-        terminal: PlaceTerminal<'db>,
-        class: &RuntimeClass<'db>,
-    ) -> CopySource<'db> {
+    fn copy_source_for_terminal(&self, terminal: PlaceTerminal<'db>) -> CopySource<'db> {
         match terminal {
             PlaceTerminal::Object { value, class } => CopySource::Object { value, class },
-            PlaceTerminal::Const { value } => CopySource::Const {
-                value,
-                class: class.clone(),
-            },
+            PlaceTerminal::Const { value, class } => CopySource::Const { value, class },
             PlaceTerminal::Ptr { addr, space, class } => CopySource::Ptr { addr, space, class },
         }
     }
@@ -2678,7 +2686,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                         CopySource::Ptr { addr, space, .. } => CopySource::Ptr {
                             addr: self.offset_address(
                                 *addr,
-                                field_offset_from_layout(self.module.db, &data.fields, idx)?,
+                                data.field_offset_words(self.module.db, idx),
                                 *space,
                             )?,
                             space: *space,
@@ -2718,7 +2726,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                         CopySource::Ptr { addr, space, .. } => CopySource::Ptr {
                             addr: self.offset_address(
                                 *addr,
-                                idx as u64 * value_span_words(self.module.db, &data.elem)?,
+                                idx as u64 * data.elem.span_words(self.module.db),
                                 *space,
                             )?,
                             space: *space,
@@ -3063,7 +3071,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                         }
                         let field_addr = self.offset_address(
                             addr,
-                            field_offset_from_layout(self.module.db, &data.fields, idx)?,
+                            data.field_offset_words(self.module.db, idx),
                             space,
                         )?;
                         self.copy_to_ptr(field_addr, space, field, field_value)?;
@@ -3084,7 +3092,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                         }
                         let elem_addr = self.offset_address(
                             addr,
-                            idx as u64 * value_span_words(self.module.db, &data.elem)?,
+                            idx as u64 * data.elem.span_words(self.module.db),
                             space,
                         )?;
                         self.copy_to_ptr(elem_addr, space, &data.elem, field_value)?;
@@ -3154,7 +3162,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 );
                 let field_addr = self.offset_address(
                     addr,
-                    variant_field_offset(self.module.db, variant, FieldIndex(field_idx as u16))?,
+                    variant
+                        .field_offset_words(self.module.db, FieldIndex(field_idx as u16))
+                        .ok_or_else(|| {
+                            LowerError::Internal("variant field layout missing".to_string())
+                        })?,
                     space,
                 )?;
                 self.copy_to_ptr(field_addr, space, field, field_value)?;
@@ -3218,7 +3230,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 for (idx, field) in data.fields.iter().enumerate() {
                     let field_addr = self.offset_address(
                         addr,
-                        field_offset_from_layout(self.module.db, &data.fields, idx)?,
+                        data.field_offset_words(self.module.db, idx),
                         space,
                     )?;
                     let field_value = self.load_from_ptr(field_addr, space, field)?;
@@ -3248,7 +3260,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 for idx in 0..data.len as usize {
                     let elem_addr = self.offset_address(
                         addr,
-                        idx as u64 * value_span_words(self.module.db, &data.elem)?,
+                        idx as u64 * data.elem.span_words(self.module.db),
                         space,
                     )?;
                     let elem = self.load_from_ptr(elem_addr, space, &data.elem)?;
@@ -3319,11 +3331,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 .map(|(field_idx, field)| {
                     let field_addr = self.offset_address(
                         addr,
-                        variant_field_offset(
-                            self.module.db,
-                            variant,
-                            FieldIndex(field_idx as u16),
-                        )?,
+                        variant
+                            .field_offset_words(self.module.db, FieldIndex(field_idx as u16))
+                            .ok_or_else(|| {
+                                LowerError::Internal("variant field layout missing".to_string())
+                            })?,
                         space,
                     )?;
                     self.load_from_ptr(field_addr, space, field)
@@ -3931,6 +3943,53 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         Ok(())
     }
 
+    fn checked_index_value(
+        &mut self,
+        base_class: &RuntimeClass<'db>,
+        index: &IndexSource<RLocalId>,
+    ) -> Result<ValueId, LowerError> {
+        let len = base_class.array_len(self.module.db).ok_or_else(|| {
+            LowerError::Internal("index projection on non-array class".to_string())
+        })?;
+        match index {
+            IndexSource::Constant(index) => {
+                self.checked_constant_index_value(len, Some(*index as u64))
+            }
+            IndexSource::Dynamic(index) => {
+                let index = self.local_value(*index)?;
+                if let Value::Immediate { imm, .. } = self.fb.func.dfg.value(index) {
+                    return self.checked_constant_index_value(len, immediate_to_u64_index(*imm));
+                }
+                let len = self.index_value(len);
+                let in_bounds = self
+                    .fb
+                    .insert_inst(Lt::new(self.module.inst_set(), index, len), Type::I1);
+                let out_of_bounds = self
+                    .fb
+                    .insert_inst(IsZero::new(self.module.inst_set(), in_bounds), Type::I1);
+                self.emit_overflow_revert(out_of_bounds)?;
+                Ok(index)
+            }
+        }
+    }
+
+    fn checked_constant_index_value(
+        &mut self,
+        len: u64,
+        index: Option<u64>,
+    ) -> Result<ValueId, LowerError> {
+        let checked_index = if let Some(index) = index
+            && index < len
+        {
+            index
+        } else {
+            let out_of_bounds = self.fb.make_imm_value(true);
+            self.emit_overflow_revert(out_of_bounds)?;
+            0
+        };
+        Ok(self.index_value(checked_index))
+    }
+
     fn variant_ref(&self, variant: VariantId<'db>) -> Result<EnumVariantRef, LowerError> {
         let ty = self
             .module
@@ -4327,106 +4386,12 @@ fn code_region_symbol<'db>(
         .unwrap_or_else(|| format!("code_region_{}", stable_hash(&region)))
 }
 
-fn field_offset<'db>(
-    db: &'db DriverDataBase,
-    class: &RuntimeClass<'db>,
-    field: FieldIndex,
-) -> Result<u64, LowerError> {
-    let Some(layout) = class.aggregate_layout() else {
-        return Err(LowerError::Internal(
-            "field projection on scalar/raw class".to_string(),
-        ));
-    };
-    if matches!(
-        class,
-        RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. }
-    ) {
-        return Err(LowerError::Internal(
-            "field projection on scalar/raw class".to_string(),
-        ));
+fn immediate_to_u64_index(imm: Immediate) -> Option<u64> {
+    let value = imm.as_i256();
+    if value.is_negative() || value > I256::from(u64::MAX) {
+        return None;
     }
-    let Layout::Struct(data) = layout.data(db) else {
-        return Err(LowerError::Internal(
-            "field projection on non-struct layout".to_string(),
-        ));
-    };
-    field_offset_from_layout(db, &data.fields, field.0 as usize)
-}
-
-fn field_offset_from_layout<'db>(
-    db: &'db DriverDataBase,
-    fields: &[RuntimeClass<'db>],
-    idx: usize,
-) -> Result<u64, LowerError> {
-    fields
-        .iter()
-        .take(idx)
-        .map(|field| value_span_words(db, field))
-        .collect::<Result<Vec<_>, _>>()
-        .map(|spans| spans.into_iter().sum())
-}
-
-fn variant_field_offset<'db>(
-    db: &'db DriverDataBase,
-    variant: VariantId<'db>,
-    field: FieldIndex,
-) -> Result<u64, LowerError> {
-    let layout = variant
-        .layout(db)
-        .ok_or_else(|| LowerError::Internal("variant layout missing".to_string()))?;
-    let fields = &layout.variants[variant.index as usize].fields;
-    Ok(1 + field_offset_from_layout(db, fields, field.0 as usize)?)
-}
-
-fn index_stride_for_class<'db>(
-    class: &RuntimeClass<'db>,
-    db: &'db DriverDataBase,
-) -> Result<u64, LowerError> {
-    match class {
-        RuntimeClass::AggregateValue { layout } => match layout.data(db) {
-            Layout::Array(data) => value_span_words(db, &data.elem),
-            _ => Err(LowerError::Internal(
-                "index projection on non-array layout".to_string(),
-            )),
-        },
-        RuntimeClass::Ref { pointee, .. } => index_stride_for_class(pointee, db),
-        RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => Err(LowerError::Internal(
-            "index projection on scalar/raw class".to_string(),
-        )),
-    }
-}
-
-fn value_span_words<'db>(
-    db: &'db DriverDataBase,
-    class: &RuntimeClass<'db>,
-) -> Result<u64, LowerError> {
-    Ok(match class {
-        RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => 1,
-        RuntimeClass::AggregateValue { layout } => match layout.data(db) {
-            Layout::Struct(data) => data
-                .fields
-                .iter()
-                .map(|field| value_span_words(db, field))
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .sum(),
-            Layout::Array(data) => value_span_words(db, &data.elem)? * data.len,
-            Layout::Enum(data) => {
-                let mut max_payload = 0;
-                for variant in data.variants.iter() {
-                    let span = variant
-                        .fields
-                        .iter()
-                        .map(|field| value_span_words(db, field))
-                        .collect::<Result<Vec<_>, _>>()?
-                        .into_iter()
-                        .sum();
-                    max_payload = max_payload.max(span);
-                }
-                1 + max_payload
-            }
-        },
-    })
+    Some(value.to_u256().low_u64())
 }
 
 trait ProjectionType<'db> {

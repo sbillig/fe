@@ -2174,7 +2174,7 @@ use std::abi::sol
 
 msg FixedStringDecodeMsg {
     #[selector = sol("ok(string)")]
-    Ok { text: String<32> } -> u256,
+    Ok { text: String<31> } -> u256,
 }
 
 pub contract FixedStringDecode {
@@ -2210,17 +2210,17 @@ use std::evm::{Address, Call}
 
 msg FixedStringEchoMsg {
     #[selector = sol("echo(string)")]
-    Echo { text: Text } -> String<32>,
+    Echo { text: Text } -> String<31>,
 }
 
 msg FixedStringCallerMsg {
     #[selector = sol("forward(address,string)")]
-    Forward { target: Address, text: Text } -> String<32>,
+    Forward { target: Address, text: Text } -> String<31>,
 }
 
 pub contract FixedStringCaller uses (call: mut Call) {
     recv FixedStringCallerMsg {
-        Forward { target, text } -> String<32> uses (mut call) {
+        Forward { target, text } -> String<31> uses (mut call) {
             target.call(FixedStringEchoMsg::Echo { text })
         }
     }
@@ -3815,7 +3815,7 @@ object "Counter" {
                 &[Token::String("short-string".to_string())],
                 ExecutionOptions::default(),
             )
-            .expect("short string should decode into String<32>");
+            .expect("short string should decode into String<31>");
 
         let err = harness
             .call_function(
@@ -3823,7 +3823,7 @@ object "Counter" {
                 &[Token::String(long_string_value("fixed-string-overflow"))],
                 ExecutionOptions::default(),
             )
-            .expect_err("33+ byte string should not silently truncate into String<32>");
+            .expect_err("32+ byte string should not silently truncate into String<31>");
         assert_empty_revert(err);
 
         let mut truncated =
@@ -3865,7 +3865,7 @@ object "Counter" {
         .expect("typed calldata should encode");
         let short_result = caller
             .call_raw(&short_call, ExecutionOptions::default())
-            .expect("short return string should decode into String<32>");
+            .expect("short return string should decode into String<31>");
         let short_decoded = decode(&[ParamType::String], &short_result.return_data)
             .expect("forward(address,string) should return ABI-encoded string");
         assert_eq!(short_decoded, vec![Token::String(short_text)]);
@@ -3879,7 +3879,7 @@ object "Counter" {
         .expect("typed calldata should encode");
         let err = caller
             .call_raw(&long_call, ExecutionOptions::default())
-            .expect_err("33+ byte returndata should not silently truncate into String<32>");
+            .expect_err("32+ byte returndata should not silently truncate into String<31>");
         assert_empty_revert(err);
     }
 

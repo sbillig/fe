@@ -97,6 +97,146 @@ impl<'db> RuntimeClass<'db> {
             | RuntimeClass::RawAddr { .. } => None,
         }
     }
+
+    pub fn address_space(&self) -> Option<AddressSpaceKind> {
+        match self {
+            RuntimeClass::Ref {
+                kind: RefKind::Provider { space, .. },
+                ..
+            }
+            | RuntimeClass::RawAddr { space, .. } => Some(*space),
+            RuntimeClass::Scalar(_)
+            | RuntimeClass::AggregateValue { .. }
+            | RuntimeClass::Ref {
+                kind: RefKind::Const | RefKind::Object,
+                ..
+            } => None,
+        }
+    }
+
+    pub fn array_len(&self, db: &'db dyn MirDb) -> Option<u64> {
+        match self {
+            RuntimeClass::AggregateValue { layout } => match layout.data(db) {
+                Layout::Array(data) => Some(data.len),
+                Layout::Struct(_) | Layout::Enum(_) => None,
+            },
+            RuntimeClass::Ref { pointee, .. } => pointee.array_len(db),
+            RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => None,
+        }
+    }
+
+    pub fn index_stride_words(&self, db: &'db dyn MirDb) -> Option<u64> {
+        match self {
+            RuntimeClass::AggregateValue { layout } => match layout.data(db) {
+                Layout::Array(data) => Some(data.elem.span_words(db)),
+                Layout::Struct(_) | Layout::Enum(_) => None,
+            },
+            RuntimeClass::Ref { pointee, .. } => pointee.index_stride_words(db),
+            RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => None,
+        }
+    }
+
+    pub fn field_offset_words(&self, db: &'db dyn MirDb, field: FieldIndex) -> Option<u64> {
+        if matches!(self, RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. }) {
+            return None;
+        }
+        let layout = self.aggregate_layout()?;
+        let Layout::Struct(data) = layout.data(db) else {
+            return None;
+        };
+        Some(data.field_offset_words(db, field.0 as usize))
+    }
+
+    pub fn span_words(&self, db: &'db dyn MirDb) -> u64 {
+        match self {
+            RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => 1,
+            RuntimeClass::AggregateValue { layout } => match layout.data(db) {
+                Layout::Struct(data) => data.fields.iter().map(|field| field.span_words(db)).sum(),
+                Layout::Array(data) => data.elem.span_words(db) * data.len,
+                Layout::Enum(data) => {
+                    1 + data
+                        .variants
+                        .iter()
+                        .map(|variant| {
+                            variant
+                                .fields
+                                .iter()
+                                .map(|field| field.span_words(db))
+                                .sum::<u64>()
+                        })
+                        .max()
+                        .unwrap_or(0)
+                }
+            },
+        }
+    }
+
+    pub fn shares_runtime_rep_with(&self, db: &'db dyn MirDb, desired: &RuntimeClass<'db>) -> bool {
+        match (self, desired) {
+            (RuntimeClass::Scalar(actual), RuntimeClass::Scalar(desired)) => actual == desired,
+            (
+                RuntimeClass::AggregateValue { layout: actual },
+                RuntimeClass::AggregateValue { layout: desired },
+            ) => layouts_share_runtime_rep(db, *actual, *desired),
+            (
+                RuntimeClass::Ref {
+                    pointee: actual_pointee,
+                    kind: actual_kind,
+                    view: actual_view,
+                },
+                RuntimeClass::Ref {
+                    pointee: desired_pointee,
+                    kind: desired_kind,
+                    view: desired_view,
+                },
+            ) => {
+                actual_view == desired_view
+                    && ref_kinds_share_runtime_rep(actual_kind, desired_kind)
+                    && actual_pointee.shares_runtime_rep_with(db, desired_pointee)
+            }
+            (
+                RuntimeClass::RawAddr {
+                    space: actual_space,
+                    target: actual_target,
+                },
+                RuntimeClass::RawAddr {
+                    space: desired_space,
+                    target: desired_target,
+                },
+            ) => {
+                actual_space == desired_space
+                    && match (actual_target, desired_target) {
+                        (Some(actual), Some(desired)) => {
+                            layouts_share_runtime_rep(db, *actual, *desired)
+                        }
+                        (None, None) => true,
+                        (Some(_), None) | (None, Some(_)) => false,
+                    }
+            }
+            (
+                RuntimeClass::Scalar(_),
+                RuntimeClass::AggregateValue { .. }
+                | RuntimeClass::Ref { .. }
+                | RuntimeClass::RawAddr { .. },
+            )
+            | (
+                RuntimeClass::AggregateValue { .. },
+                RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. },
+            )
+            | (
+                RuntimeClass::Ref { .. },
+                RuntimeClass::Scalar(_)
+                | RuntimeClass::AggregateValue { .. }
+                | RuntimeClass::RawAddr { .. },
+            )
+            | (
+                RuntimeClass::RawAddr { .. },
+                RuntimeClass::Scalar(_)
+                | RuntimeClass::AggregateValue { .. }
+                | RuntimeClass::Ref { .. },
+            ) => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -115,77 +255,6 @@ pub enum RefView<'db> {
     EnumVariant(VariantId<'db>),
 }
 
-pub(crate) fn runtime_classes_share_runtime_rep<'db>(
-    db: &'db dyn MirDb,
-    actual: &RuntimeClass<'db>,
-    desired: &RuntimeClass<'db>,
-) -> bool {
-    match (actual, desired) {
-        (RuntimeClass::Scalar(actual), RuntimeClass::Scalar(desired)) => actual == desired,
-        (
-            RuntimeClass::AggregateValue { layout: actual },
-            RuntimeClass::AggregateValue { layout: desired },
-        ) => layouts_share_runtime_rep(db, *actual, *desired),
-        (
-            RuntimeClass::Ref {
-                pointee: actual_pointee,
-                kind: actual_kind,
-                view: actual_view,
-            },
-            RuntimeClass::Ref {
-                pointee: desired_pointee,
-                kind: desired_kind,
-                view: desired_view,
-            },
-        ) => {
-            actual_view == desired_view
-                && ref_kinds_share_runtime_rep(actual_kind, desired_kind)
-                && runtime_classes_share_runtime_rep(db, actual_pointee, desired_pointee)
-        }
-        (
-            RuntimeClass::RawAddr {
-                space: actual_space,
-                target: actual_target,
-            },
-            RuntimeClass::RawAddr {
-                space: desired_space,
-                target: desired_target,
-            },
-        ) => {
-            actual_space == desired_space
-                && match (actual_target, desired_target) {
-                    (Some(actual), Some(desired)) => {
-                        layouts_share_runtime_rep(db, *actual, *desired)
-                    }
-                    (None, None) => true,
-                    (Some(_), None) | (None, Some(_)) => false,
-                }
-        }
-        (
-            RuntimeClass::Scalar(_),
-            RuntimeClass::AggregateValue { .. }
-            | RuntimeClass::Ref { .. }
-            | RuntimeClass::RawAddr { .. },
-        )
-        | (
-            RuntimeClass::AggregateValue { .. },
-            RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. },
-        )
-        | (
-            RuntimeClass::Ref { .. },
-            RuntimeClass::Scalar(_)
-            | RuntimeClass::AggregateValue { .. }
-            | RuntimeClass::RawAddr { .. },
-        )
-        | (
-            RuntimeClass::RawAddr { .. },
-            RuntimeClass::Scalar(_)
-            | RuntimeClass::AggregateValue { .. }
-            | RuntimeClass::Ref { .. },
-        ) => false,
-    }
-}
-
 fn layouts_share_runtime_rep<'db>(
     db: &'db dyn MirDb,
     actual: LayoutId<'db>,
@@ -198,11 +267,10 @@ fn layouts_share_runtime_rep<'db>(
                     .fields
                     .iter()
                     .zip(desired.fields.iter())
-                    .all(|(actual, desired)| runtime_classes_share_runtime_rep(db, actual, desired))
+                    .all(|(actual, desired)| actual.shares_runtime_rep_with(db, desired))
         }
         (Layout::Array(actual), Layout::Array(desired)) => {
-            actual.len == desired.len
-                && runtime_classes_share_runtime_rep(db, &actual.elem, &desired.elem)
+            actual.len == desired.len && actual.elem.shares_runtime_rep_with(db, &desired.elem)
         }
         (Layout::Enum(actual), Layout::Enum(desired)) => {
             actual.tag == desired.tag
@@ -214,9 +282,7 @@ fn layouts_share_runtime_rep<'db>(
                     .all(|(actual, desired)| {
                         actual.fields.len() == desired.fields.len()
                             && actual.fields.iter().zip(desired.fields.iter()).all(
-                                |(actual, desired)| {
-                                    runtime_classes_share_runtime_rep(db, actual, desired)
-                                },
+                                |(actual, desired)| actual.shares_runtime_rep_with(db, desired),
                             )
                     })
         }
@@ -339,6 +405,16 @@ pub struct StructLayout<'db> {
     pub fields: Box<[RuntimeClass<'db>]>,
 }
 
+impl<'db> StructLayout<'db> {
+    pub fn field_offset_words(&self, db: &'db dyn MirDb, idx: usize) -> u64 {
+        self.fields
+            .iter()
+            .take(idx)
+            .map(|field| field.span_words(db))
+            .sum()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct ArrayLayout<'db> {
     pub source_ty: TyId<'db>,
@@ -365,6 +441,16 @@ pub struct EnumVariantLayout<'db> {
     pub fields: Box<[RuntimeClass<'db>]>,
 }
 
+impl<'db> EnumVariantLayout<'db> {
+    pub fn payload_field_offset_words(&self, db: &'db dyn MirDb, field: FieldIndex) -> u64 {
+        self.fields
+            .iter()
+            .take(field.0 as usize)
+            .map(|field| field.span_words(db))
+            .sum()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
 pub struct VariantId<'db> {
     pub enum_layout: LayoutId<'db>,
@@ -377,6 +463,11 @@ impl<'db> VariantId<'db> {
             Layout::Enum(layout) => Some(layout),
             Layout::Struct(_) | Layout::Array(_) => None,
         }
+    }
+
+    pub fn field_offset_words(self, db: &'db dyn MirDb, field: FieldIndex) -> Option<u64> {
+        let layout = self.layout(db)?;
+        Some(1 + layout.variants[self.index as usize].payload_field_offset_words(db, field))
     }
 }
 

@@ -6,7 +6,7 @@ use crate::{
     runtime::{
         AddressSpaceKind, Layout, RExpr, RStmt, RTerminator, RuntimeBody, RuntimeBuiltin,
         RuntimeCarrier, RuntimeClass, RuntimeLocalRoot, RuntimeProgramView, RuntimeSignature,
-        ScalarClass, ScalarRepr, ScalarRole, runtime_classes_share_runtime_rep,
+        ScalarClass, ScalarRepr, ScalarRole,
     },
     verify::VerifyError,
 };
@@ -381,14 +381,15 @@ fn verify_assign<'db>(
             else {
                 return Err(VerifyError::InvalidExprClass(dst));
             };
-            if src_view != *dst_view
-                || !runtime_classes_share_runtime_rep(
+            let src_view_matches = src_view == *dst_view;
+            let src_class = RuntimeClass::Ref {
+                pointee: src_pointee,
+                kind: src_kind,
+                view: src_view,
+            };
+            if !src_view_matches
+                || !src_class.shares_runtime_rep_with(
                     db,
-                    &RuntimeClass::Ref {
-                        pointee: src_pointee,
-                        kind: src_kind,
-                        view: src_view,
-                    },
                     &RuntimeClass::Ref {
                         pointee: dst_pointee.clone(),
                         kind: dst_kind.clone(),

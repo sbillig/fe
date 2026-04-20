@@ -1487,35 +1487,21 @@ pub(crate) enum RuntimeVisibleReturnPlan<'db> {
     PassActual,
 }
 
-pub(crate) fn runtime_address_space(class: &RuntimeClass<'_>) -> Option<AddressSpaceKind> {
-    match class {
-        RuntimeClass::Ref {
-            kind: RefKind::Provider { space, .. },
-            ..
-        }
-        | RuntimeClass::RawAddr { space, .. } => Some(*space),
-        RuntimeClass::Scalar(_)
-        | RuntimeClass::AggregateValue { .. }
-        | RuntimeClass::Ref {
-            kind: RefKind::Const | RefKind::Object,
-            ..
-        } => None,
-    }
-}
-
 pub(super) fn provider_root_space<'db>(
     binding: &ProviderBinding<'db>,
     root_class: &RuntimeClass<'db>,
 ) -> AddressSpaceKind {
-    runtime_address_space(root_class).unwrap_or_else(|| match binding.semantics.kind {
-        ProviderKind::RootObject => AddressSpaceKind::Memory,
-        ProviderKind::Handle | ProviderKind::RawAddress => address_space_from_provider(
-            binding
-                .semantics
-                .address_space
-                .unwrap_or_else(|| panic!("provider binding missing resolved space")),
-        ),
-    })
+    root_class
+        .address_space()
+        .unwrap_or_else(|| match binding.semantics.kind {
+            ProviderKind::RootObject => AddressSpaceKind::Memory,
+            ProviderKind::Handle | ProviderKind::RawAddress => address_space_from_provider(
+                binding
+                    .semantics
+                    .address_space
+                    .unwrap_or_else(|| panic!("provider binding missing resolved space")),
+            ),
+        })
 }
 
 pub(crate) fn ref_class_for_place_result<'db>(
@@ -1544,7 +1530,7 @@ pub(crate) fn ref_class_for_place_result<'db>(
         }
     }
     RuntimeClass::RawAddr {
-        space: runtime_address_space(root_class).unwrap_or(root_space),
+        space: root_class.address_space().unwrap_or(root_space),
         target: value_class.aggregate_layout(),
     }
 }

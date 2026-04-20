@@ -145,6 +145,10 @@ impl Abi for Sol {
         signed_word.downcast_unchecked()
     }
 
+    fn decode_error() -> ! {
+        revert(offset: 0, len: 0)
+    }
+
     fn decoder_new<I: ByteInput>(_ input: own I) -> Self::Decoder<I> {
         SolDecoder::new(input)
     }
