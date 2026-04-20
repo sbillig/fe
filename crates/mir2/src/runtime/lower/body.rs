@@ -935,22 +935,23 @@ impl<'db> RmirEmitter<'db> {
                 kind: RefKind::Object,
                 view: RefView::Whole,
             } => {
-                let layout = pointee
-                    .aggregate_layout()
-                    .expect("object ref const target should have aggregate layout");
-                self.lower_non_scalar_const_as_object(bb, value, ty, layout)
+                assert!(
+                    pointee.aggregate_layout().is_some(),
+                    "object ref const target should have aggregate layout"
+                );
+                self.lower_non_scalar_const_as_class(bb, value, ty, target)
             }
+            RuntimeClass::Ref {
+                kind: RefKind::Provider { .. },
+                ..
+            } => self.lower_non_scalar_const_as_class(bb, value, ty, target),
             RuntimeClass::Ref { .. } => {
                 panic!(
                     "non-scalar semantic const {value:?} cannot lower directly to ref class {target:?}"
                 )
             }
             RuntimeClass::AggregateValue { layout: _ } => {
-                let RuntimeClass::AggregateValue { layout } = target else {
-                    unreachable!();
-                };
-                let src =
-                    self.lower_non_scalar_const_as_aggregate_value(bb, value, expected_ty, *layout);
+                let src = self.lower_non_scalar_const_as_class(bb, value, expected_ty, target);
                 let actual = self.value_class(src).cloned();
                 if self.value_class(src) == Some(target)
                     || actual.as_ref().is_some_and(|actual| {
@@ -963,8 +964,7 @@ impl<'db> RmirEmitter<'db> {
                 }
             }
             RuntimeClass::RawAddr { .. } => {
-                let layout = self.layout_for_ty(ty);
-                self.lower_non_scalar_const_as_object(bb, value, ty, layout)
+                self.lower_non_scalar_const_as_class(bb, value, ty, target)
             }
         }
     }
@@ -997,12 +997,13 @@ impl<'db> RmirEmitter<'db> {
         match value.value(self.db) {
             SemConstValue::Tuple { .. }
             | SemConstValue::Struct { .. }
-            | SemConstValue::Array { .. } => {
-                self.lower_non_scalar_const_as_aggregate_value(bb, value, ty, layout)
-            }
-            SemConstValue::Enum { .. } => {
-                self.lower_non_scalar_const_as_aggregate_value(bb, value, ty, layout)
-            }
+            | SemConstValue::Array { .. }
+            | SemConstValue::Enum { .. } => self.lower_non_scalar_const_as_class(
+                bb,
+                value,
+                ty,
+                &RuntimeClass::AggregateValue { layout },
+            ),
             SemConstValue::Unit
             | SemConstValue::Scalar { .. }
             | SemConstValue::TypeLevel { .. } => {
@@ -1181,29 +1182,23 @@ impl<'db> RmirEmitter<'db> {
         local
     }
 
-    fn lower_non_scalar_const_as_aggregate_value(
+    fn lower_non_scalar_const_as_class(
         &mut self,
         bb: RBlockId,
         value: SemConstId<'db>,
         ty: TyId<'db>,
-        layout: LayoutId<'db>,
+        target: &RuntimeClass<'db>,
     ) -> RLocalId {
         debug_assert!(!matches!(
             value.value(self.db),
             SemConstValue::Scalar { .. }
         ));
-        let ty = self.const_lowering_ty(ty, &RuntimeClass::AggregateValue { layout });
+        let ty = self.const_lowering_ty(ty, target);
         match value.value(self.db) {
             SemConstValue::Tuple { elems, .. }
             | SemConstValue::Struct { fields: elems, .. }
             | SemConstValue::Array { elems, .. } => {
-                let field_tys = if ty.is_array(self.db) {
-                    let (_, args) = ty.decompose_ty_app(self.db);
-                    let elem_ty = args.first().copied().expect("array element type");
-                    vec![elem_ty; elems.len()]
-                } else {
-                    ty.field_types(self.db)
-                };
+                let field_tys = self.aggregate_field_tys(ty, elems.len());
                 let (field_values, field_classes): (Vec<_>, Vec<_>) = elems
                     .iter()
                     .copied()
@@ -1213,16 +1208,37 @@ impl<'db> RmirEmitter<'db> {
                 let layout =
                     layout_for_aggregate_instance_in_env(self.db, self.env, ty, &field_classes);
                 let ctor_elems = aggregate_ctor_elems_for_layout(self.db, layout, elems.len());
-                let dst = self.alloc_runtime_temp(
-                    ty,
-                    RuntimeCarrier::Value(RuntimeClass::AggregateValue { layout }),
-                );
+                let dst_class = match target {
+                    RuntimeClass::AggregateValue { .. } => RuntimeClass::AggregateValue { layout },
+                    RuntimeClass::Ref {
+                        kind: RefKind::Object,
+                        view: RefView::Whole,
+                        ..
+                    } => RuntimeClass::object_ref(layout),
+                    RuntimeClass::Ref {
+                        kind: RefKind::Provider { .. },
+                        ..
+                    }
+                    | RuntimeClass::RawAddr { .. } => target.clone(),
+                    RuntimeClass::Scalar(_)
+                    | RuntimeClass::Ref {
+                        kind: RefKind::Const,
+                        ..
+                    }
+                    | RuntimeClass::Ref { .. } => {
+                        panic!("aggregate const cannot lower directly to class {target:?}")
+                    }
+                };
+                let dst = self.alloc_runtime_temp(ty, RuntimeCarrier::Value(dst_class));
                 self.lower_aggregate_values(bb, dst, ty, layout, &ctor_elems, &field_values);
                 dst
             }
             SemConstValue::Enum {
                 variant, fields, ..
             } => {
+                let Some(layout) = target.aggregate_layout() else {
+                    panic!("enum constant requires an aggregate target: {target:?}");
+                };
                 let crate::runtime::Layout::Enum(layout_data) = layout.data(self.db) else {
                     panic!("enum constant requires an enum layout");
                 };
@@ -1245,10 +1261,20 @@ impl<'db> RmirEmitter<'db> {
                         self.lower_sem_const_as_class(bb, field, field_ty, field_class)
                     })
                     .collect::<Vec<_>>();
-                let dst = self.alloc_runtime_temp(
-                    ty,
-                    RuntimeCarrier::Value(RuntimeClass::AggregateValue { layout }),
-                );
+                let dst_class = match target {
+                    RuntimeClass::AggregateValue { .. } => RuntimeClass::AggregateValue { layout },
+                    RuntimeClass::Ref {
+                        kind: RefKind::Object,
+                        view: RefView::Whole,
+                        ..
+                    } => RuntimeClass::object_ref(layout),
+                    RuntimeClass::Scalar(_)
+                    | RuntimeClass::RawAddr { .. }
+                    | RuntimeClass::Ref { .. } => {
+                        panic!("enum const cannot lower directly to class {target:?}")
+                    }
+                };
+                let dst = self.alloc_runtime_temp(ty, RuntimeCarrier::Value(dst_class));
                 self.lower_enum_values(bb, dst, layout, variant, &field_values);
                 dst
             }
@@ -1260,83 +1286,21 @@ impl<'db> RmirEmitter<'db> {
         }
     }
 
-    fn lower_non_scalar_const_as_object(
-        &mut self,
-        bb: RBlockId,
-        value: SemConstId<'db>,
-        ty: TyId<'db>,
-        layout: LayoutId<'db>,
-    ) -> RLocalId {
-        debug_assert!(!matches!(
-            value.value(self.db),
-            SemConstValue::Scalar { .. }
-        ));
-        let ty = self.const_lowering_ty(ty, &RuntimeClass::AggregateValue { layout });
-        match value.value(self.db) {
-            SemConstValue::Tuple { elems, .. }
-            | SemConstValue::Struct { fields: elems, .. }
-            | SemConstValue::Array { elems, .. } => {
-                let field_tys = if ty.is_array(self.db) {
-                    let (_, args) = ty.decompose_ty_app(self.db);
-                    let elem_ty = args.first().copied().expect("array element type");
-                    vec![elem_ty; elems.len()]
-                } else {
-                    ty.field_types(self.db)
-                };
-                let (field_values, field_classes): (Vec<_>, Vec<_>) = elems
-                    .iter()
-                    .copied()
-                    .zip(field_tys)
-                    .map(|(field, field_ty)| self.lower_const_value_field(bb, field, field_ty))
-                    .unzip();
-                let layout =
-                    layout_for_aggregate_instance_in_env(self.db, self.env, ty, &field_classes);
-                let ctor_elems = aggregate_ctor_elems_for_layout(self.db, layout, elems.len());
-                let dst = self.alloc_runtime_temp(
-                    ty,
-                    RuntimeCarrier::Value(RuntimeClass::object_ref(layout)),
-                );
-                self.lower_aggregate_values(bb, dst, ty, layout, &ctor_elems, &field_values);
-                dst
-            }
-            SemConstValue::Enum {
-                variant, fields, ..
-            } => {
-                let crate::runtime::Layout::Enum(layout_data) = layout.data(self.db) else {
-                    panic!("enum constant requires an enum layout");
-                };
-                let field_tys = ty
-                    .as_enum(self.db)
-                    .expect("enum constant should have an enum type")
-                    .variants(self.db)
-                    .nth(variant.0 as usize)
-                    .expect("enum variant index should resolve")
-                    .field_tys(self.db)
-                    .into_iter()
-                    .map(|field| field.instantiate(self.db, ty.generic_args(self.db)))
-                    .collect::<Vec<_>>();
-                let field_values = fields
-                    .iter()
-                    .copied()
-                    .zip(field_tys)
-                    .zip(layout_data.variants[variant.0 as usize].fields.iter())
-                    .map(|((field, field_ty), field_class)| {
-                        self.lower_sem_const_as_class(bb, field, field_ty, field_class)
-                    })
-                    .collect::<Vec<_>>();
-                let dst = self.alloc_runtime_temp(
-                    ty,
-                    RuntimeCarrier::Value(RuntimeClass::object_ref(layout)),
-                );
-                self.lower_enum_values(bb, dst, layout, variant, &field_values);
-                dst
-            }
-            SemConstValue::Unit
-            | SemConstValue::Scalar { .. }
-            | SemConstValue::TypeLevel { .. } => {
-                panic!("expected non-scalar semantic const, found {value:?}")
-            }
-        }
+    fn aggregate_field_tys(&self, ty: TyId<'db>, arity: usize) -> Vec<TyId<'db>> {
+        let field_tys = if ty.is_array(self.db) {
+            let (_, args) = ty.decompose_ty_app(self.db);
+            let elem_ty = args.first().copied().expect("array element type");
+            vec![elem_ty; arity]
+        } else {
+            ty.field_types(self.db)
+        };
+        assert_eq!(
+            field_tys.len(),
+            arity,
+            "aggregate constructor arity mismatch for {}",
+            ty.pretty_print(self.db),
+        );
+        field_tys
     }
 
     fn lower_aggregate_make(
@@ -1346,19 +1310,7 @@ impl<'db> RmirEmitter<'db> {
         ty: TyId<'db>,
         fields: &[NOperand],
     ) {
-        let field_tys = if ty.is_array(self.db) {
-            let (_, args) = ty.decompose_ty_app(self.db);
-            let elem_ty = args.first().copied().expect("array element type");
-            vec![elem_ty; fields.len()]
-        } else {
-            ty.field_types(self.db)
-        };
-        assert_eq!(
-            field_tys.len(),
-            fields.len(),
-            "aggregate constructor arity mismatch for {}",
-            ty.pretty_print(self.db),
-        );
+        let field_tys = self.aggregate_field_tys(ty, fields.len());
         let mut field_values = Vec::with_capacity(fields.len());
         let mut field_classes = Vec::with_capacity(fields.len());
         for (field, field_ty) in fields.iter().copied().zip(field_tys.iter().copied()) {
