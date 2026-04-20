@@ -10,6 +10,7 @@ use crate::{
         },
         ty::{ty_check::LocalBinding, ty_def::TyId, ty_is_copy},
     },
+    hir_def::{Expr, ExprId, Partial},
     projection::{IndexSource, Projection, ProjectionPath},
 };
 
@@ -645,22 +646,23 @@ impl<'db> NormalizeCtxt<'db> {
             SExpr::Const(const_) => NExpr::Const(const_.clone()),
             SExpr::Unary { op, value } => NExpr::Unary {
                 op: *op,
-                value: self.normalize_operand(*value, origin),
+                value: self.normalize_operand_at(*value, origin, 0),
             },
             SExpr::Binary { op, lhs, rhs } => NExpr::Binary {
                 op: *op,
-                lhs: self.normalize_operand(*lhs, origin),
-                rhs: self.normalize_operand(*rhs, origin),
+                lhs: self.normalize_operand_at(*lhs, origin, 0),
+                rhs: self.normalize_operand_at(*rhs, origin, 1),
             },
             SExpr::Cast { value, to } => NExpr::Cast {
-                value: self.normalize_operand(*value, origin),
+                value: self.normalize_operand_at(*value, origin, 0),
                 to: *to,
             },
             SExpr::AggregateMake { ty, fields } => NExpr::AggregateMake {
                 ty: *ty,
                 fields: fields
                     .iter()
-                    .map(|field| self.normalize_operand(*field, origin))
+                    .enumerate()
+                    .map(|(idx, field)| self.normalize_operand_at(*field, origin, idx))
                     .collect::<Vec<_>>()
                     .into_boxed_slice(),
             },
@@ -673,7 +675,8 @@ impl<'db> NormalizeCtxt<'db> {
                 variant: *variant,
                 fields: fields
                     .iter()
-                    .map(|field| self.normalize_operand(*field, origin))
+                    .enumerate()
+                    .map(|(idx, field)| self.normalize_operand_at(*field, origin, idx))
                     .collect::<Vec<_>>()
                     .into_boxed_slice(),
             },
@@ -713,10 +716,10 @@ impl<'db> NormalizeCtxt<'db> {
                 provider: *provider,
             },
             SExpr::GetEnumTag { value } => NExpr::GetEnumTag {
-                value: self.normalize_copy_operand(*value),
+                value: self.normalize_copy_operand(*value, origin),
             },
             SExpr::IsEnumVariant { value, variant } => NExpr::IsEnumVariant {
-                value: self.normalize_copy_operand(*value),
+                value: self.normalize_copy_operand(*value, origin),
                 variant: *variant,
             },
             SExpr::ExtractEnumField {
@@ -724,7 +727,7 @@ impl<'db> NormalizeCtxt<'db> {
                 variant,
                 field,
             } => NExpr::ExtractEnumField {
-                value: self.normalize_operand(*value, origin),
+                value: self.normalize_operand_at(*value, origin, 0),
                 variant: *variant,
                 field: *field,
             },
@@ -743,7 +746,7 @@ impl<'db> NormalizeCtxt<'db> {
                 args: args
                     .iter()
                     .enumerate()
-                    .map(|(idx, arg)| self.normalize_call_arg(*callee, idx, *arg, origin))
+                    .map(|(idx, arg)| self.normalize_call_arg_at(*callee, idx, *arg, origin))
                     .collect::<Vec<_>>()
                     .into_boxed_slice(),
                 effect_args: effect_args
@@ -803,13 +806,28 @@ impl<'db> NormalizeCtxt<'db> {
             .ty;
         NOperand {
             local,
+            origin: Self::origin_expr(origin),
             mode: self.read_mode_for_operand(local, origin, ty),
         }
     }
 
-    fn normalize_copy_operand(&self, local: SLocalId) -> NOperand {
+    fn normalize_operand_at(
+        &self,
+        local: SLocalId,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+        idx: usize,
+    ) -> NOperand {
+        self.normalize_operand(local, self.operand_origin(origin, idx).unwrap_or(origin))
+    }
+
+    fn normalize_copy_operand(
+        &self,
+        local: SLocalId,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+    ) -> NOperand {
         NOperand {
             local,
+            origin: Self::origin_expr(origin),
             mode: ReadMode::Copy,
         }
     }
@@ -835,7 +853,87 @@ impl<'db> NormalizeCtxt<'db> {
                 .unwrap_or_else(|| self.read_mode_for_operand(local, origin, ty)),
             _ => self.read_mode_for_operand(local, origin, ty),
         };
-        NOperand { local, mode }
+        NOperand {
+            local,
+            origin: Self::origin_expr(origin),
+            mode,
+        }
+    }
+
+    fn normalize_call_arg_at(
+        &self,
+        callee: crate::analysis::semantic::SemanticCalleeRef<'db>,
+        idx: usize,
+        local: SLocalId,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+    ) -> NOperand {
+        self.normalize_call_arg(
+            callee,
+            idx,
+            local,
+            self.operand_origin(origin, idx).unwrap_or(origin),
+        )
+    }
+
+    fn origin_expr(origin: crate::analysis::semantic::SemOrigin<'db>) -> Option<ExprId> {
+        match origin {
+            crate::analysis::semantic::SemOrigin::Expr(expr) => Some(expr),
+            crate::analysis::semantic::SemOrigin::Stmt(_)
+            | crate::analysis::semantic::SemOrigin::Body(_)
+            | crate::analysis::semantic::SemOrigin::Synthetic => None,
+        }
+    }
+
+    fn operand_origin(
+        &self,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+        idx: usize,
+    ) -> Option<crate::analysis::semantic::SemOrigin<'db>> {
+        self.operand_expr(origin, idx)
+            .map(crate::analysis::semantic::SemOrigin::Expr)
+    }
+
+    fn operand_expr(
+        &self,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+        idx: usize,
+    ) -> Option<ExprId> {
+        let crate::analysis::semantic::SemOrigin::Expr(expr) = origin else {
+            return None;
+        };
+        let body = self
+            .instance
+            .key(self.db)
+            .instantiate_typed_body(self.db)
+            .body()?;
+        let Partial::Present(expr_data) = expr.data(self.db, body) else {
+            return None;
+        };
+        match expr_data {
+            Expr::Un(inner, _) | Expr::Cast(inner, _) | Expr::Field(inner, _) => {
+                (idx == 0).then_some(*inner)
+            }
+            Expr::Bin(lhs, rhs, _) | Expr::Assign(lhs, rhs) | Expr::AugAssign(lhs, rhs, _) => {
+                [*lhs, *rhs].get(idx).copied()
+            }
+            Expr::Tuple(items) | Expr::Array(items) => items.get(idx).copied(),
+            Expr::ArrayRep(item, _) => Some(*item),
+            Expr::Call(_, args) => args.get(idx).map(|arg| arg.expr),
+            Expr::MethodCall(receiver, _, _, args) => {
+                if idx == 0 {
+                    Some(*receiver)
+                } else {
+                    args.get(idx - 1).map(|arg| arg.expr)
+                }
+            }
+            Expr::Lit(_)
+            | Expr::Path(_)
+            | Expr::RecordInit(_, _)
+            | Expr::Block(_)
+            | Expr::If(_, _, _)
+            | Expr::Match(_, _)
+            | Expr::With(_, _) => None,
+        }
     }
 
     fn project_local_place(

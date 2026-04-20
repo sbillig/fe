@@ -1,9 +1,9 @@
 use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
-        FieldIndex, SBlockId, SConst, SLocalId, SemConstId, SemConstScalar, SemConstValue,
-        SemanticCalleeRef, SemanticCodeRegionRef, SemanticInstance, SemanticInstanceKey,
-        VariantIndex,
+        EffectProviderSubst, FieldIndex, GenericSubst, ImplEnv, SBlockId, SConst, SLocalId,
+        SemConstId, SemConstScalar, SemConstValue, SemanticCalleeRef, SemanticCodeRegionRef,
+        SemanticInstance, SemanticInstanceKey, VariantIndex,
         borrowck::{
             NBorrowRoot, NEffectArg, NExpr, NLocalInterface, NLocalOrigin, NOperand, NSPlace,
             NSPlaceRoot, NSStmt, NSStmtKind, NSTerminator, NSTerminatorKind,
@@ -15,7 +15,12 @@ use hir::analysis::{
     ty::{
         corelib::{
             PrimitiveWrapperCallKind, RuntimeBuiltinFuncKind, core_primitive_wrapper_call_kind,
+            resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
             runtime_builtin_func_kind,
+        },
+        trait_def::TraitInstId,
+        trait_resolution::{
+            GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
         },
         ty_check::BodyOwner,
         ty_def::TyId,
@@ -34,7 +39,7 @@ use crate::{
         RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeLocalLowering, RuntimeLocalRoot,
         RuntimeParam, RuntimePlace, RuntimeProviderBinding, RuntimeProviderBindingId,
         RuntimeSignature, ScalarClass, ScalarRepr, ScalarRole, VariantId,
-        code_region::runtime_code_region_for_semantic_ref,
+        code_region::runtime_code_region_for_semantic_ref, package::runtime_instance_for_semantic,
     },
 };
 
@@ -2248,7 +2253,7 @@ impl<'db> RmirEmitter<'db> {
         if let Some(ret) = self.lower_numeric_intrinsic_call(bb, semantic, args) {
             return Some(ret);
         }
-        runtime_builtin_func_kind(self.db, func)?;
+        let kind = runtime_builtin_func_kind(self.db, func)?;
 
         let mut boundary_sites = BoundarySiteAllocator::default();
         let call_input_plan = compile_call_input_plan_for_semantic(
@@ -2260,6 +2265,12 @@ impl<'db> RmirEmitter<'db> {
             &mut boundary_sites,
         );
         let (args, _) = self.lower_visible_call_args(bb, args, &call_input_plan);
+        if kind == RuntimeBuiltinFuncKind::PanicWithValue {
+            let [value] = args.as_slice() else {
+                return None;
+            };
+            return Some(self.lower_panic_with_value(bb, *value));
+        }
         let lowered = self.lower_extern_builtin(func, &args)?;
         let ret_ty = semantic_return_ty(self.db, semantic);
         let _ = effect_args;
@@ -2285,6 +2296,162 @@ impl<'db> RmirEmitter<'db> {
                 self.alloc_runtime_temp(TyId::unit(self.db), RuntimeCarrier::Erased)
             }
         })
+    }
+
+    fn lower_panic_with_value(&mut self, bb: RBlockId, value: RLocalId) -> RLocalId {
+        let value_ty = self.locals[value.index()].semantic_ty;
+        let encode_alloc = self.resolve_panic_payload_encode_alloc(value_ty);
+        let [param_class] = encode_alloc.key(self.db).params(self.db).as_slice() else {
+            panic!("panic payload encoder should have one runtime parameter");
+        };
+        let value = self.coerce_value_if_needed(bb, value, param_class);
+        let ret_class = encode_alloc
+            .signature(self.db)
+            .ret
+            .expect("encode_single_root_alloc should return an encoded ptr/len tuple");
+        let semantic = encode_alloc
+            .key(self.db)
+            .semantic(self.db)
+            .expect("panic payload encoder should be semantic");
+        let encoded_ty = semantic_return_ty(self.db, semantic);
+        let encoded = self.alloc_runtime_temp(encoded_ty, RuntimeCarrier::Value(ret_class));
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: encoded,
+                expr: RExpr::Call {
+                    callee: encode_alloc,
+                    args: Box::new([value]),
+                },
+            },
+        );
+        let fields = self.extract_tuple_fields(bb, encoded);
+        let [offset, len]: [RLocalId; 2] = fields
+            .try_into()
+            .expect("encoded panic payload should expose ptr/len");
+        self.set_terminator(bb, RTerminator::Revert { offset, len });
+        self.alloc_runtime_temp(TyId::unit(self.db), RuntimeCarrier::Erased)
+    }
+
+    fn resolve_panic_payload_encode_alloc(&self, value_ty: TyId<'db>) -> RuntimeInstance<'db> {
+        let key = self.current_semantic_key();
+        let impl_env = key.impl_env(self.db);
+        let scope = impl_env.normalization_scope(self.db);
+        let assumptions = impl_env.assumptions(self.db);
+        self.assert_panic_payload_encodable(scope, assumptions, value_ty);
+        let func = resolve_lib_func_path(self.db, scope, "core::abi::encode_single_root_alloc")
+            .expect("missing core::abi::encode_single_root_alloc");
+        let abi_ty =
+            resolve_lib_type_path(self.db, scope, "std::abi::Sol").expect("missing std::abi::Sol");
+        let semantic_key = SemanticInstanceKey::new(
+            self.db,
+            BodyOwner::Func(func),
+            GenericSubst::new(self.db, vec![abi_ty, value_ty]),
+            EffectProviderSubst::empty(self.db),
+            ImplEnv::new(self.db, scope, assumptions, Vec::new()),
+        );
+        runtime_instance_for_semantic(
+            self.db,
+            get_or_build_semantic_instance(self.db, semantic_key),
+        )
+    }
+
+    fn assert_panic_payload_encodable(
+        &self,
+        scope: hir::hir_def::scope_graph::ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+        value_ty: TyId<'db>,
+    ) {
+        let Some(abi_ty) = resolve_lib_type_path(self.db, scope, "std::abi::Sol") else {
+            panic!("missing std::abi::Sol");
+        };
+        let Some(abi_size_trait) = resolve_core_trait(self.db, scope, &["abi", "AbiSize"]) else {
+            panic!("missing core::abi::AbiSize");
+        };
+        let Some(encode_trait) = resolve_core_trait(self.db, scope, &["abi", "Encode"]) else {
+            panic!("missing core::abi::Encode");
+        };
+        let abi_size = TraitInstId::new_simple(self.db, abi_size_trait, vec![value_ty]);
+        let encode = TraitInstId::new_simple(self.db, encode_trait, vec![value_ty, abi_ty]);
+        if self.trait_goal_satisfied(scope, assumptions, abi_size)
+            && self.trait_goal_satisfied(scope, assumptions, encode)
+        {
+            return;
+        }
+        panic!(
+            "`unwrap()` requires the error type `{}` to implement `Encode<Sol>` and `AbiSize`",
+            value_ty.pretty_print(self.db)
+        );
+    }
+
+    fn trait_goal_satisfied(
+        &self,
+        scope: hir::hir_def::scope_graph::ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+        inst: TraitInstId<'db>,
+    ) -> bool {
+        let solve_cx = TraitSolveCx::new(self.db, scope).with_assumptions(assumptions);
+        matches!(
+            is_goal_satisfiable(self.db, solve_cx, inst),
+            GoalSatisfiability::Satisfied(_)
+        )
+    }
+
+    fn extract_tuple_fields(&mut self, bb: RBlockId, tuple: RLocalId) -> Vec<RLocalId> {
+        let tuple_ty = self.locals[tuple.index()].semantic_ty;
+        let Some(tuple_class) = self.value_class(tuple).cloned() else {
+            return Vec::new();
+        };
+        let tuple_root = match tuple_class {
+            RuntimeClass::Ref { .. } => PlaceRoot::Ref(tuple),
+            RuntimeClass::AggregateValue { layout } => match &self.locals[tuple.index()].root {
+                RuntimeLocalRoot::Slot(_) => PlaceRoot::Slot(tuple),
+                RuntimeLocalRoot::Ref(_) => PlaceRoot::Ref(tuple),
+                RuntimeLocalRoot::Ptr { .. } | RuntimeLocalRoot::None => {
+                    let handle = self.alloc_runtime_temp(
+                        tuple_ty,
+                        RuntimeCarrier::Value(RuntimeClass::object_ref(layout)),
+                    );
+                    self.push_stmt(
+                        bb,
+                        RStmt::Assign {
+                            dst: handle,
+                            expr: RExpr::MaterializeToObject { src: tuple },
+                        },
+                    );
+                    PlaceRoot::Ref(handle)
+                }
+            },
+            RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => {
+                panic!("tuple extraction requires aggregate carrier")
+            }
+        };
+        tuple_ty
+            .field_types(self.db)
+            .iter()
+            .enumerate()
+            .map(|(idx, field_ty)| {
+                let class = self
+                    .top_level_class_for_ty(*field_ty, AddressSpaceKind::Memory)
+                    .unwrap_or(RuntimeClass::RawAddr {
+                        space: AddressSpaceKind::Memory,
+                        target: None,
+                    });
+                let dst = self.alloc_runtime_temp(*field_ty, RuntimeCarrier::Value(class));
+                let place = RuntimePlace {
+                    root: tuple_root.clone(),
+                    path: vec![PlaceElem::Field(FieldIndex(idx as u16))].into_boxed_slice(),
+                };
+                self.push_stmt(
+                    bb,
+                    RStmt::Assign {
+                        dst,
+                        expr: RExpr::Load { place },
+                    },
+                );
+                dst
+            })
+            .collect()
     }
 
     fn lower_numeric_intrinsic_call(

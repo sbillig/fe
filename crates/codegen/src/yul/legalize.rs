@@ -577,7 +577,11 @@ impl<'db> YTransportInfo<'db> {
     }
 
     fn projected(&self, prefix: &YTransportPath<'db>) -> Self {
-        let mut root_alias = if prefix.is_empty() {
+        let mut root_alias = if prefix.is_empty()
+            || self
+                .root_alias
+                .is_some_and(|space| !matches!(space, YulAddressSpace::Memory))
+        {
             self.root_alias
         } else {
             None
@@ -1170,6 +1174,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                     )
                 }
             };
+            let transport = yul_actual_transport(&class, &transport);
             local_values[param.local.as_u32() as usize] = LocalValueInfo {
                 class: Some(class.clone()),
                 transport: transport.clone(),
@@ -2147,6 +2152,13 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
             .filter(|space| !matches!(space, YulAddressSpace::Memory))
     }
 
+    fn transport_for_arg(&self, info: &LocalValueInfo<'db>) -> YTransportInfo<'db> {
+        let Some(class) = info.class.as_ref() else {
+            return info.transport.clone();
+        };
+        yul_actual_transport(class, &info.transport)
+    }
+
     fn specialize_call_key(
         &self,
         runtime_function: RuntimeFunction<'db>,
@@ -2164,8 +2176,8 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
             match kind {
                 YulParamKind::Visible(idx) => {
                     let default_class = yul_class_for_runtime_class(self.db, &param.class);
-                    key.param_transports[idx] = local_values[arg.as_u32() as usize]
-                        .transport
+                    key.param_transports[idx] = self
+                        .transport_for_arg(&local_values[arg.as_u32() as usize])
                         .without_default_memory_root(Some(&default_class));
                 }
                 YulParamKind::Effect(idx) => {
@@ -2286,7 +2298,16 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
             RExpr::Use(local) => (
                 YExpr::Use(YLocalId(local.as_u32())),
                 local_values[local.as_u32() as usize].class.clone(),
-                local_values[local.as_u32() as usize].transport.clone(),
+                local_values[local.as_u32() as usize]
+                    .class
+                    .as_ref()
+                    .map(|class| {
+                        yul_actual_transport(
+                            class,
+                            &local_values[local.as_u32() as usize].transport,
+                        )
+                    })
+                    .unwrap_or_else(|| local_values[local.as_u32() as usize].transport.clone()),
                 local_values[local.as_u32() as usize].const_value.clone(),
             ),
             RExpr::ConstScalar(value) => (
@@ -2400,13 +2421,18 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                         ))
                     })?;
                 let class = YulValueClass::MemoryPtr { layout };
+                let transport = if matches!(src_info.class, Some(YulValueClass::MemoryPtr { .. })) {
+                    src_info.transport.clone()
+                } else {
+                    src_info.transport.actualize_bytes_copy_to_memory()
+                };
                 (
                     YExpr::MaterializeToObject {
                         src: YLocalId(src.as_u32()),
                         layout,
                     },
                     Some(class.clone()),
-                    runtime_class_transport(&class),
+                    yul_actual_transport(&class, &transport),
                     None,
                 )
             }
@@ -2481,7 +2507,16 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
             RExpr::RetagRef { value } => (
                 YExpr::Use(YLocalId(value.as_u32())),
                 local_values[value.as_u32() as usize].class.clone(),
-                local_values[value.as_u32() as usize].transport.clone(),
+                local_values[value.as_u32() as usize]
+                    .class
+                    .as_ref()
+                    .map(|class| {
+                        yul_actual_transport(
+                            class,
+                            &local_values[value.as_u32() as usize].transport,
+                        )
+                    })
+                    .unwrap_or_else(|| local_values[value.as_u32() as usize].transport.clone()),
                 local_values[value.as_u32() as usize].const_value.clone(),
             ),
             RExpr::AddrOf { place } => {
@@ -2502,7 +2537,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                     YulStorageKind::Bytes => {
                         transport.with_replaced_root_alias(yul_space_for_class(&class))
                     }
-                    YulStorageKind::Cell => runtime_class_transport(&class),
+                    YulStorageKind::Cell => yul_actual_transport(&class, &transport),
                 };
                 (YExpr::Load { place }, Some(class), transport, None)
             }
@@ -2695,7 +2730,12 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
         let (root, mut transport) = match &resolved.root_kind {
             ResolvedPlaceRootKind::Slot { local, .. } => {
                 let info = &local_values[local.as_u32() as usize];
-                match (info.class.clone(), info.transport.root_alias) {
+                match (
+                    info.class.clone(),
+                    info.class
+                        .as_ref()
+                        .and_then(|class| yul_non_memory_root_space(class, &info.transport)),
+                ) {
                     (Some(class), Some(space)) if !matches!(class, YulValueClass::Word(_)) => (
                         YulPlaceRoot::Ptr {
                             local: YLocalId(local.as_u32()),
@@ -2884,8 +2924,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
             }
             mir2::RuntimeLocalRoot::Slot(class) => {
                 if let Some(value_class) = info.class.clone()
-                    && let Some(space) = info.transport.root_alias
-                    && !matches!(space, YulAddressSpace::Memory)
+                    && let Some(space) = yul_non_memory_root_space(&value_class, &info.transport)
                     && !matches!(value_class, YulValueClass::Word(_))
                 {
                     YulLocalRoot::PtrRoot {
@@ -2908,6 +2947,25 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
             },
         }
     }
+}
+
+fn yul_non_memory_root_space<'db>(
+    class: &YulValueClass<'db>,
+    transport: &YTransportInfo<'db>,
+) -> Option<YulAddressSpace> {
+    transport
+        .root_alias
+        .or_else(|| yul_space_for_class(class))
+        .filter(|space| !matches!(space, YulAddressSpace::Memory))
+}
+
+fn yul_actual_transport<'db>(
+    class: &YulValueClass<'db>,
+    transport: &YTransportInfo<'db>,
+) -> YTransportInfo<'db> {
+    yul_non_memory_root_space(class, transport)
+        .map(|space| transport.with_replaced_root_alias(Some(space)))
+        .unwrap_or_else(|| transport.clone())
 }
 
 pub fn yul_class_for_runtime_class<'db>(

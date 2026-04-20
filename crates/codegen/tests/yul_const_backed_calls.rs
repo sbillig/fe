@@ -111,6 +111,19 @@ fn readonly_view_params_stay_code_backed_through_transparent_private_helpers() {
                 && !line.contains("_arg0_f1_code(")),
         "readonly array params should not materialize whole arrays at transparent helper boundaries:\n{sum_first4}"
     );
+
+    let sum_last4 = function_body(&yul, "function $sum_last4_arg0_root_code(");
+    assert!(
+        sum_last4.contains("$take_u256_") && sum_last4.contains("_arg1_f0_code("),
+        "readonly array params should preserve nested code-backed refs through wrapper materialization:\n{sum_last4}"
+    );
+    assert!(
+        sum_last4.contains("$len_")
+            && sum_last4.contains("_arg0_f1_f0_code(")
+            && sum_last4.contains("$get_")
+            && sum_last4.contains("_arg0_f1_f0_code("),
+        "nested transparent helpers should see Take.base.Reverse.base as code-backed:\n{sum_last4}"
+    );
 }
 
 #[test]
@@ -123,7 +136,7 @@ fn transparent_wrapper_get_loads_base_handle_before_inner_get() {
         "file:///transparent_wrapper_get_loads_base_handle_before_inner_get.fe",
         &src,
     );
-    let get_reverse = function_body(&yul, "function $get_0(p0, p1) -> ret {");
+    let get_reverse = function_body(&yul, "function $get_0_arg0_f0_code(p0, p1) -> ret {");
 
     assert!(
         get_reverse.contains("mload(p0)") && get_reverse.contains("$get_"),
@@ -152,4 +165,25 @@ fn const_backed_constructor_args_stay_code_backed_until_abi_encoding() {
         create2_helper.contains("$encode_") && create2_helper.contains("_arg0_root_code(p2)"),
         "constructor args should flow directly into ABI encoding from their code-backed carrier:\n{create2_helper}"
     );
+    let mut tail = yul.as_str();
+    while let Some(start) = tail.find("function $") {
+        let function_tail = &tail[start..];
+        let end = function_tail
+            .find("\n      function ")
+            .or_else(|| function_tail.find("\n    function "))
+            .unwrap_or(function_tail.len());
+        let body = &function_tail[..end];
+        let signature = body.lines().next().unwrap_or_default();
+        if signature.contains("_arg0_root_code(")
+            && body
+                .lines()
+                .any(|line| line.contains("$encode_field_") && !line.contains("_arg0_root_code("))
+        {
+            assert!(
+                body.contains("datacopy("),
+                "code-backed aggregate transport should not be passed into plain field encoding without first materializing a scalar:\n{body}"
+            );
+        }
+        tail = &function_tail[end..];
+    }
 }

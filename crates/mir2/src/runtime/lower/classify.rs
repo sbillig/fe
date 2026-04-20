@@ -2056,6 +2056,7 @@ fn selected_semantic_copy<'db>(
         class,
         realization: RuntimeArgRealization::LowerSemanticOperand(NOperand {
             local,
+            origin: None,
             mode: ReadMode::Copy,
         }),
     }

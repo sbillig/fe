@@ -2926,6 +2926,7 @@ impl<'db> TyChecker<'db> {
                 trait_.params(self.db).to_vec(),
                 IndexMap::new(),
             )),
+            Some(ItemKind::ImplTrait(impl_trait)) => impl_trait.trait_inst_result(self.db).ok(),
             _ => None,
         }) else {
             return inst;

@@ -229,6 +229,7 @@ pub enum ReadMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct NOperand {
     pub local: SLocalId,
+    pub origin: Option<crate::hir_def::ExprId>,
     pub mode: ReadMode,
 }
 

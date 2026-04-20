@@ -665,6 +665,7 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
 fn copy_operand(local: SLocalId) -> NOperand {
     NOperand {
         local,
+        origin: None,
         mode: ReadMode::Copy,
     }
 }

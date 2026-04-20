@@ -23,7 +23,7 @@ use crate::{
             ty_def::BorrowKind,
         },
     },
-    hir_def::{Body, FuncParamMode, ItemKind, TopLevelMod},
+    hir_def::{Body, Expr, FuncParamMode, ItemKind, Partial, TopLevelMod},
     projection::{Aliasing, IndexSource, Projection},
     span::LazySpan,
 };
@@ -62,6 +62,14 @@ struct Loan<'db> {
     parents: FxHashSet<LoanId>,
     origin: crate::analysis::semantic::SemOrigin<'db>,
 }
+
+#[derive(Clone, Debug)]
+struct MoveSite<'db> {
+    origin: SemOrigin<'db>,
+    note: String,
+}
+
+type MovedPlaces<'db> = FxHashMap<CanonPlace<'db>, MoveSite<'db>>;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct State {
@@ -439,6 +447,7 @@ fn verify_operand<'db>(
     origin: SemOrigin<'db>,
     operand: NOperand,
 ) -> Result<(), CompleteDiagnostic> {
+    let origin = operand_origin(operand, origin);
     let local = verify_local_exists(db, instance, body, origin, operand.local)?;
     if operand.mode == ReadMode::Move
         && !local_has_runtime_move_semantics(db, local, &body.borrow_roots)
@@ -455,6 +464,10 @@ fn verify_operand<'db>(
         ));
     }
     Ok(())
+}
+
+fn operand_origin<'db>(operand: NOperand, fallback: SemOrigin<'db>) -> SemOrigin<'db> {
+    operand.origin.map_or(fallback, SemOrigin::Expr)
 }
 
 fn verify_local_exists<'db, 'a>(
@@ -675,7 +688,7 @@ struct Borrowck<'db> {
     param_loan_for_local: FxHashMap<crate::analysis::semantic::SLocalId, LoanId>,
     loans: Vec<Loan<'db>>,
     entry_state: Vec<State>,
-    moved_entry: Vec<FxHashMap<CanonPlace<'db>, crate::analysis::semantic::SemOrigin<'db>>>,
+    moved_entry: Vec<MovedPlaces<'db>>,
     live_before: Vec<Vec<FxHashSet<crate::analysis::semantic::SLocalId>>>,
     live_before_term: Vec<FxHashSet<crate::analysis::semantic::SLocalId>>,
 }
@@ -939,7 +952,7 @@ impl<'db> Borrowck<'db> {
     fn check_stmt(
         &self,
         state: &State,
-        moved: &FxHashMap<CanonPlace<'db>, crate::analysis::semantic::SemOrigin<'db>>,
+        moved: &MovedPlaces<'db>,
         live: &FxHashSet<crate::analysis::semantic::SLocalId>,
         stmt: &super::ir::NSStmt<'db>,
     ) -> Result<(), CompleteDiagnostic> {
@@ -987,7 +1000,7 @@ impl<'db> Borrowck<'db> {
     fn check_terminator(
         &self,
         state: &State,
-        moved: &FxHashMap<CanonPlace<'db>, crate::analysis::semantic::SemOrigin<'db>>,
+        moved: &MovedPlaces<'db>,
         live: &FxHashSet<crate::analysis::semantic::SLocalId>,
         term: &super::ir::NSTerminator<'db>,
     ) -> Result<(), CompleteDiagnostic> {
@@ -1411,7 +1424,7 @@ impl<'db> Borrowck<'db> {
     fn update_moved_for_stmt(
         &self,
         state: &State,
-        moved: &mut FxHashMap<CanonPlace<'db>, crate::analysis::semantic::SemOrigin<'db>>,
+        moved: &mut MovedPlaces<'db>,
         stmt: &super::ir::NSStmt<'db>,
     ) -> Result<(), CompleteDiagnostic> {
         match &stmt.kind {
@@ -1427,8 +1440,12 @@ impl<'db> Borrowck<'db> {
                     mode: ReadMode::Move,
                 } = expr
                 {
+                    let site = MoveSite {
+                        origin: stmt.origin,
+                        note: "value is moved here".to_string(),
+                    };
                     for place in self.canonicalize_place(state, place, stmt.origin)? {
-                        moved.insert(place, stmt.origin);
+                        moved.insert(place, site.clone());
                     }
                 }
                 self.record_expr_moves(state, moved, stmt.origin, expr)?;
@@ -1448,7 +1465,7 @@ impl<'db> Borrowck<'db> {
     fn check_expr_operands(
         &self,
         state: &State,
-        moved: &FxHashMap<CanonPlace<'db>, crate::analysis::semantic::SemOrigin<'db>>,
+        moved: &MovedPlaces<'db>,
         origin: crate::analysis::semantic::SemOrigin<'db>,
         expr: &NExpr<'db>,
     ) -> Result<(), CompleteDiagnostic> {
@@ -1530,11 +1547,12 @@ impl<'db> Borrowck<'db> {
     fn check_operand(
         &self,
         state: &State,
-        moved: &FxHashMap<CanonPlace<'db>, crate::analysis::semantic::SemOrigin<'db>>,
+        moved: &MovedPlaces<'db>,
         operand: NOperand,
         origin: crate::analysis::semantic::SemOrigin<'db>,
         message: &str,
     ) -> Result<(), CompleteDiagnostic> {
+        let origin = operand_origin(operand, origin);
         let targets = self.canonicalize_value_base(state, operand.local, origin)?;
         if targets.is_empty() {
             return Ok(());
@@ -1545,7 +1563,7 @@ impl<'db> Borrowck<'db> {
     fn record_expr_moves(
         &self,
         state: &State,
-        moved: &mut FxHashMap<CanonPlace<'db>, crate::analysis::semantic::SemOrigin<'db>>,
+        moved: &mut MovedPlaces<'db>,
         origin: crate::analysis::semantic::SemOrigin<'db>,
         expr: &NExpr<'db>,
     ) -> Result<(), CompleteDiagnostic> {
@@ -1593,16 +1611,38 @@ impl<'db> Borrowck<'db> {
     fn record_operand_move(
         &self,
         state: &State,
-        moved: &mut FxHashMap<CanonPlace<'db>, crate::analysis::semantic::SemOrigin<'db>>,
+        moved: &mut MovedPlaces<'db>,
         operand: NOperand,
         origin: crate::analysis::semantic::SemOrigin<'db>,
     ) -> Result<(), CompleteDiagnostic> {
+        let origin = operand_origin(operand, origin);
         if operand.mode == ReadMode::Move && self.local_has_runtime_move_semantics(operand.local) {
+            let site = self.move_site(operand, origin);
             for place in self.canonicalize_value_base(state, operand.local, origin)? {
-                moved.insert(place, origin);
+                moved.insert(place, site.clone());
             }
         }
         Ok(())
+    }
+
+    fn move_site(&self, operand: NOperand, origin: SemOrigin<'db>) -> MoveSite<'db> {
+        MoveSite {
+            origin,
+            note: self.moved_operand_name(operand).map_or_else(
+                || "value is moved here".to_string(),
+                |name| format!("`{name}` is moved here"),
+            ),
+        }
+    }
+
+    fn moved_operand_name(&self, operand: NOperand) -> Option<String> {
+        let expr = operand.origin?;
+        let body = self.hir_body?;
+        let Partial::Present(Expr::Path(Partial::Present(path))) = expr.data(self.db, body) else {
+            return None;
+        };
+        path.as_ident(self.db)
+            .map(|ident| ident.data(self.db).to_string())
     }
 
     fn local_has_runtime_move_semantics(&self, local: crate::analysis::semantic::SLocalId) -> bool {
@@ -1613,18 +1653,18 @@ impl<'db> Borrowck<'db> {
 
     fn check_moved_overlap(
         &self,
-        moved: &FxHashMap<CanonPlace<'db>, crate::analysis::semantic::SemOrigin<'db>>,
+        moved: &MovedPlaces<'db>,
         accessed: &FxHashSet<CanonPlace<'db>>,
         origin: crate::analysis::semantic::SemOrigin<'db>,
         message: &str,
     ) -> Result<(), CompleteDiagnostic> {
-        if let Some((_, moved_origin)) = moved.iter().find(|(moved, _)| {
+        if let Some((_, site)) = moved.iter().find(|(moved, _)| {
             accessed
                 .iter()
                 .any(|accessed| places_overlap(moved, accessed))
         }) {
             let mut diag = self.move_conflict_diag(origin, message.to_string());
-            self.push_secondary_origin(&mut diag, *moved_origin, "value is moved here".to_string());
+            self.push_secondary_origin(&mut diag, site.origin, site.note.clone());
             return Err(diag);
         }
         Ok(())
@@ -1632,11 +1672,11 @@ impl<'db> Borrowck<'db> {
 
     fn check_moved_parent(
         &self,
-        moved: &FxHashMap<CanonPlace<'db>, crate::analysis::semantic::SemOrigin<'db>>,
+        moved: &MovedPlaces<'db>,
         written: &FxHashSet<CanonPlace<'db>>,
         origin: crate::analysis::semantic::SemOrigin<'db>,
     ) -> Result<(), CompleteDiagnostic> {
-        if let Some((_, moved_origin)) = moved.iter().find(|(moved, _)| {
+        if let Some((_, site)) = moved.iter().find(|(moved, _)| {
             written.iter().any(|written| {
                 written.root == moved.root
                     && moved.proj.is_prefix_of(&written.proj)
@@ -1645,7 +1685,7 @@ impl<'db> Borrowck<'db> {
         }) {
             let mut diag =
                 self.move_conflict_diag(origin, "cannot write through a moved value".to_string());
-            self.push_secondary_origin(&mut diag, *moved_origin, "value is moved here".to_string());
+            self.push_secondary_origin(&mut diag, site.origin, site.note.clone());
             return Err(diag);
         }
         Ok(())
@@ -2241,13 +2281,13 @@ impl ForwardCfgAnalysis for BorrowEntryStateAnalysis<'_, '_> {
 }
 
 #[derive(Clone, Default)]
-struct MovedState<'db>(FxHashMap<CanonPlace<'db>, crate::analysis::semantic::SemOrigin<'db>>);
+struct MovedState<'db>(MovedPlaces<'db>);
 
 impl JoinSemiLattice for MovedState<'_> {
     fn join_into(&mut self, other: &Self) -> bool {
         let mut changed = false;
-        for (place, origin) in &other.0 {
-            changed |= self.0.insert(place.clone(), *origin).is_none();
+        for (place, site) in &other.0 {
+            changed |= self.0.insert(place.clone(), site.clone()).is_none();
         }
         changed
     }
