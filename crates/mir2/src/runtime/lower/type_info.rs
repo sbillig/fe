@@ -6,6 +6,7 @@ use hir::analysis::ty::{
     trait_resolution::PredicateListId,
     ty_def::{BorrowKind, MAX_INLINE_STRING_BYTES, PrimTy, TyBase, TyData, TyId},
 };
+use hir::hir_def::scope_graph::ScopeId;
 use salsa::Update;
 
 use crate::{
@@ -39,6 +40,267 @@ struct RuntimeEffectHandleInfo<'db> {
     space: AddressSpaceKind,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RuntimeTypeModel<'db> {
+    repr_ty: TyId<'db>,
+    shape: RuntimeTypeShape<'db>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RuntimeTypeShape<'db> {
+    Borrow {
+        kind: BorrowKind,
+        inner: TyId<'db>,
+    },
+    Capability {
+        inner: TyId<'db>,
+    },
+    EffectHandle {
+        info: RuntimeEffectHandleInfo<'db>,
+        effect_scope: ScopeId<'db>,
+    },
+    Scalar(ScalarClass<'db>),
+    Aggregate,
+    Other,
+}
+
+impl<'db> RuntimeTypeModel<'db> {
+    fn new(
+        db: &'db dyn MirDb,
+        ty: TyId<'db>,
+        scope: Option<ScopeId<'db>>,
+        assumptions: PredicateListId<'db>,
+    ) -> Self {
+        let repr_ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
+        let effect_scope = scope.or_else(|| repr_ty.as_scope(db));
+        let shape = if let Some((kind, inner)) = repr_ty.as_borrow(db) {
+            RuntimeTypeShape::Borrow { kind, inner }
+        } else if let Some((_, inner)) = repr_ty.as_capability(db) {
+            RuntimeTypeShape::Capability { inner }
+        } else if let Some(effect_scope) = effect_scope
+            && let Some(info) =
+                runtime_effect_handle_info(db, repr_ty, Some(effect_scope), assumptions)
+        {
+            RuntimeTypeShape::EffectHandle { info, effect_scope }
+        } else if let Some(scalar) = scalar_class_from_repr_ty(db, repr_ty) {
+            RuntimeTypeShape::Scalar(scalar)
+        } else if repr_ty.as_enum(db).is_some()
+            || repr_ty.is_struct(db)
+            || repr_ty.is_array(db)
+            || repr_ty.is_tuple(db)
+        {
+            RuntimeTypeShape::Aggregate
+        } else {
+            RuntimeTypeShape::Other
+        };
+        Self { repr_ty, shape }
+    }
+
+    fn boundary_spec(
+        &self,
+        db: &'db dyn MirDb,
+        default_space: AddressSpaceKind,
+        scope: Option<ScopeId<'db>>,
+        assumptions: PredicateListId<'db>,
+    ) -> Option<RuntimeBoundarySpec<'db>> {
+        match &self.shape {
+            RuntimeTypeShape::Borrow { kind, inner } => {
+                if runtime_zero_sized_ty(db, *inner, scope, assumptions) {
+                    return Some(RuntimeBoundarySpec::ExactShape(
+                        provider_class_for_target_in_context(
+                            db,
+                            Some(*inner),
+                            default_space,
+                            scope,
+                            assumptions,
+                        ),
+                    ));
+                }
+                let access = match kind {
+                    BorrowKind::Ref => BorrowAccess::ReadOnly,
+                    BorrowKind::Mut => BorrowAccess::ReadWrite,
+                };
+                Some(RuntimeBoundarySpec::BorrowLike {
+                    pointee: stored_class_for_ty_in_context(db, *inner, scope, assumptions),
+                    access,
+                    allow: default_borrow_transport_set(access, default_space),
+                })
+            }
+            RuntimeTypeShape::Capability { inner } => Some(RuntimeBoundarySpec::ExactShape(
+                provider_class_for_target_in_context(
+                    db,
+                    Some(*inner),
+                    default_space,
+                    scope,
+                    assumptions,
+                ),
+            )),
+            RuntimeTypeShape::EffectHandle { info, effect_scope } => {
+                Some(RuntimeBoundarySpec::ExactShape(
+                    effect_handle_class_for_info(db, *info, *effect_scope, assumptions),
+                ))
+            }
+            RuntimeTypeShape::Scalar(_) | RuntimeTypeShape::Aggregate | RuntimeTypeShape::Other => {
+                if runtime_zero_sized_ty(db, self.repr_ty, scope, assumptions) {
+                    return None;
+                }
+                self.top_level_class(db, default_space, scope, assumptions)
+                    .map(|class| {
+                        if class.is_transport()
+                            || self.transport_sensitive_aggregate(db, scope, assumptions)
+                        {
+                            RuntimeBoundarySpec::ExactShape(class)
+                        } else {
+                            RuntimeBoundarySpec::ExactTransport(class)
+                        }
+                    })
+            }
+        }
+    }
+
+    fn top_level_class(
+        &self,
+        db: &'db dyn MirDb,
+        default_space: AddressSpaceKind,
+        scope: Option<ScopeId<'db>>,
+        assumptions: PredicateListId<'db>,
+    ) -> Option<RuntimeClass<'db>> {
+        match &self.shape {
+            RuntimeTypeShape::Borrow { inner, .. } => {
+                if runtime_zero_sized_ty(db, *inner, scope, assumptions) {
+                    Some(provider_class_for_target_in_context(
+                        db,
+                        Some(*inner),
+                        default_space,
+                        scope,
+                        assumptions,
+                    ))
+                } else {
+                    Some(object_ref_class_for_target_in_context(
+                        db,
+                        *inner,
+                        scope,
+                        assumptions,
+                    ))
+                }
+            }
+            RuntimeTypeShape::Capability { inner } => Some(provider_class_for_target_in_context(
+                db,
+                Some(*inner),
+                default_space,
+                scope,
+                assumptions,
+            )),
+            RuntimeTypeShape::EffectHandle { info, effect_scope } => Some(
+                effect_handle_class_for_info(db, *info, *effect_scope, assumptions),
+            ),
+            RuntimeTypeShape::Scalar(scalar) => {
+                (!runtime_zero_sized_ty(db, self.repr_ty, scope, assumptions))
+                    .then(|| RuntimeClass::Scalar(scalar.clone()))
+            }
+            RuntimeTypeShape::Aggregate => {
+                (!runtime_zero_sized_ty(db, self.repr_ty, scope, assumptions)).then(|| {
+                    RuntimeClass::AggregateValue {
+                        layout: layout_for_ty_in_context(db, self.repr_ty, scope, assumptions),
+                    }
+                })
+            }
+            RuntimeTypeShape::Other => None,
+        }
+    }
+
+    fn stored_class(
+        &self,
+        db: &'db dyn MirDb,
+        scope: Option<ScopeId<'db>>,
+        assumptions: PredicateListId<'db>,
+    ) -> RuntimeClass<'db> {
+        match &self.shape {
+            RuntimeTypeShape::Borrow { inner, .. } | RuntimeTypeShape::Capability { inner } => {
+                provider_class_for_target_in_context(
+                    db,
+                    Some(*inner),
+                    AddressSpaceKind::Memory,
+                    scope,
+                    assumptions,
+                )
+            }
+            RuntimeTypeShape::EffectHandle { info, effect_scope } => {
+                effect_handle_class_for_info(db, *info, *effect_scope, assumptions)
+            }
+            RuntimeTypeShape::Scalar(scalar) => RuntimeClass::Scalar(scalar.clone()),
+            RuntimeTypeShape::Aggregate | RuntimeTypeShape::Other => RuntimeClass::AggregateValue {
+                layout: layout_for_ty_in_context(db, self.repr_ty, scope, assumptions),
+            },
+        }
+    }
+
+    fn transport_sensitive_aggregate(
+        &self,
+        db: &'db dyn MirDb,
+        scope: Option<ScopeId<'db>>,
+        assumptions: PredicateListId<'db>,
+    ) -> bool {
+        match &self.shape {
+            RuntimeTypeShape::Borrow { .. } => true,
+            RuntimeTypeShape::Capability { .. }
+            | RuntimeTypeShape::EffectHandle { .. }
+            | RuntimeTypeShape::Scalar(_) => false,
+            RuntimeTypeShape::Aggregate => {
+                if self.repr_ty.is_array(db) {
+                    let (_, args) = self.repr_ty.decompose_ty_app(db);
+                    return args.first().copied().is_some_and(|elem| {
+                        runtime_transport_sensitive_aggregate(db, elem, scope, assumptions)
+                    });
+                }
+                if self.repr_ty.is_tuple(db) || self.repr_ty.is_struct(db) {
+                    return self.repr_ty.field_types(db).into_iter().any(|field| {
+                        runtime_transport_sensitive_aggregate(db, field, scope, assumptions)
+                    });
+                }
+                if let Some(enum_) = self.repr_ty.as_enum(db) {
+                    let adt = enum_.as_adt(db);
+                    let args = self.repr_ty.generic_args(db);
+                    return adt
+                        .fields(db)
+                        .iter()
+                        .enumerate()
+                        .any(|(variant_idx, variant)| {
+                            (0..variant.num_types()).any(|field_idx| {
+                                runtime_transport_sensitive_aggregate(
+                                    db,
+                                    adt.fields(db)[variant_idx]
+                                        .ty(db, field_idx)
+                                        .instantiate(db, args),
+                                    scope,
+                                    assumptions,
+                                )
+                            })
+                        });
+                }
+                false
+            }
+            RuntimeTypeShape::Other => false,
+        }
+    }
+
+    fn boundary_source_uses_transport_sensitive_aggregate(
+        &self,
+        db: &'db dyn MirDb,
+        source_ty: TyId<'db>,
+        scope: Option<ScopeId<'db>>,
+        assumptions: PredicateListId<'db>,
+    ) -> bool {
+        if let Some((_, inner)) = source_ty.as_borrow(db) {
+            return runtime_transport_sensitive_aggregate(db, inner, scope, assumptions);
+        }
+        if let RuntimeTypeShape::Borrow { inner, .. } = &self.shape {
+            return runtime_transport_sensitive_aggregate(db, *inner, scope, assumptions);
+        }
+        self.transport_sensitive_aggregate(db, scope, assumptions)
+    }
+}
+
 pub(crate) fn runtime_repr_ty_in_context<'db>(
     db: &'db dyn MirDb,
     ty: TyId<'db>,
@@ -50,15 +312,6 @@ pub(crate) fn runtime_repr_ty_in_context<'db>(
         ty = scope.map_or(inner, |scope| normalize_ty(db, inner, scope, assumptions));
     }
     ty
-}
-
-pub(crate) fn is_zero_sized_in_context<'db>(
-    db: &'db dyn MirDb,
-    ty: TyId<'db>,
-    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
-    assumptions: PredicateListId<'db>,
-) -> bool {
-    runtime_zero_sized_ty(db, ty, scope, assumptions)
 }
 
 #[salsa::tracked(
@@ -201,25 +454,7 @@ pub(crate) fn stored_class_for_ty_in_context<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> RuntimeClass<'db> {
-    let ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
-    if let Some((_, inner)) = ty.as_capability(db) {
-        return provider_class_for_target_in_context(
-            db,
-            Some(inner),
-            AddressSpaceKind::Memory,
-            scope,
-            assumptions,
-        );
-    }
-    if let Some(class) = effect_handle_class_for_ty(db, ty, scope, assumptions) {
-        return class;
-    }
-    if let Some(scalar) = scalar_class_for_ty_in_context(db, ty, scope, assumptions) {
-        return RuntimeClass::Scalar(scalar);
-    }
-    RuntimeClass::AggregateValue {
-        layout: layout_for_ty_in_context(db, ty, scope, assumptions),
-    }
+    RuntimeTypeModel::new(db, ty, scope, assumptions).stored_class(db, scope, assumptions)
 }
 
 pub(crate) fn object_ref_class_for_target_in_context<'db>(
@@ -360,22 +595,19 @@ fn scalar_class_from_repr_ty<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> Option<S
     })
 }
 
-fn effect_handle_class_for_ty<'db>(
+fn effect_handle_class_for_info<'db>(
     db: &'db dyn MirDb,
-    ty: TyId<'db>,
-    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    info: RuntimeEffectHandleInfo<'db>,
+    effect_scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-) -> Option<RuntimeClass<'db>> {
-    let ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
-    let scope = scope.or_else(|| ty.as_scope(db))?;
-    let info = runtime_effect_handle_info(db, ty, Some(scope), assumptions)?;
-    Some(provider_class_for_target_in_context(
+) -> RuntimeClass<'db> {
+    provider_class_for_target_in_context(
         db,
         Some(info.target_ty),
         info.space,
-        Some(scope),
+        Some(effect_scope),
         assumptions,
-    ))
+    )
 }
 
 #[salsa::tracked]
@@ -386,61 +618,12 @@ fn runtime_boundary_spec<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> Option<RuntimeBoundarySpec<'db>> {
-    let repr_ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
-    if repr_ty != ty {
-        return runtime_boundary_spec(db, repr_ty, default_space, scope, assumptions);
-    }
-    if let Some((kind, inner)) = repr_ty.as_borrow(db) {
-        if is_zero_sized_in_context(db, inner, scope, assumptions) {
-            if repr_ty.as_capability(db).is_some() {
-                return Some(RuntimeBoundarySpec::ExactShape(
-                    provider_class_for_target_in_context(
-                        db,
-                        Some(inner),
-                        default_space,
-                        scope,
-                        assumptions,
-                    ),
-                ));
-            }
-            return None;
-        }
-        let access = match kind {
-            BorrowKind::Ref => BorrowAccess::ReadOnly,
-            BorrowKind::Mut => BorrowAccess::ReadWrite,
-        };
-        return Some(RuntimeBoundarySpec::BorrowLike {
-            pointee: stored_class_for_ty_in_context(db, inner, scope, assumptions),
-            access,
-            allow: default_borrow_transport_set(access, default_space),
-        });
-    }
-    if let Some((_, inner)) = repr_ty.as_capability(db) {
-        return Some(RuntimeBoundarySpec::ExactShape(
-            provider_class_for_target_in_context(
-                db,
-                Some(inner),
-                default_space,
-                scope,
-                assumptions,
-            ),
-        ));
-    }
-    if let Some(class) = effect_handle_class_for_ty(db, repr_ty, scope, assumptions) {
-        return Some(RuntimeBoundarySpec::ExactShape(class));
-    }
-    if repr_ty == TyId::unit(db) || is_zero_sized_in_context(db, repr_ty, scope, assumptions) {
-        return None;
-    }
-    runtime_top_level_class(db, repr_ty, default_space, scope, assumptions).map(|class| {
-        if class.is_transport()
-            || runtime_transport_sensitive_aggregate(db, repr_ty, scope, assumptions)
-        {
-            RuntimeBoundarySpec::ExactShape(class)
-        } else {
-            RuntimeBoundarySpec::ExactTransport(class)
-        }
-    })
+    RuntimeTypeModel::new(db, ty, scope, assumptions).boundary_spec(
+        db,
+        default_space,
+        scope,
+        assumptions,
+    )
 }
 
 #[salsa::tracked]
@@ -451,58 +634,12 @@ fn runtime_top_level_class<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> Option<RuntimeClass<'db>> {
-    let repr_ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
-    if repr_ty != ty {
-        return runtime_top_level_class(db, repr_ty, default_space, scope, assumptions);
-    }
-    if let Some((_, inner)) = repr_ty.as_borrow(db) {
-        if is_zero_sized_in_context(db, inner, scope, assumptions) {
-            if repr_ty.as_capability(db).is_some() {
-                return Some(provider_class_for_target_in_context(
-                    db,
-                    Some(inner),
-                    default_space,
-                    scope,
-                    assumptions,
-                ));
-            }
-            return None;
-        }
-        return Some(object_ref_class_for_target_in_context(
-            db,
-            inner,
-            scope,
-            assumptions,
-        ));
-    }
-    if let Some((_, inner)) = repr_ty.as_capability(db) {
-        return Some(provider_class_for_target_in_context(
-            db,
-            Some(inner),
-            default_space,
-            scope,
-            assumptions,
-        ));
-    }
-    if let Some(class) = effect_handle_class_for_ty(db, repr_ty, scope, assumptions) {
-        return Some(class);
-    }
-    if repr_ty == TyId::unit(db) || is_zero_sized_in_context(db, repr_ty, scope, assumptions) {
-        return None;
-    }
-    if let Some(scalar) = scalar_class_from_repr_ty(db, repr_ty) {
-        return Some(RuntimeClass::Scalar(scalar));
-    }
-    if repr_ty.as_enum(db).is_some()
-        || repr_ty.is_struct(db)
-        || repr_ty.is_array(db)
-        || repr_ty.is_tuple(db)
-    {
-        return Some(RuntimeClass::AggregateValue {
-            layout: layout_for_ty_in_context(db, repr_ty, scope, assumptions),
-        });
-    }
-    None
+    RuntimeTypeModel::new(db, ty, scope, assumptions).top_level_class(
+        db,
+        default_space,
+        scope,
+        assumptions,
+    )
 }
 
 #[salsa::tracked]
@@ -522,9 +659,6 @@ fn runtime_effect_handle_info<'db>(
         return None;
     }
     let target_ty = semantics.target_ty?;
-    if is_zero_sized_in_context(db, target_ty, Some(scope), assumptions) {
-        return None;
-    }
     Some(RuntimeEffectHandleInfo {
         target_ty,
         space: provider_address_space_to_runtime(semantics.address_space?),
@@ -538,14 +672,8 @@ fn runtime_boundary_source_uses_transport_sensitive_aggregate<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> bool {
-    if let Some((_, inner)) = ty.as_borrow(db) {
-        return runtime_transport_sensitive_aggregate(db, inner, scope, assumptions);
-    }
-    let repr_ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
-    if let Some((_, inner)) = repr_ty.as_borrow(db) {
-        return runtime_transport_sensitive_aggregate(db, inner, scope, assumptions);
-    }
-    runtime_transport_sensitive_aggregate(db, repr_ty, scope, assumptions)
+    RuntimeTypeModel::new(db, ty, scope, assumptions)
+        .boundary_source_uses_transport_sensitive_aggregate(db, ty, scope, assumptions)
 }
 
 #[salsa::tracked(
@@ -558,52 +686,11 @@ fn runtime_transport_sensitive_aggregate<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> bool {
-    let repr_ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
-    if repr_ty != ty {
-        return runtime_transport_sensitive_aggregate(db, repr_ty, scope, assumptions);
-    }
-    if repr_ty.as_borrow(db).is_some() {
-        return true;
-    }
-    if repr_ty.as_capability(db).is_some()
-        || runtime_effect_handle_info(db, repr_ty, scope, assumptions).is_some()
-        || scalar_class_from_repr_ty(db, repr_ty).is_some()
-    {
-        return false;
-    }
-    if repr_ty.is_array(db) {
-        let (_, args) = repr_ty.decompose_ty_app(db);
-        return args.first().copied().is_some_and(|elem| {
-            runtime_transport_sensitive_aggregate(db, elem, scope, assumptions)
-        });
-    }
-    if repr_ty.is_tuple(db) || repr_ty.is_struct(db) {
-        return repr_ty
-            .field_types(db)
-            .into_iter()
-            .any(|field| runtime_transport_sensitive_aggregate(db, field, scope, assumptions));
-    }
-    if let Some(enum_) = repr_ty.as_enum(db) {
-        let adt = enum_.as_adt(db);
-        let args = repr_ty.generic_args(db);
-        return adt
-            .fields(db)
-            .iter()
-            .enumerate()
-            .any(|(variant_idx, variant)| {
-                (0..variant.num_types()).any(|field_idx| {
-                    runtime_transport_sensitive_aggregate(
-                        db,
-                        adt.fields(db)[variant_idx]
-                            .ty(db, field_idx)
-                            .instantiate(db, args),
-                        scope,
-                        assumptions,
-                    )
-                })
-            });
-    }
-    false
+    RuntimeTypeModel::new(db, ty, scope, assumptions).transport_sensitive_aggregate(
+        db,
+        scope,
+        assumptions,
+    )
 }
 
 fn runtime_zero_sized_ty_cycle_initial<'db>(
@@ -644,4 +731,135 @@ fn runtime_transport_sensitive_aggregate_cycle_recover<'db>(
     _assumptions: PredicateListId<'db>,
 ) -> salsa::CycleRecoveryAction<bool> {
     salsa::CycleRecoveryAction::Iterate
+}
+
+#[cfg(test)]
+mod tests {
+    use driver::DriverDataBase;
+
+    use super::*;
+
+    #[test]
+    fn plain_runtime_zst_boundary_is_erased() {
+        let db = DriverDataBase::default();
+        let assumptions = PredicateListId::new(&db, Vec::new());
+        let unit = TyId::unit(&db);
+
+        assert_eq!(
+            boundary_spec_for_ty_in_context(&db, unit, AddressSpaceKind::Memory, None, assumptions),
+            None
+        );
+        assert_eq!(
+            top_level_class_for_ty_in_context(
+                &db,
+                unit,
+                AddressSpaceKind::Memory,
+                None,
+                assumptions
+            ),
+            None
+        );
+        assert!(
+            matches!(
+                stored_class_for_ty_in_context(&db, unit, None, assumptions),
+                RuntimeClass::AggregateValue { .. }
+            ),
+            "stored ZST layout should remain available for aggregate layout construction",
+        );
+    }
+
+    #[test]
+    fn zst_borrow_boundary_preserves_provider_transport() {
+        let db = DriverDataBase::default();
+        let assumptions = PredicateListId::new(&db, Vec::new());
+        let borrowed_unit = TyId::borrow_mut_of(&db, TyId::unit(&db));
+        let boundary = boundary_spec_for_ty_in_context(
+            &db,
+            borrowed_unit,
+            AddressSpaceKind::Memory,
+            None,
+            assumptions,
+        )
+        .expect("borrowed ZST should stay runtime-visible as provider transport");
+        let RuntimeBoundarySpec::ExactShape(class) = boundary else {
+            panic!("borrowed ZST should use exact-shape provider transport: {boundary:#?}");
+        };
+        assert_memory_provider_ref(&class);
+
+        let top_level = top_level_class_for_ty_in_context(
+            &db,
+            borrowed_unit,
+            AddressSpaceKind::Memory,
+            None,
+            assumptions,
+        )
+        .expect("borrowed ZST should have a top-level provider class");
+        assert_memory_provider_ref(&top_level);
+        assert_memory_provider_ref(&stored_class_for_ty_in_context(
+            &db,
+            borrowed_unit,
+            None,
+            assumptions,
+        ));
+    }
+
+    #[test]
+    fn non_zst_borrow_boundary_remains_borrow_like() {
+        let db = DriverDataBase::default();
+        let assumptions = PredicateListId::new(&db, Vec::new());
+        let borrowed_word = TyId::borrow_mut_of(&db, TyId::u256(&db));
+        let boundary = boundary_spec_for_ty_in_context(
+            &db,
+            borrowed_word,
+            AddressSpaceKind::Memory,
+            None,
+            assumptions,
+        )
+        .expect("non-ZST borrow should stay runtime-visible");
+        let RuntimeBoundarySpec::BorrowLike { access, .. } = boundary else {
+            panic!("non-ZST borrow should stay borrow-like at boundaries: {boundary:#?}");
+        };
+        assert_eq!(access, BorrowAccess::ReadWrite);
+
+        let top_level = top_level_class_for_ty_in_context(
+            &db,
+            borrowed_word,
+            AddressSpaceKind::Memory,
+            None,
+            assumptions,
+        )
+        .expect("non-ZST borrow should have a top-level object ref class");
+        assert!(
+            matches!(
+                top_level,
+                RuntimeClass::Ref {
+                    kind: RefKind::Object,
+                    ..
+                }
+            ),
+            "non-ZST borrow top-level class should remain an object ref: {top_level:#?}",
+        );
+        assert_memory_provider_ref(&stored_class_for_ty_in_context(
+            &db,
+            borrowed_word,
+            None,
+            assumptions,
+        ));
+    }
+
+    fn assert_memory_provider_ref(class: &RuntimeClass<'_>) {
+        let RuntimeClass::Ref { kind, .. } = class else {
+            panic!("expected provider ref, got {class:#?}");
+        };
+        assert!(
+            matches!(
+                kind,
+                RefKind::Provider {
+                    space: AddressSpaceKind::Memory,
+                    ..
+                }
+            ),
+            "expected memory provider ref, got {class:#?}",
+        );
+    }
 }
