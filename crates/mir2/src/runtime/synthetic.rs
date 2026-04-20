@@ -24,7 +24,7 @@ use crate::{
     },
     layout_size_bytes,
     runtime::{
-        AddressSpaceKind, ConstScalar, ContractEffectArgPlan, ContractInitAbiPlan,
+        AddressSpaceKind, BorrowAccess, ConstScalar, ContractEffectArgPlan, ContractInitAbiPlan,
         ContractRecvAbiPlan, DispatchDefault, InitArgsPlan, PlaceElem, PlaceRoot, RBlock, RBlockId,
         RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView, RuntimeBody,
         RuntimeBoundarySpec, RuntimeBuiltin, RuntimeCarrier, RuntimeClass, RuntimeInputPlan,
@@ -40,8 +40,9 @@ use crate::{
             },
             interface::runtime_visible_binding_plans,
             realize::{
-                RuntimeBoundaryMatcher, RuntimeBoundaryMaterialization,
-                RuntimeBoundarySourceClasses, RuntimeBoundaryValueRealization,
+                RuntimeBoundaryAddress, RuntimeBoundaryMatcher, RuntimeBoundaryMaterialization,
+                RuntimeBoundaryValueRealization, RuntimeBoundaryValueSelector,
+                RuntimeBoundaryValueSource,
             },
             returns::RuntimeReturnAnalysisCx,
             type_info::{RuntimeTypeEnv, top_level_class_for_ty_in_env},
@@ -520,13 +521,11 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     declared_ty,
                     boundary,
                 } => {
-                    let class = self
-                        .realize_runtime_boundary_class(None, boundary)
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "borrow-like boundary has no realizable synthetic placeholder class: {boundary:?}"
-                            )
-                        });
+                    let class = RuntimeBoundaryMatcher::placeholder_class(boundary).unwrap_or_else(|| {
+                        panic!(
+                            "borrow-like boundary has no realizable synthetic placeholder class: {boundary:?}"
+                        )
+                    });
                     self.push_synthetic_default_value(bb, *declared_ty, &class)
                 }
             })
@@ -817,30 +816,6 @@ impl<'db> SyntheticBodyBuilder<'db> {
             .collect()
     }
 
-    fn realize_runtime_boundary_class(
-        &self,
-        source: Option<RLocalId>,
-        boundary: &RuntimeBoundarySpec<'db>,
-    ) -> Option<RuntimeClass<'db>> {
-        source
-            .map(|source| self.runtime_boundary_source_classes(source))
-            .unwrap_or(RuntimeBoundarySourceClasses {
-                value: None,
-                address: None,
-            })
-            .realized_boundary_class(boundary)
-    }
-
-    fn runtime_boundary_source_classes(
-        &self,
-        source: RLocalId,
-    ) -> RuntimeBoundarySourceClasses<'db> {
-        RuntimeBoundarySourceClasses {
-            value: self.locals[source.index()].carrier.value_class().cloned(),
-            address: self.runtime_place_addr_class(source),
-        }
-    }
-
     fn runtime_class_for_param_arg(
         &self,
         arg: RLocalId,
@@ -848,9 +823,13 @@ impl<'db> SyntheticBodyBuilder<'db> {
     ) -> RuntimeClass<'db> {
         match plan {
             RuntimeParamPlan::Erased => None,
-            RuntimeParamPlan::Boundary(boundary) => {
-                self.realize_runtime_boundary_class(Some(arg), boundary)
+            RuntimeParamPlan::Boundary(RuntimeBoundarySpec::ExactTransport(target)) => {
+                Some(target.clone())
             }
+            RuntimeParamPlan::Boundary(boundary) => self
+                .runtime_boundary_value_source(arg)
+                .and_then(|source| source.realized_boundary_class(boundary))
+                .or_else(|| RuntimeBoundaryMatcher::placeholder_class(boundary)),
             RuntimeParamPlan::PassActual => self.locals[arg.index()].carrier.value_class().cloned(),
         }
         .unwrap_or_else(|| panic!("cannot specialize erased runtime arg {arg:?}"))
@@ -890,95 +869,47 @@ impl<'db> SyntheticBodyBuilder<'db> {
         src: RLocalId,
         boundary: &RuntimeBoundarySpec<'db>,
     ) -> RuntimeBoundaryValueRealization<'db> {
-        let source = self.locals[src.index()]
-            .carrier
-            .value_class()
-            .cloned()
-            .unwrap_or_else(|| {
-                panic!("cannot realize erased runtime value {src:?} for boundary {boundary:?}")
-            });
-        let source_classes = RuntimeBoundarySourceClasses {
-            value: Some(source.clone()),
-            address: self.runtime_place_addr_class(src),
-        };
-        match boundary {
-            RuntimeBoundarySpec::ExactTransport(target) => {
-                RuntimeBoundaryValueRealization::CoerceValue {
-                    target: target.clone(),
-                }
-            }
-            RuntimeBoundarySpec::ExactShape(target) => {
-                if source_classes.compatible_value_class(boundary).is_some() {
-                    return RuntimeBoundaryValueRealization::UseValue;
-                }
-                if let Some(actual) = source_classes.compatible_address_class(boundary) {
-                    return RuntimeBoundaryValueRealization::AddrOfRuntimePlace {
-                        place: self
-                            .runtime_place_for_local(src)
-                            .expect("local with place address class should have a place"),
-                        class: actual,
-                    };
-                }
-                RuntimeBoundaryValueRealization::CoerceValue {
-                    target: target.clone(),
-                }
-            }
-            RuntimeBoundarySpec::BorrowLike { .. }
-                if source_classes.compatible_value_class(boundary).is_some() =>
-            {
-                RuntimeBoundaryValueRealization::UseValue
-            }
+        let mut source = self.runtime_boundary_value_source(src).unwrap_or_else(|| {
+            panic!("cannot realize erased runtime value {src:?} for boundary {boundary:?}")
+        });
+        if matches!(
+            boundary,
             RuntimeBoundarySpec::BorrowLike {
-                access: crate::runtime::BorrowAccess::ReadWrite,
+                access: BorrowAccess::ReadWrite,
                 allow,
                 ..
-            } if allow.allow_object => {
-                if let Some((place, actual)) = self.promote_runtime_aggregate_local_place(src)
-                    && RuntimeBoundaryMatcher::class_satisfies_boundary(&actual, boundary)
-                {
-                    return RuntimeBoundaryValueRealization::AddrOfRuntimePlace {
-                        place,
-                        class: actual,
-                    };
-                }
-                if let Some(actual) = source_classes.compatible_address_class(boundary) {
-                    return RuntimeBoundaryValueRealization::AddrOfRuntimePlace {
-                        place: self
-                            .runtime_place_for_local(src)
-                            .expect("local with place address class should have a place"),
-                        class: actual,
-                    };
-                }
-                self.materialization_realization_for_boundary(boundary, &source)
-            }
-            RuntimeBoundarySpec::BorrowLike { .. } => {
-                if let Some(actual) = source_classes.compatible_address_class(boundary) {
-                    return RuntimeBoundaryValueRealization::AddrOfRuntimePlace {
-                        place: self
-                            .runtime_place_for_local(src)
-                            .expect("local with place address class should have a place"),
-                        class: actual,
-                    };
-                }
-                self.materialization_realization_for_boundary(boundary, &source)
-            }
+            } if allow.allow_object
+        ) && let Some(address) = self.promote_runtime_aggregate_local_place(src)
+        {
+            source.address = Some(address);
         }
+        RuntimeBoundaryValueSelector::select(source, boundary).unwrap_or_else(|| {
+            let source = self.locals[src.index()]
+                .carrier
+                .value_class()
+                .cloned()
+                .unwrap_or_else(|| panic!("cannot realize erased runtime value {src:?}"));
+            panic!(
+                "borrow-like boundary has no realizable synthetic materialization: source={source:?} boundary={boundary:?}"
+            )
+        })
     }
 
-    fn materialization_realization_for_boundary(
+    fn runtime_boundary_value_source(
         &self,
-        boundary: &RuntimeBoundarySpec<'db>,
-        source: &RuntimeClass<'db>,
-    ) -> RuntimeBoundaryValueRealization<'db> {
-        RuntimeBoundaryMaterialization::for_boundary(boundary)
-            .map(|materialization| RuntimeBoundaryValueRealization::MaterializeValue {
-                materialization,
-            })
-            .unwrap_or_else(|| {
-                panic!(
-                    "borrow-like boundary has no realizable synthetic materialization: source={source:?} boundary={boundary:?}"
-                )
-            })
+        source: RLocalId,
+    ) -> Option<RuntimeBoundaryValueSource<'db>> {
+        Some(RuntimeBoundaryValueSource {
+            value: self.locals[source.index()].carrier.value_class()?.clone(),
+            address: self.runtime_boundary_address(source),
+        })
+    }
+
+    fn runtime_boundary_address(&self, source: RLocalId) -> Option<RuntimeBoundaryAddress<'db>> {
+        Some(RuntimeBoundaryAddress {
+            place: self.runtime_place_for_local(source)?,
+            class: self.runtime_place_addr_class(source)?,
+        })
     }
 
     fn realize_runtime_boundary_value(
@@ -1005,7 +936,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
     fn promote_runtime_aggregate_local_place(
         &mut self,
         local: RLocalId,
-    ) -> Option<(RuntimePlace<'db>, RuntimeClass<'db>)> {
+    ) -> Option<RuntimeBoundaryAddress<'db>> {
         let class = self
             .locals
             .get(local.index())?
@@ -1028,7 +959,10 @@ impl<'db> SyntheticBodyBuilder<'db> {
         let addr_class = self
             .runtime_place_addr_class(local)
             .expect("promoted aggregate local should have a place address class");
-        Some((place, addr_class))
+        Some(RuntimeBoundaryAddress {
+            place,
+            class: addr_class,
+        })
     }
 
     fn runtime_place_for_local(&self, local: RLocalId) -> Option<RuntimePlace<'db>> {
