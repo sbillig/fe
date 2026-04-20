@@ -1008,12 +1008,15 @@ fn build_ingot(
                 if emit.writes_any_bytecode() {
                     had_errors |= write_yul_bytecode_artifacts(
                         &names_to_build,
-                        &yul,
                         optimize,
                         out_dir,
                         report_dir,
                         emit,
                         solc,
+                        |name| {
+                            codegen::emit_ingot_object_yul(db, ingot, name)
+                                .map_err(|err| format!("Failed to emit Yul for `{name}`: {err}"))
+                        },
                     );
                 }
             }
@@ -1135,12 +1138,15 @@ fn build_top_mod(
                 if emit.writes_any_bytecode() {
                     had_errors |= write_yul_bytecode_artifacts(
                         &names_to_build,
-                        &yul,
                         optimize,
                         out_dir,
                         report_dir,
                         emit,
                         solc,
+                        |name| {
+                            codegen::emit_module_object_yul(db, top_mod, name)
+                                .map_err(|err| format!("Failed to emit Yul for `{name}`: {err}"))
+                        },
                     );
                 }
             }
@@ -1424,16 +1430,28 @@ fn write_named_ir_artifact(
 #[allow(clippy::too_many_arguments)]
 fn write_yul_bytecode_artifacts(
     names_to_build: &[String],
-    yul: &str,
     optimize: bool,
     out_dir: &Utf8Path,
     report_dir: Option<&Utf8Path>,
     emit: EmitSelection,
     solc: Option<&str>,
+    mut yul_for_name: impl FnMut(&str) -> Result<String, String>,
 ) -> bool {
     let mut had_errors = false;
     for name in names_to_build {
-        match compile_single_contract_with_solc(name, yul, optimize, true, solc) {
+        let yul = match yul_for_name(name) {
+            Ok(yul) => yul,
+            Err(err) => {
+                eprintln!("Error: {err}");
+                had_errors = true;
+                continue;
+            }
+        };
+        if let Some(dir) = report_dir {
+            let file_name = format!("{}.solc.yul", sanitize_filename(name));
+            let _ = std::fs::write(dir.join(file_name).as_std_path(), &yul);
+        }
+        match compile_single_contract_with_solc(name, &yul, optimize, true, solc) {
             Ok(bytecode) => {
                 if let Err(err) = write_contract_artifacts(
                     out_dir,

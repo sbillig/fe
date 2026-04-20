@@ -1,5 +1,5 @@
 //! Test harness utilities for compiling Fe contracts and exercising their runtimes with `revm`.
-use codegen::{Backend, EVM_LAYOUT, SonatinaBackend, emit_module_yul};
+use codegen::{Backend, EVM_LAYOUT, SonatinaBackend, emit_module_object_yul};
 use common::InputDb;
 use driver::DriverDataBase;
 use ethers_core::abi::{AbiParser, ParamType, ParseError as AbiParseError, Token, decode};
@@ -1212,7 +1212,7 @@ impl FeContractHarness {
         if !diags.is_empty() {
             return Err(HarnessError::CompilerDiagnostics(diags.format_diags(&db)));
         }
-        let yul = emit_module_yul(&db, top_mod)?;
+        let yul = emit_module_object_yul(&db, top_mod, contract_name)?;
         let contract = compile_single_contract(
             contract_name,
             &yul,
@@ -4132,7 +4132,8 @@ object "Counter" {
 
         let root_file = ingot.root_file(&db).expect("ingot should have root file");
         let top_mod = db.top_mod(root_file);
-        let yul = emit_module_yul(&db, top_mod).expect("yul emission should succeed");
+        let yul =
+            emit_module_object_yul(&db, top_mod, "Parent").expect("yul emission should succeed");
         let contract = compile_single_contract("Parent", &yul, false, true)
             .expect("solc compilation should succeed");
 

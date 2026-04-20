@@ -135,6 +135,28 @@ pub fn emit_runtime_package_yul<'db>(
     Ok(lines.join("\n"))
 }
 
+pub fn emit_runtime_package_object_yul<'db>(
+    db: &'db DriverDataBase,
+    package: &YulPackage<'db>,
+    object_name: &str,
+) -> Result<String, YulError> {
+    let index = PackageIndex::new(db, package);
+    let object = package
+        .objects
+        .iter()
+        .find(|object| object.root && object.name == object_name)
+        .ok_or_else(|| {
+            YulError::InvalidYulPackage(format!(
+                "missing root object `{object_name}` in Yul package"
+            ))
+        })?;
+    let mut rendered_sections = HashSet::default();
+    let doc = render_root_object(&index, object, &mut rendered_sections, &mut Vec::new())?;
+    let mut lines = Vec::new();
+    render_docs(&[doc], 0, &mut lines);
+    Ok(lines.join("\n"))
+}
+
 pub fn emit_test_runtime_package_yul<'db>(
     db: &'db DriverDataBase,
     package: &YulPackage<'db>,

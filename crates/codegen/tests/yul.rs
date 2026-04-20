@@ -1,7 +1,7 @@
 use common::InputDb;
 use dir_test::{Fixture, dir_test};
 use driver::DriverDataBase;
-use fe_codegen::emit_module_yul;
+use fe_codegen::{emit_module_object_yul, emit_module_yul};
 use std::fs;
 use test_utils::snap_test;
 use url::Url;
@@ -68,6 +68,39 @@ fn yul_function_body<'a>(yul: &'a str, name: &str) -> &'a str {
     let tail = &yul[start..];
     let end = tail.find("\n      function $").unwrap_or(tail.len());
     &tail[..end]
+}
+
+fn emit_fixture_object_yul(path: &str, object_name: &str) -> String {
+    let abs_path = format!("{}/tests/fixtures/{path}", env!("CARGO_MANIFEST_DIR"));
+    let src = fs::read_to_string(&abs_path)
+        .unwrap_or_else(|err| panic!("failed to read fixture `{abs_path}`: {err}"));
+    let file_url = Url::from_file_path(&abs_path).expect("fixture path should be absolute");
+    let mut db = DriverDataBase::default();
+    db.workspace()
+        .touch(&mut db, file_url.clone(), Some(src.to_owned()));
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    emit_module_object_yul(&db, top_mod, object_name).expect("selected Yul should emit")
+}
+
+#[test]
+fn selected_contract_yul_is_a_single_solc_unit() {
+    let yul = emit_fixture_object_yul("init_args_with_child_dep.fe", "Parent");
+
+    assert_eq!(
+        yul.lines()
+            .filter(|line| line.starts_with("object \""))
+            .count(),
+        1,
+        "selected contract Yul should contain one top-level object for solc:\n{yul}"
+    );
+    assert!(
+        yul.contains("object \"Child_init\""),
+        "selected contract Yul should nest referenced external code regions:\n{yul}"
+    );
 }
 
 #[test]

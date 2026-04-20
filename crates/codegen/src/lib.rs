@@ -17,7 +17,9 @@ pub use sonatina::{
 };
 pub use test_output::{ExpectedRevert, TestMetadata, TestModuleOutput};
 pub use yul::{
-    EmitModuleError, YulError, emit_ingot_yul, emit_ingot_yul_with_layout, emit_module_yul,
-    emit_module_yul_with_layout, emit_runtime_package_yul, emit_test_ingot_yul,
+    EmitModuleError, YulError, emit_ingot_object_yul, emit_ingot_object_yul_with_layout,
+    emit_ingot_yul, emit_ingot_yul_with_layout, emit_module_object_yul,
+    emit_module_object_yul_with_layout, emit_module_yul, emit_module_yul_with_layout,
+    emit_runtime_package_object_yul, emit_runtime_package_yul, emit_test_ingot_yul,
     emit_test_ingot_yul_with_layout, emit_test_module_yul, emit_test_module_yul_with_layout,
 };
