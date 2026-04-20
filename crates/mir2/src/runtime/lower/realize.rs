@@ -4,7 +4,8 @@ use hir::analysis::{
 };
 
 use crate::runtime::{
-    AddressSpaceKind, LayoutId, RefKind, RefView, RuntimeBoundarySpec, RuntimeClass, RuntimePlace,
+    AddressSpaceKind, LayoutId, PlaceRoot, RBlockId, RLocalId, RefKind, RefView,
+    RuntimeBoundarySpec, RuntimeClass, RuntimePlace,
 };
 
 #[derive(Clone, Debug)]
@@ -122,6 +123,87 @@ impl RuntimeBoundaryValueSelector {
                     RuntimeBoundaryValueRealization::MaterializeValue { materialization }
                 })
             }
+        }
+    }
+}
+
+pub(crate) trait RuntimeBoundaryValueEmitter<'db> {
+    fn boundary_value_class(&self, value: RLocalId) -> Option<RuntimeClass<'db>>;
+
+    fn coerce_boundary_value(
+        &mut self,
+        bb: RBlockId,
+        src: RLocalId,
+        target: &RuntimeClass<'db>,
+        semantic_ty: TyId<'db>,
+    ) -> RLocalId;
+
+    fn emit_boundary_addr_of(
+        &mut self,
+        bb: RBlockId,
+        place: RuntimePlace<'db>,
+        class: RuntimeClass<'db>,
+        semantic_ty: TyId<'db>,
+    ) -> RLocalId;
+
+    fn alloc_boundary_slot(&mut self, semantic_ty: TyId<'db>, class: RuntimeClass<'db>)
+    -> RLocalId;
+
+    fn push_boundary_use(&mut self, bb: RBlockId, dst: RLocalId, src: RLocalId);
+}
+
+pub(crate) fn emit_runtime_boundary_value_realization<'db>(
+    emitter: &mut impl RuntimeBoundaryValueEmitter<'db>,
+    bb: RBlockId,
+    src: RLocalId,
+    realization: RuntimeBoundaryValueRealization<'db>,
+    semantic_ty: TyId<'db>,
+) -> RLocalId {
+    match realization {
+        RuntimeBoundaryValueRealization::UseValue => src,
+        RuntimeBoundaryValueRealization::AddrOfRuntimePlace { place, class } => {
+            emitter.emit_boundary_addr_of(bb, place, class, semantic_ty)
+        }
+        RuntimeBoundaryValueRealization::CoerceValue { target } => {
+            emitter.coerce_boundary_value(bb, src, &target, semantic_ty)
+        }
+        RuntimeBoundaryValueRealization::MaterializeValue { materialization } => {
+            emit_runtime_boundary_materialization(emitter, bb, src, materialization, semantic_ty)
+        }
+    }
+}
+
+fn emit_runtime_boundary_materialization<'db>(
+    emitter: &mut impl RuntimeBoundaryValueEmitter<'db>,
+    bb: RBlockId,
+    src: RLocalId,
+    materialization: RuntimeBoundaryMaterialization<'db>,
+    semantic_ty: TyId<'db>,
+) -> RLocalId {
+    match materialization {
+        RuntimeBoundaryMaterialization::ObjectRef { layout } => {
+            emitter.coerce_boundary_value(bb, src, &RuntimeClass::object_ref(layout), semantic_ty)
+        }
+        RuntimeBoundaryMaterialization::RawAddrSlot { pointee } => {
+            let source = emitter
+                .boundary_value_class(src)
+                .unwrap_or_else(|| panic!("cannot materialize erased runtime value {src:?}"));
+            let stored = if source == pointee {
+                src
+            } else {
+                emitter.coerce_boundary_value(bb, src, &pointee, semantic_ty)
+            };
+            let slot = emitter.alloc_boundary_slot(semantic_ty, pointee.clone());
+            emitter.push_boundary_use(bb, slot, stored);
+            emitter.emit_boundary_addr_of(
+                bb,
+                RuntimePlace {
+                    root: PlaceRoot::Slot(slot),
+                    path: Box::default(),
+                },
+                RuntimeBoundaryMaterialization::RawAddrSlot { pointee }.class(),
+                semantic_ty,
+            )
         }
     }
 }
@@ -316,15 +398,18 @@ impl<'db> RuntimeBoundaryValueSource<'db> {
 #[cfg(test)]
 mod tests {
     use cranelift_entity::EntityRef;
+    use driver::DriverDataBase;
+    use hir::analysis::ty::ty_def::TyId;
 
     use crate::runtime::{
-        AddressSpaceKind, BorrowAccess, BorrowTransportSet, PlaceRoot, RLocalId,
+        AddressSpaceKind, BorrowAccess, BorrowTransportSet, PlaceRoot, RBlockId, RLocalId,
         RuntimeBoundarySpec, RuntimeClass, RuntimePlace, ScalarClass, ScalarRepr, ScalarRole,
     };
 
     use super::{
         RuntimeBoundaryAddress, RuntimeBoundaryMatcher, RuntimeBoundaryMaterialization,
-        RuntimeBoundaryValueRealization, RuntimeBoundaryValueSelector, RuntimeBoundaryValueSource,
+        RuntimeBoundaryValueEmitter, RuntimeBoundaryValueRealization, RuntimeBoundaryValueSelector,
+        RuntimeBoundaryValueSource, emit_runtime_boundary_value_realization,
     };
 
     fn word_class<'db>() -> RuntimeClass<'db> {
@@ -333,6 +418,13 @@ mod tests {
                 bits: 256,
                 signed: false,
             },
+            role: ScalarRole::Plain,
+        })
+    }
+
+    fn bool_class<'db>() -> RuntimeClass<'db> {
+        RuntimeClass::Scalar(ScalarClass {
+            repr: ScalarRepr::Bool,
             role: ScalarRole::Plain,
         })
     }
@@ -377,6 +469,99 @@ mod tests {
                 },
                 class: address,
             }),
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum FakeEmitOp<'db> {
+        Coerce {
+            src: RLocalId,
+            dst: RLocalId,
+            target: RuntimeClass<'db>,
+        },
+        AddrOf {
+            dst: RLocalId,
+            class: RuntimeClass<'db>,
+        },
+        Assign {
+            dst: RLocalId,
+            src: RLocalId,
+        },
+    }
+
+    struct FakeBoundaryEmitter<'db> {
+        classes: Vec<Option<RuntimeClass<'db>>>,
+        roots: Vec<Option<RuntimeClass<'db>>>,
+        ops: Vec<FakeEmitOp<'db>>,
+    }
+
+    impl<'db> FakeBoundaryEmitter<'db> {
+        fn new(classes: Vec<Option<RuntimeClass<'db>>>) -> Self {
+            let roots = vec![None; classes.len()];
+            Self {
+                classes,
+                roots,
+                ops: Vec::new(),
+            }
+        }
+
+        fn push_value(&mut self, class: RuntimeClass<'db>) -> RLocalId {
+            let id = RLocalId::new(self.classes.len());
+            self.classes.push(Some(class));
+            self.roots.push(None);
+            id
+        }
+    }
+
+    impl<'db> RuntimeBoundaryValueEmitter<'db> for FakeBoundaryEmitter<'db> {
+        fn boundary_value_class(&self, value: RLocalId) -> Option<RuntimeClass<'db>> {
+            self.classes.get(value.index())?.clone()
+        }
+
+        fn coerce_boundary_value(
+            &mut self,
+            bb: RBlockId,
+            src: RLocalId,
+            target: &RuntimeClass<'db>,
+            semantic_ty: TyId<'db>,
+        ) -> RLocalId {
+            let _ = (bb, semantic_ty);
+            let dst = self.push_value(target.clone());
+            self.ops.push(FakeEmitOp::Coerce {
+                src,
+                dst,
+                target: target.clone(),
+            });
+            dst
+        }
+
+        fn emit_boundary_addr_of(
+            &mut self,
+            bb: RBlockId,
+            place: RuntimePlace<'db>,
+            class: RuntimeClass<'db>,
+            semantic_ty: TyId<'db>,
+        ) -> RLocalId {
+            let _ = (bb, place, semantic_ty);
+            let dst = self.push_value(class.clone());
+            self.ops.push(FakeEmitOp::AddrOf { dst, class });
+            dst
+        }
+
+        fn alloc_boundary_slot(
+            &mut self,
+            semantic_ty: TyId<'db>,
+            class: RuntimeClass<'db>,
+        ) -> RLocalId {
+            let _ = semantic_ty;
+            let dst = self.push_value(class.clone());
+            self.roots[dst.index()] = Some(class);
+            dst
+        }
+
+        fn push_boundary_use(&mut self, bb: RBlockId, dst: RLocalId, src: RLocalId) {
+            let _ = bb;
+            self.ops.push(FakeEmitOp::Assign { dst, src });
         }
     }
 
@@ -458,6 +643,50 @@ mod tests {
                     pointee: word_class(),
                 },
             })
+        );
+    }
+
+    #[test]
+    fn raw_addr_slot_materialization_coerces_stores_and_addresses_slot() {
+        let db = DriverDataBase::default();
+        let semantic_ty = TyId::unit(&db);
+        let mut emitter = FakeBoundaryEmitter::new(vec![Some(bool_class())]);
+
+        let result = emit_runtime_boundary_value_realization(
+            &mut emitter,
+            RBlockId::new(0),
+            RLocalId::new(0),
+            RuntimeBoundaryValueRealization::MaterializeValue {
+                materialization: RuntimeBoundaryMaterialization::RawAddrSlot {
+                    pointee: word_class(),
+                },
+            },
+            semantic_ty,
+        );
+
+        assert_eq!(result, RLocalId::new(3));
+        assert_eq!(
+            emitter.classes[result.index()],
+            Some(raw_addr_class(AddressSpaceKind::Memory))
+        );
+        assert_eq!(emitter.roots[RLocalId::new(2).index()], Some(word_class()));
+        assert_eq!(
+            emitter.ops,
+            vec![
+                FakeEmitOp::Coerce {
+                    src: RLocalId::new(0),
+                    dst: RLocalId::new(1),
+                    target: word_class(),
+                },
+                FakeEmitOp::Assign {
+                    dst: RLocalId::new(2),
+                    src: RLocalId::new(1),
+                },
+                FakeEmitOp::AddrOf {
+                    dst: RLocalId::new(3),
+                    class: raw_addr_class(AddressSpaceKind::Memory),
+                },
+            ]
         );
     }
 

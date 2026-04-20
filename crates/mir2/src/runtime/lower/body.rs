@@ -62,7 +62,10 @@ use super::{
         layout_for_enum_variant_instance_in_env, layout_for_ty_in_env,
     },
     place::{project_field_class, project_index_class, project_variant_field_class},
-    realize::{RuntimeArgRealization, RuntimeBoundaryMaterialization, SelectedRuntimeArg},
+    realize::{
+        RuntimeArgRealization, RuntimeBoundaryValueEmitter, RuntimeBoundaryValueRealization,
+        SelectedRuntimeArg, emit_runtime_boundary_value_realization,
+    },
     returns::RuntimeReturnAnalysisCx,
     type_info::{
         RuntimeTypeEnv, boundary_spec_for_ty_in_env, provider_class_for_target_in_env,
@@ -196,6 +199,53 @@ impl<'db> RuntimeConversionEmitter<'db> for RmirEmitter<'db> {
 
     fn push_conversion_stmt(&mut self, bb: RBlockId, stmt: RStmt<'db>) {
         self.push_stmt(bb, stmt);
+    }
+}
+
+impl<'db> RuntimeBoundaryValueEmitter<'db> for RmirEmitter<'db> {
+    fn boundary_value_class(&self, value: RLocalId) -> Option<RuntimeClass<'db>> {
+        self.value_class(value).cloned()
+    }
+
+    fn coerce_boundary_value(
+        &mut self,
+        bb: RBlockId,
+        src: RLocalId,
+        target: &RuntimeClass<'db>,
+        semantic_ty: TyId<'db>,
+    ) -> RLocalId {
+        let _ = semantic_ty;
+        self.coerce_value(bb, src, target)
+    }
+
+    fn emit_boundary_addr_of(
+        &mut self,
+        bb: RBlockId,
+        place: RuntimePlace<'db>,
+        class: RuntimeClass<'db>,
+        semantic_ty: TyId<'db>,
+    ) -> RLocalId {
+        self.lower_place_addr_of_for_class(semantic_ty, bb, place, class)
+    }
+
+    fn alloc_boundary_slot(
+        &mut self,
+        semantic_ty: TyId<'db>,
+        class: RuntimeClass<'db>,
+    ) -> RLocalId {
+        let slot = self.alloc_runtime_temp(semantic_ty, RuntimeCarrier::Value(class.clone()));
+        self.locals[slot.index()].root = RuntimeLocalRoot::Slot(class);
+        slot
+    }
+
+    fn push_boundary_use(&mut self, bb: RBlockId, dst: RLocalId, src: RLocalId) {
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst,
+                expr: RExpr::Use(src),
+            },
+        );
     }
 }
 
@@ -4162,7 +4212,15 @@ impl<'emitter, 'db> RuntimeArgLowerer<'emitter, 'db> {
                 let value = self
                     .emitter
                     .load_runtime_place_value(self.bb, place, *semantic_ty);
-                let value = self.materialize_value(value, materialization, *semantic_ty);
+                let value = emit_runtime_boundary_value_realization(
+                    self.emitter,
+                    self.bb,
+                    value,
+                    RuntimeBoundaryValueRealization::MaterializeValue {
+                        materialization: materialization.clone(),
+                    },
+                    *semantic_ty,
+                );
                 self.emitter
                     .coerce_value_if_needed(self.bb, value, &selected.class)
             }
@@ -4172,7 +4230,15 @@ impl<'emitter, 'db> RuntimeArgLowerer<'emitter, 'db> {
                 semantic_ty,
             } => {
                 let value = self.emitter.read_semantic_operand(self.bb, *operand);
-                let value = self.materialize_value(value, materialization, *semantic_ty);
+                let value = emit_runtime_boundary_value_realization(
+                    self.emitter,
+                    self.bb,
+                    value,
+                    RuntimeBoundaryValueRealization::MaterializeValue {
+                        materialization: materialization.clone(),
+                    },
+                    *semantic_ty,
+                );
                 self.emitter
                     .coerce_value_if_needed(self.bb, value, &selected.class)
             }
@@ -4207,57 +4273,6 @@ impl<'emitter, 'db> RuntimeArgLowerer<'emitter, 'db> {
             },
         );
         value
-    }
-
-    fn materialize_value(
-        &mut self,
-        value: RLocalId,
-        materialization: &RuntimeBoundaryMaterialization<'db>,
-        semantic_ty: TyId<'db>,
-    ) -> RLocalId {
-        if self.emitter.value_class(value).is_none() {
-            panic!(
-                "runtime value materialization source has no runtime class: owner={:?}; value={value:?}; materialization={materialization:?}",
-                self.emitter
-                    .key
-                    .semantic(self.emitter.db)
-                    .map(|semantic| semantic.key(self.emitter.db).owner(self.emitter.db)),
-            );
-        }
-        match materialization {
-            RuntimeBoundaryMaterialization::ObjectRef { layout } => {
-                self.emitter
-                    .coerce_value(self.bb, value, &RuntimeClass::object_ref(*layout))
-            }
-            RuntimeBoundaryMaterialization::RawAddrSlot { pointee } => {
-                let slot = self
-                    .emitter
-                    .alloc_runtime_temp(semantic_ty, RuntimeCarrier::Value(pointee.clone()));
-                self.emitter.locals[slot.index()].root = RuntimeLocalRoot::Slot(pointee.clone());
-                let src = if self.emitter.value_class(value) == Some(pointee) {
-                    value
-                } else {
-                    self.emitter.coerce_value(self.bb, value, pointee)
-                };
-                self.emitter.push_stmt(
-                    self.bb,
-                    RStmt::Assign {
-                        dst: slot,
-                        expr: RExpr::Use(src),
-                    },
-                );
-                let place = RuntimePlace {
-                    root: PlaceRoot::Slot(slot),
-                    path: Box::default(),
-                };
-                self.emitter.lower_place_addr_of_for_class(
-                    semantic_ty,
-                    self.bb,
-                    place,
-                    materialization.class(),
-                )
-            }
-        }
     }
 }
 

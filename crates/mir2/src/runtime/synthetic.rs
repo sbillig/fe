@@ -40,9 +40,9 @@ use crate::{
             },
             interface::runtime_visible_binding_plans,
             realize::{
-                RuntimeBoundaryAddress, RuntimeBoundaryMatcher, RuntimeBoundaryMaterialization,
+                RuntimeBoundaryAddress, RuntimeBoundaryMatcher, RuntimeBoundaryValueEmitter,
                 RuntimeBoundaryValueRealization, RuntimeBoundaryValueSelector,
-                RuntimeBoundaryValueSource,
+                RuntimeBoundaryValueSource, emit_runtime_boundary_value_realization,
             },
             returns::RuntimeReturnAnalysisCx,
             type_info::{RuntimeTypeEnv, top_level_class_for_ty_in_env},
@@ -117,6 +117,70 @@ impl<'db> RuntimeConversionEmitter<'db> for SyntheticBodyBuilder<'db> {
 
     fn push_conversion_stmt(&mut self, bb: RBlockId, stmt: RStmt<'db>) {
         self.push_stmt(bb, stmt);
+    }
+}
+
+impl<'db> RuntimeBoundaryValueEmitter<'db> for SyntheticBodyBuilder<'db> {
+    fn boundary_value_class(&self, value: RLocalId) -> Option<RuntimeClass<'db>> {
+        self.locals
+            .get(value.index())?
+            .carrier
+            .value_class()
+            .cloned()
+    }
+
+    fn coerce_boundary_value(
+        &mut self,
+        bb: RBlockId,
+        src: RLocalId,
+        target: &RuntimeClass<'db>,
+        semantic_ty: TyId<'db>,
+    ) -> RLocalId {
+        self.coerce_runtime_value(bb, src, target, semantic_ty)
+    }
+
+    fn emit_boundary_addr_of(
+        &mut self,
+        bb: RBlockId,
+        place: RuntimePlace<'db>,
+        class: RuntimeClass<'db>,
+        semantic_ty: TyId<'db>,
+    ) -> RLocalId {
+        let dst = self.push_local(
+            semantic_ty,
+            RuntimeCarrier::Value(class.clone()),
+            RuntimeLocalRoot::None,
+        );
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst,
+                expr: RExpr::AddrOf { place },
+            },
+        );
+        dst
+    }
+
+    fn alloc_boundary_slot(
+        &mut self,
+        semantic_ty: TyId<'db>,
+        class: RuntimeClass<'db>,
+    ) -> RLocalId {
+        self.push_local(
+            semantic_ty,
+            RuntimeCarrier::Value(class.clone()),
+            RuntimeLocalRoot::Slot(class),
+        )
+    }
+
+    fn push_boundary_use(&mut self, bb: RBlockId, dst: RLocalId, src: RLocalId) {
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst,
+                expr: RExpr::Use(src),
+            },
+        );
     }
 }
 
@@ -861,7 +925,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         semantic_ty: TyId<'db>,
     ) -> RLocalId {
         let realization = self.select_runtime_value_for_boundary(src, boundary);
-        self.realize_runtime_boundary_value(bb, src, realization, semantic_ty)
+        emit_runtime_boundary_value_realization(self, bb, src, realization, semantic_ty)
     }
 
     fn select_runtime_value_for_boundary(
@@ -910,27 +974,6 @@ impl<'db> SyntheticBodyBuilder<'db> {
             place: self.runtime_place_for_local(source)?,
             class: self.runtime_place_addr_class(source)?,
         })
-    }
-
-    fn realize_runtime_boundary_value(
-        &mut self,
-        bb: RBlockId,
-        src: RLocalId,
-        realization: RuntimeBoundaryValueRealization<'db>,
-        semantic_ty: TyId<'db>,
-    ) -> RLocalId {
-        match realization {
-            RuntimeBoundaryValueRealization::UseValue => src,
-            RuntimeBoundaryValueRealization::AddrOfRuntimePlace { place, class } => {
-                self.push_runtime_place_addr_of(bb, place, class, semantic_ty)
-            }
-            RuntimeBoundaryValueRealization::CoerceValue { target } => {
-                self.coerce_runtime_value(bb, src, &target, semantic_ty)
-            }
-            RuntimeBoundaryValueRealization::MaterializeValue { materialization } => {
-                self.materialize_runtime_value(bb, src, &materialization, semantic_ty)
-            }
-        }
     }
 
     fn promote_runtime_aggregate_local_place(
@@ -1029,75 +1072,6 @@ impl<'db> SyntheticBodyBuilder<'db> {
             runtime_address_space(&root_class).unwrap_or(root_space),
             force_raw,
         ))
-    }
-
-    fn push_runtime_place_addr_of(
-        &mut self,
-        bb: RBlockId,
-        place: RuntimePlace<'db>,
-        class: RuntimeClass<'db>,
-        semantic_ty: TyId<'db>,
-    ) -> RLocalId {
-        let dst = self.push_local(
-            semantic_ty,
-            RuntimeCarrier::Value(class.clone()),
-            RuntimeLocalRoot::None,
-        );
-        self.push_stmt(
-            bb,
-            RStmt::Assign {
-                dst,
-                expr: RExpr::AddrOf { place },
-            },
-        );
-        dst
-    }
-
-    fn materialize_runtime_value(
-        &mut self,
-        bb: RBlockId,
-        src: RLocalId,
-        materialization: &RuntimeBoundaryMaterialization<'db>,
-        semantic_ty: TyId<'db>,
-    ) -> RLocalId {
-        match materialization {
-            RuntimeBoundaryMaterialization::ObjectRef { layout } => {
-                self.coerce_runtime_value(bb, src, &RuntimeClass::object_ref(*layout), semantic_ty)
-            }
-            RuntimeBoundaryMaterialization::RawAddrSlot { pointee } => {
-                let source = self.locals[src.index()]
-                    .carrier
-                    .value_class()
-                    .cloned()
-                    .unwrap_or_else(|| panic!("cannot materialize erased runtime value {src:?}"));
-                let stored = if source == *pointee {
-                    src
-                } else {
-                    self.coerce_runtime_value(bb, src, pointee, semantic_ty)
-                };
-                let slot = self.push_local(
-                    semantic_ty,
-                    RuntimeCarrier::Value(pointee.clone()),
-                    RuntimeLocalRoot::Slot(pointee.clone()),
-                );
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: slot,
-                        expr: RExpr::Use(stored),
-                    },
-                );
-                self.push_runtime_place_addr_of(
-                    bb,
-                    RuntimePlace {
-                        root: PlaceRoot::Slot(slot),
-                        path: Box::default(),
-                    },
-                    materialization.class(),
-                    semantic_ty,
-                )
-            }
-        }
     }
 
     fn coerce_runtime_value(
