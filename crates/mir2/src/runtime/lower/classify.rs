@@ -873,8 +873,11 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                 if let Some(class) = facts.builtin_return_class.clone() {
                     return class;
                 }
-                let param_classes = RuntimeValueEvaluator::new(self, carriers, class_cache)
-                    .call_input_classes(args, effect_args, &facts.input_plan);
+                let param_classes: Vec<_> = RuntimeValueEvaluator::new(self, carriers, class_cache)
+                    .selected_call_inputs(args, effect_args, &facts.input_plan)
+                    .into_iter()
+                    .map(|arg| arg.class)
+                    .collect();
                 return returns.return_class_for_key(RuntimeInstanceKey::new(
                     self.db,
                     RuntimeInstanceSource::Semantic(facts.semantic),
@@ -1991,13 +1994,15 @@ fn aggregate_make_class_from_facts<'db>(
             .as_ref()
             .and_then(|boundary| {
                 let mut boundary_sites = BoundarySiteAllocator::default();
-                evaluator.evaluate_value_pass_plan(
-                    field.local,
-                    &compile_value_pass_plan(
-                        RuntimeParamPlan::Boundary(boundary.boundary.clone()),
-                        &mut boundary_sites,
-                    ),
-                )
+                evaluator
+                    .selected_value_pass_plan(
+                        field,
+                        &compile_value_pass_plan(
+                            RuntimeParamPlan::Boundary(boundary.boundary.clone()),
+                            &mut boundary_sites,
+                        ),
+                    )
+                    .map(|arg| arg.class)
             })
             .or_else(|| evaluator.materialize(field.local))
             .unwrap_or_else(|| field_facts.stored_class.clone());
@@ -2040,7 +2045,7 @@ pub(crate) fn visible_return_class_for_local<'db>(
         }
         RuntimeVisibleReturnPlan::Constrained(boundary) => {
             let mut boundary_sites = BoundarySiteAllocator::default();
-            evaluator.evaluate_value_pass_plan(
+            evaluator.selected_value_class_for_local(
                 local,
                 &compile_value_pass_plan(
                     RuntimeParamPlan::Boundary(boundary.clone()),
@@ -3039,7 +3044,7 @@ mod tests {
 
     use super::super::call_input::RuntimeValueEvaluator;
     use super::*;
-    use crate::runtime::lower::coerce::CoercionPlanner;
+    use crate::runtime::lower::realize::RuntimeBoundaryMatcher;
     use crate::runtime::{
         lower::{
             infer::LocalStateInferer,
@@ -3340,7 +3345,7 @@ mod tests {
             );
 
             assert!(
-                CoercionPlanner::class_satisfies_boundary(&plan.class, &plan.boundary),
+                RuntimeBoundaryMatcher::class_satisfies_boundary(&plan.class, &plan.boundary),
                 "provider-backed effect binding plan should keep an actualized boundary matching its chosen runtime class:\nplan={plan:#?}"
             );
             let _ = runtime_instance_for_semantic(&db, semantic).body(&db);
@@ -3602,7 +3607,10 @@ mod tests {
         let mut class_cache = InferClassCache::new(normalized.locals.len());
         let inferred_param_classes =
             RuntimeValueEvaluator::new(env, &inferred.carriers, Some(&mut class_cache))
-                .call_input_classes(&args, &effect_args, &call_facts.input_plan);
+                .selected_call_inputs(&args, &effect_args, &call_facts.input_plan)
+                .into_iter()
+                .map(|arg| arg.class)
+                .collect::<Vec<_>>();
         let lowered_take = instance
             .calls(&db)
             .iter()
@@ -3742,7 +3750,10 @@ mod tests {
         let mut class_cache = InferClassCache::new(normalized.locals.len());
         let inferred_param_classes =
             RuntimeValueEvaluator::new(env, &inferred.carriers, Some(&mut class_cache))
-                .call_input_classes(&args, &effect_args, &call_facts.input_plan);
+                .selected_call_inputs(&args, &effect_args, &call_facts.input_plan)
+                .into_iter()
+                .map(|arg| arg.class)
+                .collect::<Vec<_>>();
         let lowered_set_scaled = instance
             .calls(&db)
             .iter()

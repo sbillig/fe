@@ -2,7 +2,7 @@ use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
         NBorrowRoot, NEffectArg, NEffectArgValue, NLocalInterface, NOperand, NSPlace, NSPlaceRoot,
-        SLocalId, SemanticInstance,
+        ReadMode, SLocalId, SemanticInstance,
     },
     ty::{ty_check::EffectPassMode, ty_def::TyId},
 };
@@ -21,9 +21,11 @@ use super::{
         runtime_effect_binding_plan_for_binding_idx, snapshot_source_place,
         specialize_boundary_for_runtime_source_in_context,
     },
-    coerce::CoercionPlanner,
     place::resolved_effect_arg_address_space,
-    realize::{RuntimeArgRealization, RuntimeBoundaryMaterialization, SelectedRuntimeArg},
+    realize::{
+        RuntimeArgRealization, RuntimeBoundaryMatcher, RuntimeBoundaryMaterialization,
+        SelectedRuntimeArg,
+    },
     type_info::provider_class_for_target_in_env,
 };
 
@@ -103,49 +105,6 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeValueEvaluator<'a, 'carriers, 'cache, 'd
         }
     }
 
-    pub(super) fn evaluate_value_pass_plan(
-        &mut self,
-        local: SLocalId,
-        plan: &CompiledValuePassPlan<'db>,
-    ) -> Option<RuntimeClass<'db>> {
-        match plan {
-            CompiledValuePassPlan::Erased => None,
-            CompiledValuePassPlan::VisibleValue => self.materialize(local),
-            CompiledValuePassPlan::ActualValue => self.actual_value(local),
-            CompiledValuePassPlan::ExactTransport { exact } => Some(exact.clone()),
-            CompiledValuePassPlan::ExactShapeAggregate { exact } => self
-                .env
-                .actual_aggregate_class_for_source(self.carriers, local)
-                .or_else(|| Some(exact.clone())),
-            CompiledValuePassPlan::ExactShapeRefLike { boundary } => self
-                .select_exact_shape_ref_like_value(local, boundary)
-                .map(|arg| arg.class)
-                .or_else(|| {
-                    let RuntimeBoundarySpec::ExactShape(class) =
-                        self.specialized_boundary(local, boundary)
-                    else {
-                        unreachable!();
-                    };
-                    Some(class)
-                }),
-            CompiledValuePassPlan::BorrowLike { boundary } => self
-                .select_boundary_compatible_value(local, boundary)
-                .map(|arg| arg.class),
-        }
-    }
-
-    pub(super) fn call_input_classes(
-        &mut self,
-        args: &[NOperand],
-        effect_args: &[NEffectArg<'db>],
-        plan: &CompiledCallInputPlan<'db>,
-    ) -> Vec<RuntimeClass<'db>> {
-        self.selected_call_inputs(args, effect_args, plan)
-            .into_iter()
-            .map(|arg| arg.class)
-            .collect()
-    }
-
     pub(super) fn selected_call_inputs(
         &mut self,
         args: &[NOperand],
@@ -188,7 +147,7 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeValueEvaluator<'a, 'carriers, 'cache, 'd
         );
         let mut selected = Vec::new();
         for (arg, plan) in args.iter().zip(plans.iter()) {
-            if let Some(arg) = self.select_value_pass_plan(*arg, plan) {
+            if let Some(arg) = self.selected_value_pass_plan(*arg, plan) {
                 selected.push(arg);
             }
         }
@@ -239,7 +198,7 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeValueEvaluator<'a, 'carriers, 'cache, 'd
         }
     }
 
-    fn select_value_pass_plan(
+    pub(super) fn selected_value_pass_plan(
         &mut self,
         arg: NOperand,
         plan: &CompiledValuePassPlan<'db>,
@@ -282,6 +241,21 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeValueEvaluator<'a, 'carriers, 'cache, 'd
         }
     }
 
+    pub(super) fn selected_value_class_for_local(
+        &mut self,
+        local: SLocalId,
+        plan: &CompiledValuePassPlan<'db>,
+    ) -> Option<RuntimeClass<'db>> {
+        self.selected_value_pass_plan(
+            NOperand {
+                local,
+                mode: ReadMode::Copy,
+            },
+            plan,
+        )
+        .map(|arg| arg.class)
+    }
+
     fn select_materialized_value(
         &mut self,
         local: SLocalId,
@@ -317,7 +291,7 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeValueEvaluator<'a, 'carriers, 'cache, 'd
     ) -> Option<SelectedRuntimeArg<'db>> {
         carrier_value_class(local, self.carriers)
             .map(|class| {
-                let realization = if CoercionPlanner::target_prefers_transport(&class) {
+                let realization = if class.is_transport() {
                     RuntimeArgRealization::UseHandleLikeValue { local }
                 } else {
                     RuntimeArgRealization::UseRuntimeValue { local }
@@ -363,9 +337,9 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeValueEvaluator<'a, 'carriers, 'cache, 'd
         let local_data = self.env.body().locals.get(local.index())?;
         let semantic_ty = local_data.ty;
         if let Some(class) = carrier_value_class(local, self.carriers)
-            && CoercionPlanner::class_satisfies_boundary(&class, boundary)
+            && RuntimeBoundaryMatcher::class_satisfies_boundary(&class, boundary)
         {
-            let realization = if CoercionPlanner::target_prefers_transport(&class) {
+            let realization = if class.is_transport() {
                 RuntimeArgRealization::UseHandleLikeValue { local }
             } else {
                 RuntimeArgRealization::UseRuntimeValue { local }
@@ -393,7 +367,7 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeValueEvaluator<'a, 'carriers, 'cache, 'd
                     provider_root_space(provider, &root_class),
                     false,
                 );
-                if CoercionPlanner::class_satisfies_boundary(&class, boundary) {
+                if RuntimeBoundaryMatcher::class_satisfies_boundary(&class, boundary) {
                     return Some(SelectedRuntimeArg {
                         class,
                         realization: RuntimeArgRealization::UseHandleLikeValue { local },
@@ -413,7 +387,7 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeValueEvaluator<'a, 'carriers, 'cache, 'd
                     AddressSpaceKind::Memory,
                     false,
                 );
-                if CoercionPlanner::class_satisfies_boundary(&class, boundary) {
+                if RuntimeBoundaryMatcher::class_satisfies_boundary(&class, boundary) {
                     return Some(SelectedRuntimeArg {
                         class,
                         realization: RuntimeArgRealization::UseHandleLikeValue { local },
@@ -449,9 +423,11 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeValueEvaluator<'a, 'carriers, 'cache, 'd
         let class = self
             .env
             .normalized_place_address_class(self.carriers, &place)?;
-        CoercionPlanner::class_satisfies_boundary(&class, boundary).then(|| SelectedRuntimeArg {
-            class,
-            realization: RuntimeArgRealization::AddrOfPlace { place, semantic_ty },
+        RuntimeBoundaryMatcher::class_satisfies_boundary(&class, boundary).then(|| {
+            SelectedRuntimeArg {
+                class,
+                realization: RuntimeArgRealization::AddrOfPlace { place, semantic_ty },
+            }
         })
     }
 
@@ -482,7 +458,7 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeValueEvaluator<'a, 'carriers, 'cache, 'd
         if let Some(class) = self
             .env
             .normalized_place_address_class(self.carriers, &place)
-            && CoercionPlanner::class_satisfies_boundary(&class, &boundary)
+            && RuntimeBoundaryMatcher::class_satisfies_boundary(&class, &boundary)
         {
             return Some(SelectedRuntimeArg {
                 class,
@@ -491,7 +467,7 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeValueEvaluator<'a, 'carriers, 'cache, 'd
         }
         let (class, realization) = match &boundary {
             RuntimeBoundarySpec::ExactTransport(target) => {
-                if CoercionPlanner::target_prefers_transport(target) {
+                if target.is_transport() {
                     (
                         target.clone(),
                         RuntimeArgRealization::AddrOfPlace { place, semantic_ty },
@@ -503,14 +479,10 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeValueEvaluator<'a, 'carriers, 'cache, 'd
                     )
                 }
             }
-            RuntimeBoundarySpec::ExactShape(target)
-                if !CoercionPlanner::target_prefers_transport(target) =>
-            {
-                (
-                    target.clone(),
-                    RuntimeArgRealization::LoadPlaceValue { place, semantic_ty },
-                )
-            }
+            RuntimeBoundarySpec::ExactShape(target) if !target.is_transport() => (
+                target.clone(),
+                RuntimeArgRealization::LoadPlaceValue { place, semantic_ty },
+            ),
             RuntimeBoundarySpec::BorrowLike { .. } => {
                 let Some(materialization) = RuntimeBoundaryMaterialization::for_boundary(&boundary)
                 else {
@@ -545,7 +517,7 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeValueEvaluator<'a, 'carriers, 'cache, 'd
         if !place.path.is_empty() {
             return None;
         }
-        CoercionPlanner::placeholder_class(boundary).map(|class| SelectedRuntimeArg {
+        RuntimeBoundaryMatcher::placeholder_class(boundary).map(|class| SelectedRuntimeArg {
             class,
             realization: RuntimeArgRealization::Placeholder { semantic_ty },
         })
@@ -559,8 +531,7 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeValueEvaluator<'a, 'carriers, 'cache, 'd
     fn place_is_lowerable_with_seen(&self, place: &NSPlace<'db>, visiting: &mut [bool]) -> bool {
         match place.root {
             NSPlaceRoot::CarrierDerefLocal(local) => {
-                carrier_value_class(local, self.carriers)
-                    .is_some_and(|class| CoercionPlanner::target_prefers_transport(&class))
+                carrier_value_class(local, self.carriers).is_some_and(|class| class.is_transport())
                     || self.semantic_place_root_is_lowerable(local, visiting)
             }
             NSPlaceRoot::Root(root) => match self.env.body().root(root) {
@@ -589,7 +560,7 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeValueEvaluator<'a, 'carriers, 'cache, 'd
                 .is_some_and(|place| self.place_is_lowerable_with_seen(place, visiting))
             || (matches!(local_data.facts.interface, NLocalInterface::PlaceCarrier)
                 && carrier_value_class(local, self.carriers)
-                    .is_some_and(|class| CoercionPlanner::target_prefers_transport(&class)))
+                    .is_some_and(|class| class.is_transport()))
             || local_data
                 .facts
                 .origin
@@ -646,7 +617,7 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeValueEvaluator<'a, 'carriers, 'cache, 'd
                 let NEffectArgValue::Value(value) = &arg.arg else {
                     panic!("compiled value effect arg plan reached place arg: {arg:?}");
                 };
-                self.select_value_pass_plan(*value, plan)
+                self.selected_value_pass_plan(*value, plan)
             }
             CompiledEffectArgPlan::ByValueValueFallback { fallback } => {
                 let NEffectArgValue::Value(value) = &arg.arg else {

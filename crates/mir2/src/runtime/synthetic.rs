@@ -35,11 +35,10 @@ use crate::{
                 ref_class_for_place_result, runtime_address_space,
                 runtime_signature_for_key_with_returns, semantic_return_ty,
             },
-            coerce::CoercionPlanner,
             interface::runtime_visible_binding_plans,
             realize::{
-                RuntimeBoundaryMaterialization, RuntimeBoundarySourceClasses,
-                RuntimeBoundaryValueRealization,
+                RuntimeBoundaryMatcher, RuntimeBoundaryMaterialization,
+                RuntimeBoundarySourceClasses, RuntimeBoundaryValueRealization,
             },
             returns::RuntimeReturnAnalysisCx,
             type_info::{RuntimeTypeEnv, top_level_class_for_ty_in_env},
@@ -914,7 +913,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 ..
             } if allow.allow_object => {
                 if let Some((place, actual)) = self.promote_runtime_aggregate_local_place(src)
-                    && CoercionPlanner::class_satisfies_boundary(&actual, boundary)
+                    && RuntimeBoundaryMatcher::class_satisfies_boundary(&actual, boundary)
                 {
                     return RuntimeBoundaryValueRealization::AddrOfRuntimePlace {
                         place,

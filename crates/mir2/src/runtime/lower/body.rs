@@ -49,7 +49,6 @@ use super::{
         generic_numeric_intrinsic_kind, nonself_backing_value_place, resolve_runtime_call_key,
         semantic_return_ty, snapshot_source_place,
     },
-    coerce::CoercionPlanner,
     consts::{
         const_scalar_for_class, const_scalar_from_value, enum_tag_scalar, lower_const_region,
     },
@@ -408,7 +407,7 @@ impl<'db> RmirEmitter<'db> {
                 | NExpr::Call { .. } => None,
             });
             if let Some(actual) = actual
-                && CoercionPlanner::target_prefers_transport(&actual)
+                && actual.is_transport()
             {
                 self.refine_local_runtime_class(dst_value, actual);
                 return;
@@ -477,14 +476,13 @@ impl<'db> RmirEmitter<'db> {
             NExpr::ReadPlace { place, .. } => {
                 let place = self.lower_place(bb, place);
                 let projected = self.project_place_class(&place);
-                let dst_class = if self.runtime_local_uses_source_transport(dst)
-                    && CoercionPlanner::target_prefers_transport(&projected)
-                {
-                    self.refine_local_runtime_class(dst, projected.clone());
-                    projected.clone()
-                } else {
-                    dst_class
-                };
+                let dst_class =
+                    if self.runtime_local_uses_source_transport(dst) && projected.is_transport() {
+                        self.refine_local_runtime_class(dst, projected.clone());
+                        projected.clone()
+                    } else {
+                        dst_class
+                    };
                 if let (
                     RuntimeClass::AggregateValue { layout },
                     RuntimeClass::Ref {
@@ -579,16 +577,15 @@ impl<'db> RmirEmitter<'db> {
             NExpr::Borrow { place, .. } => {
                 let place = self.lower_place(bb, place);
                 let actual = self.place_addr_class(&place);
-                let dst_class = if self.runtime_local_uses_source_transport(dst)
-                    && CoercionPlanner::target_prefers_transport(&actual)
-                {
-                    let target =
-                        merge_runtime_class(self.db, &dst_class, &actual).unwrap_or(actual);
-                    self.refine_local_runtime_class(dst, target.clone());
-                    target
-                } else {
-                    dst_class
-                };
+                let dst_class =
+                    if self.runtime_local_uses_source_transport(dst) && actual.is_transport() {
+                        let target =
+                            merge_runtime_class(self.db, &dst_class, &actual).unwrap_or(actual);
+                        self.refine_local_runtime_class(dst, target.clone());
+                        target
+                    } else {
+                        dst_class
+                    };
                 let value = self.lower_place_addr_of_for_class(
                     self.locals[dst.index()].semantic_ty,
                     bb,
@@ -3313,9 +3310,7 @@ impl<'db> RmirEmitter<'db> {
                 );
                 temp
             }
-            (RuntimeClass::Ref { pointee, .. }, target)
-                if !CoercionPlanner::target_prefers_transport(&target) =>
-            {
+            (RuntimeClass::Ref { pointee, .. }, target) if !target.is_transport() => {
                 let loaded = self.alloc_runtime_temp(
                     self.locals[src.index()].semantic_ty,
                     RuntimeCarrier::Value((*pointee).clone()),
@@ -4173,12 +4168,12 @@ impl<'db> RmirEmitter<'db> {
         {
             return self.coerce_value_if_needed(bb, value, target);
         }
-        if !CoercionPlanner::target_prefers_transport(target)
+        if !target.is_transport()
             && let Some(value) = self.materialize_ordinary_direct_value(bb, operand.local)
         {
             return self.coerce_value_if_needed(bb, value, target);
         }
-        if CoercionPlanner::target_prefers_transport(target) {
+        if target.is_transport() {
             if let Some(value) = self.handle_like_semantic_value(operand.local) {
                 return self.coerce_value_if_needed(bb, value, target);
             }
@@ -4327,7 +4322,7 @@ impl<'db> RmirEmitter<'db> {
         operand: NOperand,
         target: &RuntimeClass<'db>,
     ) -> Option<RLocalId> {
-        if !CoercionPlanner::target_prefers_transport(target) {
+        if !target.is_transport() {
             return None;
         }
         let local = operand.local;
@@ -4377,7 +4372,7 @@ impl<'db> RmirEmitter<'db> {
                 |provider| self.provider_binding_value(provider),
             )),
         }?;
-        CoercionPlanner::target_prefers_transport(self.value_class(value)?).then_some(value)
+        self.value_class(value)?.is_transport().then_some(value)
     }
 
     fn load_runtime_place_value(

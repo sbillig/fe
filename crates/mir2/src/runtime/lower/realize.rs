@@ -3,9 +3,9 @@ use hir::analysis::{
     ty::ty_def::TyId,
 };
 
-use crate::runtime::{AddressSpaceKind, LayoutId, RuntimeBoundarySpec, RuntimeClass, RuntimePlace};
-
-use super::coerce::CoercionPlanner;
+use crate::runtime::{
+    AddressSpaceKind, LayoutId, RefKind, RefView, RuntimeBoundarySpec, RuntimeClass, RuntimePlace,
+};
 
 #[derive(Clone, Debug)]
 pub(super) struct SelectedRuntimeArg<'db> {
@@ -69,6 +69,118 @@ pub(crate) enum RuntimeBoundaryValueRealization<'db> {
     },
 }
 
+pub(crate) struct RuntimeBoundaryMatcher;
+
+impl RuntimeBoundaryMatcher {
+    pub(crate) fn class_satisfies_boundary<'db>(
+        class: &RuntimeClass<'db>,
+        boundary: &RuntimeBoundarySpec<'db>,
+    ) -> bool {
+        match boundary {
+            RuntimeBoundarySpec::ExactTransport(expected) => class == expected,
+            RuntimeBoundarySpec::ExactShape(expected) => {
+                Self::class_matches_shape_boundary(class, expected)
+            }
+            RuntimeBoundarySpec::BorrowLike { pointee, allow, .. } => match class {
+                RuntimeClass::Ref {
+                    pointee: actual_pointee,
+                    kind: RefKind::Object,
+                    view: RefView::Whole,
+                } => allow.allow_object && **actual_pointee == *pointee,
+                RuntimeClass::Ref {
+                    pointee: actual_pointee,
+                    kind: RefKind::Const,
+                    view: RefView::Whole,
+                } => allow.allow_const && **actual_pointee == *pointee,
+                RuntimeClass::Ref {
+                    pointee: actual_pointee,
+                    kind: RefKind::Provider { space, .. },
+                    view: RefView::Whole,
+                } => allow.provider_spaces.contains(space) && **actual_pointee == *pointee,
+                RuntimeClass::Ref {
+                    view: RefView::EnumVariant(_),
+                    ..
+                } => false,
+                RuntimeClass::RawAddr { .. } => allow.allow_raw_addr,
+                RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => false,
+            },
+        }
+    }
+
+    pub(crate) fn placeholder_class<'db>(
+        boundary: &RuntimeBoundarySpec<'db>,
+    ) -> Option<RuntimeClass<'db>> {
+        match boundary {
+            RuntimeBoundarySpec::ExactTransport(class) | RuntimeBoundarySpec::ExactShape(class) => {
+                Some(class.clone())
+            }
+            RuntimeBoundarySpec::BorrowLike { pointee, allow, .. }
+                if pointee.aggregate_layout().is_some() && allow.allow_object =>
+            {
+                Some(RuntimeClass::Ref {
+                    pointee: Box::new(pointee.clone()),
+                    kind: RefKind::Object,
+                    view: RefView::Whole,
+                })
+            }
+            RuntimeBoundarySpec::BorrowLike { pointee, allow, .. }
+                if pointee.aggregate_layout().is_some() && allow.allow_const =>
+            {
+                Some(RuntimeClass::Ref {
+                    pointee: Box::new(pointee.clone()),
+                    kind: RefKind::Const,
+                    view: RefView::Whole,
+                })
+            }
+            RuntimeBoundarySpec::BorrowLike { pointee, allow, .. } if allow.allow_raw_addr => {
+                Some(RuntimeClass::RawAddr {
+                    space: AddressSpaceKind::Memory,
+                    target: pointee.aggregate_layout(),
+                })
+            }
+            RuntimeBoundarySpec::BorrowLike { .. } => None,
+        }
+    }
+
+    fn class_matches_shape_boundary<'db>(
+        actual: &RuntimeClass<'db>,
+        expected: &RuntimeClass<'db>,
+    ) -> bool {
+        match (actual, expected) {
+            (
+                RuntimeClass::Ref {
+                    pointee: actual_pointee,
+                    view: actual_view,
+                    ..
+                },
+                RuntimeClass::Ref {
+                    pointee: expected_pointee,
+                    view: expected_view,
+                    ..
+                },
+            ) => actual_pointee == expected_pointee && actual_view == expected_view,
+            (
+                RuntimeClass::RawAddr {
+                    target: actual_target,
+                    ..
+                },
+                RuntimeClass::Ref { pointee, .. },
+            ) => actual_target == &pointee.aggregate_layout(),
+            (
+                RuntimeClass::RawAddr {
+                    target: actual_target,
+                    ..
+                },
+                RuntimeClass::RawAddr {
+                    target: expected_target,
+                    ..
+                },
+            ) => actual_target == expected_target,
+            _ => actual == expected,
+        }
+    }
+}
+
 impl<'db> RuntimeBoundaryMaterialization<'db> {
     pub(crate) fn for_boundary(boundary: &RuntimeBoundarySpec<'db>) -> Option<Self> {
         match boundary {
@@ -117,7 +229,7 @@ impl<'db> RuntimeBoundarySourceClasses<'db> {
             RuntimeBoundarySpec::ExactTransport(target) => Some(target.clone()),
             RuntimeBoundarySpec::ExactShape(_) | RuntimeBoundarySpec::BorrowLike { .. } => self
                 .compatible_class(boundary)
-                .or_else(|| CoercionPlanner::placeholder_class(boundary)),
+                .or_else(|| RuntimeBoundaryMatcher::placeholder_class(boundary)),
         }
     }
 
@@ -135,7 +247,7 @@ impl<'db> RuntimeBoundarySourceClasses<'db> {
     ) -> Option<RuntimeClass<'db>> {
         self.value
             .as_ref()
-            .filter(|class| CoercionPlanner::class_satisfies_boundary(class, boundary))
+            .filter(|class| RuntimeBoundaryMatcher::class_satisfies_boundary(class, boundary))
             .cloned()
     }
 
@@ -145,7 +257,7 @@ impl<'db> RuntimeBoundarySourceClasses<'db> {
     ) -> Option<RuntimeClass<'db>> {
         self.address
             .as_ref()
-            .filter(|class| CoercionPlanner::class_satisfies_boundary(class, boundary))
+            .filter(|class| RuntimeBoundaryMatcher::class_satisfies_boundary(class, boundary))
             .cloned()
     }
 }
@@ -157,7 +269,9 @@ mod tests {
         ScalarClass, ScalarRepr, ScalarRole,
     };
 
-    use super::{RuntimeBoundaryMaterialization, RuntimeBoundarySourceClasses};
+    use super::{
+        RuntimeBoundaryMatcher, RuntimeBoundaryMaterialization, RuntimeBoundarySourceClasses,
+    };
 
     fn word_class<'db>() -> RuntimeClass<'db> {
         RuntimeClass::Scalar(ScalarClass {
@@ -210,5 +324,46 @@ mod tests {
             address: None,
         };
         assert_eq!(classes.realized_boundary_class(&boundary), Some(source));
+    }
+
+    #[test]
+    fn exact_shape_boundary_preserves_raw_addr_space() {
+        let actual = RuntimeClass::RawAddr {
+            space: AddressSpaceKind::Storage,
+            target: None,
+        };
+        let desired = RuntimeBoundarySpec::ExactShape(RuntimeClass::RawAddr {
+            space: AddressSpaceKind::Memory,
+            target: None,
+        });
+        assert!(RuntimeBoundaryMatcher::class_satisfies_boundary(
+            &actual, &desired
+        ));
+    }
+
+    #[test]
+    fn exact_transport_rejects_raw_addr_space_mismatch() {
+        let actual = RuntimeClass::RawAddr {
+            space: AddressSpaceKind::Storage,
+            target: None,
+        };
+        let desired = RuntimeBoundarySpec::ExactTransport(RuntimeClass::RawAddr {
+            space: AddressSpaceKind::Memory,
+            target: None,
+        });
+        assert!(!RuntimeBoundaryMatcher::class_satisfies_boundary(
+            &actual, &desired
+        ));
+    }
+
+    #[test]
+    fn placeholder_class_uses_memory_raw_addr_for_scalar_borrow_boundary() {
+        assert_eq!(
+            RuntimeBoundaryMatcher::placeholder_class(&raw_boundary()),
+            Some(RuntimeClass::RawAddr {
+                space: AddressSpaceKind::Memory,
+                target: None,
+            })
+        );
     }
 }
