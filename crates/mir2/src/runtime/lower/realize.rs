@@ -49,6 +49,14 @@ pub(super) enum RuntimeArgRealization<'db> {
     },
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct SelectedRuntimeValueArg<'db> {
+    pub(crate) source: RLocalId,
+    pub(crate) semantic_ty: TyId<'db>,
+    pub(crate) class: RuntimeClass<'db>,
+    pub(crate) realization: RuntimeBoundaryValueRealization<'db>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RuntimeBoundaryMaterialization<'db> {
     ObjectRef { layout: LayoutId<'db> },
@@ -182,6 +190,40 @@ pub(crate) fn emit_runtime_boundary_value_realization<'db>(
             emit_runtime_boundary_materialization(emitter, bb, src, materialization, semantic_ty)
         }
     }
+}
+
+pub(crate) fn emit_selected_runtime_value_arg<'db>(
+    emitter: &mut impl RuntimeBoundaryValueEmitter<'db>,
+    bb: RBlockId,
+    arg: &SelectedRuntimeValueArg<'db>,
+) -> RLocalId {
+    let value = emit_runtime_boundary_value_realization(
+        emitter,
+        bb,
+        arg.source,
+        arg.realization.clone(),
+        arg.semantic_ty,
+    );
+    let Some(class) = emitter.boundary_value_class(value) else {
+        panic!(
+            "selected runtime value arg lowered without a runtime class: arg={arg:?}; value={value:?}"
+        );
+    };
+    assert_eq!(
+        class, arg.class,
+        "selected runtime value arg class mismatch: arg={arg:?}; value={value:?}",
+    );
+    value
+}
+
+pub(crate) fn emit_selected_runtime_value_args<'db>(
+    emitter: &mut impl RuntimeBoundaryValueEmitter<'db>,
+    bb: RBlockId,
+    args: &[SelectedRuntimeValueArg<'db>],
+) -> Vec<RLocalId> {
+    args.iter()
+        .map(|arg| emit_selected_runtime_value_arg(emitter, bb, arg))
+        .collect()
 }
 
 fn emit_runtime_boundary_materialization<'db>(
@@ -397,7 +439,8 @@ mod tests {
     use super::{
         RuntimeBoundaryAddress, RuntimeBoundaryMatcher, RuntimeBoundaryMaterialization,
         RuntimeBoundaryValueEmitter, RuntimeBoundaryValueRealization, RuntimeBoundaryValueSelector,
-        RuntimeBoundaryValueSource, emit_runtime_boundary_value_realization,
+        RuntimeBoundaryValueSource, SelectedRuntimeValueArg,
+        emit_runtime_boundary_value_realization, emit_selected_runtime_value_args,
     };
 
     fn word_class<'db>() -> RuntimeClass<'db> {
@@ -675,6 +718,27 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn selected_runtime_value_args_share_boundary_realization_lowering() {
+        let db = DriverDataBase::default();
+        let semantic_ty = TyId::unit(&db);
+        let mut emitter = FakeBoundaryEmitter::new(vec![Some(word_class())]);
+
+        let values = emit_selected_runtime_value_args(
+            &mut emitter,
+            RBlockId::new(0),
+            &[SelectedRuntimeValueArg {
+                source: RLocalId::new(0),
+                semantic_ty,
+                class: word_class(),
+                realization: RuntimeBoundaryValueRealization::UseValue,
+            }],
+        );
+
+        assert_eq!(values, vec![RLocalId::new(0)]);
+        assert!(emitter.ops.is_empty());
     }
 
     #[test]

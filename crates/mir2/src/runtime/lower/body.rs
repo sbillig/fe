@@ -64,7 +64,7 @@ use super::{
     place::{project_field_class, project_index_class, project_variant_field_class},
     realize::{
         RuntimeArgRealization, RuntimeBoundaryValueEmitter, RuntimeBoundaryValueRealization,
-        SelectedRuntimeArg, emit_runtime_boundary_value_realization,
+        SelectedRuntimeArg, SelectedRuntimeValueArg, emit_selected_runtime_value_arg,
     },
     returns::RuntimeReturnAnalysisCx,
     type_info::{
@@ -4217,17 +4217,18 @@ impl<'emitter, 'db> RuntimeArgLowerer<'emitter, 'db> {
                 let value = self
                     .emitter
                     .load_runtime_place_value(self.bb, place, *semantic_ty);
-                let value = emit_runtime_boundary_value_realization(
+                emit_selected_runtime_value_arg(
                     self.emitter,
                     self.bb,
-                    value,
-                    RuntimeBoundaryValueRealization::MaterializeValue {
-                        materialization: materialization.clone(),
+                    &SelectedRuntimeValueArg {
+                        source: value,
+                        semantic_ty: *semantic_ty,
+                        class: selected.class.clone(),
+                        realization: RuntimeBoundaryValueRealization::MaterializeValue {
+                            materialization: materialization.clone(),
+                        },
                     },
-                    *semantic_ty,
-                );
-                self.emitter
-                    .coerce_value_if_needed(self.bb, value, &selected.class)
+                )
             }
             RuntimeArgRealization::MaterializeSemanticValue {
                 operand,
@@ -4235,17 +4236,18 @@ impl<'emitter, 'db> RuntimeArgLowerer<'emitter, 'db> {
                 semantic_ty,
             } => {
                 let value = self.emitter.read_semantic_operand(self.bb, *operand);
-                let value = emit_runtime_boundary_value_realization(
+                emit_selected_runtime_value_arg(
                     self.emitter,
                     self.bb,
-                    value,
-                    RuntimeBoundaryValueRealization::MaterializeValue {
-                        materialization: materialization.clone(),
+                    &SelectedRuntimeValueArg {
+                        source: value,
+                        semantic_ty: *semantic_ty,
+                        class: selected.class.clone(),
+                        realization: RuntimeBoundaryValueRealization::MaterializeValue {
+                            materialization: materialization.clone(),
+                        },
                     },
-                    *semantic_ty,
-                );
-                self.emitter
-                    .coerce_value_if_needed(self.bb, value, &selected.class)
+                )
             }
             RuntimeArgRealization::AggregateFromRuntimeSource { local } => {
                 let Some(value) = self

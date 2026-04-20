@@ -42,7 +42,8 @@ use crate::{
             realize::{
                 RuntimeBoundaryAddress, RuntimeBoundaryMatcher, RuntimeBoundaryValueEmitter,
                 RuntimeBoundaryValueRealization, RuntimeBoundaryValueSelector,
-                RuntimeBoundaryValueSource, emit_runtime_boundary_value_realization,
+                RuntimeBoundaryValueSource, SelectedRuntimeValueArg,
+                emit_selected_runtime_value_args,
             },
             returns::RuntimeReturnAnalysisCx,
             type_info::{RuntimeTypeEnv, top_level_class_for_ty_in_env},
@@ -100,20 +101,6 @@ struct SyntheticBodyBuilder<'db> {
     returns: RuntimeReturnAnalysisCx<'db>,
     locals: Vec<RLocal<'db>>,
     blocks: Vec<RBlock<'db>>,
-}
-
-#[derive(Clone, Debug)]
-struct SyntheticSelectedRuntimeArg<'db> {
-    source: RLocalId,
-    semantic_ty: TyId<'db>,
-    class: RuntimeClass<'db>,
-    realization: SyntheticRuntimeArgRealization<'db>,
-}
-
-#[derive(Clone, Debug)]
-enum SyntheticRuntimeArgRealization<'db> {
-    UseValue,
-    Boundary(RuntimeBoundaryValueRealization<'db>),
 }
 
 impl<'db> RuntimeConversionEmitter<'db> for SyntheticBodyBuilder<'db> {
@@ -822,7 +809,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         &mut self,
         callee: RuntimeInstance<'db>,
         args: &[RLocalId],
-    ) -> Vec<SyntheticSelectedRuntimeArg<'db>> {
+    ) -> Vec<SelectedRuntimeValueArg<'db>> {
         let signature = self.runtime_signature(callee);
         if args.is_empty() && signature.params.is_empty() {
             return Vec::new();
@@ -865,7 +852,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
     fn specialize_callee_for_selected_args(
         &mut self,
         callee: RuntimeInstance<'db>,
-        args: &[SyntheticSelectedRuntimeArg<'db>],
+        args: &[SelectedRuntimeValueArg<'db>],
     ) -> RuntimeInstance<'db> {
         if args.is_empty() {
             return callee;
@@ -893,7 +880,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
     fn assert_selected_args_match_signature(
         &self,
         callee: RuntimeInstance<'db>,
-        selected: &[SyntheticSelectedRuntimeArg<'db>],
+        selected: &[SelectedRuntimeValueArg<'db>],
         signature: &RuntimeSignature<'db>,
     ) {
         assert_eq!(
@@ -912,23 +899,9 @@ impl<'db> SyntheticBodyBuilder<'db> {
     fn lower_selected_call_args(
         &mut self,
         bb: RBlockId,
-        selected: &[SyntheticSelectedRuntimeArg<'db>],
+        selected: &[SelectedRuntimeValueArg<'db>],
     ) -> Vec<RLocalId> {
-        selected
-            .iter()
-            .map(|arg| match &arg.realization {
-                SyntheticRuntimeArgRealization::UseValue => arg.source,
-                SyntheticRuntimeArgRealization::Boundary(realization) => {
-                    emit_runtime_boundary_value_realization(
-                        self,
-                        bb,
-                        arg.source,
-                        realization.clone(),
-                        arg.semantic_ty,
-                    )
-                }
-            })
-            .collect()
+        emit_selected_runtime_value_args(self, bb, selected)
     }
 
     fn select_runtime_arg_for_param_plan(
@@ -936,7 +909,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         source: RLocalId,
         plan: &RuntimeParamPlan<'db>,
         semantic_ty: TyId<'db>,
-    ) -> SyntheticSelectedRuntimeArg<'db> {
+    ) -> SelectedRuntimeValueArg<'db> {
         match plan {
             RuntimeParamPlan::Erased => {
                 panic!("erased runtime param should not have a runtime arg")
@@ -947,11 +920,11 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     .value_class()
                     .cloned()
                     .unwrap_or_else(|| panic!("cannot pass erased runtime arg {source:?}"));
-                SyntheticSelectedRuntimeArg {
+                SelectedRuntimeValueArg {
                     source,
                     semantic_ty,
                     class,
-                    realization: SyntheticRuntimeArgRealization::UseValue,
+                    realization: RuntimeBoundaryValueRealization::UseValue,
                 }
             }
             RuntimeParamPlan::Boundary(boundary) => {
@@ -963,11 +936,11 @@ impl<'db> SyntheticBodyBuilder<'db> {
                         panic!("cannot realize erased runtime value {source:?} for {boundary:?}")
                     });
                 let realization = self.select_runtime_value_for_boundary(source, boundary);
-                SyntheticSelectedRuntimeArg {
+                SelectedRuntimeValueArg {
                     source,
                     semantic_ty,
                     class: realization.class(&source_class),
-                    realization: SyntheticRuntimeArgRealization::Boundary(realization),
+                    realization,
                 }
             }
         }
