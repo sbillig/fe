@@ -102,6 +102,20 @@ struct SyntheticBodyBuilder<'db> {
     blocks: Vec<RBlock<'db>>,
 }
 
+#[derive(Clone, Debug)]
+struct SyntheticSelectedRuntimeArg<'db> {
+    source: RLocalId,
+    semantic_ty: TyId<'db>,
+    class: RuntimeClass<'db>,
+    realization: SyntheticRuntimeArgRealization<'db>,
+}
+
+#[derive(Clone, Debug)]
+enum SyntheticRuntimeArgRealization<'db> {
+    UseValue,
+    Boundary(RuntimeBoundaryValueRealization<'db>),
+}
+
 impl<'db> RuntimeConversionEmitter<'db> for SyntheticBodyBuilder<'db> {
     fn alloc_conversion_temp(
         &mut self,
@@ -719,9 +733,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         callee: RuntimeInstance<'db>,
         args: Vec<RLocalId>,
     ) -> Option<RLocalId> {
-        let callee = self.specialize_callee_for_args(callee, &args);
-        let sig = self.runtime_signature(callee);
-        let args = self.coerce_call_args(bb, callee, args);
+        let (callee, sig, args) = self.prepare_call(bb, callee, args);
         let dst = if let Some(class) = sig.ret {
             let semantic_ty = callee
                 .key(self.db)
@@ -767,8 +779,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         callee: RuntimeInstance<'db>,
         args: Vec<RLocalId>,
     ) -> RLocalId {
-        let callee = self.specialize_callee_for_args(callee, &args);
-        let args = self.coerce_call_args(bb, callee, args);
+        let (callee, _, args) = self.prepare_call(bb, callee, args);
         let dst = self.push_erased_local(TyId::unit(self.db));
         self.push_stmt(
             bb,
@@ -783,6 +794,20 @@ impl<'db> SyntheticBodyBuilder<'db> {
         dst
     }
 
+    fn prepare_call(
+        &mut self,
+        bb: RBlockId,
+        callee: RuntimeInstance<'db>,
+        args: Vec<RLocalId>,
+    ) -> (RuntimeInstance<'db>, RuntimeSignature<'db>, Vec<RLocalId>) {
+        let selected = self.select_call_args(callee, &args);
+        let callee = self.specialize_callee_for_selected_args(callee, &selected);
+        let signature = self.runtime_signature(callee);
+        self.assert_selected_args_match_signature(callee, &selected, &signature);
+        let args = self.lower_selected_call_args(bb, &selected);
+        (callee, signature, args)
+    }
+
     fn push_call_result(
         &mut self,
         bb: RBlockId,
@@ -793,57 +818,14 @@ impl<'db> SyntheticBodyBuilder<'db> {
             .expect("synthetic helper call should produce a value")
     }
 
-    fn specialize_callee_for_args(
+    fn select_call_args(
         &mut self,
         callee: RuntimeInstance<'db>,
         args: &[RLocalId],
-    ) -> RuntimeInstance<'db> {
-        if args.is_empty() {
-            return callee;
-        }
-        let RuntimeInstanceSource::Semantic(semantic) = callee.key(self.db).source(self.db) else {
-            return callee;
-        };
-        let signature = self.runtime_signature(callee);
-        let param_entries = runtime_visible_binding_plans(self.db, semantic);
-        assert_eq!(
-            param_entries.len(),
-            signature.params.len(),
-            "synthetic specialized callee metadata mismatch for {callee:?}"
-        );
-        let params: Vec<RuntimeClass<'db>> = args
-            .iter()
-            .zip(signature.params.iter().enumerate())
-            .map(|(arg, (idx, param))| {
-                let plan = param_entries
-                    .get(idx)
-                    .map(|entry| entry.plan.clone())
-                    .unwrap_or_else(|| {
-                        RuntimeParamPlan::Boundary(RuntimeBoundarySpec::ExactTransport(
-                            param.class.clone(),
-                        ))
-                    });
-                self.runtime_class_for_param_arg(*arg, &plan)
-            })
-            .collect();
-        let key =
-            RuntimeInstanceKey::new(self.db, RuntimeInstanceSource::Semantic(semantic), params);
-        if key == callee.key(self.db) {
-            callee
-        } else {
-            get_or_build_runtime_instance(self.db, key)
-        }
-    }
-
-    fn coerce_call_args(
-        &mut self,
-        bb: RBlockId,
-        callee: RuntimeInstance<'db>,
-        args: Vec<RLocalId>,
-    ) -> Vec<RLocalId> {
+    ) -> Vec<SyntheticSelectedRuntimeArg<'db>> {
         let signature = self.runtime_signature(callee);
         if args.is_empty() && signature.params.is_empty() {
-            return args;
+            return Vec::new();
         }
         let param_entries = callee
             .key(self.db)
@@ -861,7 +843,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             signature.params.len(),
             "synthetic call arg count mismatch for {callee:?}"
         );
-        args.into_iter()
+        args.iter()
             .zip(signature.params.iter().enumerate())
             .map(|(arg, (idx, param))| {
                 let (semantic_ty, plan) = param_entries
@@ -875,57 +857,120 @@ impl<'db> SyntheticBodyBuilder<'db> {
                             )),
                         )
                     });
-                self.coerce_runtime_value_for_param_plan(bb, arg, &plan, semantic_ty)
+                self.select_runtime_arg_for_param_plan(*arg, &plan, semantic_ty)
             })
             .collect()
     }
 
-    fn runtime_class_for_param_arg(
-        &self,
-        arg: RLocalId,
-        plan: &RuntimeParamPlan<'db>,
-    ) -> RuntimeClass<'db> {
-        match plan {
-            RuntimeParamPlan::Erased => None,
-            RuntimeParamPlan::Boundary(RuntimeBoundarySpec::ExactTransport(target)) => {
-                Some(target.clone())
-            }
-            RuntimeParamPlan::Boundary(boundary) => self
-                .runtime_boundary_value_source(arg)
-                .and_then(|source| source.realized_boundary_class(boundary))
-                .or_else(|| RuntimeBoundaryMatcher::placeholder_class(boundary)),
-            RuntimeParamPlan::PassActual => self.locals[arg.index()].carrier.value_class().cloned(),
+    fn specialize_callee_for_selected_args(
+        &mut self,
+        callee: RuntimeInstance<'db>,
+        args: &[SyntheticSelectedRuntimeArg<'db>],
+    ) -> RuntimeInstance<'db> {
+        if args.is_empty() {
+            return callee;
         }
-        .unwrap_or_else(|| panic!("cannot specialize erased runtime arg {arg:?}"))
+        let RuntimeInstanceSource::Semantic(semantic) = callee.key(self.db).source(self.db) else {
+            return callee;
+        };
+        let signature = self.runtime_signature(callee);
+        let param_entries = runtime_visible_binding_plans(self.db, semantic);
+        assert_eq!(
+            param_entries.len(),
+            signature.params.len(),
+            "synthetic specialized callee metadata mismatch for {callee:?}"
+        );
+        let params: Vec<RuntimeClass<'db>> = args.iter().map(|arg| arg.class.clone()).collect();
+        let key =
+            RuntimeInstanceKey::new(self.db, RuntimeInstanceSource::Semantic(semantic), params);
+        if key == callee.key(self.db) {
+            callee
+        } else {
+            get_or_build_runtime_instance(self.db, key)
+        }
     }
 
-    fn coerce_runtime_value_for_param_plan(
+    fn assert_selected_args_match_signature(
+        &self,
+        callee: RuntimeInstance<'db>,
+        selected: &[SyntheticSelectedRuntimeArg<'db>],
+        signature: &RuntimeSignature<'db>,
+    ) {
+        assert_eq!(
+            selected.len(),
+            signature.params.len(),
+            "synthetic selected arg count mismatch for {callee:?}"
+        );
+        for (idx, (selected, param)) in selected.iter().zip(signature.params.iter()).enumerate() {
+            assert_eq!(
+                selected.class, param.class,
+                "synthetic selected arg class mismatch for {callee:?} param {idx}"
+            );
+        }
+    }
+
+    fn lower_selected_call_args(
         &mut self,
         bb: RBlockId,
-        src: RLocalId,
+        selected: &[SyntheticSelectedRuntimeArg<'db>],
+    ) -> Vec<RLocalId> {
+        selected
+            .iter()
+            .map(|arg| match &arg.realization {
+                SyntheticRuntimeArgRealization::UseValue => arg.source,
+                SyntheticRuntimeArgRealization::Boundary(realization) => {
+                    emit_runtime_boundary_value_realization(
+                        self,
+                        bb,
+                        arg.source,
+                        realization.clone(),
+                        arg.semantic_ty,
+                    )
+                }
+            })
+            .collect()
+    }
+
+    fn select_runtime_arg_for_param_plan(
+        &mut self,
+        source: RLocalId,
         plan: &RuntimeParamPlan<'db>,
         semantic_ty: TyId<'db>,
-    ) -> RLocalId {
+    ) -> SyntheticSelectedRuntimeArg<'db> {
         match plan {
             RuntimeParamPlan::Erased => {
                 panic!("erased runtime param should not have a runtime arg")
             }
-            RuntimeParamPlan::Boundary(boundary) => {
-                self.realize_runtime_value_for_boundary(bb, src, boundary, semantic_ty)
+            RuntimeParamPlan::PassActual => {
+                let class = self.locals[source.index()]
+                    .carrier
+                    .value_class()
+                    .cloned()
+                    .unwrap_or_else(|| panic!("cannot pass erased runtime arg {source:?}"));
+                SyntheticSelectedRuntimeArg {
+                    source,
+                    semantic_ty,
+                    class,
+                    realization: SyntheticRuntimeArgRealization::UseValue,
+                }
             }
-            RuntimeParamPlan::PassActual => src,
+            RuntimeParamPlan::Boundary(boundary) => {
+                let source_class = self.locals[source.index()]
+                    .carrier
+                    .value_class()
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        panic!("cannot realize erased runtime value {source:?} for {boundary:?}")
+                    });
+                let realization = self.select_runtime_value_for_boundary(source, boundary);
+                SyntheticSelectedRuntimeArg {
+                    source,
+                    semantic_ty,
+                    class: realization.class(&source_class),
+                    realization: SyntheticRuntimeArgRealization::Boundary(realization),
+                }
+            }
         }
-    }
-
-    fn realize_runtime_value_for_boundary(
-        &mut self,
-        bb: RBlockId,
-        src: RLocalId,
-        boundary: &RuntimeBoundarySpec<'db>,
-        semantic_ty: TyId<'db>,
-    ) -> RLocalId {
-        let realization = self.select_runtime_value_for_boundary(src, boundary);
-        emit_runtime_boundary_value_realization(self, bb, src, realization, semantic_ty)
     }
 
     fn select_runtime_value_for_boundary(

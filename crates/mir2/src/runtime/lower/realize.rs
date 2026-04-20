@@ -70,6 +70,17 @@ pub(crate) enum RuntimeBoundaryValueRealization<'db> {
     },
 }
 
+impl<'db> RuntimeBoundaryValueRealization<'db> {
+    pub(crate) fn class(&self, source: &RuntimeClass<'db>) -> RuntimeClass<'db> {
+        match self {
+            Self::UseValue => source.clone(),
+            Self::AddrOfRuntimePlace { class, .. } => class.clone(),
+            Self::CoerceValue { target } => target.clone(),
+            Self::MaterializeValue { materialization } => materialization.class(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RuntimeBoundaryAddress<'db> {
     pub(crate) place: RuntimePlace<'db>,
@@ -355,29 +366,6 @@ impl<'db> RuntimeBoundaryMaterialization<'db> {
 }
 
 impl<'db> RuntimeBoundaryValueSource<'db> {
-    pub(crate) fn realized_boundary_class(
-        &self,
-        boundary: &RuntimeBoundarySpec<'db>,
-    ) -> Option<RuntimeClass<'db>> {
-        match boundary {
-            RuntimeBoundarySpec::ExactTransport(target) => Some(target.clone()),
-            RuntimeBoundarySpec::ExactShape(_) | RuntimeBoundarySpec::BorrowLike { .. } => self
-                .compatible_class(boundary)
-                .or_else(|| RuntimeBoundaryMatcher::placeholder_class(boundary)),
-        }
-    }
-
-    pub(crate) fn compatible_class(
-        &self,
-        boundary: &RuntimeBoundarySpec<'db>,
-    ) -> Option<RuntimeClass<'db>> {
-        if self.value_satisfies(boundary) {
-            return Some(self.value.clone());
-        }
-        self.compatible_address(boundary)
-            .map(|address| address.class)
-    }
-
     fn value_satisfies(&self, boundary: &RuntimeBoundarySpec<'db>) -> bool {
         RuntimeBoundaryMatcher::class_satisfies_boundary(&self.value, boundary)
     }
@@ -585,11 +573,10 @@ mod tests {
             space: AddressSpaceKind::Memory,
             target: None,
         });
-        let source = source_with_value(source.clone());
-        assert_eq!(
-            source.realized_boundary_class(&boundary),
-            Some(source.value)
-        );
+        let realization =
+            RuntimeBoundaryValueSelector::select(source_with_value(source.clone()), &boundary)
+                .expect("exact-shape source should select a realization");
+        assert_eq!(realization.class(&source), source,);
     }
 
     #[test]
