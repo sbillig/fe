@@ -96,6 +96,7 @@ struct RuntimeGraphBuilder<'db> {
     code_region_roots: Vec<(RuntimeCodeRegion<'db>, RuntimeInstance<'db>)>,
     seen_region_roots: FxHashSet<RuntimeCodeRegion<'db>>,
     materialized_contracts: FxHashSet<Contract<'db>>,
+    materialized_object_names: FxHashSet<String>,
 }
 
 impl<'db> RuntimeGraphBuilder<'db> {
@@ -105,6 +106,10 @@ impl<'db> RuntimeGraphBuilder<'db> {
         object_specs: Vec<(String, Vec<(RuntimeSectionName, RuntimeInstance<'db>)>)>,
     ) -> Self {
         let materialized_contracts = materialized_contracts_for_roots(db, &roots);
+        let materialized_object_names = object_specs
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<FxHashSet<_>>();
         let mut builder = Self {
             db,
             queue: Vec::new(),
@@ -115,6 +120,7 @@ impl<'db> RuntimeGraphBuilder<'db> {
             code_region_roots: Vec::new(),
             seen_region_roots: FxHashSet::default(),
             materialized_contracts,
+            materialized_object_names,
         };
         for root in roots {
             builder.enqueue(root);
@@ -175,6 +181,7 @@ impl<'db> RuntimeGraphBuilder<'db> {
     ) -> Result<(), LowerError> {
         let mut function_roots = Vec::new();
         let mut referenced_contracts = Vec::new();
+        let mut referenced_manual_roots = Vec::new();
         for region in regions.iter().copied() {
             match region.key(self.db) {
                 RuntimeCodeRegionKey::FunctionRoot { .. } => {
@@ -188,7 +195,9 @@ impl<'db> RuntimeGraphBuilder<'db> {
                         referenced_contracts.push(contract);
                     }
                 }
-                RuntimeCodeRegionKey::ManualContractRoot { .. } => {}
+                RuntimeCodeRegionKey::ManualContractRoot { func } => {
+                    referenced_manual_roots.push(func);
+                }
             }
         }
 
@@ -210,6 +219,28 @@ impl<'db> RuntimeGraphBuilder<'db> {
         referenced_contracts.sort_by_key(|contract| contract_name(self.db, *contract));
         for contract in referenced_contracts {
             let (name, sections, section_roots) = contract_object_spec(self.db, contract)?;
+            if !self.materialized_object_names.insert(name.clone()) {
+                continue;
+            }
+            self.discovered_contract_specs.push((name, sections));
+            for root in section_roots {
+                self.enqueue(root);
+            }
+        }
+        referenced_manual_roots.sort_by_key(|func| {
+            func.name(self.db)
+                .to_opt()
+                .map(|name| name.data(self.db).to_string())
+        });
+        for func in referenced_manual_roots {
+            let Some((name, sections, section_roots)) =
+                manual_contract_object_for_root(self.db, func)?
+            else {
+                continue;
+            };
+            if !self.materialized_object_names.insert(name.clone()) {
+                continue;
+            }
             self.discovered_contract_specs.push((name, sections));
             for root in section_roots {
                 self.enqueue(root);
@@ -513,6 +544,32 @@ fn manual_contract_objects<'db>(
         .collect::<Vec<_>>();
     objects.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
     Ok(objects)
+}
+
+fn manual_contract_object_for_root<'db>(
+    db: &'db dyn MirDb,
+    func: Func<'db>,
+) -> Result<Option<ManualContractObjectSpec<'db>>, LowerError> {
+    let Some(attr) = func.manual_contract_root_attr(db) else {
+        return Ok(None);
+    };
+    let contract_name = match attr {
+        ManualContractRootAttr::Init { contract_name }
+        | ManualContractRootAttr::Runtime { contract_name } => contract_name.data(db),
+        ManualContractRootAttr::Error(err) => {
+            return Err(LowerError::Unsupported(format!(
+                "invalid manual contract root attr on `{}`: {err:?}",
+                func.name(db)
+                    .to_opt()
+                    .map(|name| name.data(db).to_string())
+                    .unwrap_or_else(|| "<anonymous>".to_string())
+            )));
+        }
+    };
+    let object_name = sanitize_object_name(contract_name);
+    Ok(manual_contract_objects(db, func.top_mod(db))?
+        .into_iter()
+        .find(|(name, _, _)| name == &object_name))
 }
 
 fn discover_manual_contract_roots<'db>(
