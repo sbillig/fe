@@ -390,11 +390,19 @@ fn runtime_boundary_spec<'db>(
     if repr_ty != ty {
         return runtime_boundary_spec(db, repr_ty, default_space, scope, assumptions);
     }
-    if repr_ty == TyId::unit(db) || is_zero_sized_in_context(db, repr_ty, scope, assumptions) {
-        return None;
-    }
     if let Some((kind, inner)) = repr_ty.as_borrow(db) {
         if is_zero_sized_in_context(db, inner, scope, assumptions) {
+            if repr_ty.as_capability(db).is_some() {
+                return Some(RuntimeBoundarySpec::ExactShape(
+                    provider_class_for_target_in_context(
+                        db,
+                        Some(inner),
+                        default_space,
+                        scope,
+                        assumptions,
+                    ),
+                ));
+            }
             return None;
         }
         let access = match kind {
@@ -407,8 +415,32 @@ fn runtime_boundary_spec<'db>(
             allow: default_borrow_transport_set(access, default_space),
         });
     }
-    runtime_top_level_class(db, repr_ty, default_space, scope, assumptions)
-        .map(RuntimeBoundarySpec::Exact)
+    if let Some((_, inner)) = repr_ty.as_capability(db) {
+        return Some(RuntimeBoundarySpec::ExactShape(
+            provider_class_for_target_in_context(
+                db,
+                Some(inner),
+                default_space,
+                scope,
+                assumptions,
+            ),
+        ));
+    }
+    if let Some(class) = effect_handle_class_for_ty(db, repr_ty, scope, assumptions) {
+        return Some(RuntimeBoundarySpec::ExactShape(class));
+    }
+    if repr_ty == TyId::unit(db) || is_zero_sized_in_context(db, repr_ty, scope, assumptions) {
+        return None;
+    }
+    runtime_top_level_class(db, repr_ty, default_space, scope, assumptions).map(|class| {
+        if class.is_transport()
+            || runtime_transport_sensitive_aggregate(db, repr_ty, scope, assumptions)
+        {
+            RuntimeBoundarySpec::ExactShape(class)
+        } else {
+            RuntimeBoundarySpec::ExactTransport(class)
+        }
+    })
 }
 
 #[salsa::tracked]
@@ -423,11 +455,17 @@ fn runtime_top_level_class<'db>(
     if repr_ty != ty {
         return runtime_top_level_class(db, repr_ty, default_space, scope, assumptions);
     }
-    if repr_ty == TyId::unit(db) || is_zero_sized_in_context(db, repr_ty, scope, assumptions) {
-        return None;
-    }
     if let Some((_, inner)) = repr_ty.as_borrow(db) {
         if is_zero_sized_in_context(db, inner, scope, assumptions) {
+            if repr_ty.as_capability(db).is_some() {
+                return Some(provider_class_for_target_in_context(
+                    db,
+                    Some(inner),
+                    default_space,
+                    scope,
+                    assumptions,
+                ));
+            }
             return None;
         }
         return Some(object_ref_class_for_target_in_context(
@@ -438,9 +476,6 @@ fn runtime_top_level_class<'db>(
         ));
     }
     if let Some((_, inner)) = repr_ty.as_capability(db) {
-        if is_zero_sized_in_context(db, inner, scope, assumptions) {
-            return None;
-        }
         return Some(provider_class_for_target_in_context(
             db,
             Some(inner),
@@ -451,6 +486,9 @@ fn runtime_top_level_class<'db>(
     }
     if let Some(class) = effect_handle_class_for_ty(db, repr_ty, scope, assumptions) {
         return Some(class);
+    }
+    if repr_ty == TyId::unit(db) || is_zero_sized_in_context(db, repr_ty, scope, assumptions) {
+        return None;
     }
     if let Some(scalar) = scalar_class_from_repr_ty(db, repr_ty) {
         return Some(RuntimeClass::Scalar(scalar));

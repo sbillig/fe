@@ -5,8 +5,8 @@ use hir::analysis::{
         SemanticCalleeRef, SemanticCodeRegionRef, SemanticInstance, SemanticInstanceKey,
         VariantIndex,
         borrowck::{
-            NBorrowRoot, NEffectArg, NEffectArgValue, NExpr, NLocalInterface, NLocalOrigin,
-            NOperand, NSPlace, NSPlaceRoot, NSStmt, NSStmtKind, NSTerminator, NSTerminatorKind,
+            NBorrowRoot, NEffectArg, NExpr, NLocalInterface, NLocalOrigin, NOperand, NSPlace,
+            NSPlaceRoot, NSStmt, NSStmtKind, NSTerminator, NSTerminatorKind,
             NormalizedSemanticBody, normalize_semantic_body,
         },
         get_or_build_semantic_instance, reify_runtime_const_for_ty, sem_const_ty,
@@ -17,7 +17,7 @@ use hir::analysis::{
             PrimitiveWrapperCallKind, RuntimeBuiltinFuncKind, core_primitive_wrapper_call_kind,
             runtime_builtin_func_kind,
         },
-        ty_check::{BodyOwner, EffectPassMode},
+        ty_check::BodyOwner,
         ty_def::TyId,
     },
 };
@@ -39,13 +39,15 @@ use crate::{
 };
 
 use super::{
+    call_input::{
+        CompiledCallInputPlan, RuntimeValueEvaluator, compile_call_input_plan_for_semantic,
+    },
     classify::{
         BodyEnv, BodyStaticFacts, BoundarySiteAllocator, ContractMetadataBuiltin,
-        GenericNumericIntrinsicKind, InferClassCache, RuntimeBodyCx, RuntimeEffectBindingPlan,
+        GenericNumericIntrinsicKind, InferClassCache, RuntimeBodyCx,
         actual_aggregate_class_from_runtime_source, contract_metadata_builtin,
-        desired_runtime_effect_arg_boundary, generic_numeric_intrinsic_kind,
-        nonself_backing_value_place, resolve_runtime_call_key,
-        runtime_effect_binding_plan_for_binding_idx, semantic_return_ty, snapshot_source_place,
+        generic_numeric_intrinsic_kind, nonself_backing_value_place, resolve_runtime_call_key,
+        semantic_return_ty, snapshot_source_place,
     },
     coerce::CoercionPlanner,
     consts::{
@@ -57,17 +59,12 @@ use super::{
         AggregateCtorElem, aggregate_ctor_elems_for_layout, layout_for_aggregate_instance_in_env,
         layout_for_enum_variant_instance_in_env, layout_for_ty_in_env,
     },
-    place::{
-        project_field_class, project_index_class, project_variant_field_class,
-        resolved_effect_arg_address_space,
-    },
+    place::{project_field_class, project_index_class, project_variant_field_class},
+    realize::{RuntimeArgRealization, RuntimeBoundaryMaterialization, SelectedRuntimeArg},
     returns::RuntimeReturnAnalysisCx,
     type_info::{
         RuntimeTypeEnv, boundary_spec_for_ty_in_env, provider_class_for_target_in_env,
         stored_class_for_ty_in_context, top_level_class_for_ty_in_env,
-    },
-    value_eval::{
-        CompiledCallInputPlan, RuntimeValueEvaluator, compile_call_input_plan_for_semantic,
     },
 };
 
@@ -184,11 +181,6 @@ struct LoweredSemanticLocals<'db> {
     roots: Vec<RuntimeLocalRoot<'db>>,
     semantic_locals: Vec<RuntimeLocalLowering<'db>>,
     provider_bindings: Vec<RuntimeProviderBinding<'db>>,
-}
-
-enum BoundarySource<'db> {
-    SemanticOperand(NOperand),
-    RuntimePlace(RuntimePlace<'db>),
 }
 
 impl<'db> RmirEmitter<'db> {
@@ -1414,7 +1406,13 @@ impl<'db> RmirEmitter<'db> {
             None => {
                 let class = self
                     .top_level_class_for_ty(field_ty, AddressSpaceKind::Memory)
-                    .expect("non-zst constructor field should have a runtime class");
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "non-zst constructor field should have a runtime class: owner={:?} field_ty={} stored={stored:#?}",
+                            self.semantic_body.owner.key(self.db).owner(self.db),
+                            field_ty.pretty_print(self.db),
+                        )
+                    });
                 self.lower_semantic_operand_for_class(bb, field, &class)
             }
         };
@@ -2091,34 +2089,8 @@ impl<'db> RmirEmitter<'db> {
             effect_args,
             &mut boundary_sites,
         );
-        let (mut runtime_args, mut runtime_classes) =
-            self.lower_visible_call_args(bb, args, &call_input_plan);
-        for effect_arg in effect_args {
-            let plan = runtime_effect_binding_plan_for_binding_idx(
-                self.db,
-                semantic,
-                effect_arg.binding_idx,
-            );
-            if let Some((value, class)) = self.lower_effect_arg(bb, effect_arg, plan.as_ref()) {
-                runtime_args.push(value);
-                runtime_classes.push(class);
-            }
-        }
-        let expected_runtime_classes = self.with_current_body_cx(|cx| {
-            let mut class_cache = InferClassCache::new(self.semantic_body.locals.len());
-            RuntimeValueEvaluator::new(cx.env, cx.carriers, Some(&mut class_cache)).call_inputs(
-                args,
-                effect_args,
-                &call_input_plan,
-            )
-        });
-        assert_eq!(
-            runtime_classes,
-            expected_runtime_classes,
-            "runtime call class mismatch between lowering and classification: caller={:?} callee={:?} args={args:?} effect_args={effect_args:?}",
-            self.current_semantic_key(),
-            semantic.key(self.db),
-        );
+        let (runtime_args, runtime_classes) =
+            self.lower_runtime_call_inputs(bb, args, effect_args, &call_input_plan);
         let callee_key = RuntimeInstanceKey::new(
             self.db,
             crate::instance::RuntimeInstanceSource::Semantic(semantic),
@@ -2210,6 +2182,7 @@ impl<'db> RmirEmitter<'db> {
         if let Some(ret) = self.lower_numeric_intrinsic_call(bb, semantic, args) {
             return Some(ret);
         }
+        runtime_builtin_func_kind(self.db, func)?;
 
         let mut boundary_sites = BoundarySiteAllocator::default();
         let call_input_plan = compile_call_input_plan_for_semantic(
@@ -2505,41 +2478,128 @@ impl<'db> RmirEmitter<'db> {
         args: &[NOperand],
         plan: &CompiledCallInputPlan<'db>,
     ) -> (Vec<RLocalId>, Vec<RuntimeClass<'db>>) {
-        let expected_runtime_classes = self.with_current_body_cx(|cx| {
+        let selected = self.with_current_body_cx(|cx| {
             let mut class_cache = InferClassCache::new(self.semantic_body.locals.len());
             RuntimeValueEvaluator::new(cx.env, cx.carriers, Some(&mut class_cache))
-                .param_inputs(args, &plan.param_plans)
+                .selected_param_inputs(args, &plan.param_plans)
         });
-        let mut runtime_args = Vec::with_capacity(args.len());
-        let mut runtime_classes = Vec::with_capacity(args.len());
-        let mut expected_iter = expected_runtime_classes.iter();
-        for (idx, (arg, arg_plan)) in args.iter().zip(plan.param_plans.iter()).enumerate() {
-            if matches!(arg_plan, super::value_eval::CompiledValuePassPlan::Erased) {
-                continue;
-            }
-            let expected = expected_iter
-                .next()
-                .unwrap_or_else(|| panic!("missing expected runtime arg class for param {idx}"))
-                .clone();
-            let value = self.lower_semantic_operand_for_class(bb, *arg, &expected);
+        self.realize_selected_call_args(bb, &selected)
+    }
+
+    fn lower_runtime_call_inputs(
+        &mut self,
+        bb: RBlockId,
+        args: &[NOperand],
+        effect_args: &[NEffectArg<'db>],
+        plan: &CompiledCallInputPlan<'db>,
+    ) -> (Vec<RLocalId>, Vec<RuntimeClass<'db>>) {
+        let selected = self.with_current_body_cx(|cx| {
+            let mut class_cache = InferClassCache::new(self.semantic_body.locals.len());
+            RuntimeValueEvaluator::new(cx.env, cx.carriers, Some(&mut class_cache))
+                .selected_call_inputs(args, effect_args, plan)
+        });
+        self.realize_selected_call_args(bb, &selected)
+    }
+
+    fn realize_selected_call_args(
+        &mut self,
+        bb: RBlockId,
+        selected: &[SelectedRuntimeArg<'db>],
+    ) -> (Vec<RLocalId>, Vec<RuntimeClass<'db>>) {
+        let mut runtime_args = Vec::with_capacity(selected.len());
+        let mut runtime_classes = Vec::with_capacity(selected.len());
+        for selected in selected {
+            let value = self.realize_selected_call_arg(bb, selected);
             let Some(class) = self.value_class(value).cloned() else {
-                continue;
+                panic!(
+                    "selected runtime call arg lowered without a runtime class: caller={:?}; selected={selected:?}; value={value:?}",
+                    self.current_semantic_key(),
+                );
             };
             assert_eq!(
                 class,
-                expected,
-                "lowered runtime arg class mismatch: caller={:?} arg={arg:?} expected={expected:?}",
+                selected.class,
+                "selected runtime call arg class mismatch: caller={:?}; selected={selected:?}; value={value:?}",
                 self.current_semantic_key(),
             );
-            runtime_classes.push(class);
             runtime_args.push(value);
+            runtime_classes.push(class);
         }
-        assert!(
-            expected_iter.next().is_none(),
-            "unused expected runtime arg classes while lowering visible call args: caller={:?} args={args:?}",
-            self.current_semantic_key(),
-        );
         (runtime_args, runtime_classes)
+    }
+
+    fn realize_selected_call_arg(
+        &mut self,
+        bb: RBlockId,
+        selected: &SelectedRuntimeArg<'db>,
+    ) -> RLocalId {
+        match &selected.realization {
+            RuntimeArgRealization::LowerSemanticOperand(operand) => {
+                self.lower_semantic_operand_for_class(bb, *operand, &selected.class)
+            }
+            RuntimeArgRealization::UseRuntimeValue { local } => {
+                self.coerce_value_if_needed(bb, self.runtime_value(*local), &selected.class)
+            }
+            RuntimeArgRealization::UseHandleLikeValue { local } => {
+                let value = self
+                    .handle_like_semantic_value(*local)
+                    .unwrap_or_else(|| self.runtime_value(*local));
+                self.coerce_value_if_needed(bb, value, &selected.class)
+            }
+            RuntimeArgRealization::AddrOfPlace { place, semantic_ty } => {
+                let place = self.lower_place(bb, place);
+                self.lower_place_addr_of_for_class(
+                    *semantic_ty,
+                    bb,
+                    place,
+                    selected.class.clone(),
+                )
+            }
+            RuntimeArgRealization::LoadPlaceValue { place, semantic_ty } => {
+                let place = self.lower_place(bb, place);
+                let value = self.load_runtime_place_value(bb, place, *semantic_ty);
+                self.coerce_value_if_needed(bb, value, &selected.class)
+            }
+            RuntimeArgRealization::MaterializePlaceValue {
+                place,
+                materialization,
+                semantic_ty,
+            } => {
+                let place = self.lower_place(bb, place);
+                let value = self.load_runtime_place_value(bb, place, *semantic_ty);
+                let value = self.materialize_runtime_value(bb, value, materialization, *semantic_ty);
+                self.coerce_value_if_needed(bb, value, &selected.class)
+            }
+            RuntimeArgRealization::AggregateFromRuntimeSource { local } => self
+                .actual_aggregate_value_from_runtime_source(bb, *local)
+                .map(|value| self.coerce_value_if_needed(bb, value, &selected.class))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "selected aggregate runtime source was not lowerable: caller={:?}; local={local:?}; selected={selected:?}",
+                        self.current_semantic_key(),
+                    )
+                }),
+            RuntimeArgRealization::Placeholder { semantic_ty } => {
+                self.lower_placeholder_value(bb, *semantic_ty, selected.class.clone())
+            }
+        }
+    }
+
+    fn lower_placeholder_value(
+        &mut self,
+        bb: RBlockId,
+        semantic_ty: TyId<'db>,
+        class: RuntimeClass<'db>,
+    ) -> RLocalId {
+        let value = self.alloc_runtime_temp(semantic_ty, RuntimeCarrier::Value(class.clone()));
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: value,
+                expr: RExpr::Placeholder { class },
+            },
+        );
+        value
     }
 
     fn lower_extern_builtin(
@@ -3069,240 +3129,6 @@ impl<'db> RmirEmitter<'db> {
         Some(ret)
     }
 
-    fn lower_effect_arg(
-        &mut self,
-        bb: RBlockId,
-        arg: &NEffectArg<'db>,
-        plan: Option<&RuntimeEffectBindingPlan<'db>>,
-    ) -> Option<(RLocalId, RuntimeClass<'db>)> {
-        if plan.is_none() && arg.provider.is_none() && arg.target_ty.is_none() {
-            return match (&arg.pass_mode, &arg.arg) {
-                (
-                    EffectPassMode::ByValue | EffectPassMode::Unknown,
-                    NEffectArgValue::Value(value),
-                ) => {
-                    let value = self.read_semantic_operand(bb, *value);
-                    self.value_class(value).cloned().map(|class| (value, class))
-                }
-                (EffectPassMode::ByValue | EffectPassMode::Unknown, NEffectArgValue::Place(_))
-                | (
-                    EffectPassMode::ByPlace | EffectPassMode::ByTempPlace,
-                    NEffectArgValue::Value(_) | NEffectArgValue::Place(_),
-                ) => panic!(
-                    "effect arg without provider/target should lower as a plain value: owner={:?}; arg={arg:?}",
-                    self.key
-                        .semantic(self.db)
-                        .map(|semantic| semantic.key(self.db).owner(self.db)),
-                ),
-            };
-        }
-        let space = resolved_effect_arg_address_space(self.db, &self.semantic_body, arg);
-        let boundary = desired_runtime_effect_arg_boundary(self.db, self.env, arg, plan, space);
-        match arg.pass_mode {
-            EffectPassMode::ByValue | EffectPassMode::Unknown => match &arg.arg {
-                NEffectArgValue::Value(value) => {
-                    let value = if let Some(boundary) = boundary.as_ref() {
-                        self.lower_semantic_operand_for_boundary(bb, *value, boundary)
-                    } else {
-                        let value = if arg.provider.is_none() && arg.target_ty.is_none() {
-                            self.read_semantic_operand(bb, *value)
-                        } else {
-                            self.runtime_value(value.local)
-                        };
-                        if let Some(class) = self.value_class(value).cloned() {
-                            return Some((value, class));
-                        }
-                        if arg.provider.is_none() && arg.target_ty.is_none() {
-                            return None;
-                        }
-                        let class = provider_class_for_target_in_env(
-                            self.db,
-                            self.env,
-                            arg.target_ty,
-                            space,
-                        );
-                        let placeholder = self.alloc_runtime_temp(
-                            self.locals[value.index()].semantic_ty,
-                            RuntimeCarrier::Value(class.clone()),
-                        );
-                        self.push_stmt(
-                            bb,
-                            RStmt::Assign {
-                                dst: placeholder,
-                                expr: RExpr::Placeholder {
-                                    class: class.clone(),
-                                },
-                            },
-                        );
-                        return Some((placeholder, class));
-                    };
-                    self.value_class(value).cloned().map(|class| (value, class))
-                }
-                NEffectArgValue::Place(place) => {
-                    if let Some(place) = self.try_lower_place(bb, place) {
-                        let boundary = boundary.as_ref().cloned().unwrap_or_else(|| {
-                            crate::runtime::RuntimeBoundarySpec::Exact(
-                                provider_class_for_target_in_env(
-                                    self.db,
-                                    self.env,
-                                    arg.target_ty,
-                                    space,
-                                ),
-                            )
-                        });
-                        let value = self.lower_for_boundary(
-                            bb,
-                            BoundarySource::RuntimePlace(place),
-                            &boundary,
-                            arg.target_ty.unwrap_or_else(|| TyId::unit(self.db)),
-                        );
-                        self.value_class(value).cloned().map(|class| (value, class))
-                    } else {
-                        assert!(
-                            place.path.is_empty(),
-                            "erased capability place effect args cannot have projections"
-                        );
-                        let class = boundary
-                            .as_ref()
-                            .map_or_else(
-                                || {
-                                    provider_class_for_target_in_env(
-                                        self.db,
-                                        self.env,
-                                        arg.target_ty,
-                                        space,
-                                    )
-                                },
-                                |boundary| match boundary {
-                                    crate::runtime::RuntimeBoundarySpec::Exact(class) => {
-                                        class.clone()
-                                    }
-                                    crate::runtime::RuntimeBoundarySpec::BorrowLike {
-                                        pointee,
-                                        allow,
-                                        ..
-                                    } if pointee.aggregate_layout().is_some()
-                                        && allow.allow_object =>
-                                    {
-                                        RuntimeClass::object_ref(
-                                            pointee.aggregate_layout().expect("aggregate layout"),
-                                        )
-                                    }
-                                    crate::runtime::RuntimeBoundarySpec::BorrowLike {
-                                        allow, ..
-                                    } if allow.allow_raw_addr => RuntimeClass::RawAddr {
-                                        space: AddressSpaceKind::Memory,
-                                        target: None,
-                                    },
-                                    crate::runtime::RuntimeBoundarySpec::BorrowLike { .. } => {
-                                        panic!(
-                                            "erased effect arg place has no realizable borrow-like transport: owner={:?}; arg={arg:?}; boundary={boundary:?}",
-                                            self.key
-                                                .semantic(self.db)
-                                                .map(|semantic| semantic.key(self.db).owner(self.db)),
-                                        )
-                                    }
-                                },
-                            );
-                        let temp = self.alloc_runtime_temp(
-                            arg.target_ty.unwrap_or_else(|| TyId::unit(self.db)),
-                            RuntimeCarrier::Value(class.clone()),
-                        );
-                        self.push_stmt(
-                            bb,
-                            RStmt::Assign {
-                                dst: temp,
-                                expr: RExpr::Placeholder {
-                                    class: class.clone(),
-                                },
-                            },
-                        );
-                        Some((temp, class))
-                    }
-                }
-            },
-            EffectPassMode::ByPlace | EffectPassMode::ByTempPlace => {
-                let target_ty = arg.target_ty.unwrap_or_else(|| TyId::unit(self.db));
-                let boundary =
-                    boundary
-                        .clone()
-                        .unwrap_or(crate::runtime::RuntimeBoundarySpec::Exact(
-                            provider_class_for_target_in_env(
-                                self.db,
-                                self.env,
-                                Some(target_ty),
-                                space,
-                            ),
-                        ));
-                let value = match (&arg.arg, arg.pass_mode) {
-                    (NEffectArgValue::Place(place), _) => {
-                        if let Some(place) = self.try_lower_place(bb, place) {
-                            self.lower_for_boundary(
-                                bb,
-                                BoundarySource::RuntimePlace(place),
-                                &boundary,
-                                target_ty,
-                            )
-                        } else {
-                            let NEffectArgValue::Place(place) = &arg.arg else {
-                                unreachable!();
-                            };
-                            assert!(
-                                place.path.is_empty(),
-                                "erased capability place effect args cannot have projections"
-                            );
-                            let class = match &boundary {
-                                crate::runtime::RuntimeBoundarySpec::Exact(class) => class.clone(),
-                                crate::runtime::RuntimeBoundarySpec::BorrowLike {
-                                    pointee,
-                                    allow,
-                                    ..
-                                } if pointee.aggregate_layout().is_some() && allow.allow_object => {
-                                    RuntimeClass::object_ref(
-                                        pointee.aggregate_layout().expect("aggregate layout"),
-                                    )
-                                }
-                                crate::runtime::RuntimeBoundarySpec::BorrowLike {
-                                    allow, ..
-                                } if allow.allow_raw_addr => RuntimeClass::RawAddr {
-                                    space: AddressSpaceKind::Memory,
-                                    target: None,
-                                },
-                                crate::runtime::RuntimeBoundarySpec::BorrowLike { .. } => {
-                                    panic!(
-                                        "erased effect arg place has no realizable borrow-like transport: owner={:?}; arg={arg:?}; boundary={boundary:?}",
-                                        self.key
-                                            .semantic(self.db)
-                                            .map(|semantic| semantic.key(self.db).owner(self.db)),
-                                    )
-                                }
-                            };
-                            let temp = self.alloc_runtime_temp(
-                                target_ty,
-                                RuntimeCarrier::Value(class.clone()),
-                            );
-                            self.push_stmt(
-                                bb,
-                                RStmt::Assign {
-                                    dst: temp,
-                                    expr: RExpr::Placeholder {
-                                        class: class.clone(),
-                                    },
-                                },
-                            );
-                            temp
-                        }
-                    }
-                    (NEffectArgValue::Value(value), EffectPassMode::ByTempPlace) => {
-                        self.lower_semantic_operand_for_boundary(bb, *value, &boundary)
-                    }
-                    _ => panic!("invalid effect arg lowering mode"),
-                };
-                self.value_class(value).cloned().map(|class| (value, class))
-            }
-        }
-    }
-
     fn lower_terminator(
         &mut self,
         bb: RBlockId,
@@ -3411,6 +3237,34 @@ impl<'db> RmirEmitter<'db> {
         }
 
         match (source, target.clone()) {
+            (
+                RuntimeClass::AggregateValue { layout },
+                RuntimeClass::AggregateValue {
+                    layout: target_layout,
+                },
+            ) if runtime_classes_share_runtime_rep(
+                self.db,
+                &RuntimeClass::AggregateValue { layout },
+                &RuntimeClass::AggregateValue {
+                    layout: target_layout,
+                },
+            ) =>
+            {
+                let temp = self.alloc_runtime_temp(
+                    self.locals[src.index()].semantic_ty,
+                    RuntimeCarrier::Value(RuntimeClass::AggregateValue {
+                        layout: target_layout,
+                    }),
+                );
+                self.push_stmt(
+                    bb,
+                    RStmt::Assign {
+                        dst: temp,
+                        expr: RExpr::Use(src),
+                    },
+                );
+                temp
+            }
             (
                 RuntimeClass::Ref {
                     pointee: actual_pointee,
@@ -3806,18 +3660,67 @@ impl<'db> RmirEmitter<'db> {
                 temp
             }
             (
+                RuntimeClass::Ref {
+                    kind:
+                        RefKind::Provider {
+                            space: source_space,
+                            ..
+                        },
+                    ..
+                },
+                RuntimeClass::Ref {
+                    pointee,
+                    kind:
+                        RefKind::Provider {
+                            provider_ty,
+                            space: target_space,
+                        },
+                    view: RefView::Whole,
+                },
+            ) if source_space == target_space && pointee.aggregate_layout().is_some() => {
+                let raw = self.coerce_value(
+                    bb,
+                    src,
+                    &RuntimeClass::RawAddr {
+                        space: target_space,
+                        target: pointee.aggregate_layout(),
+                    },
+                );
+                self.coerce_value(
+                    bb,
+                    raw,
+                    &RuntimeClass::Ref {
+                        pointee,
+                        kind: RefKind::Provider {
+                            provider_ty,
+                            space: target_space,
+                        },
+                        view: RefView::Whole,
+                    },
+                )
+            }
+            (
                 RuntimeClass::AggregateValue { layout },
                 RuntimeClass::Ref {
                     pointee,
                     kind: RefKind::Provider { provider_ty, space },
                     view: RefView::Whole,
                 },
-            ) if *pointee == RuntimeClass::AggregateValue { layout } => {
-                let object = self.coerce_value(bb, src, &RuntimeClass::object_ref(layout));
+            ) if runtime_classes_share_runtime_rep(
+                self.db,
+                &RuntimeClass::AggregateValue { layout },
+                &pointee,
+            ) =>
+            {
+                let target_layout = pointee
+                    .aggregate_layout()
+                    .expect("aggregate provider ref layout");
+                let value = self.coerce_value(bb, src, &pointee);
+                let object = self.coerce_value(bb, value, &RuntimeClass::object_ref(target_layout));
                 self.coerce_value(
                     bb,
                     object,
-                    &RuntimeClass::provider_ref(layout, provider_ty, space),
+                    &RuntimeClass::provider_ref(target_layout, provider_ty, space),
                 )
             }
             (
@@ -4393,7 +4296,7 @@ impl<'db> RmirEmitter<'db> {
             .with_current_body_cx(|cx| cx.specialize_boundary_for_source(operand.local, boundary));
         self.lower_for_boundary(
             bb,
-            BoundarySource::SemanticOperand(operand),
+            operand,
             &boundary,
             self.locals[operand.local.index()].semantic_ty,
         )
@@ -4461,48 +4364,27 @@ impl<'db> RmirEmitter<'db> {
     fn lower_for_boundary(
         &mut self,
         bb: RBlockId,
-        source: BoundarySource<'db>,
+        operand: NOperand,
         boundary: &crate::runtime::RuntimeBoundarySpec<'db>,
         semantic_ty: TyId<'db>,
     ) -> RLocalId {
         match boundary {
-            crate::runtime::RuntimeBoundarySpec::Exact(target) => {
-                self.lower_boundary_source_for_class(bb, source, target, semantic_ty)
-            }
-            crate::runtime::RuntimeBoundarySpec::BorrowLike { .. } => {
-                self.lower_borrow_like_source(bb, source, boundary, semantic_ty)
-            }
-        }
-    }
-
-    fn lower_boundary_source_for_class(
-        &mut self,
-        bb: RBlockId,
-        source: BoundarySource<'db>,
-        target: &RuntimeClass<'db>,
-        semantic_ty: TyId<'db>,
-    ) -> RLocalId {
-        match source {
-            BoundarySource::SemanticOperand(operand) => {
+            crate::runtime::RuntimeBoundarySpec::ExactTransport(target) => {
                 self.lower_semantic_operand_for_class(bb, operand, target)
             }
-            BoundarySource::RuntimePlace(place)
-                if CoercionPlanner::target_prefers_transport(target) =>
-            {
-                self.lower_place_addr_of_for_class(semantic_ty, bb, place, target.clone())
+            crate::runtime::RuntimeBoundarySpec::ExactShape(target) => {
+                if let Some(value) = self.compatible_boundary_value(operand, boundary) {
+                    return value;
+                }
+                if let Some(value) =
+                    self.addr_of_boundary_source(bb, operand, boundary, semantic_ty)
+                {
+                    return value;
+                }
+                self.lower_semantic_operand_for_class(bb, operand, target)
             }
-            BoundarySource::RuntimePlace(place) => {
-                let place_class = self.project_place_class(&place);
-                let value = self
-                    .alloc_runtime_temp(semantic_ty, RuntimeCarrier::Value(place_class.clone()));
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: value,
-                        expr: RExpr::Load { place },
-                    },
-                );
-                self.coerce_value(bb, value, target)
+            crate::runtime::RuntimeBoundarySpec::BorrowLike { .. } => {
+                self.lower_borrow_like_source(bb, operand, boundary, semantic_ty)
             }
         }
     }
@@ -4510,58 +4392,57 @@ impl<'db> RmirEmitter<'db> {
     fn lower_borrow_like_source(
         &mut self,
         bb: RBlockId,
-        source: BoundarySource<'db>,
+        operand: NOperand,
         boundary: &crate::runtime::RuntimeBoundarySpec<'db>,
         semantic_ty: TyId<'db>,
     ) -> RLocalId {
-        if let Some(value) = self.compatible_boundary_value(&source, boundary) {
+        if let Some(value) = self.compatible_boundary_value(operand, boundary) {
             return value;
         }
-        if let Some(value) = self.addr_of_boundary_source(bb, &source, boundary, semantic_ty) {
+        if let Some(value) = self.addr_of_boundary_source(bb, operand, boundary, semantic_ty) {
             return value;
         }
-        match source {
-            BoundarySource::SemanticOperand(operand) => {
-                let value = self.read_semantic_operand(bb, operand);
-                self.materialize_value_for_boundary(bb, value, boundary, semantic_ty)
-            }
-            BoundarySource::RuntimePlace(place) => {
-                let place_class = self.project_place_class(&place);
-                let value = self
-                    .alloc_runtime_temp(semantic_ty, RuntimeCarrier::Value(place_class.clone()));
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: value,
-                        expr: RExpr::Load { place },
-                    },
-                );
-                self.materialize_value_for_boundary(bb, value, boundary, semantic_ty)
-            }
+        let value = self.read_semantic_operand(bb, operand);
+        let Some(materialization) = RuntimeBoundaryMaterialization::for_boundary(boundary) else {
+            let source = self.value_class(value).cloned();
+            panic!(
+                "borrow-like boundary source has no materialization plan: owner={:?}; source={source:?}; boundary={boundary:?}; semantic_ty={}",
+                self.key
+                    .semantic(self.db)
+                    .map(|semantic| semantic.key(self.db).owner(self.db)),
+                semantic_ty.pretty_print(self.db),
+            );
+        };
+        let value = self.materialize_runtime_value(bb, value, &materialization, semantic_ty);
+        if self
+            .value_class(value)
+            .is_some_and(|class| CoercionPlanner::class_satisfies_boundary(class, boundary))
+        {
+            return value;
         }
+        let source = self.value_class(value).cloned();
+        panic!(
+            "borrow-like materialization produced incompatible transport: owner={:?}; source={source:?}; boundary={boundary:?}; semantic_ty={}",
+            self.key
+                .semantic(self.db)
+                .map(|semantic| semantic.key(self.db).owner(self.db)),
+            semantic_ty.pretty_print(self.db),
+        );
     }
 
     fn compatible_boundary_value(
         &self,
-        source: &BoundarySource<'db>,
+        operand: NOperand,
         boundary: &crate::runtime::RuntimeBoundarySpec<'db>,
     ) -> Option<RLocalId> {
-        let value = match source {
-            BoundarySource::SemanticOperand(operand) => {
-                if let Some(value) = self.handle_like_semantic_value(operand.local)
-                    && self.value_class(value).is_some_and(|class| {
-                        CoercionPlanner::class_satisfies_boundary(class, boundary)
-                    })
-                {
-                    return Some(value);
-                }
-                let value = self.runtime_value(operand.local);
-                self.value_class(value)
-                    .is_some_and(|class| CoercionPlanner::class_satisfies_boundary(class, boundary))
-                    .then_some(value)
-            }
-            BoundarySource::RuntimePlace(_) => None,
-        }?;
+        if let Some(value) = self.handle_like_semantic_value(operand.local)
+            && self
+                .value_class(value)
+                .is_some_and(|class| CoercionPlanner::class_satisfies_boundary(class, boundary))
+        {
+            return Some(value);
+        }
+        let value = self.runtime_value(operand.local);
         self.value_class(value)
             .is_some_and(|class| CoercionPlanner::class_satisfies_boundary(class, boundary))
             .then_some(value)
@@ -4570,104 +4451,84 @@ impl<'db> RmirEmitter<'db> {
     fn addr_of_boundary_source(
         &mut self,
         bb: RBlockId,
-        source: &BoundarySource<'db>,
+        operand: NOperand,
         boundary: &crate::runtime::RuntimeBoundarySpec<'db>,
         semantic_ty: TyId<'db>,
     ) -> Option<RLocalId> {
-        let place = match source {
-            BoundarySource::RuntimePlace(place) => Some(place.clone()),
-            BoundarySource::SemanticOperand(operand) => {
-                let local = operand.local;
-                if let Some(place) =
-                    nonself_backing_value_place(&self.semantic_body, local).cloned()
-                    && let Some(place) = self.try_lower_place(bb, &place)
-                {
-                    Some(place)
-                } else {
-                    self.try_semantic_place(bb, local)
-                }
-            }
-        }?;
+        let local = operand.local;
+        let place = if let Some(place) =
+            nonself_backing_value_place(&self.semantic_body, local).cloned()
+            && let Some(place) = self.try_lower_place(bb, &place)
+        {
+            place
+        } else {
+            self.try_semantic_place(bb, local)?
+        };
         let actual = self.place_addr_class(&place);
         CoercionPlanner::class_satisfies_boundary(&actual, boundary)
             .then(|| self.lower_place_addr_of_for_class(semantic_ty, bb, place, actual))
     }
 
-    fn materialize_value_for_boundary(
+    fn load_runtime_place_value(
+        &mut self,
+        bb: RBlockId,
+        place: RuntimePlace<'db>,
+        semantic_ty: TyId<'db>,
+    ) -> RLocalId {
+        let place_class = self.project_place_class(&place);
+        let value = self.alloc_runtime_temp(semantic_ty, RuntimeCarrier::Value(place_class));
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: value,
+                expr: RExpr::Load { place },
+            },
+        );
+        value
+    }
+
+    fn materialize_runtime_value(
         &mut self,
         bb: RBlockId,
         value: RLocalId,
-        boundary: &crate::runtime::RuntimeBoundarySpec<'db>,
+        materialization: &RuntimeBoundaryMaterialization<'db>,
         semantic_ty: TyId<'db>,
     ) -> RLocalId {
-        let Some(source_class) = self.value_class(value).cloned() else {
+        if self.value_class(value).is_none() {
             panic!(
-                "borrow-like boundary value has no runtime class: owner={:?}; value={value:?}; boundary={boundary:?}",
+                "runtime value materialization source has no runtime class: owner={:?}; value={value:?}; materialization={materialization:?}",
                 self.key
                     .semantic(self.db)
                     .map(|semantic| semantic.key(self.db).owner(self.db)),
             );
-        };
-        if CoercionPlanner::class_satisfies_boundary(&source_class, boundary) {
-            return value;
         }
-        let crate::runtime::RuntimeBoundarySpec::BorrowLike { pointee, allow, .. } = boundary
-        else {
-            unreachable!();
-        };
-        if let Some(layout) = pointee.aggregate_layout()
-            && allow.allow_object
-        {
-            let object = self.coerce_value(bb, value, &RuntimeClass::object_ref(layout));
-            if self
-                .value_class(object)
-                .is_some_and(|class| CoercionPlanner::class_satisfies_boundary(class, boundary))
-            {
-                return object;
+        match materialization {
+            RuntimeBoundaryMaterialization::ObjectRef { layout } => {
+                self.coerce_value(bb, value, &RuntimeClass::object_ref(*layout))
+            }
+            RuntimeBoundaryMaterialization::RawAddrSlot { pointee } => {
+                let slot =
+                    self.alloc_runtime_temp(semantic_ty, RuntimeCarrier::Value(pointee.clone()));
+                self.locals[slot.index()].root = RuntimeLocalRoot::Slot(pointee.clone());
+                let src = if self.value_class(value) == Some(pointee) {
+                    value
+                } else {
+                    self.coerce_value(bb, value, pointee)
+                };
+                self.push_stmt(
+                    bb,
+                    RStmt::Assign {
+                        dst: slot,
+                        expr: RExpr::Use(src),
+                    },
+                );
+                let place = RuntimePlace {
+                    root: PlaceRoot::Slot(slot),
+                    path: Box::default(),
+                };
+                self.lower_place_addr_of_for_class(semantic_ty, bb, place, materialization.class())
             }
         }
-        if pointee.aggregate_layout().is_none() && allow.allow_raw_addr {
-            let slot = self.alloc_runtime_temp(semantic_ty, RuntimeCarrier::Value(pointee.clone()));
-            self.locals[slot.index()].root = RuntimeLocalRoot::Slot(pointee.clone());
-            let src = if self.value_class(value) == Some(pointee) {
-                value
-            } else {
-                self.coerce_value(bb, value, pointee)
-            };
-            self.push_stmt(
-                bb,
-                RStmt::Assign {
-                    dst: slot,
-                    expr: RExpr::Use(src),
-                },
-            );
-            let place = RuntimePlace {
-                root: PlaceRoot::Slot(slot),
-                path: Box::default(),
-            };
-            let raw = self.lower_place_addr_of_for_class(
-                semantic_ty,
-                bb,
-                place,
-                RuntimeClass::RawAddr {
-                    space: AddressSpaceKind::Memory,
-                    target: None,
-                },
-            );
-            if self
-                .value_class(raw)
-                .is_some_and(|class| CoercionPlanner::class_satisfies_boundary(class, boundary))
-            {
-                return raw;
-            }
-        }
-        panic!(
-            "borrow-like boundary source has no realizable runtime transport: owner={:?}; source={source_class:?}; boundary={boundary:?}; semantic_ty={}",
-            self.key
-                .semantic(self.db)
-                .map(|semantic| semantic.key(self.db).owner(self.db)),
-            semantic_ty.pretty_print(self.db),
-        );
     }
 
     fn lower_place_addr_of_for_class(

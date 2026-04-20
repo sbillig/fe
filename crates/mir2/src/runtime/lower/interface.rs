@@ -135,7 +135,7 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
             };
             let ty = semantic_binding_ty(db, semantic, binding);
             let plan = top_level_class_for_ty_in_env(db, env, ty, AddressSpaceKind::Memory)
-                .map(RuntimeBoundarySpec::Exact)
+                .map(RuntimeBoundarySpec::ExactTransport)
                 .map(RuntimeParamPlan::Boundary)
                 .unwrap_or(RuntimeParamPlan::Erased);
             push(binding, plan);

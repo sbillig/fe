@@ -49,8 +49,6 @@ impl<'db> RuntimeReturnSummary<'db> {
             )
         });
         let facts = BodyStaticFacts::new(db, &semantic_body);
-        let return_plan = desired_runtime_return_plan(db, typed_body);
-        let default_return_class = default_return_class(db, typed_body);
         let param_locals = runtime_visible_binding_plans(db, semantic)
             .iter()
             .map(|entry| entry.local)
@@ -68,6 +66,29 @@ impl<'db> RuntimeReturnSummary<'db> {
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
+        let env = BodyEnv::new(db, &semantic_body, typed_body, &facts);
+        let mut return_plan = desired_runtime_return_plan(db, typed_body);
+        let mut default_return_class = default_return_class(db, typed_body);
+        if matches!(return_plan, RuntimeVisibleReturnPlan::Erased) {
+            let mut fallback = None;
+            let mut all_fallbacks_match = true;
+            for local in return_locals.iter().copied() {
+                let Some(class) = env.root_transport_fallback_class(local) else {
+                    continue;
+                };
+                match &fallback {
+                    Some(fallback) if fallback != &class => all_fallbacks_match = false,
+                    None => fallback = Some(class),
+                    Some(_) => {}
+                }
+            }
+            if fallback.is_some() {
+                return_plan = RuntimeVisibleReturnPlan::PassActual;
+                if default_return_class.is_none() && all_fallbacks_match {
+                    default_return_class = fallback;
+                }
+            }
+        }
 
         let mut def_assignments_by_local = vec![Vec::new(); semantic_body.locals.len()];
         for (assign_id, assignment) in facts.assignments().iter().enumerate() {

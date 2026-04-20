@@ -39,6 +39,10 @@ pub enum RuntimeClass<'db> {
 }
 
 impl<'db> RuntimeClass<'db> {
+    pub fn is_transport(&self) -> bool {
+        matches!(self, Self::Ref { .. } | Self::RawAddr { .. })
+    }
+
     pub fn const_ref(layout: LayoutId<'db>) -> Self {
         Self::Ref {
             pointee: Box::new(Self::AggregateValue { layout }),
@@ -726,12 +730,23 @@ pub struct ContractFieldBinding<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum RuntimeBoundarySpec<'db> {
-    Exact(RuntimeClass<'db>),
+    ExactTransport(RuntimeClass<'db>),
+    ExactShape(RuntimeClass<'db>),
     BorrowLike {
         pointee: RuntimeClass<'db>,
         access: BorrowAccess,
         allow: BorrowTransportSet,
     },
+}
+
+impl<'db> RuntimeBoundarySpec<'db> {
+    pub fn exact_for_class(class: RuntimeClass<'db>) -> Self {
+        if class.is_transport() {
+            Self::ExactShape(class)
+        } else {
+            Self::ExactTransport(class)
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]

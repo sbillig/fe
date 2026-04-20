@@ -42,7 +42,10 @@ use crate::{
 };
 
 use super::{
-    coerce::CoercionPlanner,
+    call_input::{
+        CompiledCallInputPlan, CompiledMaterializationPlan, RuntimeValueEvaluator,
+        compile_call_input_plan_for_semantic, compile_value_pass_plan,
+    },
     infer::{fallback_root_transport_class, local_place_root_class},
     interface::{runtime_param_locals, runtime_visible_binding_plans},
     layout::{
@@ -61,10 +64,6 @@ use super::{
         provider_class_for_target_in_context, provider_class_for_target_in_env,
         runtime_repr_ty_in_context, scalar_class_for_ty_in_env, stored_class_for_ty_in_context,
         top_level_class_for_ty_in_context, top_level_class_for_ty_in_env,
-    },
-    value_eval::{
-        CompiledCallInputPlan, CompiledMaterializationPlan, RuntimeValueEvaluator,
-        compile_call_input_plan_for_semantic, compile_value_pass_plan,
     },
 };
 
@@ -303,7 +302,7 @@ enum CompiledBoundaryMatcher<'db> {
 impl<'db> CompiledBoundaryMatcher<'db> {
     fn for_boundary(boundary: &RuntimeBoundarySpec<'db>) -> Self {
         match boundary {
-            RuntimeBoundarySpec::Exact(class) => {
+            RuntimeBoundarySpec::ExactTransport(class) | RuntimeBoundarySpec::ExactShape(class) => {
                 Self::Exact(CompiledExactBoundaryMatcher::for_class(class))
             }
             RuntimeBoundarySpec::BorrowLike { pointee, allow, .. } => Self::BorrowLike {
@@ -875,7 +874,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                     return class;
                 }
                 let param_classes = RuntimeValueEvaluator::new(self, carriers, class_cache)
-                    .call_inputs(args, effect_args, &facts.input_plan);
+                    .call_input_classes(args, effect_args, &facts.input_plan);
                 return returns.return_class_for_key(RuntimeInstanceKey::new(
                     self.db,
                     RuntimeInstanceSource::Semantic(facts.semantic),
@@ -1643,14 +1642,6 @@ pub(crate) fn runtime_class_for_effect_binding_provider_in_context<'db>(
     }
 }
 
-pub(crate) fn runtime_class_for_effect_binding_provider_in_env<'db>(
-    db: &'db dyn MirDb,
-    env: RuntimeTypeEnv<'db>,
-    provider: &ProviderBinding<'db>,
-) -> Option<RuntimeClass<'db>> {
-    runtime_class_for_effect_binding_provider_in_context(db, provider, env.scope, env.assumptions)
-}
-
 pub(crate) fn runtime_class_for_direct_value_provider_in_context<'db>(
     db: &'db dyn MirDb,
     provider: &ProviderBinding<'db>,
@@ -1660,12 +1651,29 @@ pub(crate) fn runtime_class_for_direct_value_provider_in_context<'db>(
     runtime_class_for_effect_binding_provider_in_context(db, provider, scope, assumptions)
 }
 
-pub(crate) fn runtime_class_for_direct_value_provider_in_env<'db>(
+fn runtime_class_for_provider_value_ty_in_context<'db>(
     db: &'db dyn MirDb,
-    env: RuntimeTypeEnv<'db>,
     provider: &ProviderBinding<'db>,
+    value_ty: TyId<'db>,
+    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
 ) -> Option<RuntimeClass<'db>> {
-    runtime_class_for_direct_value_provider_in_context(db, provider, env.scope, env.assumptions)
+    let space = match provider.semantics.kind {
+        ProviderKind::RootObject => provider
+            .semantics
+            .address_space
+            .map_or(AddressSpaceKind::Memory, provider_address_space_to_runtime),
+        ProviderKind::Handle | ProviderKind::RawAddress => {
+            provider_address_space_to_runtime(provider.semantics.address_space?)
+        }
+    };
+    Some(provider_class_for_target_in_context(
+        db,
+        Some(value_ty),
+        space,
+        scope,
+        assumptions,
+    ))
 }
 
 fn effect_binding_borrow_boundary<'db>(
@@ -1713,7 +1721,13 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
         hir::analysis::semantic::SemanticBindingLowering::DirectValue {
             provenance: ValueProvenance::RootProvider(provider),
         } => {
-            let class = runtime_class_for_direct_value_provider_in_env(db, env, &provider)?;
+            let class = runtime_class_for_provider_value_ty_in_context(
+                db,
+                &provider,
+                binding_ty,
+                env.scope,
+                env.assumptions,
+            )?;
             let boundary = specialize_effect_binding_boundary_for_class(
                 effect_binding_borrow_boundary(db, binding, binding_ty, env.scope, env.assumptions),
                 &class,
@@ -1728,7 +1742,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
                     })?;
             Some(RuntimeEffectBindingPlan {
                 class: class.clone(),
-                boundary: RuntimeBoundarySpec::Exact(class),
+                boundary: RuntimeBoundarySpec::exact_for_class(class),
             })
         }
         hir::analysis::semantic::SemanticBindingLowering::DirectCarrier {
@@ -1739,7 +1753,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
                 runtime_class_for_provider_binding(db, &provider, env.scope, env.assumptions)?;
             Some(RuntimeEffectBindingPlan {
                 class: class.clone(),
-                boundary: RuntimeBoundarySpec::Exact(class),
+                boundary: RuntimeBoundarySpec::exact_for_class(class),
             })
         }
         hir::analysis::semantic::SemanticBindingLowering::DirectCarrier {
@@ -1758,7 +1772,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
                     })?;
             Some(RuntimeEffectBindingPlan {
                 class: class.clone(),
-                boundary: RuntimeBoundarySpec::Exact(class),
+                boundary: RuntimeBoundarySpec::exact_for_class(class),
             })
         }
         hir::analysis::semantic::SemanticBindingLowering::PlaceCarrier { value_ty } => {
@@ -1766,14 +1780,20 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
                 provider_class_for_target_in_env(db, env, Some(value_ty), AddressSpaceKind::Memory);
             Some(RuntimeEffectBindingPlan {
                 class: class.clone(),
-                boundary: RuntimeBoundarySpec::Exact(class),
+                boundary: RuntimeBoundarySpec::exact_for_class(class),
             })
         }
         hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
             provenance: hir::analysis::semantic::PlaceProvenance::RootProvider(provider),
             value_ty,
         } => {
-            let class = runtime_class_for_effect_binding_provider_in_env(db, env, &provider)?;
+            let class = runtime_class_for_provider_value_ty_in_context(
+                db,
+                &provider,
+                value_ty,
+                env.scope,
+                env.assumptions,
+            )?;
             let boundary = specialize_effect_binding_boundary_for_class(
                 effect_binding_borrow_boundary(db, binding, value_ty, env.scope, env.assumptions),
                 &class,
@@ -1795,7 +1815,8 @@ fn runtime_exact_class_for_ordinary_binding_in_env<'db>(
 ) -> Option<RuntimeClass<'db>> {
     runtime_class_for_explicit_root_provider_param(db, env, binding, binding_ty).or_else(|| {
         match boundary_spec_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory) {
-            Some(RuntimeBoundarySpec::Exact(class)) => Some(class),
+            Some(RuntimeBoundarySpec::ExactTransport(class))
+            | Some(RuntimeBoundarySpec::ExactShape(class)) => Some(class),
             Some(RuntimeBoundarySpec::BorrowLike { .. }) | None => None,
         }
     })
@@ -1812,7 +1833,13 @@ fn runtime_exact_class_for_visible_binding_in_env<'db>(
         hir::analysis::semantic::SemanticBindingLowering::Erased => None,
         hir::analysis::semantic::SemanticBindingLowering::DirectValue {
             provenance: ValueProvenance::RootProvider(provider),
-        } => runtime_class_for_direct_value_provider_in_env(db, env, &provider),
+        } => runtime_class_for_provider_value_ty_in_context(
+            db,
+            &provider,
+            binding_ty,
+            env.scope,
+            env.assumptions,
+        ),
         hir::analysis::semantic::SemanticBindingLowering::DirectValue { .. } => {
             runtime_exact_class_for_ordinary_binding_in_env(db, env, binding, binding_ty).or_else(
                 || top_level_class_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory),
@@ -1840,8 +1867,14 @@ fn runtime_exact_class_for_visible_binding_in_env<'db>(
         ),
         hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
             provenance: hir::analysis::semantic::PlaceProvenance::RootProvider(provider),
-            ..
-        } => runtime_class_for_effect_binding_provider_in_env(db, env, &provider),
+            value_ty,
+        } => runtime_class_for_provider_value_ty_in_context(
+            db,
+            &provider,
+            value_ty,
+            env.scope,
+            env.assumptions,
+        ),
         hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
             provenance: hir::analysis::semantic::PlaceProvenance::Derived { .. },
             ..
@@ -1967,20 +2000,13 @@ fn aggregate_make_class_from_facts<'db>(
             .as_ref()
             .and_then(|boundary| {
                 let mut boundary_sites = BoundarySiteAllocator::default();
-                evaluator
-                    .evaluate_value_pass_plan(
-                        field.local,
-                        &compile_value_pass_plan(
-                            RuntimeParamPlan::Boundary(boundary.boundary.clone()),
-                            &mut boundary_sites,
-                        ),
-                    )
-                    .map(|actual| match &boundary.boundary {
-                        RuntimeBoundarySpec::Exact(desired) => {
-                            CoercionPlanner::preserve_provider_space(&actual, desired)
-                        }
-                        RuntimeBoundarySpec::BorrowLike { .. } => actual,
-                    })
+                evaluator.evaluate_value_pass_plan(
+                    field.local,
+                    &compile_value_pass_plan(
+                        RuntimeParamPlan::Boundary(boundary.boundary.clone()),
+                        &mut boundary_sites,
+                    ),
+                )
             })
             .or_else(|| evaluator.materialize(field.local))
             .unwrap_or_else(|| field_facts.stored_class.clone());
@@ -2083,7 +2109,7 @@ pub(super) fn specialize_boundary_for_runtime_source_in_context<'a, 'db>(
                     }
                 }
             };
-            return preserve_actual_exact_boundary_for_runtime_source(
+            return preserve_actual_shape_boundary_for_runtime_source(
                 env,
                 local,
                 specialized,
@@ -2110,7 +2136,7 @@ pub(super) fn specialize_boundary_for_runtime_source_in_context<'a, 'db>(
                 },
             },
         );
-        return preserve_actual_exact_boundary_for_runtime_source(
+        return preserve_actual_shape_boundary_for_runtime_source(
             env,
             local,
             SpecializedBoundary {
@@ -2121,7 +2147,7 @@ pub(super) fn specialize_boundary_for_runtime_source_in_context<'a, 'db>(
             class_cache,
         );
     }
-    preserve_actual_exact_boundary_for_runtime_source(
+    preserve_actual_shape_boundary_for_runtime_source(
         env,
         local,
         SpecializedBoundary {
@@ -2200,7 +2226,7 @@ pub(crate) fn desired_runtime_param_plan<'db>(
             db,
             typed_body,
             binding,
-            RuntimeBoundarySpec::Exact(class),
+            RuntimeBoundarySpec::exact_for_class(class),
         ));
     }
     let Some(boundary) = boundary_spec_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory)
@@ -2209,7 +2235,8 @@ pub(crate) fn desired_runtime_param_plan<'db>(
     };
     if matches!(
         boundary,
-        RuntimeBoundarySpec::Exact(RuntimeClass::AggregateValue { .. })
+        RuntimeBoundarySpec::ExactTransport(RuntimeClass::AggregateValue { .. })
+            | RuntimeBoundarySpec::ExactShape(RuntimeClass::AggregateValue { .. })
     ) && aggregate_transport_depends_on_runtime_source(db, binding_ty, scope, assumptions)
     {
         return RuntimeParamPlan::PassActual;
@@ -2433,25 +2460,6 @@ fn carrier_value_class_ref<'a, 'db>(
     }
 }
 
-pub(crate) fn normalized_place_address_class<'db>(
-    db: &'db dyn MirDb,
-    body: &NormalizedSemanticBody<'db>,
-    place: &NSPlace<'db>,
-    carriers: &[RuntimeCarrier<'db>],
-    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
-    assumptions: PredicateListId<'db>,
-) -> Option<RuntimeClass<'db>> {
-    let typed_body = body.owner.key(db).typed_body(db);
-    let facts = BodyStaticFacts::new_in_context(
-        db,
-        body,
-        typed_body,
-        RuntimeTypeEnv::new(scope, assumptions),
-    );
-    BodyEnv::from_parts(db, body, RuntimeTypeEnv::new(scope, assumptions), &facts)
-        .normalized_place_address_class(carriers, place)
-}
-
 fn normalized_place_root_transport_class_in_context<'db>(
     env: BodyEnv<'_, 'db>,
     root: NSPlaceRoot,
@@ -2570,10 +2578,16 @@ fn specialize_boundary_for_aggregate_layout<'a, 'db>(
     aggregate_layout: Option<LayoutId<'db>>,
 ) -> Cow<'a, RuntimeBoundarySpec<'db>> {
     match boundary {
-        RuntimeBoundarySpec::Exact(desired) => {
+        RuntimeBoundarySpec::ExactTransport(desired) => {
             match specialize_exact_boundary_for_aggregate_layout(desired, aggregate_layout) {
                 Cow::Borrowed(_) => Cow::Borrowed(boundary),
-                Cow::Owned(class) => Cow::Owned(RuntimeBoundarySpec::Exact(class)),
+                Cow::Owned(class) => Cow::Owned(RuntimeBoundarySpec::ExactTransport(class)),
+            }
+        }
+        RuntimeBoundarySpec::ExactShape(desired) => {
+            match specialize_exact_boundary_for_aggregate_layout(desired, aggregate_layout) {
+                Cow::Borrowed(_) => Cow::Borrowed(boundary),
+                Cow::Owned(class) => Cow::Owned(RuntimeBoundarySpec::ExactShape(class)),
             }
         }
         RuntimeBoundarySpec::BorrowLike {
@@ -2647,14 +2661,17 @@ fn specialize_exact_boundary_for_aggregate_layout<'a, 'db>(
     }
 }
 
-fn preserve_actual_exact_boundary_for_runtime_source<'a, 'db>(
+fn preserve_actual_shape_boundary_for_runtime_source<'a, 'db>(
     env: BodyEnv<'_, 'db>,
     local: SLocalId,
     boundary: SpecializedBoundary<'a, 'db>,
     carriers: &[RuntimeCarrier<'db>],
     class_cache: Option<&mut InferClassCache<'db>>,
 ) -> SpecializedBoundary<'a, 'db> {
-    if !matches!(boundary.boundary.as_ref(), RuntimeBoundarySpec::Exact(_)) {
+    if !matches!(
+        boundary.boundary.as_ref(),
+        RuntimeBoundarySpec::ExactShape(_)
+    ) {
         return boundary;
     }
     let actual_matches = if let Some(class_cache) = class_cache {
@@ -2677,18 +2694,20 @@ fn preserve_actual_exact_boundary_for_runtime_source<'a, 'db>(
     }
     if let Some(actual) = carrier_value_class_ref(local, carriers) {
         return SpecializedBoundary {
-            matcher: CompiledBoundaryMatcher::for_boundary(&RuntimeBoundarySpec::Exact(
+            matcher: CompiledBoundaryMatcher::for_boundary(&RuntimeBoundarySpec::ExactShape(
                 actual.clone(),
             )),
-            boundary: Cow::Owned(RuntimeBoundarySpec::Exact(actual.clone())),
+            boundary: Cow::Owned(RuntimeBoundarySpec::ExactShape(actual.clone())),
         };
     }
     let Some(actual) = env.semantic_value_class(carriers, local) else {
         return boundary;
     };
     SpecializedBoundary {
-        matcher: CompiledBoundaryMatcher::for_boundary(&RuntimeBoundarySpec::Exact(actual.clone())),
-        boundary: Cow::Owned(RuntimeBoundarySpec::Exact(actual)),
+        matcher: CompiledBoundaryMatcher::for_boundary(&RuntimeBoundarySpec::ExactShape(
+            actual.clone(),
+        )),
+        boundary: Cow::Owned(RuntimeBoundarySpec::ExactShape(actual)),
     }
 }
 
@@ -2714,42 +2733,10 @@ pub(crate) fn desired_runtime_effect_arg_boundary<'db>(
             target_ty,
             effect_space,
         )
-        .unwrap_or(RuntimeBoundarySpec::Exact(
+        .unwrap_or(RuntimeBoundarySpec::ExactShape(
             provider_class_for_target_in_env(db, env, Some(target_ty), effect_space),
         )),
     })
-}
-
-pub(super) fn runtime_visible_place_arg_class_for_boundary<'db>(
-    db: &'db dyn MirDb,
-    body: &NormalizedSemanticBody<'db>,
-    place: &NSPlace<'db>,
-    boundary: &RuntimeBoundarySpec<'db>,
-    carriers: &[RuntimeCarrier<'db>],
-    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
-    assumptions: PredicateListId<'db>,
-) -> Option<RuntimeClass<'db>> {
-    match boundary {
-        RuntimeBoundarySpec::Exact(target) => Some(target.clone()),
-        RuntimeBoundarySpec::BorrowLike { pointee, allow, .. } => {
-            let class =
-                normalized_place_address_class(db, body, place, carriers, scope, assumptions)?;
-            if CoercionPlanner::class_satisfies_boundary(&class, boundary) {
-                Some(class)
-            } else if let Some(layout) = pointee.aggregate_layout()
-                && allow.allow_object
-            {
-                Some(RuntimeClass::object_ref(layout))
-            } else if allow.allow_raw_addr {
-                Some(RuntimeClass::RawAddr {
-                    space: AddressSpaceKind::Memory,
-                    target: None,
-                })
-            } else {
-                None
-            }
-        }
-    }
 }
 
 pub(crate) enum ContractMetadataBuiltin<'db> {
@@ -2906,8 +2893,11 @@ pub(crate) fn runtime_param_boundary<'db>(
     boundary: RuntimeBoundarySpec<'db>,
 ) -> RuntimeBoundarySpec<'db> {
     match boundary {
-        RuntimeBoundarySpec::Exact(actual) => {
-            RuntimeBoundarySpec::Exact(runtime_param_class(db, typed_body, binding, actual))
+        RuntimeBoundarySpec::ExactTransport(actual) => RuntimeBoundarySpec::ExactTransport(
+            runtime_param_class(db, typed_body, binding, actual),
+        ),
+        RuntimeBoundarySpec::ExactShape(actual) => {
+            RuntimeBoundarySpec::ExactShape(runtime_param_class(db, typed_body, binding, actual))
         }
         RuntimeBoundarySpec::BorrowLike {
             pointee,
@@ -2921,7 +2911,7 @@ pub(crate) fn runtime_param_boundary<'db>(
                 typed_body.assumptions(),
             );
             if binding.is_mut() && ty.as_enum(db).is_some() {
-                return RuntimeBoundarySpec::Exact(RuntimeClass::object_ref(
+                return RuntimeBoundarySpec::ExactTransport(RuntimeClass::object_ref(
                     layout_for_ty_in_context(
                         db,
                         ty,
@@ -2954,9 +2944,17 @@ pub(crate) fn default_return_class<'db>(
         typed_body.body().map(|body| body.scope()),
         typed_body.assumptions(),
     );
-    let default_space = typed_body
-        .return_borrow_provider()
-        .map_or(AddressSpaceKind::Memory, address_space_from_provider);
+    let return_borrow_provider = typed_body.return_borrow_provider();
+    let default_space =
+        return_borrow_provider.map_or(AddressSpaceKind::Memory, address_space_from_provider);
+    if return_borrow_provider.is_some() {
+        return Some(provider_class_for_target_in_env(
+            db,
+            env,
+            Some(typed_body.result_ty()),
+            default_space,
+        ));
+    }
     top_level_class_for_ty_in_env(db, env, typed_body.result_ty(), default_space)
 }
 
@@ -2968,23 +2966,32 @@ pub(crate) fn desired_runtime_return_plan<'db>(
         typed_body.body().map(|body| body.scope()),
         typed_body.assumptions(),
     );
-    let default_space = typed_body
-        .return_borrow_provider()
-        .map_or(AddressSpaceKind::Memory, address_space_from_provider);
+    let return_borrow_provider = typed_body.return_borrow_provider();
+    let default_space =
+        return_borrow_provider.map_or(AddressSpaceKind::Memory, address_space_from_provider);
     let ty = typed_body.result_ty();
+    if return_borrow_provider.is_some() {
+        return RuntimeVisibleReturnPlan::PassActual;
+    }
+    let repr_ty = runtime_repr_ty_in_context(db, ty, env.scope, env.assumptions);
+    if runtime_abstract_param_ty(db, ty, env.scope, env.assumptions)
+        || matches!(
+            repr_ty.base_ty(db).data(db),
+            TyData::TyParam(param) if param.is_effect() || param.is_effect_provider()
+        )
+    {
+        return RuntimeVisibleReturnPlan::PassActual;
+    }
     let Some(boundary) = boundary_spec_for_ty_in_env(db, env, ty, default_space) else {
         return RuntimeVisibleReturnPlan::Erased;
     };
-    if runtime_abstract_param_ty(db, ty, env.scope, env.assumptions) {
-        return RuntimeVisibleReturnPlan::PassActual;
-    }
     match &boundary {
-        RuntimeBoundarySpec::Exact(class @ RuntimeClass::Scalar(_))
-        | RuntimeBoundarySpec::Exact(class @ RuntimeClass::Ref { .. })
-        | RuntimeBoundarySpec::Exact(class @ RuntimeClass::RawAddr { .. }) => {
+        RuntimeBoundarySpec::ExactTransport(class @ RuntimeClass::Scalar(_))
+        | RuntimeBoundarySpec::ExactTransport(class @ RuntimeClass::Ref { .. })
+        | RuntimeBoundarySpec::ExactTransport(class @ RuntimeClass::RawAddr { .. }) => {
             RuntimeVisibleReturnPlan::Exact(class.clone())
         }
-        RuntimeBoundarySpec::Exact(class @ RuntimeClass::AggregateValue { .. })
+        RuntimeBoundarySpec::ExactTransport(class @ RuntimeClass::AggregateValue { .. })
             if !aggregate_transport_depends_on_runtime_source(
                 db,
                 ty,
@@ -2994,7 +3001,8 @@ pub(crate) fn desired_runtime_return_plan<'db>(
         {
             RuntimeVisibleReturnPlan::Exact(class.clone())
         }
-        RuntimeBoundarySpec::Exact(RuntimeClass::AggregateValue { .. })
+        RuntimeBoundarySpec::ExactTransport(RuntimeClass::AggregateValue { .. })
+        | RuntimeBoundarySpec::ExactShape(_)
         | RuntimeBoundarySpec::BorrowLike { .. } => RuntimeVisibleReturnPlan::Constrained(boundary),
     }
 }
@@ -3038,7 +3046,7 @@ mod tests {
     };
     use url::Url;
 
-    use super::super::value_eval::RuntimeValueEvaluator;
+    use super::super::call_input::RuntimeValueEvaluator;
     use super::*;
     use crate::runtime::lower::coerce::CoercionPlanner;
     use crate::runtime::{
@@ -3252,7 +3260,7 @@ mod tests {
         assert!(
             matches!(
                 plans[0].plan,
-                RuntimeParamPlan::Boundary(RuntimeBoundarySpec::Exact(RuntimeClass::Ref {
+                RuntimeParamPlan::Boundary(RuntimeBoundarySpec::ExactShape(RuntimeClass::Ref {
                     kind: RefKind::Provider { .. },
                     ..
                 }))
@@ -3289,6 +3297,88 @@ mod tests {
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
         let contract = contract_by_name(&db, top_mod, "B");
+        for arm_idx in [1, 2, 4] {
+            let semantic = get_or_build_semantic_instance(
+                &db,
+                root_semantic_instance_key(
+                    &db,
+                    BodyOwner::ContractRecvArm {
+                        contract,
+                        recv_idx: 0,
+                        arm_idx,
+                    },
+                )
+                .unwrap_or_else(|err| panic!("failed to build recv-arm semantic key: {err:?}")),
+            );
+            let binding = owner_effect_bindings(&db, semantic.key(&db).owner(&db))
+                .into_iter()
+                .next()
+                .expect("Protected arm should keep one owner effect binding");
+            let binding_ty = semantic_binding_ty(&db, semantic, binding);
+            let plan = runtime_effect_binding_plan(&db, semantic, binding)
+                .expect("guarded_balances should lower to a runtime effect binding plan");
+            let RuntimeClass::Ref {
+                kind: RefKind::Provider { space, .. },
+                pointee,
+                ..
+            } = &plan.class
+            else {
+                panic!(
+                    "guarded_balances should lower as a provider ref for arm {arm_idx}:\n{:#?}",
+                    plan.class
+                );
+            };
+            assert_eq!(*space, AddressSpaceKind::Storage);
+            let RuntimeClass::AggregateValue { layout } = **pointee else {
+                panic!(
+                    "guarded_balances provider ref should point at its semantic value aggregate for arm {arm_idx}:\n{:#?}",
+                    plan.class
+                );
+            };
+            let Layout::Struct(layout_data) = layout.data(&db) else {
+                panic!(
+                    "guarded_balances provider pointee should use struct layout for arm {arm_idx}:\n{:#?}",
+                    layout.data(&db)
+                );
+            };
+            assert_eq!(layout_data.source_ty, binding_ty);
+            assert_eq!(
+                layout_data.fields.len(),
+                1,
+                "guarded_balances Mutex layout should expose the wrapped value field for arm {arm_idx}"
+            );
+
+            assert!(
+                CoercionPlanner::class_satisfies_boundary(&plan.class, &plan.boundary),
+                "provider-backed effect binding plan should keep an actualized boundary matching its chosen runtime class:\nplan={plan:#?}"
+            );
+            let _ = runtime_instance_for_semantic(&db, semantic).body(&db);
+        }
+    }
+
+    #[test]
+    fn provider_backed_method_call_inputs_keep_storage_receiver_transport() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse(
+            "file:///provider_backed_method_call_inputs_keep_storage_receiver_transport.fe",
+        )
+        .unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                include_str!(
+                    "../../../../fe/tests/fixtures/fe_test/reentrancy_mutex_storage_map.fe"
+                )
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let contract = contract_by_name(&db, top_mod, "B");
         let semantic = get_or_build_semantic_instance(
             &db,
             root_semantic_instance_key(
@@ -3296,22 +3386,132 @@ mod tests {
                 BodyOwner::ContractRecvArm {
                     contract,
                     recv_idx: 0,
-                    arm_idx: 1,
+                    arm_idx: 4,
                 },
             )
             .unwrap_or_else(|err| panic!("failed to build recv-arm semantic key: {err:?}")),
         );
-        let binding = owner_effect_bindings(&db, semantic.key(&db).owner(&db))
-            .into_iter()
-            .next()
-            .expect("Protected arm should keep one owner effect binding");
-        let plan = runtime_effect_binding_plan(&db, semantic, binding)
-            .expect("guarded_balances should lower to a runtime effect binding plan");
+        let instance = runtime_instance_for_semantic(&db, semantic);
+        let typed_body = semantic.key(&db).typed_body(&db);
+        let normalized = normalize_semantic_body(&db, semantic)
+            .unwrap_or_else(|err| panic!("failed to normalize LockAndCheck: {err:?}"));
+        let facts = BodyStaticFacts::new(&db, &normalized);
+        let env = BodyEnv::new(&db, &normalized, typed_body, &facts);
+        let params = instance.key(&db).params(&db);
+        let mut returns = RuntimeReturnAnalysisCx::new(&db);
+        let inferred = LocalStateInferer::new(
+            env,
+            params,
+            &runtime_param_locals(&db, semantic, params),
+            &mut returns,
+        )
+        .run();
+        let mut checked_calls = Vec::new();
+        for (block_idx, block) in normalized.blocks.iter().enumerate() {
+            for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
+                let hir::analysis::semantic::NSStmtKind::Assign { expr, .. } = &stmt.kind else {
+                    continue;
+                };
+                let NExpr::Call {
+                    callee,
+                    args,
+                    effect_args,
+                } = expr
+                else {
+                    continue;
+                };
+                let BodyOwner::Func(func) = callee.key.owner(&db) else {
+                    continue;
+                };
+                let Some(name) = func.name(&db).to_opt().map(|name| name.data(&db)) else {
+                    continue;
+                };
+                if !matches!(name.as_str(), "lock" | "is_locked" | "unlock") {
+                    continue;
+                }
+                let ExprStaticFacts::Call(call_facts) =
+                    facts.expr(block_idx, stmt_idx).unwrap_or_else(|| {
+                        panic!("missing staged call facts for {block_idx}:{stmt_idx}")
+                    })
+                else {
+                    panic!("{name} expression should keep staged call facts");
+                };
+                let receiver = args.first().map(|arg| arg.local);
+                let (receiver_actual, receiver_materialized, selected, selected_classes) = {
+                    let mut class_cache = InferClassCache::new(normalized.locals.len());
+                    let mut evaluator =
+                        RuntimeValueEvaluator::new(env, &inferred.carriers, Some(&mut class_cache));
+                    let receiver_actual = receiver.and_then(|local| evaluator.actual_value(local));
+                    let receiver_materialized =
+                        receiver.and_then(|local| evaluator.materialize(local));
+                    let selected =
+                        evaluator.selected_call_inputs(args, effect_args, &call_facts.input_plan);
+                    let selected_classes = selected
+                        .iter()
+                        .map(|arg| arg.class.clone())
+                        .collect::<Vec<_>>();
+                    (
+                        receiver_actual,
+                        receiver_materialized,
+                        selected,
+                        selected_classes,
+                    )
+                };
+                let selected_return = returns.return_class_for_key(RuntimeInstanceKey::new(
+                    &db,
+                    RuntimeInstanceSource::Semantic(call_facts.semantic),
+                    selected_classes,
+                ));
+                if !selected.is_empty() {
+                    assert!(
+                        matches!(
+                            selected.first().map(|arg| &arg.class),
+                            Some(
+                                RuntimeClass::Ref {
+                                    kind: RefKind::Provider {
+                                        space: AddressSpaceKind::Storage,
+                                        ..
+                                    },
+                                    ..
+                                } | RuntimeClass::RawAddr {
+                                    space: AddressSpaceKind::Storage,
+                                    ..
+                                }
+                            )
+                        ),
+                        "provider-backed mutex receiver call input should preserve storage transport for `{name}`:\nreceiver_actual={receiver_actual:#?}\nreceiver_materialized={receiver_materialized:#?}\nselected_return={selected_return:#?}\nselected={selected:#?}",
+                    );
+                }
+                if name == "lock" {
+                    assert!(
+                        matches!(
+                            selected_return,
+                            Some(
+                                RuntimeClass::Ref {
+                                    kind: RefKind::Provider {
+                                        space: AddressSpaceKind::Storage,
+                                        ..
+                                    },
+                                    ..
+                                } | RuntimeClass::RawAddr {
+                                    space: AddressSpaceKind::Storage,
+                                    ..
+                                }
+                            )
+                        ),
+                        "storage-specialized `lock` should keep a storage transport return:\nselected_return={selected_return:#?}\nselected={selected:#?}",
+                    );
+                }
+                checked_calls.push(name.to_string());
+            }
+        }
 
-        assert!(
-            CoercionPlanner::class_satisfies_boundary(&plan.class, &plan.boundary),
-            "provider-backed effect binding plan should keep an actualized boundary matching its chosen runtime class:\nplan={plan:#?}"
+        assert_eq!(
+            checked_calls,
+            ["lock", "is_locked", "unlock"],
+            "LockAndCheck should contain the expected mutex method calls",
         );
+        let _ = instance.body(&db);
     }
 
     #[test]
@@ -3411,7 +3611,7 @@ mod tests {
         let mut class_cache = InferClassCache::new(normalized.locals.len());
         let inferred_param_classes =
             RuntimeValueEvaluator::new(env, &inferred.carriers, Some(&mut class_cache))
-                .call_inputs(&args, &effect_args, &call_facts.input_plan);
+                .call_input_classes(&args, &effect_args, &call_facts.input_plan);
         let lowered_take = instance
             .calls(&db)
             .iter()
@@ -3551,7 +3751,7 @@ mod tests {
         let mut class_cache = InferClassCache::new(normalized.locals.len());
         let inferred_param_classes =
             RuntimeValueEvaluator::new(env, &inferred.carriers, Some(&mut class_cache))
-                .call_inputs(&args, &effect_args, &call_facts.input_plan);
+                .call_input_classes(&args, &effect_args, &call_facts.input_plan);
         let lowered_set_scaled = instance
             .calls(&db)
             .iter()

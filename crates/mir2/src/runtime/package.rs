@@ -32,9 +32,7 @@ use crate::{
         runtime_visible_binding_class,
     },
     runtime::lower::interface::runtime_visible_binding_plans,
-    runtime::lower::type_info::{
-        RuntimeTypeEnv, provider_class_for_target_in_env, top_level_class_for_ty_in_env,
-    },
+    runtime::lower::type_info::{RuntimeTypeEnv, top_level_class_for_ty_in_env},
     runtime::{
         AddressSpaceKind, ConstRegionId, ContractEffectArgPlan, ContractFieldBinding,
         ContractInitAbiPlan, ContractRecvAbiPlan, DispatchArm, DispatchDefault, InitArgsPlan,
@@ -1401,7 +1399,7 @@ fn contract_effect_arg_plans_for_site<'db>(
                             ))
                         })?;
                         ContractEffectArgPlan::ContractField(contract_field_binding(
-                            db, contract, field,
+                            db, contract, field, semantic, binding,
                         )?)
                     }
                     ProviderSource::UsesParam { .. } | ProviderSource::RootProvider { .. } => {
@@ -1427,22 +1425,24 @@ pub(crate) fn contract_field_binding<'db>(
     db: &'db dyn MirDb,
     contract: Contract<'db>,
     field: &ContractFieldLayoutInfo<'db>,
+    semantic: SemanticInstance<'db>,
+    binding: LocalBinding<'db>,
 ) -> Result<ContractFieldBinding<'db>, LowerError> {
-    let space = address_space_from_ty(db, contract.scope(), field.address_space)?;
-    let class = provider_class_for_target_in_env(
-        db,
-        RuntimeTypeEnv::new(
-            Some(contract.scope()),
-            hir::analysis::ty::trait_resolution::PredicateListId::empty_list(db),
-        ),
-        Some(field.target_ty),
-        space,
-    );
+    let binding_ty = semantic_binding_ty(db, semantic, binding);
+    let class = runtime_effect_binding_plan(db, semantic, binding)
+        .map(|plan| plan.class)
+        .ok_or_else(|| {
+            LowerError::Unsupported(format!(
+                "contract field `{}` in `{}` has no runtime effect binding plan",
+                field.name.data(db),
+                contract_name(db, contract)
+            ))
+        })?;
     let kind = match &class {
         crate::runtime::RuntimeClass::Ref { kind, .. } => kind.clone(),
-        crate::runtime::RuntimeClass::RawAddr { .. } => RefKind::Provider {
-            provider_ty: TyId::borrow_ref_of(db, field.target_ty),
-            space,
+        crate::runtime::RuntimeClass::RawAddr { space, .. } => RefKind::Provider {
+            provider_ty: TyId::borrow_ref_of(db, binding_ty),
+            space: *space,
         },
         crate::runtime::RuntimeClass::Scalar(_)
         | crate::runtime::RuntimeClass::AggregateValue { .. } => {
@@ -1455,7 +1455,7 @@ pub(crate) fn contract_field_binding<'db>(
     };
     Ok(ContractFieldBinding {
         slot: field.slot_offset as u128,
-        declared_ty: field.declared_ty,
+        declared_ty: binding_ty,
         class,
         kind,
     })
@@ -1507,39 +1507,6 @@ fn resolve_trait_runtime_instance<'db>(
         db,
         get_or_build_semantic_instance(db, key),
     ))
-}
-
-fn address_space_from_ty<'db>(
-    db: &'db dyn MirDb,
-    scope: hir::hir_def::scope_graph::ScopeId<'db>,
-    ty: TyId<'db>,
-) -> Result<AddressSpaceKind, LowerError> {
-    let memory = resolve_lib_type_path(db, scope, "core::effect_ref::Memory")
-        .ok_or_else(|| LowerError::Unsupported("missing Memory address space type".to_string()))?;
-    let storage = resolve_lib_type_path(db, scope, "core::effect_ref::Storage")
-        .ok_or_else(|| LowerError::Unsupported("missing Storage address space type".to_string()))?;
-    let transient = resolve_lib_type_path(db, scope, "core::effect_ref::TransientStorage")
-        .ok_or_else(|| {
-            LowerError::Unsupported("missing TransientStorage address space type".to_string())
-        })?;
-    let calldata =
-        resolve_lib_type_path(db, scope, "core::effect_ref::Calldata").ok_or_else(|| {
-            LowerError::Unsupported("missing Calldata address space type".to_string())
-        })?;
-    if ty == memory {
-        Ok(AddressSpaceKind::Memory)
-    } else if ty == storage {
-        Ok(AddressSpaceKind::Storage)
-    } else if ty == transient {
-        Ok(AddressSpaceKind::Transient)
-    } else if ty == calldata {
-        Ok(AddressSpaceKind::Calldata)
-    } else {
-        Err(LowerError::Unsupported(format!(
-            "unsupported contract field address space `{:?}`",
-            ty
-        )))
-    }
 }
 
 fn sol_abi_ty<'db>(
