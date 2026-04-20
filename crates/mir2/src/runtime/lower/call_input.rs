@@ -5,7 +5,9 @@ use hir::analysis::{
 
 use crate::{
     db::MirDb,
-    runtime::{RuntimeBoundarySpec, RuntimeClass},
+    runtime::{
+        AddressSpaceKind, BorrowAccess, RuntimeBoundarySpec, RuntimeClass, RuntimeParamPlan,
+    },
 };
 
 use super::{
@@ -14,7 +16,10 @@ use super::{
         runtime_effect_binding_plan_for_binding_idx,
     },
     place::resolved_effect_arg_address_space,
-    type_info::provider_class_for_target_in_env,
+    type_info::{
+        RuntimeTypeEnv, default_borrow_transport_set, provider_class_for_target_in_env,
+        stored_class_for_ty_in_context,
+    },
 };
 
 #[derive(Clone, Debug)]
@@ -54,38 +59,56 @@ pub(super) struct CompiledCallInputPlan<'db> {
 }
 
 pub(super) fn compile_value_pass_plan<'db>(
-    plan: crate::runtime::RuntimeParamPlan<'db>,
+    plan: RuntimeParamPlan<'db>,
     boundary_sites: &mut BoundarySiteAllocator,
 ) -> CompiledValuePassPlan<'db> {
     match plan {
-        crate::runtime::RuntimeParamPlan::Erased => CompiledValuePassPlan::Erased,
-        crate::runtime::RuntimeParamPlan::PassActual => CompiledValuePassPlan::VisibleValue,
-        crate::runtime::RuntimeParamPlan::Boundary(RuntimeBoundarySpec::ExactTransport(exact)) => {
+        RuntimeParamPlan::Erased => CompiledValuePassPlan::Erased,
+        RuntimeParamPlan::PassActual => CompiledValuePassPlan::VisibleValue,
+        RuntimeParamPlan::Boundary(RuntimeBoundarySpec::ExactTransport(exact)) => {
             CompiledValuePassPlan::ExactTransport { exact }
         }
-        crate::runtime::RuntimeParamPlan::Boundary(
-            boundary @ RuntimeBoundarySpec::ExactShape(RuntimeClass::AggregateValue { .. }),
-        ) => {
-            let RuntimeBoundarySpec::ExactShape(exact) = boundary else {
-                unreachable!();
-            };
-            CompiledValuePassPlan::ExactShapeAggregate { exact }
-        }
-        crate::runtime::RuntimeParamPlan::Boundary(
+        RuntimeParamPlan::Boundary(RuntimeBoundarySpec::ExactShape(
+            exact @ RuntimeClass::AggregateValue { .. },
+        )) => CompiledValuePassPlan::ExactShapeAggregate { exact },
+        RuntimeParamPlan::Boundary(
             boundary @ RuntimeBoundarySpec::ExactShape(
                 RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. },
             ),
         ) => CompiledValuePassPlan::ExactShapeRefLike {
             boundary: boundary_sites.stage(boundary),
         },
-        crate::runtime::RuntimeParamPlan::Boundary(RuntimeBoundarySpec::ExactShape(exact)) => {
+        RuntimeParamPlan::Boundary(RuntimeBoundarySpec::ExactShape(exact)) => {
             CompiledValuePassPlan::ExactTransport { exact }
         }
-        crate::runtime::RuntimeParamPlan::Boundary(
-            boundary @ RuntimeBoundarySpec::BorrowLike { .. },
-        ) => CompiledValuePassPlan::BorrowLike {
-            boundary: boundary_sites.stage(boundary),
-        },
+        RuntimeParamPlan::Boundary(boundary @ RuntimeBoundarySpec::BorrowLike { .. }) => {
+            CompiledValuePassPlan::BorrowLike {
+                boundary: boundary_sites.stage(boundary),
+            }
+        }
+    }
+}
+
+fn default_by_place_boundary<'db>(
+    db: &'db dyn MirDb,
+    type_env: RuntimeTypeEnv<'db>,
+    arg: &NEffectArg<'db>,
+    space: AddressSpaceKind,
+) -> RuntimeBoundarySpec<'db> {
+    let Some(target_ty) = arg.target_ty else {
+        return RuntimeBoundarySpec::ExactShape(provider_class_for_target_in_env(
+            db, type_env, None, space,
+        ));
+    };
+    RuntimeBoundarySpec::BorrowLike {
+        pointee: stored_class_for_ty_in_context(
+            db,
+            target_ty,
+            type_env.scope,
+            type_env.assumptions,
+        ),
+        access: BorrowAccess::ReadWrite,
+        allow: default_borrow_transport_set(BorrowAccess::ReadWrite, space),
     }
 }
 
@@ -93,7 +116,7 @@ pub(super) fn compile_call_input_plan_for_semantic<'db>(
     db: &'db dyn MirDb,
     body: &hir::analysis::semantic::borrowck::NormalizedSemanticBody<'db>,
     semantic: SemanticInstance<'db>,
-    type_env: super::type_info::RuntimeTypeEnv<'db>,
+    type_env: RuntimeTypeEnv<'db>,
     effect_args: &[NEffectArg<'db>],
     boundary_sites: &mut BoundarySiteAllocator,
 ) -> CompiledCallInputPlan<'db> {
@@ -118,7 +141,7 @@ fn compile_effect_arg_plan<'db>(
     db: &'db dyn MirDb,
     body: &hir::analysis::semantic::borrowck::NormalizedSemanticBody<'db>,
     semantic: SemanticInstance<'db>,
-    type_env: super::type_info::RuntimeTypeEnv<'db>,
+    type_env: RuntimeTypeEnv<'db>,
     arg: &NEffectArg<'db>,
     boundary_sites: &mut BoundarySiteAllocator,
 ) -> CompiledEffectArgPlan<'db> {
@@ -148,10 +171,7 @@ fn compile_effect_arg_plan<'db>(
     match (&arg.pass_mode, &arg.arg) {
         (EffectPassMode::ByValue | EffectPassMode::Unknown, NEffectArgValue::Value(_)) => {
             let plan = boundary.map_or(CompiledValuePassPlan::ActualValue, |boundary| {
-                compile_value_pass_plan(
-                    crate::runtime::RuntimeParamPlan::Boundary(boundary),
-                    boundary_sites,
-                )
+                compile_value_pass_plan(RuntimeParamPlan::Boundary(boundary), boundary_sites)
             });
             if matches!(plan, CompiledValuePassPlan::ActualValue)
                 && (arg.provider.is_some() || arg.target_ty.is_some())
@@ -173,51 +193,15 @@ fn compile_effect_arg_plan<'db>(
                 },
             ),
         (EffectPassMode::ByPlace | EffectPassMode::ByTempPlace, NEffectArgValue::Value(_)) => {
-            let boundary = boundary.unwrap_or_else(|| {
-                let Some(target_ty) = arg.target_ty else {
-                    return RuntimeBoundarySpec::ExactShape(provider_class_for_target_in_env(
-                        db, type_env, None, space,
-                    ));
-                };
-                RuntimeBoundarySpec::BorrowLike {
-                    pointee: super::type_info::stored_class_for_ty_in_context(
-                        db,
-                        target_ty,
-                        type_env.scope,
-                        type_env.assumptions,
-                    ),
-                    access: crate::runtime::BorrowAccess::ReadWrite,
-                    allow: super::type_info::default_borrow_transport_set(
-                        crate::runtime::BorrowAccess::ReadWrite,
-                        space,
-                    ),
-                }
-            });
+            let boundary =
+                boundary.unwrap_or_else(|| default_by_place_boundary(db, type_env, arg, space));
             CompiledEffectArgPlan::ByPlaceValue {
                 boundary: boundary_sites.stage(boundary),
             }
         }
         (EffectPassMode::ByPlace | EffectPassMode::ByTempPlace, NEffectArgValue::Place(_)) => {
-            let boundary = boundary.unwrap_or_else(|| {
-                let Some(target_ty) = arg.target_ty else {
-                    return RuntimeBoundarySpec::ExactShape(provider_class_for_target_in_env(
-                        db, type_env, None, space,
-                    ));
-                };
-                RuntimeBoundarySpec::BorrowLike {
-                    pointee: super::type_info::stored_class_for_ty_in_context(
-                        db,
-                        target_ty,
-                        type_env.scope,
-                        type_env.assumptions,
-                    ),
-                    access: crate::runtime::BorrowAccess::ReadWrite,
-                    allow: super::type_info::default_borrow_transport_set(
-                        crate::runtime::BorrowAccess::ReadWrite,
-                        space,
-                    ),
-                }
-            });
+            let boundary =
+                boundary.unwrap_or_else(|| default_by_place_boundary(db, type_env, arg, space));
             CompiledEffectArgPlan::ByPlacePlace {
                 boundary: boundary_sites.stage(boundary),
             }

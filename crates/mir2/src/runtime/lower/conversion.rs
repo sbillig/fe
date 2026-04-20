@@ -11,7 +11,6 @@ use crate::{
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RuntimeConversionPlan<'db> {
-    pub(crate) target: RuntimeClass<'db>,
     pub(crate) steps: Box<[RuntimeConversionStep<'db>]>,
 }
 
@@ -90,7 +89,7 @@ pub(crate) fn emit_runtime_conversion_plan<'db>(
     plan: RuntimeConversionPlan<'db>,
     semantic_ty: TyId<'db>,
 ) -> RLocalId {
-    let RuntimeConversionPlan { steps, .. } = plan;
+    let RuntimeConversionPlan { steps } = plan;
     for step in steps {
         value = emit_runtime_conversion_step(emitter, bb, value, step, semantic_ty);
     }
@@ -268,7 +267,6 @@ impl<'db> RuntimeConversionPlanner<'db> {
         let mut steps = Vec::new();
         planner.convert(source, target.clone(), &mut steps)?;
         Ok(RuntimeConversionPlan {
-            target,
             steps: steps.into_boxed_slice(),
         })
     }
