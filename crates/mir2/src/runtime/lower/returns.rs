@@ -18,7 +18,7 @@ use crate::{
 use super::{
     classify::{
         BodyEnv, BodyStaticFacts, InferClassCache, RuntimeVisibleReturnPlan, default_return_class,
-        desired_runtime_return_plan, visible_return_class_for_local,
+        desired_runtime_return_plan, selected_visible_return_for_local,
     },
     infer::{desired_runtime_value_carrier, merge_runtime_carrier, seed_root_provider_carriers},
     interface::runtime_visible_binding_plans,
@@ -296,13 +296,13 @@ impl<'db> RuntimeReturnAnalysisCx<'db> {
         let env = summary.env(self.db);
         let mut returned = Vec::new();
         for local in summary.return_locals.iter().copied() {
-            let Some(class) =
-                visible_return_class_for_local(env, local, &summary.return_plan, &carriers)
+            let Some(selected) =
+                selected_visible_return_for_local(env, local, &summary.return_plan, &carriers)
             else {
                 self.solve_stack.pop();
                 return summary.default_return_class.clone();
             };
-            returned.push(class);
+            returned.push(selected.class);
         }
         self.solve_stack.pop();
         let Some(first) = returned.pop() else {
@@ -516,7 +516,7 @@ mod tests {
         .run();
         let mut returned = Vec::new();
         for local in summary.return_locals.iter().copied() {
-            let Some(class) = visible_return_class_for_local(
+            let Some(selected) = selected_visible_return_for_local(
                 env,
                 local,
                 &summary.return_plan,
@@ -524,7 +524,7 @@ mod tests {
             ) else {
                 return summary.default_return_class.clone();
             };
-            returned.push(class);
+            returned.push(selected.class);
         }
         let Some(first) = returned.pop() else {
             return summary.default_return_class.clone();

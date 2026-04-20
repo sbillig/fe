@@ -46,25 +46,18 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
         }
     }
 
-    pub(super) fn actual_value(&mut self, local: SLocalId) -> Option<RuntimeClass<'db>> {
-        carrier_value_class(local, self.carriers)
-            .or_else(|| self.env.semantic_value_class(self.carriers, local))
+    pub(super) fn selected_actual_value(
+        &mut self,
+        local: SLocalId,
+    ) -> Option<SelectedRuntimeArg<'db>> {
+        self.select_actual_operand_value(local, copy_operand(local))
     }
 
-    pub(super) fn materialize(&mut self, local: SLocalId) -> Option<RuntimeClass<'db>> {
-        match self.env.materialization_plan(local)? {
-            CompiledMaterializationPlan::Erased => None,
-            CompiledMaterializationPlan::SemanticValue => {
-                self.env.semantic_value_class(self.carriers, local)
-            }
-            CompiledMaterializationPlan::AggregateFromSource => self
-                .env
-                .actual_aggregate_class_for_source(self.carriers, local),
-            CompiledMaterializationPlan::AggregateFromSourceOrFallback { fallback } => self
-                .env
-                .actual_aggregate_class_for_source(self.carriers, local)
-                .or_else(|| Some(fallback.clone())),
-        }
+    pub(super) fn selected_materialized_value(
+        &mut self,
+        local: SLocalId,
+    ) -> Option<SelectedRuntimeArg<'db>> {
+        self.select_materialized_operand_value(local, copy_operand(local))
     }
 
     pub(super) fn selected_call_inputs(
@@ -168,8 +161,10 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
         let local = arg.local;
         match plan {
             CompiledValuePassPlan::Erased => None,
-            CompiledValuePassPlan::VisibleValue => self.select_materialized_value(local, arg),
-            CompiledValuePassPlan::ActualValue => self.select_actual_value(local, arg),
+            CompiledValuePassPlan::VisibleValue => {
+                self.select_materialized_operand_value(local, arg)
+            }
+            CompiledValuePassPlan::ActualValue => self.select_actual_operand_value(local, arg),
             CompiledValuePassPlan::ExactTransport { exact } => Some(SelectedRuntimeArg {
                 class: exact.clone(),
                 realization: RuntimeArgRealization::LowerSemanticOperand(arg),
@@ -203,22 +198,15 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
         }
     }
 
-    pub(super) fn selected_value_class_for_local(
+    pub(super) fn selected_value_for_local(
         &mut self,
         local: SLocalId,
         plan: &CompiledValuePassPlan<'db>,
-    ) -> Option<RuntimeClass<'db>> {
-        self.selected_value_pass_plan(
-            NOperand {
-                local,
-                mode: ReadMode::Copy,
-            },
-            plan,
-        )
-        .map(|arg| arg.class)
+    ) -> Option<SelectedRuntimeArg<'db>> {
+        self.selected_value_pass_plan(copy_operand(local), plan)
     }
 
-    fn select_materialized_value(
+    fn select_materialized_operand_value(
         &mut self,
         local: SLocalId,
         arg: NOperand,
@@ -246,7 +234,7 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
         }
     }
 
-    fn select_actual_value(
+    fn select_actual_operand_value(
         &mut self,
         local: SLocalId,
         arg: NOperand,
@@ -564,7 +552,7 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
         match plan {
             CompiledEffectArgPlan::ErasedPlainValue => match &arg.arg {
                 NEffectArgValue::Value(value) => {
-                    self.select_materialized_value(value.local, *value)
+                    self.select_materialized_operand_value(value.local, *value)
                 }
                 NEffectArgValue::Place(_) => panic!(
                     "effect arg without provider/target should evaluate as a plain value: owner={:?}; arg={arg:?}",
@@ -585,14 +573,15 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
                 let NEffectArgValue::Value(value) = &arg.arg else {
                     panic!("compiled value effect arg fallback reached place arg: {arg:?}");
                 };
-                self.select_actual_value(value.local, *value).or_else(|| {
-                    Some(SelectedRuntimeArg {
-                        class: fallback.clone(),
-                        realization: RuntimeArgRealization::Placeholder {
-                            semantic_ty: self.env.body().locals[value.local.index()].ty,
-                        },
+                self.select_actual_operand_value(value.local, *value)
+                    .or_else(|| {
+                        Some(SelectedRuntimeArg {
+                            class: fallback.clone(),
+                            realization: RuntimeArgRealization::Placeholder {
+                                semantic_ty: self.env.body().locals[value.local.index()].ty,
+                            },
+                        })
                     })
-                })
             }
             CompiledEffectArgPlan::ByValuePlaceBoundary { boundary } => {
                 let NEffectArgValue::Place(place) = &arg.arg else {
@@ -670,5 +659,12 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
         )
         .boundary
         .into_owned()
+    }
+}
+
+fn copy_operand(local: SLocalId) -> NOperand {
+    NOperand {
+        local,
+        mode: ReadMode::Copy,
     }
 }

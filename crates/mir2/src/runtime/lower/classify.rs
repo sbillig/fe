@@ -4,7 +4,7 @@ use common::indexmap::IndexSet;
 use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
-        FieldIndex, GenericSubst, ImplEnv, NEffectArg, NEffectArgValue, SConst, SLocalId,
+        FieldIndex, GenericSubst, ImplEnv, NEffectArg, NEffectArgValue, ReadMode, SConst, SLocalId,
         SemanticCalleeRef, SemanticInstance, SemanticInstanceKey, ValueProvenance, VariantIndex,
         borrowck::{
             NBorrowRoot, NExpr, NLocalInterface, NLocalOrigin, NOperand, NSPlace, NSPlaceRoot,
@@ -57,6 +57,7 @@ use super::{
         address_space_from_provider, project_field_class, project_index_class,
         project_variant_field_class,
     },
+    realize::{RuntimeArgRealization, SelectedRuntimeArg},
     returns::RuntimeReturnAnalysisCx,
     type_info::{
         RuntimeTypeEnv, aggregate_transport_depends_on_runtime_source,
@@ -786,7 +787,9 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         let expr_facts = self.expr_facts(block_idx, stmt_idx);
         Some(match expr {
             NExpr::Use(value) => {
-                RuntimeArgSelector::new(self, carriers, class_cache).materialize(value.local)?
+                RuntimeArgSelector::new(self, carriers, class_cache)
+                    .selected_materialized_value(value.local)?
+                    .class
             }
             NExpr::Const(_)
             | NExpr::Unary { .. }
@@ -1434,8 +1437,11 @@ pub(crate) struct RuntimeBodyCx<'a, 'carriers, 'db> {
 }
 
 impl<'a, 'carriers, 'db> RuntimeBodyCx<'a, 'carriers, 'db> {
-    pub(crate) fn materialized_value_class(self, local: SLocalId) -> Option<RuntimeClass<'db>> {
-        RuntimeArgSelector::new(self.env, self.carriers, None).materialize(local)
+    pub(super) fn selected_materialized_value(
+        self,
+        local: SLocalId,
+    ) -> Option<SelectedRuntimeArg<'db>> {
+        RuntimeArgSelector::new(self.env, self.carriers, None).selected_materialized_value(local)
     }
 
     pub(crate) fn normalized_place_class(self, place: &NSPlace<'db>) -> Option<RuntimeClass<'db>> {
@@ -1990,22 +1996,20 @@ fn aggregate_make_class_from_facts<'db>(
     let mut field_classes = Vec::with_capacity(fields.len());
     let mut evaluator = RuntimeArgSelector::new(env, carriers, class_cache);
     for (field, field_facts) in fields.iter().copied().zip(facts.fields.iter()) {
-        let class = field_facts
-            .boundary
-            .as_ref()
-            .and_then(|boundary| {
-                let mut boundary_sites = BoundarySiteAllocator::default();
-                evaluator
-                    .selected_value_pass_plan(
-                        field,
-                        &compile_value_pass_plan(
-                            RuntimeParamPlan::Boundary(boundary.boundary.clone()),
-                            &mut boundary_sites,
-                        ),
-                    )
-                    .map(|arg| arg.class)
-            })
-            .or_else(|| evaluator.materialize(field.local))
+        let selected = if let Some(boundary) = field_facts.boundary.as_ref() {
+            let mut boundary_sites = BoundarySiteAllocator::default();
+            evaluator.selected_value_pass_plan(
+                field,
+                &compile_value_pass_plan(
+                    RuntimeParamPlan::Boundary(boundary.boundary.clone()),
+                    &mut boundary_sites,
+                ),
+            )
+        } else {
+            evaluator.selected_materialized_value(field.local)
+        };
+        let class = selected
+            .map(|arg| arg.class)
             .unwrap_or_else(|| field_facts.stored_class.clone());
         field_classes.push(class);
     }
@@ -2032,21 +2036,21 @@ fn aggregate_make_class_from_facts<'db>(
     })
 }
 
-pub(crate) fn visible_return_class_for_local<'db>(
+pub(super) fn selected_visible_return_for_local<'db>(
     env: BodyEnv<'_, 'db>,
     local: SLocalId,
     plan: &RuntimeVisibleReturnPlan<'db>,
     carriers: &[RuntimeCarrier<'db>],
-) -> Option<RuntimeClass<'db>> {
+) -> Option<SelectedRuntimeArg<'db>> {
     let mut evaluator = RuntimeArgSelector::new(env, carriers, None);
     match plan {
         RuntimeVisibleReturnPlan::Erased => None,
-        RuntimeVisibleReturnPlan::Exact(class) => {
-            evaluator.materialize(local).or_else(|| Some(class.clone()))
-        }
+        RuntimeVisibleReturnPlan::Exact(class) => evaluator
+            .selected_materialized_value(local)
+            .or_else(|| Some(selected_semantic_copy(local, class.clone()))),
         RuntimeVisibleReturnPlan::Constrained(boundary) => {
             let mut boundary_sites = BoundarySiteAllocator::default();
-            evaluator.selected_value_class_for_local(
+            evaluator.selected_value_for_local(
                 local,
                 &compile_value_pass_plan(
                     RuntimeParamPlan::Boundary(boundary.clone()),
@@ -2054,7 +2058,20 @@ pub(crate) fn visible_return_class_for_local<'db>(
                 ),
             )
         }
-        RuntimeVisibleReturnPlan::PassActual => evaluator.actual_value(local),
+        RuntimeVisibleReturnPlan::PassActual => evaluator.selected_actual_value(local),
+    }
+}
+
+fn selected_semantic_copy<'db>(
+    local: SLocalId,
+    class: RuntimeClass<'db>,
+) -> SelectedRuntimeArg<'db> {
+    SelectedRuntimeArg {
+        class,
+        realization: RuntimeArgRealization::LowerSemanticOperand(NOperand {
+            local,
+            mode: ReadMode::Copy,
+        }),
     }
 }
 
@@ -3036,8 +3053,9 @@ mod tests {
     use driver::DriverDataBase;
     use hir::{
         analysis::semantic::{
-            SemanticInstance, borrowck::normalize_semantic_body, get_or_build_semantic_instance,
-            owner_effect_bindings, root_semantic_instance_key,
+            SemanticInstance,
+            borrowck::{NSTerminatorKind, normalize_semantic_body},
+            get_or_build_semantic_instance, owner_effect_bindings, root_semantic_instance_key,
         },
         analysis::ty::ty_check::BodyOwner,
     };
@@ -3195,6 +3213,85 @@ mod tests {
         assert!(
             !matches!(signature.ret, Some(RuntimeClass::AggregateValue { .. })),
             "transport-shaped returns must not be normalized to by-value aggregate contracts:\n{signature:#?}"
+        );
+    }
+
+    #[test]
+    fn visible_return_selection_preserves_transport_return_source() {
+        let mut db = DriverDataBase::default();
+        let file_url =
+            Url::parse("file:///visible_return_selection_preserves_transport_return_source.fe")
+                .unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                include_str!(
+                    "../../../../fe/tests/fixtures/fe_test/contract_field_mut_borrow_matrix.fe"
+                )
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let semantic = semantic_instance_for_named_func(&db, top_mod, "pick_ac_mut");
+        let instance = runtime_instance_for_semantic(&db, semantic);
+        let typed_body = semantic.key(&db).typed_body(&db);
+        let normalized = normalize_semantic_body(&db, semantic)
+            .unwrap_or_else(|err| panic!("failed to normalize pick_ac_mut: {err:?}"));
+        let facts = BodyStaticFacts::new(&db, &normalized);
+        let env = BodyEnv::new(&db, &normalized, typed_body, &facts);
+        let params = instance.key(&db).params(&db);
+        let mut returns = RuntimeReturnAnalysisCx::new(&db);
+        let inferred = LocalStateInferer::new(
+            env,
+            params,
+            &runtime_param_locals(&db, semantic, params),
+            &mut returns,
+        )
+        .run();
+        let return_plan = desired_runtime_return_plan(&db, typed_body);
+        let selected_returns = normalized
+            .blocks
+            .iter()
+            .filter_map(|block| match block.terminator.kind {
+                NSTerminatorKind::Return(Some(value)) => Some(value.local),
+                NSTerminatorKind::Goto(_)
+                | NSTerminatorKind::Branch { .. }
+                | NSTerminatorKind::MatchEnum { .. }
+                | NSTerminatorKind::Return(None) => None,
+            })
+            .map(|local| {
+                selected_visible_return_for_local(env, local, &return_plan, &inferred.carriers)
+                    .unwrap_or_else(|| {
+                        panic!("pick_ac_mut return local should stay runtime-visible: {local:?}")
+                    })
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            matches!(
+                return_plan,
+                RuntimeVisibleReturnPlan::Constrained(RuntimeBoundarySpec::BorrowLike { .. })
+            ),
+            "pick_ac_mut should use a constrained borrow-like visible return plan:\n{return_plan:#?}",
+        );
+        assert!(
+            !selected_returns.is_empty(),
+            "pick_ac_mut should expose at least one normalized return local",
+        );
+        assert!(
+            selected_returns.iter().all(|selected| matches!(
+                selected.class,
+                RuntimeClass::Ref {
+                    kind: RefKind::Provider { .. },
+                    ..
+                } | RuntimeClass::RawAddr { .. }
+            )),
+            "visible return selection must preserve transport, not only the semantic pointee class:\nselected={selected_returns:#?}",
         );
     }
 
@@ -3438,9 +3535,10 @@ mod tests {
                     let mut class_cache = InferClassCache::new(normalized.locals.len());
                     let mut evaluator =
                         RuntimeArgSelector::new(env, &inferred.carriers, Some(&mut class_cache));
-                    let receiver_actual = receiver.and_then(|local| evaluator.actual_value(local));
+                    let receiver_actual =
+                        receiver.and_then(|local| evaluator.selected_actual_value(local));
                     let receiver_materialized =
-                        receiver.and_then(|local| evaluator.materialize(local));
+                        receiver.and_then(|local| evaluator.selected_materialized_value(local));
                     let selected =
                         evaluator.selected_call_inputs(args, effect_args, &call_facts.input_plan);
                     let selected_classes = selected

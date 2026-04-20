@@ -456,7 +456,9 @@ impl<'db> RmirEmitter<'db> {
             RuntimeLocalLowering::PlaceCarrier { .. }
         ) {
             let actual = self.with_current_body_cx(|cx| match expr {
-                NExpr::Use(value) => cx.materialized_value_class(value.local),
+                NExpr::Use(value) => cx
+                    .selected_materialized_value(value.local)
+                    .map(|selected| selected.class),
                 NExpr::Borrow { place, .. } => cx.normalized_place_address_class(place),
                 NExpr::ReadPlace { place, .. } => cx.normalized_place_class(place),
                 NExpr::Const(_)
@@ -3560,7 +3562,10 @@ impl<'db> RmirEmitter<'db> {
             return None;
         }
         let current = self.semantic_value_class(local)?;
-        let target = self.with_current_body_cx(|cx| cx.materialized_value_class(local))?;
+        let target = self.with_current_body_cx(|cx| {
+            cx.selected_materialized_value(local)
+                .map(|selected| selected.class)
+        })?;
         if current == target {
             return None;
         }
