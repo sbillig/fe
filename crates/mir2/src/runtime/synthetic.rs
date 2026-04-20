@@ -35,7 +35,9 @@ use crate::{
                 ref_class_for_place_result, runtime_address_space,
                 runtime_signature_for_key_with_returns, semantic_return_ty,
             },
-            conversion::{RuntimeConversionPlan, RuntimeConversionPlanner, RuntimeConversionStep},
+            conversion::{
+                RuntimeConversionEmitter, RuntimeConversionPlanner, emit_runtime_conversion_plan,
+            },
             interface::runtime_visible_binding_plans,
             realize::{
                 RuntimeBoundaryMatcher, RuntimeBoundaryMaterialization,
@@ -97,6 +99,24 @@ struct SyntheticBodyBuilder<'db> {
     returns: RuntimeReturnAnalysisCx<'db>,
     locals: Vec<RLocal<'db>>,
     blocks: Vec<RBlock<'db>>,
+}
+
+impl<'db> RuntimeConversionEmitter<'db> for SyntheticBodyBuilder<'db> {
+    fn alloc_conversion_temp(
+        &mut self,
+        semantic_ty: TyId<'db>,
+        class: RuntimeClass<'db>,
+    ) -> RLocalId {
+        self.push_local(
+            semantic_ty,
+            RuntimeCarrier::Value(class),
+            RuntimeLocalRoot::None,
+        )
+    }
+
+    fn push_conversion_stmt(&mut self, bb: RBlockId, stmt: RStmt<'db>) {
+        self.push_stmt(bb, stmt);
+    }
 }
 
 impl<'db> SyntheticBodyBuilder<'db> {
@@ -1160,177 +1180,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             .unwrap_or_else(|| panic!("cannot coerce erased runtime value {src:?} to {target:?}"));
         let plan = RuntimeConversionPlanner::plan(self.db, source, target.clone())
             .unwrap_or_else(|err| panic!("unsupported synthetic runtime coercion: {err:?}"));
-        self.emit_runtime_conversion_plan(bb, src, plan, semantic_ty)
-    }
-
-    fn emit_runtime_conversion_plan(
-        &mut self,
-        bb: RBlockId,
-        mut value: RLocalId,
-        plan: RuntimeConversionPlan<'db>,
-        semantic_ty: TyId<'db>,
-    ) -> RLocalId {
-        let RuntimeConversionPlan { target, steps } = plan;
-        if steps.is_empty() {
-            debug_assert_eq!(
-                self.locals[value.index()].carrier.value_class(),
-                Some(&target)
-            );
-            return value;
-        }
-        for step in steps {
-            value = self.emit_runtime_conversion_step(bb, value, step, semantic_ty);
-        }
-        value
-    }
-
-    fn emit_runtime_conversion_step(
-        &mut self,
-        bb: RBlockId,
-        src: RLocalId,
-        step: RuntimeConversionStep<'db>,
-        semantic_ty: TyId<'db>,
-    ) -> RLocalId {
-        match step {
-            RuntimeConversionStep::UseAs { class } => {
-                self.assign_runtime_conversion_temp(bb, semantic_ty, class, RExpr::Use(src))
-            }
-            RuntimeConversionStep::RetagRef { class } => self.assign_runtime_conversion_temp(
-                bb,
-                semantic_ty,
-                class,
-                RExpr::RetagRef { value: src },
-            ),
-            RuntimeConversionStep::LoadRef { class } => self.assign_runtime_conversion_temp(
-                bb,
-                semantic_ty,
-                class,
-                RExpr::Load {
-                    place: RuntimePlace {
-                        root: PlaceRoot::Ref(src),
-                        path: Box::default(),
-                    },
-                },
-            ),
-            RuntimeConversionStep::AddrOfRef { class } => self.assign_runtime_conversion_temp(
-                bb,
-                semantic_ty,
-                class,
-                RExpr::AddrOf {
-                    place: RuntimePlace {
-                        root: PlaceRoot::Ref(src),
-                        path: Box::default(),
-                    },
-                },
-            ),
-            RuntimeConversionStep::LoadRawAddr {
-                class,
-                space,
-                layout,
-            } => self.assign_runtime_conversion_temp(
-                bb,
-                semantic_ty,
-                class,
-                RExpr::Load {
-                    place: RuntimePlace {
-                        root: PlaceRoot::Ptr {
-                            addr: src,
-                            space,
-                            class: RuntimeClass::AggregateValue { layout },
-                        },
-                        path: Box::default(),
-                    },
-                },
-            ),
-            RuntimeConversionStep::MaterializeToObject { class } => self
-                .assign_runtime_conversion_temp(
-                    bb,
-                    semantic_ty,
-                    class,
-                    RExpr::MaterializeToObject { src },
-                ),
-            RuntimeConversionStep::AllocObjectCopy { class, layout } => {
-                let dst = self.assign_runtime_conversion_temp(
-                    bb,
-                    semantic_ty,
-                    class,
-                    RExpr::AllocObject { layout },
-                );
-                self.push_stmt(
-                    bb,
-                    RStmt::CopyInto {
-                        dst: RuntimePlace {
-                            root: PlaceRoot::Ref(dst),
-                            path: Box::default(),
-                        },
-                        src,
-                    },
-                );
-                dst
-            }
-            RuntimeConversionStep::ProviderFromRaw {
-                class,
-                provider_ty,
-                space,
-                target,
-            } => self.assign_runtime_conversion_temp(
-                bb,
-                semantic_ty,
-                class,
-                RExpr::ProviderFromRaw {
-                    raw: src,
-                    provider_ty,
-                    space,
-                    target,
-                },
-            ),
-            RuntimeConversionStep::ProviderToRaw { class } => self.assign_runtime_conversion_temp(
-                bb,
-                semantic_ty,
-                class,
-                RExpr::ProviderToRaw { value: src },
-            ),
-            RuntimeConversionStep::WordToRawAddr {
-                class,
-                space,
-                target,
-            } => self.assign_runtime_conversion_temp(
-                bb,
-                semantic_ty,
-                class,
-                RExpr::WordToRawAddr {
-                    value: src,
-                    space,
-                    target,
-                },
-            ),
-            RuntimeConversionStep::RawAddrToWord { class, scalar } => self
-                .assign_runtime_conversion_temp(
-                    bb,
-                    semantic_ty,
-                    class,
-                    RExpr::Cast {
-                        value: src,
-                        to: scalar,
-                    },
-                ),
-        }
-    }
-
-    fn assign_runtime_conversion_temp(
-        &mut self,
-        bb: RBlockId,
-        semantic_ty: TyId<'db>,
-        class: RuntimeClass<'db>,
-        expr: RExpr<'db>,
-    ) -> RLocalId {
-        let dst = self.push_local(
-            semantic_ty,
-            RuntimeCarrier::Value(class),
-            RuntimeLocalRoot::None,
-        );
-        self.push_stmt(bb, RStmt::Assign { dst, expr });
-        dst
+        emit_runtime_conversion_plan(self, bb, src, plan, semantic_ty)
     }
 
     fn push_builtin_value(

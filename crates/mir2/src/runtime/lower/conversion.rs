@@ -3,8 +3,9 @@ use hir::analysis::ty::ty_def::TyId;
 use crate::{
     db::MirDb,
     runtime::{
-        AddressSpaceKind, LayoutId, RefKind, RefView, RuntimeClass, ScalarClass, ScalarRepr,
-        ScalarRole, runtime_classes_share_runtime_rep,
+        AddressSpaceKind, LayoutId, PlaceRoot, RBlockId, RExpr, RLocalId, RStmt, RefKind, RefView,
+        RuntimeClass, RuntimePlace, ScalarClass, ScalarRepr, ScalarRole,
+        runtime_classes_share_runtime_rep,
     },
 };
 
@@ -70,6 +71,183 @@ pub(crate) enum RuntimeConversionError<'db> {
         source: RuntimeClass<'db>,
         target: RuntimeClass<'db>,
     },
+}
+
+pub(crate) trait RuntimeConversionEmitter<'db> {
+    fn alloc_conversion_temp(
+        &mut self,
+        semantic_ty: TyId<'db>,
+        class: RuntimeClass<'db>,
+    ) -> RLocalId;
+
+    fn push_conversion_stmt(&mut self, bb: RBlockId, stmt: RStmt<'db>);
+}
+
+pub(crate) fn emit_runtime_conversion_plan<'db>(
+    emitter: &mut impl RuntimeConversionEmitter<'db>,
+    bb: RBlockId,
+    mut value: RLocalId,
+    plan: RuntimeConversionPlan<'db>,
+    semantic_ty: TyId<'db>,
+) -> RLocalId {
+    let RuntimeConversionPlan { steps, .. } = plan;
+    for step in steps {
+        value = emit_runtime_conversion_step(emitter, bb, value, step, semantic_ty);
+    }
+    value
+}
+
+fn emit_runtime_conversion_step<'db>(
+    emitter: &mut impl RuntimeConversionEmitter<'db>,
+    bb: RBlockId,
+    src: RLocalId,
+    step: RuntimeConversionStep<'db>,
+    semantic_ty: TyId<'db>,
+) -> RLocalId {
+    match step {
+        RuntimeConversionStep::UseAs { class } => {
+            assign_runtime_conversion_temp(emitter, bb, semantic_ty, class, RExpr::Use(src))
+        }
+        RuntimeConversionStep::RetagRef { class } => assign_runtime_conversion_temp(
+            emitter,
+            bb,
+            semantic_ty,
+            class,
+            RExpr::RetagRef { value: src },
+        ),
+        RuntimeConversionStep::LoadRef { class } => assign_runtime_conversion_temp(
+            emitter,
+            bb,
+            semantic_ty,
+            class,
+            RExpr::Load {
+                place: RuntimePlace {
+                    root: PlaceRoot::Ref(src),
+                    path: Box::default(),
+                },
+            },
+        ),
+        RuntimeConversionStep::AddrOfRef { class } => assign_runtime_conversion_temp(
+            emitter,
+            bb,
+            semantic_ty,
+            class,
+            RExpr::AddrOf {
+                place: RuntimePlace {
+                    root: PlaceRoot::Ref(src),
+                    path: Box::default(),
+                },
+            },
+        ),
+        RuntimeConversionStep::LoadRawAddr {
+            class,
+            space,
+            layout,
+        } => assign_runtime_conversion_temp(
+            emitter,
+            bb,
+            semantic_ty,
+            class,
+            RExpr::Load {
+                place: RuntimePlace {
+                    root: PlaceRoot::Ptr {
+                        addr: src,
+                        space,
+                        class: RuntimeClass::AggregateValue { layout },
+                    },
+                    path: Box::default(),
+                },
+            },
+        ),
+        RuntimeConversionStep::MaterializeToObject { class } => assign_runtime_conversion_temp(
+            emitter,
+            bb,
+            semantic_ty,
+            class,
+            RExpr::MaterializeToObject { src },
+        ),
+        RuntimeConversionStep::AllocObjectCopy { class, layout } => {
+            let dst = assign_runtime_conversion_temp(
+                emitter,
+                bb,
+                semantic_ty,
+                class,
+                RExpr::AllocObject { layout },
+            );
+            emitter.push_conversion_stmt(
+                bb,
+                RStmt::CopyInto {
+                    dst: RuntimePlace {
+                        root: PlaceRoot::Ref(dst),
+                        path: Box::default(),
+                    },
+                    src,
+                },
+            );
+            dst
+        }
+        RuntimeConversionStep::ProviderFromRaw {
+            class,
+            provider_ty,
+            space,
+            target,
+        } => assign_runtime_conversion_temp(
+            emitter,
+            bb,
+            semantic_ty,
+            class,
+            RExpr::ProviderFromRaw {
+                raw: src,
+                provider_ty,
+                space,
+                target,
+            },
+        ),
+        RuntimeConversionStep::ProviderToRaw { class } => assign_runtime_conversion_temp(
+            emitter,
+            bb,
+            semantic_ty,
+            class,
+            RExpr::ProviderToRaw { value: src },
+        ),
+        RuntimeConversionStep::WordToRawAddr {
+            class,
+            space,
+            target,
+        } => assign_runtime_conversion_temp(
+            emitter,
+            bb,
+            semantic_ty,
+            class,
+            RExpr::WordToRawAddr {
+                value: src,
+                space,
+                target,
+            },
+        ),
+        RuntimeConversionStep::RawAddrToWord { class, scalar } => assign_runtime_conversion_temp(
+            emitter,
+            bb,
+            semantic_ty,
+            class,
+            RExpr::Cast {
+                value: src,
+                to: scalar,
+            },
+        ),
+    }
+}
+
+fn assign_runtime_conversion_temp<'db>(
+    emitter: &mut impl RuntimeConversionEmitter<'db>,
+    bb: RBlockId,
+    semantic_ty: TyId<'db>,
+    class: RuntimeClass<'db>,
+    expr: RExpr<'db>,
+) -> RLocalId {
+    let dst = emitter.alloc_conversion_temp(semantic_ty, class);
+    emitter.push_conversion_stmt(bb, RStmt::Assign { dst, expr });
+    dst
 }
 
 pub(crate) struct RuntimeConversionPlanner<'db> {
@@ -453,6 +631,7 @@ mod tests {
     use hir::analysis::ty::ty_def::TyId;
 
     use super::*;
+    use crate::runtime::{LayoutKey, StructLayout};
 
     fn word_class<'db>() -> RuntimeClass<'db> {
         RuntimeClass::Scalar(ScalarClass {
@@ -462,6 +641,16 @@ mod tests {
             },
             role: ScalarRole::Plain,
         })
+    }
+
+    fn test_struct_layout<'db>(db: &'db dyn MirDb) -> LayoutId<'db> {
+        LayoutId::new(
+            db,
+            LayoutKey::Struct(StructLayout {
+                source_ty: TyId::unit(db),
+                fields: vec![word_class()].into(),
+            }),
+        )
     }
 
     #[test]
@@ -551,5 +740,79 @@ mod tests {
             RuntimeConversionPlanner::plan(&db, storage_raw, memory_provider),
             Err(RuntimeConversionError::Unsupported { .. })
         ));
+    }
+
+    #[test]
+    fn aggregate_to_object_ref_materializes_without_policy() {
+        let db = DriverDataBase::default();
+        let layout = test_struct_layout(&db);
+        let source = RuntimeClass::AggregateValue { layout };
+        let target = RuntimeClass::object_ref(layout);
+
+        let plan = RuntimeConversionPlanner::plan(&db, source, target.clone()).unwrap();
+
+        assert_eq!(
+            plan.steps.as_ref(),
+            &[RuntimeConversionStep::MaterializeToObject { class: target }]
+        );
+    }
+
+    #[test]
+    fn const_ref_to_object_ref_materializes_without_retagging() {
+        let db = DriverDataBase::default();
+        let layout = test_struct_layout(&db);
+        let target = RuntimeClass::object_ref(layout);
+
+        let plan =
+            RuntimeConversionPlanner::plan(&db, RuntimeClass::const_ref(layout), target.clone())
+                .unwrap();
+
+        assert_eq!(
+            plan.steps.as_ref(),
+            &[RuntimeConversionStep::MaterializeToObject { class: target }]
+        );
+    }
+
+    #[test]
+    fn object_ref_to_non_memory_provider_uses_address_of_ref() {
+        let db = DriverDataBase::default();
+        let layout = test_struct_layout(&db);
+        let provider_ty = TyId::unit(&db);
+        let target = RuntimeClass::provider_ref(layout, provider_ty, AddressSpaceKind::Storage);
+
+        let plan =
+            RuntimeConversionPlanner::plan(&db, RuntimeClass::object_ref(layout), target.clone())
+                .unwrap();
+
+        assert_eq!(
+            plan.steps.as_ref(),
+            &[RuntimeConversionStep::AddrOfRef { class: target }]
+        );
+    }
+
+    #[test]
+    fn raw_aggregate_address_to_value_loads_from_pointer() {
+        let db = DriverDataBase::default();
+        let layout = test_struct_layout(&db);
+        let target = RuntimeClass::AggregateValue { layout };
+
+        let plan = RuntimeConversionPlanner::plan(
+            &db,
+            RuntimeClass::RawAddr {
+                space: AddressSpaceKind::Storage,
+                target: Some(layout),
+            },
+            target.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            plan.steps.as_ref(),
+            &[RuntimeConversionStep::LoadRawAddr {
+                class: target,
+                space: AddressSpaceKind::Storage,
+                layout,
+            }]
+        );
     }
 }
