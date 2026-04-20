@@ -42,9 +42,10 @@ use crate::{
 };
 
 use super::{
+    arg_selector::RuntimeArgSelector,
     call_input::{
-        CompiledCallInputPlan, CompiledMaterializationPlan, RuntimeValueEvaluator,
-        compile_call_input_plan_for_semantic, compile_value_pass_plan,
+        CompiledCallInputPlan, CompiledMaterializationPlan, compile_call_input_plan_for_semantic,
+        compile_value_pass_plan,
     },
     infer::{fallback_root_transport_class, local_place_root_class},
     interface::{runtime_param_locals, runtime_visible_binding_plans},
@@ -785,7 +786,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         let expr_facts = self.expr_facts(block_idx, stmt_idx);
         Some(match expr {
             NExpr::Use(value) => {
-                RuntimeValueEvaluator::new(self, carriers, class_cache).materialize(value.local)?
+                RuntimeArgSelector::new(self, carriers, class_cache).materialize(value.local)?
             }
             NExpr::Const(_)
             | NExpr::Unary { .. }
@@ -873,7 +874,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                 if let Some(class) = facts.builtin_return_class.clone() {
                     return class;
                 }
-                let param_classes: Vec<_> = RuntimeValueEvaluator::new(self, carriers, class_cache)
+                let param_classes: Vec<_> = RuntimeArgSelector::new(self, carriers, class_cache)
                     .selected_call_inputs(args, effect_args, &facts.input_plan)
                     .into_iter()
                     .map(|arg| arg.class)
@@ -1434,7 +1435,7 @@ pub(crate) struct RuntimeBodyCx<'a, 'carriers, 'db> {
 
 impl<'a, 'carriers, 'db> RuntimeBodyCx<'a, 'carriers, 'db> {
     pub(crate) fn materialized_value_class(self, local: SLocalId) -> Option<RuntimeClass<'db>> {
-        RuntimeValueEvaluator::new(self.env, self.carriers, None).materialize(local)
+        RuntimeArgSelector::new(self.env, self.carriers, None).materialize(local)
     }
 
     pub(crate) fn normalized_place_class(self, place: &NSPlace<'db>) -> Option<RuntimeClass<'db>> {
@@ -1987,7 +1988,7 @@ fn aggregate_make_class_from_facts<'db>(
         return None;
     }
     let mut field_classes = Vec::with_capacity(fields.len());
-    let mut evaluator = RuntimeValueEvaluator::new(env, carriers, class_cache);
+    let mut evaluator = RuntimeArgSelector::new(env, carriers, class_cache);
     for (field, field_facts) in fields.iter().copied().zip(facts.fields.iter()) {
         let class = field_facts
             .boundary
@@ -2037,7 +2038,7 @@ pub(crate) fn visible_return_class_for_local<'db>(
     plan: &RuntimeVisibleReturnPlan<'db>,
     carriers: &[RuntimeCarrier<'db>],
 ) -> Option<RuntimeClass<'db>> {
-    let mut evaluator = RuntimeValueEvaluator::new(env, carriers, None);
+    let mut evaluator = RuntimeArgSelector::new(env, carriers, None);
     match plan {
         RuntimeVisibleReturnPlan::Erased => None,
         RuntimeVisibleReturnPlan::Exact(class) => {
@@ -3042,7 +3043,7 @@ mod tests {
     };
     use url::Url;
 
-    use super::super::call_input::RuntimeValueEvaluator;
+    use super::super::arg_selector::RuntimeArgSelector;
     use super::*;
     use crate::runtime::lower::realize::RuntimeBoundaryMatcher;
     use crate::runtime::{
@@ -3436,7 +3437,7 @@ mod tests {
                 let (receiver_actual, receiver_materialized, selected, selected_classes) = {
                     let mut class_cache = InferClassCache::new(normalized.locals.len());
                     let mut evaluator =
-                        RuntimeValueEvaluator::new(env, &inferred.carriers, Some(&mut class_cache));
+                        RuntimeArgSelector::new(env, &inferred.carriers, Some(&mut class_cache));
                     let receiver_actual = receiver.and_then(|local| evaluator.actual_value(local));
                     let receiver_materialized =
                         receiver.and_then(|local| evaluator.materialize(local));
@@ -3606,7 +3607,7 @@ mod tests {
             .expect("specialized take_u256 should contain an inner call to take");
         let mut class_cache = InferClassCache::new(normalized.locals.len());
         let inferred_param_classes =
-            RuntimeValueEvaluator::new(env, &inferred.carriers, Some(&mut class_cache))
+            RuntimeArgSelector::new(env, &inferred.carriers, Some(&mut class_cache))
                 .selected_call_inputs(&args, &effect_args, &call_facts.input_plan)
                 .into_iter()
                 .map(|arg| arg.class)
@@ -3749,7 +3750,7 @@ mod tests {
             .expect("SelectAndMutate should call set_scaled");
         let mut class_cache = InferClassCache::new(normalized.locals.len());
         let inferred_param_classes =
-            RuntimeValueEvaluator::new(env, &inferred.carriers, Some(&mut class_cache))
+            RuntimeArgSelector::new(env, &inferred.carriers, Some(&mut class_cache))
                 .selected_call_inputs(&args, &effect_args, &call_facts.input_plan)
                 .into_iter()
                 .map(|arg| arg.class)

@@ -39,9 +39,8 @@ use crate::{
 };
 
 use super::{
-    call_input::{
-        CompiledCallInputPlan, RuntimeValueEvaluator, compile_call_input_plan_for_semantic,
-    },
+    arg_selector::RuntimeArgSelector,
+    call_input::{CompiledCallInputPlan, compile_call_input_plan_for_semantic},
     classify::{
         BodyEnv, BodyStaticFacts, BoundarySiteAllocator, ContractMetadataBuiltin,
         GenericNumericIntrinsicKind, InferClassCache, RuntimeBodyCx,
@@ -2477,10 +2476,10 @@ impl<'db> RmirEmitter<'db> {
     ) -> (Vec<RLocalId>, Vec<RuntimeClass<'db>>) {
         let selected = self.with_current_body_cx(|cx| {
             let mut class_cache = InferClassCache::new(self.semantic_body.locals.len());
-            RuntimeValueEvaluator::new(cx.env, cx.carriers, Some(&mut class_cache))
+            RuntimeArgSelector::new(cx.env, cx.carriers, Some(&mut class_cache))
                 .selected_param_inputs(args, &plan.param_plans)
         });
-        self.realize_selected_call_args(bb, &selected)
+        RuntimeArgLowerer::new(self, bb).lower_all(&selected)
     }
 
     fn lower_runtime_call_inputs(
@@ -2492,120 +2491,10 @@ impl<'db> RmirEmitter<'db> {
     ) -> (Vec<RLocalId>, Vec<RuntimeClass<'db>>) {
         let selected = self.with_current_body_cx(|cx| {
             let mut class_cache = InferClassCache::new(self.semantic_body.locals.len());
-            RuntimeValueEvaluator::new(cx.env, cx.carriers, Some(&mut class_cache))
+            RuntimeArgSelector::new(cx.env, cx.carriers, Some(&mut class_cache))
                 .selected_call_inputs(args, effect_args, plan)
         });
-        self.realize_selected_call_args(bb, &selected)
-    }
-
-    fn realize_selected_call_args(
-        &mut self,
-        bb: RBlockId,
-        selected: &[SelectedRuntimeArg<'db>],
-    ) -> (Vec<RLocalId>, Vec<RuntimeClass<'db>>) {
-        let mut runtime_args = Vec::with_capacity(selected.len());
-        let mut runtime_classes = Vec::with_capacity(selected.len());
-        for selected in selected {
-            let value = self.realize_selected_call_arg(bb, selected);
-            let Some(class) = self.value_class(value).cloned() else {
-                panic!(
-                    "selected runtime call arg lowered without a runtime class: caller={:?}; selected={selected:?}; value={value:?}",
-                    self.current_semantic_key(),
-                );
-            };
-            assert_eq!(
-                class,
-                selected.class,
-                "selected runtime call arg class mismatch: caller={:?}; selected={selected:?}; value={value:?}",
-                self.current_semantic_key(),
-            );
-            runtime_args.push(value);
-            runtime_classes.push(class);
-        }
-        (runtime_args, runtime_classes)
-    }
-
-    fn realize_selected_call_arg(
-        &mut self,
-        bb: RBlockId,
-        selected: &SelectedRuntimeArg<'db>,
-    ) -> RLocalId {
-        match &selected.realization {
-            RuntimeArgRealization::LowerSemanticOperand(operand) => {
-                self.lower_semantic_operand_for_class(bb, *operand, &selected.class)
-            }
-            RuntimeArgRealization::UseRuntimeValue { local } => {
-                self.coerce_value_if_needed(bb, self.runtime_value(*local), &selected.class)
-            }
-            RuntimeArgRealization::UseHandleLikeValue { local } => {
-                let value = self
-                    .handle_like_semantic_value(*local)
-                    .unwrap_or_else(|| self.runtime_value(*local));
-                self.coerce_value_if_needed(bb, value, &selected.class)
-            }
-            RuntimeArgRealization::AddrOfPlace { place, semantic_ty } => {
-                let place = self.lower_place(bb, place);
-                self.lower_place_addr_of_for_class(
-                    *semantic_ty,
-                    bb,
-                    place,
-                    selected.class.clone(),
-                )
-            }
-            RuntimeArgRealization::LoadPlaceValue { place, semantic_ty } => {
-                let place = self.lower_place(bb, place);
-                let value = self.load_runtime_place_value(bb, place, *semantic_ty);
-                self.coerce_value_if_needed(bb, value, &selected.class)
-            }
-            RuntimeArgRealization::MaterializePlaceValue {
-                place,
-                materialization,
-                semantic_ty,
-            } => {
-                let place = self.lower_place(bb, place);
-                let value = self.load_runtime_place_value(bb, place, *semantic_ty);
-                let value = self.materialize_runtime_value(bb, value, materialization, *semantic_ty);
-                self.coerce_value_if_needed(bb, value, &selected.class)
-            }
-            RuntimeArgRealization::MaterializeSemanticValue {
-                operand,
-                materialization,
-                semantic_ty,
-            } => {
-                let value = self.read_semantic_operand(bb, *operand);
-                let value = self.materialize_runtime_value(bb, value, materialization, *semantic_ty);
-                self.coerce_value_if_needed(bb, value, &selected.class)
-            }
-            RuntimeArgRealization::AggregateFromRuntimeSource { local } => self
-                .actual_aggregate_value_from_runtime_source(bb, *local)
-                .map(|value| self.coerce_value_if_needed(bb, value, &selected.class))
-                .unwrap_or_else(|| {
-                    panic!(
-                        "selected aggregate runtime source was not lowerable: caller={:?}; local={local:?}; selected={selected:?}",
-                        self.current_semantic_key(),
-                    )
-                }),
-            RuntimeArgRealization::Placeholder { semantic_ty } => {
-                self.lower_placeholder_value(bb, *semantic_ty, selected.class.clone())
-            }
-        }
-    }
-
-    fn lower_placeholder_value(
-        &mut self,
-        bb: RBlockId,
-        semantic_ty: TyId<'db>,
-        class: RuntimeClass<'db>,
-    ) -> RLocalId {
-        let value = self.alloc_runtime_temp(semantic_ty, RuntimeCarrier::Value(class.clone()));
-        self.push_stmt(
-            bb,
-            RStmt::Assign {
-                dst: value,
-                expr: RExpr::Placeholder { class },
-            },
-        );
-        value
+        RuntimeArgLowerer::new(self, bb).lower_all(&selected)
     }
 
     fn lower_extern_builtin(
@@ -4297,10 +4186,10 @@ impl<'db> RmirEmitter<'db> {
         boundary: &crate::runtime::RuntimeBoundarySpec<'db>,
     ) -> RLocalId {
         let selected = self.with_current_body_cx(|cx| {
-            RuntimeValueEvaluator::new(cx.env, cx.carriers, None)
+            RuntimeArgSelector::new(cx.env, cx.carriers, None)
                 .selected_semantic_operand_for_boundary(operand, boundary)
         });
-        let value = self.realize_selected_call_arg(bb, &selected);
+        let value = RuntimeArgLowerer::new(self, bb).lower_one(&selected);
         let Some(class) = self.value_class(value).cloned() else {
             panic!(
                 "selected boundary operand lowered without a runtime class: owner={:?}; operand={operand:?}; selected={selected:?}; value={value:?}",
@@ -4391,50 +4280,6 @@ impl<'db> RmirEmitter<'db> {
             },
         );
         value
-    }
-
-    fn materialize_runtime_value(
-        &mut self,
-        bb: RBlockId,
-        value: RLocalId,
-        materialization: &RuntimeBoundaryMaterialization<'db>,
-        semantic_ty: TyId<'db>,
-    ) -> RLocalId {
-        if self.value_class(value).is_none() {
-            panic!(
-                "runtime value materialization source has no runtime class: owner={:?}; value={value:?}; materialization={materialization:?}",
-                self.key
-                    .semantic(self.db)
-                    .map(|semantic| semantic.key(self.db).owner(self.db)),
-            );
-        }
-        match materialization {
-            RuntimeBoundaryMaterialization::ObjectRef { layout } => {
-                self.coerce_value(bb, value, &RuntimeClass::object_ref(*layout))
-            }
-            RuntimeBoundaryMaterialization::RawAddrSlot { pointee } => {
-                let slot =
-                    self.alloc_runtime_temp(semantic_ty, RuntimeCarrier::Value(pointee.clone()));
-                self.locals[slot.index()].root = RuntimeLocalRoot::Slot(pointee.clone());
-                let src = if self.value_class(value) == Some(pointee) {
-                    value
-                } else {
-                    self.coerce_value(bb, value, pointee)
-                };
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: slot,
-                        expr: RExpr::Use(src),
-                    },
-                );
-                let place = RuntimePlace {
-                    root: PlaceRoot::Slot(slot),
-                    path: Box::default(),
-                };
-                self.lower_place_addr_of_for_class(semantic_ty, bb, place, materialization.class())
-            }
-        }
     }
 
     fn lower_place_addr_of_for_class(
@@ -4843,6 +4688,185 @@ impl<'db> RmirEmitter<'db> {
         target: &RuntimeClass<'db>,
     ) -> bool {
         merge_runtime_class(self.db, actual, target).is_some_and(|merged| &merged == actual)
+    }
+}
+
+struct RuntimeArgLowerer<'emitter, 'db> {
+    emitter: &'emitter mut RmirEmitter<'db>,
+    bb: RBlockId,
+}
+
+impl<'emitter, 'db> RuntimeArgLowerer<'emitter, 'db> {
+    fn new(emitter: &'emitter mut RmirEmitter<'db>, bb: RBlockId) -> Self {
+        Self { emitter, bb }
+    }
+
+    fn lower_all(
+        mut self,
+        selected: &[SelectedRuntimeArg<'db>],
+    ) -> (Vec<RLocalId>, Vec<RuntimeClass<'db>>) {
+        let mut runtime_args = Vec::with_capacity(selected.len());
+        let mut runtime_classes = Vec::with_capacity(selected.len());
+        for selected in selected {
+            let value = self.lower_one(selected);
+            let Some(class) = self.emitter.value_class(value).cloned() else {
+                panic!(
+                    "selected runtime call arg lowered without a runtime class: caller={:?}; selected={selected:?}; value={value:?}",
+                    self.emitter.current_semantic_key(),
+                );
+            };
+            assert_eq!(
+                class,
+                selected.class,
+                "selected runtime call arg class mismatch: caller={:?}; selected={selected:?}; value={value:?}",
+                self.emitter.current_semantic_key(),
+            );
+            runtime_args.push(value);
+            runtime_classes.push(class);
+        }
+        (runtime_args, runtime_classes)
+    }
+
+    fn lower_one(&mut self, selected: &SelectedRuntimeArg<'db>) -> RLocalId {
+        match &selected.realization {
+            RuntimeArgRealization::LowerSemanticOperand(operand) => self
+                .emitter
+                .lower_semantic_operand_for_class(self.bb, *operand, &selected.class),
+            RuntimeArgRealization::UseRuntimeValue { local } => {
+                let value = self.emitter.runtime_value(*local);
+                self.emitter
+                    .coerce_value_if_needed(self.bb, value, &selected.class)
+            }
+            RuntimeArgRealization::UseHandleLikeValue { local } => {
+                let value = self
+                    .emitter
+                    .handle_like_semantic_value(*local)
+                    .unwrap_or_else(|| self.emitter.runtime_value(*local));
+                self.emitter
+                    .coerce_value_if_needed(self.bb, value, &selected.class)
+            }
+            RuntimeArgRealization::AddrOfPlace { place, semantic_ty } => {
+                let place = self.emitter.lower_place(self.bb, place);
+                self.emitter.lower_place_addr_of_for_class(
+                    *semantic_ty,
+                    self.bb,
+                    place,
+                    selected.class.clone(),
+                )
+            }
+            RuntimeArgRealization::LoadPlaceValue { place, semantic_ty } => {
+                let place = self.emitter.lower_place(self.bb, place);
+                let value = self
+                    .emitter
+                    .load_runtime_place_value(self.bb, place, *semantic_ty);
+                self.emitter
+                    .coerce_value_if_needed(self.bb, value, &selected.class)
+            }
+            RuntimeArgRealization::MaterializePlaceValue {
+                place,
+                materialization,
+                semantic_ty,
+            } => {
+                let place = self.emitter.lower_place(self.bb, place);
+                let value = self
+                    .emitter
+                    .load_runtime_place_value(self.bb, place, *semantic_ty);
+                let value = self.materialize_value(value, materialization, *semantic_ty);
+                self.emitter
+                    .coerce_value_if_needed(self.bb, value, &selected.class)
+            }
+            RuntimeArgRealization::MaterializeSemanticValue {
+                operand,
+                materialization,
+                semantic_ty,
+            } => {
+                let value = self.emitter.read_semantic_operand(self.bb, *operand);
+                let value = self.materialize_value(value, materialization, *semantic_ty);
+                self.emitter
+                    .coerce_value_if_needed(self.bb, value, &selected.class)
+            }
+            RuntimeArgRealization::AggregateFromRuntimeSource { local } => {
+                let Some(value) = self
+                    .emitter
+                    .actual_aggregate_value_from_runtime_source(self.bb, *local)
+                else {
+                    panic!(
+                        "selected aggregate runtime source was not lowerable: caller={:?}; local={local:?}; selected={selected:?}",
+                        self.emitter.current_semantic_key(),
+                    )
+                };
+                self.emitter
+                    .coerce_value_if_needed(self.bb, value, &selected.class)
+            }
+            RuntimeArgRealization::Placeholder { semantic_ty } => {
+                self.lower_placeholder(*semantic_ty, selected.class.clone())
+            }
+        }
+    }
+
+    fn lower_placeholder(&mut self, semantic_ty: TyId<'db>, class: RuntimeClass<'db>) -> RLocalId {
+        let value = self
+            .emitter
+            .alloc_runtime_temp(semantic_ty, RuntimeCarrier::Value(class.clone()));
+        self.emitter.push_stmt(
+            self.bb,
+            RStmt::Assign {
+                dst: value,
+                expr: RExpr::Placeholder { class },
+            },
+        );
+        value
+    }
+
+    fn materialize_value(
+        &mut self,
+        value: RLocalId,
+        materialization: &RuntimeBoundaryMaterialization<'db>,
+        semantic_ty: TyId<'db>,
+    ) -> RLocalId {
+        if self.emitter.value_class(value).is_none() {
+            panic!(
+                "runtime value materialization source has no runtime class: owner={:?}; value={value:?}; materialization={materialization:?}",
+                self.emitter
+                    .key
+                    .semantic(self.emitter.db)
+                    .map(|semantic| semantic.key(self.emitter.db).owner(self.emitter.db)),
+            );
+        }
+        match materialization {
+            RuntimeBoundaryMaterialization::ObjectRef { layout } => {
+                self.emitter
+                    .coerce_value(self.bb, value, &RuntimeClass::object_ref(*layout))
+            }
+            RuntimeBoundaryMaterialization::RawAddrSlot { pointee } => {
+                let slot = self
+                    .emitter
+                    .alloc_runtime_temp(semantic_ty, RuntimeCarrier::Value(pointee.clone()));
+                self.emitter.locals[slot.index()].root = RuntimeLocalRoot::Slot(pointee.clone());
+                let src = if self.emitter.value_class(value) == Some(pointee) {
+                    value
+                } else {
+                    self.emitter.coerce_value(self.bb, value, pointee)
+                };
+                self.emitter.push_stmt(
+                    self.bb,
+                    RStmt::Assign {
+                        dst: slot,
+                        expr: RExpr::Use(src),
+                    },
+                );
+                let place = RuntimePlace {
+                    root: PlaceRoot::Slot(slot),
+                    path: Box::default(),
+                };
+                self.emitter.lower_place_addr_of_for_class(
+                    semantic_ty,
+                    self.bb,
+                    place,
+                    materialization.class(),
+                )
+            }
+        }
     }
 }
 
