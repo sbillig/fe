@@ -1743,7 +1743,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
                     })?;
             Some(RuntimeEffectBindingPlan {
                 class: class.clone(),
-                boundary: RuntimeBoundarySpec::exact_for_class(class),
+                boundary: RuntimeBoundarySpec::default_exact_boundary_for_class(class),
             })
         }
         hir::analysis::semantic::SemanticBindingLowering::DirectCarrier {
@@ -1754,7 +1754,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
                 runtime_class_for_provider_binding(db, &provider, env.scope, env.assumptions)?;
             Some(RuntimeEffectBindingPlan {
                 class: class.clone(),
-                boundary: RuntimeBoundarySpec::exact_for_class(class),
+                boundary: RuntimeBoundarySpec::default_exact_boundary_for_class(class),
             })
         }
         hir::analysis::semantic::SemanticBindingLowering::DirectCarrier {
@@ -1773,7 +1773,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
                     })?;
             Some(RuntimeEffectBindingPlan {
                 class: class.clone(),
-                boundary: RuntimeBoundarySpec::exact_for_class(class),
+                boundary: RuntimeBoundarySpec::default_exact_boundary_for_class(class),
             })
         }
         hir::analysis::semantic::SemanticBindingLowering::PlaceCarrier { value_ty } => {
@@ -1781,7 +1781,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
                 provider_class_for_target_in_env(db, env, Some(value_ty), AddressSpaceKind::Memory);
             Some(RuntimeEffectBindingPlan {
                 class: class.clone(),
-                boundary: RuntimeBoundarySpec::exact_for_class(class),
+                boundary: RuntimeBoundarySpec::default_exact_boundary_for_class(class),
             })
         }
         hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
@@ -2240,7 +2240,7 @@ pub(crate) fn desired_runtime_param_plan<'db>(
             db,
             typed_body,
             binding,
-            RuntimeBoundarySpec::exact_for_class(class),
+            RuntimeBoundarySpec::default_exact_boundary_for_class(class),
         ));
     }
     let Some(boundary) = boundary_spec_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory)

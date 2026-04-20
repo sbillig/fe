@@ -740,7 +740,7 @@ pub enum RuntimeBoundarySpec<'db> {
 }
 
 impl<'db> RuntimeBoundarySpec<'db> {
-    pub fn exact_for_class(class: RuntimeClass<'db>) -> Self {
+    pub fn default_exact_boundary_for_class(class: RuntimeClass<'db>) -> Self {
         if class.is_transport() {
             Self::ExactShape(class)
         } else {
