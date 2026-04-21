@@ -450,6 +450,32 @@ impl<'db> NormalizeCtxt<'db> {
         }
     }
 
+    fn push_semantic_projection_path(place: &mut NSPlace<'db>, path: &[SemanticProjection<'db>]) {
+        for projection in path {
+            place
+                .path
+                .push(Self::normalize_semantic_projection(projection));
+        }
+    }
+
+    fn normalize_semantic_projection(
+        projection: &SemanticProjection<'db>,
+    ) -> Projection<TyId<'db>, crate::analysis::semantic::VariantIndex, SLocalId> {
+        match projection {
+            SemanticProjection::Field(field_idx) => Projection::Field(*field_idx),
+            SemanticProjection::VariantField {
+                variant,
+                enum_ty,
+                field_idx,
+            } => Projection::VariantField {
+                variant: *variant,
+                enum_ty: *enum_ty,
+                field_idx: *field_idx,
+            },
+            SemanticProjection::Index(index) => Projection::Index(IndexSource::Dynamic(*index)),
+        }
+    }
+
     fn normalize_snapshot_derived_place(
         &mut self,
         local: SLocalId,
@@ -459,21 +485,7 @@ impl<'db> NormalizeCtxt<'db> {
         let raw_base = self.raw.locals[base.index()].clone();
         self.ensure_local_normalized(base, &raw_base)?;
         let mut place = self.snapshot_source_base_place(local, base)?;
-        for projection in path.iter() {
-            place.path.push(match projection {
-                SemanticProjection::Field(field_idx) => Projection::Field(*field_idx),
-                SemanticProjection::VariantField {
-                    variant,
-                    enum_ty,
-                    field_idx,
-                } => Projection::VariantField {
-                    variant: *variant,
-                    enum_ty: *enum_ty,
-                    field_idx: *field_idx,
-                },
-                SemanticProjection::Index(index) => Projection::Index(IndexSource::Dynamic(*index)),
-            });
-        }
+        Self::push_semantic_projection_path(&mut place, path);
         Ok(place)
     }
 
@@ -509,21 +521,7 @@ impl<'db> NormalizeCtxt<'db> {
                     local,
                     base,
                 })?;
-        for projection in path.iter() {
-            place.path.push(match projection {
-                SemanticProjection::Field(field_idx) => Projection::Field(*field_idx),
-                SemanticProjection::VariantField {
-                    variant,
-                    enum_ty,
-                    field_idx,
-                } => Projection::VariantField {
-                    variant: *variant,
-                    enum_ty: *enum_ty,
-                    field_idx: *field_idx,
-                },
-                SemanticProjection::Index(index) => Projection::Index(IndexSource::Dynamic(*index)),
-            });
-        }
+        Self::push_semantic_projection_path(&mut place, path);
         Ok(place)
     }
 
@@ -949,6 +947,21 @@ impl<'db> NormalizeCtxt<'db> {
         Ok(place)
     }
 
+    fn normalize_place_elem(
+        elem: &SPlaceElem,
+    ) -> Projection<TyId<'db>, crate::analysis::semantic::VariantIndex, SLocalId> {
+        match elem {
+            SPlaceElem::Field(field) => Projection::Field(field.0 as usize),
+            SPlaceElem::Index(index) => Projection::Index(IndexSource::Dynamic(*index)),
+        }
+    }
+
+    fn push_place_path(place: &mut NSPlace<'db>, path: &[SPlaceElem]) {
+        for elem in path {
+            place.path.push(Self::normalize_place_elem(elem));
+        }
+    }
+
     fn normalize_place(
         &mut self,
         place: &SPlace,
@@ -957,12 +970,7 @@ impl<'db> NormalizeCtxt<'db> {
         let mut lowered = self
             .local_read_place(place.local, true, origin)?
             .ok_or(SemanticNormalizeError::MissingBorrowRoot { local: place.local })?;
-        for elem in place.path.iter() {
-            lowered.path.push(match elem {
-                SPlaceElem::Field(field) => Projection::Field(field.0 as usize),
-                SPlaceElem::Index(index) => Projection::Index(IndexSource::Dynamic(*index)),
-            });
-        }
+        Self::push_place_path(&mut lowered, &place.path);
         Ok(lowered)
     }
 

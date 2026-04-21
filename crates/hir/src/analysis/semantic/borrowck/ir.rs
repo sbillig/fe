@@ -15,7 +15,7 @@ use crate::{
             ty_def::{BorrowKind, TyId},
         },
     },
-    projection::ProjectionPath,
+    projection::{IndexSource, Projection, ProjectionPath},
     semantic::ProviderBinding,
 };
 
@@ -154,6 +154,15 @@ pub struct NSPlace<'db> {
     pub path: NSProjectionPath<'db>,
 }
 
+impl<'db> NSPlace<'db> {
+    pub fn dynamic_index_locals(&self) -> impl Iterator<Item = SLocalId> + '_ {
+        self.path.iter().filter_map(|projection| match projection {
+            Projection::Index(IndexSource::Dynamic(index)) => Some(*index),
+            _ => None,
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NSPlaceRoot {
     Root(NBorrowRootId),
@@ -248,6 +257,22 @@ pub enum NEffectArgValue<'db> {
     Value(NOperand),
 }
 
+impl<'db> NEffectArgValue<'db> {
+    pub fn place_operand(&self) -> Option<&NSPlace<'db>> {
+        match self {
+            Self::Place(place) => Some(place),
+            Self::Value(_) => None,
+        }
+    }
+
+    pub fn value_operand(&self) -> Option<NOperand> {
+        match self {
+            Self::Value(value) => Some(*value),
+            Self::Place(_) => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NExpr<'db> {
     Use(NOperand),
@@ -309,6 +334,100 @@ pub enum NExpr<'db> {
         args: Box<[NOperand]>,
         effect_args: Box<[NEffectArg<'db>]>,
     },
+}
+
+impl<'db> NExpr<'db> {
+    pub fn for_each_value_operand(&self, mut f: impl FnMut(NOperand)) {
+        match self {
+            Self::Use(value)
+            | Self::Unary { value, .. }
+            | Self::Cast { value, .. }
+            | Self::GetEnumTag { value }
+            | Self::IsEnumVariant { value, .. }
+            | Self::ExtractEnumField { value, .. } => f(*value),
+            Self::Binary { lhs, rhs, .. } => {
+                f(*lhs);
+                f(*rhs);
+            }
+            Self::AggregateMake { fields, .. } | Self::EnumMake { fields, .. } => {
+                for field in fields {
+                    f(*field);
+                }
+            }
+            Self::Call {
+                args, effect_args, ..
+            } => {
+                for arg in args {
+                    f(*arg);
+                }
+                for value in effect_args
+                    .iter()
+                    .filter_map(|effect_arg| effect_arg.arg.value_operand())
+                {
+                    f(value);
+                }
+            }
+            Self::ReadPlace { .. }
+            | Self::Borrow { .. }
+            | Self::Const(_)
+            | Self::CodeRegionRef { .. }
+            | Self::CodeRegionOffset { .. }
+            | Self::CodeRegionLen { .. } => {}
+        }
+    }
+
+    pub fn try_for_each_value_operand<E>(
+        &self,
+        mut f: impl FnMut(NOperand) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let mut result = Ok(());
+        self.for_each_value_operand(|operand| {
+            if result.is_ok() {
+                result = f(operand);
+            }
+        });
+        result
+    }
+
+    pub fn for_each_place_operand(&self, mut f: impl FnMut(&NSPlace<'db>)) {
+        match self {
+            Self::ReadPlace { place, .. } | Self::Borrow { place, .. } => f(place),
+            Self::Call { effect_args, .. } => {
+                for place in effect_args
+                    .iter()
+                    .filter_map(|effect_arg| effect_arg.arg.place_operand())
+                {
+                    f(place);
+                }
+            }
+            Self::Use(_)
+            | Self::CodeRegionRef { .. }
+            | Self::Const(_)
+            | Self::Unary { .. }
+            | Self::Binary { .. }
+            | Self::Cast { .. }
+            | Self::AggregateMake { .. }
+            | Self::EnumMake { .. }
+            | Self::GetEnumTag { .. }
+            | Self::IsEnumVariant { .. }
+            | Self::ExtractEnumField { .. }
+            | Self::CodeRegionOffset { .. }
+            | Self::CodeRegionLen { .. } => {}
+        }
+    }
+
+    pub fn try_for_each_place_operand<E>(
+        &self,
+        mut f: impl FnMut(&NSPlace<'db>) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let mut result = Ok(());
+        self.for_each_place_operand(|place| {
+            if result.is_ok() {
+                result = f(place);
+            }
+        });
+        result
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
