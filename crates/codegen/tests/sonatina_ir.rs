@@ -14,6 +14,70 @@ use std::path::Path;
 use test_utils::_macro_support::_insta::{self, Settings};
 use url::Url;
 
+fn with_top_mod_for_source<T>(
+    name: &str,
+    source: &str,
+    f: impl for<'db> FnOnce(&'db DriverDataBase, hir::hir_def::TopLevelMod<'db>) -> T,
+) -> T {
+    let mut db = DriverDataBase::default();
+    let file_url = Url::parse(&format!("file:///{name}")).expect("test URL should parse");
+    db.workspace()
+        .touch(&mut db, file_url.clone(), Some(source.to_string()));
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    f(&db, top_mod)
+}
+
+#[test]
+fn wildcard_storage_map_root_reports_runtime_root_error() {
+    let err = with_top_mod_for_source(
+        "wildcard_storage_map_root_reports_runtime_root_error.fe",
+        r#"
+use std::evm::StorageMap
+
+pub fn main() -> u256
+    uses (balances: mut StorageMap<u256, u256>)
+{
+    balances.get(key: 1)
+}
+"#,
+        |db, top_mod| {
+            emit_module_sonatina_ir(db, top_mod)
+                .expect_err("wildcard StorageMap roots should be rejected")
+        },
+    );
+    let message = err.to_string();
+    assert!(
+        message.contains("standalone runtime root")
+            && message.contains("inferred layout const")
+            && message.contains("StorageMap<..., ..., 0>"),
+        "unexpected error message:\n{message}"
+    );
+}
+
+#[test]
+fn sonatina_ir_rejects_target_only_output() {
+    let err = with_top_mod_for_source(
+        "sonatina_ir_rejects_target_only_output.fe",
+        r#"
+fn helper(value: u256) -> u256 {
+    value
+}
+"#,
+        |db, top_mod| {
+            emit_module_sonatina_ir(db, top_mod).expect_err("empty packages should not emit IR")
+        },
+    );
+    let message = err.to_string();
+    assert!(
+        message.contains("no root objects") && message.contains("target-only Sonatina IR"),
+        "unexpected error message:\n{message}"
+    );
+}
+
 // NOTE: `dir_test` discovers fixtures at compile time; new fixture files will be picked up on a
 // clean build (e.g. CI) or whenever this test target is recompiled.
 //

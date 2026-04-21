@@ -1,7 +1,185 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/storage_map.fe
 ---
 target = "evm-ethereum-osaka"
+
+type @__fe_layout_0 = {};
+
+func private %__fe_main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i256 = call %main;
+        evm_stop;
+}
+
+func private %from_word(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        return v2;
+}
+
+func private %get(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = call %storagemap_get_word_with_salt v0 0.i256;
+        v4.i256 = call %from_word v3;
+        return v4;
+}
+
+func private %get_balance(v0.i256, v1.objref<@__fe_layout_0>) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        mstore v2 v0 i256;
+        jump block1;
+
+    block1:
+        v3.i256 = mload v2 i256;
+        v4.i256 = call %get v3;
+        return v4;
+}
+
+func private %main() -> i256 {
+    block0:
+        v0.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        jump block1;
+
+    block1:
+        call %new;
+        v4.@__fe_layout_0 = obj.load v0;
+        v5.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        call %set_balance 1.i256 2.i256 v5;
+        v7.@__fe_layout_0 = obj.load v0;
+        v8.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v9.i256 = call %get_balance 1.i256 v8;
+        return v9;
+}
+
+func private %new() {
+    block0:
+        jump block1;
+
+    block1:
+        return;
+}
+
+func private %set(v0.i256, v1.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %to_word v1;
+        call %storagemap_set_word_with_salt v0 0.i256 v4;
+        return;
+}
+
+func private %set_balance(v0.i256, v1.i256, v2.objref<@__fe_layout_0>) {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v0 i256;
+        mstore v4 v1 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v3 i256;
+        v6.i256 = mload v4 i256;
+        call %set v5 v6;
+        return;
+}
+
+func private %storagemap_get_word_with_salt(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        mstore v2 v1 i256;
+        jump block1;
+
+    block1:
+        v3.i256 = mload v2 i256;
+        v5.i256 = call %storagemap_storage_slot_with_salt v0 v3;
+        v6.i256 = evm_sload v5;
+        return v6;
+}
+
+func private %storagemap_set_word_with_salt(v0.i256, v1.i256, v2.i256) {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v3 i256;
+        v7.i256 = call %storagemap_storage_slot_with_salt v0 v5;
+        v8.i256 = mload v4 i256;
+        evm_sstore v7 v8;
+        return;
+}
+
+func private %storagemap_storage_slot_with_salt(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        mstore v2 v1 i256;
+        jump block1;
+
+    block1:
+        v4.*i8 = evm_malloc 0.i256;
+        v5.i256 = ptr_to_int v4 i256;
+        v7.i256 = call %write_key v5 v0;
+        (v8.i256, v9.i1) = uaddo v5 v7;
+        br v9 block2 block3;
+
+    block2:
+        evm_revert 0.i256 0.i256;
+
+    block3:
+        v10.i256 = mload v2 i256;
+        mstore v8 v10 i256;
+        (v14.i256, v15.i1) = uaddo v7 32.i256;
+        br v15 block2 block4;
+
+    block4:
+        v17.i256 = evm_keccak256 v5 v14;
+        return v17;
+}
+
+func private %to_word(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %write_key(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        v3.*i256 = alloca i256;
+        mstore v2 v0 i256;
+        mstore v3 v1 i256;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i256 = mload v3 i256;
+        mstore v4 v5 i256;
+        return 32.i256;
+}
+
+
+object @main {
+    section main {
+        entry %__fe_main_root;
+    }
+}

@@ -1094,6 +1094,10 @@ pub fn code(x: Maybe) -> u256 {
         Maybe::None => 0,
         Maybe::Some(v) => v,
     }
+}
+
+pub fn main() -> u256 {
+    code(Maybe::Some(1))
 }"#
             .to_string(),
         ),

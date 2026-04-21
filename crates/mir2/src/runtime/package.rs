@@ -8,11 +8,12 @@ use hir::{
             root_semantic_instance_key, semantic_binding_ty, semantic_instance_assumptions,
         },
         ty::{
+            const_ty::ConstTyData,
             corelib::{resolve_core_trait, resolve_lib_type_path},
             trait_def::{TraitInstId, resolve_trait_method_instance},
             trait_resolution::TraitSolveCx,
             ty_check::{BodyOwner, LocalBinding},
-            ty_def::TyId,
+            ty_def::{TyData, TyId},
         },
     },
     hir_def::{Contract, Func, IdentId, InlineHint, ItemKind, ManualContractRootAttr, TopLevelMod},
@@ -72,6 +73,25 @@ type ManualContractObjectSpec<'db> = (
     Vec<(RuntimeSectionName, RuntimeInstance<'db>)>,
     Vec<RuntimeInstance<'db>>,
 );
+
+#[derive(Debug)]
+enum RuntimeRootCandidate<'db> {
+    Root(Func<'db>),
+    NotRoot,
+    Rejected(RuntimeRootRejection<'db>),
+}
+
+#[derive(Debug)]
+struct RuntimeRootRejection<'db> {
+    func: Func<'db>,
+    reason: RuntimeRootRejectionReason<'db>,
+}
+
+#[derive(Debug)]
+enum RuntimeRootRejectionReason<'db> {
+    RootSemanticInstance(RootSemanticInstanceError<'db>),
+    UnsupportedEffectBindingClass { binding: LocalBinding<'db> },
+}
 
 #[derive(Debug, Clone)]
 struct RuntimeGraphNode<'db> {
@@ -276,12 +296,28 @@ pub fn build_runtime_package<'db>(
             .unwrap_or_default()
     });
     let mut entry_funcs = Vec::new();
+    let mut rejections = Vec::new();
     for func in funcs.iter().copied() {
-        if runtime_root_candidate(db, func)? {
-            entry_funcs.push(func);
+        match runtime_root_candidate(db, func)? {
+            RuntimeRootCandidate::Root(func) => entry_funcs.push(func),
+            RuntimeRootCandidate::NotRoot => {}
+            RuntimeRootCandidate::Rejected(rejection) => rejections.push(rejection),
         }
     }
+    if let Some(rejection) = rejections
+        .iter()
+        .find(|rejection| is_main_func(db, rejection.func))
+    {
+        return Err(LowerError::Unsupported(format_runtime_root_rejection(
+            db, rejection,
+        )));
+    }
     if entry_funcs.is_empty() {
+        if let Some(rejection) = rejections.first() {
+            return Err(LowerError::Unsupported(format_runtime_root_rejection(
+                db, rejection,
+            )));
+        }
         return Ok(RuntimePackage::new(
             db,
             top_mod,
@@ -302,11 +338,7 @@ pub fn build_runtime_package<'db>(
     }
     let entry = roots
         .iter()
-        .find(|(func, _)| {
-            func.name(db)
-                .to_opt()
-                .is_some_and(|name| name.data(db) == "main")
-        })
+        .find(|(func, _)| is_main_func(db, *func))
         .or_else(|| roots.first())
         .map(|(_, instance)| *instance)
         .expect("entry root candidates should include the chosen entry function");
@@ -1344,17 +1376,108 @@ fn is_test_func<'db>(db: &'db dyn MirDb, func: Func<'db>) -> bool {
         .is_some_and(|attrs| attrs.get_attr(db, "test").is_some())
 }
 
-fn runtime_root_candidate<'db>(db: &'db dyn MirDb, func: Func<'db>) -> Result<bool, LowerError> {
+fn runtime_root_candidate<'db>(
+    db: &'db dyn MirDb,
+    func: Func<'db>,
+) -> Result<RuntimeRootCandidate<'db>, LowerError> {
     if func.is_associated_func(db) || func.params(db).next().is_some() {
-        return Ok(false);
+        return Ok(RuntimeRootCandidate::NotRoot);
     }
-    let semantic = match semantic_instance_for_root_owner(db, BodyOwner::Func(func)) {
-        Ok(semantic) => semantic,
-        Err(LowerError::Unsupported(_)) => return Ok(false),
+    let semantic = match root_semantic_instance_key(db, BodyOwner::Func(func)) {
+        Ok(key) => get_or_build_semantic_instance(db, key),
+        Err(err) => {
+            return Ok(RuntimeRootCandidate::Rejected(RuntimeRootRejection {
+                func,
+                reason: RuntimeRootRejectionReason::RootSemanticInstance(err),
+            }));
+        }
     };
-    Ok(owner_effect_bindings(db, BodyOwner::Func(func))
+    if let Some(binding) = owner_effect_bindings(db, BodyOwner::Func(func))
         .into_iter()
-        .all(|binding| owner_effect_binding_class(db, semantic, binding).is_some()))
+        .find(|binding| owner_effect_binding_class(db, semantic, *binding).is_none())
+    {
+        return Ok(RuntimeRootCandidate::Rejected(RuntimeRootRejection {
+            func,
+            reason: RuntimeRootRejectionReason::UnsupportedEffectBindingClass { binding },
+        }));
+    }
+    Ok(RuntimeRootCandidate::Root(func))
+}
+
+fn is_main_func<'db>(db: &'db dyn MirDb, func: Func<'db>) -> bool {
+    func.name(db)
+        .to_opt()
+        .is_some_and(|name| name.data(db) == "main")
+}
+
+fn func_display_name<'db>(db: &'db dyn MirDb, func: Func<'db>) -> String {
+    func.name(db)
+        .to_opt()
+        .map(|name| name.data(db).to_string())
+        .unwrap_or_else(|| "<anonymous>".to_string())
+}
+
+fn format_runtime_root_rejection<'db>(
+    db: &'db dyn MirDb,
+    rejection: &RuntimeRootRejection<'db>,
+) -> String {
+    let name = func_display_name(db, rejection.func);
+    match &rejection.reason {
+        RuntimeRootRejectionReason::RootSemanticInstance(err) => {
+            format_root_semantic_instance_rejection(db, &name, err)
+        }
+        RuntimeRootRejectionReason::UnsupportedEffectBindingClass { binding } => {
+            let binding_name = match binding {
+                LocalBinding::EffectParam { binding_name, .. } => binding_name.data(db),
+                LocalBinding::Local { .. } | LocalBinding::Param { .. } => "<unknown>",
+            };
+            format!(
+                "function `{name}` cannot be used as a standalone runtime root because effect binding `{binding_name}` has no supported runtime representation"
+            )
+        }
+    }
+}
+
+fn format_root_semantic_instance_rejection<'db>(
+    db: &'db dyn MirDb,
+    func_name: &str,
+    err: &RootSemanticInstanceError<'db>,
+) -> String {
+    match err {
+        RootSemanticInstanceError::UnsupportedGenericParam {
+            offending_ty,
+            param_idx,
+            ..
+        } if is_implicit_layout_const_param(db, *offending_ty) => format!(
+            "function `{func_name}` cannot be used as a standalone runtime root because an effect provider type contains an inferred layout const parameter `{}` at generic parameter {param_idx}; use an explicit provider const at the root, e.g. `StorageMap<..., ..., 0>`, or create a concrete provider inside `{func_name}` and call the effect-using function with `with (...)`",
+            offending_ty.pretty_print(db),
+        ),
+        RootSemanticInstanceError::UnsupportedGenericParam {
+            offending_ty,
+            param_idx,
+            ..
+        } => format!(
+            "function `{func_name}` cannot be used as a standalone runtime root because generic parameter {param_idx} is not supported for root instantiation: {}",
+            offending_ty.pretty_print(db),
+        ),
+        RootSemanticInstanceError::MissingRootProvider { .. } => format!(
+            "function `{func_name}` cannot be used as a standalone runtime root because an effect provider could not be synthesized"
+        ),
+        RootSemanticInstanceError::UnclosedEffectEnv(err) => format!(
+            "function `{func_name}` cannot be used as a standalone runtime root because its effect environment is not fully concrete: parameter {} is missing while instantiating {}",
+            err.param_idx,
+            err.offending_ty.pretty_print(db),
+        ),
+    }
+}
+
+fn is_implicit_layout_const_param<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> bool {
+    if let TyData::ConstTy(const_ty) = ty.data(db)
+        && let ConstTyData::TyParam(param, _) = const_ty.data(db)
+    {
+        return param.is_implicit();
+    }
+    false
 }
 
 pub(crate) fn runtime_instance_for_semantic<'db>(
