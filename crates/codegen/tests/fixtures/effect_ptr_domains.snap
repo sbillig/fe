@@ -6,44 +6,39 @@ input_file: tests/fixtures/effect_ptr_domains.fe
 object "main" {
   code {
     function $__fe_main_root() {
-      let v0 := 0
-      v0 := 0
-      $bump_0(v0)
+      let t3 := mload(0x40)
+      if iszero(t3) {
+        t3 := 0x80
+      }
+      mstore(0x40, add(t3, 64))
+      let v0 := t3
+      let v1 := v0
+      $bump_1(v1)
       stop()
     }
-    function $bump_0($foo) {
-      let v1 := 0
-      let v2 := 0
-      let v3 := 0
-      let v5 := 0
-      let v6 := 0
-      let v7 := 0
-      let v9 := 0
-      let v10 := 0
-      let v11 := 0
-      let v12 := 0
-      let t13 := mload($foo)
-      v1 := t13
-      v9 := 0x01
-      v2 := v9
+    function $bump_1(p0) {
+      let t13 := mload(p0)
+      let v1 := t13
+      let v9 := 0x01
+      let v2 := v9
       let t14 := add(v1, v2)
       if lt(t14, v1) {
         revert(0, 0)
       }
-      v10 := t14
-      v3 := v10
-      mstore($foo, v3)
-      let t15 := mload(add($foo, 32))
-      v5 := t15
-      v11 := 0x02
-      v6 := v11
+      let v10 := t14
+      let v3 := v10
+      mstore(p0, v3)
+      let t15 := mload(add(p0, 32))
+      let v5 := t15
+      let v11 := 0x02
+      let v6 := v11
       let t16 := add(v5, v6)
       if lt(t16, v5) {
         revert(0, 0)
       }
-      v12 := t16
-      v7 := v12
-      mstore(add($foo, 32), v7)
+      let v12 := t16
+      let v7 := v12
+      mstore(add(p0, 32), v7)
       leave
     }
     $__fe_main_root()

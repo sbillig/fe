@@ -3,9 +3,9 @@ source: crates/hir/tests/ty_check.rs
 expression: res
 input_file: test_files/ty_check/effects_type.fe
 ---
-note: 
+note:
    ┌─ effects_type.fe:5:18
-   │  
+   │
  5 │   pub fn example() {
    │ ╭──────────────────^
  6 │ │     let mut st = Storage { value: 0 }
@@ -15,137 +15,137 @@ note:
 10 │ │ }
    │ ╰─^ ()
 
-note: 
+note:
   ┌─ effects_type.fe:6:9
   │
 6 │     let mut st = Storage { value: 0 }
   │         ^^^^^^ Storage
 
-note: 
+note:
   ┌─ effects_type.fe:6:18
   │
 6 │     let mut st = Storage { value: 0 }
   │                  ^^^^^^^^^^^^^^^^^^^^ Storage
 
-note: 
+note:
   ┌─ effects_type.fe:6:35
   │
 6 │     let mut st = Storage { value: 0 }
   │                                   ^ u64
 
-note: 
+note:
   ┌─ effects_type.fe:7:5
-  │  
+  │
 7 │ ╭     with (st) {
 8 │ │         mint_twice(5)
 9 │ │     }
   │ ╰─────^ ()
 
-note: 
+note:
   ┌─ effects_type.fe:7:11
   │
 7 │     with (st) {
   │           ^^ Storage
 
-note: 
+note:
   ┌─ effects_type.fe:7:15
-  │  
+  │
 7 │       with (st) {
   │ ╭───────────────^
 8 │ │         mint_twice(5)
 9 │ │     }
   │ ╰─────^ ()
 
-note: 
+note:
   ┌─ effects_type.fe:8:9
   │
 8 │         mint_twice(5)
   │         ^^^^^^^^^^ fn mint_twice
 
-note: 
+note:
   ┌─ effects_type.fe:8:9
   │
 8 │         mint_twice(5)
   │         ^^^^^^^^^^^^^ ()
 
-note: 
+note:
   ┌─ effects_type.fe:8:20
   │
 8 │         mint_twice(5)
   │                    ^ u64
 
-note: 
+note:
    ┌─ effects_type.fe:14:1
-   │  
+   │
 14 │ ╭ {
 15 │ │     mint(amount)
 16 │ │     mint(amount)
 17 │ │ }
    │ ╰─^ ()
 
-note: 
+note:
    ┌─ effects_type.fe:15:5
    │
 15 │     mint(amount)
    │     ^^^^ fn mint
 
-note: 
+note:
    ┌─ effects_type.fe:15:5
    │
 15 │     mint(amount)
    │     ^^^^^^^^^^^^ ()
 
-note: 
+note:
    ┌─ effects_type.fe:15:10
    │
 15 │     mint(amount)
    │          ^^^^^^ u64
 
-note: 
+note:
    ┌─ effects_type.fe:16:5
    │
 16 │     mint(amount)
    │     ^^^^ fn mint
 
-note: 
+note:
    ┌─ effects_type.fe:16:5
    │
 16 │     mint(amount)
    │     ^^^^^^^^^^^^ ()
 
-note: 
+note:
    ┌─ effects_type.fe:16:10
    │
 16 │     mint(amount)
    │          ^^^^^^ u64
 
-note: 
+note:
    ┌─ effects_type.fe:21:1
-   │  
+   │
 21 │ ╭ {
 22 │ │     st.value += amount
 23 │ │ }
    │ ╰─^ ()
 
-note: 
+note:
    ┌─ effects_type.fe:22:5
    │
 22 │     st.value += amount
    │     ^^ Storage
 
-note: 
+note:
    ┌─ effects_type.fe:22:5
    │
 22 │     st.value += amount
    │     ^^^^^^^^ u64
 
-note: 
+note:
    ┌─ effects_type.fe:22:5
    │
 22 │     st.value += amount
    │     ^^^^^^^^^^^^^^^^^^ ()
 
-note: 
+note:
    ┌─ effects_type.fe:22:17
    │
 22 │     st.value += amount

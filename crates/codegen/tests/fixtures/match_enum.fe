@@ -12,3 +12,7 @@ pub fn match_enum(e: MyEnum) -> u8 {
         _ => 4,
     }
 }
+
+pub fn main() -> u8 {
+    match_enum(MyEnum::B)
+}

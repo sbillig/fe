@@ -12,60 +12,77 @@ type @__fe_layout_0 = enum {
 
 func private %__fe_main_root() {
     block0:
-        v1.@__fe_layout_0 = call %make_some 0.i64;
+        jump block1;
+
+    block1:
+        v0.i64 = call %main;
         evm_stop;
+}
+
+func private %main() -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.@__fe_layout_0 = call %make_some 7.i64;
+        v2.i64 = call %match_option v1;
+        return v2;
 }
 
 func private %make_some(v0.i64) -> @__fe_layout_0 {
     block0:
         v1.*i64 = alloca i64;
-        v2.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
-        v3.*i64 = alloca i64;
         mstore v1 v0 i64;
-        v4.i256 = mload v1 i256;
-        v5.i64 = trunc v4 i64;
-        mstore v3 v5 i64;
-        v6.i64 = mload v3 i64;
-        v7.@__fe_layout_0 = enum.make @__fe_layout_0 #Some v6;
-        obj.store v2 v7;
-        v8.@__fe_layout_0 = obj.load v2;
-        return v8;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.i64 = trunc v2 i64;
+        v4.@__fe_layout_0 = enum.make @__fe_layout_0 #Some v3;
+        return v4;
 }
 
 func private %match_option(v0.@__fe_layout_0) -> i64 {
     block0:
         v1.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
-        v2.*i64 = alloca i64;
-        v3.*i64 = alloca i64;
-        v4.*i64 = alloca i64;
-        v5.*i64 = alloca i64;
-        v6.*i8 = alloca i8;
-        obj.store v1 v0;
-        v7.@__fe_layout_0 = obj.load v1;
-        v8.i8 = enum.tag v7;
-        mstore v6 v8 i8;
-        v9.i8 = mload v6 i8;
-        br_table v9 (1.i256 block2) (0.i256 block3);
+        v2.enumtag(@__fe_layout_0) = enum.tag v0;
+        br_table v2 block6 (0.enumtag(@__fe_layout_0) block7) (1.enumtag(@__fe_layout_0) block8);
 
     block1:
-        v12.i64 = mload v3 i64;
-        return v12;
+        v8.@__fe_layout_0 = obj.load v1;
+        v9.enumtag(@__fe_layout_0) = enum.tag v8;
+        br_table v9 (1.enumtag(@__fe_layout_0) block3) (0.enumtag(@__fe_layout_0) block4);
 
     block2:
-        v13.@__fe_layout_0 = obj.load v1;
-        v14.i64 = enum.extract v13 #Some 0.i256;
-        mstore v4 v14 i64;
-        v15.i64 = mload v4 i64;
-        mstore v2 v15 i64;
-        v16.i64 = mload v2 i64;
-        mstore v3 v16 i64;
-        jump block1;
+        v10.i64 = phi (v12 block3) (0.i64 block4);
+        return v10;
 
     block3:
-        mstore v5 0.i64 i64;
-        v18.i64 = mload v5 i64;
-        mstore v3 v18 i64;
+        v11.@__fe_layout_0 = obj.load v1;
+        enum.assert_variant v11 #Some;
+        v12.i64 = enum.extract v11 #Some 0.i256;
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
         jump block1;
+
+    block6:
+        unreachable;
+
+    block7:
+        enum.set_tag v1 #None;
+        jump block5;
+
+    block8:
+        enum.set_tag v1 #Some;
+        enum.assert_variant v0 #Some;
+        v6.objref<i64> = enum.proj v1 #Some 0.i256;
+        v7.i64 = enum.extract v0 #Some 0.i256;
+        obj.store v6 v7;
+        jump block5;
 }
 
 

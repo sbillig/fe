@@ -3,9 +3,9 @@ source: crates/hir/tests/decision_tree.rs
 expression: res
 input_file: test_files/decision_trees/nested_wildcard.fe
 ---
-note: 
+note:
    ┌─ nested_wildcard.fe:14:5
-   │  
+   │
 14 │ ╭     match o {
 15 │ │         Outer::First(Inner::A) => 1
 16 │ │         Outer::First(_) => 2   // Should match First(B) and First(C)

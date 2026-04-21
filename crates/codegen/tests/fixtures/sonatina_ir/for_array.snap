@@ -7,166 +7,257 @@ target = "evm-ethereum-osaka"
 
 func private %__fe_main_root() {
     block0:
+        jump block1;
+
+    block1:
         v0.i64 = call %for_array_sum;
         evm_stop;
 }
 
 func private %for_array_sum() -> i64 {
     block0:
-        v0.objref<[i64; 25]> = obj.alloc [i64; 25];
-        v1.*i64 = alloca i64;
-        v2.*i64 = alloca i64;
-        v3.*i64 = alloca i64;
-        v4.*i64 = alloca i64;
-        v5.*i64 = alloca i64;
-        v6.*i64 = alloca i64;
-        v7.*i64 = alloca i64;
-        v8.*i64 = alloca i64;
-        v9.*i64 = alloca i64;
-        v10.*i64 = alloca i64;
-        v11.*i64 = alloca i64;
-        v12.*i64 = alloca i64;
-        v13.*i64 = alloca i64;
-        v14.*i64 = alloca i64;
-        v15.*i64 = alloca i64;
-        v16.*i64 = alloca i64;
-        v17.*i64 = alloca i64;
-        v18.*i64 = alloca i64;
-        v19.*i64 = alloca i64;
-        v20.*i64 = alloca i64;
-        v21.*i64 = alloca i64;
-        v22.*i64 = alloca i64;
-        v23.*i64 = alloca i64;
-        v24.*i64 = alloca i64;
-        v25.*i64 = alloca i64;
-        v26.*i64 = alloca i64;
-        v27.*i64 = alloca i64;
-        v28.objref<[i64; 25]> = obj.alloc [i64; 25];
-        v29.*i64 = alloca i64;
-        v30.*i256 = alloca i256;
-        v31.*i256 = alloca i256;
-        v32.*i1 = alloca i1;
-        v33.*i64 = alloca i64;
-        v34.*i64 = alloca i64;
-        v35.*i256 = alloca i256;
-        v36.*i256 = alloca i256;
-        v37.*i256 = alloca i256;
-        v38.*i64 = alloca i64;
-        mstore v3 1.i64 i64;
-        mstore v4 2.i64 i64;
-        mstore v5 3.i64 i64;
-        mstore v6 4.i64 i64;
-        mstore v7 5.i64 i64;
-        mstore v8 6.i64 i64;
-        mstore v9 7.i64 i64;
-        mstore v10 8.i64 i64;
-        mstore v11 9.i64 i64;
-        mstore v12 10.i64 i64;
-        mstore v13 11.i64 i64;
-        mstore v14 12.i64 i64;
-        mstore v15 13.i64 i64;
-        mstore v16 14.i64 i64;
-        mstore v17 15.i64 i64;
-        mstore v18 16.i64 i64;
-        mstore v19 17.i64 i64;
-        mstore v20 18.i64 i64;
-        mstore v21 19.i64 i64;
-        mstore v22 20.i64 i64;
-        mstore v23 21.i64 i64;
-        mstore v24 22.i64 i64;
-        mstore v25 23.i64 i64;
-        mstore v26 24.i64 i64;
-        mstore v27 25.i64 i64;
-        v64.objref<[i64; 25]> = obj.alloc [i64; 25];
-        v65.[i64; 25] = obj.load v64;
-        obj.store v28 v65;
-        v66.[i64; 25] = obj.load v28;
-        obj.store v0 v66;
-        mstore v29 0.i64 i64;
-        v68.i64 = mload v29 i64;
-        mstore v1 v68 i64;
-        mstore v30 0.i256 i256;
-        v70.[i64; 25] = obj.load v0;
-        v71.i256 = call %len v70;
-        mstore v37 v71 i256;
-        v72.i256 = mload v37 i256;
-        mstore v31 v72 i256;
+        v0.*i64 = alloca i64;
         jump block1;
 
     block1:
-        v73.i256 = mload v30 i256;
-        v74.i256 = mload v31 i256;
-        v75.i1 = ne v73 0.i256;
-        v76.i1 = ne v74 0.i256;
-        v77.i1 = lt v75 v76;
-        mstore v32 v77 i1;
-        v78.i1 = mload v32 i1;
-        br v78 block2 block3;
+        v26.objref<[i64; 25]> = obj.alloc [i64; 25];
+        v28.objref<i64> = obj.index v26 0.i256;
+        obj.store v28 1.i64;
+        v30.objref<i64> = obj.index v26 1.i256;
+        obj.store v30 2.i64;
+        v32.objref<i64> = obj.index v26 2.i256;
+        obj.store v32 3.i64;
+        v34.objref<i64> = obj.index v26 3.i256;
+        obj.store v34 4.i64;
+        v36.objref<i64> = obj.index v26 4.i256;
+        obj.store v36 5.i64;
+        v38.objref<i64> = obj.index v26 5.i256;
+        obj.store v38 6.i64;
+        v40.objref<i64> = obj.index v26 6.i256;
+        obj.store v40 7.i64;
+        v42.objref<i64> = obj.index v26 7.i256;
+        obj.store v42 8.i64;
+        v44.objref<i64> = obj.index v26 8.i256;
+        obj.store v44 9.i64;
+        v46.objref<i64> = obj.index v26 9.i256;
+        obj.store v46 10.i64;
+        v48.objref<i64> = obj.index v26 10.i256;
+        obj.store v48 11.i64;
+        v50.objref<i64> = obj.index v26 11.i256;
+        obj.store v50 12.i64;
+        v52.objref<i64> = obj.index v26 12.i256;
+        obj.store v52 13.i64;
+        v54.objref<i64> = obj.index v26 13.i256;
+        obj.store v54 14.i64;
+        v56.objref<i64> = obj.index v26 14.i256;
+        obj.store v56 15.i64;
+        v58.objref<i64> = obj.index v26 15.i256;
+        obj.store v58 16.i64;
+        v60.objref<i64> = obj.index v26 16.i256;
+        obj.store v60 17.i64;
+        v62.objref<i64> = obj.index v26 17.i256;
+        obj.store v62 18.i64;
+        v64.objref<i64> = obj.index v26 18.i256;
+        obj.store v64 19.i64;
+        v66.objref<i64> = obj.index v26 19.i256;
+        obj.store v66 20.i64;
+        v68.objref<i64> = obj.index v26 20.i256;
+        obj.store v68 21.i64;
+        v70.objref<i64> = obj.index v26 21.i256;
+        obj.store v70 22.i64;
+        v72.objref<i64> = obj.index v26 22.i256;
+        obj.store v72 23.i64;
+        v74.objref<i64> = obj.index v26 23.i256;
+        obj.store v74 24.i64;
+        v76.objref<i64> = obj.index v26 24.i256;
+        obj.store v76 25.i64;
+        v77.[i64; 25] = obj.load v26;
+        v78.objref<[i64; 25]> = obj.alloc [i64; 25];
+        v79.objref<i64> = obj.index v78 0.i256;
+        obj.store v79 1.i64;
+        v80.objref<i64> = obj.index v78 1.i256;
+        obj.store v80 2.i64;
+        v81.objref<i64> = obj.index v78 2.i256;
+        obj.store v81 3.i64;
+        v82.objref<i64> = obj.index v78 3.i256;
+        obj.store v82 4.i64;
+        v83.objref<i64> = obj.index v78 4.i256;
+        obj.store v83 5.i64;
+        v84.objref<i64> = obj.index v78 5.i256;
+        obj.store v84 6.i64;
+        v85.objref<i64> = obj.index v78 6.i256;
+        obj.store v85 7.i64;
+        v86.objref<i64> = obj.index v78 7.i256;
+        obj.store v86 8.i64;
+        v87.objref<i64> = obj.index v78 8.i256;
+        obj.store v87 9.i64;
+        v88.objref<i64> = obj.index v78 9.i256;
+        obj.store v88 10.i64;
+        v89.objref<i64> = obj.index v78 10.i256;
+        obj.store v89 11.i64;
+        v90.objref<i64> = obj.index v78 11.i256;
+        obj.store v90 12.i64;
+        v91.objref<i64> = obj.index v78 12.i256;
+        obj.store v91 13.i64;
+        v92.objref<i64> = obj.index v78 13.i256;
+        obj.store v92 14.i64;
+        v93.objref<i64> = obj.index v78 14.i256;
+        obj.store v93 15.i64;
+        v94.objref<i64> = obj.index v78 15.i256;
+        obj.store v94 16.i64;
+        v95.objref<i64> = obj.index v78 16.i256;
+        obj.store v95 17.i64;
+        v96.objref<i64> = obj.index v78 17.i256;
+        obj.store v96 18.i64;
+        v97.objref<i64> = obj.index v78 18.i256;
+        obj.store v97 19.i64;
+        v98.objref<i64> = obj.index v78 19.i256;
+        obj.store v98 20.i64;
+        v99.objref<i64> = obj.index v78 20.i256;
+        obj.store v99 21.i64;
+        v100.objref<i64> = obj.index v78 21.i256;
+        obj.store v100 22.i64;
+        v101.objref<i64> = obj.index v78 22.i256;
+        obj.store v101 23.i64;
+        v102.objref<i64> = obj.index v78 23.i256;
+        obj.store v102 24.i64;
+        v103.objref<i64> = obj.index v78 24.i256;
+        obj.store v103 25.i64;
+        v104.[i64; 25] = obj.load v78;
+        v106.i256 = call %len v104;
+        jump block2;
 
     block2:
-        v79.[i64; 25] = obj.load v0;
-        v80.i256 = mload v30 i256;
-        v81.i64 = call %get v79 v80;
-        mstore v38 v81 i64;
-        v82.i64 = mload v38 i64;
-        mstore v33 v82 i64;
-        v83.i64 = mload v33 i64;
-        mstore v2 v83 i64;
-        v84.i64 = mload v1 i64;
-        v85.i64 = mload v2 i64;
-        (v86.i64, v87.i1) = uaddo v84 v85;
-        br v87 block4 block5;
+        v125.i64 = phi (0.i64 block1) (v117 block7);
+        v107.i256 = phi (0.i256 block1) (v119 block7);
+        v109.i1 = lt v107 v106;
+        br v109 block3 block4;
 
     block3:
-        v95.i64 = mload v1 i64;
-        return v95;
+        v112.i64 = call %get v104 v107;
+        (v114.i64, v115.i1) = uaddo v125 v112;
+        br v115 block5 block6;
 
     block4:
-        evm_revert 0.i256 0.i256;
+        return v125;
 
     block5:
-        mstore v34 v86 i64;
-        v88.i64 = mload v34 i64;
-        mstore v1 v88 i64;
-        mstore v35 1.i256 i256;
-        v90.i256 = mload v30 i256;
-        v91.i256 = mload v35 i256;
-        (v92.i256, v93.i1) = uaddo v90 v91;
-        br v93 block4 block6;
+        evm_revert 0.i256 0.i256;
 
     block6:
-        mstore v36 v92 i256;
-        v94.i256 = mload v36 i256;
-        mstore v30 v94 i256;
-        jump block1;
+        mstore v0 v114 i64;
+        v116.i256 = mload v0 i256;
+        v117.i64 = trunc v116 i64;
+        (v119.i256, v120.i1) = uaddo v107 1.i256;
+        br v120 block5 block7;
+
+    block7:
+        jump block2;
 }
 
 func private %get(v0.[i64; 25], v1.i256) -> i64 {
     block0:
         v2.objref<[i64; 25]> = obj.alloc [i64; 25];
         v3.*i256 = alloca i256;
-        v4.*i64 = alloca i64;
-        v5.*i256 = alloca i256;
-        obj.store v2 v0;
+        v5.objref<i64> = obj.index v2 0.i256;
+        v6.i64 = extract_value v0 0.i256;
+        obj.store v5 v6;
+        v8.objref<i64> = obj.index v2 1.i256;
+        v9.i64 = extract_value v0 1.i256;
+        obj.store v8 v9;
+        v11.objref<i64> = obj.index v2 2.i256;
+        v12.i64 = extract_value v0 2.i256;
+        obj.store v11 v12;
+        v14.objref<i64> = obj.index v2 3.i256;
+        v15.i64 = extract_value v0 3.i256;
+        obj.store v14 v15;
+        v17.objref<i64> = obj.index v2 4.i256;
+        v18.i64 = extract_value v0 4.i256;
+        obj.store v17 v18;
+        v20.objref<i64> = obj.index v2 5.i256;
+        v21.i64 = extract_value v0 5.i256;
+        obj.store v20 v21;
+        v23.objref<i64> = obj.index v2 6.i256;
+        v24.i64 = extract_value v0 6.i256;
+        obj.store v23 v24;
+        v26.objref<i64> = obj.index v2 7.i256;
+        v27.i64 = extract_value v0 7.i256;
+        obj.store v26 v27;
+        v29.objref<i64> = obj.index v2 8.i256;
+        v30.i64 = extract_value v0 8.i256;
+        obj.store v29 v30;
+        v32.objref<i64> = obj.index v2 9.i256;
+        v33.i64 = extract_value v0 9.i256;
+        obj.store v32 v33;
+        v35.objref<i64> = obj.index v2 10.i256;
+        v36.i64 = extract_value v0 10.i256;
+        obj.store v35 v36;
+        v38.objref<i64> = obj.index v2 11.i256;
+        v39.i64 = extract_value v0 11.i256;
+        obj.store v38 v39;
+        v41.objref<i64> = obj.index v2 12.i256;
+        v42.i64 = extract_value v0 12.i256;
+        obj.store v41 v42;
+        v44.objref<i64> = obj.index v2 13.i256;
+        v45.i64 = extract_value v0 13.i256;
+        obj.store v44 v45;
+        v47.objref<i64> = obj.index v2 14.i256;
+        v48.i64 = extract_value v0 14.i256;
+        obj.store v47 v48;
+        v50.objref<i64> = obj.index v2 15.i256;
+        v51.i64 = extract_value v0 15.i256;
+        obj.store v50 v51;
+        v53.objref<i64> = obj.index v2 16.i256;
+        v54.i64 = extract_value v0 16.i256;
+        obj.store v53 v54;
+        v56.objref<i64> = obj.index v2 17.i256;
+        v57.i64 = extract_value v0 17.i256;
+        obj.store v56 v57;
+        v59.objref<i64> = obj.index v2 18.i256;
+        v60.i64 = extract_value v0 18.i256;
+        obj.store v59 v60;
+        v62.objref<i64> = obj.index v2 19.i256;
+        v63.i64 = extract_value v0 19.i256;
+        obj.store v62 v63;
+        v65.objref<i64> = obj.index v2 20.i256;
+        v66.i64 = extract_value v0 20.i256;
+        obj.store v65 v66;
+        v68.objref<i64> = obj.index v2 21.i256;
+        v69.i64 = extract_value v0 21.i256;
+        obj.store v68 v69;
+        v71.objref<i64> = obj.index v2 22.i256;
+        v72.i64 = extract_value v0 22.i256;
+        obj.store v71 v72;
+        v74.objref<i64> = obj.index v2 23.i256;
+        v75.i64 = extract_value v0 23.i256;
+        obj.store v74 v75;
+        v77.objref<i64> = obj.index v2 24.i256;
+        v78.i64 = extract_value v0 24.i256;
+        obj.store v77 v78;
         mstore v3 v1 i256;
-        v6.i256 = mload v3 i256;
-        mstore v5 v6 i256;
-        v7.i256 = mload v5 i256;
-        v8.objref<i64> = obj.index v2 v7;
-        v9.i64 = obj.load v8;
-        mstore v4 v9 i64;
-        v10.i64 = mload v4 i64;
-        return v10;
+        jump block1;
+
+    block1:
+        v79.i256 = mload v3 i256;
+        v81.i1 = lt v79 25.i256;
+        v82.i1 = is_zero v81;
+        br v82 block2 block3;
+
+    block2:
+        evm_revert 0.i256 0.i256;
+
+    block3:
+        v83.objref<i64> = obj.index v2 v79;
+        v84.i64 = obj.load v83;
+        return v84;
 }
 
 func private %len(v0.[i64; 25]) -> i256 {
     block0:
-        v1.objref<[i64; 25]> = obj.alloc [i64; 25];
-        v2.*i256 = alloca i256;
-        obj.store v1 v0;
-        mstore v2 25.i256 i256;
-        v4.i256 = mload v2 i256;
-        return v4;
+        jump block1;
+
+    block1:
+        return 25.i256;
 }
 
 

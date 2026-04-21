@@ -3,4 +3,102 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/cast_u8_usize_cmp.fe
 ---
-
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let v0 := $main()
+      stop()
+    }
+    function $cast_u8_usize_cmp_arg0_root_code(p0, p1, p2) -> ret {
+      let v3 := 0
+      let v4 := p1
+      let t35 := mload(0x40)
+      if iszero(t35) {
+        t35 := 0x80
+      }
+      mstore(0x40, add(t35, 32))
+      datacopy(t35, add(p0, mul(v4, 1)), 1)
+      t35 := and(byte(0, mload(t35)), 0xff)
+      let v5 := t35
+      v3 := and(v5, 0xff)
+      let v7 := p2
+      let v8 := and(v3, 0xff)
+      let v28 := iszero(iszero(lt(v7, v8)))
+      let v9 := iszero(iszero(v28))
+      if iszero(iszero(v9)) {
+        let v29 := 0x01
+        let v10 := and(v29, 0xff)
+        ret := and(v10, 0xff)
+        leave
+      }
+      if iszero(iszero(iszero(v9))) {
+        let v14 := p2
+        let v15 := and(v3, 0xff)
+        let v30 := iszero(iszero(eq(v14, v15)))
+        let v16 := iszero(iszero(v30))
+        if iszero(iszero(v16)) {
+          let v31 := 0x02
+          let v17 := and(v31, 0xff)
+          ret := and(v17, 0xff)
+          leave
+        }
+        if iszero(iszero(iszero(v16))) {
+          let v21 := p2
+          let v22 := and(v3, 0xff)
+          let v32 := iszero(iszero(gt(v21, v22)))
+          let v23 := iszero(iszero(v32))
+          if iszero(iszero(v23)) {
+            let v33 := 0x03
+            let v24 := and(v33, 0xff)
+            ret := and(v24, 0xff)
+            leave
+          }
+          if iszero(iszero(iszero(v23))) {
+            let v34 := 0x00
+            let v27 := and(v34, 0xff)
+            ret := and(v27, 0xff)
+            leave
+          }
+        }
+      }
+    }
+    function $main() -> ret {
+      let v12 := 0x01
+      let v0 := and(v12, 0xff)
+      let v13 := 0x02
+      let v1 := and(v13, 0xff)
+      let v14 := 0x03
+      let v2 := and(v14, 0xff)
+      let v15 := 0x04
+      let v3 := and(v15, 0xff)
+      let v16 := 0x05
+      let v4 := and(v16, 0xff)
+      let v17 := 0x06
+      let v5 := and(v17, 0xff)
+      let v18 := 0x07
+      let v6 := and(v18, 0xff)
+      let v19 := 0x08
+      let v7 := and(v19, 0xff)
+      let v20 := 0x01
+      let v21 := 0x02
+      let v22 := 0x03
+      let v23 := 0x04
+      let v24 := 0x05
+      let v25 := 0x06
+      let v26 := 0x07
+      let v27 := 0x08
+      let v28 := dataoffset("const_0")
+      let v8 := v28
+      let v30 := 0x01
+      let v9 := v30
+      let v31 := 0x02
+      let v10 := v31
+      let v32 := $cast_u8_usize_cmp_arg0_root_code(v8, v9, v10)
+      let v11 := and(v32, 0xff)
+      ret := and(v11, 0xff)
+      leave
+    }
+    $__fe_main_root()
+  }
+  data "const_0" hex"0102030405060708000000000000000000000000000000000000000000000000"
+}

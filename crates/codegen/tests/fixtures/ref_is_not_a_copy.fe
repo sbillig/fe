@@ -21,3 +21,7 @@ fn test_ref_is_not_a_copy() {
     assert(live_x == d.x)
     assert(live_y == d.y)
 }
+
+pub fn main() {
+    test_ref_is_not_a_copy()
+}

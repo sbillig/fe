@@ -6,38 +6,23 @@ input_file: tests/fixtures/const_array_add.fe
 object "main" {
   code {
     function $__fe_main_root() {
-      let v0 := 0
-      v0 := $get_sum()
+      let v0 := $get_sum()
       stop()
     }
     function $get_sum() -> ret {
-      let v0 := 0
-      let v1 := 0
-      let v2 := 0
-      let v3 := 0
-      let v4 := 0
-      let v6 := 0
-      let v7 := 0
-      let v8 := 0
-      let v9 := 0
-      let v10 := 0
-      let v11 := 0
-      let v12 := 0
-      let v13 := 0
-      let v14 := 0
-      v6 := 0x01
-      v0 := v6
-      v7 := 0x0a
-      v8 := 0x14
-      v9 := 0x1e
-      v10 := dataoffset("const_0")
-      v1 := v10
-      v12 := 0x00
-      v2 := v12
-      v13 := 0x0a
-      v3 := v13
-      v14 := 0x0b
-      v4 := v14
+      let v6 := 0x01
+      let v0 := v6
+      let v7 := 0x0a
+      let v8 := 0x14
+      let v9 := 0x1e
+      let v10 := dataoffset("const_0")
+      let v1 := v10
+      let v12 := 0x00
+      let v2 := v12
+      let v13 := 0x0a
+      let v3 := v13
+      let v14 := 0x0b
+      let v4 := v14
       ret := v4
       leave
     }

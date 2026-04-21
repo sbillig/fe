@@ -3,4 +3,28 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/unit_method_call.fe
 ---
-
+object "main" {
+  code {
+    function $__fe_main_root() {
+      $main()
+      stop()
+    }
+    function $call_unit_method(p0) {
+      $increment(p0)
+      leave
+    }
+    function $increment(p0) {
+      leave
+    }
+    function $main() {
+      let v3 := 0x01
+      let v0 := v3
+      let v4 := 0x01
+      let v5 := v4
+      let v1 := v5
+      $call_unit_method(v1)
+      leave
+    }
+    $__fe_main_root()
+  }
+}

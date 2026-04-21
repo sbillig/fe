@@ -7,128 +7,63 @@ target = "evm-ethereum-osaka"
 
 func private %__fe_main_root() {
     block0:
-        v1.i64 = call %helper_0 0.i64;
+        jump block1;
+
+    block1:
+        v0.i64 = call %main;
         evm_stop;
 }
 
-func private %helper_0(v0.i64) -> i64 {
+func private %helper(v0.i64) -> i64 {
     block0:
         v1.*i64 = alloca i64;
-        v2.*i64 = alloca i64;
-        v3.*i64 = alloca i64;
-        v4.*i64 = alloca i64;
         mstore v1 v0 i64;
-        mstore v2 1.i64 i64;
-        v6.i256 = mload v1 i256;
-        v7.i64 = trunc v6 i64;
-        mstore v4 v7 i64;
-        v8.i64 = mload v4 i64;
-        v9.i64 = mload v2 i64;
-        (v10.i64, v11.i1) = uaddo v8 v9;
-        br v11 block1 block2;
+        jump block1;
 
     block1:
-        evm_revert 0.i256 0.i256;
+        v2.i256 = mload v1 i256;
+        v3.i64 = trunc v2 i64;
+        (v5.i64, v6.i1) = uaddo v3 1.i64;
+        br v6 block2 block3;
 
     block2:
-        mstore v3 v10 i64;
-        v13.i64 = mload v3 i64;
-        return v13;
-}
-
-func private %helper_1(v0.i64) -> i64 {
-    block0:
-        v1.*i64 = alloca i64;
-        v2.*i64 = alloca i64;
-        v3.*i64 = alloca i64;
-        v4.*i64 = alloca i64;
-        mstore v1 v0 i64;
-        mstore v2 1.i64 i64;
-        v6.i256 = mload v1 i256;
-        v7.i64 = trunc v6 i64;
-        mstore v4 v7 i64;
-        v8.i64 = mload v4 i64;
-        v9.i64 = mload v2 i64;
-        (v10.i64, v11.i1) = uaddo v8 v9;
-        br v11 block1 block2;
-
-    block1:
         evm_revert 0.i256 0.i256;
 
-    block2:
-        mstore v3 v10 i64;
-        v13.i64 = mload v3 i64;
-        return v13;
-}
-
-func private %helper_2(v0.i64) -> i64 {
-    block0:
-        v1.*i64 = alloca i64;
-        v2.*i64 = alloca i64;
-        v3.*i64 = alloca i64;
-        v4.*i64 = alloca i64;
-        mstore v1 v0 i64;
-        mstore v2 1.i64 i64;
-        v6.i256 = mload v1 i256;
-        v7.i64 = trunc v6 i64;
-        mstore v4 v7 i64;
-        v8.i64 = mload v4 i64;
-        v9.i64 = mload v2 i64;
-        (v10.i64, v11.i1) = uaddo v8 v9;
-        br v11 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        mstore v3 v10 i64;
-        v13.i64 = mload v3 i64;
-        return v13;
+    block3:
+        return v5;
 }
 
 func private %if_else(v0.i1) -> i64 {
     block0:
         v1.*i1 = alloca i1;
-        v2.*i64 = alloca i64;
-        v3.*i64 = alloca i64;
-        v4.*i64 = alloca i64;
-        v5.*i64 = alloca i64;
-        v6.*i64 = alloca i64;
-        v7.*i1 = alloca i1;
-        v8.*i64 = alloca i64;
-        v9.*i64 = alloca i64;
         mstore v1 v0 i1;
-        v10.i256 = mload v1 i256;
-        v12.i1 = ne v10 0.i256;
-        mstore v7 v12 i1;
-        v13.i1 = mload v7 i1;
-        br v13 block1 block2;
+        jump block1;
 
     block1:
-        mstore v3 1.i64 i64;
-        v15.i64 = mload v3 i64;
-        v16.i64 = call %helper_2 v15;
-        mstore v8 v16 i64;
-        v17.i64 = mload v8 i64;
-        mstore v4 v17 i64;
-        v18.i64 = mload v4 i64;
-        mstore v2 v18 i64;
-        jump block3;
+        v2.i256 = mload v1 i256;
+        v4.i1 = ne v2 0.i256;
+        br v4 block2 block3;
 
     block2:
-        mstore v5 2.i64 i64;
-        v20.i64 = mload v5 i64;
-        v21.i64 = call %helper_1 v20;
-        mstore v9 v21 i64;
-        v22.i64 = mload v9 i64;
-        mstore v6 v22 i64;
-        v23.i64 = mload v6 i64;
-        mstore v2 v23 i64;
-        jump block3;
+        v6.i64 = call %helper 1.i64;
+        jump block4;
 
     block3:
-        v24.i64 = mload v2 i64;
-        return v24;
+        v8.i64 = call %helper 2.i64;
+        jump block4;
+
+    block4:
+        v9.i64 = phi (v6 block2) (v8 block3);
+        return v9;
+}
+
+func private %main() -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i64 = call %if_else 1.i1;
+        return v1;
 }
 
 

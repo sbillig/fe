@@ -3,9 +3,9 @@ source: crates/hir/tests/decision_tree.rs
 expression: res
 input_file: test_files/decision_trees/nested_enum.fe
 ---
-note: 
+note:
    ┌─ nested_enum.fe:12:5
-   │  
+   │
 12 │ ╭     match n {
 13 │ │         Nested::Value(MyEnum::Unit) => 0
 14 │ │         Nested::Value(MyEnum::Tuple(x, y)) => x + y

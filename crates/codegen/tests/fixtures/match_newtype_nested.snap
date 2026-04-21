@@ -3,22 +3,66 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/match_newtype_nested.fe
 ---
-function $match_newtype_nested($a) -> ret {
-  let v0 := 0
-  switch $a
-    case 0 {
-      v0 := 0
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let v0 := $f()
+      stop()
     }
-    default {
-      let v1 := $a
-      v0 := v1
+    function $f() -> ret {
+      let v5 := 0x0a
+      let v1 := v5
+      let v6 := 0x0a
+      let v7 := v6
+      let v2 := v7
+      let v9 := 0x0a
+      let v10 := v9
+      let v12 := v10
+      let v3 := v12
+      let v14 := 0x0a
+      let v15 := v14
+      let v17 := v15
+      let v0 := v17
+      let v19 := $match_newtype_nested(v0)
+      let v4 := v19
+      ret := v4
+      leave
     }
-  ret := v0
-  leave
-}
-function $f() -> ret {
-  let v0 := 10
-  let v1 := $match_newtype_nested(v0)
-  ret := v1
-  leave
+    function $match_newtype_nested(p0) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      let v2 := 0
+      let v3 := 0
+      let v4 := 0
+      mstore(r0, p0)
+      let t11 := mload(0x40)
+      if iszero(t11) {
+        t11 := 0x80
+      }
+      mstore(0x40, add(t11, 32))
+      mstore(t11, mload(r0))
+      v3 := t11
+      let t12 := mload(v3)
+      v4 := t12
+      let v8 := 0x00
+      let v5 := v8
+      let v6 := iszero(iszero(eq(v4, v5)))
+      if iszero(iszero(v6)) {
+        let v9 := 0x00
+        let v7 := v9
+        let v10 := 0x00
+        v2 := v10
+      }
+      if iszero(iszero(iszero(v6))) {
+        let v1 := v4
+        v2 := v1
+      }
+      ret := v2
+      leave
+    }
+    $__fe_main_root()
+  }
 }

@@ -2,3 +2,7 @@ pub fn arg_bindings(x: u64, y: u64) -> u64 {
     let z = x + y
     z
 }
+
+pub fn main() -> u64 {
+    arg_bindings(1, 2)
+}

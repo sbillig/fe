@@ -1,15 +1,15 @@
 ---
-source: crates/hir-analysis/tests/import.rs
+source: crates/hir/tests/import.rs
 expression: res
-input_file: crates/hir-analysis/test_files/imports/glob_shadow.fe
+input_file: test_files/imports/glob_shadow.fe
 ---
-note: 
+note:
   ┌─ glob_shadow.fe:1:1
   │
 1 │ use foo::*
   │ ^^^^^^^^^^ glob_shadow::foo::MyEnum as MyEnum | glob_shadow::foo::MyEnum::Variant2 as Variant2 | glob_shadow::foo::Variant as Variant
 
-note: 
+note:
   ┌─ glob_shadow.fe:4:5
   │
 4 │     pub use MyEnum::*

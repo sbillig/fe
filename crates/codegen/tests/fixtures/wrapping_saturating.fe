@@ -16,3 +16,17 @@ pub fn wrapping_ops_u256(a: u256, b: u256) -> (u256, u256, u256) {
 pub fn saturating_ops_u256(a: u256, b: u256) -> (u256, u256, u256) {
     (a.saturating_add(b), a.saturating_sub(b), a.saturating_mul(b))
 }
+
+pub fn main() -> (
+    (u64, u64, u64),
+    (u64, u64, u64),
+    (u256, u256, u256),
+    (u256, u256, u256),
+) {
+    (
+        wrapping_ops_u64(1, 2),
+        saturating_ops_u64(1, 2),
+        wrapping_ops_u256(1, 2),
+        saturating_ops_u256(1, 2),
+    )
+}

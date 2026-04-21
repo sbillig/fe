@@ -7,7 +7,10 @@ target = "evm-ethereum-osaka"
 
 func private %__fe_main_root() {
     block0:
-        v1.i256 = call %bump_self_assign 0.i256;
+        jump block1;
+
+    block1:
+        v0.i256 = call %main;
         evm_stop;
 }
 
@@ -15,25 +18,25 @@ func private %bump_self_assign(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
         v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
         mstore v1 v0 i256;
-        v7.i256 = mload v1 i256;
-        mstore v4 v7 i256;
-        v8.i256 = mload v4 i256;
-        mstore v2 v8 i256;
-        v9.i256 = mload v2 i256;
-        v10.*i8 = evm_malloc v9;
-        v11.i256 = ptr_to_int v10 i256;
-        mstore v6 v11 i256;
-        v12.i256 = mload v6 i256;
-        mstore v3 v12 i256;
-        v13.i256 = mload v3 i256;
-        mstore v2 v13 i256;
-        v14.i256 = mload v2 i256;
-        return v14;
+        jump block1;
+
+    block1:
+        v3.i256 = mload v1 i256;
+        v4.*i8 = evm_malloc v3;
+        v5.i256 = ptr_to_int v4 i256;
+        mstore v2 v5 i256;
+        v6.i256 = mload v2 i256;
+        return v6;
+}
+
+func private %main() -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i256 = call %bump_self_assign 64.i256;
+        return v1;
 }
 
 

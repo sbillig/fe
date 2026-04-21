@@ -7,16 +7,19 @@ target = "evm-ethereum-osaka"
 
 func private %__fe_main_root() {
     block0:
+        jump block1;
+
+    block1:
         v0.i1 = call %bool_literal;
         evm_stop;
 }
 
 func private %bool_literal() -> i1 {
     block0:
-        v0.*i1 = alloca i1;
-        mstore v0 1.i1 i1;
-        v2.i1 = mload v0 i1;
-        return v2;
+        jump block1;
+
+    block1:
+        return 1.i1;
 }
 
 

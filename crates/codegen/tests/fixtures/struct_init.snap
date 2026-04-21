@@ -6,37 +6,30 @@ input_file: tests/fixtures/struct_init.fe
 object "main" {
   code {
     function $__fe_main_root() {
-      let v0 := 0
-      v0 := $make_dummy()
+      let v0 := $make_dummy()
       stop()
     }
     function $make_dummy() -> ret {
-      let v0 := 0
-      let v1 := 0
-      let v2 := 0
-      let v3 := 0
-      let v4 := 0
-      let v5 := 0
-      let v6 := 0
-      let v7 := 0
-      let v8 := 0
-      let v9 := 0
-      let v10 := 0
-      let v11 := 0
-      let v12 := 0
-      let v13 := 0
-      v4 := 0x2a
-      v1 := v4
-      v5 := 0x63
-      v2 := v5
-      v6 := 0x2a
-      v7 := 0x63
-      v8 := dataoffset("const_0")
-      v3 := v8
-      v10 := 0x2a
-      v11 := 0x63
-      v12 := dataoffset("const_0")
-      v0 := v12
+      let v4 := 0x2a
+      let v1 := and(v4, 0xffffffffffffffff)
+      let v5 := 0x63
+      let v2 := v5
+      let v6 := 0x2a
+      let v7 := 0x63
+      let v8 := dataoffset("const_0")
+      let v3 := v8
+      let v10 := 0x2a
+      let v11 := 0x63
+      let t14 := mload(0x40)
+      if iszero(t14) {
+        t14 := 0x80
+      }
+      mstore(0x40, add(t14, 64))
+      let v13 := t14
+      mstore(v13, and(and(v10, 0xffffffffffffffff), 0xffffffffffffffff))
+      mstore(add(v13, 32), v11)
+      let v12 := v13
+      let v0 := v12
       ret := v0
       leave
     }

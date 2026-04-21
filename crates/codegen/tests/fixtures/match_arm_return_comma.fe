@@ -11,3 +11,7 @@ fn f(e: E) -> u256 {
         E::B => return 0,
     }
 }
+
+pub fn main() -> u256 {
+    f(E::A(1))
+}

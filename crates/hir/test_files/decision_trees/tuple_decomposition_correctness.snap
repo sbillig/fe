@@ -1,11 +1,11 @@
 ---
-source: crates/hir-analysis/tests/decision_tree.rs
+source: crates/hir/tests/decision_tree.rs
 expression: res
 input_file: test_files/decision_trees/tuple_decomposition_correctness.fe
 ---
-note: 
+note:
    ┌─ tuple_decomposition_correctness.fe:7:5
-   │  
+   │
  7 │ ╭     match t {
  8 │ │         (true, true) => 3
  9 │ │         (true, false) => 2
@@ -30,9 +30,9 @@ note:
                 └─ Execute arm #3
 
 
-note: 
+note:
    ┌─ tuple_decomposition_correctness.fe:17:5
-   │  
+   │
 17 │ ╭     match t {
 18 │ │         (true, true, true) => 7
 19 │ │         (true, true, false) => 6
@@ -74,9 +74,9 @@ note:
                       └─ Execute arm #7
 
 
-note: 
+note:
    ┌─ tuple_decomposition_correctness.fe:31:5
-   │  
+   │
 31 │ ╭     match t {
 32 │ │         (true, 0) => 10
 33 │ │         (true, 1) => 11
@@ -104,9 +104,9 @@ note:
                 └─ Execute arm #4
 
 
-note: 
+note:
    ┌─ tuple_decomposition_correctness.fe:42:5
-   │  
+   │
 42 │ ╭     match t {
 43 │ │         ((true, true), true) => 4
 44 │ │         ((true, true), false) => 3
@@ -138,9 +138,9 @@ note:
                 └─ Execute arm #4
 
 
-note: 
+note:
    ┌─ tuple_decomposition_correctness.fe:53:5
-   │  
+   │
 53 │ ╭     match t {
 54 │ │         (true, _, true) => 3
 55 │ │         (false, true, _) => 2
@@ -169,9 +169,9 @@ note:
                       └─ Execute arm #3
 
 
-note: 
+note:
    ┌─ tuple_decomposition_correctness.fe:63:5
-   │  
+   │
 63 │ ╭     match t {
 64 │ │         (true, true, true, true, true) => 5
 65 │ │         (true, true, true, true, false) => 4
@@ -205,9 +205,9 @@ note:
           └─ Execute arm #5
 
 
-note: 
+note:
    ┌─ tuple_decomposition_correctness.fe:80:5
-   │  
+   │
 80 │ ╭     match t {
 81 │ │         (SimpleEnum::A, true) => 3
 82 │ │         (SimpleEnum::A, false) => 2
@@ -232,9 +232,9 @@ note:
                 └─ Execute arm #3
 
 
-note: 
+note:
    ┌─ tuple_decomposition_correctness.fe:92:5
-   │  
+   │
 92 │ ╭     match t {
 93 │ │         (true, true | false, true) => 2
 94 │ │         (false | true, false, false) => 1
@@ -270,9 +270,9 @@ note:
                       └─ Execute arm #2
 
 
-note: 
+note:
     ┌─ tuple_decomposition_correctness.fe:101:5
-    │  
+    │
 101 │ ╭     match t {
 102 │ │         (true,) => 1
 103 │ │         (false,) => 0

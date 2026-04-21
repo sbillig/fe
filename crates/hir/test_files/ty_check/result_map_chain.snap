@@ -3,51 +3,51 @@ source: crates/hir/tests/ty_check.rs
 expression: res
 input_file: test_files/ty_check/result_map_chain.fe
 ---
-note: 
+note:
    ┌─ result_map_chain.fe:10:42
-   │  
+   │
 10 │       fn call(self, _ x: own u256) -> Wrap {
    │ ╭──────────────────────────────────────────^
 11 │ │         Wrap { val: x }
 12 │ │     }
    │ ╰─────^ Wrap
 
-note: 
+note:
    ┌─ result_map_chain.fe:11:9
    │
 11 │         Wrap { val: x }
    │         ^^^^^^^^^^^^^^^ Wrap
 
-note: 
+note:
    ┌─ result_map_chain.fe:11:21
    │
 11 │         Wrap { val: x }
    │                     ^ u256
 
-note: 
+note:
    ┌─ result_map_chain.fe:17:42
-   │  
+   │
 17 │       fn call(self, _ w: own Wrap) -> u256 {
    │ ╭──────────────────────────────────────────^
 18 │ │         w.val
 19 │ │     }
    │ ╰─────^ u256
 
-note: 
+note:
    ┌─ result_map_chain.fe:18:9
    │
 18 │         w.val
    │         ^ Wrap
 
-note: 
+note:
    ┌─ result_map_chain.fe:18:9
    │
 18 │         w.val
    │         ^^^^^ u256
 
-note: 
+note:
    ┌─ result_map_chain.fe:22:23
-   │  
+   │
 22 │   fn pipeline() -> u256 {
    │ ╭───────────────────────^
 23 │ │     let r: Result<bool, u256> = Ok(42)
@@ -55,61 +55,61 @@ note:
 25 │ │ }
    │ ╰─^ u256
 
-note: 
+note:
    ┌─ result_map_chain.fe:23:9
    │
 23 │     let r: Result<bool, u256> = Ok(42)
    │         ^ Result<bool, u256>
 
-note: 
+note:
    ┌─ result_map_chain.fe:23:33
    │
 23 │     let r: Result<bool, u256> = Ok(42)
    │                                 ^^ fn Ok<bool, u256>
 
-note: 
+note:
    ┌─ result_map_chain.fe:23:33
    │
 23 │     let r: Result<bool, u256> = Ok(42)
    │                                 ^^^^^^ Result<bool, u256>
 
-note: 
+note:
    ┌─ result_map_chain.fe:23:36
    │
 23 │     let r: Result<bool, u256> = Ok(42)
    │                                    ^^ u256
 
-note: 
+note:
    ┌─ result_map_chain.fe:24:5
    │
 24 │     r.map(ToWrap{}).map(FromWrap{}).unwrap()
    │     ^ Result<bool, u256>
 
-note: 
+note:
    ┌─ result_map_chain.fe:24:5
    │
 24 │     r.map(ToWrap{}).map(FromWrap{}).unwrap()
    │     ^^^^^^^^^^^^^^^ Result<bool, Wrap>
 
-note: 
+note:
    ┌─ result_map_chain.fe:24:5
    │
 24 │     r.map(ToWrap{}).map(FromWrap{}).unwrap()
    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Result<bool, u256>
 
-note: 
+note:
    ┌─ result_map_chain.fe:24:5
    │
 24 │     r.map(ToWrap{}).map(FromWrap{}).unwrap()
    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u256
 
-note: 
+note:
    ┌─ result_map_chain.fe:24:11
    │
 24 │     r.map(ToWrap{}).map(FromWrap{}).unwrap()
    │           ^^^^^^^^ ToWrap
 
-note: 
+note:
    ┌─ result_map_chain.fe:24:25
    │
 24 │     r.map(ToWrap{}).map(FromWrap{}).unwrap()

@@ -5,3 +5,7 @@ pub fn bump_self_assign(size: u256) -> u256 {
     x = alloc(x)
     x
 }
+
+pub fn main() -> u256 {
+    bump_self_assign(64)
+}

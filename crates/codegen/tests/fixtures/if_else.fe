@@ -9,3 +9,7 @@ pub fn if_else(cond: bool) -> u64 {
 fn helper(_ x: u64) -> u64 {
     x + 1
 }
+
+pub fn main() -> u64 {
+    if_else(true)
+}

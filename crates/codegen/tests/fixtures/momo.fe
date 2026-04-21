@@ -6,3 +6,7 @@ struct MyStruct {
 pub fn read_x(val: MyStruct) -> u8 {
     val.x + val.y
 }
+
+pub fn main() -> u8 {
+    read_x(MyStruct { x: 1, y: 2 })
+}

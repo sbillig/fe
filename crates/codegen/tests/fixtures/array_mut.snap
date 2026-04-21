@@ -3,4 +3,43 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/array_mut.fe
 ---
-
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let v0 := $main()
+      stop()
+    }
+    function $array_mut(p0) -> ret {
+      let v2 := and(p0, 0xff)
+      let v7 := 0x02
+      let v3 := and(v7, 0xff)
+      let v8 := 0x03
+      let v4 := and(v8, 0xff)
+      let v9 := 0x04
+      let v5 := and(v9, 0xff)
+      let t11 := mload(0x40)
+      if iszero(t11) {
+        t11 := 0x80
+      }
+      mstore(0x40, add(t11, 32))
+      let v10 := t11
+      mstore8(add(v10, mul(0, 1)), and(and(v2, 0xff), 0xff))
+      mstore8(add(v10, mul(1, 1)), and(and(v3, 0xff), 0xff))
+      mstore8(add(v10, mul(2, 1)), and(and(v4, 0xff), 0xff))
+      mstore8(add(v10, mul(3, 1)), and(and(v5, 0xff), 0xff))
+      let v6 := v10
+      let v1 := v6
+      ret := v1
+      leave
+    }
+    function $main() -> ret {
+      let v2 := 0x01
+      let v0 := and(v2, 0xff)
+      let v3 := $array_mut(and(v0, 0xff))
+      let v1 := v3
+      ret := v1
+      leave
+    }
+    $__fe_main_root()
+  }
+}

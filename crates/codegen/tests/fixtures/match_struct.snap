@@ -3,4 +3,168 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/match_struct.fe
 ---
-
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let v0 := $main()
+      stop()
+    }
+    function $main() -> ret {
+      let v9 := 0x01
+      let v0 := and(v9, 0xff)
+      let v10 := 0x02
+      let v1 := and(v10, 0xff)
+      let v11 := 0x01
+      let v12 := 0x02
+      let v13 := dataoffset("const_0")
+      let v2 := v13
+      let v15 := $match_struct_fields_arg0_root_code(v2)
+      let v3 := and(v15, 0xff)
+      let v16 := 0x00
+      let v4 := and(v16, 0xff)
+      let v17 := 0x01
+      let v5 := and(v17, 0xff)
+      let v18 := 0x00
+      let v19 := 0x01
+      let v20 := dataoffset("const_1")
+      let v6 := v20
+      let v22 := $match_struct_wildcard_arg0_root_code(v6)
+      let v7 := and(v22, 0xff)
+      let t24 := mload(0x40)
+      if iszero(t24) {
+        t24 := 0x80
+      }
+      mstore(0x40, add(t24, 64))
+      let v23 := t24
+      mstore(v23, and(and(v3, 0xff), 0xff))
+      mstore(add(v23, 32), and(and(v7, 0xff), 0xff))
+      let v8 := v23
+      ret := v8
+      leave
+    }
+    function $match_struct_fields_arg0_root_code(p0) -> ret {
+      let v5 := 0
+      let v6 := 0
+      let v22 := p0
+      v5 := v22
+      let t43 := and(mload(add(v5, 32)), 0xff)
+      let v23 := t43
+      mstore(add(v5, 32), and(and(v23, 0xff), 0xff))
+      let v24 := 0x00
+      let v8 := and(v24, 0xff)
+      let t44 := and(mload(add(v5, 32)), 0xff)
+      let v25 := t44
+      let v9 := iszero(iszero(eq(and(v25, 0xff), and(v8, 0xff))))
+      if iszero(iszero(v9)) {
+        let t45 := and(mload(v5), 0xff)
+        let v26 := t45
+        mstore(v5, and(and(v26, 0xff), 0xff))
+        let v27 := 0x00
+        let v11 := and(v27, 0xff)
+        let t46 := and(mload(v5), 0xff)
+        let v28 := t46
+        let v12 := iszero(iszero(eq(and(v28, 0xff), and(v11, 0xff))))
+        if iszero(iszero(v12)) {
+          let v32 := 0x00
+          let v13 := and(v32, 0xff)
+          let v33 := 0x00
+          v6 := and(v33, 0xff)
+        }
+        if iszero(iszero(iszero(v12))) {
+          let t47 := and(mload(v5), 0xff)
+          let v34 := t47
+          let v2 := and(v34, 0xff)
+          let v35 := and(v2, 0xff)
+          let v14 := and(v35, 0xff)
+          v6 := and(v14, 0xff)
+        }
+      }
+      if iszero(iszero(iszero(v9))) {
+        let t48 := and(mload(v5), 0xff)
+        let v29 := t48
+        mstore(v5, and(and(v29, 0xff), 0xff))
+        let v30 := 0x00
+        let v16 := and(v30, 0xff)
+        let t49 := and(mload(v5), 0xff)
+        let v31 := t49
+        let v17 := iszero(iszero(eq(and(v31, 0xff), and(v16, 0xff))))
+        if iszero(iszero(v17)) {
+          let t50 := and(mload(add(v5, 32)), 0xff)
+          let v36 := t50
+          let v1 := and(v36, 0xff)
+          let v37 := and(v1, 0xff)
+          let v18 := and(v37, 0xff)
+          v6 := and(v18, 0xff)
+        }
+        if iszero(iszero(iszero(v17))) {
+          let t51 := and(mload(add(v5, 32)), 0xff)
+          let v38 := t51
+          let v4 := and(v38, 0xff)
+          let t52 := and(mload(v5), 0xff)
+          let v39 := t52
+          let v3 := and(v39, 0xff)
+          let v40 := and(v3, 0xff)
+          let v19 := and(v40, 0xff)
+          let v41 := and(v4, 0xff)
+          let v20 := and(v41, 0xff)
+          let t53 := and(add(and(v19, 0xff), and(v20, 0xff)), 0xff)
+          if lt(t53, and(v19, 0xff)) {
+            revert(0, 0)
+          }
+          let v42 := t53
+          let v21 := and(v42, 0xff)
+          v6 := and(v21, 0xff)
+        }
+      }
+      ret := and(v6, 0xff)
+      leave
+    }
+    function $match_struct_wildcard_arg0_root_code(p0) -> ret {
+      let v1 := 0
+      let v2 := 0
+      let v12 := p0
+      v1 := v12
+      let t25 := and(mload(v1), 0xff)
+      let v13 := t25
+      mstore(v1, and(and(v13, 0xff), 0xff))
+      let v14 := 0x00
+      let v4 := and(v14, 0xff)
+      let t26 := and(mload(v1), 0xff)
+      let v15 := t26
+      let v5 := iszero(iszero(eq(and(v15, 0xff), and(v4, 0xff))))
+      if iszero(iszero(v5)) {
+        let v16 := 0x01
+        let v6 := and(v16, 0xff)
+        let v17 := 0x01
+        v2 := and(v17, 0xff)
+      }
+      if iszero(iszero(iszero(v5))) {
+        let t27 := and(mload(add(v1, 32)), 0xff)
+        let v18 := t27
+        mstore(add(v1, 32), and(and(v18, 0xff), 0xff))
+        let v19 := 0x00
+        let v8 := and(v19, 0xff)
+        let t28 := and(mload(add(v1, 32)), 0xff)
+        let v20 := t28
+        let v9 := iszero(iszero(eq(and(v20, 0xff), and(v8, 0xff))))
+        if iszero(iszero(v9)) {
+          let v21 := 0x02
+          let v10 := and(v21, 0xff)
+          let v22 := 0x02
+          v2 := and(v22, 0xff)
+        }
+        if iszero(iszero(iszero(v9))) {
+          let v23 := 0x03
+          let v11 := and(v23, 0xff)
+          let v24 := 0x03
+          v2 := and(v24, 0xff)
+        }
+      }
+      ret := and(v2, 0xff)
+      leave
+    }
+    $__fe_main_root()
+  }
+  data "const_0" hex"00000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000002"
+  data "const_1" hex"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001"
+}

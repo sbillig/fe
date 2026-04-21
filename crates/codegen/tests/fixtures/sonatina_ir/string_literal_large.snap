@@ -7,16 +7,19 @@ target = "evm-ethereum-osaka"
 
 func private %__fe_main_root() {
     block0:
+        jump block1;
+
+    block1:
         v0.i256 = call %large_string;
         evm_stop;
 }
 
 func private %large_string() -> i256 {
     block0:
-        v0.*i256 = alloca i256;
-        mstore v0 172063216033151516844329818169388221396727601204421676283161692387156386917.i256 i256;
-        v2.i256 = mload v0 i256;
-        return v2;
+        jump block1;
+
+    block1:
+        return 172063216033151516844329818169388221396727601204421676283161692387156386917.i256;
 }
 
 

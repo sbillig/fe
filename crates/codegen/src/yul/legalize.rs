@@ -66,6 +66,45 @@ pub enum YulValueClass<'db> {
     CalldataPtr { layout: LayoutId<'db> },
 }
 
+impl<'db> YulValueClass<'db> {
+    fn for_runtime_class(db: &'db DriverDataBase, class: &RuntimeClass<'db>) -> Self {
+        match class {
+            RuntimeClass::Scalar(class) => Self::Word(class.clone()),
+            RuntimeClass::Ref { pointee, kind, .. } => match kind {
+                RefKind::Const => pointee
+                    .aggregate_layout()
+                    .map(|layout| Self::CodePtr { layout })
+                    .unwrap_or_else(pointer_word_class),
+                RefKind::Object => pointee
+                    .aggregate_layout()
+                    .map(|layout| Self::MemoryPtr { layout })
+                    .unwrap_or_else(pointer_word_class),
+                RefKind::Provider { space, .. } => pointee
+                    .aggregate_layout()
+                    .map(|layout| yul_ptr_class(yul_space_from_runtime(*space), layout))
+                    .unwrap_or_else(pointer_word_class),
+            },
+            RuntimeClass::RawAddr { space, target } => target
+                .map(|layout| yul_ptr_class(yul_space_from_runtime(*space), layout))
+                .unwrap_or_else(pointer_word_class),
+            RuntimeClass::AggregateValue { layout } => layout_scalar_word_class(db, *layout)
+                .map(Self::Word)
+                .unwrap_or(Self::MemoryPtr { layout: *layout }),
+        }
+    }
+
+    fn for_place_path(
+        db: &'db DriverDataBase,
+        class: &RuntimeClass<'db>,
+        remaining_path: bool,
+    ) -> Self {
+        if remaining_path && let RuntimeClass::AggregateValue { layout } = class {
+            return Self::MemoryPtr { layout: *layout };
+        }
+        Self::for_runtime_class(db, class)
+    }
+}
+
 pub type YTransportPath<'db> = ProjectionPath<LayoutId<'db>, VariantId<'db>, YLocalId>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -2833,7 +2872,8 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
         );
 
         let mut path = Vec::with_capacity(resolved.path.len());
-        for elem in resolved.path.iter() {
+        for (idx, elem) in resolved.path.iter().enumerate() {
+            let remaining_path = idx + 1 < resolved.path.len();
             let projection = match elem {
                 ResolvedPlaceElem::Field { field, .. } => Projection::Field(field.0 as usize),
                 ResolvedPlaceElem::Index { index, .. } => Projection::Index(match index {
@@ -2854,7 +2894,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                 ResolvedPlaceElem::Field { field, class } => YulPlaceElem::Field {
                     field: *field,
                     class: specialize_yul_class_root(
-                        yul_class_for_runtime_class(self.db, class),
+                        YulValueClass::for_place_path(self.db, class, remaining_path),
                         transport.root_alias,
                     ),
                     runtime_class: class.clone(),
@@ -2867,7 +2907,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                         }
                     },
                     class: specialize_yul_class_root(
-                        yul_class_for_runtime_class(self.db, class),
+                        YulValueClass::for_place_path(self.db, class, remaining_path),
                         transport.root_alias,
                     ),
                     runtime_class: class.clone(),
@@ -2880,7 +2920,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                     variant: *variant,
                     field: *field,
                     class: specialize_yul_class_root(
-                        yul_class_for_runtime_class(self.db, class),
+                        YulValueClass::for_place_path(self.db, class, remaining_path),
                         transport.root_alias,
                     ),
                     runtime_class: class.clone(),
@@ -2972,29 +3012,7 @@ pub fn yul_class_for_runtime_class<'db>(
     db: &'db DriverDataBase,
     class: &RuntimeClass<'db>,
 ) -> YulValueClass<'db> {
-    match class {
-        RuntimeClass::Scalar(class) => YulValueClass::Word(class.clone()),
-        RuntimeClass::Ref { pointee, kind, .. } => match kind {
-            RefKind::Const => pointee
-                .aggregate_layout()
-                .map(|layout| YulValueClass::CodePtr { layout })
-                .unwrap_or_else(pointer_word_class),
-            RefKind::Object => pointee
-                .aggregate_layout()
-                .map(|layout| YulValueClass::MemoryPtr { layout })
-                .unwrap_or_else(pointer_word_class),
-            RefKind::Provider { space, .. } => pointee
-                .aggregate_layout()
-                .map(|layout| yul_ptr_class(yul_space_from_runtime(*space), layout))
-                .unwrap_or_else(pointer_word_class),
-        },
-        RuntimeClass::RawAddr { space, target } => target
-            .map(|layout| yul_ptr_class(yul_space_from_runtime(*space), layout))
-            .unwrap_or_else(pointer_word_class),
-        RuntimeClass::AggregateValue { layout } => layout_scalar_word_class(db, *layout)
-            .map(YulValueClass::Word)
-            .unwrap_or(YulValueClass::MemoryPtr { layout: *layout }),
-    }
+    YulValueClass::for_runtime_class(db, class)
 }
 
 pub fn yul_space_for_root_class(class: &YulValueClass<'_>) -> Result<YulAddressSpace, YulError> {

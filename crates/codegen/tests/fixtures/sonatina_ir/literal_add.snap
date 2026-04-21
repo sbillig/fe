@@ -7,87 +7,19 @@ target = "evm-ethereum-osaka"
 
 func private %__fe_main_root() {
     block0:
-        v1.i64 = call %add_0 0.i64 0.i64;
+        jump block1;
+
+    block1:
+        v0.i64 = call %main;
         evm_stop;
-}
-
-func private %add_0(v0.i64, v1.i64) -> i64 {
-    block0:
-        v2.*i64 = alloca i64;
-        v3.*i64 = alloca i64;
-        v4.*i64 = alloca i64;
-        v5.*i64 = alloca i64;
-        v6.*i64 = alloca i64;
-        mstore v2 v0 i64;
-        mstore v3 v1 i64;
-        v7.i256 = mload v2 i256;
-        v8.i64 = trunc v7 i64;
-        mstore v5 v8 i64;
-        v9.i256 = mload v3 i256;
-        v10.i64 = trunc v9 i64;
-        mstore v6 v10 i64;
-        v11.i64 = mload v5 i64;
-        v12.i64 = mload v6 i64;
-        (v13.i64, v14.i1) = uaddo v11 v12;
-        br v14 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        mstore v4 v13 i64;
-        v16.i64 = mload v4 i64;
-        return v16;
-}
-
-func private %add_1(v0.i64, v1.i64) -> i64 {
-    block0:
-        v2.*i64 = alloca i64;
-        v3.*i64 = alloca i64;
-        v4.*i64 = alloca i64;
-        v5.*i64 = alloca i64;
-        v6.*i64 = alloca i64;
-        mstore v2 v0 i64;
-        mstore v3 v1 i64;
-        v7.i256 = mload v2 i256;
-        v8.i64 = trunc v7 i64;
-        mstore v5 v8 i64;
-        v9.i256 = mload v3 i256;
-        v10.i64 = trunc v9 i64;
-        mstore v6 v10 i64;
-        v11.i64 = mload v5 i64;
-        v12.i64 = mload v6 i64;
-        (v13.i64, v14.i1) = uaddo v11 v12;
-        br v14 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        mstore v4 v13 i64;
-        v16.i64 = mload v4 i64;
-        return v16;
 }
 
 func private %main() -> i64 {
     block0:
-        v0.*i64 = alloca i64;
-        v1.*i64 = alloca i64;
-        v2.*i64 = alloca i64;
-        v3.*i64 = alloca i64;
-        v4.*i64 = alloca i64;
-        mstore v1 10.i64 i64;
-        mstore v2 20.i64 i64;
-        v7.i64 = mload v1 i64;
-        v8.i64 = mload v2 i64;
-        v9.i64 = call %add_1 v7 v8;
-        mstore v4 v9 i64;
-        v10.i64 = mload v4 i64;
-        mstore v3 v10 i64;
-        v11.i64 = mload v3 i64;
-        mstore v0 v11 i64;
-        v12.i64 = mload v0 i64;
-        return v12;
+        jump block1;
+
+    block1:
+        return 30.i64;
 }
 
 

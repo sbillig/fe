@@ -10,42 +10,22 @@ object "NewtypeByPlaceEffectArg" {
     }
     function $__fe_contract_init_abi_NewtypeByPlaceEffectArg() {
       let v0 := 0
-      let v1 := 0
-      let v2 := 0
-      let $pc := 0
-      for {} 1 {} {
-        switch $pc
-        case 0 {
-            v0 := 0
-            v1 := callvalue()
-            v2 := iszero(iszero(iszero(eq(v1, v0))))
-            if v2 {
-              $pc := 1
-              continue
-            }
-            $pc := 2
-            continue
-        }
-        case 1 {
-            revert(v0, v0)
-        }
-        case 2 {
-            $__NewtypeByPlaceEffectArg_init()
-            leave
-        }
-        default {
-            invalid()
-        }
+      v0 := 0
+      let v1 := callvalue()
+      let v2 := iszero(iszero(iszero(eq(v1, v0))))
+      if iszero(iszero(v2)) {
+        revert(v0, v0)
+      }
+      if iszero(iszero(iszero(v2))) {
+        $__NewtypeByPlaceEffectArg_init()
+        leave
       }
     }
     function $__fe_contract_init_root_NewtypeByPlaceEffectArg() {
       let v0 := 0
-      let v2 := 0
-      let v3 := 0
-      v0 := 0
       $__fe_contract_init_abi_NewtypeByPlaceEffectArg()
-      v2 := dataoffset("NewtypeByPlaceEffectArg_runtime")
-      v3 := datasize("NewtypeByPlaceEffectArg_runtime")
+      let v2 := dataoffset("NewtypeByPlaceEffectArg_runtime")
+      let v3 := datasize("NewtypeByPlaceEffectArg_runtime")
       datacopy(v0, v2, v3)
       return(v0, v3)
     }
@@ -53,386 +33,406 @@ object "NewtypeByPlaceEffectArg" {
   }
   object "NewtypeByPlaceEffectArg_runtime" {
     code {
-      function $__NewtypeByPlaceEffectArg_recv_0_0_eff0_stor($w, $x) -> ret {
-        let v3 := 0
-        let v4 := 0
-        let v7 := 0
-        let v9 := 0
-        let v10 := 0
-        let v12 := 0
-        let v13 := 0
-        let v15 := 0
-        v7 := $w
+      function $__NewtypeByPlaceEffectArg_recv_0_0_eff0_stor(p0, p1) -> ret {
+        let v7 := p0
         $bump_eff0_stor(v7)
-        v9 := $x
-        v3 := v9
-        v10 := 0x01
-        v4 := v10
+        let v9 := p1
+        let v3 := v9
+        let v10 := 0x01
+        let v4 := v10
         let t16 := sload(v3)
-        v12 := t16
+        let v12 := t16
         let t17 := add(v12, v4)
         if lt(t17, v12) {
           revert(0, 0)
         }
-        v13 := t17
+        let v13 := t17
         sstore(v3, v13)
-        let t18 := sload($x)
-        v15 := t18
+        let t18 := sload(p1)
+        let v15 := t18
         ret := v15
         leave
       }
       function $__fe_contract_recv_abi_NewtypeByPlaceEffectArg_1() {
-        let r8 := mload(0x40)
-        if iszero(r8) {
-          r8 := 0x80
-        }
-        mstore(0x40, add(r8, 64))
         let v0 := 0
         let v1 := 0
-        let v2 := 0
-        let v3 := 0
-        let v4 := 0
-        let v5 := 0
-        let v6 := 0
-        let v9 := 0
-        let v10 := 0
-        let v12 := 0
-        let v13 := 0
-        let v14 := 0
-        let v15 := 0
-        let v16 := 0
-        let v17 := 0
-        let v19 := 0
-        let v21 := 0
-        let v22 := 0
-        let v23 := 0
-        let v24 := 0
-        let $pc := 0
-        for {} 1 {} {
-          switch $pc
-          case 0 {
-              v0 := 0
-              v1 := 0x04
-              v2 := callvalue()
-              v3 := iszero(iszero(iszero(eq(v2, v0))))
-              if v3 {
-                $pc := 1
-                continue
-              }
-              $pc := 2
-              continue
+        v0 := 0
+        v1 := 0x04
+        let v2 := callvalue()
+        let v3 := iszero(iszero(iszero(eq(v2, v0))))
+        if iszero(iszero(v3)) {
+          revert(v0, v0)
+        }
+        if iszero(iszero(iszero(v3))) {
+          let v4 := calldatasize()
+          let t20 := sub(v4, v1)
+          if gt(v1, v4) {
+            revert(0, 0)
           }
-          case 1 {
-              revert(v0, v0)
+          let v5 := t20
+          let t21 := mload(0x40)
+          if iszero(t21) {
+            t21 := 0x80
           }
-          case 2 {
-              v4 := calldatasize()
-              let t25 := sub(v4, v1)
-              if gt(v1, v4) {
-                revert(0, 0)
-              }
-              v5 := t25
-              v6 := allocate(v5)
-              calldatacopy(v6, v1, v5)
-              mstore(r8, v6)
-              mstore(add(r8, 32), v5)
-              v9 := $decoder_new(r8)
-              v10 := v9
-              $decode(v10)
-              v12 := 1
-              v13 := 0
-              v14 := $__NewtypeByPlaceEffectArg_recv_0_0_eff0_stor(v12, v13)
-              v15 := $encoder_new()
-              v16 := 0x20
-              v17 := v15
-              $reserve_head_arg0_root_code(v17, v16)
-              v19 := v15
-              $encode_arg1_root_code(v14, v19)
-              v21 := $finish_arg0_root_code(v15)
-              v22 := v21
-              let t26 := mload(v22)
-              v23 := t26
-              let t27 := mload(add(v22, 32))
-              v24 := t27
-              return(v23, v24)
+          mstore(0x40, add(t21, v5))
+          let v6 := t21
+          calldatacopy(v6, v1, v5)
+          let r8 := mload(0x40)
+          if iszero(r8) {
+            r8 := 0x80
           }
-          default {
-              invalid()
-          }
+          mstore(0x40, add(r8, 64))
+          mstore(r8, v6)
+          mstore(add(r8, 32), v5)
+          let v9 := $decoder_new(r8)
+          let v10 := v9
+          let v11 := v10
+          $decode_payload(v11)
+          let v13 := 1
+          let v14 := 0
+          let v15 := $__NewtypeByPlaceEffectArg_recv_0_0_eff0_stor(v13, v14)
+          let v16 := $encode_single_root_alloc(v15)
+          let v17 := v16
+          let t22 := mload(v17)
+          let v18 := t22
+          let t23 := mload(add(v17, 32))
+          let v19 := t23
+          return(v18, v19)
         }
       }
       function $__fe_contract_runtime_root_NewtypeByPlaceEffectArg() {
         let v0 := 0
-        let v1 := 0
-        let $pc := 0
-        for {} 1 {} {
-          switch $pc
-          case 0 {
-              v0 := 0
-              v1 := shr(224, calldataload(0))
-              switch v1
-              case 0x01 {
-                  $pc := 2
-                  continue
-              }
-              default {
-                  $pc := 1
-                  continue
-              }
-          }
-          case 1 {
-              revert(v0, v0)
-          }
-          case 2 {
-              $__fe_contract_recv_abi_NewtypeByPlaceEffectArg_1()
-              invalid()
-          }
-          default {
-              invalid()
-          }
+        v0 := 0
+        let v1 := shr(224, calldataload(0))
+        switch and(v1, 0xffffffff)
+        case 0x01 {
+            $__fe_contract_recv_abi_NewtypeByPlaceEffectArg_1()
+            invalid()
+        }
+        default {
+            revert(v0, v0)
         }
       }
-      function $bump_eff0_stor($w) {
+      function $abi_field_size(p0) -> ret {
         let v1 := 0
-        let v2 := 0
-        let v4 := 0
-        let v5 := 0
-        let v7 := 0
-        let v8 := 0
-        v4 := $w
-        v1 := v4
-        v5 := 0x01
-        v2 := v5
+        let v9 := $payload_size_1(p0)
+        let v2 := v9
+        v1 := v2
+        let v10 := 0
+        let v4 := iszero(iszero(v10))
+        if iszero(iszero(v4)) {
+          let v11 := 0x20
+          let v5 := v11
+          let t13 := add(v5, v1)
+          if lt(t13, v5) {
+            revert(0, 0)
+          }
+          let v12 := t13
+          let v6 := v12
+          ret := v6
+          leave
+        }
+        if iszero(iszero(iszero(v4))) {
+          ret := v1
+          leave
+        }
+      }
+      function $abi_single_root_size(p0) -> ret {
+        let v2 := $abi_field_size(p0)
+        let v1 := v2
+        ret := v1
+        leave
+      }
+      function $base(p0) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 64))
+        mstore(r0, mload(p0))
+        mstore(add(r0, 32), mload(add(p0, 32)))
+        let t2 := mload(r0)
+        let v1 := t2
+        ret := v1
+        leave
+      }
+      function $bump_eff0_stor(p0) {
+        let v4 := p0
+        let v1 := v4
+        let v5 := 0x01
+        let v2 := v5
         let t10 := sload(v1)
-        v7 := t10
+        let v7 := t10
         let t11 := add(v7, v2)
         if lt(t11, v7) {
           revert(0, 0)
         }
-        v8 := t11
+        let v8 := t11
         sstore(v1, v8)
         leave
       }
-      function $decode($d) {
+      function $decode_payload(p0) {
         leave
       }
-      function $decoder_new($input) -> ret {
-        let v1 := 0
-        let v2 := 0
-        v2 := $new_1($input)
-        v1 := v2
+      function $decoder_new(p0) -> ret {
+        let v2 := $new_0(p0)
+        let v1 := v2
         ret := v1
         leave
       }
-      function $encode_arg1_root_code($self, $e) {
-        $write_word_arg0_root_code($e, $self)
+      function $encode_field(p0, p1, p2) {
+        let v28 := 0
+        let v8 := iszero(iszero(v28))
+        if iszero(iszero(v8)) {
+          let v29 := p1
+          let v30 := $base(v29)
+          let v9 := v30
+          let v3 := v9
+          let v4 := p2
+          let v31 := $payload_size_0(p0)
+          let v10 := v31
+          let v5 := v10
+          let v11 := v4
+          let t56 := mload(v11)
+          let v32 := t56
+          let t57 := sub(v32, v3)
+          if gt(v3, v32) {
+            revert(0, 0)
+          }
+          let v33 := t57
+          let v12 := v33
+          $write_word_1(p1, v12)
+          let v36 := p1
+          let v37 := $pos(v36)
+          let v14 := v37
+          let v6 := v14
+          let t58 := mload(v4)
+          let v39 := t58
+          $set_base(p1, v39)
+          let t59 := mload(v4)
+          let v42 := t59
+          $set_pos(p1, v42)
+          let v44 := p1
+          let v17 := v44
+          $encode_payload(p0, v17)
+          $set_base(p1, v3)
+          $set_pos(p1, v6)
+          let v21 := v4
+          let t60 := mload(v21)
+          let v51 := t60
+          let t61 := add(v51, v5)
+          if lt(t61, v51) {
+            revert(0, 0)
+          }
+          let v52 := t61
+          let v22 := v52
+          mstore(p2, v22)
+          leave
+        }
+        if iszero(iszero(iszero(v8))) {
+          let v53 := p1
+          let v26 := v53
+          $encode_payload(p0, v26)
+          leave
+        }
+      }
+      function $encode_payload(p0, p1) {
+        $write_word_0(p1, p0)
         leave
       }
-      function $encoder_new() -> ret {
-        let v0 := 0
-        let v1 := 0
-        v1 := $new_0()
-        v0 := v1
-        ret := v0
-        leave
-      }
-      function $finish_arg0_root_code($self) -> ret {
-        let v1 := 0
-        let v2 := 0
-        let v3 := 0
-        let v4 := 0
-        let v5 := 0
-        let v6 := 0
-        let v7 := 0
-        let t8 := allocate(32)
-        datacopy(t8, $self, 32)
-        t8 := mload(t8)
-        v2 := t8
-        v1 := v2
-        let t9 := allocate(32)
-        datacopy(t9, add($self, 96), 32)
-        t9 := mload(t9)
-        v3 := t9
-        let t10 := sub(v3, v1)
-        if gt(v1, v3) {
+      function $encode_single_root(p0, p1) {
+        let v9 := p1
+        let v10 := $base(v9)
+        let v3 := v10
+        let v11 := 0x20
+        let v4 := v11
+        let t17 := add(v3, v4)
+        if lt(t17, v3) {
           revert(0, 0)
         }
-        v6 := t10
-        v4 := v6
-        v7 := allocate(64)
-        mstore(v7, v1)
-        mstore(add(v7, 32), v4)
-        v5 := v7
-        ret := v5
+        let v12 := t17
+        let v5 := v12
+        let r2 := mload(0x40)
+        if iszero(r2) {
+          r2 := 0x80
+        }
+        mstore(0x40, add(r2, 32))
+        mstore(r2, v5)
+        let v13 := p1
+        let v6 := v13
+        let v14 := r2
+        let v7 := v14
+        $encode_field(p0, v6, v7)
         leave
       }
-      function $new_0() -> ret {
-        let v0 := 0
-        let v1 := 0
-        let v2 := 0
-        let v3 := 0
-        let v4 := 0
-        let v5 := 0
-        let v6 := 0
-        let v7 := 0
-        let v8 := 0
-        let v9 := 0
-        let v10 := 0
-        let v11 := 0
-        let v12 := 0
-        let v13 := 0
-        let v14 := 0
-        v5 := 0x00
-        v0 := v5
-        v6 := 0x00
-        v1 := v6
-        v7 := 0x00
-        v2 := v7
-        v8 := 0x00
-        v3 := v8
-        v9 := 0x00
-        v10 := 0x00
-        v11 := 0x00
-        v12 := 0x00
-        v13 := dataoffset("const_0")
-        v4 := v13
-        ret := v4
+      function $encode_single_root_alloc(p0) -> ret {
+        let v10 := $abi_single_root_size(p0)
+        let v4 := v10
+        let v1 := v4
+        let v11 := $encoder_new(v1)
+        let v5 := v11
+        let v12 := v5
+        let v2 := v12
+        let v13 := v2
+        let v14 := $base(v13)
+        let v6 := v14
+        let v3 := v6
+        let v15 := v2
+        let v7 := v15
+        $encode_single_root(p0, v7)
+        let t19 := mload(0x40)
+        if iszero(t19) {
+          t19 := 0x80
+        }
+        mstore(0x40, add(t19, 64))
+        let v18 := t19
+        mstore(v18, v3)
+        mstore(add(v18, 32), v1)
+        let v9 := v18
+        ret := v9
         leave
       }
-      function $new_1($input) -> ret {
-        let v1 := 0
-        let v2 := 0
-        let v3 := 0
-        let v4 := 0
-        let v5 := 0
-        let v6 := 0
-        v4 := $new_2($input)
-        v1 := v4
-        v5 := 0x00
-        v2 := v5
-        v6 := allocate(128)
+      function $encoder_new(p0) -> ret {
+        let v1 := p0
+        let v3 := $new_2(v1)
+        let v2 := v3
+        ret := v2
+        leave
+      }
+      function $new_0(p0) -> ret {
+        let v4 := $new_1(p0)
+        let v1 := v4
+        let v5 := 0x00
+        let v2 := v5
+        let t7 := mload(0x40)
+        if iszero(t7) {
+          t7 := 0x80
+        }
+        mstore(0x40, add(t7, 128))
+        let v6 := t7
         mstore(v6, mload(v1))
         mstore(add(v6, 32), mload(add(v1, 32)))
         mstore(add(v6, 64), mload(add(v1, 64)))
         mstore(add(v6, 96), v2)
-        v3 := v6
+        let v3 := v6
         ret := v3
         leave
       }
-      function $new_2($input) -> ret {
-        let v1 := 0
-        let v2 := 0
-        let v3 := 0
-        let v4 := 0
-        v3 := 0x00
-        v1 := v3
-        v4 := allocate(96)
-        mstore(v4, mload($input))
-        mstore(add(v4, 32), mload(add($input, 32)))
+      function $new_1(p0) -> ret {
+        let v3 := 0x00
+        let v1 := v3
+        let t5 := mload(0x40)
+        if iszero(t5) {
+          t5 := 0x80
+        }
+        mstore(0x40, add(t5, 96))
+        let v4 := t5
+        mstore(v4, mload(p0))
+        mstore(add(v4, 32), mload(add(p0, 32)))
         mstore(add(v4, 64), v1)
-        v2 := v4
+        let v2 := v4
         ret := v2
         leave
       }
-      function $reserve_head_arg0_root_code($self, $bytes) -> ret {
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
+      function $new_2(p0) -> ret {
         let v2 := 0
-        let v4 := 0
-        let v5 := 0
-        let v6 := 0
-        let v7 := 0
-        let v8 := 0
-        let v12 := 0
-        let v13 := 0
-        let v16 := 0
-        let v17 := 0
-        let v18 := 0
-        let v19 := 0
-        let v20 := 0
-        let v21 := 0
-        mstore(r1, $bytes)
-        let $pc := 0
-        for {} 1 {} {
-          switch $pc
-          case 0 {
-              let t22 := mload($self)
-              v4 := t22
-              v17 := 0x00
-              v5 := v17
-              v18 := iszero(iszero(eq(v4, v5)))
-              v6 := v18
-              if v6 {
-                $pc := 1
-                continue
-              }
-              $pc := 2
-              continue
-          }
-          case 1 {
-              let t23 := mload(r1)
-              v7 := t23
-              v20 := allocate(v7)
-              v8 := v20
-              v2 := v8
-              mstore($self, v2)
-              mstore(add($self, 32), v2)
-              mstore(add($self, 64), v2)
-              let t24 := mload(r1)
-              v12 := t24
-              v21 := add(v2, v12)
-              v13 := v21
-              mstore(add($self, 96), v13)
-              $pc := 3
-              continue
-          }
-          case 2 {
-              $pc := 3
-              continue
-          }
-          case 3 {
-              let t25 := mload(add($self, 32))
-              v16 := t25
-              ret := v16
-              leave
-          }
-          default {
-              invalid()
-          }
+        let v3 := p0
+        let v10 := 0x00
+        let v4 := v10
+        let v11 := iszero(iszero(eq(v3, v4)))
+        let v5 := iszero(iszero(v11))
+        if iszero(iszero(v5)) {
+          let v12 := 0x00
+          let v6 := v12
+          let v13 := 0x00
+          v2 := v13
         }
+        if iszero(iszero(iszero(v5))) {
+          let v7 := p0
+          let t17 := mload(0x40)
+          if iszero(t17) {
+            t17 := 0x80
+          }
+          mstore(0x40, add(t17, v7))
+          let v15 := t17
+          let v8 := v15
+          v2 := v8
+        }
+        let v1 := v2
+        let t18 := mload(0x40)
+        if iszero(t18) {
+          t18 := 0x80
+        }
+        mstore(0x40, add(t18, 64))
+        let v16 := t18
+        mstore(v16, v1)
+        mstore(add(v16, 32), v1)
+        let v9 := v16
+        ret := v9
+        leave
       }
-      function $write_word_arg0_root_code($self, $v) {
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
+      function $payload_size_0(p0) -> ret {
+        let v2 := 0x20
+        let v1 := v2
+        ret := v1
+        leave
+      }
+      function $payload_size_1(p0) -> ret {
+        let v2 := 0x20
+        let v1 := v2
+        ret := v1
+        leave
+      }
+      function $pos(p0) -> ret {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
         }
-        mstore(0x40, add(r1, 32))
-        let v2 := 0
-        let v3 := 0
-        let v4 := 0
-        let v6 := 0
-        let v7 := 0
-        let v11 := 0
-        let v12 := 0
-        mstore(r1, $v)
-        let t13 := mload(add($self, 64))
-        v3 := t13
-        v2 := v3
-        let t14 := mload(r1)
-        v4 := t14
+        mstore(0x40, add(r0, 64))
+        mstore(r0, mload(p0))
+        mstore(add(r0, 32), mload(add(p0, 32)))
+        let t2 := mload(add(r0, 32))
+        let v1 := t2
+        ret := v1
+        leave
+      }
+      function $set_base(p0, p1) {
+        let v2 := p1
+        mstore(p0, v2)
+        leave
+      }
+      function $set_pos(p0, p1) {
+        let v2 := p1
+        mstore(add(p0, 32), v2)
+        leave
+      }
+      function $write_word_0(p0, p1) {
+        let t13 := mload(add(p0, 32))
+        let v3 := t13
+        let v2 := v3
+        let v4 := p1
         mstore(v2, v4)
-        v11 := 0x20
-        v6 := v11
-        v12 := add(v2, v6)
-        v7 := v12
-        mstore(add($self, 64), v7)
+        let v11 := 0x20
+        let v6 := v11
+        let v12 := add(v2, v6)
+        let v7 := v12
+        mstore(add(p0, 32), v7)
+        leave
+      }
+      function $write_word_1(p0, p1) {
+        let t13 := mload(add(p0, 32))
+        let v3 := t13
+        let v2 := v3
+        let v4 := p1
+        mstore(v2, v4)
+        let v11 := 0x20
+        let v6 := v11
+        let v12 := add(v2, v6)
+        let v7 := v12
+        mstore(add(p0, 32), v7)
         leave
       }
       $__fe_contract_runtime_root_NewtypeByPlaceEffectArg()
     }
-    data "const_0" hex"0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
   }
 }

@@ -100,3 +100,19 @@ pub fn match_i256(e: i256) -> i256 {
         _ => 3,
     }
 }
+
+pub fn main() {
+    let _ = match_bool(true)
+    let _ = match_u8(255)
+    let _ = match_u16(0x1234)
+    let _ = match_u32(0xdeadbeef)
+    let _ = match_u64(1)
+    let _ = match_u128(1)
+    let _ = match_u256(1)
+    let _ = match_i8(99)
+    let _ = match_i16(32000)
+    let _ = match_i32(2000000000)
+    let _ = match_i64(1)
+    let _ = match_i128(1)
+    let _ = match_i256(1)
+}

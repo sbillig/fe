@@ -34,3 +34,7 @@ pub fn newtype_field_mut_method_call(x: u256) -> u256 {
     c.w.bump()
     c.w.inner.value
 }
+
+pub fn main() -> u256 {
+    newtype_field_mut_method_call(1)
+}

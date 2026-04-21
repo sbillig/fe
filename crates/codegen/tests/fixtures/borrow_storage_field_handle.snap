@@ -6,36 +6,32 @@ input_file: tests/fixtures/borrow_storage_field_handle.fe
 object "main" {
   code {
     function $__fe_main_root() {
-      let v0 := 0
-      let v1 := 0
-      v0 := 0
-      v1 := $borrow_storage_field_handle(v0)
+      let t3 := mload(0x40)
+      if iszero(t3) {
+        t3 := 0x80
+      }
+      mstore(0x40, add(t3, 32))
+      let v0 := t3
+      let v1 := v0
+      let v2 := $borrow_storage_field_handle(v1)
       stop()
     }
-    function $borrow_storage_field_handle($store) -> ret {
-      let v1 := 0
-      let v2 := 0
-      let v3 := 0
-      let v5 := 0
-      let v6 := 0
-      let v7 := 0
-      let v9 := 0
-      let v10 := 0
-      v6 := $store
-      v2 := v6
-      v1 := v2
-      v7 := 0x01
-      v3 := v7
+    function $borrow_storage_field_handle(p0) -> ret {
+      let v6 := p0
+      let v2 := v6
+      let v1 := v2
+      let v7 := 0x01
+      let v3 := v7
       let t12 := mload(v1)
-      v9 := t12
+      let v9 := t12
       let t13 := add(v9, v3)
       if lt(t13, v9) {
         revert(0, 0)
       }
-      v10 := t13
+      let v10 := t13
       mstore(v1, v10)
-      let t14 := mload($store)
-      v5 := t14
+      let t14 := mload(p0)
+      let v5 := t14
       ret := v5
       leave
     }

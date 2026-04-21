@@ -6,24 +6,17 @@ input_file: tests/fixtures/logical_ops.fe
 object "main" {
   code {
     function $__fe_main_root() {
-      let v0 := 0
-      v0 := $logical_ops()
+      let v0 := $logical_ops()
       stop()
     }
     function $logical_ops() -> ret {
-      let v0 := 0
-      let v1 := 0
-      let v2 := 0
-      let v3 := 0
+      let v3 := 1
+      let v0 := iszero(iszero(v3))
       let v4 := 0
+      let v1 := iszero(iszero(v4))
       let v5 := 0
-      v3 := 1
-      v0 := v3
-      v4 := 0
-      v1 := v4
-      v5 := 0
-      v2 := v5
-      ret := v2
+      let v2 := iszero(iszero(v5))
+      ret := iszero(iszero(v2))
       leave
     }
     $__fe_main_root()

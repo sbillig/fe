@@ -6,49 +6,101 @@ input_file: crates/codegen/tests/fixtures/ref_is_not_a_copy.fe
 target = "evm-ethereum-osaka"
 
 type @__fe_layout_0 = {i256, i256};
-type @__fe_layout_1 = {i256, i256};
+type @__fe_layout_1 = {objref<i256>, objref<i256>};
 
 func private %__fe_main_root() {
     block0:
-        v1.@__fe_layout_1 = call %live_view undef.objref<@__fe_layout_0>;
+        jump block1;
+
+    block1:
+        call %main;
         evm_stop;
-        unreachable;
+}
+
+func private %assert(v0.i1) {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i1 = is_zero v0;
+        br v2 block2 block3;
+
+    block2:
+        evm_revert 0.i256 0.i256;
+
+    block3:
+        jump block4;
+
+    block4:
+        return;
 }
 
 func private %live_view(v0.objref<@__fe_layout_0>) -> @__fe_layout_1 {
     block0:
+        jump block1;
+
+    block1:
+        v3.objref<i256> = obj.proj v0 0.i256;
+        v5.objref<i256> = obj.proj v0 1.i256;
+        v6.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v7.objref<objref<i256>> = obj.proj v6 0.i256;
+        obj.store v7 v3;
+        v8.objref<objref<i256>> = obj.proj v6 1.i256;
+        obj.store v8 v5;
+        v9.@__fe_layout_1 = obj.load v6;
+        return v9;
+}
+
+func private %main() {
+    block0:
+        jump block1;
+
+    block1:
+        call %test_ref_is_not_a_copy;
+        return;
+}
+
+func private %test_ref_is_not_a_copy() {
+    block0:
+        v0.*i256 = alloca i256;
         v1.*i256 = alloca i256;
-        v2.*i256 = alloca i256;
-        v3.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
-        v9.i256 = obj.proj v0 0.i256;
-        mstore v1 v9 i256;
-        v11.i256 = obj.proj v0 1.i256;
-        mstore v2 v11 i256;
-        v12.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
-        v13.i256 = mload v1 i256;
-        v14.i256 = mload v13 i256;
-        mstore v4 v14 i256;
-        v15.i256 = mload v4 i256;
-        mstore v5 v15 i256;
-        v16.i256 = mload v5 i256;
-        v17.i256 = obj.proj v12 0.i256;
-        obj.store v17 v16;
-        v18.i256 = mload v2 i256;
-        v19.i256 = mload v18 i256;
-        mstore v6 v19 i256;
-        v20.i256 = mload v6 i256;
-        mstore v7 v20 i256;
-        v21.i256 = mload v7 i256;
-        v22.i256 = obj.proj v12 1.i256;
-        obj.store v22 v21;
-        v23.@__fe_layout_1 = obj.load v12;
-        obj.store v3 v23;
-        v24.@__fe_layout_1 = obj.load v3;
-        return v24;
+        jump block1;
+
+    block1:
+        v4.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v6.objref<i256> = obj.proj v4 0.i256;
+        obj.store v6 10.i256;
+        v8.objref<i256> = obj.proj v4 1.i256;
+        obj.store v8 20.i256;
+        v9.@__fe_layout_0 = obj.load v4;
+        v10.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v11.objref<i256> = obj.proj v10 0.i256;
+        obj.store v11 10.i256;
+        v12.objref<i256> = obj.proj v10 1.i256;
+        obj.store v12 20.i256;
+        v13.@__fe_layout_1 = call %live_view v10;
+        v14.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v15.objref<objref<i256>> = obj.proj v14 0.i256;
+        v16.objref<i256> = extract_value v13 0.i256;
+        obj.store v15 v16;
+        v17.objref<objref<i256>> = obj.proj v14 1.i256;
+        v18.objref<i256> = extract_value v13 1.i256;
+        obj.store v17 v18;
+        v19.objref<objref<i256>> = obj.proj v14 0.i256;
+        v20.objref<i256> = obj.load v19;
+        v21.objref<objref<i256>> = obj.proj v14 1.i256;
+        v22.objref<i256> = obj.load v21;
+        mstore v0 10.i256 i256;
+        v23.i256 = obj.load v20;
+        v24.i256 = mload v0 i256;
+        v25.i1 = eq v23 v24;
+        call %assert v25;
+        mstore v1 20.i256 i256;
+        v27.i256 = obj.load v22;
+        v28.i256 = mload v1 i256;
+        v29.i1 = eq v27 v28;
+        call %assert v29;
+        return;
 }
 
 

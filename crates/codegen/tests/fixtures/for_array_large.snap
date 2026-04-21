@@ -6,201 +6,112 @@ input_file: tests/fixtures/for_array_large.fe
 object "main" {
   code {
     function $__fe_main_root() {
-      let v0 := 0
-      v0 := $for_array_large_sum()
+      let v0 := $for_array_large_sum()
       stop()
     }
     function $for_array_large_sum() -> ret {
-      let r19 := mload(0x40)
-      if iszero(r19) {
-        r19 := 0x80
-      }
-      mstore(0x40, add(r19, 32))
       let v0 := 0
       let v1 := 0
-      let v2 := 0
-      let v3 := 0
-      let v4 := 0
-      let v5 := 0
-      let v6 := 0
-      let v7 := 0
-      let v8 := 0
-      let v9 := 0
-      let v10 := 0
-      let v11 := 0
-      let v12 := 0
-      let v13 := 0
-      let v14 := 0
       let v15 := 0
       let v16 := 0
-      let v17 := 0
-      let v18 := 0
-      let v21 := 0
-      let v22 := 0
-      let v23 := 0
-      let v24 := 0
-      let v25 := 0
-      let v26 := 0
-      let v27 := 0
-      let v28 := 0
-      let v29 := 0
-      let v30 := 0
-      let v31 := 0
-      let v32 := 0
-      let v33 := 0
-      let v34 := 0
-      let v35 := 0
-      let v36 := 0
-      let v37 := 0
-      let v38 := 0
-      let v39 := 0
-      let v40 := 0
-      let v41 := 0
-      let v42 := 0
-      let v43 := 0
-      let v44 := 0
-      let v45 := 0
-      let v46 := 0
-      let v47 := 0
-      let v48 := 0
-      let v49 := 0
-      let v50 := 0
-      let v51 := 0
-      let v52 := 0
-      let v53 := 0
-      let v54 := 0
-      let v55 := 0
-      let v56 := 0
-      let v57 := 0
-      let v58 := 0
-      let v59 := 0
-      let v60 := 0
-      let v61 := 0
-      let v62 := 0
-      let v63 := 0
-      let $pc := 0
+      let v23 := 0x01
+      let v3 := and(v23, 0xffffffffffffffff)
+      let v24 := 0x02
+      let v4 := and(v24, 0xffffffffffffffff)
+      let v25 := 0x03
+      let v5 := and(v25, 0xffffffffffffffff)
+      let v26 := 0x04
+      let v6 := and(v26, 0xffffffffffffffff)
+      let v27 := 0x05
+      let v7 := and(v27, 0xffffffffffffffff)
+      let v28 := 0x06
+      let v8 := and(v28, 0xffffffffffffffff)
+      let v29 := 0x07
+      let v9 := and(v29, 0xffffffffffffffff)
+      let v30 := 0x08
+      let v10 := and(v30, 0xffffffffffffffff)
+      let v31 := 0x09
+      let v11 := and(v31, 0xffffffffffffffff)
+      let v32 := 0x0a
+      let v12 := and(v32, 0xffffffffffffffff)
+      let v33 := 0x01
+      let v34 := 0x02
+      let v35 := 0x03
+      let v36 := 0x04
+      let v37 := 0x05
+      let v38 := 0x06
+      let v39 := 0x07
+      let v40 := 0x08
+      let v41 := 0x09
+      let v42 := 0x0a
+      let v43 := dataoffset("const_0")
+      let v13 := v43
+      let v45 := 0x01
+      let v46 := 0x02
+      let v47 := 0x03
+      let v48 := 0x04
+      let v49 := 0x05
+      let v50 := 0x06
+      let v51 := 0x07
+      let v52 := 0x08
+      let v53 := 0x09
+      let v54 := 0x0a
+      let v55 := dataoffset("const_0")
+      v0 := v55
+      let v57 := 0x00
+      let v14 := and(v57, 0xffffffffffffffff)
+      let v58 := 0x00
+      v1 := and(v58, 0xffffffffffffffff)
+      let v59 := 0x00
+      v15 := v59
+      let v60 := $len_arg0_root_code(v0)
+      v16 := v60
       for {} 1 {} {
-        switch $pc
-        case 0 {
-            v23 := 0x01
-            v3 := v23
-            v24 := 0x02
-            v4 := v24
-            v25 := 0x03
-            v5 := v25
-            v26 := 0x04
-            v6 := v26
-            v27 := 0x05
-            v7 := v27
-            v28 := 0x06
-            v8 := v28
-            v29 := 0x07
-            v9 := v29
-            v30 := 0x08
-            v10 := v30
-            v31 := 0x09
-            v11 := v31
-            v32 := 0x0a
-            v12 := v32
-            v33 := 0x01
-            v34 := 0x02
-            v35 := 0x03
-            v36 := 0x04
-            v37 := 0x05
-            v38 := 0x06
-            v39 := 0x07
-            v40 := 0x08
-            v41 := 0x09
-            v42 := 0x0a
-            v43 := dataoffset("const_0")
-            v13 := v43
-            v45 := 0x01
-            v46 := 0x02
-            v47 := 0x03
-            v48 := 0x04
-            v49 := 0x05
-            v50 := 0x06
-            v51 := 0x07
-            v52 := 0x08
-            v53 := 0x09
-            v54 := 0x0a
-            v55 := dataoffset("const_0")
-            v0 := v55
-            v57 := 0x00
-            v14 := v57
-            v58 := 0x00
-            v1 := v58
-            v59 := 0x00
-            v15 := v59
-            v60 := $len_arg0_root_code(v0)
-            v16 := v60
-            $pc := 1
-            continue
+        let v17 := iszero(iszero(lt(v15, v16)))
+        if iszero(iszero(v17)) {
+          let v61 := $get_arg0_root_code(v0, v15)
+          let v18 := and(v61, 0xffffffffffffffff)
+          let v2 := and(v18, 0xffffffffffffffff)
+          let t64 := and(add(and(v1, 0xffffffffffffffff), and(v2, 0xffffffffffffffff)), 0xffffffffffffffff)
+          if lt(t64, and(v1, 0xffffffffffffffff)) {
+            revert(0, 0)
+          }
+          let v62 := t64
+          let v19 := and(v62, 0xffffffffffffffff)
+          v1 := and(v19, 0xffffffffffffffff)
+          let v63 := 0x01
+          let v21 := v63
+          let t65 := add(v15, v21)
+          if lt(t65, v15) {
+            revert(0, 0)
+          }
+          let v22 := t65
+          v15 := v22
+          continue
         }
-        case 1 {
-            v17 := iszero(iszero(lt(v15, v16)))
-            if v17 {
-              $pc := 2
-              continue
-            }
-            $pc := 3
-            continue
-        }
-        case 2 {
-            v61 := $get_arg0_root_code(v0, v15)
-            v18 := v61
-            v2 := v18
-            let t64 := and(add(v1, v2), 0xffffffffffffffff)
-            if lt(t64, v1) {
-              revert(0, 0)
-            }
-            v62 := t64
-            mstore(r19, v62)
-            let t65 := mload(r19)
-            v1 := t65
-            v63 := 0x01
-            v21 := v63
-            let t66 := add(v15, v21)
-            if lt(t66, v15) {
-              revert(0, 0)
-            }
-            v22 := t66
-            v15 := v22
-            $pc := 1
-            continue
-        }
-        case 3 {
-            ret := v1
-            leave
-        }
-        default {
-            invalid()
+        if iszero(iszero(iszero(v17))) {
+          break
         }
       }
-    }
-    function $get_arg0_root_code($self, $i) -> ret {
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let v2 := 0
-      let v3 := 0
-      mstore(r1, $i)
-      let t4 := mload(r1)
-      v2 := t4
-      let t5 := allocate(32)
-      datacopy(t5, add($self, mul(v2, 32)), 32)
-      t5 := mload(t5)
-      v3 := t5
-      ret := v3
+      ret := and(v1, 0xffffffffffffffff)
       leave
     }
-    function $len_arg0_root_code($self) -> ret {
-      let v1 := 0
-      let v2 := 0
-      v2 := 0x0a
-      v1 := v2
+    function $get_arg0_root_code(p0, p1) -> ret {
+      let v2 := p1
+      let t4 := mload(0x40)
+      if iszero(t4) {
+        t4 := 0x80
+      }
+      mstore(0x40, add(t4, 32))
+      datacopy(t4, add(p0, mul(v2, 32)), 32)
+      t4 := mload(t4)
+      let v3 := t4
+      ret := and(v3, 0xffffffffffffffff)
+      leave
+    }
+    function $len_arg0_root_code(p0) -> ret {
+      let v2 := 0x0a
+      let v1 := v2
       ret := v1
       leave
     }

@@ -1,11 +1,11 @@
 ---
-source: crates/hir-analysis/tests/decision_tree.rs
+source: crates/hir/tests/decision_tree.rs
 expression: res
 input_file: test_files/decision_trees/wildcard.fe
 ---
-note: 
+note:
    ┌─ wildcard.fe:8:5
-   │  
+   │
  8 │ ╭     match c {
  9 │ │         Color::Red => 0
 10 │ │         _ => 1

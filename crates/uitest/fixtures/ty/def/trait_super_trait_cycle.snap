@@ -8,7 +8,7 @@ error[5-0002]: cyclic trait bounds are not allowed
   │
 1 │ pub trait Foo: Bar {}
   │           ^^^ trait cycle detected here
-2 │ 
+2 │
 3 │ pub trait Bar
   │           --- cycle continues here
   ·

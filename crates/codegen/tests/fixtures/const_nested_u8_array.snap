@@ -6,52 +6,29 @@ input_file: tests/fixtures/const_nested_u8_array.fe
 object "main" {
   code {
     function $__fe_main_root() {
-      let v0 := 0
-      v0 := $const_nested_u8_array()
+      let v0 := $const_nested_u8_array()
       stop()
     }
     function $const_nested_u8_array() -> ret {
-      let v0 := 0
-      let v1 := 0
-      let v2 := 0
-      let v3 := 0
-      let v4 := 0
-      let v5 := 0
-      let v6 := 0
-      let v7 := 0
-      let v8 := 0
-      let v9 := 0
-      let v10 := 0
-      let v11 := 0
-      let v12 := 0
-      let v13 := 0
-      let v14 := 0
-      let v15 := 0
-      let v16 := 0
-      let v17 := 0
-      let v18 := 0
-      let v19 := 0
-      let v20 := 0
-      let v21 := 0
-      v5 := 0x01
-      v6 := 0x02
-      v7 := dataoffset("const_0")
-      v9 := 0x03
-      v10 := 0x04
-      v11 := dataoffset("const_1")
-      v13 := dataoffset("const_2")
-      v0 := v13
-      v15 := 0x01
-      v1 := v15
-      v16 := 0x03
-      v17 := 0x04
-      v18 := dataoffset("const_1")
-      v2 := v18
-      v20 := 0x00
-      v3 := v20
-      v21 := 0x03
-      v4 := v21
-      ret := v4
+      let v5 := 0x01
+      let v6 := 0x02
+      let v7 := dataoffset("const_0")
+      let v9 := 0x03
+      let v10 := 0x04
+      let v11 := dataoffset("const_1")
+      let v13 := dataoffset("const_2")
+      let v0 := v13
+      let v15 := 0x01
+      let v1 := v15
+      let v16 := 0x03
+      let v17 := 0x04
+      let v18 := dataoffset("const_1")
+      let v2 := v18
+      let v20 := 0x00
+      let v3 := v20
+      let v21 := 0x03
+      let v4 := and(v21, 0xff)
+      ret := and(v4, 0xff)
       leave
     }
     $__fe_main_root()

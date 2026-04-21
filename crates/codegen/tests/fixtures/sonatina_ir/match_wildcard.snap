@@ -5,7 +5,8 @@ input_file: crates/codegen/tests/fixtures/match_wildcard.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @__fe_layout_0 = enum {
+type @__fe_layout_0 = {i8, i8, i8};
+type @__fe_layout_1 = enum {
     #Red,
     #Green,
     #Blue,
@@ -13,126 +14,99 @@ type @__fe_layout_0 = enum {
 
 func private %__fe_main_root() {
     block0:
-        v1.i8 = call %match_with_wildcard undef.@__fe_layout_0;
+        jump block1;
+
+    block1:
+        v0.@__fe_layout_0 = call %main;
         evm_stop;
 }
 
-func private %match_with_wildcard(v0.@__fe_layout_0) -> i8 {
+func private %main() -> @__fe_layout_0 {
     block0:
-        v1.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
-        v2.*i8 = alloca i8;
-        v3.*i8 = alloca i8;
-        v4.*i8 = alloca i8;
-        v5.*i8 = alloca i8;
-        v6.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
-        obj.store v1 v0;
-        v7.@__fe_layout_0 = obj.load v1;
-        obj.store v6 v7;
-        v8.@__fe_layout_0 = obj.load v6;
-        v9.i8 = enum.tag v8;
-        mstore v5 v9 i8;
-        v10.i8 = mload v5 i8;
-        br_table v10 block3 (0.i256 block2);
+        jump block1;
 
     block1:
-        v12.i8 = mload v2 i8;
-        return v12;
-
-    block2:
-        mstore v3 1.i8 i8;
-        v14.i8 = mload v3 i8;
-        mstore v2 v14 i8;
-        jump block1;
-
-    block3:
-        mstore v4 0.i8 i8;
-        v16.i8 = mload v4 i8;
-        mstore v2 v16 i8;
-        jump block1;
+        v0.@__fe_layout_1 = enum.make @__fe_layout_1 #Red;
+        v1.i8 = call %match_with_wildcard v0;
+        v3.i8 = call %wildcard_not_last 1.i8;
+        v4.@__fe_layout_1 = enum.make @__fe_layout_1 #Green;
+        v5.i8 = call %multiple_before_wildcard v4;
+        v6.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v8.objref<i8> = obj.proj v6 0.i256;
+        obj.store v8 v1;
+        v10.objref<i8> = obj.proj v6 1.i256;
+        obj.store v10 v3;
+        v12.objref<i8> = obj.proj v6 2.i256;
+        obj.store v12 v5;
+        v13.@__fe_layout_0 = obj.load v6;
+        return v13;
 }
 
-func private %multiple_before_wildcard(v0.@__fe_layout_0) -> i8 {
+func private %match_with_wildcard(v0.@__fe_layout_1) -> i8 {
     block0:
-        v1.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
-        v2.*i8 = alloca i8;
-        v3.*i8 = alloca i8;
-        v4.*i8 = alloca i8;
-        v5.*i8 = alloca i8;
-        v6.*i8 = alloca i8;
-        v7.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
-        obj.store v1 v0;
-        v8.@__fe_layout_0 = obj.load v1;
-        obj.store v7 v8;
-        v9.@__fe_layout_0 = obj.load v7;
-        v10.i8 = enum.tag v9;
-        mstore v6 v10 i8;
-        v11.i8 = mload v6 i8;
-        br_table v11 block4 (0.i256 block2) (1.i256 block3);
+        jump block1;
 
     block1:
-        v14.i8 = mload v2 i8;
-        return v14;
+        v2.enumtag(@__fe_layout_1) = enum.tag v0;
+        br_table v2 block4 (0.enumtag(@__fe_layout_1) block3);
 
     block2:
-        mstore v3 1.i8 i8;
-        v16.i8 = mload v3 i8;
-        mstore v2 v16 i8;
-        jump block1;
+        v4.i8 = phi (1.i8 block3) (0.i8 block4);
+        return v4;
 
     block3:
-        mstore v4 2.i8 i8;
-        v18.i8 = mload v4 i8;
-        mstore v2 v18 i8;
-        jump block1;
+        jump block2;
 
     block4:
-        mstore v5 3.i8 i8;
-        v20.i8 = mload v5 i8;
-        mstore v2 v20 i8;
+        jump block2;
+}
+
+func private %multiple_before_wildcard(v0.@__fe_layout_1) -> i8 {
+    block0:
         jump block1;
+
+    block1:
+        v2.enumtag(@__fe_layout_1) = enum.tag v0;
+        br_table v2 block5 (0.enumtag(@__fe_layout_1) block3) (1.enumtag(@__fe_layout_1) block4);
+
+    block2:
+        v5.i8 = phi (1.i8 block3) (2.i8 block4) (3.i8 block5);
+        return v5;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        jump block2;
 }
 
 func private %wildcard_not_last(v0.i8) -> i8 {
     block0:
         v1.*i8 = alloca i8;
-        v2.*i8 = alloca i8;
-        v3.*i8 = alloca i8;
-        v4.*i1 = alloca i1;
-        v5.*i8 = alloca i8;
-        v6.*i8 = alloca i8;
-        v7.*i8 = alloca i8;
         mstore v1 v0 i8;
-        mstore v3 0.i8 i8;
-        v9.i256 = mload v1 i256;
-        v10.i8 = trunc v9 i8;
-        mstore v7 v10 i8;
-        v11.i8 = mload v7 i8;
-        v12.i8 = mload v3 i8;
-        v13.i1 = ne v11 0.i8;
-        v14.i1 = ne v12 0.i8;
-        v15.i1 = eq v13 v14;
-        mstore v4 v15 i1;
-        v16.i1 = mload v4 i1;
-        br v16 block2 block4;
+        jump block1;
 
     block1:
-        v17.i8 = mload v2 i8;
-        return v17;
+        v2.i256 = mload v1 i256;
+        v3.i8 = trunc v2 i8;
+        v5.i1 = eq v3 0.i8;
+        br v5 block3 block5;
 
     block2:
-        mstore v5 10.i8 i8;
-        v19.i8 = mload v5 i8;
-        mstore v2 v19 i8;
-        jump block1;
+        v6.i8 = phi (10.i8 block3) (99.i8 block4);
+        return v6;
 
     block3:
-        mstore v6 99.i8 i8;
-        v21.i8 = mload v6 i8;
-        mstore v2 v21 i8;
-        jump block1;
+        jump block2;
 
     block4:
-        jump block3;
+        jump block2;
+
+    block5:
+        jump block4;
 }
 
 

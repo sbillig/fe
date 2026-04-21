@@ -7,6 +7,9 @@ target = "evm-ethereum-osaka"
 
 func private %__fe_main_root() {
     block0:
+        jump block1;
+
+    block1:
         v0.i64 = call %do_while;
         evm_stop;
 }
@@ -14,46 +17,31 @@ func private %__fe_main_root() {
 func private %do_while() -> i64 {
     block0:
         v0.*i64 = alloca i64;
-        v1.*i64 = alloca i64;
-        v2.*i64 = alloca i64;
-        v3.*i1 = alloca i1;
-        v4.*i64 = alloca i64;
-        v5.*i64 = alloca i64;
-        mstore v1 0.i64 i64;
-        v7.i64 = mload v1 i64;
-        mstore v0 v7 i64;
         jump block1;
 
     block1:
-        mstore v2 10.i64 i64;
-        v9.i64 = mload v0 i64;
-        v10.i64 = mload v2 i64;
-        v11.i1 = ne v9 0.i64;
-        v12.i1 = ne v10 0.i64;
-        v13.i1 = lt v11 v12;
-        mstore v3 v13 i1;
-        v14.i1 = mload v3 i1;
-        br v14 block2 block3;
+        jump block2;
 
     block2:
-        mstore v4 1.i64 i64;
-        v16.i64 = mload v0 i64;
-        v17.i64 = mload v4 i64;
-        (v18.i64, v19.i1) = uaddo v16 v17;
-        br v19 block4 block5;
+        v3.i64 = phi (0.i64 block1) (v11 block6);
+        v4.i1 = lt v3 10.i64;
+        br v4 block3 block4;
 
     block3:
-        v22.i64 = mload v0 i64;
-        return v22;
+        (v7.i64, v8.i1) = uaddo v3 1.i64;
+        br v8 block5 block6;
 
     block4:
-        evm_revert 0.i256 0.i256;
+        return v3;
 
     block5:
-        mstore v5 v18 i64;
-        v21.i64 = mload v5 i64;
-        mstore v0 v21 i64;
-        jump block1;
+        evm_revert 0.i256 0.i256;
+
+    block6:
+        mstore v0 v7 i64;
+        v10.i256 = mload v0 i256;
+        v11.i64 = trunc v10 i64;
+        jump block2;
 }
 
 

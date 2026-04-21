@@ -6,26 +6,20 @@ input_file: tests/fixtures/generic_identity.fe
 object "main" {
   code {
     function $__fe_main_root() {
-      let v0 := 0
-      v0 := $call_identity_bool()
+      let v0 := $call_identity_bool()
       stop()
     }
     function $call_identity_bool() -> ret {
-      let v0 := 0
-      let v1 := 0
-      let v2 := 0
-      let v3 := 0
-      let v4 := 0
-      v3 := 1
-      v1 := v3
-      v4 := $identity_0(v1)
-      v2 := v4
-      v0 := v2
-      ret := v0
+      let v3 := 1
+      let v1 := iszero(iszero(v3))
+      let v4 := $identity_0(iszero(iszero(v1)))
+      let v2 := iszero(iszero(v4))
+      let v0 := iszero(iszero(v2))
+      ret := iszero(iszero(v0))
       leave
     }
-    function $identity_0($value) -> ret {
-      ret := $value
+    function $identity_0(p0) -> ret {
+      ret := iszero(iszero(p0))
       leave
     }
     $__fe_main_root()

@@ -18,3 +18,10 @@ pub fn match_deeply_nested(t: (((bool, bool), bool), bool)) -> u8 {
         (((false, _), _), _) => 0,
     }
 }
+
+pub fn main() -> (u8, u8) {
+    (
+        match_nested_tuple(((true, false), true)),
+        match_deeply_nested((((true, true), false), true)),
+    )
+}

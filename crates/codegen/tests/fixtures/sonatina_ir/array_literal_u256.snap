@@ -7,29 +7,39 @@ target = "evm-ethereum-osaka"
 
 func private %__fe_main_root() {
     block0:
+        jump block1;
+
+    block1:
         v0.[i256; 4] = call %fixed_u256_array_literal;
         evm_stop;
 }
 
 func private %fixed_u256_array_literal() -> [i256; 4] {
     block0:
-        v0.objref<[i256; 4]> = obj.alloc [i256; 4];
-        v1.*i256 = alloca i256;
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.objref<[i256; 4]> = obj.alloc [i256; 4];
-        mstore v1 1.i256 i256;
-        mstore v2 2.i256 i256;
-        mstore v3 3.i256 i256;
-        mstore v4 4.i256 i256;
-        v10.objref<[i256; 4]> = obj.alloc [i256; 4];
-        v11.[i256; 4] = obj.load v10;
-        obj.store v5 v11;
-        v12.[i256; 4] = obj.load v5;
-        obj.store v0 v12;
-        v13.[i256; 4] = obj.load v0;
-        return v13;
+        jump block1;
+
+    block1:
+        v4.objref<[i256; 4]> = obj.alloc [i256; 4];
+        v6.objref<i256> = obj.index v4 0.i256;
+        obj.store v6 1.i256;
+        v7.objref<i256> = obj.index v4 1.i256;
+        obj.store v7 2.i256;
+        v8.objref<i256> = obj.index v4 2.i256;
+        obj.store v8 3.i256;
+        v9.objref<i256> = obj.index v4 3.i256;
+        obj.store v9 4.i256;
+        v10.[i256; 4] = obj.load v4;
+        v11.objref<[i256; 4]> = obj.alloc [i256; 4];
+        v12.objref<i256> = obj.index v11 0.i256;
+        obj.store v12 1.i256;
+        v13.objref<i256> = obj.index v11 1.i256;
+        obj.store v13 2.i256;
+        v14.objref<i256> = obj.index v11 2.i256;
+        obj.store v14 3.i256;
+        v15.objref<i256> = obj.index v11 3.i256;
+        obj.store v15 4.i256;
+        v16.[i256; 4] = obj.load v11;
+        return v16;
 }
 
 

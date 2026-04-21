@@ -15,3 +15,7 @@ pub fn call_user_helpers(a: u64, b: u64) -> (u64, u64) {
 pub fn call_internal_helpers(a: u64, b: u64) -> (u64, u64) {
     (a + b, a.saturating_add(b))
 }
+
+pub fn main() -> ((u64, u64), (u64, u64)) {
+    (call_user_helpers(1, 2), call_internal_helpers(1, 2))
+}

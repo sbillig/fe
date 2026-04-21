@@ -8,3 +8,7 @@ pub fn aug_assign_bit_ops(x: u256, y: u256) -> u256 {
     acc ^= 2
     acc
 }
+
+pub fn main() -> u256 {
+    aug_assign_bit_ops(3, 2)
+}

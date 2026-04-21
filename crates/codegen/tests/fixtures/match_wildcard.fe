@@ -28,3 +28,11 @@ pub fn multiple_before_wildcard(c: Color) -> u8 {
         _ => 3
     }
 }
+
+pub fn main() -> (u8, u8, u8) {
+    (
+        match_with_wildcard(Color::Red),
+        wildcard_not_last(1),
+        multiple_before_wildcard(Color::Green),
+    )
+}

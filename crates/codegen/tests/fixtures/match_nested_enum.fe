@@ -17,3 +17,7 @@ pub fn match_nested_enum(outer: own Outer) -> u8 {
         Outer::Second(y) => y
     }
 }
+
+pub fn main() -> u8 {
+    match_nested_enum(Outer::First(Inner::Value(7)))
+}

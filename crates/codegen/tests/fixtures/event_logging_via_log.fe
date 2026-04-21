@@ -12,3 +12,12 @@ struct Transfer {
 fn emit_transfer(evm: mut Evm, from: Address, to: Address, amount: u256) {
     evm.emit(Transfer { from, to, amount })
 }
+
+pub fn main() uses (evm: mut Evm) {
+    emit_transfer(
+        evm,
+        Address { inner: 1 },
+        Address { inner: 2 },
+        100,
+    )
+}

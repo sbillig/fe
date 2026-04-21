@@ -8,7 +8,7 @@ error[8-0032]: duplicate binding `x` in pattern
   │
 6 │     let E::V(x, x) = f
   │              -  ^ `x` is defined again here
-  │              │   
+  │              │
   │              first definition of `x` in this pattern
 
 error[8-0032]: duplicate binding `x` in pattern
@@ -16,5 +16,5 @@ error[8-0032]: duplicate binding `x` in pattern
   │
 9 │         E::V(x, x) => ()
   │              -  ^ `x` is defined again here
-  │              │   
+  │              │
   │              first definition of `x` in this pattern

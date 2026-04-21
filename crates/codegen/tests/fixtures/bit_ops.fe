@@ -10,3 +10,8 @@ pub fn bit_ops(x: u256, y: u256) -> (u256, u256, u256, u256, u256) {
 pub fn pow_op(x: u256, y: u256) -> u256 {
     x ** y
 }
+
+pub fn main() -> u256 {
+    let _ = bit_ops(1, 2)
+    pow_op(2, 3)
+}

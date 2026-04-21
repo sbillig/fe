@@ -7,7 +7,10 @@ target = "evm-ethereum-osaka"
 
 func private %__fe_main_root() {
     block0:
-        v1.i64 = call %aug_assign 0.i64 0.i64;
+        jump block1;
+
+    block1:
+        v0.i64 = call %main;
         evm_stop;
 }
 
@@ -16,55 +19,52 @@ func private %aug_assign(v0.i64, v1.i64) -> i64 {
         v2.*i64 = alloca i64;
         v3.*i64 = alloca i64;
         v4.*i64 = alloca i64;
-        v5.*i64 = alloca i64;
-        v6.*i64 = alloca i64;
-        v7.*i64 = alloca i64;
-        v8.*i64 = alloca i64;
-        v9.*i64 = alloca i64;
-        v10.*i64 = alloca i64;
-        v11.*i64 = alloca i64;
         mstore v2 v0 i64;
         mstore v3 v1 i64;
-        v12.i256 = mload v2 i256;
-        v13.i64 = trunc v12 i64;
-        mstore v10 v13 i64;
-        v14.i64 = mload v10 i64;
-        mstore v4 v14 i64;
-        v15.i256 = mload v3 i256;
-        v16.i64 = trunc v15 i64;
-        mstore v11 v16 i64;
-        v17.i64 = mload v4 i64;
-        v18.i64 = mload v11 i64;
-        (v19.i64, v20.i1) = uaddo v17 v18;
-        br v20 block1 block2;
+        jump block1;
 
     block1:
-        evm_revert 0.i256 0.i256;
+        v5.i256 = mload v2 i256;
+        v6.i64 = trunc v5 i64;
+        mstore v4 v6 i64;
+        v7.i256 = ptr_to_int v4 i256;
+        v8.i256 = mload v3 i256;
+        v9.i64 = trunc v8 i64;
+        v10.i256 = mload v7 i256;
+        v11.i64 = trunc v10 i64;
+        (v12.i64, v13.i1) = uaddo v11 v9;
+        br v13 block2 block3;
 
     block2:
-        mstore v5 v19 i64;
-        v22.i64 = mload v5 i64;
-        mstore v4 v22 i64;
-        mstore v6 2.i64 i64;
-        v24.i64 = mload v4 i64;
-        v25.i64 = mload v6 i64;
-        (v26.i64, v27.i1) = umulo v24 v25;
-        br v27 block1 block3;
+        evm_revert 0.i256 0.i256;
 
     block3:
-        mstore v7 v26 i64;
-        v28.i64 = mload v7 i64;
-        mstore v4 v28 i64;
-        mstore v8 2.i64 i64;
-        v29.i64 = mload v4 i64;
-        v30.i64 = mload v8 i64;
-        (v31.i64, v32.i1) = evm_udivo v29 v30;
-        br v32 block1 block4;
+        v16.i256 = zext v12 i256;
+        mstore v7 v16 i256;
+        v17.i256 = ptr_to_int v4 i256;
+        v19.i256 = mload v17 i256;
+        v20.i64 = trunc v19 i64;
+        (v21.i64, v22.i1) = umulo v20 2.i64;
+        br v22 block2 block4;
 
     block4:
-        mstore v9 v31 i64;
-        v33.i64 = mload v9 i64;
-        return v33;
+        v24.i256 = zext v21 i256;
+        mstore v17 v24 i256;
+        v25.i64 = mload v4 i64;
+        (v26.i64, v27.i1) = evm_udivo v25 2.i64;
+        br v27 block2 block5;
+
+    block5:
+        return v26;
+}
+
+func private %main() -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i64 = call %aug_assign 1.i64 2.i64;
+        return v2;
 }
 
 

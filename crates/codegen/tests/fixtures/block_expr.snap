@@ -6,24 +6,17 @@ input_file: tests/fixtures/block_expr.fe
 object "main" {
   code {
     function $__fe_main_root() {
-      let v0 := 0
-      v0 := $block_expr()
+      let v0 := $block_expr()
       stop()
     }
     function $block_expr() -> ret {
-      let v0 := 0
-      let v1 := 0
-      let v2 := 0
-      let v3 := 0
-      let v4 := 0
-      let v5 := 0
-      v3 := 0x01
-      v0 := v3
-      v4 := 0x02
-      v1 := v4
-      v5 := 0x03
-      v2 := v5
-      ret := v2
+      let v3 := 0x01
+      let v0 := and(v3, 0xffffffffffffffff)
+      let v4 := 0x02
+      let v1 := and(v4, 0xffffffffffffffff)
+      let v5 := 0x03
+      let v2 := and(v5, 0xffffffffffffffff)
+      ret := and(v2, 0xffffffffffffffff)
       leave
     }
     $__fe_main_root()

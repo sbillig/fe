@@ -7,112 +7,19 @@ target = "evm-ethereum-osaka"
 
 func private %__fe_main_root() {
     block0:
-        v0.i64 = call %call_method;
+        jump block1;
+
+    block1:
+        v0.i64 = call %make_value;
         evm_stop;
 }
 
-func private %call_method() -> i64 {
+func private %make_value() -> i64 {
     block0:
-        v0.*i64 = alloca i64;
-        v1.*i64 = alloca i64;
-        v2.i64 = call %return_value_0;
-        mstore v1 v2 i64;
-        v3.i64 = mload v1 i64;
-        mstore v0 v3 i64;
-        v4.i64 = mload v0 i64;
-        return v4;
-}
+        jump block1;
 
-func private %gen_value_0() -> i64 {
-    block0:
-        v0.*i64 = alloca i64;
-        v1.*i64 = alloca i64;
-        v2.i64 = call %make_value_0;
-        mstore v1 v2 i64;
-        v3.i64 = mload v1 i64;
-        mstore v0 v3 i64;
-        v4.i64 = mload v0 i64;
-        return v4;
-}
-
-func private %gen_value_1() -> i64 {
-    block0:
-        v0.*i64 = alloca i64;
-        v1.*i64 = alloca i64;
-        v2.i64 = call %make_value_1;
-        mstore v1 v2 i64;
-        v3.i64 = mload v1 i64;
-        mstore v0 v3 i64;
-        v4.i64 = mload v0 i64;
-        return v4;
-}
-
-func private %gen_value_2() -> i64 {
-    block0:
-        v0.*i64 = alloca i64;
-        v1.*i64 = alloca i64;
-        v2.i64 = call %make_value_3;
-        mstore v1 v2 i64;
-        v3.i64 = mload v1 i64;
-        mstore v0 v3 i64;
-        v4.i64 = mload v0 i64;
-        return v4;
-}
-
-func private %make_value_0() -> i64 {
-    block0:
-        v0.*i64 = alloca i64;
-        mstore v0 42.i64 i64;
-        v2.i64 = mload v0 i64;
-        return v2;
-}
-
-func private %make_value_1() -> i64 {
-    block0:
-        v0.*i64 = alloca i64;
-        mstore v0 42.i64 i64;
-        v2.i64 = mload v0 i64;
-        return v2;
-}
-
-func private %make_value_2() -> i64 {
-    block0:
-        v0.*i64 = alloca i64;
-        mstore v0 42.i64 i64;
-        v2.i64 = mload v0 i64;
-        return v2;
-}
-
-func private %make_value_3() -> i64 {
-    block0:
-        v0.*i64 = alloca i64;
-        mstore v0 42.i64 i64;
-        v2.i64 = mload v0 i64;
-        return v2;
-}
-
-func private %return_value_0() -> i64 {
-    block0:
-        v0.*i64 = alloca i64;
-        v1.*i64 = alloca i64;
-        v2.i64 = call %gen_value_0;
-        mstore v1 v2 i64;
-        v3.i64 = mload v1 i64;
-        mstore v0 v3 i64;
-        v4.i64 = mload v0 i64;
-        return v4;
-}
-
-func private %return_value_1() -> i64 {
-    block0:
-        v0.*i64 = alloca i64;
-        v1.*i64 = alloca i64;
-        v2.i64 = call %gen_value_1;
-        mstore v1 v2 i64;
-        v3.i64 = mload v1 i64;
-        mstore v0 v3 i64;
-        v4.i64 = mload v0 i64;
-        return v4;
+    block1:
+        return 42.i64;
 }
 
 

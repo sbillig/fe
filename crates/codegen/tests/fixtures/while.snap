@@ -6,72 +6,38 @@ input_file: tests/fixtures/while.fe
 object "main" {
   code {
     function $__fe_main_root() {
-      let v0 := 0
-      v0 := $do_while()
+      let v0 := $do_while()
       stop()
     }
     function $do_while() -> ret {
-      let r5 := mload(0x40)
-      if iszero(r5) {
-        r5 := 0x80
-      }
-      mstore(0x40, add(r5, 32))
       let v0 := 0
-      let v1 := 0
-      let v2 := 0
-      let v3 := 0
-      let v4 := 0
-      let v7 := 0
-      let v8 := 0
-      let v9 := 0
-      let v10 := 0
-      let v11 := 0
-      let v12 := 0
-      let $pc := 0
+      let v7 := 0x00
+      let v1 := and(v7, 0xffffffffffffffff)
+      let v8 := 0x00
+      v0 := and(v8, 0xffffffffffffffff)
       for {} 1 {} {
-        switch $pc
-        case 0 {
-            v7 := 0x00
-            v1 := v7
-            v8 := 0x00
-            v0 := v8
-            $pc := 1
-            continue
+        let v9 := 0x0a
+        let v2 := and(v9, 0xffffffffffffffff)
+        let v10 := iszero(iszero(lt(and(v0, 0xffffffffffffffff), and(v2, 0xffffffffffffffff))))
+        let v3 := iszero(iszero(v10))
+        if iszero(iszero(v3)) {
+          let v11 := 0x01
+          let v4 := and(v11, 0xffffffffffffffff)
+          let t13 := and(add(and(v0, 0xffffffffffffffff), and(v4, 0xffffffffffffffff)), 0xffffffffffffffff)
+          if lt(t13, and(v0, 0xffffffffffffffff)) {
+            revert(0, 0)
+          }
+          let v12 := t13
+          let v5 := and(v12, 0xffffffffffffffff)
+          v0 := and(v5, 0xffffffffffffffff)
+          continue
         }
-        case 1 {
-            v9 := 0x0a
-            v2 := v9
-            v10 := iszero(iszero(lt(v0, v2)))
-            v3 := v10
-            if v3 {
-              $pc := 2
-              continue
-            }
-            $pc := 3
-            continue
-        }
-        case 2 {
-            v11 := 0x01
-            v4 := v11
-            let t13 := and(add(v0, v4), 0xffffffffffffffff)
-            if lt(t13, v0) {
-              revert(0, 0)
-            }
-            v12 := t13
-            mstore(r5, v12)
-            let t14 := mload(r5)
-            v0 := t14
-            $pc := 1
-            continue
-        }
-        case 3 {
-            ret := v0
-            leave
-        }
-        default {
-            invalid()
+        if iszero(iszero(iszero(v3))) {
+          break
         }
       }
+      ret := and(v0, 0xffffffffffffffff)
+      leave
     }
     $__fe_main_root()
   }

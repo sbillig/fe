@@ -1,24 +1,23 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 41
 expression: res
 input_file: test_files/ty_check/contract_happy.fe
 ---
-note: 
+note:
    ┌─ contract_happy.fe:10:9
    │
 10 │         Withdraw { amount } -> bool
    │         ^^^^^^^^^^^^^^^^^^^ Withdraw
 
-note: 
+note:
    ┌─ contract_happy.fe:10:20
    │
 10 │         Withdraw { amount } -> bool
    │                    ^^^^^^ u64
 
-note: 
+note:
    ┌─ contract_happy.fe:11:28
-   │  
+   │
 11 │             uses (mut total) {
    │ ╭────────────────────────────^
 12 │ │             if amount > total {
@@ -29,9 +28,9 @@ note:
 18 │ │         }
    │ ╰─────────^ bool
 
-note: 
+note:
    ┌─ contract_happy.fe:12:13
-   │  
+   │
 12 │ ╭             if amount > total {
 13 │ │                 false
 14 │ │             } else {
@@ -40,42 +39,42 @@ note:
 17 │ │             }
    │ ╰─────────────^ bool
 
-note: 
+note:
    ┌─ contract_happy.fe:12:16
    │
 12 │             if amount > total {
    │                ^^^^^^ u64
 
-note: 
+note:
    ┌─ contract_happy.fe:12:16
    │
 12 │             if amount > total {
    │                ^^^^^^^^^^^^^^ bool
 
-note: 
+note:
    ┌─ contract_happy.fe:12:25
    │
 12 │             if amount > total {
    │                         ^^^^^ u64
 
-note: 
+note:
    ┌─ contract_happy.fe:12:31
-   │  
+   │
 12 │               if amount > total {
    │ ╭───────────────────────────────^
 13 │ │                 false
 14 │ │             } else {
    │ ╰─────────────^ bool
 
-note: 
+note:
    ┌─ contract_happy.fe:13:17
    │
 13 │                 false
    │                 ^^^^^ bool
 
-note: 
+note:
    ┌─ contract_happy.fe:14:20
-   │  
+   │
 14 │               } else {
    │ ╭────────────────────^
 15 │ │                 total -= amount
@@ -83,45 +82,45 @@ note:
 17 │ │             }
    │ ╰─────────────^ bool
 
-note: 
+note:
    ┌─ contract_happy.fe:15:17
    │
 15 │                 total -= amount
    │                 ^^^^^ u64
 
-note: 
+note:
    ┌─ contract_happy.fe:15:17
    │
 15 │                 total -= amount
    │                 ^^^^^^^^^^^^^^^ ()
 
-note: 
+note:
    ┌─ contract_happy.fe:15:26
    │
 15 │                 total -= amount
    │                          ^^^^^^ u64
 
-note: 
+note:
    ┌─ contract_happy.fe:16:17
    │
 16 │                 true
    │                 ^^^^ bool
 
-note: 
+note:
    ┌─ contract_happy.fe:19:9
    │
 19 │         Deposit { amount } -> u64 uses (mut total) {
    │         ^^^^^^^^^^^^^^^^^^ Deposit
 
-note: 
+note:
    ┌─ contract_happy.fe:19:19
    │
 19 │         Deposit { amount } -> u64 uses (mut total) {
    │                   ^^^^^^ u64
 
-note: 
+note:
    ┌─ contract_happy.fe:19:52
-   │  
+   │
 19 │           Deposit { amount } -> u64 uses (mut total) {
    │ ╭────────────────────────────────────────────────────^
 20 │ │             total += amount
@@ -129,37 +128,37 @@ note:
 22 │ │         }
    │ ╰─────────^ u64
 
-note: 
+note:
    ┌─ contract_happy.fe:20:13
    │
 20 │             total += amount
    │             ^^^^^ u64
 
-note: 
+note:
    ┌─ contract_happy.fe:20:13
    │
 20 │             total += amount
    │             ^^^^^^^^^^^^^^^ ()
 
-note: 
+note:
    ┌─ contract_happy.fe:20:22
    │
 20 │             total += amount
    │                      ^^^^^^ u64
 
-note: 
+note:
    ┌─ contract_happy.fe:21:13
    │
 21 │             total
    │             ^^^^^ u64
 
-note: 
+note:
    ┌─ contract_happy.fe:28:5
    │
 28 │     Withdraw { amount: u64 } -> bool,
    │     ^^^^^^^^ () | Withdraw | fn decode_field<Sol, u64, D> | fn dynamic_payload_size<u64> | fn encode_field<Sol, u64, E> | mut D | mut E | mut u256 | u256 | u64
 
-note: 
+note:
    ┌─ contract_happy.fe:30:5
    │
 30 │     Deposit { amount: u64 } -> u64,

@@ -3,3 +3,7 @@ const VALS: [u256; 3] = [10, 20, 30]
 pub fn sum_two(i: usize, j: usize) -> u256 {
     VALS[i] + VALS[j]
 }
+
+pub fn main() -> u256 {
+    sum_two(0, 1)
+}

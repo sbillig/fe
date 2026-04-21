@@ -12,28 +12,21 @@ object "test_test_effect" {
     code {
       function $__fe_test_root_test_effect() {
         let v0 := 0
-        v0 := 0
         $test_effect(v0)
         stop()
       }
-      function $test_effect($x) {
-        let v1 := 0
-        let v2 := 0
-        let v4 := 0
-        let v5 := 0
-        let v7 := 0
-        let v8 := 0
-        v4 := $x
-        v1 := v4
-        v5 := 0x01
-        v2 := v5
+      function $test_effect(p0) {
+        let v4 := p0
+        let v1 := v4
+        let v5 := 0x01
+        let v2 := v5
         let t10 := mload(v1)
-        v7 := t10
+        let v7 := t10
         let t11 := add(v7, v2)
         if lt(t11, v7) {
           revert(0, 0)
         }
-        v8 := t11
+        let v8 := t11
         mstore(v1, v8)
         leave
       }

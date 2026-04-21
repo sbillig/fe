@@ -6,28 +6,19 @@ input_file: tests/fixtures/unary_expr.fe
 object "main" {
   code {
     function $__fe_main_root() {
-      let v0 := 0
-      v0 := $unary_expr()
+      let v0 := $unary_expr()
       stop()
     }
     function $unary_expr() -> ret {
-      let v0 := 0
-      let v1 := 0
-      let v2 := 0
-      let v3 := 0
-      let v4 := 0
-      let v5 := 0
-      let v6 := 0
-      let v7 := 0
-      v4 := 0x01
-      v0 := v4
-      v5 := 0x02
-      v1 := v5
-      v6 := 0x03
-      v2 := v6
-      v7 := 0xfffffffffffffffd
-      v3 := v7
-      ret := v3
+      let v4 := 0x01
+      let v0 := signextend(7, and(v4, 0xffffffffffffffff))
+      let v5 := 0x02
+      let v1 := signextend(7, and(v5, 0xffffffffffffffff))
+      let v6 := 0x03
+      let v2 := signextend(7, and(v6, 0xffffffffffffffff))
+      let v7 := 0xfffffffffffffffd
+      let v3 := signextend(7, and(v7, 0xffffffffffffffff))
+      ret := signextend(7, and(v3, 0xffffffffffffffff))
       leave
     }
     $__fe_main_root()

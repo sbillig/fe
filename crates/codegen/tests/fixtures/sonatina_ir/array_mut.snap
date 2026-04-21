@@ -7,29 +7,42 @@ target = "evm-ethereum-osaka"
 
 func private %__fe_main_root() {
     block0:
-        v1.[i8; 4] = call %array_mut 0.i8;
+        jump block1;
+
+    block1:
+        v0.[i8; 4] = call %main;
         evm_stop;
 }
 
 func private %array_mut(v0.i8) -> [i8; 4] {
     block0:
         v1.*i8 = alloca i8;
-        v2.objref<[i8; 4]> = obj.alloc [i8; 4];
-        v3.*i8 = alloca i8;
-        v4.*i8 = alloca i8;
-        v5.*i8 = alloca i8;
-        v6.objref<[i8; 4]> = obj.alloc [i8; 4];
         mstore v1 v0 i8;
-        mstore v3 2.i8 i8;
-        mstore v4 3.i8 i8;
-        mstore v5 4.i8 i8;
-        v10.objref<[i8; 4]> = obj.alloc [i8; 4];
-        v11.[i8; 4] = obj.load v10;
-        obj.store v6 v11;
-        v12.[i8; 4] = obj.load v6;
-        obj.store v2 v12;
-        v13.[i8; 4] = obj.load v2;
-        return v13;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.i8 = trunc v2 i8;
+        v7.objref<[i8; 4]> = obj.alloc [i8; 4];
+        v9.objref<i8> = obj.index v7 0.i256;
+        obj.store v9 v3;
+        v11.objref<i8> = obj.index v7 1.i256;
+        obj.store v11 2.i8;
+        v13.objref<i8> = obj.index v7 2.i256;
+        obj.store v13 3.i8;
+        v15.objref<i8> = obj.index v7 3.i256;
+        obj.store v15 4.i8;
+        v16.[i8; 4] = obj.load v7;
+        return v16;
+}
+
+func private %main() -> [i8; 4] {
+    block0:
+        jump block1;
+
+    block1:
+        v1.[i8; 4] = call %array_mut 1.i8;
+        return v1;
 }
 
 

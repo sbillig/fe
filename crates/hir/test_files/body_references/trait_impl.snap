@@ -1,28 +1,27 @@
 ---
 source: crates/hir/tests/body_references.rs
-assertion_line: 79
 expression: res
 input_file: test_files/body_references/trait_impl.fe
 ---
-note: 
+note:
    ┌─ trait_impl.fe:11:9
    │
 11 │         self.age
    │         ^^^^ self -> local
 
-note: 
+note:
    ┌─ trait_impl.fe:11:14
    │
 11 │         self.age
    │              ^^^ field -> field
 
-note: 
+note:
    ┌─ trait_impl.fe:16:5
    │
 16 │     p.greet()
    │     ^ p -> local
 
-note: 
+note:
    ┌─ trait_impl.fe:16:7
    │
 16 │     p.greet()

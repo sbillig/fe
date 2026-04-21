@@ -61,9 +61,11 @@ fn emit_fixture_yul(path: &str) -> String {
 }
 
 fn yul_function_body<'a>(yul: &'a str, name: &str) -> &'a str {
-    let marker = format!("function ${name}(");
+    let exact_marker = format!("function ${name}(");
+    let specialized_marker = format!("function ${name}_");
     let start = yul
-        .find(&marker)
+        .find(&exact_marker)
+        .or_else(|| yul.find(&specialized_marker))
         .unwrap_or_else(|| panic!("missing function `{name}` in emitted Yul:\n{yul}"));
     let tail = &yul[start..];
     let end = tail.find("\n      function $").unwrap_or(tail.len());

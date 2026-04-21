@@ -7,3 +7,7 @@ pub fn const_array_branch(flag: bool) -> u256 {
         C[0]
     }
 }
+
+pub fn main() -> u256 {
+    const_array_branch(true)
+}

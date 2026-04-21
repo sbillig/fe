@@ -74,6 +74,6 @@ error[3-0100]: conflicting definitions of `foo`
    │
 28 │ fn foo(gen: Gen) {}
    │    ^^^ `foo` is defined here
-29 │ 
+29 │
 30 │ fn foo(gen: Gen<i32>) -> Gen {}
    │    --- `foo` is redefined here

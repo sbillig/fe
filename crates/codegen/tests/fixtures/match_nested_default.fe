@@ -50,3 +50,12 @@ pub fn exhaustive_inner_outer_wildcard(o: Outer) -> u8 {
         _ => 0
     }
 }
+
+pub fn main() -> (u8, u8, u8, u8) {
+    (
+        nested_with_defaults(Outer::First(Inner::A)),
+        outer_specific_inner_wildcard(Outer::First(Inner::B)),
+        deeply_nested_wildcard(Deep::Wrap(Outer::Second(Inner::C))),
+        exhaustive_inner_outer_wildcard(Outer::First(Inner::C)),
+    )
+}

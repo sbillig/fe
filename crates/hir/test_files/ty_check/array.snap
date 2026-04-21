@@ -1,119 +1,118 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
 expression: res
 input_file: test_files/ty_check/array.fe
 ---
-note: 
+note:
    ┌─ array.fe:5:10
-   │  
+   │
  5 │   fn foo() {
    │ ╭──────────^
  6 │ │     let i_array: [i32; 2] = [1, 2]
  7 │ │     let b_array = [true, false]
- 8 │ │     
+ 8 │ │
    · │
 11 │ │     let array_rep3: [i32; 5] = [1; 5]
 12 │ │ }
    │ ╰─^ ()
 
-note: 
+note:
   ┌─ array.fe:6:9
   │
 6 │     let i_array: [i32; 2] = [1, 2]
   │         ^^^^^^^ [i32; 2]
 
-note: 
+note:
   ┌─ array.fe:6:29
   │
 6 │     let i_array: [i32; 2] = [1, 2]
   │                             ^^^^^^ [i32; 2]
 
-note: 
+note:
   ┌─ array.fe:6:30
   │
 6 │     let i_array: [i32; 2] = [1, 2]
   │                              ^ i32
 
-note: 
+note:
   ┌─ array.fe:6:33
   │
 6 │     let i_array: [i32; 2] = [1, 2]
   │                                 ^ i32
 
-note: 
+note:
   ┌─ array.fe:7:9
   │
 7 │     let b_array = [true, false]
   │         ^^^^^^^ [bool; 2]
 
-note: 
+note:
   ┌─ array.fe:7:19
   │
 7 │     let b_array = [true, false]
   │                   ^^^^^^^^^^^^^ [bool; 2]
 
-note: 
+note:
   ┌─ array.fe:7:20
   │
 7 │     let b_array = [true, false]
   │                    ^^^^ bool
 
-note: 
+note:
   ┌─ array.fe:7:26
   │
 7 │     let b_array = [true, false]
   │                          ^^^^^ bool
 
-note: 
+note:
   ┌─ array.fe:9:9
   │
 9 │     let array_rep = [true; 10]
   │         ^^^^^^^^^ [bool; 10]
 
-note: 
+note:
   ┌─ array.fe:9:21
   │
 9 │     let array_rep = [true; 10]
   │                     ^^^^^^^^^^ [bool; 10]
 
-note: 
+note:
   ┌─ array.fe:9:22
   │
 9 │     let array_rep = [true; 10]
   │                      ^^^^ bool
 
-note: 
+note:
    ┌─ array.fe:10:9
    │
 10 │     let array_rep2 = [Foo {}; 5]
    │         ^^^^^^^^^^ [Foo; 5]
 
-note: 
+note:
    ┌─ array.fe:10:22
    │
 10 │     let array_rep2 = [Foo {}; 5]
    │                      ^^^^^^^^^^^ [Foo; 5]
 
-note: 
+note:
    ┌─ array.fe:10:23
    │
 10 │     let array_rep2 = [Foo {}; 5]
    │                       ^^^^^^ Foo
 
-note: 
+note:
    ┌─ array.fe:11:9
    │
 11 │     let array_rep3: [i32; 5] = [1; 5]
    │         ^^^^^^^^^^ [i32; 5]
 
-note: 
+note:
    ┌─ array.fe:11:32
    │
 11 │     let array_rep3: [i32; 5] = [1; 5]
    │                                ^^^^^^ [i32; 5]
 
-note: 
+note:
    ┌─ array.fe:11:33
    │
 11 │     let array_rep3: [i32; 5] = [1; 5]

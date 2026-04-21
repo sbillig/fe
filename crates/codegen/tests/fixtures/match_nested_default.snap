@@ -3,4 +3,329 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/match_nested_default.fe
 ---
-
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let v0 := $main()
+      stop()
+    }
+    function $deeply_nested_wildcard(p0) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 3))
+      let v1 := 0
+      mstore(r0, mload(p0))
+      let t13 := and(byte(0, mload(r0)), 0xff)
+      let v6 := t13
+      switch and(v6, 0xff)
+      case 0 {
+          let r2 := mload(0x40)
+          if iszero(r2) {
+            r2 := 0x80
+          }
+          mstore(0x40, add(r2, 2))
+          mstore(r2, mload(add(r0, 1)))
+          let v8 := r2
+          let v7 := add(v8, 1)
+          mstore(add(r2, 1), mload(v7))
+          let v9 := 0x01
+          let v4 := and(v9, 0xff)
+          let v10 := 0x01
+          v1 := and(v10, 0xff)
+      }
+      default {
+          let v11 := 0x00
+          let v5 := and(v11, 0xff)
+          let v12 := 0x00
+          v1 := and(v12, 0xff)
+      }
+      ret := and(v1, 0xff)
+      leave
+    }
+    function $exhaustive_inner_outer_wildcard(p0) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 2))
+      let r3 := mload(0x40)
+      if iszero(r3) {
+        r3 := 0x80
+      }
+      mstore(0x40, add(r3, 1))
+      let v1 := 0
+      mstore(r0, mload(p0))
+      let t20 := and(byte(0, mload(r0)), 0xff)
+      let v2 := eq(t20, 0)
+      if iszero(iszero(v2)) {
+        mstore(r3, mload(add(r0, 1)))
+        let v10 := r3
+        let t22 := and(byte(0, mload(v10)), 0xff)
+        let v4 := eq(t22, 0)
+        if iszero(iszero(v4)) {
+          let v13 := 0x01
+          let v6 := and(v13, 0xff)
+          let v14 := 0x01
+          v1 := and(v14, 0xff)
+        }
+        if iszero(iszero(iszero(v4))) {
+          let v19 := r3
+          let t23 := and(byte(0, mload(v19)), 0xff)
+          let v5 := eq(t23, 1)
+          if iszero(iszero(v5)) {
+            let v15 := 0x02
+            let v7 := and(v15, 0xff)
+            let v16 := 0x02
+            v1 := and(v16, 0xff)
+          }
+          if iszero(iszero(iszero(v5))) {
+            let v17 := 0x03
+            let v8 := and(v17, 0xff)
+            let v18 := 0x03
+            v1 := and(v18, 0xff)
+          }
+        }
+      }
+      if iszero(iszero(iszero(v2))) {
+        let v11 := 0x00
+        let v9 := and(v11, 0xff)
+        let v12 := 0x00
+        v1 := and(v12, 0xff)
+      }
+      ret := and(v1, 0xff)
+      leave
+    }
+    function $main() -> ret {
+      let t34 := mload(0x40)
+      if iszero(t34) {
+        t34 := 0x80
+      }
+      mstore(0x40, add(t34, 1))
+      mstore8(t34, and(0, 0xff))
+      let v14 := t34
+      let v0 := v14
+      let t35 := mload(0x40)
+      if iszero(t35) {
+        t35 := 0x80
+      }
+      mstore(0x40, add(t35, 1))
+      mstore8(t35, and(0, 0xff))
+      let v15 := t35
+      let t36 := mload(0x40)
+      if iszero(t36) {
+        t36 := 0x80
+      }
+      mstore(0x40, add(t36, 2))
+      mstore8(t36, and(0, 0xff))
+      mstore(add(t36, 1), mload(v15))
+      let v16 := t36
+      let v1 := v16
+      let v17 := $nested_with_defaults(v1)
+      let v2 := and(v17, 0xff)
+      let t37 := mload(0x40)
+      if iszero(t37) {
+        t37 := 0x80
+      }
+      mstore(0x40, add(t37, 1))
+      mstore8(t37, and(1, 0xff))
+      let v18 := t37
+      let v3 := v18
+      let t38 := mload(0x40)
+      if iszero(t38) {
+        t38 := 0x80
+      }
+      mstore(0x40, add(t38, 1))
+      mstore8(t38, and(1, 0xff))
+      let v19 := t38
+      let t39 := mload(0x40)
+      if iszero(t39) {
+        t39 := 0x80
+      }
+      mstore(0x40, add(t39, 2))
+      mstore8(t39, and(0, 0xff))
+      mstore(add(t39, 1), mload(v19))
+      let v20 := t39
+      let v4 := v20
+      let v21 := $outer_specific_inner_wildcard(v4)
+      let v5 := and(v21, 0xff)
+      let t40 := mload(0x40)
+      if iszero(t40) {
+        t40 := 0x80
+      }
+      mstore(0x40, add(t40, 1))
+      mstore8(t40, and(2, 0xff))
+      let v22 := t40
+      let v6 := v22
+      let t41 := mload(0x40)
+      if iszero(t41) {
+        t41 := 0x80
+      }
+      mstore(0x40, add(t41, 1))
+      mstore8(t41, and(2, 0xff))
+      let v23 := t41
+      let t42 := mload(0x40)
+      if iszero(t42) {
+        t42 := 0x80
+      }
+      mstore(0x40, add(t42, 2))
+      mstore8(t42, and(1, 0xff))
+      mstore(add(t42, 1), mload(v23))
+      let v24 := t42
+      let v7 := v24
+      let t43 := mload(0x40)
+      if iszero(t43) {
+        t43 := 0x80
+      }
+      mstore(0x40, add(t43, 1))
+      mstore8(t43, and(2, 0xff))
+      let v25 := t43
+      let t44 := mload(0x40)
+      if iszero(t44) {
+        t44 := 0x80
+      }
+      mstore(0x40, add(t44, 2))
+      mstore8(t44, and(1, 0xff))
+      mstore(add(t44, 1), mload(v25))
+      let v26 := t44
+      let t45 := mload(0x40)
+      if iszero(t45) {
+        t45 := 0x80
+      }
+      mstore(0x40, add(t45, 3))
+      mstore8(t45, and(0, 0xff))
+      mstore(add(t45, 1), mload(v26))
+      let v27 := t45
+      let v8 := v27
+      let v28 := $deeply_nested_wildcard(v8)
+      let v9 := and(v28, 0xff)
+      let t46 := mload(0x40)
+      if iszero(t46) {
+        t46 := 0x80
+      }
+      mstore(0x40, add(t46, 1))
+      mstore8(t46, and(2, 0xff))
+      let v29 := t46
+      let v10 := v29
+      let t47 := mload(0x40)
+      if iszero(t47) {
+        t47 := 0x80
+      }
+      mstore(0x40, add(t47, 1))
+      mstore8(t47, and(2, 0xff))
+      let v30 := t47
+      let t48 := mload(0x40)
+      if iszero(t48) {
+        t48 := 0x80
+      }
+      mstore(0x40, add(t48, 2))
+      mstore8(t48, and(0, 0xff))
+      mstore(add(t48, 1), mload(v30))
+      let v31 := t48
+      let v11 := v31
+      let v32 := $exhaustive_inner_outer_wildcard(v11)
+      let v12 := and(v32, 0xff)
+      let t49 := mload(0x40)
+      if iszero(t49) {
+        t49 := 0x80
+      }
+      mstore(0x40, add(t49, 128))
+      let v33 := t49
+      mstore(v33, and(and(v2, 0xff), 0xff))
+      mstore(add(v33, 32), and(and(v5, 0xff), 0xff))
+      mstore(add(v33, 64), and(and(v9, 0xff), 0xff))
+      mstore(add(v33, 96), and(and(v12, 0xff), 0xff))
+      let v13 := v33
+      ret := v13
+      leave
+    }
+    function $nested_with_defaults(p0) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 2))
+      let v1 := 0
+      mstore(r0, mload(p0))
+      let t14 := and(byte(0, mload(r0)), 0xff)
+      let v7 := t14
+      switch and(v7, 0xff)
+      case 0 {
+          let r2 := mload(0x40)
+          if iszero(r2) {
+            r2 := 0x80
+          }
+          mstore(0x40, add(r2, 1))
+          mstore(r2, mload(add(r0, 1)))
+          let v8 := 0x01
+          let v3 := and(v8, 0xff)
+          let v9 := 0x01
+          v1 := and(v9, 0xff)
+      }
+      case 1 {
+          let r4 := mload(0x40)
+          if iszero(r4) {
+            r4 := 0x80
+          }
+          mstore(0x40, add(r4, 1))
+          mstore(r4, mload(add(r0, 1)))
+          let v10 := 0x02
+          let v5 := and(v10, 0xff)
+          let v11 := 0x02
+          v1 := and(v11, 0xff)
+      }
+      default {
+          let v12 := 0x00
+          let v6 := and(v12, 0xff)
+          let v13 := 0x00
+          v1 := and(v13, 0xff)
+      }
+      ret := and(v1, 0xff)
+      leave
+    }
+    function $outer_specific_inner_wildcard(p0) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 2))
+      let v1 := 0
+      mstore(r0, mload(p0))
+      let t15 := and(byte(0, mload(r0)), 0xff)
+      let v2 := eq(t15, 0)
+      if iszero(iszero(v2)) {
+        let r3 := mload(0x40)
+        if iszero(r3) {
+          r3 := 0x80
+        }
+        mstore(0x40, add(r3, 1))
+        mstore(r3, mload(add(r0, 1)))
+        let v8 := r3
+        let t17 := and(byte(0, mload(v8)), 0xff)
+        let v4 := eq(t17, 0)
+        if iszero(iszero(v4)) {
+          let v11 := 0x01
+          let v5 := and(v11, 0xff)
+          let v12 := 0x01
+          v1 := and(v12, 0xff)
+        }
+        if iszero(iszero(iszero(v4))) {
+          let v13 := 0x02
+          let v6 := and(v13, 0xff)
+          let v14 := 0x02
+          v1 := and(v14, 0xff)
+        }
+      }
+      if iszero(iszero(iszero(v2))) {
+        let v9 := 0x03
+        let v7 := and(v9, 0xff)
+        let v10 := 0x03
+        v1 := and(v10, 0xff)
+      }
+      ret := and(v1, 0xff)
+      leave
+    }
+    $__fe_main_root()
+  }
+}

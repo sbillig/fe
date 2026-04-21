@@ -1,15 +1,15 @@
 ---
-source: crates/hir-analysis/tests/import.rs
+source: crates/hir/tests/import.rs
 expression: res
-input_file: crates/hir-analysis/test_files/imports/use_depends_glob.fe
+input_file: test_files/imports/use_depends_glob.fe
 ---
-note: 
+note:
   ┌─ use_depends_glob.fe:1:1
   │
 1 │ use bar::Bar
   │ ^^^^^^^^^^^^ use_depends_glob::foo::bar::Bar
 
-note: 
+note:
   ┌─ use_depends_glob.fe:2:1
   │
 2 │ use foo::*

@@ -3,20 +3,49 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/method_infer_by_constraints.fe
 ---
-function $call() -> ret {
-  let v0 := 10
-  let v1 := $s_t__h10779c135f64b393_foo_h6dbce71a6ea992b8_foo__u64__aee7f05a097ffa16(v0)
-  ret := v1
-  leave
-}
-function $s_t__h10779c135f64b393_foo_h6dbce71a6ea992b8_foo__u64__aee7f05a097ffa16($self) -> ret {
-  let v0 := mload(0x40)
-  if iszero(v0) {
-    v0 := 0x80
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let v0 := $call()
+      stop()
+    }
+    function $call() -> ret {
+      let v4 := 0x0a
+      let v1 := and(v4, 0xffffffffffffffff)
+      let v5 := 0x0a
+      let v6 := and(v5, 0xffffffffffffffff)
+      let v2 := and(v6, 0xffffffffffffffff)
+      let v8 := 0x0a
+      let v9 := and(v8, 0xffffffffffffffff)
+      let v0 := and(v9, 0xffffffffffffffff)
+      let v11 := $foo(and(v0, 0xffffffffffffffff))
+      let v3 := v11
+      ret := v3
+      leave
+    }
+    function $foo(p0) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      mstore(r0, and(p0, 0xffffffffffffffff))
+      let t6 := and(mload(r0), 0xffffffffffffffff)
+      let v1 := t6
+      let v4 := 0x01
+      let v2 := and(v4, 0xffffffffffffffff)
+      let t7 := mload(0x40)
+      if iszero(t7) {
+        t7 := 0x80
+      }
+      mstore(0x40, add(t7, 64))
+      let v5 := t7
+      mstore(v5, and(and(v1, 0xffffffffffffffff), 0xffffffffffffffff))
+      mstore(add(v5, 32), and(and(v2, 0xffffffffffffffff), 0xffffffffffffffff))
+      let v3 := v5
+      ret := v3
+      leave
+    }
+    $__fe_main_root()
   }
-  mstore(0x40, add(v0, 64))
-  mstore(v0, and($self, 0xffffffffffffffff))
-  mstore(add(v0, 32), and(1, 0xffffffffffffffff))
-  ret := v0
-  leave
 }

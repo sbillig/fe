@@ -3,4 +3,87 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/bit_ops.fe
 ---
-
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let v0 := $main()
+      stop()
+    }
+    function $bit_ops(p0, p1) -> ret {
+      let v7 := p0
+      let v8 := p1
+      let v23 := and(v7, v8)
+      let v9 := v23
+      let v2 := v9
+      let v10 := p0
+      let v11 := p1
+      let v24 := or(v10, v11)
+      let v12 := v24
+      let v3 := v12
+      let v13 := p0
+      let v14 := p1
+      let v25 := xor(v13, v14)
+      let v15 := v25
+      let v4 := v15
+      let v16 := p0
+      let v26 := 0x08
+      let v17 := v26
+      let v27 := shl(v17, v16)
+      let v18 := v27
+      let v5 := v18
+      let v19 := p0
+      let v28 := 0x02
+      let v20 := v28
+      let v29 := shr(v20, v19)
+      let v21 := v29
+      let v6 := v21
+      let t31 := mload(0x40)
+      if iszero(t31) {
+        t31 := 0x80
+      }
+      mstore(0x40, add(t31, 160))
+      let v30 := t31
+      mstore(v30, v2)
+      mstore(add(v30, 32), v3)
+      mstore(add(v30, 64), v4)
+      mstore(add(v30, 96), v5)
+      mstore(add(v30, 128), v6)
+      let v22 := v30
+      ret := v22
+      leave
+    }
+    function $main() -> ret {
+      let v6 := 0x01
+      let v0 := v6
+      let v7 := 0x02
+      let v1 := v7
+      let v8 := $bit_ops(v0, v1)
+      let v2 := v8
+      let v9 := 0x02
+      let v3 := v9
+      let v10 := 0x03
+      let v4 := v10
+      let v11 := $pow_op(v3, v4)
+      let v5 := v11
+      ret := v5
+      leave
+    }
+    function $pow_op(p0, p1) -> ret {
+      let v2 := p0
+      let v3 := p1
+      let t6 := 1
+      for { let t7 := 0 } lt(t7, v3) { t7 := add(t7, 1) } {
+        let t8 := mul(t6, v2)
+        if and(iszero(iszero(t6)), iszero(eq(div(t8, t6), v2))) {
+          revert(0, 0)
+        }
+        t6 := t8
+      }
+      let v5 := t6
+      let v4 := v5
+      ret := v4
+      leave
+    }
+    $__fe_main_root()
+  }
+}

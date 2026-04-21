@@ -16,3 +16,10 @@ pub fn match_nested_extract(t: own ((u8, u8), u8)) -> u8 {
         ((a, _), c) => a + c,
     }
 }
+
+pub fn main() -> (u8, u8) {
+    (
+        match_tuple_extract((1, 2)),
+        match_nested_extract(((1, 2), 3)),
+    )
+}

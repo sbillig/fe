@@ -22,3 +22,10 @@ pub fn match_struct_wildcard(p: Point) -> u8 {
         _ => 3,
     }
 }
+
+pub fn main() -> (u8, u8) {
+    (
+        match_struct_fields(Point { x: 1, y: 2 }),
+        match_struct_wildcard(Point { x: 0, y: 1 }),
+    )
+}

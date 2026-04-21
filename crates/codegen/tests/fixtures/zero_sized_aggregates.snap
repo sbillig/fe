@@ -10,32 +10,20 @@ object "main" {
       stop()
     }
     function $empty_field_assign() {
-      let v1 := 0
-      let v3 := 0
-      let v4 := 0
-      let v7 := 0
-      let v8 := 0
-      let v9 := 0
-      let v10 := 0
-      let v11 := 0
-      let v12 := 0
-      let v13 := 0
-      let v14 := 0
-      let v15 := 0
-      let v16 := 0
-      v7 := 0x01
-      v3 := v7
-      v9 := allocate(0)
-      v8 := v9
-      v10 := 0x01
-      v11 := dataoffset("const_0")
-      v4 := v11
-      v14 := allocate(0)
-      v13 := v14
-      v15 := 0x01
-      v16 := allocate(32)
-      mstore(v16, v15)
-      v1 := v16
+      let v7 := 0x01
+      let v3 := v7
+      let v9 := 0x01
+      let v10 := dataoffset("const_0")
+      let v4 := v10
+      let v13 := 0x01
+      let t15 := mload(0x40)
+      if iszero(t15) {
+        t15 := 0x80
+      }
+      mstore(0x40, add(t15, 32))
+      let v14 := t15
+      mstore(v14, v13)
+      let v1 := v14
       leave
     }
     $__fe_main_root()

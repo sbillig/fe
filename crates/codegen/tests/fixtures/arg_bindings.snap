@@ -3,4 +3,35 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/arg_bindings.fe
 ---
-
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let v0 := $main()
+      stop()
+    }
+    function $arg_bindings(p0, p1) -> ret {
+      let v3 := and(p0, 0xffffffffffffffff)
+      let v4 := and(p1, 0xffffffffffffffff)
+      let t7 := and(add(and(v3, 0xffffffffffffffff), and(v4, 0xffffffffffffffff)), 0xffffffffffffffff)
+      if lt(t7, and(v3, 0xffffffffffffffff)) {
+        revert(0, 0)
+      }
+      let v6 := t7
+      let v5 := and(v6, 0xffffffffffffffff)
+      let v2 := and(v5, 0xffffffffffffffff)
+      ret := and(v2, 0xffffffffffffffff)
+      leave
+    }
+    function $main() -> ret {
+      let v3 := 0x01
+      let v0 := and(v3, 0xffffffffffffffff)
+      let v4 := 0x02
+      let v1 := and(v4, 0xffffffffffffffff)
+      let v5 := $arg_bindings(and(v0, 0xffffffffffffffff), and(v1, 0xffffffffffffffff))
+      let v2 := and(v5, 0xffffffffffffffff)
+      ret := and(v2, 0xffffffffffffffff)
+      leave
+    }
+    $__fe_main_root()
+  }
+}

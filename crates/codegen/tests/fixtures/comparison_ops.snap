@@ -6,128 +6,69 @@ input_file: tests/fixtures/comparison_ops.fe
 object "main" {
   code {
     function $__fe_main_root() {
-      let v0 := 0
-      v0 := $comparison_ops()
+      let v0 := $comparison_ops()
       stop()
     }
     function $comparison_ops() -> ret {
-      let r6 := mload(0x40)
-      if iszero(r6) {
-        r6 := 0x80
+      let v19 := 0x01
+      let v3 := v19
+      let v20 := 0x01
+      let v0 := v20
+      let v21 := 0x02
+      let v4 := v21
+      let v22 := 0x02
+      let v1 := v22
+      let v23 := 0x03
+      let v5 := v23
+      let v24 := 0x03
+      let v2 := v24
+      let v25 := 0x01
+      let v6 := v25
+      let v26 := 1
+      let v7 := iszero(iszero(v26))
+      let v27 := 0x02
+      let v8 := v27
+      let v28 := 1
+      let v9 := iszero(iszero(v28))
+      let v29 := 0x02
+      let v10 := v29
+      let v30 := 1
+      let v11 := iszero(iszero(v30))
+      let v31 := 0x02
+      let v12 := v31
+      let v32 := 1
+      let v13 := iszero(iszero(v32))
+      let v33 := 0x02
+      let v14 := v33
+      let v34 := 1
+      let v15 := iszero(iszero(v34))
+      let v35 := 0x03
+      let v16 := v35
+      let v36 := 1
+      let v17 := iszero(iszero(v36))
+      let v37 := 1
+      let v38 := 1
+      let v39 := 1
+      let v40 := 1
+      let v41 := 1
+      let v42 := 1
+      let t45 := mload(0x40)
+      if iszero(t45) {
+        t45 := 0x80
       }
-      mstore(0x40, add(r6, 32))
-      let r8 := mload(0x40)
-      if iszero(r8) {
-        r8 := 0x80
-      }
-      mstore(0x40, add(r8, 32))
-      let r10 := mload(0x40)
-      if iszero(r10) {
-        r10 := 0x80
-      }
-      mstore(0x40, add(r10, 32))
-      let r12 := mload(0x40)
-      if iszero(r12) {
-        r12 := 0x80
-      }
-      mstore(0x40, add(r12, 32))
-      let r14 := mload(0x40)
-      if iszero(r14) {
-        r14 := 0x80
-      }
-      mstore(0x40, add(r14, 32))
-      let r16 := mload(0x40)
-      if iszero(r16) {
-        r16 := 0x80
-      }
-      mstore(0x40, add(r16, 32))
-      let v0 := 0
-      let v1 := 0
-      let v2 := 0
-      let v3 := 0
-      let v4 := 0
-      let v5 := 0
-      let v7 := 0
-      let v9 := 0
-      let v11 := 0
-      let v13 := 0
-      let v15 := 0
-      let v17 := 0
-      let v18 := 0
-      let v19 := 0
-      let v20 := 0
-      let v21 := 0
-      let v22 := 0
-      let v23 := 0
-      let v24 := 0
-      let v25 := 0
-      let v26 := 0
-      let v27 := 0
-      let v28 := 0
-      let v29 := 0
-      let v30 := 0
-      let v31 := 0
-      let v32 := 0
-      let v33 := 0
-      let v34 := 0
-      let v35 := 0
-      let v36 := 0
-      let v37 := 0
-      let v38 := 0
-      let v39 := 0
-      let v40 := 0
-      let v41 := 0
-      let v42 := 0
-      let v43 := 0
-      let v44 := 0
-      v19 := 0x01
-      v3 := v19
-      v20 := 0x01
-      v0 := v20
-      v21 := 0x02
-      v4 := v21
-      v22 := 0x02
-      v1 := v22
-      v23 := 0x03
-      v5 := v23
-      v24 := 0x03
-      v2 := v24
-      v25 := 0x01
-      mstore(r6, v25)
-      v26 := 1
-      v7 := v26
-      v27 := 0x02
-      mstore(r8, v27)
-      v28 := 1
-      v9 := v28
-      v29 := 0x02
-      mstore(r10, v29)
-      v30 := 1
-      v11 := v30
-      v31 := 0x02
-      mstore(r12, v31)
-      v32 := 1
-      v13 := v32
-      v33 := 0x02
-      mstore(r14, v33)
-      v34 := 1
-      v15 := v34
-      v35 := 0x03
-      mstore(r16, v35)
-      v36 := 1
-      v17 := v36
-      v37 := 1
-      v38 := 1
-      v39 := 1
-      v40 := 1
-      v41 := 1
-      v42 := 1
-      v43 := dataoffset("const_0")
-      v18 := v43
+      mstore(0x40, add(t45, 192))
+      let v44 := t45
+      mstore(v44, iszero(iszero(iszero(iszero(v37)))))
+      mstore(add(v44, 32), iszero(iszero(iszero(iszero(v38)))))
+      mstore(add(v44, 64), iszero(iszero(iszero(iszero(v39)))))
+      mstore(add(v44, 96), iszero(iszero(iszero(iszero(v40)))))
+      mstore(add(v44, 128), iszero(iszero(iszero(iszero(v41)))))
+      mstore(add(v44, 160), iszero(iszero(iszero(iszero(v42)))))
+      let v43 := v44
+      let v18 := v43
       ret := v18
       leave
     }
     $__fe_main_root()
   }
-  data "const_0" hex"000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001"
 }

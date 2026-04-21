@@ -3,9 +3,9 @@ source: crates/hir/tests/decision_tree.rs
 expression: res
 input_file: test_files/decision_trees/with_bindings.fe
 ---
-note: 
+note:
    ┌─ with_bindings.fe:12:5
-   │  
+   │
 12 │ ╭     match c {
 13 │ │         Color::Rgb(r, g, b) => r + g + b
 14 │ │         Color::Simple(value) => value
@@ -22,9 +22,9 @@ note:
          value ← expr.Simple[0]
 
 
-note: 
+note:
    ┌─ with_bindings.fe:19:5
-   │  
+   │
 19 │ ╭     match p {
 20 │ │         Point::Origin => 0
 21 │ │         Point::Coordinate(x, y) => x + y
@@ -39,9 +39,9 @@ note:
          y ← expr.Coordinate[1]
 
 
-note: 
+note:
    ┌─ with_bindings.fe:26:5
-   │  
+   │
 26 │ ╭     match colors {
 27 │ │         (Color::Rgb(r, _, _), Point::Coordinate(x, _)) => r + x
 28 │ │         (Color::Simple(_), Point::Origin) => 42

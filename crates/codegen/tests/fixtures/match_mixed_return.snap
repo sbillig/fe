@@ -3,4 +3,54 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/match_mixed_return.fe
 ---
-
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let v0 := $main()
+      stop()
+    }
+    function $f(p0) -> ret {
+      let t15 := and(byte(0, mload(p0)), 0xff)
+      let v8 := t15
+      switch and(v8, 0xff)
+      case 0 {
+          let v12 := 0x00
+          let v3 := v12
+          ret := v3
+          leave
+      }
+      case 1 {
+          let v13 := 0x01
+          let v5 := v13
+          let v14 := 0x01
+          let v2 := v14
+          let v9 := 0x01
+          let v1 := v9
+          let v10 := 0x01
+          let v6 := v10
+          let v11 := 0x02
+          let v7 := v11
+          ret := v7
+          leave
+      }
+      default {
+          invalid()
+      }
+    }
+    function $main() -> ret {
+      let t4 := mload(0x40)
+      if iszero(t4) {
+        t4 := 0x80
+      }
+      mstore(0x40, add(t4, 1))
+      mstore8(t4, and(1, 0xff))
+      let v2 := t4
+      let v0 := v2
+      let v3 := $f(v0)
+      let v1 := v3
+      ret := v1
+      leave
+    }
+    $__fe_main_root()
+  }
+}

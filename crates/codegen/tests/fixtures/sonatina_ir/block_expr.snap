@@ -7,29 +7,19 @@ target = "evm-ethereum-osaka"
 
 func private %__fe_main_root() {
     block0:
+        jump block1;
+
+    block1:
         v0.i64 = call %block_expr;
         evm_stop;
 }
 
 func private %block_expr() -> i64 {
     block0:
-        v0.*i64 = alloca i64;
-        v1.*i64 = alloca i64;
-        v2.*i64 = alloca i64;
-        mstore v0 1.i64 i64;
-        mstore v1 2.i64 i64;
-        v5.i64 = mload v0 i64;
-        v6.i64 = mload v1 i64;
-        (v7.i64, v8.i1) = uaddo v5 v6;
-        br v8 block1 block2;
+        jump block1;
 
     block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        mstore v2 v7 i64;
-        v10.i64 = mload v2 i64;
-        return v10;
+        return 3.i64;
 }
 
 

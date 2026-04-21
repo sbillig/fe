@@ -6,16 +6,13 @@ input_file: tests/fixtures/bool_literal.fe
 object "main" {
   code {
     function $__fe_main_root() {
-      let v0 := 0
-      v0 := $bool_literal()
+      let v0 := $bool_literal()
       stop()
     }
     function $bool_literal() -> ret {
-      let v0 := 0
-      let v1 := 0
-      v1 := 1
-      v0 := v1
-      ret := v0
+      let v1 := 1
+      let v0 := iszero(iszero(v1))
+      ret := iszero(iszero(v0))
       leave
     }
     $__fe_main_root()

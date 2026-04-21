@@ -6,40 +6,24 @@ input_file: tests/fixtures/tuple_literal_field_access.fe
 object "main" {
   code {
     function $__fe_main_root() {
-      let v0 := 0
-      v0 := $tuple_literal_field_access()
+      let v0 := $tuple_literal_field_access()
       stop()
     }
     function $tuple_literal_field_access() -> ret {
-      let v0 := 0
-      let v1 := 0
-      let v2 := 0
-      let v3 := 0
-      let v4 := 0
-      let v5 := 0
-      let v6 := 0
-      let v7 := 0
-      let v8 := 0
-      let v9 := 0
-      let v10 := 0
-      let v11 := 0
-      let v12 := 0
-      let v13 := 0
-      let v14 := 0
-      v6 := 0x01
-      v2 := v6
-      v7 := 0x01
-      v0 := v7
-      v8 := 0x02
-      v3 := v8
-      v9 := 0x02
-      v1 := v9
-      v10 := 0x01
-      v11 := 0x02
-      v12 := dataoffset("const_0")
-      v4 := v12
-      v14 := 0x02
-      v5 := v14
+      let v6 := 0x01
+      let v2 := v6
+      let v7 := 0x01
+      let v0 := v7
+      let v8 := 0x02
+      let v3 := v8
+      let v9 := 0x02
+      let v1 := v9
+      let v10 := 0x01
+      let v11 := 0x02
+      let v12 := dataoffset("const_0")
+      let v4 := v12
+      let v14 := 0x02
+      let v5 := v14
       ret := v5
       leave
     }

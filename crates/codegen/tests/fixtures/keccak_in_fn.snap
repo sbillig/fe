@@ -3,7 +3,26 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/keccak_in_fn.fe
 ---
-function $main() -> ret {
-  ret := 12910348618308260923200348219926901280687058984330794534952861439530514639560
-  leave
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let v0 := $main()
+      stop()
+    }
+    function $main() -> ret {
+      let v2 := 0x68
+      let v3 := 0x65
+      let v4 := 0x6c
+      let v5 := 0x6c
+      let v6 := 0x6f
+      let v7 := dataoffset("const_0")
+      let v0 := v7
+      let v9 := 0x1c8aff950685c2ed4bc3174f3472287b56d9517b9c948127319a09a7a36deac8
+      let v1 := v9
+      ret := v1
+      leave
+    }
+    $__fe_main_root()
+  }
+  data "const_0" hex"68656c6c6f000000000000000000000000000000000000000000000000000000"
 }

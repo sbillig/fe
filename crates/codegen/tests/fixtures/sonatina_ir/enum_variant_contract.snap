@@ -6,291 +6,79 @@ input_file: crates/codegen/tests/fixtures/enum_variant_contract.fe
 target = "evm-ethereum-osaka"
 
 type @__fe_layout_0 = {};
-type @__fe_layout_1 = enum {
+type @__fe_layout_1 = {@__fe_layout_0};
+type @__fe_layout_2 = enum {
     #None,
     #Some(i256),
 };
 
-func private %abi_encode_u256_0(v0.i256) {
+func private %abi_encode_u256(v0.i256, v1.objref<@__fe_layout_1>) {
     block0:
-        v1.*i256 = alloca i256;
         v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        v4.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
-        v5.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
-        v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
-        v8.*i256 = alloca i256;
-        mstore v1 v0 i256;
-        mstore v3 0.i256 i256;
-        v10.i256 = mload v3 i256;
-        mstore v2 v10 i256;
-        v11.i256 = mload v1 i256;
-        mstore v7 v11 i256;
-        v12.i256 = mload v1 i256;
-        mstore v8 v12 i256;
-        v13.i256 = mload v2 i256;
-        v14.i256 = mload v8 i256;
-        call %mstore_0 v13 v14;
-        mstore v6 32.i256 i256;
-        v17.i256 = mload v2 i256;
-        v18.i256 = mload v6 i256;
-        call %return_data_0 v17 v18;
+        mstore v2 v0 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v2 i256;
+        call %mstore v1 0.i256 v5;
+        call %return_data_0 0.i256 32.i256;
         unreachable;
 }
 
-func private %abi_encode_u256_1(v0.i256) {
+func private %calldataload(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        v4.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
-        v5.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
-        v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
-        v8.*i256 = alloca i256;
         mstore v1 v0 i256;
-        mstore v3 0.i256 i256;
-        v10.i256 = mload v3 i256;
-        mstore v2 v10 i256;
-        v11.i256 = mload v1 i256;
-        mstore v7 v11 i256;
-        v12.i256 = mload v1 i256;
-        mstore v8 v12 i256;
-        v13.i256 = mload v2 i256;
-        v14.i256 = mload v8 i256;
-        call %mstore_1 v13 v14;
-        mstore v6 32.i256 i256;
-        v17.i256 = mload v2 i256;
-        v18.i256 = mload v6 i256;
-        call %return_data_2 v17 v18;
-        unreachable;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.i256 = evm_calldata_load v2;
+        return v3;
 }
 
-func private %abi_encode_u256_2(v0.i256) {
+func private %codecopy(v0.objref<@__fe_layout_1>, v1.i256, v2.i256, v3.i256) {
     block0:
-        v1.*i256 = alloca i256;
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        v4.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
-        v5.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
-        v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
-        v8.*i256 = alloca i256;
-        mstore v1 v0 i256;
-        mstore v3 0.i256 i256;
-        v10.i256 = mload v3 i256;
-        mstore v2 v10 i256;
-        v11.i256 = mload v1 i256;
-        mstore v7 v11 i256;
-        v12.i256 = mload v1 i256;
-        mstore v8 v12 i256;
-        v13.i256 = mload v2 i256;
-        v14.i256 = mload v8 i256;
-        call %mstore_2 v13 v14;
-        mstore v6 32.i256 i256;
-        v17.i256 = mload v2 i256;
-        v18.i256 = mload v6 i256;
-        call %return_data_3 v17 v18;
-        unreachable;
-}
-
-func private %calldataload_0(v0.i256) -> i256 {
-    block0:
-        v1.*i256 = alloca i256;
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
         v5.*i256 = alloca i256;
         v6.*i256 = alloca i256;
-        mstore v1 v0 i256;
-        v7.i256 = mload v1 i256;
-        mstore v3 v7 i256;
-        v8.i256 = mload v1 i256;
-        mstore v5 v8 i256;
-        v9.i256 = mload v5 i256;
-        v10.i256 = evm_calldata_load v9;
-        mstore v6 v10 i256;
-        v11.i256 = mload v6 i256;
-        mstore v2 v11 i256;
-        v12.i256 = mload v2 i256;
-        return v12;
-}
-
-func private %calldataload_1(v0.i256) -> i256 {
-    block0:
-        v1.*i256 = alloca i256;
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        mstore v1 v0 i256;
-        v7.i256 = mload v1 i256;
-        mstore v3 v7 i256;
-        v8.i256 = mload v1 i256;
-        mstore v5 v8 i256;
-        v9.i256 = mload v5 i256;
-        v10.i256 = evm_calldata_load v9;
-        mstore v6 v10 i256;
-        v11.i256 = mload v6 i256;
-        mstore v2 v11 i256;
-        v12.i256 = mload v2 i256;
-        return v12;
-}
-
-func private %calldataload_2(v0.i256) -> i256 {
-    block0:
-        v1.*i256 = alloca i256;
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        mstore v1 v0 i256;
-        v7.i256 = mload v1 i256;
-        mstore v3 v7 i256;
-        v8.i256 = mload v1 i256;
-        mstore v5 v8 i256;
-        v9.i256 = mload v5 i256;
-        v10.i256 = evm_calldata_load v9;
-        mstore v6 v10 i256;
-        v11.i256 = mload v6 i256;
-        mstore v2 v11 i256;
-        v12.i256 = mload v2 i256;
-        return v12;
-}
-
-func private %codecopy(v0.i256, v1.i256, v2.i256) {
-    block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
-        v8.*i256 = alloca i256;
-        v9.*i256 = alloca i256;
-        v10.*i256 = alloca i256;
-        v11.*i256 = alloca i256;
-        mstore v3 v0 i256;
         mstore v4 v1 i256;
         mstore v5 v2 i256;
-        v12.i256 = mload v3 i256;
-        mstore v6 v12 i256;
-        v13.i256 = mload v4 i256;
-        mstore v7 v13 i256;
-        v14.i256 = mload v5 i256;
-        mstore v8 v14 i256;
-        v15.i256 = mload v3 i256;
-        mstore v9 v15 i256;
-        v16.i256 = mload v4 i256;
-        mstore v10 v16 i256;
-        v17.i256 = mload v5 i256;
-        mstore v11 v17 i256;
-        v18.i256 = mload v9 i256;
-        v19.i256 = mload v10 i256;
-        v20.i256 = mload v11 i256;
-        evm_code_copy v18 v19 v20;
+        mstore v6 v3 i256;
+        jump block1;
+
+    block1:
+        v7.i256 = mload v4 i256;
+        v8.i256 = mload v5 i256;
+        v9.i256 = mload v6 i256;
+        evm_code_copy v7 v8 v9;
         return;
 }
 
-func private %init() {
+func private %init(v0.objref<@__fe_layout_1>) {
     block0:
-        v0.*i256 = alloca i256;
-        v1.*i256 = alloca i256;
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.i256 = sym_size &__EnumContract_runtime;
-        mstore v2 v6 i256;
-        v7.i256 = mload v2 i256;
-        mstore v0 v7 i256;
-        v8.i256 = sym_addr &__EnumContract_runtime;
-        mstore v3 v8 i256;
-        v9.i256 = mload v3 i256;
-        mstore v1 v9 i256;
-        mstore v4 0.i256 i256;
-        v11.i256 = mload v4 i256;
-        v12.i256 = mload v1 i256;
-        v13.i256 = mload v0 i256;
-        call %codecopy v11 v12 v13;
-        mstore v5 0.i256 i256;
-        v15.i256 = mload v5 i256;
-        v16.i256 = mload v0 i256;
-        call %return_data_4 v15 v16;
+        jump block1;
+
+    block1:
+        v1.i256 = sym_size &__EnumContract_runtime;
+        v2.i256 = sym_addr &__EnumContract_runtime;
+        call %codecopy v0 0.i256 v2 v1;
+        call %return_data_1 0.i256 v1;
         unreachable;
 }
 
-func private %mstore_0(v0.i256, v1.i256) {
+func private %mstore(v0.objref<@__fe_layout_1>, v1.i256, v2.i256) {
     block0:
-        v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
-        mstore v2 v0 i256;
         mstore v3 v1 i256;
-        v8.i256 = mload v2 i256;
-        mstore v4 v8 i256;
-        v9.i256 = mload v3 i256;
-        mstore v5 v9 i256;
-        v10.i256 = mload v2 i256;
-        mstore v6 v10 i256;
-        v11.i256 = mload v3 i256;
-        mstore v7 v11 i256;
-        v12.i256 = mload v6 i256;
-        v13.i256 = mload v7 i256;
-        mstore v12 v13 i256;
-        return;
-}
+        mstore v4 v2 i256;
+        jump block1;
 
-func private %mstore_1(v0.i256, v1.i256) {
-    block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
-        v8.i256 = mload v2 i256;
-        mstore v4 v8 i256;
-        v9.i256 = mload v3 i256;
-        mstore v5 v9 i256;
-        v10.i256 = mload v2 i256;
-        mstore v6 v10 i256;
-        v11.i256 = mload v3 i256;
-        mstore v7 v11 i256;
-        v12.i256 = mload v6 i256;
-        v13.i256 = mload v7 i256;
-        mstore v12 v13 i256;
-        return;
-}
-
-func private %mstore_2(v0.i256, v1.i256) {
-    block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
-        v8.i256 = mload v2 i256;
-        mstore v4 v8 i256;
-        v9.i256 = mload v3 i256;
-        mstore v5 v9 i256;
-        v10.i256 = mload v2 i256;
-        mstore v6 v10 i256;
-        v11.i256 = mload v3 i256;
-        mstore v7 v11 i256;
-        v12.i256 = mload v6 i256;
-        v13.i256 = mload v7 i256;
-        mstore v12 v13 i256;
+    block1:
+        v5.i256 = mload v3 i256;
+        v6.i256 = mload v4 i256;
+        mstore v5 v6 i256;
         return;
 }
 
@@ -298,354 +86,197 @@ func private %return_data_0(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
         mstore v2 v0 i256;
         mstore v3 v1 i256;
-        v8.i256 = mload v2 i256;
-        mstore v4 v8 i256;
-        v9.i256 = mload v3 i256;
-        mstore v5 v9 i256;
-        v10.i256 = mload v2 i256;
-        mstore v6 v10 i256;
-        v11.i256 = mload v3 i256;
-        mstore v7 v11 i256;
-        v12.i256 = mload v6 i256;
-        v13.i256 = mload v7 i256;
-        evm_return v12 v13;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i256 = mload v3 i256;
+        evm_return v4 v5;
 }
 
 func private %return_data_1(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
         mstore v2 v0 i256;
         mstore v3 v1 i256;
-        v8.i256 = mload v2 i256;
-        mstore v4 v8 i256;
-        v9.i256 = mload v3 i256;
-        mstore v5 v9 i256;
-        v10.i256 = mload v2 i256;
-        mstore v6 v10 i256;
-        v11.i256 = mload v3 i256;
-        mstore v7 v11 i256;
-        v12.i256 = mload v6 i256;
-        v13.i256 = mload v7 i256;
-        evm_return v12 v13;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i256 = mload v3 i256;
+        evm_return v4 v5;
 }
 
 func private %return_data_2(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
         mstore v2 v0 i256;
         mstore v3 v1 i256;
-        v8.i256 = mload v2 i256;
-        mstore v4 v8 i256;
-        v9.i256 = mload v3 i256;
-        mstore v5 v9 i256;
-        v10.i256 = mload v2 i256;
-        mstore v6 v10 i256;
-        v11.i256 = mload v3 i256;
-        mstore v7 v11 i256;
-        v12.i256 = mload v6 i256;
-        v13.i256 = mload v7 i256;
-        evm_return v12 v13;
-}
-
-func private %return_data_3(v0.i256, v1.i256) {
-    block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
-        v8.i256 = mload v2 i256;
-        mstore v4 v8 i256;
-        v9.i256 = mload v3 i256;
-        mstore v5 v9 i256;
-        v10.i256 = mload v2 i256;
-        mstore v6 v10 i256;
-        v11.i256 = mload v3 i256;
-        mstore v7 v11 i256;
-        v12.i256 = mload v6 i256;
-        v13.i256 = mload v7 i256;
-        evm_return v12 v13;
-}
-
-func private %return_data_4(v0.i256, v1.i256) {
-    block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
-        v8.i256 = mload v2 i256;
-        mstore v4 v8 i256;
-        v9.i256 = mload v3 i256;
-        mstore v5 v9 i256;
-        v10.i256 = mload v2 i256;
-        mstore v6 v10 i256;
-        v11.i256 = mload v3 i256;
-        mstore v7 v11 i256;
-        v12.i256 = mload v6 i256;
-        v13.i256 = mload v7 i256;
-        evm_return v12 v13;
-}
-
-func private %runtime() {
-    block0:
-        v0.*i256 = alloca i256;
-        v1.*i256 = alloca i256;
-        v2.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
-        v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
-        v8.*i256 = alloca i256;
-        v9.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
-        v10.*i256 = alloca i256;
-        v11.*i256 = alloca i256;
-        v12.*i256 = alloca i256;
-        v13.*i256 = alloca i256;
-        v14.*i256 = alloca i256;
-        v15.*i256 = alloca i256;
-        v16.*i1 = alloca i1;
-        v17.*i256 = alloca i256;
-        v18.*i256 = alloca i256;
-        v19.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
-        v20.*i256 = alloca i256;
-        v21.*i256 = alloca i256;
-        v22.*i256 = alloca i256;
-        v23.*i256 = alloca i256;
-        v24.*i1 = alloca i1;
-        v25.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
-        v26.*i256 = alloca i256;
-        v27.*i256 = alloca i256;
-        v28.*i256 = alloca i256;
-        v29.*i256 = alloca i256;
-        v30.*i1 = alloca i1;
-        v31.*i256 = alloca i256;
-        v32.*i256 = alloca i256;
-        v33.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
-        v34.*i256 = alloca i256;
-        v35.*i256 = alloca i256;
-        v36.*i256 = alloca i256;
-        v37.*i256 = alloca i256;
-        v38.*i256 = alloca i256;
-        v39.*i256 = alloca i256;
-        v40.*i256 = alloca i256;
-        v41.*i256 = alloca i256;
-        v42.*i256 = alloca i256;
-        v43.*i8 = alloca i8;
-        v44.*i256 = alloca i256;
-        v45.*i8 = alloca i8;
-        v46.*i256 = alloca i256;
-        v47.*i256 = alloca i256;
-        v48.*i8 = alloca i8;
-        mstore v11 0.i256 i256;
-        v50.i256 = mload v11 i256;
-        v51.i256 = call %calldataload_2 v50;
-        mstore v40 v51 i256;
-        v52.i256 = mload v40 i256;
-        mstore v12 v52 i256;
-        mstore v13 224.i256 i256;
-        v54.i256 = mload v12 i256;
-        v55.i256 = mload v13 i256;
-        v56.i256 = shr v55 v54;
-        mstore v14 v56 i256;
-        v57.i256 = mload v14 i256;
-        mstore v0 v57 i256;
-        mstore v15 1817627404.i256 i256;
-        v59.i256 = mload v15 i256;
-        mstore v41 v59 i256;
-        v60.i256 = mload v0 i256;
-        v61.i256 = mload v41 i256;
-        v62.i1 = ne v60 0.i256;
-        v63.i1 = ne v61 0.i256;
-        v64.i1 = eq v62 v63;
-        mstore v16 v64 i1;
-        v65.i1 = mload v16 i1;
-        br v65 block1 block2;
+        jump block1;
 
     block1:
-        mstore v17 4.i256 i256;
-        v67.i256 = mload v17 i256;
-        v68.i256 = call %calldataload_1 v67;
-        mstore v42 v68 i256;
-        v69.i256 = mload v42 i256;
-        mstore v18 v69 i256;
-        v70.i256 = mload v18 i256;
-        mstore v1 v70 i256;
-        v71.i256 = mload v1 i256;
-        v72.@__fe_layout_1 = enum.make @__fe_layout_1 #Some v71;
-        obj.store v19 v72;
-        v73.@__fe_layout_1 = obj.load v19;
-        obj.store v2 v73;
-        v74.@__fe_layout_1 = obj.load v2;
-        v75.i8 = enum.tag v74;
-        mstore v43 v75 i8;
-        v76.i8 = mload v43 i8;
-        br_table v76 (1.i256 block5) (0.i256 block6);
+        v4.i256 = mload v2 i256;
+        v5.i256 = mload v3 i256;
+        evm_return v4 v5;
+}
+
+func private %runtime(v0.objref<@__fe_layout_1>) {
+    block0:
+        v1.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v2.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v3.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        jump block1;
+
+    block1:
+        v5.i256 = call %calldataload 0.i256;
+        v7.i256 = shr 224.i256 v5;
+        v9.i1 = eq v7 1817627404.i256;
+        br v9 block2 block3;
 
     block2:
-        jump block3;
+        v11.i256 = call %calldataload 4.i256;
+        v12.@__fe_layout_2 = enum.make @__fe_layout_2 #Some v11;
+        v13.enumtag(@__fe_layout_2) = enum.tag v12;
+        br_table v13 block21 (0.enumtag(@__fe_layout_2) block22) (1.enumtag(@__fe_layout_2) block23);
 
     block3:
-        mstore v23 1163776883.i256 i256;
-        v79.i256 = mload v23 i256;
-        mstore v44 v79 i256;
-        v80.i256 = mload v0 i256;
-        v81.i256 = mload v44 i256;
-        v82.i1 = ne v80 0.i256;
-        v83.i1 = ne v81 0.i256;
-        v84.i1 = eq v82 v83;
-        mstore v24 v84 i1;
-        v85.i1 = mload v24 i1;
-        br v85 block7 block8;
+        jump block4;
 
     block4:
-        v86.i256 = mload v20 i256;
-        mstore v3 v86 i256;
-        v87.i256 = mload v3 i256;
-        call %abi_encode_u256_2 v87;
-        unreachable;
+        v22.i1 = eq v7 1163776883.i256;
+        br v22 block8 block9;
 
     block5:
-        v88.@__fe_layout_1 = obj.load v2;
-        v89.i256 = enum.extract v88 #Some 0.i256;
-        mstore v21 v89 i256;
-        v90.i256 = mload v21 i256;
-        mstore v4 v90 i256;
-        v91.i256 = mload v4 i256;
-        mstore v20 v91 i256;
-        jump block4;
+        v23.i256 = phi (v26 block6) (0.i256 block7);
+        call %abi_encode_u256 v23 v0;
+        unreachable;
 
     block6:
-        mstore v22 0.i256 i256;
-        v92.i256 = mload v22 i256;
-        mstore v20 v92 i256;
-        jump block4;
+        v25.@__fe_layout_2 = obj.load v1;
+        enum.assert_variant v25 #Some;
+        v26.i256 = enum.extract v25 #Some 0.i256;
+        jump block5;
 
     block7:
-        v93.@__fe_layout_1 = enum.make @__fe_layout_1 #None;
-        obj.store v25 v93;
-        v94.@__fe_layout_1 = obj.load v25;
-        obj.store v5 v94;
-        v95.@__fe_layout_1 = obj.load v5;
-        v96.i8 = enum.tag v95;
-        mstore v45 v96 i8;
-        v97.i8 = mload v45 i8;
-        br_table v97 (1.i256 block11) (0.i256 block12);
+        jump block5;
 
     block8:
-        jump block9;
+        v27.@__fe_layout_2 = enum.make @__fe_layout_2 #None;
+        v28.@__fe_layout_2 = enum.make @__fe_layout_2 #None;
+        v29.enumtag(@__fe_layout_2) = enum.tag v28;
+        br_table v29 block25 (0.enumtag(@__fe_layout_2) block26) (1.enumtag(@__fe_layout_2) block27);
 
     block9:
-        mstore v29 3572425762.i256 i256;
-        v99.i256 = mload v29 i256;
-        mstore v46 v99 i256;
-        v100.i256 = mload v0 i256;
-        v101.i256 = mload v46 i256;
-        v102.i1 = ne v100 0.i256;
-        v103.i1 = ne v101 0.i256;
-        v104.i1 = eq v102 v103;
-        mstore v30 v104 i1;
-        v105.i1 = mload v30 i1;
-        br v105 block13 block14;
+        jump block10;
 
     block10:
-        v106.i256 = mload v26 i256;
-        mstore v6 v106 i256;
-        v107.i256 = mload v6 i256;
-        call %abi_encode_u256_1 v107;
-        unreachable;
+        v36.i1 = eq v7 3572425762.i256;
+        br v36 block14 block15;
 
     block11:
-        v108.@__fe_layout_1 = obj.load v5;
-        v109.i256 = enum.extract v108 #Some 0.i256;
-        mstore v27 v109 i256;
-        v110.i256 = mload v27 i256;
-        mstore v7 v110 i256;
-        v111.i256 = mload v7 i256;
-        mstore v26 v111 i256;
-        jump block10;
-
-    block12:
-        mstore v28 0.i256 i256;
-        v112.i256 = mload v28 i256;
-        mstore v26 v112 i256;
-        jump block10;
-
-    block13:
-        mstore v31 4.i256 i256;
-        v113.i256 = mload v31 i256;
-        v114.i256 = call %calldataload_0 v113;
-        mstore v47 v114 i256;
-        v115.i256 = mload v47 i256;
-        mstore v32 v115 i256;
-        v116.i256 = mload v32 i256;
-        mstore v8 v116 i256;
-        v117.i256 = mload v8 i256;
-        v118.@__fe_layout_1 = enum.make @__fe_layout_1 #Some v117;
-        obj.store v33 v118;
-        v119.@__fe_layout_1 = obj.load v33;
-        obj.store v9 v119;
-        v120.@__fe_layout_1 = obj.load v9;
-        v121.i8 = enum.tag v120;
-        mstore v48 v121 i8;
-        v122.i8 = mload v48 i8;
-        br_table v122 (1.i256 block17) (0.i256 block18);
-
-    block14:
-        jump block15;
-
-    block15:
-        mstore v38 0.i256 i256;
-        mstore v39 0.i256 i256;
-        v123.i256 = mload v38 i256;
-        v124.i256 = mload v39 i256;
-        call %return_data_1 v123 v124;
+        v37.i256 = phi (v40 block12) (0.i256 block13);
+        call %abi_encode_u256 v37 v0;
         unreachable;
 
+    block12:
+        v39.@__fe_layout_2 = obj.load v2;
+        enum.assert_variant v39 #Some;
+        v40.i256 = enum.extract v39 #Some 0.i256;
+        jump block11;
+
+    block13:
+        jump block11;
+
+    block14:
+        v41.i256 = call %calldataload 4.i256;
+        v42.@__fe_layout_2 = enum.make @__fe_layout_2 #Some v41;
+        v43.enumtag(@__fe_layout_2) = enum.tag v42;
+        br_table v43 block29 (0.enumtag(@__fe_layout_2) block30) (1.enumtag(@__fe_layout_2) block31);
+
+    block15:
+        jump block16;
+
     block16:
-        v125.i256 = mload v34 i256;
-        mstore v10 v125 i256;
-        v126.i256 = mload v10 i256;
-        call %abi_encode_u256_0 v126;
+        call %return_data_2 0.i256 0.i256;
         unreachable;
 
     block17:
-        v127.@__fe_layout_1 = obj.load v9;
-        v128.i256 = enum.extract v127 #Some 0.i256;
-        mstore v35 v128 i256;
-        mstore v36 1.i256 i256;
-        v129.i256 = mload v36 i256;
-        mstore v34 v129 i256;
-        jump block16;
+        v48.i256 = phi (1.i256 block18) (0.i256 block19);
+        call %abi_encode_u256 v48 v0;
+        unreachable;
 
     block18:
-        mstore v37 0.i256 i256;
-        v130.i256 = mload v37 i256;
-        mstore v34 v130 i256;
-        jump block16;
+        v50.@__fe_layout_2 = obj.load v3;
+        enum.assert_variant v50 #Some;
+        v51.i256 = enum.extract v50 #Some 0.i256;
+        jump block17;
+
+    block19:
+        jump block17;
+
+    block20:
+        v18.@__fe_layout_2 = obj.load v1;
+        v19.enumtag(@__fe_layout_2) = enum.tag v18;
+        br_table v19 (1.enumtag(@__fe_layout_2) block6) (0.enumtag(@__fe_layout_2) block7);
+
+    block21:
+        unreachable;
+
+    block22:
+        enum.set_tag v1 #None;
+        jump block20;
+
+    block23:
+        enum.set_tag v1 #Some;
+        enum.assert_variant v12 #Some;
+        v16.objref<i256> = enum.proj v1 #Some 0.i256;
+        v17.i256 = enum.extract v12 #Some 0.i256;
+        obj.store v16 v17;
+        jump block20;
+
+    block24:
+        v32.@__fe_layout_2 = obj.load v2;
+        v33.enumtag(@__fe_layout_2) = enum.tag v32;
+        br_table v33 (1.enumtag(@__fe_layout_2) block12) (0.enumtag(@__fe_layout_2) block13);
+
+    block25:
+        unreachable;
+
+    block26:
+        enum.set_tag v2 #None;
+        jump block24;
+
+    block27:
+        enum.set_tag v2 #Some;
+        enum.assert_variant v28 #Some;
+        v30.objref<i256> = enum.proj v2 #Some 0.i256;
+        v31.i256 = enum.extract v28 #Some 0.i256;
+        obj.store v30 v31;
+        jump block24;
+
+    block28:
+        v46.@__fe_layout_2 = obj.load v3;
+        v47.enumtag(@__fe_layout_2) = enum.tag v46;
+        br_table v47 (1.enumtag(@__fe_layout_2) block18) (0.enumtag(@__fe_layout_2) block19);
+
+    block29:
+        unreachable;
+
+    block30:
+        enum.set_tag v3 #None;
+        jump block28;
+
+    block31:
+        enum.set_tag v3 #Some;
+        enum.assert_variant v42 #Some;
+        v44.objref<i256> = enum.proj v3 #Some 0.i256;
+        v45.i256 = enum.extract v42 #Some 0.i256;
+        obj.store v44 v45;
+        jump block28;
 }
 
 

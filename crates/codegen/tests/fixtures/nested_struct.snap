@@ -5,71 +5,214 @@ input_file: tests/fixtures/nested_struct.fe
 ---
 object "NestedStruct" {
   code {
-    function $init__Evm_hef0af3106e109414__3af54274b2985741() {
-      let v0 := datasize("NestedStruct_deployed")
-      let v1 := dataoffset("NestedStruct_deployed")
-      codecopy(0, v1, v0)
-      return(0, v0)
+    function $codecopy(p0, p1, p2, p3) {
+      let v4 := p1
+      let v5 := p2
+      let v6 := p3
+      datacopy(v4, v5, v6)
+      leave
     }
-    $init__Evm_hef0af3106e109414__3af54274b2985741()
+    function $init(p0) {
+      let v3 := datasize("__NestedStruct_runtime")
+      let v1 := v3
+      let v4 := dataoffset("__NestedStruct_runtime")
+      let v2 := v4
+      let v10 := p0
+      let v5 := v10
+      let v11 := 0x00
+      let v6 := v11
+      $codecopy(v5, v6, v2, v1)
+      let v14 := 0x00
+      let v8 := v14
+      $return_data_0(v8, v1)
+      invalid()
+    }
+    function $return_data_0(p0, p1) {
+      let v3 := p0
+      let v4 := p1
+      return(v3, v4)
+    }
+    $init(0)
   }
-
-  object "NestedStruct_deployed" {
+  object "__NestedStruct_runtime" {
     code {
-      function $abi_encode__Evm_hef0af3106e109414__3af54274b2985741($value) {
-        mstore(0, $value)
-        return(0, 32)
+      function $abi_encode(p0, p1) {
+        let v9 := p1
+        let v2 := v9
+        let v10 := 0x00
+        let v3 := v10
+        let v4 := p0
+        $mstore(v2, v3, v4)
+        let v13 := 0x00
+        let v6 := v13
+        let v14 := 0x20
+        let v7 := v14
+        $return_data_2(v6, v7)
+        invalid()
       }
-      function $mem_read($value) -> ret {
-        let v0 := 0
-        v0 := $value
-        ret := v0
+      function $abi_encode_arg0_root_stor(p0, p1) {
+        let v9 := p1
+        let v2 := v9
+        let v10 := 0x00
+        let v3 := v10
+        let v4 := p0
+        $mstore_arg2_root_stor(v2, v3, v4)
+        let v13 := 0x00
+        let v6 := v13
+        let v14 := 0x20
+        let v7 := v14
+        $return_data_2(v6, v7)
+        invalid()
+      }
+      function $calldataload(p0) -> ret {
+        let v2 := p0
+        let v5 := calldataload(v2)
+        let v3 := v5
+        ret := v3
         leave
       }
-      function $read_inner__StorPtr_Outer___dab28b9da6c3e28($outer) -> ret {
-        let v0 := sload($outer)
-        ret := v0
+      function $from_raw(p0) -> ret {
+        let v1 := p0
+        let v3 := v1
+        let v4 := v3
+        let v2 := v4
+        ret := v2
         leave
       }
-      function $runtime__Evm_hef0af3106e109414__3af54274b2985741() {
-        let v0 := $stor_ptr_stor__Evm_hef0af3106e109414_Outer_hccd04e332bd35653__177c3c9a6f7ae368(0)
-        let v1 := v0
-        let v2 := calldataload(0)
-        let v3 := shr(224, v2)
-        switch v3
-          case 3091856072 {
-            let v4 := calldataload(4)
-            $write_inner__StorPtr_Outer___dab28b9da6c3e28(v4, v1)
-            $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v4)
+      function $mem_read(p0) -> ret {
+        let v8 := 0x00
+        let v2 := v8
+        let v9 := 0x00
+        let v10 := v9
+        let v3 := v10
+        let v12 := 0x00
+        let v13 := v12
+        let v15 := v13
+        let v4 := v15
+        let v17 := 0x00
+        let v18 := v17
+        let t21 := mload(0x40)
+        if iszero(t21) {
+          t21 := 0x80
+        }
+        mstore(0x40, add(t21, 32))
+        let v20 := t21
+        mstore(v20, v18)
+        let v1 := v20
+        let v5 := p0
+        mstore(v1, v5)
+        let t22 := mload(v1)
+        let v7 := t22
+        ret := v7
+        leave
+      }
+      function $mstore(p0, p1, p2) {
+        let v3 := p1
+        let v4 := p2
+        mstore(v3, v4)
+        leave
+      }
+      function $mstore_arg2_root_stor(p0, p1, p2) {
+        let v3 := p1
+        let v4 := p2
+        mstore(v3, v4)
+        leave
+      }
+      function $read_inner_eff0_stor(p0) -> ret {
+        let t2 := sload(p0)
+        let v1 := t2
+        ret := v1
+        leave
+      }
+      function $return_data_1(p0, p1) {
+        let v3 := p0
+        let v4 := p1
+        return(v3, v4)
+      }
+      function $return_data_2(p0, p1) {
+        let v3 := p0
+        let v4 := p1
+        return(v3, v4)
+      }
+      function $runtime(p0) {
+        let v1 := 0
+        let v2 := 0
+        let v31 := 0x00
+        let v5 := v31
+        let v32 := $stor_ptr(v5)
+        let v6 := v32
+        v1 := v6
+        let v33 := 0x00
+        let v7 := v33
+        let v34 := $calldataload(v7)
+        let v8 := v34
+        let v35 := 0xe0
+        let v9 := v35
+        let v36 := shr(v9, v8)
+        let v10 := v36
+        v2 := v10
+        let v37 := 0xb849fac8
+        let v12 := v37
+        let v13 := iszero(iszero(eq(v2, v12)))
+        if iszero(iszero(v13)) {
+          let v38 := 0x04
+          let v18 := v38
+          let v39 := $calldataload(v18)
+          let v19 := v39
+          let v3 := v19
+          $write_inner_eff0_stor(v3, v1)
+          $abi_encode(v3, p0)
+          invalid()
+        }
+        if iszero(iszero(iszero(v13))) {
+          let v56 := 0xd164e48d
+          let v14 := v56
+          let v15 := iszero(iszero(eq(v2, v14)))
+          if iszero(iszero(v15)) {
+            let v44 := $read_inner_eff0_stor(v1)
+            let v22 := v44
+            $abi_encode_arg0_root_stor(v22, p0)
+            invalid()
           }
-          case 3513050253 {
-            let v5 := $read_inner__StorPtr_Outer___dab28b9da6c3e28(v1)
-            $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v5)
+          if iszero(iszero(iszero(v15))) {
+            let v57 := 0x806f30cd
+            let v16 := v57
+            let v17 := iszero(iszero(eq(v2, v16)))
+            if iszero(iszero(v17)) {
+              let v47 := 0x04
+              let v24 := v47
+              let v48 := $calldataload(v24)
+              let v25 := v48
+              let v4 := v25
+              let v49 := $mem_read(v4)
+              let v26 := v49
+              $abi_encode(v26, p0)
+              invalid()
+            }
+            if iszero(iszero(iszero(v17))) {
+              let v52 := 0x00
+              let v28 := v52
+              let v53 := 0x00
+              let v29 := v53
+              $return_data_1(v28, v29)
+              invalid()
+            }
           }
-          case 2154770637 {
-            let v6 := calldataload(4)
-            let v7 := $mem_read(v6)
-            $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v7)
-          }
-          default {
-            return(0, 0)
-          }
+        }
       }
-      function $stor_ptr_stor__Evm_hef0af3106e109414_Outer_hccd04e332bd35653__177c3c9a6f7ae368($slot) -> ret {
-        let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Outer_hccd04e332bd35653__f44d0100de7cf929($slot)
-        ret := v0
+      function $stor_ptr(p0) -> ret {
+        let v2 := p0
+        let v4 := $from_raw(v2)
+        let v3 := v4
+        ret := v3
         leave
       }
-      function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Outer_hccd04e332bd35653__f44d0100de7cf929($raw) -> ret {
-        ret := $raw
+      function $write_inner_eff0_stor(p0, p1) {
+        let v2 := p0
+        sstore(p1, v2)
         leave
       }
-      function $write_inner__StorPtr_Outer___dab28b9da6c3e28($value, $outer) {
-        sstore($outer, $value)
-        leave
-      }
-      $runtime__Evm_hef0af3106e109414__3af54274b2985741()
-      return(0, 0)
+      $runtime(0)
     }
   }
 }

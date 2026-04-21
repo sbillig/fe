@@ -25,3 +25,11 @@ pub fn match_mixed_tuple(t: (bool, u8)) -> u8 {
         (false, _) => 0,
     }
 }
+
+pub fn main() -> (u8, u8, u8) {
+    (
+        match_bool_tuple((true, false)),
+        match_tuple_with_wildcard((false, true)),
+        match_mixed_tuple((true, 2)),
+    )
+}

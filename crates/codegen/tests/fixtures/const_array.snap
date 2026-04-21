@@ -3,4 +3,64 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/const_array.fe
 ---
-
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let v0 := $main()
+      stop()
+    }
+    function $main() -> ret {
+      let v3 := 0x00
+      let v0 := v3
+      let v4 := 0x01
+      let v1 := v4
+      let v5 := $sum_two(v0, v1)
+      let v2 := v5
+      ret := v2
+      leave
+    }
+    function $sum_two(p0, p1) -> ret {
+      let v9 := 0x0a
+      let v10 := 0x14
+      let v11 := 0x1e
+      let t18 := mload(0x40)
+      if iszero(t18) {
+        t18 := 0x80
+      }
+      mstore(0x40, add(t18, 96))
+      let v12 := t18
+      mstore(add(v12, mul(0, 32)), v9)
+      mstore(add(v12, mul(1, 32)), v10)
+      mstore(add(v12, mul(2, 32)), v11)
+      let v2 := v12
+      let v3 := p0
+      let t19 := mload(add(v2, mul(v3, 32)))
+      let v4 := t19
+      let v13 := 0x0a
+      let v14 := 0x14
+      let v15 := 0x1e
+      let t20 := mload(0x40)
+      if iszero(t20) {
+        t20 := 0x80
+      }
+      mstore(0x40, add(t20, 96))
+      let v16 := t20
+      mstore(add(v16, mul(0, 32)), v13)
+      mstore(add(v16, mul(1, 32)), v14)
+      mstore(add(v16, mul(2, 32)), v15)
+      let v5 := v16
+      let v6 := p1
+      let t21 := mload(add(v5, mul(v6, 32)))
+      let v7 := t21
+      let t22 := add(v4, v7)
+      if lt(t22, v4) {
+        revert(0, 0)
+      }
+      let v17 := t22
+      let v8 := v17
+      ret := v8
+      leave
+    }
+    $__fe_main_root()
+  }
+}

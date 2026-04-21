@@ -8,7 +8,7 @@ error[2-0004]: `T` is ambiguous
   │
 1 │ pub struct MyS<T, U, T> {
   │                -     - candidate 2
-  │                │      
+  │                │
   │                candidate 1
 2 │     x: T,
   │        ^ `T` is ambiguous
@@ -18,5 +18,5 @@ error[3-0019]: duplicate generic parameter name in struct `MyS`
   │
 1 │ pub struct MyS<T, U, T> {
   │                ^     - `T` is redefined here
-  │                │      
+  │                │
   │                `T` is defined here

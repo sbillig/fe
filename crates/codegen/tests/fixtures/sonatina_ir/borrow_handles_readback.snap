@@ -7,6 +7,9 @@ target = "evm-ethereum-osaka"
 
 func private %__fe_main_root() {
     block0:
+        jump block1;
+
+    block1:
         v0.i256 = call %borrow_handles_readback;
         evm_stop;
 }
@@ -14,26 +17,14 @@ func private %__fe_main_root() {
 func private %borrow_handles_readback() -> i256 {
     block0:
         v0.*i256 = alloca i256;
-        v1.*i256 = alloca i256;
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        mstore v2 0.i256 i256;
-        v7.i256 = mload v2 i256;
-        mstore v0 v7 i256;
-        v8.i256 = ptr_to_int v0 i256;
-        mstore v3 v8 i256;
-        v9.i256 = mload v3 i256;
-        v10.i256 = mload v9 i256;
-        mstore v5 v10 i256;
-        v11.i256 = mload v5 i256;
-        mstore v1 v11 i256;
-        mstore v4 5.i256 i256;
-        v13.i256 = mload v4 i256;
-        mstore v1 v13 i256;
-        v14.i256 = mload v0 i256;
-        return v14;
+        jump block1;
+
+    block1:
+        mstore v0 0.i256 i256;
+        v2.i256 = ptr_to_int v0 i256;
+        mstore v2 5.i256 i256;
+        v4.i256 = mload v0 i256;
+        return v4;
 }
 
 

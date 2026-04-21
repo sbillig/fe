@@ -6,50 +6,36 @@ input_file: tests/fixtures/effect_ptr_name_collision.fe
 object "main" {
   code {
     function $__fe_main_root() {
-      let v0 := 0
-      v0 := $effect_ptr_name_collision()
+      let v0 := $effect_ptr_name_collision()
       stop()
     }
     function $effect_ptr_name_collision() -> ret {
-      let v0 := 0
-      let v1 := 0
-      let v2 := 0
-      let v3 := 0
-      let v4 := 0
-      let v5 := 0
-      let v6 := 0
-      let v7 := 0
-      let v8 := 0
-      let v9 := 0
-      let v10 := 0
-      let v11 := 0
-      let v12 := 0
-      let v13 := 0
-      let v14 := 0
-      let v15 := 0
-      v5 := 0x01
-      v1 := v5
-      v6 := 0x07
-      v2 := v6
-      v7 := 0x01
-      v8 := 0x07
-      v9 := dataoffset("const_0")
-      v3 := v9
-      v11 := 0x01
-      v12 := 0x07
-      v13 := dataoffset("const_0")
-      v0 := v13
-      v15 := $read_tag_arg0_root_code(v0)
-      v4 := v15
+      let v5 := 0x01
+      let v1 := v5
+      let v6 := 0x07
+      let v2 := v6
+      let v7 := 0x01
+      let v8 := 0x07
+      let v9 := dataoffset("const_0")
+      let v3 := v9
+      let v11 := 0x01
+      let v12 := 0x07
+      let v13 := dataoffset("const_0")
+      let v0 := v13
+      let v15 := $read_tag_arg0_root_code(v0)
+      let v4 := v15
       ret := v4
       leave
     }
-    function $read_tag_arg0_root_code($ptr) -> ret {
-      let v1 := 0
-      let t2 := allocate(32)
-      datacopy(t2, add($ptr, 32), 32)
+    function $read_tag_arg0_root_code(p0) -> ret {
+      let t2 := mload(0x40)
+      if iszero(t2) {
+        t2 := 0x80
+      }
+      mstore(0x40, add(t2, 32))
+      datacopy(t2, add(p0, 32), 32)
       t2 := mload(t2)
-      v1 := t2
+      let v1 := t2
       ret := v1
       leave
     }

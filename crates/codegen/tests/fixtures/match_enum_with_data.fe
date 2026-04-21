@@ -14,3 +14,8 @@ pub fn match_option(opt: own MyOption) -> u64 {
         MyOption::None => 0,
     }
 }
+
+pub fn main() -> u64 {
+    let opt = make_some(7)
+    match_option(opt)
+}

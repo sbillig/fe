@@ -23,7 +23,7 @@ error[6-0003]: trait bound is not satisfied
 
 error[6-0003]: trait bound is not satisfied
    ┌─ assoc_ty.fe:32:1
-   │  
+   │
 32 │ ╭ trait Tr1 {
 33 │ │     type Foo: Tr2 = FooDefault
 34 │ │ }

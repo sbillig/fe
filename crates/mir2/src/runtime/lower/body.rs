@@ -915,6 +915,9 @@ impl<'db> RmirEmitter<'db> {
         if let Some(value) = self.try_lower_dyn_string_literal(bb, ty, value) {
             return value;
         }
+        if let Some(value) = self.try_lower_bytes_array_const_as_class(bb, ty, value, target) {
+            return value;
+        }
         if let Some(scalar) = const_scalar_from_value(self.db, self.env, value) {
             return self.lower_sem_const_scalar(bb, ty, scalar);
         }
@@ -980,6 +983,15 @@ impl<'db> RmirEmitter<'db> {
         if let Some(value) = self.try_lower_dyn_string_literal(bb, ty, value) {
             return value;
         }
+        let layout = self.layout_for_ty(ty);
+        if let Some(value) = self.try_lower_bytes_array_const_as_class(
+            bb,
+            ty,
+            value,
+            &RuntimeClass::AggregateValue { layout },
+        ) {
+            return value;
+        }
         if let Some(scalar) = const_scalar_from_value(self.db, self.env, value) {
             return self.lower_sem_const_scalar(bb, ty, scalar);
         }
@@ -993,7 +1005,6 @@ impl<'db> RmirEmitter<'db> {
                 scalar,
             );
         }
-        let layout = self.layout_for_ty(ty);
         match value.value(self.db) {
             SemConstValue::Tuple { .. }
             | SemConstValue::Struct { .. }
@@ -1027,6 +1038,69 @@ impl<'db> RmirEmitter<'db> {
         };
         ty.is_core_dyn_string(self.db)
             .then(|| self.lower_dyn_string_literal(bb, ty, &bytes))
+    }
+
+    fn try_lower_bytes_array_const_as_class(
+        &mut self,
+        bb: RBlockId,
+        ty: TyId<'db>,
+        value: SemConstId<'db>,
+        target: &RuntimeClass<'db>,
+    ) -> Option<RLocalId> {
+        let SemConstValue::Scalar {
+            value: SemConstScalar::Bytes(bytes),
+            ..
+        } = value.value(self.db)
+        else {
+            return None;
+        };
+        if !ty.is_array(self.db) {
+            return None;
+        }
+
+        let field_tys = self.aggregate_field_tys(ty, bytes.len());
+        let mut field_values = Vec::with_capacity(bytes.len());
+        let mut field_classes = Vec::with_capacity(bytes.len());
+        for (byte, field_ty) in bytes.iter().copied().zip(field_tys) {
+            let field_class = self
+                .top_level_class_for_ty(field_ty, AddressSpaceKind::Memory)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "bytes array element should have a runtime class: {}",
+                        field_ty.pretty_print(self.db)
+                    )
+                });
+            let RuntimeClass::Scalar(ScalarClass {
+                repr:
+                    ScalarRepr::Int {
+                        bits: 8,
+                        signed: false,
+                    },
+                ..
+            }) = &field_class
+            else {
+                panic!("bytes array const requires u8 element class, found {field_class:?}");
+            };
+            let value = self.lower_sem_const_scalar_with_class(
+                bb,
+                field_ty,
+                field_class.clone(),
+                ConstScalar::Int {
+                    bits: 8,
+                    signed: false,
+                    words: if byte == 0 { Vec::new() } else { vec![byte] },
+                },
+            );
+            field_values.push(value);
+            field_classes.push(field_class);
+        }
+        Some(self.lower_aggregate_const_fields_as_class(
+            bb,
+            ty,
+            target,
+            &field_values,
+            &field_classes,
+        ))
     }
 
     fn lower_dyn_string_literal(&mut self, bb: RBlockId, ty: TyId<'db>, bytes: &[u8]) -> RLocalId {
@@ -1205,33 +1279,13 @@ impl<'db> RmirEmitter<'db> {
                     .zip(field_tys)
                     .map(|(field, field_ty)| self.lower_const_value_field(bb, field, field_ty))
                     .unzip();
-                let layout =
-                    layout_for_aggregate_instance_in_env(self.db, self.env, ty, &field_classes);
-                let ctor_elems = aggregate_ctor_elems_for_layout(self.db, layout, elems.len());
-                let dst_class = match target {
-                    RuntimeClass::AggregateValue { .. } => RuntimeClass::AggregateValue { layout },
-                    RuntimeClass::Ref {
-                        kind: RefKind::Object,
-                        view: RefView::Whole,
-                        ..
-                    } => RuntimeClass::object_ref(layout),
-                    RuntimeClass::Ref {
-                        kind: RefKind::Provider { .. },
-                        ..
-                    }
-                    | RuntimeClass::RawAddr { .. } => target.clone(),
-                    RuntimeClass::Scalar(_)
-                    | RuntimeClass::Ref {
-                        kind: RefKind::Const,
-                        ..
-                    }
-                    | RuntimeClass::Ref { .. } => {
-                        panic!("aggregate const cannot lower directly to class {target:?}")
-                    }
-                };
-                let dst = self.alloc_runtime_temp(ty, RuntimeCarrier::Value(dst_class));
-                self.lower_aggregate_values(bb, dst, ty, layout, &ctor_elems, &field_values);
-                dst
+                self.lower_aggregate_const_fields_as_class(
+                    bb,
+                    ty,
+                    target,
+                    &field_values,
+                    &field_classes,
+                )
             }
             SemConstValue::Enum {
                 variant, fields, ..
@@ -1284,6 +1338,42 @@ impl<'db> RmirEmitter<'db> {
                 panic!("expected non-scalar semantic const, found {value:?}")
             }
         }
+    }
+
+    fn lower_aggregate_const_fields_as_class(
+        &mut self,
+        bb: RBlockId,
+        ty: TyId<'db>,
+        target: &RuntimeClass<'db>,
+        field_values: &[RLocalId],
+        field_classes: &[RuntimeClass<'db>],
+    ) -> RLocalId {
+        let layout = layout_for_aggregate_instance_in_env(self.db, self.env, ty, field_classes);
+        let ctor_elems = aggregate_ctor_elems_for_layout(self.db, layout, field_values.len());
+        let dst_class = match target {
+            RuntimeClass::AggregateValue { .. } => RuntimeClass::AggregateValue { layout },
+            RuntimeClass::Ref {
+                kind: RefKind::Object,
+                view: RefView::Whole,
+                ..
+            } => RuntimeClass::object_ref(layout),
+            RuntimeClass::Ref {
+                kind: RefKind::Provider { .. },
+                ..
+            }
+            | RuntimeClass::RawAddr { .. } => target.clone(),
+            RuntimeClass::Scalar(_)
+            | RuntimeClass::Ref {
+                kind: RefKind::Const,
+                ..
+            }
+            | RuntimeClass::Ref { .. } => {
+                panic!("aggregate const cannot lower directly to class {target:?}")
+            }
+        };
+        let dst = self.alloc_runtime_temp(ty, RuntimeCarrier::Value(dst_class));
+        self.lower_aggregate_values(bb, dst, ty, layout, &ctor_elems, field_values);
+        dst
     }
 
     fn aggregate_field_tys(&self, ty: TyId<'db>, arity: usize) -> Vec<TyId<'db>> {

@@ -5,64 +5,36 @@ input_file: crates/codegen/tests/fixtures/code_region_qualified.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %codecopy(v0.i256, v1.i256, v2.i256) {
+type @__fe_layout_0 = {};
+type @__fe_layout_1 = {@__fe_layout_0};
+
+func private %codecopy(v0.objref<@__fe_layout_1>, v1.i256, v2.i256, v3.i256) {
     block0:
-        v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
         v5.*i256 = alloca i256;
         v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
-        v8.*i256 = alloca i256;
-        v9.*i256 = alloca i256;
-        v10.*i256 = alloca i256;
-        v11.*i256 = alloca i256;
-        mstore v3 v0 i256;
         mstore v4 v1 i256;
         mstore v5 v2 i256;
-        v12.i256 = mload v3 i256;
-        mstore v6 v12 i256;
-        v13.i256 = mload v4 i256;
-        mstore v7 v13 i256;
-        v14.i256 = mload v5 i256;
-        mstore v8 v14 i256;
-        v15.i256 = mload v3 i256;
-        mstore v9 v15 i256;
-        v16.i256 = mload v4 i256;
-        mstore v10 v16 i256;
-        v17.i256 = mload v5 i256;
-        mstore v11 v17 i256;
-        v18.i256 = mload v9 i256;
-        v19.i256 = mload v10 i256;
-        v20.i256 = mload v11 i256;
-        evm_code_copy v18 v19 v20;
+        mstore v6 v3 i256;
+        jump block1;
+
+    block1:
+        v7.i256 = mload v4 i256;
+        v8.i256 = mload v5 i256;
+        v9.i256 = mload v6 i256;
+        evm_code_copy v7 v8 v9;
         return;
 }
 
-func private %init() {
+func private %init(v0.objref<@__fe_layout_1>) {
     block0:
-        v0.*i256 = alloca i256;
-        v1.*i256 = alloca i256;
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.i256 = sym_size &__Foo_runtime;
-        mstore v2 v6 i256;
-        v7.i256 = mload v2 i256;
-        mstore v0 v7 i256;
-        v8.i256 = sym_addr &__Foo_runtime;
-        mstore v3 v8 i256;
-        v9.i256 = mload v3 i256;
-        mstore v1 v9 i256;
-        mstore v4 0.i256 i256;
-        v11.i256 = mload v4 i256;
-        v12.i256 = mload v1 i256;
-        v13.i256 = mload v0 i256;
-        call %codecopy v11 v12 v13;
-        mstore v5 0.i256 i256;
-        v15.i256 = mload v5 i256;
-        v16.i256 = mload v0 i256;
-        call %return_data_1 v15 v16;
+        jump block1;
+
+    block1:
+        v1.i256 = sym_size &__Foo_runtime;
+        v2.i256 = sym_addr &__Foo_runtime;
+        call %codecopy v0 0.i256 v2 v1;
+        call %return_data_1 0.i256 v1;
         unreachable;
 }
 
@@ -70,57 +42,36 @@ func private %return_data_0(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
         mstore v2 v0 i256;
         mstore v3 v1 i256;
-        v8.i256 = mload v2 i256;
-        mstore v4 v8 i256;
-        v9.i256 = mload v3 i256;
-        mstore v5 v9 i256;
-        v10.i256 = mload v2 i256;
-        mstore v6 v10 i256;
-        v11.i256 = mload v3 i256;
-        mstore v7 v11 i256;
-        v12.i256 = mload v6 i256;
-        v13.i256 = mload v7 i256;
-        evm_return v12 v13;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i256 = mload v3 i256;
+        evm_return v4 v5;
 }
 
 func private %return_data_1(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
         mstore v2 v0 i256;
         mstore v3 v1 i256;
-        v8.i256 = mload v2 i256;
-        mstore v4 v8 i256;
-        v9.i256 = mload v3 i256;
-        mstore v5 v9 i256;
-        v10.i256 = mload v2 i256;
-        mstore v6 v10 i256;
-        v11.i256 = mload v3 i256;
-        mstore v7 v11 i256;
-        v12.i256 = mload v6 i256;
-        v13.i256 = mload v7 i256;
-        evm_return v12 v13;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i256 = mload v3 i256;
+        evm_return v4 v5;
 }
 
-func private %runtime() {
+func private %runtime(v0.objref<@__fe_layout_1>) {
     block0:
-        v0.*i256 = alloca i256;
-        v1.*i256 = alloca i256;
-        mstore v0 0.i256 i256;
-        mstore v1 0.i256 i256;
-        v3.i256 = mload v0 i256;
-        v4.i256 = mload v1 i256;
-        call %return_data_0 v3 v4;
+        jump block1;
+
+    block1:
+        call %return_data_0 0.i256 0.i256;
         unreachable;
 }
 

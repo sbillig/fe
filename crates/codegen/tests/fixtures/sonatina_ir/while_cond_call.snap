@@ -7,101 +7,54 @@ target = "evm-ethereum-osaka"
 
 func private %__fe_main_root() {
     block0:
-        v1.i1 = call %lt_ten_0 0.i64;
+        jump block1;
+
+    block1:
+        v0.i64 = call %while_cond_call;
         evm_stop;
 }
 
-func private %lt_ten_0(v0.i64) -> i1 {
+func private %lt_ten(v0.i64) -> i1 {
     block0:
         v1.*i64 = alloca i64;
-        v2.*i64 = alloca i64;
-        v3.*i1 = alloca i1;
-        v4.*i64 = alloca i64;
-        v5.*i64 = alloca i64;
         mstore v1 v0 i64;
-        mstore v2 10.i64 i64;
-        v7.i256 = mload v1 i256;
-        v8.i64 = trunc v7 i64;
-        mstore v4 v8 i64;
-        v9.i256 = mload v2 i256;
-        v10.i64 = trunc v9 i64;
-        mstore v5 v10 i64;
-        v11.i64 = mload v4 i64;
-        v12.i64 = mload v5 i64;
-        v14.i1 = ne v11 0.i64;
-        v15.i1 = ne v12 0.i64;
-        v16.i1 = lt v14 v15;
-        mstore v3 v16 i1;
-        v17.i1 = mload v3 i1;
-        return v17;
-}
+        jump block1;
 
-func private %lt_ten_1(v0.i64) -> i1 {
-    block0:
-        v1.*i64 = alloca i64;
-        v2.*i64 = alloca i64;
-        v3.*i1 = alloca i1;
-        v4.*i64 = alloca i64;
-        v5.*i64 = alloca i64;
-        mstore v1 v0 i64;
-        mstore v2 10.i64 i64;
-        v7.i256 = mload v1 i256;
-        v8.i64 = trunc v7 i64;
-        mstore v4 v8 i64;
-        v9.i256 = mload v2 i256;
-        v10.i64 = trunc v9 i64;
-        mstore v5 v10 i64;
-        v11.i64 = mload v4 i64;
-        v12.i64 = mload v5 i64;
-        v14.i1 = ne v11 0.i64;
-        v15.i1 = ne v12 0.i64;
-        v16.i1 = lt v14 v15;
-        mstore v3 v16 i1;
-        v17.i1 = mload v3 i1;
-        return v17;
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.i64 = trunc v2 i64;
+        v5.i1 = lt v3 10.i64;
+        return v5;
 }
 
 func private %while_cond_call() -> i64 {
     block0:
         v0.*i64 = alloca i64;
-        v1.*i64 = alloca i64;
-        v2.*i1 = alloca i1;
-        v3.*i64 = alloca i64;
-        v4.*i64 = alloca i64;
-        v5.*i1 = alloca i1;
-        mstore v1 0.i64 i64;
-        v7.i64 = mload v1 i64;
-        mstore v0 v7 i64;
         jump block1;
 
     block1:
-        v8.i64 = mload v0 i64;
-        v9.i1 = call %lt_ten_1 v8;
-        mstore v5 v9 i1;
-        v10.i1 = mload v5 i1;
-        mstore v2 v10 i1;
-        v11.i1 = mload v2 i1;
-        br v11 block2 block3;
+        jump block2;
 
     block2:
-        mstore v3 1.i64 i64;
-        v13.i64 = mload v0 i64;
-        v14.i64 = mload v3 i64;
-        (v15.i64, v16.i1) = uaddo v13 v14;
-        br v16 block4 block5;
+        v2.i64 = phi (0.i64 block1) (v10 block6);
+        v3.i1 = call %lt_ten v2;
+        br v3 block3 block4;
 
     block3:
-        v19.i64 = mload v0 i64;
-        return v19;
+        (v6.i64, v7.i1) = uaddo v2 1.i64;
+        br v7 block5 block6;
 
     block4:
-        evm_revert 0.i256 0.i256;
+        return v2;
 
     block5:
-        mstore v4 v15 i64;
-        v18.i64 = mload v4 i64;
-        mstore v0 v18 i64;
-        jump block1;
+        evm_revert 0.i256 0.i256;
+
+    block6:
+        mstore v0 v6 i64;
+        v9.i256 = mload v0 i256;
+        v10.i64 = trunc v9 i64;
+        jump block2;
 }
 
 

@@ -12,3 +12,7 @@ pub fn sum_loop(n: usize) -> u256 {
 
     acc
 }
+
+pub fn main() -> u256 {
+    sum_loop(3)
+}

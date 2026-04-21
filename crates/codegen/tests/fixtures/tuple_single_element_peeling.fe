@@ -25,3 +25,12 @@ pub fn match_single_element_tuple(t: (bool,)) -> u8 {
         (false,) => 0,
     }
 }
+
+pub fn main() -> (u256, u256, u256, u8) {
+    (
+        tuple_single_passthrough(1),
+        tuple_single_nested_passthrough(2),
+        tuple_single_struct_newtype_nested(3),
+        match_single_element_tuple((true,)),
+    )
+}

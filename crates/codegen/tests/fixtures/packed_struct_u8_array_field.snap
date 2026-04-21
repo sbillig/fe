@@ -6,64 +6,34 @@ input_file: tests/fixtures/packed_struct_u8_array_field.fe
 object "main" {
   code {
     function $__fe_main_root() {
-      let v0 := 0
-      v0 := $packed_field_offset()
+      let v0 := $packed_field_offset()
       stop()
     }
     function $packed_field_offset() -> ret {
-      let v0 := 0
-      let v1 := 0
-      let v2 := 0
-      let v3 := 0
-      let v4 := 0
-      let v5 := 0
-      let v6 := 0
-      let v7 := 0
-      let v8 := 0
-      let v9 := 0
-      let v10 := 0
-      let v11 := 0
-      let v12 := 0
-      let v13 := 0
-      let v14 := 0
-      let v15 := 0
-      let v16 := 0
-      let v17 := 0
-      let v18 := 0
-      let v19 := 0
-      let v20 := 0
-      let v21 := 0
-      let v22 := 0
-      let v23 := 0
-      let v24 := 0
-      let v25 := 0
-      let v26 := 0
-      let v27 := 0
-      let v28 := 0
-      v7 := 0x01
-      v1 := v7
-      v8 := 0x02
-      v2 := v8
-      v9 := 0x01
-      v10 := 0x02
-      v11 := dataoffset("const_0")
-      v3 := v11
-      v13 := 0x2a
-      v4 := v13
-      v14 := 0x01
-      v15 := 0x02
-      v16 := dataoffset("const_0")
-      v18 := 0x2a
-      v19 := dataoffset("const_1")
-      v5 := v19
-      v21 := 0x01
-      v22 := 0x02
-      v23 := dataoffset("const_0")
-      v25 := 0x2a
-      v26 := dataoffset("const_1")
-      v0 := v26
-      v28 := 0x2a
-      v6 := v28
+      let v7 := 0x01
+      let v1 := and(v7, 0xff)
+      let v8 := 0x02
+      let v2 := and(v8, 0xff)
+      let v9 := 0x01
+      let v10 := 0x02
+      let v11 := dataoffset("const_0")
+      let v3 := v11
+      let v13 := 0x2a
+      let v4 := v13
+      let v14 := 0x01
+      let v15 := 0x02
+      let v16 := dataoffset("const_0")
+      let v18 := 0x2a
+      let v19 := dataoffset("const_1")
+      let v5 := v19
+      let v21 := 0x01
+      let v22 := 0x02
+      let v23 := dataoffset("const_0")
+      let v25 := 0x2a
+      let v26 := dataoffset("const_1")
+      let v0 := v26
+      let v28 := 0x2a
+      let v6 := v28
       ret := v6
       leave
     }

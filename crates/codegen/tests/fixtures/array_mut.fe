@@ -2,3 +2,7 @@ pub fn array_mut(x: u8) -> [u8; 4] {
     let arr: [u8; 4] = [x, 2, 3, 4]
     arr
 }
+
+pub fn main() -> [u8; 4] {
+    array_mut(1)
+}

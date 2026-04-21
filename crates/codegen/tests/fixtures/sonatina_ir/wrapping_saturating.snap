@@ -5,669 +5,391 @@ input_file: crates/codegen/tests/fixtures/wrapping_saturating.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @__fe_layout_0 = {i256, i256, i256};
-type @__fe_layout_1 = {i64, i64, i64};
+type @__fe_layout_0 = {i64, i64, i64};
+type @__fe_layout_1 = {i256, i256, i256};
+type @__fe_layout_2 = {@__fe_layout_0, @__fe_layout_0, @__fe_layout_1, @__fe_layout_1};
 
 func private %__fe_main_root() {
     block0:
-        v1.@__fe_layout_0 = call %saturating_ops_u256 0.i256 0.i256;
+        jump block1;
+
+    block1:
+        v0.@__fe_layout_2 = call %main;
         evm_stop;
+}
+
+func private %main() -> @__fe_layout_2 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.@__fe_layout_0 = call %wrapping_ops_u64 1.i64 2.i64;
+        v3.@__fe_layout_0 = call %saturating_ops_u64 1.i64 2.i64;
+        v6.@__fe_layout_1 = call %wrapping_ops_u256 1.i256 2.i256;
+        v7.@__fe_layout_1 = call %saturating_ops_u256 1.i256 2.i256;
+        v8.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v10.objref<@__fe_layout_0> = obj.proj v8 0.i256;
+        v11.objref<i64> = obj.proj v10 0.i256;
+        v12.i64 = extract_value v2 0.i256;
+        obj.store v11 v12;
+        v13.objref<i64> = obj.proj v10 1.i256;
+        v14.i64 = extract_value v2 1.i256;
+        obj.store v13 v14;
+        v15.objref<i64> = obj.proj v10 2.i256;
+        v16.i64 = extract_value v2 2.i256;
+        obj.store v15 v16;
+        v17.objref<@__fe_layout_0> = obj.proj v8 1.i256;
+        v18.objref<i64> = obj.proj v17 0.i256;
+        v19.i64 = extract_value v3 0.i256;
+        obj.store v18 v19;
+        v20.objref<i64> = obj.proj v17 1.i256;
+        v21.i64 = extract_value v3 1.i256;
+        obj.store v20 v21;
+        v22.objref<i64> = obj.proj v17 2.i256;
+        v23.i64 = extract_value v3 2.i256;
+        obj.store v22 v23;
+        v24.objref<@__fe_layout_1> = obj.proj v8 2.i256;
+        v25.objref<i256> = obj.proj v24 0.i256;
+        v26.i256 = extract_value v6 0.i256;
+        obj.store v25 v26;
+        v27.objref<i256> = obj.proj v24 1.i256;
+        v28.i256 = extract_value v6 1.i256;
+        obj.store v27 v28;
+        v29.objref<i256> = obj.proj v24 2.i256;
+        v30.i256 = extract_value v6 2.i256;
+        obj.store v29 v30;
+        v32.objref<@__fe_layout_1> = obj.proj v8 3.i256;
+        v33.objref<i256> = obj.proj v32 0.i256;
+        v34.i256 = extract_value v7 0.i256;
+        obj.store v33 v34;
+        v35.objref<i256> = obj.proj v32 1.i256;
+        v36.i256 = extract_value v7 1.i256;
+        obj.store v35 v36;
+        v37.objref<i256> = obj.proj v32 2.i256;
+        v38.i256 = extract_value v7 2.i256;
+        obj.store v37 v38;
+        v39.@__fe_layout_2 = obj.load v8;
+        return v39;
 }
 
 func private %saturating_add_0(v0.i256, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
         mstore v2 v0 i256;
         mstore v3 v1 i256;
-        v8.i256 = mload v2 i256;
-        mstore v5 v8 i256;
-        v9.i256 = mload v3 i256;
-        mstore v6 v9 i256;
-        v10.i256 = mload v5 i256;
-        v11.i256 = mload v6 i256;
-        v12.i256 = uaddsat v10 v11;
-        mstore v7 v12 i256;
-        v13.i256 = mload v7 i256;
-        mstore v4 v13 i256;
-        v14.i256 = mload v4 i256;
-        return v14;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i256 = mload v3 i256;
+        v6.i256 = uaddsat v4 v5;
+        return v6;
 }
 
 func private %saturating_add_1(v0.i64, v1.i64) -> i64 {
     block0:
         v2.*i64 = alloca i64;
         v3.*i64 = alloca i64;
-        v4.*i64 = alloca i64;
-        v5.*i64 = alloca i64;
-        v6.*i64 = alloca i64;
-        v7.*i64 = alloca i64;
         mstore v2 v0 i64;
         mstore v3 v1 i64;
-        v8.i256 = mload v2 i256;
-        v9.i64 = trunc v8 i64;
-        mstore v5 v9 i64;
-        v10.i256 = mload v3 i256;
-        v11.i64 = trunc v10 i64;
-        mstore v6 v11 i64;
-        v12.i64 = mload v5 i64;
-        v13.i64 = mload v6 i64;
-        v14.i64 = uaddsat v12 v13;
-        mstore v7 v14 i64;
-        v15.i64 = mload v7 i64;
-        mstore v4 v15 i64;
-        v16.i64 = mload v4 i64;
-        return v16;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i64 = trunc v4 i64;
+        v6.i256 = mload v3 i256;
+        v7.i64 = trunc v6 i64;
+        v8.i64 = uaddsat v5 v7;
+        return v8;
 }
 
 func private %saturating_mul_0(v0.i256, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
         mstore v2 v0 i256;
         mstore v3 v1 i256;
-        v8.i256 = mload v2 i256;
-        mstore v5 v8 i256;
-        v9.i256 = mload v3 i256;
-        mstore v6 v9 i256;
-        v10.i256 = mload v5 i256;
-        v11.i256 = mload v6 i256;
-        v12.i256 = umulsat v10 v11;
-        mstore v7 v12 i256;
-        v13.i256 = mload v7 i256;
-        mstore v4 v13 i256;
-        v14.i256 = mload v4 i256;
-        return v14;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i256 = mload v3 i256;
+        v6.i256 = umulsat v4 v5;
+        return v6;
 }
 
 func private %saturating_mul_1(v0.i64, v1.i64) -> i64 {
     block0:
         v2.*i64 = alloca i64;
         v3.*i64 = alloca i64;
-        v4.*i64 = alloca i64;
-        v5.*i64 = alloca i64;
-        v6.*i64 = alloca i64;
-        v7.*i64 = alloca i64;
         mstore v2 v0 i64;
         mstore v3 v1 i64;
-        v8.i256 = mload v2 i256;
-        v9.i64 = trunc v8 i64;
-        mstore v5 v9 i64;
-        v10.i256 = mload v3 i256;
-        v11.i64 = trunc v10 i64;
-        mstore v6 v11 i64;
-        v12.i64 = mload v5 i64;
-        v13.i64 = mload v6 i64;
-        v14.i64 = umulsat v12 v13;
-        mstore v7 v14 i64;
-        v15.i64 = mload v7 i64;
-        mstore v4 v15 i64;
-        v16.i64 = mload v4 i64;
-        return v16;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i64 = trunc v4 i64;
+        v6.i256 = mload v3 i256;
+        v7.i64 = trunc v6 i64;
+        v8.i64 = umulsat v5 v7;
+        return v8;
 }
 
-func private %saturating_ops_u256(v0.i256, v1.i256) -> @__fe_layout_0 {
+func private %saturating_ops_u256(v0.i256, v1.i256) -> @__fe_layout_1 {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        v7.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
-        v8.*i256 = alloca i256;
-        v9.*i256 = alloca i256;
-        v10.*i256 = alloca i256;
-        v11.*i256 = alloca i256;
-        v12.*i256 = alloca i256;
-        v13.*i256 = alloca i256;
-        v14.*i256 = alloca i256;
-        v15.*i256 = alloca i256;
-        v16.*i256 = alloca i256;
-        v17.*i256 = alloca i256;
-        v18.*i256 = alloca i256;
-        v19.*i256 = alloca i256;
-        v20.*i256 = alloca i256;
-        v21.*i256 = alloca i256;
-        v22.*i256 = alloca i256;
         mstore v2 v0 i256;
         mstore v3 v1 i256;
-        v23.i256 = mload v2 i256;
-        mstore v8 v23 i256;
-        v24.i256 = mload v3 i256;
-        mstore v9 v24 i256;
-        v25.i256 = mload v2 i256;
-        mstore v10 v25 i256;
-        v26.i256 = mload v3 i256;
-        mstore v11 v26 i256;
-        v27.i256 = mload v10 i256;
-        v28.i256 = mload v11 i256;
-        v29.i256 = call %saturating_add_0 v27 v28;
-        mstore v12 v29 i256;
-        v30.i256 = mload v12 i256;
-        mstore v4 v30 i256;
-        v31.i256 = mload v2 i256;
-        mstore v13 v31 i256;
-        v32.i256 = mload v3 i256;
-        mstore v14 v32 i256;
-        v33.i256 = mload v2 i256;
-        mstore v15 v33 i256;
-        v34.i256 = mload v3 i256;
-        mstore v16 v34 i256;
-        v35.i256 = mload v15 i256;
-        v36.i256 = mload v16 i256;
-        v37.i256 = call %saturating_sub_0 v35 v36;
-        mstore v17 v37 i256;
-        v38.i256 = mload v17 i256;
-        mstore v5 v38 i256;
-        v39.i256 = mload v2 i256;
-        mstore v18 v39 i256;
-        v40.i256 = mload v3 i256;
-        mstore v19 v40 i256;
-        v41.i256 = mload v2 i256;
-        mstore v20 v41 i256;
-        v42.i256 = mload v3 i256;
-        mstore v21 v42 i256;
-        v43.i256 = mload v20 i256;
-        v44.i256 = mload v21 i256;
-        v45.i256 = call %saturating_mul_0 v43 v44;
-        mstore v22 v45 i256;
-        v46.i256 = mload v22 i256;
-        mstore v6 v46 i256;
-        v47.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
-        v48.i256 = mload v4 i256;
-        v50.objref<i256> = obj.proj v47 0.i256;
-        obj.store v50 v48;
-        v51.i256 = mload v5 i256;
-        v53.objref<i256> = obj.proj v47 1.i256;
-        obj.store v53 v51;
-        v54.i256 = mload v6 i256;
-        v56.objref<i256> = obj.proj v47 2.i256;
-        obj.store v56 v54;
-        v57.@__fe_layout_0 = obj.load v47;
-        obj.store v7 v57;
-        v58.@__fe_layout_0 = obj.load v7;
-        return v58;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i256 = mload v3 i256;
+        v6.i256 = call %saturating_add_0 v4 v5;
+        v7.i256 = mload v2 i256;
+        v8.i256 = mload v3 i256;
+        v9.i256 = call %saturating_sub_0 v7 v8;
+        v10.i256 = mload v2 i256;
+        v11.i256 = mload v3 i256;
+        v12.i256 = call %saturating_mul_0 v10 v11;
+        v13.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v15.objref<i256> = obj.proj v13 0.i256;
+        obj.store v15 v6;
+        v17.objref<i256> = obj.proj v13 1.i256;
+        obj.store v17 v9;
+        v19.objref<i256> = obj.proj v13 2.i256;
+        obj.store v19 v12;
+        v20.@__fe_layout_1 = obj.load v13;
+        return v20;
 }
 
-func private %saturating_ops_u64(v0.i64, v1.i64) -> @__fe_layout_1 {
+func private %saturating_ops_u64(v0.i64, v1.i64) -> @__fe_layout_0 {
     block0:
         v2.*i64 = alloca i64;
         v3.*i64 = alloca i64;
-        v4.*i64 = alloca i64;
-        v5.*i64 = alloca i64;
-        v6.*i64 = alloca i64;
-        v7.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
-        v8.*i64 = alloca i64;
-        v9.*i64 = alloca i64;
-        v10.*i64 = alloca i64;
-        v11.*i64 = alloca i64;
-        v12.*i64 = alloca i64;
-        v13.*i64 = alloca i64;
-        v14.*i64 = alloca i64;
-        v15.*i64 = alloca i64;
-        v16.*i64 = alloca i64;
-        v17.*i64 = alloca i64;
-        v18.*i64 = alloca i64;
-        v19.*i64 = alloca i64;
-        v20.*i64 = alloca i64;
-        v21.*i64 = alloca i64;
-        v22.*i64 = alloca i64;
         mstore v2 v0 i64;
         mstore v3 v1 i64;
-        v23.i256 = mload v2 i256;
-        v24.i64 = trunc v23 i64;
-        mstore v8 v24 i64;
-        v25.i256 = mload v3 i256;
-        v26.i64 = trunc v25 i64;
-        mstore v9 v26 i64;
-        v27.i256 = mload v2 i256;
-        v28.i64 = trunc v27 i64;
-        mstore v10 v28 i64;
-        v29.i256 = mload v3 i256;
-        v30.i64 = trunc v29 i64;
-        mstore v11 v30 i64;
-        v31.i64 = mload v10 i64;
-        v32.i64 = mload v11 i64;
-        v33.i64 = call %saturating_add_1 v31 v32;
-        mstore v12 v33 i64;
-        v34.i64 = mload v12 i64;
-        mstore v4 v34 i64;
-        v35.i256 = mload v2 i256;
-        v36.i64 = trunc v35 i64;
-        mstore v13 v36 i64;
-        v37.i256 = mload v3 i256;
-        v38.i64 = trunc v37 i64;
-        mstore v14 v38 i64;
-        v39.i256 = mload v2 i256;
-        v40.i64 = trunc v39 i64;
-        mstore v15 v40 i64;
-        v41.i256 = mload v3 i256;
-        v42.i64 = trunc v41 i64;
-        mstore v16 v42 i64;
-        v43.i64 = mload v15 i64;
-        v44.i64 = mload v16 i64;
-        v45.i64 = call %saturating_sub_1 v43 v44;
-        mstore v17 v45 i64;
-        v46.i64 = mload v17 i64;
-        mstore v5 v46 i64;
-        v47.i256 = mload v2 i256;
-        v48.i64 = trunc v47 i64;
-        mstore v18 v48 i64;
-        v49.i256 = mload v3 i256;
-        v50.i64 = trunc v49 i64;
-        mstore v19 v50 i64;
-        v51.i256 = mload v2 i256;
-        v52.i64 = trunc v51 i64;
-        mstore v20 v52 i64;
-        v53.i256 = mload v3 i256;
-        v54.i64 = trunc v53 i64;
-        mstore v21 v54 i64;
-        v55.i64 = mload v20 i64;
-        v56.i64 = mload v21 i64;
-        v57.i64 = call %saturating_mul_1 v55 v56;
-        mstore v22 v57 i64;
-        v58.i64 = mload v22 i64;
-        mstore v6 v58 i64;
-        v59.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
-        v60.i64 = mload v4 i64;
-        v62.objref<i64> = obj.proj v59 0.i256;
-        obj.store v62 v60;
-        v63.i64 = mload v5 i64;
-        v65.objref<i64> = obj.proj v59 1.i256;
-        obj.store v65 v63;
-        v66.i64 = mload v6 i64;
-        v68.objref<i64> = obj.proj v59 2.i256;
-        obj.store v68 v66;
-        v69.@__fe_layout_1 = obj.load v59;
-        obj.store v7 v69;
-        v70.@__fe_layout_1 = obj.load v7;
-        return v70;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i64 = trunc v4 i64;
+        v6.i256 = mload v3 i256;
+        v7.i64 = trunc v6 i64;
+        v8.i64 = call %saturating_add_1 v5 v7;
+        v9.i256 = mload v2 i256;
+        v10.i64 = trunc v9 i64;
+        v11.i256 = mload v3 i256;
+        v12.i64 = trunc v11 i64;
+        v13.i64 = call %saturating_sub_1 v10 v12;
+        v14.i256 = mload v2 i256;
+        v15.i64 = trunc v14 i64;
+        v16.i256 = mload v3 i256;
+        v17.i64 = trunc v16 i64;
+        v18.i64 = call %saturating_mul_1 v15 v17;
+        v19.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v21.objref<i64> = obj.proj v19 0.i256;
+        obj.store v21 v8;
+        v23.objref<i64> = obj.proj v19 1.i256;
+        obj.store v23 v13;
+        v25.objref<i64> = obj.proj v19 2.i256;
+        obj.store v25 v18;
+        v26.@__fe_layout_0 = obj.load v19;
+        return v26;
 }
 
 func private %saturating_sub_0(v0.i256, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
         mstore v2 v0 i256;
         mstore v3 v1 i256;
-        v8.i256 = mload v2 i256;
-        mstore v5 v8 i256;
-        v9.i256 = mload v3 i256;
-        mstore v6 v9 i256;
-        v10.i256 = mload v5 i256;
-        v11.i256 = mload v6 i256;
-        v12.i256 = usubsat v10 v11;
-        mstore v7 v12 i256;
-        v13.i256 = mload v7 i256;
-        mstore v4 v13 i256;
-        v14.i256 = mload v4 i256;
-        return v14;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i256 = mload v3 i256;
+        v6.i256 = usubsat v4 v5;
+        return v6;
 }
 
 func private %saturating_sub_1(v0.i64, v1.i64) -> i64 {
     block0:
         v2.*i64 = alloca i64;
         v3.*i64 = alloca i64;
-        v4.*i64 = alloca i64;
-        v5.*i64 = alloca i64;
-        v6.*i64 = alloca i64;
-        v7.*i64 = alloca i64;
         mstore v2 v0 i64;
         mstore v3 v1 i64;
-        v8.i256 = mload v2 i256;
-        v9.i64 = trunc v8 i64;
-        mstore v5 v9 i64;
-        v10.i256 = mload v3 i256;
-        v11.i64 = trunc v10 i64;
-        mstore v6 v11 i64;
-        v12.i64 = mload v5 i64;
-        v13.i64 = mload v6 i64;
-        v14.i64 = usubsat v12 v13;
-        mstore v7 v14 i64;
-        v15.i64 = mload v7 i64;
-        mstore v4 v15 i64;
-        v16.i64 = mload v4 i64;
-        return v16;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i64 = trunc v4 i64;
+        v6.i256 = mload v3 i256;
+        v7.i64 = trunc v6 i64;
+        v8.i64 = usubsat v5 v7;
+        return v8;
 }
 
 func private %wrapping_add_0(v0.i64, v1.i64) -> i64 {
     block0:
         v2.*i64 = alloca i64;
         v3.*i64 = alloca i64;
-        v4.*i64 = alloca i64;
-        v5.*i64 = alloca i64;
-        v6.*i64 = alloca i64;
-        v7.*i64 = alloca i64;
         mstore v2 v0 i64;
         mstore v3 v1 i64;
-        v8.i256 = mload v2 i256;
-        v9.i64 = trunc v8 i64;
-        mstore v5 v9 i64;
-        v10.i256 = mload v3 i256;
-        v11.i64 = trunc v10 i64;
-        mstore v6 v11 i64;
-        v12.i64 = mload v5 i64;
-        v13.i64 = mload v6 i64;
-        v14.i64 = add v12 v13;
-        mstore v7 v14 i64;
-        v15.i64 = mload v7 i64;
-        mstore v4 v15 i64;
-        v16.i64 = mload v4 i64;
-        return v16;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i64 = trunc v4 i64;
+        v6.i256 = mload v3 i256;
+        v7.i64 = trunc v6 i64;
+        v8.i64 = add v5 v7;
+        return v8;
 }
 
 func private %wrapping_add_1(v0.i256, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
         mstore v2 v0 i256;
         mstore v3 v1 i256;
-        v8.i256 = mload v2 i256;
-        mstore v5 v8 i256;
-        v9.i256 = mload v3 i256;
-        mstore v6 v9 i256;
-        v10.i256 = mload v5 i256;
-        v11.i256 = mload v6 i256;
-        v12.i256 = add v10 v11;
-        mstore v7 v12 i256;
-        v13.i256 = mload v7 i256;
-        mstore v4 v13 i256;
-        v14.i256 = mload v4 i256;
-        return v14;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i256 = mload v3 i256;
+        v6.i256 = add v4 v5;
+        return v6;
 }
 
-func private %wrapping_mul_0(v0.i64, v1.i64) -> i64 {
-    block0:
-        v2.*i64 = alloca i64;
-        v3.*i64 = alloca i64;
-        v4.*i64 = alloca i64;
-        v5.*i64 = alloca i64;
-        v6.*i64 = alloca i64;
-        v7.*i64 = alloca i64;
-        mstore v2 v0 i64;
-        mstore v3 v1 i64;
-        v8.i256 = mload v2 i256;
-        v9.i64 = trunc v8 i64;
-        mstore v5 v9 i64;
-        v10.i256 = mload v3 i256;
-        v11.i64 = trunc v10 i64;
-        mstore v6 v11 i64;
-        v12.i64 = mload v5 i64;
-        v13.i64 = mload v6 i64;
-        v14.i64 = mul v12 v13;
-        mstore v7 v14 i64;
-        v15.i64 = mload v7 i64;
-        mstore v4 v15 i64;
-        v16.i64 = mload v4 i64;
-        return v16;
-}
-
-func private %wrapping_mul_1(v0.i256, v1.i256) -> i256 {
+func private %wrapping_mul_0(v0.i256, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
         mstore v2 v0 i256;
         mstore v3 v1 i256;
-        v8.i256 = mload v2 i256;
-        mstore v5 v8 i256;
-        v9.i256 = mload v3 i256;
-        mstore v6 v9 i256;
-        v10.i256 = mload v5 i256;
-        v11.i256 = mload v6 i256;
-        v12.i256 = mul v10 v11;
-        mstore v7 v12 i256;
-        v13.i256 = mload v7 i256;
-        mstore v4 v13 i256;
-        v14.i256 = mload v4 i256;
-        return v14;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i256 = mload v3 i256;
+        v6.i256 = mul v4 v5;
+        return v6;
 }
 
-func private %wrapping_ops_u256(v0.i256, v1.i256) -> @__fe_layout_0 {
-    block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        v7.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
-        v8.*i256 = alloca i256;
-        v9.*i256 = alloca i256;
-        v10.*i256 = alloca i256;
-        v11.*i256 = alloca i256;
-        v12.*i256 = alloca i256;
-        v13.*i256 = alloca i256;
-        v14.*i256 = alloca i256;
-        v15.*i256 = alloca i256;
-        v16.*i256 = alloca i256;
-        v17.*i256 = alloca i256;
-        v18.*i256 = alloca i256;
-        v19.*i256 = alloca i256;
-        v20.*i256 = alloca i256;
-        v21.*i256 = alloca i256;
-        v22.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
-        v23.i256 = mload v2 i256;
-        mstore v8 v23 i256;
-        v24.i256 = mload v3 i256;
-        mstore v9 v24 i256;
-        v25.i256 = mload v2 i256;
-        mstore v10 v25 i256;
-        v26.i256 = mload v3 i256;
-        mstore v11 v26 i256;
-        v27.i256 = mload v10 i256;
-        v28.i256 = mload v11 i256;
-        v29.i256 = call %wrapping_add_1 v27 v28;
-        mstore v12 v29 i256;
-        v30.i256 = mload v12 i256;
-        mstore v4 v30 i256;
-        v31.i256 = mload v2 i256;
-        mstore v13 v31 i256;
-        v32.i256 = mload v3 i256;
-        mstore v14 v32 i256;
-        v33.i256 = mload v2 i256;
-        mstore v15 v33 i256;
-        v34.i256 = mload v3 i256;
-        mstore v16 v34 i256;
-        v35.i256 = mload v15 i256;
-        v36.i256 = mload v16 i256;
-        v37.i256 = call %wrapping_sub_1 v35 v36;
-        mstore v17 v37 i256;
-        v38.i256 = mload v17 i256;
-        mstore v5 v38 i256;
-        v39.i256 = mload v2 i256;
-        mstore v18 v39 i256;
-        v40.i256 = mload v3 i256;
-        mstore v19 v40 i256;
-        v41.i256 = mload v2 i256;
-        mstore v20 v41 i256;
-        v42.i256 = mload v3 i256;
-        mstore v21 v42 i256;
-        v43.i256 = mload v20 i256;
-        v44.i256 = mload v21 i256;
-        v45.i256 = call %wrapping_mul_1 v43 v44;
-        mstore v22 v45 i256;
-        v46.i256 = mload v22 i256;
-        mstore v6 v46 i256;
-        v47.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
-        v48.i256 = mload v4 i256;
-        v50.objref<i256> = obj.proj v47 0.i256;
-        obj.store v50 v48;
-        v51.i256 = mload v5 i256;
-        v53.objref<i256> = obj.proj v47 1.i256;
-        obj.store v53 v51;
-        v54.i256 = mload v6 i256;
-        v56.objref<i256> = obj.proj v47 2.i256;
-        obj.store v56 v54;
-        v57.@__fe_layout_0 = obj.load v47;
-        obj.store v7 v57;
-        v58.@__fe_layout_0 = obj.load v7;
-        return v58;
-}
-
-func private %wrapping_ops_u64(v0.i64, v1.i64) -> @__fe_layout_1 {
+func private %wrapping_mul_1(v0.i64, v1.i64) -> i64 {
     block0:
         v2.*i64 = alloca i64;
         v3.*i64 = alloca i64;
-        v4.*i64 = alloca i64;
-        v5.*i64 = alloca i64;
-        v6.*i64 = alloca i64;
-        v7.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
-        v8.*i64 = alloca i64;
-        v9.*i64 = alloca i64;
-        v10.*i64 = alloca i64;
-        v11.*i64 = alloca i64;
-        v12.*i64 = alloca i64;
-        v13.*i64 = alloca i64;
-        v14.*i64 = alloca i64;
-        v15.*i64 = alloca i64;
-        v16.*i64 = alloca i64;
-        v17.*i64 = alloca i64;
-        v18.*i64 = alloca i64;
-        v19.*i64 = alloca i64;
-        v20.*i64 = alloca i64;
-        v21.*i64 = alloca i64;
-        v22.*i64 = alloca i64;
         mstore v2 v0 i64;
         mstore v3 v1 i64;
-        v23.i256 = mload v2 i256;
-        v24.i64 = trunc v23 i64;
-        mstore v8 v24 i64;
-        v25.i256 = mload v3 i256;
-        v26.i64 = trunc v25 i64;
-        mstore v9 v26 i64;
-        v27.i256 = mload v2 i256;
-        v28.i64 = trunc v27 i64;
-        mstore v10 v28 i64;
-        v29.i256 = mload v3 i256;
-        v30.i64 = trunc v29 i64;
-        mstore v11 v30 i64;
-        v31.i64 = mload v10 i64;
-        v32.i64 = mload v11 i64;
-        v33.i64 = call %wrapping_add_0 v31 v32;
-        mstore v12 v33 i64;
-        v34.i64 = mload v12 i64;
-        mstore v4 v34 i64;
-        v35.i256 = mload v2 i256;
-        v36.i64 = trunc v35 i64;
-        mstore v13 v36 i64;
-        v37.i256 = mload v3 i256;
-        v38.i64 = trunc v37 i64;
-        mstore v14 v38 i64;
-        v39.i256 = mload v2 i256;
-        v40.i64 = trunc v39 i64;
-        mstore v15 v40 i64;
-        v41.i256 = mload v3 i256;
-        v42.i64 = trunc v41 i64;
-        mstore v16 v42 i64;
-        v43.i64 = mload v15 i64;
-        v44.i64 = mload v16 i64;
-        v45.i64 = call %wrapping_sub_0 v43 v44;
-        mstore v17 v45 i64;
-        v46.i64 = mload v17 i64;
-        mstore v5 v46 i64;
-        v47.i256 = mload v2 i256;
-        v48.i64 = trunc v47 i64;
-        mstore v18 v48 i64;
-        v49.i256 = mload v3 i256;
-        v50.i64 = trunc v49 i64;
-        mstore v19 v50 i64;
-        v51.i256 = mload v2 i256;
-        v52.i64 = trunc v51 i64;
-        mstore v20 v52 i64;
-        v53.i256 = mload v3 i256;
-        v54.i64 = trunc v53 i64;
-        mstore v21 v54 i64;
-        v55.i64 = mload v20 i64;
-        v56.i64 = mload v21 i64;
-        v57.i64 = call %wrapping_mul_0 v55 v56;
-        mstore v22 v57 i64;
-        v58.i64 = mload v22 i64;
-        mstore v6 v58 i64;
-        v59.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
-        v60.i64 = mload v4 i64;
-        v62.objref<i64> = obj.proj v59 0.i256;
-        obj.store v62 v60;
-        v63.i64 = mload v5 i64;
-        v65.objref<i64> = obj.proj v59 1.i256;
-        obj.store v65 v63;
-        v66.i64 = mload v6 i64;
-        v68.objref<i64> = obj.proj v59 2.i256;
-        obj.store v68 v66;
-        v69.@__fe_layout_1 = obj.load v59;
-        obj.store v7 v69;
-        v70.@__fe_layout_1 = obj.load v7;
-        return v70;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i64 = trunc v4 i64;
+        v6.i256 = mload v3 i256;
+        v7.i64 = trunc v6 i64;
+        v8.i64 = mul v5 v7;
+        return v8;
 }
 
-func private %wrapping_sub_0(v0.i64, v1.i64) -> i64 {
-    block0:
-        v2.*i64 = alloca i64;
-        v3.*i64 = alloca i64;
-        v4.*i64 = alloca i64;
-        v5.*i64 = alloca i64;
-        v6.*i64 = alloca i64;
-        v7.*i64 = alloca i64;
-        mstore v2 v0 i64;
-        mstore v3 v1 i64;
-        v8.i256 = mload v2 i256;
-        v9.i64 = trunc v8 i64;
-        mstore v5 v9 i64;
-        v10.i256 = mload v3 i256;
-        v11.i64 = trunc v10 i64;
-        mstore v6 v11 i64;
-        v12.i64 = mload v5 i64;
-        v13.i64 = mload v6 i64;
-        v14.i64 = sub v12 v13;
-        mstore v7 v14 i64;
-        v15.i64 = mload v7 i64;
-        mstore v4 v15 i64;
-        v16.i64 = mload v4 i64;
-        return v16;
-}
-
-func private %wrapping_sub_1(v0.i256, v1.i256) -> i256 {
+func private %wrapping_ops_u256(v0.i256, v1.i256) -> @__fe_layout_1 {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
         mstore v2 v0 i256;
         mstore v3 v1 i256;
-        v8.i256 = mload v2 i256;
-        mstore v5 v8 i256;
-        v9.i256 = mload v3 i256;
-        mstore v6 v9 i256;
-        v10.i256 = mload v5 i256;
-        v11.i256 = mload v6 i256;
-        v12.i256 = sub v10 v11;
-        mstore v7 v12 i256;
-        v13.i256 = mload v7 i256;
-        mstore v4 v13 i256;
-        v14.i256 = mload v4 i256;
-        return v14;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i256 = mload v3 i256;
+        v6.i256 = call %wrapping_add_1 v4 v5;
+        v7.i256 = mload v2 i256;
+        v8.i256 = mload v3 i256;
+        v9.i256 = call %wrapping_sub_0 v7 v8;
+        v10.i256 = mload v2 i256;
+        v11.i256 = mload v3 i256;
+        v12.i256 = call %wrapping_mul_0 v10 v11;
+        v13.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v15.objref<i256> = obj.proj v13 0.i256;
+        obj.store v15 v6;
+        v17.objref<i256> = obj.proj v13 1.i256;
+        obj.store v17 v9;
+        v19.objref<i256> = obj.proj v13 2.i256;
+        obj.store v19 v12;
+        v20.@__fe_layout_1 = obj.load v13;
+        return v20;
+}
+
+func private %wrapping_ops_u64(v0.i64, v1.i64) -> @__fe_layout_0 {
+    block0:
+        v2.*i64 = alloca i64;
+        v3.*i64 = alloca i64;
+        mstore v2 v0 i64;
+        mstore v3 v1 i64;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i64 = trunc v4 i64;
+        v6.i256 = mload v3 i256;
+        v7.i64 = trunc v6 i64;
+        v8.i64 = call %wrapping_add_0 v5 v7;
+        v9.i256 = mload v2 i256;
+        v10.i64 = trunc v9 i64;
+        v11.i256 = mload v3 i256;
+        v12.i64 = trunc v11 i64;
+        v13.i64 = call %wrapping_sub_1 v10 v12;
+        v14.i256 = mload v2 i256;
+        v15.i64 = trunc v14 i64;
+        v16.i256 = mload v3 i256;
+        v17.i64 = trunc v16 i64;
+        v18.i64 = call %wrapping_mul_1 v15 v17;
+        v19.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v21.objref<i64> = obj.proj v19 0.i256;
+        obj.store v21 v8;
+        v23.objref<i64> = obj.proj v19 1.i256;
+        obj.store v23 v13;
+        v25.objref<i64> = obj.proj v19 2.i256;
+        obj.store v25 v18;
+        v26.@__fe_layout_0 = obj.load v19;
+        return v26;
+}
+
+func private %wrapping_sub_0(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        v3.*i256 = alloca i256;
+        mstore v2 v0 i256;
+        mstore v3 v1 i256;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i256 = mload v3 i256;
+        v6.i256 = sub v4 v5;
+        return v6;
+}
+
+func private %wrapping_sub_1(v0.i64, v1.i64) -> i64 {
+    block0:
+        v2.*i64 = alloca i64;
+        v3.*i64 = alloca i64;
+        mstore v2 v0 i64;
+        mstore v3 v1 i64;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i64 = trunc v4 i64;
+        v6.i256 = mload v3 i256;
+        v7.i64 = trunc v6 i64;
+        v8.i64 = sub v5 v7;
+        return v8;
 }
 
 

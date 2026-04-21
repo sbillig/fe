@@ -4,3 +4,7 @@ pub fn aug_assign(x: u64, y: u64) -> u64 {
     acc *= 2
     acc / 2
 }
+
+pub fn main() -> u64 {
+    aug_assign(1, 2)
+}

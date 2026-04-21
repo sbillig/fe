@@ -3,264 +3,312 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/name_collisions.fe
 ---
-function $a_b_h12fd23afeb13a092_flattened_fn() -> ret {
-  ret := 1
-  leave
-}
-function $a_b_h948d5ab23860c017_flattened_fn() -> ret {
-  ret := 2
-  leave
-}
-function $test_module_qualifier_flatten_collision() -> ret {
-  let v0 := $a_b_h12fd23afeb13a092_flattened_fn()
-  let v1 := $a_b_h948d5ab23860c017_flattened_fn()
-  let v2 := $checked_add_u32(v0, v1)
-  ret := v2
-  leave
-}
-function $test_generic_type_collision() -> ret {
-  let v0 := 1
-  let v1 := 2
-  let v2 := $generic_fn__S_h730d9dc564aaaf27__8d32801e7ec9d42b(v0)
-  let v3 := $generic_fn__S_h2db58d011b97b333__42a13489a1ec39e8(v1)
-  ret := 42
-  leave
-}
-function $test_impl_method_collision() -> ret {
-  let v0 := 10
-  let v1 := 20
-  let v2 := $widget_h8588afca9d68e578_process(v0)
-  let v3 := $widget_h6847c0e3e0e4aa1e_process(v1)
-  ret := v2
-  leave
-}
-function $test_trait_method_collision() -> ret {
-  let v0 := 100
-  let v1 := $multitraitimpl_h60cc862fc809464_trait_h79853acec5b2b3ad_same_method(v0)
-  let v2 := 100
-  let v3 := $multitraitimpl_h60cc862fc809464_trait_ha6da5e54b37dd39c_same_method(v2)
-  let v4 := $checked_add_u32(v1, v3)
-  ret := v4
-  leave
-}
-function $param_local_collision($v0) -> ret {
-  let v0 := $checked_add_u32($v0, 1)
-  let v1 := v0
-  let v2 := $checked_add_u32(v1, 2)
-  let v3 := v2
-  ret := v3
-  leave
-}
-function $test_param_local_collision() -> ret {
-  let v0 := $param_local_collision(10)
-  ret := v0
-  leave
-}
-function $__u32_as_u256() -> ret {
-  let v0 := 999
-  ret := v0
-  leave
-}
-function $test_cast_shim_collision() -> ret {
-  let v0 := $__u32_as_u256()
-  ret := v0
-  leave
-}
-function $ret_param_collision($ret) -> ret {
-  let v0 := $checked_add_u32($ret, 1)
-  ret := v0
-  leave
-}
-function $test_ret_param_collision() -> ret {
-  let v0 := $ret_param_collision(10)
-  ret := v0
-  leave
-}
-function $add() -> ret {
-  ret := 123
-  leave
-}
-function $test_yul_reserved_fn_collision() -> ret {
-  let v0 := $add()
-  ret := v0
-  leave
-}
-function $main() -> ret {
-  let v0 := $test_module_qualifier_flatten_collision()
-  let v1 := $test_generic_type_collision()
-  let v2 := $test_impl_method_collision()
-  let v3 := $test_trait_method_collision()
-  let v4 := $test_param_local_collision()
-  let v5 := $test_cast_shim_collision()
-  let v6 := $test_ret_param_collision()
-  let v7 := $test_yul_reserved_fn_collision()
-  ret := 0
-  leave
-}
-function $generic_fn__S_h730d9dc564aaaf27__8d32801e7ec9d42b($val) -> ret {
-  ret := $val
-  leave
-}
-function $generic_fn__S_h2db58d011b97b333__42a13489a1ec39e8($val) -> ret {
-  ret := $val
-  leave
-}
-function $widget_h8588afca9d68e578_process($self) -> ret {
-  let v0 := $checked_mul_u32($self, 2)
-  ret := v0
-  leave
-}
-function $widget_h6847c0e3e0e4aa1e_process($self) -> ret {
-  let v0 := $checked_mul_u64($self, 3)
-  ret := v0
-  leave
-}
-function $multitraitimpl_h60cc862fc809464_trait_h79853acec5b2b3ad_same_method($self) -> ret {
-  let v0 := $checked_add_u32($self, 1)
-  ret := v0
-  leave
-}
-function $multitraitimpl_h60cc862fc809464_trait_ha6da5e54b37dd39c_same_method($self) -> ret {
-  let v0 := $checked_add_u32($self, 2)
-  ret := v0
-  leave
-}
-function $checked_add_u32($a, $b) -> ret {
-  let v0 := $checked_add_unsigned_impl__u32__20aa0c10687491ad($a, $b)
-  ret := v0
-  leave
-}
-function $checked_add_unsigned_impl__u32__20aa0c10687491ad($a, $b) -> ret {
-  let v0 := $u32_h20aa0c10687491ad_wrappingadd_h14afa79b3047617f_wrapping_add($a, $b)
-  let v1 := $u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_to_word(v0)
-  let v2 := $u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_to_word($a)
-  let v3 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v1, v2)
-  let v4 := v3
-  if v4 {
-    revert(0, 0)
-  }
-  ret := v0
-  leave
-}
-function $checked_div_u32($a, $b) -> ret {
-  $ensure_nonzero_divisor__u32__20aa0c10687491ad($b)
-  let v0 := and(div(and($a, 0xffffffff), and($b, 0xffffffff)), 0xffffffff)
-  ret := v0
-  leave
-}
-function $checked_div_u64($a, $b) -> ret {
-  $ensure_nonzero_divisor__u64__aee7f05a097ffa16($b)
-  let v0 := and(div(and($a, 0xffffffffffffffff), and($b, 0xffffffffffffffff)), 0xffffffffffffffff)
-  ret := v0
-  leave
-}
-function $checked_mul_u32($a, $b) -> ret {
-  let v0 := $checked_mul_unsigned_impl__u32__20aa0c10687491ad($a, $b)
-  ret := v0
-  leave
-}
-function $checked_mul_u64($a, $b) -> ret {
-  let v0 := $checked_mul_unsigned_impl__u64__aee7f05a097ffa16($a, $b)
-  ret := v0
-  leave
-}
-function $checked_mul_unsigned_impl__u32__20aa0c10687491ad($a, $b) -> ret {
-  let v0 := $u32_h20aa0c10687491ad_wrappingmul_h64e6b83610cda761_wrapping_mul($a, $b)
-  let v1 := $u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_to_word($a)
-  let v2 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v1, 0)
-  let v3 := v2
-  if v3 {
-    let v4 := $checked_div_u32(v0, $a)
-    let v5 := $u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_to_word(v4)
-    let v6 := $u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_to_word($b)
-    let v7 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v5, v6)
-    let v8 := v7
-    if v8 {
-      revert(0, 0)
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let v0 := $main()
+      stop()
     }
-    ret := v0
-    leave
-  }
-  if iszero(v3) {
-    ret := v0
-    leave
-  }
-}
-function $checked_mul_unsigned_impl__u64__aee7f05a097ffa16($a, $b) -> ret {
-  let v0 := $u64_haee7f05a097ffa16_wrappingmul_h64e6b83610cda761_wrapping_mul($a, $b)
-  let v1 := $u64_haee7f05a097ffa16_intword_h9a147c8c32b1323c_to_word($a)
-  let v2 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v1, 0)
-  let v3 := v2
-  if v3 {
-    let v4 := $checked_div_u64(v0, $a)
-    let v5 := $u64_haee7f05a097ffa16_intword_h9a147c8c32b1323c_to_word(v4)
-    let v6 := $u64_haee7f05a097ffa16_intword_h9a147c8c32b1323c_to_word($b)
-    let v7 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v5, v6)
-    let v8 := v7
-    if v8 {
-      revert(0, 0)
+    function $__u32_as_u256_0(p0) -> ret {
+      let v3 := 0x03e7
+      let v2 := v3
+      let v4 := 0x03e7
+      let v1 := v4
+      ret := v1
+      leave
     }
-    ret := v0
-    leave
+    function $add_2() -> ret {
+      let v1 := 0x7b
+      let v0 := and(v1, 0xffffffff)
+      ret := and(v0, 0xffffffff)
+      leave
+    }
+    function $flattened_fn_2() -> ret {
+      let v1 := 0x02
+      let v0 := and(v1, 0xffffffff)
+      ret := and(v0, 0xffffffff)
+      leave
+    }
+    function $flattened_fn_4() -> ret {
+      let v1 := 0x01
+      let v0 := and(v1, 0xffffffff)
+      ret := and(v0, 0xffffffff)
+      leave
+    }
+    function $generic_fn_0(p0) -> ret {
+      ret := and(p0, 0xffffffffffffffff)
+      leave
+    }
+    function $generic_fn_2(p0) -> ret {
+      ret := and(p0, 0xffffffff)
+      leave
+    }
+    function $main() -> ret {
+      let v9 := $test_module_qualifier_flatten_collision_1()
+      let v0 := and(v9, 0xffffffff)
+      let v10 := $test_generic_type_collision_0()
+      let v1 := and(v10, 0xffffffff)
+      let v11 := $test_impl_method_collision_1()
+      let v2 := and(v11, 0xffffffff)
+      let v12 := $test_trait_method_collision_1()
+      let v3 := and(v12, 0xffffffff)
+      let v13 := $test_param_local_collision_0()
+      let v4 := and(v13, 0xffffffff)
+      let v14 := $test_cast_shim_collision_1()
+      let v5 := v14
+      let v15 := $test_ret_param_collision_1()
+      let v6 := and(v15, 0xffffffff)
+      let v16 := $test_yul_reserved_fn_collision_1()
+      let v7 := and(v16, 0xffffffff)
+      let v17 := 0x00
+      let v8 := and(v17, 0xffffffff)
+      ret := and(v8, 0xffffffff)
+      leave
+    }
+    function $param_local_collision_0(p0) -> ret {
+      let v3 := and(p0, 0xffffffff)
+      let v8 := 0x01
+      let v4 := and(v8, 0xffffffff)
+      let t12 := and(add(and(v3, 0xffffffff), and(v4, 0xffffffff)), 0xffffffff)
+      if lt(t12, and(v3, 0xffffffff)) {
+        revert(0, 0)
+      }
+      let v9 := t12
+      let v5 := and(v9, 0xffffffff)
+      let v1 := and(v5, 0xffffffff)
+      let v10 := 0x02
+      let v6 := and(v10, 0xffffffff)
+      let t13 := and(add(and(v1, 0xffffffff), and(v6, 0xffffffff)), 0xffffffff)
+      if lt(t13, and(v1, 0xffffffff)) {
+        revert(0, 0)
+      }
+      let v11 := t13
+      let v7 := and(v11, 0xffffffff)
+      let v2 := and(v7, 0xffffffff)
+      ret := and(v2, 0xffffffff)
+      leave
+    }
+    function $process_0(p0) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      mstore(r0, and(p0, 0xffffffff))
+      let t6 := and(mload(r0), 0xffffffff)
+      let v1 := t6
+      let v4 := 0x02
+      let v2 := and(v4, 0xffffffff)
+      let t7 := and(mul(and(v1, 0xffffffff), and(v2, 0xffffffff)), 0xffffffff)
+      if and(iszero(iszero(and(v1, 0xffffffff))), iszero(eq(div(t7, and(v1, 0xffffffff)), and(v2, 0xffffffff)))) {
+        revert(0, 0)
+      }
+      let v5 := t7
+      let v3 := and(v5, 0xffffffff)
+      ret := and(v3, 0xffffffff)
+      leave
+    }
+    function $process_2(p0) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      mstore(r0, and(p0, 0xffffffffffffffff))
+      let t6 := and(mload(r0), 0xffffffffffffffff)
+      let v1 := t6
+      let v4 := 0x03
+      let v2 := and(v4, 0xffffffffffffffff)
+      let t7 := and(mul(and(v1, 0xffffffffffffffff), and(v2, 0xffffffffffffffff)), 0xffffffffffffffff)
+      if and(iszero(iszero(and(v1, 0xffffffffffffffff))), iszero(eq(div(t7, and(v1, 0xffffffffffffffff)), and(v2, 0xffffffffffffffff)))) {
+        revert(0, 0)
+      }
+      let v5 := t7
+      let v3 := and(v5, 0xffffffffffffffff)
+      ret := and(v3, 0xffffffffffffffff)
+      leave
+    }
+    function $ret_param_collision_1(p0) -> ret {
+      let v1 := and(p0, 0xffffffff)
+      let v4 := 0x01
+      let v2 := and(v4, 0xffffffff)
+      let t6 := and(add(and(v1, 0xffffffff), and(v2, 0xffffffff)), 0xffffffff)
+      if lt(t6, and(v1, 0xffffffff)) {
+        revert(0, 0)
+      }
+      let v5 := t6
+      let v3 := and(v5, 0xffffffff)
+      ret := and(v3, 0xffffffff)
+      leave
+    }
+    function $same_method_1(p0) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      mstore(r0, and(p0, 0xffffffff))
+      let t6 := and(mload(r0), 0xffffffff)
+      let v1 := t6
+      let v4 := 0x02
+      let v2 := and(v4, 0xffffffff)
+      let t7 := and(add(and(v1, 0xffffffff), and(v2, 0xffffffff)), 0xffffffff)
+      if lt(t7, and(v1, 0xffffffff)) {
+        revert(0, 0)
+      }
+      let v5 := t7
+      let v3 := and(v5, 0xffffffff)
+      ret := and(v3, 0xffffffff)
+      leave
+    }
+    function $same_method_3(p0) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 32))
+      mstore(r0, and(p0, 0xffffffff))
+      let t6 := and(mload(r0), 0xffffffff)
+      let v1 := t6
+      let v4 := 0x01
+      let v2 := and(v4, 0xffffffff)
+      let t7 := and(add(and(v1, 0xffffffff), and(v2, 0xffffffff)), 0xffffffff)
+      if lt(t7, and(v1, 0xffffffff)) {
+        revert(0, 0)
+      }
+      let v5 := t7
+      let v3 := and(v5, 0xffffffff)
+      ret := and(v3, 0xffffffff)
+      leave
+    }
+    function $test_cast_shim_collision_1() -> ret {
+      let v2 := 0x2a
+      let v0 := and(v2, 0xffffffff)
+      let v3 := $__u32_as_u256_0(and(v0, 0xffffffff))
+      let v1 := v3
+      ret := v1
+      leave
+    }
+    function $test_generic_type_collision_0() -> ret {
+      let v9 := 0x01
+      let v2 := and(v9, 0xffffffff)
+      let v10 := 0x01
+      let v11 := and(v10, 0xffffffff)
+      let v3 := and(v11, 0xffffffff)
+      let v13 := 0x01
+      let v14 := and(v13, 0xffffffff)
+      let v0 := and(v14, 0xffffffff)
+      let v16 := 0x02
+      let v4 := and(v16, 0xffffffffffffffff)
+      let v17 := 0x02
+      let v18 := and(v17, 0xffffffffffffffff)
+      let v5 := and(v18, 0xffffffffffffffff)
+      let v20 := 0x02
+      let v21 := and(v20, 0xffffffffffffffff)
+      let v1 := and(v21, 0xffffffffffffffff)
+      let v23 := $generic_fn_2(and(v0, 0xffffffff))
+      let v6 := and(v23, 0xffffffff)
+      let v24 := $generic_fn_0(and(v1, 0xffffffffffffffff))
+      let v7 := and(v24, 0xffffffffffffffff)
+      let v25 := 0x2a
+      let v8 := and(v25, 0xffffffff)
+      ret := and(v8, 0xffffffff)
+      leave
+    }
+    function $test_impl_method_collision_1() -> ret {
+      let v10 := 0x0a
+      let v4 := and(v10, 0xffffffff)
+      let v11 := 0x0a
+      let v12 := and(v11, 0xffffffff)
+      let v5 := and(v12, 0xffffffff)
+      let v14 := 0x0a
+      let v15 := and(v14, 0xffffffff)
+      let v0 := and(v15, 0xffffffff)
+      let v17 := 0x14
+      let v6 := and(v17, 0xffffffffffffffff)
+      let v18 := 0x14
+      let v19 := and(v18, 0xffffffffffffffff)
+      let v7 := and(v19, 0xffffffffffffffff)
+      let v21 := 0x14
+      let v22 := and(v21, 0xffffffffffffffff)
+      let v1 := and(v22, 0xffffffffffffffff)
+      let v24 := $process_0(and(v0, 0xffffffff))
+      let v8 := and(v24, 0xffffffff)
+      let v2 := and(v8, 0xffffffff)
+      let v25 := $process_2(and(v1, 0xffffffffffffffff))
+      let v9 := and(v25, 0xffffffffffffffff)
+      let v3 := and(v9, 0xffffffffffffffff)
+      ret := and(v2, 0xffffffff)
+      leave
+    }
+    function $test_module_qualifier_flatten_collision_1() -> ret {
+      let v3 := $flattened_fn_4()
+      let v0 := and(v3, 0xffffffff)
+      let v4 := $flattened_fn_2()
+      let v1 := and(v4, 0xffffffff)
+      let t6 := and(add(and(v0, 0xffffffff), and(v1, 0xffffffff)), 0xffffffff)
+      if lt(t6, and(v0, 0xffffffff)) {
+        revert(0, 0)
+      }
+      let v5 := t6
+      let v2 := and(v5, 0xffffffff)
+      ret := and(v2, 0xffffffff)
+      leave
+    }
+    function $test_param_local_collision_0() -> ret {
+      let v2 := 0x0a
+      let v0 := and(v2, 0xffffffff)
+      let v3 := $param_local_collision_0(and(v0, 0xffffffff))
+      let v1 := and(v3, 0xffffffff)
+      ret := and(v1, 0xffffffff)
+      leave
+    }
+    function $test_ret_param_collision_1() -> ret {
+      let v2 := 0x0a
+      let v0 := and(v2, 0xffffffff)
+      let v3 := $ret_param_collision_1(and(v0, 0xffffffff))
+      let v1 := and(v3, 0xffffffff)
+      ret := and(v1, 0xffffffff)
+      leave
+    }
+    function $test_trait_method_collision_1() -> ret {
+      let v11 := 0x64
+      let v4 := and(v11, 0xffffffff)
+      let v12 := 0x64
+      let v13 := and(v12, 0xffffffff)
+      let v5 := and(v13, 0xffffffff)
+      let v15 := 0x64
+      let v16 := and(v15, 0xffffffff)
+      let v0 := and(v16, 0xffffffff)
+      let v18 := $same_method_3(and(v0, 0xffffffff))
+      let v6 := and(v18, 0xffffffff)
+      let v1 := and(v6, 0xffffffff)
+      let v19 := 0x64
+      let v7 := and(v19, 0xffffffff)
+      let v20 := 0x64
+      let v21 := and(v20, 0xffffffff)
+      let v8 := and(v21, 0xffffffff)
+      let v23 := 0x64
+      let v24 := and(v23, 0xffffffff)
+      let v2 := and(v24, 0xffffffff)
+      let v26 := $same_method_1(and(v2, 0xffffffff))
+      let v9 := and(v26, 0xffffffff)
+      let v3 := and(v9, 0xffffffff)
+      let t28 := and(add(and(v1, 0xffffffff), and(v3, 0xffffffff)), 0xffffffff)
+      if lt(t28, and(v1, 0xffffffff)) {
+        revert(0, 0)
+      }
+      let v27 := t28
+      let v10 := and(v27, 0xffffffff)
+      ret := and(v10, 0xffffffff)
+      leave
+    }
+    function $test_yul_reserved_fn_collision_1() -> ret {
+      let v1 := $add_2()
+      let v0 := and(v1, 0xffffffff)
+      ret := and(v0, 0xffffffff)
+      leave
+    }
+    $__fe_main_root()
   }
-  if iszero(v3) {
-    ret := v0
-    leave
-  }
-}
-function $ensure_nonzero_divisor__u32__20aa0c10687491ad($b) {
-  let v0 := $u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_to_word($b)
-  let v1 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0, 0)
-  let v2 := v1
-  if v2 {
-    revert(0, 0)
-  }
-  leave
-}
-function $ensure_nonzero_divisor__u64__aee7f05a097ffa16($b) {
-  let v0 := $u64_haee7f05a097ffa16_intword_h9a147c8c32b1323c_to_word($b)
-  let v1 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0, 0)
-  let v2 := v1
-  if v2 {
-    revert(0, 0)
-  }
-  leave
-}
-function $u256_h3271ca15373d4483_eq_he50383edd273619f_eq($self, $other) -> ret {
-  let v0 := eq($self, $other)
-  ret := v0
-  leave
-}
-function $u256_h3271ca15373d4483_eq_he50383edd273619f_ne($self, $other) -> ret {
-  let v0 := iszero(eq($self, $other))
-  ret := v0
-  leave
-}
-function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt($self, $other) -> ret {
-  let v0 := lt($self, $other)
-  ret := v0
-  leave
-}
-function $u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_to_word($self) -> ret {
-  ret := $self
-  leave
-}
-function $u32_h20aa0c10687491ad_wrappingadd_h14afa79b3047617f_wrapping_add($self, $other) -> ret {
-  let v0 := and(add(and($self, 0xffffffff), and($other, 0xffffffff)), 0xffffffff)
-  ret := v0
-  leave
-}
-function $u32_h20aa0c10687491ad_wrappingmul_h64e6b83610cda761_wrapping_mul($self, $other) -> ret {
-  let v0 := and(mul(and($self, 0xffffffff), and($other, 0xffffffff)), 0xffffffff)
-  ret := v0
-  leave
-}
-function $u64_haee7f05a097ffa16_intword_h9a147c8c32b1323c_to_word($self) -> ret {
-  ret := $self
-  leave
-}
-function $u64_haee7f05a097ffa16_wrappingmul_h64e6b83610cda761_wrapping_mul($self, $other) -> ret {
-  let v0 := and(mul(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
-  ret := v0
-  leave
 }

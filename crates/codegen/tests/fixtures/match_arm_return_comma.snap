@@ -3,4 +3,60 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/match_arm_return_comma.fe
 ---
-
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let v0 := $main()
+      stop()
+    }
+    function $f(p0) -> ret {
+      let r0 := mload(0x40)
+      if iszero(r0) {
+        r0 := 0x80
+      }
+      mstore(0x40, add(r0, 33))
+      mstore(r0, mload(p0))
+      mstore(add(r0, 32), mload(add(p0, 32)))
+      let t11 := and(byte(0, mload(r0)), 0xff)
+      let v7 := t11
+      switch and(v7, 0xff)
+      case 0 {
+          let t12 := mload(add(r0, 1))
+          let v3 := t12
+          let v8 := v3
+          let v1 := v8
+          let v9 := v1
+          ret := v9
+          leave
+      }
+      case 1 {
+          let v10 := 0x00
+          let v5 := v10
+          ret := v5
+          leave
+      }
+      default {
+          invalid()
+      }
+    }
+    function $main() -> ret {
+      let v3 := 0x01
+      let v0 := v3
+      let v4 := 0x01
+      let t7 := mload(0x40)
+      if iszero(t7) {
+        t7 := 0x80
+      }
+      mstore(0x40, add(t7, 33))
+      mstore8(t7, and(0, 0xff))
+      mstore(add(t7, 1), v4)
+      let v5 := t7
+      let v1 := v5
+      let v6 := $f(v1)
+      let v2 := v6
+      ret := v2
+      leave
+    }
+    $__fe_main_root()
+  }
+}

@@ -1,3 +1,7 @@
 pub fn bit_not(x: u256) -> u256 {
     ~x
 }
+
+pub fn main() -> u256 {
+    bit_not(1)
+}

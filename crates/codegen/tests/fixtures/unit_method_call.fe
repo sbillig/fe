@@ -10,3 +10,7 @@ impl Counter {
 fn call_unit_method(c: Counter) {
     c.increment()
 }
+
+pub fn main() {
+    call_unit_method(Counter { value: 1 })
+}

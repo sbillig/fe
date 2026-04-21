@@ -1,12 +1,11 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 41
 expression: res
 input_file: test_files/ty_check/const_generic_const_fn_args.fe
 ---
-note: 
+note:
    ┌─ const_generic_const_fn_args.fe:12:8
-   │  
+   │
 12 │   fn f() {
    │ ╭────────^
 13 │ │     let x: Foo
@@ -16,25 +15,25 @@ note:
 17 │ │ }
    │ ╰─^ ()
 
-note: 
+note:
    ┌─ const_generic_const_fn_args.fe:13:9
    │
 13 │     let x: Foo
    │         ^ Foo<3>
 
-note: 
+note:
    ┌─ const_generic_const_fn_args.fe:14:9
    │
 14 │     let y: Foo<add(ONE, TWO)>
    │         ^ Foo<3>
 
-note: 
+note:
    ┌─ const_generic_const_fn_args.fe:15:9
    │
 15 │     let z: Bar<4>
    │         ^ Bar<4, plus1(4)>
 
-note: 
+note:
    ┌─ const_generic_const_fn_args.fe:16:9
    │
 16 │     let w: Bar<4, plus1(ONE)>

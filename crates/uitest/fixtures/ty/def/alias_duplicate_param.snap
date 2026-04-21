@@ -8,7 +8,7 @@ error[2-0004]: `T` is ambiguous
   │
 2 │ type Foo<T, T> = Map<T, T>
   │          -  -        ^ `T` is ambiguous
-  │          │  │         
+  │          │  │
   │          │  candidate 2
   │          candidate 1
 
@@ -17,7 +17,7 @@ error[2-0004]: `T` is ambiguous
   │
 2 │ type Foo<T, T> = Map<T, T>
   │          -  -           ^ `T` is ambiguous
-  │          │  │            
+  │          │  │
   │          │  candidate 2
   │          candidate 1
 
@@ -26,5 +26,5 @@ error[3-0019]: duplicate generic parameter name in type `Foo`
   │
 2 │ type Foo<T, T> = Map<T, T>
   │          ^  - `T` is redefined here
-  │          │   
+  │          │
   │          `T` is defined here

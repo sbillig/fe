@@ -1,12 +1,11 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
 expression: res
 input_file: test_files/ty_check/trait_self_associated_type.fe
 ---
-note: 
+note:
    ┌─ trait_self_associated_type.fe:15:37
-   │  
+   │
 15 │       fn next(mut self) -> Self::Item {
    │ ╭─────────────────────────────────────^
 16 │ │         if self.start < self.end {
@@ -17,9 +16,9 @@ note:
 23 │ │     }
    │ ╰─────^ i32
 
-note: 
+note:
    ┌─ trait_self_associated_type.fe:16:9
-   │  
+   │
 16 │ ╭         if self.start < self.end {
 17 │ │             let val = self.start
 18 │ │             self.start += 1
@@ -29,39 +28,39 @@ note:
 22 │ │         }
    │ ╰─────────^ i32
 
-note: 
+note:
    ┌─ trait_self_associated_type.fe:16:12
    │
 16 │         if self.start < self.end {
    │            ^^^^ mut Range
 
-note: 
+note:
    ┌─ trait_self_associated_type.fe:16:12
    │
 16 │         if self.start < self.end {
    │            ^^^^^^^^^^ i32
 
-note: 
+note:
    ┌─ trait_self_associated_type.fe:16:12
    │
 16 │         if self.start < self.end {
    │            ^^^^^^^^^^^^^^^^^^^^^ bool
 
-note: 
+note:
    ┌─ trait_self_associated_type.fe:16:25
    │
 16 │         if self.start < self.end {
    │                         ^^^^ mut Range
 
-note: 
+note:
    ┌─ trait_self_associated_type.fe:16:25
    │
 16 │         if self.start < self.end {
    │                         ^^^^^^^^ i32
 
-note: 
+note:
    ┌─ trait_self_associated_type.fe:16:34
-   │  
+   │
 16 │           if self.start < self.end {
    │ ╭──────────────────────────────────^
 17 │ │             let val = self.start
@@ -70,64 +69,64 @@ note:
 20 │ │         } else {
    │ ╰─────────^ i32
 
-note: 
+note:
    ┌─ trait_self_associated_type.fe:17:17
    │
 17 │             let val = self.start
    │                 ^^^ i32
 
-note: 
+note:
    ┌─ trait_self_associated_type.fe:17:23
    │
 17 │             let val = self.start
    │                       ^^^^ mut Range
 
-note: 
+note:
    ┌─ trait_self_associated_type.fe:17:23
    │
 17 │             let val = self.start
    │                       ^^^^^^^^^^ i32
 
-note: 
+note:
    ┌─ trait_self_associated_type.fe:18:13
    │
 18 │             self.start += 1
    │             ^^^^ mut Range
 
-note: 
+note:
    ┌─ trait_self_associated_type.fe:18:13
    │
 18 │             self.start += 1
    │             ^^^^^^^^^^ i32
 
-note: 
+note:
    ┌─ trait_self_associated_type.fe:18:13
    │
 18 │             self.start += 1
    │             ^^^^^^^^^^^^^^^ ()
 
-note: 
+note:
    ┌─ trait_self_associated_type.fe:18:27
    │
 18 │             self.start += 1
    │                           ^ i32
 
-note: 
+note:
    ┌─ trait_self_associated_type.fe:19:13
    │
 19 │             val
    │             ^^^ i32
 
-note: 
+note:
    ┌─ trait_self_associated_type.fe:20:16
-   │  
+   │
 20 │           } else {
    │ ╭────────────────^
 21 │ │             0
 22 │ │         }
    │ ╰─────────^ i32
 
-note: 
+note:
    ┌─ trait_self_associated_type.fe:21:13
    │
 21 │             0

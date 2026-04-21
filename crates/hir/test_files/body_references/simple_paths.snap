@@ -3,25 +3,25 @@ source: crates/hir/tests/body_references.rs
 expression: res
 input_file: test_files/body_references/simple_paths.fe
 ---
-note: 
+note:
   ┌─ simple_paths.fe:4:9
   │
 4 │     let x = MyStruct {}
   │         ^ x -> local
 
-note: 
+note:
   ┌─ simple_paths.fe:4:13
   │
 4 │     let x = MyStruct {}
   │             ^^^^^^^^ MyStruct -> struct
 
-note: 
+note:
   ┌─ simple_paths.fe:5:5
   │
 5 │     bar(s: x)
   │     ^^^ bar -> fn
 
-note: 
+note:
   ┌─ simple_paths.fe:5:12
   │
 5 │     bar(s: x)

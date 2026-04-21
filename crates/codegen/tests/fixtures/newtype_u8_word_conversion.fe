@@ -12,3 +12,7 @@ pub fn newtype_u8_roundtrip(x: u8) -> u8 {
     let w = ref c.w
     w.inner
 }
+
+pub fn main() -> u8 {
+    newtype_u8_roundtrip(7)
+}

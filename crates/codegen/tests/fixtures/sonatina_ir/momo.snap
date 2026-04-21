@@ -9,35 +9,52 @@ type @__fe_layout_0 = {i8, i8};
 
 func private %__fe_main_root() {
     block0:
-        v1.i8 = call %read_x undef.@__fe_layout_0;
+        jump block1;
+
+    block1:
+        v0.i8 = call %main;
         evm_stop;
+}
+
+func private %main() -> i8 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v4.objref<i8> = obj.proj v2 0.i256;
+        obj.store v4 1.i8;
+        v6.objref<i8> = obj.proj v2 1.i256;
+        obj.store v6 2.i8;
+        v7.@__fe_layout_0 = obj.load v2;
+        v8.i8 = call %read_x v7;
+        return v8;
 }
 
 func private %read_x(v0.@__fe_layout_0) -> i8 {
     block0:
         v1.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
-        v2.*i8 = alloca i8;
-        v3.*i8 = alloca i8;
-        v4.*i8 = alloca i8;
-        obj.store v1 v0;
-        v6.objref<i8> = obj.proj v1 0.i256;
-        v7.i8 = obj.load v6;
-        mstore v2 v7 i8;
-        v9.objref<i8> = obj.proj v1 1.i256;
-        v10.i8 = obj.load v9;
-        mstore v3 v10 i8;
-        v11.i8 = mload v2 i8;
-        v12.i8 = mload v3 i8;
-        (v13.i8, v14.i1) = uaddo v11 v12;
-        br v14 block1 block2;
+        v3.objref<i8> = obj.proj v1 0.i256;
+        v4.i8 = extract_value v0 0.i256;
+        obj.store v3 v4;
+        v6.objref<i8> = obj.proj v1 1.i256;
+        v7.i8 = extract_value v0 1.i256;
+        obj.store v6 v7;
+        jump block1;
 
     block1:
-        evm_revert 0.i256 0.i256;
+        v8.objref<i8> = obj.proj v1 0.i256;
+        v9.i8 = obj.load v8;
+        v10.objref<i8> = obj.proj v1 1.i256;
+        v11.i8 = obj.load v10;
+        (v12.i8, v13.i1) = uaddo v9 v11;
+        br v13 block2 block3;
 
     block2:
-        mstore v4 v13 i8;
-        v15.i8 = mload v4 i8;
-        return v15;
+        evm_revert 0.i256 0.i256;
+
+    block3:
+        return v12;
 }
 
 

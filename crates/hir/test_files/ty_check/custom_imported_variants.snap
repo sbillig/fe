@@ -3,9 +3,9 @@ source: crates/hir/tests/ty_check.rs
 expression: res
 input_file: test_files/ty_check/custom_imported_variants.fe
 ---
-note: 
+note:
    ┌─ custom_imported_variants.fe:15:37
-   │  
+   │
 15 │   fn match_full_paths(tag: Tag) -> u8 {
    │ ╭─────────────────────────────────────^
 16 │ │     match tag {
@@ -16,9 +16,9 @@ note:
 27 │ │ }
    │ ╰─^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:16:5
-   │  
+   │
 16 │ ╭     match tag {
 17 │ │         Tag::Tag1 => {
 18 │ │             return 1
@@ -28,91 +28,91 @@ note:
 26 │ │     }
    │ ╰─────^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:16:11
    │
 16 │     match tag {
    │           ^^^ Tag
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:17:9
    │
 17 │         Tag::Tag1 => {
    │         ^^^^^^^^^ Tag
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:17:22
-   │  
+   │
 17 │           Tag::Tag1 => {
    │ ╭──────────────────────^
 18 │ │             return 1
 19 │ │         }
    │ ╰─────────^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:18:20
    │
 18 │             return 1
    │                    ^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:20:9
    │
 20 │         Tag::Tag2 => {
    │         ^^^^^^^^^ Tag
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:20:22
-   │  
+   │
 20 │           Tag::Tag2 => {
    │ ╭──────────────────────^
 21 │ │             return 2
 22 │ │         }
    │ ╰─────────^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:21:20
    │
 21 │             return 2
    │                    ^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:23:9
    │
 23 │         Tag::Tag3 => {
    │         ^^^^^^^^^ Tag
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:23:22
-   │  
+   │
 23 │           Tag::Tag3 => {
    │ ╭──────────────────────^
 24 │ │             return 3
 25 │ │         }
    │ ╰─────────^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:24:20
    │
 24 │             return 3
    │                    ^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:30:44
-   │  
+   │
 30 │   fn match_imported_variants(tag: Tag) -> u8 {
    │ ╭────────────────────────────────────────────^
 31 │ │     use Tag::*
-32 │ │     
+32 │ │
 33 │ │     match tag {
    · │
 43 │ │     }
 44 │ │ }
    │ ╰─^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:33:5
-   │  
+   │
 33 │ ╭     match tag {
 34 │ │         Tag1 => {
 35 │ │             return 1
@@ -122,91 +122,91 @@ note:
 43 │ │     }
    │ ╰─────^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:33:11
    │
 33 │     match tag {
    │           ^^^ Tag
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:34:9
    │
 34 │         Tag1 => {
    │         ^^^^ Tag
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:34:17
-   │  
+   │
 34 │           Tag1 => {
    │ ╭─────────────────^
 35 │ │             return 1
 36 │ │         }
    │ ╰─────────^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:35:20
    │
 35 │             return 1
    │                    ^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:37:9
    │
 37 │         Tag2 => {
    │         ^^^^ Tag
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:37:17
-   │  
+   │
 37 │           Tag2 => {
    │ ╭─────────────────^
 38 │ │             return 2  // If Tag2 is treated as a wildcard, this might be unreachable
 39 │ │         }
    │ ╰─────────^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:38:20
    │
 38 │             return 2  // If Tag2 is treated as a wildcard, this might be unreachable
    │                    ^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:40:9
    │
 40 │         Tag3 => {
    │         ^^^^ Tag
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:40:17
-   │  
+   │
 40 │           Tag3 => {
    │ ╭─────────────────^
 41 │ │             return 3  // If Tag2 is treated as a wildcard, this would definitely be unreachable
 42 │ │         }
    │ ╰─────────^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:41:20
    │
 41 │             return 3  // If Tag2 is treated as a wildcard, this would definitely be unreachable
    │                    ^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:47:49
-   │  
+   │
 47 │   fn match_imported_tuple_variant(c: Color) -> u8 {
    │ ╭─────────────────────────────────────────────────^
 48 │ │     use Color::*
-49 │ │     
+49 │ │
 50 │ │     match c {
    · │
 63 │ │     }
 64 │ │ }
    │ ╰─^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:50:5
-   │  
+   │
 50 │ ╭     match c {
 51 │ │         Red => {
 52 │ │             return 1
@@ -216,141 +216,141 @@ note:
 63 │ │     }
    │ ╰─────^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:50:11
    │
 50 │     match c {
    │           ^ Color
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:51:9
    │
 51 │         Red => {
    │         ^^^ Color
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:51:16
-   │  
+   │
 51 │           Red => {
    │ ╭────────────────^
 52 │ │             return 1
 53 │ │         }
    │ ╰─────────^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:52:20
    │
 52 │             return 1
    │                    ^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:54:9
    │
 54 │         Green => {
    │         ^^^^^ Color
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:54:18
-   │  
+   │
 54 │           Green => {
    │ ╭──────────────────^
 55 │ │             return 2
 56 │ │         }
    │ ╰─────────^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:55:20
    │
 55 │             return 2
    │                    ^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:57:9
    │
 57 │         Blue => {
    │         ^^^^ Color
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:57:17
-   │  
+   │
 57 │           Blue => {
    │ ╭─────────────────^
 58 │ │             return 3
 59 │ │         }
    │ ╰─────────^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:58:20
    │
 58 │             return 3
    │                    ^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:60:9
    │
 60 │         Rgb(r, g, b) => {
    │         ^^^^^^^^^^^^ Color
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:60:13
    │
 60 │         Rgb(r, g, b) => {
    │             ^ ref u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:60:16
    │
 60 │         Rgb(r, g, b) => {
    │                ^ ref u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:60:19
    │
 60 │         Rgb(r, g, b) => {
    │                   ^ ref u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:60:25
-   │  
+   │
 60 │           Rgb(r, g, b) => {
    │ ╭─────────────────────────^
 61 │ │             return r + g + b
 62 │ │         }
    │ ╰─────────^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:61:20
    │
 61 │             return r + g + b
    │                    ^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:61:20
    │
 61 │             return r + g + b
    │                    ^^^^^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:61:20
    │
 61 │             return r + g + b
    │                    ^^^^^^^^^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:61:24
    │
 61 │             return r + g + b
    │                        ^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:61:28
    │
 61 │             return r + g + b
    │                            ^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:67:50
-   │  
+   │
 67 │   fn match_full_path_tuple_variant(c: Color) -> u8 {
    │ ╭──────────────────────────────────────────────────^
 68 │ │     match c {
@@ -361,9 +361,9 @@ note:
 82 │ │ }
    │ ╰─^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:68:5
-   │  
+   │
 68 │ ╭     match c {
 69 │ │         Color::Red => {
 70 │ │             return 1
@@ -373,133 +373,133 @@ note:
 81 │ │     }
    │ ╰─────^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:68:11
    │
 68 │     match c {
    │           ^ Color
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:69:9
    │
 69 │         Color::Red => {
    │         ^^^^^^^^^^ Color
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:69:23
-   │  
+   │
 69 │           Color::Red => {
    │ ╭───────────────────────^
 70 │ │             return 1
 71 │ │         }
    │ ╰─────────^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:70:20
    │
 70 │             return 1
    │                    ^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:72:9
    │
 72 │         Color::Green => {
    │         ^^^^^^^^^^^^ Color
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:72:25
-   │  
+   │
 72 │           Color::Green => {
    │ ╭─────────────────────────^
 73 │ │             return 2
 74 │ │         }
    │ ╰─────────^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:73:20
    │
 73 │             return 2
    │                    ^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:75:9
    │
 75 │         Color::Blue => {
    │         ^^^^^^^^^^^ Color
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:75:24
-   │  
+   │
 75 │           Color::Blue => {
    │ ╭────────────────────────^
 76 │ │             return 3
 77 │ │         }
    │ ╰─────────^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:76:20
    │
 76 │             return 3
    │                    ^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:78:9
    │
 78 │         Color::Rgb(r, g, b) => {
    │         ^^^^^^^^^^^^^^^^^^^ Color
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:78:20
    │
 78 │         Color::Rgb(r, g, b) => {
    │                    ^ ref u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:78:23
    │
 78 │         Color::Rgb(r, g, b) => {
    │                       ^ ref u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:78:26
    │
 78 │         Color::Rgb(r, g, b) => {
    │                          ^ ref u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:78:32
-   │  
+   │
 78 │           Color::Rgb(r, g, b) => {
    │ ╭────────────────────────────────^
 79 │ │             return r + g + b
 80 │ │         }
    │ ╰─────────^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:79:20
    │
 79 │             return r + g + b
    │                    ^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:79:20
    │
 79 │             return r + g + b
    │                    ^^^^^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:79:20
    │
 79 │             return r + g + b
    │                    ^^^^^^^^^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:79:24
    │
 79 │             return r + g + b
    │                        ^ u8
 
-note: 
+note:
    ┌─ custom_imported_variants.fe:79:28
    │
 79 │             return r + g + b

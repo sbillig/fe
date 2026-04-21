@@ -1,7 +1,7 @@
 ---
 source: crates/uitest/tests/parser.rs
 expression: diags
-input_file: crates/uitest/fixtures/parser/const_.fe
+input_file: fixtures/parser/const_.fe
 ---
 error[1-0001]: missing type bound for const definition
   ┌─ const_.fe:1:8
@@ -12,7 +12,7 @@ error[1-0001]: missing type bound for const definition
 error[1-0001]: expected `=`
   ┌─ const_.fe:3:13
   │
-3 │ const X: i32 
+3 │ const X: i32
   │             ^ expected `=`
 
 error[1-0001]: expected type
@@ -26,5 +26,3 @@ error[1-0001]: unexpected syntax while parsing type
   │
 5 │ const X: ]@ = 1
   │          ^^ unexpected
-
-

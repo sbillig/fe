@@ -6,53 +6,40 @@ input_file: tests/fixtures/array_literal_u256.fe
 object "main" {
   code {
     function $__fe_main_root() {
-      let v0 := 0
-      v0 := $fixed_u256_array_literal()
+      let v0 := $fixed_u256_array_literal()
       stop()
     }
     function $fixed_u256_array_literal() -> ret {
-      let v0 := 0
-      let v1 := 0
-      let v2 := 0
-      let v3 := 0
-      let v4 := 0
-      let v5 := 0
-      let v6 := 0
-      let v7 := 0
-      let v8 := 0
-      let v9 := 0
-      let v10 := 0
-      let v11 := 0
-      let v12 := 0
-      let v13 := 0
-      let v14 := 0
-      let v15 := 0
-      let v16 := 0
-      let v17 := 0
-      let v18 := 0
-      let v19 := 0
-      let v20 := 0
-      let v21 := 0
-      v6 := 0x01
-      v1 := v6
-      v7 := 0x02
-      v2 := v7
-      v8 := 0x03
-      v3 := v8
-      v9 := 0x04
-      v4 := v9
-      v10 := 0x01
-      v11 := 0x02
-      v12 := 0x03
-      v13 := 0x04
-      v14 := dataoffset("const_0")
-      v5 := v14
-      v16 := 0x01
-      v17 := 0x02
-      v18 := 0x03
-      v19 := 0x04
-      v20 := dataoffset("const_0")
-      v0 := v20
+      let v6 := 0x01
+      let v1 := v6
+      let v7 := 0x02
+      let v2 := v7
+      let v8 := 0x03
+      let v3 := v8
+      let v9 := 0x04
+      let v4 := v9
+      let v10 := 0x01
+      let v11 := 0x02
+      let v12 := 0x03
+      let v13 := 0x04
+      let v14 := dataoffset("const_0")
+      let v5 := v14
+      let v16 := 0x01
+      let v17 := 0x02
+      let v18 := 0x03
+      let v19 := 0x04
+      let t22 := mload(0x40)
+      if iszero(t22) {
+        t22 := 0x80
+      }
+      mstore(0x40, add(t22, 128))
+      let v21 := t22
+      mstore(add(v21, mul(0, 32)), v16)
+      mstore(add(v21, mul(1, 32)), v17)
+      mstore(add(v21, mul(2, 32)), v18)
+      mstore(add(v21, mul(3, 32)), v19)
+      let v20 := v21
+      let v0 := v20
       ret := v0
       leave
     }

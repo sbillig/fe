@@ -3,9 +3,9 @@ source: crates/hir/tests/decision_tree.rs
 expression: res
 input_file: test_files/decision_trees/stress_patterns.fe
 ---
-note: 
+note:
    ┌─ stress_patterns.fe:35:5
-   │  
+   │
 35 │ ╭     match large {
 36 │ │         VeryLargeEnum::Variant1 => 1
 37 │ │         VeryLargeEnum::Variant2 => 2
@@ -27,9 +27,9 @@ note:
     └─ Execute arm #4
 
 
-note: 
+note:
    ┌─ stress_patterns.fe:46:5
-   │  
+   │
 46 │ ╭     match data {
 47 │ │         ((0, true), (Color::Red, _)) => 10
 48 │ │         ((0, false), (Color::Green, x)) => x + 20
@@ -74,9 +74,9 @@ note:
                             └─ Execute arm #4
 
 
-note: 
+note:
    ┌─ stress_patterns.fe:57:5
-   │  
+   │
 57 │ ╭     match (point, color) {
 58 │ │         (Point { x: 0, y: 0 }, Color::Red) => 100
 59 │ │         (Point { x: 0, y: _ }, Color::Green) => 200
@@ -121,9 +121,9 @@ note:
                            x ← expr.0.0
 
 
-note: 
+note:
    ┌─ stress_patterns.fe:67:5
-   │  
+   │
 67 │ ╭     match rect {
 68 │ │         Rectangle { top_left: Point { x: 0, y: 0 }, bottom_right: _ } => 50
 69 │ │         Rectangle { top_left: Point { x: 1, y: 1 }, bottom_right: Point { x: 2, y: 2 } } => 100
@@ -185,9 +185,9 @@ note:
                            x ← expr.0.0
 
 
-note: 
+note:
    ┌─ stress_patterns.fe:76:5
-   │  
+   │
 76 │ ╭     match shape {
 77 │ │         ShapeVariant::Circle(Point { x: 0, y: 0 }, radius) => radius
 78 │ │         ShapeVariant::Circle(Point { x, y }, _) => x + y
@@ -252,9 +252,9 @@ note:
                       └─ Execute arm #5
 
 
-note: 
+note:
    ┌─ stress_patterns.fe:88:5
-   │  
+   │
 88 │ ╭     match data {
 89 │ │         (VeryLargeEnum::Variant1 | VeryLargeEnum::Variant2, true) => 10
 90 │ │         (VeryLargeEnum::Variant3 | VeryLargeEnum::Variant4, false) => 20
@@ -293,9 +293,9 @@ note:
           └─ Execute arm #2
 
 
-note: 
+note:
     ┌─ stress_patterns.fe:100:5
-    │  
+    │
 100 │ ╭     match data {
 101 │ │         (VeryLargeEnum::Variant1, Point { x: 0, y: 0 }, (true, _)) => 100
 102 │ │         (VeryLargeEnum::Variant2, Point { x: 1, y: _ }, (false, val)) => val + 50

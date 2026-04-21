@@ -20,7 +20,7 @@ error[8-0008]: duplicated record field binding
    │
 12 │     let Foo {x, x}
    │              -  ^ duplicate field binding `x`
-   │              │   
+   │              │
    │              first use of `x`
 
 error[8-0008]: duplicated record field binding
@@ -28,7 +28,7 @@ error[8-0008]: duplicated record field binding
    │
 18 │     let Bar::Variant {x, x}
    │                       -  ^ duplicate field binding `x`
-   │                       │   
+   │                       │
    │                       first use of `x`
 
 error[8-0009]: specified field not found
@@ -84,7 +84,7 @@ error[8-0032]: duplicate binding `x` in pattern
    │
 12 │     let Foo {x, x}
    │              -  ^ `x` is defined again here
-   │              │   
+   │              │
    │              first definition of `x` in this pattern
 
 error[8-0032]: duplicate binding `x` in pattern
@@ -92,5 +92,5 @@ error[8-0032]: duplicate binding `x` in pattern
    │
 18 │     let Bar::Variant {x, x}
    │                       -  ^ `x` is defined again here
-   │                       │   
+   │                       │
    │                       first definition of `x` in this pattern

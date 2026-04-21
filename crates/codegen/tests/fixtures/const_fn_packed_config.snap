@@ -6,15 +6,12 @@ input_file: tests/fixtures/const_fn_packed_config.fe
 object "main" {
   code {
     function $__fe_main_root() {
-      let v0 := 0
-      v0 := $main()
+      let v0 := $main()
       stop()
     }
     function $main() -> ret {
-      let v0 := 0
-      let v1 := 0
-      v1 := 0x12001e
-      v0 := v1
+      let v1 := 0x12001e
+      let v0 := v1
       ret := v0
       leave
     }

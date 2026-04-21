@@ -5,46 +5,44 @@ input_file: crates/codegen/tests/fixtures/const_array_addmod.fe
 ---
 target = "evm-ethereum-osaka"
 
-global private const [i256; 3] $__fe_const_region_0 = [10, 20, 30];
-
 func private %__fe_main_root() {
     block0:
+        jump block1;
+
+    block1:
         v0.i256 = call %get_sum;
         evm_stop;
 }
 
 func private %get_sum() -> i256 {
     block0:
-        v0.*i256 = alloca i256;
-        v1.*i256 = alloca i256;
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        mstore v0 1.i256 i256;
-        v8.constref<[i256; 3]> = const.ref $__fe_const_region_0;
-        mstore v1 0.i256 i256;
-        v10.i256 = mload v1 i256;
-        v11.constref<i256> = const.index v8 v10;
-        v12.i256 = const.load v11;
-        mstore v2 v12 i256;
-        mstore v3 100.i256 i256;
-        v14.i256 = mload v0 i256;
-        v15.i256 = mload v2 i256;
-        v16.i256 = mload v3 i256;
-        v17.i256 = evm_add_mod v14 v15 v16;
-        mstore v6 v17 i256;
-        v18.i256 = mload v6 i256;
-        mstore v4 v18 i256;
-        v19.i256 = mload v4 i256;
-        return v19;
+        v0.objref<[i256; 3]> = obj.alloc [i256; 3];
+        jump block1;
+
+    block1:
+        v5.objref<[i256; 3]> = obj.alloc [i256; 3];
+        v7.objref<i256> = obj.index v5 0.i256;
+        obj.store v7 10.i256;
+        v8.objref<i256> = obj.index v5 1.i256;
+        obj.store v8 20.i256;
+        v10.objref<i256> = obj.index v5 2.i256;
+        obj.store v10 30.i256;
+        v11.[i256; 3] = obj.load v5;
+        v12.objref<i256> = obj.index v0 0.i256;
+        v13.i256 = extract_value v11 0.i256;
+        obj.store v12 v13;
+        v14.objref<i256> = obj.index v0 1.i256;
+        v15.i256 = extract_value v11 1.i256;
+        obj.store v14 v15;
+        v16.objref<i256> = obj.index v0 2.i256;
+        v17.i256 = extract_value v11 2.i256;
+        obj.store v16 v17;
+        return 11.i256;
 }
 
 
 object @main {
     section main {
         entry %__fe_main_root;
-        data $__fe_const_region_0;
     }
 }

@@ -1,12 +1,11 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 41
 expression: res
 input_file: test_files/ty_check/const_eval_arith_generic_args.fe
 ---
-note: 
+note:
   ┌─ const_eval_arith_generic_args.fe:3:8
-  │  
+  │
 3 │   fn f() {
   │ ╭────────^
 4 │ │     let a: Foo
@@ -14,13 +13,13 @@ note:
 6 │ │ }
   │ ╰─^ ()
 
-note: 
+note:
   ┌─ const_eval_arith_generic_args.fe:4:9
   │
 4 │     let a: Foo
   │         ^ Foo<3>
 
-note: 
+note:
   ┌─ const_eval_arith_generic_args.fe:5:9
   │
 5 │     let b: Foo<{ 5 + 6 }>

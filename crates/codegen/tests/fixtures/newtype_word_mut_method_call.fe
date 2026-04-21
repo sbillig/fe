@@ -14,3 +14,7 @@ pub fn newtype_word_mut_method_call(x: u256) -> u256 {
     let w = w.bump()
     w.inner
 }
+
+pub fn main() -> u256 {
+    newtype_word_mut_method_call(1)
+}
