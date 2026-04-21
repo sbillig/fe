@@ -62,10 +62,11 @@ use super::{
     type_info::{
         RuntimeTypeEnv, aggregate_transport_depends_on_runtime_source,
         boundary_source_uses_transport_sensitive_aggregate, boundary_spec_for_ty_in_env,
-        default_borrow_transport_set, provider_address_space_to_runtime,
-        provider_class_for_target_in_context, provider_class_for_target_in_env,
-        runtime_repr_ty_in_context, scalar_class_for_ty_in_env, stored_class_for_ty_in_context,
-        top_level_class_for_ty_in_context, top_level_class_for_ty_in_env,
+        default_borrow_transport_set, effect_handle_class_for_ty_in_context,
+        provider_address_space_to_runtime, provider_class_for_target_in_context,
+        provider_class_for_target_in_env, runtime_repr_ty_in_context, scalar_class_for_ty_in_env,
+        stored_class_for_ty_in_context, top_level_class_for_ty_in_context,
+        top_level_class_for_ty_in_env,
     },
 };
 
@@ -1595,13 +1596,16 @@ pub(crate) fn runtime_class_for_provider_binding<'db>(
             assumptions,
         ),
         ProviderKind::Handle | ProviderKind::RawAddress => {
-            Some(provider_class_for_target_in_context(
-                db,
-                provider.semantics.target_ty,
-                provider_address_space_to_runtime(provider.semantics.address_space?),
-                scope,
-                assumptions,
-            ))
+            effect_handle_class_for_ty_in_context(db, provider.provider_ty, scope, assumptions)
+                .or_else(|| {
+                    Some(provider_class_for_target_in_context(
+                        db,
+                        provider.semantics.target_ty,
+                        provider_address_space_to_runtime(provider.semantics.address_space?),
+                        scope,
+                        assumptions,
+                    ))
+                })
         }
     }
 }
@@ -1654,13 +1658,17 @@ fn runtime_class_for_provider_value_ty_in_context<'db>(
             provider_address_space_to_runtime(provider.semantics.address_space?)
         }
     };
-    Some(provider_class_for_target_in_context(
-        db,
-        Some(value_ty),
-        space,
-        scope,
-        assumptions,
-    ))
+    effect_handle_class_for_ty_in_context(db, provider.provider_ty, scope, assumptions).or_else(
+        || {
+            Some(provider_class_for_target_in_context(
+                db,
+                Some(value_ty),
+                space,
+                scope,
+                assumptions,
+            ))
+        },
+    )
 }
 
 fn effect_binding_borrow_boundary<'db>(

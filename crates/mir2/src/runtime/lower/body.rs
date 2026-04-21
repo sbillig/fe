@@ -76,8 +76,9 @@ use super::{
     },
     returns::RuntimeReturnAnalysisCx,
     type_info::{
-        RuntimeTypeEnv, boundary_spec_for_ty_in_env, provider_class_for_target_in_env,
-        stored_class_for_ty_in_context, top_level_class_for_ty_in_env,
+        RuntimeTypeEnv, boundary_spec_for_ty_in_env, effect_handle_class_for_ty_in_context,
+        provider_class_for_target_in_env, stored_class_for_ty_in_context,
+        top_level_class_for_ty_in_env,
     },
 };
 
@@ -642,6 +643,9 @@ impl<'db> RmirEmitter<'db> {
                 );
             }
             NExpr::ReadPlace { place, .. } => {
+                if self.lower_single_field_transport_place_read(bb, dst, place) {
+                    return;
+                }
                 let place = self.lower_place(bb, place);
                 let projected = self.project_place_class(&place);
                 let dst_class =
@@ -1741,6 +1745,11 @@ impl<'db> RmirEmitter<'db> {
         base: SLocalId,
         elem: PlaceElem<'db>,
     ) {
+        if let PlaceElem::Field(FieldIndex(field_idx)) = &elem
+            && self.lower_single_field_transport_local_read(bb, dst, base, *field_idx as usize)
+        {
+            return;
+        }
         let mut place = self.semantic_place(bb, base);
         place.path = vec![elem].into_boxed_slice();
         let projected = self.project_place_class(&place);
@@ -1778,6 +1787,80 @@ impl<'db> RmirEmitter<'db> {
                 expr: RExpr::Use(copied),
             },
         );
+    }
+
+    fn lower_single_field_transport_place_read(
+        &mut self,
+        bb: RBlockId,
+        dst: RLocalId,
+        place: &NSPlace<'db>,
+    ) -> bool {
+        let Some(Projection::Field(field_idx)) = place.path.iter().next() else {
+            return false;
+        };
+        if place.path.len() != 1 {
+            return false;
+        }
+        let base = match place.root {
+            NSPlaceRoot::CarrierDerefLocal(base) => base,
+            NSPlaceRoot::Root(root) => match self.semantic_body.root(root) {
+                Some(NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local }) => *local,
+                Some(NBorrowRoot::Provider { .. }) => return false,
+                None => return false,
+            },
+        };
+        self.lower_single_field_transport_local_read(bb, dst, base, *field_idx)
+    }
+
+    fn lower_single_field_transport_local_read(
+        &mut self,
+        bb: RBlockId,
+        dst: RLocalId,
+        base: SLocalId,
+        field_idx: usize,
+    ) -> bool {
+        if field_idx != 0 {
+            return false;
+        }
+        let base_ty = self.locals[base.index()].semantic_ty;
+        self.lower_single_field_transport_value_read(bb, dst, self.runtime_value(base), base_ty)
+    }
+
+    fn lower_single_field_transport_value_read(
+        &mut self,
+        bb: RBlockId,
+        dst: RLocalId,
+        value: RLocalId,
+        value_ty: TyId<'db>,
+    ) -> bool {
+        if effect_handle_class_for_ty_in_context(
+            self.db,
+            value_ty,
+            self.env.scope,
+            self.env.assumptions,
+        )
+        .is_none()
+        {
+            return false;
+        }
+        let Some(base_class) = self.value_class(value) else {
+            return false;
+        };
+        let Some(target) = self.value_class(dst).cloned() else {
+            return false;
+        };
+        if !base_class.is_transport() || !matches!(target, RuntimeClass::Scalar(_)) {
+            return false;
+        }
+        let raw = self.coerce_value(bb, value, &target);
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst,
+                expr: RExpr::Use(raw),
+            },
+        );
+        true
     }
 
     fn lower_enum_tag(&mut self, bb: RBlockId, dst: RLocalId, value: NOperand) {

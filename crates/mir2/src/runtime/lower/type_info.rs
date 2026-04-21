@@ -12,8 +12,8 @@ use salsa::Update;
 use crate::{
     db::MirDb,
     runtime::{
-        AddressSpaceKind, BorrowAccess, BorrowTransportSet, RefKind, RefView, RuntimeBoundarySpec,
-        RuntimeClass, ScalarClass, ScalarRepr, ScalarRole,
+        AddressSpaceKind, BorrowAccess, BorrowTransportSet, LayoutId, RefKind, RefView,
+        RuntimeBoundarySpec, RuntimeClass, ScalarClass, ScalarRepr, ScalarRole,
     },
 };
 
@@ -601,6 +601,17 @@ fn effect_handle_class_for_info<'db>(
     effect_scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> RuntimeClass<'db> {
+    if info.space == AddressSpaceKind::Memory {
+        return RuntimeClass::RawAddr {
+            space: info.space,
+            target: raw_addr_target_for_ty_in_context(
+                db,
+                info.target_ty,
+                Some(effect_scope),
+                assumptions,
+            ),
+        };
+    }
     provider_class_for_target_in_context(
         db,
         Some(info.target_ty),
@@ -608,6 +619,38 @@ fn effect_handle_class_for_info<'db>(
         Some(effect_scope),
         assumptions,
     )
+}
+
+pub(crate) fn effect_handle_class_for_ty_in_context<'db>(
+    db: &'db dyn MirDb,
+    ty: TyId<'db>,
+    scope: Option<ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
+) -> Option<RuntimeClass<'db>> {
+    let repr_ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
+    if repr_ty.as_capability(db).is_some() {
+        return None;
+    }
+    let effect_scope = scope.or_else(|| repr_ty.as_scope(db))?;
+    let info = runtime_effect_handle_info(db, repr_ty, Some(effect_scope), assumptions)?;
+    Some(effect_handle_class_for_info(
+        db,
+        info,
+        effect_scope,
+        assumptions,
+    ))
+}
+
+fn raw_addr_target_for_ty_in_context<'db>(
+    db: &'db dyn MirDb,
+    ty: TyId<'db>,
+    scope: Option<ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
+) -> Option<LayoutId<'db>> {
+    match stored_class_for_ty_in_context(db, ty, scope, assumptions) {
+        RuntimeClass::AggregateValue { layout } => Some(layout),
+        RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => None,
+    }
 }
 
 #[salsa::tracked]

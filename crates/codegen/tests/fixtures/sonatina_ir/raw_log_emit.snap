@@ -4,3 +4,89 @@ expression: output
 input_file: crates/codegen/tests/fixtures/raw_log_emit.fe
 ---
 target = "evm-ethereum-osaka"
+
+type @__fe_layout_0 = {};
+type @__fe_layout_1 = {@__fe_layout_0};
+
+func private %__fe_main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        call %main v0;
+        evm_stop;
+}
+
+func private %from_raw(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        return v2;
+}
+
+func private %log0(v0.objref<@__fe_layout_1>, v1.i256, v2.i256) {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v3 i256;
+        v6.i256 = mload v4 i256;
+        evm_log0 v5 v6;
+        return;
+}
+
+func private %main(v0.objref<@__fe_layout_1>) {
+    block0:
+        jump block1;
+
+    block1:
+        call %raw_emit v0;
+        return;
+}
+
+func private %mem_ptr(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.i256 = call %from_raw v2;
+        return v3;
+}
+
+func private %raw(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %raw_emit(v0.objref<@__fe_layout_1>) {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %mem_ptr 256.i256;
+        v3.i256 = call %raw v2;
+        call %log0 v0 v3 32.i256;
+        return;
+}
+
+
+object @main {
+    section main {
+        entry %__fe_main_root;
+    }
+}

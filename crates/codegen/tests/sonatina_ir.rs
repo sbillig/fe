@@ -78,6 +78,23 @@ fn helper(value: u256) -> u256 {
     );
 }
 
+#[test]
+fn raw_log_emit_sonatina_ir_lowers_mem_ptr_from_raw() {
+    let output = with_top_mod_for_source(
+        "raw_log_emit_sonatina_ir_lowers_mem_ptr_from_raw.fe",
+        include_str!("fixtures/raw_log_emit.fe"),
+        |db, top_mod| {
+            emit_module_sonatina_ir(db, top_mod)
+                .expect("MemPtr::from_raw should lower for Sonatina")
+        },
+    );
+
+    assert!(
+        output.contains("func private %raw_emit") && output.contains("object @main"),
+        "raw_log_emit should emit real Sonatina IR, not target-only output:\n{output}"
+    );
+}
+
 // NOTE: `dir_test` discovers fixtures at compile time; new fixture files will be picked up on a
 // clean build (e.g. CI) or whenever this test target is recompiled.
 //

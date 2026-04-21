@@ -1,7 +1,7 @@
 use common::InputDb;
 use driver::DriverDataBase;
 use fe_codegen::{OptLevel, emit_module_sonatina_ir, emit_runtime_package_sonatina_ir_optimized};
-use mir2::runtime::RefKind;
+use mir2::runtime::{AddressSpaceKind, RefKind};
 use mir2::{
     IntrinsicArithBinOp, Layout, PlaceElem, PlaceRoot, RExpr, RLocalId, RStmt, RuntimeBuiltin,
     RuntimeClass, build_runtime_package, build_test_runtime_package,
@@ -306,6 +306,76 @@ fn effect_handle_from_raw_helpers_preserve_transport_in_rmir() {
                     )
                 }),
             "from_raw helper should not materialize or take the address of the raw slot:\n{body:#?}"
+        );
+    }
+}
+
+#[test]
+fn mem_ptr_from_raw_helpers_use_raw_addr_transport_in_rmir() {
+    let mut db = DriverDataBase::default();
+    let file_url =
+        Url::parse("file:///mem_ptr_from_raw_helpers_use_raw_addr_transport_in_rmir.fe").unwrap();
+    db.workspace().touch(
+        &mut db,
+        file_url.clone(),
+        Some(include_str!("fixtures/raw_log_emit.fe").to_string()),
+    );
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    let package = build_runtime_package(&db, top_mod).expect("runtime package");
+
+    let from_raw_helpers = package
+        .functions(&db)
+        .iter()
+        .copied()
+        .filter(|function| function.symbol(&db).contains("from_raw"))
+        .collect::<Vec<_>>();
+    assert!(
+        !from_raw_helpers.is_empty(),
+        "expected generated MemPtr::from_raw helper in runtime package"
+    );
+
+    for function in from_raw_helpers {
+        let body = function.instance(&db).body(&db);
+        assert!(
+            body.blocks
+                .iter()
+                .flat_map(|block| block.stmts.iter())
+                .any(|stmt| {
+                    matches!(
+                        stmt,
+                        RStmt::Assign {
+                            expr: RExpr::WordToRawAddr {
+                                space: AddressSpaceKind::Memory,
+                                ..
+                            },
+                            ..
+                        }
+                    )
+                }),
+            "MemPtr::from_raw should keep memory handles as raw-address transport:\n{body:#?}"
+        );
+        assert!(
+            !body
+                .blocks
+                .iter()
+                .flat_map(|block| block.stmts.iter())
+                .any(|stmt| {
+                    matches!(
+                        stmt,
+                        RStmt::Assign {
+                            expr: RExpr::ProviderFromRaw {
+                                space: AddressSpaceKind::Memory,
+                                ..
+                            },
+                            ..
+                        }
+                    )
+                }),
+            "MemPtr::from_raw must not reconstruct memory provider refs:\n{body:#?}"
         );
     }
 }

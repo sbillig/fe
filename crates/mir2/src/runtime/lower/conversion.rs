@@ -338,7 +338,8 @@ impl<'db> RuntimeConversionPlanner<'db> {
                         },
                     view: RefView::Whole,
                 },
-            ) if space == provider_space
+            ) if *space != AddressSpaceKind::Memory
+                && space == provider_space
                 && pointee.as_ref() == &(RuntimeClass::AggregateValue { layout: *layout }) =>
             {
                 steps.push(RuntimeConversionStep::ProviderFromRaw {
@@ -448,7 +449,7 @@ impl<'db> RuntimeConversionPlanner<'db> {
                         },
                     view: RefView::Whole,
                 },
-            ) if space == provider_space => {
+            ) if *space != AddressSpaceKind::Memory && space == provider_space => {
                 let target_layout = pointee.aggregate_layout();
                 steps.push(RuntimeConversionStep::ProviderFromRaw {
                     class: target.clone(),
@@ -476,7 +477,10 @@ impl<'db> RuntimeConversionPlanner<'db> {
                         },
                     view: RefView::Whole,
                 },
-            ) if source_space == target_space && pointee.aggregate_layout().is_some() => {
+            ) if *target_space != AddressSpaceKind::Memory
+                && source_space == target_space
+                && pointee.aggregate_layout().is_some() =>
+            {
                 let target_layout = pointee.aggregate_layout();
                 let raw = RuntimeClass::RawAddr {
                     space: *target_space,
@@ -531,7 +535,7 @@ impl<'db> RuntimeConversionPlanner<'db> {
                     kind: RefKind::Provider { space, .. },
                     view: RefView::Whole,
                 },
-            ) if is_plain_word_scalar(scalar) => {
+            ) if *space != AddressSpaceKind::Memory && is_plain_word_scalar(scalar) => {
                 let target_layout = pointee.aggregate_layout();
                 let raw = RuntimeClass::RawAddr {
                     space: *space,
@@ -732,6 +736,33 @@ mod tests {
         };
         assert!(matches!(
             RuntimeConversionPlanner::plan(&db, storage_raw, memory_provider),
+            Err(RuntimeConversionError::Unsupported { .. })
+        ));
+    }
+
+    #[test]
+    fn raw_memory_address_does_not_reconstruct_memory_provider() {
+        let db = DriverDataBase::default();
+        let provider_ty = TyId::unit(&db);
+        let memory_provider = RuntimeClass::Ref {
+            pointee: Box::new(word_class()),
+            kind: RefKind::Provider {
+                provider_ty,
+                space: AddressSpaceKind::Memory,
+            },
+            view: RefView::Whole,
+        };
+        let memory_raw = RuntimeClass::RawAddr {
+            space: AddressSpaceKind::Memory,
+            target: None,
+        };
+
+        assert!(matches!(
+            RuntimeConversionPlanner::plan(&db, memory_raw, memory_provider.clone()),
+            Err(RuntimeConversionError::Unsupported { .. })
+        ));
+        assert!(matches!(
+            RuntimeConversionPlanner::plan(&db, word_class(), memory_provider),
             Err(RuntimeConversionError::Unsupported { .. })
         ));
     }
