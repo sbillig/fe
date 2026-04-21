@@ -187,3 +187,31 @@ fn const_backed_constructor_args_stay_code_backed_until_abi_encoding() {
         tail = &function_tail[end..];
     }
 }
+
+#[test]
+fn code_backed_storage_array_copy_stages_code_before_storage_writes() {
+    let yul = emit_inline_test_yul(
+        "file:///code_backed_storage_array_copy_stages_code_before_storage_writes.fe",
+        include_str!("../../fe/tests/fixtures/fe_test/code_backed_array_storage_copy.fe"),
+    );
+    let init = function_body(&yul, "function $__CodeArrayStore_init_eff0_stor(");
+
+    assert!(
+        init.contains("datacopy("),
+        "code-backed aggregate storage copy should stage through memory before loading words:\n{init}"
+    );
+    assert!(
+        !init.contains("mload(dataoffset("),
+        "Yul cannot load code-space constants with mload(dataoffset(...)); use datacopy first:\n{init}"
+    );
+    assert!(
+        init.contains("sstore(add(p0, 1),")
+            && init.contains("sstore(add(p0, 2),")
+            && init.contains("sstore(add(p0, 3),"),
+        "aggregate storage copies should address word slots, not byte offsets:\n{init}"
+    );
+    assert!(
+        !init.contains("sstore(add(p0, 32),"),
+        "aggregate storage copies should not write byte offsets into storage slots:\n{init}"
+    );
+}

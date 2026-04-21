@@ -1,0 +1,36 @@
+use std::evm::effects::assert
+
+const WORDS: [u256; 4] = [11, 22, 33, 44]
+
+msg CodeArrayMsg {
+    #[selector = 0x5e9359b4]
+    Sum -> u256,
+}
+
+pub contract CodeArrayStore {
+    data: [u256; 4]
+
+    init() uses (mut data) {
+        data = WORDS
+    }
+
+    recv CodeArrayMsg {
+        Sum -> u256 uses (data) {
+            data[0] + data[1] + data[2] + data[3]
+        }
+    }
+}
+
+#[test]
+fn test_code_backed_array_storage_copy() uses (evm: mut Evm) {
+    let contract_addr = evm.create2<CodeArrayStore>(value: 0, args: (), salt: 0)
+    assert(contract_addr.inner != 0)
+
+    let sum: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: CodeArrayMsg::Sum {}
+    )
+    assert(sum == 110)
+}

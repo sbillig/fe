@@ -6,6 +6,13 @@ use crate::yul::{
 
 use super::function::{FunctionEmitter, RenderedValue};
 
+#[derive(Clone, Copy)]
+enum WordLoadSpace {
+    Memory,
+    Storage,
+    Transient,
+}
+
 impl<'a, 'db> FunctionEmitter<'a, 'db> {
     pub(super) fn render_stmt(&mut self, stmt: &YStmt<'db>) -> Result<Vec<YulDoc>, YulError> {
         match stmt {
@@ -130,7 +137,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 docs.extend(self.copy_word_chunks(
                     YulAddressSpace::Memory,
                     dst_addr,
-                    YulAddressSpace::Memory,
+                    WordLoadSpace::Memory,
                     src.value,
                     size,
                 ));
@@ -151,7 +158,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 docs.extend(self.copy_word_chunks(
                     YulAddressSpace::Storage,
                     dst_addr,
-                    YulAddressSpace::Memory,
+                    WordLoadSpace::Memory,
                     src.value,
                     size,
                 ));
@@ -160,7 +167,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 docs.extend(self.copy_word_chunks(
                     YulAddressSpace::Transient,
                     dst_addr,
-                    YulAddressSpace::Memory,
+                    WordLoadSpace::Memory,
                     src.value,
                     size,
                 ));
@@ -169,7 +176,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 docs.extend(self.copy_word_chunks(
                     YulAddressSpace::Memory,
                     dst_addr,
-                    YulAddressSpace::Storage,
+                    WordLoadSpace::Storage,
                     src.value,
                     size,
                 ));
@@ -178,7 +185,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 docs.extend(self.copy_word_chunks(
                     YulAddressSpace::Storage,
                     dst_addr,
-                    YulAddressSpace::Storage,
+                    WordLoadSpace::Storage,
                     src.value,
                     size,
                 ));
@@ -207,7 +214,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 docs.extend(self.copy_word_chunks(
                     YulAddressSpace::Memory,
                     dst_addr,
-                    YulAddressSpace::Transient,
+                    WordLoadSpace::Transient,
                     src.value,
                     size,
                 ));
@@ -216,7 +223,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 docs.extend(self.copy_word_chunks(
                     YulAddressSpace::Transient,
                     dst_addr,
-                    YulAddressSpace::Transient,
+                    WordLoadSpace::Transient,
                     src.value,
                     size,
                 ));
@@ -290,7 +297,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         docs.extend(self.copy_word_chunks(
             dst_space,
             dst_addr,
-            YulAddressSpace::Memory,
+            WordLoadSpace::Memory,
             scratch,
             size,
         ));
@@ -301,30 +308,36 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
         &self,
         dst_space: YulAddressSpace,
         dst_addr: String,
-        src_space: YulAddressSpace,
+        src_space: WordLoadSpace,
         src_addr: String,
         size: usize,
     ) -> Vec<YulDoc> {
         let mut docs = Vec::new();
-        let words = size.div_ceil(self.index.package_layout().word_size_bytes);
+        let word_size = self.index.package_layout().word_size_bytes;
+        let words = size.div_ceil(word_size);
+        let chunk_addr = |base: &str, offset| {
+            if offset == 0 {
+                base.to_string()
+            } else {
+                format!("add({base}, {offset})")
+            }
+        };
         for idx in 0..words {
-            let offset = idx * self.index.package_layout().word_size_bytes;
-            let dst = if offset == 0 {
-                dst_addr.clone()
-            } else {
-                format!("add({dst_addr}, {offset})")
+            let dst_offset = match dst_space {
+                YulAddressSpace::Memory => idx * word_size,
+                YulAddressSpace::Storage | YulAddressSpace::Transient => idx,
+                YulAddressSpace::Calldata | YulAddressSpace::Code => unreachable!(),
             };
-            let src = if offset == 0 {
-                src_addr.clone()
-            } else {
-                format!("add({src_addr}, {offset})")
+            let src_offset = match src_space {
+                WordLoadSpace::Memory => idx * word_size,
+                WordLoadSpace::Storage | WordLoadSpace::Transient => idx,
             };
+            let dst = chunk_addr(&dst_addr, dst_offset);
+            let src = chunk_addr(&src_addr, src_offset);
             let loaded = match src_space {
-                YulAddressSpace::Memory => format!("mload({src})"),
-                YulAddressSpace::Storage => format!("sload({src})"),
-                YulAddressSpace::Transient => format!("tload({src})"),
-                YulAddressSpace::Calldata => format!("calldataload({src})"),
-                YulAddressSpace::Code => format!("mload({src})"),
+                WordLoadSpace::Memory => format!("mload({src})"),
+                WordLoadSpace::Storage => format!("sload({src})"),
+                WordLoadSpace::Transient => format!("tload({src})"),
             };
             let stored = match dst_space {
                 YulAddressSpace::Memory => format!("mstore({dst}, {loaded})"),
