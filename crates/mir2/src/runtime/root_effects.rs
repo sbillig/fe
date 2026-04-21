@@ -222,7 +222,7 @@ fn unsupported_entry_effect<'db>(
     source: &str,
 ) -> LowerError {
     LowerError::Unsupported(format!(
-        "{} cannot synthesize effect binding `{}` from {source}; only target root providers and contract fields are valid entry effects",
+        "{} cannot synthesize effect binding `{}` from {source}; entry roots have no caller to supply ordinary effect parameters, so move the effectful logic into a helper and call it with a concrete provider using `with (...)`, or use a contract field/provider context",
         context.label(db),
         binding_display_name(db, binding),
     ))

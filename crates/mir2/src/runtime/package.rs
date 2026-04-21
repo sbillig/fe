@@ -1479,7 +1479,7 @@ fn format_root_semantic_instance_rejection<'db>(
             param_idx,
             ..
         } if is_implicit_layout_const_param(db, *offending_ty) => format!(
-            "function `{func_name}` cannot be used as a standalone runtime root because an effect provider type contains an inferred layout const parameter `{}` at generic parameter {param_idx}; use an explicit provider const at the root, e.g. `StorageMap<..., ..., 0>`, or create a concrete provider inside `{func_name}` and call the effect-using function with `with (...)`",
+            "function `{func_name}` cannot be used as a standalone runtime root because an effect provider type contains an inferred layout const parameter `{}` at generic parameter {param_idx}; roots cannot declare wildcard effect providers because there is no caller to supply a concrete provider. Move the effectful logic into a helper and call it from `{func_name}` with a concrete provider using `with (...)`, or use a contract field/provider context",
             offending_ty.pretty_print(db),
         ),
         RootSemanticInstanceError::UnsupportedGenericParam {

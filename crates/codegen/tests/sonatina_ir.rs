@@ -53,8 +53,68 @@ pub fn main() -> u256
     assert!(
         message.contains("standalone runtime root")
             && message.contains("inferred layout const")
-            && message.contains("StorageMap<..., ..., 0>"),
+            && message.contains("no caller to supply a concrete provider")
+            && message.contains("with (...)"),
         "unexpected error message:\n{message}"
+    );
+}
+
+#[test]
+fn explicit_storage_map_root_reports_ordinary_uses_error() {
+    let err = with_top_mod_for_source(
+        "explicit_storage_map_root_reports_ordinary_uses_error.fe",
+        r#"
+use std::evm::StorageMap
+
+pub fn main() -> u256
+    uses (balances: mut StorageMap<u256, u256, 0>)
+{
+    balances.get(key: 1)
+}
+"#,
+        |db, top_mod| {
+            emit_module_sonatina_ir(db, top_mod)
+                .expect_err("ordinary root StorageMap effects should be rejected")
+        },
+    );
+    let message = err.to_string();
+    assert!(
+        message.contains("standalone root `main`")
+            && message.contains("ordinary uses parameter")
+            && message.contains("no caller to supply ordinary effect parameters")
+            && message.contains("with (...)"),
+        "unexpected error message:\n{message}"
+    );
+}
+
+#[test]
+fn wildcard_storage_map_free_function_compiles_with_concrete_provider() {
+    let output = with_top_mod_for_source(
+        "wildcard_storage_map_free_function_compiles_with_concrete_provider.fe",
+        r#"
+use std::evm::StorageMap
+
+fn get_balance(addr: u256) -> u256
+    uses (balances: StorageMap<u256, u256>)
+{
+    balances.get(key: addr)
+}
+
+pub fn main() -> u256 {
+    let mut balances = StorageMap<u256, u256, 0>::new()
+    with (balances) {
+        get_balance(1)
+    }
+}
+"#,
+        |db, top_mod| {
+            emit_module_sonatina_ir(db, top_mod)
+                .expect("wildcard StorageMap helpers should compile from a concrete provider")
+        },
+    );
+    assert!(
+        output.contains("func private %get_balance") && output.contains("object @main"),
+        "concrete-provider StorageMap helper should emit real Sonatina IR:\n{output}"
     );
 }
 
