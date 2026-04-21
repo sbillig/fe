@@ -21,7 +21,7 @@ object "ByRefTraitProviderStorageBug" {
       mstore(0x40, add(t11, 64))
       datacopy(t11, v3, 64)
       sstore(p0, mload(t11))
-      sstore(add(p0, 32), mload(add(t11, 32)))
+      sstore(add(p0, 1), mload(add(t11, 32)))
       leave
     }
     function $__fe_contract_init_abi_ByRefTraitProviderStorageBug() {
