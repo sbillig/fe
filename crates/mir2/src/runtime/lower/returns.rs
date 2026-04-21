@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::{collections::VecDeque, convert::Infallible};
 
-use cranelift_entity::EntityRef;
+use cranelift_entity::{EntityRef, entity_impl};
 use dataflow::{SparseAnalysis, solve_sparse};
 use hir::analysis::semantic::{
     SLocalId, SemanticInstance,
@@ -325,6 +325,10 @@ struct ReturnSliceInferer<'summary, 'cx, 'db> {
     returns: &'cx mut RuntimeReturnAnalysisCx<'db>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct SliceAssignmentNode(u32);
+entity_impl!(SliceAssignmentNode);
+
 impl<'summary, 'cx, 'db> ReturnSliceInferer<'summary, 'cx, 'db> {
     fn new(
         db: &'db dyn MirDb,
@@ -397,6 +401,7 @@ impl<'summary, 'cx, 'db> ReturnSliceInferer<'summary, 'cx, 'db> {
 }
 
 impl<'summary, 'cx, 'db> SparseAnalysis for ReturnSliceInferer<'summary, 'cx, 'db> {
+    type Node = SliceAssignmentNode;
     type State = ();
     type Error = Infallible;
 
@@ -404,12 +409,15 @@ impl<'summary, 'cx, 'db> SparseAnalysis for ReturnSliceInferer<'summary, 'cx, 'd
         self.summary.slice_assignment_ids.len()
     }
 
-    fn seed_nodes(&self) -> Vec<usize> {
-        (0..self.summary.slice_assignment_ids.len()).collect()
+    fn seed_nodes(&self) -> Vec<Self::Node> {
+        (0..self.summary.slice_assignment_ids.len())
+            .map(SliceAssignmentNode::new)
+            .collect()
     }
 
-    fn step(&mut self, slice_idx: usize, _: &mut Self::State) -> Result<bool, Self::Error> {
+    fn step(&mut self, node: Self::Node, _: &mut Self::State) -> Result<bool, Self::Error> {
         self.pending_dependents.clear();
+        let slice_idx = node.index();
         let assign_id = self.summary.slice_assignment_ids[slice_idx];
         let assign =
             self.summary.facts.assignment(assign_id).unwrap_or_else(|| {
@@ -445,8 +453,13 @@ impl<'summary, 'cx, 'db> SparseAnalysis for ReturnSliceInferer<'summary, 'cx, 'd
         Ok(true)
     }
 
-    fn dependents(&self, _node: usize, out: &mut Vec<usize>) {
-        out.extend(self.pending_dependents.iter().copied());
+    fn dependents(&self, _node: Self::Node, out: &mut Vec<Self::Node>) {
+        out.extend(
+            self.pending_dependents
+                .iter()
+                .copied()
+                .map(SliceAssignmentNode::new),
+        );
     }
 }
 

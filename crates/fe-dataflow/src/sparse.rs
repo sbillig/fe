@@ -1,15 +1,18 @@
 use std::convert::Infallible;
 
+use cranelift_entity::EntityRef;
+
 use crate::queue::WorkQueue;
 
 pub trait SparseAnalysis {
+    type Node: EntityRef;
     type State;
     type Error;
 
     fn node_count(&self) -> usize;
-    fn seed_nodes(&self) -> Vec<usize>;
-    fn step(&mut self, node: usize, state: &mut Self::State) -> Result<bool, Self::Error>;
-    fn dependents(&self, node: usize, out: &mut Vec<usize>);
+    fn seed_nodes(&self) -> Vec<Self::Node>;
+    fn step(&mut self, node: Self::Node, state: &mut Self::State) -> Result<bool, Self::Error>;
+    fn dependents(&self, node: Self::Node, out: &mut Vec<Self::Node>);
 }
 
 pub fn try_solve_sparse<A: SparseAnalysis>(
@@ -41,13 +44,20 @@ pub fn solve_sparse<A: SparseAnalysis<Error = Infallible>>(analysis: &mut A, sta
 mod tests {
     use std::convert::Infallible;
 
+    use cranelift_entity::{EntityRef, entity_impl};
+
     use super::{SparseAnalysis, solve_sparse, try_solve_sparse};
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct Node(u32);
+    entity_impl!(Node);
 
     struct ChainAnalysis {
         runs: Vec<usize>,
     }
 
     impl SparseAnalysis for ChainAnalysis {
+        type Node = Node;
         type State = Vec<bool>;
         type Error = Infallible;
 
@@ -55,20 +65,20 @@ mod tests {
             3
         }
 
-        fn seed_nodes(&self) -> Vec<usize> {
-            vec![0]
+        fn seed_nodes(&self) -> Vec<Self::Node> {
+            vec![Node::new(0)]
         }
 
-        fn step(&mut self, node: usize, state: &mut Self::State) -> Result<bool, Self::Error> {
-            self.runs[node] += 1;
-            let changed = !state[node];
-            state[node] = true;
+        fn step(&mut self, node: Self::Node, state: &mut Self::State) -> Result<bool, Self::Error> {
+            self.runs[node.index()] += 1;
+            let changed = !state[node.index()];
+            state[node.index()] = true;
             Ok(changed)
         }
 
-        fn dependents(&self, node: usize, out: &mut Vec<usize>) {
-            if node + 1 < self.node_count() {
-                out.push(node + 1);
+        fn dependents(&self, node: Self::Node, out: &mut Vec<Self::Node>) {
+            if node.index() + 1 < self.node_count() {
+                out.push(Node::new(node.index() + 1));
             }
         }
     }
@@ -89,6 +99,7 @@ mod tests {
     }
 
     impl SparseAnalysis for StableAnalysis {
+        type Node = Node;
         type State = ();
         type Error = Infallible;
 
@@ -96,17 +107,17 @@ mod tests {
             2
         }
 
-        fn seed_nodes(&self) -> Vec<usize> {
-            vec![0]
+        fn seed_nodes(&self) -> Vec<Self::Node> {
+            vec![Node::new(0)]
         }
 
-        fn step(&mut self, node: usize, _: &mut Self::State) -> Result<bool, Self::Error> {
-            self.runs[node] += 1;
+        fn step(&mut self, node: Self::Node, _: &mut Self::State) -> Result<bool, Self::Error> {
+            self.runs[node.index()] += 1;
             Ok(false)
         }
 
-        fn dependents(&self, _node: usize, out: &mut Vec<usize>) {
-            out.push(1);
+        fn dependents(&self, _node: Self::Node, out: &mut Vec<Self::Node>) {
+            out.push(Node::new(1));
         }
     }
 
@@ -126,6 +137,7 @@ mod tests {
     struct FallibleAnalysis;
 
     impl SparseAnalysis for FallibleAnalysis {
+        type Node = Node;
         type State = ();
         type Error = TestError;
 
@@ -133,15 +145,15 @@ mod tests {
             1
         }
 
-        fn seed_nodes(&self) -> Vec<usize> {
-            vec![0]
+        fn seed_nodes(&self) -> Vec<Self::Node> {
+            vec![Node::new(0)]
         }
 
-        fn step(&mut self, _node: usize, _: &mut Self::State) -> Result<bool, Self::Error> {
+        fn step(&mut self, _node: Self::Node, _: &mut Self::State) -> Result<bool, Self::Error> {
             Err(TestError)
         }
 
-        fn dependents(&self, _node: usize, _out: &mut Vec<usize>) {}
+        fn dependents(&self, _node: Self::Node, _out: &mut Vec<Self::Node>) {}
     }
 
     #[test]

@@ -8,3 +8,6 @@ description = "Shared dataflow solver kernels for Fe"
 
 [lib]
 doctest = false
+
+[dependencies]
+cranelift-entity.workspace = true

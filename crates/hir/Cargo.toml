@@ -12,7 +12,7 @@ doctest = false
 [dependencies]
 bitflags = "2.8"
 camino.workspace = true
-cranelift-entity = "0.115"
+cranelift-entity.workspace = true
 derive_more.workspace = true
 dot2 = "1.0"
 either = "1.13"

@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 
-use cranelift_entity::EntityRef;
+use cranelift_entity::{EntityRef, entity_impl};
 use dataflow::{SparseAnalysis, solve_sparse};
 use hir::{
     analysis::{
@@ -54,6 +54,10 @@ pub(super) struct LocalStateInferer<'a, 'returns, 'db> {
     pending_dependents: Vec<usize>,
     returns: &'returns mut RuntimeReturnAnalysisCx<'db>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct AssignmentNode(u32);
+entity_impl!(AssignmentNode);
 
 impl<'a, 'returns, 'db> LocalStateInferer<'a, 'returns, 'db> {
     pub(super) fn new(
@@ -146,6 +150,7 @@ impl<'a, 'returns, 'db> LocalStateInferer<'a, 'returns, 'db> {
 }
 
 impl<'a, 'returns, 'db> SparseAnalysis for LocalStateInferer<'a, 'returns, 'db> {
+    type Node = AssignmentNode;
     type State = ();
     type Error = Infallible;
 
@@ -153,12 +158,15 @@ impl<'a, 'returns, 'db> SparseAnalysis for LocalStateInferer<'a, 'returns, 'db> 
         self.env.assignment_count()
     }
 
-    fn seed_nodes(&self) -> Vec<usize> {
-        (0..self.env.assignment_count()).collect()
+    fn seed_nodes(&self) -> Vec<Self::Node> {
+        (0..self.env.assignment_count())
+            .map(AssignmentNode::new)
+            .collect()
     }
 
-    fn step(&mut self, assign_id: usize, _: &mut Self::State) -> Result<bool, Self::Error> {
+    fn step(&mut self, node: Self::Node, _: &mut Self::State) -> Result<bool, Self::Error> {
         self.pending_dependents.clear();
+        let assign_id = node.index();
         let assign = self
             .env
             .assignment(assign_id)
@@ -193,8 +201,13 @@ impl<'a, 'returns, 'db> SparseAnalysis for LocalStateInferer<'a, 'returns, 'db> 
         Ok(true)
     }
 
-    fn dependents(&self, _node: usize, out: &mut Vec<usize>) {
-        out.extend(self.pending_dependents.iter().copied());
+    fn dependents(&self, _node: Self::Node, out: &mut Vec<Self::Node>) {
+        out.extend(
+            self.pending_dependents
+                .iter()
+                .copied()
+                .map(AssignmentNode::new),
+        );
     }
 }
 
