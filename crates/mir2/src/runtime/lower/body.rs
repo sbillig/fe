@@ -3753,7 +3753,7 @@ impl<'db> RmirEmitter<'db> {
         };
         let mut current = self.project_place_class(&runtime_place);
         let mut projected = Vec::new();
-        for elem in place.path.iter() {
+        for (idx, elem) in place.path.iter().enumerate() {
             match elem {
                 Projection::Deref => {
                     panic!("unexpected deref in normalized runtime place: {place:?}")
@@ -3790,6 +3790,12 @@ impl<'db> RmirEmitter<'db> {
                 Projection::Discriminant => {
                     panic!("discriminant projections are not valid runtime places: {place:?}");
                 }
+            }
+            if idx + 1 < place.path.len()
+                && let Some(target) = current.deref_target()
+            {
+                projected.push(PlaceElem::Deref);
+                current = target;
             }
         }
         runtime_place.path = projected.into_boxed_slice();
@@ -4283,6 +4289,9 @@ impl<'db> RmirEmitter<'db> {
                 PlaceElem::VariantField { variant, field } => {
                     project_variant_field_class(self.db, current, *variant, *field)
                 }
+                PlaceElem::Deref => current
+                    .deref_target()
+                    .unwrap_or_else(|| panic!("invalid runtime place deref class: {current:?}")),
             };
         }
         current

@@ -692,12 +692,7 @@ fn materialized_place_class_from_runtime_source<'db>(
 ) -> Option<RuntimeClass<'db>> {
     match class {
         RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => Some(class.clone()),
-        RuntimeClass::Ref { pointee, .. } => Some((**pointee).clone()),
-        RuntimeClass::RawAddr {
-            target: Some(layout),
-            ..
-        } => Some(RuntimeClass::AggregateValue { layout: *layout }),
-        RuntimeClass::RawAddr { target: None, .. } => None,
+        RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => class.deref_target(),
     }
 }
 

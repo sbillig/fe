@@ -909,18 +909,9 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                     FieldIndex((*field).try_into().expect("field index fits")),
                 ),
                 Projection::Index(_) => project_index_class(self.db, current),
-                Projection::Deref => match current {
-                    RuntimeClass::Ref { pointee, .. } => *pointee,
-                    RuntimeClass::RawAddr {
-                        target: Some(layout),
-                        ..
-                    } => RuntimeClass::AggregateValue { layout },
-                    RuntimeClass::AggregateValue { .. }
-                    | RuntimeClass::Scalar(_)
-                    | RuntimeClass::RawAddr { target: None, .. } => {
-                        panic!("invalid deref projection class")
-                    }
-                },
+                Projection::Deref => current
+                    .deref_target()
+                    .unwrap_or_else(|| panic!("invalid deref projection class")),
                 Projection::VariantField {
                     variant, field_idx, ..
                 } => project_variant_field_place_class(
@@ -1567,18 +1558,9 @@ fn provider_root_place_class<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> RuntimeClass<'db> {
-    match provider_class {
-        RuntimeClass::Ref { pointee, .. } => *pointee.clone(),
-        RuntimeClass::RawAddr {
-            target: Some(layout),
-            ..
-        } => RuntimeClass::AggregateValue { layout: *layout },
-        RuntimeClass::Scalar(_)
-        | RuntimeClass::AggregateValue { .. }
-        | RuntimeClass::RawAddr { target: None, .. } => {
-            stored_class_for_ty_in_context(db, value_ty, scope, assumptions)
-        }
-    }
+    provider_class
+        .deref_target()
+        .unwrap_or_else(|| stored_class_for_ty_in_context(db, value_ty, scope, assumptions))
 }
 
 pub(crate) fn runtime_class_for_provider_binding<'db>(

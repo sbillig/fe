@@ -133,6 +133,16 @@ pub fn resolve_runtime_place<'db>(
                     class: current.clone(),
                 });
             }
+            PlaceElem::Deref => {
+                let carrier_class = current;
+                current = carrier_class
+                    .deref_target()
+                    .ok_or_else(|| VerifyError::InvalidPlace(carrier_class.clone()))?;
+                path.push(ResolvedPlaceElem::Deref {
+                    carrier_class,
+                    class: current.clone(),
+                });
+            }
         }
     }
 
@@ -160,24 +170,9 @@ pub fn resolve_runtime_place_address_class<'db>(
     let resolved = resolve_runtime_place(db, program, body, place)?;
     let (mut root_class, mut root_space, mut force_raw) =
         runtime_place_transport_root(body, place)?;
-    for (idx, elem) in resolved.path.iter().enumerate() {
-        if idx + 1 >= resolved.path.len() {
-            break;
-        }
-        let class = match elem {
-            ResolvedPlaceElem::Field { class, .. }
-            | ResolvedPlaceElem::Index { class, .. }
-            | ResolvedPlaceElem::VariantField { class, .. } => class,
-        };
-        if matches!(
-            class,
-            RuntimeClass::Ref { .. }
-                | RuntimeClass::RawAddr {
-                    target: Some(_),
-                    ..
-                }
-        ) {
-            root_class = class.clone();
+    for elem in resolved.path.iter() {
+        if let ResolvedPlaceElem::Deref { carrier_class, .. } = elem {
+            root_class = carrier_class.clone();
             root_space = root_class.address_space().unwrap_or(root_space);
             force_raw = matches!(root_class, RuntimeClass::RawAddr { .. });
         }

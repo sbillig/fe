@@ -2241,25 +2241,6 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         }
     }
 
-    fn follow_projected_carrier(
-        &mut self,
-        terminal: PlaceTerminal<'db>,
-        carrier_class: &RuntimeClass<'db>,
-    ) -> Result<PlaceTerminal<'db>, LowerError> {
-        if !matches!(
-            carrier_class,
-            RuntimeClass::Ref { .. }
-                | RuntimeClass::RawAddr {
-                    target: Some(_),
-                    ..
-                }
-        ) {
-            return Ok(terminal);
-        }
-        let value = self.load_terminal_value(&terminal, carrier_class)?;
-        self.place_terminal_from_loaded_carrier(value, carrier_class)
-    }
-
     fn resolve_place(
         &mut self,
         place: &RuntimePlace<'db>,
@@ -2306,7 +2287,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             },
         };
 
-        for (idx, elem) in resolved.path.iter().enumerate() {
+        for elem in resolved.path.iter() {
             terminal = match (terminal, elem) {
                 (
                     PlaceTerminal::Object { value, .. },
@@ -2463,6 +2444,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     space,
                     class: class.clone(),
                 },
+                (terminal, ResolvedPlaceElem::Deref { carrier_class, .. }) => {
+                    let value = self.load_terminal_value(&terminal, carrier_class)?;
+                    self.place_terminal_from_loaded_carrier(value, carrier_class)?
+                }
                 (terminal, elem) => {
                     return Err(LowerError::Unsupported(format!(
                         "unsupported place projection terminal `{terminal_kind}` with `{elem:?}`",
@@ -2474,14 +2459,6 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     )));
                 }
             };
-            if idx + 1 < resolved.path.len() {
-                let class = match elem {
-                    ResolvedPlaceElem::Field { class, .. }
-                    | ResolvedPlaceElem::Index { class, .. }
-                    | ResolvedPlaceElem::VariantField { class, .. } => class,
-                };
-                terminal = self.follow_projected_carrier(terminal, class)?;
-            }
         }
         Ok(Lowered::Value(terminal))
     }

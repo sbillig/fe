@@ -486,7 +486,7 @@ fn storage_backed_nested_handle_field_borrows_use_storage_transport() {
                 dst,
                 expr: RExpr::AddrOf { place },
             } if matches!(place.root, PlaceRoot::Ref(_))
-                && matches!(place.path.as_ref(), [PlaceElem::Field(field0), PlaceElem::Field(field1)] if field0.0 == 0 && field1.0 == 0) =>
+                && matches!(place.path.as_ref(), [PlaceElem::Field(field0), PlaceElem::Deref, PlaceElem::Field(field1)] if field0.0 == 0 && field1.0 == 0) =>
             {
                 Some(*dst)
             }

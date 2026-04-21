@@ -234,18 +234,19 @@ pub enum YulPlaceElem<'db> {
     Field {
         field: FieldIndex,
         class: YulValueClass<'db>,
-        runtime_class: RuntimeClass<'db>,
     },
     Index {
         index: IndexSource<YLocalId>,
         class: YulValueClass<'db>,
-        runtime_class: RuntimeClass<'db>,
     },
     VariantField {
         variant: VariantId<'db>,
         field: FieldIndex,
         class: YulValueClass<'db>,
-        runtime_class: RuntimeClass<'db>,
+    },
+    Deref {
+        carrier_class: RuntimeClass<'db>,
+        class: YulValueClass<'db>,
     },
 }
 
@@ -1825,7 +1826,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                     variant: *variant,
                     field: *field,
                 }),
-                PlaceElem::Index(IndexSource::Dynamic(_)) => return None,
+                PlaceElem::Index(IndexSource::Dynamic(_)) | PlaceElem::Deref => return None,
             }
         }
         Some(path.into_boxed_slice())
@@ -1851,6 +1852,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                         field_idx: field.0 as usize,
                     });
                 }
+                YulPlaceElem::Deref { .. } => return None,
             }
         }
         Some(path)
@@ -2875,59 +2877,79 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
         let mut path = Vec::with_capacity(resolved.path.len());
         for (idx, elem) in resolved.path.iter().enumerate() {
             let remaining_path = idx + 1 < resolved.path.len();
-            let projection = match elem {
-                ResolvedPlaceElem::Field { field, .. } => Projection::Field(field.0 as usize),
-                ResolvedPlaceElem::Index { index, .. } => Projection::Index(match index {
-                    IndexSource::Constant(value) => IndexSource::Constant(*value),
-                    IndexSource::Dynamic(value) => IndexSource::Dynamic(YLocalId(value.as_u32())),
-                }),
-                ResolvedPlaceElem::VariantField { variant, field, .. } => {
-                    Projection::VariantField {
-                        variant: *variant,
-                        enum_ty: variant.enum_layout,
-                        field_idx: field.0 as usize,
-                    }
-                }
-            };
-            let projection_path = YTransportPath::from_projection(projection.clone());
-            transport = transport.projected(&projection_path);
-            let class = match elem {
-                ResolvedPlaceElem::Field { field, class } => YulPlaceElem::Field {
-                    field: *field,
-                    class: specialize_yul_class_root(
+            let yul_elem = match elem {
+                ResolvedPlaceElem::Field { field, class } => {
+                    transport = transport.projected(&YTransportPath::from_projection(
+                        Projection::Field(field.0 as usize),
+                    ));
+                    let class = specialize_yul_class_root(
                         YulValueClass::for_place_path(self.db, class, remaining_path),
                         transport.root_alias,
-                    ),
-                    runtime_class: class.clone(),
-                },
-                ResolvedPlaceElem::Index { index, class } => YulPlaceElem::Index {
-                    index: match index {
+                    );
+                    YulPlaceElem::Field {
+                        field: *field,
+                        class,
+                    }
+                }
+                ResolvedPlaceElem::Index { index, class } => {
+                    let index = match index {
                         IndexSource::Constant(value) => IndexSource::Constant(*value),
                         IndexSource::Dynamic(value) => {
                             IndexSource::Dynamic(YLocalId(value.as_u32()))
                         }
-                    },
-                    class: specialize_yul_class_root(
+                    };
+                    transport = transport
+                        .projected(&YTransportPath::from_projection(Projection::Index(index)));
+                    let class = specialize_yul_class_root(
                         YulValueClass::for_place_path(self.db, class, remaining_path),
                         transport.root_alias,
-                    ),
-                    runtime_class: class.clone(),
-                },
+                    );
+                    YulPlaceElem::Index { index, class }
+                }
                 ResolvedPlaceElem::VariantField {
                     variant,
                     field,
                     class,
-                } => YulPlaceElem::VariantField {
-                    variant: *variant,
-                    field: *field,
-                    class: specialize_yul_class_root(
+                } => {
+                    transport = transport.projected(&YTransportPath::from_projection(
+                        Projection::VariantField {
+                            variant: *variant,
+                            enum_ty: variant.enum_layout,
+                            field_idx: field.0 as usize,
+                        },
+                    ));
+                    let class = specialize_yul_class_root(
                         YulValueClass::for_place_path(self.db, class, remaining_path),
                         transport.root_alias,
-                    ),
-                    runtime_class: class.clone(),
-                },
+                    );
+                    YulPlaceElem::VariantField {
+                        variant: *variant,
+                        field: *field,
+                        class,
+                    }
+                }
+                ResolvedPlaceElem::Deref {
+                    carrier_class,
+                    class,
+                } => {
+                    let root_alias =
+                        yul_space_for_deref_carrier(carrier_class).ok_or_else(|| {
+                            YulError::InvalidYulPackage(format!(
+                                "cannot follow non-transport runtime class `{carrier_class:?}`"
+                            ))
+                        })?;
+                    transport = transport.with_replaced_root_alias(Some(root_alias));
+                    let class = specialize_yul_class_root(
+                        YulValueClass::for_place_path(self.db, class, remaining_path),
+                        transport.root_alias,
+                    );
+                    YulPlaceElem::Deref {
+                        carrier_class: carrier_class.clone(),
+                        class,
+                    }
+                }
             };
-            path.push(class);
+            path.push(yul_elem);
         }
         let default_result_class = yul_class_for_runtime_class(self.db, &resolved.result_class);
         let transport = transport.without_default_memory_root(Some(&default_result_class));
@@ -3038,6 +3060,25 @@ fn yul_space_from_runtime(space: AddressSpaceKind) -> YulAddressSpace {
     }
 }
 
+pub(super) fn yul_space_for_deref_carrier(class: &RuntimeClass<'_>) -> Option<YulAddressSpace> {
+    match class {
+        RuntimeClass::Ref {
+            kind: RefKind::Const,
+            ..
+        } => Some(YulAddressSpace::Code),
+        RuntimeClass::Ref {
+            kind: RefKind::Object,
+            ..
+        } => Some(YulAddressSpace::Memory),
+        RuntimeClass::Ref {
+            kind: RefKind::Provider { space, .. },
+            ..
+        }
+        | RuntimeClass::RawAddr { space, .. } => Some(yul_space_from_runtime(*space)),
+        RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => None,
+    }
+}
+
 fn yul_ptr_class<'db>(space: YulAddressSpace, layout: LayoutId<'db>) -> YulValueClass<'db> {
     match space {
         YulAddressSpace::Memory => YulValueClass::MemoryPtr { layout },
@@ -3074,9 +3115,7 @@ fn yul_place_uses_packed_byte_access<'db>(
     space: YulAddressSpace,
     target: TargetDataLayout,
 ) -> bool {
-    if !matches!(space, YulAddressSpace::Memory | YulAddressSpace::Code) {
-        return false;
-    }
+    let mut space = space;
     let mut current_layout = match &resolved.root_kind {
         ResolvedPlaceRootKind::Slot { class, .. }
         | ResolvedPlaceRootKind::Ref { class, .. }
@@ -3087,13 +3126,21 @@ fn yul_place_uses_packed_byte_access<'db>(
         let class = match elem {
             ResolvedPlaceElem::Field { class, .. }
             | ResolvedPlaceElem::Index { class, .. }
-            | ResolvedPlaceElem::VariantField { class, .. } => class,
+            | ResolvedPlaceElem::VariantField { class, .. }
+            | ResolvedPlaceElem::Deref { class, .. } => class,
         };
         if matches!(elem, ResolvedPlaceElem::Index { .. })
             && current_layout.is_some_and(|layout| array_elem_size_bytes(db, layout, target) == 1)
+            && matches!(space, YulAddressSpace::Memory | YulAddressSpace::Code)
             && matches!(class, RuntimeClass::Scalar(_))
         {
             return true;
+        }
+        if let ResolvedPlaceElem::Deref { carrier_class, .. } = elem {
+            let Some(deref_space) = yul_space_for_deref_carrier(carrier_class) else {
+                return false;
+            };
+            space = deref_space;
         }
         current_layout = class.aggregate_layout();
     }

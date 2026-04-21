@@ -89,6 +89,19 @@ impl<'db> RuntimeClass<'db> {
         }
     }
 
+    pub fn deref_target(&self) -> Option<RuntimeClass<'db>> {
+        match self {
+            RuntimeClass::Ref { pointee, .. } => Some((**pointee).clone()),
+            RuntimeClass::RawAddr {
+                target: Some(layout),
+                ..
+            } => Some(RuntimeClass::AggregateValue { layout: *layout }),
+            RuntimeClass::Scalar(_)
+            | RuntimeClass::AggregateValue { .. }
+            | RuntimeClass::RawAddr { target: None, .. } => None,
+        }
+    }
+
     pub fn as_ref_kind(&self) -> Option<&RefKind<'db>> {
         match self {
             RuntimeClass::Ref { kind, .. } => Some(kind),
@@ -984,6 +997,7 @@ pub enum PlaceElem<'db> {
         variant: VariantId<'db>,
         field: FieldIndex,
     },
+    Deref,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -1029,6 +1043,10 @@ pub enum ResolvedPlaceElem<'db> {
     VariantField {
         variant: VariantId<'db>,
         field: FieldIndex,
+        class: RuntimeClass<'db>,
+    },
+    Deref {
+        carrier_class: RuntimeClass<'db>,
         class: RuntimeClass<'db>,
     },
 }
