@@ -73,11 +73,10 @@ use crate::analysis::{
     place::resolve_place_field_index,
     ty::{
         const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
-        layout_holes::callable_input_layout_bindings_by_origin,
         normalize::normalize_ty,
         ty_check::{RecordInitLowering, TyChecker, path::RecordInitChecker},
         ty_def::{InvalidCause, TyId},
-        ty_lower::resolve_callable_input_effect_key,
+        ty_lower::instantiate_callable_effect_layout_args,
     },
 };
 use crate::hir_def::{FieldParent, ItemKind, scope_graph::ScopeId};
@@ -1480,57 +1479,13 @@ impl<'db> TyChecker<'db> {
         effect_idx: usize,
         actual_key_ty: TyId<'db>,
     ) {
-        let assumptions =
-            crate::analysis::ty::trait_resolution::constraint::collect_func_decl_constraints(
-                self.db,
-                callee.into(),
-                true,
-            )
-            .instantiate_identity();
-        let Some(key_path) = callee
-            .effect_params(self.db)
-            .nth(effect_idx)
-            .and_then(|effect| effect.key_path(self.db))
-        else {
-            return;
-        };
-        let crate::analysis::ty::effects::ResolvedEffectKey::Type(expected_key_ty) =
-            resolve_callable_input_effect_key(self.db, callee, effect_idx, key_path, assumptions)
-        else {
-            return;
-        };
-        let bindings = callable_input_layout_bindings_by_origin(self.db, CallableDef::Func(callee));
-        let Some(bindings) = bindings
-            .get(&crate::analysis::ty::const_ty::CallableInputLayoutHoleOrigin::Effect(effect_idx))
-        else {
-            return;
-        };
-        let mut actual_layout_args = Vec::with_capacity(bindings.len());
-        if !collect_layout_args_in_order(
+        instantiate_callable_effect_layout_args(
             self.db,
-            expected_key_ty,
+            callee,
+            effect_idx,
             self.table.fold_ty(self.db, actual_key_ty),
-            &mut actual_layout_args,
-        ) || actual_layout_args.len() != bindings.len()
-        {
-            return;
-        }
-
-        for ((_, implicit_arg), actual_arg) in bindings.iter().zip(actual_layout_args) {
-            let implicit_idx = match implicit_arg.data(self.db) {
-                TyData::TyParam(param) => Some(param.idx),
-                TyData::ConstTy(const_ty) => match const_ty.data(self.db) {
-                    ConstTyData::TyParam(param, _) => Some(param.idx),
-                    _ => None,
-                },
-                _ => None,
-            };
-            if let Some(implicit_idx) = implicit_idx
-                && let Some(slot) = callable.generic_args_mut().get_mut(implicit_idx)
-            {
-                *slot = actual_arg;
-            }
-        }
+            callable.generic_args_mut(),
+        );
     }
 
     fn resolve_effect_query(
@@ -4413,40 +4368,6 @@ where
     }
 
     value.fold_with(db, &mut SlotReifier { slot_bindings })
-}
-
-fn collect_layout_args_in_order<'db>(
-    db: &'db dyn HirAnalysisDb,
-    expected: TyId<'db>,
-    actual: TyId<'db>,
-    out: &mut Vec<TyId<'db>>,
-) -> bool {
-    if matches!(
-        expected.data(db),
-        TyData::ConstTy(const_ty) if matches!(const_ty.data(db), ConstTyData::Hole(..))
-    ) {
-        out.push(actual);
-        return true;
-    }
-
-    let (expected_base, expected_args) = expected.decompose_ty_app(db);
-    let (actual_base, actual_args) = actual.decompose_ty_app(db);
-    if expected_args.len() != actual_args.len() {
-        return false;
-    }
-    if expected_args.is_empty() {
-        return expected == actual;
-    }
-    if expected_base != actual_base {
-        return false;
-    }
-
-    expected_args
-        .iter()
-        .zip(actual_args.iter())
-        .all(|(expected_arg, actual_arg)| {
-            collect_layout_args_in_order(db, *expected_arg, *actual_arg, out)
-        })
 }
 
 fn body_diag_from_method_selection_err<'db>(

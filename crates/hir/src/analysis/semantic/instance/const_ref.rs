@@ -17,6 +17,7 @@ use crate::{
                 BodyOwner, Callable, ConstRef, EffectParamSite, EffectProviderSpecialization,
             },
             ty_def::TyId,
+            ty_lower::instantiate_callable_effect_layout_args,
         },
     },
     core::semantic::EffectEnvView,
@@ -122,14 +123,9 @@ fn resolve_callable_effect_providers<'db>(
             .into_iter()
             .map(|resolution| (resolution.requirement_idx as usize, resolution.provider_idx))
             .collect::<FxHashMap<_, _>>();
-        let provider_ty_by_idx = providers
+        let provider_by_idx = providers
             .iter()
-            .map(|provider| {
-                (
-                    provider.provider.provider_idx,
-                    provider.provider.provider_ty,
-                )
-            })
+            .map(|provider| (provider.provider.provider_idx, provider))
             .collect::<FxHashMap<_, _>>();
         for (effect_idx, param_idx) in place_effect_provider_param_index_map(db, func)
             .iter()
@@ -141,12 +137,24 @@ fn resolve_callable_effect_providers<'db>(
             let Some(provider_idx) = resolution_by_req.get(&effect_idx).copied() else {
                 continue;
             };
-            let Some(provider_ty) = provider_ty_by_idx.get(&provider_idx).copied() else {
+            let Some(provider) = provider_by_idx.get(&provider_idx) else {
                 continue;
             };
             if let Some(slot) = subst_args.get_mut(param_idx) {
-                *slot = provider_ty;
+                *slot = provider.provider.provider_ty;
             }
+            let actual_key_ty = provider
+                .provider
+                .semantics
+                .target_ty
+                .unwrap_or(provider.provider.provider_ty);
+            instantiate_callable_effect_layout_args(
+                db,
+                func,
+                effect_idx,
+                actual_key_ty,
+                subst_args,
+            );
         }
     }
     providers

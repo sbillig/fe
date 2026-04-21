@@ -18,3 +18,11 @@ pub fn main() -> u256
     set_balance(1, 2)
     get_balance(1)
 }
+
+#[test]
+fn foo() {
+    let mut st = StorageMap<u256, u256, 0>::new()
+    with (st) {
+        main()
+    }
+}
