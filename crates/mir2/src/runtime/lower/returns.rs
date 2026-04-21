@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::{collections::VecDeque, convert::Infallible};
 
-use cranelift_entity::{EntityRef, entity_impl};
+use cranelift_entity::{EntityRef, PrimaryMap, SecondaryMap, entity_impl};
 use dataflow::{SparseAnalysis, solve_sparse};
 use hir::analysis::semantic::{
     SLocalId, SemanticInstance,
@@ -17,8 +17,8 @@ use crate::{
 
 use super::{
     classify::{
-        BodyEnv, BodyStaticFacts, InferClassCache, RuntimeVisibleReturnPlan, default_return_class,
-        desired_runtime_return_plan, selected_visible_return_for_local,
+        AssignmentId, BodyEnv, BodyStaticFacts, InferClassCache, RuntimeVisibleReturnPlan,
+        default_return_class, desired_runtime_return_plan, selected_visible_return_for_local,
     },
     infer::{desired_runtime_value_carrier, merge_runtime_carrier, seed_root_provider_carriers},
     interface::runtime_visible_binding_plans,
@@ -33,9 +33,9 @@ pub(crate) struct RuntimeReturnSummary<'db> {
     pub(crate) default_return_class: Option<RuntimeClass<'db>>,
     pub(crate) param_locals: Box<[SLocalId]>,
     pub(crate) return_locals: Box<[SLocalId]>,
-    pub(crate) slice_assignment_ids: Box<[usize]>,
-    pub(crate) slice_assignment_positions: Box<[Option<usize>]>,
-    pub(crate) slice_assignments_by_local: Vec<Vec<usize>>,
+    pub(crate) slice_assignment_ids: PrimaryMap<SliceAssignmentId, AssignmentId>,
+    pub(crate) slice_assignment_positions: SecondaryMap<AssignmentId, Option<SliceAssignmentId>>,
+    pub(crate) slice_assignments_by_local: Vec<Vec<AssignmentId>>,
     pub(crate) slice_dynamic_dependents_by_local: Vec<Vec<SLocalId>>,
 }
 
@@ -91,7 +91,7 @@ impl<'db> RuntimeReturnSummary<'db> {
         }
 
         let mut def_assignments_by_local = vec![Vec::new(); semantic_body.locals.len()];
-        for (assign_id, assignment) in facts.assignments().iter().enumerate() {
+        for (assign_id, assignment) in facts.assignments().iter() {
             def_assignments_by_local[assignment.dst.index()].push(assign_id);
         }
 
@@ -118,16 +118,19 @@ impl<'db> RuntimeReturnSummary<'db> {
 
         let mut slice_assignment_ids = needed_assignments.into_iter().collect::<Vec<_>>();
         slice_assignment_ids.sort_unstable();
-        let mut slice_assignment_positions = vec![None; facts.assignments().len()];
-        for (slice_idx, &assign_id) in slice_assignment_ids.iter().enumerate() {
+        let slice_assignment_ids: PrimaryMap<SliceAssignmentId, AssignmentId> =
+            slice_assignment_ids.into_iter().collect();
+        let mut slice_assignment_positions = SecondaryMap::new();
+        slice_assignment_positions.resize(facts.assignments().len());
+        for (slice_idx, &assign_id) in slice_assignment_ids.iter() {
             slice_assignment_positions[assign_id] = Some(slice_idx);
         }
 
         let mut slice_assignments_by_local = vec![Vec::new(); semantic_body.locals.len()];
-        for &assign_id in &slice_assignment_ids {
+        for (_, &assign_id) in slice_assignment_ids.iter() {
             let assignment = facts
                 .assignment(assign_id)
-                .unwrap_or_else(|| panic!("missing sliced assignment {assign_id}"));
+                .unwrap_or_else(|| panic!("missing sliced assignment {assign_id:?}"));
             for used in assignment.uses().iter().copied() {
                 slice_assignments_by_local[used.index()].push(assign_id);
             }
@@ -148,8 +151,8 @@ impl<'db> RuntimeReturnSummary<'db> {
             default_return_class,
             param_locals,
             return_locals,
-            slice_assignment_ids: slice_assignment_ids.into_boxed_slice(),
-            slice_assignment_positions: slice_assignment_positions.into_boxed_slice(),
+            slice_assignment_ids,
+            slice_assignment_positions,
             slice_assignments_by_local,
             slice_dynamic_dependents_by_local,
         }
@@ -321,13 +324,13 @@ struct ReturnSliceInferer<'summary, 'cx, 'db> {
     summary: &'summary RuntimeReturnSummary<'db>,
     carriers: Vec<RuntimeCarrier<'db>>,
     class_cache: InferClassCache<'db>,
-    pending_dependents: Vec<usize>,
+    pending_dependents: Vec<SliceAssignmentId>,
     returns: &'cx mut RuntimeReturnAnalysisCx<'db>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct SliceAssignmentNode(u32);
-entity_impl!(SliceAssignmentNode);
+pub(crate) struct SliceAssignmentId(u32);
+entity_impl!(SliceAssignmentId);
 
 impl<'summary, 'cx, 'db> ReturnSliceInferer<'summary, 'cx, 'db> {
     fn new(
@@ -374,7 +377,8 @@ impl<'summary, 'cx, 'db> ReturnSliceInferer<'summary, 'cx, 'db> {
     fn collect_local_change_dependents(&mut self, changed_local: SLocalId) {
         let mut pending = vec![changed_local];
         let mut seen = vec![false; self.summary.semantic_body.locals.len()];
-        let mut queued = vec![false; self.summary.slice_assignment_ids.len()];
+        let mut queued = SecondaryMap::with_default(false);
+        queued.resize(self.summary.slice_assignment_ids.len());
         self.pending_dependents.clear();
         while let Some(local) = pending.pop() {
             if std::mem::replace(&mut seen[local.index()], true) {
@@ -382,12 +386,12 @@ impl<'summary, 'cx, 'db> ReturnSliceInferer<'summary, 'cx, 'db> {
             }
             self.class_cache.invalidate_local_dynamic_facts(local);
             for &assign_id in &self.summary.slice_assignments_by_local[local.index()] {
-                let Some(slice_idx) = self.summary.slice_assignment_positions[assign_id] else {
+                let Some(slice_id) = self.summary.slice_assignment_positions[assign_id] else {
                     continue;
                 };
-                if !queued[slice_idx] {
-                    queued[slice_idx] = true;
-                    self.pending_dependents.push(slice_idx);
+                if !queued[slice_id] {
+                    queued[slice_id] = true;
+                    self.pending_dependents.push(slice_id);
                 }
             }
             for dependent in self.summary.slice_dynamic_dependents_by_local[local.index()]
@@ -401,7 +405,7 @@ impl<'summary, 'cx, 'db> ReturnSliceInferer<'summary, 'cx, 'db> {
 }
 
 impl<'summary, 'cx, 'db> SparseAnalysis for ReturnSliceInferer<'summary, 'cx, 'db> {
-    type Node = SliceAssignmentNode;
+    type Node = SliceAssignmentId;
     type State = ();
     type Error = Infallible;
 
@@ -410,19 +414,15 @@ impl<'summary, 'cx, 'db> SparseAnalysis for ReturnSliceInferer<'summary, 'cx, 'd
     }
 
     fn seed_nodes(&self) -> Vec<Self::Node> {
-        (0..self.summary.slice_assignment_ids.len())
-            .map(SliceAssignmentNode::new)
-            .collect()
+        self.summary.slice_assignment_ids.keys().collect()
     }
 
     fn step(&mut self, node: Self::Node, _: &mut Self::State) -> Result<bool, Self::Error> {
         self.pending_dependents.clear();
-        let slice_idx = node.index();
-        let assign_id = self.summary.slice_assignment_ids[slice_idx];
-        let assign =
-            self.summary.facts.assignment(assign_id).unwrap_or_else(|| {
-                panic!("missing sliced assignment facts for statement {assign_id}")
-            });
+        let assign_id = self.summary.slice_assignment_ids[node];
+        let assign = self.summary.facts.assignment(assign_id).unwrap_or_else(|| {
+            panic!("missing sliced assignment facts for statement {assign_id:?}")
+        });
         let local = &self.summary.semantic_body.locals[assign.dst.index()];
         let stmt = &self.summary.semantic_body.blocks[assign.block_idx].stmts[assign.stmt_idx];
         let expr = match &stmt.kind {
@@ -454,12 +454,7 @@ impl<'summary, 'cx, 'db> SparseAnalysis for ReturnSliceInferer<'summary, 'cx, 'd
     }
 
     fn dependents(&self, _node: Self::Node, out: &mut Vec<Self::Node>) {
-        out.extend(
-            self.pending_dependents
-                .iter()
-                .copied()
-                .map(SliceAssignmentNode::new),
-        );
+        out.extend(self.pending_dependents.iter().copied());
     }
 }
 
@@ -586,13 +581,12 @@ fn choose(_ flag: bool) -> u256 {
             .facts
             .assignments()
             .iter()
-            .enumerate()
             .filter(|(_, assignment)| assignment.dst == return_local)
             .count();
         let sliced_return_defs = summary
             .slice_assignment_ids
             .iter()
-            .filter(|&&assign_id| {
+            .filter(|&(_, &assign_id)| {
                 summary
                     .facts
                     .assignment(assign_id)

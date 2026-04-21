@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use common::indexmap::IndexSet;
-use cranelift_entity::EntityRef;
+use cranelift_entity::{EntityRef, PrimaryMap, entity_impl};
 use hir::analysis::{
     semantic::{
         FieldIndex, GenericSubst, ImplEnv, NEffectArg, NEffectArgValue, ReadMode, SConst, SLocalId,
@@ -73,12 +73,16 @@ use super::{
 #[derive(Clone)]
 pub(crate) struct BodyStaticFacts<'db> {
     local_facts: Vec<LocalStaticFacts<'db>>,
-    assignments: Vec<AssignStaticFacts<'db>>,
-    stmt_assignments: Vec<Vec<Option<usize>>>,
-    assignments_by_local: Vec<Vec<usize>>,
+    assignments: PrimaryMap<AssignmentId, AssignStaticFacts<'db>>,
+    stmt_assignments: Vec<Vec<Option<AssignmentId>>>,
+    assignments_by_local: Vec<Vec<AssignmentId>>,
     dynamic_dependents_by_local: Vec<Vec<SLocalId>>,
     root_provider_locals: FxHashMap<ProviderBinding<'db>, SLocalId>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) struct AssignmentId(u32);
+entity_impl!(AssignmentId);
 
 #[derive(Clone)]
 pub(super) struct AssignStaticFacts<'db> {
@@ -530,7 +534,7 @@ impl<'db> BodyStaticFacts<'db> {
                 build_local_static_facts(db, type_env, local, local_data, body)
             })
             .collect();
-        let mut assignments = Vec::new();
+        let mut assignments = PrimaryMap::new();
         let stmt_assignments = body
             .blocks
             .iter()
@@ -566,15 +570,14 @@ impl<'db> BodyStaticFacts<'db> {
                             uses: expr_used_locals(body, expr),
                             expr: expr_facts,
                         };
-                        let assign_id = assignments.len();
-                        assignments.push(assignment);
+                        let assign_id = assignments.push(assignment);
                         Some(assign_id)
                     })
                     .collect()
             })
             .collect();
         let mut assignments_by_local = vec![Vec::new(); body.locals.len()];
-        for (assign_id, assignment) in assignments.iter().enumerate() {
+        for (assign_id, assignment) in assignments.iter() {
             for local in assignment.uses.iter().copied() {
                 assignments_by_local[local.index()].push(assign_id);
             }
@@ -610,11 +613,11 @@ impl<'db> BodyStaticFacts<'db> {
         self.assignments.get(*assign_id)?.expr.as_ref()
     }
 
-    pub(super) fn assignment(&self, assign_id: usize) -> Option<&AssignStaticFacts<'db>> {
+    pub(super) fn assignment(&self, assign_id: AssignmentId) -> Option<&AssignStaticFacts<'db>> {
         self.assignments.get(assign_id)
     }
 
-    pub(super) fn assignments(&self) -> &[AssignStaticFacts<'db>] {
+    pub(super) fn assignments(&self) -> &PrimaryMap<AssignmentId, AssignStaticFacts<'db>> {
         &self.assignments
     }
 
@@ -629,7 +632,7 @@ impl<'db> BodyStaticFacts<'db> {
             .is_some_and(|facts| facts.boundary_source_transport_sensitive)
     }
 
-    fn assignments_using_local(&self, local: SLocalId) -> &[usize] {
+    fn assignments_using_local(&self, local: SLocalId) -> &[AssignmentId] {
         self.assignments_by_local
             .get(local.index())
             .map(Vec::as_slice)
@@ -716,7 +719,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         self.facts.expr(block_idx, stmt_idx)
     }
 
-    pub(super) fn assignment(self, assign_id: usize) -> Option<&'a AssignStaticFacts<'db>> {
+    pub(super) fn assignment(self, assign_id: AssignmentId) -> Option<&'a AssignStaticFacts<'db>> {
         self.facts.assignment(assign_id)
     }
 
@@ -724,7 +727,11 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         self.facts.assignments.len()
     }
 
-    pub(super) fn assignments_using_local(self, local: SLocalId) -> &'a [usize] {
+    pub(super) fn assignment_ids(self) -> Vec<AssignmentId> {
+        self.facts.assignments.keys().collect()
+    }
+
+    pub(super) fn assignments_using_local(self, local: SLocalId) -> &'a [AssignmentId] {
         self.facts.assignments_using_local(local)
     }
 

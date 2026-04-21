@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 
-use cranelift_entity::{EntityRef, entity_impl};
+use cranelift_entity::{EntityRef, SecondaryMap};
 use dataflow::{SparseAnalysis, solve_sparse};
 use hir::{
     analysis::{
@@ -27,7 +27,7 @@ use crate::{
 
 use super::{
     classify::{
-        BodyEnv, BodyStaticFacts, InferClassCache, RuntimeBodyCx,
+        AssignmentId, BodyEnv, BodyStaticFacts, InferClassCache, RuntimeBodyCx,
         actual_aggregate_class_from_runtime_source, carrier_value_class,
         runtime_class_for_direct_value_provider_in_context,
         runtime_class_for_effect_binding_provider_in_context, runtime_class_for_provider_binding,
@@ -51,13 +51,9 @@ pub(super) struct LocalStateInferer<'a, 'returns, 'db> {
     env: BodyEnv<'a, 'db>,
     carriers: Vec<RuntimeCarrier<'db>>,
     class_cache: InferClassCache<'db>,
-    pending_dependents: Vec<usize>,
+    pending_dependents: Vec<AssignmentId>,
     returns: &'returns mut RuntimeReturnAnalysisCx<'db>,
 }
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct AssignmentNode(u32);
-entity_impl!(AssignmentNode);
 
 impl<'a, 'returns, 'db> LocalStateInferer<'a, 'returns, 'db> {
     pub(super) fn new(
@@ -111,7 +107,8 @@ impl<'a, 'returns, 'db> LocalStateInferer<'a, 'returns, 'db> {
     fn collect_local_change_dependents(&mut self, changed_local: SLocalId) {
         let mut pending = vec![changed_local];
         let mut seen = vec![false; self.env.body().locals.len()];
-        let mut queued = vec![false; self.env.assignment_count()];
+        let mut queued = SecondaryMap::with_default(false);
+        queued.resize(self.env.assignment_count());
         self.pending_dependents.clear();
         while let Some(local) = pending.pop() {
             if std::mem::replace(&mut seen[local.index()], true) {
@@ -150,7 +147,7 @@ impl<'a, 'returns, 'db> LocalStateInferer<'a, 'returns, 'db> {
 }
 
 impl<'a, 'returns, 'db> SparseAnalysis for LocalStateInferer<'a, 'returns, 'db> {
-    type Node = AssignmentNode;
+    type Node = AssignmentId;
     type State = ();
     type Error = Infallible;
 
@@ -159,18 +156,16 @@ impl<'a, 'returns, 'db> SparseAnalysis for LocalStateInferer<'a, 'returns, 'db> 
     }
 
     fn seed_nodes(&self) -> Vec<Self::Node> {
-        (0..self.env.assignment_count())
-            .map(AssignmentNode::new)
-            .collect()
+        self.env.assignment_ids()
     }
 
     fn step(&mut self, node: Self::Node, _: &mut Self::State) -> Result<bool, Self::Error> {
         self.pending_dependents.clear();
-        let assign_id = node.index();
+        let assign_id = node;
         let assign = self
             .env
             .assignment(assign_id)
-            .unwrap_or_else(|| panic!("missing assignment facts for statement {assign_id}"));
+            .unwrap_or_else(|| panic!("missing assignment facts for statement {assign_id:?}"));
         let stmt = &self.env.body().blocks[assign.block_idx].stmts[assign.stmt_idx];
         let expr = match &stmt.kind {
             hir::analysis::semantic::NSStmtKind::Assign { expr, .. } => expr,
@@ -202,12 +197,7 @@ impl<'a, 'returns, 'db> SparseAnalysis for LocalStateInferer<'a, 'returns, 'db> 
     }
 
     fn dependents(&self, _node: Self::Node, out: &mut Vec<Self::Node>) {
-        out.extend(
-            self.pending_dependents
-                .iter()
-                .copied()
-                .map(AssignmentNode::new),
-        );
+        out.extend(self.pending_dependents.iter().copied());
     }
 }
 
