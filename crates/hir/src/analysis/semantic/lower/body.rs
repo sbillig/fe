@@ -455,23 +455,7 @@ impl<'db> SmirLowerCtxt<'db> {
             Expr::Assign(dst, src) => {
                 let src = self.lower_expr(*src);
                 let dst_place = self.lower_place(*dst);
-                if dst_place.path.is_empty() && !self.place_needs_indirect_store(&dst_place) {
-                    self.push_stmt(
-                        origin,
-                        SStmtKind::Assign {
-                            dst: dst_place.local,
-                            expr: SExpr::UseValue(src),
-                        },
-                    );
-                } else {
-                    self.push_stmt(
-                        origin,
-                        SStmtKind::Store {
-                            dst: dst_place,
-                            src,
-                        },
-                    );
-                }
+                self.push_place_write(origin, dst_place, src);
                 self.unit_value()
             }
             Expr::AugAssign(dst, src, op) => {
@@ -491,23 +475,7 @@ impl<'db> SmirLowerCtxt<'db> {
                     },
                 );
                 let dst_place = self.lower_place(*dst);
-                if dst_place.path.is_empty() && !self.place_needs_indirect_store(&dst_place) {
-                    self.push_stmt(
-                        origin,
-                        SStmtKind::Assign {
-                            dst: dst_place.local,
-                            expr: SExpr::UseValue(sum),
-                        },
-                    );
-                } else {
-                    self.push_stmt(
-                        origin,
-                        SStmtKind::Store {
-                            dst: dst_place,
-                            src: sum,
-                        },
-                    );
-                }
+                self.push_place_write(origin, dst_place, sum);
                 self.unit_value()
             }
             Expr::Block(stmts) => self.lower_block_expr(stmts),
@@ -1326,5 +1294,21 @@ impl<'db> SmirLowerCtxt<'db> {
         semantic_binding_ty(self.db, self.instance, binding)
             .as_capability(self.db)
             .is_some()
+    }
+
+    fn place_can_assign_directly(&self, place: &SPlace) -> bool {
+        place.path.is_empty() && !self.place_needs_indirect_store(place)
+    }
+
+    fn push_place_write(&mut self, origin: SemOrigin<'db>, dst: SPlace, src: SValueId) {
+        let kind = if self.place_can_assign_directly(&dst) {
+            SStmtKind::Assign {
+                dst: dst.local,
+                expr: SExpr::UseValue(src),
+            }
+        } else {
+            SStmtKind::Store { dst, src }
+        };
+        self.push_stmt(origin, kind);
     }
 }
