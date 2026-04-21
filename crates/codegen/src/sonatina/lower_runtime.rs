@@ -677,6 +677,11 @@ enum PlaceTerminal<'db> {
     },
 }
 
+enum Lowered<T> {
+    Value(T),
+    Terminated,
+}
+
 #[derive(Clone)]
 enum CopySource<'db> {
     Value {
@@ -792,18 +797,29 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             }
             self.fb
                 .switch_to_block(self.block_id(RBlockId::from_u32(idx as u32))?);
+            let mut terminated = false;
             for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
-                self.lower_stmt(stmt).map_err(|err| {
-                    self.with_body_context(
-                        format!(
-                            "while lowering `{}` at bb{idx}[{stmt_idx}]",
-                            self.module.function_symbol(self.body.owner)
-                        ),
-                        Some(RBlockId::from_u32(idx as u32)),
-                        Some(stmt_idx),
-                    )
-                    .wrap(err)
-                })?;
+                if matches!(
+                    self.lower_stmt(stmt).map_err(|err| {
+                        self.with_body_context(
+                            format!(
+                                "while lowering `{}` at bb{idx}[{stmt_idx}]",
+                                self.module.function_symbol(self.body.owner)
+                            ),
+                            Some(RBlockId::from_u32(idx as u32)),
+                            Some(stmt_idx),
+                        )
+                        .wrap(err)
+                    })?,
+                    Lowered::Terminated
+                ) {
+                    self.pending_enum_proof = None;
+                    terminated = true;
+                    break;
+                }
+            }
+            if terminated {
+                continue;
             }
             self.pending_enum_proof = None;
             self.lower_terminator(&block.terminator).map_err(|err| {
@@ -908,10 +924,13 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             .ok_or_else(|| LowerError::Internal(format!("missing arg value {idx}")))
     }
 
-    fn lower_stmt(&mut self, stmt: &RStmt<'db>) -> Result<(), LowerError> {
+    fn lower_stmt(&mut self, stmt: &RStmt<'db>) -> Result<Lowered<()>, LowerError> {
         match stmt {
             RStmt::Assign { dst, expr } => {
-                let value = self.lower_expr(expr, Some(*dst))?;
+                let Lowered::Value(value) = self.lower_expr(expr, Some(*dst))? else {
+                    self.pending_enum_proof = None;
+                    return Ok(Lowered::Terminated);
+                };
                 self.assign_local(*dst, value)?;
                 self.pending_enum_proof = None;
             }
@@ -930,11 +949,17 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             }
             RStmt::Store { dst, src } => {
                 let src = self.local_value(*src)?;
-                self.store_to_place(dst, src)?;
+                if matches!(self.store_to_place(dst, src)?, Lowered::Terminated) {
+                    self.pending_enum_proof = None;
+                    return Ok(Lowered::Terminated);
+                }
                 self.pending_enum_proof = None;
             }
             RStmt::CopyInto { dst, src } => {
-                self.copy_into_place(dst, *src)?;
+                if matches!(self.copy_into_place(dst, *src)?, Lowered::Terminated) {
+                    self.pending_enum_proof = None;
+                    return Ok(Lowered::Terminated);
+                }
                 self.pending_enum_proof = None;
             }
             RStmt::EnumSetTag { root, variant } => {
@@ -965,15 +990,15 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 self.pending_enum_proof = None;
             }
         }
-        Ok(())
+        Ok(Lowered::Value(()))
     }
 
     fn lower_expr(
         &mut self,
         expr: &RExpr<'db>,
         dst: Option<RLocalId>,
-    ) -> Result<ValueId, LowerError> {
-        Ok(match expr {
+    ) -> Result<Lowered<ValueId>, LowerError> {
+        let value = match expr {
             RExpr::Use(value) => self.local_value(*value)?,
             RExpr::ConstScalar(value) => self.fb.make_imm_value(
                 self.module
@@ -1061,7 +1086,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 object
             }
             RExpr::MaterializePlaceToObject { place } => {
-                self.materialize_place_to_object(place, dst)?
+                return self.materialize_place_to_object(place, dst);
             }
             RExpr::ProviderFromRaw { raw, space, .. } => {
                 let value = self.local_value(*raw)?;
@@ -1076,11 +1101,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             RExpr::WordToRawAddr { value, .. } => self.local_value(*value)?,
             RExpr::ProviderToRaw { value } => self.local_value(*value)?,
             RExpr::RetagRef { value } => self.local_value(*value)?,
-            RExpr::AddrOf { place } => self.addr_of_place(place, dst)?,
-            RExpr::Load { place } => self.load_from_place(place)?,
+            RExpr::AddrOf { place } => return self.addr_of_place(place, dst),
+            RExpr::Load { place } => return self.load_from_place(place),
             RExpr::Call { callee, args } => {
                 if let Some(value) = self.lower_intrinsic_call(*callee, args, dst)? {
-                    return Ok(value);
+                    return Ok(Lowered::Value(value));
                 }
                 let callee_ref = self.module.func_ref(*callee)?;
                 let args = args
@@ -1188,7 +1213,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     ty,
                 )
             }
-        })
+        };
+        Ok(Lowered::Value(value))
     }
 
     fn lower_builtin(&mut self, builtin: &RuntimeBuiltin<'db>) -> Result<ValueId, LowerError> {
@@ -2237,7 +2263,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
     fn resolve_place(
         &mut self,
         place: &RuntimePlace<'db>,
-    ) -> Result<PlaceTerminal<'db>, LowerError> {
+    ) -> Result<Lowered<PlaceTerminal<'db>>, LowerError> {
         let program = self.module.db as &dyn mir2::MirDb;
         let resolved = resolve_runtime_place(self.module.db, &program, &self.body, place)
             .map_err(|err| LowerError::Internal(format!("invalid runtime place: {err:?}")))?;
@@ -2302,7 +2328,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     },
                     ResolvedPlaceElem::Index { index, class },
                 ) => {
-                    let index = self.checked_index_value(&base_class, index)?;
+                    let Lowered::Value(index) = self.checked_index_value(&base_class, index)?
+                    else {
+                        return Ok(Lowered::Terminated);
+                    };
                     PlaceTerminal::Object {
                         value: self.fb.insert_inst(
                             ObjIndex::new(self.module.inst_set(), value, index),
@@ -2350,7 +2379,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     },
                     ResolvedPlaceElem::Index { index, class },
                 ) => {
-                    let index = self.checked_index_value(&base_class, index)?;
+                    let Lowered::Value(index) = self.checked_index_value(&base_class, index)?
+                    else {
+                        return Ok(Lowered::Terminated);
+                    };
                     PlaceTerminal::Const {
                         value: self.fb.insert_inst(
                             ConstIndex::new(self.module.inst_set(), value, index),
@@ -2391,7 +2423,9 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                         .ok_or_else(|| {
                             LowerError::Internal("index projection on non-array class".to_string())
                         })?;
-                    let idx = self.checked_index_value(&base_class, index)?;
+                    let Lowered::Value(idx) = self.checked_index_value(&base_class, index)? else {
+                        return Ok(Lowered::Terminated);
+                    };
                     let scale = self.scale_for_space(space, span);
                     let scaled = if scale == 1 {
                         idx
@@ -2449,32 +2483,38 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 terminal = self.follow_projected_carrier(terminal, class)?;
             }
         }
-        Ok(terminal)
+        Ok(Lowered::Value(terminal))
     }
 
-    fn load_from_place(&mut self, place: &RuntimePlace<'db>) -> Result<ValueId, LowerError> {
+    fn load_from_place(
+        &mut self,
+        place: &RuntimePlace<'db>,
+    ) -> Result<Lowered<ValueId>, LowerError> {
         let program = self.module.db as &dyn mir2::MirDb;
         let class = resolve_runtime_place(self.module.db, &program, &self.body, place)
             .map_err(|err| LowerError::Internal(format!("invalid runtime place: {err:?}")))?
             .result_class;
-        match self.resolve_place(place)? {
-            PlaceTerminal::Object { value, .. } => Ok(self.fb.insert_inst(
+        let Lowered::Value(terminal) = self.resolve_place(place)? else {
+            return Ok(Lowered::Terminated);
+        };
+        Ok(Lowered::Value(match terminal {
+            PlaceTerminal::Object { value, .. } => self.fb.insert_inst(
                 ObjLoad::new(self.module.inst_set(), value),
                 self.module.ty_for_class(&class)?,
-            )),
-            PlaceTerminal::Const { value, .. } => Ok(self.fb.insert_inst(
+            ),
+            PlaceTerminal::Const { value, .. } => self.fb.insert_inst(
                 ConstLoad::new(self.module.inst_set(), value),
                 self.module.ty_for_class(&class)?,
-            )),
-            PlaceTerminal::Ptr { addr, space, class } => self.load_from_ptr(addr, space, &class),
-        }
+            ),
+            PlaceTerminal::Ptr { addr, space, class } => self.load_from_ptr(addr, space, &class)?,
+        }))
     }
 
     fn materialize_place_to_object(
         &mut self,
         place: &RuntimePlace<'db>,
         dst: Option<RLocalId>,
-    ) -> Result<ValueId, LowerError> {
+    ) -> Result<Lowered<ValueId>, LowerError> {
         let dst_local = dst.ok_or_else(|| {
             LowerError::Internal("materialize-place-to-object missing destination".to_string())
         })?;
@@ -2503,10 +2543,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             ObjAlloc::new(self.module.inst_set(), layout_ty),
             self.fb.module_builder.objref_type(layout_ty),
         );
-        let terminal = self.resolve_place(place)?;
+        let Lowered::Value(terminal) = self.resolve_place(place)? else {
+            return Ok(Lowered::Terminated);
+        };
         let source = self.copy_source_for_terminal(terminal);
         self.copy_source_into_object(source, &RuntimeClass::AggregateValue { layout }, object)?;
-        Ok(object)
+        Ok(Lowered::Value(object))
     }
 
     fn copy_source_for_local(
@@ -2959,9 +3001,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         &mut self,
         place: &RuntimePlace<'db>,
         dst: Option<RLocalId>,
-    ) -> Result<ValueId, LowerError> {
-        match self.resolve_place(place)? {
-            PlaceTerminal::Object { value, .. } => Ok(value),
+    ) -> Result<Lowered<ValueId>, LowerError> {
+        let Lowered::Value(terminal) = self.resolve_place(place)? else {
+            return Ok(Lowered::Terminated);
+        };
+        match terminal {
+            PlaceTerminal::Object { value, .. } => Ok(Lowered::Value(value)),
             PlaceTerminal::Const { .. } => Err(LowerError::Unsupported(
                 "borrowing const-backed places is not supported".to_string(),
             )),
@@ -2986,7 +3031,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                             .to_string(),
                     ));
                 }
-                Ok(addr)
+                Ok(Lowered::Value(addr))
             }
         }
     }
@@ -2995,10 +3040,14 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         &mut self,
         place: &RuntimePlace<'db>,
         src: ValueId,
-    ) -> Result<(), LowerError> {
-        match self.resolve_place(place)? {
+    ) -> Result<Lowered<()>, LowerError> {
+        let Lowered::Value(terminal) = self.resolve_place(place)? else {
+            return Ok(Lowered::Terminated);
+        };
+        match terminal {
             PlaceTerminal::Ptr { addr, space, class } => {
-                self.store_to_ptr(addr, space, &class, src)
+                self.store_to_ptr(addr, space, &class, src)?;
+                Ok(Lowered::Value(()))
             }
             PlaceTerminal::Object { value, class } => {
                 if !matches!(
@@ -3013,7 +3062,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 }
                 self.fb
                     .insert_inst_no_result(ObjStore::new(self.module.inst_set(), value, src));
-                Ok(())
+                Ok(Lowered::Value(()))
             }
             PlaceTerminal::Const { .. } => Err(LowerError::Unsupported(
                 "cannot store into const-backed places".to_string(),
@@ -3025,23 +3074,27 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         &mut self,
         place: &RuntimePlace<'db>,
         src: RLocalId,
-    ) -> Result<(), LowerError> {
+    ) -> Result<Lowered<()>, LowerError> {
         let src_value = self.local_value(src)?;
         let program = self.module.db as &dyn mir2::MirDb;
         let dst_class = resolve_runtime_place(self.module.db, &program, &self.body, place)
             .map_err(|err| LowerError::Internal(format!("invalid runtime place: {err:?}")))?
             .result_class;
-        match self.resolve_place(place)? {
+        let Lowered::Value(terminal) = self.resolve_place(place)? else {
+            return Ok(Lowered::Terminated);
+        };
+        match terminal {
             PlaceTerminal::Object { value, .. } => {
                 let source = self.copy_source_for_local(src, src_value)?;
                 self.copy_source_into_object(source, &dst_class, value)?;
-                Ok(())
+                Ok(Lowered::Value(()))
             }
             PlaceTerminal::Const { .. } => Err(LowerError::Unsupported(
                 "cannot copy into const-backed places".to_string(),
             )),
             PlaceTerminal::Ptr { addr, space, .. } => {
-                self.copy_to_ptr(addr, space, &dst_class, src_value)
+                self.copy_to_ptr(addr, space, &dst_class, src_value)?;
+                Ok(Lowered::Value(()))
             }
         }
     }
@@ -3943,11 +3996,18 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         Ok(())
     }
 
+    fn emit_unconditional_overflow_revert<T>(&mut self) -> Lowered<T> {
+        let revert_block = self.ensure_overflow_revert_block();
+        self.fb
+            .insert_inst_no_result(Jump::new(self.module.inst_set(), revert_block));
+        Lowered::Terminated
+    }
+
     fn checked_index_value(
         &mut self,
         base_class: &RuntimeClass<'db>,
         index: &IndexSource<RLocalId>,
-    ) -> Result<ValueId, LowerError> {
+    ) -> Result<Lowered<ValueId>, LowerError> {
         let len = base_class.array_len(self.module.db).ok_or_else(|| {
             LowerError::Internal("index projection on non-array class".to_string())
         })?;
@@ -3968,7 +4028,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     .fb
                     .insert_inst(IsZero::new(self.module.inst_set(), in_bounds), Type::I1);
                 self.emit_overflow_revert(out_of_bounds)?;
-                Ok(index)
+                Ok(Lowered::Value(index))
             }
         }
     }
@@ -3977,17 +4037,13 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         &mut self,
         len: u64,
         index: Option<u64>,
-    ) -> Result<ValueId, LowerError> {
-        let checked_index = if let Some(index) = index
+    ) -> Result<Lowered<ValueId>, LowerError> {
+        if let Some(index) = index
             && index < len
         {
-            index
-        } else {
-            let out_of_bounds = self.fb.make_imm_value(true);
-            self.emit_overflow_revert(out_of_bounds)?;
-            0
-        };
-        Ok(self.index_value(checked_index))
+            return Ok(Lowered::Value(self.index_value(index)));
+        }
+        Ok(self.emit_unconditional_overflow_revert())
     }
 
     fn variant_ref(&self, variant: VariantId<'db>) -> Result<EnumVariantRef, LowerError> {

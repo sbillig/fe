@@ -1,0 +1,13 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/fe_test_runner/constant_array_oob_reverts.fe
+---
+=== STDOUT ===
+PASS  [<time>] test_const_oob_read_reverts
+PASS  [<time>] test_const_oob_write_reverts
+PASS  [<time>] test_const_oob_dead_read_reverts
+
+test result: ok. 3 passed; 0 failed
+
+=== EXIT CODE: 0 ===

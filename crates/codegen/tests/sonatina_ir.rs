@@ -95,6 +95,36 @@ fn raw_log_emit_sonatina_ir_lowers_mem_ptr_from_raw() {
     );
 }
 
+#[test]
+fn constant_oob_index_terminates_without_continuation_projection() {
+    let output = with_top_mod_for_source(
+        "constant_oob_index_terminates_without_continuation_projection.fe",
+        r#"
+fn main() -> u256 {
+    let arr: [u256; 2] = [10, 20]
+    return arr[2]
+}
+"#,
+        |db, top_mod| {
+            emit_module_sonatina_ir(db, top_mod)
+                .expect("constant out-of-bounds array access should lower to a revert")
+        },
+    );
+
+    assert!(
+        output.contains("evm_revert 0.i256 0.i256"),
+        "constant out-of-bounds array access should lower to a revert:\n{output}"
+    );
+    assert!(
+        !output.contains("br 1.i1"),
+        "constant out-of-bounds array access should not emit a conditional true branch plus continuation:\n{output}"
+    );
+    assert!(
+        !output.contains("obj_index") && !output.contains("const_index"),
+        "constant out-of-bounds array access should not continue into index projection IR:\n{output}"
+    );
+}
+
 // NOTE: `dir_test` discovers fixtures at compile time; new fixture files will be picked up on a
 // clean build (e.g. CI) or whenever this test target is recompiled.
 //
