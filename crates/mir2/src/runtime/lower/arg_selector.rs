@@ -120,29 +120,16 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
             .env
             .specialize_boundary_for_source(self.carriers, local, boundary);
         match &boundary {
-            RuntimeBoundarySpec::ExactTransport(target) => SelectedRuntimeArg {
-                class: target.clone(),
-                realization: RuntimeArgRealization::LowerSemanticOperand(arg),
-            },
+            RuntimeBoundarySpec::ExactTransport(target) => {
+                SelectedRuntimeArg::semantic_operand(arg, target.clone())
+            }
             RuntimeBoundarySpec::ExactShape(target) => self
                 .select_runtime_boundary_compatible_value(local, &boundary)
-                .unwrap_or_else(|| SelectedRuntimeArg {
-                    class: target.clone(),
-                    realization: RuntimeArgRealization::LowerSemanticOperand(arg),
-                }),
+                .unwrap_or_else(|| SelectedRuntimeArg::semantic_operand(arg, target.clone())),
             RuntimeBoundarySpec::BorrowLike { .. } => self
                 .select_runtime_boundary_compatible_value(local, &boundary)
                 .or_else(|| {
-                    RuntimeBoundaryMaterialization::for_boundary(&boundary).map(
-                        |materialization| SelectedRuntimeArg {
-                            class: materialization.class(),
-                            realization: RuntimeArgRealization::MaterializeSemanticValue {
-                                operand: arg,
-                                materialization,
-                                semantic_ty,
-                            },
-                        },
-                    )
+                    SelectedRuntimeArg::materialized_semantic_operand(arg, semantic_ty, &boundary)
                 })
                 .unwrap_or_else(|| {
                     panic!(
@@ -165,33 +152,15 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
                 self.select_materialized_operand_value(local, arg)
             }
             CompiledValuePassPlan::ActualValue => self.select_actual_operand_value(local, arg),
-            CompiledValuePassPlan::ExactTransport { exact } => Some(SelectedRuntimeArg {
-                class: exact.clone(),
-                realization: RuntimeArgRealization::LowerSemanticOperand(arg),
-            }),
-            CompiledValuePassPlan::ExactShapeAggregate { exact } => {
-                self.select_actual_aggregate_value(local).or_else(|| {
-                    Some(SelectedRuntimeArg {
-                        class: exact.clone(),
-                        realization: RuntimeArgRealization::LowerSemanticOperand(arg),
-                    })
-                })
+            CompiledValuePassPlan::ExactTransport { exact } => {
+                Some(SelectedRuntimeArg::semantic_operand(arg, exact.clone()))
             }
+            CompiledValuePassPlan::ExactShapeAggregate { exact } => self
+                .select_actual_aggregate_value(local)
+                .or_else(|| Some(SelectedRuntimeArg::semantic_operand(arg, exact.clone()))),
             CompiledValuePassPlan::ExactShapeRefLike { boundary } => self
                 .select_exact_shape_ref_like_value(local, boundary)
-                .or_else(|| {
-                    let RuntimeBoundarySpec::ExactShape(class) =
-                        self.specialized_boundary(local, boundary)
-                    else {
-                        unreachable!();
-                    };
-                    Some(SelectedRuntimeArg {
-                        class,
-                        realization: RuntimeArgRealization::Placeholder {
-                            semantic_ty: self.env.body().locals[local.index()].ty,
-                        },
-                    })
-                }),
+                .or_else(|| self.exact_shape_ref_like_placeholder(local, boundary)),
             CompiledValuePassPlan::BorrowLike { boundary } => {
                 self.select_boundary_compatible_value(local, boundary)
             }
@@ -216,21 +185,13 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
             CompiledMaterializationPlan::SemanticValue => self
                 .env
                 .semantic_value_class(self.carriers, local)
-                .map(|class| SelectedRuntimeArg {
-                    class,
-                    realization: RuntimeArgRealization::LowerSemanticOperand(arg),
-                }),
+                .map(|class| SelectedRuntimeArg::semantic_operand(arg, class)),
             CompiledMaterializationPlan::AggregateFromSource => {
                 self.select_actual_aggregate_value(local)
             }
-            CompiledMaterializationPlan::AggregateFromSourceOrFallback { fallback } => {
-                self.select_actual_aggregate_value(local).or_else(|| {
-                    Some(SelectedRuntimeArg {
-                        class: fallback.clone(),
-                        realization: RuntimeArgRealization::LowerSemanticOperand(arg),
-                    })
-                })
-            }
+            CompiledMaterializationPlan::AggregateFromSourceOrFallback { fallback } => self
+                .select_actual_aggregate_value(local)
+                .or_else(|| Some(SelectedRuntimeArg::semantic_operand(arg, fallback.clone()))),
         }
     }
 
@@ -240,21 +201,11 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
         arg: NOperand,
     ) -> Option<SelectedRuntimeArg<'db>> {
         carrier_value_class(local, self.carriers)
-            .map(|class| {
-                let realization = if class.is_transport() {
-                    RuntimeArgRealization::UseHandleLikeValue { local }
-                } else {
-                    RuntimeArgRealization::UseRuntimeValue { local }
-                };
-                SelectedRuntimeArg { class, realization }
-            })
+            .map(|class| SelectedRuntimeArg::local_value(local, class))
             .or_else(|| {
                 self.env
                     .semantic_value_class(self.carriers, local)
-                    .map(|class| SelectedRuntimeArg {
-                        class,
-                        realization: RuntimeArgRealization::LowerSemanticOperand(arg),
-                    })
+                    .map(|class| SelectedRuntimeArg::semantic_operand(arg, class))
             })
     }
 
@@ -289,12 +240,7 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
         if let Some(class) = carrier_value_class(local, self.carriers)
             && RuntimeBoundaryMatcher::class_satisfies_boundary(&class, boundary)
         {
-            let realization = if class.is_transport() {
-                RuntimeArgRealization::UseHandleLikeValue { local }
-            } else {
-                RuntimeArgRealization::UseRuntimeValue { local }
-            };
-            return Some(SelectedRuntimeArg { class, realization });
+            return Some(SelectedRuntimeArg::local_value(local, class));
         }
         if let Some(value_class) = self.env.semantic_value_class(self.carriers, local) {
             if let Some(provider) = local_data.facts.origin.root_provider()
@@ -318,10 +264,7 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
                     false,
                 );
                 if RuntimeBoundaryMatcher::class_satisfies_boundary(&class, boundary) {
-                    return Some(SelectedRuntimeArg {
-                        class,
-                        realization: RuntimeArgRealization::UseHandleLikeValue { local },
-                    });
+                    return Some(SelectedRuntimeArg::handle_like_value(local, class));
                 }
             }
             let cx = self.env.with_carriers(self.carriers);
@@ -338,10 +281,7 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
                     false,
                 );
                 if RuntimeBoundaryMatcher::class_satisfies_boundary(&class, boundary) {
-                    return Some(SelectedRuntimeArg {
-                        class,
-                        realization: RuntimeArgRealization::UseHandleLikeValue { local },
-                    });
+                    return Some(SelectedRuntimeArg::handle_like_value(local, class));
                 }
             }
         }
@@ -373,12 +313,8 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
         let class = self
             .env
             .normalized_place_address_class(self.carriers, &place)?;
-        RuntimeBoundaryMatcher::class_satisfies_boundary(&class, boundary).then(|| {
-            SelectedRuntimeArg {
-                class,
-                realization: RuntimeArgRealization::AddrOfPlace { place, semantic_ty },
-            }
-        })
+        RuntimeBoundaryMatcher::class_satisfies_boundary(&class, boundary)
+            .then(|| SelectedRuntimeArg::place_addr(place, semantic_ty, class))
     }
 
     fn select_exact_shape_ref_like_value(
@@ -396,6 +332,28 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
         }
     }
 
+    fn exact_shape_ref_like_placeholder(
+        &mut self,
+        local: SLocalId,
+        boundary: &StagedBoundary<'db>,
+    ) -> Option<SelectedRuntimeArg<'db>> {
+        let RuntimeBoundarySpec::ExactShape(class) = self.specialized_boundary(local, boundary)
+        else {
+            panic!(
+                "exact-shape ref-like pass plan specialized to non-exact-shape boundary: owner={:?}; local={local:?}; boundary={boundary:?}",
+                self.env
+                    .body()
+                    .owner
+                    .key(self.env.db())
+                    .owner(self.env.db()),
+            );
+        };
+        Some(SelectedRuntimeArg::placeholder(
+            self.env.body().locals[local.index()].ty,
+            class,
+        ))
+    }
+
     fn select_place_for_boundary(
         &self,
         place: NSPlace<'db>,
@@ -410,52 +368,37 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
             .normalized_place_address_class(self.carriers, &place)
             && RuntimeBoundaryMatcher::class_satisfies_boundary(&class, &boundary)
         {
-            return Some(SelectedRuntimeArg {
-                class,
-                realization: RuntimeArgRealization::AddrOfPlace { place, semantic_ty },
-            });
+            return Some(SelectedRuntimeArg::place_addr(place, semantic_ty, class));
         }
-        let (class, realization) = match &boundary {
-            RuntimeBoundarySpec::ExactTransport(target) => {
-                if target.is_transport() {
-                    (
-                        target.clone(),
-                        RuntimeArgRealization::AddrOfPlace { place, semantic_ty },
-                    )
-                } else {
-                    (
-                        target.clone(),
-                        RuntimeArgRealization::LoadPlaceValue { place, semantic_ty },
-                    )
-                }
-            }
-            RuntimeBoundarySpec::ExactShape(target) if !target.is_transport() => (
+        match &boundary {
+            RuntimeBoundarySpec::ExactTransport(target) if target.is_transport() => Some(
+                SelectedRuntimeArg::place_addr(place, semantic_ty, target.clone()),
+            ),
+            RuntimeBoundarySpec::ExactTransport(target) => Some(SelectedRuntimeArg::place_load(
+                place,
+                semantic_ty,
                 target.clone(),
-                RuntimeArgRealization::LoadPlaceValue { place, semantic_ty },
+            )),
+            RuntimeBoundarySpec::ExactShape(target) if !target.is_transport() => Some(
+                SelectedRuntimeArg::place_load(place, semantic_ty, target.clone()),
             ),
             RuntimeBoundarySpec::BorrowLike { .. } => {
-                let Some(materialization) = RuntimeBoundaryMaterialization::for_boundary(&boundary)
-                else {
-                    return self.placeholder_arg_for_unlowerable_place(
-                        place,
-                        semantic_ty,
-                        &boundary,
-                    );
-                };
-                (
-                    materialization.class(),
-                    RuntimeArgRealization::MaterializePlaceValue {
-                        place,
-                        materialization,
-                        semantic_ty,
-                    },
-                )
+                RuntimeBoundaryMaterialization::for_boundary(&boundary)
+                    .map(|materialization| {
+                        SelectedRuntimeArg::materialized_place(
+                            place.clone(),
+                            semantic_ty,
+                            materialization,
+                        )
+                    })
+                    .or_else(|| {
+                        self.placeholder_arg_for_unlowerable_place(place, semantic_ty, &boundary)
+                    })
             }
             RuntimeBoundarySpec::ExactShape(_) => {
-                return self.placeholder_arg_for_unlowerable_place(place, semantic_ty, &boundary);
+                self.placeholder_arg_for_unlowerable_place(place, semantic_ty, &boundary)
             }
-        };
-        Some(SelectedRuntimeArg { class, realization })
+        }
     }
 
     fn placeholder_arg_for_unlowerable_place(
@@ -467,10 +410,8 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
         if !place.path.is_empty() {
             return None;
         }
-        RuntimeBoundaryMatcher::placeholder_class(boundary).map(|class| SelectedRuntimeArg {
-            class,
-            realization: RuntimeArgRealization::Placeholder { semantic_ty },
-        })
+        RuntimeBoundaryMatcher::placeholder_class(boundary)
+            .map(|class| SelectedRuntimeArg::placeholder(semantic_ty, class))
     }
 
     fn place_is_lowerable(&self, place: &NSPlace<'db>) -> bool {
@@ -549,100 +490,108 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
         arg: &NEffectArg<'db>,
         plan: &CompiledEffectArgPlan<'db>,
     ) -> Option<SelectedRuntimeArg<'db>> {
+        match EffectArgInput::new(arg) {
+            EffectArgInput::Value(value) => self.select_value_effect_arg(arg, value, plan),
+            EffectArgInput::Place(place) => self.select_place_effect_arg(arg, place, plan),
+        }
+    }
+
+    fn select_value_effect_arg(
+        &mut self,
+        arg: &NEffectArg<'db>,
+        value: NOperand,
+        plan: &CompiledEffectArgPlan<'db>,
+    ) -> Option<SelectedRuntimeArg<'db>> {
         match plan {
-            CompiledEffectArgPlan::ErasedPlainValue => match &arg.arg {
-                NEffectArgValue::Value(value) => {
-                    self.select_materialized_operand_value(value.local, *value)
-                }
-                NEffectArgValue::Place(_) => panic!(
-                    "effect arg without provider/target should evaluate as a plain value: owner={:?}; arg={arg:?}",
-                    self.env
-                        .body()
-                        .owner
-                        .key(self.env.db())
-                        .owner(self.env.db()),
-                ),
-            },
+            CompiledEffectArgPlan::ErasedPlainValue => {
+                self.select_materialized_operand_value(value.local, value)
+            }
             CompiledEffectArgPlan::ByValueValue { plan } => {
-                let NEffectArgValue::Value(value) = &arg.arg else {
-                    panic!("compiled value effect arg plan reached place arg: {arg:?}");
-                };
-                self.selected_value_pass_plan(*value, plan)
+                self.selected_value_pass_plan(value, plan)
             }
-            CompiledEffectArgPlan::ByValueValueFallback { fallback } => {
-                let NEffectArgValue::Value(value) = &arg.arg else {
-                    panic!("compiled value effect arg fallback reached place arg: {arg:?}");
-                };
-                self.select_actual_operand_value(value.local, *value)
-                    .or_else(|| {
-                        Some(SelectedRuntimeArg {
-                            class: fallback.clone(),
-                            realization: RuntimeArgRealization::Placeholder {
-                                semantic_ty: self.env.body().locals[value.local.index()].ty,
-                            },
-                        })
-                    })
-            }
-            CompiledEffectArgPlan::ByValuePlaceBoundary { boundary } => {
-                let NEffectArgValue::Place(place) = &arg.arg else {
-                    panic!("compiled place effect arg plan reached value arg: {arg:?}");
-                };
-                Some(self.select_place_for_boundary(
-                    place.clone(),
-                    arg.target_ty.unwrap_or_else(|| TyId::unit(self.env.db())),
-                    boundary.boundary.clone(),
-                )
-                .unwrap_or_else(|| {
-                    panic!(
-                        "compiled place effect arg boundary has no runtime realization: owner={:?}; arg={arg:?}; boundary={:?}",
-                        self.env.body().owner.key(self.env.db()).owner(self.env.db()),
-                        boundary.boundary,
-                    )
-                }))
-            }
-            CompiledEffectArgPlan::ByValuePlaceFallback { fallback } => {
-                let NEffectArgValue::Place(_) = &arg.arg else {
-                    panic!("compiled place effect arg fallback reached value arg: {arg:?}");
-                };
-                let NEffectArgValue::Place(place) = &arg.arg else {
-                    unreachable!();
-                };
-                Some(self.select_place_for_boundary(
-                    place.clone(),
-                    arg.target_ty.unwrap_or_else(|| TyId::unit(self.env.db())),
-                    RuntimeBoundarySpec::ExactTransport(fallback.clone()),
-                )
-                .unwrap_or_else(|| {
-                    panic!(
-                        "compiled place effect arg fallback has no runtime realization: owner={:?}; arg={arg:?}; fallback={fallback:?}",
-                        self.env.body().owner.key(self.env.db()).owner(self.env.db()),
-                    )
-                }))
-            }
+            CompiledEffectArgPlan::ByValueValueFallback { fallback } => self
+                .select_actual_operand_value(value.local, value)
+                .or_else(|| {
+                    Some(SelectedRuntimeArg::placeholder(
+                        self.env.body().locals[value.local.index()].ty,
+                        fallback.clone(),
+                    ))
+                }),
             CompiledEffectArgPlan::ByPlaceValue { boundary } => {
-                let NEffectArgValue::Value(value) = &arg.arg else {
-                    panic!("compiled by-place effect arg plan reached place arg: {arg:?}");
-                };
                 self.select_boundary_compatible_value(value.local, boundary)
             }
-            CompiledEffectArgPlan::ByPlacePlace { boundary } => {
-                let NEffectArgValue::Place(place) = &arg.arg else {
-                    panic!("compiled by-place effect arg plan reached value arg: {arg:?}");
-                };
-                Some(self.select_place_for_boundary(
-                    place.clone(),
-                    arg.target_ty.unwrap_or_else(|| TyId::unit(self.env.db())),
-                    boundary.boundary.clone(),
-                )
-                .unwrap_or_else(|| {
-                    panic!(
-                        "compiled by-place effect arg boundary has no runtime realization: owner={:?}; arg={arg:?}; boundary={:?}",
-                        self.env.body().owner.key(self.env.db()).owner(self.env.db()),
-                        boundary.boundary,
-                    )
-                }))
+            CompiledEffectArgPlan::ByValuePlaceBoundary { .. }
+            | CompiledEffectArgPlan::ByValuePlaceFallback { .. }
+            | CompiledEffectArgPlan::ByPlacePlace { .. } => {
+                self.invalid_effect_arg_plan(arg, plan, "value")
             }
         }
+    }
+
+    fn select_place_effect_arg(
+        &self,
+        arg: &NEffectArg<'db>,
+        place: &NSPlace<'db>,
+        plan: &CompiledEffectArgPlan<'db>,
+    ) -> Option<SelectedRuntimeArg<'db>> {
+        match plan {
+            CompiledEffectArgPlan::ByValuePlaceBoundary { boundary }
+            | CompiledEffectArgPlan::ByPlacePlace { boundary } => {
+                Some(self.select_effect_place_for_boundary(arg, place, boundary.boundary.clone()))
+            }
+            CompiledEffectArgPlan::ByValuePlaceFallback { fallback } => {
+                Some(self.select_effect_place_for_boundary(
+                    arg,
+                    place,
+                    RuntimeBoundarySpec::ExactTransport(fallback.clone()),
+                ))
+            }
+            CompiledEffectArgPlan::ErasedPlainValue
+            | CompiledEffectArgPlan::ByValueValue { .. }
+            | CompiledEffectArgPlan::ByValueValueFallback { .. }
+            | CompiledEffectArgPlan::ByPlaceValue { .. } => {
+                self.invalid_effect_arg_plan(arg, plan, "place")
+            }
+        }
+    }
+
+    fn select_effect_place_for_boundary(
+        &self,
+        arg: &NEffectArg<'db>,
+        place: &NSPlace<'db>,
+        boundary: RuntimeBoundarySpec<'db>,
+    ) -> SelectedRuntimeArg<'db> {
+        self.select_place_for_boundary(
+            place.clone(),
+            self.effect_arg_target_ty(arg),
+            boundary.clone(),
+        )
+        .unwrap_or_else(|| {
+            panic!(
+                "effect place arg boundary has no runtime realization: owner={:?}; arg={arg:?}; boundary={boundary:?}",
+                self.env.body().owner.key(self.env.db()).owner(self.env.db()),
+            )
+        })
+    }
+
+    fn effect_arg_target_ty(&self, arg: &NEffectArg<'db>) -> TyId<'db> {
+        arg.target_ty.unwrap_or_else(|| TyId::unit(self.env.db()))
+    }
+
+    fn invalid_effect_arg_plan(
+        &self,
+        arg: &NEffectArg<'db>,
+        plan: &CompiledEffectArgPlan<'db>,
+        source_kind: &str,
+    ) -> ! {
+        panic!(
+            "compiled effect arg plan does not match {source_kind} arg: owner={:?}; arg={arg:?}; plan={plan:?}",
+            self.env
+                .body()
+                .owner
+                .key(self.env.db())
+                .owner(self.env.db()),
+        )
     }
 
     fn specialized_boundary(
@@ -659,6 +608,20 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
         )
         .boundary
         .into_owned()
+    }
+}
+
+enum EffectArgInput<'arg, 'db> {
+    Value(NOperand),
+    Place(&'arg NSPlace<'db>),
+}
+
+impl<'arg, 'db> EffectArgInput<'arg, 'db> {
+    fn new(arg: &'arg NEffectArg<'db>) -> Self {
+        match &arg.arg {
+            NEffectArgValue::Value(value) => Self::Value(*value),
+            NEffectArgValue::Place(place) => Self::Place(place),
+        }
     }
 }
 

@@ -407,6 +407,90 @@ impl<'db> RuntimeBoundaryMaterialization<'db> {
     }
 }
 
+impl<'db> SelectedRuntimeArg<'db> {
+    pub(super) fn local_value(local: SLocalId, class: RuntimeClass<'db>) -> Self {
+        let realization = if class.is_transport() {
+            RuntimeArgRealization::UseHandleLikeValue { local }
+        } else {
+            RuntimeArgRealization::UseRuntimeValue { local }
+        };
+        Self { class, realization }
+    }
+
+    pub(super) fn handle_like_value(local: SLocalId, class: RuntimeClass<'db>) -> Self {
+        Self {
+            class,
+            realization: RuntimeArgRealization::UseHandleLikeValue { local },
+        }
+    }
+
+    pub(super) fn semantic_operand(arg: NOperand, class: RuntimeClass<'db>) -> Self {
+        Self {
+            class,
+            realization: RuntimeArgRealization::LowerSemanticOperand(arg),
+        }
+    }
+
+    pub(super) fn placeholder(semantic_ty: TyId<'db>, class: RuntimeClass<'db>) -> Self {
+        Self {
+            class,
+            realization: RuntimeArgRealization::Placeholder { semantic_ty },
+        }
+    }
+
+    pub(super) fn place_addr(
+        place: NSPlace<'db>,
+        semantic_ty: TyId<'db>,
+        class: RuntimeClass<'db>,
+    ) -> Self {
+        Self {
+            class,
+            realization: RuntimeArgRealization::AddrOfPlace { place, semantic_ty },
+        }
+    }
+
+    pub(super) fn place_load(
+        place: NSPlace<'db>,
+        semantic_ty: TyId<'db>,
+        class: RuntimeClass<'db>,
+    ) -> Self {
+        Self {
+            class,
+            realization: RuntimeArgRealization::LoadPlaceValue { place, semantic_ty },
+        }
+    }
+
+    pub(super) fn materialized_place(
+        place: NSPlace<'db>,
+        semantic_ty: TyId<'db>,
+        materialization: RuntimeBoundaryMaterialization<'db>,
+    ) -> Self {
+        Self {
+            class: materialization.class(),
+            realization: RuntimeArgRealization::MaterializePlaceValue {
+                place,
+                materialization,
+                semantic_ty,
+            },
+        }
+    }
+
+    pub(super) fn materialized_semantic_operand(
+        arg: NOperand,
+        semantic_ty: TyId<'db>,
+        boundary: &RuntimeBoundarySpec<'db>,
+    ) -> Option<Self> {
+        RuntimeBoundaryMaterialization::for_boundary(boundary).map(|materialization| Self {
+            class: materialization.class(),
+            realization: RuntimeArgRealization::MaterializeSemanticValue {
+                operand: arg,
+                materialization,
+                semantic_ty,
+            },
+        })
+    }
+}
+
 impl<'db> RuntimeBoundaryValueSource<'db> {
     fn value_satisfies(&self, boundary: &RuntimeBoundarySpec<'db>) -> bool {
         RuntimeBoundaryMatcher::class_satisfies_boundary(&self.value, boundary)
