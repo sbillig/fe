@@ -226,10 +226,6 @@ fn root_objects_in_emit_order<'a, 'db>(
         let primary = roots.remove(idx);
         roots.insert(0, primary);
     }
-    if roots.is_empty() {
-        roots.extend(package.objects.iter());
-        roots.sort_by(|lhs, rhs| lhs.name.cmp(&rhs.name));
-    }
     roots
 }
 

@@ -9,7 +9,9 @@ use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, ManualContractRootAttr, TopLevelMod};
 use mir2::{RuntimePackage, build_runtime_package, build_test_runtime_package};
 
-use crate::{TargetDataLayout, TestModuleOutput};
+use crate::{
+    TargetDataLayout, TestModuleOutput, runtime_package::ensure_runtime_package_has_roots,
+};
 
 pub use errors::YulError;
 
@@ -47,6 +49,7 @@ pub fn emit_runtime_package_yul<'db>(
     package: &RuntimePackage<'db>,
     layout: TargetDataLayout,
 ) -> Result<String, EmitModuleError> {
+    ensure_runtime_package_has_roots(db, package, "Yul")?;
     let package = legalize::legalize_runtime_package(db, package, layout)?;
     emitter::emit_runtime_package_yul(db, &package).map_err(Into::into)
 }

@@ -23,6 +23,7 @@ use sonatina_verifier::{
 
 use crate::{
     OptLevel, TargetDataLayout, TestMetadata, TestModuleOutput,
+    runtime_package::ensure_runtime_package_has_roots,
     test_output::{TestRootMetadataError, runtime_test_root_metadata},
 };
 
@@ -238,25 +239,12 @@ pub fn compile_runtime_package_sonatina(
     lower_runtime::compile_runtime_package_sonatina(db, package, layout)
 }
 
-fn ensure_runtime_package_has_roots(
-    db: &DriverDataBase,
-    package: &RuntimePackage<'_>,
-) -> Result<(), LowerError> {
-    if package.root_objects(db).is_empty() {
-        return Err(LowerError::RuntimeLower(mir2::LowerError::Unsupported(
-            "runtime package has no root objects; refusing to emit target-only Sonatina IR"
-                .to_string(),
-        )));
-    }
-    Ok(())
-}
-
 pub fn emit_runtime_package_sonatina_ir(
     db: &DriverDataBase,
     package: &RuntimePackage<'_>,
     layout: TargetDataLayout,
 ) -> Result<String, LowerError> {
-    ensure_runtime_package_has_roots(db, package)?;
+    ensure_runtime_package_has_roots(db, package, "Sonatina IR")?;
     let module = compile_runtime_package_sonatina(db, package, layout)?;
     let mut writer = ModuleWriter::new(&module);
     Ok(writer.dump_string())
@@ -268,7 +256,7 @@ pub fn emit_runtime_package_sonatina_ir_optimized(
     layout: TargetDataLayout,
     opt_level: OptLevel,
 ) -> Result<String, LowerError> {
-    ensure_runtime_package_has_roots(db, package)?;
+    ensure_runtime_package_has_roots(db, package, "Sonatina IR")?;
     let mut module = compile_runtime_package_sonatina(db, package, layout)?;
     ensure_module_sonatina_ir_valid(&module)?;
     run_sonatina_optimization_pipeline(&mut module, opt_level);
@@ -283,7 +271,7 @@ pub fn emit_runtime_package_sonatina_bytecode(
     layout: TargetDataLayout,
     opt_level: OptLevel,
 ) -> Result<BTreeMap<String, SonatinaContractBytecode>, LowerError> {
-    ensure_runtime_package_has_roots(db, package)?;
+    ensure_runtime_package_has_roots(db, package, "Sonatina bytecode")?;
     let mut module = compile_runtime_package_sonatina(db, package, layout)?;
     ensure_module_sonatina_ir_valid(&module)?;
     run_sonatina_optimization_pipeline(&mut module, opt_level);

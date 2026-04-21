@@ -1,5 +1,6 @@
 mod backend;
 mod layout;
+mod runtime_package;
 mod sonatina;
 mod test_output;
 mod yul;

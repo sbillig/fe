@@ -1,7 +1,7 @@
 use common::InputDb;
 use dir_test::{Fixture, dir_test};
 use driver::DriverDataBase;
-use fe_codegen::{emit_module_object_yul, emit_module_yul};
+use fe_codegen::{EmitModuleError, emit_module_object_yul, emit_module_yul};
 use std::fs;
 use test_utils::snap_test;
 use url::Url;
@@ -32,6 +32,10 @@ fn yul_snap(fixture: Fixture<&str>) {
 }
 
 fn emit_inline_yul(path: &str, src: &str) -> String {
+    emit_inline_yul_result(path, src).expect("Yul emission should succeed")
+}
+
+fn emit_inline_yul_result(path: &str, src: &str) -> Result<String, EmitModuleError> {
     let mut db = DriverDataBase::default();
     let file_url = Url::parse(path).expect("fixture path should be valid");
     db.workspace()
@@ -41,7 +45,7 @@ fn emit_inline_yul(path: &str, src: &str) -> String {
         .get(&db, &file_url)
         .expect("file should be loaded");
     let top_mod = db.top_mod(file);
-    emit_module_yul(&db, top_mod).expect("Yul emission should succeed")
+    emit_module_yul(&db, top_mod)
 }
 
 fn emit_fixture_yul(path: &str) -> String {
@@ -86,6 +90,24 @@ fn emit_fixture_object_yul(path: &str, object_name: &str) -> String {
         .expect("file should be loaded");
     let top_mod = db.top_mod(file);
     emit_module_object_yul(&db, top_mod, object_name).expect("selected Yul should emit")
+}
+
+#[test]
+fn yul_rejects_target_only_output() {
+    let err = emit_inline_yul_result(
+        "file:///yul_rejects_target_only_output.fe",
+        r#"
+fn helper(value: u256) -> u256 {
+    value
+}
+"#,
+    )
+    .expect_err("empty packages should not emit Yul");
+    let message = err.to_string();
+    assert!(
+        message.contains("no root objects") && message.contains("target-only Yul"),
+        "unexpected error message:\n{message}"
+    );
 }
 
 #[test]
@@ -225,11 +247,12 @@ fn sum_compound_if_let(_ a: Option<Option<usize>>) -> usize {
     }
 }
 
-#[test]
-fn test_sum_compound_if_let() {
-    assert(sum_compound_if_let(Option::Some(Option::Some(7))) == 7)
-    assert(sum_compound_if_let(Option::Some(Option::None)) == 0)
-    assert(sum_compound_if_let(Option::None) == 0)
+pub fn main() -> (usize, usize, usize) {
+    (
+        sum_compound_if_let(Option::Some(Option::Some(7))),
+        sum_compound_if_let(Option::Some(Option::None)),
+        sum_compound_if_let(Option::None),
+    )
 }
 "#,
     );
@@ -460,6 +483,10 @@ fn iterate(_ max_iter: u256) -> u256 {
     }
     0
 }
+
+pub fn main() -> u256 {
+    iterate(4)
+}
 "#,
     );
 }
@@ -625,8 +652,7 @@ struct Pair {
     b: Address,
 }
 
-#[test]
-fn test_alloc_after_struct() uses (evm: Evm) {
+pub fn main() uses (evm: Evm) {
     let p = Pair {
         a: Address { inner: 0x1111111111111111111111111111111111111111 },
         b: Address { inner: 0x2222222222222222222222222222222222222222 },
