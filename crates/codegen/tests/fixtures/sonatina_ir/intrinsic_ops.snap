@@ -4,3 +4,214 @@ expression: output
 input_file: crates/codegen/tests/fixtures/intrinsic_ops.fe
 ---
 target = "evm-ethereum-osaka"
+
+type @__fe_layout_0 = {};
+type @__fe_layout_1 = {@__fe_layout_0};
+
+func private %__fe_main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v1.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v2.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v3.i256 = call %main v0 v1 v2;
+        evm_stop;
+}
+
+func private %calldataload(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.i256 = evm_calldata_load v2;
+        return v3;
+}
+
+func private %load_calldata(v0.i256, v1.objref<@__fe_layout_1>) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        mstore v2 v0 i256;
+        jump block1;
+
+    block1:
+        v3.i256 = mload v2 i256;
+        v4.i256 = call %calldataload v3;
+        return v4;
+}
+
+func private %load_slot(v0.i256, v1.objref<@__fe_layout_1>) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        mstore v2 v0 i256;
+        jump block1;
+
+    block1:
+        v3.i256 = mload v2 i256;
+        v4.i256 = call %sload v3;
+        return v4;
+}
+
+func private %load_word(v0.i256, v1.objref<@__fe_layout_1>) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        mstore v2 v0 i256;
+        jump block1;
+
+    block1:
+        v3.i256 = mload v2 i256;
+        v4.i256 = call %mload v3;
+        return v4;
+}
+
+func private %main(v0.objref<@__fe_layout_1>, v1.objref<@__fe_layout_1>, v2.objref<@__fe_layout_1>) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        call %store_word 128.i256 1.i256 v0;
+        call %store_byte 129.i256 2.i8 v0;
+        call %store_slot 3.i256 4.i256 v1;
+        v14.i256 = call %load_word 128.i256 v0;
+        v15.i256 = call %load_slot 3.i256 v1;
+        (v16.i256, v17.i1) = uaddo v14 v15;
+        br v17 block2 block3;
+
+    block2:
+        evm_revert 0.i256 0.i256;
+
+    block3:
+        v20.i256 = call %load_calldata 0.i256 v2;
+        (v21.i256, v22.i1) = uaddo v16 v20;
+        br v22 block2 block4;
+
+    block4:
+        return v21;
+}
+
+func private %mload(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.i256 = mload v2 i256;
+        return v3;
+}
+
+func private %mstore(v0.objref<@__fe_layout_1>, v1.i256, v2.i256) {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v3 i256;
+        v6.i256 = mload v4 i256;
+        mstore v5 v6 i256;
+        return;
+}
+
+func private %mstore8(v0.objref<@__fe_layout_1>, v1.i256, v2.i8) {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i8 = alloca i8;
+        mstore v3 v1 i256;
+        mstore v4 v2 i8;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v3 i256;
+        v6.i256 = mload v4 i256;
+        v7.i8 = trunc v6 i8;
+        evm_mstore8 v5 v7;
+        return;
+}
+
+func private %sload(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.i256 = evm_sload v2;
+        return v3;
+}
+
+func private %sstore(v0.objref<@__fe_layout_1>, v1.i256, v2.i256) {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v3 i256;
+        v6.i256 = mload v4 i256;
+        evm_sstore v5 v6;
+        return;
+}
+
+func private %store_byte(v0.i256, v1.i8, v2.objref<@__fe_layout_1>) {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i8 = alloca i8;
+        mstore v3 v0 i256;
+        mstore v4 v1 i8;
+        jump block1;
+
+    block1:
+        v6.i256 = mload v3 i256;
+        v7.i256 = mload v4 i256;
+        v8.i8 = trunc v7 i8;
+        call %mstore8 v2 v6 v8;
+        return;
+}
+
+func private %store_slot(v0.i256, v1.i256, v2.objref<@__fe_layout_1>) {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v0 i256;
+        mstore v4 v1 i256;
+        jump block1;
+
+    block1:
+        v6.i256 = mload v3 i256;
+        v7.i256 = mload v4 i256;
+        call %sstore v2 v6 v7;
+        return;
+}
+
+func private %store_word(v0.i256, v1.i256, v2.objref<@__fe_layout_1>) {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v0 i256;
+        mstore v4 v1 i256;
+        jump block1;
+
+    block1:
+        v6.i256 = mload v3 i256;
+        v7.i256 = mload v4 i256;
+        call %mstore v2 v6 v7;
+        return;
+}
+
+
+object @main {
+    section main {
+        entry %__fe_main_root;
+    }
+}

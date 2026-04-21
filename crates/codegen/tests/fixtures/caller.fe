@@ -3,3 +3,7 @@ use std::evm::{Address, Ctx}
 fn who_called() -> Address uses (ctx: Ctx) {
     ctx.caller()
 }
+
+pub fn main() -> Address uses (ctx: Ctx) {
+    who_called()
+}

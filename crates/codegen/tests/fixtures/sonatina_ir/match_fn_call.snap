@@ -4,3 +4,158 @@ expression: output
 input_file: crates/codegen/tests/fixtures/match_fn_call.fe
 ---
 target = "evm-ethereum-osaka"
+
+type @__fe_layout_0 = {};
+type @__fe_layout_1 = {@__fe_layout_0};
+
+func private %__fe_main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v1.i256 = call %main v0;
+        evm_stop;
+}
+
+func private %calldataload_0(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.i256 = evm_calldata_load v2;
+        return v3;
+}
+
+func private %calldataload_1(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.i256 = evm_calldata_load v2;
+        return v3;
+}
+
+func private %calldataload_2(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.i256 = evm_calldata_load v2;
+        return v3;
+}
+
+func private %example_0(v0.objref<@__fe_layout_1>) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %read_selector_1 v0;
+        v4.i1 = eq v2 305419896.i256;
+        br v4 block3 block6;
+
+    block2:
+        v5.i256 = phi (1.i256 block3) (2.i256 block4) (3.i256 block5);
+        return v5;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        jump block2;
+
+    block6:
+        v11.i1 = eq v2 591751049.i256;
+        br v11 block4 block7;
+
+    block7:
+        jump block5;
+}
+
+func private %example_1(v0.objref<@__fe_layout_1>) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %read_selector_0 v0;
+        v4.i1 = eq v2 305419896.i256;
+        br v4 block3 block6;
+
+    block2:
+        v5.i256 = phi (1.i256 block3) (2.i256 block4) (3.i256 block5);
+        return v5;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        jump block2;
+
+    block6:
+        v11.i1 = eq v2 591751049.i256;
+        br v11 block4 block7;
+
+    block7:
+        jump block5;
+}
+
+func private %main(v0.objref<@__fe_layout_1>) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %example_0 v0;
+        return v2;
+}
+
+func private %read_selector_0(v0.objref<@__fe_layout_1>) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %calldataload_0 0.i256;
+        v4.i256 = shr 224.i256 v2;
+        return v4;
+}
+
+func private %read_selector_1(v0.objref<@__fe_layout_1>) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %calldataload_2 0.i256;
+        v4.i256 = shr 224.i256 v2;
+        return v4;
+}
+
+func private %read_selector_2(v0.objref<@__fe_layout_1>) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %calldataload_1 0.i256;
+        v4.i256 = shr 224.i256 v2;
+        return v4;
+}
+
+
+object @main {
+    section main {
+        entry %__fe_main_root;
+    }
+}

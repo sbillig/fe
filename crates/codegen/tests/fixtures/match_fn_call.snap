@@ -3,24 +3,79 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/match_fn_call.fe
 ---
-function $example__Evm_hef0af3106e109414__3af54274b2985741() -> ret {
-  let v0 := $read_selector__Evm_hef0af3106e109414__3af54274b2985741()
-  let v1 := 0
-  switch v0
-    case 305419896 {
-      v1 := 1
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let t3 := mload(0x40)
+      if iszero(t3) {
+        t3 := 0x80
+      }
+      mstore(0x40, add(t3, 0))
+      let v0 := t3
+      let v1 := v0
+      let v2 := $main(v1)
+      stop()
     }
-    case 591751049 {
-      v1 := 2
+    function $calldataload_2(p0) -> ret {
+      let v2 := p0
+      let v5 := calldataload(v2)
+      let v3 := v5
+      ret := v3
+      leave
     }
-    default {
-      v1 := 3
+    function $example_0(p0) -> ret {
+      let v1 := 0
+      let v2 := 0
+      let v10 := $read_selector_1(p0)
+      v1 := v10
+      let v11 := 0x12345678
+      let v3 := v11
+      let v4 := iszero(iszero(eq(v1, v3)))
+      if iszero(iszero(v4)) {
+        let v12 := 0x01
+        let v7 := v12
+        let v13 := 0x01
+        v2 := v13
+      }
+      if iszero(iszero(iszero(v4))) {
+        let v18 := 0x23456789
+        let v5 := v18
+        let v6 := iszero(iszero(eq(v1, v5)))
+        if iszero(iszero(v6)) {
+          let v14 := 0x02
+          let v8 := v14
+          let v15 := 0x02
+          v2 := v15
+        }
+        if iszero(iszero(iszero(v6))) {
+          let v16 := 0x03
+          let v9 := v16
+          let v17 := 0x03
+          v2 := v17
+        }
+      }
+      ret := v2
+      leave
     }
-  ret := v1
-  leave
-}
-function $read_selector__Evm_hef0af3106e109414__3af54274b2985741() -> ret {
-  let v0 := calldataload(0)
-  ret := shr(224, v0)
-  leave
+    function $main(p0) -> ret {
+      let v2 := $example_0(p0)
+      let v1 := v2
+      ret := v1
+      leave
+    }
+    function $read_selector_1(p0) -> ret {
+      let v6 := 0x00
+      let v2 := v6
+      let v7 := $calldataload_2(v2)
+      let v3 := v7
+      let v1 := v3
+      let v8 := 0xe0
+      let v4 := v8
+      let v9 := shr(v4, v1)
+      let v5 := v9
+      ret := v5
+      leave
+    }
+    $__fe_main_root()
+  }
 }

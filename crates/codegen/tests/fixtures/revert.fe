@@ -4,3 +4,7 @@ fn fail() uses (ops: mut RawOps) {
     ops.mstore(addr: 0, value: 42)
     ops.revert(offset: 0, len: 32)
 }
+
+pub fn main() uses (ops: mut RawOps) {
+    fail()
+}

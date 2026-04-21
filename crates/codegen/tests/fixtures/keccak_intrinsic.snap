@@ -3,4 +3,45 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/keccak_intrinsic.fe
 ---
-
+object "main" {
+  code {
+    function $__fe_main_root() {
+      let t3 := mload(0x40)
+      if iszero(t3) {
+        t3 := 0x80
+      }
+      mstore(0x40, add(t3, 0))
+      let v0 := t3
+      let v1 := v0
+      let v2 := $main(v1)
+      stop()
+    }
+    function $hash(p0, p1, p2) -> ret {
+      let v3 := p0
+      let v4 := p1
+      let v6 := $keccak256(v3, v4)
+      let v5 := v6
+      ret := v5
+      leave
+    }
+    function $keccak256(p0, p1) -> ret {
+      let v3 := p0
+      let v4 := p1
+      let v7 := keccak256(v3, v4)
+      let v5 := v7
+      ret := v5
+      leave
+    }
+    function $main(p0) -> ret {
+      let v4 := 0x00
+      let v1 := v4
+      let v5 := 0x20
+      let v2 := v5
+      let v6 := $hash(v1, v2, p0)
+      let v3 := v6
+      ret := v3
+      leave
+    }
+    $__fe_main_root()
+  }
+}

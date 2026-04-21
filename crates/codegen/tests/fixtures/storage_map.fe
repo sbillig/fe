@@ -11,3 +11,10 @@ fn set_balance(addr: u256, value: u256)
 {
     balances.set(key: addr, value)
 }
+
+pub fn main() -> u256
+    uses (balances: mut StorageMap<u256, u256>)
+{
+    set_balance(1, 2)
+    get_balance(1)
+}

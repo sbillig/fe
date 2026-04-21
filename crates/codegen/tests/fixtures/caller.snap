@@ -1,59 +1,38 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 30
 expression: output
 input_file: tests/fixtures/caller.fe
 ---
 object "main" {
   code {
     function $__fe_main_root() {
-      let v0 := 0
-      let v1 := 0
-      v0 := 0
-      v1 := $who_called(v0)
+      let t3 := mload(0x40)
+      if iszero(t3) {
+        t3 := 0x80
+      }
+      mstore(0x40, add(t3, 0))
+      let v0 := t3
+      let v1 := v0
+      let v2 := $main(v1)
       stop()
     }
-    function $caller($self) -> ret {
-      let r0 := mload(0x40)
-      if iszero(r0) {
-        r0 := 0x80
-      }
-      mstore(0x40, add(r0, 0))
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let r2 := mload(0x40)
-      if iszero(r2) {
-        r2 := 0x80
-      }
-      mstore(0x40, add(r2, 32))
-      let v3 := 0
-      let v4 := 0
-      let v5 := 0
-      v4 := caller()
-      mstore(r1, v4)
-      v5 := allocate(32)
-      mstore(v5, mload(r1))
-      mstore(r2, v5)
-      ret := mload(r2)
+    function $caller_0() -> ret {
+      let v4 := caller()
+      let v1 := v4
+      let v2 := v1
+      ret := v2
       leave
     }
-    function $who_called($Ctx) -> ret {
-      let r1 := mload(0x40)
-      if iszero(r1) {
-        r1 := 0x80
-      }
-      mstore(0x40, add(r1, 32))
-      let v2 := 0
-      let v3 := 0
-      let v4 := 0
-      v2 := $Ctx
-      v3 := $Ctx
-      v4 := $caller(v3)
-      mstore(r1, v4)
-      ret := mload(r1)
+    function $main(p0) -> ret {
+      let v2 := $who_called_1(p0)
+      let v1 := v2
+      ret := v1
+      leave
+    }
+    function $who_called_1(p0) -> ret {
+      let v2 := $caller_0()
+      let v1 := v2
+      ret := v1
       leave
     }
     $__fe_main_root()

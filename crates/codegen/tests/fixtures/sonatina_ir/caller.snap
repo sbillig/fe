@@ -4,3 +4,77 @@ expression: output
 input_file: crates/codegen/tests/fixtures/caller.fe
 ---
 target = "evm-ethereum-osaka"
+
+type @__fe_layout_0 = {i256};
+type @__fe_layout_1 = {};
+type @__fe_layout_2 = {@__fe_layout_1};
+
+func private %__fe_main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v1.@__fe_layout_0 = call %main v0;
+        evm_stop;
+}
+
+func private %caller_0() -> @__fe_layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i256 = evm_caller;
+        v1.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v3.objref<i256> = obj.proj v1 0.i256;
+        obj.store v3 v0;
+        v4.@__fe_layout_0 = obj.load v1;
+        return v4;
+}
+
+func private %caller_1() -> @__fe_layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i256 = evm_caller;
+        v1.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v3.objref<i256> = obj.proj v1 0.i256;
+        obj.store v3 v0;
+        v4.@__fe_layout_0 = obj.load v1;
+        return v4;
+}
+
+func private %main(v0.objref<@__fe_layout_2>) -> @__fe_layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.@__fe_layout_0 = call %who_called_1 v0;
+        return v2;
+}
+
+func private %who_called_0(v0.objref<@__fe_layout_2>) -> @__fe_layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.@__fe_layout_0 = call %caller_1;
+        return v1;
+}
+
+func private %who_called_1(v0.objref<@__fe_layout_2>) -> @__fe_layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.@__fe_layout_0 = call %caller_0;
+        return v1;
+}
+
+
+object @main {
+    section main {
+        entry %__fe_main_root;
+    }
+}

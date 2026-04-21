@@ -13,3 +13,7 @@ pub fn read_selector() -> u256 uses (ops: RawOps) {
     // Shift right by 224 bits to keep only the first four bytes.
     word >> 224
 }
+
+pub fn main() -> u256 uses (ops: RawOps) {
+    example()
+}

@@ -8,3 +8,7 @@ fn f(e: E) uses (ops: RawOps) {
         E::B => { ops.return_data(offset: 0, len: 0) }
     }
 }
+
+pub fn main() uses (ops: RawOps) {
+    f(E::A)
+}

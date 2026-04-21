@@ -9,3 +9,7 @@ fn raw_emit(evm: mut Evm) {
     let data: MemPtr<Data> = evm.mem_ptr(0x100)
     evm.log0(offset: data.raw(), len: core::size_of<Data>())
 }
+
+pub fn main() uses (evm: mut Evm) {
+    raw_emit(mut evm)
+}

@@ -4,3 +4,68 @@ expression: output
 input_file: crates/codegen/tests/fixtures/match_return.fe
 ---
 target = "evm-ethereum-osaka"
+
+type @__fe_layout_1 = {};
+type @__fe_layout_2 = {@__fe_layout_1};
+type @__fe_layout_0 = enum {
+    #A,
+    #B,
+};
+
+func private %__fe_main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        call %main v0;
+        evm_stop;
+}
+
+func private %f(v0.@__fe_layout_0, v1.objref<@__fe_layout_2>) {
+    block0:
+        jump block1;
+
+    block1:
+        v3.enumtag(@__fe_layout_0) = enum.tag v0;
+        br_table v3 (0.enumtag(@__fe_layout_0) block2) (1.enumtag(@__fe_layout_0) block3);
+
+    block2:
+        call %return_data 0.i256 0.i256;
+        unreachable;
+
+    block3:
+        call %return_data 0.i256 0.i256;
+        unreachable;
+}
+
+func private %main(v0.objref<@__fe_layout_2>) {
+    block0:
+        jump block1;
+
+    block1:
+        v1.@__fe_layout_0 = enum.make @__fe_layout_0 #A;
+        call %f v1 v0;
+        unreachable;
+}
+
+func private %return_data(v0.i256, v1.i256) {
+    block0:
+        v2.*i256 = alloca i256;
+        v3.*i256 = alloca i256;
+        mstore v2 v0 i256;
+        mstore v3 v1 i256;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i256 = mload v3 i256;
+        evm_return v4 v5;
+}
+
+
+object @main {
+    section main {
+        entry %__fe_main_root;
+    }
+}

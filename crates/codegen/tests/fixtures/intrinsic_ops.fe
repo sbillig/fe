@@ -27,3 +27,12 @@ pub fn load_calldata(offset: u256) -> u256 uses (ops: RawOps) {
 pub fn finish(ptr: u256, len: u256) uses (ops: RawOps) {
     ops.return_data(offset: ptr, len: len)
 }
+
+pub fn main() -> u256
+    uses (mem: mut RawMem, sto: mut RawStorage, ops: RawOps)
+{
+    store_word(0x80, 1)
+    store_byte(0x81, 2)
+    store_slot(3, 4)
+    load_word(0x80) + load_slot(3) + load_calldata(0)
+}
