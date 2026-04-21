@@ -46,6 +46,43 @@ pub(super) struct PatternValue<'db> {
     pub(super) carrier_ty: PatternCarrierTy<'db>,
 }
 
+#[derive(Clone)]
+struct DecisionTreeProjectionCache<'db> {
+    entries: Vec<(ProjectionPath<'db>, PatternValue<'db>)>,
+}
+
+impl<'db> DecisionTreeProjectionCache<'db> {
+    fn new(root_value: PatternValue<'db>) -> Self {
+        Self {
+            entries: vec![(ProjectionPath::default(), root_value)],
+        }
+    }
+
+    fn get(&self, path: &ProjectionPath<'db>) -> Option<PatternValue<'db>> {
+        self.entries
+            .iter()
+            .find_map(|(cached_path, value)| (cached_path == path).then_some(*value))
+    }
+
+    fn insert(&mut self, path: ProjectionPath<'db>, value: PatternValue<'db>) {
+        if self.get(&path).is_none() {
+            self.entries.push((path, value));
+        }
+    }
+
+    fn longest_prefix(
+        &self,
+        path: &ProjectionPath<'db>,
+    ) -> (ProjectionPath<'db>, PatternValue<'db>) {
+        self.entries
+            .iter()
+            .filter(|(cached_path, _)| cached_path.is_prefix_of(path))
+            .max_by_key(|(cached_path, _)| cached_path.len())
+            .map(|(cached_path, value)| (cached_path.clone(), *value))
+            .expect("decision-tree projection cache always contains the root occurrence")
+    }
+}
+
 impl<'db> SmirLowerCtxt<'db> {
     fn validated_pattern_is_irrefutable(&self, pat: ValidatedPatId) -> bool {
         self.typed_body.pattern_store().is_irrefutable(self.db, pat)
@@ -238,7 +275,8 @@ impl<'db> SmirLowerCtxt<'db> {
             self.db,
             &PatternMatrix::from_roots(self.typed_body.pattern_store(), &roots),
         );
-        if !self.lower_decision_tree(&tree, value, result, join_bb, arms) {
+        let mut projections = DecisionTreeProjectionCache::new(value);
+        if !self.lower_decision_tree(&tree, &mut projections, result, join_bb, arms) {
             self.set_synthetic_terminator(join_bb, STerminatorKind::Goto(join_bb));
         }
         self.switch_to(join_bb);
@@ -398,14 +436,14 @@ impl<'db> SmirLowerCtxt<'db> {
     fn lower_decision_tree(
         &mut self,
         tree: &DecisionTree<'db>,
-        root_value: PatternValue<'db>,
+        projections: &mut DecisionTreeProjectionCache<'db>,
         result: crate::analysis::semantic::SLocalId,
         join_bb: SBlockId,
         arms: &[MatchArm],
     ) -> bool {
         match tree {
             DecisionTree::Leaf(leaf) => {
-                self.bind_decision_tree_leaf(leaf, root_value);
+                self.bind_decision_tree_leaf(leaf, projections);
                 let arm = &arms[leaf.arm_index];
                 let arm_value = self.lower_expr(arm.body);
                 if self.is_terminated(self.current) {
@@ -420,7 +458,7 @@ impl<'db> SmirLowerCtxt<'db> {
                 }
             }
             DecisionTree::Switch(switch) => {
-                self.lower_decision_tree_switch(switch, root_value, result, join_bb, arms)
+                self.lower_decision_tree_switch(switch, projections, result, join_bb, arms)
             }
         }
     }
@@ -428,12 +466,12 @@ impl<'db> SmirLowerCtxt<'db> {
     fn lower_decision_tree_switch(
         &mut self,
         switch: &SwitchNode<'db>,
-        root_value: PatternValue<'db>,
+        projections: &mut DecisionTreeProjectionCache<'db>,
         result: crate::analysis::semantic::SLocalId,
         join_bb: SBlockId,
         arms: &[MatchArm],
     ) -> bool {
-        let occurrence = self.project_decision_tree_path(root_value, &switch.occurrence);
+        let occurrence = self.project_decision_tree_path(projections, &switch.occurrence);
         let case_blocks = switch
             .arms
             .iter()
@@ -493,16 +531,22 @@ impl<'db> SmirLowerCtxt<'db> {
         let mut join_reachable = false;
         for (_, subtree, block) in case_blocks {
             self.switch_to(block);
-            join_reachable |= self.lower_decision_tree(subtree, root_value, result, join_bb, arms);
+            let mut subtree_projections = projections.clone();
+            join_reachable |=
+                self.lower_decision_tree(subtree, &mut subtree_projections, result, join_bb, arms);
         }
         join_reachable
     }
 
-    fn bind_decision_tree_leaf(&mut self, leaf: &LeafNode<'db>, root_value: PatternValue<'db>) {
+    fn bind_decision_tree_leaf(
+        &mut self,
+        leaf: &LeafNode<'db>,
+        projections: &mut DecisionTreeProjectionCache<'db>,
+    ) {
         for (binding_ref, path) in &leaf.bindings {
             if let Some(binding) = self.typed_body.pat_binding(binding_ref.representative_pat) {
                 let dst = self.alloc_binding_local(binding);
-                let src = self.project_decision_tree_path(root_value, path);
+                let src = self.project_decision_tree_path(projections, path);
                 self.debug_assert_pattern_binding_ty_matches(dst, src);
                 self.push_synthetic_stmt(SStmtKind::Assign {
                     dst,
@@ -514,12 +558,22 @@ impl<'db> SmirLowerCtxt<'db> {
 
     fn project_decision_tree_path(
         &mut self,
-        root_value: PatternValue<'db>,
+        projections: &mut DecisionTreeProjectionCache<'db>,
         path: &ProjectionPath<'db>,
     ) -> PatternValue<'db> {
-        let mut value = root_value;
-        for projection in path.iter() {
+        if let Some(value) = projections.get(path) {
+            return value;
+        }
+
+        let (mut current_path, mut value) = projections.longest_prefix(path);
+        for projection in path
+            .strip_prefix(&current_path)
+            .expect("longest cached prefix should be a prefix")
+            .iter()
+        {
+            current_path.push(projection.clone());
             value = self.project_decision_tree_value(value, projection);
+            projections.insert(current_path.clone(), value);
         }
         value
     }

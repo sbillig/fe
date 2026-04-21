@@ -536,6 +536,67 @@ fn decode(word: u256) -> u64 {
 }
 
 #[test]
+fn nested_owned_enum_match_does_not_report_move_conflict() {
+    let diags = borrow_diags(
+        r#"
+enum Inner {
+    Unit,
+    Value(u8),
+}
+
+enum Outer {
+    First(Inner),
+    Second(u8),
+}
+
+fn read(outer: own Outer) -> u8 {
+    match outer {
+        Outer::First(Inner::Unit) => 0
+        Outer::First(Inner::Value(x)) => x
+        Outer::Second(y) => y
+    }
+}
+"#,
+    );
+
+    assert!(!diags.contains("move conflict"), "{diags:?}");
+    assert!(
+        !diags.contains("internal borrow checking error"),
+        "{diags:?}"
+    );
+}
+
+#[test]
+fn multi_field_owned_enum_match_does_not_report_move_conflict() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {}
+
+enum Pair {
+    Both(Boxed, Boxed),
+}
+
+fn take(_ value: own Boxed) {}
+
+fn read(pair: own Pair) {
+    match pair {
+        Pair::Both(lhs, rhs) => {
+            take(lhs)
+            take(rhs)
+        }
+    }
+}
+"#,
+    );
+
+    assert!(!diags.contains("move conflict"), "{diags:?}");
+    assert!(
+        !diags.contains("internal borrow checking error"),
+        "{diags:?}"
+    );
+}
+
+#[test]
 fn effect_handle_field_deref_fixture_does_not_report_semantic_borrow_errors() {
     let diags = borrow_diags(include_str!(
         "../../codegen/tests/fixtures/effect_handle_field_deref.fe"

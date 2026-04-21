@@ -968,7 +968,7 @@ impl<'db> Borrowck<'db> {
                         "cannot use a value after it was moved",
                     )?;
                     if *mode == ReadMode::Move {
-                        self.check_move_out(state, &active, place, &targets, stmt.origin)?;
+                        self.check_move_out(&active, place, &targets, stmt.origin)?;
                     }
                 }
                 NExpr::Borrow { place, kind, .. } => {
@@ -985,6 +985,28 @@ impl<'db> Borrowck<'db> {
                             self.overlapping_loans_msg(conflict, *kind),
                             conflict,
                         ));
+                    }
+                }
+                NExpr::ExtractEnumField {
+                    value,
+                    variant,
+                    field,
+                } => {
+                    let targets = self.extract_enum_field_move_targets(
+                        state,
+                        *value,
+                        *variant,
+                        *field,
+                        stmt.origin,
+                    )?;
+                    self.check_moved_overlap(
+                        moved,
+                        &targets,
+                        stmt.origin,
+                        "cannot use a value after it was moved",
+                    )?;
+                    if value.mode == ReadMode::Move {
+                        self.check_move_targets_out(&active, &targets, stmt.origin)?;
                     }
                 }
                 _ => self.check_expr_operands(state, moved, stmt.origin, expr)?,
@@ -1380,7 +1402,6 @@ impl<'db> Borrowck<'db> {
 
     fn check_move_out(
         &self,
-        state: &State,
         active: &[LoanId],
         place: &NSPlace<'db>,
         targets: &FxHashSet<CanonPlace<'db>>,
@@ -1392,6 +1413,16 @@ impl<'db> Borrowck<'db> {
                 "cannot move out through a borrow handle".to_string(),
             ));
         }
+        self.check_move_targets_out(active, targets, origin)?;
+        Ok(())
+    }
+
+    fn check_move_targets_out(
+        &self,
+        active: &[LoanId],
+        targets: &FxHashSet<CanonPlace<'db>>,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+    ) -> Result<(), CompleteDiagnostic> {
         for target in targets {
             if let BorrowRoot::Param(idx) = target.root
                 && self
@@ -1417,7 +1448,6 @@ impl<'db> Borrowck<'db> {
                 loan,
             ));
         }
-        let _ = state;
         Ok(())
     }
 
@@ -1448,7 +1478,27 @@ impl<'db> Borrowck<'db> {
                         moved.insert(place, site.clone());
                     }
                 }
-                self.record_expr_moves(state, moved, stmt.origin, expr)?;
+                if let NExpr::ExtractEnumField {
+                    value,
+                    variant,
+                    field,
+                } = expr
+                {
+                    if value.mode == ReadMode::Move {
+                        let site = self.move_site(*value, operand_origin(*value, stmt.origin));
+                        for place in self.extract_enum_field_move_targets(
+                            state,
+                            *value,
+                            *variant,
+                            *field,
+                            stmt.origin,
+                        )? {
+                            moved.insert(place, site.clone());
+                        }
+                    }
+                } else {
+                    self.record_expr_moves(state, moved, stmt.origin, expr)?;
+                }
             }
             NSStmtKind::Store { dst, .. } => {
                 let written = self.canonicalize_place(state, dst, stmt.origin)?;
@@ -1460,6 +1510,32 @@ impl<'db> Borrowck<'db> {
             }
         }
         Ok(())
+    }
+
+    fn extract_enum_field_move_targets(
+        &self,
+        state: &State,
+        source: NOperand,
+        variant: crate::analysis::semantic::VariantIndex,
+        field: crate::analysis::semantic::FieldIndex,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+    ) -> Result<FxHashSet<CanonPlace<'db>>, CompleteDiagnostic> {
+        let Some(source_local) = self.body.local(source.local) else {
+            return Ok(FxHashSet::default());
+        };
+        let projection = Projection::VariantField {
+            variant,
+            enum_ty: source_local.ty,
+            field_idx: field.0 as usize,
+        };
+        Ok(self
+            .canonicalize_value_base(state, source.local, origin)?
+            .into_iter()
+            .map(|mut target| {
+                target.proj.push(projection.clone());
+                target
+            })
+            .collect())
     }
 
     fn check_expr_operands(
