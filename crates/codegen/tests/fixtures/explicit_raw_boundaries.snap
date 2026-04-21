@@ -6,11 +6,17 @@ input_file: tests/fixtures/explicit_raw_boundaries.fe
 object "main" {
   code {
     function $__fe_main_root() {
-      let v0 := 0
-      $bump_0(v0)
+      let t3 := mload(0x40)
+      if iszero(t3) {
+        t3 := 0x80
+      }
+      mstore(0x40, add(t3, 0))
+      let v0 := t3
+      let v1 := v0
+      $explicit_raw_boundaries(v1)
       stop()
     }
-    function $bump_0(p0) {
+    function $bump(p0) {
       let v4 := p0
       let v1 := v4
       let v5 := 0x01
@@ -23,6 +29,71 @@ object "main" {
       }
       let v8 := t11
       mstore(v1, v8)
+      leave
+    }
+    function $explicit_raw_boundaries(p0) {
+      let v9 := 0x0100
+      let v3 := v9
+      let v10 := $mem_ptr_0(v3)
+      let v4 := v10
+      let v1 := v4
+      $bump(v1)
+      let v13 := 0x0120
+      let v6 := v13
+      let v14 := $mem_ptr_1(v6)
+      let v7 := v14
+      let v2 := v7
+      $raw_store_1(v2, p0)
+      leave
+    }
+    function $from_raw_0(p0) -> ret {
+      let v1 := p0
+      let v3 := v1
+      let v2 := v3
+      ret := v2
+      leave
+    }
+    function $from_raw_1(p0) -> ret {
+      let v1 := p0
+      let v3 := v1
+      let v2 := v3
+      ret := v2
+      leave
+    }
+    function $mem_ptr_0(p0) -> ret {
+      let v2 := p0
+      let v4 := $from_raw_0(v2)
+      let v3 := v4
+      ret := v3
+      leave
+    }
+    function $mem_ptr_1(p0) -> ret {
+      let v2 := p0
+      let v4 := $from_raw_1(v2)
+      let v3 := v4
+      ret := v3
+      leave
+    }
+    function $mstore_1(p0, p1, p2) {
+      let v3 := p1
+      let v4 := p2
+      mstore(v3, v4)
+      leave
+    }
+    function $raw_0(p0) -> ret {
+      let v2 := p0
+      let v1 := v2
+      ret := v1
+      leave
+    }
+    function $raw_store_1(p0, p1) {
+      let v6 := p1
+      let v2 := v6
+      let v7 := $raw_0(p0)
+      let v3 := v7
+      let v8 := 0x08
+      let v4 := v8
+      $mstore_1(v2, v3, v4)
       leave
     }
     $__fe_main_root()

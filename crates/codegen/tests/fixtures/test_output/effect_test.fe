@@ -1,4 +1,6 @@
+use std::evm::RawMem
+
 #[test]
-fn test_effect() uses (x: mut u256) {
-    x += 1
+fn test_effect() uses (mem: mut RawMem) {
+    mem.mstore(addr: 0x80, value: 1)
 }

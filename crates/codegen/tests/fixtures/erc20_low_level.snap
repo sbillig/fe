@@ -5,7 +5,18 @@ input_file: tests/fixtures/erc20_low_level.fe
 ---
 object "Erc20Contract" {
   code {
-    function $caller_0() -> ret {
+    function $__fe_manual_contract_init_root_Erc20Contract() {
+      let t3 := mload(0x40)
+      if iszero(t3) {
+        t3 := 0x80
+      }
+      mstore(0x40, add(t3, 0))
+      let v0 := t3
+      let v1 := v0
+      $init(v1)
+      stop()
+    }
+    function $caller_2() -> ret {
       let v4 := caller()
       let v1 := v4
       let v2 := v1
@@ -22,7 +33,7 @@ object "Erc20Contract" {
     function $do_init_eff0_stor(p0, p1, p2) {
       let v6 := p0
       let v3 := v6
-      let v7 := $caller_0()
+      let v7 := $caller_2()
       let v4 := v7
       $set_owner_once(v3, v4, p2)
       leave
@@ -50,7 +61,7 @@ object "Erc20Contract" {
       ret := iszero(iszero(v4))
       leave
     }
-    function $from_raw_0(p0) -> ret {
+    function $from_raw_1(p0) -> ret {
       let v1 := p0
       let v3 := v1
       let v4 := v3
@@ -76,7 +87,7 @@ object "Erc20Contract" {
       $codecopy(v9, v10, v3, v2)
       let v22 := 0x00
       let v12 := v22
-      $return_data_1(v12, v2)
+      $return_data_0(v12, v2)
       invalid()
     }
     function $ne_0(p0, p1) -> ret {
@@ -87,12 +98,12 @@ object "Erc20Contract" {
       ret := iszero(iszero(v3))
       leave
     }
-    function $return_data_1(p0, p1) {
+    function $return_data_0(p0, p1) {
       let v3 := p0
       let v4 := p1
       return(v3, v4)
     }
-    function $revert_1(p0, p1) {
+    function $revert_0(p0, p1) {
       let v3 := p0
       let v4 := p1
       revert(v3, v4)
@@ -110,7 +121,7 @@ object "Erc20Contract" {
         let v7 := v16
         let v17 := 0x00
         let v8 := v17
-        $revert_1(v7, v8)
+        $revert_0(v7, v8)
         invalid()
       }
       if iszero(iszero(iszero(v6))) {
@@ -121,7 +132,7 @@ object "Erc20Contract" {
     }
     function $stor_ptr_0(p0) -> ret {
       let v2 := p0
-      let v4 := $from_raw_0(v2)
+      let v4 := $from_raw_1(v2)
       let v3 := v4
       ret := v3
       leave
@@ -135,10 +146,21 @@ object "Erc20Contract" {
       ret := v1
       leave
     }
-    $init(0)
+    $__fe_manual_contract_init_root_Erc20Contract()
   }
   object "__Erc20Contract_runtime" {
     code {
+      function $__fe_manual_contract_runtime_root_Erc20Contract() {
+        let t3 := mload(0x40)
+        if iszero(t3) {
+          t3 := 0x80
+        }
+        mstore(0x40, add(t3, 0))
+        let v0 := t3
+        let v1 := v0
+        $runtime(v1)
+        stop()
+      }
       function $abi_encode_string(p0, p1, p2) {
         let v18 := p2
         let v3 := v18
@@ -163,7 +185,7 @@ object "Erc20Contract" {
         let v15 := v31
         let v32 := 0x60
         let v16 := v32
-        $return_data_0(v15, v16)
+        $return_data_1(v15, v16)
         invalid()
       }
       function $abi_encode_u256(p0, p1) {
@@ -177,28 +199,10 @@ object "Erc20Contract" {
         let v6 := v13
         let v14 := 0x20
         let v7 := v14
-        $return_data_0(v6, v7)
+        $return_data_1(v6, v7)
         invalid()
       }
-      function $allowance_0_eff0_stor(p0, p1, p2) -> ret {
-        let v3 := p2
-        let v4 := p0
-        let v5 := p1
-        let t10 := mload(0x40)
-        if iszero(t10) {
-          t10 := 0x80
-        }
-        mstore(0x40, add(t10, 64))
-        let v8 := t10
-        mstore(v8, v4)
-        mstore(add(v8, 32), v5)
-        let v6 := v8
-        let v9 := $get_0(v6)
-        let v7 := v9
-        ret := v7
-        leave
-      }
-      function $allowance_1_arg0_root_stor(p0, p1, p2) -> ret {
+      function $allowance_0_arg0_root_stor(p0, p1, p2) -> ret {
         let v3 := p0
         let v4 := p1
         let v5 := p2
@@ -211,7 +215,25 @@ object "Erc20Contract" {
         mstore(v8, v4)
         mstore(add(v8, 32), v5)
         let v6 := v8
-        let v9 := $get_2(v6)
+        let v9 := $get_1(v6)
+        let v7 := v9
+        ret := v7
+        leave
+      }
+      function $allowance_1_eff0_stor(p0, p1, p2) -> ret {
+        let v3 := p2
+        let v4 := p0
+        let v5 := p1
+        let t10 := mload(0x40)
+        if iszero(t10) {
+          t10 := 0x80
+        }
+        mstore(0x40, add(t10, 64))
+        let v8 := t10
+        mstore(v8, v4)
+        mstore(add(v8, 32), v5)
+        let v6 := v8
+        let v9 := $get_4(v6)
         let v7 := v9
         ret := v7
         leave
@@ -219,7 +241,7 @@ object "Erc20Contract" {
       function $approve_0_eff0_stor(p0, p1, p2, p3) -> ret {
         let v10 := p2
         let v4 := v10
-        let v11 := $caller_1()
+        let v11 := $caller_0()
         let v5 := v11
         let v6 := p0
         let v7 := p1
@@ -243,29 +265,29 @@ object "Erc20Contract" {
         mstore(add(v10, 32), v6)
         let v7 := v10
         let v8 := p3
-        $set_2(v7, v8)
+        $set_1(v7, v8)
         leave
       }
       function $balance_of_0_arg0_root_stor(p0, p1) -> ret {
         let v2 := p0
         let v3 := p1
+        let v5 := $get_0(v3)
+        let v4 := v5
+        ret := v4
+        leave
+      }
+      function $balance_of_1_eff0_stor(p0, p1) -> ret {
+        let v2 := p1
+        let v3 := p0
         let v5 := $get_3(v3)
         let v4 := v5
         ret := v4
         leave
       }
-      function $balance_of_1_arg0_root_stor(p0, p1) -> ret {
+      function $balance_of_2_arg0_root_stor(p0, p1) -> ret {
         let v2 := p0
         let v3 := p1
-        let v5 := $get_1(v3)
-        let v4 := v5
-        ret := v4
-        leave
-      }
-      function $balance_of_2_eff0_stor(p0, p1) -> ret {
-        let v2 := p1
-        let v3 := p0
-        let v5 := $get_4(v3)
+        let v5 := $get_2(v3)
         let v4 := v5
         ret := v4
         leave
@@ -277,14 +299,14 @@ object "Erc20Contract" {
         ret := v3
         leave
       }
-      function $caller_1() -> ret {
+      function $caller_0() -> ret {
         let v4 := caller()
         let v1 := v4
         let v2 := v1
         ret := v2
         leave
       }
-      function $caller_2() -> ret {
+      function $caller_1() -> ret {
         let v4 := caller()
         let v1 := v4
         let v2 := v1
@@ -314,7 +336,7 @@ object "Erc20Contract" {
         ret := iszero(iszero(v4))
         leave
       }
-      function $from_raw_1(p0) -> ret {
+      function $from_raw_0(p0) -> ret {
         let v1 := p0
         let v3 := v1
         let v4 := v3
@@ -348,46 +370,6 @@ object "Erc20Contract" {
         leave
       }
       function $get_0(p0) -> ret {
-        let v5 := 0x01
-        let v2 := v5
-        let v6 := $storagemap_get_word_with_salt_4(p0, v2)
-        let v3 := v6
-        let v7 := $from_word_4(v3)
-        let v4 := v7
-        ret := v4
-        leave
-      }
-      function $get_1(p0) -> ret {
-        let v5 := 0x00
-        let v2 := v5
-        let v6 := $storagemap_get_word_with_salt_0(p0, v2)
-        let v3 := v6
-        let v7 := $from_word_0(v3)
-        let v4 := v7
-        ret := v4
-        leave
-      }
-      function $get_2(p0) -> ret {
-        let v5 := 0x01
-        let v2 := v5
-        let v6 := $storagemap_get_word_with_salt_1(p0, v2)
-        let v3 := v6
-        let v7 := $from_word_1(v3)
-        let v4 := v7
-        ret := v4
-        leave
-      }
-      function $get_3(p0) -> ret {
-        let v5 := 0x00
-        let v2 := v5
-        let v6 := $storagemap_get_word_with_salt_2(p0, v2)
-        let v3 := v6
-        let v7 := $from_word_2(v3)
-        let v4 := v7
-        ret := v4
-        leave
-      }
-      function $get_4(p0) -> ret {
         let v5 := 0x00
         let v2 := v5
         let v6 := $storagemap_get_word_with_salt_3(p0, v2)
@@ -397,8 +379,59 @@ object "Erc20Contract" {
         ret := v4
         leave
       }
-      function $mint_0(p0, p1, p2, p3, p4) {
-        let v26 := $caller_2()
+      function $get_1(p0) -> ret {
+        let v5 := 0x01
+        let v2 := v5
+        let v6 := $storagemap_get_word_with_salt_4(p0, v2)
+        let v3 := v6
+        let v7 := $from_word_4(v3)
+        let v4 := v7
+        ret := v4
+        leave
+      }
+      function $get_2(p0) -> ret {
+        let v5 := 0x00
+        let v2 := v5
+        let v6 := $storagemap_get_word_with_salt_0(p0, v2)
+        let v3 := v6
+        let v7 := $from_word_0(v3)
+        let v4 := v7
+        ret := v4
+        leave
+      }
+      function $get_3(p0) -> ret {
+        let v5 := 0x00
+        let v2 := v5
+        let v6 := $storagemap_get_word_with_salt_1(p0, v2)
+        let v3 := v6
+        let v7 := $from_word_1(v3)
+        let v4 := v7
+        ret := v4
+        leave
+      }
+      function $get_4(p0) -> ret {
+        let v5 := 0x01
+        let v2 := v5
+        let v6 := $storagemap_get_word_with_salt_2(p0, v2)
+        let v3 := v6
+        let v7 := $from_word_2(v3)
+        let v4 := v7
+        ret := v4
+        leave
+      }
+      function $mint_0_eff0_stor(p0, p1, p2, p3, p4) -> ret {
+        let v10 := p2
+        let v5 := v10
+        let v6 := p0
+        let v7 := p1
+        $mint_1(v5, v6, v7, p3, p4)
+        let v13 := 0x01
+        let v9 := v13
+        ret := v9
+        leave
+      }
+      function $mint_1(p0, p1, p2, p3, p4) {
+        let v26 := $caller_1()
         let v7 := v26
         let v5 := v7
         let t40 := sload(add(p0, div(add(32, 31), 32)))
@@ -413,13 +446,13 @@ object "Erc20Contract" {
           let v11 := v30
           let v31 := 0x00
           let v12 := v31
-          $revert_2(v11, v12)
+          $revert_1(v11, v12)
           invalid()
         }
         if iszero(iszero(iszero(v10))) {
           let v15 := p1
           let v34 := p0
-          let v35 := $balance_of_1_arg0_root_stor(v34, v15)
+          let v35 := $balance_of_0_arg0_root_stor(v34, v15)
           let v16 := v35
           let v6 := v16
           let v17 := p0
@@ -431,7 +464,7 @@ object "Erc20Contract" {
           }
           let v36 := t42
           let v20 := v36
-          $set_1(v18, v20)
+          $set_0(v18, v20)
           let t43 := sload(p0)
           let v22 := t43
           let v23 := p2
@@ -444,17 +477,6 @@ object "Erc20Contract" {
           sstore(p0, v24)
           leave
         }
-      }
-      function $mint_1_eff0_stor(p0, p1, p2, p3, p4) -> ret {
-        let v10 := p2
-        let v5 := v10
-        let v6 := p0
-        let v7 := p1
-        $mint_0(v5, v6, v7, p3, p4)
-        let v13 := 0x01
-        let v9 := v13
-        ret := v9
-        leave
       }
       function $mstore(p0, p1, p2) {
         let v3 := p1
@@ -470,12 +492,12 @@ object "Erc20Contract" {
         ret := iszero(iszero(v3))
         leave
       }
-      function $return_data_0(p0, p1) {
+      function $return_data_1(p0, p1) {
         let v3 := p0
         let v4 := p1
         return(v3, v4)
       }
-      function $revert_0(p0, p1) {
+      function $revert_1(p0, p1) {
         let v3 := p0
         let v4 := p1
         revert(v3, v4)
@@ -517,7 +539,7 @@ object "Erc20Contract" {
           let v41 := v103
           let v42 := v41
           let v3 := v42
-          let v105 := $balance_of_2_eff0_stor(v3, v1)
+          let v105 := $balance_of_1_eff0_stor(v3, v1)
           let v43 := v105
           $abi_encode_u256(v43, p0)
           invalid()
@@ -539,7 +561,7 @@ object "Erc20Contract" {
             let v49 := v112
             let v50 := v49
             let v5 := v50
-            let v114 := $allowance_0_eff0_stor(v4, v5, v1)
+            let v114 := $allowance_1_eff0_stor(v4, v5, v1)
             let v51 := v114
             $abi_encode_u256(v51, p0)
             invalid()
@@ -663,7 +685,7 @@ object "Erc20Contract" {
                           let v159 := $calldataload(v88)
                           let v89 := v159
                           let v14 := v89
-                          let v160 := $mint_1_eff0_stor(v13, v14, v1, p0, p0)
+                          let v160 := $mint_0_eff0_stor(v13, v14, v1, p0, p0)
                           let v90 := v160
                           $abi_encode_u256(v90, p0)
                           invalid()
@@ -673,7 +695,7 @@ object "Erc20Contract" {
                           let v92 := v163
                           let v164 := 0x00
                           let v93 := v164
-                          $revert_0(v92, v93)
+                          $revert_3(v92, v93)
                           invalid()
                         }
                       }
@@ -686,30 +708,6 @@ object "Erc20Contract" {
         }
       }
       function $set_0(p0, p1) {
-        let v6 := 0x01
-        let v3 := v6
-        let v7 := $to_word_0(p1)
-        let v4 := v7
-        $storagemap_set_word_with_salt_3(p0, v3, v4)
-        leave
-      }
-      function $set_1(p0, p1) {
-        let v6 := 0x00
-        let v3 := v6
-        let v7 := $to_word_1(p1)
-        let v4 := v7
-        $storagemap_set_word_with_salt_0(p0, v3, v4)
-        leave
-      }
-      function $set_2(p0, p1) {
-        let v6 := 0x01
-        let v3 := v6
-        let v7 := $to_word_2(p1)
-        let v4 := v7
-        $storagemap_set_word_with_salt_1(p0, v3, v4)
-        leave
-      }
-      function $set_3(p0, p1) {
         let v6 := 0x00
         let v3 := v6
         let v7 := $to_word_3(p1)
@@ -717,16 +715,40 @@ object "Erc20Contract" {
         $storagemap_set_word_with_salt_2(p0, v3, v4)
         leave
       }
+      function $set_1(p0, p1) {
+        let v6 := 0x01
+        let v3 := v6
+        let v7 := $to_word_0(p1)
+        let v4 := v7
+        $storagemap_set_word_with_salt_3(p0, v3, v4)
+        leave
+      }
+      function $set_2(p0, p1) {
+        let v6 := 0x00
+        let v3 := v6
+        let v7 := $to_word_1(p1)
+        let v4 := v7
+        $storagemap_set_word_with_salt_0(p0, v3, v4)
+        leave
+      }
+      function $set_3(p0, p1) {
+        let v6 := 0x01
+        let v3 := v6
+        let v7 := $to_word_2(p1)
+        let v4 := v7
+        $storagemap_set_word_with_salt_1(p0, v3, v4)
+        leave
+      }
       function $stor_ptr_1(p0) -> ret {
         let v2 := p0
-        let v4 := $from_raw_1(v2)
+        let v4 := $from_raw_0(v2)
         let v3 := v4
         ret := v3
         leave
       }
       function $storagemap_get_word_with_salt_0(p0, p1) -> ret {
         let v3 := p1
-        let v6 := $storagemap_storage_slot_with_salt_5(p0, v3)
+        let v6 := $storagemap_storage_slot_with_salt_0(p0, v3)
         let v4 := v6
         let v2 := v4
         let v8 := sload(v2)
@@ -736,7 +758,7 @@ object "Erc20Contract" {
       }
       function $storagemap_get_word_with_salt_1(p0, p1) -> ret {
         let v3 := p1
-        let v6 := $storagemap_storage_slot_with_salt_4(p0, v3)
+        let v6 := $storagemap_storage_slot_with_salt_1(p0, v3)
         let v4 := v6
         let v2 := v4
         let v8 := sload(v2)
@@ -746,7 +768,7 @@ object "Erc20Contract" {
       }
       function $storagemap_get_word_with_salt_2(p0, p1) -> ret {
         let v3 := p1
-        let v6 := $storagemap_storage_slot_with_salt_1(p0, v3)
+        let v6 := $storagemap_storage_slot_with_salt_2(p0, v3)
         let v4 := v6
         let v2 := v4
         let v8 := sload(v2)
@@ -756,7 +778,7 @@ object "Erc20Contract" {
       }
       function $storagemap_get_word_with_salt_3(p0, p1) -> ret {
         let v3 := p1
-        let v6 := $storagemap_storage_slot_with_salt_2(p0, v3)
+        let v6 := $storagemap_storage_slot_with_salt_4(p0, v3)
         let v4 := v6
         let v2 := v4
         let v8 := sload(v2)
@@ -776,7 +798,7 @@ object "Erc20Contract" {
       }
       function $storagemap_set_word_with_salt_0(p0, p1, p2) {
         let v4 := p1
-        let v8 := $storagemap_storage_slot_with_salt_5(p0, v4)
+        let v8 := $storagemap_storage_slot_with_salt_0(p0, v4)
         let v5 := v8
         let v3 := v5
         let v6 := p2
@@ -785,7 +807,7 @@ object "Erc20Contract" {
       }
       function $storagemap_set_word_with_salt_1(p0, p1, p2) {
         let v4 := p1
-        let v8 := $storagemap_storage_slot_with_salt_0(p0, v4)
+        let v8 := $storagemap_storage_slot_with_salt_3(p0, v4)
         let v5 := v8
         let v3 := v5
         let v6 := p2
@@ -794,7 +816,7 @@ object "Erc20Contract" {
       }
       function $storagemap_set_word_with_salt_2(p0, p1, p2) {
         let v4 := p1
-        let v8 := $storagemap_storage_slot_with_salt_1(p0, v4)
+        let v8 := $storagemap_storage_slot_with_salt_4(p0, v4)
         let v5 := v8
         let v3 := v5
         let v6 := p2
@@ -803,7 +825,7 @@ object "Erc20Contract" {
       }
       function $storagemap_set_word_with_salt_3(p0, p1, p2) {
         let v4 := p1
-        let v8 := $storagemap_storage_slot_with_salt_4(p0, v4)
+        let v8 := $storagemap_storage_slot_with_salt_5(p0, v4)
         let v5 := v8
         let v3 := v5
         let v6 := p2
@@ -821,7 +843,7 @@ object "Erc20Contract" {
         let v15 := t24
         let v5 := v15
         let v2 := v5
-        let v16 := $write_key_14(v2, p0)
+        let v16 := $write_key_11(v2, p0)
         let v6 := v16
         let v3 := v6
         let t25 := add(v2, v3)
@@ -856,7 +878,7 @@ object "Erc20Contract" {
         let v15 := t24
         let v5 := v15
         let v2 := v5
-        let v16 := $write_key_3(v2, p0)
+        let v16 := $write_key_13(v2, p0)
         let v6 := v16
         let v3 := v6
         let t25 := add(v2, v3)
@@ -891,7 +913,7 @@ object "Erc20Contract" {
         let v15 := t24
         let v5 := v15
         let v2 := v5
-        let v16 := $write_key_5(v2, p0)
+        let v16 := $write_key_0(v2, p0)
         let v6 := v16
         let v3 := v6
         let t25 := add(v2, v3)
@@ -926,7 +948,7 @@ object "Erc20Contract" {
         let v15 := t24
         let v5 := v15
         let v2 := v5
-        let v16 := $write_key_7(v2, p0)
+        let v16 := $write_key_3(v2, p0)
         let v6 := v16
         let v3 := v6
         let t25 := add(v2, v3)
@@ -961,7 +983,7 @@ object "Erc20Contract" {
         let v15 := t24
         let v5 := v15
         let v2 := v5
-        let v16 := $write_key_10(v2, p0)
+        let v16 := $write_key_5(v2, p0)
         let v6 := v16
         let v3 := v6
         let t25 := add(v2, v3)
@@ -996,7 +1018,7 @@ object "Erc20Contract" {
         let v15 := t24
         let v5 := v15
         let v2 := v5
-        let v16 := $write_key_12(v2, p0)
+        let v16 := $write_key_7(v2, p0)
         let v6 := v16
         let v3 := v6
         let t25 := add(v2, v3)
@@ -1040,7 +1062,7 @@ object "Erc20Contract" {
         let v5 := 0
         let v7 := p1
         let v27 := p0
-        let v28 := $balance_of_0_arg0_root_stor(v27, v7)
+        let v28 := $balance_of_2_arg0_root_stor(v27, v7)
         let v8 := v28
         v5 := v8
         let v29 := iszero(iszero(lt(v5, p3)))
@@ -1050,13 +1072,13 @@ object "Erc20Contract" {
           let v11 := v30
           let v31 := 0x00
           let v12 := v31
-          $revert_3(v11, v12)
+          $revert_2(v11, v12)
           invalid()
         }
         if iszero(iszero(iszero(v10))) {
           let v15 := p2
           let v34 := p0
-          let v35 := $balance_of_0_arg0_root_stor(v34, v15)
+          let v35 := $balance_of_2_arg0_root_stor(v34, v15)
           let v16 := v35
           let v6 := v16
           let v17 := p0
@@ -1068,7 +1090,7 @@ object "Erc20Contract" {
           }
           let v36 := t42
           let v20 := v36
-          $set_3(v18, v20)
+          $set_2(v18, v20)
           let v22 := p0
           let v23 := p2
           let v24 := p3
@@ -1078,7 +1100,7 @@ object "Erc20Contract" {
           }
           let v39 := t43
           let v25 := v39
-          $set_3(v23, v25)
+          $set_2(v23, v25)
           leave
         }
       }
@@ -1086,7 +1108,7 @@ object "Erc20Contract" {
         let v5 := 0
         let v7 := p1
         let v27 := p0
-        let v28 := $balance_of_0_arg0_root_stor(v27, v7)
+        let v28 := $balance_of_2_arg0_root_stor(v27, v7)
         let v8 := v28
         v5 := v8
         let v29 := iszero(iszero(lt(v5, p3)))
@@ -1096,13 +1118,13 @@ object "Erc20Contract" {
           let v11 := v30
           let v31 := 0x00
           let v12 := v31
-          $revert_3(v11, v12)
+          $revert_2(v11, v12)
           invalid()
         }
         if iszero(iszero(iszero(v10))) {
           let v15 := p2
           let v34 := p0
-          let v35 := $balance_of_0_arg0_root_stor(v34, v15)
+          let v35 := $balance_of_2_arg0_root_stor(v34, v15)
           let v16 := v35
           let v6 := v16
           let v17 := p0
@@ -1114,7 +1136,7 @@ object "Erc20Contract" {
           }
           let v36 := t42
           let v20 := v36
-          $set_3(v18, v20)
+          $set_2(v18, v20)
           let v22 := p0
           let v23 := p2
           let v24 := p3
@@ -1124,14 +1146,14 @@ object "Erc20Contract" {
           }
           let v39 := t43
           let v25 := v39
-          $set_3(v23, v25)
+          $set_2(v23, v25)
           leave
         }
       }
       function $transfer_2_eff0_stor(p0, p1, p2, p3, p4) -> ret {
         let v11 := p2
         let v5 := v11
-        let v12 := $caller_2()
+        let v12 := $caller_1()
         let v6 := v12
         let v7 := p0
         let v8 := p1
@@ -1156,12 +1178,12 @@ object "Erc20Contract" {
       function $transfer_from_1(p0, p1, p2, p3, p4, p5) {
         let v6 := 0
         let v7 := 0
-        let v27 := $caller_2()
+        let v27 := $caller_1()
         let v8 := v27
         v6 := v8
         let v9 := p1
         let v28 := p0
-        let v29 := $allowance_1_arg0_root_stor(v28, v9, v6)
+        let v29 := $allowance_0_arg0_root_stor(v28, v9, v6)
         let v10 := v29
         v7 := v10
         let v30 := iszero(iszero(lt(v7, p3)))
@@ -1171,7 +1193,7 @@ object "Erc20Contract" {
           let v13 := v31
           let v32 := 0x00
           let v14 := v32
-          $revert_2(v13, v14)
+          $revert_1(v13, v14)
           invalid()
         }
         if iszero(iszero(iszero(v12))) {
@@ -1197,29 +1219,11 @@ object "Erc20Contract" {
           }
           let v38 := t42
           let v25 := v38
-          $set_0(v23, v25)
+          $set_3(v23, v25)
           leave
         }
       }
       function $write_key_0(p0, p1) -> ret {
-        let v2 := p0
-        let v3 := p1
-        mstore(v2, v3)
-        let v8 := 0x20
-        let v5 := v8
-        ret := v5
-        leave
-      }
-      function $write_key_1(p0, p1) -> ret {
-        let v2 := p0
-        let v3 := p1
-        mstore(v2, v3)
-        let v8 := 0x20
-        let v5 := v8
-        ret := v5
-        leave
-      }
-      function $write_key_10(p0, p1) -> ret {
         let r1 := mload(0x40)
         if iszero(r1) {
           r1 := 0x80
@@ -1230,7 +1234,7 @@ object "Erc20Contract" {
         let v4 := p0
         let t16 := mload(r1)
         let v5 := t16
-        let v12 := $write_key_8(v4, v5)
+        let v12 := $write_key_12(v4, v5)
         let v6 := v12
         let v2 := v6
         let v7 := p0
@@ -1242,7 +1246,7 @@ object "Erc20Contract" {
         let v8 := v13
         let t18 := mload(add(r1, 32))
         let v9 := t18
-        let v14 := $write_key_8(v8, v9)
+        let v14 := $write_key_12(v8, v9)
         let v10 := v14
         let v3 := v10
         let t19 := add(v2, v3)
@@ -1254,13 +1258,43 @@ object "Erc20Contract" {
         ret := v11
         leave
       }
-      function $write_key_11(p0, p1) -> ret {
+      function $write_key_1(p0, p1) -> ret {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        mstore(r1, p1)
+        let v2 := p0
+        let t6 := mload(r1)
+        let v3 := t6
+        let v5 := $write_key_14(v2, v3)
+        let v4 := v5
+        ret := v4
+        leave
+      }
+      function $write_key_10(p0, p1) -> ret {
         let v2 := p0
         let v3 := p1
         mstore(v2, v3)
         let v8 := 0x20
         let v5 := v8
         ret := v5
+        leave
+      }
+      function $write_key_11(p0, p1) -> ret {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        mstore(r1, p1)
+        let v2 := p0
+        let t6 := mload(r1)
+        let v3 := t6
+        let v5 := $write_key_8(v2, v3)
+        let v4 := v5
+        ret := v4
         leave
       }
       function $write_key_12(p0, p1) -> ret {
@@ -1288,44 +1322,18 @@ object "Erc20Contract" {
         let v2 := p0
         let t6 := mload(r1)
         let v3 := t6
-        let v5 := $write_key_11(v2, v3)
+        let v5 := $write_key_10(v2, v3)
         let v4 := v5
         ret := v4
         leave
       }
       function $write_key_14(p0, p1) -> ret {
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 64))
-        mstore(r1, mload(p1))
-        mstore(add(r1, 32), mload(add(p1, 32)))
-        let v4 := p0
-        let t16 := mload(r1)
-        let v5 := t16
-        let v12 := $write_key_13(v4, v5)
-        let v6 := v12
-        let v2 := v6
-        let v7 := p0
-        let t17 := add(v7, v2)
-        if lt(t17, v7) {
-          revert(0, 0)
-        }
-        let v13 := t17
-        let v8 := v13
-        let t18 := mload(add(r1, 32))
-        let v9 := t18
-        let v14 := $write_key_13(v8, v9)
-        let v10 := v14
-        let v3 := v10
-        let t19 := add(v2, v3)
-        if lt(t19, v2) {
-          revert(0, 0)
-        }
-        let v15 := t19
-        let v11 := v15
-        ret := v11
+        let v2 := p0
+        let v3 := p1
+        mstore(v2, v3)
+        let v8 := 0x20
+        let v5 := v8
+        ret := v5
         leave
       }
       function $write_key_2(p0, p1) -> ret {
@@ -1342,29 +1350,43 @@ object "Erc20Contract" {
         if iszero(r1) {
           r1 := 0x80
         }
-        mstore(0x40, add(r1, 32))
-        mstore(r1, p1)
-        let v2 := p0
-        let t6 := mload(r1)
-        let v3 := t6
-        let v5 := $write_key_0(v2, v3)
-        let v4 := v5
-        ret := v4
+        mstore(0x40, add(r1, 64))
+        mstore(r1, mload(p1))
+        mstore(add(r1, 32), mload(add(p1, 32)))
+        let v4 := p0
+        let t16 := mload(r1)
+        let v5 := t16
+        let v12 := $write_key_1(v4, v5)
+        let v6 := v12
+        let v2 := v6
+        let v7 := p0
+        let t17 := add(v7, v2)
+        if lt(t17, v7) {
+          revert(0, 0)
+        }
+        let v13 := t17
+        let v8 := v13
+        let t18 := mload(add(r1, 32))
+        let v9 := t18
+        let v14 := $write_key_1(v8, v9)
+        let v10 := v14
+        let v3 := v10
+        let t19 := add(v2, v3)
+        if lt(t19, v2) {
+          revert(0, 0)
+        }
+        let v15 := t19
+        let v11 := v15
+        ret := v11
         leave
       }
       function $write_key_4(p0, p1) -> ret {
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        mstore(r1, p1)
         let v2 := p0
-        let t6 := mload(r1)
-        let v3 := t6
-        let v5 := $write_key_1(v2, v3)
-        let v4 := v5
-        ret := v4
+        let v3 := p1
+        mstore(v2, v3)
+        let v8 := 0x20
+        let v5 := v8
+        ret := v5
         leave
       }
       function $write_key_5(p0, p1) -> ret {
@@ -1383,12 +1405,18 @@ object "Erc20Contract" {
         leave
       }
       function $write_key_6(p0, p1) -> ret {
+        let r1 := mload(0x40)
+        if iszero(r1) {
+          r1 := 0x80
+        }
+        mstore(0x40, add(r1, 32))
+        mstore(r1, p1)
         let v2 := p0
-        let v3 := p1
-        mstore(v2, v3)
-        let v8 := 0x20
-        let v5 := v8
-        ret := v5
+        let t6 := mload(r1)
+        let v3 := t6
+        let v5 := $write_key_4(v2, v3)
+        let v4 := v5
+        ret := v4
         leave
       }
       function $write_key_7(p0, p1) -> ret {
@@ -1402,7 +1430,7 @@ object "Erc20Contract" {
         let v4 := p0
         let t16 := mload(r1)
         let v5 := t16
-        let v12 := $write_key_4(v4, v5)
+        let v12 := $write_key_6(v4, v5)
         let v6 := v12
         let v2 := v6
         let v7 := p0
@@ -1414,7 +1442,7 @@ object "Erc20Contract" {
         let v8 := v13
         let t18 := mload(add(r1, 32))
         let v9 := t18
-        let v14 := $write_key_4(v8, v9)
+        let v14 := $write_key_6(v8, v9)
         let v10 := v14
         let v3 := v10
         let t19 := add(v2, v3)
@@ -1427,18 +1455,12 @@ object "Erc20Contract" {
         leave
       }
       function $write_key_8(p0, p1) -> ret {
-        let r1 := mload(0x40)
-        if iszero(r1) {
-          r1 := 0x80
-        }
-        mstore(0x40, add(r1, 32))
-        mstore(r1, p1)
         let v2 := p0
-        let t6 := mload(r1)
-        let v3 := t6
-        let v5 := $write_key_6(v2, v3)
-        let v4 := v5
-        ret := v4
+        let v3 := p1
+        mstore(v2, v3)
+        let v8 := 0x20
+        let v5 := v8
+        ret := v5
         leave
       }
       function $write_key_9(p0, p1) -> ret {
@@ -1450,7 +1472,7 @@ object "Erc20Contract" {
         ret := v5
         leave
       }
-      $runtime(0)
+      $__fe_manual_contract_runtime_root_Erc20Contract()
     }
   }
 }

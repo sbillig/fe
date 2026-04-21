@@ -5,6 +5,17 @@ input_file: tests/fixtures/code_region.fe
 ---
 object "Child" {
   code {
+    function $__fe_manual_contract_init_root_Child() {
+      let t3 := mload(0x40)
+      if iszero(t3) {
+        t3 := 0x80
+      }
+      mstore(0x40, add(t3, 0))
+      let v0 := t3
+      let v1 := v0
+      $child_init(v1)
+      stop()
+    }
     function $child_init(p0) {
       let v3 := datasize("__Child_runtime")
       let v1 := v3
@@ -14,28 +25,39 @@ object "Child" {
       let v5 := v10
       let v11 := 0x00
       let v6 := v11
-      $codecopy_1(v5, v6, v2, v1)
+      $codecopy_0(v5, v6, v2, v1)
       let v14 := 0x00
       let v8 := v14
-      $return_data_3(v8, v1)
+      $return_data_4(v8, v1)
       invalid()
     }
-    function $codecopy_1(p0, p1, p2, p3) {
+    function $codecopy_0(p0, p1, p2, p3) {
       let v4 := p1
       let v5 := p2
       let v6 := p3
       datacopy(v4, v5, v6)
       leave
     }
-    function $return_data_3(p0, p1) {
+    function $return_data_4(p0, p1) {
       let v3 := p0
       let v4 := p1
       return(v3, v4)
     }
-    $child_init(0)
+    $__fe_manual_contract_init_root_Child()
   }
   object "__Child_runtime" {
     code {
+      function $__fe_manual_contract_runtime_root_Child() {
+        let t3 := mload(0x40)
+        if iszero(t3) {
+          t3 := 0x80
+        }
+        mstore(0x40, add(t3, 0))
+        let v0 := t3
+        let v1 := v0
+        $child_runtime(v1)
+        stop()
+      }
       function $calldatacopy(p0, p1, p2, p3) {
         let v4 := p1
         let v5 := p2
@@ -57,20 +79,31 @@ object "Child" {
         let v6 := v15
         let v16 := 0x04
         let v7 := v16
-        $return_data_4(v6, v7)
+        $return_data_0(v6, v7)
         invalid()
       }
-      function $return_data_4(p0, p1) {
+      function $return_data_0(p0, p1) {
         let v3 := p0
         let v4 := p1
         return(v3, v4)
       }
-      $child_runtime(0)
+      $__fe_manual_contract_runtime_root_Child()
     }
   }
 }
 object "Foo" {
   code {
+    function $__fe_manual_contract_init_root_Foo() {
+      let t3 := mload(0x40)
+      if iszero(t3) {
+        t3 := 0x80
+      }
+      mstore(0x40, add(t3, 0))
+      let v0 := t3
+      let v1 := v0
+      $init(v1)
+      stop()
+    }
     function $allocate(p0, p1) -> ret {
       let v2 := 0
       let v16 := 0x40
@@ -103,7 +136,7 @@ object "Foo" {
       ret := v2
       leave
     }
-    function $codecopy_0(p0, p1, p2, p3) {
+    function $codecopy_1(p0, p1, p2, p3) {
       let v4 := p1
       let v5 := p2
       let v6 := p3
@@ -131,7 +164,7 @@ object "Foo" {
       let v3 := v9
       let v23 := p0
       let v10 := v23
-      $codecopy_0(v10, v3, v2, v1)
+      $codecopy_1(v10, v3, v2, v1)
       let v26 := p0
       let v12 := v26
       let v27 := 0x00
@@ -149,8 +182,8 @@ object "Foo" {
       let v6 := v18
       let v31 := p0
       let v19 := v31
-      $codecopy_0(v19, v6, v5, v4)
-      $return_data_0(v6, v4)
+      $codecopy_1(v19, v6, v5, v4)
+      $return_data_1(v6, v4)
       invalid()
     }
     function $mload(p0) -> ret {
@@ -166,15 +199,26 @@ object "Foo" {
       mstore(v3, v4)
       leave
     }
-    function $return_data_0(p0, p1) {
+    function $return_data_1(p0, p1) {
       let v3 := p0
       let v4 := p1
       return(v3, v4)
     }
-    $init(0)
+    $__fe_manual_contract_init_root_Foo()
   }
   object "__Child_init" {
     code {
+      function $__fe_manual_contract_init_root_Child() {
+        let t3 := mload(0x40)
+        if iszero(t3) {
+          t3 := 0x80
+        }
+        mstore(0x40, add(t3, 0))
+        let v0 := t3
+        let v1 := v0
+        $child_init(v1)
+        stop()
+      }
       function $child_init(p0) {
         let v3 := datasize("__Child_runtime")
         let v1 := v3
@@ -184,28 +228,39 @@ object "Foo" {
         let v5 := v10
         let v11 := 0x00
         let v6 := v11
-        $codecopy_1(v5, v6, v2, v1)
+        $codecopy_0(v5, v6, v2, v1)
         let v14 := 0x00
         let v8 := v14
-        $return_data_3(v8, v1)
+        $return_data_4(v8, v1)
         invalid()
       }
-      function $codecopy_1(p0, p1, p2, p3) {
+      function $codecopy_0(p0, p1, p2, p3) {
         let v4 := p1
         let v5 := p2
         let v6 := p3
         datacopy(v4, v5, v6)
         leave
       }
-      function $return_data_3(p0, p1) {
+      function $return_data_4(p0, p1) {
         let v3 := p0
         let v4 := p1
         return(v3, v4)
       }
-      $child_init(0)
+      $__fe_manual_contract_init_root_Child()
     }
     object "__Child_runtime" {
       code {
+        function $__fe_manual_contract_runtime_root_Child() {
+          let t3 := mload(0x40)
+          if iszero(t3) {
+            t3 := 0x80
+          }
+          mstore(0x40, add(t3, 0))
+          let v0 := t3
+          let v1 := v0
+          $child_runtime(v1)
+          stop()
+        }
         function $calldatacopy(p0, p1, p2, p3) {
           let v4 := p1
           let v5 := p2
@@ -227,26 +282,37 @@ object "Foo" {
           let v6 := v15
           let v16 := 0x04
           let v7 := v16
-          $return_data_4(v6, v7)
+          $return_data_0(v6, v7)
           invalid()
         }
-        function $return_data_4(p0, p1) {
+        function $return_data_0(p0, p1) {
           let v3 := p0
           let v4 := p1
           return(v3, v4)
         }
-        $child_runtime(0)
+        $__fe_manual_contract_runtime_root_Child()
       }
     }
   }
   object "__Foo_runtime" {
     code {
+      function $__fe_manual_contract_runtime_root_Foo() {
+        let t3 := mload(0x40)
+        if iszero(t3) {
+          t3 := 0x80
+        }
+        mstore(0x40, add(t3, 0))
+        let v0 := t3
+        let v1 := v0
+        $runtime(v1)
+        stop()
+      }
       function $balance(p0) {
         let v4 := 0x00
         let v1 := v4
         let v5 := 0x00
         let v2 := v5
-        $return_data_2(v1, v2)
+        $return_data_3(v1, v2)
         invalid()
       }
       function $calldataload(p0) -> ret {
@@ -269,12 +335,12 @@ object "Foo" {
         ret := v5
         leave
       }
-      function $return_data_1(p0, p1) {
+      function $return_data_2(p0, p1) {
         let v3 := p0
         let v4 := p1
         return(v3, v4)
       }
-      function $return_data_2(p0, p1) {
+      function $return_data_3(p0, p1) {
         let v3 := p0
         let v4 := p1
         return(v3, v4)
@@ -303,7 +369,7 @@ object "Foo" {
             let v10 := v15
             let v16 := 0x00
             let v11 := v16
-            $return_data_1(v10, v11)
+            $return_data_2(v10, v11)
             invalid()
           }
         }
@@ -313,10 +379,10 @@ object "Foo" {
         let v1 := v4
         let v5 := 0x00
         let v2 := v5
-        $return_data_2(v1, v2)
+        $return_data_3(v1, v2)
         invalid()
       }
-      $runtime(0)
+      $__fe_manual_contract_runtime_root_Foo()
     }
   }
 }

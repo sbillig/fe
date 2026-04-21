@@ -24,12 +24,13 @@ use crate::{
     },
     layout_size_bytes,
     runtime::{
-        AddressSpaceKind, BorrowAccess, ConstScalar, ContractEffectArgPlan, ContractInitAbiPlan,
-        ContractRecvAbiPlan, DispatchDefault, InitArgsPlan, PlaceElem, PlaceRoot, RBlock, RBlockId,
+        AddressSpaceKind, BorrowAccess, ConstScalar, ContractInitAbiPlan, ContractRecvAbiPlan,
+        DispatchDefault, EntryEffectArgPlan, InitArgsPlan, PlaceElem, PlaceRoot, RBlock, RBlockId,
         RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView, RuntimeBody,
         RuntimeBoundarySpec, RuntimeBuiltin, RuntimeCarrier, RuntimeClass, RuntimeInputPlan,
         RuntimeLocalRoot, RuntimeParamPlan, RuntimePlace, RuntimeReturnPlan, RuntimeSignature,
-        RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole,
+        RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole, TargetRootProviderBinding,
+        TargetRootProviderMaterialization,
         lower::{
             classify::{
                 ref_class_for_place_result, runtime_signature_for_key_with_returns,
@@ -40,7 +41,7 @@ use crate::{
             },
             interface::runtime_visible_binding_plans,
             realize::{
-                RuntimeBoundaryAddress, RuntimeBoundaryMatcher, RuntimeBoundaryValueEmitter,
+                RuntimeBoundaryAddress, RuntimeBoundaryValueEmitter,
                 RuntimeBoundaryValueRealization, RuntimeBoundaryValueSelector,
                 RuntimeBoundaryValueSource, SelectedRuntimeValueArg,
                 emit_selected_runtime_value_args,
@@ -58,6 +59,7 @@ pub(crate) fn runtime_synthetic_signature<'db>(
     match spec {
         RuntimeSyntheticSpec::MainRoot { .. }
         | RuntimeSyntheticSpec::TestRoot { .. }
+        | RuntimeSyntheticSpec::ManualContractRoot { .. }
         | RuntimeSyntheticSpec::ContractInitAbi { .. }
         | RuntimeSyntheticSpec::ContractRecvAbi { .. }
         | RuntimeSyntheticSpec::ContractInitRoot { .. }
@@ -76,10 +78,22 @@ pub(crate) fn lower_synthetic_runtime_body<'db>(
 ) -> RuntimeBody<'db> {
     let mut builder = SyntheticBodyBuilder::new(db, instance);
     match spec {
-        RuntimeSyntheticSpec::MainRoot { callee }
-        | RuntimeSyntheticSpec::TestRoot { callee, .. }
-        | RuntimeSyntheticSpec::CodeRegionRoot { callee, .. } => {
-            builder.build_passthrough_root(callee);
+        RuntimeSyntheticSpec::MainRoot {
+            callee,
+            entry_effect_args,
+        }
+        | RuntimeSyntheticSpec::TestRoot {
+            callee,
+            entry_effect_args,
+            ..
+        }
+        | RuntimeSyntheticSpec::ManualContractRoot {
+            callee,
+            entry_effect_args,
+            ..
+        } => builder.build_entry_root(callee, &entry_effect_args),
+        RuntimeSyntheticSpec::CodeRegionRoot { callee, .. } => {
+            builder.build_passthrough_root(callee)
         }
         RuntimeSyntheticSpec::ContractInitAbi { plan } => builder.build_contract_init_abi(plan),
         RuntimeSyntheticSpec::ContractRecvAbi { plan } => builder.build_contract_recv_abi(plan),
@@ -228,6 +242,15 @@ impl<'db> SyntheticBodyBuilder<'db> {
         }
     }
 
+    fn build_entry_root(
+        &mut self,
+        callee: RuntimeInstance<'db>,
+        entry_effect_args: &[EntryEffectArgPlan<'db>],
+    ) {
+        let args = self.emit_entry_effect_args(RBlockId::from_u32(0), entry_effect_args);
+        self.build_root_call(callee, args);
+    }
+
     fn build_passthrough_root(&mut self, callee: RuntimeInstance<'db>) {
         let signature = self.runtime_signature(callee);
         let semantic = callee.key(self.db).semantic(self.db);
@@ -253,6 +276,17 @@ impl<'db> SyntheticBodyBuilder<'db> {
             ));
         }
 
+        self.build_root_call(callee, args);
+    }
+
+    fn build_root_call(&mut self, callee: RuntimeInstance<'db>, args: Vec<RLocalId>) {
+        let signature = self.runtime_signature(callee);
+        assert_eq!(
+            args.len(),
+            signature.params.len(),
+            "synthetic root arg count mismatch for {callee:?}"
+        );
+        let semantic = callee.key(self.db).semantic(self.db);
         if let Some(class) = signature.ret.clone() {
             let dst = self.push_local(
                 semantic
@@ -363,7 +397,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 cont_bb,
                 user_init,
                 call_args.len(),
-                &plan.owner_effect_args,
+                &plan.entry_effect_args,
             ));
             let _ = self.push_ignored_call(cont_bb, user_init, call_args);
         }
@@ -430,7 +464,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             cont_bb,
             plan.user_recv,
             call_args.len(),
-            &plan.owner_effect_args,
+            &plan.entry_effect_args,
         ));
 
         let ret = self.push_call(cont_bb, plan.user_recv, call_args);
@@ -564,15 +598,15 @@ impl<'db> SyntheticBodyBuilder<'db> {
         cont_bb
     }
 
-    fn emit_contract_effect_args(
+    fn emit_entry_effect_args(
         &mut self,
         bb: RBlockId,
-        bindings: &[ContractEffectArgPlan<'db>],
+        bindings: &[EntryEffectArgPlan<'db>],
     ) -> Vec<RLocalId> {
         bindings
             .iter()
             .map(|binding| match binding {
-                ContractEffectArgPlan::ContractField(binding) => self.push_builtin_value(
+                EntryEffectArgPlan::ContractField(binding) => self.push_builtin_value(
                     bb,
                     binding.declared_ty,
                     binding.class.clone(),
@@ -582,19 +616,31 @@ impl<'db> SyntheticBodyBuilder<'db> {
                         kind: binding.kind.clone(),
                     },
                 ),
-                ContractEffectArgPlan::Placeholder {
-                    declared_ty,
-                    boundary,
-                } => {
-                    let class = RuntimeBoundaryMatcher::placeholder_class(boundary).unwrap_or_else(|| {
-                        panic!(
-                            "borrow-like boundary has no realizable synthetic placeholder class: {boundary:?}"
-                        )
-                    });
-                    self.push_synthetic_default_value(bb, *declared_ty, &class)
+                EntryEffectArgPlan::TargetRootProvider(binding) => {
+                    self.emit_target_root_provider(bb, binding)
                 }
             })
             .collect()
+    }
+
+    fn emit_target_root_provider(
+        &mut self,
+        bb: RBlockId,
+        binding: &TargetRootProviderBinding<'db>,
+    ) -> RLocalId {
+        let root = match binding.materialization {
+            TargetRootProviderMaterialization::MemoryObject { layout } => {
+                self.push_zeroed_memory_object_ref(bb, binding.declared_ty, layout)
+            }
+            TargetRootProviderMaterialization::MemoryRawAddr { layout } => {
+                self.push_zeroed_memory_raw_root(bb, binding.declared_ty, layout)
+            }
+        };
+        if self.locals[root.index()].carrier.value_class() == Some(&binding.class) {
+            root
+        } else {
+            self.coerce_runtime_value(bb, root, &binding.class, binding.declared_ty)
+        }
     }
 
     fn owner_effect_call_args(
@@ -602,14 +648,14 @@ impl<'db> SyntheticBodyBuilder<'db> {
         bb: RBlockId,
         callee: RuntimeInstance<'db>,
         provided_prefix: usize,
-        bindings: &[ContractEffectArgPlan<'db>],
+        bindings: &[EntryEffectArgPlan<'db>],
     ) -> Vec<RLocalId> {
         let needed = self
             .runtime_signature(callee)
             .params
             .len()
             .saturating_sub(provided_prefix);
-        let args = self.emit_contract_effect_args(bb, bindings);
+        let args = self.emit_entry_effect_args(bb, bindings);
         assert_eq!(
             args.len(),
             needed,
@@ -1604,19 +1650,24 @@ mod tests {
     };
 
     #[test]
-    fn test_roots_materialize_fresh_memory_for_mutable_aggregate_effect_params() {
+    fn test_roots_materialize_target_root_providers() {
         let mut db = DriverDataBase::default();
         let file_url = Url::from_file_path(
-            std::env::temp_dir().join("synthetic_mutable_array_args_and_effects_test_root.fe"),
+            std::env::temp_dir().join("synthetic_target_root_provider_test_root.fe"),
         )
         .expect("fixture path should be absolute");
         db.workspace().touch(
             &mut db,
             file_url.clone(),
             Some(
-                include_str!(
-                    "../../../fe/tests/fixtures/fe_test/mutable_array_args_and_effects.fe"
-                )
+                r#"
+use std::evm::RawMem
+
+#[test]
+fn test_raw_mem_root() uses (mem: mut RawMem) {
+    mem.mstore(addr: 0x80, value: 1)
+}
+"#
                 .to_string(),
             ),
         );
@@ -1625,7 +1676,7 @@ mod tests {
             .get(&db, &file_url)
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
-        let package = build_test_runtime_package(&db, top_mod, Some("test_mut_array_effect_param"))
+        let package = build_test_runtime_package(&db, top_mod, Some("test_raw_mem_root"))
             .expect("test runtime package should build");
         let functions = package.functions(&db);
         let root = functions
@@ -1634,7 +1685,7 @@ mod tests {
                 matches!(
                     function.owner(&db),
                     RuntimeFunctionOwner::Synthetic(RuntimeSyntheticSpec::TestRoot { ref name, .. })
-                        if name == "test_mut_array_effect_param"
+                        if name == "test_raw_mem_root"
                 )
             })
             .expect("expected synthetic test root");
@@ -1647,7 +1698,7 @@ mod tests {
                     ..
                 }
             )),
-            "expected synthetic test root to materialize fresh ambient state for aggregate effect params: {body:#?}"
+            "expected synthetic test root to materialize target root providers: {body:#?}"
         );
         assert!(
             !body.blocks[0].stmts.iter().any(|stmt| matches!(

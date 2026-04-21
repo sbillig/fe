@@ -5,6 +5,17 @@ input_file: tests/fixtures/nested_struct.fe
 ---
 object "NestedStruct" {
   code {
+    function $__fe_manual_contract_init_root_NestedStruct() {
+      let t3 := mload(0x40)
+      if iszero(t3) {
+        t3 := 0x80
+      }
+      mstore(0x40, add(t3, 0))
+      let v0 := t3
+      let v1 := v0
+      $init(v1)
+      stop()
+    }
     function $codecopy(p0, p1, p2, p3) {
       let v4 := p1
       let v5 := p2
@@ -24,18 +35,29 @@ object "NestedStruct" {
       $codecopy(v5, v6, v2, v1)
       let v14 := 0x00
       let v8 := v14
-      $return_data_0(v8, v1)
+      $return_data_1(v8, v1)
       invalid()
     }
-    function $return_data_0(p0, p1) {
+    function $return_data_1(p0, p1) {
       let v3 := p0
       let v4 := p1
       return(v3, v4)
     }
-    $init(0)
+    $__fe_manual_contract_init_root_NestedStruct()
   }
   object "__NestedStruct_runtime" {
     code {
+      function $__fe_manual_contract_runtime_root_NestedStruct() {
+        let t3 := mload(0x40)
+        if iszero(t3) {
+          t3 := 0x80
+        }
+        mstore(0x40, add(t3, 0))
+        let v0 := t3
+        let v1 := v0
+        $runtime(v1)
+        stop()
+      }
       function $abi_encode(p0, p1) {
         let v9 := p1
         let v2 := v9
@@ -47,7 +69,7 @@ object "NestedStruct" {
         let v6 := v13
         let v14 := 0x20
         let v7 := v14
-        $return_data_2(v6, v7)
+        $return_data_0(v6, v7)
         invalid()
       }
       function $abi_encode_arg0_root_stor(p0, p1) {
@@ -61,7 +83,7 @@ object "NestedStruct" {
         let v6 := v13
         let v14 := 0x20
         let v7 := v14
-        $return_data_2(v6, v7)
+        $return_data_0(v6, v7)
         invalid()
       }
       function $calldataload(p0) -> ret {
@@ -124,7 +146,7 @@ object "NestedStruct" {
         ret := v1
         leave
       }
-      function $return_data_1(p0, p1) {
+      function $return_data_0(p0, p1) {
         let v3 := p0
         let v4 := p1
         return(v3, v4)
@@ -194,7 +216,7 @@ object "NestedStruct" {
               let v28 := v52
               let v53 := 0x00
               let v29 := v53
-              $return_data_1(v28, v29)
+              $return_data_2(v28, v29)
               invalid()
             }
           }
@@ -212,7 +234,7 @@ object "NestedStruct" {
         sstore(p1, v2)
         leave
       }
-      $runtime(0)
+      $__fe_manual_contract_runtime_root_NestedStruct()
     }
   }
 }

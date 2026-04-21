@@ -7,11 +7,31 @@ target = "evm-ethereum-osaka"
 
 type @__fe_layout_0 = {};
 type @__fe_layout_1 = {@__fe_layout_0};
-type @__fe_layout_2 = {i256};
+type @__fe_layout_2 = {};
 type @__fe_layout_3 = {};
-type @__fe_layout_4 = {};
-type @__fe_layout_5 = {@__fe_layout_3, @__fe_layout_4, i256, @__fe_layout_2};
-type @__fe_layout_6 = {@__fe_layout_2, @__fe_layout_2};
+type @__fe_layout_4 = {i256};
+type @__fe_layout_5 = {@__fe_layout_2, @__fe_layout_3, i256, @__fe_layout_4};
+type @__fe_layout_6 = {@__fe_layout_4, @__fe_layout_4};
+
+func private %__fe_manual_contract_init_root_Erc20Contract() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        call %init v0;
+        evm_stop;
+}
+
+func private %__fe_manual_contract_runtime_root_Erc20Contract() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        call %runtime v0;
+        evm_stop;
+}
 
 func private %abi_encode_string(v0.i256, v1.i256, v2.objref<@__fe_layout_1>) {
     block0:
@@ -27,7 +47,7 @@ func private %abi_encode_string(v0.i256, v1.i256, v2.objref<@__fe_layout_1>) {
         call %mstore v2 32.i256 v9;
         v12.i256 = mload v3 i256;
         call %mstore v2 64.i256 v12;
-        call %return_data_0 0.i256 96.i256;
+        call %return_data_1 0.i256 96.i256;
         unreachable;
 }
 
@@ -40,53 +60,24 @@ func private %abi_encode_u256(v0.i256, v1.objref<@__fe_layout_1>) {
     block1:
         v5.i256 = mload v2 i256;
         call %mstore v1 0.i256 v5;
-        call %return_data_0 0.i256 32.i256;
+        call %return_data_1 0.i256 32.i256;
         unreachable;
 }
 
-func private %allowance_0(v0.@__fe_layout_2, v1.@__fe_layout_2, v2.i256) -> i256 {
-    block0:
-        v3.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
-        v4.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
-        v6.objref<i256> = obj.proj v3 0.i256;
-        v7.i256 = extract_value v0 0.i256;
-        obj.store v6 v7;
-        v8.objref<i256> = obj.proj v4 0.i256;
-        v9.i256 = extract_value v1 0.i256;
-        obj.store v8 v9;
-        jump block1;
-
-    block1:
-        v12.@__fe_layout_2 = obj.load v3;
-        v13.@__fe_layout_2 = obj.load v4;
-        v14.objref<@__fe_layout_6> = obj.alloc @__fe_layout_6;
-        v15.objref<@__fe_layout_2> = obj.proj v14 0.i256;
-        v16.objref<i256> = obj.proj v15 0.i256;
-        v17.i256 = extract_value v12 0.i256;
-        obj.store v16 v17;
-        v19.objref<@__fe_layout_2> = obj.proj v14 1.i256;
-        v20.objref<i256> = obj.proj v19 0.i256;
-        v21.i256 = extract_value v13 0.i256;
-        obj.store v20 v21;
-        v22.@__fe_layout_6 = obj.load v14;
-        v23.i256 = call %get_0 v22;
-        return v23;
-}
-
-func private %allowance_1(v0.@__fe_layout_5, v1.@__fe_layout_2, v2.@__fe_layout_2) -> i256 {
+func private %allowance_0(v0.@__fe_layout_5, v1.@__fe_layout_4, v2.@__fe_layout_4) -> i256 {
     block0:
         v3.objref<@__fe_layout_5> = obj.alloc @__fe_layout_5;
-        v4.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
-        v5.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
-        v7.objref<@__fe_layout_3> = obj.proj v3 0.i256;
-        v8.@__fe_layout_3 = extract_value v0 0.i256;
-        v10.objref<@__fe_layout_4> = obj.proj v3 1.i256;
-        v11.@__fe_layout_4 = extract_value v0 1.i256;
+        v4.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
+        v5.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
+        v7.objref<@__fe_layout_2> = obj.proj v3 0.i256;
+        v8.@__fe_layout_2 = extract_value v0 0.i256;
+        v10.objref<@__fe_layout_3> = obj.proj v3 1.i256;
+        v11.@__fe_layout_3 = extract_value v0 1.i256;
         v13.objref<i256> = obj.proj v3 2.i256;
         v14.i256 = extract_value v0 2.i256;
         obj.store v13 v14;
-        v16.objref<@__fe_layout_2> = obj.proj v3 3.i256;
-        v17.@__fe_layout_2 = extract_value v0 3.i256;
+        v16.objref<@__fe_layout_4> = obj.proj v3 3.i256;
+        v17.@__fe_layout_4 = extract_value v0 3.i256;
         v18.objref<i256> = obj.proj v16 0.i256;
         v19.i256 = extract_value v17 0.i256;
         obj.store v18 v19;
@@ -99,27 +90,56 @@ func private %allowance_1(v0.@__fe_layout_5, v1.@__fe_layout_2, v2.@__fe_layout_
         jump block1;
 
     block1:
-        v24.objref<@__fe_layout_4> = obj.proj v3 1.i256;
-        v25.@__fe_layout_4 = obj.load v24;
-        v26.@__fe_layout_2 = obj.load v4;
-        v27.@__fe_layout_2 = obj.load v5;
+        v24.objref<@__fe_layout_3> = obj.proj v3 1.i256;
+        v25.@__fe_layout_3 = obj.load v24;
+        v26.@__fe_layout_4 = obj.load v4;
+        v27.@__fe_layout_4 = obj.load v5;
         v28.objref<@__fe_layout_6> = obj.alloc @__fe_layout_6;
-        v29.objref<@__fe_layout_2> = obj.proj v28 0.i256;
+        v29.objref<@__fe_layout_4> = obj.proj v28 0.i256;
         v30.objref<i256> = obj.proj v29 0.i256;
         v31.i256 = extract_value v26 0.i256;
         obj.store v30 v31;
-        v32.objref<@__fe_layout_2> = obj.proj v28 1.i256;
+        v32.objref<@__fe_layout_4> = obj.proj v28 1.i256;
         v33.objref<i256> = obj.proj v32 0.i256;
         v34.i256 = extract_value v27 0.i256;
         obj.store v33 v34;
         v35.@__fe_layout_6 = obj.load v28;
-        v36.i256 = call %get_2 v35;
+        v36.i256 = call %get_1 v35;
         return v36;
 }
 
-func private %approve_0(v0.@__fe_layout_2, v1.i256, v2.i256, v3.objref<@__fe_layout_1>) -> i256 {
+func private %allowance_1(v0.@__fe_layout_4, v1.@__fe_layout_4, v2.i256) -> i256 {
     block0:
-        v4.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v3.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
+        v4.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
+        v6.objref<i256> = obj.proj v3 0.i256;
+        v7.i256 = extract_value v0 0.i256;
+        obj.store v6 v7;
+        v8.objref<i256> = obj.proj v4 0.i256;
+        v9.i256 = extract_value v1 0.i256;
+        obj.store v8 v9;
+        jump block1;
+
+    block1:
+        v12.@__fe_layout_4 = obj.load v3;
+        v13.@__fe_layout_4 = obj.load v4;
+        v14.objref<@__fe_layout_6> = obj.alloc @__fe_layout_6;
+        v15.objref<@__fe_layout_4> = obj.proj v14 0.i256;
+        v16.objref<i256> = obj.proj v15 0.i256;
+        v17.i256 = extract_value v12 0.i256;
+        obj.store v16 v17;
+        v19.objref<@__fe_layout_4> = obj.proj v14 1.i256;
+        v20.objref<i256> = obj.proj v19 0.i256;
+        v21.i256 = extract_value v13 0.i256;
+        obj.store v20 v21;
+        v22.@__fe_layout_6 = obj.load v14;
+        v23.i256 = call %get_4 v22;
+        return v23;
+}
+
+func private %approve_0(v0.@__fe_layout_4, v1.i256, v2.i256, v3.objref<@__fe_layout_1>) -> i256 {
+    block0:
+        v4.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v5.*i256 = alloca i256;
         v7.objref<i256> = obj.proj v4 0.i256;
         v8.i256 = extract_value v0 0.i256;
@@ -128,17 +148,17 @@ func private %approve_0(v0.@__fe_layout_2, v1.i256, v2.i256, v3.objref<@__fe_lay
         jump block1;
 
     block1:
-        v10.@__fe_layout_2 = call %caller_1;
-        v11.@__fe_layout_2 = obj.load v4;
+        v10.@__fe_layout_4 = call %caller_0;
+        v11.@__fe_layout_4 = obj.load v4;
         v12.i256 = mload v5 i256;
         call %approve_1 v2 v10 v11 v12;
         return 1.i256;
 }
 
-func private %approve_1(v0.i256, v1.@__fe_layout_2, v2.@__fe_layout_2, v3.i256) {
+func private %approve_1(v0.i256, v1.@__fe_layout_4, v2.@__fe_layout_4, v3.i256) {
     block0:
-        v4.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
-        v5.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v4.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
+        v5.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v6.*i256 = alloca i256;
         v8.objref<i256> = obj.proj v4 0.i256;
         v9.i256 = extract_value v1 0.i256;
@@ -150,36 +170,36 @@ func private %approve_1(v0.i256, v1.@__fe_layout_2, v2.@__fe_layout_2, v3.i256) 
         jump block1;
 
     block1:
-        v14.@__fe_layout_2 = obj.load v4;
-        v15.@__fe_layout_2 = obj.load v5;
+        v14.@__fe_layout_4 = obj.load v4;
+        v15.@__fe_layout_4 = obj.load v5;
         v16.objref<@__fe_layout_6> = obj.alloc @__fe_layout_6;
-        v17.objref<@__fe_layout_2> = obj.proj v16 0.i256;
+        v17.objref<@__fe_layout_4> = obj.proj v16 0.i256;
         v18.objref<i256> = obj.proj v17 0.i256;
         v19.i256 = extract_value v14 0.i256;
         obj.store v18 v19;
-        v21.objref<@__fe_layout_2> = obj.proj v16 1.i256;
+        v21.objref<@__fe_layout_4> = obj.proj v16 1.i256;
         v22.objref<i256> = obj.proj v21 0.i256;
         v23.i256 = extract_value v15 0.i256;
         obj.store v22 v23;
         v24.@__fe_layout_6 = obj.load v16;
         v25.i256 = mload v6 i256;
-        call %set_2 v24 v25;
+        call %set_1 v24 v25;
         return;
 }
 
-func private %balance_of_0(v0.@__fe_layout_5, v1.@__fe_layout_2) -> i256 {
+func private %balance_of_0(v0.@__fe_layout_5, v1.@__fe_layout_4) -> i256 {
     block0:
         v2.objref<@__fe_layout_5> = obj.alloc @__fe_layout_5;
-        v3.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
-        v5.objref<@__fe_layout_3> = obj.proj v2 0.i256;
-        v6.@__fe_layout_3 = extract_value v0 0.i256;
-        v8.objref<@__fe_layout_4> = obj.proj v2 1.i256;
-        v9.@__fe_layout_4 = extract_value v0 1.i256;
+        v3.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
+        v5.objref<@__fe_layout_2> = obj.proj v2 0.i256;
+        v6.@__fe_layout_2 = extract_value v0 0.i256;
+        v8.objref<@__fe_layout_3> = obj.proj v2 1.i256;
+        v9.@__fe_layout_3 = extract_value v0 1.i256;
         v11.objref<i256> = obj.proj v2 2.i256;
         v12.i256 = extract_value v0 2.i256;
         obj.store v11 v12;
-        v14.objref<@__fe_layout_2> = obj.proj v2 3.i256;
-        v15.@__fe_layout_2 = extract_value v0 3.i256;
+        v14.objref<@__fe_layout_4> = obj.proj v2 3.i256;
+        v15.@__fe_layout_4 = extract_value v0 3.i256;
         v16.objref<i256> = obj.proj v14 0.i256;
         v17.i256 = extract_value v15 0.i256;
         obj.store v16 v17;
@@ -189,54 +209,54 @@ func private %balance_of_0(v0.@__fe_layout_5, v1.@__fe_layout_2) -> i256 {
         jump block1;
 
     block1:
-        v20.objref<@__fe_layout_3> = obj.proj v2 0.i256;
-        v21.@__fe_layout_3 = obj.load v20;
-        v22.@__fe_layout_2 = obj.load v3;
-        v23.i256 = call %get_3 v22;
+        v20.objref<@__fe_layout_2> = obj.proj v2 0.i256;
+        v21.@__fe_layout_2 = obj.load v20;
+        v22.@__fe_layout_4 = obj.load v3;
+        v23.i256 = call %get_0 v22;
         return v23;
 }
 
-func private %balance_of_1(v0.@__fe_layout_5, v1.@__fe_layout_2) -> i256 {
+func private %balance_of_1(v0.@__fe_layout_4, v1.i256) -> i256 {
     block0:
-        v2.objref<@__fe_layout_5> = obj.alloc @__fe_layout_5;
-        v3.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
-        v5.objref<@__fe_layout_3> = obj.proj v2 0.i256;
-        v6.@__fe_layout_3 = extract_value v0 0.i256;
-        v8.objref<@__fe_layout_4> = obj.proj v2 1.i256;
-        v9.@__fe_layout_4 = extract_value v0 1.i256;
-        v11.objref<i256> = obj.proj v2 2.i256;
-        v12.i256 = extract_value v0 2.i256;
-        obj.store v11 v12;
-        v14.objref<@__fe_layout_2> = obj.proj v2 3.i256;
-        v15.@__fe_layout_2 = extract_value v0 3.i256;
-        v16.objref<i256> = obj.proj v14 0.i256;
-        v17.i256 = extract_value v15 0.i256;
-        obj.store v16 v17;
-        v18.objref<i256> = obj.proj v3 0.i256;
-        v19.i256 = extract_value v1 0.i256;
-        obj.store v18 v19;
-        jump block1;
-
-    block1:
-        v20.objref<@__fe_layout_3> = obj.proj v2 0.i256;
-        v21.@__fe_layout_3 = obj.load v20;
-        v22.@__fe_layout_2 = obj.load v3;
-        v23.i256 = call %get_1 v22;
-        return v23;
-}
-
-func private %balance_of_2(v0.@__fe_layout_2, v1.i256) -> i256 {
-    block0:
-        v2.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v2.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v4.objref<i256> = obj.proj v2 0.i256;
         v5.i256 = extract_value v0 0.i256;
         obj.store v4 v5;
         jump block1;
 
     block1:
-        v8.@__fe_layout_2 = obj.load v2;
-        v9.i256 = call %get_4 v8;
+        v8.@__fe_layout_4 = obj.load v2;
+        v9.i256 = call %get_3 v8;
         return v9;
+}
+
+func private %balance_of_2(v0.@__fe_layout_5, v1.@__fe_layout_4) -> i256 {
+    block0:
+        v2.objref<@__fe_layout_5> = obj.alloc @__fe_layout_5;
+        v3.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
+        v5.objref<@__fe_layout_2> = obj.proj v2 0.i256;
+        v6.@__fe_layout_2 = extract_value v0 0.i256;
+        v8.objref<@__fe_layout_3> = obj.proj v2 1.i256;
+        v9.@__fe_layout_3 = extract_value v0 1.i256;
+        v11.objref<i256> = obj.proj v2 2.i256;
+        v12.i256 = extract_value v0 2.i256;
+        obj.store v11 v12;
+        v14.objref<@__fe_layout_4> = obj.proj v2 3.i256;
+        v15.@__fe_layout_4 = extract_value v0 3.i256;
+        v16.objref<i256> = obj.proj v14 0.i256;
+        v17.i256 = extract_value v15 0.i256;
+        obj.store v16 v17;
+        v18.objref<i256> = obj.proj v3 0.i256;
+        v19.i256 = extract_value v1 0.i256;
+        obj.store v18 v19;
+        jump block1;
+
+    block1:
+        v20.objref<@__fe_layout_2> = obj.proj v2 0.i256;
+        v21.@__fe_layout_2 = obj.load v20;
+        v22.@__fe_layout_4 = obj.load v3;
+        v23.i256 = call %get_2 v22;
+        return v23;
 }
 
 func private %calldataload(v0.i256) -> i256 {
@@ -251,42 +271,42 @@ func private %calldataload(v0.i256) -> i256 {
         return v3;
 }
 
-func private %caller_0() -> @__fe_layout_2 {
+func private %caller_0() -> @__fe_layout_4 {
     block0:
         jump block1;
 
     block1:
         v0.i256 = evm_caller;
-        v1.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v1.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v3.objref<i256> = obj.proj v1 0.i256;
         obj.store v3 v0;
-        v4.@__fe_layout_2 = obj.load v1;
+        v4.@__fe_layout_4 = obj.load v1;
         return v4;
 }
 
-func private %caller_1() -> @__fe_layout_2 {
+func private %caller_1() -> @__fe_layout_4 {
     block0:
         jump block1;
 
     block1:
         v0.i256 = evm_caller;
-        v1.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v1.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v3.objref<i256> = obj.proj v1 0.i256;
         obj.store v3 v0;
-        v4.@__fe_layout_2 = obj.load v1;
+        v4.@__fe_layout_4 = obj.load v1;
         return v4;
 }
 
-func private %caller_2() -> @__fe_layout_2 {
+func private %caller_2() -> @__fe_layout_4 {
     block0:
         jump block1;
 
     block1:
         v0.i256 = evm_caller;
-        v1.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v1.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v3.objref<i256> = obj.proj v1 0.i256;
         obj.store v3 v0;
-        v4.@__fe_layout_2 = obj.load v1;
+        v4.@__fe_layout_4 = obj.load v1;
         return v4;
 }
 
@@ -313,15 +333,15 @@ func private %do_init(v0.i256, v1.objref<@__fe_layout_1>, v2.objref<@__fe_layout
         jump block1;
 
     block1:
-        v4.@__fe_layout_2 = call %caller_0;
+        v4.@__fe_layout_4 = call %caller_2;
         call %set_owner_once v0 v4 v2;
         return;
 }
 
-func private %eq_0(v0.@__fe_layout_2, v1.@__fe_layout_2) -> i1 {
+func private %eq_0(v0.@__fe_layout_4, v1.@__fe_layout_4) -> i1 {
     block0:
-        v2.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
-        v3.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v2.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
+        v3.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v4.*i256 = alloca i256;
         v6.objref<i256> = obj.proj v2 0.i256;
         v7.i256 = extract_value v0 0.i256;
@@ -342,10 +362,10 @@ func private %eq_0(v0.@__fe_layout_2, v1.@__fe_layout_2) -> i1 {
         return v15;
 }
 
-func private %eq_1(v0.@__fe_layout_2, v1.@__fe_layout_2) -> i1 {
+func private %eq_1(v0.@__fe_layout_4, v1.@__fe_layout_4) -> i1 {
     block0:
-        v2.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
-        v3.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v2.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
+        v3.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v4.*i256 = alloca i256;
         v6.objref<i256> = obj.proj v2 0.i256;
         v7.i256 = extract_value v0 0.i256;
@@ -443,7 +463,17 @@ func private %from_word_4(v0.i256) -> i256 {
         return v2;
 }
 
-func private %get_0(v0.@__fe_layout_6) -> i256 {
+func private %get_0(v0.@__fe_layout_4) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = call %storagemap_get_word_with_salt_3 v0 0.i256;
+        v4.i256 = call %from_word_3 v3;
+        return v4;
+}
+
+func private %get_1(v0.@__fe_layout_6) -> i256 {
     block0:
         jump block1;
 
@@ -453,7 +483,7 @@ func private %get_0(v0.@__fe_layout_6) -> i256 {
         return v4;
 }
 
-func private %get_1(v0.@__fe_layout_2) -> i256 {
+func private %get_2(v0.@__fe_layout_4) -> i256 {
     block0:
         jump block1;
 
@@ -463,33 +493,23 @@ func private %get_1(v0.@__fe_layout_2) -> i256 {
         return v4;
 }
 
-func private %get_2(v0.@__fe_layout_6) -> i256 {
+func private %get_3(v0.@__fe_layout_4) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v3.i256 = call %storagemap_get_word_with_salt_1 v0 1.i256;
+        v3.i256 = call %storagemap_get_word_with_salt_1 v0 0.i256;
         v4.i256 = call %from_word_1 v3;
         return v4;
 }
 
-func private %get_3(v0.@__fe_layout_2) -> i256 {
+func private %get_4(v0.@__fe_layout_6) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v3.i256 = call %storagemap_get_word_with_salt_2 v0 0.i256;
+        v3.i256 = call %storagemap_get_word_with_salt_2 v0 1.i256;
         v4.i256 = call %from_word_2 v3;
-        return v4;
-}
-
-func private %get_4(v0.@__fe_layout_2) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.i256 = call %storagemap_get_word_with_salt_3 v0 0.i256;
-        v4.i256 = call %from_word_3 v3;
         return v4;
 }
 
@@ -503,76 +523,13 @@ func private %init(v0.objref<@__fe_layout_1>) {
         v5.i256 = sym_size &__Erc20Contract_runtime;
         v6.i256 = sym_addr &__Erc20Contract_runtime;
         call %codecopy v0 0.i256 v6 v5;
-        call %return_data_1 0.i256 v5;
+        call %return_data_0 0.i256 v5;
         unreachable;
 }
 
-func private %mint_0(v0.i256, v1.@__fe_layout_2, v2.i256, v3.objref<@__fe_layout_1>, v4.objref<@__fe_layout_1>) {
+func private %mint_0(v0.@__fe_layout_4, v1.i256, v2.i256, v3.objref<@__fe_layout_1>, v4.objref<@__fe_layout_1>) -> i256 {
     block0:
-        v5.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
-        v6.*i256 = alloca i256;
-        v7.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
-        v9.objref<i256> = obj.proj v5 0.i256;
-        v10.i256 = extract_value v1 0.i256;
-        obj.store v9 v10;
-        mstore v6 v2 i256;
-        jump block1;
-
-    block1:
-        v11.@__fe_layout_2 = call %caller_2;
-        v14.i256 = add v0 1.i256;
-        v16.i256 = evm_sload v14;
-        v17.@__fe_layout_2 = insert_value undef.@__fe_layout_2 0.i256 v16;
-        v18.i256 = add v0 1.i256;
-        v19.i256 = extract_value v17 0.i256;
-        evm_sstore v18 v19;
-        v20.i256 = add v0 1.i256;
-        v22.i256 = evm_sload v20;
-        v23.@__fe_layout_2 = insert_value undef.@__fe_layout_2 0.i256 v22;
-        v24.i1 = call %ne_1 v11 v23;
-        br v24 block2 block3;
-
-    block2:
-        call %revert_2 0.i256 0.i256;
-        unreachable;
-
-    block3:
-        jump block4;
-
-    block4:
-        v25.@__fe_layout_2 = obj.load v5;
-        v29.@__fe_layout_5 = insert_value undef.@__fe_layout_5 0.i256 undef.@__fe_layout_3;
-        v31.@__fe_layout_5 = insert_value v29 1.i256 undef.@__fe_layout_4;
-        v32.i256 = evm_sload v0;
-        v34.@__fe_layout_5 = insert_value v31 2.i256 v32;
-        v35.i256 = add v0 1.i256;
-        v37.i256 = evm_sload v35;
-        v38.@__fe_layout_2 = insert_value undef.@__fe_layout_2 0.i256 v37;
-        v40.@__fe_layout_5 = insert_value v34 3.i256 v38;
-        v41.i256 = call %balance_of_1 v40 v25;
-        v43.@__fe_layout_2 = obj.load v5;
-        v44.i256 = mload v6 i256;
-        (v45.i256, v46.i1) = uaddo v41 v44;
-        br v46 block5 block6;
-
-    block5:
-        evm_revert 0.i256 0.i256;
-
-    block6:
-        call %set_1 v43 v45;
-        v50.i256 = evm_sload v0;
-        v51.i256 = mload v6 i256;
-        (v52.i256, v53.i1) = uaddo v50 v51;
-        br v53 block5 block7;
-
-    block7:
-        evm_sstore v0 v52;
-        return;
-}
-
-func private %mint_1(v0.@__fe_layout_2, v1.i256, v2.i256, v3.objref<@__fe_layout_1>, v4.objref<@__fe_layout_1>) -> i256 {
-    block0:
-        v5.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v5.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v6.*i256 = alloca i256;
         v8.objref<i256> = obj.proj v5 0.i256;
         v9.i256 = extract_value v0 0.i256;
@@ -581,10 +538,73 @@ func private %mint_1(v0.@__fe_layout_2, v1.i256, v2.i256, v3.objref<@__fe_layout
         jump block1;
 
     block1:
-        v11.@__fe_layout_2 = obj.load v5;
+        v11.@__fe_layout_4 = obj.load v5;
         v12.i256 = mload v6 i256;
-        call %mint_0 v2 v11 v12 v3 v4;
+        call %mint_1 v2 v11 v12 v3 v4;
         return 1.i256;
+}
+
+func private %mint_1(v0.i256, v1.@__fe_layout_4, v2.i256, v3.objref<@__fe_layout_1>, v4.objref<@__fe_layout_1>) {
+    block0:
+        v5.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
+        v6.*i256 = alloca i256;
+        v7.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
+        v9.objref<i256> = obj.proj v5 0.i256;
+        v10.i256 = extract_value v1 0.i256;
+        obj.store v9 v10;
+        mstore v6 v2 i256;
+        jump block1;
+
+    block1:
+        v11.@__fe_layout_4 = call %caller_1;
+        v14.i256 = add v0 1.i256;
+        v16.i256 = evm_sload v14;
+        v17.@__fe_layout_4 = insert_value undef.@__fe_layout_4 0.i256 v16;
+        v18.i256 = add v0 1.i256;
+        v19.i256 = extract_value v17 0.i256;
+        evm_sstore v18 v19;
+        v20.i256 = add v0 1.i256;
+        v22.i256 = evm_sload v20;
+        v23.@__fe_layout_4 = insert_value undef.@__fe_layout_4 0.i256 v22;
+        v24.i1 = call %ne_1 v11 v23;
+        br v24 block2 block3;
+
+    block2:
+        call %revert_1 0.i256 0.i256;
+        unreachable;
+
+    block3:
+        jump block4;
+
+    block4:
+        v25.@__fe_layout_4 = obj.load v5;
+        v29.@__fe_layout_5 = insert_value undef.@__fe_layout_5 0.i256 undef.@__fe_layout_2;
+        v31.@__fe_layout_5 = insert_value v29 1.i256 undef.@__fe_layout_3;
+        v32.i256 = evm_sload v0;
+        v34.@__fe_layout_5 = insert_value v31 2.i256 v32;
+        v35.i256 = add v0 1.i256;
+        v37.i256 = evm_sload v35;
+        v38.@__fe_layout_4 = insert_value undef.@__fe_layout_4 0.i256 v37;
+        v40.@__fe_layout_5 = insert_value v34 3.i256 v38;
+        v41.i256 = call %balance_of_0 v40 v25;
+        v43.@__fe_layout_4 = obj.load v5;
+        v44.i256 = mload v6 i256;
+        (v45.i256, v46.i1) = uaddo v41 v44;
+        br v46 block5 block6;
+
+    block5:
+        evm_revert 0.i256 0.i256;
+
+    block6:
+        call %set_0 v43 v45;
+        v50.i256 = evm_sload v0;
+        v51.i256 = mload v6 i256;
+        (v52.i256, v53.i1) = uaddo v50 v51;
+        br v53 block5 block7;
+
+    block7:
+        evm_sstore v0 v52;
+        return;
 }
 
 func private %mstore(v0.objref<@__fe_layout_1>, v1.i256, v2.i256) {
@@ -602,7 +622,7 @@ func private %mstore(v0.objref<@__fe_layout_1>, v1.i256, v2.i256) {
         return;
 }
 
-func private %ne_0(v0.@__fe_layout_2, v1.@__fe_layout_2) -> i1 {
+func private %ne_0(v0.@__fe_layout_4, v1.@__fe_layout_4) -> i1 {
     block0:
         jump block1;
 
@@ -612,7 +632,7 @@ func private %ne_0(v0.@__fe_layout_2, v1.@__fe_layout_2) -> i1 {
         return v5;
 }
 
-func private %ne_1(v0.@__fe_layout_2, v1.@__fe_layout_2) -> i1 {
+func private %ne_1(v0.@__fe_layout_4, v1.@__fe_layout_4) -> i1 {
     block0:
         jump block1;
 
@@ -719,26 +739,26 @@ func private %runtime(v0.objref<@__fe_layout_1>) {
 
     block2:
         v9.i256 = call %calldataload 4.i256;
-        v10.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v10.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v11.objref<i256> = obj.proj v10 0.i256;
         obj.store v11 v9;
-        v12.@__fe_layout_2 = obj.load v10;
-        v14.i256 = call %balance_of_2 v12 v2;
+        v12.@__fe_layout_4 = obj.load v10;
+        v14.i256 = call %balance_of_1 v12 v2;
         call %abi_encode_u256 v14 v0;
         unreachable;
 
     block3:
         v16.i256 = call %calldataload 4.i256;
-        v17.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v17.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v18.objref<i256> = obj.proj v17 0.i256;
         obj.store v18 v16;
-        v19.@__fe_layout_2 = obj.load v17;
+        v19.@__fe_layout_4 = obj.load v17;
         v21.i256 = call %calldataload 36.i256;
-        v22.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v22.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v23.objref<i256> = obj.proj v22 0.i256;
         obj.store v23 v21;
-        v24.@__fe_layout_2 = obj.load v22;
-        v26.i256 = call %allowance_0 v19 v24 v2;
+        v24.@__fe_layout_4 = obj.load v22;
+        v26.i256 = call %allowance_1 v19 v24 v2;
         call %abi_encode_u256 v26 v0;
         unreachable;
 
@@ -756,10 +776,10 @@ func private %runtime(v0.objref<@__fe_layout_1>) {
 
     block7:
         v36.i256 = call %calldataload 4.i256;
-        v37.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v37.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v38.objref<i256> = obj.proj v37 0.i256;
         obj.store v38 v36;
-        v39.@__fe_layout_2 = obj.load v37;
+        v39.@__fe_layout_4 = obj.load v37;
         v40.i256 = call %calldataload 36.i256;
         v43.i256 = call %transfer_2 v39 v40 v2 v0 v0;
         call %abi_encode_u256 v43 v0;
@@ -767,10 +787,10 @@ func private %runtime(v0.objref<@__fe_layout_1>) {
 
     block8:
         v44.i256 = call %calldataload 4.i256;
-        v45.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v45.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v46.objref<i256> = obj.proj v45 0.i256;
         obj.store v46 v44;
-        v47.@__fe_layout_2 = obj.load v45;
+        v47.@__fe_layout_4 = obj.load v45;
         v48.i256 = call %calldataload 36.i256;
         v51.i256 = call %approve_0 v47 v48 v2 v0;
         call %abi_encode_u256 v51 v0;
@@ -778,15 +798,15 @@ func private %runtime(v0.objref<@__fe_layout_1>) {
 
     block9:
         v52.i256 = call %calldataload 4.i256;
-        v53.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v53.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v54.objref<i256> = obj.proj v53 0.i256;
         obj.store v54 v52;
-        v55.@__fe_layout_2 = obj.load v53;
+        v55.@__fe_layout_4 = obj.load v53;
         v56.i256 = call %calldataload 36.i256;
-        v57.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v57.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v58.objref<i256> = obj.proj v57 0.i256;
         obj.store v58 v56;
-        v59.@__fe_layout_2 = obj.load v57;
+        v59.@__fe_layout_4 = obj.load v57;
         v61.i256 = call %calldataload 68.i256;
         v64.i256 = call %transfer_from_0 v55 v59 v61 v2 v0 v0;
         call %abi_encode_u256 v64 v0;
@@ -794,17 +814,17 @@ func private %runtime(v0.objref<@__fe_layout_1>) {
 
     block10:
         v65.i256 = call %calldataload 4.i256;
-        v66.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v66.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v67.objref<i256> = obj.proj v66 0.i256;
         obj.store v67 v65;
-        v68.@__fe_layout_2 = obj.load v66;
+        v68.@__fe_layout_4 = obj.load v66;
         v69.i256 = call %calldataload 36.i256;
-        v72.i256 = call %mint_1 v68 v69 v2 v0 v0;
+        v72.i256 = call %mint_0 v68 v69 v2 v0 v0;
         call %abi_encode_u256 v72 v0;
         unreachable;
 
     block11:
-        call %revert_0 0.i256 0.i256;
+        call %revert_3 0.i256 0.i256;
         unreachable;
 
     block12:
@@ -843,37 +863,7 @@ func private %runtime(v0.objref<@__fe_layout_1>) {
         jump block11;
 }
 
-func private %set_0(v0.@__fe_layout_6, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i256 = call %to_word_0 v1;
-        call %storagemap_set_word_with_salt_3 v0 1.i256 v4;
-        return;
-}
-
-func private %set_1(v0.@__fe_layout_2, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i256 = call %to_word_1 v1;
-        call %storagemap_set_word_with_salt_0 v0 0.i256 v4;
-        return;
-}
-
-func private %set_2(v0.@__fe_layout_6, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i256 = call %to_word_2 v1;
-        call %storagemap_set_word_with_salt_1 v0 1.i256 v4;
-        return;
-}
-
-func private %set_3(v0.@__fe_layout_2, v1.i256) {
+func private %set_0(v0.@__fe_layout_4, v1.i256) {
     block0:
         jump block1;
 
@@ -883,10 +873,40 @@ func private %set_3(v0.@__fe_layout_2, v1.i256) {
         return;
 }
 
-func private %set_owner_once(v0.i256, v1.@__fe_layout_2, v2.objref<@__fe_layout_1>) {
+func private %set_1(v0.@__fe_layout_6, v1.i256) {
     block0:
-        v3.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
-        v4.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        jump block1;
+
+    block1:
+        v4.i256 = call %to_word_0 v1;
+        call %storagemap_set_word_with_salt_3 v0 1.i256 v4;
+        return;
+}
+
+func private %set_2(v0.@__fe_layout_4, v1.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %to_word_1 v1;
+        call %storagemap_set_word_with_salt_0 v0 0.i256 v4;
+        return;
+}
+
+func private %set_3(v0.@__fe_layout_6, v1.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %to_word_2 v1;
+        call %storagemap_set_word_with_salt_1 v0 1.i256 v4;
+        return;
+}
+
+func private %set_owner_once(v0.i256, v1.@__fe_layout_4, v2.objref<@__fe_layout_1>) {
+    block0:
+        v3.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
+        v4.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v6.objref<i256> = obj.proj v3 0.i256;
         v7.i256 = extract_value v1 0.i256;
         obj.store v6 v7;
@@ -895,24 +915,24 @@ func private %set_owner_once(v0.i256, v1.@__fe_layout_2, v2.objref<@__fe_layout_
     block1:
         v10.i256 = add v0 1.i256;
         v12.i256 = evm_sload v10;
-        v13.@__fe_layout_2 = insert_value undef.@__fe_layout_2 0.i256 v12;
-        v14.@__fe_layout_2 = call %zero;
+        v13.@__fe_layout_4 = insert_value undef.@__fe_layout_4 0.i256 v12;
+        v14.@__fe_layout_4 = call %zero;
         v15.objref<i256> = obj.proj v4 0.i256;
         v16.i256 = extract_value v14 0.i256;
         obj.store v15 v16;
-        v17.@__fe_layout_2 = obj.load v4;
+        v17.@__fe_layout_4 = obj.load v4;
         v18.i1 = call %ne_0 v13 v17;
         br v18 block2 block3;
 
     block2:
-        call %revert_1 0.i256 0.i256;
+        call %revert_0 0.i256 0.i256;
         unreachable;
 
     block3:
         jump block4;
 
     block4:
-        v19.@__fe_layout_2 = obj.load v3;
+        v19.@__fe_layout_4 = obj.load v3;
         v21.i256 = add v0 1.i256;
         v22.i256 = extract_value v19 0.i256;
         evm_sstore v21 v22;
@@ -927,7 +947,7 @@ func private %stor_ptr_0(v0.i256) -> i256 {
 
     block1:
         v2.i256 = mload v1 i256;
-        v3.i256 = call %from_raw_0 v2;
+        v3.i256 = call %from_raw_1 v2;
         return v3;
 }
 
@@ -939,11 +959,11 @@ func private %stor_ptr_1(v0.i256) -> i256 {
 
     block1:
         v2.i256 = mload v1 i256;
-        v3.i256 = call %from_raw_1 v2;
+        v3.i256 = call %from_raw_0 v2;
         return v3;
 }
 
-func private %storagemap_get_word_with_salt_0(v0.@__fe_layout_2, v1.i256) -> i256 {
+func private %storagemap_get_word_with_salt_0(v0.@__fe_layout_4, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         mstore v2 v1 i256;
@@ -951,25 +971,12 @@ func private %storagemap_get_word_with_salt_0(v0.@__fe_layout_2, v1.i256) -> i25
 
     block1:
         v3.i256 = mload v2 i256;
-        v5.i256 = call %storagemap_storage_slot_with_salt_5 v0 v3;
+        v5.i256 = call %storagemap_storage_slot_with_salt_0 v0 v3;
         v6.i256 = evm_sload v5;
         return v6;
 }
 
-func private %storagemap_get_word_with_salt_1(v0.@__fe_layout_6, v1.i256) -> i256 {
-    block0:
-        v2.*i256 = alloca i256;
-        mstore v2 v1 i256;
-        jump block1;
-
-    block1:
-        v3.i256 = mload v2 i256;
-        v5.i256 = call %storagemap_storage_slot_with_salt_4 v0 v3;
-        v6.i256 = evm_sload v5;
-        return v6;
-}
-
-func private %storagemap_get_word_with_salt_2(v0.@__fe_layout_2, v1.i256) -> i256 {
+func private %storagemap_get_word_with_salt_1(v0.@__fe_layout_4, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         mstore v2 v1 i256;
@@ -982,7 +989,7 @@ func private %storagemap_get_word_with_salt_2(v0.@__fe_layout_2, v1.i256) -> i25
         return v6;
 }
 
-func private %storagemap_get_word_with_salt_3(v0.@__fe_layout_2, v1.i256) -> i256 {
+func private %storagemap_get_word_with_salt_2(v0.@__fe_layout_6, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         mstore v2 v1 i256;
@@ -991,6 +998,19 @@ func private %storagemap_get_word_with_salt_3(v0.@__fe_layout_2, v1.i256) -> i25
     block1:
         v3.i256 = mload v2 i256;
         v5.i256 = call %storagemap_storage_slot_with_salt_2 v0 v3;
+        v6.i256 = evm_sload v5;
+        return v6;
+}
+
+func private %storagemap_get_word_with_salt_3(v0.@__fe_layout_4, v1.i256) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        mstore v2 v1 i256;
+        jump block1;
+
+    block1:
+        v3.i256 = mload v2 i256;
+        v5.i256 = call %storagemap_storage_slot_with_salt_4 v0 v3;
         v6.i256 = evm_sload v5;
         return v6;
 }
@@ -1008,23 +1028,7 @@ func private %storagemap_get_word_with_salt_4(v0.@__fe_layout_6, v1.i256) -> i25
         return v6;
 }
 
-func private %storagemap_set_word_with_salt_0(v0.@__fe_layout_2, v1.i256, v2.i256) {
-    block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        mstore v3 v1 i256;
-        mstore v4 v2 i256;
-        jump block1;
-
-    block1:
-        v5.i256 = mload v3 i256;
-        v7.i256 = call %storagemap_storage_slot_with_salt_5 v0 v5;
-        v8.i256 = mload v4 i256;
-        evm_sstore v7 v8;
-        return;
-}
-
-func private %storagemap_set_word_with_salt_1(v0.@__fe_layout_6, v1.i256, v2.i256) {
+func private %storagemap_set_word_with_salt_0(v0.@__fe_layout_4, v1.i256, v2.i256) {
     block0:
         v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
@@ -1040,7 +1044,7 @@ func private %storagemap_set_word_with_salt_1(v0.@__fe_layout_6, v1.i256, v2.i25
         return;
 }
 
-func private %storagemap_set_word_with_salt_2(v0.@__fe_layout_2, v1.i256, v2.i256) {
+func private %storagemap_set_word_with_salt_1(v0.@__fe_layout_6, v1.i256, v2.i256) {
     block0:
         v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
@@ -1050,13 +1054,13 @@ func private %storagemap_set_word_with_salt_2(v0.@__fe_layout_2, v1.i256, v2.i25
 
     block1:
         v5.i256 = mload v3 i256;
-        v7.i256 = call %storagemap_storage_slot_with_salt_1 v0 v5;
+        v7.i256 = call %storagemap_storage_slot_with_salt_3 v0 v5;
         v8.i256 = mload v4 i256;
         evm_sstore v7 v8;
         return;
 }
 
-func private %storagemap_set_word_with_salt_3(v0.@__fe_layout_6, v1.i256, v2.i256) {
+func private %storagemap_set_word_with_salt_2(v0.@__fe_layout_4, v1.i256, v2.i256) {
     block0:
         v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
@@ -1072,7 +1076,23 @@ func private %storagemap_set_word_with_salt_3(v0.@__fe_layout_6, v1.i256, v2.i25
         return;
 }
 
-func private %storagemap_storage_slot_with_salt_0(v0.@__fe_layout_6, v1.i256) -> i256 {
+func private %storagemap_set_word_with_salt_3(v0.@__fe_layout_6, v1.i256, v2.i256) {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v3 i256;
+        v7.i256 = call %storagemap_storage_slot_with_salt_5 v0 v5;
+        v8.i256 = mload v4 i256;
+        evm_sstore v7 v8;
+        return;
+}
+
+func private %storagemap_storage_slot_with_salt_0(v0.@__fe_layout_4, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         mstore v2 v1 i256;
@@ -1081,7 +1101,7 @@ func private %storagemap_storage_slot_with_salt_0(v0.@__fe_layout_6, v1.i256) ->
     block1:
         v4.*i8 = evm_malloc 0.i256;
         v5.i256 = ptr_to_int v4 i256;
-        v7.i256 = call %write_key_14 v5 v0;
+        v7.i256 = call %write_key_11 v5 v0;
         (v8.i256, v9.i1) = uaddo v5 v7;
         br v9 block2 block3;
 
@@ -1099,7 +1119,7 @@ func private %storagemap_storage_slot_with_salt_0(v0.@__fe_layout_6, v1.i256) ->
         return v17;
 }
 
-func private %storagemap_storage_slot_with_salt_1(v0.@__fe_layout_2, v1.i256) -> i256 {
+func private %storagemap_storage_slot_with_salt_1(v0.@__fe_layout_4, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         mstore v2 v1 i256;
@@ -1108,7 +1128,7 @@ func private %storagemap_storage_slot_with_salt_1(v0.@__fe_layout_2, v1.i256) ->
     block1:
         v4.*i8 = evm_malloc 0.i256;
         v5.i256 = ptr_to_int v4 i256;
-        v7.i256 = call %write_key_3 v5 v0;
+        v7.i256 = call %write_key_13 v5 v0;
         (v8.i256, v9.i1) = uaddo v5 v7;
         br v9 block2 block3;
 
@@ -1126,7 +1146,7 @@ func private %storagemap_storage_slot_with_salt_1(v0.@__fe_layout_2, v1.i256) ->
         return v17;
 }
 
-func private %storagemap_storage_slot_with_salt_2(v0.@__fe_layout_2, v1.i256) -> i256 {
+func private %storagemap_storage_slot_with_salt_2(v0.@__fe_layout_6, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         mstore v2 v1 i256;
@@ -1135,7 +1155,7 @@ func private %storagemap_storage_slot_with_salt_2(v0.@__fe_layout_2, v1.i256) ->
     block1:
         v4.*i8 = evm_malloc 0.i256;
         v5.i256 = ptr_to_int v4 i256;
-        v7.i256 = call %write_key_5 v5 v0;
+        v7.i256 = call %write_key_0 v5 v0;
         (v8.i256, v9.i1) = uaddo v5 v7;
         br v9 block2 block3;
 
@@ -1162,61 +1182,61 @@ func private %storagemap_storage_slot_with_salt_3(v0.@__fe_layout_6, v1.i256) ->
     block1:
         v4.*i8 = evm_malloc 0.i256;
         v5.i256 = ptr_to_int v4 i256;
+        v7.i256 = call %write_key_3 v5 v0;
+        (v8.i256, v9.i1) = uaddo v5 v7;
+        br v9 block2 block3;
+
+    block2:
+        evm_revert 0.i256 0.i256;
+
+    block3:
+        v10.i256 = mload v2 i256;
+        mstore v8 v10 i256;
+        (v14.i256, v15.i1) = uaddo v7 32.i256;
+        br v15 block2 block4;
+
+    block4:
+        v17.i256 = evm_keccak256 v5 v14;
+        return v17;
+}
+
+func private %storagemap_storage_slot_with_salt_4(v0.@__fe_layout_4, v1.i256) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        mstore v2 v1 i256;
+        jump block1;
+
+    block1:
+        v4.*i8 = evm_malloc 0.i256;
+        v5.i256 = ptr_to_int v4 i256;
+        v7.i256 = call %write_key_5 v5 v0;
+        (v8.i256, v9.i1) = uaddo v5 v7;
+        br v9 block2 block3;
+
+    block2:
+        evm_revert 0.i256 0.i256;
+
+    block3:
+        v10.i256 = mload v2 i256;
+        mstore v8 v10 i256;
+        (v14.i256, v15.i1) = uaddo v7 32.i256;
+        br v15 block2 block4;
+
+    block4:
+        v17.i256 = evm_keccak256 v5 v14;
+        return v17;
+}
+
+func private %storagemap_storage_slot_with_salt_5(v0.@__fe_layout_6, v1.i256) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        mstore v2 v1 i256;
+        jump block1;
+
+    block1:
+        v4.*i8 = evm_malloc 0.i256;
+        v5.i256 = ptr_to_int v4 i256;
         v7.i256 = call %write_key_7 v5 v0;
-        (v8.i256, v9.i1) = uaddo v5 v7;
-        br v9 block2 block3;
-
-    block2:
-        evm_revert 0.i256 0.i256;
-
-    block3:
-        v10.i256 = mload v2 i256;
-        mstore v8 v10 i256;
-        (v14.i256, v15.i1) = uaddo v7 32.i256;
-        br v15 block2 block4;
-
-    block4:
-        v17.i256 = evm_keccak256 v5 v14;
-        return v17;
-}
-
-func private %storagemap_storage_slot_with_salt_4(v0.@__fe_layout_6, v1.i256) -> i256 {
-    block0:
-        v2.*i256 = alloca i256;
-        mstore v2 v1 i256;
-        jump block1;
-
-    block1:
-        v4.*i8 = evm_malloc 0.i256;
-        v5.i256 = ptr_to_int v4 i256;
-        v7.i256 = call %write_key_10 v5 v0;
-        (v8.i256, v9.i1) = uaddo v5 v7;
-        br v9 block2 block3;
-
-    block2:
-        evm_revert 0.i256 0.i256;
-
-    block3:
-        v10.i256 = mload v2 i256;
-        mstore v8 v10 i256;
-        (v14.i256, v15.i1) = uaddo v7 32.i256;
-        br v15 block2 block4;
-
-    block4:
-        v17.i256 = evm_keccak256 v5 v14;
-        return v17;
-}
-
-func private %storagemap_storage_slot_with_salt_5(v0.@__fe_layout_2, v1.i256) -> i256 {
-    block0:
-        v2.*i256 = alloca i256;
-        mstore v2 v1 i256;
-        jump block1;
-
-    block1:
-        v4.*i8 = evm_malloc 0.i256;
-        v5.i256 = ptr_to_int v4 i256;
-        v7.i256 = call %write_key_12 v5 v0;
         (v8.i256, v9.i1) = uaddo v5 v7;
         br v9 block2 block3;
 
@@ -1266,10 +1286,10 @@ func private %to_word_3(v0.i256) -> i256 {
         return v0;
 }
 
-func private %transfer_0(v0.i256, v1.@__fe_layout_2, v2.@__fe_layout_2, v3.i256, v4.objref<@__fe_layout_1>) {
+func private %transfer_0(v0.i256, v1.@__fe_layout_4, v2.@__fe_layout_4, v3.i256, v4.objref<@__fe_layout_1>) {
     block0:
-        v5.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
-        v6.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v5.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
+        v6.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v7.*i256 = alloca i256;
         v9.objref<i256> = obj.proj v5 0.i256;
         v10.i256 = extract_value v1 0.i256;
@@ -1281,39 +1301,39 @@ func private %transfer_0(v0.i256, v1.@__fe_layout_2, v2.@__fe_layout_2, v3.i256,
         jump block1;
 
     block1:
-        v13.@__fe_layout_2 = obj.load v5;
-        v17.@__fe_layout_5 = insert_value undef.@__fe_layout_5 0.i256 undef.@__fe_layout_3;
-        v20.@__fe_layout_5 = insert_value v17 1.i256 undef.@__fe_layout_4;
+        v13.@__fe_layout_4 = obj.load v5;
+        v17.@__fe_layout_5 = insert_value undef.@__fe_layout_5 0.i256 undef.@__fe_layout_2;
+        v20.@__fe_layout_5 = insert_value v17 1.i256 undef.@__fe_layout_3;
         v21.i256 = evm_sload v0;
         v23.@__fe_layout_5 = insert_value v20 2.i256 v21;
         v24.i256 = add v0 1.i256;
         v26.i256 = evm_sload v24;
-        v27.@__fe_layout_2 = insert_value undef.@__fe_layout_2 0.i256 v26;
+        v27.@__fe_layout_4 = insert_value undef.@__fe_layout_4 0.i256 v26;
         v29.@__fe_layout_5 = insert_value v23 3.i256 v27;
-        v30.i256 = call %balance_of_0 v29 v13;
+        v30.i256 = call %balance_of_2 v29 v13;
         v31.i256 = mload v7 i256;
         v32.i1 = lt v30 v31;
         br v32 block2 block3;
 
     block2:
-        call %revert_3 0.i256 0.i256;
+        call %revert_2 0.i256 0.i256;
         unreachable;
 
     block3:
         jump block4;
 
     block4:
-        v33.@__fe_layout_2 = obj.load v6;
-        v37.@__fe_layout_5 = insert_value undef.@__fe_layout_5 0.i256 undef.@__fe_layout_3;
-        v39.@__fe_layout_5 = insert_value v37 1.i256 undef.@__fe_layout_4;
+        v33.@__fe_layout_4 = obj.load v6;
+        v37.@__fe_layout_5 = insert_value undef.@__fe_layout_5 0.i256 undef.@__fe_layout_2;
+        v39.@__fe_layout_5 = insert_value v37 1.i256 undef.@__fe_layout_3;
         v40.i256 = evm_sload v0;
         v41.@__fe_layout_5 = insert_value v39 2.i256 v40;
         v42.i256 = add v0 1.i256;
         v44.i256 = evm_sload v42;
-        v45.@__fe_layout_2 = insert_value undef.@__fe_layout_2 0.i256 v44;
+        v45.@__fe_layout_4 = insert_value undef.@__fe_layout_4 0.i256 v44;
         v46.@__fe_layout_5 = insert_value v41 3.i256 v45;
-        v47.i256 = call %balance_of_0 v46 v33;
-        v49.@__fe_layout_2 = obj.load v5;
+        v47.i256 = call %balance_of_2 v46 v33;
+        v49.@__fe_layout_4 = obj.load v5;
         v50.i256 = mload v7 i256;
         (v52.i256, v53.i1) = usubo v30 v50;
         br v53 block5 block6;
@@ -1322,21 +1342,21 @@ func private %transfer_0(v0.i256, v1.@__fe_layout_2, v2.@__fe_layout_2, v3.i256,
         evm_revert 0.i256 0.i256;
 
     block6:
-        call %set_3 v49 v52;
-        v58.@__fe_layout_2 = obj.load v6;
+        call %set_2 v49 v52;
+        v58.@__fe_layout_4 = obj.load v6;
         v59.i256 = mload v7 i256;
         (v61.i256, v62.i1) = uaddo v47 v59;
         br v62 block5 block7;
 
     block7:
-        call %set_3 v58 v61;
+        call %set_2 v58 v61;
         return;
 }
 
-func private %transfer_1(v0.i256, v1.@__fe_layout_2, v2.@__fe_layout_2, v3.i256, v4.objref<@__fe_layout_1>) {
+func private %transfer_1(v0.i256, v1.@__fe_layout_4, v2.@__fe_layout_4, v3.i256, v4.objref<@__fe_layout_1>) {
     block0:
-        v5.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
-        v6.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v5.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
+        v6.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v7.*i256 = alloca i256;
         v9.objref<i256> = obj.proj v5 0.i256;
         v10.i256 = extract_value v1 0.i256;
@@ -1348,39 +1368,39 @@ func private %transfer_1(v0.i256, v1.@__fe_layout_2, v2.@__fe_layout_2, v3.i256,
         jump block1;
 
     block1:
-        v13.@__fe_layout_2 = obj.load v5;
-        v17.@__fe_layout_5 = insert_value undef.@__fe_layout_5 0.i256 undef.@__fe_layout_3;
-        v20.@__fe_layout_5 = insert_value v17 1.i256 undef.@__fe_layout_4;
+        v13.@__fe_layout_4 = obj.load v5;
+        v17.@__fe_layout_5 = insert_value undef.@__fe_layout_5 0.i256 undef.@__fe_layout_2;
+        v20.@__fe_layout_5 = insert_value v17 1.i256 undef.@__fe_layout_3;
         v21.i256 = evm_sload v0;
         v23.@__fe_layout_5 = insert_value v20 2.i256 v21;
         v24.i256 = add v0 1.i256;
         v26.i256 = evm_sload v24;
-        v27.@__fe_layout_2 = insert_value undef.@__fe_layout_2 0.i256 v26;
+        v27.@__fe_layout_4 = insert_value undef.@__fe_layout_4 0.i256 v26;
         v29.@__fe_layout_5 = insert_value v23 3.i256 v27;
-        v30.i256 = call %balance_of_0 v29 v13;
+        v30.i256 = call %balance_of_2 v29 v13;
         v31.i256 = mload v7 i256;
         v32.i1 = lt v30 v31;
         br v32 block2 block3;
 
     block2:
-        call %revert_3 0.i256 0.i256;
+        call %revert_2 0.i256 0.i256;
         unreachable;
 
     block3:
         jump block4;
 
     block4:
-        v33.@__fe_layout_2 = obj.load v6;
-        v37.@__fe_layout_5 = insert_value undef.@__fe_layout_5 0.i256 undef.@__fe_layout_3;
-        v39.@__fe_layout_5 = insert_value v37 1.i256 undef.@__fe_layout_4;
+        v33.@__fe_layout_4 = obj.load v6;
+        v37.@__fe_layout_5 = insert_value undef.@__fe_layout_5 0.i256 undef.@__fe_layout_2;
+        v39.@__fe_layout_5 = insert_value v37 1.i256 undef.@__fe_layout_3;
         v40.i256 = evm_sload v0;
         v41.@__fe_layout_5 = insert_value v39 2.i256 v40;
         v42.i256 = add v0 1.i256;
         v44.i256 = evm_sload v42;
-        v45.@__fe_layout_2 = insert_value undef.@__fe_layout_2 0.i256 v44;
+        v45.@__fe_layout_4 = insert_value undef.@__fe_layout_4 0.i256 v44;
         v46.@__fe_layout_5 = insert_value v41 3.i256 v45;
-        v47.i256 = call %balance_of_0 v46 v33;
-        v49.@__fe_layout_2 = obj.load v5;
+        v47.i256 = call %balance_of_2 v46 v33;
+        v49.@__fe_layout_4 = obj.load v5;
         v50.i256 = mload v7 i256;
         (v52.i256, v53.i1) = usubo v30 v50;
         br v53 block5 block6;
@@ -1389,20 +1409,20 @@ func private %transfer_1(v0.i256, v1.@__fe_layout_2, v2.@__fe_layout_2, v3.i256,
         evm_revert 0.i256 0.i256;
 
     block6:
-        call %set_3 v49 v52;
-        v58.@__fe_layout_2 = obj.load v6;
+        call %set_2 v49 v52;
+        v58.@__fe_layout_4 = obj.load v6;
         v59.i256 = mload v7 i256;
         (v61.i256, v62.i1) = uaddo v47 v59;
         br v62 block5 block7;
 
     block7:
-        call %set_3 v58 v61;
+        call %set_2 v58 v61;
         return;
 }
 
-func private %transfer_2(v0.@__fe_layout_2, v1.i256, v2.i256, v3.objref<@__fe_layout_1>, v4.objref<@__fe_layout_1>) -> i256 {
+func private %transfer_2(v0.@__fe_layout_4, v1.i256, v2.i256, v3.objref<@__fe_layout_1>, v4.objref<@__fe_layout_1>) -> i256 {
     block0:
-        v5.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v5.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v6.*i256 = alloca i256;
         v8.objref<i256> = obj.proj v5 0.i256;
         v9.i256 = extract_value v0 0.i256;
@@ -1411,17 +1431,17 @@ func private %transfer_2(v0.@__fe_layout_2, v1.i256, v2.i256, v3.objref<@__fe_la
         jump block1;
 
     block1:
-        v11.@__fe_layout_2 = call %caller_2;
-        v12.@__fe_layout_2 = obj.load v5;
+        v11.@__fe_layout_4 = call %caller_1;
+        v12.@__fe_layout_4 = obj.load v5;
         v13.i256 = mload v6 i256;
         call %transfer_1 v2 v11 v12 v13 v4;
         return 1.i256;
 }
 
-func private %transfer_from_0(v0.@__fe_layout_2, v1.@__fe_layout_2, v2.i256, v3.i256, v4.objref<@__fe_layout_1>, v5.objref<@__fe_layout_1>) -> i256 {
+func private %transfer_from_0(v0.@__fe_layout_4, v1.@__fe_layout_4, v2.i256, v3.i256, v4.objref<@__fe_layout_1>, v5.objref<@__fe_layout_1>) -> i256 {
     block0:
-        v6.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
-        v7.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v6.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
+        v7.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v8.*i256 = alloca i256;
         v10.objref<i256> = obj.proj v6 0.i256;
         v11.i256 = extract_value v0 0.i256;
@@ -1433,17 +1453,17 @@ func private %transfer_from_0(v0.@__fe_layout_2, v1.@__fe_layout_2, v2.i256, v3.
         jump block1;
 
     block1:
-        v15.@__fe_layout_2 = obj.load v6;
-        v16.@__fe_layout_2 = obj.load v7;
+        v15.@__fe_layout_4 = obj.load v6;
+        v16.@__fe_layout_4 = obj.load v7;
         v17.i256 = mload v8 i256;
         call %transfer_from_1 v3 v15 v16 v17 v4 v5;
         return 1.i256;
 }
 
-func private %transfer_from_1(v0.i256, v1.@__fe_layout_2, v2.@__fe_layout_2, v3.i256, v4.objref<@__fe_layout_1>, v5.objref<@__fe_layout_1>) {
+func private %transfer_from_1(v0.i256, v1.@__fe_layout_4, v2.@__fe_layout_4, v3.i256, v4.objref<@__fe_layout_1>, v5.objref<@__fe_layout_1>) {
     block0:
-        v6.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
-        v7.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v6.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
+        v7.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v8.*i256 = alloca i256;
         v10.objref<i256> = obj.proj v6 0.i256;
         v11.i256 = extract_value v1 0.i256;
@@ -1455,40 +1475,40 @@ func private %transfer_from_1(v0.i256, v1.@__fe_layout_2, v2.@__fe_layout_2, v3.
         jump block1;
 
     block1:
-        v14.@__fe_layout_2 = call %caller_2;
-        v15.@__fe_layout_2 = obj.load v6;
-        v19.@__fe_layout_5 = insert_value undef.@__fe_layout_5 0.i256 undef.@__fe_layout_3;
-        v22.@__fe_layout_5 = insert_value v19 1.i256 undef.@__fe_layout_4;
+        v14.@__fe_layout_4 = call %caller_1;
+        v15.@__fe_layout_4 = obj.load v6;
+        v19.@__fe_layout_5 = insert_value undef.@__fe_layout_5 0.i256 undef.@__fe_layout_2;
+        v22.@__fe_layout_5 = insert_value v19 1.i256 undef.@__fe_layout_3;
         v23.i256 = evm_sload v0;
         v25.@__fe_layout_5 = insert_value v22 2.i256 v23;
         v26.i256 = add v0 1.i256;
         v28.i256 = evm_sload v26;
-        v29.@__fe_layout_2 = insert_value undef.@__fe_layout_2 0.i256 v28;
+        v29.@__fe_layout_4 = insert_value undef.@__fe_layout_4 0.i256 v28;
         v31.@__fe_layout_5 = insert_value v25 3.i256 v29;
-        v32.i256 = call %allowance_1 v31 v15 v14;
+        v32.i256 = call %allowance_0 v31 v15 v14;
         v33.i256 = mload v8 i256;
         v34.i1 = lt v32 v33;
         br v34 block2 block3;
 
     block2:
-        call %revert_2 0.i256 0.i256;
+        call %revert_1 0.i256 0.i256;
         unreachable;
 
     block3:
         jump block4;
 
     block4:
-        v35.@__fe_layout_2 = obj.load v6;
-        v36.@__fe_layout_2 = obj.load v7;
+        v35.@__fe_layout_4 = obj.load v6;
+        v36.@__fe_layout_4 = obj.load v7;
         v37.i256 = mload v8 i256;
         call %transfer_0 v0 v35 v36 v37 v5;
-        v42.@__fe_layout_2 = obj.load v6;
+        v42.@__fe_layout_4 = obj.load v6;
         v43.objref<@__fe_layout_6> = obj.alloc @__fe_layout_6;
-        v44.objref<@__fe_layout_2> = obj.proj v43 0.i256;
+        v44.objref<@__fe_layout_4> = obj.proj v43 0.i256;
         v45.objref<i256> = obj.proj v44 0.i256;
         v46.i256 = extract_value v42 0.i256;
         obj.store v45 v46;
-        v48.objref<@__fe_layout_2> = obj.proj v43 1.i256;
+        v48.objref<@__fe_layout_4> = obj.proj v43 1.i256;
         v49.objref<i256> = obj.proj v48 0.i256;
         v50.i256 = extract_value v14 0.i256;
         obj.store v49 v50;
@@ -1501,52 +1521,22 @@ func private %transfer_from_1(v0.i256, v1.@__fe_layout_2, v2.@__fe_layout_2, v3.
         evm_revert 0.i256 0.i256;
 
     block6:
-        call %set_0 v51 v54;
+        call %set_3 v51 v54;
         return;
 }
 
-func private %write_key_0(v0.i256, v1.i256) -> i256 {
-    block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
-        jump block1;
-
-    block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        mstore v4 v5 i256;
-        return 32.i256;
-}
-
-func private %write_key_1(v0.i256, v1.i256) -> i256 {
-    block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
-        jump block1;
-
-    block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        mstore v4 v5 i256;
-        return 32.i256;
-}
-
-func private %write_key_10(v0.i256, v1.@__fe_layout_6) -> i256 {
+func private %write_key_0(v0.i256, v1.@__fe_layout_6) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         v3.objref<@__fe_layout_6> = obj.alloc @__fe_layout_6;
         mstore v2 v0 i256;
-        v5.objref<@__fe_layout_2> = obj.proj v3 0.i256;
-        v6.@__fe_layout_2 = extract_value v1 0.i256;
+        v5.objref<@__fe_layout_4> = obj.proj v3 0.i256;
+        v6.@__fe_layout_4 = extract_value v1 0.i256;
         v7.objref<i256> = obj.proj v5 0.i256;
         v8.i256 = extract_value v6 0.i256;
         obj.store v7 v8;
-        v10.objref<@__fe_layout_2> = obj.proj v3 1.i256;
-        v11.@__fe_layout_2 = extract_value v1 1.i256;
+        v10.objref<@__fe_layout_4> = obj.proj v3 1.i256;
+        v11.@__fe_layout_4 = extract_value v1 1.i256;
         v12.objref<i256> = obj.proj v10 0.i256;
         v13.i256 = extract_value v11 0.i256;
         obj.store v12 v13;
@@ -1554,9 +1544,9 @@ func private %write_key_10(v0.i256, v1.@__fe_layout_6) -> i256 {
 
     block1:
         v14.i256 = mload v2 i256;
-        v15.objref<@__fe_layout_2> = obj.proj v3 0.i256;
-        v16.@__fe_layout_2 = obj.load v15;
-        v17.i256 = call %write_key_8 v14 v16;
+        v15.objref<@__fe_layout_4> = obj.proj v3 0.i256;
+        v16.@__fe_layout_4 = obj.load v15;
+        v17.i256 = call %write_key_12 v14 v16;
         v18.i256 = mload v2 i256;
         (v19.i256, v20.i1) = uaddo v18 v17;
         br v20 block2 block3;
@@ -1565,9 +1555,9 @@ func private %write_key_10(v0.i256, v1.@__fe_layout_6) -> i256 {
         evm_revert 0.i256 0.i256;
 
     block3:
-        v21.objref<@__fe_layout_2> = obj.proj v3 1.i256;
-        v22.@__fe_layout_2 = obj.load v21;
-        v23.i256 = call %write_key_8 v19 v22;
+        v21.objref<@__fe_layout_4> = obj.proj v3 1.i256;
+        v22.@__fe_layout_4 = obj.load v21;
+        v23.i256 = call %write_key_12 v19 v22;
         (v25.i256, v26.i1) = uaddo v17 v23;
         br v26 block2 block4;
 
@@ -1575,7 +1565,25 @@ func private %write_key_10(v0.i256, v1.@__fe_layout_6) -> i256 {
         return v25;
 }
 
-func private %write_key_11(v0.i256, v1.i256) -> i256 {
+func private %write_key_1(v0.i256, v1.@__fe_layout_4) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        v3.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
+        mstore v2 v0 i256;
+        v5.objref<i256> = obj.proj v3 0.i256;
+        v6.i256 = extract_value v1 0.i256;
+        obj.store v5 v6;
+        jump block1;
+
+    block1:
+        v7.i256 = mload v2 i256;
+        v8.objref<i256> = obj.proj v3 0.i256;
+        v9.i256 = obj.load v8;
+        v10.i256 = call %write_key_14 v7 v9;
+        return v10;
+}
+
+func private %write_key_10(v0.i256, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
@@ -1590,10 +1598,28 @@ func private %write_key_11(v0.i256, v1.i256) -> i256 {
         return 32.i256;
 }
 
-func private %write_key_12(v0.i256, v1.@__fe_layout_2) -> i256 {
+func private %write_key_11(v0.i256, v1.@__fe_layout_4) -> i256 {
     block0:
         v2.*i256 = alloca i256;
-        v3.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v3.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
+        mstore v2 v0 i256;
+        v5.objref<i256> = obj.proj v3 0.i256;
+        v6.i256 = extract_value v1 0.i256;
+        obj.store v5 v6;
+        jump block1;
+
+    block1:
+        v7.i256 = mload v2 i256;
+        v8.objref<i256> = obj.proj v3 0.i256;
+        v9.i256 = obj.load v8;
+        v10.i256 = call %write_key_8 v7 v9;
+        return v10;
+}
+
+func private %write_key_12(v0.i256, v1.@__fe_layout_4) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        v3.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         mstore v2 v0 i256;
         v5.objref<i256> = obj.proj v3 0.i256;
         v6.i256 = extract_value v1 0.i256;
@@ -1608,10 +1634,10 @@ func private %write_key_12(v0.i256, v1.@__fe_layout_2) -> i256 {
         return v10;
 }
 
-func private %write_key_13(v0.i256, v1.@__fe_layout_2) -> i256 {
+func private %write_key_13(v0.i256, v1.@__fe_layout_4) -> i256 {
     block0:
         v2.*i256 = alloca i256;
-        v3.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v3.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         mstore v2 v0 i256;
         v5.objref<i256> = obj.proj v3 0.i256;
         v6.i256 = extract_value v1 0.i256;
@@ -1622,48 +1648,23 @@ func private %write_key_13(v0.i256, v1.@__fe_layout_2) -> i256 {
         v7.i256 = mload v2 i256;
         v8.objref<i256> = obj.proj v3 0.i256;
         v9.i256 = obj.load v8;
-        v10.i256 = call %write_key_11 v7 v9;
+        v10.i256 = call %write_key_10 v7 v9;
         return v10;
 }
 
-func private %write_key_14(v0.i256, v1.@__fe_layout_6) -> i256 {
+func private %write_key_14(v0.i256, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
-        v3.objref<@__fe_layout_6> = obj.alloc @__fe_layout_6;
+        v3.*i256 = alloca i256;
         mstore v2 v0 i256;
-        v5.objref<@__fe_layout_2> = obj.proj v3 0.i256;
-        v6.@__fe_layout_2 = extract_value v1 0.i256;
-        v7.objref<i256> = obj.proj v5 0.i256;
-        v8.i256 = extract_value v6 0.i256;
-        obj.store v7 v8;
-        v10.objref<@__fe_layout_2> = obj.proj v3 1.i256;
-        v11.@__fe_layout_2 = extract_value v1 1.i256;
-        v12.objref<i256> = obj.proj v10 0.i256;
-        v13.i256 = extract_value v11 0.i256;
-        obj.store v12 v13;
+        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v14.i256 = mload v2 i256;
-        v15.objref<@__fe_layout_2> = obj.proj v3 0.i256;
-        v16.@__fe_layout_2 = obj.load v15;
-        v17.i256 = call %write_key_13 v14 v16;
-        v18.i256 = mload v2 i256;
-        (v19.i256, v20.i1) = uaddo v18 v17;
-        br v20 block2 block3;
-
-    block2:
-        evm_revert 0.i256 0.i256;
-
-    block3:
-        v21.objref<@__fe_layout_2> = obj.proj v3 1.i256;
-        v22.@__fe_layout_2 = obj.load v21;
-        v23.i256 = call %write_key_13 v19 v22;
-        (v25.i256, v26.i1) = uaddo v17 v23;
-        br v26 block2 block4;
-
-    block4:
-        return v25;
+        v4.i256 = mload v2 i256;
+        v5.i256 = mload v3 i256;
+        mstore v4 v5 i256;
+        return 32.i256;
 }
 
 func private %write_key_2(v0.i256, v1.i256) -> i256 {
@@ -1681,61 +1682,47 @@ func private %write_key_2(v0.i256, v1.i256) -> i256 {
         return 32.i256;
 }
 
-func private %write_key_3(v0.i256, v1.@__fe_layout_2) -> i256 {
+func private %write_key_3(v0.i256, v1.@__fe_layout_6) -> i256 {
     block0:
         v2.*i256 = alloca i256;
-        v3.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v3.objref<@__fe_layout_6> = obj.alloc @__fe_layout_6;
         mstore v2 v0 i256;
-        v5.objref<i256> = obj.proj v3 0.i256;
-        v6.i256 = extract_value v1 0.i256;
-        obj.store v5 v6;
+        v5.objref<@__fe_layout_4> = obj.proj v3 0.i256;
+        v6.@__fe_layout_4 = extract_value v1 0.i256;
+        v7.objref<i256> = obj.proj v5 0.i256;
+        v8.i256 = extract_value v6 0.i256;
+        obj.store v7 v8;
+        v10.objref<@__fe_layout_4> = obj.proj v3 1.i256;
+        v11.@__fe_layout_4 = extract_value v1 1.i256;
+        v12.objref<i256> = obj.proj v10 0.i256;
+        v13.i256 = extract_value v11 0.i256;
+        obj.store v12 v13;
         jump block1;
 
     block1:
-        v7.i256 = mload v2 i256;
-        v8.objref<i256> = obj.proj v3 0.i256;
-        v9.i256 = obj.load v8;
-        v10.i256 = call %write_key_0 v7 v9;
-        return v10;
+        v14.i256 = mload v2 i256;
+        v15.objref<@__fe_layout_4> = obj.proj v3 0.i256;
+        v16.@__fe_layout_4 = obj.load v15;
+        v17.i256 = call %write_key_1 v14 v16;
+        v18.i256 = mload v2 i256;
+        (v19.i256, v20.i1) = uaddo v18 v17;
+        br v20 block2 block3;
+
+    block2:
+        evm_revert 0.i256 0.i256;
+
+    block3:
+        v21.objref<@__fe_layout_4> = obj.proj v3 1.i256;
+        v22.@__fe_layout_4 = obj.load v21;
+        v23.i256 = call %write_key_1 v19 v22;
+        (v25.i256, v26.i1) = uaddo v17 v23;
+        br v26 block2 block4;
+
+    block4:
+        return v25;
 }
 
-func private %write_key_4(v0.i256, v1.@__fe_layout_2) -> i256 {
-    block0:
-        v2.*i256 = alloca i256;
-        v3.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
-        mstore v2 v0 i256;
-        v5.objref<i256> = obj.proj v3 0.i256;
-        v6.i256 = extract_value v1 0.i256;
-        obj.store v5 v6;
-        jump block1;
-
-    block1:
-        v7.i256 = mload v2 i256;
-        v8.objref<i256> = obj.proj v3 0.i256;
-        v9.i256 = obj.load v8;
-        v10.i256 = call %write_key_1 v7 v9;
-        return v10;
-}
-
-func private %write_key_5(v0.i256, v1.@__fe_layout_2) -> i256 {
-    block0:
-        v2.*i256 = alloca i256;
-        v3.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
-        mstore v2 v0 i256;
-        v5.objref<i256> = obj.proj v3 0.i256;
-        v6.i256 = extract_value v1 0.i256;
-        obj.store v5 v6;
-        jump block1;
-
-    block1:
-        v7.i256 = mload v2 i256;
-        v8.objref<i256> = obj.proj v3 0.i256;
-        v9.i256 = obj.load v8;
-        v10.i256 = call %write_key_2 v7 v9;
-        return v10;
-}
-
-func private %write_key_6(v0.i256, v1.i256) -> i256 {
+func private %write_key_4(v0.i256, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
@@ -1750,50 +1737,10 @@ func private %write_key_6(v0.i256, v1.i256) -> i256 {
         return 32.i256;
 }
 
-func private %write_key_7(v0.i256, v1.@__fe_layout_6) -> i256 {
+func private %write_key_5(v0.i256, v1.@__fe_layout_4) -> i256 {
     block0:
         v2.*i256 = alloca i256;
-        v3.objref<@__fe_layout_6> = obj.alloc @__fe_layout_6;
-        mstore v2 v0 i256;
-        v5.objref<@__fe_layout_2> = obj.proj v3 0.i256;
-        v6.@__fe_layout_2 = extract_value v1 0.i256;
-        v7.objref<i256> = obj.proj v5 0.i256;
-        v8.i256 = extract_value v6 0.i256;
-        obj.store v7 v8;
-        v10.objref<@__fe_layout_2> = obj.proj v3 1.i256;
-        v11.@__fe_layout_2 = extract_value v1 1.i256;
-        v12.objref<i256> = obj.proj v10 0.i256;
-        v13.i256 = extract_value v11 0.i256;
-        obj.store v12 v13;
-        jump block1;
-
-    block1:
-        v14.i256 = mload v2 i256;
-        v15.objref<@__fe_layout_2> = obj.proj v3 0.i256;
-        v16.@__fe_layout_2 = obj.load v15;
-        v17.i256 = call %write_key_4 v14 v16;
-        v18.i256 = mload v2 i256;
-        (v19.i256, v20.i1) = uaddo v18 v17;
-        br v20 block2 block3;
-
-    block2:
-        evm_revert 0.i256 0.i256;
-
-    block3:
-        v21.objref<@__fe_layout_2> = obj.proj v3 1.i256;
-        v22.@__fe_layout_2 = obj.load v21;
-        v23.i256 = call %write_key_4 v19 v22;
-        (v25.i256, v26.i1) = uaddo v17 v23;
-        br v26 block2 block4;
-
-    block4:
-        return v25;
-}
-
-func private %write_key_8(v0.i256, v1.@__fe_layout_2) -> i256 {
-    block0:
-        v2.*i256 = alloca i256;
-        v3.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v3.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         mstore v2 v0 i256;
         v5.objref<i256> = obj.proj v3 0.i256;
         v6.i256 = extract_value v1 0.i256;
@@ -1804,8 +1751,81 @@ func private %write_key_8(v0.i256, v1.@__fe_layout_2) -> i256 {
         v7.i256 = mload v2 i256;
         v8.objref<i256> = obj.proj v3 0.i256;
         v9.i256 = obj.load v8;
-        v10.i256 = call %write_key_6 v7 v9;
+        v10.i256 = call %write_key_2 v7 v9;
         return v10;
+}
+
+func private %write_key_6(v0.i256, v1.@__fe_layout_4) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        v3.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
+        mstore v2 v0 i256;
+        v5.objref<i256> = obj.proj v3 0.i256;
+        v6.i256 = extract_value v1 0.i256;
+        obj.store v5 v6;
+        jump block1;
+
+    block1:
+        v7.i256 = mload v2 i256;
+        v8.objref<i256> = obj.proj v3 0.i256;
+        v9.i256 = obj.load v8;
+        v10.i256 = call %write_key_4 v7 v9;
+        return v10;
+}
+
+func private %write_key_7(v0.i256, v1.@__fe_layout_6) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        v3.objref<@__fe_layout_6> = obj.alloc @__fe_layout_6;
+        mstore v2 v0 i256;
+        v5.objref<@__fe_layout_4> = obj.proj v3 0.i256;
+        v6.@__fe_layout_4 = extract_value v1 0.i256;
+        v7.objref<i256> = obj.proj v5 0.i256;
+        v8.i256 = extract_value v6 0.i256;
+        obj.store v7 v8;
+        v10.objref<@__fe_layout_4> = obj.proj v3 1.i256;
+        v11.@__fe_layout_4 = extract_value v1 1.i256;
+        v12.objref<i256> = obj.proj v10 0.i256;
+        v13.i256 = extract_value v11 0.i256;
+        obj.store v12 v13;
+        jump block1;
+
+    block1:
+        v14.i256 = mload v2 i256;
+        v15.objref<@__fe_layout_4> = obj.proj v3 0.i256;
+        v16.@__fe_layout_4 = obj.load v15;
+        v17.i256 = call %write_key_6 v14 v16;
+        v18.i256 = mload v2 i256;
+        (v19.i256, v20.i1) = uaddo v18 v17;
+        br v20 block2 block3;
+
+    block2:
+        evm_revert 0.i256 0.i256;
+
+    block3:
+        v21.objref<@__fe_layout_4> = obj.proj v3 1.i256;
+        v22.@__fe_layout_4 = obj.load v21;
+        v23.i256 = call %write_key_6 v19 v22;
+        (v25.i256, v26.i1) = uaddo v17 v23;
+        br v26 block2 block4;
+
+    block4:
+        return v25;
+}
+
+func private %write_key_8(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        v3.*i256 = alloca i256;
+        mstore v2 v0 i256;
+        mstore v3 v1 i256;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i256 = mload v3 i256;
+        mstore v4 v5 i256;
+        return 32.i256;
 }
 
 func private %write_key_9(v0.i256, v1.i256) -> i256 {
@@ -1823,25 +1843,25 @@ func private %write_key_9(v0.i256, v1.i256) -> i256 {
         return 32.i256;
 }
 
-func private %zero() -> @__fe_layout_2 {
+func private %zero() -> @__fe_layout_4 {
     block0:
         jump block1;
 
     block1:
-        v1.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v1.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
         v2.objref<i256> = obj.proj v1 0.i256;
         obj.store v2 0.i256;
-        v3.@__fe_layout_2 = obj.load v1;
+        v3.@__fe_layout_4 = obj.load v1;
         return v3;
 }
 
 
 object @Erc20Contract {
     section init {
-        entry %init;
+        entry %__fe_manual_contract_init_root_Erc20Contract;
         embed .runtime as &__Erc20Contract_runtime;
     }
     section runtime {
-        entry %runtime;
+        entry %__fe_manual_contract_runtime_root_Erc20Contract;
     }
 }

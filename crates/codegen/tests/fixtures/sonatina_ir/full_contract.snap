@@ -7,8 +7,28 @@ target = "evm-ethereum-osaka"
 
 type @__fe_layout_0 = {};
 type @__fe_layout_1 = {@__fe_layout_0};
-type @__fe_layout_2 = {i256};
-type @__fe_layout_3 = {i256, i256};
+type @__fe_layout_2 = {i256, i256};
+type @__fe_layout_3 = {i256};
+
+func private %__fe_manual_contract_init_root_ShapeDispatcher() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        call %init v0;
+        evm_stop;
+}
+
+func private %__fe_manual_contract_runtime_root_ShapeDispatcher() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        call %dispatch v0;
+        evm_stop;
+}
 
 func private %abi_encode(v0.i256, v1.objref<@__fe_layout_1>) {
     block0:
@@ -19,34 +39,13 @@ func private %abi_encode(v0.i256, v1.objref<@__fe_layout_1>) {
     block1:
         v5.i256 = mload v2 i256;
         call %mstore v1 0.i256 v5;
-        call %return_data_1 0.i256 32.i256;
+        call %return_data_2 0.i256 32.i256;
         unreachable;
 }
 
 func private %area_0(v0.@__fe_layout_2) -> i256 {
     block0:
         v1.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
-        v3.objref<i256> = obj.proj v1 0.i256;
-        v4.i256 = extract_value v0 0.i256;
-        obj.store v3 v4;
-        jump block1;
-
-    block1:
-        v5.objref<i256> = obj.proj v1 0.i256;
-        v6.i256 = obj.load v5;
-        (v7.i256, v8.i1) = umulo v6 v6;
-        br v8 block2 block3;
-
-    block2:
-        evm_revert 0.i256 0.i256;
-
-    block3:
-        return v7;
-}
-
-func private %area_1(v0.@__fe_layout_3) -> i256 {
-    block0:
-        v1.objref<@__fe_layout_3> = obj.alloc @__fe_layout_3;
         v3.objref<i256> = obj.proj v1 0.i256;
         v4.i256 = extract_value v0 0.i256;
         obj.store v3 v4;
@@ -68,6 +67,27 @@ func private %area_1(v0.@__fe_layout_3) -> i256 {
 
     block3:
         return v12;
+}
+
+func private %area_1(v0.@__fe_layout_3) -> i256 {
+    block0:
+        v1.objref<@__fe_layout_3> = obj.alloc @__fe_layout_3;
+        v3.objref<i256> = obj.proj v1 0.i256;
+        v4.i256 = extract_value v0 0.i256;
+        obj.store v3 v4;
+        jump block1;
+
+    block1:
+        v5.objref<i256> = obj.proj v1 0.i256;
+        v6.i256 = obj.load v5;
+        (v7.i256, v8.i1) = umulo v6 v6;
+        br v8 block2 block3;
+
+    block2:
+        evm_revert 0.i256 0.i256;
+
+    block3:
+        return v7;
 }
 
 func private %calldataload(v0.i256) -> i256 {
@@ -113,13 +133,13 @@ func private %dispatch(v0.objref<@__fe_layout_1>) {
     block2:
         v8.i256 = call %calldataload 4.i256;
         v10.i256 = call %calldataload 36.i256;
-        v11.objref<@__fe_layout_3> = obj.alloc @__fe_layout_3;
+        v11.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
         v12.objref<i256> = obj.proj v11 0.i256;
         obj.store v12 v8;
         v14.objref<i256> = obj.proj v11 1.i256;
         obj.store v14 v10;
-        v15.@__fe_layout_3 = obj.load v11;
-        v16.objref<@__fe_layout_3> = obj.alloc @__fe_layout_3;
+        v15.@__fe_layout_2 = obj.load v11;
+        v16.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
         v17.objref<i256> = obj.proj v16 0.i256;
         v18.i256 = extract_value v15 0.i256;
         obj.store v17 v18;
@@ -140,11 +160,11 @@ func private %dispatch(v0.objref<@__fe_layout_1>) {
 
     block5:
         v40.i256 = call %calldataload 4.i256;
-        v41.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v41.objref<@__fe_layout_3> = obj.alloc @__fe_layout_3;
         v42.objref<i256> = obj.proj v41 0.i256;
         obj.store v42 v40;
-        v43.@__fe_layout_2 = obj.load v41;
-        v44.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v43.@__fe_layout_3 = obj.load v41;
+        v44.objref<@__fe_layout_3> = obj.alloc @__fe_layout_3;
         v45.objref<i256> = obj.proj v44 0.i256;
         v46.i256 = extract_value v43 0.i256;
         obj.store v45 v46;
@@ -174,16 +194,16 @@ func private %dispatch(v0.objref<@__fe_layout_1>) {
     block10:
         v33.objref<i256> = obj.proj v16 1.i256;
         obj.store v33 v30;
-        v34.@__fe_layout_3 = obj.load v16;
-        v35.i256 = call %area_1 v34;
+        v34.@__fe_layout_2 = obj.load v16;
+        v35.i256 = call %area_0 v34;
         call %abi_encode v35 v0;
         unreachable;
 
     block11:
         v53.objref<i256> = obj.proj v44 0.i256;
         obj.store v53 v50;
-        v54.@__fe_layout_2 = obj.load v44;
-        v55.i256 = call %area_0 v54;
+        v54.@__fe_layout_3 = obj.load v44;
+        v55.i256 = call %area_1 v54;
         call %abi_encode v55 v0;
         unreachable;
 }
@@ -196,7 +216,7 @@ func private %init(v0.objref<@__fe_layout_1>) {
         v1.i256 = sym_size &__ShapeDispatcher_runtime;
         v2.i256 = sym_addr &__ShapeDispatcher_runtime;
         call %codecopy v0 0.i256 v2 v1;
-        call %return_data_2 0.i256 v1;
+        call %return_data_1 0.i256 v1;
         unreachable;
 }
 
@@ -260,10 +280,10 @@ func private %return_data_2(v0.i256, v1.i256) {
 
 object @ShapeDispatcher {
     section init {
-        entry %init;
+        entry %__fe_manual_contract_init_root_ShapeDispatcher;
         embed .runtime as &__ShapeDispatcher_runtime;
     }
     section runtime {
-        entry %dispatch;
+        entry %__fe_manual_contract_runtime_root_ShapeDispatcher;
     }
 }

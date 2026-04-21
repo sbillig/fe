@@ -1,11 +1,11 @@
-use hir::semantic::{ContractFieldLayoutInfo, ProviderSource, RecvArmAbiInfo, RecvArmView};
+use hir::semantic::{RecvArmAbiInfo, RecvArmView};
 use hir::{
     analysis::{
         semantic::{
             GenericSubst, ImplEnv, ManualContractSection, RootSemanticInstanceError,
             SemanticInstance, SemanticInstanceKey, get_or_build_semantic_instance,
-            owner_effect_bindings, resolved_provider_binding_for_instance_effect,
-            root_semantic_instance_key, semantic_binding_ty, semantic_instance_assumptions,
+            owner_effect_bindings, root_semantic_instance_key, semantic_binding_ty,
+            semantic_instance_assumptions,
         },
         ty::{
             const_ty::ConstTyData,
@@ -29,18 +29,17 @@ use crate::{
     },
     runtime::code_region::{code_region_symbol, runtime_code_region_for_manual_root},
     runtime::lower::classify::{
-        owner_effect_binding_boundary, runtime_effect_binding_plan, runtime_param_class,
-        runtime_visible_binding_class,
+        runtime_effect_binding_plan, runtime_param_class, runtime_visible_binding_class,
     },
     runtime::lower::interface::runtime_visible_binding_plans,
     runtime::lower::type_info::{RuntimeTypeEnv, top_level_class_for_ty_in_env},
+    runtime::root_effects::{EntryEffectContext, entry_effect_arg_plans},
     runtime::{
-        AddressSpaceKind, ConstRegionId, ContractEffectArgPlan, ContractFieldBinding,
-        ContractInitAbiPlan, ContractRecvAbiPlan, DispatchArm, DispatchDefault, InitArgsPlan,
-        RefKind, ResolvedCodeRegion, RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeFunction,
-        RuntimeFunctionOwner, RuntimeInlineHint, RuntimeInputPlan, RuntimeLinkage, RuntimeObject,
-        RuntimePackage, RuntimePackagePlan, RuntimeReturnPlan, RuntimeSection, RuntimeSectionName,
-        RuntimeSectionRef, RuntimeSyntheticSpec,
+        AddressSpaceKind, ConstRegionId, ContractInitAbiPlan, ContractRecvAbiPlan, DispatchArm,
+        DispatchDefault, InitArgsPlan, ResolvedCodeRegion, RuntimeCodeRegion, RuntimeCodeRegionKey,
+        RuntimeFunction, RuntimeFunctionOwner, RuntimeInlineHint, RuntimeInputPlan, RuntimeLinkage,
+        RuntimeObject, RuntimePackage, RuntimePackagePlan, RuntimeReturnPlan, RuntimeSection,
+        RuntimeSectionName, RuntimeSectionRef, RuntimeSyntheticSpec,
     },
     verify::verify_runtime_package,
 };
@@ -90,7 +89,7 @@ struct RuntimeRootRejection<'db> {
 #[derive(Debug)]
 enum RuntimeRootRejectionReason<'db> {
     RootSemanticInstance(RootSemanticInstanceError<'db>),
-    UnsupportedEffectBindingClass { binding: LocalBinding<'db> },
+    UnsupportedEntryEffect(String),
 }
 
 #[derive(Debug, Clone)]
@@ -328,28 +327,32 @@ pub fn build_runtime_package<'db>(
 
     let mut roots = Vec::new();
     for func in entry_funcs.iter().copied() {
+        let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func))?;
+        let entry_effect_args =
+            entry_effect_arg_plans(db, EntryEffectContext::StandaloneFunc { func }, semantic)?;
         roots.push((
             func,
-            runtime_instance_for_semantic(
-                db,
-                semantic_instance_for_root_owner(db, BodyOwner::Func(func))?,
-            ),
+            runtime_instance_for_semantic(db, semantic),
+            entry_effect_args,
         ));
     }
     let entry = roots
         .iter()
-        .find(|(func, _)| is_main_func(db, *func))
+        .find(|(func, _, _)| is_main_func(db, *func))
         .or_else(|| roots.first())
-        .map(|(_, instance)| *instance)
+        .map(|(_, instance, entry_effect_args)| (*instance, entry_effect_args.clone()))
         .expect("entry root candidates should include the chosen entry function");
     let root = synthetic_instance(
         db,
-        RuntimeSyntheticSpec::MainRoot { callee: entry },
+        RuntimeSyntheticSpec::MainRoot {
+            callee: entry.0,
+            entry_effect_args: entry.1.into_boxed_slice(),
+        },
         Vec::new(),
     );
     let mut package_roots = roots
         .into_iter()
-        .map(|(_, instance)| instance)
+        .map(|(_, instance, _)| instance)
         .collect::<Vec<_>>();
     package_roots.push(root);
     let package = build_non_contract_package(
@@ -400,12 +403,15 @@ pub fn build_test_runtime_package<'db>(
         }
 
         let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func))?;
+        let entry_effect_args =
+            entry_effect_arg_plans(db, EntryEffectContext::TestFunc { func }, semantic)?;
         let runtime_root = runtime_instance_for_semantic(db, semantic);
         let root = synthetic_instance(
             db,
             RuntimeSyntheticSpec::TestRoot {
                 name: name.clone(),
                 callee: runtime_root,
+                entry_effect_args: entry_effect_args.into_boxed_slice(),
             },
             Vec::new(),
         );
@@ -486,12 +492,15 @@ fn build_contract_test_package<'db>(
             continue;
         }
         let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func))?;
+        let entry_effect_args =
+            entry_effect_arg_plans(db, EntryEffectContext::TestFunc { func }, semantic)?;
         let runtime_root = runtime_instance_for_semantic(db, semantic);
         let root = synthetic_instance(
             db,
             RuntimeSyntheticSpec::TestRoot {
                 name: name.clone(),
                 callee: runtime_root,
+                entry_effect_args: entry_effect_args.into_boxed_slice(),
             },
             Vec::new(),
         );
@@ -645,10 +654,7 @@ fn discover_manual_contract_roots<'db>(
         }
         roots.push(ManualContractRoot {
             func,
-            instance: runtime_instance_for_semantic(
-                db,
-                semantic_instance_for_root_owner(db, BodyOwner::Func(func))?,
-            ),
+            instance: manual_contract_root_instance(db, func)?,
             contract_name,
             section,
         });
@@ -664,6 +670,28 @@ fn discover_manual_contract_roots<'db>(
         )
     });
     Ok(roots)
+}
+
+pub(crate) fn manual_contract_root_instance<'db>(
+    db: &'db dyn MirDb,
+    func: Func<'db>,
+) -> Result<RuntimeInstance<'db>, LowerError> {
+    let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func))?;
+    let callee = runtime_instance_for_semantic(db, semantic);
+    let entry_effect_args = entry_effect_arg_plans(
+        db,
+        EntryEffectContext::ManualContractRoot { func },
+        semantic,
+    )?;
+    Ok(synthetic_instance(
+        db,
+        RuntimeSyntheticSpec::ManualContractRoot {
+            func,
+            callee,
+            entry_effect_args: entry_effect_args.into_boxed_slice(),
+        },
+        Vec::new(),
+    ))
 }
 
 fn contract_runtime_root<'db>(
@@ -746,14 +774,18 @@ fn contract_init_abi_plan<'db>(
             contract,
             payable: false,
             user_init: None,
-            owner_effect_args: Box::new([]),
+            entry_effect_args: Box::new([]),
             init_args: InitArgsPlan::None,
         });
     };
 
     let semantic = semantic_instance_for_root_owner(db, BodyOwner::ContractInit { contract })?;
     let user_init = Some(runtime_instance_for_semantic(db, semantic));
-    let owner_effect_args = contract_effect_arg_plans_for_site(db, contract, semantic)?;
+    let entry_effect_args = entry_effect_arg_plans(
+        db,
+        EntryEffectContext::HighLevelContract { contract },
+        semantic,
+    )?;
     let projected_fields = visible_init_arg_fields(db, semantic);
     let init_args = if contract.init_args_ty(db) == TyId::unit(db) {
         InitArgsPlan::None
@@ -768,7 +800,7 @@ fn contract_init_abi_plan<'db>(
         contract,
         payable: init.is_payable(db),
         user_init,
-        owner_effect_args: owner_effect_args.into_boxed_slice(),
+        entry_effect_args: entry_effect_args.into_boxed_slice(),
         init_args,
     })
 }
@@ -792,9 +824,9 @@ fn contract_recv_wrapper<'db>(
             },
         )?,
     );
-    let owner_effect_args = contract_effect_arg_plans_for_site(
+    let entry_effect_args = entry_effect_arg_plans(
         db,
-        contract,
+        EntryEffectContext::HighLevelContract { contract },
         semantic_instance_for_root_owner(
             db,
             BodyOwner::ContractRecvArm {
@@ -841,7 +873,7 @@ fn contract_recv_wrapper<'db>(
                     None => false,
                 },
                 user_recv,
-                owner_effect_args: owner_effect_args.into_boxed_slice(),
+                entry_effect_args: entry_effect_args.into_boxed_slice(),
                 input,
                 ret,
             },
@@ -1188,6 +1220,12 @@ fn resolved_section_region<'db>(
             | RuntimeSectionName::Test(_)
             | RuntimeSectionName::CodeRegion(_) => None,
         },
+        RuntimeFunctionOwner::Synthetic(RuntimeSyntheticSpec::ManualContractRoot {
+            func, ..
+        }) => {
+            let region = runtime_code_region_for_manual_root(db, func)?;
+            Some((region, code_region_symbol(db, region)))
+        }
         RuntimeFunctionOwner::Semantic(semantic) => {
             let BodyOwner::Func(func) = semantic.key(db).owner(db) else {
                 return None;
@@ -1316,6 +1354,7 @@ fn materialized_contracts_for_roots<'db>(
                 | RuntimeSyntheticSpec::ContractRuntimeRoot { contract, .. } => Some(contract),
                 RuntimeSyntheticSpec::MainRoot { .. }
                 | RuntimeSyntheticSpec::TestRoot { .. }
+                | RuntimeSyntheticSpec::ManualContractRoot { .. }
                 | RuntimeSyntheticSpec::ContractInitAbi { .. }
                 | RuntimeSyntheticSpec::ContractRecvAbi { .. }
                 | RuntimeSyntheticSpec::CodeRegionRoot { .. } => None,
@@ -1392,13 +1431,12 @@ fn runtime_root_candidate<'db>(
             }));
         }
     };
-    if let Some(binding) = owner_effect_bindings(db, BodyOwner::Func(func))
-        .into_iter()
-        .find(|binding| owner_effect_binding_class(db, semantic, *binding).is_none())
+    if let Err(err) =
+        entry_effect_arg_plans(db, EntryEffectContext::StandaloneFunc { func }, semantic)
     {
         return Ok(RuntimeRootCandidate::Rejected(RuntimeRootRejection {
             func,
-            reason: RuntimeRootRejectionReason::UnsupportedEffectBindingClass { binding },
+            reason: RuntimeRootRejectionReason::UnsupportedEntryEffect(err.to_string()),
         }));
     }
     Ok(RuntimeRootCandidate::Root(func))
@@ -1426,15 +1464,7 @@ fn format_runtime_root_rejection<'db>(
         RuntimeRootRejectionReason::RootSemanticInstance(err) => {
             format_root_semantic_instance_rejection(db, &name, err)
         }
-        RuntimeRootRejectionReason::UnsupportedEffectBindingClass { binding } => {
-            let binding_name = match binding {
-                LocalBinding::EffectParam { binding_name, .. } => binding_name.data(db),
-                LocalBinding::Local { .. } | LocalBinding::Param { .. } => "<unknown>",
-            };
-            format!(
-                "function `{name}` cannot be used as a standalone runtime root because effect binding `{binding_name}` has no supported runtime representation"
-            )
-        }
+        RuntimeRootRejectionReason::UnsupportedEntryEffect(message) => message.clone(),
     }
 }
 
@@ -1553,93 +1583,6 @@ fn synthetic_instance<'db>(
     let synthetic = RuntimeSyntheticInstance::new(db, spec);
     let key = RuntimeInstanceKey::new(db, RuntimeInstanceSource::Synthetic(synthetic), params);
     get_or_build_runtime_instance(db, key)
-}
-
-fn contract_effect_arg_plans_for_site<'db>(
-    db: &'db dyn MirDb,
-    contract: Contract<'db>,
-    semantic: SemanticInstance<'db>,
-) -> Result<Vec<ContractEffectArgPlan<'db>>, LowerError> {
-    let field_layout = contract.field_layout(db);
-    let field_by_index = field_layout
-        .values()
-        .cloned()
-        .map(|field| (field.index, field))
-        .collect::<FxHashMap<_, _>>();
-    owner_effect_bindings(db, semantic.key(db).owner(db))
-        .into_iter()
-        .filter_map(|binding| {
-            let provider = resolved_provider_binding_for_instance_effect(db, semantic, binding)?;
-            Some((|| {
-                Ok(match provider.source.clone() {
-                    ProviderSource::ContractField { field_idx, .. } => {
-                        let field = field_by_index.get(&field_idx).ok_or_else(|| {
-                            LowerError::Unsupported(format!(
-                                "missing contract field layout for field {field_idx} in `{}`",
-                                contract_name(db, contract)
-                            ))
-                        })?;
-                        ContractEffectArgPlan::ContractField(contract_field_binding(
-                            db, contract, field, semantic, binding,
-                        )?)
-                    }
-                    ProviderSource::UsesParam { .. } | ProviderSource::RootProvider { .. } => {
-                        let Some(boundary) = owner_effect_binding_boundary(db, semantic, binding)
-                        else {
-                            return Err(LowerError::Unsupported(format!(
-                                "missing runtime boundary for owner effect binding {binding:?} in `{}`",
-                                contract_name(db, contract)
-                            )));
-                        };
-                        ContractEffectArgPlan::Placeholder {
-                            declared_ty: semantic_binding_ty(db, semantic, binding),
-                            boundary,
-                        }
-                    }
-                })
-            })())
-        })
-        .collect()
-}
-
-pub(crate) fn contract_field_binding<'db>(
-    db: &'db dyn MirDb,
-    contract: Contract<'db>,
-    field: &ContractFieldLayoutInfo<'db>,
-    semantic: SemanticInstance<'db>,
-    binding: LocalBinding<'db>,
-) -> Result<ContractFieldBinding<'db>, LowerError> {
-    let binding_ty = semantic_binding_ty(db, semantic, binding);
-    let class = runtime_effect_binding_plan(db, semantic, binding)
-        .map(|plan| plan.class)
-        .ok_or_else(|| {
-            LowerError::Unsupported(format!(
-                "contract field `{}` in `{}` has no runtime effect binding plan",
-                field.name.data(db),
-                contract_name(db, contract)
-            ))
-        })?;
-    let kind = match &class {
-        crate::runtime::RuntimeClass::Ref { kind, .. } => kind.clone(),
-        crate::runtime::RuntimeClass::RawAddr { space, .. } => RefKind::Provider {
-            provider_ty: TyId::borrow_ref_of(db, binding_ty),
-            space: *space,
-        },
-        crate::runtime::RuntimeClass::Scalar(_)
-        | crate::runtime::RuntimeClass::AggregateValue { .. } => {
-            return Err(LowerError::Unsupported(format!(
-                "contract field `{}` in `{}` does not lower to a provider-style runtime class",
-                field.name.data(db),
-                contract_name(db, contract)
-            )));
-        }
-    };
-    Ok(ContractFieldBinding {
-        slot: field.slot_offset as u128,
-        declared_ty: binding_ty,
-        class,
-        kind,
-    })
 }
 
 fn resolve_decode_instance<'db>(
@@ -1871,6 +1814,10 @@ fn runtime_instance_sort_key<'db>(db: &'db dyn MirDb, instance: RuntimeInstance<
             RuntimeSyntheticSpec::TestRoot { name, .. } => {
                 format!("__synthetic:test_root:{name}")
             }
+            RuntimeSyntheticSpec::ManualContractRoot { func, .. } => format!(
+                "__synthetic:manual_contract_root:{}",
+                func_display_name(db, func)
+            ),
             RuntimeSyntheticSpec::ContractInitAbi { plan } => format!(
                 "__synthetic:contract_init_abi:{}",
                 contract_name(db, plan.contract)
@@ -1965,6 +1912,27 @@ fn symbol_base_for_runtime_instance<'db>(
         RuntimeSyntheticSpec::MainRoot { .. } => "__fe_main_root".to_string(),
         RuntimeSyntheticSpec::TestRoot { name, .. } => {
             format!("__fe_test_root_{}", sanitize_symbol(name))
+        }
+        RuntimeSyntheticSpec::ManualContractRoot { func, .. } => {
+            let (contract_name, section) = match func.manual_contract_root_attr(db) {
+                Some(ManualContractRootAttr::Init { contract_name }) => {
+                    (contract_name.data(db), ManualContractSection::Init)
+                }
+                Some(ManualContractRootAttr::Runtime { contract_name }) => {
+                    (contract_name.data(db), ManualContractSection::Runtime)
+                }
+                Some(ManualContractRootAttr::Error(_)) | None => {
+                    return "__fe_manual_contract_root".to_string();
+                }
+            };
+            let section = match section {
+                ManualContractSection::Init => "init",
+                ManualContractSection::Runtime => "runtime",
+            };
+            format!(
+                "__fe_manual_contract_{section}_root_{}",
+                sanitize_symbol(contract_name)
+            )
         }
         RuntimeSyntheticSpec::ContractInitAbi { plan } => {
             format!(
@@ -2198,7 +2166,7 @@ pub contract NoInitBox {}
             "implicit constructor wrapper should not call a user init"
         );
         assert!(
-            plan.owner_effect_args.is_empty(),
+            plan.entry_effect_args.is_empty(),
             "implicit constructor wrapper should not synthesize owner effect args"
         );
         assert!(

@@ -5,6 +5,17 @@ input_file: tests/fixtures/storage.fe
 ---
 object "Coin" {
   code {
+    function $__fe_manual_contract_init_root_Coin() {
+      let t3 := mload(0x40)
+      if iszero(t3) {
+        t3 := 0x80
+      }
+      mstore(0x40, add(t3, 0))
+      let v0 := t3
+      let v1 := v0
+      $init(v1)
+      stop()
+    }
     function $codecopy(p0, p1, p2, p3) {
       let v4 := p1
       let v5 := p2
@@ -32,10 +43,21 @@ object "Coin" {
       let v4 := p1
       return(v3, v4)
     }
-    $init(0)
+    $__fe_manual_contract_init_root_Coin()
   }
   object "__Coin_runtime" {
     code {
+      function $__fe_manual_contract_runtime_root_Coin() {
+        let t3 := mload(0x40)
+        if iszero(t3) {
+          t3 := 0x80
+        }
+        mstore(0x40, add(t3, 0))
+        let v0 := t3
+        let v1 := v0
+        $runtime(v1)
+        stop()
+      }
       function $abi_encode(p0, p1) {
         let v9 := 0x00
         let v3 := v9
@@ -190,12 +212,12 @@ object "Coin" {
         let v49 := 0
         let v61 := 0x00
         let v14 := v61
-        let v62 := $stor_ptr_0(v14)
+        let v62 := $stor_ptr_1(v14)
         let v15 := v62
         v1 := v15
         let v63 := 0x02
         let v16 := v63
-        let v64 := $stor_ptr_1(v16)
+        let v64 := $stor_ptr_0(v16)
         let v17 := v64
         v2 := v17
         let v65 := 0x00
@@ -314,14 +336,14 @@ object "Coin" {
       }
       function $stor_ptr_0(p0) -> ret {
         let v2 := p0
-        let v4 := $from_raw_1(v2)
+        let v4 := $from_raw_0(v2)
         let v3 := v4
         ret := v3
         leave
       }
       function $stor_ptr_1(p0) -> ret {
         let v2 := p0
-        let v4 := $from_raw_0(v2)
+        let v4 := $from_raw_1(v2)
         let v3 := v4
         ret := v3
         leave
@@ -455,7 +477,7 @@ object "Coin" {
         ret := v1
         leave
       }
-      $runtime(0)
+      $__fe_manual_contract_runtime_root_Coin()
     }
   }
 }

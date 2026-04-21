@@ -5004,7 +5004,7 @@ fn root_trait_effect_bindings_specialize_call_to_concrete_evm() {
 }
 
 #[test]
-fn root_test_functions_specialize_plain_effect_params_to_memory_capabilities() {
+fn with_bound_plain_effect_params_specialize_to_memory_capabilities() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         Utf8PathBuf::from("effect_params.fe"),
@@ -5013,13 +5013,29 @@ fn root_test_functions_specialize_plain_effect_params_to_memory_capabilities() {
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
 
-    let func = find_func(&db, top_mod, "test_non_evm_effect_param");
-    let root = get_or_build_semantic_instance(
+    let caller = find_func(&db, top_mod, "test_non_evm_effect_param");
+    let instance = get_or_build_semantic_instance(
         &db,
-        root_semantic_instance_key(&db, BodyOwner::Func(func))
-            .expect("root semantic instance should exist"),
+        root_semantic_instance_key(&db, BodyOwner::Func(caller))
+            .expect("caller root instance should exist"),
     );
-    let env = instantiated_effect_env(&db, root).expect("root effect env should exist");
+    let callee = instance
+        .body(&db)
+        .callees()
+        .into_iter()
+        .map(|callee| get_or_build_semantic_instance(&db, callee.key))
+        .find(|callee| {
+            matches!(
+                callee.key(&db).owner(&db),
+                BodyOwner::Func(func)
+                    if func
+                        .name(&db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(&db) == "bump_non_evm_effect_param")
+            )
+        })
+        .expect("expected specialized bump_non_evm_effect_param callee");
+    let env = instantiated_effect_env(&db, callee).expect("callee effect env should exist");
     let value_provider_idx = env
         .requirements(&db)
         .iter()
@@ -5038,8 +5054,9 @@ fn root_test_functions_specialize_plain_effect_params_to_memory_capabilities() {
         .expect("expected specialized value provider binding");
     assert_eq!(
         value_provider.provider_ty.pretty_print(&db).to_string(),
-        "mut u256"
+        "u256"
     );
+    assert!(value_provider.is_mut);
     assert_eq!(
         value_provider
             .semantics
@@ -5188,7 +5205,23 @@ fn free_function_effect_bindings_keep_explicit_memory_address_space() {
         root_semantic_instance_key(&db, BodyOwner::Func(caller))
             .expect("caller root instance should exist"),
     );
-    let callee = instance
+    let write_effects_and_sum = instance
+        .body(&db)
+        .callees()
+        .into_iter()
+        .map(|callee| get_or_build_semantic_instance(&db, callee.key))
+        .find(|callee| {
+            matches!(
+                callee.key(&db).owner(&db),
+                BodyOwner::Func(func)
+                    if func
+                        .name(&db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(&db) == "write_effects_and_sum")
+            )
+        })
+        .expect("expected write_effects_and_sum callee");
+    let callee = write_effects_and_sum
         .body(&db)
         .callees()
         .into_iter()

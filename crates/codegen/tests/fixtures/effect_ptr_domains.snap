@@ -6,15 +6,47 @@ input_file: tests/fixtures/effect_ptr_domains.fe
 object "main" {
   code {
     function $__fe_main_root() {
-      let t3 := mload(0x40)
-      if iszero(t3) {
-        t3 := 0x80
+      let t5 := mload(0x40)
+      if iszero(t5) {
+        t5 := 0x80
       }
-      mstore(0x40, add(t3, 64))
-      let v0 := t3
+      mstore(0x40, add(t5, 0))
+      let v0 := t5
       let v1 := v0
-      $bump_1(v1)
+      let t6 := mload(0x40)
+      if iszero(t6) {
+        t6 := 0x80
+      }
+      mstore(0x40, add(t6, 0))
+      let v2 := t6
+      let v3 := v2
+      $test_effect_ptr_domains(v1, v3)
       stop()
+    }
+    function $bump_0_eff0_stor(p0) {
+      let t13 := sload(p0)
+      let v1 := t13
+      let v9 := 0x01
+      let v2 := v9
+      let t14 := add(v1, v2)
+      if lt(t14, v1) {
+        revert(0, 0)
+      }
+      let v10 := t14
+      let v3 := v10
+      sstore(p0, v3)
+      let t15 := sload(add(p0, div(add(32, 31), 32)))
+      let v5 := t15
+      let v11 := 0x02
+      let v6 := v11
+      let t16 := add(v5, v6)
+      if lt(t16, v5) {
+        revert(0, 0)
+      }
+      let v12 := t16
+      let v7 := v12
+      sstore(add(p0, div(add(32, 31), 32)), v7)
+      leave
     }
     function $bump_1(p0) {
       let t13 := mload(p0)
@@ -41,6 +73,97 @@ object "main" {
       mstore(add(p0, 32), v7)
       leave
     }
+    function $bump_2(p0) {
+      let t13 := mload(p0)
+      let v1 := t13
+      let v9 := 0x01
+      let v2 := v9
+      let t14 := add(v1, v2)
+      if lt(t14, v1) {
+        revert(0, 0)
+      }
+      let v10 := t14
+      let v3 := v10
+      mstore(p0, v3)
+      let t15 := mload(add(p0, 32))
+      let v5 := t15
+      let v11 := 0x02
+      let v6 := v11
+      let t16 := add(v5, v6)
+      if lt(t16, v5) {
+        revert(0, 0)
+      }
+      let v12 := t16
+      let v7 := v12
+      mstore(add(p0, 32), v7)
+      leave
+    }
+    function $from_raw_0(p0) -> ret {
+      let v1 := p0
+      let v3 := v1
+      let v2 := v3
+      ret := v2
+      leave
+    }
+    function $from_raw_1(p0) -> ret {
+      let v1 := p0
+      let v3 := v1
+      let v4 := v3
+      let v2 := v4
+      ret := v2
+      leave
+    }
+    function $mem_ptr(p0) -> ret {
+      let v2 := p0
+      let v4 := $from_raw_0(v2)
+      let v3 := v4
+      ret := v3
+      leave
+    }
+    function $stor_ptr(p0) -> ret {
+      let v2 := p0
+      let v4 := $from_raw_1(v2)
+      let v3 := v4
+      ret := v3
+      leave
+    }
+    function $test_effect_ptr_domains(p0, p1) {
+      let v15 := 0x0100
+      let v5 := v15
+      let v16 := $mem_ptr(v5)
+      let v6 := v16
+      let v2 := v6
+      $bump_1(v2)
+      let v19 := 0x00
+      let v8 := v19
+      let v20 := $stor_ptr(v8)
+      let v9 := v20
+      let v3 := v9
+      $bump_0_eff0_stor(v3)
+      let v23 := 0x0a
+      let v11 := v23
+      let v24 := 0x14
+      let v12 := v24
+      let v25 := 0x0a
+      let v26 := 0x14
+      let v27 := dataoffset("const_0")
+      let v13 := v27
+      let v29 := 0x0a
+      let v30 := 0x14
+      let t35 := mload(0x40)
+      if iszero(t35) {
+        t35 := 0x80
+      }
+      mstore(0x40, add(t35, 64))
+      let v31 := t35
+      mstore(v31, v29)
+      mstore(add(v31, 32), v30)
+      let v4 := v31
+      let v33 := v4
+      $bump_2(v33)
+      leave
+    }
     $__fe_main_root()
   }
+  data "const_0" hex"000000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000014"
 }

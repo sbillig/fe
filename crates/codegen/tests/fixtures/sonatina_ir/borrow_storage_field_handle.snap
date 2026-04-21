@@ -5,36 +5,68 @@ input_file: crates/codegen/tests/fixtures/borrow_storage_field_handle.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @__fe_layout_0 = {i256};
+type @__fe_layout_0 = {};
+type @__fe_layout_1 = {@__fe_layout_0};
 
 func private %__fe_main_root() {
     block0:
         jump block1;
 
     block1:
-        v0.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
-        v1.i256 = call %borrow_storage_field_handle v0;
+        v0.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v1.i256 = call %main v0;
         evm_stop;
 }
 
-func private %borrow_storage_field_handle(v0.objref<@__fe_layout_0>) -> i256 {
+func private %borrow_storage_field_handle(v0.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v3.objref<i256> = obj.proj v0 0.i256;
-        v5.i256 = obj.load v3;
-        (v6.i256, v7.i1) = uaddo v5 1.i256;
-        br v7 block2 block3;
+        v3.i256 = evm_sload v0;
+        (v4.i256, v5.i1) = uaddo v3 1.i256;
+        br v5 block2 block3;
 
     block2:
         evm_revert 0.i256 0.i256;
 
     block3:
-        obj.store v3 v6;
-        v10.objref<i256> = obj.proj v0 0.i256;
-        v11.i256 = obj.load v10;
-        return v11;
+        evm_sstore v0 v4;
+        v9.i256 = evm_sload v0;
+        return v9;
+}
+
+func private %from_raw(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        return v2;
+}
+
+func private %main(v0.objref<@__fe_layout_1>) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %stor_ptr 0.i256;
+        v3.i256 = call %borrow_storage_field_handle v2;
+        return v3;
+}
+
+func private %stor_ptr(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.i256 = call %from_raw v2;
+        return v3;
 }
 
 

@@ -1,3 +1,5 @@
+use std::evm::{RawStorage, StorPtr}
+
 struct CoinStore {
     alice: u256,
 }
@@ -8,4 +10,13 @@ fn borrow_storage_field_handle() -> u256
     let p: mut u256 = mut store.alice
     p += 1
     store.alice
+}
+
+pub fn main() -> u256
+    uses (sto: mut RawStorage)
+{
+    let mut store: StorPtr<CoinStore> = sto.stor_ptr(0)
+    with (store) {
+        borrow_storage_field_handle()
+    }
 }

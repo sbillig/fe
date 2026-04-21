@@ -6,8 +6,14 @@ input_file: tests/fixtures/pointer_field_aggregate.fe
 object "main" {
   code {
     function $__fe_main_root() {
-      let v0 := 0
-      $bump_0(v0)
+      let t3 := mload(0x40)
+      if iszero(t3) {
+        t3 := 0x80
+      }
+      mstore(0x40, add(t3, 0))
+      let v0 := t3
+      let v1 := v0
+      $pointer_field_aggregate(v1)
       stop()
     }
     function $bump_0(p0) {
@@ -23,6 +29,68 @@ object "main" {
       }
       let v8 := t11
       mstore(v1, v8)
+      leave
+    }
+    function $bump_1(p0) {
+      let v4 := p0
+      let v1 := v4
+      let v5 := 0x01
+      let v2 := v5
+      let t10 := mload(v1)
+      let v7 := t10
+      let t11 := add(v7, v2)
+      if lt(t11, v7) {
+        revert(0, 0)
+      }
+      let v8 := t11
+      mstore(v1, v8)
+      leave
+    }
+    function $from_raw(p0) -> ret {
+      let v1 := p0
+      let v3 := v1
+      let v2 := v3
+      ret := v2
+      leave
+    }
+    function $mem_ptr(p0) -> ret {
+      let v2 := p0
+      let v4 := $from_raw(v2)
+      let v3 := v4
+      ret := v3
+      leave
+    }
+    function $pointer_field_aggregate(p0) {
+      let v15 := 0x0100
+      let v4 := v15
+      let v16 := $mem_ptr(v4)
+      let v5 := v16
+      let v17 := 0x01
+      let v6 := v17
+      let t26 := mload(0x40)
+      if iszero(t26) {
+        t26 := 0x80
+      }
+      mstore(0x40, add(t26, 64))
+      let v18 := t26
+      mstore(v18, v5)
+      mstore(add(v18, 32), v6)
+      let v7 := v18
+      let v19 := v7
+      let v1 := v19
+      let t27 := mload(v1)
+      let v8 := t27
+      let v2 := v8
+      $bump_0(v2)
+      let v22 := 0x0120
+      let v10 := v22
+      let v23 := $mem_ptr(v10)
+      let v11 := v23
+      mstore(v1, v11)
+      let t28 := mload(v1)
+      let v13 := t28
+      let v3 := v13
+      $bump_1(v3)
       leave
     }
     $__fe_main_root()

@@ -12,6 +12,26 @@ type @__fe_layout_2 = enum {
     #Some(i256),
 };
 
+func private %__fe_manual_contract_init_root_EnumContract() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        call %init v0;
+        evm_stop;
+}
+
+func private %__fe_manual_contract_runtime_root_EnumContract() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        call %runtime v0;
+        evm_stop;
+}
+
 func private %abi_encode_u256(v0.i256, v1.objref<@__fe_layout_1>) {
     block0:
         v2.*i256 = alloca i256;
@@ -21,7 +41,7 @@ func private %abi_encode_u256(v0.i256, v1.objref<@__fe_layout_1>) {
     block1:
         v5.i256 = mload v2 i256;
         call %mstore v1 0.i256 v5;
-        call %return_data_0 0.i256 32.i256;
+        call %return_data_1 0.i256 32.i256;
         unreachable;
 }
 
@@ -63,7 +83,7 @@ func private %init(v0.objref<@__fe_layout_1>) {
         v1.i256 = sym_size &__EnumContract_runtime;
         v2.i256 = sym_addr &__EnumContract_runtime;
         call %codecopy v0 0.i256 v2 v1;
-        call %return_data_1 0.i256 v1;
+        call %return_data_2 0.i256 v1;
         unreachable;
 }
 
@@ -201,7 +221,7 @@ func private %runtime(v0.objref<@__fe_layout_1>) {
         jump block16;
 
     block16:
-        call %return_data_2 0.i256 0.i256;
+        call %return_data_0 0.i256 0.i256;
         unreachable;
 
     block17:
@@ -282,10 +302,10 @@ func private %runtime(v0.objref<@__fe_layout_1>) {
 
 object @EnumContract {
     section init {
-        entry %init;
+        entry %__fe_manual_contract_init_root_EnumContract;
         embed .runtime as &__EnumContract_runtime;
     }
     section runtime {
-        entry %runtime;
+        entry %__fe_manual_contract_runtime_root_EnumContract;
     }
 }

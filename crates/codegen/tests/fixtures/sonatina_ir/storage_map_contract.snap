@@ -10,6 +10,26 @@ type @__fe_layout_1 = {@__fe_layout_0};
 type @__fe_layout_2 = {};
 type @__fe_layout_3 = {};
 
+func private %__fe_manual_contract_init_root_BalanceMap() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        call %init v0;
+        evm_stop;
+}
+
+func private %__fe_manual_contract_runtime_root_BalanceMap() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        call %runtime v0;
+        evm_stop;
+}
+
 func private %abi_encode(v0.i256, v1.objref<@__fe_layout_1>) {
     block0:
         v2.*i256 = alloca i256;
@@ -200,8 +220,8 @@ func private %runtime(v0.objref<@__fe_layout_1>) {
         jump block1;
 
     block1:
-        call %new_0;
         call %new_1;
+        call %new_0;
         v6.i256 = call %calldataload 0.i256;
         v8.i256 = shr 224.i256 v6;
         v10.i1 = eq v8 2630350600.i256;
@@ -453,10 +473,10 @@ func private %write_key(v0.i256, v1.i256) -> i256 {
 
 object @BalanceMap {
     section init {
-        entry %init;
+        entry %__fe_manual_contract_init_root_BalanceMap;
         embed .runtime as &__BalanceMap_runtime;
     }
     section runtime {
-        entry %runtime;
+        entry %__fe_manual_contract_runtime_root_BalanceMap;
     }
 }

@@ -102,6 +102,63 @@ object "EffectHandleFieldDeref" {
         }
         if iszero(iszero(iszero(v3))) {
           let v4 := calldatasize()
+          let t23 := sub(v4, v1)
+          if gt(v1, v4) {
+            revert(0, 0)
+          }
+          let v5 := t23
+          let t24 := mload(0x40)
+          if iszero(t24) {
+            t24 := 0x80
+          }
+          mstore(0x40, add(t24, v5))
+          let v6 := t24
+          calldatacopy(v6, v1, v5)
+          let r8 := mload(0x40)
+          if iszero(r8) {
+            r8 := 0x80
+          }
+          mstore(0x40, add(r8, 64))
+          mstore(r8, v6)
+          mstore(add(r8, 32), v5)
+          let v9 := $decoder_new(r8)
+          let v10 := v9
+          let v11 := v10
+          let v12 := $decode_payload_4(v11)
+          let v13 := v12
+          let t25 := mload(v13)
+          let v14 := t25
+          let t26 := mload(add(v13, 32))
+          let v15 := t26
+          let t27 := mload(0x40)
+          if iszero(t27) {
+            t27 := 0x80
+          }
+          mstore(0x40, add(t27, 0))
+          let v16 := t27
+          let v17 := v16
+          let v18 := $__EffectHandleFieldDeref_recv_0_0(v14, v15, v17)
+          let v19 := $encode_single_root_alloc_arg0_root_stor(v18)
+          let v20 := v19
+          let t28 := mload(v20)
+          let v21 := t28
+          let t29 := mload(add(v20, 32))
+          let v22 := t29
+          return(v21, v22)
+        }
+      }
+      function $__fe_contract_recv_abi_EffectHandleFieldDeref_2() {
+        let v0 := 0
+        let v1 := 0
+        v0 := 0
+        v1 := 0x04
+        let v2 := callvalue()
+        let v3 := iszero(iszero(iszero(eq(v2, v0))))
+        if iszero(iszero(v3)) {
+          revert(v0, v0)
+        }
+        if iszero(iszero(iszero(v3))) {
+          let v4 := calldatasize()
           let t22 := sub(v4, v1)
           if gt(v1, v4) {
             revert(0, 0)
@@ -125,18 +182,23 @@ object "EffectHandleFieldDeref" {
           let v10 := v9
           let v11 := v10
           let v12 := $decode_payload_3(v11)
-          let v13 := v12
-          let t24 := mload(v13)
-          let v14 := t24
-          let t25 := mload(add(v13, 32))
-          let v15 := t25
+          let t24 := mload(0x40)
+          if iszero(t24) {
+            t24 := 0x80
+          }
+          mstore(0x40, add(t24, 32))
+          mstore(t24, v12)
+          let v13 := t24
+          let t25 := mload(v13)
+          let v14 := t25
           let t26 := mload(0x40)
           if iszero(t26) {
             t26 := 0x80
           }
           mstore(0x40, add(t26, 0))
-          let v16 := t26
-          let v17 := $__EffectHandleFieldDeref_recv_0_0(v14, v15, v16)
+          let v15 := t26
+          let v16 := v15
+          let v17 := $__EffectHandleFieldDeref_recv_0_1(v14, v16)
           let v18 := $encode_single_root_alloc_arg0_root_stor(v17)
           let v19 := v18
           let t27 := mload(v19)
@@ -144,66 +206,6 @@ object "EffectHandleFieldDeref" {
           let t28 := mload(add(v19, 32))
           let v21 := t28
           return(v20, v21)
-        }
-      }
-      function $__fe_contract_recv_abi_EffectHandleFieldDeref_2() {
-        let v0 := 0
-        let v1 := 0
-        v0 := 0
-        v1 := 0x04
-        let v2 := callvalue()
-        let v3 := iszero(iszero(iszero(eq(v2, v0))))
-        if iszero(iszero(v3)) {
-          revert(v0, v0)
-        }
-        if iszero(iszero(iszero(v3))) {
-          let v4 := calldatasize()
-          let t21 := sub(v4, v1)
-          if gt(v1, v4) {
-            revert(0, 0)
-          }
-          let v5 := t21
-          let t22 := mload(0x40)
-          if iszero(t22) {
-            t22 := 0x80
-          }
-          mstore(0x40, add(t22, v5))
-          let v6 := t22
-          calldatacopy(v6, v1, v5)
-          let r8 := mload(0x40)
-          if iszero(r8) {
-            r8 := 0x80
-          }
-          mstore(0x40, add(r8, 64))
-          mstore(r8, v6)
-          mstore(add(r8, 32), v5)
-          let v9 := $decoder_new(r8)
-          let v10 := v9
-          let v11 := v10
-          let v12 := $decode_payload_2(v11)
-          let t23 := mload(0x40)
-          if iszero(t23) {
-            t23 := 0x80
-          }
-          mstore(0x40, add(t23, 32))
-          mstore(t23, v12)
-          let v13 := t23
-          let t24 := mload(v13)
-          let v14 := t24
-          let t25 := mload(0x40)
-          if iszero(t25) {
-            t25 := 0x80
-          }
-          mstore(0x40, add(t25, 0))
-          let v15 := t25
-          let v16 := $__EffectHandleFieldDeref_recv_0_1(v14, v15)
-          let v17 := $encode_single_root_alloc_arg0_root_stor(v16)
-          let v18 := v17
-          let t26 := mload(v18)
-          let v19 := t26
-          let t27 := mload(add(v18, 32))
-          let v20 := t27
-          return(v19, v20)
         }
       }
       function $__fe_contract_recv_abi_EffectHandleFieldDeref_3() {
@@ -393,50 +395,7 @@ object "EffectHandleFieldDeref" {
         let v21 := 0
         let v6 := iszero(iszero(v21))
         if iszero(iszero(v6)) {
-          let v22 := $read_word_0(p0)
-          let v7 := v22
-          let v1 := v7
-          let v23 := p0
-          let v24 := $base_1(v23)
-          let v8 := v24
-          let v2 := v8
-          let v25 := p0
-          let v26 := $pos_0(v25)
-          let v9 := v26
-          let v3 := v9
-          let t41 := add(v2, v1)
-          if lt(t41, v2) {
-            revert(0, 0)
-          }
-          let v27 := t41
-          let v10 := v27
-          $set_base_0(p0, v10)
-          let v30 := p0
-          let v31 := $base_1(v30)
-          let v12 := v31
-          $set_pos_3(p0, v12)
-          let v34 := p0
-          let v14 := v34
-          let v35 := $decode_payload_4(v14)
-          let v15 := v35
-          let v4 := v15
-          $set_base_0(p0, v2)
-          $set_pos_3(p0, v3)
-          ret := v4
-          leave
-        }
-        if iszero(iszero(iszero(v6))) {
-          let v40 := $decode_payload_4(p0)
-          let v20 := v40
-          ret := v20
-          leave
-        }
-      }
-      function $decode_field_1(p0) -> ret {
-        let v21 := 0
-        let v6 := iszero(iszero(v21))
-        if iszero(iszero(v6)) {
-          let v22 := $read_word_2(p0)
+          let v22 := $read_word_3(p0)
           let v7 := v22
           let v1 := v7
           let v23 := p0
@@ -457,29 +416,29 @@ object "EffectHandleFieldDeref" {
           let v30 := p0
           let v31 := $base_2(v30)
           let v12 := v31
-          $set_pos_1(p0, v12)
+          $set_pos_2(p0, v12)
           let v34 := p0
           let v14 := v34
-          let v35 := $decode_payload_0(v14)
+          let v35 := $decode_payload_1(v14)
           let v15 := v35
           let v4 := v15
           $set_base_2(p0, v2)
-          $set_pos_1(p0, v3)
+          $set_pos_2(p0, v3)
           ret := v4
           leave
         }
         if iszero(iszero(iszero(v6))) {
-          let v40 := $decode_payload_0(p0)
+          let v40 := $decode_payload_1(p0)
           let v20 := v40
           ret := v20
           leave
         }
       }
-      function $decode_field_2(p0) -> ret {
+      function $decode_field_1(p0) -> ret {
         let v21 := 0
         let v6 := iszero(iszero(v21))
         if iszero(iszero(v6)) {
-          let v22 := $read_word_3(p0)
+          let v22 := $read_word_5(p0)
           let v7 := v22
           let v1 := v7
           let v23 := p0
@@ -500,37 +459,86 @@ object "EffectHandleFieldDeref" {
           let v30 := p0
           let v31 := $base_3(v30)
           let v12 := v31
-          $set_pos_2(p0, v12)
+          $set_pos_3(p0, v12)
           let v34 := p0
           let v14 := v34
-          let v35 := $decode_payload_1(v14)
+          let v35 := $decode_payload_2(v14)
           let v15 := v35
           let v4 := v15
           $set_base_3(p0, v2)
-          $set_pos_2(p0, v3)
+          $set_pos_3(p0, v3)
           ret := v4
           leave
         }
         if iszero(iszero(iszero(v6))) {
-          let v40 := $decode_payload_1(p0)
+          let v40 := $decode_payload_2(p0)
+          let v20 := v40
+          ret := v20
+          leave
+        }
+      }
+      function $decode_field_2(p0) -> ret {
+        let v21 := 0
+        let v6 := iszero(iszero(v21))
+        if iszero(iszero(v6)) {
+          let v22 := $read_word_1(p0)
+          let v7 := v22
+          let v1 := v7
+          let v23 := p0
+          let v24 := $base_1(v23)
+          let v8 := v24
+          let v2 := v8
+          let v25 := p0
+          let v26 := $pos_1(v25)
+          let v9 := v26
+          let v3 := v9
+          let t41 := add(v2, v1)
+          if lt(t41, v2) {
+            revert(0, 0)
+          }
+          let v27 := t41
+          let v10 := v27
+          $set_base_1(p0, v10)
+          let v30 := p0
+          let v31 := $base_1(v30)
+          let v12 := v31
+          $set_pos_1(p0, v12)
+          let v34 := p0
+          let v14 := v34
+          let v35 := $decode_payload_0(v14)
+          let v15 := v35
+          let v4 := v15
+          $set_base_1(p0, v2)
+          $set_pos_1(p0, v3)
+          ret := v4
+          leave
+        }
+        if iszero(iszero(iszero(v6))) {
+          let v40 := $decode_payload_0(p0)
           let v20 := v40
           ret := v20
           leave
         }
       }
       function $decode_payload_0(p0) -> ret {
-        let v2 := $read_word_4(p0)
+        let v2 := $read_word_2(p0)
         let v1 := v2
         ret := v1
         leave
       }
       function $decode_payload_1(p0) -> ret {
-        let v2 := $read_word_5(p0)
+        let v2 := $read_word_4(p0)
         let v1 := v2
         ret := v1
         leave
       }
       function $decode_payload_2(p0) -> ret {
+        let v2 := $read_word_0(p0)
+        let v1 := v2
+        ret := v1
+        leave
+      }
+      function $decode_payload_3(p0) -> ret {
         let v5 := $decode_field_1(p0)
         let v2 := v5
         let v1 := v2
@@ -538,7 +546,7 @@ object "EffectHandleFieldDeref" {
         ret := v3
         leave
       }
-      function $decode_payload_3(p0) -> ret {
+      function $decode_payload_4(p0) -> ret {
         let v7 := $decode_field_0(p0)
         let v3 := v7
         let v1 := v3
@@ -555,12 +563,6 @@ object "EffectHandleFieldDeref" {
         mstore(add(v9, 32), v2)
         let v5 := v9
         ret := v5
-        leave
-      }
-      function $decode_payload_4(p0) -> ret {
-        let v2 := $read_word_1(p0)
-        let v1 := v2
-        ret := v1
         leave
       }
       function $decode_payload_5(p0) -> ret {
@@ -600,19 +602,19 @@ object "EffectHandleFieldDeref" {
           let v12 := v33
           $write_word_0(p1, v12)
           let v36 := p1
-          let v37 := $pos_1(v36)
+          let v37 := $pos_0(v36)
           let v14 := v37
           let v6 := v14
           let t58 := mload(v4)
           let v39 := t58
-          $set_base_1(p1, v39)
+          $set_base_0(p1, v39)
           let t59 := mload(v4)
           let v42 := t59
           $set_pos_0(p1, v42)
           let v44 := p1
           let v17 := v44
           $encode_payload_arg0_root_stor(p0, v17)
-          $set_base_1(p1, v3)
+          $set_base_0(p1, v3)
           $set_pos_0(p1, v6)
           let v21 := v4
           let t60 := mload(v21)
@@ -884,12 +886,10 @@ object "EffectHandleFieldDeref" {
         if iszero(r0) {
           r0 := 0x80
         }
-        mstore(0x40, add(r0, 128))
+        mstore(0x40, add(r0, 64))
         mstore(r0, mload(p0))
         mstore(add(r0, 32), mload(add(p0, 32)))
-        mstore(add(r0, 64), mload(add(p0, 64)))
-        mstore(add(r0, 96), mload(add(p0, 96)))
-        let t2 := mload(add(r0, 64))
+        let t2 := mload(add(r0, 32))
         let v1 := t2
         ret := v1
         leave
@@ -899,10 +899,12 @@ object "EffectHandleFieldDeref" {
         if iszero(r0) {
           r0 := 0x80
         }
-        mstore(0x40, add(r0, 64))
+        mstore(0x40, add(r0, 128))
         mstore(r0, mload(p0))
         mstore(add(r0, 32), mload(add(p0, 32)))
-        let t2 := mload(add(r0, 32))
+        mstore(add(r0, 64), mload(add(p0, 64)))
+        mstore(add(r0, 96), mload(add(p0, 96)))
+        let t2 := mload(add(r0, 64))
         let v1 := t2
         ret := v1
         leave
@@ -944,6 +946,63 @@ object "EffectHandleFieldDeref" {
         leave
       }
       function $read_word_0(p0) -> ret {
+        let v1 := 0
+        let v2 := 0
+        let v4 := p0
+        let v22 := $len_5(v4)
+        let v5 := v22
+        v1 := v5
+        let t35 := mload(add(p0, 64))
+        let v6 := t35
+        let v23 := 0x20
+        let v7 := v23
+        let t36 := add(v6, v7)
+        if lt(t36, v6) {
+          revert(0, 0)
+        }
+        let v24 := t36
+        let v8 := v24
+        v2 := v8
+        let t37 := mload(add(p0, 64))
+        let v25 := t37
+        mstore(add(p0, 64), v25)
+        let t38 := mload(add(p0, 64))
+        let v26 := t38
+        let v27 := iszero(iszero(lt(v2, v26)))
+        let v11 := iszero(iszero(v27))
+        if iszero(iszero(v11)) {
+          let v28 := 0x00
+          let v14 := v28
+          let v29 := 0x00
+          let v15 := v29
+          revert(v14, v15)
+        }
+        if iszero(iszero(iszero(v11))) {
+          let v12 := v1
+          let v33 := v12
+          let v34 := iszero(iszero(gt(v2, v33)))
+          let v13 := iszero(iszero(v34))
+          if iszero(iszero(v13)) {
+            let v28 := 0x00
+            let v14 := v28
+            let v29 := 0x00
+            let v15 := v29
+            revert(v14, v15)
+          }
+          if iszero(iszero(iszero(v13))) {
+            let v18 := p0
+            let t39 := mload(add(p0, 64))
+            let v19 := t39
+            let v32 := $word_at_5(v18, v19)
+            let v20 := v32
+            let v3 := v20
+            mstore(add(p0, 64), v2)
+            ret := v3
+            leave
+          }
+        }
+      }
+      function $read_word_1(p0) -> ret {
         let v1 := 0
         let v2 := 0
         let v4 := p0
@@ -1000,7 +1059,7 @@ object "EffectHandleFieldDeref" {
           }
         }
       }
-      function $read_word_1(p0) -> ret {
+      function $read_word_2(p0) -> ret {
         let v1 := 0
         let v2 := 0
         let v4 := p0
@@ -1057,7 +1116,7 @@ object "EffectHandleFieldDeref" {
           }
         }
       }
-      function $read_word_2(p0) -> ret {
+      function $read_word_3(p0) -> ret {
         let v1 := 0
         let v2 := 0
         let v4 := p0
@@ -1106,63 +1165,6 @@ object "EffectHandleFieldDeref" {
             let t39 := mload(add(p0, 64))
             let v19 := t39
             let v32 := $word_at_1(v18, v19)
-            let v20 := v32
-            let v3 := v20
-            mstore(add(p0, 64), v2)
-            ret := v3
-            leave
-          }
-        }
-      }
-      function $read_word_3(p0) -> ret {
-        let v1 := 0
-        let v2 := 0
-        let v4 := p0
-        let v22 := $len_2(v4)
-        let v5 := v22
-        v1 := v5
-        let t35 := mload(add(p0, 64))
-        let v6 := t35
-        let v23 := 0x20
-        let v7 := v23
-        let t36 := add(v6, v7)
-        if lt(t36, v6) {
-          revert(0, 0)
-        }
-        let v24 := t36
-        let v8 := v24
-        v2 := v8
-        let t37 := mload(add(p0, 64))
-        let v25 := t37
-        mstore(add(p0, 64), v25)
-        let t38 := mload(add(p0, 64))
-        let v26 := t38
-        let v27 := iszero(iszero(lt(v2, v26)))
-        let v11 := iszero(iszero(v27))
-        if iszero(iszero(v11)) {
-          let v28 := 0x00
-          let v14 := v28
-          let v29 := 0x00
-          let v15 := v29
-          revert(v14, v15)
-        }
-        if iszero(iszero(iszero(v11))) {
-          let v12 := v1
-          let v33 := v12
-          let v34 := iszero(iszero(gt(v2, v33)))
-          let v13 := iszero(iszero(v34))
-          if iszero(iszero(v13)) {
-            let v28 := 0x00
-            let v14 := v28
-            let v29 := 0x00
-            let v15 := v29
-            revert(v14, v15)
-          }
-          if iszero(iszero(iszero(v13))) {
-            let v18 := p0
-            let t39 := mload(add(p0, 64))
-            let v19 := t39
-            let v32 := $word_at_2(v18, v19)
             let v20 := v32
             let v3 := v20
             mstore(add(p0, 64), v2)
@@ -1232,7 +1234,7 @@ object "EffectHandleFieldDeref" {
         let v1 := 0
         let v2 := 0
         let v4 := p0
-        let v22 := $len_5(v4)
+        let v22 := $len_2(v4)
         let v5 := v22
         v1 := v5
         let t35 := mload(add(p0, 64))
@@ -1276,7 +1278,7 @@ object "EffectHandleFieldDeref" {
             let v18 := p0
             let t39 := mload(add(p0, 64))
             let v19 := t39
-            let v32 := $word_at_5(v18, v19)
+            let v32 := $word_at_2(v18, v19)
             let v20 := v32
             let v3 := v20
             mstore(add(p0, 64), v2)
@@ -1287,12 +1289,12 @@ object "EffectHandleFieldDeref" {
       }
       function $set_base_0(p0, p1) {
         let v2 := p1
-        mstore(add(p0, 96), v2)
+        mstore(p0, v2)
         leave
       }
       function $set_base_1(p0, p1) {
         let v2 := p1
-        mstore(p0, v2)
+        mstore(add(p0, 96), v2)
         leave
       }
       function $set_base_2(p0, p1) {

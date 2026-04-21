@@ -5,6 +5,10 @@ input_file: tests/fixtures/contract_dispatch.fe
 ---
 object "MinimalDispatcher" {
   code {
+    function $__fe_manual_contract_runtime_root_MinimalDispatcher() {
+      $dispatch()
+      stop()
+    }
     function $dispatch() {
       let v3 := $emit_code()
       let v1 := and(v3, 0xffffffffffffffff)
@@ -17,6 +21,6 @@ object "MinimalDispatcher" {
       ret := and(v0, 0xffffffffffffffff)
       leave
     }
-    $dispatch()
+    $__fe_manual_contract_runtime_root_MinimalDispatcher()
   }
 }

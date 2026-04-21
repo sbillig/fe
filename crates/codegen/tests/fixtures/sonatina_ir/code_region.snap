@@ -9,6 +9,46 @@ type @__fe_layout_0 = {};
 type @__fe_layout_1 = {@__fe_layout_0};
 type @__fe_layout_2 = {i256};
 
+func private %__fe_manual_contract_init_root_Child() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        call %child_init v0;
+        evm_stop;
+}
+
+func private %__fe_manual_contract_init_root_Foo() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        call %init v0;
+        evm_stop;
+}
+
+func private %__fe_manual_contract_runtime_root_Child() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        call %child_runtime v0;
+        evm_stop;
+}
+
+func private %__fe_manual_contract_runtime_root_Foo() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        call %runtime v0;
+        evm_stop;
+}
+
 func private %allocate(v0.i256, v1.objref<@__fe_layout_1>) -> i256 {
     block0:
         v2.*i256 = alloca i256;
@@ -45,7 +85,7 @@ func private %balance(v0.objref<@__fe_layout_1>) {
         jump block1;
 
     block1:
-        call %return_data_2 0.i256 0.i256;
+        call %return_data_3 0.i256 0.i256;
         unreachable;
 }
 
@@ -86,8 +126,8 @@ func private %child_init(v0.objref<@__fe_layout_1>) {
     block1:
         v1.i256 = sym_size &__Child_runtime;
         v2.i256 = sym_addr &__Child_runtime;
-        call %codecopy_1 v0 0.i256 v2 v1;
-        call %return_data_3 0.i256 v1;
+        call %codecopy_0 v0 0.i256 v2 v1;
+        call %return_data_4 0.i256 v1;
         unreachable;
 }
 
@@ -97,7 +137,7 @@ func private %child_runtime(v0.objref<@__fe_layout_1>) {
 
     block1:
         call %calldatacopy v0 0.i256 0.i256 4.i256;
-        call %return_data_4 0.i256 4.i256;
+        call %return_data_0 0.i256 4.i256;
         unreachable;
 }
 
@@ -170,13 +210,13 @@ func private %init(v0.objref<@__fe_layout_1>) {
         v1.i256 = sym_size &__Child_init;
         v2.i256 = sym_addr &__Child_init;
         v4.i256 = call %allocate v1 v0;
-        call %codecopy_0 v0 v4 v2 v1;
+        call %codecopy_1 v0 v4 v2 v1;
         v8.@__fe_layout_2 = call %create2_raw v0 0.i256 v4 v1 4660.i256;
         v9.i256 = sym_size &__Foo_runtime;
         v10.i256 = sym_addr &__Foo_runtime;
         v11.i256 = call %allocate v9 v0;
-        call %codecopy_0 v0 v11 v10 v9;
-        call %return_data_0 v11 v9;
+        call %codecopy_1 v0 v11 v10 v9;
+        call %return_data_1 v11 v9;
         unreachable;
 }
 
@@ -297,7 +337,7 @@ func private %runtime(v0.objref<@__fe_layout_1>) {
         br v4 block3 block6;
 
     block2:
-        call %return_data_1 0.i256 0.i256;
+        call %return_data_2 0.i256 0.i256;
         unreachable;
 
     block3:
@@ -324,28 +364,28 @@ func private %transfer(v0.objref<@__fe_layout_1>) {
         jump block1;
 
     block1:
-        call %return_data_2 0.i256 0.i256;
+        call %return_data_3 0.i256 0.i256;
         unreachable;
 }
 
 
 object @Child {
     section init {
-        entry %child_init;
+        entry %__fe_manual_contract_init_root_Child;
         embed .runtime as &__Child_runtime;
     }
     section runtime {
-        entry %child_runtime;
+        entry %__fe_manual_contract_runtime_root_Child;
     }
 }
 
 object @Foo {
     section init {
-        entry %init;
+        entry %__fe_manual_contract_init_root_Foo;
         embed @Child.init as &__Child_init;
         embed .runtime as &__Foo_runtime;
     }
     section runtime {
-        entry %runtime;
+        entry %__fe_manual_contract_runtime_root_Foo;
     }
 }

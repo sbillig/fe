@@ -11,23 +11,30 @@ object "test_test_effect" {
   object "runtime" {
     code {
       function $__fe_test_root_test_effect() {
-        let v0 := 0
-        $test_effect(v0)
+        let t3 := mload(0x40)
+        if iszero(t3) {
+          t3 := 0x80
+        }
+        mstore(0x40, add(t3, 0))
+        let v0 := t3
+        let v1 := v0
+        $test_effect(v1)
         stop()
       }
+      function $mstore(p0, p1, p2) {
+        let v3 := p1
+        let v4 := p2
+        mstore(v3, v4)
+        leave
+      }
       function $test_effect(p0) {
-        let v4 := p0
-        let v1 := v4
-        let v5 := 0x01
-        let v2 := v5
-        let t10 := mload(v1)
-        let v7 := t10
-        let t11 := add(v7, v2)
-        if lt(t11, v7) {
-          revert(0, 0)
-        }
-        let v8 := t11
-        mstore(v1, v8)
+        let v5 := p0
+        let v1 := v5
+        let v6 := 0x80
+        let v2 := v6
+        let v7 := 0x01
+        let v3 := v7
+        $mstore(v1, v2, v3)
         leave
       }
       $__fe_test_root_test_effect()

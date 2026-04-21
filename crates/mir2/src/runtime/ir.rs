@@ -755,10 +755,17 @@ pub enum RuntimeFunctionOwner<'db> {
 pub enum RuntimeSyntheticSpec<'db> {
     MainRoot {
         callee: RuntimeInstance<'db>,
+        entry_effect_args: Box<[EntryEffectArgPlan<'db>]>,
     },
     TestRoot {
         name: String,
         callee: RuntimeInstance<'db>,
+        entry_effect_args: Box<[EntryEffectArgPlan<'db>]>,
+    },
+    ManualContractRoot {
+        func: Func<'db>,
+        callee: RuntimeInstance<'db>,
+        entry_effect_args: Box<[EntryEffectArgPlan<'db>]>,
     },
     ContractInitAbi {
         plan: ContractInitAbiPlan<'db>,
@@ -787,7 +794,7 @@ pub struct ContractInitAbiPlan<'db> {
     pub contract: Contract<'db>,
     pub payable: bool,
     pub user_init: Option<RuntimeInstance<'db>>,
-    pub owner_effect_args: Box<[ContractEffectArgPlan<'db>]>,
+    pub entry_effect_args: Box<[EntryEffectArgPlan<'db>]>,
     pub init_args: InitArgsPlan<'db>,
 }
 
@@ -797,18 +804,15 @@ pub struct ContractRecvAbiPlan<'db> {
     pub selector: Option<u32>,
     pub payable: bool,
     pub user_recv: RuntimeInstance<'db>,
-    pub owner_effect_args: Box<[ContractEffectArgPlan<'db>]>,
+    pub entry_effect_args: Box<[EntryEffectArgPlan<'db>]>,
     pub input: RuntimeInputPlan<'db>,
     pub ret: RuntimeReturnPlan<'db>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub enum ContractEffectArgPlan<'db> {
+pub enum EntryEffectArgPlan<'db> {
     ContractField(ContractFieldBinding<'db>),
-    Placeholder {
-        declared_ty: TyId<'db>,
-        boundary: RuntimeBoundarySpec<'db>,
-    },
+    TargetRootProvider(TargetRootProviderBinding<'db>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -817,6 +821,19 @@ pub struct ContractFieldBinding<'db> {
     pub declared_ty: TyId<'db>,
     pub class: RuntimeClass<'db>,
     pub kind: RefKind<'db>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct TargetRootProviderBinding<'db> {
+    pub declared_ty: TyId<'db>,
+    pub class: RuntimeClass<'db>,
+    pub materialization: TargetRootProviderMaterialization<'db>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum TargetRootProviderMaterialization<'db> {
+    MemoryObject { layout: LayoutId<'db> },
+    MemoryRawAddr { layout: LayoutId<'db> },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]

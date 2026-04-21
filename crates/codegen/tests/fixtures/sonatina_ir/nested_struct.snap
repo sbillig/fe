@@ -10,6 +10,26 @@ type @__fe_layout_1 = {@__fe_layout_0};
 type @__fe_layout_2 = {i256};
 type @__fe_layout_3 = {@__fe_layout_2};
 
+func private %__fe_manual_contract_init_root_NestedStruct() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        call %init v0;
+        evm_stop;
+}
+
+func private %__fe_manual_contract_runtime_root_NestedStruct() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        call %runtime v0;
+        evm_stop;
+}
+
 func private %abi_encode(v0.i256, v1.objref<@__fe_layout_1>) {
     block0:
         v2.*i256 = alloca i256;
@@ -19,7 +39,7 @@ func private %abi_encode(v0.i256, v1.objref<@__fe_layout_1>) {
     block1:
         v5.i256 = mload v2 i256;
         call %mstore v1 0.i256 v5;
-        call %return_data_2 0.i256 32.i256;
+        call %return_data_0 0.i256 32.i256;
         unreachable;
 }
 
@@ -72,7 +92,7 @@ func private %init(v0.objref<@__fe_layout_1>) {
         v1.i256 = sym_size &__NestedStruct_runtime;
         v2.i256 = sym_addr &__NestedStruct_runtime;
         call %codecopy v0 0.i256 v2 v1;
-        call %return_data_0 0.i256 v1;
+        call %return_data_1 0.i256 v1;
         unreachable;
 }
 
@@ -211,7 +231,7 @@ func private %runtime(v0.objref<@__fe_layout_1>) {
         unreachable;
 
     block5:
-        call %return_data_1 0.i256 0.i256;
+        call %return_data_2 0.i256 0.i256;
         unreachable;
 
     block6:
@@ -253,10 +273,10 @@ func private %write_inner(v0.i256, v1.i256) {
 
 object @NestedStruct {
     section init {
-        entry %init;
+        entry %__fe_manual_contract_init_root_NestedStruct;
         embed .runtime as &__NestedStruct_runtime;
     }
     section runtime {
-        entry %runtime;
+        entry %__fe_manual_contract_runtime_root_NestedStruct;
     }
 }

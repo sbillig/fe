@@ -1,8 +1,5 @@
 use hir::{
-    analysis::semantic::{
-        ManualContractSection, SemanticCodeRegionRef, SemanticInstance,
-        get_or_build_semantic_instance, root_semantic_instance_key,
-    },
+    analysis::semantic::{ManualContractSection, SemanticCodeRegionRef},
     hir_def::{Contract, Func, ManualContractRootAttr},
 };
 
@@ -12,7 +9,7 @@ use crate::{
     runtime::{RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeSectionName},
 };
 
-use super::package::runtime_instance_for_semantic;
+use super::package::manual_contract_root_instance;
 
 pub(crate) fn runtime_code_region_for_semantic_ref<'db>(
     db: &'db dyn MirDb,
@@ -30,7 +27,10 @@ pub(crate) fn runtime_code_region_for_manual_root<'db>(
     db: &'db dyn MirDb,
     func: Func<'db>,
 ) -> Option<RuntimeCodeRegion<'db>> {
-    manual_contract_root_metadata(db, func)?;
+    match func.manual_contract_root_attr(db)? {
+        ManualContractRootAttr::Init { .. } | ManualContractRootAttr::Runtime { .. } => {}
+        ManualContractRootAttr::Error(_) => return None,
+    }
     Some(RuntimeCodeRegion::new(
         db,
         RuntimeCodeRegionKey::ManualContractRoot { func },
@@ -113,26 +113,20 @@ fn manual_contract_root_metadata<'db>(
         ),
         ManualContractRootAttr::Error(_) => return None,
     };
-    let entry = runtime_instance_for_semantic(db, semantic_instance_for_func(db, func));
+    let entry = manual_contract_root_instance(db, func).unwrap_or_else(|err| {
+        panic!(
+            "manual contract root `{}` must synthesize a zero-arg runtime entry: {err}",
+            func.name(db)
+                .to_opt()
+                .map(|name| name.data(db).to_string())
+                .unwrap_or_else(|| "<anonymous>".to_string())
+        )
+    });
     Some(ManualContractRootMetadata {
         contract_name,
         section,
         entry,
     })
-}
-
-fn semantic_instance_for_func<'db>(db: &'db dyn MirDb, func: Func<'db>) -> SemanticInstance<'db> {
-    let key = root_semantic_instance_key(db, hir::analysis::ty::ty_check::BodyOwner::Func(func))
-        .unwrap_or_else(|err| {
-            panic!(
-                "manual contract root `{}` must synthesize a closed root semantic instance: {err:?}",
-                func.name(db)
-                    .to_opt()
-                    .map(|name| name.data(db).to_string())
-                    .unwrap_or_else(|| "<anonymous>".to_string())
-            )
-        });
-    get_or_build_semantic_instance(db, key)
 }
 
 fn manual_contract_section_symbol(contract_name: &str, section: ManualContractSection) -> String {

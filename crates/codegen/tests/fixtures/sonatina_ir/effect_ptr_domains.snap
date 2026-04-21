@@ -14,12 +14,38 @@ func private %__fe_main_root() {
         jump block1;
 
     block1:
-        v0.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
-        call %bump_1 v0;
+        v0.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v1.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        call %test_effect_ptr_domains v0 v1;
         evm_stop;
 }
 
 func private %bump_0(v0.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = evm_sload v0;
+        (v4.i256, v5.i1) = uaddo v2 1.i256;
+        br v5 block2 block3;
+
+    block2:
+        evm_revert 0.i256 0.i256;
+
+    block3:
+        evm_sstore v0 v4;
+        v8.i256 = add v0 1.i256;
+        v9.i256 = evm_sload v8;
+        (v11.i256, v12.i1) = uaddo v9 2.i256;
+        br v12 block2 block4;
+
+    block4:
+        v14.i256 = add v0 1.i256;
+        evm_sstore v14 v11;
+        return;
+}
+
+func private %bump_1(v0.i256) {
     block0:
         jump block1;
 
@@ -41,33 +67,6 @@ func private %bump_0(v0.i256) {
     block4:
         v15.i256 = add v0 32.i256;
         mstore v15 v12 i256;
-        return;
-}
-
-func private %bump_1(v0.objref<@__fe_layout_0>) {
-    block0:
-        jump block1;
-
-    block1:
-        v3.objref<i256> = obj.proj v0 0.i256;
-        v4.i256 = obj.load v3;
-        (v6.i256, v7.i1) = uaddo v4 1.i256;
-        br v7 block2 block3;
-
-    block2:
-        evm_revert 0.i256 0.i256;
-
-    block3:
-        v9.objref<i256> = obj.proj v0 0.i256;
-        obj.store v9 v6;
-        v10.objref<i256> = obj.proj v0 1.i256;
-        v11.i256 = obj.load v10;
-        (v13.i256, v14.i1) = uaddo v11 2.i256;
-        br v14 block2 block4;
-
-    block4:
-        v16.objref<i256> = obj.proj v0 1.i256;
-        obj.store v16 v13;
         return;
 }
 
@@ -95,31 +94,6 @@ func private %bump_2(v0.objref<@__fe_layout_0>) {
     block4:
         v16.objref<i256> = obj.proj v0 1.i256;
         obj.store v16 v13;
-        return;
-}
-
-func private %bump_3(v0.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        v2.i256 = evm_sload v0;
-        (v4.i256, v5.i1) = uaddo v2 1.i256;
-        br v5 block2 block3;
-
-    block2:
-        evm_revert 0.i256 0.i256;
-
-    block3:
-        evm_sstore v0 v4;
-        v8.i256 = add v0 1.i256;
-        v9.i256 = evm_sload v8;
-        (v11.i256, v12.i1) = uaddo v9 2.i256;
-        br v12 block2 block4;
-
-    block4:
-        v14.i256 = add v0 1.i256;
-        evm_sstore v14 v11;
         return;
 }
 
@@ -175,9 +149,9 @@ func private %test_effect_ptr_domains(v0.objref<@__fe_layout_2>, v1.objref<@__fe
 
     block1:
         v3.i256 = call %mem_ptr 256.i256;
-        call %bump_0 v3;
+        call %bump_1 v3;
         v6.i256 = call %stor_ptr 0.i256;
-        call %bump_3 v6;
+        call %bump_0 v6;
         v10.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
         v11.objref<i256> = obj.proj v10 0.i256;
         obj.store v11 10.i256;

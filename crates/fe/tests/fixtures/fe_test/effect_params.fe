@@ -1,13 +1,32 @@
 
-#[test]
-fn test_multiple_effect_params() uses (x: mut u256, y: mut u256) {
+pub fn main() {}
+
+fn bump_multiple_effect_params() -> u256 uses (x: mut u256, y: mut u256) {
     x += 1
     y += 2
-    assert(true)
+    x + y
+}
+
+fn bump_non_evm_effect_param() -> u256 uses (value: mut u256) {
+    value += 1
+    value
 }
 
 #[test]
-fn test_non_evm_effect_param() uses (value: mut u256) {
-    value += 1
-    assert(true)
+fn test_multiple_effect_params() {
+    let mut x: u256 = 0
+    let mut y: u256 = 0
+    let total = with (x, y) {
+        bump_multiple_effect_params()
+    }
+    assert(total == 3)
+}
+
+#[test]
+fn test_non_evm_effect_param() {
+    let mut value: u256 = 0
+    let updated = with (value) {
+        bump_non_evm_effect_param()
+    }
+    assert(updated == 1)
 }

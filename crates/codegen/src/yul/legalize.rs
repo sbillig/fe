@@ -2122,7 +2122,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                     .signature
                     .params
                     .len()
-                    .saturating_sub(plan.owner_effect_args.len());
+                    .saturating_sub(plan.entry_effect_args.len());
                 body.signature
                     .params
                     .iter()
@@ -2145,7 +2145,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
                     .signature
                     .params
                     .len()
-                    .saturating_sub(plan.owner_effect_args.len());
+                    .saturating_sub(plan.entry_effect_args.len());
                 body.signature
                     .params
                     .iter()
@@ -2166,6 +2166,7 @@ impl<'pkg, 'db> YulLegalizer<'pkg, 'db> {
             RuntimeFunctionOwner::Synthetic(
                 RuntimeSyntheticSpec::MainRoot { .. }
                 | RuntimeSyntheticSpec::TestRoot { .. }
+                | RuntimeSyntheticSpec::ManualContractRoot { .. }
                 | RuntimeSyntheticSpec::ContractInitRoot { .. }
                 | RuntimeSyntheticSpec::ContractRuntimeRoot { .. }
                 | RuntimeSyntheticSpec::CodeRegionRoot { .. },

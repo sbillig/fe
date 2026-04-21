@@ -12,6 +12,26 @@ type @__fe_layout_2 = enum {
     #Insufficient,
 };
 
+func private %__fe_manual_contract_init_root_Coin() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        call %init v0;
+        evm_stop;
+}
+
+func private %__fe_manual_contract_runtime_root_Coin() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        call %runtime v0;
+        evm_stop;
+}
+
 func private %abi_encode(v0.i256, v1.objref<@__fe_layout_1>) {
     block0:
         v2.*i256 = alloca i256;
@@ -238,8 +258,8 @@ func private %runtime(v0.objref<@__fe_layout_1>) {
         jump block1;
 
     block1:
-        v2.i256 = call %stor_ptr_0 0.i256;
-        v4.i256 = call %stor_ptr_1 2.i256;
+        v2.i256 = call %stor_ptr_1 0.i256;
+        v4.i256 = call %stor_ptr_0 2.i256;
         v5.i256 = call %calldataload 0.i256;
         v7.i256 = shr 224.i256 v5;
         v9.i1 = eq v7 2877082652.i256;
@@ -329,7 +349,7 @@ func private %stor_ptr_0(v0.i256) -> i256 {
 
     block1:
         v2.i256 = mload v1 i256;
-        v3.i256 = call %from_raw_1 v2;
+        v3.i256 = call %from_raw_0 v2;
         return v3;
 }
 
@@ -341,7 +361,7 @@ func private %stor_ptr_1(v0.i256) -> i256 {
 
     block1:
         v2.i256 = mload v1 i256;
-        v3.i256 = call %from_raw_0 v2;
+        v3.i256 = call %from_raw_1 v2;
         return v3;
 }
 
@@ -463,10 +483,10 @@ func private %transfer_result_code(v0.@__fe_layout_2) -> i256 {
 
 object @Coin {
     section init {
-        entry %init;
+        entry %__fe_manual_contract_init_root_Coin;
         embed .runtime as &__Coin_runtime;
     }
     section runtime {
-        entry %runtime;
+        entry %__fe_manual_contract_runtime_root_Coin;
     }
 }

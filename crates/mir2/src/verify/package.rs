@@ -181,6 +181,7 @@ fn verify_synthetic_function<'db>(
             }),
             RuntimeSyntheticSpec::MainRoot { .. }
             | RuntimeSyntheticSpec::TestRoot { .. }
+            | RuntimeSyntheticSpec::ManualContractRoot { .. }
             | RuntimeSyntheticSpec::ContractInitAbi { .. }
             | RuntimeSyntheticSpec::CodeRegionRoot { .. } => Ok(()),
         },

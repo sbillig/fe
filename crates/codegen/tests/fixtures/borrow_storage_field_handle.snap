@@ -10,29 +10,55 @@ object "main" {
       if iszero(t3) {
         t3 := 0x80
       }
-      mstore(0x40, add(t3, 32))
+      mstore(0x40, add(t3, 0))
       let v0 := t3
       let v1 := v0
-      let v2 := $borrow_storage_field_handle(v1)
+      let v2 := $main(v1)
       stop()
     }
-    function $borrow_storage_field_handle(p0) -> ret {
+    function $borrow_storage_field_handle_eff0_stor(p0) -> ret {
       let v6 := p0
       let v2 := v6
       let v1 := v2
       let v7 := 0x01
       let v3 := v7
-      let t12 := mload(v1)
+      let t12 := sload(v1)
       let v9 := t12
       let t13 := add(v9, v3)
       if lt(t13, v9) {
         revert(0, 0)
       }
       let v10 := t13
-      mstore(v1, v10)
-      let t14 := mload(p0)
+      sstore(v1, v10)
+      let t14 := sload(p0)
       let v5 := t14
       ret := v5
+      leave
+    }
+    function $from_raw(p0) -> ret {
+      let v1 := p0
+      let v3 := v1
+      let v4 := v3
+      let v2 := v4
+      ret := v2
+      leave
+    }
+    function $main(p0) -> ret {
+      let v5 := 0x00
+      let v2 := v5
+      let v6 := $stor_ptr(v2)
+      let v3 := v6
+      let v1 := v3
+      let v7 := $borrow_storage_field_handle_eff0_stor(v1)
+      let v4 := v7
+      ret := v4
+      leave
+    }
+    function $stor_ptr(p0) -> ret {
+      let v2 := p0
+      let v4 := $from_raw(v2)
+      let v3 := v4
+      ret := v3
       leave
     }
     $__fe_main_root()
