@@ -5,16 +5,16 @@ use rustc_hash::FxHashMap;
 use crate::{
     analysis::semantic::instance::{
         CallLoweringPlan, ForLoopCalleeRefs, SemanticInstance, resolve_semantic_const_ref,
-        semantic_binding_ty, semantic_call_lowering_plans, semantic_for_loop_callee_refs,
-        semantic_instance_assumptions,
+        semantic_binding_role, semantic_binding_ty, semantic_call_lowering_plans,
+        semantic_for_loop_callee_refs, semantic_instance_assumptions,
     },
     analysis::{
         HirAnalysisDb,
         semantic::{
             FieldIndex, Mutability, SBlock, SBlockId, SConst, SExpr, SLocal, SLocalId, SPlace,
             SStmt, SStmtKind, STerminator, STerminatorKind, SValueId, SemOrigin, SemanticBody,
-            SemanticLocalRole, ValueProvenance, VariantIndex, bool_const, bytes_const, int_const,
-            runtime_size_bytes, sem_const_from_ty, unit_const,
+            VariantIndex, bool_const, bytes_const, int_const, runtime_size_bytes,
+            sem_const_from_ty, unit_const,
         },
         ty::{
             const_ty::const_ty_or_abstract_from_assoc_const_use,
@@ -34,7 +34,11 @@ use crate::{
     },
 };
 
-use super::{effects::owner_effect_bindings, pattern::ArmVariants};
+use super::{
+    effects::owner_effect_bindings,
+    local_facts::{initial_snapshot_source, ordinary_direct_value_role},
+    pattern::ArmVariants,
+};
 
 pub fn lower_to_smir<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -45,6 +49,8 @@ pub fn lower_to_smir<'db>(
     let Some(body) = typed_body.body() else {
         let mut locals = Vec::new();
         let mut push_binding_local = |binding| {
+            let role = semantic_binding_role(db, instance, binding);
+            let snapshot_source = initial_snapshot_source(&role);
             locals.push(SLocal {
                 ty: semantic_binding_ty(db, instance, binding),
                 mutability: if binding.is_mut() {
@@ -53,10 +59,8 @@ pub fn lower_to_smir<'db>(
                     Mutability::Immutable
                 },
                 source: Some(binding),
-                role: SemanticLocalRole::DirectValue {
-                    provenance: ValueProvenance::Ordinary,
-                },
-                snapshot_source: None,
+                role,
+                snapshot_source,
             });
         };
         let mut idx = 0;
@@ -115,6 +119,7 @@ pub(super) struct SmirLowerCtxt<'db> {
     pub(super) for_loop_callee_refs: &'db [Option<ForLoopCalleeRefs<'db>>],
     pub(super) assumptions: crate::analysis::ty::trait_resolution::PredicateListId<'db>,
     pub(super) locals: Vec<SLocal<'db>>,
+    pub(super) assigned_snapshots: Vec<bool>,
     pub(super) blocks: Vec<BlockState<'db>>,
     pub(super) binding_locals: FxHashMap<LocalBinding<'db>, SLocalId>,
     pub(super) with_binding_values: FxHashMap<ExprId, SValueId>,
@@ -153,6 +158,7 @@ impl<'db> SmirLowerCtxt<'db> {
             for_loop_callee_refs,
             assumptions: semantic_instance_assumptions(db, instance),
             locals: Vec::new(),
+            assigned_snapshots: Vec::new(),
             blocks: Vec::new(),
             binding_locals: FxHashMap::default(),
             with_binding_values: FxHashMap::default(),
@@ -240,14 +246,17 @@ impl<'db> SmirLowerCtxt<'db> {
         source: Option<LocalBinding<'db>>,
     ) -> SLocalId {
         let id = SLocalId::from_u32(self.locals.len() as u32);
+        let role = source.map_or_else(ordinary_direct_value_role, |binding| {
+            semantic_binding_role(self.db, self.instance, binding)
+        });
+        let snapshot_source = initial_snapshot_source(&role);
+        self.assigned_snapshots.push(snapshot_source.is_some());
         self.locals.push(SLocal {
             ty,
             mutability,
             source,
-            role: SemanticLocalRole::DirectValue {
-                provenance: ValueProvenance::Ordinary,
-            },
-            snapshot_source: None,
+            role,
+            snapshot_source,
         });
         id
     }
@@ -275,6 +284,7 @@ impl<'db> SmirLowerCtxt<'db> {
 
     pub(super) fn push_stmt(&mut self, origin: SemOrigin<'db>, kind: SStmtKind<'db>) {
         if !self.is_terminated(self.current) {
+            self.update_stmt_local_facts(&kind);
             self.blocks[self.current.index()]
                 .stmts
                 .push(SStmt { origin, kind });
