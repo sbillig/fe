@@ -1,7 +1,7 @@
 use crate::{
     analysis::{
         place::{Place, PlaceBase, PlaceProjection, projectable_place_ty},
-        semantic::{FieldIndex, SPlace, SPlaceElem},
+        semantic::{FieldIndex, SPlace},
         ty::ty_def::TyId,
     },
     hir_def::ExprId,
@@ -14,7 +14,7 @@ impl<'db> SmirLowerCtxt<'db> {
         projectable_place_ty(self.db, ty)
     }
 
-    pub(super) fn lower_place(&mut self, expr: ExprId) -> SPlace {
+    pub(super) fn lower_place(&mut self, expr: ExprId) -> SPlace<'db> {
         let place = self
             .typed_body
             .expr_place(expr)
@@ -22,28 +22,26 @@ impl<'db> SmirLowerCtxt<'db> {
         self.lower_place_data(place)
     }
 
-    pub(super) fn lower_place_data(&mut self, place: &Place<'db>) -> SPlace {
-        let PlaceBase::Binding(binding) = place.base;
+    pub(super) fn lower_place_data(&mut self, source_place: &Place<'db>) -> SPlace<'db> {
+        let PlaceBase::Binding(binding) = source_place.base;
         let local = *self
             .binding_locals
             .get(&binding)
             .expect("binding local should be allocated");
-        let mut path = Vec::with_capacity(place.projections.len());
+        let mut place = SPlace::new(local);
 
-        for projection in &place.projections {
+        for projection in &source_place.projections {
             match *projection {
                 PlaceProjection::Field { index, .. } => {
-                    path.push(SPlaceElem::Field(FieldIndex(index)));
+                    place.push_field(FieldIndex(index));
                 }
                 PlaceProjection::Index { index_expr, .. } => {
-                    path.push(SPlaceElem::Index(self.lower_expr(index_expr)));
+                    let index = self.lower_expr(index_expr);
+                    place.push_dynamic_index(index);
                 }
             }
         }
 
-        SPlace {
-            local,
-            path: path.into_boxed_slice(),
-        }
+        place
     }
 }

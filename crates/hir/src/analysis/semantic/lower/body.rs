@@ -827,10 +827,7 @@ impl<'db> SmirLowerCtxt<'db> {
                         expr: SExpr::UseValue(value),
                     },
                 );
-                SPlace {
-                    local,
-                    path: Box::default(),
-                }
+                SPlace::new(local)
             };
             return self.emit_expr_with_origin(
                 SemOrigin::Expr(call_expr),
@@ -1274,7 +1271,7 @@ impl<'db> SmirLowerCtxt<'db> {
         }
     }
 
-    fn place_needs_indirect_store(&self, place: &crate::analysis::semantic::SPlace) -> bool {
+    fn place_needs_indirect_store(&self, place: &SPlace<'db>) -> bool {
         let Some(local) = self.locals.get(place.local.index()) else {
             return false;
         };
@@ -1296,11 +1293,11 @@ impl<'db> SmirLowerCtxt<'db> {
             .is_some()
     }
 
-    fn place_can_assign_directly(&self, place: &SPlace) -> bool {
+    fn place_can_assign_directly(&self, place: &SPlace<'db>) -> bool {
         place.path.is_empty() && !self.place_needs_indirect_store(place)
     }
 
-    fn push_place_write(&mut self, origin: SemOrigin<'db>, dst: SPlace, src: SValueId) {
+    fn push_place_write(&mut self, origin: SemOrigin<'db>, dst: SPlace<'db>, src: SValueId) {
         let kind = if self.place_can_assign_directly(&dst) {
             SStmtKind::Assign {
                 dst: dst.local,

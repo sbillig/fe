@@ -98,10 +98,7 @@ impl<'db> SmirLowerCtxt<'db> {
                 EffectArg::Binding(binding) => {
                     let local = self.alloc_binding_local(*binding);
                     if matches!(arg.pass_mode, EffectPassMode::ByPlace) {
-                        SEffectArgValue::Place(SPlace {
-                            local,
-                            path: Box::default(),
-                        })
+                        SEffectArgValue::Place(SPlace::new(local))
                     } else {
                         SEffectArgValue::Value(local)
                     }

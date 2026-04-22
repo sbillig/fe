@@ -11,6 +11,7 @@ use crate::{
         },
     },
     hir_def::{BinOp, ExprId, Func, StmtId, UnOp},
+    projection::{IndexSource, Projection, ProjectionPath},
     semantic::ProviderBinding,
 };
 
@@ -37,6 +38,19 @@ pub struct SBlockId(u32);
 entity_impl!(SBlockId);
 
 pub type SValueId = SLocalId;
+pub type SemanticProjectionPath<'db> = ProjectionPath<TyId<'db>, VariantIndex, SLocalId>;
+
+unsafe impl<'db> Update for SemanticProjectionPath<'db> {
+    unsafe fn maybe_update(old_pointer: *mut Self, new_value: Self) -> bool {
+        let old_value = unsafe { &mut *old_pointer };
+        if *old_value == new_value {
+            false
+        } else {
+            *old_value = new_value;
+            true
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct SemanticBody<'db> {
@@ -82,17 +96,6 @@ pub struct SLocal<'db> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub enum SemanticProjection<'db> {
-    Field(usize),
-    VariantField {
-        variant: VariantIndex,
-        enum_ty: TyId<'db>,
-        field_idx: usize,
-    },
-    Index(SLocalId),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum ValueProvenance<'db> {
     Ordinary,
     RootProvider(ProviderBinding<'db>),
@@ -101,18 +104,15 @@ pub enum ValueProvenance<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum PlaceProvenance<'db> {
     RootProvider(ProviderBinding<'db>),
-    Derived {
-        base: SLocalId,
-        path: Box<[SemanticProjection<'db>]>,
-    },
+    Derived(SPlace<'db>),
 }
 
 impl<'db> PlaceProvenance<'db> {
     pub fn root_provider(&self, locals: &[SLocal<'db>]) -> Option<ProviderBinding<'db>> {
         match self {
             Self::RootProvider(provider) => Some(provider.clone()),
-            Self::Derived { base, .. } => locals
-                .get(base.index())
+            Self::Derived(place) => locals
+                .get(place.local.index())
                 .and_then(|local| local.role.root_provider(locals)),
         }
     }
@@ -216,29 +216,74 @@ pub enum SemanticCodeRegionRef<'db> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub struct SPlace {
+pub struct SPlace<'db> {
     pub local: SLocalId,
-    pub path: Box<[SPlaceElem]>,
+    pub path: SemanticProjectionPath<'db>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub enum SPlaceElem {
-    Field(FieldIndex),
-    Index(SValueId),
+impl<'db> SPlace<'db> {
+    pub fn new(local: SLocalId) -> Self {
+        Self {
+            local,
+            path: SemanticProjectionPath::default(),
+        }
+    }
+
+    pub fn with_projection(
+        local: SLocalId,
+        projection: Projection<TyId<'db>, VariantIndex, SLocalId>,
+    ) -> Self {
+        let mut place = Self::new(local);
+        place.path.push(projection);
+        place
+    }
+
+    pub fn field(local: SLocalId, field: FieldIndex) -> Self {
+        Self::with_projection(local, Projection::Field(field.0 as usize))
+    }
+
+    pub fn dynamic_index(local: SLocalId, index: SValueId) -> Self {
+        Self::with_projection(local, Projection::Index(IndexSource::Dynamic(index)))
+    }
+
+    pub fn variant_field(
+        local: SLocalId,
+        variant: VariantIndex,
+        enum_ty: TyId<'db>,
+        field: FieldIndex,
+    ) -> Self {
+        Self::with_projection(
+            local,
+            Projection::VariantField {
+                variant,
+                enum_ty,
+                field_idx: field.0 as usize,
+            },
+        )
+    }
+
+    pub fn push_field(&mut self, field: FieldIndex) {
+        self.path.push(Projection::Field(field.0 as usize));
+    }
+
+    pub fn push_dynamic_index(&mut self, index: SValueId) {
+        self.path
+            .push(Projection::Index(IndexSource::Dynamic(index)));
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct SEffectArg<'db> {
     pub binding_idx: u32,
-    pub arg: SEffectArgValue,
+    pub arg: SEffectArgValue<'db>,
     pub pass_mode: EffectPassMode,
     pub target_ty: Option<TyId<'db>>,
     pub provider: Option<ProviderAddressSpace>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub enum SEffectArgValue {
-    Place(SPlace),
+pub enum SEffectArgValue<'db> {
+    Place(SPlace<'db>),
     Value(SValueId),
 }
 
@@ -247,7 +292,7 @@ pub enum SExpr<'db> {
     Forward(SValueId),
     UseValue(SValueId),
     ReadPlace {
-        place: SPlace,
+        place: SPlace<'db>,
     },
     CodeRegionRef {
         region: SemanticCodeRegionRef<'db>,
@@ -284,7 +329,7 @@ pub enum SExpr<'db> {
         index: SValueId,
     },
     Borrow {
-        place: SPlace,
+        place: SPlace<'db>,
         kind: BorrowKind,
         provider: Option<ProviderAddressSpace>,
     },
@@ -328,7 +373,7 @@ pub struct SStmt<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum SStmtKind<'db> {
     Assign { dst: SLocalId, expr: SExpr<'db> },
-    Store { dst: SPlace, src: SValueId },
+    Store { dst: SPlace<'db>, src: SValueId },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]

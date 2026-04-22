@@ -6,9 +6,9 @@ use fe_hir::{
     analysis::{
         diagnostics::format_diags,
         semantic::{
-            BorrowInputRef, BorrowTransform, FieldIndex, NBorrowRoot, NExpr, NLocalOrigin,
-            NSStmtKind, NormalizedBindingLowering, SPlaceElem, SStmtKind, SemanticInstance,
-            SemanticLocalKind, check_semantic_borrows, collect_semantic_borrow_diagnostics,
+            BorrowInputRef, BorrowTransform, NBorrowRoot, NExpr, NLocalOrigin, NSStmtKind,
+            NormalizedBindingLowering, SStmtKind, SemanticInstance, SemanticLocalKind,
+            check_semantic_borrows, collect_semantic_borrow_diagnostics,
             get_or_build_semantic_instance, identity_semantic_instance_key,
             normalize_semantic_body, semantic_borrow_summary,
         },
@@ -1270,7 +1270,8 @@ fn write(mut tree: Tree, i: usize, h: u256) -> Tree {
         .expect("store statement");
 
     assert_eq!(dst.path.len(), 3);
-    assert!(matches!(dst.path[0], SPlaceElem::Field(FieldIndex(0))));
-    assert!(matches!(dst.path[1], SPlaceElem::Index(_)));
-    assert!(matches!(dst.path[2], SPlaceElem::Field(FieldIndex(0))));
+    let path = dst.path.iter().collect::<Vec<_>>();
+    assert!(matches!(path[0], Projection::Field(0)));
+    assert!(matches!(path[1], Projection::Index(_)));
+    assert!(matches!(path[2], Projection::Field(0)));
 }

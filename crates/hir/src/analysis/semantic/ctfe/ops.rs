@@ -1,8 +1,8 @@
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        CtfeError, SemConstId, SemConstScalar, SemConstValue, SemOrigin, array_const, int_const,
-        struct_const, tuple_const,
+        CtfeError, SemConstId, SemConstScalar, SemConstValue, SemOrigin, array_const, enum_const,
+        int_const, struct_const, tuple_const,
     },
     ty::ty_def::{PrimTy, TyBase, TyData, TyId},
 };
@@ -19,6 +19,17 @@ pub(super) fn project_const<'db>(
         value = match (value.value(db), elem) {
             (SemConstValue::Tuple { elems, .. }, CtfePathElem::Field(field))
             | (SemConstValue::Struct { fields: elems, .. }, CtfePathElem::Field(field)) => elems
+                .get(field.0 as usize)
+                .copied()
+                .ok_or(CtfeError::OutOfBounds { origin })?,
+            (
+                SemConstValue::Enum {
+                    variant: actual,
+                    fields,
+                    ..
+                },
+                CtfePathElem::VariantField { variant, field },
+            ) if actual == *variant => fields
                 .get(field.0 as usize)
                 .copied()
                 .ok_or(CtfeError::OutOfBounds { origin })?,
@@ -103,6 +114,31 @@ pub(super) fn store_const<'db>(
             };
             *slot = store_const(db, *slot, tail, new_value, origin)?;
             Ok(array_const(db, ty, elems.into_boxed_slice()))
+        }
+        SemConstValue::Enum {
+            ty,
+            variant,
+            fields,
+        } => {
+            let mut fields = fields.to_vec();
+            let CtfePathElem::VariantField {
+                variant: expected,
+                field,
+            } = head
+            else {
+                return Err(CtfeError::InvalidOperation {
+                    origin,
+                    message: "enum store requires variant field projection".into(),
+                });
+            };
+            if variant != *expected {
+                return Err(CtfeError::VariantMismatch { origin });
+            }
+            let Some(slot) = fields.get_mut(field.0 as usize) else {
+                return Err(CtfeError::OutOfBounds { origin });
+            };
+            *slot = store_const(db, *slot, tail, new_value, origin)?;
+            Ok(enum_const(db, ty, variant, fields.into_boxed_slice()))
         }
         _ => Err(CtfeError::InvalidOperation {
             origin,

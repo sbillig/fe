@@ -12,10 +12,10 @@ use crate::{
             get_or_build_semantic_instance, instantiate_with_generic_args,
         },
         semantic::{
-            FieldIndex, SConst, SExpr, SLocalId, SPlace, SPlaceElem, SStmt, SStmtKind,
-            STerminatorKind, SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticBody,
-            SemanticConstRef, VariantIndex, array_const, bool_const, bytes_const, enum_const,
-            int_const, int_ty_shape, normalize_int_to_shape, runtime_size_bytes, sem_const_eq,
+            FieldIndex, SConst, SExpr, SLocalId, SPlace, SStmt, SStmtKind, STerminatorKind,
+            SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticBody, SemanticConstRef,
+            VariantIndex, array_const, bool_const, bytes_const, enum_const, int_const,
+            int_ty_shape, normalize_int_to_shape, runtime_size_bytes, sem_const_eq,
             sem_const_from_ty, struct_const, tuple_const, unit_const,
         },
         ty::{
@@ -29,6 +29,7 @@ use crate::{
     },
     core::hir_def::expr::LogicalBinOp,
     hir_def::{ArithBinOp, BinOp, CompBinOp, Func, UnOp, attr::ArithmeticMode},
+    projection::{IndexSource, Projection},
 };
 
 use super::ops::{project_const, store_const};
@@ -250,6 +251,10 @@ struct CtfeRef {
 #[derive(Clone)]
 pub(super) enum CtfePathElem {
     Field(FieldIndex),
+    VariantField {
+        variant: VariantIndex,
+        field: FieldIndex,
+    },
     Index(usize),
 }
 
@@ -989,7 +994,7 @@ impl<'db> CtfeMachine<'db> {
     fn resolve_place(
         &mut self,
         frame_idx: usize,
-        place: &SPlace,
+        place: &SPlace<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<ResolvedPlace, CtfeError<'db>> {
         let mut resolved = match self.read_slot(frame_idx, place.local, origin)? {
@@ -1006,10 +1011,36 @@ impl<'db> CtfeMachine<'db> {
         };
         for elem in place.path.iter() {
             resolved.path.push(match elem {
-                SPlaceElem::Field(field) => CtfePathElem::Field(*field),
-                SPlaceElem::Index(index) => {
+                Projection::Field(field) => {
+                    CtfePathElem::Field(FieldIndex((*field).try_into().map_err(|_| {
+                        CtfeError::InvalidOperation {
+                            origin,
+                            message: "field index does not fit in semantic field index".into(),
+                        }
+                    })?))
+                }
+                Projection::VariantField {
+                    variant, field_idx, ..
+                } => CtfePathElem::VariantField {
+                    variant: *variant,
+                    field: FieldIndex((*field_idx).try_into().map_err(|_| {
+                        CtfeError::InvalidOperation {
+                            origin,
+                            message: "variant field index does not fit in semantic field index"
+                                .into(),
+                        }
+                    })?),
+                },
+                Projection::Index(IndexSource::Dynamic(index)) => {
                     let index = self.load_value(frame_idx, *index, origin)?;
                     CtfePathElem::Index(self.index_from_value(frame_idx, index, origin)?)
+                }
+                Projection::Index(IndexSource::Constant(index)) => CtfePathElem::Index(*index),
+                Projection::Deref | Projection::Discriminant => {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "invalid CTFE place projection".into(),
+                    });
                 }
             });
         }

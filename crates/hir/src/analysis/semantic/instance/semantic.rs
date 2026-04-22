@@ -5,9 +5,9 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            PlaceProvenance, SBlockId, SExpr, SPlace, SPlaceElem, SStmtKind, STerminatorKind,
-            SemanticBody, SemanticCalleeRef, SemanticLocalRole, SemanticProjection,
-            ValueProvenance, effect_param_site, lower::lower_to_smir, verify_semantic_body,
+            PlaceProvenance, SBlockId, SExpr, SPlace, SStmtKind, STerminatorKind, SemanticBody,
+            SemanticCalleeRef, SemanticLocalRole, ValueProvenance, effect_param_site,
+            lower::lower_to_smir, verify_semantic_body,
         },
         ty::{
             corelib::{RuntimeBuiltinFuncKind, runtime_builtin_func_kind},
@@ -1348,23 +1348,16 @@ fn classify_expr_local_role<'db>(
             classify_forward_role(db, scope, assumptions, dst_ty, *value, locals)
         }
         SExpr::UseValue(_) => fallback_local_role(db, scope, assumptions, dst_ty),
-        SExpr::ReadPlace { place } => classify_projection_local_role(
-            db,
-            scope,
-            assumptions,
-            dst_ty,
-            place.local,
-            semantic_projection_path_from_place(place),
-            locals,
-        ),
+        SExpr::ReadPlace { place } => {
+            classify_projection_local_role(db, scope, assumptions, dst_ty, place.clone(), locals)
+        }
         SExpr::Borrow { .. } => fallback_local_role(db, scope, assumptions, dst_ty),
         SExpr::Field { base, field } => classify_projection_local_role(
             db,
             scope,
             assumptions,
             dst_ty,
-            *base,
-            vec![SemanticProjection::Field(field.0 as usize)].into_boxed_slice(),
+            SPlace::field(*base, *field),
             locals,
         ),
         SExpr::Index { base, index } => classify_projection_local_role(
@@ -1372,8 +1365,7 @@ fn classify_expr_local_role<'db>(
             scope,
             assumptions,
             dst_ty,
-            *base,
-            vec![SemanticProjection::Index(*index)].into_boxed_slice(),
+            SPlace::dynamic_index(*base, *index),
             locals,
         ),
         SExpr::ExtractEnumField {
@@ -1385,13 +1377,7 @@ fn classify_expr_local_role<'db>(
             scope,
             assumptions,
             dst_ty,
-            *value,
-            vec![SemanticProjection::VariantField {
-                variant: *variant,
-                enum_ty: locals[value.index()].ty,
-                field_idx: field.0 as usize,
-            }]
-            .into_boxed_slice(),
+            SPlace::variant_field(*value, *variant, locals[value.index()].ty, *field),
             locals,
         ),
         SExpr::Call { .. } => fallback_local_role(db, scope, assumptions, dst_ty),
@@ -1431,33 +1417,19 @@ fn classify_expr_snapshot_source<'db>(
         SExpr::Forward(value) | SExpr::UseValue(value) => {
             locals[value.index()].snapshot_source.clone()
         }
-        SExpr::ReadPlace { place } => classify_projection_snapshot_source(
-            place.local,
-            semantic_projection_path_from_place(place),
-            locals,
-        ),
-        SExpr::Field { base, field } => classify_projection_snapshot_source(
-            *base,
-            vec![SemanticProjection::Field(field.0 as usize)].into_boxed_slice(),
-            locals,
-        ),
-        SExpr::Index { base, index } => classify_projection_snapshot_source(
-            *base,
-            vec![SemanticProjection::Index(*index)].into_boxed_slice(),
-            locals,
-        ),
+        SExpr::ReadPlace { place } => classify_projection_snapshot_source(place.clone(), locals),
+        SExpr::Field { base, field } => {
+            classify_projection_snapshot_source(SPlace::field(*base, *field), locals)
+        }
+        SExpr::Index { base, index } => {
+            classify_projection_snapshot_source(SPlace::dynamic_index(*base, *index), locals)
+        }
         SExpr::ExtractEnumField {
             value,
             variant,
             field,
         } => classify_projection_snapshot_source(
-            *value,
-            vec![SemanticProjection::VariantField {
-                variant: *variant,
-                enum_ty: locals[value.index()].ty,
-                field_idx: field.0 as usize,
-            }]
-            .into_boxed_slice(),
+            SPlace::variant_field(*value, *variant, locals[value.index()].ty, *field),
             locals,
         ),
         SExpr::Borrow { .. }
@@ -1476,24 +1448,12 @@ fn classify_expr_snapshot_source<'db>(
     }
 }
 
-fn semantic_projection_path_from_place<'db>(place: &SPlace) -> Box<[SemanticProjection<'db>]> {
-    place
-        .path
-        .iter()
-        .map(|elem| match elem {
-            SPlaceElem::Field(field) => SemanticProjection::Field(field.0 as usize),
-            SPlaceElem::Index(index) => SemanticProjection::Index(*index),
-        })
-        .collect()
-}
-
 fn classify_projection_snapshot_source<'db>(
-    base: crate::analysis::semantic::SLocalId,
-    path: Box<[SemanticProjection<'db>]>,
+    place: SPlace<'db>,
     locals: &[crate::analysis::semantic::SLocal<'db>],
 ) -> Option<PlaceProvenance<'db>> {
-    (!matches!(locals[base.index()].role, SemanticLocalRole::Erased))
-        .then_some(PlaceProvenance::Derived { base, path })
+    (!matches!(locals[place.local.index()].role, SemanticLocalRole::Erased))
+        .then_some(PlaceProvenance::Derived(place))
 }
 
 fn classify_forward_role<'db>(
@@ -1555,12 +1515,11 @@ fn classify_projection_local_role<'db>(
     scope: crate::hir_def::scope_graph::ScopeId<'db>,
     assumptions: crate::analysis::ty::trait_resolution::PredicateListId<'db>,
     dst_ty: crate::analysis::ty::ty_def::TyId<'db>,
-    base: crate::analysis::semantic::SLocalId,
-    path: Box<[SemanticProjection<'db>]>,
+    place: SPlace<'db>,
     locals: &[crate::analysis::semantic::SLocal<'db>],
 ) -> SemanticLocalRole<'db> {
     let fallback = fallback_local_role(db, scope, assumptions, dst_ty);
-    let base_role = locals[base.index()].role.clone();
+    let base_role = locals[place.local.index()].role.clone();
     match fallback {
         SemanticLocalRole::Erased => SemanticLocalRole::Erased,
         SemanticLocalRole::DirectValue { .. } => fallback,
@@ -1569,7 +1528,7 @@ fn classify_projection_local_role<'db>(
             if local_role_supports_place_provenance(&base_role) =>
         {
             SemanticLocalRole::PlaceBoundValue {
-                provenance: PlaceProvenance::Derived { base, path },
+                provenance: PlaceProvenance::Derived(place),
                 value_ty,
             }
         }

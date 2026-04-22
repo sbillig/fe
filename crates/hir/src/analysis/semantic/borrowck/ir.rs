@@ -7,7 +7,7 @@ use crate::{
         HirAnalysisDb,
         semantic::{
             FieldIndex, Mutability, SConst, SLocalId, SemOrigin, SemanticBody, SemanticCalleeRef,
-            SemanticCodeRegionRef, SemanticLocalKind, VariantIndex,
+            SemanticCodeRegionRef, SemanticLocalKind, SemanticProjectionPath, VariantIndex,
         },
         ty::{
             provider::ProviderAddressSpace,
@@ -15,7 +15,7 @@ use crate::{
             ty_def::{BorrowKind, TyId},
         },
     },
-    projection::{IndexSource, Projection, ProjectionPath},
+    projection::{IndexSource, Projection},
     semantic::ProviderBinding,
 };
 
@@ -23,7 +23,7 @@ use crate::{
 pub struct NBorrowRootId(u32);
 entity_impl!(NBorrowRootId);
 
-pub type NSProjectionPath<'db> = ProjectionPath<TyId<'db>, VariantIndex, SLocalId>;
+pub type NSProjectionPath<'db> = SemanticProjectionPath<'db>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct NormalizedSemanticBody<'db> {

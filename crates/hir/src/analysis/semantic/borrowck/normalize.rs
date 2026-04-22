@@ -4,10 +4,9 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            PlaceProvenance, SExpr, SLocalId, SPlace, SPlaceElem, SStmtKind, STerminatorKind,
-            SemanticBody, SemanticInstance, SemanticLocalKind, SemanticLocalRole,
-            SemanticProjection, ValueProvenance, ctfe::canonicalize_semantic_consts,
-            semantic_instance_assumptions,
+            PlaceProvenance, SExpr, SLocalId, SPlace, SStmtKind, STerminatorKind, SemanticBody,
+            SemanticInstance, SemanticLocalKind, SemanticLocalRole, ValueProvenance,
+            ctfe::canonicalize_semantic_consts, semantic_instance_assumptions,
         },
         ty::{ty_check::LocalBinding, ty_def::TyId, ty_is_copy},
     },
@@ -234,7 +233,7 @@ impl<'db> NormalizeCtxt<'db> {
                     PlaceProvenance::RootProvider(provider) => {
                         NLocalOrigin::RootProvider(provider.clone())
                     }
-                    PlaceProvenance::Derived { .. } => NLocalOrigin::AliasedPlace,
+                    PlaceProvenance::Derived(_) => NLocalOrigin::AliasedPlace,
                 },
             ),
             SemanticLocalRole::PlaceCarrier { .. } => {
@@ -432,9 +431,7 @@ impl<'db> NormalizeCtxt<'db> {
     ) -> Result<NSPlace<'db>, SemanticNormalizeError<'db>> {
         match provenance {
             PlaceProvenance::RootProvider(binding) => Ok(self.provider_root_place(binding)),
-            PlaceProvenance::Derived { base, path } => {
-                self.normalize_derived_place(local, base, &path)
-            }
+            PlaceProvenance::Derived(place) => self.normalize_derived_place(local, &place),
         }
     }
 
@@ -445,48 +442,20 @@ impl<'db> NormalizeCtxt<'db> {
     ) -> Result<NSPlace<'db>, SemanticNormalizeError<'db>> {
         match snapshot_source {
             PlaceProvenance::RootProvider(binding) => Ok(self.provider_root_place(binding)),
-            PlaceProvenance::Derived { base, path } => {
-                self.normalize_snapshot_derived_place(local, base, &path)
-            }
-        }
-    }
-
-    fn push_semantic_projection_path(place: &mut NSPlace<'db>, path: &[SemanticProjection<'db>]) {
-        for projection in path {
-            place
-                .path
-                .push(Self::normalize_semantic_projection(projection));
-        }
-    }
-
-    fn normalize_semantic_projection(
-        projection: &SemanticProjection<'db>,
-    ) -> Projection<TyId<'db>, crate::analysis::semantic::VariantIndex, SLocalId> {
-        match projection {
-            SemanticProjection::Field(field_idx) => Projection::Field(*field_idx),
-            SemanticProjection::VariantField {
-                variant,
-                enum_ty,
-                field_idx,
-            } => Projection::VariantField {
-                variant: *variant,
-                enum_ty: *enum_ty,
-                field_idx: *field_idx,
-            },
-            SemanticProjection::Index(index) => Projection::Index(IndexSource::Dynamic(*index)),
+            PlaceProvenance::Derived(place) => self.normalize_snapshot_derived_place(local, &place),
         }
     }
 
     fn normalize_snapshot_derived_place(
         &mut self,
         local: SLocalId,
-        base: SLocalId,
-        path: &[SemanticProjection<'db>],
+        source_place: &SPlace<'db>,
     ) -> Result<NSPlace<'db>, SemanticNormalizeError<'db>> {
+        let base = source_place.local;
         let raw_base = self.raw.locals[base.index()].clone();
         self.ensure_local_normalized(base, &raw_base)?;
         let mut place = self.snapshot_source_base_place(local, base)?;
-        Self::push_semantic_projection_path(&mut place, path);
+        place.path = place.path.concat(&source_place.path);
         Ok(place)
     }
 
@@ -510,9 +479,9 @@ impl<'db> NormalizeCtxt<'db> {
     fn normalize_derived_place(
         &mut self,
         local: SLocalId,
-        base: SLocalId,
-        path: &[SemanticProjection<'db>],
+        source_place: &SPlace<'db>,
     ) -> Result<NSPlace<'db>, SemanticNormalizeError<'db>> {
+        let base = source_place.local;
         let raw_base = self.raw.locals[base.index()].clone();
         self.ensure_local_normalized(base, &raw_base)?;
         let mut place =
@@ -522,7 +491,7 @@ impl<'db> NormalizeCtxt<'db> {
                     local,
                     base,
                 })?;
-        Self::push_semantic_projection_path(&mut place, path);
+        place.path = place.path.concat(&source_place.path);
         Ok(place)
     }
 
@@ -948,30 +917,15 @@ impl<'db> NormalizeCtxt<'db> {
         Ok(place)
     }
 
-    fn normalize_place_elem(
-        elem: &SPlaceElem,
-    ) -> Projection<TyId<'db>, crate::analysis::semantic::VariantIndex, SLocalId> {
-        match elem {
-            SPlaceElem::Field(field) => Projection::Field(field.0 as usize),
-            SPlaceElem::Index(index) => Projection::Index(IndexSource::Dynamic(*index)),
-        }
-    }
-
-    fn push_place_path(place: &mut NSPlace<'db>, path: &[SPlaceElem]) {
-        for elem in path {
-            place.path.push(Self::normalize_place_elem(elem));
-        }
-    }
-
     fn normalize_place(
         &mut self,
-        place: &SPlace,
+        place: &SPlace<'db>,
         origin: crate::analysis::semantic::SemOrigin<'db>,
     ) -> Result<NSPlace<'db>, SemanticNormalizeError<'db>> {
         let mut lowered = self
             .local_read_place(place.local, true, origin)?
             .ok_or(SemanticNormalizeError::MissingBorrowRoot { local: place.local })?;
-        Self::push_place_path(&mut lowered, &place.path);
+        lowered.path = lowered.path.concat(&place.path);
         Ok(lowered)
     }
 

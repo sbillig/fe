@@ -1061,7 +1061,7 @@ fn root_provider_for_runtime_visible_binding<'db>(
         | SemanticLocalRole::DirectCarrier { provider: None, .. }
         | SemanticLocalRole::PlaceCarrier { .. }
         | SemanticLocalRole::PlaceBoundValue {
-            provenance: hir::analysis::semantic::PlaceProvenance::Derived { .. },
+            provenance: hir::analysis::semantic::PlaceProvenance::Derived(_),
             ..
         } => None,
     }
@@ -1784,7 +1784,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
             Some(RuntimeEffectBindingPlan { class, boundary })
         }
         SemanticLocalRole::PlaceBoundValue {
-            provenance: hir::analysis::semantic::PlaceProvenance::Derived { .. },
+            provenance: hir::analysis::semantic::PlaceProvenance::Derived(_),
             ..
         } => None,
     }
@@ -1861,7 +1861,7 @@ fn runtime_exact_class_for_visible_binding_in_env<'db>(
             env.assumptions,
         ),
         SemanticLocalRole::PlaceBoundValue {
-            provenance: hir::analysis::semantic::PlaceProvenance::Derived { .. },
+            provenance: hir::analysis::semantic::PlaceProvenance::Derived(_),
             ..
         } => None,
     }
