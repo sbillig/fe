@@ -68,8 +68,8 @@ use super::{
     },
     place::{project_field_class, project_index_class, project_variant_field_class},
     realize::{
-        RuntimeArgRealization, RuntimeBoundaryValueEmitter, RuntimeBoundaryValueRealization,
-        SelectedRuntimeArg, SelectedRuntimeValueArg, emit_selected_runtime_value_arg,
+        RuntimeArgSource, RuntimeValueUseEmitter, RuntimeValueUsePlan, SelectedRuntimeArg,
+        emit_runtime_value_use_plan,
     },
     returns::RuntimeReturnAnalysisCx,
     tuple::{RuntimeTupleFieldEmitter, extract_runtime_tuple_fields, memory_fallback_class},
@@ -300,12 +300,12 @@ impl<'db> RuntimeConversionEmitter<'db> for RmirEmitter<'db> {
     }
 }
 
-impl<'db> RuntimeBoundaryValueEmitter<'db> for RmirEmitter<'db> {
-    fn boundary_value_class(&self, value: RLocalId) -> Option<RuntimeClass<'db>> {
+impl<'db> RuntimeValueUseEmitter<'db> for RmirEmitter<'db> {
+    fn value_class_for_use(&self, value: RLocalId) -> Option<RuntimeClass<'db>> {
         self.value_class(value).cloned()
     }
 
-    fn coerce_boundary_value(
+    fn coerce_value_for_use(
         &mut self,
         bb: RBlockId,
         src: RLocalId,
@@ -316,7 +316,7 @@ impl<'db> RuntimeBoundaryValueEmitter<'db> for RmirEmitter<'db> {
         self.coerce_value(bb, src, target)
     }
 
-    fn emit_boundary_addr_of(
+    fn emit_addr_of_place_for_use(
         &mut self,
         bb: RBlockId,
         place: RuntimePlace<'db>,
@@ -326,17 +326,13 @@ impl<'db> RuntimeBoundaryValueEmitter<'db> for RmirEmitter<'db> {
         self.lower_place_addr_of_for_class(semantic_ty, bb, place, class)
     }
 
-    fn alloc_boundary_slot(
-        &mut self,
-        semantic_ty: TyId<'db>,
-        class: RuntimeClass<'db>,
-    ) -> RLocalId {
+    fn alloc_value_slot(&mut self, semantic_ty: TyId<'db>, class: RuntimeClass<'db>) -> RLocalId {
         let slot = self.alloc_runtime_temp(semantic_ty, RuntimeCarrier::Value(class.clone()));
         self.locals[slot.index()].root = RuntimeLocalRoot::Slot(class);
         slot
     }
 
-    fn push_boundary_use(&mut self, bb: RBlockId, dst: RLocalId, src: RLocalId) {
+    fn push_value_use(&mut self, bb: RBlockId, dst: RLocalId, src: RLocalId) {
         self.push_stmt(
             bb,
             RStmt::Assign {
@@ -4515,24 +4511,29 @@ impl<'emitter, 'db> RuntimeArgLowerer<'emitter, 'db> {
     }
 
     fn lower_one(&mut self, selected: &SelectedRuntimeArg<'db>) -> RLocalId {
-        match &selected.realization {
-            RuntimeArgRealization::LowerSemanticOperand(operand) => self
+        match (&selected.source, &selected.use_plan) {
+            (RuntimeArgSource::SemanticOperand(operand), RuntimeValueUsePlan::UseValue) => self
                 .emitter
                 .lower_semantic_operand_for_class(self.bb, *operand, &selected.class),
-            RuntimeArgRealization::UseRuntimeValue { local } => {
-                let value = self.emitter.runtime_value(*local);
-                self.emitter
-                    .coerce_value_if_needed(self.bb, value, &selected.class)
+            (RuntimeArgSource::SemanticOperand(operand), use_plan) => {
+                let value = self.emitter.read_semantic_operand(self.bb, *operand);
+                self.apply_use_plan(value, use_plan.clone(), self.semantic_ty(*operand))
             }
-            RuntimeArgRealization::UseHandleLikeValue { local } => {
+            (RuntimeArgSource::RuntimeValue { local }, use_plan) => {
+                let value = self.emitter.runtime_value(*local);
+                self.apply_use_plan(value, use_plan.clone(), self.semantic_local_ty(*local))
+            }
+            (RuntimeArgSource::HandleLikeValue { local }, use_plan) => {
                 let value = self
                     .emitter
                     .handle_like_semantic_value(*local)
                     .unwrap_or_else(|| self.emitter.runtime_value(*local));
-                self.emitter
-                    .coerce_value_if_needed(self.bb, value, &selected.class)
+                self.apply_use_plan(value, use_plan.clone(), self.semantic_local_ty(*local))
             }
-            RuntimeArgRealization::AddrOfPlace { place, semantic_ty } => {
+            (
+                RuntimeArgSource::PlaceAddress { place, semantic_ty },
+                RuntimeValueUsePlan::UseValue,
+            ) => {
                 let place = self.emitter.lower_place(self.bb, place);
                 self.emitter.lower_place_addr_of_for_class(
                     *semantic_ty,
@@ -4541,56 +4542,24 @@ impl<'emitter, 'db> RuntimeArgLowerer<'emitter, 'db> {
                     selected.class.clone(),
                 )
             }
-            RuntimeArgRealization::LoadPlaceValue { place, semantic_ty } => {
+            (RuntimeArgSource::PlaceAddress { place, semantic_ty }, use_plan) => {
+                let place = self.emitter.lower_place(self.bb, place);
+                let value = self.emitter.lower_place_addr_of_for_class(
+                    *semantic_ty,
+                    self.bb,
+                    place,
+                    selected.class.clone(),
+                );
+                self.apply_use_plan(value, use_plan.clone(), *semantic_ty)
+            }
+            (RuntimeArgSource::PlaceValue { place, semantic_ty }, use_plan) => {
                 let place = self.emitter.lower_place(self.bb, place);
                 let value = self
                     .emitter
                     .load_runtime_place_value(self.bb, place, *semantic_ty);
-                self.emitter
-                    .coerce_value_if_needed(self.bb, value, &selected.class)
+                self.apply_use_plan(value, use_plan.clone(), *semantic_ty)
             }
-            RuntimeArgRealization::MaterializePlaceValue {
-                place,
-                materialization,
-                semantic_ty,
-            } => {
-                let place = self.emitter.lower_place(self.bb, place);
-                let value = self
-                    .emitter
-                    .load_runtime_place_value(self.bb, place, *semantic_ty);
-                emit_selected_runtime_value_arg(
-                    self.emitter,
-                    self.bb,
-                    &SelectedRuntimeValueArg {
-                        source: value,
-                        semantic_ty: *semantic_ty,
-                        class: selected.class.clone(),
-                        realization: RuntimeBoundaryValueRealization::MaterializeValue {
-                            materialization: materialization.clone(),
-                        },
-                    },
-                )
-            }
-            RuntimeArgRealization::MaterializeSemanticValue {
-                operand,
-                materialization,
-                semantic_ty,
-            } => {
-                let value = self.emitter.read_semantic_operand(self.bb, *operand);
-                emit_selected_runtime_value_arg(
-                    self.emitter,
-                    self.bb,
-                    &SelectedRuntimeValueArg {
-                        source: value,
-                        semantic_ty: *semantic_ty,
-                        class: selected.class.clone(),
-                        realization: RuntimeBoundaryValueRealization::MaterializeValue {
-                            materialization: materialization.clone(),
-                        },
-                    },
-                )
-            }
-            RuntimeArgRealization::AggregateFromRuntimeSource { local } => {
+            (RuntimeArgSource::AggregateFromRuntimeSource { local }, use_plan) => {
                 let Some(value) = self
                     .emitter
                     .actual_aggregate_value_from_runtime_source(self.bb, *local)
@@ -4600,13 +4569,33 @@ impl<'emitter, 'db> RuntimeArgLowerer<'emitter, 'db> {
                         self.emitter.current_semantic_key(),
                     )
                 };
-                self.emitter
-                    .coerce_value_if_needed(self.bb, value, &selected.class)
+                self.apply_use_plan(value, use_plan.clone(), self.semantic_local_ty(*local))
             }
-            RuntimeArgRealization::Placeholder { semantic_ty } => {
+            (RuntimeArgSource::Placeholder { semantic_ty }, RuntimeValueUsePlan::UseValue) => {
                 self.lower_placeholder(*semantic_ty, selected.class.clone())
             }
+            (RuntimeArgSource::Placeholder { semantic_ty }, use_plan) => {
+                let value = self.lower_placeholder(*semantic_ty, selected.class.clone());
+                self.apply_use_plan(value, use_plan.clone(), *semantic_ty)
+            }
         }
+    }
+
+    fn apply_use_plan(
+        &mut self,
+        value: RLocalId,
+        use_plan: RuntimeValueUsePlan<'db>,
+        semantic_ty: TyId<'db>,
+    ) -> RLocalId {
+        emit_runtime_value_use_plan(self.emitter, self.bb, value, use_plan, semantic_ty)
+    }
+
+    fn semantic_ty(&self, operand: NOperand) -> TyId<'db> {
+        self.semantic_local_ty(operand.local)
+    }
+
+    fn semantic_local_ty(&self, local: SLocalId) -> TyId<'db> {
+        self.emitter.semantic_body.locals[local.index()].ty
     }
 
     fn lower_placeholder(&mut self, semantic_ty: TyId<'db>, class: RuntimeClass<'db>) -> RLocalId {

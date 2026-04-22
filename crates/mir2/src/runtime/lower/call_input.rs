@@ -43,13 +43,22 @@ pub(super) enum CompiledValuePassPlan<'db> {
 
 #[derive(Clone, Debug)]
 pub(super) enum CompiledEffectArgPlan<'db> {
+    Value(CompiledEffectValuePlan<'db>),
+    Place(CompiledEffectPlacePlan<'db>),
+}
+
+#[derive(Clone, Debug)]
+pub(super) enum CompiledEffectValuePlan<'db> {
     ErasedPlainValue,
-    ByValueValue { plan: CompiledValuePassPlan<'db> },
-    ByValueValueFallback { fallback: RuntimeClass<'db> },
-    ByValuePlaceBoundary { boundary: StagedBoundary<'db> },
-    ByValuePlaceFallback { fallback: RuntimeClass<'db> },
-    ByPlaceValue { boundary: StagedBoundary<'db> },
-    ByPlacePlace { boundary: StagedBoundary<'db> },
+    ByValue { plan: CompiledValuePassPlan<'db> },
+    ByValueFallback { fallback: RuntimeClass<'db> },
+    ByPlace { boundary: StagedBoundary<'db> },
+}
+
+#[derive(Clone, Debug)]
+pub(super) enum CompiledEffectPlacePlan<'db> {
+    Boundary { boundary: StagedBoundary<'db> },
+    Fallback { fallback: RuntimeClass<'db> },
 }
 
 #[derive(Clone, Debug)]
@@ -156,7 +165,7 @@ fn compile_effect_arg_plan<'db>(
     if boundary.is_none() && arg.provider.is_none() && arg.target_ty.is_none() {
         return match (&arg.pass_mode, &arg.arg) {
             (EffectPassMode::ByValue | EffectPassMode::Unknown, NEffectArgValue::Value(_)) => {
-                CompiledEffectArgPlan::ErasedPlainValue
+                CompiledEffectArgPlan::Value(CompiledEffectValuePlan::ErasedPlainValue)
             }
             (EffectPassMode::ByValue | EffectPassMode::Unknown, NEffectArgValue::Place(_))
             | (
@@ -176,35 +185,44 @@ fn compile_effect_arg_plan<'db>(
             if matches!(plan, CompiledValuePassPlan::ActualValue)
                 && (arg.provider.is_some() || arg.target_ty.is_some())
             {
-                CompiledEffectArgPlan::ByValueValueFallback {
+                CompiledEffectArgPlan::Value(CompiledEffectValuePlan::ByValueFallback {
                     fallback: provider_class_for_target_in_env(db, type_env, arg.target_ty, space),
-                }
+                })
             } else {
-                CompiledEffectArgPlan::ByValueValue { plan }
+                CompiledEffectArgPlan::Value(CompiledEffectValuePlan::ByValue { plan })
             }
         }
         (EffectPassMode::ByValue | EffectPassMode::Unknown, NEffectArgValue::Place(_)) => boundary
             .map_or_else(
-                || CompiledEffectArgPlan::ByValuePlaceFallback {
-                    fallback: provider_class_for_target_in_env(db, type_env, arg.target_ty, space),
+                || {
+                    CompiledEffectArgPlan::Place(CompiledEffectPlacePlan::Fallback {
+                        fallback: provider_class_for_target_in_env(
+                            db,
+                            type_env,
+                            arg.target_ty,
+                            space,
+                        ),
+                    })
                 },
-                |boundary| CompiledEffectArgPlan::ByValuePlaceBoundary {
-                    boundary: boundary_sites.stage(boundary),
+                |boundary| {
+                    CompiledEffectArgPlan::Place(CompiledEffectPlacePlan::Boundary {
+                        boundary: boundary_sites.stage(boundary),
+                    })
                 },
             ),
         (EffectPassMode::ByPlace | EffectPassMode::ByTempPlace, NEffectArgValue::Value(_)) => {
             let boundary =
                 boundary.unwrap_or_else(|| default_by_place_boundary(db, type_env, arg, space));
-            CompiledEffectArgPlan::ByPlaceValue {
+            CompiledEffectArgPlan::Value(CompiledEffectValuePlan::ByPlace {
                 boundary: boundary_sites.stage(boundary),
-            }
+            })
         }
         (EffectPassMode::ByPlace | EffectPassMode::ByTempPlace, NEffectArgValue::Place(_)) => {
             let boundary =
                 boundary.unwrap_or_else(|| default_by_place_boundary(db, type_env, arg, space));
-            CompiledEffectArgPlan::ByPlacePlace {
+            CompiledEffectArgPlan::Place(CompiledEffectPlacePlan::Boundary {
                 boundary: boundary_sites.stage(boundary),
-            }
+            })
         }
     }
 }

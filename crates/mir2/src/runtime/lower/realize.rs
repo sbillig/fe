@@ -11,34 +11,25 @@ use crate::runtime::{
 #[derive(Clone, Debug)]
 pub(super) struct SelectedRuntimeArg<'db> {
     pub(super) class: RuntimeClass<'db>,
-    pub(super) realization: RuntimeArgRealization<'db>,
+    pub(super) source: RuntimeArgSource<'db>,
+    pub(super) use_plan: RuntimeValueUsePlan<'db>,
 }
 
 #[derive(Clone, Debug)]
-pub(super) enum RuntimeArgRealization<'db> {
-    LowerSemanticOperand(NOperand),
-    UseRuntimeValue {
+pub(super) enum RuntimeArgSource<'db> {
+    SemanticOperand(NOperand),
+    RuntimeValue {
         local: SLocalId,
     },
-    UseHandleLikeValue {
+    HandleLikeValue {
         local: SLocalId,
     },
-    AddrOfPlace {
+    PlaceAddress {
         place: NSPlace<'db>,
         semantic_ty: TyId<'db>,
     },
-    LoadPlaceValue {
+    PlaceValue {
         place: NSPlace<'db>,
-        semantic_ty: TyId<'db>,
-    },
-    MaterializePlaceValue {
-        place: NSPlace<'db>,
-        materialization: RuntimeBoundaryMaterialization<'db>,
-        semantic_ty: TyId<'db>,
-    },
-    MaterializeSemanticValue {
-        operand: NOperand,
-        materialization: RuntimeBoundaryMaterialization<'db>,
         semantic_ty: TyId<'db>,
     },
     AggregateFromRuntimeSource {
@@ -54,7 +45,7 @@ pub(crate) struct SelectedRuntimeValueArg<'db> {
     pub(crate) source: RLocalId,
     pub(crate) semantic_ty: TyId<'db>,
     pub(crate) class: RuntimeClass<'db>,
-    pub(crate) realization: RuntimeBoundaryValueRealization<'db>,
+    pub(crate) use_plan: RuntimeValueUsePlan<'db>,
 }
 
 impl<'db> SelectedRuntimeValueArg<'db> {
@@ -63,19 +54,19 @@ impl<'db> SelectedRuntimeValueArg<'db> {
             source,
             semantic_ty,
             class,
-            realization: RuntimeBoundaryValueRealization::UseValue,
+            use_plan: RuntimeValueUsePlan::UseValue,
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum RuntimeBoundaryMaterialization<'db> {
+pub(crate) enum RuntimeValueMaterialization<'db> {
     ObjectRef { layout: LayoutId<'db> },
     RawAddrSlot { pointee: RuntimeClass<'db> },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum RuntimeBoundaryValueRealization<'db> {
+pub(crate) enum RuntimeValueUsePlan<'db> {
     UseValue,
     AddrOfRuntimePlace {
         place: RuntimePlace<'db>,
@@ -85,11 +76,11 @@ pub(crate) enum RuntimeBoundaryValueRealization<'db> {
         target: RuntimeClass<'db>,
     },
     MaterializeValue {
-        materialization: RuntimeBoundaryMaterialization<'db>,
+        materialization: RuntimeValueMaterialization<'db>,
     },
 }
 
-impl<'db> RuntimeBoundaryValueRealization<'db> {
+impl<'db> RuntimeValueUsePlan<'db> {
     pub(crate) fn class(&self, source: &RuntimeClass<'db>) -> RuntimeClass<'db> {
         match self {
             Self::UseValue => source.clone(),
@@ -101,56 +92,54 @@ impl<'db> RuntimeBoundaryValueRealization<'db> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RuntimeBoundaryAddress<'db> {
+pub(crate) struct RuntimeValueAddress<'db> {
     pub(crate) place: RuntimePlace<'db>,
     pub(crate) class: RuntimeClass<'db>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RuntimeBoundaryValueSource<'db> {
+pub(crate) struct RuntimeValueSource<'db> {
     pub(crate) value: RuntimeClass<'db>,
-    pub(crate) address: Option<RuntimeBoundaryAddress<'db>>,
+    pub(crate) address: Option<RuntimeValueAddress<'db>>,
 }
 
-pub(crate) struct RuntimeBoundaryValueSelector;
+pub(crate) struct RuntimeValueUsePlanner;
 
-impl RuntimeBoundaryValueSelector {
+impl RuntimeValueUsePlanner {
     pub(crate) fn select<'db>(
-        source: RuntimeBoundaryValueSource<'db>,
+        source: RuntimeValueSource<'db>,
         boundary: &RuntimeBoundarySpec<'db>,
-    ) -> Option<RuntimeBoundaryValueRealization<'db>> {
+    ) -> Option<RuntimeValueUsePlan<'db>> {
         match boundary {
-            RuntimeBoundarySpec::ExactTransport(target) => {
-                Some(RuntimeBoundaryValueRealization::CoerceValue {
-                    target: target.clone(),
-                })
-            }
+            RuntimeBoundarySpec::ExactTransport(target) => Some(RuntimeValueUsePlan::CoerceValue {
+                target: target.clone(),
+            }),
             RuntimeBoundarySpec::ExactShape(target) => {
                 if source.value_satisfies(boundary) {
-                    return Some(RuntimeBoundaryValueRealization::UseValue);
+                    return Some(RuntimeValueUsePlan::UseValue);
                 }
                 if let Some(address) = source.compatible_address(boundary) {
-                    return Some(RuntimeBoundaryValueRealization::AddrOfRuntimePlace {
+                    return Some(RuntimeValueUsePlan::AddrOfRuntimePlace {
                         place: address.place,
                         class: address.class,
                     });
                 }
-                Some(RuntimeBoundaryValueRealization::CoerceValue {
+                Some(RuntimeValueUsePlan::CoerceValue {
                     target: target.clone(),
                 })
             }
             RuntimeBoundarySpec::BorrowLike { .. } if source.value_satisfies(boundary) => {
-                Some(RuntimeBoundaryValueRealization::UseValue)
+                Some(RuntimeValueUsePlan::UseValue)
             }
             RuntimeBoundarySpec::BorrowLike { .. } => {
                 if let Some(address) = source.compatible_address(boundary) {
-                    return Some(RuntimeBoundaryValueRealization::AddrOfRuntimePlace {
+                    return Some(RuntimeValueUsePlan::AddrOfRuntimePlace {
                         place: address.place,
                         class: address.class,
                     });
                 }
-                RuntimeBoundaryMaterialization::for_boundary(boundary).map(|materialization| {
-                    RuntimeBoundaryValueRealization::MaterializeValue { materialization }
+                RuntimeValueMaterialization::for_boundary(boundary).map(|materialization| {
+                    RuntimeValueUsePlan::MaterializeValue { materialization }
                 })
             }
         }
@@ -160,16 +149,13 @@ impl RuntimeBoundaryValueSelector {
 pub(crate) trait RuntimeValueArgSelectionCx<'db> {
     fn runtime_value_class(&self, value: RLocalId) -> Option<RuntimeClass<'db>>;
 
-    fn runtime_boundary_value_source(
-        &self,
-        value: RLocalId,
-    ) -> Option<RuntimeBoundaryValueSource<'db>>;
+    fn runtime_value_source(&self, value: RLocalId) -> Option<RuntimeValueSource<'db>>;
 
-    fn promote_runtime_boundary_address(
+    fn promote_runtime_value_address(
         &mut self,
         value: RLocalId,
         boundary: &RuntimeBoundarySpec<'db>,
-    ) -> Option<RuntimeBoundaryAddress<'db>>;
+    ) -> Option<RuntimeValueAddress<'db>>;
 }
 
 pub(crate) struct RuntimeValueArgSelector<'cx, Cx> {
@@ -201,32 +187,29 @@ where
             }
             RuntimeParamPlan::Boundary(boundary) => {
                 let source_class = self.source_class(source);
-                let realization = self.select_boundary_realization(source, boundary);
+                let use_plan = self.select_boundary_use_plan(source, boundary);
                 SelectedRuntimeValueArg {
                     source,
                     semantic_ty,
-                    class: realization.class(&source_class),
-                    realization,
+                    class: use_plan.class(&source_class),
+                    use_plan,
                 }
             }
         }
     }
 
-    fn select_boundary_realization(
+    fn select_boundary_use_plan(
         &mut self,
         source: RLocalId,
         boundary: &RuntimeBoundarySpec<'db>,
-    ) -> RuntimeBoundaryValueRealization<'db> {
-        let mut value_source = self
-            .cx
-            .runtime_boundary_value_source(source)
-            .unwrap_or_else(|| {
-                panic!("cannot realize erased runtime value {source:?} for boundary {boundary:?}")
-            });
-        if let Some(address) = self.cx.promote_runtime_boundary_address(source, boundary) {
+    ) -> RuntimeValueUsePlan<'db> {
+        let mut value_source = self.cx.runtime_value_source(source).unwrap_or_else(|| {
+            panic!("cannot realize erased runtime value {source:?} for boundary {boundary:?}")
+        });
+        if let Some(address) = self.cx.promote_runtime_value_address(source, boundary) {
             value_source.address = Some(address);
         }
-        RuntimeBoundaryValueSelector::select(value_source, boundary).unwrap_or_else(|| {
+        RuntimeValueUsePlanner::select(value_source, boundary).unwrap_or_else(|| {
             let source = self.source_class(source);
             panic!(
                 "runtime boundary has no realizable materialization: source={source:?} boundary={boundary:?}"
@@ -241,10 +224,10 @@ where
     }
 }
 
-pub(crate) trait RuntimeBoundaryValueEmitter<'db> {
-    fn boundary_value_class(&self, value: RLocalId) -> Option<RuntimeClass<'db>>;
+pub(crate) trait RuntimeValueUseEmitter<'db> {
+    fn value_class_for_use(&self, value: RLocalId) -> Option<RuntimeClass<'db>>;
 
-    fn coerce_boundary_value(
+    fn coerce_value_for_use(
         &mut self,
         bb: RBlockId,
         src: RLocalId,
@@ -252,7 +235,7 @@ pub(crate) trait RuntimeBoundaryValueEmitter<'db> {
         semantic_ty: TyId<'db>,
     ) -> RLocalId;
 
-    fn emit_boundary_addr_of(
+    fn emit_addr_of_place_for_use(
         &mut self,
         bb: RBlockId,
         place: RuntimePlace<'db>,
@@ -260,46 +243,45 @@ pub(crate) trait RuntimeBoundaryValueEmitter<'db> {
         semantic_ty: TyId<'db>,
     ) -> RLocalId;
 
-    fn alloc_boundary_slot(&mut self, semantic_ty: TyId<'db>, class: RuntimeClass<'db>)
-    -> RLocalId;
+    fn alloc_value_slot(&mut self, semantic_ty: TyId<'db>, class: RuntimeClass<'db>) -> RLocalId;
 
-    fn push_boundary_use(&mut self, bb: RBlockId, dst: RLocalId, src: RLocalId);
+    fn push_value_use(&mut self, bb: RBlockId, dst: RLocalId, src: RLocalId);
 }
 
-pub(crate) fn emit_runtime_boundary_value_realization<'db>(
-    emitter: &mut impl RuntimeBoundaryValueEmitter<'db>,
+pub(crate) fn emit_runtime_value_use_plan<'db>(
+    emitter: &mut impl RuntimeValueUseEmitter<'db>,
     bb: RBlockId,
     src: RLocalId,
-    realization: RuntimeBoundaryValueRealization<'db>,
+    use_plan: RuntimeValueUsePlan<'db>,
     semantic_ty: TyId<'db>,
 ) -> RLocalId {
-    match realization {
-        RuntimeBoundaryValueRealization::UseValue => src,
-        RuntimeBoundaryValueRealization::AddrOfRuntimePlace { place, class } => {
-            emitter.emit_boundary_addr_of(bb, place, class, semantic_ty)
+    match use_plan {
+        RuntimeValueUsePlan::UseValue => src,
+        RuntimeValueUsePlan::AddrOfRuntimePlace { place, class } => {
+            emitter.emit_addr_of_place_for_use(bb, place, class, semantic_ty)
         }
-        RuntimeBoundaryValueRealization::CoerceValue { target } => {
-            emitter.coerce_boundary_value(bb, src, &target, semantic_ty)
+        RuntimeValueUsePlan::CoerceValue { target } => {
+            emitter.coerce_value_for_use(bb, src, &target, semantic_ty)
         }
-        RuntimeBoundaryValueRealization::MaterializeValue { materialization } => {
-            emit_runtime_boundary_materialization(emitter, bb, src, materialization, semantic_ty)
+        RuntimeValueUsePlan::MaterializeValue { materialization } => {
+            emit_runtime_value_materialization(emitter, bb, src, materialization, semantic_ty)
         }
     }
 }
 
 pub(crate) fn emit_selected_runtime_value_arg<'db>(
-    emitter: &mut impl RuntimeBoundaryValueEmitter<'db>,
+    emitter: &mut impl RuntimeValueUseEmitter<'db>,
     bb: RBlockId,
     arg: &SelectedRuntimeValueArg<'db>,
 ) -> RLocalId {
-    let value = emit_runtime_boundary_value_realization(
+    let value = emit_runtime_value_use_plan(
         emitter,
         bb,
         arg.source,
-        arg.realization.clone(),
+        arg.use_plan.clone(),
         arg.semantic_ty,
     );
-    let Some(class) = emitter.boundary_value_class(value) else {
+    let Some(class) = emitter.value_class_for_use(value) else {
         panic!(
             "selected runtime value arg lowered without a runtime class: arg={arg:?}; value={value:?}"
         );
@@ -312,7 +294,7 @@ pub(crate) fn emit_selected_runtime_value_arg<'db>(
 }
 
 pub(crate) fn emit_selected_runtime_value_args<'db>(
-    emitter: &mut impl RuntimeBoundaryValueEmitter<'db>,
+    emitter: &mut impl RuntimeValueUseEmitter<'db>,
     bb: RBlockId,
     args: &[SelectedRuntimeValueArg<'db>],
 ) -> Vec<RLocalId> {
@@ -321,35 +303,35 @@ pub(crate) fn emit_selected_runtime_value_args<'db>(
         .collect()
 }
 
-fn emit_runtime_boundary_materialization<'db>(
-    emitter: &mut impl RuntimeBoundaryValueEmitter<'db>,
+fn emit_runtime_value_materialization<'db>(
+    emitter: &mut impl RuntimeValueUseEmitter<'db>,
     bb: RBlockId,
     src: RLocalId,
-    materialization: RuntimeBoundaryMaterialization<'db>,
+    materialization: RuntimeValueMaterialization<'db>,
     semantic_ty: TyId<'db>,
 ) -> RLocalId {
     match materialization {
-        RuntimeBoundaryMaterialization::ObjectRef { layout } => {
-            emitter.coerce_boundary_value(bb, src, &RuntimeClass::object_ref(layout), semantic_ty)
+        RuntimeValueMaterialization::ObjectRef { layout } => {
+            emitter.coerce_value_for_use(bb, src, &RuntimeClass::object_ref(layout), semantic_ty)
         }
-        RuntimeBoundaryMaterialization::RawAddrSlot { pointee } => {
+        RuntimeValueMaterialization::RawAddrSlot { pointee } => {
             let source = emitter
-                .boundary_value_class(src)
+                .value_class_for_use(src)
                 .unwrap_or_else(|| panic!("cannot materialize erased runtime value {src:?}"));
             let stored = if source == pointee {
                 src
             } else {
-                emitter.coerce_boundary_value(bb, src, &pointee, semantic_ty)
+                emitter.coerce_value_for_use(bb, src, &pointee, semantic_ty)
             };
-            let slot = emitter.alloc_boundary_slot(semantic_ty, pointee.clone());
-            emitter.push_boundary_use(bb, slot, stored);
-            emitter.emit_boundary_addr_of(
+            let slot = emitter.alloc_value_slot(semantic_ty, pointee.clone());
+            emitter.push_value_use(bb, slot, stored);
+            emitter.emit_addr_of_place_for_use(
                 bb,
                 RuntimePlace {
                     root: PlaceRoot::Slot(slot),
                     path: Box::default(),
                 },
-                RuntimeBoundaryMaterialization::RawAddrSlot { pointee }.class(),
+                RuntimeValueMaterialization::RawAddrSlot { pointee }.class(),
                 semantic_ty,
             )
         }
@@ -468,7 +450,7 @@ impl RuntimeBoundaryMatcher {
     }
 }
 
-impl<'db> RuntimeBoundaryMaterialization<'db> {
+impl<'db> RuntimeValueMaterialization<'db> {
     pub(crate) fn for_boundary(boundary: &RuntimeBoundarySpec<'db>) -> Option<Self> {
         match boundary {
             RuntimeBoundarySpec::BorrowLike { pointee, allow, .. }
@@ -504,32 +486,44 @@ impl<'db> RuntimeBoundaryMaterialization<'db> {
 
 impl<'db> SelectedRuntimeArg<'db> {
     pub(super) fn local_value(local: SLocalId, class: RuntimeClass<'db>) -> Self {
-        let realization = if class.is_transport() {
-            RuntimeArgRealization::UseHandleLikeValue { local }
+        let source = if class.is_transport() {
+            RuntimeArgSource::HandleLikeValue { local }
         } else {
-            RuntimeArgRealization::UseRuntimeValue { local }
+            RuntimeArgSource::RuntimeValue { local }
         };
-        Self { class, realization }
+        let use_plan = RuntimeValueUsePlan::CoerceValue {
+            target: class.clone(),
+        };
+        Self {
+            class,
+            source,
+            use_plan,
+        }
     }
 
     pub(super) fn handle_like_value(local: SLocalId, class: RuntimeClass<'db>) -> Self {
         Self {
+            use_plan: RuntimeValueUsePlan::CoerceValue {
+                target: class.clone(),
+            },
             class,
-            realization: RuntimeArgRealization::UseHandleLikeValue { local },
+            source: RuntimeArgSource::HandleLikeValue { local },
         }
     }
 
     pub(super) fn semantic_operand(arg: NOperand, class: RuntimeClass<'db>) -> Self {
         Self {
             class,
-            realization: RuntimeArgRealization::LowerSemanticOperand(arg),
+            source: RuntimeArgSource::SemanticOperand(arg),
+            use_plan: RuntimeValueUsePlan::UseValue,
         }
     }
 
     pub(super) fn placeholder(semantic_ty: TyId<'db>, class: RuntimeClass<'db>) -> Self {
         Self {
             class,
-            realization: RuntimeArgRealization::Placeholder { semantic_ty },
+            source: RuntimeArgSource::Placeholder { semantic_ty },
+            use_plan: RuntimeValueUsePlan::UseValue,
         }
     }
 
@@ -540,7 +534,8 @@ impl<'db> SelectedRuntimeArg<'db> {
     ) -> Self {
         Self {
             class,
-            realization: RuntimeArgRealization::AddrOfPlace { place, semantic_ty },
+            source: RuntimeArgSource::PlaceAddress { place, semantic_ty },
+            use_plan: RuntimeValueUsePlan::UseValue,
         }
     }
 
@@ -550,43 +545,39 @@ impl<'db> SelectedRuntimeArg<'db> {
         class: RuntimeClass<'db>,
     ) -> Self {
         Self {
+            use_plan: RuntimeValueUsePlan::CoerceValue {
+                target: class.clone(),
+            },
             class,
-            realization: RuntimeArgRealization::LoadPlaceValue { place, semantic_ty },
+            source: RuntimeArgSource::PlaceValue { place, semantic_ty },
         }
     }
 
     pub(super) fn materialized_place(
         place: NSPlace<'db>,
         semantic_ty: TyId<'db>,
-        materialization: RuntimeBoundaryMaterialization<'db>,
+        materialization: RuntimeValueMaterialization<'db>,
     ) -> Self {
         Self {
             class: materialization.class(),
-            realization: RuntimeArgRealization::MaterializePlaceValue {
-                place,
-                materialization,
-                semantic_ty,
-            },
+            source: RuntimeArgSource::PlaceValue { place, semantic_ty },
+            use_plan: RuntimeValueUsePlan::MaterializeValue { materialization },
         }
     }
 
     pub(super) fn materialized_semantic_operand(
         arg: NOperand,
-        semantic_ty: TyId<'db>,
         boundary: &RuntimeBoundarySpec<'db>,
     ) -> Option<Self> {
-        RuntimeBoundaryMaterialization::for_boundary(boundary).map(|materialization| Self {
+        RuntimeValueMaterialization::for_boundary(boundary).map(|materialization| Self {
             class: materialization.class(),
-            realization: RuntimeArgRealization::MaterializeSemanticValue {
-                operand: arg,
-                materialization,
-                semantic_ty,
-            },
+            source: RuntimeArgSource::SemanticOperand(arg),
+            use_plan: RuntimeValueUsePlan::MaterializeValue { materialization },
         })
     }
 }
 
-impl<'db> RuntimeBoundaryValueSource<'db> {
+impl<'db> RuntimeValueSource<'db> {
     fn value_satisfies(&self, boundary: &RuntimeBoundarySpec<'db>) -> bool {
         RuntimeBoundaryMatcher::class_satisfies_boundary(&self.value, boundary)
     }
@@ -594,7 +585,7 @@ impl<'db> RuntimeBoundaryValueSource<'db> {
     fn compatible_address(
         &self,
         boundary: &RuntimeBoundarySpec<'db>,
-    ) -> Option<RuntimeBoundaryAddress<'db>> {
+    ) -> Option<RuntimeValueAddress<'db>> {
         self.address
             .as_ref()
             .filter(|address| {
@@ -616,10 +607,9 @@ mod tests {
     };
 
     use super::{
-        RuntimeBoundaryAddress, RuntimeBoundaryMatcher, RuntimeBoundaryMaterialization,
-        RuntimeBoundaryValueEmitter, RuntimeBoundaryValueRealization, RuntimeBoundaryValueSelector,
-        RuntimeBoundaryValueSource, SelectedRuntimeValueArg,
-        emit_runtime_boundary_value_realization, emit_selected_runtime_value_args,
+        RuntimeBoundaryMatcher, RuntimeValueAddress, RuntimeValueMaterialization,
+        RuntimeValueSource, RuntimeValueUseEmitter, RuntimeValueUsePlan, RuntimeValueUsePlanner,
+        SelectedRuntimeValueArg, emit_runtime_value_use_plan, emit_selected_runtime_value_args,
     };
 
     fn word_class<'db>() -> RuntimeClass<'db> {
@@ -659,8 +649,8 @@ mod tests {
         }
     }
 
-    fn source_with_value<'db>(value: RuntimeClass<'db>) -> RuntimeBoundaryValueSource<'db> {
-        RuntimeBoundaryValueSource {
+    fn source_with_value<'db>(value: RuntimeClass<'db>) -> RuntimeValueSource<'db> {
+        RuntimeValueSource {
             value,
             address: None,
         }
@@ -669,10 +659,10 @@ mod tests {
     fn source_with_address<'db>(
         value: RuntimeClass<'db>,
         address: RuntimeClass<'db>,
-    ) -> RuntimeBoundaryValueSource<'db> {
-        RuntimeBoundaryValueSource {
+    ) -> RuntimeValueSource<'db> {
+        RuntimeValueSource {
             value,
-            address: Some(RuntimeBoundaryAddress {
+            address: Some(RuntimeValueAddress {
                 place: RuntimePlace {
                     root: PlaceRoot::Slot(RLocalId::new(0)),
                     path: Box::default(),
@@ -723,12 +713,12 @@ mod tests {
         }
     }
 
-    impl<'db> RuntimeBoundaryValueEmitter<'db> for FakeBoundaryEmitter<'db> {
-        fn boundary_value_class(&self, value: RLocalId) -> Option<RuntimeClass<'db>> {
+    impl<'db> RuntimeValueUseEmitter<'db> for FakeBoundaryEmitter<'db> {
+        fn value_class_for_use(&self, value: RLocalId) -> Option<RuntimeClass<'db>> {
             self.classes.get(value.index())?.clone()
         }
 
-        fn coerce_boundary_value(
+        fn coerce_value_for_use(
             &mut self,
             bb: RBlockId,
             src: RLocalId,
@@ -745,7 +735,7 @@ mod tests {
             dst
         }
 
-        fn emit_boundary_addr_of(
+        fn emit_addr_of_place_for_use(
             &mut self,
             bb: RBlockId,
             place: RuntimePlace<'db>,
@@ -758,7 +748,7 @@ mod tests {
             dst
         }
 
-        fn alloc_boundary_slot(
+        fn alloc_value_slot(
             &mut self,
             semantic_ty: TyId<'db>,
             class: RuntimeClass<'db>,
@@ -769,7 +759,7 @@ mod tests {
             dst
         }
 
-        fn push_boundary_use(&mut self, bb: RBlockId, dst: RLocalId, src: RLocalId) {
+        fn push_value_use(&mut self, bb: RBlockId, dst: RLocalId, src: RLocalId) {
             let _ = bb;
             self.ops.push(FakeEmitOp::Assign { dst, src });
         }
@@ -777,7 +767,7 @@ mod tests {
 
     #[test]
     fn raw_addr_materialization_has_explicit_class() {
-        let materialization = RuntimeBoundaryMaterialization::for_boundary(&raw_boundary())
+        let materialization = RuntimeValueMaterialization::for_boundary(&raw_boundary())
             .expect("raw boundary should materialize through a slot");
         assert_eq!(
             materialization.class(),
@@ -789,16 +779,15 @@ mod tests {
     }
 
     #[test]
-    fn exact_shape_realization_preserves_source_transport() {
+    fn exact_shape_use_plan_preserves_source_transport() {
         let source = raw_addr_class(AddressSpaceKind::Storage);
         let boundary = RuntimeBoundarySpec::ExactShape(RuntimeClass::RawAddr {
             space: AddressSpaceKind::Memory,
             target: None,
         });
-        let realization =
-            RuntimeBoundaryValueSelector::select(source_with_value(source.clone()), &boundary)
-                .expect("exact-shape source should select a realization");
-        assert_eq!(realization.class(&source), source,);
+        let use_plan = RuntimeValueUsePlanner::select(source_with_value(source.clone()), &boundary)
+            .expect("exact-shape source should select a use plan");
+        assert_eq!(use_plan.class(&source), source,);
     }
 
     #[test]
@@ -807,8 +796,8 @@ mod tests {
         let boundary = RuntimeBoundarySpec::ExactShape(raw_addr_class(AddressSpaceKind::Memory));
 
         assert_eq!(
-            RuntimeBoundaryValueSelector::select(source_with_value(source), &boundary),
-            Some(RuntimeBoundaryValueRealization::UseValue)
+            RuntimeValueUsePlanner::select(source_with_value(source), &boundary),
+            Some(RuntimeValueUsePlan::UseValue)
         );
     }
 
@@ -818,11 +807,11 @@ mod tests {
         let boundary = RuntimeBoundarySpec::ExactTransport(target.clone());
 
         assert_eq!(
-            RuntimeBoundaryValueSelector::select(
+            RuntimeValueUsePlanner::select(
                 source_with_value(raw_addr_class(AddressSpaceKind::Storage)),
                 &boundary
             ),
-            Some(RuntimeBoundaryValueRealization::CoerceValue { target })
+            Some(RuntimeValueUsePlan::CoerceValue { target })
         );
     }
 
@@ -832,8 +821,8 @@ mod tests {
         let source = source_with_address(word_class(), address.clone());
 
         assert_eq!(
-            RuntimeBoundaryValueSelector::select(source, &raw_boundary()),
-            Some(RuntimeBoundaryValueRealization::AddrOfRuntimePlace {
+            RuntimeValueUsePlanner::select(source, &raw_boundary()),
+            Some(RuntimeValueUsePlan::AddrOfRuntimePlace {
                 place: RuntimePlace {
                     root: PlaceRoot::Slot(RLocalId::new(0)),
                     path: Box::default(),
@@ -846,9 +835,9 @@ mod tests {
     #[test]
     fn borrow_like_selector_materializes_when_no_source_address_matches() {
         assert_eq!(
-            RuntimeBoundaryValueSelector::select(source_with_value(word_class()), &raw_boundary()),
-            Some(RuntimeBoundaryValueRealization::MaterializeValue {
-                materialization: RuntimeBoundaryMaterialization::RawAddrSlot {
+            RuntimeValueUsePlanner::select(source_with_value(word_class()), &raw_boundary()),
+            Some(RuntimeValueUsePlan::MaterializeValue {
+                materialization: RuntimeValueMaterialization::RawAddrSlot {
                     pointee: word_class(),
                 },
             })
@@ -861,12 +850,12 @@ mod tests {
         let semantic_ty = TyId::unit(&db);
         let mut emitter = FakeBoundaryEmitter::new(vec![Some(bool_class())]);
 
-        let result = emit_runtime_boundary_value_realization(
+        let result = emit_runtime_value_use_plan(
             &mut emitter,
             RBlockId::new(0),
             RLocalId::new(0),
-            RuntimeBoundaryValueRealization::MaterializeValue {
-                materialization: RuntimeBoundaryMaterialization::RawAddrSlot {
+            RuntimeValueUsePlan::MaterializeValue {
+                materialization: RuntimeValueMaterialization::RawAddrSlot {
                     pointee: word_class(),
                 },
             },
@@ -900,7 +889,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_runtime_value_args_share_boundary_realization_lowering() {
+    fn selected_runtime_value_args_share_use_plan_lowering() {
         let db = DriverDataBase::default();
         let semantic_ty = TyId::unit(&db);
         let mut emitter = FakeBoundaryEmitter::new(vec![Some(word_class())]);
@@ -912,7 +901,7 @@ mod tests {
                 source: RLocalId::new(0),
                 semantic_ty,
                 class: word_class(),
-                realization: RuntimeBoundaryValueRealization::UseValue,
+                use_plan: RuntimeValueUsePlan::UseValue,
             }],
         );
 

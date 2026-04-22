@@ -58,7 +58,7 @@ use super::{
         address_space_from_provider, project_field_class, project_index_class,
         project_variant_field_class,
     },
-    realize::{RuntimeArgRealization, SelectedRuntimeArg},
+    realize::{RuntimeArgSource, RuntimeValueUsePlan, SelectedRuntimeArg},
     returns::RuntimeReturnAnalysisCx,
     type_info::{
         RuntimeTypeEnv, aggregate_transport_depends_on_runtime_source,
@@ -1935,11 +1935,12 @@ fn selected_semantic_copy<'db>(
 ) -> SelectedRuntimeArg<'db> {
     SelectedRuntimeArg {
         class,
-        realization: RuntimeArgRealization::LowerSemanticOperand(NOperand {
+        source: RuntimeArgSource::SemanticOperand(NOperand {
             local,
             origin: None,
             mode: ReadMode::Copy,
         }),
+        use_plan: RuntimeValueUsePlan::UseValue,
     }
 }
 

@@ -39,8 +39,8 @@ use crate::{
             conversion::{RuntimeConversionEmitter, emit_runtime_coercion},
             interface::runtime_visible_binding_plans,
             realize::{
-                RuntimeBoundaryAddress, RuntimeBoundaryValueEmitter, RuntimeBoundaryValueSource,
-                RuntimeValueArgSelectionCx, RuntimeValueArgSelector, SelectedRuntimeValueArg,
+                RuntimeValueAddress, RuntimeValueArgSelectionCx, RuntimeValueArgSelector,
+                RuntimeValueSource, RuntimeValueUseEmitter, SelectedRuntimeValueArg,
                 emit_selected_runtime_value_args,
             },
             returns::RuntimeReturnAnalysisCx,
@@ -135,8 +135,8 @@ impl<'db> RuntimeConversionEmitter<'db> for SyntheticBodyBuilder<'db> {
     }
 }
 
-impl<'db> RuntimeBoundaryValueEmitter<'db> for SyntheticBodyBuilder<'db> {
-    fn boundary_value_class(&self, value: RLocalId) -> Option<RuntimeClass<'db>> {
+impl<'db> RuntimeValueUseEmitter<'db> for SyntheticBodyBuilder<'db> {
+    fn value_class_for_use(&self, value: RLocalId) -> Option<RuntimeClass<'db>> {
         self.locals
             .get(value.index())?
             .carrier
@@ -144,7 +144,7 @@ impl<'db> RuntimeBoundaryValueEmitter<'db> for SyntheticBodyBuilder<'db> {
             .cloned()
     }
 
-    fn coerce_boundary_value(
+    fn coerce_value_for_use(
         &mut self,
         bb: RBlockId,
         src: RLocalId,
@@ -154,7 +154,7 @@ impl<'db> RuntimeBoundaryValueEmitter<'db> for SyntheticBodyBuilder<'db> {
         self.coerce_runtime_value(bb, src, target, semantic_ty)
     }
 
-    fn emit_boundary_addr_of(
+    fn emit_addr_of_place_for_use(
         &mut self,
         bb: RBlockId,
         place: RuntimePlace<'db>,
@@ -176,11 +176,7 @@ impl<'db> RuntimeBoundaryValueEmitter<'db> for SyntheticBodyBuilder<'db> {
         dst
     }
 
-    fn alloc_boundary_slot(
-        &mut self,
-        semantic_ty: TyId<'db>,
-        class: RuntimeClass<'db>,
-    ) -> RLocalId {
+    fn alloc_value_slot(&mut self, semantic_ty: TyId<'db>, class: RuntimeClass<'db>) -> RLocalId {
         self.push_local(
             semantic_ty,
             RuntimeCarrier::Value(class.clone()),
@@ -188,7 +184,7 @@ impl<'db> RuntimeBoundaryValueEmitter<'db> for SyntheticBodyBuilder<'db> {
         )
     }
 
-    fn push_boundary_use(&mut self, bb: RBlockId, dst: RLocalId, src: RLocalId) {
+    fn push_value_use(&mut self, bb: RBlockId, dst: RLocalId, src: RLocalId) {
         self.push_stmt(
             bb,
             RStmt::Assign {
@@ -238,21 +234,18 @@ impl<'db> RuntimeValueArgSelectionCx<'db> for SyntheticBodyBuilder<'db> {
             .cloned()
     }
 
-    fn runtime_boundary_value_source(
-        &self,
-        value: RLocalId,
-    ) -> Option<RuntimeBoundaryValueSource<'db>> {
-        Some(RuntimeBoundaryValueSource {
+    fn runtime_value_source(&self, value: RLocalId) -> Option<RuntimeValueSource<'db>> {
+        Some(RuntimeValueSource {
             value: self.runtime_value_class(value)?,
-            address: self.runtime_boundary_address(value),
+            address: self.runtime_value_address(value),
         })
     }
 
-    fn promote_runtime_boundary_address(
+    fn promote_runtime_value_address(
         &mut self,
         value: RLocalId,
         boundary: &RuntimeBoundarySpec<'db>,
-    ) -> Option<RuntimeBoundaryAddress<'db>> {
+    ) -> Option<RuntimeValueAddress<'db>> {
         if matches!(
             boundary,
             RuntimeBoundarySpec::BorrowLike {
@@ -975,8 +968,8 @@ impl<'db> SyntheticBodyBuilder<'db> {
         emit_selected_runtime_value_args(self, bb, selected)
     }
 
-    fn runtime_boundary_address(&self, source: RLocalId) -> Option<RuntimeBoundaryAddress<'db>> {
-        Some(RuntimeBoundaryAddress {
+    fn runtime_value_address(&self, source: RLocalId) -> Option<RuntimeValueAddress<'db>> {
+        Some(RuntimeValueAddress {
             place: self.runtime_place_for_local(source)?,
             class: self.runtime_place_addr_class(source)?,
         })
@@ -985,7 +978,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
     fn promote_runtime_aggregate_local_place(
         &mut self,
         local: RLocalId,
-    ) -> Option<RuntimeBoundaryAddress<'db>> {
+    ) -> Option<RuntimeValueAddress<'db>> {
         let class = self
             .locals
             .get(local.index())?
@@ -1008,7 +1001,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         let addr_class = self
             .runtime_place_addr_class(local)
             .expect("promoted aggregate local should have a place address class");
-        Some(RuntimeBoundaryAddress {
+        Some(RuntimeValueAddress {
             place,
             class: addr_class,
         })
