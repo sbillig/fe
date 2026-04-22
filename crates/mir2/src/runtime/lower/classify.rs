@@ -1,15 +1,15 @@
 use std::borrow::Cow;
 
 use common::indexmap::IndexSet;
-use cranelift_entity::{EntityRef, PrimaryMap, entity_impl};
+use cranelift_entity::{EntityRef, PrimaryMap};
 use hir::analysis::{
     semantic::{
-        FieldIndex, GenericSubst, ImplEnv, NEffectArg, NEffectArgValue, ReadMode, SConst, SLocalId,
+        FieldIndex, GenericSubst, ImplEnv, NEffectArg, ReadMode, SBlockId, SConst, SLocalId,
         SemanticCalleeRef, SemanticInstance, SemanticInstanceKey, SemanticLocalKind,
         SemanticLocalRole, ValueProvenance, VariantIndex,
         borrowck::{
-            NBorrowRoot, NExpr, NLocalOrigin, NOperand, NSPlace, NSPlaceRoot,
-            NormalizedBindingLowering, NormalizedSemanticBody,
+            NAssignmentId, NBorrowRoot, NExpr, NLocalOrigin, NOperand, NSPlace, NSPlaceRoot,
+            NormalizedBindingLowering, NormalizedBodyFacts, NormalizedSemanticBody,
         },
         get_or_build_semantic_instance, sem_const_ty, semantic_binding_role, semantic_binding_ty,
         semantic_instance_assumptions,
@@ -73,31 +73,20 @@ use super::{
 
 #[derive(Clone)]
 pub(crate) struct BodyStaticFacts<'db> {
+    normalized_facts: NormalizedBodyFacts,
     local_facts: Vec<LocalStaticFacts<'db>>,
     assignments: PrimaryMap<AssignmentId, AssignStaticFacts<'db>>,
-    stmt_assignments: Vec<Vec<Option<AssignmentId>>>,
-    assignments_by_local: Vec<Vec<AssignmentId>>,
-    dynamic_dependents_by_local: Vec<Vec<SLocalId>>,
     root_provider_locals: FxHashMap<ProviderBinding<'db>, SLocalId>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) struct AssignmentId(u32);
-entity_impl!(AssignmentId);
+pub(crate) type AssignmentId = NAssignmentId;
 
 #[derive(Clone)]
 pub(super) struct AssignStaticFacts<'db> {
     pub(super) block_idx: usize,
     pub(super) stmt_idx: usize,
     pub(super) dst: SLocalId,
-    uses: Box<[SLocalId]>,
     expr: Option<ExprStaticFacts<'db>>,
-}
-
-impl<'db> AssignStaticFacts<'db> {
-    pub(crate) fn uses(&self) -> &[SLocalId] {
-        &self.uses
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -211,7 +200,8 @@ impl<'db> InferClassCache<'db> {
         local: SLocalId,
         carriers: &[RuntimeCarrier<'db>],
     ) -> Option<LocalDynamicFacts<'db>> {
-        let local_static = env.local_facts(local)?;
+        env.local_facts(local)?;
+        let source_locals = env.facts.source_locals(local);
         let self_version = *self.local_versions.get(local.index())?;
         let entry = self
             .local_dynamic_facts
@@ -219,8 +209,7 @@ impl<'db> InferClassCache<'db> {
             .unwrap_or_else(|| panic!("missing dynamic fact cache entry for {local:?}"));
         if let Some(facts) = entry.facts.as_ref()
             && entry.self_version == self_version
-            && local_static
-                .source_locals
+            && source_locals
                 .iter()
                 .zip(entry.source_versions.iter())
                 .all(|(dep, version)| self.local_versions[dep.index()] == *version)
@@ -229,8 +218,7 @@ impl<'db> InferClassCache<'db> {
         }
         let facts = LocalDynamicFacts::compute(env, local, carriers);
         entry.self_version = self_version;
-        entry.source_versions = local_static
-            .source_locals
+        entry.source_versions = source_locals
             .iter()
             .map(|dep| self.local_versions[dep.index()])
             .collect();
@@ -466,7 +454,6 @@ struct LocalStaticFacts<'db> {
     root_place_fallback_class: Option<RuntimeClass<'db>>,
     root_transport_fallback_class: Option<RuntimeClass<'db>>,
     pub(super) materialization_plan: CompiledMaterializationPlan<'db>,
-    source_locals: Box<[SLocalId]>,
 }
 
 #[derive(Clone)]
@@ -526,77 +513,53 @@ impl<'db> BodyStaticFacts<'db> {
         type_env: RuntimeTypeEnv<'db>,
     ) -> Self {
         let mut boundary_sites = BoundarySiteAllocator::default();
+        let normalized_facts = NormalizedBodyFacts::new(body);
         let local_facts: Vec<_> = body
             .locals
             .iter()
             .enumerate()
             .map(|(idx, local_data)| {
                 let local = SLocalId::from_u32(idx as u32);
-                build_local_static_facts(db, type_env, local, local_data, body)
+                build_local_static_facts(db, type_env, local, local_data)
             })
             .collect();
         let mut assignments = PrimaryMap::new();
-        let stmt_assignments = body
-            .blocks
-            .iter()
-            .enumerate()
-            .map(|(block_idx, block)| {
-                block
-                    .stmts
-                    .iter()
-                    .enumerate()
-                    .map(|(stmt_idx, stmt)| {
-                        let hir::analysis::semantic::NSStmtKind::Assign { dst, expr } = &stmt.kind
-                        else {
-                            return None;
-                        };
-                        let result_ty = body
-                            .locals
-                            .get(dst.index())
-                            .unwrap_or_else(|| panic!("missing assignment local for {dst:?}"))
-                            .ty;
-                        let expr_facts = build_expr_static_facts(
-                            db,
-                            body,
-                            typed_body,
-                            type_env,
-                            expr,
-                            result_ty,
-                            &mut boundary_sites,
-                        );
-                        let assignment = AssignStaticFacts {
-                            block_idx,
-                            stmt_idx,
-                            dst: *dst,
-                            uses: expr_used_locals(body, expr),
-                            expr: expr_facts,
-                        };
-                        let assign_id = assignments.push(assignment);
-                        Some(assign_id)
-                    })
-                    .collect()
-            })
-            .collect();
-        let mut assignments_by_local = vec![Vec::new(); body.locals.len()];
-        for (assign_id, assignment) in assignments.iter() {
-            for local in assignment.uses.iter().copied() {
-                assignments_by_local[local.index()].push(assign_id);
-            }
-        }
-        let mut dynamic_dependents_by_local = vec![Vec::new(); body.locals.len()];
-        for (local_idx, facts) in local_facts.iter().enumerate() {
-            for dependency in facts.source_locals.iter().copied() {
-                dynamic_dependents_by_local[dependency.index()]
-                    .push(SLocalId::from_u32(local_idx as u32));
-            }
+        for (assign_id, structural) in normalized_facts.assignments().iter() {
+            let stmt = &body.blocks[structural.block.index()].stmts[structural.stmt_idx];
+            let hir::analysis::semantic::NSStmtKind::Assign { dst, expr } = &stmt.kind else {
+                panic!(
+                    "normalized assignment facts point to non-assignment statement: block={} stmt={}",
+                    structural.block.index(),
+                    structural.stmt_idx
+                );
+            };
+            let result_ty = body
+                .locals
+                .get(dst.index())
+                .unwrap_or_else(|| panic!("missing assignment local for {dst:?}"))
+                .ty;
+            let expr_facts = build_expr_static_facts(
+                db,
+                body,
+                typed_body,
+                type_env,
+                expr,
+                result_ty,
+                &mut boundary_sites,
+            );
+            let pushed = assignments.push(AssignStaticFacts {
+                block_idx: structural.block.index(),
+                stmt_idx: structural.stmt_idx,
+                dst: *dst,
+                expr: expr_facts,
+            });
+            debug_assert_eq!(pushed, assign_id);
         }
         let root_provider_locals = build_runtime_visible_root_provider_locals(db, body.owner);
         Self {
+            normalized_facts,
             local_facts,
             assignments,
-            stmt_assignments,
-            assignments_by_local,
-            dynamic_dependents_by_local,
             root_provider_locals,
         }
     }
@@ -607,11 +570,9 @@ impl<'db> BodyStaticFacts<'db> {
 
     fn expr(&self, block_idx: usize, stmt_idx: usize) -> Option<&ExprStaticFacts<'db>> {
         let assign_id = self
-            .stmt_assignments
-            .get(block_idx)?
-            .get(stmt_idx)?
-            .as_ref()?;
-        self.assignments.get(*assign_id)?.expr.as_ref()
+            .normalized_facts
+            .stmt_assignment(SBlockId::new(block_idx), stmt_idx)?;
+        self.assignments.get(assign_id)?.expr.as_ref()
     }
 
     pub(super) fn assignment(&self, assign_id: AssignmentId) -> Option<&AssignStaticFacts<'db>> {
@@ -623,9 +584,7 @@ impl<'db> BodyStaticFacts<'db> {
     }
 
     pub(super) fn source_locals(&self, local: SLocalId) -> &[SLocalId] {
-        self.local(local)
-            .map(|facts| facts.source_locals.as_ref())
-            .unwrap_or(&[])
+        self.normalized_facts.local_source_uses(local)
     }
 
     pub(super) fn boundary_source_transport_sensitive(&self, local: SLocalId) -> bool {
@@ -634,17 +593,22 @@ impl<'db> BodyStaticFacts<'db> {
     }
 
     fn assignments_using_local(&self, local: SLocalId) -> &[AssignmentId] {
-        self.assignments_by_local
-            .get(local.index())
-            .map(Vec::as_slice)
+        self.normalized_facts.assignments_using_local(local)
+    }
+
+    pub(super) fn assignments_defining_local(&self, local: SLocalId) -> &[AssignmentId] {
+        self.normalized_facts.defs_by_local(local)
+    }
+
+    pub(super) fn assignment_uses(&self, assign_id: AssignmentId) -> &[SLocalId] {
+        self.normalized_facts
+            .assignment(assign_id)
+            .map(|assignment| assignment.uses())
             .unwrap_or(&[])
     }
 
     fn dynamic_dependents(&self, local: SLocalId) -> &[SLocalId] {
-        self.dynamic_dependents_by_local
-            .get(local.index())
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+        self.normalized_facts.dynamic_dependents(local)
     }
 
     fn root_provider_local(&self, provider: &ProviderBinding<'db>) -> Option<SLocalId> {
@@ -1087,7 +1051,6 @@ fn build_local_static_facts<'db>(
     type_env: RuntimeTypeEnv<'db>,
     local: SLocalId,
     local_data: &hir::analysis::semantic::borrowck::NSLocal<'db>,
-    body: &NormalizedSemanticBody<'db>,
 ) -> LocalStaticFacts<'db> {
     let scope = type_env.scope;
     let assumptions = type_env.assumptions;
@@ -1152,7 +1115,6 @@ fn build_local_static_facts<'db>(
                 SemanticLocalKind::Erased => unreachable!(),
             }
         },
-        source_locals: local_source_locals(body, local_data),
     }
 }
 
@@ -1177,85 +1139,6 @@ fn lowered_place_like_ty<'db>(
         }
         (SemanticLocalKind::Erased | SemanticLocalKind::DirectValue, _) => None,
     }
-}
-
-fn local_source_locals<'db>(
-    body: &NormalizedSemanticBody<'db>,
-    local_data: &hir::analysis::semantic::borrowck::NSLocal<'db>,
-) -> Box<[SLocalId]> {
-    let mut uses = IndexSet::new();
-    if let Some(place) = local_data.backing_place() {
-        uses.extend(place_used_locals(body, place));
-    }
-    if let Some(place) = local_data.snapshot_source_place() {
-        uses.extend(place_used_locals(body, place));
-    }
-    uses.into_iter().collect()
-}
-
-fn expr_used_locals<'db>(body: &NormalizedSemanticBody<'db>, expr: &NExpr<'db>) -> Box<[SLocalId]> {
-    let mut uses = IndexSet::new();
-    match expr {
-        NExpr::Use(value)
-        | NExpr::Unary { value, .. }
-        | NExpr::Cast { value, .. }
-        | NExpr::GetEnumTag { value }
-        | NExpr::IsEnumVariant { value, .. }
-        | NExpr::ExtractEnumField { value, .. } => {
-            uses.insert(value.local);
-        }
-        NExpr::Binary { lhs, rhs, .. } => {
-            uses.insert(lhs.local);
-            uses.insert(rhs.local);
-        }
-        NExpr::AggregateMake { fields, .. } | NExpr::EnumMake { fields, .. } => {
-            uses.extend(fields.iter().map(|field| field.local));
-        }
-        NExpr::ReadPlace { place, .. } | NExpr::Borrow { place, .. } => {
-            uses.extend(place_used_locals(body, place));
-        }
-        NExpr::Call {
-            args, effect_args, ..
-        } => {
-            uses.extend(args.iter().map(|arg| arg.local));
-            for effect_arg in effect_args {
-                match &effect_arg.arg {
-                    NEffectArgValue::Place(place) => uses.extend(place_used_locals(body, place)),
-                    NEffectArgValue::Value(value) => {
-                        uses.insert(value.local);
-                    }
-                }
-            }
-        }
-        NExpr::Const(_)
-        | NExpr::CodeRegionRef { .. }
-        | NExpr::CodeRegionOffset { .. }
-        | NExpr::CodeRegionLen { .. } => {}
-    }
-    uses.into_iter().collect()
-}
-
-fn place_used_locals<'db>(
-    body: &NormalizedSemanticBody<'db>,
-    place: &NSPlace<'db>,
-) -> Box<[SLocalId]> {
-    let mut uses = IndexSet::new();
-    match place.root {
-        NSPlaceRoot::Root(root) => match body.root(root) {
-            Some(NBorrowRoot::Param { local, .. }) | Some(NBorrowRoot::LocalSlot { local }) => {
-                uses.insert(*local);
-            }
-            Some(NBorrowRoot::Provider { .. }) | None => {}
-        },
-        NSPlaceRoot::CarrierDerefLocal(local) => {
-            uses.insert(local);
-        }
-    }
-    uses.extend(place.path.iter().filter_map(|projection| match projection {
-        Projection::Index(hir::projection::IndexSource::Dynamic(local)) => Some(*local),
-        _ => None,
-    }));
-    uses.into_iter().collect()
 }
 
 fn build_expr_static_facts<'db>(

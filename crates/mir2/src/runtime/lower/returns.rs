@@ -90,11 +90,6 @@ impl<'db> RuntimeReturnSummary<'db> {
             }
         }
 
-        let mut def_assignments_by_local = vec![Vec::new(); semantic_body.locals.len()];
-        for (assign_id, assignment) in facts.assignments().iter() {
-            def_assignments_by_local[assignment.dst.index()].push(assign_id);
-        }
-
         let mut needed_assignments = FxHashSet::default();
         let mut needed_locals = FxHashSet::default();
         let mut pending = return_locals.iter().copied().collect::<VecDeque<_>>();
@@ -105,11 +100,9 @@ impl<'db> RuntimeReturnSummary<'db> {
             for dependency in facts.source_locals(local).iter().copied() {
                 pending.push_back(dependency);
             }
-            for assign_id in def_assignments_by_local[local.index()].iter().copied() {
-                if needed_assignments.insert(assign_id)
-                    && let Some(assignment) = facts.assignment(assign_id)
-                {
-                    for used in assignment.uses().iter().copied() {
+            for assign_id in facts.assignments_defining_local(local).iter().copied() {
+                if needed_assignments.insert(assign_id) && facts.assignment(assign_id).is_some() {
+                    for used in facts.assignment_uses(assign_id).iter().copied() {
                         pending.push_back(used);
                     }
                 }
@@ -128,10 +121,10 @@ impl<'db> RuntimeReturnSummary<'db> {
 
         let mut slice_assignments_by_local = vec![Vec::new(); semantic_body.locals.len()];
         for (_, &assign_id) in slice_assignment_ids.iter() {
-            let assignment = facts
+            facts
                 .assignment(assign_id)
                 .unwrap_or_else(|| panic!("missing sliced assignment {assign_id:?}"));
-            for used in assignment.uses().iter().copied() {
+            for used in facts.assignment_uses(assign_id).iter().copied() {
                 slice_assignments_by_local[used.index()].push(assign_id);
             }
         }

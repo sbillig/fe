@@ -364,9 +364,9 @@ impl<'db> BackwardCfgAnalysis for BorrowLivenessAnalysis<'_, 'db> {
     fn transfer(&mut self, block: Self::Block, out_state: &Self::State) -> Self::State {
         let block_data = &self.borrowck.body.blocks[block.index()];
         let mut live = out_state.0.clone();
-        live.extend(self.borrowck.terminator_uses(&block_data.terminator));
-        for stmt in block_data.stmts.iter().rev() {
-            live = self.borrowck.live_before_stmt(stmt, &live);
+        live.extend(self.borrowck.facts.terminator_uses(block));
+        for (stmt_idx, _) in block_data.stmts.iter().enumerate().rev() {
+            live = self.borrowck.live_before_stmt(block, stmt_idx, &live);
         }
         LiveSet(live)
     }

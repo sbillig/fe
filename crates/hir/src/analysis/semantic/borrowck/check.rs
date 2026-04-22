@@ -32,6 +32,7 @@ use super::{
         MoveSite, MovedPlaces, State, place_set_overlaps, places_overlap,
     },
     diagnostics::{checker_name, normalize_error_to_diag, operand_origin},
+    facts::NormalizedBodyFacts,
     ir::{
         BorrowDiagnosticId, BorrowInputRef, BorrowSummary, BorrowSummaryId, BorrowTransform,
         NBorrowRoot, NBorrowRootId, NExpr, NOperand, NSPlace, NSPlaceRoot, NSProjectionPath,
@@ -153,6 +154,7 @@ pub(super) struct Borrowck<'db> {
     pub(super) db: &'db dyn SpannedHirAnalysisDb,
     pub(super) instance: SemanticInstance<'db>,
     pub(super) body: NormalizedSemanticBody<'db>,
+    pub(super) facts: NormalizedBodyFacts,
     hir_body: Option<Body<'db>>,
     param_modes: Vec<FuncParamMode>,
     param_index_of_local: FxHashMap<crate::analysis::semantic::SLocalId, u32>,
@@ -213,11 +215,13 @@ impl<'db> Borrowck<'db> {
                 effect_input_of_root.insert(root, idx);
             }
         }
+        let facts = NormalizedBodyFacts::new(&body);
         let mut checker = Self {
             db,
             instance,
             hir_body: owner.body(db),
             body,
+            facts,
             param_modes,
             param_index_of_local,
             effect_input_of_root,
@@ -287,10 +291,10 @@ impl<'db> Borrowck<'db> {
         for (bb_idx, block) in self.body.blocks.iter().enumerate() {
             let bb = SBlockId::new(bb_idx);
             let mut live = live_out[bb].0.clone();
-            live.extend(self.terminator_uses(&block.terminator));
+            live.extend(self.facts.terminator_uses(bb));
             self.live_before_term[bb] = live.clone();
-            for (stmt_idx, stmt) in block.stmts.iter().enumerate().rev() {
-                live = self.live_before_stmt(stmt, &live);
+            for (stmt_idx, _) in block.stmts.iter().enumerate().rev() {
+                live = self.live_before_stmt(bb, stmt_idx, &live);
                 self.live_before[bb_idx][stmt_idx] = live.clone();
             }
         }
@@ -298,17 +302,18 @@ impl<'db> Borrowck<'db> {
 
     pub(super) fn live_before_stmt(
         &self,
-        stmt: &super::ir::NSStmt<'db>,
+        block: SBlockId,
+        stmt_idx: usize,
         live_after: &FxHashSet<crate::analysis::semantic::SLocalId>,
     ) -> FxHashSet<crate::analysis::semantic::SLocalId> {
         let mut live = live_after.clone();
-        let uses = self.stmt_uses(stmt);
+        let stmt = &self.body.blocks[block.index()].stmts[stmt_idx];
         match &stmt.kind {
             NSStmtKind::Assign { dst, .. } => {
                 live.remove(dst);
-                live.extend(uses);
+                live.extend(self.facts.stmt_uses(block, stmt_idx));
             }
-            NSStmtKind::Store { .. } => live.extend(uses),
+            NSStmtKind::Store { .. } => live.extend(self.facts.stmt_uses(block, stmt_idx)),
         }
         live
     }
@@ -593,58 +598,6 @@ impl<'db> Borrowck<'db> {
                 Some(NBorrowRoot::Provider { binding }) if *binding == provider => Some(*idx),
                 _ => None,
             })
-    }
-
-    fn stmt_uses(
-        &self,
-        stmt: &super::ir::NSStmt<'db>,
-    ) -> FxHashSet<crate::analysis::semantic::SLocalId> {
-        match &stmt.kind {
-            NSStmtKind::Assign { expr, .. } => self.expr_uses(expr),
-            NSStmtKind::Store { dst, src } => {
-                let mut uses = self.place_uses(dst);
-                uses.insert(*src);
-                uses
-            }
-        }
-    }
-
-    pub(super) fn terminator_uses(
-        &self,
-        term: &super::ir::NSTerminator<'db>,
-    ) -> FxHashSet<crate::analysis::semantic::SLocalId> {
-        match &term.kind {
-            NSTerminatorKind::Goto(_) | NSTerminatorKind::Return(None) => FxHashSet::default(),
-            NSTerminatorKind::Branch { cond, .. }
-            | NSTerminatorKind::MatchEnum { value: cond, .. }
-            | NSTerminatorKind::Return(Some(cond)) => FxHashSet::from_iter([cond.local]),
-        }
-    }
-
-    fn expr_uses(&self, expr: &NExpr<'db>) -> FxHashSet<crate::analysis::semantic::SLocalId> {
-        let mut uses = FxHashSet::default();
-        expr.for_each_value_operand(|value| {
-            uses.insert(value.local);
-        });
-        expr.for_each_place_operand(|place| uses.extend(self.place_uses(place)));
-        uses
-    }
-
-    fn place_uses(&self, place: &NSPlace<'db>) -> FxHashSet<crate::analysis::semantic::SLocalId> {
-        let mut uses = FxHashSet::default();
-        match place.root {
-            NSPlaceRoot::Root(root) => match self.body.root(root) {
-                Some(NBorrowRoot::Param { local, .. }) | Some(NBorrowRoot::LocalSlot { local }) => {
-                    uses.insert(*local);
-                }
-                Some(NBorrowRoot::Provider { .. }) | None => {}
-            },
-            NSPlaceRoot::CarrierDerefLocal(local) => {
-                uses.insert(local);
-            }
-        }
-        uses.extend(place.dynamic_index_locals());
-        uses
     }
 
     fn effective_loans(
