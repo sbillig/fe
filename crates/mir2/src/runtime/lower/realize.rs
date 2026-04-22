@@ -5,7 +5,7 @@ use hir::analysis::{
 
 use crate::runtime::{
     AddressSpaceKind, LayoutId, PlaceRoot, RBlockId, RLocalId, RefKind, RefView,
-    RuntimeBoundarySpec, RuntimeClass, RuntimePlace,
+    RuntimeBoundarySpec, RuntimeClass, RuntimeParamPlan, RuntimePlace,
 };
 
 #[derive(Clone, Debug)]
@@ -55,6 +55,17 @@ pub(crate) struct SelectedRuntimeValueArg<'db> {
     pub(crate) semantic_ty: TyId<'db>,
     pub(crate) class: RuntimeClass<'db>,
     pub(crate) realization: RuntimeBoundaryValueRealization<'db>,
+}
+
+impl<'db> SelectedRuntimeValueArg<'db> {
+    fn use_value(source: RLocalId, semantic_ty: TyId<'db>, class: RuntimeClass<'db>) -> Self {
+        Self {
+            source,
+            semantic_ty,
+            class,
+            realization: RuntimeBoundaryValueRealization::UseValue,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -143,6 +154,90 @@ impl RuntimeBoundaryValueSelector {
                 })
             }
         }
+    }
+}
+
+pub(crate) trait RuntimeValueArgSelectionCx<'db> {
+    fn runtime_value_class(&self, value: RLocalId) -> Option<RuntimeClass<'db>>;
+
+    fn runtime_boundary_value_source(
+        &self,
+        value: RLocalId,
+    ) -> Option<RuntimeBoundaryValueSource<'db>>;
+
+    fn promote_runtime_boundary_address(
+        &mut self,
+        value: RLocalId,
+        boundary: &RuntimeBoundarySpec<'db>,
+    ) -> Option<RuntimeBoundaryAddress<'db>>;
+}
+
+pub(crate) struct RuntimeValueArgSelector<'cx, Cx> {
+    cx: &'cx mut Cx,
+}
+
+impl<'cx, Cx> RuntimeValueArgSelector<'cx, Cx> {
+    pub(crate) fn new(cx: &'cx mut Cx) -> Self {
+        Self { cx }
+    }
+}
+
+impl<'cx, 'db, Cx> RuntimeValueArgSelector<'cx, Cx>
+where
+    Cx: RuntimeValueArgSelectionCx<'db>,
+{
+    pub(crate) fn selected_arg_for_param_plan(
+        &mut self,
+        source: RLocalId,
+        plan: &RuntimeParamPlan<'db>,
+        semantic_ty: TyId<'db>,
+    ) -> SelectedRuntimeValueArg<'db> {
+        match plan {
+            RuntimeParamPlan::Erased => {
+                panic!("erased runtime param should not have a runtime arg")
+            }
+            RuntimeParamPlan::PassActual => {
+                SelectedRuntimeValueArg::use_value(source, semantic_ty, self.source_class(source))
+            }
+            RuntimeParamPlan::Boundary(boundary) => {
+                let source_class = self.source_class(source);
+                let realization = self.select_boundary_realization(source, boundary);
+                SelectedRuntimeValueArg {
+                    source,
+                    semantic_ty,
+                    class: realization.class(&source_class),
+                    realization,
+                }
+            }
+        }
+    }
+
+    fn select_boundary_realization(
+        &mut self,
+        source: RLocalId,
+        boundary: &RuntimeBoundarySpec<'db>,
+    ) -> RuntimeBoundaryValueRealization<'db> {
+        let mut value_source = self
+            .cx
+            .runtime_boundary_value_source(source)
+            .unwrap_or_else(|| {
+                panic!("cannot realize erased runtime value {source:?} for boundary {boundary:?}")
+            });
+        if let Some(address) = self.cx.promote_runtime_boundary_address(source, boundary) {
+            value_source.address = Some(address);
+        }
+        RuntimeBoundaryValueSelector::select(value_source, boundary).unwrap_or_else(|| {
+            let source = self.source_class(source);
+            panic!(
+                "runtime boundary has no realizable materialization: source={source:?} boundary={boundary:?}"
+            )
+        })
+    }
+
+    fn source_class(&self, source: RLocalId) -> RuntimeClass<'db> {
+        self.cx
+            .runtime_value_class(source)
+            .unwrap_or_else(|| panic!("cannot pass erased runtime arg {source:?}"))
     }
 }
 

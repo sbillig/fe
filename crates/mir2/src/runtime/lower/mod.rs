@@ -11,6 +11,7 @@ pub(crate) mod layout;
 mod place;
 pub(crate) mod realize;
 pub(crate) mod returns;
+pub(crate) mod tuple;
 pub(crate) mod type_info;
 
 pub use body::lower_to_rmir;

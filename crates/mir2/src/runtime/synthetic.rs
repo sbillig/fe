@@ -36,17 +36,17 @@ use crate::{
                 ref_class_for_place_result, runtime_signature_for_key_with_returns,
                 semantic_return_ty,
             },
-            conversion::{
-                RuntimeConversionEmitter, RuntimeConversionPlanner, emit_runtime_conversion_plan,
-            },
+            conversion::{RuntimeConversionEmitter, emit_runtime_coercion},
             interface::runtime_visible_binding_plans,
             realize::{
-                RuntimeBoundaryAddress, RuntimeBoundaryValueEmitter,
-                RuntimeBoundaryValueRealization, RuntimeBoundaryValueSelector,
-                RuntimeBoundaryValueSource, SelectedRuntimeValueArg,
+                RuntimeBoundaryAddress, RuntimeBoundaryValueEmitter, RuntimeBoundaryValueSource,
+                RuntimeValueArgSelectionCx, RuntimeValueArgSelector, SelectedRuntimeValueArg,
                 emit_selected_runtime_value_args,
             },
             returns::RuntimeReturnAnalysisCx,
+            tuple::{
+                RuntimeTupleFieldEmitter, extract_runtime_tuple_fields, memory_fallback_class,
+            },
             type_info::{RuntimeTypeEnv, top_level_class_for_ty_in_env},
         },
         package::runtime_instance_for_semantic,
@@ -196,6 +196,74 @@ impl<'db> RuntimeBoundaryValueEmitter<'db> for SyntheticBodyBuilder<'db> {
                 expr: RExpr::Use(src),
             },
         );
+    }
+}
+
+impl<'db> RuntimeTupleFieldEmitter<'db> for SyntheticBodyBuilder<'db> {
+    fn db(&self) -> &'db dyn MirDb {
+        self.db
+    }
+
+    fn tuple_value_class(&self, tuple: RLocalId) -> Option<RuntimeClass<'db>> {
+        self.locals
+            .get(tuple.index())?
+            .carrier
+            .value_class()
+            .cloned()
+    }
+
+    fn tuple_local_root(&self, tuple: RLocalId) -> RuntimeLocalRoot<'db> {
+        self.locals[tuple.index()].root.clone()
+    }
+
+    fn alloc_tuple_temp(
+        &mut self,
+        semantic_ty: TyId<'db>,
+        carrier: RuntimeCarrier<'db>,
+    ) -> RLocalId {
+        self.push_local(semantic_ty, carrier, RuntimeLocalRoot::None)
+    }
+
+    fn push_tuple_stmt(&mut self, bb: RBlockId, stmt: RStmt<'db>) {
+        self.push_stmt(bb, stmt);
+    }
+}
+
+impl<'db> RuntimeValueArgSelectionCx<'db> for SyntheticBodyBuilder<'db> {
+    fn runtime_value_class(&self, value: RLocalId) -> Option<RuntimeClass<'db>> {
+        self.locals
+            .get(value.index())?
+            .carrier
+            .value_class()
+            .cloned()
+    }
+
+    fn runtime_boundary_value_source(
+        &self,
+        value: RLocalId,
+    ) -> Option<RuntimeBoundaryValueSource<'db>> {
+        Some(RuntimeBoundaryValueSource {
+            value: self.runtime_value_class(value)?,
+            address: self.runtime_boundary_address(value),
+        })
+    }
+
+    fn promote_runtime_boundary_address(
+        &mut self,
+        value: RLocalId,
+        boundary: &RuntimeBoundarySpec<'db>,
+    ) -> Option<RuntimeBoundaryAddress<'db>> {
+        if matches!(
+            boundary,
+            RuntimeBoundarySpec::BorrowLike {
+                access: BorrowAccess::ReadWrite,
+                allow,
+                ..
+            } if allow.allow_object
+        ) {
+            return self.promote_runtime_aggregate_local_place(value);
+        }
+        None
     }
 }
 
@@ -679,72 +747,19 @@ impl<'db> SyntheticBodyBuilder<'db> {
         scope: hir::hir_def::scope_graph::ScopeId<'db>,
         field_indices: &[u32],
     ) -> Vec<RLocalId> {
-        let Some(tuple_class) = self.locals[tuple.index()].carrier.value_class().cloned() else {
-            return Vec::new();
-        };
         let env = self.runtime_type_env(scope);
-        let tuple_root = match tuple_class {
-            RuntimeClass::Ref { .. } => PlaceRoot::Ref(tuple),
-            RuntimeClass::AggregateValue { layout } => match &self.locals[tuple.index()].root {
-                RuntimeLocalRoot::Slot(_) => PlaceRoot::Slot(tuple),
-                RuntimeLocalRoot::Ref(_) => PlaceRoot::Ref(tuple),
-                RuntimeLocalRoot::Ptr { .. } | RuntimeLocalRoot::None => {
-                    let handle = self.push_local(
-                        tuple_ty,
-                        RuntimeCarrier::Value(RuntimeClass::object_ref(layout)),
-                        RuntimeLocalRoot::None,
-                    );
-                    self.push_stmt(
-                        bb,
-                        RStmt::Assign {
-                            dst: handle,
-                            expr: RExpr::MaterializeToObject { src: tuple },
-                        },
-                    );
-                    PlaceRoot::Ref(handle)
-                }
+        let field_indices = field_indices.iter().map(|idx| *idx as usize);
+        extract_runtime_tuple_fields(
+            self,
+            bb,
+            tuple,
+            tuple_ty,
+            field_indices,
+            |emitter, field_ty| {
+                top_level_class_for_ty_in_env(emitter.db(), env, field_ty, AddressSpaceKind::Memory)
+                    .unwrap_or_else(memory_fallback_class)
             },
-            RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => {
-                panic!("tuple extraction requires aggregate carrier")
-            }
-        };
-        let field_tys = tuple_ty.field_types(self.db);
-        field_indices
-            .iter()
-            .map(|field_idx| {
-                let idx = *field_idx as usize;
-                let field_ty = field_tys
-                    .get(idx)
-                    .copied()
-                    .unwrap_or_else(|| panic!("tuple field index {idx} out of bounds"));
-                let class =
-                    top_level_class_for_ty_in_env(self.db, env, field_ty, AddressSpaceKind::Memory)
-                        .unwrap_or(RuntimeClass::RawAddr {
-                            space: AddressSpaceKind::Memory,
-                            target: None,
-                        });
-                let dst = self.push_local(
-                    field_ty,
-                    RuntimeCarrier::Value(class),
-                    RuntimeLocalRoot::None,
-                );
-                let place = RuntimePlace {
-                    root: tuple_root.clone(),
-                    path: vec![PlaceElem::Field(hir::analysis::semantic::FieldIndex(
-                        idx as u16,
-                    ))]
-                    .into_boxed_slice(),
-                };
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::Load { place },
-                    },
-                );
-                dst
-            })
-            .collect()
+        )
     }
 
     fn extract_tuple_fields(
@@ -754,10 +769,12 @@ impl<'db> SyntheticBodyBuilder<'db> {
         tuple_ty: TyId<'db>,
         scope: hir::hir_def::scope_graph::ScopeId<'db>,
     ) -> Vec<RLocalId> {
-        let field_indices = (0..tuple_ty.field_types(self.db).len())
-            .map(|idx| idx as u32)
-            .collect::<Vec<_>>();
-        self.extract_selected_tuple_fields(bb, tuple, tuple_ty, scope, &field_indices)
+        let field_count = tuple_ty.field_types(self.db).len();
+        let env = self.runtime_type_env(scope);
+        extract_runtime_tuple_fields(self, bb, tuple, tuple_ty, 0..field_count, |emitter, ty| {
+            top_level_class_for_ty_in_env(emitter.db(), env, ty, AddressSpaceKind::Memory)
+                .unwrap_or_else(memory_fallback_class)
+        })
     }
 
     fn push_call(
@@ -876,7 +893,8 @@ impl<'db> SyntheticBodyBuilder<'db> {
             signature.params.len(),
             "synthetic call arg count mismatch for {callee:?}"
         );
-        args.iter()
+        let arg_plans = args
+            .iter()
             .zip(signature.params.iter().enumerate())
             .map(|(arg, (idx, param))| {
                 let (semantic_ty, plan) = param_entries
@@ -890,7 +908,14 @@ impl<'db> SyntheticBodyBuilder<'db> {
                             )),
                         )
                     });
-                self.select_runtime_arg_for_param_plan(*arg, &plan, semantic_ty)
+                (*arg, semantic_ty, plan)
+            })
+            .collect::<Vec<_>>();
+        let mut selector = RuntimeValueArgSelector::new(self);
+        arg_plans
+            .into_iter()
+            .map(|(arg, semantic_ty, plan)| {
+                selector.selected_arg_for_param_plan(arg, &plan, semantic_ty)
             })
             .collect()
     }
@@ -948,89 +973,6 @@ impl<'db> SyntheticBodyBuilder<'db> {
         selected: &[SelectedRuntimeValueArg<'db>],
     ) -> Vec<RLocalId> {
         emit_selected_runtime_value_args(self, bb, selected)
-    }
-
-    fn select_runtime_arg_for_param_plan(
-        &mut self,
-        source: RLocalId,
-        plan: &RuntimeParamPlan<'db>,
-        semantic_ty: TyId<'db>,
-    ) -> SelectedRuntimeValueArg<'db> {
-        match plan {
-            RuntimeParamPlan::Erased => {
-                panic!("erased runtime param should not have a runtime arg")
-            }
-            RuntimeParamPlan::PassActual => {
-                let class = self.locals[source.index()]
-                    .carrier
-                    .value_class()
-                    .cloned()
-                    .unwrap_or_else(|| panic!("cannot pass erased runtime arg {source:?}"));
-                SelectedRuntimeValueArg {
-                    source,
-                    semantic_ty,
-                    class,
-                    realization: RuntimeBoundaryValueRealization::UseValue,
-                }
-            }
-            RuntimeParamPlan::Boundary(boundary) => {
-                let source_class = self.locals[source.index()]
-                    .carrier
-                    .value_class()
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        panic!("cannot realize erased runtime value {source:?} for {boundary:?}")
-                    });
-                let realization = self.select_runtime_value_for_boundary(source, boundary);
-                SelectedRuntimeValueArg {
-                    source,
-                    semantic_ty,
-                    class: realization.class(&source_class),
-                    realization,
-                }
-            }
-        }
-    }
-
-    fn select_runtime_value_for_boundary(
-        &mut self,
-        src: RLocalId,
-        boundary: &RuntimeBoundarySpec<'db>,
-    ) -> RuntimeBoundaryValueRealization<'db> {
-        let mut source = self.runtime_boundary_value_source(src).unwrap_or_else(|| {
-            panic!("cannot realize erased runtime value {src:?} for boundary {boundary:?}")
-        });
-        if matches!(
-            boundary,
-            RuntimeBoundarySpec::BorrowLike {
-                access: BorrowAccess::ReadWrite,
-                allow,
-                ..
-            } if allow.allow_object
-        ) && let Some(address) = self.promote_runtime_aggregate_local_place(src)
-        {
-            source.address = Some(address);
-        }
-        RuntimeBoundaryValueSelector::select(source, boundary).unwrap_or_else(|| {
-            let source = self.locals[src.index()]
-                .carrier
-                .value_class()
-                .cloned()
-                .unwrap_or_else(|| panic!("cannot realize erased runtime value {src:?}"));
-            panic!(
-                "borrow-like boundary has no realizable synthetic materialization: source={source:?} boundary={boundary:?}"
-            )
-        })
-    }
-
-    fn runtime_boundary_value_source(
-        &self,
-        source: RLocalId,
-    ) -> Option<RuntimeBoundaryValueSource<'db>> {
-        Some(RuntimeBoundaryValueSource {
-            value: self.locals[source.index()].carrier.value_class()?.clone(),
-            address: self.runtime_boundary_address(source),
-        })
     }
 
     fn runtime_boundary_address(&self, source: RLocalId) -> Option<RuntimeBoundaryAddress<'db>> {
@@ -1150,9 +1092,9 @@ impl<'db> SyntheticBodyBuilder<'db> {
             .value_class()
             .cloned()
             .unwrap_or_else(|| panic!("cannot coerce erased runtime value {src:?} to {target:?}"));
-        let plan = RuntimeConversionPlanner::plan(self.db, source, target.clone())
-            .unwrap_or_else(|err| panic!("unsupported synthetic runtime coercion: {err:?}"));
-        emit_runtime_conversion_plan(self, bb, src, plan, semantic_ty)
+        let db = self.db;
+        emit_runtime_coercion(self, db, bb, src, source, target, semantic_ty)
+            .unwrap_or_else(|err| panic!("unsupported synthetic runtime coercion: {err:?}"))
     }
 
     fn push_builtin_value(

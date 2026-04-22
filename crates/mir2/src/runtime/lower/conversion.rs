@@ -95,6 +95,25 @@ pub(crate) fn emit_runtime_conversion_plan<'db>(
     value
 }
 
+pub(crate) fn emit_runtime_coercion<'db>(
+    emitter: &mut impl RuntimeConversionEmitter<'db>,
+    db: &'db dyn MirDb,
+    bb: RBlockId,
+    value: RLocalId,
+    source: RuntimeClass<'db>,
+    target: &RuntimeClass<'db>,
+    semantic_ty: TyId<'db>,
+) -> Result<RLocalId, RuntimeConversionError<'db>> {
+    let plan = RuntimeConversionPlanner::plan(db, source, target.clone())?;
+    Ok(emit_runtime_conversion_plan(
+        emitter,
+        bb,
+        value,
+        plan,
+        semantic_ty,
+    ))
+}
+
 fn emit_runtime_conversion_step<'db>(
     emitter: &mut impl RuntimeConversionEmitter<'db>,
     bb: RBlockId,

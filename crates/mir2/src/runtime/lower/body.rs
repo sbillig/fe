@@ -59,10 +59,7 @@ use super::{
     consts::{
         const_scalar_for_class, const_scalar_from_value, enum_tag_scalar, lower_const_region,
     },
-    conversion::{
-        RuntimeConversionEmitter, RuntimeConversionError, RuntimeConversionPlanner,
-        emit_runtime_conversion_plan,
-    },
+    conversion::{RuntimeConversionEmitter, RuntimeConversionError, emit_runtime_coercion},
     infer::{InferenceResult, LocalStateInferer, merge_runtime_class},
     interface::runtime_param_locals,
     layout::{
@@ -75,6 +72,7 @@ use super::{
         SelectedRuntimeArg, SelectedRuntimeValueArg, emit_selected_runtime_value_arg,
     },
     returns::RuntimeReturnAnalysisCx,
+    tuple::{RuntimeTupleFieldEmitter, extract_runtime_tuple_fields, memory_fallback_class},
     type_info::{
         RuntimeTypeEnv, boundary_spec_for_ty_in_env, effect_handle_class_for_ty_in_context,
         provider_class_for_target_in_env, stored_class_for_ty_in_context,
@@ -346,6 +344,32 @@ impl<'db> RuntimeBoundaryValueEmitter<'db> for RmirEmitter<'db> {
                 expr: RExpr::Use(src),
             },
         );
+    }
+}
+
+impl<'db> RuntimeTupleFieldEmitter<'db> for RmirEmitter<'db> {
+    fn db(&self) -> &'db dyn MirDb {
+        self.db
+    }
+
+    fn tuple_value_class(&self, tuple: RLocalId) -> Option<RuntimeClass<'db>> {
+        self.value_class(tuple).cloned()
+    }
+
+    fn tuple_local_root(&self, tuple: RLocalId) -> RuntimeLocalRoot<'db> {
+        self.locals[tuple.index()].root.clone()
+    }
+
+    fn alloc_tuple_temp(
+        &mut self,
+        semantic_ty: TyId<'db>,
+        carrier: RuntimeCarrier<'db>,
+    ) -> RLocalId {
+        self.alloc_runtime_temp(semantic_ty, carrier)
+    }
+
+    fn push_tuple_stmt(&mut self, bb: RBlockId, stmt: RStmt<'db>) {
+        self.push_stmt(bb, stmt);
     }
 }
 
@@ -2587,59 +2611,12 @@ impl<'db> RmirEmitter<'db> {
 
     fn extract_tuple_fields(&mut self, bb: RBlockId, tuple: RLocalId) -> Vec<RLocalId> {
         let tuple_ty = self.locals[tuple.index()].semantic_ty;
-        let Some(tuple_class) = self.value_class(tuple).cloned() else {
-            return Vec::new();
-        };
-        let tuple_root = match tuple_class {
-            RuntimeClass::Ref { .. } => PlaceRoot::Ref(tuple),
-            RuntimeClass::AggregateValue { layout } => match &self.locals[tuple.index()].root {
-                RuntimeLocalRoot::Slot(_) => PlaceRoot::Slot(tuple),
-                RuntimeLocalRoot::Ref(_) => PlaceRoot::Ref(tuple),
-                RuntimeLocalRoot::Ptr { .. } | RuntimeLocalRoot::None => {
-                    let handle = self.alloc_runtime_temp(
-                        tuple_ty,
-                        RuntimeCarrier::Value(RuntimeClass::object_ref(layout)),
-                    );
-                    self.push_stmt(
-                        bb,
-                        RStmt::Assign {
-                            dst: handle,
-                            expr: RExpr::MaterializeToObject { src: tuple },
-                        },
-                    );
-                    PlaceRoot::Ref(handle)
-                }
-            },
-            RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => {
-                panic!("tuple extraction requires aggregate carrier")
-            }
-        };
-        tuple_ty
-            .field_types(self.db)
-            .iter()
-            .enumerate()
-            .map(|(idx, field_ty)| {
-                let class = self
-                    .top_level_class_for_ty(*field_ty, AddressSpaceKind::Memory)
-                    .unwrap_or(RuntimeClass::RawAddr {
-                        space: AddressSpaceKind::Memory,
-                        target: None,
-                    });
-                let dst = self.alloc_runtime_temp(*field_ty, RuntimeCarrier::Value(class));
-                let place = RuntimePlace {
-                    root: tuple_root.clone(),
-                    path: vec![PlaceElem::Field(FieldIndex(idx as u16))].into_boxed_slice(),
-                };
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::Load { place },
-                    },
-                );
-                dst
-            })
-            .collect()
+        let field_count = tuple_ty.field_types(self.db).len();
+        extract_runtime_tuple_fields(self, bb, tuple, tuple_ty, 0..field_count, |emitter, ty| {
+            emitter
+                .top_level_class_for_ty(ty, AddressSpaceKind::Memory)
+                .unwrap_or_else(memory_fallback_class)
+        })
     }
 
     fn lower_numeric_intrinsic_call(
@@ -3552,10 +3529,10 @@ impl<'db> RmirEmitter<'db> {
                     self.locals,
                 )
             });
-        let plan = RuntimeConversionPlanner::plan(self.db, source, target.clone())
-            .unwrap_or_else(|err| self.panic_unsupported_conversion(src, err));
         let semantic_ty = self.locals[src.index()].semantic_ty;
-        emit_runtime_conversion_plan(self, bb, src, plan, semantic_ty)
+        let db = self.db;
+        emit_runtime_coercion(self, db, bb, src, source, target, semantic_ty)
+            .unwrap_or_else(|err| self.panic_unsupported_conversion(src, err))
     }
 
     fn panic_unsupported_conversion(&self, src: RLocalId, err: RuntimeConversionError<'db>) -> ! {
