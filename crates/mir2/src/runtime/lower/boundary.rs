@@ -926,3 +926,296 @@ pub(crate) fn default_by_place_boundary<'db>(
         allow: default_borrow_transport_set(BorrowAccess::ReadWrite, space),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use cranelift_entity::EntityRef;
+    use driver::DriverDataBase;
+    use hir::analysis::ty::ty_def::TyId;
+
+    use crate::runtime::{
+        EnumLayoutKey, EnumVariantLayout, LayoutKey, PlaceRoot, RLocalId, ScalarClass, ScalarRepr,
+        ScalarRole, StructLayout,
+    };
+
+    use super::*;
+
+    fn word_class<'db>() -> RuntimeClass<'db> {
+        RuntimeClass::Scalar(ScalarClass {
+            repr: ScalarRepr::Int {
+                bits: 256,
+                signed: false,
+            },
+            role: ScalarRole::Plain,
+        })
+    }
+
+    fn bool_class<'db>() -> RuntimeClass<'db> {
+        RuntimeClass::Scalar(ScalarClass {
+            repr: ScalarRepr::Bool,
+            role: ScalarRole::Plain,
+        })
+    }
+
+    fn raw_addr_class<'db>(space: AddressSpaceKind) -> RuntimeClass<'db> {
+        RuntimeClass::RawAddr {
+            space,
+            target: None,
+        }
+    }
+
+    fn ref_class<'db>(
+        pointee: RuntimeClass<'db>,
+        kind: RefKind<'db>,
+        view: RefView<'db>,
+    ) -> RuntimeClass<'db> {
+        RuntimeClass::Ref {
+            pointee: Box::new(pointee),
+            kind,
+            view,
+        }
+    }
+
+    fn provider_ref<'db>(
+        db: &'db dyn MirDb,
+        pointee: RuntimeClass<'db>,
+        space: AddressSpaceKind,
+    ) -> RuntimeClass<'db> {
+        ref_class(
+            pointee,
+            RefKind::Provider {
+                provider_ty: TyId::unit(db),
+                space,
+            },
+            RefView::Whole,
+        )
+    }
+
+    fn source_with_value<'db>(value: RuntimeClass<'db>) -> RuntimeValueSource<'db> {
+        RuntimeValueSource {
+            value,
+            address: None,
+        }
+    }
+
+    fn source_with_address<'db>(
+        value: RuntimeClass<'db>,
+        address: RuntimeClass<'db>,
+    ) -> RuntimeValueSource<'db> {
+        RuntimeValueSource {
+            value,
+            address: Some(RuntimeValueAddress {
+                place: RuntimePlace {
+                    root: PlaceRoot::Slot(RLocalId::new(0)),
+                    path: Box::default(),
+                },
+                class: address,
+            }),
+        }
+    }
+
+    fn scalar_borrow_boundary<'db>(
+        access: BorrowAccess,
+        default_space: AddressSpaceKind,
+    ) -> RuntimeBoundarySpec<'db> {
+        RuntimeBoundarySpec::BorrowLike {
+            pointee: word_class(),
+            access,
+            allow: default_borrow_transport_set(access, default_space),
+        }
+    }
+
+    fn test_struct_layout<'db>(db: &'db dyn MirDb) -> LayoutId<'db> {
+        LayoutId::new(
+            db,
+            LayoutKey::Struct(StructLayout {
+                source_ty: TyId::unit(db),
+                fields: vec![word_class()].into(),
+            }),
+        )
+    }
+
+    fn test_enum_variant<'db>(db: &'db dyn MirDb) -> crate::runtime::VariantId<'db> {
+        let enum_layout = LayoutId::new(
+            db,
+            LayoutKey::Enum(EnumLayoutKey {
+                source_ty: TyId::unit(db),
+                variants: vec![EnumVariantLayout {
+                    name: "Variant".to_string(),
+                    fields: vec![word_class()].into(),
+                }]
+                .into(),
+            }),
+        );
+        crate::runtime::VariantId {
+            enum_layout,
+            index: 0,
+        }
+    }
+
+    #[test]
+    fn exact_transport_requires_transport_match_but_exact_shape_preserves_source_transport() {
+        let source = raw_addr_class(AddressSpaceKind::Storage);
+        let target = raw_addr_class(AddressSpaceKind::Memory);
+        let exact_transport = RuntimeBoundarySpec::ExactTransport(target.clone());
+        let exact_shape = RuntimeBoundarySpec::ExactShape(target.clone());
+
+        assert!(!BoundaryMatcher::class_satisfies_boundary(
+            &source,
+            &exact_transport
+        ));
+        assert!(BoundaryMatcher::class_satisfies_boundary(
+            &source,
+            &exact_shape
+        ));
+        assert_eq!(
+            RuntimeValueUsePlanner::select(source_with_value(source.clone()), &exact_transport),
+            Some(RuntimeValueUsePlan::CoerceValue { target })
+        );
+        let shape_plan =
+            RuntimeValueUsePlanner::select(source_with_value(source.clone()), &exact_shape)
+                .expect("exact-shape-compatible source should select a plan");
+        assert_eq!(shape_plan, RuntimeValueUsePlan::UseValue);
+        assert_eq!(shape_plan.class(&source), source);
+    }
+
+    #[test]
+    fn exact_shape_ref_matching_ignores_provider_space_but_not_view_or_pointee() {
+        let db = DriverDataBase::default();
+        let boundary = RuntimeBoundarySpec::ExactShape(provider_ref(
+            &db,
+            word_class(),
+            AddressSpaceKind::Memory,
+        ));
+
+        assert!(BoundaryMatcher::class_satisfies_boundary(
+            &provider_ref(&db, word_class(), AddressSpaceKind::Storage),
+            &boundary
+        ));
+        assert!(!BoundaryMatcher::class_satisfies_boundary(
+            &provider_ref(&db, bool_class(), AddressSpaceKind::Storage),
+            &boundary
+        ));
+        assert!(!BoundaryMatcher::class_satisfies_boundary(
+            &ref_class(
+                word_class(),
+                RefKind::Provider {
+                    provider_ty: TyId::unit(&db),
+                    space: AddressSpaceKind::Storage,
+                },
+                RefView::EnumVariant(test_enum_variant(&db))
+            ),
+            &boundary
+        ));
+        assert!(!BoundaryMatcher::class_satisfies_boundary(
+            &provider_ref(&db, word_class(), AddressSpaceKind::Storage),
+            &RuntimeBoundarySpec::ExactTransport(provider_ref(
+                &db,
+                word_class(),
+                AddressSpaceKind::Memory
+            ))
+        ));
+    }
+
+    #[test]
+    fn borrow_like_boundary_respects_transport_allowlist() {
+        let db = DriverDataBase::default();
+        let boundary = scalar_borrow_boundary(BorrowAccess::ReadWrite, AddressSpaceKind::Storage);
+        let cases = [
+            (
+                "object ref",
+                ref_class(word_class(), RefKind::Object, RefView::Whole),
+                true,
+            ),
+            (
+                "storage provider",
+                provider_ref(&db, word_class(), AddressSpaceKind::Storage),
+                true,
+            ),
+            (
+                "memory provider",
+                provider_ref(&db, word_class(), AddressSpaceKind::Memory),
+                true,
+            ),
+            (
+                "calldata provider",
+                provider_ref(&db, word_class(), AddressSpaceKind::Calldata),
+                false,
+            ),
+            (
+                "const ref",
+                ref_class(word_class(), RefKind::Const, RefView::Whole),
+                false,
+            ),
+            ("raw addr", raw_addr_class(AddressSpaceKind::Memory), true),
+            ("plain scalar", word_class(), false),
+            (
+                "variant view",
+                ref_class(
+                    word_class(),
+                    RefKind::Object,
+                    RefView::EnumVariant(test_enum_variant(&db)),
+                ),
+                false,
+            ),
+        ];
+
+        for (name, class, expected) in cases {
+            assert_eq!(
+                BoundaryMatcher::class_satisfies_boundary(&class, &boundary),
+                expected,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn borrow_like_planner_prefers_compatible_address_then_scalar_slot_materialization() {
+        let db = DriverDataBase::default();
+        let boundary = scalar_borrow_boundary(BorrowAccess::ReadWrite, AddressSpaceKind::Storage);
+        let address = provider_ref(&db, word_class(), AddressSpaceKind::Storage);
+
+        assert_eq!(
+            RuntimeValueUsePlanner::select(
+                source_with_address(word_class(), address.clone()),
+                &boundary
+            ),
+            Some(RuntimeValueUsePlan::AddrOfRuntimePlace {
+                place: RuntimePlace {
+                    root: PlaceRoot::Slot(RLocalId::new(0)),
+                    path: Box::default(),
+                },
+                class: address,
+            })
+        );
+        assert_eq!(
+            RuntimeValueUsePlanner::select(source_with_value(word_class()), &boundary),
+            Some(RuntimeValueUsePlan::MaterializeValue {
+                materialization: RuntimeValueMaterialization::RawAddrSlot {
+                    pointee: word_class(),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn aggregate_borrow_like_materializes_object_ref() {
+        let db = DriverDataBase::default();
+        let layout = test_struct_layout(&db);
+        let boundary = RuntimeBoundarySpec::BorrowLike {
+            pointee: RuntimeClass::AggregateValue { layout },
+            access: BorrowAccess::ReadWrite,
+            allow: default_borrow_transport_set(BorrowAccess::ReadWrite, AddressSpaceKind::Memory),
+        };
+
+        assert_eq!(
+            RuntimeValueUsePlanner::select(
+                source_with_value(RuntimeClass::AggregateValue { layout }),
+                &boundary,
+            ),
+            Some(RuntimeValueUsePlan::MaterializeValue {
+                materialization: RuntimeValueMaterialization::ObjectRef { layout },
+            })
+        );
+    }
+}
