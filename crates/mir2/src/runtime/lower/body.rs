@@ -3,11 +3,10 @@ use hir::analysis::{
     semantic::{
         EffectProviderSubst, FieldIndex, GenericSubst, ImplEnv, SBlockId, SConst, SLocalId,
         SemConstId, SemConstScalar, SemConstValue, SemanticCalleeRef, SemanticCodeRegionRef,
-        SemanticInstance, SemanticInstanceKey, SemanticLocalKind, VariantIndex,
+        SemanticInstance, SemanticInstanceKey, VariantIndex,
         borrowck::{
-            NBorrowRoot, NEffectArg, NExpr, NLocalOrigin, NOperand, NSPlace, NSPlaceRoot, NSStmt,
-            NSStmtKind, NSTerminator, NSTerminatorKind, NormalizedSemanticBody,
-            normalize_semantic_body,
+            NBorrowRoot, NEffectArg, NExpr, NOperand, NSPlace, NSPlaceRoot, NSStmt, NSStmtKind,
+            NSTerminator, NSTerminatorKind, NormalizedSemanticBody, normalize_semantic_body,
         },
         get_or_build_semantic_instance, reify_runtime_const_for_ty, sem_const_ty,
         semantic_may_return_normally,
@@ -3824,29 +3823,11 @@ impl<'db> RmirEmitter<'db> {
         operand: NOperand,
         target: &RuntimeClass<'db>,
     ) -> RLocalId {
-        if matches!(target, RuntimeClass::AggregateValue { .. })
-            && self.with_current_body_cx(|cx| {
-                cx.env.boundary_source_transport_sensitive(operand.local)
-            })
-            && let Some(value) = self.actual_aggregate_value_from_runtime_source(bb, operand.local)
-        {
-            return self.coerce_value_if_needed(bb, value, target);
-        }
-        if !target.is_transport()
-            && let Some(value) = self.materialize_ordinary_direct_value(bb, operand.local)
-        {
-            return self.coerce_value_if_needed(bb, value, target);
-        }
-        if target.is_transport() {
-            if let Some(value) = self.handle_like_semantic_value(operand.local) {
-                return self.coerce_value_if_needed(bb, value, target);
-            }
-            if let Some(value) = self.addr_of_semantic_operand_for_class(bb, operand, target) {
-                return value;
-            }
-        }
-        let value = self.read_semantic_operand(bb, operand);
-        self.coerce_value_if_needed(bb, value, target)
+        let selected = self.with_current_body_cx(|cx| {
+            RuntimeArgSelector::new(cx.env, cx.carriers, None)
+                .selected_semantic_operand_for_class(operand, target)
+        });
+        self.lower_selected_runtime_arg(bb, operand, &selected)
     }
 
     fn actual_aggregate_value_from_runtime_source(
@@ -3878,32 +3859,15 @@ impl<'db> RmirEmitter<'db> {
         Some(self.coerce_value_if_needed(bb, value, &actual))
     }
 
-    fn materialize_ordinary_direct_value(
+    fn materialize_direct_value(
         &mut self,
         bb: RBlockId,
         local: SLocalId,
+        materialized_class: &RuntimeClass<'db>,
     ) -> Option<RLocalId> {
-        let local_data = self.semantic_body.local(local)?;
-        if !matches!(
-            (&local_data.facts.interface, &local_data.facts.origin),
-            (
-                SemanticLocalKind::DirectValue,
-                NLocalOrigin::SelfRooted | NLocalOrigin::AliasedPlace
-            )
-        ) {
-            return None;
-        }
-        let current = self.semantic_value_class(local)?;
-        let target = self.with_current_body_cx(|cx| {
-            cx.selected_materialized_value(local)
-                .map(|selected| selected.class)
-        })?;
-        if current == target {
-            return None;
-        }
         let place = self
             .try_semantic_place(bb, local)
-            .or_else(|| self.place_from_direct_value_transport(local, &target))?;
+            .or_else(|| self.place_from_direct_value_transport(local, materialized_class))?;
         let place_class = self.project_place_class(&place);
         let temp = self.alloc_runtime_temp(
             self.locals[local.index()].semantic_ty,
@@ -3916,7 +3880,7 @@ impl<'db> RmirEmitter<'db> {
                 expr: RExpr::Load { place },
             },
         );
-        Some(self.coerce_value_if_needed(bb, temp, &target))
+        Some(self.coerce_value_if_needed(bb, temp, materialized_class))
     }
 
     fn place_from_direct_value_transport(
@@ -3967,60 +3931,29 @@ impl<'db> RmirEmitter<'db> {
             RuntimeArgSelector::new(cx.env, cx.carriers, None)
                 .selected_semantic_operand_for_boundary(operand, boundary)
         });
-        let value = RuntimeArgLowerer::new(self, bb).lower_one(&selected);
+        self.lower_selected_runtime_arg(bb, operand, &selected)
+    }
+
+    fn lower_selected_runtime_arg(
+        &mut self,
+        bb: RBlockId,
+        operand: NOperand,
+        selected: &SelectedRuntimeArg<'db>,
+    ) -> RLocalId {
+        let value = RuntimeArgLowerer::new(self, bb).lower_one(selected);
         let Some(class) = self.value_class(value).cloned() else {
             panic!(
-                "selected boundary operand lowered without a runtime class: owner={:?}; operand={operand:?}; selected={selected:?}; value={value:?}",
+                "selected runtime argument lowered without a runtime class: owner={:?}; operand={operand:?}; selected={selected:?}; value={value:?}",
                 self.current_semantic_key(),
             );
         };
         assert_eq!(
             class,
             selected.class,
-            "selected boundary operand class mismatch: owner={:?}; operand={operand:?}; selected={selected:?}; value={value:?}",
+            "selected runtime argument class mismatch: owner={:?}; operand={operand:?}; selected={selected:?}; value={value:?}",
             self.current_semantic_key(),
         );
         value
-    }
-
-    fn addr_of_semantic_operand_for_class(
-        &mut self,
-        bb: RBlockId,
-        operand: NOperand,
-        target: &RuntimeClass<'db>,
-    ) -> Option<RLocalId> {
-        if !target.is_transport() {
-            return None;
-        }
-        let local = operand.local;
-        if let Some(place) = nonself_backing_value_place(&self.semantic_body, local).cloned()
-            && let Some(place) = self.try_lower_place(bb, &place)
-        {
-            return Some(self.lower_place_addr_of_for_class(
-                self.locals[local.index()].semantic_ty,
-                bb,
-                place,
-                target.clone(),
-            ));
-        }
-        if let Some(value) = self.handle_like_semantic_value(local) {
-            return Some(self.coerce_value_if_needed(bb, value, target));
-        }
-        if matches!(
-            self.semantic_local_lowering(local),
-            RuntimeLocalLowering::DirectValue
-                | RuntimeLocalLowering::PlaceCarrier { .. }
-                | RuntimeLocalLowering::PlaceBoundValue { .. }
-        ) && let Some(place) = self.try_semantic_place(bb, local)
-        {
-            return Some(self.lower_place_addr_of_for_class(
-                self.locals[local.index()].semantic_ty,
-                bb,
-                place,
-                target.clone(),
-            ));
-        }
-        None
     }
 
     fn handle_like_semantic_value(&self, local: SLocalId) -> Option<RLocalId> {
@@ -4510,12 +4443,27 @@ impl<'emitter, 'db> RuntimeArgLowerer<'emitter, 'db> {
 
     fn lower_one(&mut self, selected: &SelectedRuntimeArg<'db>) -> RLocalId {
         match (&selected.source, &selected.use_plan) {
-            (RuntimeArgSource::SemanticOperand(operand), RuntimeValueUsePlan::UseValue) => self
-                .emitter
-                .lower_semantic_operand_for_class(self.bb, *operand, &selected.class),
             (RuntimeArgSource::SemanticOperand(operand), use_plan) => {
                 let value = self.emitter.read_semantic_operand(self.bb, *operand);
                 self.apply_use_plan(value, use_plan.clone(), self.semantic_ty(*operand))
+            }
+            (
+                RuntimeArgSource::DirectValueMaterialization {
+                    local,
+                    materialized_class,
+                },
+                use_plan,
+            ) => {
+                let Some(value) =
+                    self.emitter
+                        .materialize_direct_value(self.bb, *local, materialized_class)
+                else {
+                    panic!(
+                        "selected direct-value materialization was not lowerable: caller={:?}; local={local:?}; selected={selected:?}",
+                        self.emitter.current_semantic_key(),
+                    )
+                };
+                self.apply_use_plan(value, use_plan.clone(), self.semantic_local_ty(*local))
             }
             (RuntimeArgSource::RuntimeValue { local }, use_plan) => {
                 let value = self.emitter.runtime_value(*local);
@@ -4555,6 +4503,28 @@ impl<'emitter, 'db> RuntimeArgLowerer<'emitter, 'db> {
                 let value = self
                     .emitter
                     .load_runtime_place_value(self.bb, place, *semantic_ty);
+                self.apply_use_plan(value, use_plan.clone(), *semantic_ty)
+            }
+            (
+                RuntimeArgSource::SemanticPlaceAddress { local, semantic_ty },
+                RuntimeValueUsePlan::UseValue,
+            ) => {
+                let place = self.emitter.semantic_place(self.bb, *local);
+                self.emitter.lower_place_addr_of_for_class(
+                    *semantic_ty,
+                    self.bb,
+                    place,
+                    selected.class.clone(),
+                )
+            }
+            (RuntimeArgSource::SemanticPlaceAddress { local, semantic_ty }, use_plan) => {
+                let place = self.emitter.semantic_place(self.bb, *local);
+                let value = self.emitter.lower_place_addr_of_for_class(
+                    *semantic_ty,
+                    self.bb,
+                    place,
+                    selected.class.clone(),
+                );
                 self.apply_use_plan(value, use_plan.clone(), *semantic_ty)
             }
             (RuntimeArgSource::AggregateFromRuntimeSource { local }, use_plan) => {

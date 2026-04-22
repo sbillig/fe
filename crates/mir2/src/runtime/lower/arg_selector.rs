@@ -2,7 +2,7 @@ use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
         NBorrowRoot, NEffectArg, NEffectArgValue, NOperand, NSPlace, NSPlaceRoot, ReadMode,
-        SLocalId, SemanticLocalKind,
+        SLocalId, SemanticLocalKind, borrowck::NLocalOrigin,
     },
     ty::ty_def::TyId,
 };
@@ -19,8 +19,9 @@ use super::{
         CompiledEffectValuePlan, CompiledMaterializationPlan, CompiledValuePassPlan,
     },
     classify::{
-        BodyEnv, InferClassCache, carrier_value_class, provider_root_space,
-        ref_class_for_place_result, runtime_class_for_direct_value_provider_in_context,
+        BodyEnv, InferClassCache, carrier_value_class, nonself_backing_value_place,
+        provider_root_space, ref_class_for_place_result,
+        runtime_class_for_direct_value_provider_in_context,
         runtime_class_for_effect_binding_provider_in_context, snapshot_source_place,
     },
     realize::{RuntimeArgSource, SelectedRuntimeArg},
@@ -119,11 +120,11 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
             .specialize_boundary_for_source(self.carriers, local, boundary);
         match &boundary {
             RuntimeBoundarySpec::ExactTransport(target) => {
-                SelectedRuntimeArg::semantic_operand(arg, target.clone())
+                self.selected_semantic_operand_for_class(arg, target)
             }
             RuntimeBoundarySpec::ExactShape(target) => self
                 .select_runtime_boundary_compatible_value(local, &boundary)
-                .unwrap_or_else(|| SelectedRuntimeArg::semantic_operand(arg, target.clone())),
+                .unwrap_or_else(|| self.selected_semantic_operand_for_class(arg, target)),
             RuntimeBoundarySpec::BorrowLike { .. } => self
                 .select_runtime_boundary_compatible_value(local, &boundary)
                 .or_else(|| SelectedRuntimeArg::materialized_semantic_operand(arg, &boundary))
@@ -134,6 +135,37 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
                     )
                 }),
         }
+    }
+
+    pub(super) fn selected_semantic_operand_for_class(
+        &mut self,
+        arg: NOperand,
+        target: &RuntimeClass<'db>,
+    ) -> SelectedRuntimeArg<'db> {
+        let local = arg.local;
+        if matches!(target, RuntimeClass::AggregateValue { .. })
+            && self.env.boundary_source_transport_sensitive(local)
+            && self
+                .env
+                .actual_aggregate_class_for_source(self.carriers, local)
+                .is_some()
+        {
+            return SelectedRuntimeArg::aggregate_from_runtime_source(local, target.clone());
+        }
+        if !target.is_transport()
+            && let Some(selected) = self.select_direct_value_materialization(local, target)
+        {
+            return selected;
+        }
+        if target.is_transport() {
+            if self.handle_like_semantic_value_is_available(local) {
+                return SelectedRuntimeArg::handle_like_value(local, target.clone());
+            }
+            if let Some(selected) = self.select_semantic_place_address_for_class(arg, target) {
+                return selected;
+            }
+        }
+        SelectedRuntimeArg::semantic_operand(arg, target.clone())
     }
 
     pub(super) fn selected_value_pass_plan(
@@ -149,11 +181,11 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
             }
             CompiledValuePassPlan::ActualValue => self.select_actual_operand_value(local, arg),
             CompiledValuePassPlan::ExactTransport { exact } => {
-                Some(SelectedRuntimeArg::semantic_operand(arg, exact.clone()))
+                Some(self.selected_semantic_operand_for_class(arg, exact))
             }
             CompiledValuePassPlan::ExactShapeAggregate { exact } => self
                 .select_actual_aggregate_value(local)
-                .or_else(|| Some(SelectedRuntimeArg::semantic_operand(arg, exact.clone()))),
+                .or_else(|| Some(self.selected_semantic_operand_for_class(arg, exact))),
             CompiledValuePassPlan::ExactShapeRefLike { boundary } => self
                 .select_exact_shape_ref_like_value(local, boundary)
                 .or_else(|| self.exact_shape_ref_like_placeholder(local, boundary)),
@@ -187,8 +219,141 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
             }
             CompiledMaterializationPlan::AggregateFromSourceOrFallback { fallback } => self
                 .select_actual_aggregate_value(local)
-                .or_else(|| Some(SelectedRuntimeArg::semantic_operand(arg, fallback.clone()))),
+                .or_else(|| Some(self.selected_semantic_operand_for_class(arg, fallback))),
         }
+    }
+
+    fn select_direct_value_materialization(
+        &self,
+        local: SLocalId,
+        target: &RuntimeClass<'db>,
+    ) -> Option<SelectedRuntimeArg<'db>> {
+        let local_data = self.env.body().locals.get(local.index())?;
+        if !matches!(
+            (&local_data.facts.interface, &local_data.facts.origin),
+            (
+                SemanticLocalKind::DirectValue,
+                NLocalOrigin::SelfRooted | NLocalOrigin::AliasedPlace
+            )
+        ) {
+            return None;
+        }
+        let current = self.env.semantic_value_class(self.carriers, local)?;
+        let materialized_class = self.materialized_value_class(local)?;
+        if current == materialized_class
+            || !self.direct_value_materialization_is_lowerable(local, &materialized_class)
+        {
+            return None;
+        }
+        Some(SelectedRuntimeArg::direct_value_materialization(
+            local,
+            materialized_class,
+            target.clone(),
+        ))
+    }
+
+    fn materialized_value_class(&self, local: SLocalId) -> Option<RuntimeClass<'db>> {
+        match self.env.materialization_plan(local)? {
+            CompiledMaterializationPlan::Erased => None,
+            CompiledMaterializationPlan::SemanticValue => {
+                self.env.semantic_value_class(self.carriers, local)
+            }
+            CompiledMaterializationPlan::AggregateFromSource => self
+                .env
+                .actual_aggregate_class_for_source(self.carriers, local),
+            CompiledMaterializationPlan::AggregateFromSourceOrFallback { fallback } => self
+                .env
+                .actual_aggregate_class_for_source(self.carriers, local)
+                .or_else(|| Some(fallback.clone())),
+        }
+    }
+
+    fn direct_value_materialization_is_lowerable(
+        &self,
+        local: SLocalId,
+        materialized_class: &RuntimeClass<'db>,
+    ) -> bool {
+        let Some(local_data) = self.env.body().locals.get(local.index()) else {
+            return false;
+        };
+        local_data
+            .backing_place()
+            .is_some_and(|place| self.place_is_lowerable(place))
+            || self.direct_value_transport_place_is_lowerable(local, materialized_class)
+    }
+
+    fn direct_value_transport_place_is_lowerable(
+        &self,
+        local: SLocalId,
+        materialized_class: &RuntimeClass<'db>,
+    ) -> bool {
+        match carrier_value_class(local, self.carriers) {
+            Some(RuntimeClass::Ref { .. })
+            | Some(RuntimeClass::RawAddr {
+                target: Some(_), ..
+            }) => true,
+            Some(RuntimeClass::RawAddr { target: None, .. }) => {
+                matches!(materialized_class, RuntimeClass::Scalar(_))
+            }
+            Some(RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. }) | None => false,
+        }
+    }
+
+    fn handle_like_semantic_value_is_available(&self, local: SLocalId) -> bool {
+        if carrier_value_class(local, self.carriers).is_some_and(|class| class.is_transport()) {
+            return true;
+        }
+        self.env
+            .body()
+            .locals
+            .get(local.index())
+            .and_then(|local_data| local_data.facts.origin.root_provider())
+            .is_some_and(|provider| self.provider_place_root_is_lowerable(provider))
+    }
+
+    fn select_semantic_place_address_for_class(
+        &self,
+        arg: NOperand,
+        target: &RuntimeClass<'db>,
+    ) -> Option<SelectedRuntimeArg<'db>> {
+        let local_data = self.env.body().locals.get(arg.local.index())?;
+        if let Some(place) = nonself_backing_value_place(self.env.body(), arg.local)
+            && self.place_is_lowerable(place)
+        {
+            return Some(SelectedRuntimeArg::place_addr(
+                place.clone(),
+                local_data.ty,
+                target.clone(),
+            ));
+        }
+        if matches!(
+            local_data.facts.interface,
+            SemanticLocalKind::DirectValue
+                | SemanticLocalKind::PlaceCarrier
+                | SemanticLocalKind::PlaceBoundValue
+        ) && self.semantic_operand_place_address_is_lowerable(arg.local, local_data)
+        {
+            return Some(SelectedRuntimeArg::semantic_place_addr(
+                arg.local,
+                local_data.ty,
+                target.clone(),
+            ));
+        }
+        None
+    }
+
+    fn semantic_operand_place_address_is_lowerable(
+        &self,
+        local: SLocalId,
+        local_data: &hir::analysis::semantic::borrowck::NSLocal<'db>,
+    ) -> bool {
+        (matches!(local_data.facts.interface, SemanticLocalKind::PlaceCarrier)
+            && carrier_value_class(local, self.carriers).is_some_and(|class| class.is_transport()))
+            || local_data
+                .facts
+                .origin
+                .root_provider()
+                .is_some_and(|provider| self.provider_place_root_is_lowerable(provider))
     }
 
     fn select_actual_operand_value(

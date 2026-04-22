@@ -44,7 +44,7 @@ use super::{
     arg_selector::RuntimeArgSelector,
     boundary::{
         BoundaryRef, BoundarySiteAllocator, BoundarySpecializationCache, RuntimeClassShape,
-        RuntimeValueUsePlan, StagedBoundary, aggregate_transport_depends_on_runtime_source,
+        StagedBoundary, aggregate_transport_depends_on_runtime_source,
         boundary_source_uses_transport_sensitive_aggregate, boundary_spec_for_ty_in_env,
         default_borrow_transport_set, specialize_boundary_for_aggregate_layout,
         specialize_boundary_for_runtime_source_in_context,
@@ -63,7 +63,7 @@ use super::{
         address_space_from_provider, project_field_class, project_index_class,
         project_variant_field_class,
     },
-    realize::{RuntimeArgSource, SelectedRuntimeArg},
+    realize::SelectedRuntimeArg,
     returns::RuntimeReturnAnalysisCx,
     type_info::{
         RuntimeTypeEnv, effect_handle_class_for_ty_in_context, provider_address_space_to_runtime,
@@ -1682,15 +1682,14 @@ fn selected_semantic_copy<'db>(
     local: SLocalId,
     class: RuntimeClass<'db>,
 ) -> SelectedRuntimeArg<'db> {
-    SelectedRuntimeArg {
-        class,
-        source: RuntimeArgSource::SemanticOperand(NOperand {
+    SelectedRuntimeArg::semantic_operand(
+        NOperand {
             local,
             origin: None,
             mode: ReadMode::Copy,
-        }),
-        use_plan: RuntimeValueUsePlan::UseValue,
-    }
+        },
+        class,
+    )
 }
 
 pub(super) fn nonself_backing_value_place<'a, 'db>(

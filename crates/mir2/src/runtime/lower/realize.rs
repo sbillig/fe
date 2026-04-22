@@ -23,6 +23,10 @@ pub(super) struct SelectedRuntimeArg<'db> {
 #[derive(Clone, Debug)]
 pub(super) enum RuntimeArgSource<'db> {
     SemanticOperand(NOperand),
+    DirectValueMaterialization {
+        local: SLocalId,
+        materialized_class: RuntimeClass<'db>,
+    },
     RuntimeValue {
         local: SLocalId,
     },
@@ -35,6 +39,10 @@ pub(super) enum RuntimeArgSource<'db> {
     },
     PlaceValue {
         place: NSPlace<'db>,
+        semantic_ty: TyId<'db>,
+    },
+    SemanticPlaceAddress {
+        local: SLocalId,
         semantic_ty: TyId<'db>,
     },
     AggregateFromRuntimeSource {
@@ -285,9 +293,28 @@ impl<'db> SelectedRuntimeArg<'db> {
 
     pub(super) fn semantic_operand(arg: NOperand, class: RuntimeClass<'db>) -> Self {
         Self {
-            class,
+            use_plan: RuntimeValueUsePlan::CoerceValue {
+                target: class.clone(),
+            },
             source: RuntimeArgSource::SemanticOperand(arg),
-            use_plan: RuntimeValueUsePlan::UseValue,
+            class,
+        }
+    }
+
+    pub(super) fn direct_value_materialization(
+        local: SLocalId,
+        materialized_class: RuntimeClass<'db>,
+        class: RuntimeClass<'db>,
+    ) -> Self {
+        Self {
+            use_plan: RuntimeValueUsePlan::CoerceValue {
+                target: class.clone(),
+            },
+            source: RuntimeArgSource::DirectValueMaterialization {
+                local,
+                materialized_class,
+            },
+            class,
         }
     }
 
@@ -322,6 +349,28 @@ impl<'db> SelectedRuntimeArg<'db> {
             },
             class,
             source: RuntimeArgSource::PlaceValue { place, semantic_ty },
+        }
+    }
+
+    pub(super) fn semantic_place_addr(
+        local: SLocalId,
+        semantic_ty: TyId<'db>,
+        class: RuntimeClass<'db>,
+    ) -> Self {
+        Self {
+            class,
+            source: RuntimeArgSource::SemanticPlaceAddress { local, semantic_ty },
+            use_plan: RuntimeValueUsePlan::UseValue,
+        }
+    }
+
+    pub(super) fn aggregate_from_runtime_source(local: SLocalId, class: RuntimeClass<'db>) -> Self {
+        Self {
+            use_plan: RuntimeValueUsePlan::CoerceValue {
+                target: class.clone(),
+            },
+            class,
+            source: RuntimeArgSource::AggregateFromRuntimeSource { local },
         }
     }
 
