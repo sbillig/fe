@@ -15,31 +15,52 @@ object "main" {
         r0 := 0x80
       }
       mstore(0x40, add(r0, 3))
+      let r2 := mload(0x40)
+      if iszero(r2) {
+        r2 := 0x80
+      }
+      mstore(0x40, add(r2, 2))
       let v1 := 0
       mstore(r0, mload(p0))
-      let t13 := and(byte(0, mload(r0)), 0xff)
-      let v6 := t13
-      switch and(v6, 0xff)
+      let t20 := and(byte(0, mload(r0)), 0xff)
+      let v7 := t20
+      switch and(v7, 0xff)
       case 0 {
-          let r2 := mload(0x40)
-          if iszero(r2) {
-            r2 := 0x80
-          }
-          mstore(0x40, add(r2, 2))
-          mstore(r2, mload(add(r0, 1)))
-          let v8 := r2
-          let v7 := add(v8, 1)
-          mstore(add(r2, 1), mload(v7))
-          let v9 := 0x01
-          let v4 := and(v9, 0xff)
-          let v10 := 0x01
-          v1 := and(v10, 0xff)
       }
       default {
-          let v11 := 0x00
-          let v5 := and(v11, 0xff)
-          let v12 := 0x00
-          v1 := and(v12, 0xff)
+          invalid()
+      }
+      mstore(r2, mload(add(r0, 1)))
+      let v9 := r2
+      let t22 := and(byte(0, mload(v9)), 0xff)
+      let v8 := t22
+      switch and(v8, 0xff)
+      case 0 {
+          let v11 := r2
+          let v10 := add(v11, 1)
+          mstore(add(r2, 1), mload(v10))
+          let v13 := add(r2, 1)
+          let t24 := and(byte(0, mload(v13)), 0xff)
+          let v12 := t24
+          switch and(v12, 0xff)
+          case 0 {
+              let v16 := 0x01
+              let v4 := and(v16, 0xff)
+              let v17 := 0x01
+              v1 := and(v17, 0xff)
+          }
+          default {
+              let v18 := 0x00
+              let v5 := and(v18, 0xff)
+              let v19 := 0x00
+              v1 := and(v19, 0xff)
+          }
+      }
+      default {
+          let v14 := 0x00
+          let v6 := and(v14, 0xff)
+          let v15 := 0x00
+          v1 := and(v15, 0xff)
       }
       ret := and(v1, 0xff)
       leave
@@ -50,49 +71,49 @@ object "main" {
         r0 := 0x80
       }
       mstore(0x40, add(r0, 2))
-      let r3 := mload(0x40)
-      if iszero(r3) {
-        r3 := 0x80
-      }
-      mstore(0x40, add(r3, 1))
       let v1 := 0
       mstore(r0, mload(p0))
-      let t20 := and(byte(0, mload(r0)), 0xff)
-      let v2 := eq(t20, 0)
-      if iszero(iszero(v2)) {
-        mstore(r3, mload(add(r0, 1)))
-        let v10 := r3
-        let t22 := and(byte(0, mload(v10)), 0xff)
-        let v4 := eq(t22, 0)
-        if iszero(iszero(v4)) {
-          let v13 := 0x01
-          let v6 := and(v13, 0xff)
-          let v14 := 0x01
-          v1 := and(v14, 0xff)
-        }
-        if iszero(iszero(iszero(v4))) {
-          let v19 := r3
-          let t23 := and(byte(0, mload(v19)), 0xff)
-          let v5 := eq(t23, 1)
-          if iszero(iszero(v5)) {
-            let v15 := 0x02
-            let v7 := and(v15, 0xff)
-            let v16 := 0x02
-            v1 := and(v16, 0xff)
+      let t18 := and(byte(0, mload(r0)), 0xff)
+      let v7 := t18
+      switch and(v7, 0xff)
+      case 0 {
+          let r2 := mload(0x40)
+          if iszero(r2) {
+            r2 := 0x80
           }
-          if iszero(iszero(iszero(v5))) {
-            let v17 := 0x03
-            let v8 := and(v17, 0xff)
-            let v18 := 0x03
-            v1 := and(v18, 0xff)
+          mstore(0x40, add(r2, 1))
+          mstore(r2, mload(add(r0, 1)))
+          let v9 := r2
+          let t20 := and(byte(0, mload(v9)), 0xff)
+          let v8 := t20
+          switch and(v8, 0xff)
+          case 0 {
+              let v12 := 0x01
+              let v3 := and(v12, 0xff)
+              let v13 := 0x01
+              v1 := and(v13, 0xff)
           }
-        }
+          case 1 {
+              let v14 := 0x02
+              let v4 := and(v14, 0xff)
+              let v15 := 0x02
+              v1 := and(v15, 0xff)
+          }
+          case 2 {
+              let v16 := 0x03
+              let v5 := and(v16, 0xff)
+              let v17 := 0x03
+              v1 := and(v17, 0xff)
+          }
+          default {
+              invalid()
+          }
       }
-      if iszero(iszero(iszero(v2))) {
-        let v11 := 0x00
-        let v9 := and(v11, 0xff)
-        let v12 := 0x00
-        v1 := and(v12, 0xff)
+      default {
+          let v10 := 0x00
+          let v6 := and(v10, 0xff)
+          let v11 := 0x00
+          v1 := and(v11, 0xff)
       }
       ret := and(v1, 0xff)
       leave
@@ -248,9 +269,9 @@ object "main" {
       mstore(0x40, add(r0, 2))
       let v1 := 0
       mstore(r0, mload(p0))
-      let t14 := and(byte(0, mload(r0)), 0xff)
-      let v7 := t14
-      switch and(v7, 0xff)
+      let t21 := and(byte(0, mload(r0)), 0xff)
+      let v8 := t21
+      switch and(v8, 0xff)
       case 0 {
           let r2 := mload(0x40)
           if iszero(r2) {
@@ -258,28 +279,49 @@ object "main" {
           }
           mstore(0x40, add(r2, 1))
           mstore(r2, mload(add(r0, 1)))
-          let v8 := 0x01
-          let v3 := and(v8, 0xff)
-          let v9 := 0x01
-          v1 := and(v9, 0xff)
+          let v10 := r2
+          let t23 := and(byte(0, mload(v10)), 0xff)
+          let v9 := t23
+          switch and(v9, 0xff)
+          case 0 {
+              let v13 := 0x01
+              let v3 := and(v13, 0xff)
+              let v14 := 0x01
+              v1 := and(v14, 0xff)
+          }
+          default {
+              let v15 := 0x00
+              let v4 := and(v15, 0xff)
+              let v16 := 0x00
+              v1 := and(v16, 0xff)
+          }
       }
       case 1 {
-          let r4 := mload(0x40)
-          if iszero(r4) {
-            r4 := 0x80
+          let r5 := mload(0x40)
+          if iszero(r5) {
+            r5 := 0x80
           }
-          mstore(0x40, add(r4, 1))
-          mstore(r4, mload(add(r0, 1)))
-          let v10 := 0x02
-          let v5 := and(v10, 0xff)
-          let v11 := 0x02
-          v1 := and(v11, 0xff)
+          mstore(0x40, add(r5, 1))
+          mstore(r5, mload(add(r0, 1)))
+          let v12 := r5
+          let t25 := and(byte(0, mload(v12)), 0xff)
+          let v11 := t25
+          switch and(v11, 0xff)
+          case 1 {
+              let v17 := 0x02
+              let v6 := and(v17, 0xff)
+              let v18 := 0x02
+              v1 := and(v18, 0xff)
+          }
+          default {
+              let v19 := 0x00
+              let v7 := and(v19, 0xff)
+              let v20 := 0x00
+              v1 := and(v20, 0xff)
+          }
       }
       default {
-          let v12 := 0x00
-          let v6 := and(v12, 0xff)
-          let v13 := 0x00
-          v1 := and(v13, 0xff)
+          invalid()
       }
       ret := and(v1, 0xff)
       leave
@@ -293,35 +335,37 @@ object "main" {
       let v1 := 0
       mstore(r0, mload(p0))
       let t15 := and(byte(0, mload(r0)), 0xff)
-      let v2 := eq(t15, 0)
-      if iszero(iszero(v2)) {
-        let r3 := mload(0x40)
-        if iszero(r3) {
-          r3 := 0x80
-        }
-        mstore(0x40, add(r3, 1))
-        mstore(r3, mload(add(r0, 1)))
-        let v8 := r3
-        let t17 := and(byte(0, mload(v8)), 0xff)
-        let v4 := eq(t17, 0)
-        if iszero(iszero(v4)) {
-          let v11 := 0x01
-          let v5 := and(v11, 0xff)
-          let v12 := 0x01
-          v1 := and(v12, 0xff)
-        }
-        if iszero(iszero(iszero(v4))) {
-          let v13 := 0x02
-          let v6 := and(v13, 0xff)
-          let v14 := 0x02
-          v1 := and(v14, 0xff)
-        }
+      let v6 := t15
+      switch and(v6, 0xff)
+      case 0 {
+          let r2 := mload(0x40)
+          if iszero(r2) {
+            r2 := 0x80
+          }
+          mstore(0x40, add(r2, 1))
+          mstore(r2, mload(add(r0, 1)))
+          let v8 := r2
+          let t17 := and(byte(0, mload(v8)), 0xff)
+          let v7 := t17
+          switch and(v7, 0xff)
+          case 0 {
+              let v11 := 0x01
+              let v3 := and(v11, 0xff)
+              let v12 := 0x01
+              v1 := and(v12, 0xff)
+          }
+          default {
+              let v13 := 0x02
+              let v4 := and(v13, 0xff)
+              let v14 := 0x02
+              v1 := and(v14, 0xff)
+          }
       }
-      if iszero(iszero(iszero(v2))) {
-        let v9 := 0x03
-        let v7 := and(v9, 0xff)
-        let v10 := 0x03
-        v1 := and(v10, 0xff)
+      default {
+          let v9 := 0x03
+          let v5 := and(v9, 0xff)
+          let v10 := 0x03
+          v1 := and(v10, 0xff)
       }
       ret := and(v1, 0xff)
       leave

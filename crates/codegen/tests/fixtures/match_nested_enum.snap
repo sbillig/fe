@@ -53,33 +53,41 @@ object "main" {
       }
       mstore(0x40, add(r0, 34))
       let v3 := 0
-      let v5 := 0
+      let v4 := 0
       mstore(r0, mload(p0))
       mstore(add(r0, 32), mload(add(p0, 32)))
       let t12 := and(byte(0, mload(r0)), 0xff)
-      let v4 := eq(t12, 0)
-      if iszero(iszero(v4)) {
-        v5 := add(r0, 1)
-        let t14 := and(byte(0, mload(v5)), 0xff)
-        let v6 := eq(t14, 0)
-        if iszero(iszero(v6)) {
-          let v10 := 0x00
-          let v7 := and(v10, 0xff)
-          let v11 := 0x00
-          v3 := and(v11, 0xff)
-        }
-        if iszero(iszero(iszero(v6))) {
-          let t15 := and(mload(add(v5, 1)), 0xff)
-          let v8 := t15
-          let v1 := and(v8, 0xff)
-          v3 := and(v1, 0xff)
-        }
+      let v8 := t12
+      switch and(v8, 0xff)
+      case 0 {
+          v4 := add(r0, 1)
+          let t14 := and(byte(0, mload(v4)), 0xff)
+          let v9 := t14
+          switch and(v9, 0xff)
+          case 0 {
+              let v10 := 0x00
+              let v5 := and(v10, 0xff)
+              let v11 := 0x00
+              v3 := and(v11, 0xff)
+          }
+          case 1 {
+              let t15 := and(mload(add(v4, 1)), 0xff)
+              let v6 := t15
+              let v1 := and(v6, 0xff)
+              v3 := and(v1, 0xff)
+          }
+          default {
+              invalid()
+          }
       }
-      if iszero(iszero(iszero(v4))) {
-        let t16 := and(mload(add(r0, 1)), 0xff)
-        let v9 := t16
-        let v2 := and(v9, 0xff)
-        v3 := and(v2, 0xff)
+      case 1 {
+          let t16 := and(mload(add(r0, 1)), 0xff)
+          let v7 := t16
+          let v2 := and(v7, 0xff)
+          v3 := and(v2, 0xff)
+      }
+      default {
+          invalid()
       }
       ret := and(v3, 0xff)
       leave

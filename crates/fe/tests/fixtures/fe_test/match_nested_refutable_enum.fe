@@ -1,0 +1,18 @@
+enum Maybe {
+    None,
+    Some(u8),
+}
+
+fn classify(value: own Maybe) -> u8 {
+    match value {
+        Maybe::Some(1) => 10
+        _ => 20
+    }
+}
+
+#[test]
+fn test_match_nested_refutable_enum() {
+    assert(classify(Maybe::Some(1)) == 10)
+    assert(classify(Maybe::Some(2)) == 20)
+    assert(classify(Maybe::None) == 20)
+}

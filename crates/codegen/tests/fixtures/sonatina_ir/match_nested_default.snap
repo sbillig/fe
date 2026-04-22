@@ -34,15 +34,15 @@ func private %deeply_nested_wildcard(v0.@__fe_layout_2) -> i8 {
         v2.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
         v3.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
         v4.enumtag(@__fe_layout_2) = enum.tag v0;
-        br_table v4 block6 (0.enumtag(@__fe_layout_2) block7);
+        br_table v4 block9 (0.enumtag(@__fe_layout_2) block10);
 
     block1:
         v21.@__fe_layout_2 = obj.load v1;
         v22.enumtag(@__fe_layout_2) = enum.tag v21;
-        br_table v22 block4 (0.enumtag(@__fe_layout_2) block3);
+        br_table v22 (0.enumtag(@__fe_layout_2) block3);
 
     block2:
-        v23.i8 = phi (1.i8 block36) (0.i8 block4);
+        v23.i8 = phi (0.i8 block5) (1.i8 block6) (0.i8 block7);
         return v23;
 
     block3:
@@ -50,164 +50,179 @@ func private %deeply_nested_wildcard(v0.@__fe_layout_2) -> i8 {
         enum.assert_variant v24 #Wrap;
         v25.@__fe_layout_1 = enum.extract v24 #Wrap 0.i256;
         v26.enumtag(@__fe_layout_1) = enum.tag v25;
-        br_table v26 block23 (0.enumtag(@__fe_layout_1) block24) (1.enumtag(@__fe_layout_1) block25);
+        br_table v26 block26 (0.enumtag(@__fe_layout_1) block27) (1.enumtag(@__fe_layout_1) block28);
 
     block4:
-        jump block2;
+        v35.@__fe_layout_1 = obj.load v2;
+        enum.assert_variant v35 #First;
+        v36.@__fe_layout_0 = enum.extract v35 #First 0.i256;
+        v37.objref<@__fe_layout_1> = enum.assert_variant_ref v2 #First;
+        v38.objref<@__fe_layout_0> = enum.proj v37 #First 0.i256;
+        v39.enumtag(@__fe_layout_0) = enum.tag v36;
+        br_table v39 block40 (0.enumtag(@__fe_layout_0) block41) (1.enumtag(@__fe_layout_0) block42) (2.enumtag(@__fe_layout_0) block43);
 
     block5:
-        jump block1;
+        jump block2;
 
     block6:
-        unreachable;
+        jump block2;
 
     block7:
-        enum.set_tag v1 #Wrap;
-        enum.assert_variant v0 #Wrap;
-        v7.objref<@__fe_layout_1> = enum.proj v1 #Wrap 0.i256;
-        v8.@__fe_layout_1 = enum.extract v0 #Wrap 0.i256;
-        v9.enumtag(@__fe_layout_1) = enum.tag v8;
-        br_table v9 block9 (0.enumtag(@__fe_layout_1) block10) (1.enumtag(@__fe_layout_1) block11);
+        jump block2;
 
     block8:
-        jump block5;
+        jump block1;
 
     block9:
         unreachable;
 
     block10:
+        enum.set_tag v1 #Wrap;
+        enum.assert_variant v0 #Wrap;
+        v7.objref<@__fe_layout_1> = enum.proj v1 #Wrap 0.i256;
+        v8.@__fe_layout_1 = enum.extract v0 #Wrap 0.i256;
+        v9.enumtag(@__fe_layout_1) = enum.tag v8;
+        br_table v9 block12 (0.enumtag(@__fe_layout_1) block13) (1.enumtag(@__fe_layout_1) block14);
+
+    block11:
+        jump block8;
+
+    block12:
+        unreachable;
+
+    block13:
         enum.set_tag v7 #First;
         enum.assert_variant v8 #First;
         v12.objref<@__fe_layout_0> = enum.proj v7 #First 0.i256;
         v13.@__fe_layout_0 = enum.extract v8 #First 0.i256;
         v14.enumtag(@__fe_layout_0) = enum.tag v13;
-        br_table v14 block13 (0.enumtag(@__fe_layout_0) block14) (1.enumtag(@__fe_layout_0) block15) (2.enumtag(@__fe_layout_0) block16);
+        br_table v14 block16 (0.enumtag(@__fe_layout_0) block17) (1.enumtag(@__fe_layout_0) block18) (2.enumtag(@__fe_layout_0) block19);
 
-    block11:
+    block14:
         enum.set_tag v7 #Second;
         enum.assert_variant v8 #Second;
         v18.objref<@__fe_layout_0> = enum.proj v7 #Second 0.i256;
         v19.@__fe_layout_0 = enum.extract v8 #Second 0.i256;
         v20.enumtag(@__fe_layout_0) = enum.tag v19;
-        br_table v20 block18 (0.enumtag(@__fe_layout_0) block19) (1.enumtag(@__fe_layout_0) block20) (2.enumtag(@__fe_layout_0) block21);
-
-    block12:
-        jump block8;
-
-    block13:
-        unreachable;
-
-    block14:
-        enum.set_tag v12 #A;
-        jump block12;
+        br_table v20 block21 (0.enumtag(@__fe_layout_0) block22) (1.enumtag(@__fe_layout_0) block23) (2.enumtag(@__fe_layout_0) block24);
 
     block15:
-        enum.set_tag v12 #B;
-        jump block12;
+        jump block11;
 
     block16:
-        enum.set_tag v12 #C;
-        jump block12;
+        unreachable;
 
     block17:
-        jump block8;
+        enum.set_tag v12 #A;
+        jump block15;
 
     block18:
-        unreachable;
+        enum.set_tag v12 #B;
+        jump block15;
 
     block19:
-        enum.set_tag v18 #A;
-        jump block17;
+        enum.set_tag v12 #C;
+        jump block15;
 
     block20:
-        enum.set_tag v18 #B;
-        jump block17;
+        jump block11;
 
     block21:
-        enum.set_tag v18 #C;
-        jump block17;
-
-    block22:
-        v33.@__fe_layout_1 = obj.load v2;
-        enum.assert_variant v33 #First;
-        v34.@__fe_layout_0 = enum.extract v33 #First 0.i256;
-        v35.objref<@__fe_layout_1> = enum.assert_variant_ref v2 #First;
-        v36.objref<@__fe_layout_0> = enum.proj v35 #First 0.i256;
-        v37.enumtag(@__fe_layout_0) = enum.tag v34;
-        br_table v37 block37 (0.enumtag(@__fe_layout_0) block38) (1.enumtag(@__fe_layout_0) block39) (2.enumtag(@__fe_layout_0) block40);
-
-    block23:
         unreachable;
 
+    block22:
+        enum.set_tag v18 #A;
+        jump block20;
+
+    block23:
+        enum.set_tag v18 #B;
+        jump block20;
+
     block24:
+        enum.set_tag v18 #C;
+        jump block20;
+
+    block25:
+        v33.@__fe_layout_1 = obj.load v2;
+        v34.enumtag(@__fe_layout_1) = enum.tag v33;
+        br_table v34 block5 (0.enumtag(@__fe_layout_1) block4);
+
+    block26:
+        unreachable;
+
+    block27:
         enum.set_tag v2 #First;
         enum.assert_variant v25 #First;
         v27.objref<@__fe_layout_0> = enum.proj v2 #First 0.i256;
         v28.@__fe_layout_0 = enum.extract v25 #First 0.i256;
         v29.enumtag(@__fe_layout_0) = enum.tag v28;
-        br_table v29 block27 (0.enumtag(@__fe_layout_0) block28) (1.enumtag(@__fe_layout_0) block29) (2.enumtag(@__fe_layout_0) block30);
+        br_table v29 block30 (0.enumtag(@__fe_layout_0) block31) (1.enumtag(@__fe_layout_0) block32) (2.enumtag(@__fe_layout_0) block33);
 
-    block25:
+    block28:
         enum.set_tag v2 #Second;
         enum.assert_variant v25 #Second;
         v30.objref<@__fe_layout_0> = enum.proj v2 #Second 0.i256;
         v31.@__fe_layout_0 = enum.extract v25 #Second 0.i256;
         v32.enumtag(@__fe_layout_0) = enum.tag v31;
-        br_table v32 block32 (0.enumtag(@__fe_layout_0) block33) (1.enumtag(@__fe_layout_0) block34) (2.enumtag(@__fe_layout_0) block35);
-
-    block26:
-        jump block22;
-
-    block27:
-        unreachable;
-
-    block28:
-        enum.set_tag v27 #A;
-        jump block26;
+        br_table v32 block35 (0.enumtag(@__fe_layout_0) block36) (1.enumtag(@__fe_layout_0) block37) (2.enumtag(@__fe_layout_0) block38);
 
     block29:
-        enum.set_tag v27 #B;
-        jump block26;
+        jump block25;
 
     block30:
-        enum.set_tag v27 #C;
-        jump block26;
+        unreachable;
 
     block31:
-        jump block22;
+        enum.set_tag v27 #A;
+        jump block29;
 
     block32:
-        unreachable;
+        enum.set_tag v27 #B;
+        jump block29;
 
     block33:
-        enum.set_tag v30 #A;
-        jump block31;
+        enum.set_tag v27 #C;
+        jump block29;
 
     block34:
-        enum.set_tag v30 #B;
-        jump block31;
+        jump block25;
 
     block35:
-        enum.set_tag v30 #C;
-        jump block31;
-
-    block36:
-        jump block2;
-
-    block37:
         unreachable;
 
+    block36:
+        enum.set_tag v30 #A;
+        jump block34;
+
+    block37:
+        enum.set_tag v30 #B;
+        jump block34;
+
     block38:
-        enum.set_tag v36 #A;
-        jump block36;
+        enum.set_tag v30 #C;
+        jump block34;
 
     block39:
-        enum.set_tag v36 #B;
-        jump block36;
+        v40.objref<@__fe_layout_1> = enum.assert_variant_ref v2 #First;
+        v41.objref<@__fe_layout_0> = enum.proj v40 #First 0.i256;
+        v42.@__fe_layout_0 = obj.load v41;
+        v43.enumtag(@__fe_layout_0) = enum.tag v42;
+        br_table v43 block7 (0.enumtag(@__fe_layout_0) block6);
 
     block40:
-        enum.set_tag v36 #C;
-        jump block36;
+        unreachable;
+
+    block41:
+        enum.set_tag v38 #A;
+        jump block39;
+
+    block42:
+        enum.set_tag v38 #B;
+        jump block39;
+
+    block43:
+        enum.set_tag v38 #C;
+        jump block39;
 }
 
 func private %exhaustive_inner_outer_wildcard(v0.@__fe_layout_1) -> i8 {
@@ -215,15 +230,15 @@ func private %exhaustive_inner_outer_wildcard(v0.@__fe_layout_1) -> i8 {
         v1.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
         v2.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
         v3.enumtag(@__fe_layout_1) = enum.tag v0;
-        br_table v3 block12 (0.enumtag(@__fe_layout_1) block13) (1.enumtag(@__fe_layout_1) block14);
+        br_table v3 block9 (0.enumtag(@__fe_layout_1) block10) (1.enumtag(@__fe_layout_1) block11);
 
     block1:
         v16.@__fe_layout_1 = obj.load v1;
-        v17.i1 = enum.is_variant v16 #First;
-        br v17 block3 block5;
+        v17.enumtag(@__fe_layout_1) = enum.tag v16;
+        br_table v17 block4 (0.enumtag(@__fe_layout_1) block3);
 
     block2:
-        v18.i8 = phi (0.i8 block4) (1.i8 block6) (2.i8 block7) (3.i8 block8);
+        v18.i8 = phi (0.i8 block4) (1.i8 block5) (2.i8 block6) (3.i8 block7);
         return v18;
 
     block3:
@@ -231,13 +246,13 @@ func private %exhaustive_inner_outer_wildcard(v0.@__fe_layout_1) -> i8 {
         enum.assert_variant v19 #First;
         v20.@__fe_layout_0 = enum.extract v19 #First 0.i256;
         v21.enumtag(@__fe_layout_0) = enum.tag v20;
-        br_table v21 block26 (0.enumtag(@__fe_layout_0) block27) (1.enumtag(@__fe_layout_0) block28) (2.enumtag(@__fe_layout_0) block29);
+        br_table v21 block23 (0.enumtag(@__fe_layout_0) block24) (1.enumtag(@__fe_layout_0) block25) (2.enumtag(@__fe_layout_0) block26);
 
     block4:
         jump block2;
 
     block5:
-        jump block4;
+        jump block2;
 
     block6:
         jump block2;
@@ -246,93 +261,82 @@ func private %exhaustive_inner_outer_wildcard(v0.@__fe_layout_1) -> i8 {
         jump block2;
 
     block8:
-        jump block2;
-
-    block9:
-        v28.@__fe_layout_0 = obj.load v2;
-        v29.i1 = enum.is_variant v28 #B;
-        br v29 block7 block10;
-
-    block10:
-        jump block8;
-
-    block11:
         jump block1;
 
-    block12:
+    block9:
         unreachable;
 
-    block13:
+    block10:
         enum.set_tag v1 #First;
         enum.assert_variant v0 #First;
         v7.objref<@__fe_layout_0> = enum.proj v1 #First 0.i256;
         v8.@__fe_layout_0 = enum.extract v0 #First 0.i256;
         v9.enumtag(@__fe_layout_0) = enum.tag v8;
-        br_table v9 block16 (0.enumtag(@__fe_layout_0) block17) (1.enumtag(@__fe_layout_0) block18) (2.enumtag(@__fe_layout_0) block19);
+        br_table v9 block13 (0.enumtag(@__fe_layout_0) block14) (1.enumtag(@__fe_layout_0) block15) (2.enumtag(@__fe_layout_0) block16);
 
-    block14:
+    block11:
         enum.set_tag v1 #Second;
         enum.assert_variant v0 #Second;
         v13.objref<@__fe_layout_0> = enum.proj v1 #Second 0.i256;
         v14.@__fe_layout_0 = enum.extract v0 #Second 0.i256;
         v15.enumtag(@__fe_layout_0) = enum.tag v14;
-        br_table v15 block21 (0.enumtag(@__fe_layout_0) block22) (1.enumtag(@__fe_layout_0) block23) (2.enumtag(@__fe_layout_0) block24);
+        br_table v15 block18 (0.enumtag(@__fe_layout_0) block19) (1.enumtag(@__fe_layout_0) block20) (2.enumtag(@__fe_layout_0) block21);
+
+    block12:
+        jump block8;
+
+    block13:
+        unreachable;
+
+    block14:
+        enum.set_tag v7 #A;
+        jump block12;
 
     block15:
-        jump block11;
+        enum.set_tag v7 #B;
+        jump block12;
 
     block16:
-        unreachable;
+        enum.set_tag v7 #C;
+        jump block12;
 
     block17:
-        enum.set_tag v7 #A;
-        jump block15;
+        jump block8;
 
     block18:
-        enum.set_tag v7 #B;
-        jump block15;
+        unreachable;
 
     block19:
-        enum.set_tag v7 #C;
-        jump block15;
+        enum.set_tag v13 #A;
+        jump block17;
 
     block20:
-        jump block11;
+        enum.set_tag v13 #B;
+        jump block17;
 
     block21:
-        unreachable;
+        enum.set_tag v13 #C;
+        jump block17;
 
     block22:
-        enum.set_tag v13 #A;
-        jump block20;
+        v22.@__fe_layout_0 = obj.load v2;
+        v23.enumtag(@__fe_layout_0) = enum.tag v22;
+        br_table v23 (0.enumtag(@__fe_layout_0) block5) (1.enumtag(@__fe_layout_0) block6) (2.enumtag(@__fe_layout_0) block7);
 
     block23:
-        enum.set_tag v13 #B;
-        jump block20;
-
-    block24:
-        enum.set_tag v13 #C;
-        jump block20;
-
-    block25:
-        v22.@__fe_layout_0 = obj.load v2;
-        v23.i1 = enum.is_variant v22 #A;
-        br v23 block6 block9;
-
-    block26:
         unreachable;
 
-    block27:
+    block24:
         enum.set_tag v2 #A;
-        jump block25;
+        jump block22;
 
-    block28:
+    block25:
         enum.set_tag v2 #B;
-        jump block25;
+        jump block22;
 
-    block29:
+    block26:
         enum.set_tag v2 #C;
-        jump block25;
+        jump block22;
 }
 
 func private %main() -> @__fe_layout_3 {
@@ -378,15 +382,15 @@ func private %nested_with_defaults(v0.@__fe_layout_1) -> i8 {
         v2.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
         v3.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
         v4.enumtag(@__fe_layout_1) = enum.tag v0;
-        br_table v4 block7 (0.enumtag(@__fe_layout_1) block8) (1.enumtag(@__fe_layout_1) block9);
+        br_table v4 block10 (0.enumtag(@__fe_layout_1) block11) (1.enumtag(@__fe_layout_1) block12);
 
     block1:
         v17.@__fe_layout_1 = obj.load v1;
         v18.enumtag(@__fe_layout_1) = enum.tag v17;
-        br_table v18 block5 (0.enumtag(@__fe_layout_1) block3) (1.enumtag(@__fe_layout_1) block4);
+        br_table v18 (0.enumtag(@__fe_layout_1) block3) (1.enumtag(@__fe_layout_1) block4);
 
     block2:
-        v19.i8 = phi (1.i8 block20) (2.i8 block25) (0.i8 block5);
+        v19.i8 = phi (1.i8 block5) (0.i8 block6) (2.i8 block7) (0.i8 block8);
         return v19;
 
     block3:
@@ -394,111 +398,124 @@ func private %nested_with_defaults(v0.@__fe_layout_1) -> i8 {
         enum.assert_variant v20 #First;
         v21.@__fe_layout_0 = enum.extract v20 #First 0.i256;
         v22.enumtag(@__fe_layout_0) = enum.tag v21;
-        br_table v22 block21 (0.enumtag(@__fe_layout_0) block22) (1.enumtag(@__fe_layout_0) block23) (2.enumtag(@__fe_layout_0) block24);
+        br_table v22 block24 (0.enumtag(@__fe_layout_0) block25) (1.enumtag(@__fe_layout_0) block26) (2.enumtag(@__fe_layout_0) block27);
 
     block4:
-        v24.@__fe_layout_1 = obj.load v1;
-        enum.assert_variant v24 #Second;
-        v25.@__fe_layout_0 = enum.extract v24 #Second 0.i256;
-        v26.enumtag(@__fe_layout_0) = enum.tag v25;
-        br_table v26 block26 (0.enumtag(@__fe_layout_0) block27) (1.enumtag(@__fe_layout_0) block28) (2.enumtag(@__fe_layout_0) block29);
+        v25.@__fe_layout_1 = obj.load v1;
+        enum.assert_variant v25 #Second;
+        v26.@__fe_layout_0 = enum.extract v25 #Second 0.i256;
+        v27.enumtag(@__fe_layout_0) = enum.tag v26;
+        br_table v27 block29 (0.enumtag(@__fe_layout_0) block30) (1.enumtag(@__fe_layout_0) block31) (2.enumtag(@__fe_layout_0) block32);
 
     block5:
         jump block2;
 
     block6:
-        jump block1;
+        jump block2;
 
     block7:
-        unreachable;
+        jump block2;
 
     block8:
+        jump block2;
+
+    block9:
+        jump block1;
+
+    block10:
+        unreachable;
+
+    block11:
         enum.set_tag v1 #First;
         enum.assert_variant v0 #First;
         v8.objref<@__fe_layout_0> = enum.proj v1 #First 0.i256;
         v9.@__fe_layout_0 = enum.extract v0 #First 0.i256;
         v10.enumtag(@__fe_layout_0) = enum.tag v9;
-        br_table v10 block11 (0.enumtag(@__fe_layout_0) block12) (1.enumtag(@__fe_layout_0) block13) (2.enumtag(@__fe_layout_0) block14);
+        br_table v10 block14 (0.enumtag(@__fe_layout_0) block15) (1.enumtag(@__fe_layout_0) block16) (2.enumtag(@__fe_layout_0) block17);
 
-    block9:
+    block12:
         enum.set_tag v1 #Second;
         enum.assert_variant v0 #Second;
         v14.objref<@__fe_layout_0> = enum.proj v1 #Second 0.i256;
         v15.@__fe_layout_0 = enum.extract v0 #Second 0.i256;
         v16.enumtag(@__fe_layout_0) = enum.tag v15;
-        br_table v16 block16 (0.enumtag(@__fe_layout_0) block17) (1.enumtag(@__fe_layout_0) block18) (2.enumtag(@__fe_layout_0) block19);
-
-    block10:
-        jump block6;
-
-    block11:
-        unreachable;
-
-    block12:
-        enum.set_tag v8 #A;
-        jump block10;
+        br_table v16 block19 (0.enumtag(@__fe_layout_0) block20) (1.enumtag(@__fe_layout_0) block21) (2.enumtag(@__fe_layout_0) block22);
 
     block13:
-        enum.set_tag v8 #B;
-        jump block10;
+        jump block9;
 
     block14:
-        enum.set_tag v8 #C;
-        jump block10;
+        unreachable;
 
     block15:
-        jump block6;
+        enum.set_tag v8 #A;
+        jump block13;
 
     block16:
-        unreachable;
+        enum.set_tag v8 #B;
+        jump block13;
 
     block17:
-        enum.set_tag v14 #A;
-        jump block15;
+        enum.set_tag v8 #C;
+        jump block13;
 
     block18:
-        enum.set_tag v14 #B;
-        jump block15;
+        jump block9;
 
     block19:
-        enum.set_tag v14 #C;
-        jump block15;
+        unreachable;
 
     block20:
-        jump block2;
+        enum.set_tag v14 #A;
+        jump block18;
 
     block21:
-        unreachable;
+        enum.set_tag v14 #B;
+        jump block18;
 
     block22:
-        enum.set_tag v2 #A;
-        jump block20;
+        enum.set_tag v14 #C;
+        jump block18;
 
     block23:
-        enum.set_tag v2 #B;
-        jump block20;
+        v23.@__fe_layout_0 = obj.load v2;
+        v24.enumtag(@__fe_layout_0) = enum.tag v23;
+        br_table v24 block6 (0.enumtag(@__fe_layout_0) block5);
 
     block24:
-        enum.set_tag v2 #C;
-        jump block20;
-
-    block25:
-        jump block2;
-
-    block26:
         unreachable;
 
+    block25:
+        enum.set_tag v2 #A;
+        jump block23;
+
+    block26:
+        enum.set_tag v2 #B;
+        jump block23;
+
     block27:
-        enum.set_tag v3 #A;
-        jump block25;
+        enum.set_tag v2 #C;
+        jump block23;
 
     block28:
-        enum.set_tag v3 #B;
-        jump block25;
+        v28.@__fe_layout_0 = obj.load v3;
+        v29.enumtag(@__fe_layout_0) = enum.tag v28;
+        br_table v29 block8 (1.enumtag(@__fe_layout_0) block7);
 
     block29:
+        unreachable;
+
+    block30:
+        enum.set_tag v3 #A;
+        jump block28;
+
+    block31:
+        enum.set_tag v3 #B;
+        jump block28;
+
+    block32:
         enum.set_tag v3 #C;
-        jump block25;
+        jump block28;
 }
 
 func private %outer_specific_inner_wildcard(v0.@__fe_layout_1) -> i8 {
@@ -506,15 +523,15 @@ func private %outer_specific_inner_wildcard(v0.@__fe_layout_1) -> i8 {
         v1.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
         v2.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
         v3.enumtag(@__fe_layout_1) = enum.tag v0;
-        br_table v3 block10 (0.enumtag(@__fe_layout_1) block11) (1.enumtag(@__fe_layout_1) block12);
+        br_table v3 block8 (0.enumtag(@__fe_layout_1) block9) (1.enumtag(@__fe_layout_1) block10);
 
     block1:
         v16.@__fe_layout_1 = obj.load v1;
-        v17.i1 = enum.is_variant v16 #First;
-        br v17 block3 block5;
+        v17.enumtag(@__fe_layout_1) = enum.tag v16;
+        br_table v17 block4 (0.enumtag(@__fe_layout_1) block3);
 
     block2:
-        v18.i8 = phi (3.i8 block4) (1.i8 block6) (2.i8 block7);
+        v18.i8 = phi (3.i8 block4) (1.i8 block5) (2.i8 block6);
         return v18;
 
     block3:
@@ -522,100 +539,94 @@ func private %outer_specific_inner_wildcard(v0.@__fe_layout_1) -> i8 {
         enum.assert_variant v19 #First;
         v20.@__fe_layout_0 = enum.extract v19 #First 0.i256;
         v21.enumtag(@__fe_layout_0) = enum.tag v20;
-        br_table v21 block24 (0.enumtag(@__fe_layout_0) block25) (1.enumtag(@__fe_layout_0) block26) (2.enumtag(@__fe_layout_0) block27);
+        br_table v21 block22 (0.enumtag(@__fe_layout_0) block23) (1.enumtag(@__fe_layout_0) block24) (2.enumtag(@__fe_layout_0) block25);
 
     block4:
         jump block2;
 
     block5:
-        jump block4;
+        jump block2;
 
     block6:
         jump block2;
 
     block7:
-        jump block2;
-
-    block8:
-        jump block7;
-
-    block9:
         jump block1;
 
-    block10:
+    block8:
         unreachable;
 
-    block11:
+    block9:
         enum.set_tag v1 #First;
         enum.assert_variant v0 #First;
         v7.objref<@__fe_layout_0> = enum.proj v1 #First 0.i256;
         v8.@__fe_layout_0 = enum.extract v0 #First 0.i256;
         v9.enumtag(@__fe_layout_0) = enum.tag v8;
-        br_table v9 block14 (0.enumtag(@__fe_layout_0) block15) (1.enumtag(@__fe_layout_0) block16) (2.enumtag(@__fe_layout_0) block17);
+        br_table v9 block12 (0.enumtag(@__fe_layout_0) block13) (1.enumtag(@__fe_layout_0) block14) (2.enumtag(@__fe_layout_0) block15);
 
-    block12:
+    block10:
         enum.set_tag v1 #Second;
         enum.assert_variant v0 #Second;
         v13.objref<@__fe_layout_0> = enum.proj v1 #Second 0.i256;
         v14.@__fe_layout_0 = enum.extract v0 #Second 0.i256;
         v15.enumtag(@__fe_layout_0) = enum.tag v14;
-        br_table v15 block19 (0.enumtag(@__fe_layout_0) block20) (1.enumtag(@__fe_layout_0) block21) (2.enumtag(@__fe_layout_0) block22);
+        br_table v15 block17 (0.enumtag(@__fe_layout_0) block18) (1.enumtag(@__fe_layout_0) block19) (2.enumtag(@__fe_layout_0) block20);
+
+    block11:
+        jump block7;
+
+    block12:
+        unreachable;
 
     block13:
-        jump block9;
+        enum.set_tag v7 #A;
+        jump block11;
 
     block14:
-        unreachable;
+        enum.set_tag v7 #B;
+        jump block11;
 
     block15:
-        enum.set_tag v7 #A;
-        jump block13;
+        enum.set_tag v7 #C;
+        jump block11;
 
     block16:
-        enum.set_tag v7 #B;
-        jump block13;
+        jump block7;
 
     block17:
-        enum.set_tag v7 #C;
-        jump block13;
+        unreachable;
 
     block18:
-        jump block9;
+        enum.set_tag v13 #A;
+        jump block16;
 
     block19:
-        unreachable;
+        enum.set_tag v13 #B;
+        jump block16;
 
     block20:
-        enum.set_tag v13 #A;
-        jump block18;
+        enum.set_tag v13 #C;
+        jump block16;
 
     block21:
-        enum.set_tag v13 #B;
-        jump block18;
+        v22.@__fe_layout_0 = obj.load v2;
+        v23.enumtag(@__fe_layout_0) = enum.tag v22;
+        br_table v23 block6 (0.enumtag(@__fe_layout_0) block5);
 
     block22:
-        enum.set_tag v13 #C;
-        jump block18;
-
-    block23:
-        v22.@__fe_layout_0 = obj.load v2;
-        v23.i1 = enum.is_variant v22 #A;
-        br v23 block6 block8;
-
-    block24:
         unreachable;
 
-    block25:
+    block23:
         enum.set_tag v2 #A;
-        jump block23;
+        jump block21;
 
-    block26:
+    block24:
         enum.set_tag v2 #B;
-        jump block23;
+        jump block21;
 
-    block27:
+    block25:
         enum.set_tag v2 #C;
-        jump block23;
+        jump block21;
 }
 
 

@@ -36,10 +36,10 @@ func private %match_enum(v0.@__fe_layout_0) -> i8 {
 
     block1:
         v2.enumtag(@__fe_layout_0) = enum.tag v0;
-        br_table v2 block6 (0.enumtag(@__fe_layout_0) block3) (1.enumtag(@__fe_layout_0) block4) (2.enumtag(@__fe_layout_0) block5);
+        br_table v2 (0.enumtag(@__fe_layout_0) block3) (1.enumtag(@__fe_layout_0) block4) (2.enumtag(@__fe_layout_0) block5);
 
     block2:
-        v6.i8 = phi (1.i8 block3) (2.i8 block4) (3.i8 block5) (4.i8 block6);
+        v6.i8 = phi (1.i8 block3) (2.i8 block4) (3.i8 block5);
         return v6;
 
     block3:
@@ -49,9 +49,6 @@ func private %match_enum(v0.@__fe_layout_0) -> i8 {
         jump block2;
 
     block5:
-        jump block2;
-
-    block6:
         jump block2;
 }
 

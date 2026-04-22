@@ -37,7 +37,6 @@ use crate::{
 use super::{
     effects::owner_effect_bindings,
     local_facts::{initial_snapshot_source, ordinary_direct_value_role},
-    pattern::ArmVariants,
 };
 
 pub fn lower_to_smir<'db>(
@@ -1137,105 +1136,9 @@ impl<'db> SmirLowerCtxt<'db> {
             panic!("match arms missing")
         };
         let value = self.lower_expr(scrutinee);
-        let enum_ty = self
-            .expr_ty(scrutinee)
-            .as_enum(self.db)
-            .map(|_| self.expr_ty(scrutinee))
-            .or_else(|| arms.iter().find_map(|arm| self.pattern_enum_ty(arm.pat)));
         let result = self.alloc_temp(self.expr_ty(expr));
         let join_bb = self.new_block();
-
-        if enum_ty.is_none()
-            || !arms
-                .iter()
-                .all(|arm| self.pattern_is_enum_dispatchable(arm.pat))
-            || !self.can_lower_match_expr_with_enum_dispatch(arms, enum_ty.expect("checked"))
-        {
-            return self.lower_match_expr_with_decision_tree(value, result, join_bb, arms);
-        }
-        let enum_ty = enum_ty.expect("enum match should have an enum scrutinee type");
-
-        let mut cases = Vec::new();
-        let mut default = None;
-        let mut arm_blocks = Vec::with_capacity(arms.len());
-        let mut join_reachable = false;
-
-        for arm in arms {
-            let block = self.new_block();
-            arm_blocks.push((arm, block));
-            match self.arm_variants(arm.pat) {
-                ArmVariants::Variants(variants) => {
-                    cases.extend(variants.into_iter().map(|variant| (variant, block)));
-                }
-                ArmVariants::Default => default = Some(block),
-            }
-        }
-
-        self.set_synthetic_terminator(
-            self.current,
-            STerminatorKind::MatchEnum {
-                value,
-                enum_ty,
-                cases: cases.into_boxed_slice(),
-                default,
-            },
-        );
-
-        for (arm, block) in arm_blocks {
-            self.switch_to(block);
-            self.bind_pattern(arm.pat, value);
-            let arm_value = self.lower_expr(arm.body);
-            if !self.is_terminated(self.current) {
-                join_reachable = true;
-                self.push_synthetic_stmt(SStmtKind::Assign {
-                    dst: result,
-                    expr: SExpr::Forward(arm_value),
-                });
-                self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
-            }
-        }
-
-        if !join_reachable {
-            self.set_synthetic_terminator(join_bb, STerminatorKind::Goto(join_bb));
-        }
-        self.switch_to(join_bb);
-        result
-    }
-
-    fn can_lower_match_expr_with_enum_dispatch(
-        &self,
-        arms: &[MatchArm],
-        enum_ty: TyId<'db>,
-    ) -> bool {
-        let Some(enum_) = enum_ty.as_enum(self.db) else {
-            return false;
-        };
-
-        let mut covered = FxHashMap::default();
-        let mut saw_default = false;
-        for (idx, arm) in arms.iter().enumerate() {
-            match self.arm_variants(arm.pat) {
-                ArmVariants::Variants(variants) => {
-                    if saw_default {
-                        return false;
-                    }
-
-                    for variant in variants {
-                        if covered.insert(variant, idx).is_some() {
-                            return false;
-                        }
-                    }
-                }
-                ArmVariants::Default => {
-                    if saw_default || idx + 1 != arms.len() {
-                        return false;
-                    }
-                    saw_default = true;
-                }
-            }
-        }
-
-        saw_default || covered.len() == enum_.len_variants(self.db)
+        self.lower_match_expr_with_decision_tree(value, result, join_bb, arms)
     }
 
     fn lower_cond_branch(&mut self, cond: CondId, then_bb: SBlockId, else_bb: SBlockId) {

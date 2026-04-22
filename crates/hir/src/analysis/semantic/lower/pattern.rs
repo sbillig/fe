@@ -15,7 +15,7 @@ use crate::{
             },
             normalize::normalize_ty,
             pattern_analysis::PatternMatrix,
-            pattern_ir::{ConstructorKind, ValidatedPatId, ValidatedPatKind},
+            pattern_ir::{ConstructorKind, ValidatedPatId},
             pattern_types::{
                 PatternProjectionStep, pattern_match_expected_ty, project_pattern_child_carrier_ty,
             },
@@ -29,11 +29,6 @@ use crate::{
 };
 
 use super::body::SmirLowerCtxt;
-
-pub(super) enum ArmVariants {
-    Variants(Vec<VariantIndex>),
-    Default,
-}
 
 #[derive(Clone, Copy)]
 pub(super) struct PatternCarrierTy<'db>(pub(super) TyId<'db>);
@@ -92,13 +87,6 @@ impl<'db> SmirLowerCtxt<'db> {
         self.typed_body
             .pattern_root(pat)
             .is_none_or(|root| self.validated_pattern_is_irrefutable(root))
-    }
-
-    pub(super) fn pattern_is_enum_dispatchable(&self, pat: PatId) -> bool {
-        let Some(root) = self.typed_body.pattern_root(pat) else {
-            return true;
-        };
-        self.is_enum_dispatchable_root(root)
     }
 
     pub(super) fn bind_pattern(&mut self, pat: PatId, value: SValueId) {
@@ -246,18 +234,6 @@ impl<'db> SmirLowerCtxt<'db> {
         }
     }
 
-    pub(super) fn arm_variants(&self, pat: PatId) -> ArmVariants {
-        let Some(root) = self.typed_body.pattern_root(pat) else {
-            return ArmVariants::Default;
-        };
-        self.arm_variants_from_root(root)
-    }
-
-    pub(super) fn pattern_enum_ty(&self, pat: PatId) -> Option<TyId<'db>> {
-        let root = self.typed_body.pattern_root(pat)?;
-        self.pattern_enum_ty_from_root(root)
-    }
-
     pub(super) fn lower_match_expr_with_decision_tree(
         &mut self,
         value: SValueId,
@@ -281,66 +257,6 @@ impl<'db> SmirLowerCtxt<'db> {
         }
         self.switch_to(join_bb);
         result
-    }
-
-    fn arm_variants_from_root(&self, pat: ValidatedPatId) -> ArmVariants {
-        match self.typed_body.pattern_store().node(pat).kind() {
-            ValidatedPatKind::Wildcard { .. } => ArmVariants::Default,
-            ValidatedPatKind::Constructor {
-                ctor: ConstructorKind::Variant(variant, _),
-                ..
-            } => ArmVariants::Variants(vec![VariantIndex(variant.idx)]),
-            ValidatedPatKind::Constructor {
-                ctor: ConstructorKind::Type(_) | ConstructorKind::Literal(..),
-                ..
-            } => ArmVariants::Default,
-            ValidatedPatKind::Or(pats) => {
-                let mut variants = Vec::new();
-                for pat in pats {
-                    match self.arm_variants_from_root(*pat) {
-                        ArmVariants::Variants(mut pat_variants) => {
-                            variants.append(&mut pat_variants)
-                        }
-                        ArmVariants::Default => return ArmVariants::Default,
-                    }
-                }
-                ArmVariants::Variants(variants)
-            }
-        }
-    }
-
-    fn pattern_enum_ty_from_root(&self, pat: ValidatedPatId) -> Option<TyId<'db>> {
-        match self.typed_body.pattern_store().node(pat).kind() {
-            ValidatedPatKind::Wildcard { .. } => None,
-            ValidatedPatKind::Constructor {
-                ctor: ConstructorKind::Variant(_, enum_ty),
-                ..
-            } => Some(*enum_ty),
-            ValidatedPatKind::Constructor {
-                ctor: ConstructorKind::Type(_) | ConstructorKind::Literal(..),
-                ..
-            } => None,
-            ValidatedPatKind::Or(pats) => pats
-                .iter()
-                .find_map(|pat| self.pattern_enum_ty_from_root(*pat)),
-        }
-    }
-
-    fn is_enum_dispatchable_root(&self, pat: ValidatedPatId) -> bool {
-        match self.typed_body.pattern_store().node(pat).kind() {
-            ValidatedPatKind::Wildcard { .. } => true,
-            ValidatedPatKind::Constructor {
-                ctor: ConstructorKind::Variant(..),
-                ..
-            } => true,
-            ValidatedPatKind::Constructor {
-                ctor: ConstructorKind::Type(_) | ConstructorKind::Literal(..),
-                ..
-            } => false,
-            ValidatedPatKind::Or(pats) => {
-                pats.iter().all(|pat| self.is_enum_dispatchable_root(*pat))
-            }
-        }
     }
 
     fn lower_validated_pattern_branch(
@@ -477,53 +393,90 @@ impl<'db> SmirLowerCtxt<'db> {
             .iter()
             .map(|(case, tree)| (case, tree, self.new_block()))
             .collect::<Vec<_>>();
-        let mut dispatch_bb = self.current;
-        for (idx, (case, _, case_bb)) in case_blocks.iter().enumerate() {
-            if idx > 0 {
-                self.switch_to(dispatch_bb);
-            }
-            let is_last = idx + 1 == case_blocks.len();
+
+        let mut enum_ty = None;
+        let mut enum_cases = Vec::new();
+        let mut enum_default = None;
+        let mut is_enum_switch = true;
+        for (case, _, case_bb) in &case_blocks {
             match case {
-                Case::Default | Case::Constructor(ConstructorKind::Type(_)) if is_last => {
-                    self.set_synthetic_terminator(self.current, STerminatorKind::Goto(*case_bb));
+                Case::Constructor(ConstructorKind::Variant(variant, case_enum_ty)) => {
+                    if enum_ty.is_some_and(|ty| ty != *case_enum_ty) {
+                        is_enum_switch = false;
+                        break;
+                    }
+                    enum_ty = Some(*case_enum_ty);
+                    enum_cases.push((VariantIndex(variant.idx), *case_bb));
+                }
+                Case::Default => enum_default = Some(*case_bb),
+                Case::Constructor(_) => {
+                    is_enum_switch = false;
                     break;
                 }
-                Case::Default | Case::Constructor(ConstructorKind::Type(_)) => {
-                    self.set_synthetic_terminator(self.current, STerminatorKind::Goto(*case_bb));
-                    break;
+            }
+        }
+
+        if is_enum_switch && let Some(enum_ty) = enum_ty {
+            self.set_synthetic_terminator(
+                self.current,
+                STerminatorKind::MatchEnum {
+                    value: occurrence.value,
+                    enum_ty,
+                    cases: enum_cases.into_boxed_slice(),
+                    default: enum_default,
+                },
+            );
+        } else {
+            let mut dispatch_bb = self.current;
+            for (idx, (case, _, case_bb)) in case_blocks.iter().enumerate() {
+                if idx > 0 {
+                    self.switch_to(dispatch_bb);
                 }
-                Case::Constructor(ctor) if is_last => {
-                    let _ = ctor;
-                    self.set_synthetic_terminator(self.current, STerminatorKind::Goto(*case_bb));
-                    break;
-                }
-                Case::Constructor(ctor) => {
-                    let test = match ctor {
-                        ConstructorKind::Literal(lit, ty) => {
-                            let rhs = self.literal_pattern_value(*ty, *lit);
-                            SExpr::Binary {
-                                op: BinOp::Comp(CompBinOp::Eq),
-                                lhs: occurrence.value,
-                                rhs,
+                let is_last = idx + 1 == case_blocks.len();
+                match case {
+                    Case::Default | Case::Constructor(ConstructorKind::Type(_)) => {
+                        self.set_synthetic_terminator(
+                            self.current,
+                            STerminatorKind::Goto(*case_bb),
+                        );
+                        break;
+                    }
+                    Case::Constructor(ctor) if is_last => {
+                        let _ = ctor;
+                        self.set_synthetic_terminator(
+                            self.current,
+                            STerminatorKind::Goto(*case_bb),
+                        );
+                        break;
+                    }
+                    Case::Constructor(ctor) => {
+                        let test = match ctor {
+                            ConstructorKind::Literal(lit, ty) => {
+                                let rhs = self.literal_pattern_value(*ty, *lit);
+                                SExpr::Binary {
+                                    op: BinOp::Comp(CompBinOp::Eq),
+                                    lhs: occurrence.value,
+                                    rhs,
+                                }
                             }
-                        }
-                        ConstructorKind::Variant(variant, _) => SExpr::IsEnumVariant {
-                            value: occurrence.value,
-                            variant: VariantIndex(variant.idx),
-                        },
-                        ConstructorKind::Type(_) => unreachable!(),
-                    };
-                    let next_bb = self.new_block();
-                    let cond = self.emit_expr(TyId::bool(self.db), test);
-                    self.set_synthetic_terminator(
-                        self.current,
-                        STerminatorKind::Branch {
-                            cond,
-                            then_bb: *case_bb,
-                            else_bb: next_bb,
-                        },
-                    );
-                    dispatch_bb = next_bb;
+                            ConstructorKind::Variant(variant, _) => SExpr::IsEnumVariant {
+                                value: occurrence.value,
+                                variant: VariantIndex(variant.idx),
+                            },
+                            ConstructorKind::Type(_) => unreachable!(),
+                        };
+                        let next_bb = self.new_block();
+                        let cond = self.emit_expr(TyId::bool(self.db), test);
+                        self.set_synthetic_terminator(
+                            self.current,
+                            STerminatorKind::Branch {
+                                cond,
+                                then_bb: *case_bb,
+                                else_bb: next_bb,
+                            },
+                        );
+                        dispatch_bb = next_bb;
+                    }
                 }
             }
         }
