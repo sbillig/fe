@@ -1,4 +1,3 @@
-use common::indexmap::IndexSet;
 use hir::analysis::ty::{
     ProviderAddressSpace, ProviderKind,
     normalize::normalize_ty,
@@ -12,8 +11,8 @@ use salsa::Update;
 use crate::{
     db::MirDb,
     runtime::{
-        AddressSpaceKind, BorrowAccess, BorrowTransportSet, LayoutId, RefKind, RefView,
-        RuntimeBoundarySpec, RuntimeClass, ScalarClass, ScalarRepr, ScalarRole,
+        AddressSpaceKind, LayoutId, RefKind, RefView, RuntimeClass, ScalarClass, ScalarRepr,
+        ScalarRole,
     },
 };
 
@@ -94,68 +93,6 @@ impl<'db> RuntimeTypeModel<'db> {
             RuntimeTypeShape::Other
         };
         Self { repr_ty, shape }
-    }
-
-    fn boundary_spec(
-        &self,
-        db: &'db dyn MirDb,
-        default_space: AddressSpaceKind,
-        scope: Option<ScopeId<'db>>,
-        assumptions: PredicateListId<'db>,
-    ) -> Option<RuntimeBoundarySpec<'db>> {
-        match &self.shape {
-            RuntimeTypeShape::Borrow { kind, inner } => {
-                if runtime_zero_sized_ty(db, *inner, scope, assumptions) {
-                    return Some(RuntimeBoundarySpec::ExactShape(
-                        provider_class_for_target_in_context(
-                            db,
-                            Some(*inner),
-                            default_space,
-                            scope,
-                            assumptions,
-                        ),
-                    ));
-                }
-                let access = match kind {
-                    BorrowKind::Ref => BorrowAccess::ReadOnly,
-                    BorrowKind::Mut => BorrowAccess::ReadWrite,
-                };
-                Some(RuntimeBoundarySpec::BorrowLike {
-                    pointee: stored_class_for_ty_in_context(db, *inner, scope, assumptions),
-                    access,
-                    allow: default_borrow_transport_set(access, default_space),
-                })
-            }
-            RuntimeTypeShape::Capability { inner } => Some(RuntimeBoundarySpec::ExactShape(
-                provider_class_for_target_in_context(
-                    db,
-                    Some(*inner),
-                    default_space,
-                    scope,
-                    assumptions,
-                ),
-            )),
-            RuntimeTypeShape::EffectHandle { info, effect_scope } => {
-                Some(RuntimeBoundarySpec::ExactShape(
-                    effect_handle_class_for_info(db, *info, *effect_scope, assumptions),
-                ))
-            }
-            RuntimeTypeShape::Scalar(_) | RuntimeTypeShape::Aggregate | RuntimeTypeShape::Other => {
-                if runtime_zero_sized_ty(db, self.repr_ty, scope, assumptions) {
-                    return None;
-                }
-                self.top_level_class(db, default_space, scope, assumptions)
-                    .map(|class| {
-                        if class.is_transport()
-                            || self.transport_sensitive_aggregate(db, scope, assumptions)
-                        {
-                            RuntimeBoundarySpec::ExactShape(class)
-                        } else {
-                            RuntimeBoundarySpec::ExactTransport(class)
-                        }
-                    })
-            }
-        }
     }
 
     fn top_level_class(
@@ -283,22 +220,6 @@ impl<'db> RuntimeTypeModel<'db> {
             RuntimeTypeShape::Other => false,
         }
     }
-
-    fn boundary_source_uses_transport_sensitive_aggregate(
-        &self,
-        db: &'db dyn MirDb,
-        source_ty: TyId<'db>,
-        scope: Option<ScopeId<'db>>,
-        assumptions: PredicateListId<'db>,
-    ) -> bool {
-        if let Some((_, inner)) = source_ty.as_borrow(db) {
-            return runtime_transport_sensitive_aggregate(db, inner, scope, assumptions);
-        }
-        if let RuntimeTypeShape::Borrow { inner, .. } = &self.shape {
-            return runtime_transport_sensitive_aggregate(db, *inner, scope, assumptions);
-        }
-        self.transport_sensitive_aggregate(db, scope, assumptions)
-    }
 }
 
 pub(crate) fn runtime_repr_ty_in_context<'db>(
@@ -318,7 +239,7 @@ pub(crate) fn runtime_repr_ty_in_context<'db>(
     cycle_fn=runtime_zero_sized_ty_cycle_recover,
     cycle_initial=runtime_zero_sized_ty_cycle_initial
 )]
-fn runtime_zero_sized_ty<'db>(
+pub(super) fn runtime_zero_sized_ty<'db>(
     db: &'db dyn MirDb,
     ty: TyId<'db>,
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
@@ -364,15 +285,6 @@ pub(crate) fn top_level_class_for_ty_in_env<'db>(
     top_level_class_for_ty_in_context(db, ty, default_space, env.scope, env.assumptions)
 }
 
-pub(crate) fn boundary_spec_for_ty_in_env<'db>(
-    db: &'db dyn MirDb,
-    env: RuntimeTypeEnv<'db>,
-    ty: TyId<'db>,
-    default_space: AddressSpaceKind,
-) -> Option<RuntimeBoundarySpec<'db>> {
-    boundary_spec_for_ty_in_context(db, ty, default_space, env.scope, env.assumptions)
-}
-
 pub(crate) fn provider_class_for_target_in_env<'db>(
     db: &'db dyn MirDb,
     env: RuntimeTypeEnv<'db>,
@@ -388,54 +300,6 @@ pub(crate) fn scalar_class_for_ty_in_env<'db>(
     ty: TyId<'db>,
 ) -> Option<ScalarClass<'db>> {
     scalar_class_for_ty_in_context(db, ty, env.scope, env.assumptions)
-}
-
-pub(crate) fn boundary_spec_for_ty_in_context<'db>(
-    db: &'db dyn MirDb,
-    ty: TyId<'db>,
-    default_space: AddressSpaceKind,
-    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
-    assumptions: PredicateListId<'db>,
-) -> Option<RuntimeBoundarySpec<'db>> {
-    runtime_boundary_spec(db, ty, default_space, scope, assumptions)
-}
-
-pub(crate) fn default_borrow_transport_set(
-    access: BorrowAccess,
-    default_space: AddressSpaceKind,
-) -> BorrowTransportSet {
-    let mut provider_spaces = IndexSet::new();
-    provider_spaces.insert(default_space);
-    provider_spaces.insert(AddressSpaceKind::Memory);
-    provider_spaces.insert(AddressSpaceKind::Storage);
-    provider_spaces.insert(AddressSpaceKind::Transient);
-    if matches!(access, BorrowAccess::ReadOnly) {
-        provider_spaces.insert(AddressSpaceKind::Calldata);
-    }
-    BorrowTransportSet {
-        allow_object: true,
-        allow_const: matches!(access, BorrowAccess::ReadOnly),
-        provider_spaces: provider_spaces.into_iter().collect(),
-        allow_raw_addr: true,
-    }
-}
-
-pub(crate) fn aggregate_transport_depends_on_runtime_source<'db>(
-    db: &'db dyn MirDb,
-    ty: TyId<'db>,
-    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
-    assumptions: PredicateListId<'db>,
-) -> bool {
-    runtime_transport_sensitive_aggregate(db, ty, scope, assumptions)
-}
-
-pub(crate) fn boundary_source_uses_transport_sensitive_aggregate<'db>(
-    db: &'db dyn MirDb,
-    ty: TyId<'db>,
-    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
-    assumptions: PredicateListId<'db>,
-) -> bool {
-    runtime_boundary_source_uses_transport_sensitive_aggregate(db, ty, scope, assumptions)
 }
 
 pub(crate) fn top_level_class_for_ty_in_context<'db>(
@@ -654,22 +518,6 @@ fn raw_addr_target_for_ty_in_context<'db>(
 }
 
 #[salsa::tracked]
-fn runtime_boundary_spec<'db>(
-    db: &'db dyn MirDb,
-    ty: TyId<'db>,
-    default_space: AddressSpaceKind,
-    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
-    assumptions: PredicateListId<'db>,
-) -> Option<RuntimeBoundarySpec<'db>> {
-    RuntimeTypeModel::new(db, ty, scope, assumptions).boundary_spec(
-        db,
-        default_space,
-        scope,
-        assumptions,
-    )
-}
-
-#[salsa::tracked]
 fn runtime_top_level_class<'db>(
     db: &'db dyn MirDb,
     ty: TyId<'db>,
@@ -708,22 +556,11 @@ fn runtime_effect_handle_info<'db>(
     })
 }
 
-#[salsa::tracked]
-fn runtime_boundary_source_uses_transport_sensitive_aggregate<'db>(
-    db: &'db dyn MirDb,
-    ty: TyId<'db>,
-    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
-    assumptions: PredicateListId<'db>,
-) -> bool {
-    RuntimeTypeModel::new(db, ty, scope, assumptions)
-        .boundary_source_uses_transport_sensitive_aggregate(db, ty, scope, assumptions)
-}
-
 #[salsa::tracked(
     cycle_fn=runtime_transport_sensitive_aggregate_cycle_recover,
     cycle_initial=runtime_transport_sensitive_aggregate_cycle_initial
 )]
-fn runtime_transport_sensitive_aggregate<'db>(
+pub(super) fn runtime_transport_sensitive_aggregate<'db>(
     db: &'db dyn MirDb,
     ty: TyId<'db>,
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
@@ -780,6 +617,9 @@ fn runtime_transport_sensitive_aggregate_cycle_recover<'db>(
 mod tests {
     use driver::DriverDataBase;
 
+    use crate::runtime::{BorrowAccess, RuntimeBoundarySpec};
+
+    use super::super::boundary::boundary_spec_for_ty_in_context;
     use super::*;
 
     #[test]

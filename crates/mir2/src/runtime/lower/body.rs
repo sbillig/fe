@@ -48,13 +48,13 @@ use crate::{
 
 use super::{
     arg_selector::RuntimeArgSelector,
+    boundary::{BoundarySiteAllocator, RuntimeValueUsePlan, boundary_spec_for_ty_in_env},
     call_input::{CompiledCallInputPlan, compile_call_input_plan_for_semantic},
     classify::{
-        BodyEnv, BodyStaticFacts, BoundarySiteAllocator, ContractMetadataBuiltin,
-        GenericNumericIntrinsicKind, InferClassCache, RuntimeBodyCx,
-        actual_aggregate_class_from_runtime_source, contract_metadata_builtin,
-        generic_numeric_intrinsic_kind, nonself_backing_value_place, resolve_runtime_call_key,
-        semantic_return_ty, snapshot_source_place,
+        BodyEnv, BodyStaticFacts, ContractMetadataBuiltin, GenericNumericIntrinsicKind,
+        InferClassCache, RuntimeBodyCx, actual_aggregate_class_from_runtime_source,
+        contract_metadata_builtin, generic_numeric_intrinsic_kind, nonself_backing_value_place,
+        resolve_runtime_call_key, semantic_return_ty, snapshot_source_place,
     },
     consts::{
         const_scalar_for_class, const_scalar_from_value, enum_tag_scalar, lower_const_region,
@@ -68,15 +68,13 @@ use super::{
     },
     place::{project_field_class, project_index_class, project_variant_field_class},
     realize::{
-        RuntimeArgSource, RuntimeValueUseEmitter, RuntimeValueUsePlan, SelectedRuntimeArg,
-        emit_runtime_value_use_plan,
+        RuntimeArgSource, RuntimeValueUseEmitter, SelectedRuntimeArg, emit_runtime_value_use_plan,
     },
     returns::RuntimeReturnAnalysisCx,
     tuple::{RuntimeTupleFieldEmitter, extract_runtime_tuple_fields, memory_fallback_class},
     type_info::{
-        RuntimeTypeEnv, boundary_spec_for_ty_in_env, effect_handle_class_for_ty_in_context,
-        provider_class_for_target_in_env, stored_class_for_ty_in_context,
-        top_level_class_for_ty_in_env,
+        RuntimeTypeEnv, effect_handle_class_for_ty_in_context, provider_class_for_target_in_env,
+        stored_class_for_ty_in_context, top_level_class_for_ty_in_env,
     },
 };
 

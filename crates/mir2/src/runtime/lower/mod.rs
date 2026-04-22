@@ -1,5 +1,6 @@
 pub(crate) mod arg_selector;
 pub mod body;
+pub(crate) mod boundary;
 pub(crate) mod call;
 pub(crate) mod call_input;
 pub(crate) mod classify;

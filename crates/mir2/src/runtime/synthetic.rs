@@ -32,6 +32,7 @@ use crate::{
         RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole, TargetRootProviderBinding,
         TargetRootProviderMaterialization,
         lower::{
+            boundary::{RuntimeValueAddress, RuntimeValueSource},
             classify::{
                 ref_class_for_place_result, runtime_signature_for_key_with_returns,
                 semantic_return_ty,
@@ -39,9 +40,8 @@ use crate::{
             conversion::{RuntimeConversionEmitter, emit_runtime_coercion},
             interface::runtime_visible_binding_plans,
             realize::{
-                RuntimeValueAddress, RuntimeValueArgSelectionCx, RuntimeValueArgSelector,
-                RuntimeValueSource, RuntimeValueUseEmitter, SelectedRuntimeValueArg,
-                emit_selected_runtime_value_args,
+                RuntimeValueArgSelectionCx, RuntimeValueArgSelector, RuntimeValueUseEmitter,
+                SelectedRuntimeValueArg, emit_selected_runtime_value_args,
             },
             returns::RuntimeReturnAnalysisCx,
             tuple::{

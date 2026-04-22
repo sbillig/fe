@@ -5,21 +5,14 @@ use hir::analysis::{
 
 use crate::{
     db::MirDb,
-    runtime::{
-        AddressSpaceKind, BorrowAccess, RuntimeBoundarySpec, RuntimeClass, RuntimeParamPlan,
-    },
+    runtime::{RuntimeBoundarySpec, RuntimeClass, RuntimeParamPlan},
 };
 
 use super::{
-    classify::{
-        BoundarySiteAllocator, StagedBoundary, desired_runtime_effect_arg_boundary,
-        runtime_effect_binding_plan_for_binding_idx,
-    },
+    boundary::{BoundarySiteAllocator, StagedBoundary, default_by_place_boundary},
+    classify::{desired_runtime_effect_arg_boundary, runtime_effect_binding_plan_for_binding_idx},
     place::resolved_effect_arg_address_space,
-    type_info::{
-        RuntimeTypeEnv, default_borrow_transport_set, provider_class_for_target_in_env,
-        stored_class_for_ty_in_context,
-    },
+    type_info::{RuntimeTypeEnv, provider_class_for_target_in_env},
 };
 
 #[derive(Clone, Debug)]
@@ -95,29 +88,6 @@ pub(super) fn compile_value_pass_plan<'db>(
                 boundary: boundary_sites.stage(boundary),
             }
         }
-    }
-}
-
-fn default_by_place_boundary<'db>(
-    db: &'db dyn MirDb,
-    type_env: RuntimeTypeEnv<'db>,
-    arg: &NEffectArg<'db>,
-    space: AddressSpaceKind,
-) -> RuntimeBoundarySpec<'db> {
-    let Some(target_ty) = arg.target_ty else {
-        return RuntimeBoundarySpec::ExactShape(provider_class_for_target_in_env(
-            db, type_env, None, space,
-        ));
-    };
-    RuntimeBoundarySpec::BorrowLike {
-        pointee: stored_class_for_ty_in_context(
-            db,
-            target_ty,
-            type_env.scope,
-            type_env.assumptions,
-        ),
-        access: BorrowAccess::ReadWrite,
-        allow: default_borrow_transport_set(BorrowAccess::ReadWrite, space),
     }
 }
 
@@ -211,15 +181,15 @@ fn compile_effect_arg_plan<'db>(
                 },
             ),
         (EffectPassMode::ByPlace | EffectPassMode::ByTempPlace, NEffectArgValue::Value(_)) => {
-            let boundary =
-                boundary.unwrap_or_else(|| default_by_place_boundary(db, type_env, arg, space));
+            let boundary = boundary
+                .unwrap_or_else(|| default_by_place_boundary(db, type_env, arg.target_ty, space));
             CompiledEffectArgPlan::Value(CompiledEffectValuePlan::ByPlace {
                 boundary: boundary_sites.stage(boundary),
             })
         }
         (EffectPassMode::ByPlace | EffectPassMode::ByTempPlace, NEffectArgValue::Place(_)) => {
-            let boundary =
-                boundary.unwrap_or_else(|| default_by_place_boundary(db, type_env, arg, space));
+            let boundary = boundary
+                .unwrap_or_else(|| default_by_place_boundary(db, type_env, arg.target_ty, space));
             CompiledEffectArgPlan::Place(CompiledEffectPlacePlan::Boundary {
                 boundary: boundary_sites.stage(boundary),
             })

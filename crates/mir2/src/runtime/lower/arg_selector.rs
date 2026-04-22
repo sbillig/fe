@@ -10,21 +10,20 @@ use hir::analysis::{
 use crate::runtime::{AddressSpaceKind, RuntimeBoundarySpec, RuntimeCarrier, RuntimeClass};
 
 use super::{
+    boundary::{
+        BoundaryMatcher, BoundaryRef, RuntimeValueMaterialization, RuntimeValueUsePlan,
+        StagedBoundary, specialize_boundary_for_runtime_source_in_context,
+    },
     call_input::{
         CompiledCallInputPlan, CompiledEffectArgPlan, CompiledEffectPlacePlan,
         CompiledEffectValuePlan, CompiledMaterializationPlan, CompiledValuePassPlan,
     },
     classify::{
-        BodyEnv, BoundaryRef, InferClassCache, StagedBoundary, carrier_value_class,
-        provider_root_space, ref_class_for_place_result,
-        runtime_class_for_direct_value_provider_in_context,
+        BodyEnv, InferClassCache, carrier_value_class, provider_root_space,
+        ref_class_for_place_result, runtime_class_for_direct_value_provider_in_context,
         runtime_class_for_effect_binding_provider_in_context, snapshot_source_place,
-        specialize_boundary_for_runtime_source_in_context,
     },
-    realize::{
-        RuntimeArgSource, RuntimeBoundaryMatcher, RuntimeValueMaterialization, RuntimeValueUsePlan,
-        SelectedRuntimeArg,
-    },
+    realize::{RuntimeArgSource, SelectedRuntimeArg},
 };
 
 pub(super) struct RuntimeArgSelector<'a, 'carriers, 'cache, 'db> {
@@ -238,7 +237,7 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
         let local_data = self.env.body().locals.get(local.index())?;
         let semantic_ty = local_data.ty;
         if let Some(class) = carrier_value_class(local, self.carriers)
-            && RuntimeBoundaryMatcher::class_satisfies_boundary(&class, boundary)
+            && BoundaryMatcher::class_satisfies_boundary(&class, boundary)
         {
             return Some(SelectedRuntimeArg::local_value(local, class));
         }
@@ -263,7 +262,7 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
                     provider_root_space(provider, &root_class),
                     false,
                 );
-                if RuntimeBoundaryMatcher::class_satisfies_boundary(&class, boundary) {
+                if BoundaryMatcher::class_satisfies_boundary(&class, boundary) {
                     return Some(SelectedRuntimeArg::handle_like_value(local, class));
                 }
             }
@@ -280,7 +279,7 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
                     AddressSpaceKind::Memory,
                     false,
                 );
-                if RuntimeBoundaryMatcher::class_satisfies_boundary(&class, boundary) {
+                if BoundaryMatcher::class_satisfies_boundary(&class, boundary) {
                     return Some(SelectedRuntimeArg::handle_like_value(local, class));
                 }
             }
@@ -313,7 +312,7 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
         let class = self
             .env
             .normalized_place_address_class(self.carriers, &place)?;
-        RuntimeBoundaryMatcher::class_satisfies_boundary(&class, boundary)
+        BoundaryMatcher::class_satisfies_boundary(&class, boundary)
             .then(|| SelectedRuntimeArg::place_addr(place, semantic_ty, class))
     }
 
@@ -366,7 +365,7 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
         if let Some(class) = self
             .env
             .normalized_place_address_class(self.carriers, &place)
-            && RuntimeBoundaryMatcher::class_satisfies_boundary(&class, &boundary)
+            && BoundaryMatcher::class_satisfies_boundary(&class, &boundary)
         {
             return Some(SelectedRuntimeArg::place_addr(place, semantic_ty, class));
         }
@@ -410,7 +409,7 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
         if !place.path.is_empty() {
             return None;
         }
-        RuntimeBoundaryMatcher::placeholder_class(boundary)
+        BoundaryMatcher::placeholder_class(boundary)
             .map(|class| SelectedRuntimeArg::placeholder(semantic_ty, class))
     }
 
