@@ -3,11 +3,11 @@ use hir::analysis::{
     semantic::{
         EffectProviderSubst, FieldIndex, GenericSubst, ImplEnv, SBlockId, SConst, SLocalId,
         SemConstId, SemConstScalar, SemConstValue, SemanticCalleeRef, SemanticCodeRegionRef,
-        SemanticInstance, SemanticInstanceKey, VariantIndex,
+        SemanticInstance, SemanticInstanceKey, SemanticLocalKind, VariantIndex,
         borrowck::{
-            NBorrowRoot, NEffectArg, NExpr, NLocalInterface, NLocalOrigin, NOperand, NSPlace,
-            NSPlaceRoot, NSStmt, NSStmtKind, NSTerminator, NSTerminatorKind,
-            NormalizedSemanticBody, normalize_semantic_body,
+            NBorrowRoot, NEffectArg, NExpr, NLocalOrigin, NOperand, NSPlace, NSPlaceRoot, NSStmt,
+            NSStmtKind, NSTerminator, NSTerminatorKind, NormalizedSemanticBody,
+            normalize_semantic_body,
         },
         get_or_build_semantic_instance, reify_runtime_const_for_ty, sem_const_ty,
         semantic_may_return_normally,
@@ -3893,7 +3893,7 @@ impl<'db> RmirEmitter<'db> {
         if !matches!(
             (&local_data.facts.interface, &local_data.facts.origin),
             (
-                NLocalInterface::DirectValue,
+                SemanticLocalKind::DirectValue,
                 NLocalOrigin::SelfRooted | NLocalOrigin::AliasedPlace
             )
         ) {

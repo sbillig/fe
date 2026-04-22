@@ -465,8 +465,7 @@ mod tests {
     use hir::{
         analysis::{
             semantic::{
-                borrowck::NLocalInterface, get_or_build_semantic_instance,
-                root_semantic_instance_key,
+                SemanticLocalKind, get_or_build_semantic_instance, root_semantic_instance_key,
             },
             ty::ty_check::BodyOwner,
         },
@@ -716,7 +715,7 @@ fn first(_ arr: [u8; 4]) -> u8 {
             .enumerate()
             .filter_map(|(idx, local)| {
                 (idx >= summary.param_locals.len()
-                    && matches!(local.facts.interface, NLocalInterface::DirectValue)
+                    && matches!(local.facts.interface, SemanticLocalKind::DirectValue)
                     && local.facts.root_demand.needs_projectable_owned_storage())
                 .then_some(SLocalId::from_u32(idx as u32))
             })

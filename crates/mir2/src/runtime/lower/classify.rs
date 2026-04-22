@@ -5,13 +5,14 @@ use cranelift_entity::{EntityRef, PrimaryMap, entity_impl};
 use hir::analysis::{
     semantic::{
         FieldIndex, GenericSubst, ImplEnv, NEffectArg, NEffectArgValue, ReadMode, SConst, SLocalId,
-        SemanticCalleeRef, SemanticInstance, SemanticInstanceKey, ValueProvenance, VariantIndex,
+        SemanticCalleeRef, SemanticInstance, SemanticInstanceKey, SemanticLocalKind,
+        SemanticLocalRole, ValueProvenance, VariantIndex,
         borrowck::{
-            NBorrowRoot, NExpr, NLocalInterface, NLocalOrigin, NOperand, NSPlace, NSPlaceRoot,
+            NBorrowRoot, NExpr, NLocalOrigin, NOperand, NSPlace, NSPlaceRoot,
             NormalizedBindingLowering, NormalizedSemanticBody,
         },
-        get_or_build_semantic_instance, sem_const_ty, semantic_binding_lowering,
-        semantic_binding_ty, semantic_instance_assumptions,
+        get_or_build_semantic_instance, sem_const_ty, semantic_binding_role, semantic_binding_ty,
+        semantic_instance_assumptions,
     },
     ty::{
         ProviderKind,
@@ -1022,13 +1023,13 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         let local_data = self.body.locals.get(local.index())?;
         let local_facts = self.local_facts(local)?;
         match local_data.facts.interface {
-            NLocalInterface::Erased => None,
-            NLocalInterface::DirectValue | NLocalInterface::DirectCarrier => {
+            SemanticLocalKind::Erased => None,
+            SemanticLocalKind::DirectValue | SemanticLocalKind::DirectCarrier => {
                 carrier_value_class(local, carriers)
             }
-            NLocalInterface::PlaceCarrier => carrier_value_class(local, carriers)
+            SemanticLocalKind::PlaceCarrier => carrier_value_class(local, carriers)
                 .or_else(|| local_facts.semantic_fallback_class.clone()),
-            NLocalInterface::PlaceBoundValue => self
+            SemanticLocalKind::PlaceBoundValue => self
                 .normalized_place_class(
                     carriers,
                     self.body.locals.get(local.index())?.backing_place()?,
@@ -1043,25 +1044,23 @@ fn root_provider_for_runtime_visible_binding<'db>(
     semantic: SemanticInstance<'db>,
     binding: LocalBinding<'db>,
 ) -> Option<ProviderBinding<'db>> {
-    match semantic_binding_lowering(db, semantic, binding) {
-        hir::analysis::semantic::SemanticBindingLowering::DirectValue {
+    match semantic_binding_role(db, semantic, binding) {
+        SemanticLocalRole::DirectValue {
             provenance: ValueProvenance::RootProvider(provider),
         }
-        | hir::analysis::semantic::SemanticBindingLowering::DirectCarrier {
+        | SemanticLocalRole::DirectCarrier {
             provider: Some(provider),
             ..
         }
-        | hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
+        | SemanticLocalRole::PlaceBoundValue {
             provenance: hir::analysis::semantic::PlaceProvenance::RootProvider(provider),
             ..
         } => Some(provider),
-        hir::analysis::semantic::SemanticBindingLowering::Erased
-        | hir::analysis::semantic::SemanticBindingLowering::DirectValue { .. }
-        | hir::analysis::semantic::SemanticBindingLowering::DirectCarrier {
-            provider: None, ..
-        }
-        | hir::analysis::semantic::SemanticBindingLowering::PlaceCarrier { .. }
-        | hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
+        SemanticLocalRole::Erased
+        | SemanticLocalRole::DirectValue { .. }
+        | SemanticLocalRole::DirectCarrier { provider: None, .. }
+        | SemanticLocalRole::PlaceCarrier { .. }
+        | SemanticLocalRole::PlaceBoundValue {
             provenance: hir::analysis::semantic::PlaceProvenance::Derived { .. },
             ..
         } => None,
@@ -1094,24 +1093,24 @@ fn build_local_static_facts<'db>(
     let assumptions = type_env.assumptions;
     let lowered_ty = lowered_place_like_ty(local, local_data);
     let semantic_fallback_class = match local_data.facts.interface {
-        NLocalInterface::PlaceCarrier | NLocalInterface::PlaceBoundValue => {
+        SemanticLocalKind::PlaceCarrier | SemanticLocalKind::PlaceBoundValue => {
             lowered_ty.map(|ty| stored_class_for_ty_in_context(db, ty, scope, assumptions))
         }
-        NLocalInterface::Erased | NLocalInterface::DirectValue | NLocalInterface::DirectCarrier => {
-            None
-        }
+        SemanticLocalKind::Erased
+        | SemanticLocalKind::DirectValue
+        | SemanticLocalKind::DirectCarrier => None,
     };
     let root_place_fallback_class = match local_data.facts.interface {
-        NLocalInterface::Erased => None,
-        NLocalInterface::DirectValue => Some(stored_class_for_ty_in_context(
+        SemanticLocalKind::Erased => None,
+        SemanticLocalKind::DirectValue => Some(stored_class_for_ty_in_context(
             db,
             local_data.ty,
             scope,
             assumptions,
         )),
-        NLocalInterface::PlaceCarrier
-        | NLocalInterface::DirectCarrier
-        | NLocalInterface::PlaceBoundValue => {
+        SemanticLocalKind::PlaceCarrier
+        | SemanticLocalKind::DirectCarrier
+        | SemanticLocalKind::PlaceBoundValue => {
             lowered_ty.map(|ty| stored_class_for_ty_in_context(db, ty, scope, assumptions))
         }
     };
@@ -1130,11 +1129,11 @@ fn build_local_static_facts<'db>(
             scope,
             assumptions,
         ),
-        materialization_plan: if matches!(local_data.facts.interface, NLocalInterface::Erased) {
+        materialization_plan: if matches!(local_data.facts.interface, SemanticLocalKind::Erased) {
             CompiledMaterializationPlan::Erased
         } else {
             match local_data.facts.interface {
-                NLocalInterface::DirectValue => top_level_class_for_ty_in_context(
+                SemanticLocalKind::DirectValue => top_level_class_for_ty_in_context(
                     db,
                     local_data.ty,
                     AddressSpaceKind::Memory,
@@ -1147,10 +1146,10 @@ fn build_local_static_facts<'db>(
                         fallback,
                     },
                 ),
-                NLocalInterface::PlaceCarrier
-                | NLocalInterface::DirectCarrier
-                | NLocalInterface::PlaceBoundValue => CompiledMaterializationPlan::SemanticValue,
-                NLocalInterface::Erased => unreachable!(),
+                SemanticLocalKind::PlaceCarrier
+                | SemanticLocalKind::DirectCarrier
+                | SemanticLocalKind::PlaceBoundValue => CompiledMaterializationPlan::SemanticValue,
+                SemanticLocalKind::Erased => unreachable!(),
             }
         },
         source_locals: local_source_locals(body, local_data),
@@ -1163,20 +1162,20 @@ fn lowered_place_like_ty<'db>(
 ) -> Option<TyId<'db>> {
     match (&local_data.facts.interface, &local_data.lowering) {
         (
-            NLocalInterface::PlaceCarrier | NLocalInterface::DirectCarrier,
+            SemanticLocalKind::PlaceCarrier | SemanticLocalKind::DirectCarrier,
             NormalizedBindingLowering::CarrierLocal { target_ty, .. },
         ) => Some(*target_ty),
         (
-            NLocalInterface::PlaceBoundValue,
+            SemanticLocalKind::PlaceBoundValue,
             NormalizedBindingLowering::PlaceBoundValue { value_ty, .. },
         ) => Some(*value_ty),
-        (NLocalInterface::PlaceCarrier | NLocalInterface::DirectCarrier, _) => {
+        (SemanticLocalKind::PlaceCarrier | SemanticLocalKind::DirectCarrier, _) => {
             panic!("carrier local missing carrier lowering: {local:?}")
         }
-        (NLocalInterface::PlaceBoundValue, _) => {
+        (SemanticLocalKind::PlaceBoundValue, _) => {
             panic!("place-bound local missing place-bound lowering: {local:?}")
         }
-        (NLocalInterface::Erased | NLocalInterface::DirectValue, _) => None,
+        (SemanticLocalKind::Erased | SemanticLocalKind::DirectValue, _) => None,
     }
 }
 
@@ -1700,9 +1699,9 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
         semantic_instance_assumptions(db, semantic),
     );
     let binding_ty = semantic_binding_ty(db, semantic, binding);
-    match semantic_binding_lowering(db, semantic, binding) {
-        hir::analysis::semantic::SemanticBindingLowering::Erased => None,
-        hir::analysis::semantic::SemanticBindingLowering::DirectValue {
+    match semantic_binding_role(db, semantic, binding) {
+        SemanticLocalRole::Erased => None,
+        SemanticLocalRole::DirectValue {
             provenance: ValueProvenance::RootProvider(provider),
         } => {
             let class = runtime_class_for_provider_value_ty_in_context(
@@ -1718,7 +1717,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
             );
             Some(RuntimeEffectBindingPlan { class, boundary })
         }
-        hir::analysis::semantic::SemanticBindingLowering::DirectValue { .. } => {
+        SemanticLocalRole::DirectValue { .. } => {
             let class =
                 runtime_class_for_explicit_root_provider_param(db, env, binding, binding_ty)
                     .or_else(|| {
@@ -1729,7 +1728,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
                 boundary: RuntimeBoundarySpec::default_exact_boundary_for_class(class),
             })
         }
-        hir::analysis::semantic::SemanticBindingLowering::DirectCarrier {
+        SemanticLocalRole::DirectCarrier {
             provider: Some(provider),
             ..
         } => {
@@ -1740,7 +1739,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
                 boundary: RuntimeBoundarySpec::default_exact_boundary_for_class(class),
             })
         }
-        hir::analysis::semantic::SemanticBindingLowering::DirectCarrier {
+        SemanticLocalRole::DirectCarrier {
             provider: None,
             target_ty,
         } => {
@@ -1759,7 +1758,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
                 boundary: RuntimeBoundarySpec::default_exact_boundary_for_class(class),
             })
         }
-        hir::analysis::semantic::SemanticBindingLowering::PlaceCarrier { value_ty } => {
+        SemanticLocalRole::PlaceCarrier { value_ty } => {
             let class =
                 provider_class_for_target_in_env(db, env, Some(value_ty), AddressSpaceKind::Memory);
             Some(RuntimeEffectBindingPlan {
@@ -1767,7 +1766,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
                 boundary: RuntimeBoundarySpec::default_exact_boundary_for_class(class),
             })
         }
-        hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
+        SemanticLocalRole::PlaceBoundValue {
             provenance: hir::analysis::semantic::PlaceProvenance::RootProvider(provider),
             value_ty,
         } => {
@@ -1784,7 +1783,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
             );
             Some(RuntimeEffectBindingPlan { class, boundary })
         }
-        hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
+        SemanticLocalRole::PlaceBoundValue {
             provenance: hir::analysis::semantic::PlaceProvenance::Derived { .. },
             ..
         } => None,
@@ -1813,9 +1812,9 @@ fn runtime_exact_class_for_visible_binding_in_env<'db>(
     binding: LocalBinding<'db>,
     binding_ty: TyId<'db>,
 ) -> Option<RuntimeClass<'db>> {
-    match semantic_binding_lowering(db, semantic, binding) {
-        hir::analysis::semantic::SemanticBindingLowering::Erased => None,
-        hir::analysis::semantic::SemanticBindingLowering::DirectValue {
+    match semantic_binding_role(db, semantic, binding) {
+        SemanticLocalRole::Erased => None,
+        SemanticLocalRole::DirectValue {
             provenance: ValueProvenance::RootProvider(provider),
         } => runtime_class_for_provider_value_ty_in_context(
             db,
@@ -1824,16 +1823,15 @@ fn runtime_exact_class_for_visible_binding_in_env<'db>(
             env.scope,
             env.assumptions,
         ),
-        hir::analysis::semantic::SemanticBindingLowering::DirectValue { .. } => {
-            runtime_exact_class_for_ordinary_binding_in_env(db, env, binding, binding_ty).or_else(
-                || top_level_class_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory),
-            )
-        }
-        hir::analysis::semantic::SemanticBindingLowering::DirectCarrier {
+        SemanticLocalRole::DirectValue { .. } => runtime_exact_class_for_ordinary_binding_in_env(
+            db, env, binding, binding_ty,
+        )
+        .or_else(|| top_level_class_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory)),
+        SemanticLocalRole::DirectCarrier {
             provider: Some(provider),
             ..
         } => runtime_class_for_provider_binding(db, &provider, env.scope, env.assumptions),
-        hir::analysis::semantic::SemanticBindingLowering::DirectCarrier {
+        SemanticLocalRole::DirectCarrier {
             provider: None,
             target_ty,
         } => top_level_class_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory).or_else(
@@ -1846,10 +1844,13 @@ fn runtime_exact_class_for_visible_binding_in_env<'db>(
                 ))
             },
         ),
-        hir::analysis::semantic::SemanticBindingLowering::PlaceCarrier { value_ty } => Some(
-            provider_class_for_target_in_env(db, env, Some(value_ty), AddressSpaceKind::Memory),
-        ),
-        hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
+        SemanticLocalRole::PlaceCarrier { value_ty } => Some(provider_class_for_target_in_env(
+            db,
+            env,
+            Some(value_ty),
+            AddressSpaceKind::Memory,
+        )),
+        SemanticLocalRole::PlaceBoundValue {
             provenance: hir::analysis::semantic::PlaceProvenance::RootProvider(provider),
             value_ty,
         } => runtime_class_for_provider_value_ty_in_context(
@@ -1859,7 +1860,7 @@ fn runtime_exact_class_for_visible_binding_in_env<'db>(
             env.scope,
             env.assumptions,
         ),
-        hir::analysis::semantic::SemanticBindingLowering::PlaceBoundValue {
+        SemanticLocalRole::PlaceBoundValue {
             provenance: hir::analysis::semantic::PlaceProvenance::Derived { .. },
             ..
         } => None,
@@ -2400,27 +2401,27 @@ fn concrete_runtime_self_ty_for_call_arg<'db>(
         &local_data.facts.origin,
         &local_data.lowering,
     ) {
-        (NLocalInterface::Erased, _, _) => None,
+        (SemanticLocalKind::Erased, _, _) => None,
         (
-            NLocalInterface::DirectValue | NLocalInterface::DirectCarrier,
+            SemanticLocalKind::DirectValue | SemanticLocalKind::DirectCarrier,
             NLocalOrigin::RootProvider(provider),
             _,
         ) => Some(normalized(provider.provider_ty)),
         (
-            NLocalInterface::PlaceBoundValue,
+            SemanticLocalKind::PlaceBoundValue,
             NLocalOrigin::RootProvider(provider),
             NormalizedBindingLowering::PlaceBoundValue { value_ty, .. },
         ) => Some(normalized(
             provider.semantics.target_ty.unwrap_or(*value_ty),
         )),
         (
-            NLocalInterface::PlaceBoundValue,
+            SemanticLocalKind::PlaceBoundValue,
             NLocalOrigin::SelfRooted | NLocalOrigin::AliasedPlace,
             NormalizedBindingLowering::PlaceBoundValue { value_ty, .. },
         ) => Some(normalized(*value_ty)),
-        (NLocalInterface::DirectValue, _, _) => Some(normalized(local_data.ty)),
+        (SemanticLocalKind::DirectValue, _, _) => Some(normalized(local_data.ty)),
         (
-            NLocalInterface::PlaceCarrier | NLocalInterface::DirectCarrier,
+            SemanticLocalKind::PlaceCarrier | SemanticLocalKind::DirectCarrier,
             _,
             NormalizedBindingLowering::CarrierLocal { target_ty, .. },
         ) => Some(normalized(*target_ty)),
@@ -3326,14 +3327,14 @@ mod tests {
         let self_binding = typed_body
             .param_binding(0)
             .expect("grant typed body should keep self as the first param binding");
-        let self_lowering = semantic_binding_lowering(&db, semantic, self_binding);
+        let self_role = semantic_binding_role(&db, semantic, self_binding);
         let plans = runtime_visible_binding_plans(&db, semantic);
         let signature = callee.signature(&db);
 
         assert_eq!(
             plans.len(),
             3,
-            "specialized grant callee should keep self + 2 explicit args runtime-visible:\nself_lowering={self_lowering:#?}\nplans={plans:#?}\nsignature={signature:#?}"
+            "specialized grant callee should keep self + 2 explicit args runtime-visible:\nself_role={self_role:#?}\nplans={plans:#?}\nsignature={signature:#?}"
         );
         assert!(
             matches!(
@@ -3343,12 +3344,12 @@ mod tests {
                     ..
                 }))
             ),
-            "specialized grant receiver should remain a visible provider transport:\nself_lowering={self_lowering:#?}\nplans={plans:#?}\nsignature={signature:#?}"
+            "specialized grant receiver should remain a visible provider transport:\nself_role={self_role:#?}\nplans={plans:#?}\nsignature={signature:#?}"
         );
         assert_eq!(
             signature.params.len(),
             3,
-            "specialized grant runtime signature should keep self + 2 explicit args:\nself_lowering={self_lowering:#?}\nplans={plans:#?}\nsignature={signature:#?}"
+            "specialized grant runtime signature should keep self + 2 explicit args:\nself_role={self_role:#?}\nplans={plans:#?}\nsignature={signature:#?}"
         );
     }
 

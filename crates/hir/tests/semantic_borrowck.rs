@@ -6,9 +6,9 @@ use fe_hir::{
     analysis::{
         diagnostics::format_diags,
         semantic::{
-            BorrowInputRef, BorrowTransform, FieldIndex, NBorrowRoot, NExpr, NLocalInterface,
-            NLocalOrigin, NSStmtKind, NormalizedBindingLowering, SPlaceElem, SStmtKind,
-            SemanticInstance, check_semantic_borrows, collect_semantic_borrow_diagnostics,
+            BorrowInputRef, BorrowTransform, FieldIndex, NBorrowRoot, NExpr, NLocalOrigin,
+            NSStmtKind, NormalizedBindingLowering, SPlaceElem, SStmtKind, SemanticInstance,
+            SemanticLocalKind, check_semantic_borrows, collect_semantic_borrow_diagnostics,
             get_or_build_semantic_instance, identity_semantic_instance_key,
             normalize_semantic_body, semantic_borrow_summary,
         },
@@ -673,7 +673,10 @@ fn read_balance(addr: Address) -> u256 uses (store: TokenStore) {
         "expected provider root for store binding, got {:?}",
         normalized.root(root)
     );
-    assert_eq!(store_local.1.facts.interface, NLocalInterface::DirectValue);
+    assert_eq!(
+        store_local.1.facts.interface,
+        SemanticLocalKind::DirectValue
+    );
     assert!(matches!(
         store_local.1.facts.origin,
         NLocalOrigin::RootProvider(_)
@@ -698,7 +701,7 @@ fn read_balance(addr: Address) -> u256 uses (store: TokenStore) {
         "expected self-rooted local slot for provider field temp, got {:?}",
         normalized.root(root)
     );
-    assert_eq!(field_local.facts.interface, NLocalInterface::DirectValue);
+    assert_eq!(field_local.facts.interface, SemanticLocalKind::DirectValue);
     assert!(matches!(field_local.facts.origin, NLocalOrigin::SelfRooted));
     let backing_place = field_local
         .backing_place()
@@ -882,7 +885,7 @@ fn read(wrapper: Wrapper) -> u256 {
     let (copy_local_id, copy_local) = locals[1];
 
     for (local_id, local) in [(pair_local_id, pair_local), (copy_local_id, copy_local)] {
-        assert_eq!(local.facts.interface, NLocalInterface::DirectValue);
+        assert_eq!(local.facts.interface, SemanticLocalKind::DirectValue);
         assert!(matches!(local.facts.origin, NLocalOrigin::SelfRooted));
         let backing_place = local
             .backing_place()
@@ -1070,7 +1073,7 @@ impl Table {
         })
         .expect("owned array local");
 
-    assert_eq!(used_local.facts.interface, NLocalInterface::DirectValue);
+    assert_eq!(used_local.facts.interface, SemanticLocalKind::DirectValue);
     assert!(matches!(used_local.facts.origin, NLocalOrigin::SelfRooted));
     let backing_place = used_local
         .backing_place()

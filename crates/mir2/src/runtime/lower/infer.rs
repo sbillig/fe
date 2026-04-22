@@ -5,11 +5,8 @@ use dataflow::{SparseAnalysis, solve_sparse};
 use hir::{
     analysis::{
         semantic::{
-            SLocalId,
-            borrowck::{
-                NLocalInterface, NLocalOrigin, NSLocal, NormalizedBindingLowering,
-                NormalizedSemanticBody,
-            },
+            SLocalId, SemanticLocalKind,
+            borrowck::{NLocalOrigin, NSLocal, NormalizedBindingLowering, NormalizedSemanticBody},
         },
         ty::trait_resolution::PredicateListId,
     },
@@ -210,7 +207,7 @@ pub(crate) fn seed_root_provider_carriers<'a, 'db>(
             continue;
         }
         let class = match (&local.facts.interface, &local.facts.origin) {
-            (NLocalInterface::DirectValue, NLocalOrigin::RootProvider(provider)) => env
+            (SemanticLocalKind::DirectValue, NLocalOrigin::RootProvider(provider)) => env
                 .actual_runtime_visible_root_provider_class(carriers, provider)
                 .map(|(_, class)| class)
                 .or_else(|| {
@@ -221,7 +218,7 @@ pub(crate) fn seed_root_provider_carriers<'a, 'db>(
                         env.assumptions(),
                     )
                 }),
-            (NLocalInterface::DirectCarrier, NLocalOrigin::RootProvider(provider)) => env
+            (SemanticLocalKind::DirectCarrier, NLocalOrigin::RootProvider(provider)) => env
                 .actual_runtime_visible_root_provider_class(carriers, provider)
                 .map(|(_, class)| class)
                 .or_else(|| {
@@ -246,7 +243,7 @@ pub(crate) fn desired_runtime_value_carrier<'db>(
 ) -> RuntimeCarrier<'db> {
     match class {
         RuntimeClass::AggregateValue { layout }
-            if matches!(local.facts.interface, NLocalInterface::DirectValue)
+            if matches!(local.facts.interface, SemanticLocalKind::DirectValue)
                 && local.facts.root_demand.needs_projectable_owned_storage() =>
         {
             RuntimeCarrier::Value(RuntimeClass::object_ref(layout))
@@ -270,7 +267,7 @@ fn lower_semantic_locals<'db>(
     for (idx, local) in body.locals.iter().enumerate() {
         let local_id = SLocalId::from_u32(idx as u32);
         let binding = match (&local.facts.interface, &local.facts.origin) {
-            (NLocalInterface::DirectValue, NLocalOrigin::RootProvider(provider)) => {
+            (SemanticLocalKind::DirectValue, NLocalOrigin::RootProvider(provider)) => {
                 let (provider_local, provider_class) = cx
                     .env
                     .actual_runtime_visible_root_provider_class(carriers, provider)
@@ -301,7 +298,7 @@ fn lower_semantic_locals<'db>(
                     provider_local,
                 ))
             }
-            (NLocalInterface::PlaceBoundValue, NLocalOrigin::RootProvider(provider)) => {
+            (SemanticLocalKind::PlaceBoundValue, NLocalOrigin::RootProvider(provider)) => {
                 let (provider_local, provider_class) = cx
                     .env
                     .actual_runtime_visible_root_provider_class(carriers, provider)
@@ -339,7 +336,7 @@ fn lower_semantic_locals<'db>(
                     provider_local,
                 ))
             }
-            (NLocalInterface::DirectCarrier, NLocalOrigin::RootProvider(provider)) => {
+            (SemanticLocalKind::DirectCarrier, NLocalOrigin::RootProvider(provider)) => {
                 let NormalizedBindingLowering::CarrierLocal { .. } = &local.lowering else {
                     panic!("direct-carrier local missing carrier lowering: {idx}");
                 };
@@ -386,8 +383,8 @@ fn lower_semantic_locals<'db>(
         .iter()
         .enumerate()
         .map(|(idx, local)| match (&local.facts.interface, &local.facts.origin) {
-            (NLocalInterface::Erased, _) => RuntimeLocalLowering::Erased,
-            (NLocalInterface::DirectValue, NLocalOrigin::RootProvider(provider)) => {
+            (SemanticLocalKind::Erased, _) => RuntimeLocalLowering::Erased,
+            (SemanticLocalKind::DirectValue, NLocalOrigin::RootProvider(provider)) => {
                 let provider = runtime_provider_binding_id(&provider_bindings, provider)
                     .unwrap_or_else(|| {
                         panic!(
@@ -399,8 +396,8 @@ fn lower_semantic_locals<'db>(
                     place_class: provider_bindings[provider.index()].place_class.clone(),
                 }
             }
-            (NLocalInterface::DirectValue, _) => RuntimeLocalLowering::DirectValue,
-            (NLocalInterface::PlaceCarrier, _) => RuntimeLocalLowering::PlaceCarrier {
+            (SemanticLocalKind::DirectValue, _) => RuntimeLocalLowering::DirectValue,
+            (SemanticLocalKind::PlaceCarrier, _) => RuntimeLocalLowering::PlaceCarrier {
                 place_class: carrier_local_place_class(
                     db,
                     local,
@@ -410,7 +407,7 @@ fn lower_semantic_locals<'db>(
                     assumptions,
                 ),
             },
-            (NLocalInterface::PlaceBoundValue, origin) => {
+            (SemanticLocalKind::PlaceBoundValue, origin) => {
                 let place_class =
                     normalized_local_place_class(db, body, SLocalId::from_u32(idx as u32), carriers)
                         .unwrap_or_else(|| {
@@ -428,7 +425,7 @@ fn lower_semantic_locals<'db>(
                     place_class,
                 }
             }
-            (NLocalInterface::DirectCarrier, origin) => {
+            (SemanticLocalKind::DirectCarrier, origin) => {
                 let place_class = carrier_local_place_class(
                     db,
                     local,
@@ -585,8 +582,8 @@ pub(super) fn local_place_root_class<'db>(
     carrier: &RuntimeCarrier<'db>,
 ) -> Option<RuntimeClass<'db>> {
     match local_data.facts.interface {
-        NLocalInterface::Erased => None,
-        NLocalInterface::DirectValue => {
+        SemanticLocalKind::Erased => None,
+        SemanticLocalKind::DirectValue => {
             if let Some(carrier_class) = carrier_value_class_for_runtime(carrier)
                 && let Some(place_class) =
                     materialized_place_class_from_runtime_source(&carrier_class)
@@ -595,21 +592,21 @@ pub(super) fn local_place_root_class<'db>(
             }
             cx.env.root_place_fallback_class(local)
         }
-        NLocalInterface::PlaceCarrier => {
+        SemanticLocalKind::PlaceCarrier => {
             if let Some(carrier_class) = carrier_value_class_for_runtime(carrier) {
                 return actual_aggregate_class_from_runtime_source(&carrier_class)
                     .or(Some(carrier_class));
             }
             cx.env.root_place_fallback_class(local)
         }
-        NLocalInterface::PlaceBoundValue => cx
+        SemanticLocalKind::PlaceBoundValue => cx
             .env
             .normalized_place_class(
                 cx.carriers,
                 cx.env.body().locals.get(local.index())?.backing_place()?,
             )
             .or_else(|| cx.env.root_place_fallback_class(local)),
-        NLocalInterface::DirectCarrier => {
+        SemanticLocalKind::DirectCarrier => {
             if let Some(carrier_class) = carrier_value_class_for_runtime(carrier) {
                 return actual_aggregate_class_from_runtime_source(&carrier_class)
                     .or(Some(carrier_class));
@@ -626,10 +623,10 @@ pub(super) fn fallback_root_transport_class<'db>(
     assumptions: PredicateListId<'db>,
 ) -> Option<RuntimeClass<'db>> {
     match local.facts.interface {
-        NLocalInterface::Erased
-        | NLocalInterface::DirectValue
-        | NLocalInterface::PlaceBoundValue => None,
-        NLocalInterface::PlaceCarrier => {
+        SemanticLocalKind::Erased
+        | SemanticLocalKind::DirectValue
+        | SemanticLocalKind::PlaceBoundValue => None,
+        SemanticLocalKind::PlaceCarrier => {
             let NormalizedBindingLowering::CarrierLocal { target_ty, .. } = &local.lowering else {
                 panic!("place-carrier local missing carrier lowering");
             };
@@ -650,7 +647,7 @@ pub(super) fn fallback_root_transport_class<'db>(
                 ))
             })
         }
-        NLocalInterface::DirectCarrier => {
+        SemanticLocalKind::DirectCarrier => {
             let provider = local.facts.origin.root_provider();
             let NormalizedBindingLowering::CarrierLocal { target_ty, .. } = &local.lowering else {
                 panic!("direct-carrier local missing carrier lowering");

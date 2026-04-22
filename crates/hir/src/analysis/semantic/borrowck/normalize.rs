@@ -5,8 +5,9 @@ use crate::{
         HirAnalysisDb,
         semantic::{
             PlaceProvenance, SExpr, SLocalId, SPlace, SPlaceElem, SStmtKind, STerminatorKind,
-            SemanticBody, SemanticInstance, SemanticLocalRole, SemanticProjection, ValueProvenance,
-            ctfe::canonicalize_semantic_consts, semantic_instance_assumptions,
+            SemanticBody, SemanticInstance, SemanticLocalKind, SemanticLocalRole,
+            SemanticProjection, ValueProvenance, ctfe::canonicalize_semantic_consts,
+            semantic_instance_assumptions,
         },
         ty::{ty_check::LocalBinding, ty_def::TyId, ty_is_copy},
     },
@@ -15,9 +16,9 @@ use crate::{
 };
 
 use super::ir::{
-    NBorrowRoot, NBorrowRootId, NEffectArg, NEffectArgValue, NExpr, NLocalFacts, NLocalInterface,
-    NLocalOrigin, NLocalRootDemand, NOperand, NSBlock, NSLocal, NSPlace, NSPlaceRoot, NSStmt,
-    NSStmtKind, NSTerminator, NSTerminatorKind, NormalizedBindingLowering, NormalizedSemanticBody,
+    NBorrowRoot, NBorrowRootId, NEffectArg, NEffectArgValue, NExpr, NLocalFacts, NLocalOrigin,
+    NLocalRootDemand, NOperand, NSBlock, NSLocal, NSPlace, NSPlaceRoot, NSStmt, NSStmtKind,
+    NSTerminator, NSTerminatorKind, NormalizedBindingLowering, NormalizedSemanticBody,
     NormalizedSemanticBodyId, ReadMode, SemanticNormalizeError, SemanticNormalizeErrorId,
     SemanticNormalizeResult, empty_normalized_body, local_has_runtime_move_semantics,
 };
@@ -217,9 +218,9 @@ impl<'db> NormalizeCtxt<'db> {
         _: &NormalizedBindingLowering<'db>,
     ) -> Result<NLocalFacts<'db>, SemanticNormalizeError<'db>> {
         let (interface, origin) = match &raw_local.role {
-            SemanticLocalRole::Erased => (NLocalInterface::Erased, NLocalOrigin::SelfRooted),
+            SemanticLocalRole::Erased => (SemanticLocalKind::Erased, NLocalOrigin::SelfRooted),
             SemanticLocalRole::DirectValue { provenance } => (
-                NLocalInterface::DirectValue,
+                SemanticLocalKind::DirectValue,
                 match provenance {
                     ValueProvenance::Ordinary => NLocalOrigin::SelfRooted,
                     ValueProvenance::RootProvider(provider) => {
@@ -228,7 +229,7 @@ impl<'db> NormalizeCtxt<'db> {
                 },
             ),
             SemanticLocalRole::PlaceBoundValue { provenance, .. } => (
-                NLocalInterface::PlaceBoundValue,
+                SemanticLocalKind::PlaceBoundValue,
                 match provenance {
                     PlaceProvenance::RootProvider(provider) => {
                         NLocalOrigin::RootProvider(provider.clone())
@@ -237,10 +238,10 @@ impl<'db> NormalizeCtxt<'db> {
                 },
             ),
             SemanticLocalRole::PlaceCarrier { .. } => {
-                (NLocalInterface::PlaceCarrier, NLocalOrigin::SelfRooted)
+                (SemanticLocalKind::PlaceCarrier, NLocalOrigin::SelfRooted)
             }
             SemanticLocalRole::DirectCarrier { provider, .. } => (
-                NLocalInterface::DirectCarrier,
+                SemanticLocalKind::DirectCarrier,
                 provider
                     .clone()
                     .map_or(NLocalOrigin::SelfRooted, NLocalOrigin::RootProvider),
@@ -254,7 +255,7 @@ impl<'db> NormalizeCtxt<'db> {
         let mut root_demand = NLocalRootDemand::default();
         if matches!(
             interface,
-            NLocalInterface::PlaceBoundValue | NLocalInterface::PlaceCarrier
+            SemanticLocalKind::PlaceBoundValue | SemanticLocalKind::PlaceCarrier
         ) {
             root_demand.always_rooted = true;
         }

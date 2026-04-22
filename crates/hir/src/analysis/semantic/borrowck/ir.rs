@@ -7,7 +7,7 @@ use crate::{
         HirAnalysisDb,
         semantic::{
             FieldIndex, Mutability, SConst, SLocalId, SemOrigin, SemanticBody, SemanticCalleeRef,
-            SemanticCodeRegionRef, VariantIndex,
+            SemanticCodeRegionRef, SemanticLocalKind, VariantIndex,
         },
         ty::{
             provider::ProviderAddressSpace,
@@ -74,15 +74,6 @@ pub enum NormalizedBindingLowering<'db> {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum NLocalInterface {
-    Erased,
-    DirectValue,
-    PlaceBoundValue,
-    PlaceCarrier,
-    DirectCarrier,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NLocalOrigin<'db> {
     SelfRooted,
@@ -129,7 +120,7 @@ impl NLocalRootDemand {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct NLocalFacts<'db> {
-    pub interface: NLocalInterface,
+    pub interface: SemanticLocalKind,
     pub origin: NLocalOrigin<'db>,
     pub snapshot_source_place: Option<NSPlace<'db>>,
     pub root_demand: NLocalRootDemand,

@@ -118,23 +118,13 @@ impl<'db> PlaceProvenance<'db> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub enum SemanticBindingLowering<'db> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum SemanticLocalKind {
     Erased,
-    DirectValue {
-        provenance: ValueProvenance<'db>,
-    },
-    PlaceCarrier {
-        value_ty: TyId<'db>,
-    },
-    PlaceBoundValue {
-        provenance: PlaceProvenance<'db>,
-        value_ty: TyId<'db>,
-    },
-    DirectCarrier {
-        provider: Option<ProviderBinding<'db>>,
-        target_ty: TyId<'db>,
-    },
+    DirectValue,
+    PlaceCarrier,
+    PlaceBoundValue,
+    DirectCarrier,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -157,6 +147,16 @@ pub enum SemanticLocalRole<'db> {
 }
 
 impl<'db> SemanticLocalRole<'db> {
+    pub fn kind(&self) -> SemanticLocalKind {
+        match self {
+            Self::Erased => SemanticLocalKind::Erased,
+            Self::DirectValue { .. } => SemanticLocalKind::DirectValue,
+            Self::PlaceCarrier { .. } => SemanticLocalKind::PlaceCarrier,
+            Self::PlaceBoundValue { .. } => SemanticLocalKind::PlaceBoundValue,
+            Self::DirectCarrier { .. } => SemanticLocalKind::DirectCarrier,
+        }
+    }
+
     pub fn root_provider(&self, locals: &[SLocal<'db>]) -> Option<ProviderBinding<'db>> {
         match self {
             Self::DirectValue {

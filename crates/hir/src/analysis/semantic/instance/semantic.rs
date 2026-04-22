@@ -6,9 +6,8 @@ use crate::{
         HirAnalysisDb,
         semantic::{
             PlaceProvenance, SBlockId, SExpr, SPlace, SPlaceElem, SStmtKind, STerminatorKind,
-            SemanticBindingLowering, SemanticBody, SemanticCalleeRef, SemanticLocalRole,
-            SemanticProjection, ValueProvenance, effect_param_site, lower::lower_to_smir,
-            verify_semantic_body,
+            SemanticBody, SemanticCalleeRef, SemanticLocalRole, SemanticProjection,
+            ValueProvenance, effect_param_site, lower::lower_to_smir, verify_semantic_body,
         },
         ty::{
             corelib::{RuntimeBuiltinFuncKind, runtime_builtin_func_kind},
@@ -315,12 +314,12 @@ impl<'db> SemanticInstance<'db> {
 }
 
 #[salsa::tracked]
-pub fn semantic_binding_lowering<'db>(
+pub fn semantic_binding_role<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
     binding: crate::analysis::ty::ty_check::LocalBinding<'db>,
-) -> SemanticBindingLowering<'db> {
-    classify_binding_lowering(db, instance, binding)
+) -> SemanticLocalRole<'db> {
+    classify_binding_role(db, instance, binding)
 }
 
 #[salsa::tracked]
@@ -619,11 +618,11 @@ fn collect_semantic_callees<'db>(
     callees
 }
 
-fn classify_binding_lowering<'db>(
+fn classify_binding_role<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
     binding: LocalBinding<'db>,
-) -> SemanticBindingLowering<'db> {
+) -> SemanticLocalRole<'db> {
     let owner = instance.key(db).owner(db);
     let scope = owner.scope();
     let assumptions = semantic_instance_assumptions(db, instance);
@@ -643,28 +642,26 @@ fn classify_binding_lowering<'db>(
     }
     if let Some((_, value_ty)) = ty.as_capability(db) {
         let value_ty = normalize_ty(db, value_ty, scope, assumptions);
-        return SemanticBindingLowering::PlaceCarrier { value_ty };
+        return SemanticLocalRole::PlaceCarrier { value_ty };
     }
     if let Some(metadata) = effect_handle_metadata(db, scope, assumptions, ty) {
-        return SemanticBindingLowering::DirectCarrier {
+        return SemanticLocalRole::DirectCarrier {
             provider: resolved_provider_binding_for_instance_effect(db, instance, binding),
             target_ty: metadata.target_ty,
         };
     }
     if let Some(provider) = resolved_provider_binding_for_instance_effect(db, instance, binding) {
         return match provider.semantics.kind {
-            ProviderKind::RootObject => SemanticBindingLowering::DirectValue {
+            ProviderKind::RootObject => SemanticLocalRole::DirectValue {
                 provenance: ValueProvenance::RootProvider(provider),
             },
-            ProviderKind::Handle | ProviderKind::RawAddress => {
-                SemanticBindingLowering::PlaceBoundValue {
-                    provenance: PlaceProvenance::RootProvider(provider),
-                    value_ty: ty,
-                }
-            }
+            ProviderKind::Handle | ProviderKind::RawAddress => SemanticLocalRole::PlaceBoundValue {
+                provenance: PlaceProvenance::RootProvider(provider),
+                value_ty: ty,
+            },
         };
     }
-    SemanticBindingLowering::DirectValue {
+    SemanticLocalRole::DirectValue {
         provenance: ValueProvenance::Ordinary,
     }
 }
@@ -684,9 +681,7 @@ fn assign_semantic_local_facts<'db>(
             || SemanticLocalRole::DirectValue {
                 provenance: ValueProvenance::Ordinary,
             },
-            |binding| {
-                binding_lowering_to_local_role(semantic_binding_lowering(db, instance, binding))
-            },
+            |binding| semantic_binding_role(db, instance, binding),
         );
         local.snapshot_source = match &local.role {
             SemanticLocalRole::DirectValue {
@@ -743,34 +738,6 @@ fn assign_semantic_local_facts<'db>(
                 assigned_snapshots[dst_idx] = true;
             }
         }
-    }
-}
-
-fn binding_lowering_to_local_role<'db>(
-    lowering: SemanticBindingLowering<'db>,
-) -> SemanticLocalRole<'db> {
-    match lowering {
-        SemanticBindingLowering::Erased => SemanticLocalRole::Erased,
-        SemanticBindingLowering::DirectValue { provenance } => {
-            SemanticLocalRole::DirectValue { provenance }
-        }
-        SemanticBindingLowering::PlaceCarrier { value_ty } => {
-            SemanticLocalRole::PlaceCarrier { value_ty }
-        }
-        SemanticBindingLowering::PlaceBoundValue {
-            provenance,
-            value_ty,
-        } => SemanticLocalRole::PlaceBoundValue {
-            provenance,
-            value_ty,
-        },
-        SemanticBindingLowering::DirectCarrier {
-            provider,
-            target_ty,
-        } => SemanticLocalRole::DirectCarrier {
-            provider,
-            target_ty,
-        },
     }
 }
 

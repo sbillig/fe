@@ -4,7 +4,7 @@ use cranelift_entity::EntityRef;
 use crate::{
     analysis::{
         diagnostics::SpannedHirAnalysisDb,
-        semantic::{NOperand, NSLocal, SLocalId, SemOrigin, SemanticInstance},
+        semantic::{NOperand, NSLocal, SLocalId, SemOrigin, SemanticInstance, SemanticLocalKind},
     },
     projection::{IndexSource, Projection},
 };
@@ -12,8 +12,8 @@ use crate::{
 use super::{
     diagnostics::{normalized_body_internal_diag, operand_origin},
     ir::{
-        NBorrowRoot, NExpr, NLocalInterface, NSPlace, NSPlaceRoot, NSStmtKind, NSTerminator,
-        NSTerminatorKind, NormalizedBindingLowering, NormalizedSemanticBody, ReadMode,
+        NBorrowRoot, NExpr, NSPlace, NSPlaceRoot, NSStmtKind, NSTerminator, NSTerminatorKind,
+        NormalizedBindingLowering, NormalizedSemanticBody, ReadMode,
         local_has_runtime_move_semantics,
     },
 };
@@ -48,14 +48,14 @@ pub fn verify_normalized_semantic_body<'db>(
             Ok(())
         };
         match (&local.facts.interface, &local.lowering) {
-            (NLocalInterface::Erased, NormalizedBindingLowering::Erased)
-            | (NLocalInterface::DirectValue, NormalizedBindingLowering::ValueLocal { .. })
+            (SemanticLocalKind::Erased, NormalizedBindingLowering::Erased)
+            | (SemanticLocalKind::DirectValue, NormalizedBindingLowering::ValueLocal { .. })
             | (
-                NLocalInterface::PlaceBoundValue,
+                SemanticLocalKind::PlaceBoundValue,
                 NormalizedBindingLowering::PlaceBoundValue { .. },
             )
             | (
-                NLocalInterface::PlaceCarrier | NLocalInterface::DirectCarrier,
+                SemanticLocalKind::PlaceCarrier | SemanticLocalKind::DirectCarrier,
                 NormalizedBindingLowering::CarrierLocal { .. },
             ) => {}
             _ => {

@@ -1,8 +1,8 @@
 use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
-        NBorrowRoot, NEffectArg, NEffectArgValue, NLocalInterface, NOperand, NSPlace, NSPlaceRoot,
-        ReadMode, SLocalId,
+        NBorrowRoot, NEffectArg, NEffectArgValue, NOperand, NSPlace, NSPlaceRoot, ReadMode,
+        SLocalId, SemanticLocalKind,
     },
     ty::ty_def::TyId,
 };
@@ -449,7 +449,7 @@ impl<'a, 'carriers, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'cache, 'db> 
             || local_data
                 .backing_place()
                 .is_some_and(|place| self.place_is_lowerable_with_seen(place, visiting))
-            || (matches!(local_data.facts.interface, NLocalInterface::PlaceCarrier)
+            || (matches!(local_data.facts.interface, SemanticLocalKind::PlaceCarrier)
                 && carrier_value_class(local, self.carriers)
                     .is_some_and(|class| class.is_transport()))
             || local_data
