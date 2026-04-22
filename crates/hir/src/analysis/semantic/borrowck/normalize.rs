@@ -57,6 +57,7 @@ struct NormalizeCtxt<'db> {
     assumptions: crate::analysis::ty::trait_resolution::PredicateListId<'db>,
     locals: Vec<Option<NSLocal<'db>>>,
     local_state: Vec<LocalNormState>,
+    root_demands: Vec<NLocalRootDemand>,
     borrow_roots: Vec<NBorrowRoot<'db>>,
 }
 
@@ -82,6 +83,7 @@ impl<'db> NormalizeCtxt<'db> {
             assumptions,
             locals: vec![None; local_capacity],
             local_state: vec![LocalNormState::Unseen; local_capacity],
+            root_demands: vec![NLocalRootDemand::default(); local_capacity],
             borrow_roots: Vec::new(),
         }
     }
@@ -89,14 +91,9 @@ impl<'db> NormalizeCtxt<'db> {
     fn normalize(mut self) -> Result<NormalizedSemanticBody<'db>, SemanticNormalizeError<'db>> {
         self.normalize_locals()?;
         if self.raw.blocks.is_empty() {
-            return Ok(empty_normalized_body(
-                &self.raw,
-                self.locals
-                    .into_iter()
-                    .map(|local| local.expect("all locals normalized"))
-                    .collect(),
-                self.borrow_roots,
-            ));
+            let locals = self.take_normalized_locals();
+            let borrow_roots = std::mem::take(&mut self.borrow_roots);
+            return Ok(empty_normalized_body(&self.raw, locals, borrow_roots));
         }
 
         let mut blocks = Vec::with_capacity(self.raw.blocks.len());
@@ -118,19 +115,27 @@ impl<'db> NormalizeCtxt<'db> {
             };
             blocks.push(NSBlock { stmts, terminator });
         }
-        self.populate_root_demand(&blocks);
+        let locals = self.take_normalized_locals();
 
         Ok(NormalizedSemanticBody {
             owner: self.instance,
             template_owner: self.raw.template_owner,
-            locals: self
-                .locals
-                .into_iter()
-                .map(|local| local.expect("all locals normalized"))
-                .collect(),
+            locals,
             blocks,
             borrow_roots: self.borrow_roots,
         })
+    }
+
+    fn take_normalized_locals(&mut self) -> Vec<NSLocal<'db>> {
+        std::mem::take(&mut self.locals)
+            .into_iter()
+            .enumerate()
+            .map(|(idx, local)| {
+                let mut local = local.expect("all locals normalized");
+                local.facts.root_demand = self.root_demands[idx];
+                local
+            })
+            .collect()
     }
 
     fn normalize_locals(&mut self) -> Result<(), SemanticNormalizeError<'db>> {
@@ -161,6 +166,7 @@ impl<'db> NormalizeCtxt<'db> {
         self.local_state[local.index()] = LocalNormState::Visiting;
         let lowering = self.normalize_local_lowering(local, raw_local)?;
         let facts = self.normalize_local_facts(local, raw_local, &lowering)?;
+        self.mark_local_root_demand(local, &lowering, facts.snapshot_source_place.as_ref());
         self.locals[local.index()] = Some(NSLocal {
             ty: raw_local.ty,
             mutability: raw_local.mutability,
@@ -258,6 +264,7 @@ impl<'db> NormalizeCtxt<'db> {
         ) {
             root_demand.always_rooted = true;
         }
+        self.root_demands[local.index()] = root_demand;
         Ok(NLocalFacts {
             interface,
             origin,
@@ -266,59 +273,38 @@ impl<'db> NormalizeCtxt<'db> {
         })
     }
 
-    fn populate_root_demand(&mut self, blocks: &[NSBlock<'db>]) {
-        let mut root_demand = self
-            .locals
-            .iter()
-            .map(|local| {
-                local
-                    .as_ref()
-                    .map_or(NLocalRootDemand::default(), |local| local.facts.root_demand)
-            })
-            .collect::<Vec<_>>();
-
-        for block in blocks {
-            for stmt in &block.stmts {
-                match &stmt.kind {
-                    NSStmtKind::Assign { expr, .. } => {
-                        self.mark_expr_root_demand(expr, &mut root_demand);
-                    }
-                    NSStmtKind::Store { dst, .. } => {
-                        self.mark_place_root_demand(dst, &mut root_demand, |demand| {
-                            demand.written_by_place = true;
-                        });
-                    }
-                }
-            }
+    fn mark_local_root_demand(
+        &mut self,
+        local: SLocalId,
+        lowering: &NormalizedBindingLowering<'db>,
+        snapshot_source_place: Option<&NSPlace<'db>>,
+    ) {
+        if let NormalizedBindingLowering::ValueLocal { place } = lowering
+            && !self.is_self_rooted_value_place(local, place)
+        {
+            self.mark_place_root_demand(place, |demand| {
+                demand.nonself_backing_place = true;
+            });
         }
+        if let Some(place) = snapshot_source_place {
+            self.mark_place_root_demand(place, |demand| {
+                demand.nonself_backing_place = true;
+            });
+        }
+    }
 
-        for (idx, local) in self.locals.iter().enumerate() {
-            let Some(local) = local.as_ref() else {
-                continue;
-            };
-            if let NormalizedBindingLowering::ValueLocal { place } = &local.lowering {
-                let local_id = SLocalId::from_u32(idx as u32);
-                if !self.is_self_rooted_value_place(local_id, place) {
-                    self.mark_place_root_demand(place, &mut root_demand, |demand| {
-                        demand.nonself_backing_place = true;
-                    });
-                }
-            }
-            if let Some(place) = local.snapshot_source_place() {
-                self.mark_place_root_demand(place, &mut root_demand, |demand| {
-                    demand.nonself_backing_place = true;
+    fn mark_stmt_root_demand(&mut self, stmt: &NSStmtKind<'db>) {
+        match stmt {
+            NSStmtKind::Assign { expr, .. } => self.mark_expr_root_demand(expr),
+            NSStmtKind::Store { dst, .. } => {
+                self.mark_place_root_demand(dst, |demand| {
+                    demand.written_by_place = true;
                 });
-            }
-        }
-
-        for (idx, demand) in root_demand.into_iter().enumerate() {
-            if let Some(local) = self.locals[idx].as_mut() {
-                local.facts.root_demand = demand;
             }
         }
     }
 
-    fn mark_expr_root_demand(&self, expr: &NExpr<'db>, root_demand: &mut [NLocalRootDemand]) {
+    fn mark_expr_root_demand(&mut self, expr: &NExpr<'db>) {
         match expr {
             NExpr::Use(_)
             | NExpr::Const(_)
@@ -334,19 +320,19 @@ impl<'db> NormalizeCtxt<'db> {
             | NExpr::CodeRegionOffset { .. }
             | NExpr::CodeRegionLen { .. } => {}
             NExpr::ReadPlace { place, .. } => {
-                self.mark_place_root_demand(place, root_demand, |demand| {
+                self.mark_place_root_demand(place, |demand| {
                     demand.read_by_place = true;
                 });
             }
             NExpr::Borrow { place, .. } => {
-                self.mark_place_root_demand(place, root_demand, |demand| {
+                self.mark_place_root_demand(place, |demand| {
                     demand.borrowed_or_addr_taken = true;
                 });
             }
             NExpr::Call { effect_args, .. } => {
                 for arg in effect_args {
                     if let NEffectArgValue::Place(place) = &arg.arg {
-                        self.mark_place_root_demand(place, root_demand, |demand| {
+                        self.mark_place_root_demand(place, |demand| {
                             demand.passed_by_place = true;
                         });
                     }
@@ -356,9 +342,8 @@ impl<'db> NormalizeCtxt<'db> {
     }
 
     fn mark_place_root_demand(
-        &self,
+        &mut self,
         place: &NSPlace<'db>,
-        root_demand: &mut [NLocalRootDemand],
         mut mark: impl FnMut(&mut NLocalRootDemand),
     ) {
         let local = match place.root {
@@ -371,7 +356,7 @@ impl<'db> NormalizeCtxt<'db> {
             },
         };
         if let Some(local) = local
-            && let Some(demand) = root_demand.get_mut(local.index())
+            && let Some(demand) = self.root_demands.get_mut(local.index())
         {
             mark(demand);
         }
@@ -548,7 +533,7 @@ impl<'db> NormalizeCtxt<'db> {
         origin: crate::analysis::semantic::SemOrigin<'db>,
         stmt: &SStmtKind<'db>,
     ) -> Result<NSStmtKind<'db>, SemanticNormalizeError<'db>> {
-        match stmt {
+        let stmt = match stmt {
             SStmtKind::Assign { dst, expr } => Ok(NSStmtKind::Assign {
                 dst: *dst,
                 expr: self.normalize_expr(origin, *dst, expr)?,
@@ -557,7 +542,9 @@ impl<'db> NormalizeCtxt<'db> {
                 dst: self.normalize_place(dst, origin)?,
                 src: *src,
             }),
-        }
+        }?;
+        self.mark_stmt_root_demand(&stmt);
+        Ok(stmt)
     }
 
     fn normalize_terminator(
